@@ -2,13 +2,16 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
+import { isFailoverError, isSignalTimeoutReason } from "../agents/failover/error.js";
 import { ToolAuthorizationError } from "../agents/tool-input-error.js";
 import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromGatewayIngress } from "../commands/agent.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { isAbortError } from "../infra/abort-signal.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../runtime.js";
+import { resolveAssistantResultText } from "./agent-event-assistant-text.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import { resolveOpenAiCompatError, type OpenAiCompatError } from "./openai-compat-errors.js";
@@ -30,6 +33,15 @@ export type OpenAiCompatiblePendingToolCall = {
   arguments: string;
 };
 
+// Provider failures reach this boundary as FailoverErrors and run budgets abort with a
+// TimeoutError; a bare abort is Gateway-owned cancellation, not an upstream provider timeout.
+function isGatewayRunCancellation(error: unknown): boolean {
+  if (!error || typeof error !== "object" || isFailoverError(error) || !isAbortError(error)) {
+    return false;
+  }
+  return !isSignalTimeoutReason("cause" in error ? error.cause : undefined);
+}
+
 export function resolveOpenAiCompatibleAgentError(
   error: unknown,
   fallback?: OpenAiCompatError["error"],
@@ -39,6 +51,9 @@ export function resolveOpenAiCompatibleAgentError(
       status: 400,
       error: { message: "invalid tool configuration", type: "invalid_request_error" },
     };
+  }
+  if (isGatewayRunCancellation(error)) {
+    return { status: 500, error: { message: "agent run was cancelled", type: "api_error" } };
   }
   return (
     resolveOpenAiCompatError(error) ?? {
@@ -50,12 +65,21 @@ export function resolveOpenAiCompatibleAgentError(
 
 export function readOpenAiHttpRunTerminal(result: unknown): {
   runFailed: boolean;
+  incompleteTurnText?: string;
   stopReason: string | undefined;
   pendingToolCalls: OpenAiCompatiblePendingToolCall[] | undefined;
 } {
   const meta = asOptionalRecord(asOptionalRecord(result)?.meta);
   const stopReasonRaw = meta?.stopReason;
   const stopReason = typeof stopReasonRaw === "string" ? stopReasonRaw : undefined;
+  const runFailed = readAgentRunTerminalOutcome(result) === "failed";
+  // Other failures must not expose diagnostic payloads as assistant recovery text.
+  const incompleteTurnText =
+    runFailed &&
+    stopReason === "length" &&
+    asOptionalRecord(meta?.error)?.kind === "incomplete_turn"
+      ? resolveAssistantResultText(result)
+      : undefined;
   const pendingRaw = meta?.pendingToolCalls;
   const pendingToolCalls = Array.isArray(pendingRaw)
     ? pendingRaw.flatMap((call): OpenAiCompatiblePendingToolCall[] => {
@@ -73,7 +97,8 @@ export function readOpenAiHttpRunTerminal(result: unknown): {
       })
     : undefined;
   return {
-    runFailed: readAgentRunTerminalOutcome(result) === "failed",
+    runFailed,
+    ...(incompleteTurnText ? { incompleteTurnText } : {}),
     stopReason,
     pendingToolCalls,
   };
@@ -165,7 +190,6 @@ export async function runOpenAiCompatibleAgentCommand(params: {
       },
       defaultRuntime,
       createDefaultDeps(),
-      {},
     );
     captured?.authority.assertCurrent();
     return result;

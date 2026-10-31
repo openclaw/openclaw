@@ -6,6 +6,7 @@ import {
   resolveNonNegativeIntegerOption,
 } from "../../packages/normalization-core/src/number-coercion.js";
 import { computeBackoffSchedule } from "../../packages/retry/src/index.js";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { sleep } from "../utils/sleep.js";
 import { collectErrorGraphCandidates, extractErrorCode } from "./errors.js";
 import {
@@ -26,6 +27,7 @@ const PRE_CONNECT_ERROR_CODES = new Set([
   "ENETDOWN",
   "ENETUNREACH",
   "EHOSTUNREACH",
+  "ETIMEDOUT",
 ]);
 const TRANSPORT_ERROR_CODE_RE =
   /^(?:E(?:AI_|CONN|NET|HOST|ADDR|PIPE|TIMEDOUT|SOCKET)|UND_ERR_|ERR_(?:NETWORK|HTTP2|QUIC|TLS|SSL))/;
@@ -43,7 +45,7 @@ export type DeliveryRecoveryDrainDecision = {
   bypassBackoff?: boolean;
 };
 
-export type ActiveDeliveryRecoveryClaimResult<T> =
+type ActiveDeliveryRecoveryClaimResult<T> =
   | { status: "claimed"; value: T }
   | { status: "claimed-by-other-owner" };
 
@@ -63,6 +65,7 @@ type DeliveryRecoveryScanOptions<T extends DeliveryRecoveryEntry> = {
   onDeadlineExceeded?: () => void;
   onClaimConflict?: (entry: T) => void;
   onMissingEntry?: (entry: T) => void;
+  laneKey?: (entry: T) => string;
 };
 
 export function createEmptyDeliveryRecoverySummary(): DeliveryRecoverySummary {
@@ -172,6 +175,30 @@ export function isProvenDeliveryNotSentError(err: unknown): boolean {
   return hasDeliveryNotSentProof(collectErrorGraphCandidates(err, nestedErrorCandidates));
 }
 
+/** Transport ambiguity is not no-send proof; only opted-in final text may replay it. */
+export function isAmbiguousDeliveryTransportError(error: unknown): boolean {
+  const candidates = collectErrorGraphCandidates(error, nestedErrorCandidates);
+  if (
+    hasDeliveryNotSentProof(candidates) ||
+    candidates.some(
+      (candidate) =>
+        isRecord(candidate) &&
+        ((Array.isArray(candidate.results) && candidate.results.length > 0) ||
+          candidate.visibleReplySent === true ||
+          (isRecord(candidate.deliveryResult) &&
+            (candidate.deliveryResult.visibleReplySent === true ||
+              (Array.isArray(candidate.deliveryResult.messageIds) &&
+                candidate.deliveryResult.messageIds.length > 0)))),
+    )
+  ) {
+    return false;
+  }
+  return candidates.some((candidate) => {
+    const code = extractErrorCode(candidate)?.trim().toUpperCase();
+    return code !== undefined && TRANSPORT_ERROR_CODE_RE.test(code);
+  });
+}
+
 /** Finds a provider's permanent pre-dispatch rejection through delivery wrappers. */
 export function findPlatformMessageRejectedError(
   err: unknown,
@@ -186,9 +213,13 @@ export function findPlatformMessageRejectedError(
  * Untyped pre-connect proof stays undefined so caller-specific text policy keeps precedence.
  */
 export function resolveDeliveryNotSentRetryability(err: unknown): boolean | undefined {
+  return deliveryNotSentRetryability(err, true);
+}
+
+function deliveryNotSentRetryability(err: unknown, requireMarker: boolean): boolean | undefined {
   const candidates = collectErrorGraphCandidates(err, nestedErrorCandidates);
   if (
-    !candidates.some(isPlatformMessageNotDispatchedError) ||
+    (requireMarker && !candidates.some(isPlatformMessageNotDispatchedError)) ||
     !hasDeliveryNotSentProof(candidates) ||
     hasDeliverySendEvidence(candidates)
   ) {
@@ -209,12 +240,7 @@ function hasDeliverySendEvidence(candidates: readonly unknown[]): boolean {
 
 /** True only when the complete error graph proves a retryable recipient no-send. */
 export function isRetryableDeliveryNotSentError(err: unknown): boolean {
-  const candidates = collectErrorGraphCandidates(err, nestedErrorCandidates);
-  return (
-    hasDeliveryNotSentProof(candidates) &&
-    !hasDeliverySendEvidence(candidates) &&
-    !candidates.some(isPlatformMessageRejectedError)
-  );
+  return deliveryNotSentRetryability(err, false) ?? false;
 }
 
 /** True when the durable queue retained the exact failed attempt for recovery. */
@@ -260,16 +286,13 @@ function createRecoveryReplayPacer() {
     });
 }
 
-/** Own one queue namespace's live claims, drain exclusion, and replay pacing. */
-export function createDeliveryRecoveryCoordinator<T extends DeliveryRecoveryEntry>() {
-  const activeDrains = new Set<string>();
+function createRecoveryClaim(limit = Number.POSITIVE_INFINITY) {
   const activeEntries = new Set<string>();
-
-  async function withClaim<Result>(
+  return async <Result>(
     entryId: string,
     run: () => Promise<Result>,
-  ): Promise<ActiveDeliveryRecoveryClaimResult<Result>> {
-    if (activeEntries.has(entryId)) {
+  ): Promise<ActiveDeliveryRecoveryClaimResult<Result>> => {
+    if (activeEntries.has(entryId) || activeEntries.size >= limit) {
       return { status: "claimed-by-other-owner" };
     }
     activeEntries.add(entryId);
@@ -278,48 +301,90 @@ export function createDeliveryRecoveryCoordinator<T extends DeliveryRecoveryEntr
     } finally {
       activeEntries.delete(entryId);
     }
-  }
+  };
+}
+
+/** Own one queue namespace's live claims, drain exclusion, and replay pacing. */
+export function createDeliveryRecoveryCoordinator<T extends DeliveryRecoveryEntry>(scheduling?: {
+  maxConcurrentLanes: number;
+}) {
+  const withClaim = createRecoveryClaim();
+  const withDrainClaim = createRecoveryClaim();
+  const withLaneClaim = createRecoveryClaim(scheduling?.maxConcurrentLanes);
 
   return {
     withClaim,
 
     async withDrain(drainKey: string, run: () => Promise<void>): Promise<boolean> {
-      if (activeDrains.has(drainKey)) {
-        return false;
-      }
-      activeDrains.add(drainKey);
-      try {
-        await run();
-        return true;
-      } finally {
-        activeDrains.delete(drainKey);
-      }
+      return (await withDrainClaim(drainKey, run)).status === "claimed";
     },
 
     async scan(options: DeliveryRecoveryScanOptions<T>): Promise<void> {
-      for (const entry of options.entries.toSorted((a, b) => a.enqueuedAt - b.enqueuedAt)) {
-        if (options.deadlineMs !== undefined && Date.now() >= options.deadlineMs) {
-          options.onDeadlineExceeded?.();
-          break;
-        }
-
-        // Claim before the authoritative reload so a stale startup snapshot
-        // can never race a reconnect drain or recipient-visible live send.
-        const claim = await withClaim(entry.id, async () => {
-          const current = await options.loadEntry(entry.id);
-          if (!current) {
-            options.onMissingEntry?.(entry);
-            return "continue" as const;
+      let stopped = false;
+      const scanEntries = async (entries: readonly T[]) => {
+        for (const entry of entries) {
+          if (stopped) {
+            break;
           }
-          return (await options.onEntry(current)) ?? "continue";
-        });
-        if (claim.status === "claimed-by-other-owner") {
-          options.onClaimConflict?.(entry);
-          continue;
+          if (options.deadlineMs !== undefined && Date.now() >= options.deadlineMs) {
+            stopped = true;
+            options.onDeadlineExceeded?.();
+            break;
+          }
+
+          // Claim before the authoritative reload so a stale startup snapshot
+          // can never race a reconnect drain or recipient-visible live send.
+          const claim = await withClaim(entry.id, async () => {
+            const current = await options.loadEntry(entry.id);
+            if (!current) {
+              options.onMissingEntry?.(entry);
+              return "continue" as const;
+            }
+            return (await options.onEntry(current)) ?? "continue";
+          });
+          if (claim.status === "claimed-by-other-owner") {
+            options.onClaimConflict?.(entry);
+            continue;
+          }
+          if (claim.value === "stop") {
+            stopped = true;
+            break;
+          }
         }
-        if (claim.value === "stop") {
-          break;
+      };
+      const sorted = options.entries.toSorted((a, b) => a.enqueuedAt - b.enqueuedAt);
+      if (!scheduling) {
+        await scanEntries(sorted);
+        return;
+      }
+      const lanes = new Map<string, T[]>();
+      for (const entry of sorted) {
+        const key = options.laneKey?.(entry) ?? "default";
+        const lane = lanes.get(key);
+        if (lane) {
+          lane.push(entry);
+        } else {
+          lanes.set(key, [entry]);
         }
+      }
+      const result = await runTasksWithConcurrency({
+        limit: scheduling.maxConcurrentLanes,
+        errorMode: "stop",
+        onTaskError: () => {
+          stopped = true;
+        },
+        // Startup and reconnect share the cap and domain claim. A competing
+        // scan leaves busy domains untouched for the owner's next retry pass.
+        tasks: Array.from(
+          lanes,
+          ([key, entries]) =>
+            () =>
+              withLaneClaim(key, () => scanEntries(entries)),
+        ),
+      });
+      // Join every admitted send before surfacing an error to lifecycle teardown.
+      if (result.hasError) {
+        throw result.firstError;
       }
     },
 

@@ -1,8 +1,9 @@
-import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import { sendHttpRequestRejection } from "../../infra/http-request-lifecycle.js";
+import { SystemEventQueueFullError } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveHookExternalContentSource as resolveHookExternalContentSourceFromSession } from "../../security/external-content.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
@@ -41,7 +42,7 @@ import { readPreparedGatewayIngressAttribution } from "../ingress-attribution.js
 import { resolveRequestClientIpFromHeaders } from "../net.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import {
-  HOOK_FAN_OUT_RESPONSE_DEADLINE_MS,
+  HookWakeUnavailableError,
   sendAgentResult,
   sendFanOutResult,
   settleFanOutDispatches,
@@ -56,8 +57,6 @@ const HOOK_AUTH_FAILURE_WINDOW_MS = 60_000;
 const HOOK_FAN_OUT_DERIVED_IDEMPOTENCY = "hook-fanout-item";
 const HOOK_CONFIG_CHANGED_ERROR = "hook configuration changed; retry request";
 
-const hashReplay = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
-
 export type HookClientIpConfig = Readonly<{
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
@@ -69,7 +68,8 @@ type HookDispatchers = {
   dispatchWakeHook: (
     value: { text: string; mode: "now" | "next-heartbeat"; sessionKey?: string },
     agentId: string,
-  ) => WakeResult;
+    isHooksConfigCurrent?: () => boolean,
+  ) => WakeResult | null | Promise<WakeResult | null>;
   dispatchAgentHook: (
     value: HookAgentDispatchPayload,
   ) => HookAgentDispatchResult | Promise<HookAgentDispatchResult>;
@@ -96,12 +96,9 @@ export function createHooksRequestHandler(
     port: number;
     logHooks: ReturnType<typeof createSubsystemLogger>;
     getClientIpConfig?: () => HookClientIpConfig;
-    fanoutResponseDeadlineMs?: number;
   } & HookDispatchers,
 ): HooksRequestHandler {
   const { getHooksConfig, logHooks, dispatchAgentHook, dispatchWakeHook, getClientIpConfig } = opts;
-  const fanoutResponseDeadlineMs =
-    opts.fanoutResponseDeadlineMs ?? HOOK_FAN_OUT_RESPONSE_DEADLINE_MS;
   const hookReplayCache = new Map<string, HookReplayEntry>();
   const hookAuthLimiter = createGatewayAuthRateLimiter(
     {
@@ -151,7 +148,7 @@ export function createHooksRequestHandler(
       pathKey: params.pathKey,
       dispatchScope: params.dispatchScope,
     });
-    return `${hashReplay(params.token ?? "")}:${hashReplay(scope)}:${hashReplay(idem)}`;
+    return `${sha256Hex(params.token ?? "")}:${sha256Hex(scope)}:${sha256Hex(idem)}`;
   };
 
   const resolveHookReplay = (key: string | undefined) => {
@@ -184,32 +181,23 @@ export function createHooksRequestHandler(
     const pending = Promise.resolve()
       .then(dispatch)
       .then((result) => {
-        const current = hookReplayCache.get(key);
-        if (current?.state === "pending" && current.dispatch === pending) {
-          if (result.ok) {
-            const active = { state: "active", dispatch: result } as const;
-            hookReplayCache.set(key, active);
-            const settle = () => {
-              if (hookReplayCache.get(key) !== active) {
-                return;
-              }
-              const terminal = { state: "terminal", ts: Date.now(), dispatch: result } as const;
-              hookReplayCache.delete(key);
-              hookReplayCache.set(key, terminal);
-              pruneHookReplayCache(terminal.ts);
-            };
-            void result.completion.then(settle, settle);
-          } else {
+        // Pending/active entries cannot be pruned or replaced by another request.
+        if (result.ok) {
+          hookReplayCache.set(key, { state: "active", dispatch: result });
+          const settle = () => {
+            const terminal = { state: "terminal", ts: Date.now(), dispatch: result } as const;
             hookReplayCache.delete(key);
-          }
+            hookReplayCache.set(key, terminal);
+            pruneHookReplayCache(terminal.ts);
+          };
+          void result.completion.then(settle, settle);
+        } else {
+          hookReplayCache.delete(key);
         }
         return result;
       })
       .catch((err: unknown) => {
-        const current = hookReplayCache.get(key);
-        if (current?.state === "pending" && current.dispatch === pending) {
-          hookReplayCache.delete(key);
-        }
+        hookReplayCache.delete(key);
         throw err;
       });
     hookReplayCache.set(key, { state: "pending", dispatch: pending });
@@ -352,11 +340,11 @@ export function createHooksRequestHandler(
       return resolution;
     };
     // Callers own the success response so mappings can dispatch several wakes first.
-    const dispatchWake = (
+    const dispatchWake = async (
       value: Parameters<HookDispatchers["dispatchWakeHook"]>[0],
       targetAgentId: string,
       source: HookSessionKeySource,
-    ): WakeResult | null => {
+    ): Promise<WakeResult | null> => {
       let dispatchSessionKey: string | undefined;
       if (value.sessionKey) {
         const sessionKey = resolveHookSessionKey({
@@ -381,7 +369,21 @@ export function createHooksRequestHandler(
       if (rejectChangedHooksConfig()) {
         return null;
       }
-      return dispatchWakeHook(dispatchValue, targetAgentId);
+      try {
+        return await dispatchWakeHook(
+          dispatchValue,
+          targetAgentId,
+          () => !rejectChangedHooksConfig(),
+        );
+      } catch (error) {
+        if (
+          !(error instanceof SystemEventQueueFullError || error instanceof HookWakeUnavailableError)
+        ) {
+          throw error;
+        }
+        sendJson(res, 503, { ok: false, error: error.message, ...wakeResult });
+        return null;
+      }
     };
 
     if (subPath === "wake") {
@@ -394,7 +396,11 @@ export function createHooksRequestHandler(
       if (!target) {
         return true;
       }
-      const directWakeResult = dispatchWake(normalized.value, target.effectiveAgentId, "request");
+      const directWakeResult = await dispatchWake(
+        normalized.value,
+        target.effectiveAgentId,
+        "request",
+      );
       if (!directWakeResult) {
         return true;
       }
@@ -489,6 +495,7 @@ export function createHooksRequestHandler(
           sourcePath: `${basePath}/agent`,
           agentId: target.selectedAgentId,
           externalContentSource: "webhook",
+          replayKey,
         });
       });
       await sendAgentResult(res, dispatched, undefined, waitForCompletion === true);
@@ -630,6 +637,7 @@ export function createHooksRequestHandler(
                   mappingId: action.mappingId,
                   allowUnsafeExternalContent: action.allowUnsafeExternalContent,
                   ...(mapped.fanout ? { admissionMode: "background" as const } : {}),
+                  replayKey,
                   externalContentSource:
                     subPath === "gmail"
                       ? "gmail"
@@ -653,7 +661,7 @@ export function createHooksRequestHandler(
               if (!target) {
                 return true;
               }
-              const dispatched = dispatchWake(
+              const dispatched = await dispatchWake(
                 { text: action.text, mode: action.mode, sessionKey: action.sessionKey },
                 target.effectiveAgentId,
                 action.sessionKeySource === "static" ? "mapping-static" : "mapping-templated",
@@ -685,7 +693,6 @@ export function createHooksRequestHandler(
           }
           const settled = await settleFanOutDispatches(
             dispatches.map((dispatch) => Promise.resolve(dispatch())),
-            fanoutResponseDeadlineMs,
           );
           sendFanOutResult(res, settled, wakeResult);
           return true;

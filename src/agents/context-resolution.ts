@@ -15,8 +15,8 @@ import {
 } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  lookupCachedContextTokens,
-  lookupCachedContextWindow,
+  lookupCachedContextTokens as lookupContextTokens,
+  lookupCachedContextWindow as lookupContextWindow,
   minPositiveContextTokens,
   providerContextTokenCacheKey,
 } from "./context-cache.js";
@@ -40,6 +40,8 @@ export type ContextTokenResolutionParams = {
   modelContextTokens?: number;
   allowAsyncLoad?: boolean;
   allowUnscopedModelLookup?: boolean;
+  /** Reports with admitted model facts must not reuse a different cache generation. */
+  allowCacheLookup?: boolean;
 };
 
 export type ModelContextTokenProjection = {
@@ -48,14 +50,9 @@ export type ModelContextTokenProjection = {
 };
 
 const normalizePositiveContextTokens = (value: number | undefined) =>
-  typeof value === "number" && value > 0 ? value : undefined;
+  value !== undefined && value > 0 ? value : undefined;
 
 const ANTHROPIC_CONTEXT_1M_TOKENS = 1_000_000;
-const ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS = 1_000_000;
-const ANTHROPIC_FABLE_CONTEXT_TOKENS = 1_000_000;
-const ANTHROPIC_MYTHOS_5_CONTEXT_TOKENS = 1_000_000;
-const ANTHROPIC_OPUS_5_CONTEXT_TOKENS = 1_000_000;
-const ANTHROPIC_SONNET_5_CONTEXT_TOKENS = 1_000_000;
 
 function resolveProviderModelRef(params: {
   provider?: string;
@@ -81,11 +78,11 @@ function resolveProviderModelRef(params: {
 
 /** Preserve shipped self-prefixed context refs after exact configured-row selection. */
 function resolveConfiguredProviderModel(
-  cfg: OpenClawConfig | null | undefined,
+  cfg: OpenClawConfig | undefined,
   provider: string,
   model: string,
 ): ConfigModelEntry | undefined {
-  const providerConfig = resolveMergedModelProviderConfig(cfg ?? undefined, provider);
+  const providerConfig = resolveMergedModelProviderConfig(cfg, provider);
   const bareModel = stripSelfProviderModelPrefix(provider, model);
   const findModel = createConfiguredProviderModelResolver(providerConfig, provider, (id) =>
     normalizeConfiguredProviderCatalogModelId(provider, id),
@@ -94,7 +91,7 @@ function resolveConfiguredProviderModel(
 }
 
 function resolveConfiguredRuntimeModel(
-  cfg: OpenClawConfig | null | undefined,
+  cfg: OpenClawConfig | undefined,
   provider: string,
   modelProvider: string | undefined,
   model: string,
@@ -144,23 +141,14 @@ export function resolveAnthropicFixedContextWindow(
   if (!isAnthropicProvider) {
     return undefined;
   }
-  if (/^claude-fable-5(?=$|[^a-z0-9])/.test(modelId)) {
-    return ANTHROPIC_FABLE_CONTEXT_TOKENS;
-  }
-  // Mythos 5 is direct-API only; Claude CLI must keep its discovered or fallback window.
+  // Native 1M models precede the older CLI opt-in gate; Mythos remains direct-API only.
   if (
-    (provider === "anthropic" || provider === "anthropic-vertex") &&
-    /^claude-mythos-5(?=$|[^a-z0-9])/.test(modelId)
+    /^claude-fable-5(?=$|[^a-z0-9])/.test(modelId) ||
+    (provider !== "claude-cli" && /^claude-mythos-5(?=$|[^a-z0-9])/.test(modelId)) ||
+    resolveClaudeOpus5ModelIdentity({ id: modelId }) ||
+    resolveClaudeSonnet5ModelIdentity({ id: modelId })
   ) {
-    return ANTHROPIC_MYTHOS_5_CONTEXT_TOKENS;
-  }
-  // Opus 5 is natively 1M on every runtime, including Claude CLI. Keep this
-  // ahead of the legacy CLI opt-in gate used by older 1M variants below.
-  if (resolveClaudeOpus5ModelIdentity({ id: modelId })) {
-    return ANTHROPIC_OPUS_5_CONTEXT_TOKENS;
-  }
-  if (resolveClaudeSonnet5ModelIdentity({ id: modelId })) {
-    return ANTHROPIC_SONNET_5_CONTEXT_TOKENS;
+    return ANTHROPIC_CONTEXT_1M_TOKENS;
   }
   if (!supportsClaude1MContext({ id: modelId })) {
     return undefined;
@@ -168,9 +156,7 @@ export function resolveAnthropicFixedContextWindow(
   if (provider === "claude-cli" && !modelId.endsWith("[1m]") && options?.claudeCli1M !== true) {
     return undefined;
   }
-  return provider === "anthropic-vertex"
-    ? ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS
-    : ANTHROPIC_CONTEXT_1M_TOKENS;
+  return ANTHROPIC_CONTEXT_1M_TOKENS;
 }
 
 /** Resolves an authored cap without lowering it to discovered model metadata. */
@@ -208,21 +194,20 @@ function resolveConfiguredContextTokenLimitsForModel(
   configuredModel: ConfigModelEntry | undefined,
   normalize: (value: number | undefined) => number | null | undefined,
 ) {
-  const { provider, model } = params;
+  const { model } = params;
+  const provider = normalizeProviderId(params.provider);
   const extraParamSources = resolveModelExtraParamSources({
     config: params.cfg,
-    provider: normalizeProviderId(provider),
+    provider,
     modelId: model,
   });
   const effectiveContext1M =
     extraParamSources.modelParams && Object.hasOwn(extraParamSources.modelParams, "context1m")
       ? extraParamSources.modelParams.context1m
       : extraParamSources.defaultParams?.context1m;
-  const fixedContextWindow = resolveAnthropicFixedContextWindow(
-    normalizeProviderId(provider),
-    model,
-    { claudeCli1M: effectiveContext1M === true },
-  );
+  const fixedContextWindow = resolveAnthropicFixedContextWindow(provider, model, {
+    claudeCli1M: effectiveContext1M === true,
+  });
   const configuredContextTokens = normalize(configuredModel?.contextTokens) ?? undefined;
   const configuredContextWindow = normalize(configuredModel?.contextWindow) ?? undefined;
   // Fixed provider contracts deliberately ignore materialized catalog windows.
@@ -242,20 +227,12 @@ function resolveConfiguredContextTokenLimitsForModel(
 
 export function resolveContextTokensForModelFromCache(
   params: ContextTokenResolutionParams,
-  lookupContextTokens: (modelId?: string) => number | undefined = lookupCachedContextTokens,
-  lookupContextWindow: (modelId?: string) => number | undefined = lookupCachedContextWindow,
 ): number | undefined {
-  return resolveModelContextTokenProjectionFromCache(
-    params,
-    lookupContextTokens,
-    lookupContextWindow,
-  ).contextTokens;
+  return resolveModelContextTokenProjectionFromCache(params).contextTokens;
 }
 
 export function resolveModelContextTokenProjectionFromCache(
   params: ContextTokenResolutionParams,
-  lookupContextTokens: (modelId?: string) => number | undefined = lookupCachedContextTokens,
-  lookupContextWindow: (modelId?: string) => number | undefined = lookupCachedContextWindow,
 ): ModelContextTokenProjection {
   const ref = resolveProviderModelRef(params);
   const explicitProvider = params.provider?.trim();
@@ -275,18 +252,15 @@ export function resolveModelContextTokenProjectionFromCache(
         configuredModel,
         normalizePositiveContextTokens,
       );
-    if (effectiveConfiguredTokens !== undefined) {
-      return { contextTokens: effectiveConfiguredTokens, authoredContextTokens };
+    const configuredTokens = effectiveConfiguredTokens ?? fixedContextWindow;
+    if (configuredTokens !== undefined) {
+      return { contextTokens: configuredTokens, authoredContextTokens };
     }
-    if (fixedContextWindow !== undefined) {
-      return { contextTokens: fixedContextWindow, authoredContextTokens };
-    }
-    const providerResult = lookupContextTokens(
-      providerContextTokenCacheKey(normalizeProviderId(ref.provider), ref.model),
-    );
-    const providerWindow = lookupContextWindow(
-      providerContextTokenCacheKey(normalizeProviderId(ref.provider), ref.model),
-    );
+    const providerKey = providerContextTokenCacheKey(ref.provider, ref.model);
+    const providerResult =
+      params.allowCacheLookup === false ? undefined : lookupContextTokens(providerKey);
+    const providerWindow =
+      params.allowCacheLookup === false ? undefined : lookupContextWindow(providerKey);
     const discoveredCap = minPositiveContextTokens(
       providerResult,
       normalizePositiveContextTokens(params.modelContextTokens),
@@ -307,7 +281,7 @@ export function resolveModelContextTokenProjectionFromCache(
     }
   }
 
-  if (params.allowUnscopedModelLookup === false) {
+  if (params.allowCacheLookup === false || params.allowUnscopedModelLookup === false) {
     return { contextTokens: params.fallbackContextTokens, authoredContextTokens };
   }
 

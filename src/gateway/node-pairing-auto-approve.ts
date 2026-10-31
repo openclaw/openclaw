@@ -1,14 +1,6 @@
-// Gateway node pairing auto-approval policy.
-// Allows first-time node pairing from configured CIDRs while rejecting upgrades/browser paths.
 import type { DevicePairingPendingRequest } from "../infra/device-pairing.types.js";
 import { isTrustedProxyAddress } from "./net.js";
 import type { NodePairingAutoApproveClientIpSource } from "./node-pairing-auto-approve.types.js";
-
-type NodePairingAutoApproveReason =
-  | "not-paired"
-  | "role-upgrade"
-  | "scope-upgrade"
-  | "metadata-upgrade";
 
 /** Remote auto-approval may grant only the fresh, capability-free node request it proved. */
 export function isScopelessNodePairingRequest(
@@ -22,7 +14,6 @@ export function isScopelessNodePairingRequest(
   );
 }
 
-/** Classifies how the gateway learned the client IP for node auto-approval. */
 export function resolveNodePairingClientIpSource(params: {
   reportedClientIp?: string;
   hasProxyHeaders: boolean;
@@ -38,11 +29,10 @@ export function resolveNodePairingClientIpSource(params: {
   return params.remoteIsLoopback ? "loopback-trusted-proxy" : "trusted-proxy";
 }
 
-/** Shared eligibility inputs for non-interactive first-time node pairing approvals. */
 export type FreshNodePairingEligibilityParams = {
   existingPairedDevice: boolean;
   role: string;
-  reason: NodePairingAutoApproveReason;
+  reason: "not-paired" | "role-upgrade" | "scope-upgrade" | "metadata-upgrade";
   scopes: readonly string[];
   hasBrowserOriginHeader: boolean;
   isControlUi: boolean;
@@ -74,7 +64,6 @@ export function isEligibleFreshNodePairingRequest(
   );
 }
 
-/** Returns true when a node pairing request can be auto-approved by trusted CIDR policy. */
 export function shouldAutoApproveNodePairingFromTrustedCidrs(
   params: FreshNodePairingEligibilityParams & {
     autoApproveCidrs?: readonly string[];

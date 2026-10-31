@@ -61,42 +61,6 @@ export type ManagedNpmProjectQuarantine = {
   movedArtifactNames: string[];
 };
 
-type ManagedNpmRootPrepareDependencyResult =
-  | { ok: true; dependencySpec: string }
-  | {
-      ok: false;
-      error: string;
-    };
-
-export type ManagedNpmRootDependencySpecPreparation = (params: {
-  npmRoot: string;
-}) => Promise<ManagedNpmRootPrepareDependencyResult>;
-
-export async function resolveManagedNpmRootDependencySpecForInstall(params: {
-  npmRoot: string;
-  packageName: string;
-  dependencySpec?: string;
-  prepareDependencySpec?: ManagedNpmRootDependencySpecPreparation;
-}): Promise<ManagedNpmRootPrepareDependencyResult> {
-  if (params.prepareDependencySpec) {
-    try {
-      return await params.prepareDependencySpec({ npmRoot: params.npmRoot });
-    } catch (error) {
-      return {
-        ok: false,
-        error: `Failed to prepare managed npm dependency for ${params.packageName}: ${String(error)}`,
-      };
-    }
-  }
-  if (params.dependencySpec === undefined) {
-    return {
-      ok: false,
-      error: `missing managed npm dependency spec for ${params.packageName}`,
-    };
-  }
-  return { ok: true, dependencySpec: params.dependencySpec };
-}
-
 export function isManagedNpmProjectCorruptionInstallFailure(result: {
   stdout: string;
   stderr: string;
@@ -193,30 +157,6 @@ function resolveManagedNpmRootForInstall(params: {
   });
 }
 
-function resolveManagedNpmInstallRoot(params: {
-  npmBaseDir: string;
-  packageName: string;
-  npmResolution: NpmSpecResolution;
-  useGeneration: boolean;
-}): string {
-  const generationKey = resolveManagedNpmRootGenerationKey({
-    packageName: params.packageName,
-    npmResolution: params.npmResolution,
-  });
-  const npmRoot = resolveManagedNpmRootForInstall(params);
-  const installRoot = resolveManagedNpmRootPackageDir(npmRoot, params.packageName);
-  if (!hasRetainedManagedNpmInstallMarker(installRoot)) {
-    return npmRoot;
-  }
-  // Never mutate a retained tree: an older process may still hold lazy imports
-  // rooted there. A fresh activation root keeps that module graph importable.
-  return resolvePluginNpmGenerationProjectDir({
-    npmDir: params.npmBaseDir,
-    packageName: params.packageName,
-    generationKey: `${generationKey}\nactivation\n${randomUUID()}`,
-  });
-}
-
 async function listManagedNpmPackageDirsForPackage(params: {
   runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
   npmBaseDir: string;
@@ -257,41 +197,6 @@ async function listManagedNpmPackageDirsForPackage(params: {
   return packageDirs;
 }
 
-async function resolveManagedNpmGenerationUseForInstall(params: {
-  runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
-  npmBaseDir: string;
-  packageName: string;
-  requestedMode: "install" | "update";
-  npmResolution?: NpmSpecResolution;
-}): Promise<"none" | "update" | "retained-install"> {
-  const packageDirs = await listManagedNpmPackageDirsForPackage({
-    runtime: params.runtime,
-    npmBaseDir: params.npmBaseDir,
-    packageName: params.packageName,
-  });
-  const hasNonRetainedPackageDir = packageDirs.some(
-    (packageDir) => !hasRetainedManagedNpmInstallMarker(packageDir),
-  );
-  if (packageDirs.length > 0 && !hasNonRetainedPackageDir) {
-    return "retained-install";
-  }
-  const generationUse =
-    params.requestedMode === "update" && hasNonRetainedPackageDir ? "update" : "none";
-  if (params.npmResolution) {
-    const candidateRoot = resolveManagedNpmRootForInstall({
-      npmBaseDir: params.npmBaseDir,
-      packageName: params.packageName,
-      npmResolution: params.npmResolution,
-      useGeneration: generationUse !== "none",
-    });
-    const candidatePackageDir = resolveManagedNpmRootPackageDir(candidateRoot, params.packageName);
-    if (hasRetainedManagedNpmInstallMarker(candidatePackageDir)) {
-      return "retained-install";
-    }
-  }
-  return generationUse;
-}
-
 export async function resolveManagedNpmInstallPlan(params: {
   runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
   npmBaseDir: string;
@@ -304,11 +209,43 @@ export async function resolveManagedNpmInstallPlan(params: {
   targetMode: "install" | "update";
   policyMode: "install" | "update";
 }> {
-  const generationUse = await resolveManagedNpmGenerationUseForInstall(params);
-  const npmRoot = resolveManagedNpmInstallRoot({
+  const packageDirs = await listManagedNpmPackageDirsForPackage(params);
+  const hasNonRetainedPackageDir = packageDirs.some(
+    (packageDir) => !hasRetainedManagedNpmInstallMarker(packageDir),
+  );
+  let generationUse: "none" | "update" | "retained-install" =
+    packageDirs.length > 0 && !hasNonRetainedPackageDir
+      ? "retained-install"
+      : params.requestedMode === "update" && hasNonRetainedPackageDir
+        ? "update"
+        : "none";
+  if (generationUse !== "retained-install") {
+    const candidateRoot = resolveManagedNpmRootForInstall({
+      ...params,
+      useGeneration: generationUse !== "none",
+    });
+    if (
+      hasRetainedManagedNpmInstallMarker(
+        resolveManagedNpmRootPackageDir(candidateRoot, params.packageName),
+      )
+    ) {
+      generationUse = "retained-install";
+    }
+  }
+  let npmRoot = resolveManagedNpmRootForInstall({
     ...params,
     useGeneration: generationUse !== "none",
   });
+  if (
+    hasRetainedManagedNpmInstallMarker(resolveManagedNpmRootPackageDir(npmRoot, params.packageName))
+  ) {
+    // Older processes may still hold lazy imports into the retained tree.
+    npmRoot = resolvePluginNpmGenerationProjectDir({
+      npmDir: params.npmBaseDir,
+      packageName: params.packageName,
+      generationKey: `${resolveManagedNpmRootGenerationKey(params)}\nactivation\n${randomUUID()}`,
+    });
+  }
   const installRoot = resolveManagedNpmRootPackageDir(npmRoot, params.packageName);
   const targetMode =
     generationUse === "retained-install" && hasRetainedManagedNpmInstallMarker(installRoot)

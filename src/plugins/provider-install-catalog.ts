@@ -6,6 +6,7 @@ import {
   type PluginInstallSourceInfo,
 } from "./install-source-info.js";
 import type { InstalledPluginInstallRecordInfo } from "./installed-plugin-index.js";
+import { isPluginManifestOnboardingScope } from "./manifest-capability-normalizers.js";
 import type { PluginPackageInstall } from "./manifest.js";
 import {
   getOfficialExternalPluginCatalogManifest,
@@ -21,6 +22,7 @@ import {
   resolveManifestProviderAuthChoices,
   type ProviderAuthChoiceMetadata,
 } from "./provider-auth-choices.js";
+import { PLUGIN_ORIGIN_PRIORITIES } from "./record-groups.js";
 
 /** Provider setup choice paired with install metadata for the owning plugin. */
 export type ProviderInstallCatalogEntry = ProviderAuthChoiceMetadata & {
@@ -47,32 +49,6 @@ type PreferredInstallSources = {
   installedPluginIds: ReadonlySet<string>;
   installsByPluginId: Map<string, PreferredInstallSource>;
 };
-type ProviderInstallCatalogChoiceFields = Pick<
-  ProviderAuthChoiceMetadata,
-  | "choiceHint"
-  | "modelTarget"
-  | "assistantPriority"
-  | "assistantVisibility"
-  | "groupId"
-  | "groupLabel"
-  | "groupHint"
-  | "optionKey"
-  | "cliFlag"
-  | "cliOption"
-  | "cliDescription"
-  | "onboardingScopes"
->;
-
-const INSTALL_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>> = {
-  config: 0,
-  bundled: 1,
-  global: 2,
-  workspace: 3,
-};
-
-function isPreferredOrigin(candidate: PluginOrigin, current: PluginOrigin | undefined): boolean {
-  return !current || INSTALL_ORIGIN_PRIORITY[candidate] < INSTALL_ORIGIN_PRIORITY[current];
-}
 
 function resolveInstallInfoFromInstallRecord(
   record: InstalledPluginInstallRecordInfo | undefined,
@@ -176,7 +152,11 @@ function resolvePreferredInstallsByPluginId(
       continue;
     }
     const existing = preferredByPluginId.get(record.pluginId);
-    if (!existing || isPreferredOrigin(record.origin, existing.origin)) {
+    if (
+      !existing ||
+      PLUGIN_ORIGIN_PRIORITIES[record.origin]?.provider <
+        PLUGIN_ORIGIN_PRIORITIES[existing.origin]?.provider
+    ) {
       preferredByPluginId.set(record.pluginId, {
         origin: record.origin,
         install,
@@ -187,40 +167,13 @@ function resolvePreferredInstallsByPluginId(
   return { installedPluginIds, installsByPluginId: preferredByPluginId };
 }
 
-function resolveProviderInstallCatalogChoiceFields(
-  choice: ProviderInstallCatalogChoiceFields,
-): Partial<ProviderInstallCatalogChoiceFields> {
-  return {
-    ...(choice.choiceHint ? { choiceHint: choice.choiceHint } : {}),
-    ...(choice.modelTarget ? { modelTarget: choice.modelTarget } : {}),
-    ...(choice.assistantPriority !== undefined
-      ? { assistantPriority: choice.assistantPriority }
-      : {}),
-    ...(choice.assistantVisibility ? { assistantVisibility: choice.assistantVisibility } : {}),
-    ...(choice.groupId ? { groupId: choice.groupId } : {}),
-    ...(choice.groupLabel ? { groupLabel: choice.groupLabel } : {}),
-    ...(choice.groupHint ? { groupHint: choice.groupHint } : {}),
-    ...(choice.optionKey ? { optionKey: choice.optionKey } : {}),
-    ...(choice.cliFlag ? { cliFlag: choice.cliFlag } : {}),
-    ...(choice.cliOption ? { cliOption: choice.cliOption } : {}),
-    ...(choice.cliDescription ? { cliDescription: choice.cliDescription } : {}),
-    ...(choice.onboardingScopes ? { onboardingScopes: choice.onboardingScopes } : {}),
-  };
-}
-
-function isProviderFlowScope(
-  value: unknown,
-): value is "text-inference" | "image-generation" | "music-generation" {
-  return value === "text-inference" || value === "image-generation" || value === "music-generation";
-}
-
 function normalizeProviderAuthChoiceScopes(
   scopes: OfficialExternalProviderAuthChoice["onboardingScopes"],
 ): ("text-inference" | "image-generation" | "music-generation")[] | undefined {
   if (!Array.isArray(scopes)) {
     return undefined;
   }
-  const normalized = scopes.filter(isProviderFlowScope);
+  const normalized = scopes.filter(isPluginManifestOnboardingScope);
   return normalized.length > 0 ? normalized : undefined;
 }
 
@@ -262,6 +215,7 @@ function resolveOfficialExternalProviderInstallCatalogEntries(params: {
         if (!methodId || !choiceId || !choiceLabel || params.seenChoiceIds.has(choiceId)) {
           continue;
         }
+        const onboardingScopes = normalizeProviderAuthChoiceScopes(choice.onboardingScopes);
         entries.push({
           pluginId,
           providerId,
@@ -269,10 +223,22 @@ function resolveOfficialExternalProviderInstallCatalogEntries(params: {
           methodId,
           choiceId,
           choiceLabel,
-          ...resolveProviderInstallCatalogChoiceFields({
-            ...choice,
-            onboardingScopes: normalizeProviderAuthChoiceScopes(choice.onboardingScopes),
-          }),
+          ...(choice.choiceHint ? { choiceHint: choice.choiceHint } : {}),
+          ...(choice.modelTarget ? { modelTarget: choice.modelTarget } : {}),
+          ...(choice.assistantPriority !== undefined
+            ? { assistantPriority: choice.assistantPriority }
+            : {}),
+          ...(choice.assistantVisibility
+            ? { assistantVisibility: choice.assistantVisibility }
+            : {}),
+          ...(choice.groupId ? { groupId: choice.groupId } : {}),
+          ...(choice.groupLabel ? { groupLabel: choice.groupLabel } : {}),
+          ...(choice.groupHint ? { groupHint: choice.groupHint } : {}),
+          ...(choice.optionKey ? { optionKey: choice.optionKey } : {}),
+          ...(choice.cliFlag ? { cliFlag: choice.cliFlag } : {}),
+          ...(choice.cliOption ? { cliOption: choice.cliOption } : {}),
+          ...(choice.cliDescription ? { cliDescription: choice.cliDescription } : {}),
+          ...(onboardingScopes ? { onboardingScopes } : {}),
           ...(choice.deprecatedChoiceIds?.length
             ? { deprecatedChoiceIds: [...choice.deprecatedChoiceIds] }
             : {}),
@@ -289,7 +255,6 @@ function resolveOfficialExternalProviderInstallCatalogEntries(params: {
   return entries;
 }
 
-/** Lists install catalog entries for provider setup choices. */
 export function resolveProviderInstallCatalogEntries(
   params?: ProviderInstallCatalogParams,
 ): ProviderInstallCatalogEntry[] {
@@ -323,7 +288,6 @@ export function resolveProviderInstallCatalogEntries(
   );
 }
 
-/** Resolves one provider install catalog entry by setup choice id. */
 export function resolveProviderInstallCatalogEntry(
   choiceId: string,
   params?: ProviderInstallCatalogParams,

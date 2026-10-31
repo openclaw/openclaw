@@ -1,4 +1,5 @@
 import {
+  externalContentStamp,
   readStringParam,
   resolveSearchTimeoutSeconds,
   type SearchConfigRecord,
@@ -51,12 +52,7 @@ export async function executeCodexWebSearchProviderTool(
     provider: "codex",
     model: result.model,
     tookMs: Date.now() - start,
-    externalContent: {
-      untrusted: true,
-      source: "web_search",
-      provider: "codex",
-      wrapped: true,
-    },
+    externalContent: externalContentStamp("codex"),
     content: wrapWebContent(result.text, "web_search"),
     searches,
   };

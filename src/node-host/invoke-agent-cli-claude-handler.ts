@@ -1,48 +1,34 @@
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
+import { stripCliNativeAuthEnv } from "../agents/cli-runner/execution-env.js";
 import type { DesktopHostConfig } from "../config/types.desktop.js";
 import { createExecApprovalPolicySnapshot } from "../infra/exec-approvals.js";
-import type { scanInstalledApps } from "../infra/installed-apps.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node-host.js";
 import type { NodeHostClient, NodeInvokeResponder } from "./client.js";
 import {
   decodeClaudeCliNodeRunParams,
+  CLAUDE_NODE_CLEAR_ENV,
   type ClaudeCliNodeRunParams,
   type ClaudeCliNodeRunResult,
 } from "./invoke-agent-cli-claude-params.js";
 import { runClaudeCliNodeCommand } from "./invoke-agent-cli-claude.js";
-import {
-  buildSystemRunApprovalPlan,
-  handleSystemRunInvoke,
-  resolveEffectiveSystemRunExecPolicy,
-} from "./invoke-system-run.js";
-import type { NodeInvokeRequestPayload, RunResult, SkillBinsProvider } from "./invoke-types.js";
+import { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
+import { handleSystemRunInvoke, resolveEffectiveSystemRunExecPolicy } from "./invoke-system-run.js";
+import type { NodeInvokeRequestPayload, RunResult } from "./invoke-types.js";
+import type { SkillBinsProvider } from "./runtime-skill-bins.js";
 
 export type NodeHostInvokeRuntime = {
   claudePath?: string;
-  handleSystemRun?: typeof handleSystemRunInvoke;
   signal?: AbortSignal;
   pluginCommandIo?: OpenClawPluginNodeHostCommandIo;
   pluginCommandContext?: OpenClawPluginNodeHostCommandContext;
   installedAppsSharingEnabled?: boolean;
-  installedAppsPlatform?: NodeJS.Platform;
-  scanInstalledApps?: typeof scanInstalledApps;
   gatewayUrl?: string;
   gatewayTlsFingerprint?: string;
   gatewayCloudflareAccess?: CloudflareAccessCredentials;
   desktopHostConfig?: DesktopHostConfig;
   emitProgress?: (text: string) => Promise<void>;
 };
-
-type ClaudeCliNodeInvokeDeps = Pick<
-  Parameters<typeof handleSystemRunInvoke>[0],
-  | "resolveExecSecurity"
-  | "resolveExecAsk"
-  | "isCmdExeInvocation"
-  | "sanitizeEnv"
-  | "runViaMacAppExecHost"
-  | "buildExecEventPayload"
->;
 
 const CLAUDE_NODE_AUTH_INPUTS = [
   {
@@ -94,7 +80,6 @@ export async function handleClaudeCliNodeInvoke(params: {
   response: NodeInvokeResponder;
   skillBins: SkillBinsProvider;
   runtime: NodeHostInvokeRuntime;
-  deps: ClaudeCliNodeInvokeDeps;
 }): Promise<void> {
   if (!params.runtime.claudePath) {
     await params.response.error("UNAVAILABLE", "Claude CLI agent runs are unavailable");
@@ -123,8 +108,6 @@ export async function handleClaudeCliNodeInvoke(params: {
   const execPolicy = await resolveEffectiveSystemRunExecPolicy({
     cfg: getNodeRuntimeConfig(),
     agentId: request.agentId,
-    defaultSecurity: params.deps.resolveExecSecurity(undefined),
-    defaultAsk: params.deps.resolveExecAsk(undefined),
     requireSocket: false,
   });
   const approvalPlan = {
@@ -135,9 +118,7 @@ export async function handleClaudeCliNodeInvoke(params: {
     }),
   };
   let runResult: RunResult | undefined;
-  await (params.runtime.handleSystemRun ?? handleSystemRunInvoke)({
-    ...params.deps,
-    client: params.client,
+  await handleSystemRunInvoke({
     // The command-specific validator is the execution boundary. Approval sees
     // every caller-supplied executable argument. The node adds its own prompt,
     // verified resources, and invocation-only MCP proxy after approval.
@@ -152,8 +133,6 @@ export async function handleClaudeCliNodeInvoke(params: {
       timeoutMs: request.timeoutMs,
     },
     skillBins: params.skillBins,
-    execHostEnforced: false,
-    execHostFallbackAllowed: true,
     runCommand: async (approvalArgv, cwd, env, timeoutMs, _signal, assertCurrent) => {
       const childEnv = { ...env };
       for (const key of request.clearEnv ?? []) {
@@ -161,8 +140,16 @@ export async function handleClaudeCliNodeInvoke(params: {
           delete childEnv[key];
         }
       }
+      if (request.nativeAuthOnly) {
+        stripCliNativeAuthEnv(
+          childEnv,
+          { config: getNodeRuntimeConfig(), workspaceDir: cwd ?? process.cwd() },
+          // The node's config directory selects its own native login.
+          [...CLAUDE_NODE_CLEAR_ENV].filter((key) => key !== "CLAUDE_CONFIG_DIR"),
+        );
+      }
       const preparedSecret = prepareClaudeNodeSecretInput({
-        requestEnv: request.env,
+        requestEnv: request.nativeAuthOnly ? undefined : request.env,
         childEnv,
       });
       try {
@@ -184,10 +171,6 @@ export async function handleClaudeCliNodeInvoke(params: {
       }
       return runResult;
     },
-    // Agent runs already report through the agent-run stream. Suppress the
-    // system.run lifecycle side-channel, whose Gateway provenance is scoped
-    // exclusively to system.run invokes.
-    sendNodeEvent: async () => {},
     sendInvokeResult: async (result) => {
       if (
         !result.ok &&
@@ -216,7 +199,6 @@ export async function handleClaudeCliNodeInvoke(params: {
       };
       await params.response.json(payload);
     },
-    sendExecFinishedEvent: async () => {},
     preferMacAppExecHost: false,
   });
 }

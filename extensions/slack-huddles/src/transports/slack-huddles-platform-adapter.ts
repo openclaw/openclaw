@@ -2,12 +2,7 @@ import {
   MeetingPlatformAdapter,
   type MeetingBrowserJoinSession,
 } from "openclaw/plugin-sdk/meeting-runtime";
-import {
-  slackHuddleAudioCaptureScript,
-  slackHuddleLeaveScript,
-  slackHuddleStatusScript,
-  slackHuddleTranscriptScript,
-} from "./slack-huddles-page-scripts.js";
+import { slackHuddlePageScripts } from "./slack-huddles-page-scripts.js";
 import {
   isRecoverableSlackHuddleTab,
   isSameSlackHuddleUrl,
@@ -19,10 +14,6 @@ import type {
   SlackHuddlesMode,
   SlackHuddlesTranscriptSnapshot,
 } from "./types.js";
-
-function slackHuddleOrigin(meetingUrl: string): string | undefined {
-  return normalizeSlackHuddleUrlForReuse(meetingUrl) ? "https://app.slack.com" : undefined;
-}
 
 export const SLACK_HUDDLES_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
   MeetingBrowserJoinSession<SlackHuddlesMode>,
@@ -73,12 +64,8 @@ export const SLACK_HUDDLES_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
     retryCaptions: false,
     unavailableMessage:
       "Open the OpenClaw browser profile, finish Slack sign-in, admission, or permission prompt, then retry.",
-    origin: slackHuddleOrigin,
-    scripts: {
-      audioCapture: slackHuddleAudioCaptureScript,
-      status: slackHuddleStatusScript,
-      leave: slackHuddleLeaveScript,
-      transcript: slackHuddleTranscriptScript,
-    },
+    origin: (meetingUrl) =>
+      normalizeSlackHuddleUrlForReuse(meetingUrl) ? "https://app.slack.com" : undefined,
+    scripts: slackHuddlePageScripts,
   }),
 });

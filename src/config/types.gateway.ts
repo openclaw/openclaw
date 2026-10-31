@@ -44,11 +44,11 @@ export type GatewayControlUiConfig = Omit<
    * this break-glass flag can migrate an unpaired browser safely.
    */
   dangerouslyDisableDeviceAuth?: boolean;
-  github?: { token?: SecretInput };
+  github?: { host?: string; token?: SecretInput };
 };
 
 /** Gateway authentication strategy for WebSocket and HTTP clients. */
-export type GatewayAuthMode = "none" | "token" | "password" | "trusted-proxy";
+export type GatewayAuthMode = NonNullable<GatewayAuthConfig["mode"]>;
 
 /**
  * Configuration for trusted reverse proxy authentication.
@@ -68,7 +68,7 @@ export type GatewayAuthConfig = Omit<
 export type GatewayAuthRateLimitConfig = NonNullable<GatewayAuthConfig["rateLimit"]>;
 
 /** Tailscale exposure mode for gateway HTTP/WebSocket surfaces. */
-export type GatewayTailscaleMode = "off" | "serve" | "funnel";
+export type GatewayTailscaleMode = NonNullable<GatewayTailscaleConfig["mode"]>;
 
 export type GatewayTailscaleConfig = Omit<
   NonNullable<GatewayConfigInput["tailscale"]>,
@@ -125,7 +125,7 @@ export type GatewayOperatorRolesConfig = Omit<
   NonNullable<GatewayConfigInput["roles"]>,
   "default"
 > & {
-  /** Required validated default for profiles without a valid assigned role. */
+  /** Required default for profiles without a valid explicit or GitHub login assignment. */
   default?: string;
 };
 

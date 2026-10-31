@@ -6,10 +6,6 @@ export type {
   ExtensionCommandContextActions,
   ExtensionUIContext,
   InputSource,
-  LoadExtensionsResult,
-  SessionStartEvent,
   ToolDefinition,
   ToolInfo,
-  TreePreparation,
 } from "./types.js";
-export { wrapRegisteredTools } from "./wrapper.js";

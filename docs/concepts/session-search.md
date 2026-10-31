@@ -19,6 +19,9 @@ active-path row outside the current view opens that original closed interval and
 not mix later post-reset turns.
 
 Anchored reads use `limit` to bound the surrounding messages. Omit `offset` when using an anchor.
+Large transcript windows may return fewer messages to stay within the source byte limit.
+Jump-to-message reads retain the requested message, and directional history cursors continue
+through adjacent large messages without skipping them or reporting a false end of history.
 For SQLite transcript history, a missing or off-path message returns empty history rather than
 the newest tail; a `sessionId` that does not belong to the selected session key is rejected.
 These rules also apply in local embedded mode, without a running Gateway.
@@ -37,8 +40,19 @@ applied. Sandboxed agents remain limited to sessions they spawned when spawned-s
 is enabled. Incognito sessions remain excluded; narrowing visibility from `all` blocks ordinary
 cross-agent access.
 
-Excerpts are redacted before they return to the model. Results are also bounded by count, excerpt
+Excerpts preserve transcript text, including credentials. Results are bounded by count, excerpt
 length, and total response size.
+
+Queries must contain text and cannot exceed 4,096 UTF-16 code units. A search
+returns at most 25 hits. The tool trims each excerpt to 300 UTF-16 code units
+plus an ellipsis when needed, within a 32 KiB result budget. Query words are
+literal text; punctuation does not become database query syntax.
+
+Each transcript search request allows up to 90 seconds, leaving dispatch and
+authorization headroom around the reader's 60-second budget, including worker admission.
+If it times out, retry `sessions_search` with a `sessionKey` to search one session
+or more specific query keywords. A timeout does not mean that no matching
+conversation exists.
 
 ## Control UI search
 
@@ -63,24 +77,37 @@ Groups do not grant access to private conversations or include incognito or
 archived sessions in active search.
 
 Search returns a bounded set of the best matches. More matches than the result limit is
-normal, not an incomplete-index warning; refine the query to narrow the results. Genuine
-indexing work and cold archived transcripts excluded from search have separate status
+normal, not a search-completeness warning; refine the query to narrow the results. Unconfirmed
+search completeness and cold archived transcripts excluded from search have separate status
 messages. Cold transcript history becomes searchable again when its session is opened
 and the history is restored. Search does not restore archived history automatically.
 
 ## Index lifecycle
 
-OpenClaw stores a full-text index next to the transcript rows in each agent's SQLite database.
+OpenClaw stores a full-text index with the transcript rows in each agent's database.
 New user and assistant messages are indexed in the same transaction that persists them, so the
 index never lags live conversations; tool results, reasoning blocks, and images are excluded.
 Only the transcript's active branch is searchable.
 
 Transcripts that predate the index (for example, sessions imported by `openclaw doctor`) and
 sessions whose active branch was rewound are reindexed by a background reconciliation that starts
-with the next search. A response with `indexing: true` can therefore be incomplete; retry after
-indexing finishes. Deleting a session removes its index entries in the same transaction.
+with the next search. Deleting a session removes its index entries in the same transaction.
 
-Search uses SQLite's Unicode word tokenizer with diacritic removal.
+A response with `indexing: true` means search completeness could not be confirmed, not necessarily
+that indexing is running. Returned matches remain usable, but results may be incomplete;
+retry shortly.
+
+SQLite search uses its Unicode word tokenizer with diacritic removal. PostgreSQL
+search uses the `simple` text configuration with `unaccent`, retaining literal
+word, phrase, and prefix matching. Its native ranking is engine-local, so scores
+and result order can differ from SQLite. See
+[PostgreSQL search](/reference/database-engines#search-on-postgresql) for extension
+requirements and supported modes.
+
+Agent namespace prefixes are literal, including underscores in agent IDs.
+The default-agent PostgreSQL RPC search uses a planner-selective prefix predicate
+so selective text queries can start from the full-text index. Explicit session
+selections and other search scopes can use different plans.
 
 ## Session search vs. memory search
 

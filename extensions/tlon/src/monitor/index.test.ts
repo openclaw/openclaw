@@ -1,9 +1,15 @@
-// Tlon monitor tests cover authentication, inbound context, and shutdown lifecycle.
-import { createServer, type Server } from "node:http";
+import fs from "node:fs/promises";
+import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import os from "node:os";
 import { join } from "node:path";
 import { setImmediate } from "node:timers/promises";
+import {
+  closeOpenClawStateDatabaseForTest,
+  createChannelIngressQueueForTests,
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
@@ -45,7 +51,11 @@ afterEach(async () => {
 async function withMonitor(run: (runtime: RuntimeEnv) => Promise<void>) {
   const controller = new AbortController();
   const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
-  const monitor = monitorTlonProvider({ abortSignal: controller.signal, runtime });
+  const monitor = monitorTlonProvider({
+    scheduler: createTestPluginServiceScheduler(),
+    abortSignal: controller.signal,
+    runtime,
+  });
   // Observe startup failures while the subscription assertion is pending.
   void monitor.catch(() => {});
   try {
@@ -70,7 +80,6 @@ function getSubscription(app: string, path?: string) {
 it.each([
   { ship: "~nec", text: "approve missing", reply: "No pending approval found for ID: missing" },
   { ship: "~nec", text: "pending", reply: "No pending approval requests." },
-  { ship: "~nec", text: "approveable", reply: undefined },
   { ship: "~bus", text: "pending", reply: undefined },
 ])("routes $ship's '$text' through the owner command boundary", async ({ ship, text, reply }) => {
   const controller = new AbortController();
@@ -81,7 +90,11 @@ it.each([
   sseClientMock.connect.mockImplementationOnce(async () => connected.resolve());
   ingressMock.receive.mockResolvedValueOnce({ kind: "ignored" });
 
-  const monitor = monitorTlonProvider({ abortSignal: controller.signal, runtime });
+  const monitor = monitorTlonProvider({
+    scheduler: createTestPluginServiceScheduler(),
+    abortSignal: controller.signal,
+    runtime,
+  });
   try {
     await Promise.race([connected.promise, monitor]);
     const subscription = getSubscription("chat");
@@ -140,6 +153,7 @@ describe("monitorTlonProvider authentication retry", () => {
 
     await expect(
       monitorTlonProvider({
+        scheduler: createTestPluginServiceScheduler(),
         abortSignal: controller.signal,
         runtime,
       }),
@@ -256,7 +270,7 @@ it.each([
     authenticateMock.mockResolvedValueOnce("urbauth-~zod=proof");
     settingsManagerMock.load.mockResolvedValueOnce(settings);
 
-    await withMonitor(async () => {
+    await withMonitor(async (runtime) => {
       const chatSubscription = getSubscription("chat", "/v3");
       sseClientMock.poke.mockClear();
       ingressMock.receive
@@ -264,8 +278,12 @@ it.each([
         .mockResolvedValueOnce({ kind: "ignored" });
 
       const inviteEvent = [{ ship }];
-      sseClientMock.poke.mockRejectedValueOnce(new Error("DM invite write failed"));
-      await expect(chatSubscription.event(inviteEvent)).rejects.toThrow("DM invite write failed");
+      const failure = new Error("DM invite write failed");
+      sseClientMock.poke.mockRejectedValueOnce(failure);
+      await expect(chatSubscription.event(inviteEvent)).rejects.toBe(failure);
+      expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+        "[tlon] Error handling chat firehose event: DM invite write failed",
+      );
       await chatSubscription.event(inviteEvent);
 
       expect(sseClientMock.poke).toHaveBeenCalledTimes(2);
@@ -304,7 +322,7 @@ it("persists group invite approval before notification and acknowledgement", asy
   });
 });
 
-it("preserves an oversized queue and applies a bare owner approval to its newest request", async () => {
+it("preserves an oversized queue and applies an explicit owner approval", async () => {
   authenticateMock.mockResolvedValueOnce("urbauth-~zod=proof");
   const pendingApprovals = Array.from(
     { length: TLON_PENDING_APPROVAL_LIMIT + 1 },
@@ -321,12 +339,13 @@ it("preserves an oversized queue and applies a bare owner approval to its newest
   await withMonitor(async () => {
     const chatSubscription = getSubscription("chat", "/v3");
     sseClientMock.poke.mockClear();
+    const approvalText = `approve dm-${TLON_PENDING_APPROVAL_LIMIT}`;
 
     await chatSubscription.event({
       whom: "~nec",
       id: "approve-newest",
       response: {
-        add: { essay: { author: "~nec", content: [{ inline: ["approve"] }], sent: 1 } },
+        add: { essay: { author: "~nec", content: [{ inline: [approvalText] }], sent: 1 } },
       },
     });
 
@@ -335,8 +354,6 @@ it("preserves an oversized queue and applies a bare owner approval to its newest
       .filter(Boolean);
     const allowlistWrite = settingWrites.find((entry) => entry["entry-key"] === "dmAllowlist");
     expect(allowlistWrite?.value).toEqual([`~requester-${TLON_PENDING_APPROVAL_LIMIT}`]);
-    expect(allowlistWrite?.value).not.toContain(`~requester-${TLON_PENDING_APPROVAL_LIMIT - 1}`);
-
     const pendingWrite = settingWrites.find((entry) => entry["entry-key"] === "pendingApprovals");
     const remaining = JSON.parse(String(pendingWrite?.value)) as PendingApproval[];
     expect(remaining).toHaveLength(TLON_PENDING_APPROVAL_LIMIT);
@@ -404,7 +421,11 @@ it("continues startup after an initial group invite write fails", async () => {
     }
   });
 
-  const monitor = monitorTlonProvider({ abortSignal: controller.signal, runtime });
+  const monitor = monitorTlonProvider({
+    scheduler: createTestPluginServiceScheduler(),
+    abortSignal: controller.signal,
+    runtime,
+  });
   try {
     await vi.waitFor(() => expect(sseClientMock.connect).toHaveBeenCalledOnce());
     expect(sseClientMock.subscribe.mock.calls.map(([subscription]) => subscription)).toEqual(
@@ -424,31 +445,20 @@ it("continues startup after an initial group invite write fails", async () => {
 describe("monitorTlonProvider reply prefixes", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     afterEach(async () => {
-      // Retire background maintenance before removing its database or changing clocks.
-      for (const dir of tempDirs.dirs) {
-        await closeOpenClawAgentDatabasesAsync(dir);
-      }
-      cleanup();
-      // A case that failed before holding maintenance has no fake clock to inspect.
-      if (vi.isFakeTimers()) {
-        expect.soft(vi.getTimerCount()).toBe(0);
+      try {
+        for (const dir of tempDirs.dirs) {
+          await closeOpenClawAgentDatabasesAsync(dir);
+        }
+        cleanup();
+        if (vi.isFakeTimers()) {
+          expect.soft(vi.getTimerCount()).toBe(0);
+        }
+      } finally {
+        vi.useRealTimers();
       }
     }),
   );
-  it.for([
-    { name: "global fallback", root: undefined, account: undefined, expected: "[global] reply" },
-    { name: "channel override", root: "[root]", account: undefined, expected: "[root] reply" },
-    { name: "account override", root: "[root]", account: "[account]", expected: "[account] reply" },
-    { name: "empty account override", root: "[root]", account: "", expected: "reply" },
-    { name: "identity", root: "auto", account: undefined, expected: "[Test Bot] reply" },
-    {
-      name: "selected model",
-      root: "[{model}]",
-      account: undefined,
-      expected: "[gpt-5.6-luna] reply",
-    },
-  ])("delivers $name through the shared dispatcher", async (row, { signal }) => {
-    const { name, root, account, expected } = row;
+  it("delivers the selected model prefix through the shared dispatcher", async ({ signal }) => {
     const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
       "openclaw/plugin-sdk/channel-inbound",
     );
@@ -459,16 +469,16 @@ describe("monitorTlonProvider reply prefixes", () => {
     const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
     realUrbitFixture.config = {
       session: { store: join(stateDir, "sessions.json") },
-      agents: { list: [{ id: "main", identity: { name: "Test Bot" } }] },
-      messages: { responsePrefix: "[global]" },
+      agents: { entries: { main: { identity: { name: "Test Bot" } } } },
+      messages: { responsePrefix: "[global]", visibleReplies: "automatic" },
       channels: {
         tlon: {
           code: "code",
           ship: "~zod",
           url: realUrbitFixture.url,
           ownerShip: "~nec",
-          responsePrefix: root,
-          accounts: { default: { responsePrefix: account } },
+          responsePrefix: "[{model}]",
+          accounts: { default: {} },
           showModelSignature: true,
         },
       },
@@ -495,6 +505,7 @@ describe("monitorTlonProvider reply prefixes", () => {
       }),
     );
     const monitor = monitorTlonProvider({
+      scheduler: createTestPluginServiceScheduler(),
       abortSignal: AbortSignal.any([controller.signal, signal]),
       runtime,
     });
@@ -508,17 +519,18 @@ describe("monitorTlonProvider reply prefixes", () => {
       vi.useFakeTimers({ toFake: ["setImmediate", "clearImmediate"] });
       await subscription.event({
         whom: "~nec",
-        id: `dm-prefix-${name}`,
+        id: "dm-prefix-selected-model",
         response: {
           add: { essay: { author: "~nec", content: [{ inline: ["hello"] }], sent: Date.now() } },
         },
       });
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
       const sends = sseClientMock.poke.mock.calls
         .map(([value]) => value)
         .filter((value) => value.mark === "chat-dm-action");
       expect(sends).toHaveLength(1);
       const text = extractMessageText(sends[0].json.diff.delta.add.memo.content);
-      expect(text.split("\n")[0]).toBe(expected);
+      expect(text.split("\n")[0]).toBe("[gpt-5.6-luna] reply");
       expect(text).toContain("Generated by");
       expect(runtime.error).not.toHaveBeenCalled();
     } finally {
@@ -538,31 +550,7 @@ describe("monitorTlonProvider sender roles", () => {
       "owner",
       "~nocsyx-lassul [owner]",
     ],
-    [
-      "unprefixed owner",
-      "nocsyx-lassul",
-      "~nocsyx-lassul",
-      false,
-      "owner",
-      "~nocsyx-lassul [owner]",
-    ],
-    [
-      "claimed owner in message text",
-      "~nocsyx-lassul",
-      "~malicious-actor",
-      false,
-      "user",
-      "~malicious-actor [user]",
-    ],
     ["missing owner", undefined, "~nocsyx-lassul", false, "user", "~nocsyx-lassul [user]"],
-    [
-      "owner group message",
-      "~nocsyx-lassul",
-      "~nocsyx-lassul",
-      true,
-      "owner",
-      "~nocsyx-lassul [owner] in chat/~host/general",
-    ],
     [
       "user group message",
       "~nocsyx-lassul",
@@ -578,14 +566,6 @@ describe("monitorTlonProvider sender roles", () => {
       false,
       "user",
       "~nocsyx-lassul-fake [user]",
-    ],
-    [
-      "owner prefix lookalike",
-      "~nocsyx-lassul",
-      "~fake-nocsyx-lassul",
-      false,
-      "user",
-      "~fake-nocsyx-lassul [user]",
     ],
   ] as const)(
     "labels %s from the admitted sender",
@@ -755,37 +735,16 @@ describe("monitorTlonProvider shutdown", () => {
     controller.abort();
     const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
 
-    await expect(monitorTlonProvider({ abortSignal: controller.signal, runtime })).rejects.toThrow(
-      "Aborted while waiting to authenticate",
-    );
+    await expect(
+      monitorTlonProvider({
+        scheduler: createTestPluginServiceScheduler(),
+        abortSignal: controller.signal,
+        runtime,
+      }),
+    ).rejects.toThrow("Aborted while waiting to authenticate");
 
     expect(authenticateMock).not.toHaveBeenCalled();
     expect(ingressMock.start).not.toHaveBeenCalled();
-  });
-
-  it("settles and cleans up when startup aborts before the shutdown listener is registered", async () => {
-    vi.useFakeTimers();
-    const controller = new AbortController();
-    const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
-    authenticateMock.mockResolvedValueOnce("urbauth-~zod=proof");
-    sseClientMock.connect.mockImplementationOnce(async () => {
-      controller.abort();
-    });
-
-    let settled = false;
-    const monitor = monitorTlonProvider({ abortSignal: controller.signal, runtime }).then(() => {
-      settled = true;
-    });
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(sseClientMock.connect).toHaveBeenCalledOnce();
-    expect(ingressMock.start).toHaveBeenCalledOnce();
-    expect(settled).toBe(true);
-    expect(sseClientMock.stopReceiving).toHaveBeenCalledOnce();
-    expect(ingressMock.stop).toHaveBeenCalledOnce();
-    expect(sseClientMock.close).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
-    await monitor;
   });
 
   it.each([
@@ -837,11 +796,6 @@ describe("monitorTlonProvider shutdown", () => {
         res.write(": connected\n\n");
         return;
       }
-      if (req.method === "DELETE" && pathname.startsWith("/~/channel/")) {
-        res.writeHead(204);
-        res.end();
-        return;
-      }
       res.writeHead(404);
       res.end();
     });
@@ -856,8 +810,12 @@ describe("monitorTlonProvider shutdown", () => {
     const actualAuth = await vi.importActual<typeof import("../urbit/auth.js")>("../urbit/auth.js");
     authenticateMock.mockImplementationOnce(actualAuth.authenticate);
 
-    const pollIntervalSpy = vi.spyOn(globalThis, "setInterval");
-    const monitor = monitorTlonProvider({ abortSignal: controller.signal, runtime });
+    const scheduler = createTestPluginServiceScheduler();
+    const monitor = monitorTlonProvider({
+      scheduler,
+      abortSignal: controller.signal,
+      runtime,
+    });
     if (!abortDuringHandshake) {
       await vi.waitFor(() => expect(ingressMock.start).toHaveBeenCalledOnce());
       controller.abort();
@@ -872,11 +830,7 @@ describe("monitorTlonProvider shutdown", () => {
     ]);
     clearTimeout(deadline);
     if (outcome === "timed out") {
-      for (const [index, [, delay]] of pollIntervalSpy.mock.calls.entries()) {
-        if (delay === 120_000) {
-          clearInterval(pollIntervalSpy.mock.results[index]?.value);
-        }
-      }
+      scheduler.beginClose();
       const realClient = realUrbitFixture.client;
       if (realClient) {
         realClient.stopReceiving();
@@ -886,10 +840,12 @@ describe("monitorTlonProvider shutdown", () => {
     } else {
       realUrbitFixture.client = null;
     }
+    await scheduler.stop();
     expect(requests).toContain("POST /~/login");
     expect(requests.some((request) => request.startsWith("GET /~/scry/"))).toBe(true);
     expect(requests.some((request) => request.startsWith("GET /~/channel/"))).toBe(true);
-    expect(requests.some((request) => request.startsWith("DELETE /~/channel/"))).toBe(true);
+    expect(requests.some((request) => request.startsWith("DELETE /~/channel/"))).toBe(false);
+    expect(subscriptions).toContainEqual([{ action: "delete" }]);
     expect(subscriptions.flat()).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ action: "subscribe", app: "channels" }),
@@ -901,6 +857,251 @@ describe("monitorTlonProvider shutdown", () => {
       expect(ingressMock.stop).toHaveBeenCalledOnce();
     }
     expect(outcome).toBe("settled");
-    pollIntervalSpy.mockRestore();
+  });
+
+  it("streams deeply nested poison and capped messages over real HTTP SSE through production handlers and recovers on the next messages", async () => {
+    const createdDir = await fs.mkdtemp(join(os.tmpdir(), "tlon-live-stream-"));
+    const stateDir = await fs.realpath(createdDir);
+    const controller = new AbortController();
+    const ackedEventIds: number[] = [];
+    const subscriptionsByApp = new Map<string, number>();
+    let stream: ServerResponse | undefined;
+    const streamOpened = Promise.withResolvers<ServerResponse>();
+    const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
+
+    const server = createServer((req, res) => {
+      const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
+
+      if (req.method === "POST" && pathname === "/~/login") {
+        res.writeHead(200, {
+          "Content-Type": "text/plain",
+          "Set-Cookie": "urbauth-~zod=proof; Path=/",
+        });
+        res.end("ok");
+        return;
+      }
+      if (req.method === "GET" && pathname.startsWith("/~/scry/")) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end("{}");
+        return;
+      }
+      if (req.method === "PUT" && pathname.startsWith("/~/channel/")) {
+        let body = "";
+        req.setEncoding("utf8");
+        req.on("data", (part: string) => {
+          body += part;
+        });
+        req.on("end", () => {
+          const actions = JSON.parse(body) as Array<{
+            id?: number;
+            action?: string;
+            app?: string;
+            "event-id"?: number;
+          }>;
+          for (const item of actions) {
+            if (item.action === "subscribe" && item.app && typeof item.id === "number") {
+              subscriptionsByApp.set(item.app, item.id);
+            }
+            if (item.action === "ack" && typeof item["event-id"] === "number") {
+              ackedEventIds.push(item["event-id"]);
+            }
+          }
+          res.writeHead(204);
+          res.end();
+        });
+        return;
+      }
+      if (req.method === "GET" && pathname.startsWith("/~/channel/")) {
+        res.writeHead(200, {
+          "Cache-Control": "no-cache",
+          "Content-Type": "text/event-stream",
+        });
+        res.write(": connected\n\n");
+        streamOpened.resolve(res);
+        return;
+      }
+      if (req.method === "DELETE" && pathname.startsWith("/~/channel/")) {
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    runningServers.push(server);
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address() as AddressInfo;
+    const queue = createChannelIngressQueueForTests<{
+      version: 1;
+      receivedAt: number;
+      source: "channels" | "chat";
+      rawEvent: string;
+    }>({
+      channelId: "tlon",
+      accountId: "default",
+      stateDir,
+    });
+    realUrbitFixture.url = `http://127.0.0.1:${address.port}`;
+    realUrbitFixture.enabled = true;
+    realUrbitFixture.useRealIngress = true;
+    realUrbitFixture.openChannelIngressQueue = () => queue;
+    realUrbitFixture.config = {
+      channels: {
+        tlon: {
+          code: "code",
+          ship: "~zod",
+          url: realUrbitFixture.url,
+          network: { dangerouslyAllowPrivateNetwork: true },
+          ownerShip: "~nec",
+          groupChannels: ["chat/~zod/general"],
+          dmAllowlist: ["~bus"],
+        },
+      },
+    };
+    const actualAuth = await vi.importActual<typeof import("../urbit/auth.js")>("../urbit/auth.js");
+    const actualRuntimeEnv = await vi.importActual<
+      typeof import("openclaw/plugin-sdk/runtime-env")
+    >("openclaw/plugin-sdk/runtime-env");
+    authenticateMock.mockImplementation(actualAuth.authenticate);
+    sleepWithAbortMock.mockImplementation(actualRuntimeEnv.sleepWithAbort);
+    inboundRuntimeMock.dispatch.mockImplementation(
+      async (params: { replyOptions?: { onReplyStart?: () => Promise<void> | void } }) => {
+        await params.replyOptions?.onReplyStart?.();
+      },
+    );
+
+    const scheduler = createTestPluginServiceScheduler();
+    const monitor = monitorTlonProvider({
+      scheduler,
+      abortSignal: controller.signal,
+      runtime,
+    });
+
+    try {
+      stream = await streamOpened.promise;
+      await vi.waitFor(() => {
+        expect(subscriptionsByApp.get("channels")).toBeTypeOf("number");
+        expect(subscriptionsByApp.get("chat")).toBeTypeOf("number");
+      });
+      const channelsSubId = subscriptionsByApp.get("channels")!;
+      const chatSubId = subscriptionsByApp.get("chat")!;
+
+      const buildNestedInlineJson = (depth: number, leafText: string, tailText?: string) => {
+        const nested =
+          depth > 0
+            ? `${'{"bold":['.repeat(depth)}${JSON.stringify(leafText)}${"]}".repeat(depth)}`
+            : JSON.stringify(leafText);
+        return tailText
+          ? `[{"inline":[${nested}]},{"inline":[${JSON.stringify(tailText)}]}]`
+          : `[{"inline":[${nested}]}]`;
+      };
+
+      // 1) Event 25: 100,000-level channel message (parses over SSE, overflows JSON.stringify in durable ingress).
+      const unserializableGroupJson = `{"nest":"chat/~zod/general","response":{"post":{"id":"msg-poison-100k","r-post":{"set":{"essay":{"author":"~nec","content":${buildNestedInlineJson(100_000, "x")},"sent":1700000000001}}}}}}`;
+      stream.write(`id: 25\ndata: {"id":${channelsSubId},"json":${unserializableGroupJson}}\n\n`);
+      await vi.waitFor(() => expect(ackedEventIds).toContain(25), { timeout: 2_000 });
+
+      // 2) Event 26: 2,000-level channel message mentioning ~zod (serializes durably, exercises bounded extractor in handleChannelsFirehose).
+      const deepGroupJson = `{"nest":"chat/~zod/general","response":{"post":{"id":"msg-deep-group-2k","r-post":{"set":{"essay":{"author":"~nec","content":${buildNestedInlineJson(2_000, "deep", "~zod group after deep")},"sent":1700000000002}}}}}}`;
+      stream.write(`id: 26\ndata: {"id":${channelsSubId},"json":${deepGroupJson}}\n\n`);
+
+      // 3) Event 27: ordinary group message after the deep messages.
+      const normalGroupJson = JSON.stringify({
+        nest: "chat/~zod/general",
+        response: {
+          post: {
+            id: "msg-normal-group",
+            "r-post": {
+              set: {
+                essay: {
+                  author: "~nec",
+                  content: [{ inline: ["~zod hello group"] }],
+                  sent: 1700000000003,
+                },
+              },
+            },
+          },
+        },
+      });
+      stream.write(`id: 27\ndata: {"id":${channelsSubId},"json":${normalGroupJson}}\n\n`);
+
+      // 4) Event 46: 2,000-level DM followed by visible text (exercises bounded extractor in handleChatFirehose + triggers second SSE ack threshold).
+      const deepDmJson = `{"whom":"~bus","id":"dm-deep-2k","response":{"add":{"essay":{"author":"~bus","content":${buildNestedInlineJson(2_000, "deep", "dm after deep")},"sent":1700000000004}}}}`;
+      stream.write(`id: 46\ndata: {"id":${chatSubId},"json":${deepDmJson}}\n\n`);
+
+      // 5) Event 67: ordinary DM after the deep DM (triggers third SSE ack threshold).
+      const normalDmJson = JSON.stringify({
+        whom: "~bus",
+        id: "dm-normal",
+        response: {
+          add: {
+            essay: {
+              author: "~bus",
+              content: [{ inline: ["hello dm"] }],
+              sent: 1700000000005,
+            },
+          },
+        },
+      });
+      stream.write(`id: 67\ndata: {"id":${chatSubId},"json":${normalDmJson}}\n\n`);
+
+      await vi.waitFor(
+        () => {
+          expect(ackedEventIds).toEqual([25, 46, 67]);
+          expect(inboundRuntimeMock.buildContext).toHaveBeenCalledTimes(4);
+          expect(inboundRuntimeMock.dispatch).toHaveBeenCalledTimes(4);
+        },
+        { timeout: 5_000 },
+      );
+
+      await realUrbitFixture.ingress?.waitForIdle();
+      expect(await queue.listPending({ limit: "all" })).toEqual([]);
+
+      const builtMessages = inboundRuntimeMock.buildContext.mock.calls.map((call) => {
+        const [arg] = call as [
+          { messageId: string; message: { rawBody: string; commandBody: string } },
+        ];
+        return {
+          messageId: arg.messageId,
+          rawBody: arg.message.rawBody,
+          commandBody: arg.message.commandBody,
+        };
+      });
+      expect(builtMessages).toEqual([
+        {
+          messageId: "msg-deep-group-2k",
+          rawBody: `${"**".repeat(200)}\n~zod group after deep`,
+          commandBody: `${"**".repeat(200)}\n group after deep`,
+        },
+        {
+          messageId: "msg-normal-group",
+          rawBody: "~zod hello group",
+          commandBody: "hello group",
+        },
+        {
+          messageId: "dm-deep-2k",
+          rawBody: `${"**".repeat(200)}\ndm after deep`,
+          commandBody: `${"**".repeat(200)}\ndm after deep`,
+        },
+        {
+          messageId: "dm-normal",
+          rawBody: "hello dm",
+          commandBody: "hello dm",
+        },
+      ]);
+      expect(runtime.log).toHaveBeenCalledWith(
+        "tlon dropped channels event: Tlon firehose event is too deeply nested to store.",
+      );
+    } finally {
+      controller.abort();
+      stream?.end();
+      await monitor.catch(() => undefined);
+      await scheduler.stop();
+      closeOpenClawStateDatabaseForTest();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 });

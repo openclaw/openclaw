@@ -1,5 +1,7 @@
 import { isMainThread } from "node:worker_threads";
+import JSON5 from "json5";
 import { loadDotEnvAsync } from "../infra/dotenv.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
@@ -20,26 +22,23 @@ import {
   coerceConfig,
   containsConfigIncludeDirective,
   hashConfigRaw,
+  readConfigFileIfPresent,
   resolveConfigForRead,
   resolveConfigIncludesForRead,
   restoreEnvChangesIfUnchanged,
   snapshotEnv,
 } from "./io.read-helpers.js";
 import { maybeLoadDotEnvForConfig } from "./io.runtime-env.js";
-import { materializeConfigSnapshotDefaults } from "./io.snapshot-preparation.js";
+import {
+  materializeConfigSnapshotDefaults,
+  prepareConfigSnapshotValidation,
+} from "./io.snapshot-preparation.js";
 import { createConfigFileSnapshot } from "./io.snapshot-shared.js";
 import { loggedConfigWarningFingerprints, loggedInvalidConfigs } from "./io.state.js";
-import {
-  logConfigWarningsOnce,
-  warnIfConfigFromFuture,
-  warnOnConfigMiskeys,
-} from "./io.warnings.js";
+import { logConfigWarningsOnce, warnIfConfigFromFuture } from "./io.warnings.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { OpenClawConfig } from "./types.js";
-import {
-  validateConfigObjectWithPlugins,
-  validateConfigObjectWithPluginsAsync,
-} from "./validation.js";
+import { validateConfigObjectWithPlugins } from "./validation.js";
 
 type ConfigLoadOptions = { skipSuspiciousRecovery?: boolean; assertCurrent?: () => void };
 
@@ -72,20 +71,16 @@ function* loadConfigWithEffects(
       sync: () => maybeLoadDotEnvForConfig(deps.env),
       async: async () => {
         if (deps.env === process.env) {
-          await loadDotEnvAsync({ env: deps.env, quiet: true });
+          await loadDotEnvAsync({ env: deps.env });
         }
       },
     });
     envBeforeRead = snapshotEnv(deps.env);
-    const exists = yield* resolveConfigIoEffect({
-      sync: () => deps.fs.existsSync(configPath),
-      async: () =>
-        deps.fs.promises.access(configPath).then(
-          () => true,
-          () => false,
-        ),
+    const raw = yield* resolveConfigIoEffect({
+      sync: () => readConfigFileIfPresent(deps, configPath),
+      async: () => deps.fs.promises.readFile(configPath, "utf-8").catch(ignoreMissingPath),
     });
-    if (!exists) {
+    if (raw === undefined) {
       loggedConfigWarningFingerprints.delete(configPath);
       // A missing config is the fresh-install default path: materialize the
       // same runtime defaults an empty {} config gets, or out-of-box behavior
@@ -111,11 +106,7 @@ function* loadConfigWithEffects(
           context.finalizeLoadedRuntimeConfigAsync(materialized, metadata, options.assertCurrent),
       });
     }
-    const raw = yield* resolveConfigIoEffect({
-      sync: () => deps.fs.readFileSync(configPath, "utf-8"),
-      async: () => deps.fs.promises.readFile(configPath, "utf-8"),
-    });
-    const parsed = deps.json5.parse(raw);
+    const parsed = JSON5.parse(raw);
     const readResolution = resolveConfigForRead(
       resolveConfigIncludesForRead(parsed, configPath, deps),
       deps.env,
@@ -128,7 +119,6 @@ function* loadConfigWithEffects(
         `Config (${configPath}): missing env var "${warning.varName}" at ${warning.configPath} - feature using this value will be unavailable`,
       );
     }
-    warnOnConfigMiskeys(effectiveConfigRaw, deps.logger);
     // A scalar/null root (truncated or clobbered file) must fail validation
     // below like any invalid config — never load as an empty config marked
     // valid, which would run with defaults and poison lastKnownGood.
@@ -153,7 +143,7 @@ function* loadConfigWithEffects(
     const { deferredPluginMigrations, validated } = yield* resolveConfigIoEffect({
       sync: () =>
         withSynchronousArtifactPreservingStateSnapshot(() => {
-          const pending = context.resolveDeferredPluginMigrations();
+          const pending = context.options.deferredPluginMigrations;
           return {
             deferredPluginMigrations: pending,
             validated: validateConfigObjectWithPlugins(effectiveConfigRaw, {
@@ -163,17 +153,13 @@ function* loadConfigWithEffects(
             }),
           };
         }),
-      async: async () => {
-        const pending = await context.resolveDeferredPluginMigrationsAsync();
-        return {
-          deferredPluginMigrations: pending,
-          validated: await validateConfigObjectWithPluginsAsync(effectiveConfigRaw, {
-            ...validationParams,
-            deferredPluginMigrations: pending,
-            loadPluginMetadataSnapshotAsync: pluginMetadata.loadAsync,
-          }),
-        };
-      },
+      async: () =>
+        prepareConfigSnapshotValidation({
+          context,
+          metadata: pluginMetadata,
+          raw: effectiveConfigRaw,
+          sourceRaw: parsed,
+        }),
     });
     if (!validated.ok) {
       const invalidSnapshot = createConfigFileSnapshot({

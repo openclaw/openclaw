@@ -11,7 +11,7 @@ import {
 } from "../../session-cards/progress-card-input.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, ToolInputError } from "./common.js";
-import { callInProcessGatewayTool, type InProcessGatewayCaller } from "./in-process-gateway.js";
+import { callInProcessGatewayTool } from "./in-process-gateway.js";
 import { recordProgressCardToolOutcome } from "./progress-card-tool-outcome.js";
 
 const ProgressCardToolSchema = Type.Object(
@@ -25,12 +25,10 @@ const ProgressCardToolSchema = Type.Object(
 type ProgressCardToolOptions = {
   agentSessionKey?: string;
   agentId?: string;
-  callGateway?: InProcessGatewayCaller;
   onPlanSaved?: (unfinished: boolean) => void;
 };
 
 export function createProgressCardTool(options: ProgressCardToolOptions = {}): AnyAgentTool {
-  const gatewayCall = options.callGateway ?? callInProcessGatewayTool;
   return {
     name: "progress_card",
     label: "Progress Card",
@@ -55,18 +53,16 @@ export function createProgressCardTool(options: ProgressCardToolOptions = {}): A
         }
         throw error;
       }
-      const result = await gatewayCall<ProgressCardPutResult>("progressCard.put", {
+      const result = await callInProcessGatewayTool<ProgressCardPutResult>("progressCard.put", {
         sessionKey,
         ...(options.agentId !== undefined ? { agentId: options.agentId } : {}),
         ...(input.markdown ? { markdown: input.markdown } : {}),
         ...(input.steps ? { plan: input.steps } : {}),
       });
-      options.onPlanSaved?.(
-        result.card?.steps?.some((step) => step.status !== "completed") === true,
-      );
       const completed =
         result.card?.steps?.filter((step) => step.status === "completed").length ?? 0;
       const total = result.card?.steps?.length ?? 0;
+      options.onPlanSaved?.(completed < total);
       const payload = {
         revision: result.card?.revision ?? null,
         steps: total > 0 ? { completed, total } : null,

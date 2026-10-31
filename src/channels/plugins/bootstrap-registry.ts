@@ -5,28 +5,9 @@ import {
   getBundledChannelSetupPlugin,
   getBundledChannelSetupSecrets,
 } from "./bundled.js";
-import { mergeChannelPluginSection } from "./merge-plugin-section.js";
-import type { ChannelPlugin } from "./types.plugin.js";
+import { mergeChannelPlugins, mergeChannelPluginSection } from "./merge-plugin-section.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
-
-function mergeBootstrapPlugin(
-  runtimePlugin: ChannelPlugin,
-  setupPlugin: ChannelPlugin,
-): ChannelPlugin {
-  return {
-    ...runtimePlugin,
-    ...setupPlugin,
-    meta: mergeChannelPluginSection(runtimePlugin.meta, setupPlugin.meta),
-    capabilities: mergeChannelPluginSection(runtimePlugin.capabilities, setupPlugin.capabilities),
-    commands: mergeChannelPluginSection(runtimePlugin.commands, setupPlugin.commands),
-    doctor: mergeChannelPluginSection(runtimePlugin.doctor, setupPlugin.doctor),
-    reload: mergeChannelPluginSection(runtimePlugin.reload, setupPlugin.reload),
-    config: mergeChannelPluginSection(runtimePlugin.config, setupPlugin.config),
-    messaging: mergeChannelPluginSection(runtimePlugin.messaging, setupPlugin.messaging),
-    actions: mergeChannelPluginSection(runtimePlugin.actions, setupPlugin.actions),
-    secrets: mergeChannelPluginSection(runtimePlugin.secrets, setupPlugin.secrets),
-  } as ChannelPlugin;
-}
 
 /**
  * Loads a bundled channel plugin for bootstrap, merging runtime and setup artifacts.
@@ -47,7 +28,7 @@ export function getBootstrapChannelPlugin(id: ChannelId): ChannelPlugin | undefi
     return undefined;
   }
   return runtimePlugin && setupPlugin
-    ? mergeBootstrapPlugin(runtimePlugin, setupPlugin)
+    ? mergeChannelPlugins(runtimePlugin, setupPlugin, "override")
     : (setupPlugin ?? runtimePlugin);
 }
 

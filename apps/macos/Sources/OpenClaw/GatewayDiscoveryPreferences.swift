@@ -27,10 +27,7 @@ enum GatewayDiscoveryPreferences {
         self.setPreferredStableID(stableID)
         guard self.preferredStableID() != nil,
               let routeBinding = routeBinding?.nonEmpty
-        else {
-            AppDefaults.standard.removeObject(forKey: self.preferredRouteBindingKey)
-            return
-        }
+        else { return }
         AppDefaults.standard.set(routeBinding, forKey: self.preferredRouteBindingKey)
     }
 

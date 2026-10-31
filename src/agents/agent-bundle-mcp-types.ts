@@ -1,4 +1,3 @@
-/** Shared bundle MCP catalog, runtime, and manager types. */
 import type {
   CallToolResult,
   GetPromptResult,
@@ -34,7 +33,6 @@ export type BundleMcpToolRuntime = {
   dispose: () => Promise<void>;
 };
 
-/** Catalog metadata for one configured MCP server. */
 export type McpServerCatalog = {
   serverName: string;
   safeServerName?: string;
@@ -43,6 +41,8 @@ export type McpServerCatalog = {
   marketplace?: string;
   title?: string;
   icons?: McpAppIcon[];
+  /** Complete server-level guidance from the upstream initialize result. */
+  instructions?: string;
   settings?: McpAppSettingsCapability;
   toolCount: number;
   resources?: {
@@ -82,7 +82,6 @@ export type McpCatalogTool = {
   oauthConnectBootstrap?: true;
 };
 
-/** Complete tool catalog for a session-scoped MCP runtime. */
 export type McpToolCatalog = {
   version: number;
   generatedAt: number;
@@ -217,6 +216,7 @@ export type SessionMcpRuntimeManager = {
   acquire: (params: {
     sessionId: string;
     sessionKey?: string;
+    agentId?: string;
     workspaceDir: string;
     agentDir?: string;
     cfg?: OpenClawConfig;
@@ -244,20 +244,23 @@ export type SessionMcpRuntimeManager = {
     catalog: McpToolCatalog,
   ) => void;
   getAdvertisedScopedCatalog: (sessionId: string) => McpToolCatalog | null;
-  bindSessionKey: (sessionKey: string, sessionId: string) => void;
   resolveSessionId: (sessionKey: string) => string | undefined;
   /** Looks up an existing runtime only; must not create runtimes or connect transports. */
   peekSession: (params: {
     sessionId?: string;
     sessionKey?: string;
   }) => SessionMcpRuntime | undefined;
+  captureSessionRetirement: (params: {
+    sessionId?: string;
+    sessionKey?: string;
+  }) => { sessionId: string; retire: (assertCurrent: () => void) => Promise<void> } | undefined;
   disposeSession: (sessionId: string) => Promise<void>;
   /** Required retirement stays armed when a stopping run creates or reuses a runtime. */
   deferRetirement: (sessionId: string, opts?: { retainAcrossReuse?: boolean }) => boolean;
   completeDeferredRetirement: (sessionId: string, runtime?: SessionMcpRuntime) => Promise<boolean>;
   reloadConfig: (params: SessionMcpConfigReload) => Promise<void>;
   disposeAll: () => Promise<void>;
-  sweepIdleRuntimes: () => Promise<number>;
+  sweepIdleRuntimes: () => Promise<void>;
   listSessionIds: () => string[];
   /** All managed cache keys (session ids and requester composite keys). */
   listRuntimeKeys: () => string[];

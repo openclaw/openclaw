@@ -1,11 +1,19 @@
 import type { SessionsSearchParams } from "../../../packages/gateway-protocol/src/index.js";
+import { listAgentIds } from "../../agents/agent-scope-config.js";
 import { isConfiguredSessionStoreAgentId } from "../../config/sessions.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeAgentIdStrict } from "../../routing/session-key.js";
+import {
+  isAcpSessionKey,
+  normalizeAgentIdStrict,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { invalidSessionRequest } from "../session-request-error.js";
-import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
+import {
+  resolveSessionStoreAgentId,
+  resolveStoredSessionKeyForAgentStore,
+} from "../session-store-key.js";
 
 export function resolveSessionSearchScope(cfg: OpenClawConfig, params: SessionsSearchParams) {
   const normalizedRequest =
@@ -14,29 +22,41 @@ export function resolveSessionSearchScope(cfg: OpenClawConfig, params: SessionsS
     return invalidSessionRequest(`Unknown agent id "${params.agentId}"`);
   }
   const requestedAgentId = normalizedRequest?.value;
-  const resolvedSessionKeys: Array<{ sessionKey: string; agentId: string }> | undefined =
-    params.sessionKeys ? [] : undefined;
+  const sessionKeys: string[] | undefined = params.sessionKeys ? [] : undefined;
+  const agentIds = new Set<string>();
+  const rosterAgentIds = new Set(listAgentIds(cfg));
   for (const sessionKey of params.sessionKeys ?? []) {
-    const requestedAgent =
+    const acpOwnerAgentId =
+      parseAgentSessionKey(sessionKey) && isAcpSessionKey(sessionKey)
+        ? resolveSessionStoreAgentId(cfg, sessionKey)
+        : undefined;
+    const configuredAcpOwner = Boolean(
       requestedAgentId &&
-      !isConfiguredSessionStoreAgentId(cfg, requestedAgentId) &&
-      resolvePersistedSessionStoreOwnerForKey(cfg, sessionKey).kind === "none"
+      !rosterAgentIds.has(requestedAgentId) &&
+      isConfiguredSessionStoreAgentId(cfg, requestedAgentId) &&
+      acpOwnerAgentId === requestedAgentId &&
+      resolvePersistedSessionStoreOwnerForKey(cfg, sessionKey).kind === "none",
+    );
+    const requestedAgent =
+      requestedAgentId && configuredAcpOwner
         ? ({ ok: true, agentId: requestedAgentId } as const)
-        : resolveRequestedSessionAgentId(cfg, sessionKey, requestedAgentId);
+        : requestedAgentId &&
+            !isConfiguredSessionStoreAgentId(cfg, requestedAgentId) &&
+            resolvePersistedSessionStoreOwnerForKey(cfg, sessionKey).kind === "none"
+          ? ({ ok: true, agentId: requestedAgentId } as const)
+          : resolveRequestedSessionAgentId(cfg, sessionKey, requestedAgentId);
     if (!requestedAgent.ok) {
       return requestedAgent;
     }
-    resolvedSessionKeys?.push({
-      sessionKey: resolveStoredSessionKeyForAgentStore({
+    sessionKeys?.push(
+      resolveStoredSessionKeyForAgentStore({
         cfg,
         agentId: requestedAgent.agentId,
         sessionKey,
       }),
-      agentId: requestedAgent.agentId,
-    });
+    );
+    agentIds.add(requestedAgent.agentId);
   }
-  const sessionKeys = resolvedSessionKeys?.map((resolved) => resolved.sessionKey);
-  const agentIds = new Set(resolvedSessionKeys?.map((resolved) => resolved.agentId));
   if (
     agentIds.size > 1 ||
     (requestedAgentId && [...agentIds].some((agentId) => agentId !== requestedAgentId))

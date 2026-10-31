@@ -15,7 +15,6 @@ import {
   statRegularFile,
   walkDirectory,
 } from "./fs-utils.js";
-import { hashText } from "./hash.js";
 import type { MemoryChunk } from "./markdown-chunks.js";
 import {
   buildMemoryMultimodalLabel,
@@ -30,20 +29,14 @@ import {
 import { retryTransientMemoryRead } from "./read-retry.js";
 import type { MemoryExtraPath } from "./types.js";
 
-export { hashText } from "./hash.js";
-export {
-  parseEmbedding,
-  cosineSimilarity,
-  encodeMemoryEmbedding,
-  decodeMemoryEmbedding,
-} from "./embedding-vector.js";
+export const hashText: (value: string) => string = sha256Hex;
+export { encodeMemoryEmbedding, decodeMemoryEmbedding } from "./embedding-vector.js";
 export {
   chunkMarkdown,
   splitCuratedMarkdownEntries,
   remapChunkLines,
   MEMORY_CHUNKING_VERSION,
   type MemoryChunk,
-  type CuratedMarkdownEntry,
 } from "./markdown-chunks.js";
 
 export type MemoryFileEntry = {
@@ -101,7 +94,7 @@ function expandHomePath(value: string): string {
   return value;
 }
 
-export type NormalizedExtraMemoryPath = { path: string; pattern?: string };
+type NormalizedExtraMemoryPath = { path: string; pattern?: string; evergreen?: true };
 
 export function normalizeExtraMemoryPathEntries(
   workspaceDir: string,
@@ -114,6 +107,9 @@ export function normalizeExtraMemoryPathEntries(
     };
     if (typeof entry !== "string") {
       normalized.pattern = entry.pattern?.replaceAll("\\", "/");
+      if (entry.evergreen === true) {
+        normalized.evergreen = true;
+      }
     }
     return normalized;
   });
@@ -173,17 +169,12 @@ export function isMemoryPath(relPath: string): boolean {
     .trim()
     .replace(/^[./]+/, "")
     .replace(/\\/g, "/");
-  if (!normalized) {
-    return false;
-  }
-  if (
+  return (
     normalized === MEMORY_HOST_ROOT_FILENAME ||
     normalized === "USER.md" ||
-    normalized.toLowerCase() === "dreams.md"
-  ) {
-    return true;
-  }
-  return normalized.startsWith("memory/");
+    normalized.toLowerCase() === "dreams.md" ||
+    normalized.startsWith("memory/")
+  );
 }
 
 function isAllowedMemoryFilePath(filePath: string, multimodal?: MemoryMultimodalSettings): boolean {
@@ -304,12 +295,9 @@ export async function listMemoryFiles(
 
   const extraPathsByRoot = new Map<string, NormalizedExtraMemoryPath[]>();
   for (const entry of normalizeExtraMemoryPathEntries(workspaceDir, extraPaths)) {
-    const entries = extraPathsByRoot.get(entry.path);
-    if (entries) {
-      entries.push(entry);
-    } else {
-      extraPathsByRoot.set(entry.path, [entry]);
-    }
+    const entries = extraPathsByRoot.get(entry.path) ?? [];
+    entries.push(entry);
+    extraPathsByRoot.set(entry.path, entries);
   }
   for (const [inputPath, entries] of extraPathsByRoot) {
     if (shouldSkipWorkspaceMemoryPath(inputPath)) {
@@ -363,6 +351,20 @@ export async function listMemoryFiles(
   return deduped;
 }
 
+async function readIndexingBuffer(
+  read: () => ReturnType<typeof readRegularFile>,
+  label: string,
+): Promise<Buffer | null> {
+  try {
+    return (await retryTransientMemoryRead(read, label)).buffer;
+  } catch (error) {
+    if (isFileMissingError(error)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
 export async function buildFileEntry(
   absPath: string,
   workspaceDir: string,
@@ -378,23 +380,16 @@ export async function buildFileEntry(
   if (modality && stat.size > multimodalSettings.maxFileBytes) {
     return null;
   }
-  let buffer: Buffer;
-  try {
-    buffer = (
-      await retryTransientMemoryRead(
-        () =>
-          readRegularFile({
-            filePath: absPath,
-            maxBytes: modality ? multimodalSettings.maxFileBytes : undefined,
-          }),
-        modality ? `read multimodal memory file ${absPath}` : `read memory index file ${absPath}`,
-      )
-    ).buffer;
-  } catch (err) {
-    if (isFileMissingError(err)) {
-      return null;
-    }
-    throw err;
+  const buffer = await readIndexingBuffer(
+    () =>
+      readRegularFile({
+        filePath: absPath,
+        maxBytes: modality ? multimodalSettings.maxFileBytes : undefined,
+      }),
+    modality ? `read multimodal memory file ${absPath}` : `read memory index file ${absPath}`,
+  );
+  if (buffer === null) {
+    return null;
   }
   if (modality) {
     const mimeType = await detectMime({ buffer: buffer.subarray(0, 512), filePath: absPath });
@@ -403,7 +398,7 @@ export async function buildFileEntry(
     }
     const contentText = buildMemoryMultimodalLabel(modality, normalizedPath);
     const dataHash = sha256Hex(buffer);
-    const chunkHash = hashText(
+    const chunkHash = sha256Hex(
       JSON.stringify({
         path: normalizedPath,
         contentText,
@@ -429,7 +424,7 @@ export async function buildFileEntry(
     absPath,
     mtimeMs: stat.mtimeMs,
     size: stat.size,
-    hash: hashText(buffer.toString("utf-8")),
+    hash: sha256Hex(buffer.toString("utf-8")),
     kind: "markdown",
   };
 }
@@ -450,19 +445,12 @@ export async function buildMultimodalChunkForIndexing(
   if (regularFile.stat.size !== entry.size) {
     return null;
   }
-  let buffer: Buffer;
-  try {
-    buffer = (
-      await retryTransientMemoryRead(
-        () => readRegularFile({ filePath: entry.absPath, maxBytes: entry.size }),
-        `read multimodal indexing file ${entry.absPath}`,
-      )
-    ).buffer;
-  } catch (err) {
-    if (isFileMissingError(err)) {
-      return null;
-    }
-    throw err;
+  const buffer = await readIndexingBuffer(
+    () => readRegularFile({ filePath: entry.absPath, maxBytes: entry.size }),
+    `read multimodal indexing file ${entry.absPath}`,
+  );
+  if (buffer === null) {
+    return null;
   }
   const dataHash = sha256Hex(buffer);
   if (entry.dataHash && entry.dataHash !== dataHash) {
@@ -496,7 +484,6 @@ export {
   INVALID_PROJECT_ANNOTATION_KEY,
   normalizeProjectAnnotationKey,
   stripMemoryAnnotationCarriers,
-  type CuratedProjectAnnotations,
 } from "./curated-annotations.js";
 
 export { runWithConcurrency } from "./concurrency.js";

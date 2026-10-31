@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 import type { UserConfig } from "tsdown";
 import { packageActivationRuntimeEntrypoint } from "../../src/infra/package-update-activation-runtime-assets.ts";
 import { managedHandoffRuntimeEntrypoint } from "../../src/infra/update-managed-service-handoff-runtime-assets.ts";
+import { createFsSafeWindowsHelperAssetPlugin } from "./fs-safe-windows-helper-asset.mts";
 import { createStateSchemaInlinePlugin } from "./state-schema-inline-plugin.mts";
 
 /** The installed CLI and invocation compiler seal the same typed lease owner. */
@@ -15,13 +16,16 @@ function createSealedRecoveryBuildConfig(entry: typeof managedHandoffRuntimeEntr
   const identityReader = fileURLToPath(
     new URL("../../src/shared/freebsd-process-identity.ts", import.meta.url),
   );
-  const privateNativeLoader = fileURLToPath(
-    new URL("../../src/infra/update-managed-service-handoff-native-loader.ts", import.meta.url),
+  // Literal URLs keep both loaders visible to declaration-input capture.
+  const nativeLoader = fileURLToPath(
+    entry === managedHandoffRuntimeEntrypoint
+      ? new URL("../../src/infra/update-managed-service-handoff-native-loader.ts", import.meta.url)
+      : new URL("../../src/infra/package-update-activation-native-loader.ts", import.meta.url),
   );
   return {
     entry: {
       [entry.distWorkerPath.replace(/\.mjs$/u, "")]: fileURLToPath(
-        new URL(`./${entry.sourceWorkerName}.ts`, entry.currentModuleUrl),
+        new URL(`../../${entry.sourceModulePath}`, import.meta.url),
       ),
     },
     outDir: "dist",
@@ -32,16 +36,15 @@ function createSealedRecoveryBuildConfig(entry: typeof managedHandoffRuntimeEntr
     envPrefix: [],
     define: { SEALED_RUNTIME_BUILD: "true" },
     plugins: [
+      createFsSafeWindowsHelperAssetPlugin(),
       createStateSchemaInlinePlugin(),
       {
         name: "openclaw:managed-handoff-native-loader",
-        // All shared identity consumers in this bundle use the same private loader.
-        // Normal installations and sibling sealed builds keep their own loader policy.
+        // All shared identity consumers in this bundle use its recovery-owned loader.
+        // Normal installations and other sealed builds keep their own loader policy.
         resolveId(source, importer) {
-          return entry === managedHandoffRuntimeEntrypoint &&
-            source === "./freebsd-process-identity-native.ts" &&
-            importer === identityReader
-            ? privateNativeLoader
+          return source === "./freebsd-process-identity-native.ts" && importer === identityReader
+            ? nativeLoader
             : null;
         },
       },

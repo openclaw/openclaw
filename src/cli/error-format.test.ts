@@ -1,12 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { formatStrictJsonParseFailure } from "./error-format.js";
+import { parseConfigSetValue } from "./config-cli-path.js";
 
-describe("formatStrictJsonParseFailure", () => {
+function readStrictJsonFailure(value: string): string {
+  try {
+    parseConfigSetValue(value, true);
+  } catch (error) {
+    if (error instanceof Error) {
+      return error.message;
+    }
+    throw error;
+  }
+  throw new Error("Expected strict JSON parsing to fail");
+}
+
+describe("parseConfigSetValue strict JSON failures", () => {
   it("offers file-based recovery for invalid JSON", () => {
-    const message = formatStrictJsonParseFailure({
-      value: "[telegram:123456]",
-      cause: "invalid token",
-    });
+    const message = readStrictJsonFailure("[telegram:123456]");
 
     expect(message).toContain("openclaw config patch --file <path> --dry-run");
     expect(message).toContain("JSON5 config patch object");
@@ -15,7 +24,7 @@ describe("formatStrictJsonParseFailure", () => {
   it("keeps the bounded JSON preview UTF-16 well-formed", () => {
     const value = `${"x".repeat(44)}🚀tail`;
 
-    const message = formatStrictJsonParseFailure({ value, cause: "invalid token" });
+    const message = readStrictJsonFailure(value);
 
     expect(message).toContain(`${"x".repeat(44)}...`);
     expect(message).not.toContain("\uD83D");

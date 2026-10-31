@@ -1,4 +1,5 @@
-import { expect, it, vi, type MockInstance } from "vitest";
+import { expect, it, vi } from "vitest";
+import type { MockInstance } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -8,6 +9,7 @@ import {
   createOperatorClient,
 } from "../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
@@ -16,17 +18,20 @@ import {
   getAdmittedRunDelegatedAuthority,
   prepareSystemAgentRunAdmission,
 } from "./admitted-run-context.js";
+import type { EmbeddedAgentQueueHandle } from "./embedded-agent-runner/runs.js";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-  type EmbeddedAgentQueueHandle,
-} from "./embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "./embedded-agent-runner/runs.test-support.js";
-import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  createEmbeddedRunHandle,
+} from "./embedded-agent-runner/runs.test-support.js";
+import {
+  createSessionsSendTestCaller,
+  setSessionsSendTestActiveRun,
+} from "./openclaw-tools.sessions-steering.test-support.js";
 import { announceTesting } from "./subagents/announce/subagent-announce-overrides.test-support.js";
 import { subscribeSubagentRunChanges } from "./subagents/registry/subagent-registry-publication.js";
 import {
   addSubagentRunForTests,
+  countPendingDescendantRuns,
   getSubagentRunByRunId,
   registerSubagentRun,
   resetSubagentRegistryForTests,
@@ -46,12 +51,109 @@ export type GatewayCall = {
   onAccepted?: (payload: unknown) => void;
 };
 
+export function observeSubagentChange(ready: () => boolean) {
+  const done = createDeferredCore();
+  const stop = subscribeSubagentRunChanges("persistence", () => {
+    if (ready()) {
+      done.resolve();
+    }
+  });
+  return { ...done, stop };
+}
+
+/** Gateway response for a requester turn that accepted and delivered one reply. */
+export function deliveredRequesterReply(text: string) {
+  return {
+    status: "ok",
+    inputProcessingCompleted: true,
+    result: {
+      payloads: [{ text }],
+      deliveryStatus: { status: "sent", resultCount: 1 },
+    },
+  };
+}
+
+/** Ends a child run through its real lifecycle event and waits for the terminal registry row. */
+export async function endChildRun(
+  runId: string,
+  childSessionKey: string,
+  terminalReply: { disposition: "visible"; text: string },
+) {
+  const ended = observeSubagentChange(
+    () => getSubagentRunByRunId(runId)?.execution.status === "terminal",
+  );
+  emitAgentEvent({
+    runId,
+    sessionKey: childSessionKey,
+    stream: "lifecycle",
+    data: { phase: "end", endedAt: Date.now(), terminalReply },
+  });
+  await ended.promise;
+  ended.stop();
+}
+
+/** Asserts a consumed child result finished cleanup and no longer counts as pending work. */
+export async function expectChildCleanupSettled(runId: string, requesterSessionKey: string) {
+  expect(getSubagentRunByRunId(runId)?.cleanupCompletedAt).toBeTypeOf("number");
+  expect(await countPendingDescendantRuns(requesterSessionKey, () => {})).toBe(0);
+}
+
+export function seedDeliveredChild(
+  runId: string,
+  childSessionKey: string,
+  requesterSessionKey: string,
+) {
+  return addSubagentRunForTests({
+    runId,
+    childSessionKey,
+    requesterSessionKey,
+    requesterAgentId: "main",
+    expectsCompletionMessage: true,
+    createdAt: 1,
+    execution: { status: "terminal", startedAt: 1, endedAt: 2, outcome: { status: "ok" } },
+    completion: {
+      required: true,
+      resultText: "Original result",
+      terminalReply: { disposition: "visible", text: "Original result" },
+    },
+    delivery: { status: "delivered" },
+    cleanupCompletedAt: 3,
+  });
+}
+
+export function childDeliverySettled(runId: string) {
+  const child = getSubagentRunByRunId(runId);
+  return child?.delivery?.status === "delivered" && !child.requesterSettleWake;
+}
+
+function requesterScope(
+  context: ReturnType<typeof createContext>,
+  identity: Parameters<typeof createAdmittedGatewayToolCallerIdentity>[0],
+  client?: ReturnType<typeof createOperatorClient>,
+) {
+  return <T>(run: () => T, receiptAuthority?: () => boolean) =>
+    withPluginRuntimeGatewayRequestScope(
+      { client, context, resolveGatewayContext: () => context, isWebchatConnect: () => false },
+      () =>
+        withGatewayToolCallerIdentity(
+          createAdmittedGatewayToolCallerIdentity({ ...identity, receiptAuthority }),
+          run,
+        ),
+    );
+}
+
 /** Reuse the coordination suite's transport and state fixture for post-commit retirement. */
 export function registerSessionsSendRequesterRetirementTests({
   config,
   callGatewayMock,
   calls,
   writeEntry,
+  writeFinal,
+  writePair,
+  sendTool,
+  yieldTool,
+  deliveredReply,
+  requesterCalls,
   settleSessionWork,
   drainRootWork,
 }: {
@@ -60,6 +162,22 @@ export function registerSessionsSendRequesterRetirementTests({
     MockInstance<(request: GatewayCall) => Promise<unknown>>;
   calls: GatewayCall[];
   writeEntry: (sessionKey: string, entry: SessionEntry, storePath?: string) => Promise<void>;
+  writeFinal: (sessionKey: string, runId: string, text: string) => Promise<void>;
+  writePair: (
+    requesterKey: string,
+    requesterId: string,
+    childKey: string,
+    childId: string,
+  ) => Promise<void>;
+  sendTool: (requesterKey: string, runId?: string) => ReturnType<typeof createSessionsSendTool>;
+  yieldTool: (
+    sessionId: string,
+    requesterKey: string,
+    runId: string,
+    onYield?: () => void,
+  ) => ReturnType<typeof createSessionsYieldTool>;
+  deliveredReply: (text: string) => unknown;
+  requesterCalls: (sessionKey: string) => GatewayCall[];
   settleSessionWork: () => Promise<void>;
   drainRootWork: () => Promise<void>;
 }) {
@@ -77,16 +195,11 @@ export function registerSessionsSendRequesterRetirementTests({
       const requesterTurnRunId = "retiring-requester-turn";
       const childSessionId = "retiring-child";
       const runId = "retired-requester-child-run";
-      await writeEntry(requesterSessionKey, { sessionId: "retiring-requester", updatedAt: 1 });
-      await writeEntry(childSessionKey, {
-        sessionId: childSessionId,
-        updatedAt: 1,
-        spawnedBy: requesterSessionKey,
-        spawnDepth: 1,
-      });
+      await writePair(requesterSessionKey, "retiring-requester", childSessionKey, childSessionId);
       await resetSubagentRegistryForTests();
       const childPending = createDeferredCore();
-      const terminalReply = { disposition: "visible", text: "Result after requester retirement" };
+      const fullReply = "Result after requester retirement";
+      const terminalReply = { disposition: "visible" as const, text: fullReply };
       callGatewayMock.mockImplementation(async (request: GatewayCall) => {
         calls.push(request);
         if (request.method === "agent" && request.params?.sessionKey === childSessionKey) {
@@ -99,36 +212,34 @@ export function registerSessionsSendRequesterRetirementTests({
         }
         if (request.method === "agent.wait" && request.params?.runId === runId) {
           await childPending.promise;
+          await writeFinal(childSessionKey, runId, fullReply);
           return { runId, status: "ok", startedAt: 1, endedAt: Date.now(), terminalReply };
         }
         if (request.method === "agent") {
-          return {
-            status: "ok",
-            inputProcessingCompleted: true,
-            result: {
-              payloads: [{ text: "Retired requester's child result delivered" }],
-              deliveryStatus: { status: "sent", resultCount: 1 },
-            },
-          };
+          return deliveredReply("Retired requester's child result delivered");
         }
         return {};
       });
-      const queueMessage = vi.fn(async () => {});
-      const handle: EmbeddedAgentQueueHandle = {
-        ...createEmbeddedRunHandle({ runId, queueMessage }),
-        messageInjectionV2: {
-          version: 2,
-          isAvailable: () => true,
-          queueMessage: async (_text, _options, assertCurrent) => {
-            assertCurrent?.();
-            await queueMessage();
-          },
+      const queueMessage = vi.fn<EmbeddedAgentQueueHandle["queueMessage"]>(
+        async (_text, options) => {
+          const recorder = options?.userTurnTranscriptRecorder;
+          if (!recorder || !(await recorder.persistApproved())) {
+            throw new Error("Steering fixture did not commit the admitted guidance");
+          }
         },
-      };
+      );
+      const handle = createEmbeddedRunHandle({
+        runId,
+        queueMessage,
+        supportsTranscriptCommitWait: true,
+        guarded: true,
+      });
       if (mode === "steer") {
         await registerSubagentRun({
           runId,
           childSessionKey,
+          childAgentId: "main",
+          sessionEntry: { sessionId: childSessionId },
           requesterSessionKey,
           requesterDisplayKey: requesterSessionKey,
           requesterAgentId: "main",
@@ -137,20 +248,19 @@ export function registerSessionsSendRequesterRetirementTests({
           spawnMode: "session",
           expectsCompletionMessage: true,
         });
-        setActiveEmbeddedRun(childSessionId, handle, childSessionKey);
-      } else {
-        await addSubagentRunForTests({
-          runId: "retiring-original-child-run",
+        await setSessionsSendTestActiveRun(
+          childSessionId,
+          handle,
           childSessionKey,
           requesterSessionKey,
-          requesterAgentId: "main",
-          expectsCompletionMessage: true,
-          createdAt: 1,
-          execution: { status: "terminal", startedAt: 1, endedAt: 2, outcome: { status: "ok" } },
-          completion: { required: true, resultText: "Original result" },
-          delivery: { status: "delivered" },
-          cleanupCompletedAt: 3,
-        });
+          config,
+        );
+      } else {
+        await seedDeliveredChild(
+          "retiring-original-child-run",
+          childSessionKey,
+          requesterSessionKey,
+        );
       }
       const admission = prepareSystemAgentRunAdmission(
         config,
@@ -170,29 +280,20 @@ export function registerSessionsSendRequesterRetirementTests({
         requesterRetired = true;
         admission.close();
       };
-      const execute = stateWorker.runOpenClawStateWorkerOperation;
-      const retireBeforePublication = vi
-        .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-        .mockImplementation((owner, run, options) =>
-          execute(
-            owner,
-            (scope) =>
-              run({
-                execute: async (command, executeOptions) => {
-                  const result = await scope.execute(command, executeOptions);
-                  if (
-                    retirement === "before publication" &&
-                    !requesterRetired &&
-                    command.type === "subagents.persistChanges"
-                  ) {
-                    retireRequester();
-                  }
-                  return result;
-                },
-              }),
-            options,
-          ),
-        );
+      const retireBeforePublication = probe.command(
+        stateWorker,
+        async (command, executeOptions, scope) => {
+          const result = await scope.execute(command, executeOptions);
+          if (
+            retirement === "before publication" &&
+            !requesterRetired &&
+            command.type === "subagents.persistChanges"
+          ) {
+            retireRequester();
+          }
+          return result;
+        },
+      );
       const stopRetiring = subscribeSubagentRunChanges("persistence", () => {
         if (
           retirement === "after publication" &&
@@ -205,29 +306,20 @@ export function registerSessionsSendRequesterRetirementTests({
       announceTesting.setDepsForTest({ callGateway: callGatewayMock });
       let stopObserving = () => {};
       try {
-        const result = await withPluginRuntimeGatewayRequestScope(
-          { context, resolveGatewayContext: () => context, isWebchatConnect: () => false },
-          () =>
-            withGatewayToolCallerIdentity(
-              createAdmittedGatewayToolCallerIdentity({
-                admittedRunContext,
-                agentId: "main",
-                sessionKey: requesterSessionKey,
-              }),
-              () =>
-                createSessionsSendTool({
-                  agentSessionKey: requesterSessionKey,
-                  requesterTurnRunId,
-                  config,
-                  callGateway: callGatewayMock,
-                }).execute("retiring-watched-send", {
-                  sessionKey: childSessionKey,
-                  mode,
-                  watch: true,
-                  timeoutSeconds: 0,
-                  message: "Return the follow-up result",
-                }),
-            ),
+        const withCaller = requesterScope(context, {
+          admittedRunContext,
+          agentId: "main",
+          sessionKey: requesterSessionKey,
+          requesterOrigin: createSessionsSendTestCaller(requesterSessionKey).requesterOrigin,
+        });
+        const result = await withCaller(() =>
+          sendTool(requesterSessionKey, requesterTurnRunId).execute("retiring-watched-send", {
+            sessionKey: childSessionKey,
+            mode,
+            watch: true,
+            timeoutSeconds: 0,
+            message: "Return the follow-up result",
+          }),
         );
         expect(requesterRetired).toBe(true);
         expect(result.details).toMatchObject({ status: "error", sentBeforeError: true });
@@ -235,25 +327,23 @@ export function registerSessionsSendRequesterRetirementTests({
         if (mode === "steer") {
           expect(queueMessage).toHaveBeenCalledOnce();
         }
-        const requesterCalls = () =>
-          calls.filter(
-            (call) => call.method === "agent" && call.params?.sessionKey === requesterSessionKey,
-          );
-        expect(requesterCalls()).toHaveLength(0);
-        const delivered = createDeferredCore();
-        stopObserving = subscribeSubagentRunChanges("persistence", () => {
-          const child = getSubagentRunByRunId(runId);
-          if (child?.delivery?.status === "delivered" && !child.requesterSettleWake) {
-            delivered.resolve();
-          }
-        });
+        expect(requesterCalls(requesterSessionKey)).toHaveLength(0);
+        const delivered = observeSubagentChange(() => childDeliverySettled(runId));
+        stopObserving = delivered.stop;
         clearActiveEmbeddedRun(childSessionId, handle, childSessionKey);
         childPending.resolve();
         await delivered.promise;
         await settleSessionWork();
-        expect(requesterCalls()).toHaveLength(1);
-        expect(requesterCalls()[0]?.params).toMatchObject({
-          message: expect.stringContaining(terminalReply.text),
+        expect(requesterCalls(requesterSessionKey)).toHaveLength(1);
+        expect(requesterCalls(requesterSessionKey)[0]?.params).toMatchObject({
+          message: "Continue the OpenClaw runtime event.",
+          internalEvents: [
+            {
+              type: "task_completion",
+              childSessionKey,
+              result: expect.stringContaining(terminalReply.text),
+            },
+          ],
           inputProvenance: { sourceTool: "subagent_announce" },
         });
         emitAgentEvent({
@@ -263,7 +353,7 @@ export function registerSessionsSendRequesterRetirementTests({
           data: { phase: "end", endedAt: Date.now(), terminalReply },
         });
         await settleSessionWork();
-        expect(requesterCalls()).toHaveLength(1);
+        expect(requesterCalls(requesterSessionKey)).toHaveLength(1);
       } finally {
         stopRetiring();
         retireBeforePublication.mockRestore();
@@ -279,24 +369,14 @@ export function registerSessionsSendRequesterRetirementTests({
   );
 
   it.for([
-    { scenario: "only a watched tool's authority retires", sameChild: false, revokeTool: true },
-    { scenario: "two watched runs target the same child", sameChild: true, revokeTool: false },
-    { scenario: "the requester finishes without yielding", sameChild: true, finish: "normal" },
-    { scenario: "the requester retires without yielding", sameChild: true, finish: "retired" },
-    {
-      scenario: "the newest task finishes first without yielding",
-      sameChild: true,
-      finish: "normal",
-      newestFirst: true,
-    },
-    {
-      scenario: "a nested requester finishes without yielding",
-      sameChild: true,
-      finish: "normal",
-      nested: true,
-    },
+    { scenario: "tool authority retires", sameChild: false, revokeTool: true },
+    { scenario: "two runs target one child" },
+    { scenario: "requester finishes without yielding", finish: "normal" },
+    { scenario: "requester retires without yielding", finish: "retired" },
+    { scenario: "newest child finishes first", finish: "normal", newestFirst: true },
+    { scenario: "nested requester finishes", finish: "normal", nested: true },
   ])("keeps earlier child claims when $scenario", async (scenario, { signal }) => {
-    const { sameChild, revokeTool, finish, newestFirst, nested } = scenario;
+    const { sameChild = true, revokeTool = false, finish, newestFirst, nested } = scenario;
     const requesterSessionKey = "agent:main:dashboard:active-requester";
     const requesterTurnRunId = "active-requester-turn";
     const firstChildKey = "agent:main:dashboard:first-watched-child";
@@ -341,25 +421,20 @@ export function registerSessionsSendRequesterRetirementTests({
           throw new Error("Unexpected child completion wait");
         }
         await childrenPending[children.indexOf(child)]!.promise;
+        const fullReply = `Watched child result ${child.runId}`;
+        await writeFinal(child.childSessionKey, child.runId, fullReply);
         return {
           status: "ok",
           startedAt: 1,
           endedAt: Date.now(),
           terminalReply: {
             disposition: "visible",
-            text: `Watched child result ${child.runId}`,
+            text: fullReply,
           },
         };
       }
       if (request.method === "agent" && sessionKey === requesterSessionKey) {
-        return {
-          status: "ok",
-          inputProcessingCompleted: true,
-          result: {
-            payloads: [{ text: "Both watched results reached the requester" }],
-            deliveryStatus: { status: "sent", resultCount: 1 },
-          },
-        };
+        return deliveredReply("Both watched results reached the requester");
       }
       return {};
     });
@@ -385,29 +460,15 @@ export function registerSessionsSendRequesterRetirementTests({
     );
     const admittedRunContext = await admission.admit("embedded");
     let toolCurrent = true;
-    const withCaller = <T>(run: () => T, receiptAuthority?: () => boolean) =>
-      withPluginRuntimeGatewayRequestScope(
-        { client, context, resolveGatewayContext: () => context, isWebchatConnect: () => false },
-        () =>
-          withGatewayToolCallerIdentity(
-            createAdmittedGatewayToolCallerIdentity({
-              admittedRunContext,
-              agentId: "main",
-              sessionKey: requesterSessionKey,
-              receiptAuthority,
-            }),
-            run,
-          ),
-      );
+    const withCaller = requesterScope(
+      context,
+      { admittedRunContext, agentId: "main", sessionKey: requesterSessionKey },
+      client,
+    );
     const send = (sessionKey: string) =>
       withCaller(
         () =>
-          createSessionsSendTool({
-            agentSessionKey: requesterSessionKey,
-            requesterTurnRunId,
-            config,
-            callGateway: callGatewayMock,
-          }).execute("watched-send", {
+          sendTool(requesterSessionKey, requesterTurnRunId).execute("watched-send", {
             sessionKey,
             mode: "followup",
             watch: true,
@@ -454,15 +515,10 @@ export function registerSessionsSendRequesterRetirementTests({
       );
       if (!finish) {
         const yielded = await withCaller(() =>
-          createSessionsYieldTool({
-            sessionId: "active-requester",
-            claimYield: createRequesterYieldCallback({
-              requesterSessionKey,
-              requesterAgentId: "main",
-              requesterTurnRunId,
-            }),
-            onYield: vi.fn(),
-          }).execute("yield-existing-claims", {}),
+          yieldTool("active-requester", requesterSessionKey, requesterTurnRunId, vi.fn()).execute(
+            "yield-existing-claims",
+            {},
+          ),
         );
         expect(yielded.details).toEqual({ status: "yielded" });
         for (const { runId } of children) {
@@ -495,12 +551,7 @@ export function registerSessionsSendRequesterRetirementTests({
         if (!firstChild || firstChild.cleanupCompletedAt !== undefined) {
           firstSettled.resolve();
         }
-        if (
-          children.every(({ runId }) => {
-            const child = getSubagentRunByRunId(runId);
-            return child?.delivery?.status === "delivered" && !child.requesterSettleWake;
-          })
-        ) {
+        if (children.every(({ runId }) => childDeliverySettled(runId))) {
           resultsDelivered.resolve();
         }
       });
@@ -512,21 +563,15 @@ export function registerSessionsSendRequesterRetirementTests({
         "The first accepted result must retain its completion owner",
       ).toBeDefined();
       await drainRootWork();
-      expect(
-        calls.filter(
-          (call) => call.method === "agent" && call.params?.sessionKey === requesterSessionKey,
-        ),
-      ).toHaveLength(0);
+      expect(requesterCalls(requesterSessionKey)).toHaveLength(0);
       childrenPending[1 - firstIndex]!.resolve();
       // The wait receipt must publish completion before its newly admitted roots can be drained.
       await withinTest(resultsDelivered.promise, signal);
       await settleSessionWork();
-      const requesterCalls = calls.filter(
-        (call) => call.method === "agent" && call.params?.sessionKey === requesterSessionKey,
-      );
-      expect(requesterCalls).toHaveLength(1);
+      const deliveredCalls = requesterCalls(requesterSessionKey);
+      expect(deliveredCalls).toHaveLength(1);
       for (const { runId } of children) {
-        expect(requesterCalls[0]?.params?.message).toContain(`Watched child result ${runId}`);
+        expect(deliveredCalls[0]?.params?.message).toContain(`Watched child result ${runId}`);
         expect(getSubagentRunByRunId(runId)?.delivery?.status).toBe("delivered");
         expect(getSubagentRunByRunId(runId)?.requesterSettleWake).toBeUndefined();
         emitAgentEvent({
@@ -536,11 +581,7 @@ export function registerSessionsSendRequesterRetirementTests({
         });
       }
       await settleSessionWork();
-      expect(
-        calls.filter(
-          (call) => call.method === "agent" && call.params?.sessionKey === requesterSessionKey,
-        ),
-      ).toHaveLength(1);
+      expect(requesterCalls(requesterSessionKey)).toHaveLength(1);
     } finally {
       stopRetiringTool();
       admission.close();

@@ -37,6 +37,7 @@ struct RootSidebarShell<Sidebar: View, Detail: View>: View {
     let onHide: () -> Void
     let sidebar: Sidebar
     let detail: Detail
+    let contentSafeAreaInsets: EdgeInsets
 
     @State private var dragSession = DragSession()
     @GestureState(resetTransaction: Transaction(animation: .spring(response: 0.35, dampingFraction: 0.86)))
@@ -85,7 +86,7 @@ struct RootSidebarShell<Sidebar: View, Detail: View>: View {
     private var contentCard: some View {
         let offset = self.contentOffset
         let progress = self.sidebarWidth > 0 ? offset / self.sidebarWidth : 0
-        let shape = Self.contentShape(progress: progress)
+        let shape = RootSidebarContentClipShape.cardShape(progress: progress)
         return self.detail
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             // RootTabs always supplies its shared NavigationStack here. Expanding
@@ -94,7 +95,11 @@ struct RootSidebarShell<Sidebar: View, Detail: View>: View {
             .background(OpenClawProBackground())
             .ignoresSafeArea(.container, edges: self.isDrawerLayout ? .vertical : [])
             .allowsHitTesting(!self.isDrawerLayout || !self.isPresented)
-            .clipShape(shape)
+            // Native bars can paint outside the content bounds into the system
+            // safe area. Keep them inside the card's mask without moving content.
+            .clipShape(RootSidebarContentClipShape(
+                progress: progress,
+                safeAreaInsets: self.contentSafeAreaInsets))
             .overlay {
                 shape.strokeBorder(
                     OpenClawSidebarPalette.hairline.opacity(Double(progress)),
@@ -214,13 +219,79 @@ struct RootSidebarShell<Sidebar: View, Detail: View>: View {
         translation > RootSidebarShellMetric.settleTranslation ||
             predictedTranslation > RootSidebarShellMetric.settlePredictedTranslation
     }
+}
 
-    private static func contentShape(progress: CGFloat) -> UnevenRoundedRectangle {
+struct RootSidebarContentClipShape: Shape {
+    var progress: CGFloat
+    let safeAreaInsets: EdgeInsets
+
+    var animatableData: CGFloat {
+        get { self.progress }
+        set { self.progress = newValue }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let progress = min(1, max(0, self.progress))
+        let expansion = 1 - progress
+        let barBounds = CGRect(
+            x: rect.minX - self.safeAreaInsets.leading * expansion,
+            y: rect.minY - self.safeAreaInsets.top * expansion,
+            width: rect.width + (self.safeAreaInsets.leading + self.safeAreaInsets.trailing) * expansion,
+            height: rect.height + (self.safeAreaInsets.top + self.safeAreaInsets.bottom) * expansion)
+        return Self.cardShape(progress: progress).path(in: barBounds)
+    }
+
+    static func cardShape(progress: CGFloat) -> UnevenRoundedRectangle {
         UnevenRoundedRectangle(
             topLeadingRadius: RootSidebarShellMetric.topLeadingRadius * progress,
             bottomLeadingRadius: RootSidebarShellMetric.cornerRadius * progress,
             bottomTrailingRadius: RootSidebarShellMetric.cornerRadius * progress,
             topTrailingRadius: RootSidebarShellMetric.cornerRadius * progress,
             style: .continuous)
+    }
+}
+
+/// UIKit grants a navigation controller its system minimum layout margins only
+/// while its view touches the screen edge. The sidebar shell slides the detail card away
+/// from that edge, which zeroes the margins and pins native large titles flush
+/// against the card. Owning the margins explicitly keeps them stable at any offset.
+struct SidebarNavigationMarginAnchor: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIView {
+        AnchorView()
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {}
+
+    private final class AnchorView: UIView {
+        private var positionObservation: NSKeyValueObservation?
+
+        /// UIKit recomputes the margins whenever the controller view moves, so the
+        /// override follows the view's position instead of running once.
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            self.positionObservation = nil
+            var responder: UIResponder? = self
+            while let current = responder, !(current is UINavigationController) {
+                responder = current.next
+            }
+            guard let navigation = responder as? UINavigationController else { return }
+            Self.applyMargins(to: navigation)
+            // Layer position only changes on the main thread, where UIKit drives layout.
+            self.positionObservation = navigation.view.layer.observe(\.position) { [weak navigation] _, _ in
+                MainActor.assumeIsolated {
+                    guard let navigation else { return }
+                    Self.applyMargins(to: navigation)
+                }
+            }
+        }
+
+        private static func applyMargins(to navigation: UINavigationController) {
+            navigation.viewRespectsSystemMinimumLayoutMargins = false
+            // The displaced controller reports zero; the window root sits at the edge.
+            guard let margins = navigation.view.window?.rootViewController?.systemMinimumLayoutMargins
+            else { return }
+            guard navigation.view.directionalLayoutMargins != margins else { return }
+            navigation.view.directionalLayoutMargins = margins
+        }
     }
 }

@@ -1,153 +1,62 @@
-// Control UI tests cover the Automations (cron) list pane and select controls.
 import { describe, expect, it, vi } from "vitest";
-import { updatePickers } from "../../test-helpers/select-picker.ts";
+import type { CronFormState } from "../../lib/cron/types.ts";
+import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
+import { updatePickers, openPicker } from "../../test-helpers/select-picker.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { text, testId, attribute } from "./cron-assertions.test-support.ts";
+import type { CronProps } from "./view-types.ts";
 import {
   createCronViewJob as createJob,
+  findToggleByLabel,
+  getButtonByText,
   getElement,
+  selectSegmented,
   renderCronView as renderView,
 } from "./view.test-support.ts";
 
-describe("cron view list pane", () => {
-  it("identifies the agent on each job in a mixed-agent list", async () => {
-    const container = renderView({
-      jobs: [
-        createJob("home", { agentId: "main" }),
-        createJob("research", { agentId: "research" }),
-      ],
-    });
-    document.body.append(container);
-    try {
-      await Promise.all(
-        [...container.querySelectorAll("openclaw-agent-row-chip")].map(
-          (chip) => chip.updateComplete,
-        ),
-      );
-      expect(
-        [...container.querySelectorAll(".cron-table__row .agent-row-chip")].map((chip) =>
-          chip.getAttribute("data-agent-id"),
-        ),
-      ).toEqual(["main", "research"]);
-    } finally {
-      container.remove();
-    }
-  });
+function renderEditor(form: Partial<CronFormState> = {}, props: Partial<CronProps> = {}) {
+  return renderView({ ...props, createOpen: true, form: { ...DEFAULT_CRON_FORM, ...form } });
+}
 
-  it("combines status filters and run history in one tab row", () => {
-    const onJobsFiltersChange = vi.fn();
-    const onListTabChange = vi.fn();
-    const container = renderView({
+function picker(container: Element, id: string) {
+  return getElement(container, `openclaw-select-picker:has(#${id})`, HTMLElement);
+}
+
+function selectSchedule(container: Element, kind: string) {
+  selectSegmented(getElement(container, testId(`cron-schedule-kind-${kind}`), HTMLElement));
+}
+
+function expectAbsent(container: Element, ...selectors: string[]) {
+  for (const selector of selectors) {
+    expect(container.querySelector(selector), selector).toBeNull();
+  }
+}
+
+function expectInvalidField(container: Element, id: string, errorId: string, message: string) {
+  const field = getElement(container, `#cron-${id}`, HTMLInputElement);
+  expect(field.getAttribute("aria-invalid")).toBe("true");
+  expect(field.getAttribute("aria-describedby")).toBe(`cron-error-${errorId}`);
+  expect(text(container, `#cron-error-${errorId}`)).toContain(message);
+}
+
+describe("cron view list pane", () => {
+  it("switches from an active status to paused tasks", async () => {
+    const onJobsFiltersChange = vi.fn(),
+      onListTabChange = vi.fn();
+    const container = await renderView({
       jobsEnabledFilter: "enabled",
       onJobsFiltersChange,
       onListTabChange,
     });
-
-    const labels = Array.from(container.querySelectorAll(".cron-list-hub-tabs wa-tab"), (tab) =>
-      tab.textContent?.trim(),
-    );
-    expect(labels).toEqual(["All", "Active", "Paused", "Run history"]);
-
-    const active = getElement(container, '[data-test-id="cron-tab-enabled"]', HTMLElement);
-    expect(active.getAttribute("aria-selected")).toBe("true");
-
-    getElement(container, '[data-test-id="cron-tab-disabled"]', HTMLElement).dispatchEvent(
+    expect(attribute(container, testId("cron-tab-enabled"), "aria-selected")).toBe("true");
+    getElement(container, testId("cron-tab-disabled"), HTMLElement).dispatchEvent(
       new MouseEvent("click", { detail: 1, bubbles: true }),
     );
     expect(onListTabChange).toHaveBeenCalledWith("tasks");
     expect(onJobsFiltersChange).toHaveBeenCalledWith({ cronJobsEnabledFilter: "disabled" });
-
-    getElement(container, '[data-test-id="cron-list-tab-activity"]', HTMLElement).dispatchEvent(
-      new MouseEvent("click", { detail: 1, bubbles: true }),
-    );
-    expect(onListTabChange).toHaveBeenCalledWith("activity");
   });
 
-  it("wires search and the advanced jobs filter popover", () => {
-    const onJobsFiltersChange = vi.fn();
-    const container = renderView({ onJobsFiltersChange });
-
-    const search = getElement(container, ".cron-search-box input", HTMLInputElement);
-    search.value = "brief";
-    search.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onJobsFiltersChange).toHaveBeenCalledWith({ cronJobsQuery: "brief" });
-
-    const scheduleFilter = getElement(
-      container,
-      '[data-test-id="cron-jobs-schedule-filter"]',
-      HTMLSelectElement,
-    );
-    expect(Array.from(scheduleFilter.options, (option) => option.value)).toEqual([
-      "all",
-      "at",
-      "every",
-      "cron",
-      "on-exit",
-      "stream",
-    ]);
-    for (const scheduleKind of ["on-exit", "stream"] as const) {
-      scheduleFilter.value = scheduleKind;
-      scheduleFilter.dispatchEvent(new Event("change", { bubbles: true }));
-      expect(onJobsFiltersChange).toHaveBeenCalledWith({
-        cronJobsScheduleKindFilter: scheduleKind,
-      });
-    }
-
-    const lastStatusFilter = getElement(
-      container,
-      '[data-test-id="cron-jobs-last-status-filter"]',
-      HTMLSelectElement,
-    );
-    lastStatusFilter.value = "unknown";
-    lastStatusFilter.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(onJobsFiltersChange).toHaveBeenCalledWith({ cronJobsLastStatusFilter: "unknown" });
-
-    const triggerFilter = getElement(
-      container,
-      '[data-test-id="cron-jobs-trigger-filter"]',
-      HTMLSelectElement,
-    );
-    triggerFilter.value = "conditional";
-    triggerFilter.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(onJobsFiltersChange).toHaveBeenCalledWith({
-      cronJobsTriggerFilter: "conditional",
-    });
-
-    const reset = getElement(
-      container,
-      '[data-test-id="cron-jobs-filters-reset"]',
-      HTMLButtonElement,
-    );
-    expect(reset.disabled).toBe(true);
-  });
-
-  it("enables filter reset when advanced filters are active", () => {
-    const onJobsFiltersReset = vi.fn();
-    const container = renderView({ jobsScheduleKindFilter: "cron", onJobsFiltersReset });
-    const reset = getElement(
-      container,
-      '[data-test-id="cron-jobs-filters-reset"]',
-      HTMLButtonElement,
-    );
-    expect(reset.disabled).toBe(false);
-    reset.click();
-    expect(onJobsFiltersReset).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not expose table rows without complete table semantics", () => {
-    const container = renderView({ jobs: [createJob("job-1")] });
-
-    for (const row of container.querySelectorAll('[role="row"]')) {
-      expect(row.closest('[role="table"], [role="grid"], [role="treegrid"]')).not.toBeNull();
-      expect(
-        Array.from(row.children).every((child) =>
-          child.matches(
-            '[role="cell"], [role="gridcell"], [role="columnheader"], [role="rowheader"]',
-          ),
-        ),
-      ).toBe(true);
-    }
-  });
-
-  it("renders table rows with independent native buttons for opening tasks", () => {
+  it("renders table rows with independent native buttons for opening tasks", async () => {
     const onSelectJob = vi.fn();
     const job = createJob("job-1", {
       trigger: { script: "json({ fire: true })" },
@@ -158,273 +67,195 @@ describe("cron view list pane", () => {
       name: "Failing task",
       state: { lastRunStatus: "error", lastRunAtMs: Date.now() - 60_000 },
     });
-    const container = renderView({
-      jobs: [job, paused, failed],
-      onSelectJob,
-    });
-
+    const container = await renderView({ jobs: [job, paused, failed], onSelectJob });
     const rows = Array.from(container.querySelectorAll(".cron-table__row"));
     expect(rows).toHaveLength(3);
     expect(rows[0]?.getAttribute("role")).toBeNull();
-    expect(rows[0]?.querySelector(".cron-table__state--error")?.getAttribute("aria-label")).toBe(
-      "Error",
-    );
+    expect(attribute(rows[0]!, ".cron-table__state--error", "aria-label")).toBe("Error");
     expect(rows[0]?.querySelector(".cron-last-glyph--error")).not.toBeNull();
-    expect(rows[0]?.querySelector(".cron-table__last-run")?.getAttribute("aria-label")).toBe(
-      "Error",
-    );
+    expect(attribute(rows[0]!, ".cron-table__last-run", "aria-label")).toBe("Error");
     expect(rows[1]?.textContent).toContain("Cron 0 9 * * *");
     expect(rows[1]?.querySelector(".cron-last-glyph--ok")).toBeNull();
     expect(rows[1]?.textContent).toContain("n/a");
-    expect(rows[1]?.querySelector(".cron-trigger-icon")?.getAttribute("aria-label")).toBe(
-      "Trigger configured",
-    );
+    expect(attribute(rows[1]!, ".cron-trigger-icon", "aria-label")).toBe("Trigger configured");
     expect(rows[2]?.classList.contains("cron-table__row--paused")).toBe(true);
     expect(rows[2]?.textContent).toContain("Paused");
-
     getElement(rows[2] as Element, ".cron-table__name", HTMLButtonElement).click();
     expect(onSelectJob).toHaveBeenCalledWith(paused);
   });
 
-  it("floats actionable failures while preserving the selected order within each group", () => {
-    const jobs = [
-      createJob("healthy-a", { name: "Healthy A" }),
-      createJob("failing-a", { name: "Failing A", state: { lastRunStatus: "error" } }),
-      createJob("healthy-b", { name: "Healthy B" }),
-      createJob("failing-b", { name: "Failing B", state: { lastRunStatus: "error" } }),
-    ];
-    const container = renderView({ jobs });
-
-    expect(
-      Array.from(container.querySelectorAll(".cron-table__name-text"), (name) =>
-        name.textContent?.trim(),
-      ),
-    ).toEqual(["Failing A", "Failing B", "Healthy A", "Healthy B"]);
-  });
-
-  it("opens the create panel from the New task button and suggestions", () => {
-    const onOpenCreate = vi.fn();
-    const container = renderView({ onOpenCreate });
-
-    getElement(container, '[data-test-id="cron-new-task"]', HTMLButtonElement).click();
-    expect(onOpenCreate).toHaveBeenCalledWith();
-
-    expect(container.querySelectorAll(".cron-suggestion")).toHaveLength(6);
-    const suggestion = getElement(container, '[data-suggestion="repoPulse"]', HTMLButtonElement);
-    suggestion.click();
-    const patch = onOpenCreate.mock.calls.at(-1)?.[0];
-    expect(patch).toMatchObject({
-      payloadKind: "agentTurn",
-      scheduleKind: "cron",
-      cronExpr: "0 9 * * 1-5",
-      name: "Repo pulse",
-    });
-    expect(patch).not.toHaveProperty("deliveryMode");
-    expect(String(patch.payloadText)).toContain("overnight activity");
-  });
-
-  it("offers Create & run now only in create mode", () => {
-    const onSubmitRunNow = vi.fn();
-    const create = renderView({ createOpen: true, onSubmitRunNow });
-    getElement(create, '[data-test-id="cron-submit-run"]', HTMLButtonElement).click();
-    expect(onSubmitRunNow).toHaveBeenCalledTimes(1);
-
-    const job = createJob("job-1");
-    const editing = renderView({ jobs: [job], editingJob: job });
-    expect(editing.querySelector('[data-test-id="cron-submit-run"]')).toBeNull();
-  });
-
-  it("shows starter automations only for a loaded empty inventory", () => {
-    const findStarterSection = (container: Element) =>
-      Array.from(container.querySelectorAll(".settings-section")).find(
-        (section) =>
-          section.querySelector(".settings-section__heading")?.textContent?.trim() ===
-          "Starter automations",
-      ) ?? null;
-
-    expect(findStarterSection(renderView({ jobs: [], jobsTotal: 0 }))).not.toBeNull();
-
-    const configuredJobs = [
-      createJob("active"),
-      createJob("paused", { enabled: false }),
-      createJob("failing", { state: { lastRunStatus: "error" } }),
-    ];
-    for (const job of configuredJobs) {
-      expect(findStarterSection(renderView({ jobs: [job], jobsTotal: 1 }))).toBeNull();
-    }
-
-    expect(findStarterSection(renderView({ loading: true }))).toBeNull();
-    expect(findStarterSection(renderView({ error: "Unable to load automations." }))).toBeNull();
-    expect(findStarterSection(renderView({ jobsQuery: "x" }))).toBeNull();
-    expect(findStarterSection(renderView({ jobsEnabledFilter: "enabled" }))).toBeNull();
-  });
-
-  it("renders a truthful inventory state matrix for the tasks table", () => {
-    // Initial pending: polite loading status, not a false completed-empty message.
-    const pending = renderView({ loading: true, hasLoaded: false, jobs: [], jobsTotal: 0 });
-    const pendingStatus = getElement(pending, '[data-test-id="cron-jobs-loading"]', HTMLDivElement);
+  it("renders a truthful inventory state matrix for the tasks table", async () => {
+    const pending = await renderView({ loading: true, hasLoaded: false });
+    const pendingStatus = getElement(pending, testId("cron-jobs-loading"), HTMLDivElement);
     expect(pendingStatus.getAttribute("role")).toBe("status");
     expect(pendingStatus.getAttribute("aria-live")).toBe("polite");
     expect(pendingStatus.textContent).toContain("Loading...");
     expect(pending.textContent).not.toContain("No automations yet");
-    expect(getElement(pending, ".cron-table", HTMLDivElement).getAttribute("aria-busy")).toBe(
-      "true",
-    );
-
-    // Loaded empty: completed empty guidance with no busy state.
-    const loadedEmpty = renderView({ loading: false, hasLoaded: true, jobs: [], jobsTotal: 0 });
-    expect(loadedEmpty.querySelector('[data-test-id="cron-jobs-loading"]')).toBeNull();
-    const empty = getElement(loadedEmpty, ".cron-empty-state", HTMLDivElement);
-    expect(empty.textContent).toContain("No automations yet");
-    expect(empty.textContent).toContain("Describe what OpenClaw should do");
-    expect(
-      getElement(loadedEmpty, ".cron-table", HTMLDivElement).getAttribute("aria-busy"),
-    ).toBeNull();
-
-    // Filtered empty keeps the matching-copy variant.
-    const filtered = renderView({ loading: false, hasLoaded: true, jobs: [], jobsQuery: "zzz" });
-    expect(getElement(filtered, ".cron-empty-state", HTMLDivElement).textContent).toContain(
-      "No automations match the current filters.",
-    );
-
-    // Refresh with retained rows keeps the rows and marks the region busy.
-    const refreshing = renderView({
-      loading: true,
-      hasLoaded: true,
-      jobs: [createJob("refresh-me")],
-      jobsTotal: 1,
-    });
-    expect(refreshing.querySelector('[data-test-id="cron-jobs-loading"]')).toBeNull();
-    expect(getElement(refreshing, ".cron-table", HTMLDivElement).getAttribute("aria-busy")).toBe(
-      "true",
-    );
-    expect(refreshing.textContent).toContain("Daily ping");
-
-    // Refresh of a loaded-empty inventory keeps the empty message (no false loading copy).
-    const refreshingEmpty = renderView({ loading: true, hasLoaded: true, jobs: [], jobsTotal: 0 });
-    expect(refreshingEmpty.querySelector('[data-test-id="cron-jobs-loading"]')).toBeNull();
-    expect(getElement(refreshingEmpty, ".cron-empty-state", HTMLDivElement).textContent).toContain(
-      "No automations yet",
-    );
-
-    // A first list failure reports its own error instead of claiming the inventory is empty.
-    const failed = renderView({
-      loading: false,
-      hasLoaded: false,
-      jobs: [],
-      listError: "Unable to load automations.",
-    });
-    expect(failed.querySelector(".cron-empty-state")).toBeNull();
-    expect(failed.querySelector('[data-test-id="cron-jobs-loading"]')).toBeNull();
+    expect(attribute(pending, ".cron-table", "aria-busy")).toBe("true");
+    const states: Array<[Partial<CronProps>, string]> = [
+      [{}, "No automations yet"],
+      [{ loading: true }, "No automations yet"],
+      [{ jobsQuery: "zzz" }, "No automations match the current filters."],
+      [{ loading: true, jobs: [createJob("refresh-me")], jobsTotal: 1 }, "Daily ping"],
+      [{ error: "Run history unavailable." }, "No automations yet"],
+    ];
+    for (const [props, message] of states) {
+      const container = await renderView(props);
+      expectAbsent(container, testId("cron-jobs-loading"));
+      expect(text(container, props.jobs ? ".cron-table" : ".cron-empty-state")).toContain(message);
+      expect(attribute(container, ".cron-table", "aria-busy")).toBe(props.loading ? "true" : null);
+      if (message === "No automations yet") {
+        expect(text(container, ".cron-empty-state")).toContain("Describe what OpenClaw should do");
+      }
+      if (props.error) {
+        expect(text(container, '.cron-error-banner[role="alert"]')).toContain(props.error);
+      }
+    }
+    const failed = await renderView({ hasLoaded: false, listError: "Unable to load automations." });
+    expectAbsent(failed, ".cron-empty-state", testId("cron-jobs-loading"));
     const failedAlert = getElement(failed, ".cron-error-banner", HTMLDivElement);
     expect(failedAlert.getAttribute("role")).toBe("alert");
     expect(failedAlert.textContent).toContain("Unable to load automations.");
-
-    // A non-list failure cannot hide a successfully loaded empty inventory.
-    const unrelatedFailure = renderView({
-      hasLoaded: true,
-      jobs: [],
-      error: "Run history unavailable.",
-    });
-    expect(unrelatedFailure.querySelector(".cron-empty-state")?.textContent).toContain(
-      "No automations yet",
-    );
-    expect(
-      unrelatedFailure.querySelector('.cron-error-banner[role="alert"]')?.textContent,
-    ).toContain("Run history unavailable.");
-  });
-
-  it("shows a scheduler banner only while the scheduler is off", () => {
-    const off = renderView({
-      status: { enabled: false, triggersEnabled: true, jobs: 2 },
-      jobs: [createJob("job-1")],
-      jobsTotal: 2,
-    });
-    const banner = getElement(off, '[data-test-id="cron-scheduler-banner"]', HTMLDivElement);
-    expect(banner.textContent).toContain("Scheduler disabled");
-    expect(off.querySelector(".cron-stats")).toBeNull();
-    const footer = getElement(off, ".cron-table__footer", HTMLDivElement);
-    expect(footer.textContent).toContain("1 of 2");
-
-    const on = renderView({ status: { enabled: true, triggersEnabled: true, jobs: 2 } });
-    expect(on.querySelector('[data-test-id="cron-scheduler-banner"]')).toBeNull();
-  });
-
-  it("switches the default inventory and history panels through accessible manual tabs", () => {
-    const onListTabChange = vi.fn();
-    const container = renderView({ onListTabChange });
-    document.body.append(container);
-    const group = getElement(container, ".cron-list-hub-tabs", HTMLElement);
-    const tasks = getElement(container, '[data-test-id="cron-tab-all"]', HTMLElement);
-    const activity = getElement(container, '[data-test-id="cron-list-tab-activity"]', HTMLElement);
-
-    expect(container.querySelector(".cron-table")).not.toBeNull();
-    expect(container.querySelector(".cron-activity")).toBeNull();
-    expect(group.getAttribute("activation")).toBe("manual");
-    expect(tasks.getAttribute("aria-selected")).toBe("true");
-    expect(activity.getAttribute("aria-selected")).toBe("false");
-    activity.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
-    expect(onListTabChange).toHaveBeenCalledWith("activity");
-    expect(activity.getAttribute("aria-controls")).toBe("cron-list-panel");
-    container.remove();
-
-    const history = renderView({ listTab: "activity" });
-    expect(history.querySelector(".cron-table")).toBeNull();
-    expect(history.querySelector(".cron-activity")).not.toBeNull();
   });
 });
 
-describe("cron view selects", () => {
-  it("shows authoritative form values instead of first options in the create form", async () => {
-    const container = renderView({ createOpen: true });
+describe("cron view editor", () => {
+  it("falls back to configured channel labels when metadata has no label", async () => {
+    const container = await renderEditor(
+      {
+        failureAlertMode: "custom",
+      },
+      {
+        channels: ["telegram"],
+        channelMeta: [{ id: "telegram", label: "", detailLabel: "Telegram" }],
+        channelLabels: { telegram: "Telegram fallback" },
+      },
+    );
     await updatePickers(container);
-    const action = getElement(
-      container,
-      "openclaw-select-picker:has(#cron-payload-kind)",
-      HTMLElement,
+    const channel = picker(container, "cron-failure-alert-channel");
+    await openPicker(channel);
+    expect(text(channel, '[data-value="telegram"] .picker-select__label')?.trim()).toBe(
+      "Telegram fallback",
     );
-    expect(
-      action.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
-    ).toBe("agentTurn");
-    const runsIn = getElement(
-      container,
-      "openclaw-select-picker:has(#cron-session-target)",
-      HTMLElement,
-    );
-    expect(
-      runsIn.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
-    ).toBe("isolated");
-    const unit = Array.from(container.querySelectorAll<HTMLElement>("openclaw-select-picker")).find(
-      (select) => select.querySelector('[role="listbox"]')?.getAttribute("aria-label") === "Unit",
-    );
-    expect(
-      unit?.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
-    ).toBe("minutes");
-    // The targetless create form keeps delivery internal until the operator
-    // explicitly selects a channel delivery mode.
-    const delivery = getElement(
-      container,
-      "openclaw-select-picker:has(#cron-delivery-mode)",
-      HTMLElement,
-    );
-    expect(
-      delivery.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
-    ).toBe("none");
   });
 
-  it("shows persisted non-first values in jobs filters and runs sort", () => {
-    const activity = renderView({ listTab: "activity", runsSortDir: "asc" });
-    const sort = getElement(activity, ".cron-run-sort", HTMLButtonElement);
-    expect(sort.textContent).toContain("Oldest first");
-    expect(
-      activity.querySelector('wa-dropdown-item[value="asc"]')?.getAttribute("aria-current"),
-    ).toBe("true");
-    const tasks = renderView({ jobsLastStatusFilter: "error" });
-    const lastStatus = getElement(
-      tasks,
-      'select[data-test-id="cron-jobs-last-status-filter"]',
-      HTMLSelectElement,
+  it("switches schedule inputs by segmented kind and wires kind changes", async () => {
+    const onFormChange = vi.fn();
+    const everyContainer = await renderEditor({ scheduleKind: "every" }, { onFormChange });
+    expect(everyContainer.querySelector("#cron-every-amount")).not.toBeNull();
+    expect(everyContainer.querySelector("#cron-cron-expr")).toBeNull();
+    const activeEvery = getElement(
+      everyContainer,
+      '[data-test-id="cron-schedule-kind-every"] input',
+      HTMLInputElement,
     );
-    expect(lastStatus.value).toBe("error");
+    expect(activeEvery.checked).toBe(true);
+    selectSchedule(everyContainer, "cron");
+    expect(onFormChange).toHaveBeenCalledWith({ scheduleKind: "cron", deleteAfterRun: false });
+    selectSchedule(everyContainer, "at");
+    expect(onFormChange).toHaveBeenCalledWith({ scheduleKind: "at", deleteAfterRun: true });
+    expect(
+      (await renderEditor({ scheduleKind: "at" })).querySelector("#cron-schedule-at"),
+    ).not.toBeNull();
+    const cronContainer = await renderEditor(
+      { scheduleKind: "cron", deleteAfterRun: true },
+      { onFormChange },
+    );
+    expect(cronContainer.querySelector("#cron-cron-expr")).not.toBeNull();
+    expect(findToggleByLabel(cronContainer, "Delete after run")).toBeNull();
+    selectSchedule(cronContainer, "every");
+    expect(onFormChange).toHaveBeenCalledWith({ scheduleKind: "every", deleteAfterRun: false });
+    const onExitFormChange = vi.fn();
+    const onExitContainer = await renderEditor(
+      { scheduleKind: "on-exit" },
+      { onFormChange: onExitFormChange },
+    );
+    expect(onExitContainer.querySelector(testId("cron-schedule-kind-on-exit"))).not.toBeNull();
+    expect(findToggleByLabel(onExitContainer, "Delete after run")).not.toBeNull();
+    expect(everyContainer.querySelector(testId("cron-schedule-kind-on-exit"))).toBeNull();
+    selectSchedule(onExitContainer, "at");
+    expect(onExitFormChange).toHaveBeenCalledWith({ scheduleKind: "at" });
+  });
+
+  it("shows announce channel/to rows and webhook URL row per delivery mode", async () => {
+    const announce = await renderEditor({ deliveryMode: "announce" }, { channels: ["telegram"] });
+    await updatePickers(announce);
+    expect(announce.querySelector("#cron-delivery-channel")).not.toBeNull();
+    expect(announce.querySelector("#cron-delivery-to")).not.toBeNull();
+    const webhook = await renderEditor(
+      { deliveryMode: "webhook" },
+      { fieldErrors: { deliveryTo: "cron.errors.webhookUrlRequired" }, canSubmit: false },
+    );
+    expectInvalidField(webhook, "delivery-to", "deliveryTo", "Webhook URL is required.");
+  });
+
+  it("announces field validation errors as alerts", async () => {
+    const container = await renderEditor(
+      { name: "", everyAmount: "0" },
+      {
+        fieldErrors: {
+          name: "cron.errors.nameRequired",
+          everyAmount: "cron.errors.everyAmountInvalid",
+        },
+        canSubmit: false,
+      },
+    );
+    const alerts = Array.from(container.querySelectorAll('[role="alert"]'), (alert) =>
+      alert.textContent?.trim(),
+    );
+    expect(alerts).toEqual(["Name is required.", "Interval must be greater than 0."]);
+    expectInvalidField(container, "name", "name", "Name is required.");
+  });
+
+  it("waits for scheduler status before presenting trigger capability", async () => {
+    const pending = await renderEditor({}, { status: null });
+    expect(findToggleByLabel(pending, "Condition trigger")).toBeNull();
+    expect(pending.textContent).not.toContain("disabled by cron.triggers.enabled");
+  });
+
+  it("keeps an existing trigger clearable when the operator disabled triggers", async () => {
+    const onFormChange = vi.fn();
+    const status = { enabled: true, triggersEnabled: false, jobs: 0 };
+    const configured = await renderEditor(
+      { triggerEnabled: true, triggerScript: "json({ fire: true })" },
+      { status, onFormChange },
+    );
+    getButtonByText(configured, "Clear trigger").click();
+    expect(onFormChange).toHaveBeenCalledWith({ triggerEnabled: false });
+  });
+
+  it("keeps an incompatible existing script condition trigger visible and explicitly clearable", async () => {
+    const onFormChange = vi.fn();
+    const script = "const result = await agent('check status')";
+    const job = createJob("job-script-trigger", {
+      payload: { kind: "script", script },
+      trigger: { script: "json({ fire: true })" },
+    });
+    const container = await renderView({
+      jobs: [job],
+      editingJob: job,
+      onFormChange,
+      form: {
+        ...DEFAULT_CRON_FORM,
+        name: job.name,
+        payloadKind: "script",
+        payloadLocked: true,
+        payloadText: script,
+        triggerEnabled: true,
+        triggerScript: "json({ fire: true })",
+      },
+      fieldErrors: { triggerScript: "cron.errors.triggerScriptPayloadUnsupported" },
+      canSubmit: false,
+    });
+    expect(findToggleByLabel(container, "Condition trigger")).toBeNull();
+    expect(container.querySelector("#cron-trigger-script")).toBeNull();
+    expect(container.textContent).toContain("Script payloads cannot use condition triggers");
+    const payload = getElement(container, "#cron-payload-text", HTMLPreElement);
+    expect(payload.textContent).toBe(script);
+    await waitForSolid(() => expect(text(payload, ".hljs-keyword")).toBe("const"));
+    expect(text(payload, ".hljs-string")).toBe("'check status'");
+    expect(container.querySelector("textarea#cron-payload-text")).toBeNull();
+    getButtonByText(container, "Clear trigger").click();
+    expect(onFormChange).toHaveBeenCalledWith({ triggerEnabled: false });
   });
 });

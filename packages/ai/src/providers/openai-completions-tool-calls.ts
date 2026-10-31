@@ -3,7 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { measureUtf8AppendBytes } from "../transports/openai-transport-shared.js";
 import { finalizeTerminalToolCallArguments } from "../transports/transport-stream-shared.js";
-import type { ToolCall } from "../types.js";
+import type { AssistantMessage, ToolCall } from "../types.js";
 
 type ChatCompletionToolCallDelta = ChatCompletionChunk.Choice.Delta.ToolCall;
 const MAX_BUFFERED_TOOL_CALL_ARGUMENT_BYTES = 256_000;
@@ -13,11 +13,6 @@ const MAX_BUFFERED_LEGACY_FOLLOWING_DELTAS = 1_024;
 type NormalizedOpenAICompletionsDelta = {
   delta: ChatCompletionChunk.Choice.Delta;
   toolCalls: ChatCompletionToolCallDelta[];
-};
-
-type OpenAICompletionsToolCallFinalizationOptions<TBlock extends object> = {
-  allowSilentToolCallPromotion?: boolean;
-  onConfirmedToolCall?: (block: TBlock, contentIndex: number) => void;
 };
 
 /** Keep encrypted provider reasoning attached to the first matching tool call. */
@@ -71,6 +66,31 @@ export function createOpenAIEncryptedToolCallReasoningTracker() {
   };
 }
 
+function hasObservableContent(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.length > 0;
+  }
+  if (Array.isArray(value)) {
+    return value.some(hasObservableContent);
+  }
+  if (isRecord(value)) {
+    return Object.entries(value).some(
+      ([field, nestedValue]) =>
+        field !== "type" &&
+        field !== "id" &&
+        field !== "index" &&
+        hasObservableContent(nestedValue),
+    );
+  }
+  return false;
+}
+
+export function hasOpenAICompletionsDeltaContent(delta: ChatCompletionChunk.Choice.Delta): boolean {
+  return Object.entries(delta).some(
+    ([field, value]) => field !== "role" && hasObservableContent(value),
+  );
+}
+
 /** Normalize the SDK's legacy single-function lane into its modern tool-call shape. */
 export function createOpenAICompletionsToolCallDeltaNormalizer(): (
   delta: ChatCompletionChunk.Choice.Delta,
@@ -87,37 +107,6 @@ export function createOpenAICompletionsToolCallDeltaNormalizer(): (
   const takePendingFollowingDeltas = (): NormalizedOpenAICompletionsDelta[] => {
     pendingFollowingDeltaBytes = 0;
     return pendingFollowingDeltas.splice(0).map((delta) => ({ delta, toolCalls: [] }));
-  };
-
-  const bufferFollowingDelta = (delta: ChatCompletionChunk.Choice.Delta): void => {
-    const nextDeltaBytes = Buffer.byteLength(JSON.stringify(delta), "utf8");
-    if (
-      pendingFollowingDeltaBytes + nextDeltaBytes > MAX_BUFFERED_LEGACY_FOLLOWING_DELTA_BYTES ||
-      pendingFollowingDeltas.length >= MAX_BUFFERED_LEGACY_FOLLOWING_DELTAS
-    ) {
-      throw new Error("Exceeded legacy tool-call content buffer limit");
-    }
-    pendingFollowingDeltaBytes += nextDeltaBytes;
-    pendingFollowingDeltas.push(delta);
-  };
-
-  const hasObservableContent = (value: unknown): boolean => {
-    if (typeof value === "string") {
-      return value.length > 0;
-    }
-    if (Array.isArray(value)) {
-      return value.some(hasObservableContent);
-    }
-    if (isRecord(value)) {
-      return Object.entries(value).some(
-        ([field, nestedValue]) =>
-          field !== "type" &&
-          field !== "id" &&
-          field !== "index" &&
-          hasObservableContent(nestedValue),
-      );
-    }
-    return false;
   };
 
   return (delta, finishReason) => {
@@ -162,15 +151,19 @@ export function createOpenAICompletionsToolCallDeltaNormalizer(): (
 
     const hadPendingLegacyCall = pendingLegacyToolCall !== undefined;
     const leadingDeltas: NormalizedOpenAICompletionsDelta[] = [];
-    if (
-      Object.entries(ordinaryDelta).some(
-        ([field, value]) => field !== "role" && hasObservableContent(value),
-      )
-    ) {
+    if (hasOpenAICompletionsDeltaContent(ordinaryDelta)) {
       if (hadPendingLegacyCall) {
         // Keep every lane behind its provisional call; publishing text early
         // permanently reverses the assistant's original tool/content order.
-        bufferFollowingDelta(ordinaryDelta);
+        const nextDeltaBytes = Buffer.byteLength(JSON.stringify(ordinaryDelta), "utf8");
+        if (
+          pendingFollowingDeltaBytes + nextDeltaBytes > MAX_BUFFERED_LEGACY_FOLLOWING_DELTA_BYTES ||
+          pendingFollowingDeltas.length >= MAX_BUFFERED_LEGACY_FOLLOWING_DELTAS
+        ) {
+          throw new Error("Exceeded legacy tool-call content buffer limit");
+        }
+        pendingFollowingDeltaBytes += nextDeltaBytes;
+        pendingFollowingDeltas.push(ordinaryDelta);
       } else {
         leadingDeltas.push({ delta: ordinaryDelta, toolCalls: [] });
       }
@@ -231,11 +224,15 @@ export function createOpenAICompletionsToolCallDeltaNormalizer(): (
 }
 
 /** Publish only executable calls; streaming scratch state never belongs in replay. */
-export function finalizeOpenAICompletionsToolCalls<TBlock extends object>(
-  output: { content: TBlock[]; stopReason: string; errorMessage?: string },
-  options: OpenAICompletionsToolCallFinalizationOptions<TBlock> = {},
+export function finalizeOpenAICompletionsToolCalls(
+  output: Pick<AssistantMessage, "content" | "stopReason" | "errorMessage">,
+  options: {
+    allowSilentToolCallPromotion?: boolean;
+    onConfirmedToolCall?: (block: ToolCall, contentIndex: number) => void;
+  } = {},
 ): void {
-  const isToolCall = (block: TBlock) => (block as { type?: unknown }).type === "toolCall";
+  const isToolCall = (block: AssistantMessage["content"][number]): block is ToolCall =>
+    block.type === "toolCall";
   const hasToolCalls = output.content.some(isToolCall);
 
   if (output.stopReason === "toolUse" && !hasToolCalls) {
@@ -246,14 +243,7 @@ export function finalizeOpenAICompletionsToolCalls<TBlock extends object>(
     output.stopReason === "stop" &&
     hasToolCalls &&
     options.allowSilentToolCallPromotion !== false &&
-    !output.content.some((block) => {
-      const candidate = block as { type?: unknown; text?: unknown };
-      return (
-        candidate.type === "text" &&
-        typeof candidate.text === "string" &&
-        candidate.text.trim().length > 0
-      );
-    })
+    !output.content.some((block) => block.type === "text" && block.text.trim().length > 0)
   ) {
     output.stopReason = "toolUse";
   }
@@ -265,12 +255,7 @@ export function finalizeOpenAICompletionsToolCalls<TBlock extends object>(
     return;
   }
 
-  type FinalToolCall = TBlock & {
-    name?: unknown;
-    arguments: Record<string, unknown>;
-    partialArgs?: unknown;
-  };
-  const toolCalls = output.content.filter(isToolCall) as FinalToolCall[];
+  const toolCalls = output.content.filter(isToolCall);
   const rejectToolCalls = () => {
     output.stopReason = "error";
     output.errorMessage = "Provider returned an incomplete or malformed tool call";
@@ -281,15 +266,15 @@ export function finalizeOpenAICompletionsToolCalls<TBlock extends object>(
       (call) =>
         typeof call.name !== "string" ||
         call.name.trim().length === 0 ||
-        typeof call.partialArgs !== "string" ||
-        call.partialArgs.trim().length === 0,
+        typeof call.partialJson !== "string" ||
+        call.partialJson.trim().length === 0,
     )
   ) {
     rejectToolCalls();
     return;
   }
   try {
-    finalizeTerminalToolCallArguments(toolCalls, (call) => call.partialArgs);
+    finalizeTerminalToolCallArguments(toolCalls, (call) => call.partialJson);
   } catch {
     rejectToolCalls();
     return;
@@ -300,8 +285,7 @@ export function finalizeOpenAICompletionsToolCalls<TBlock extends object>(
     if (!block || !isToolCall(block)) {
       continue;
     }
-    delete (block as { partialArgs?: string }).partialArgs;
-    delete (block as { streamIndex?: number }).streamIndex;
+    delete block.partialJson;
     options.onConfirmedToolCall?.(block, contentIndex);
   }
 }

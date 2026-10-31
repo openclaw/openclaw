@@ -8,17 +8,19 @@ import type {
   ChannelResolveKind,
   ChannelResolveResult,
 } from "../../channels/plugins/types.adapters.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 import { formatUnsupportedChannelActionMessage } from "../../cli/error-format.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import { danger } from "../../globals.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import { groupPluginRecords as groupRecords } from "../../plugins/record-groups.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
 
-export type ChannelsResolveOptions = {
+type ChannelsResolveOptions = {
   agent?: string;
   channel?: string;
   account?: string;
@@ -27,42 +29,27 @@ export type ChannelsResolveOptions = {
   entries?: string[];
 };
 
-function resolvePreferredKind(
-  kind?: ChannelsResolveOptions["kind"],
-): ChannelResolveKind | undefined {
-  if (!kind || kind === "auto") {
-    return undefined;
-  }
-  if (kind === "user") {
-    return "user";
-  }
-  return "group";
-}
-
-function detectAutoKind(input: string): ChannelResolveKind {
+function detectAutoKindForPlugin(input: string, plugin: ChannelPlugin): ChannelResolveKind {
   const trimmed = input.trim();
-  return trimmed.startsWith("@") ||
+  if (
+    trimmed.startsWith("@") ||
     /^<@!?/.test(trimmed) ||
     /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed) ||
     /^user:/i.test(trimmed)
-    ? "user"
-    : "group";
-}
-
-function detectAutoKindForPlugin(
-  input: string,
-  plugin?: {
-    id: string;
-    meta?: {
-      aliases?: readonly string[];
-    };
-  },
-): ChannelResolveKind {
-  const generic = detectAutoKind(input);
-  if (generic === "user" || !plugin) {
-    return generic;
+  ) {
+    return "user";
   }
-  const trimmed = input.trim();
+  try {
+    const chatType = plugin.messaging?.inferTargetChatType?.({ to: trimmed });
+    if (chatType === "direct") {
+      return "user";
+    }
+    if (chatType === "group" || chatType === "channel") {
+      return "group";
+    }
+  } catch {
+    // Some plugins only accept resolved IDs here; names still need directory lookup.
+  }
   const lowered = normalizeLowercaseStringOrEmpty(trimmed);
   const prefixes = [plugin.id, ...(plugin.meta?.aliases ?? [])]
     .map((entry) => normalizeOptionalLowercaseString(entry))
@@ -84,13 +71,7 @@ function detectAutoKindForPlugin(
     }
     return "user";
   }
-  return generic;
-}
-
-function formatResolveResult(result: ChannelResolveResult): string {
-  const name = result.name ? ` (${result.name})` : "";
-  const note = result.note ? ` [${result.note}]` : "";
-  return `${result.input} -> ${result.id}${name}${note}`;
+  return "group";
 }
 
 export async function channelsResolveCommand(opts: ChannelsResolveOptions, runtime: RuntimeEnv) {
@@ -101,7 +82,7 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
     );
   }
 
-  const loadedRaw = getRuntimeConfig();
+  const loadedRaw = await captureRuntimeConfigAsyncReader()();
   const requestedAgent = opts.agent?.trim();
   if (opts.agent !== undefined && !requestedAgent) {
     throw new Error("--agent must not be blank");
@@ -153,17 +134,12 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
       }),
     );
   }
-  const preferredKind = resolvePreferredKind(opts.kind);
+  const preferredKind =
+    !opts.kind || opts.kind === "auto" ? undefined : opts.kind === "user" ? "user" : "group";
 
-  const byKind = new Map<ChannelResolveKind, string[]>();
-  if (preferredKind) {
-    byKind.set(preferredKind, entries);
-  } else {
-    for (const entry of entries) {
-      const kind = detectAutoKindForPlugin(entry, plugin);
-      byKind.set(kind, [...(byKind.get(kind) ?? []), entry]);
-    }
-  }
+  const byKind: Map<ChannelResolveKind, string[]> = preferredKind
+    ? new Map([[preferredKind, entries]])
+    : groupRecords(entries, (entry) => detectAutoKindForPlugin(entry, plugin));
   const resolved: ChannelResolveResult[] = [];
   for (const [kind, inputs] of byKind) {
     resolved.push(
@@ -176,28 +152,17 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
       })),
     );
   }
-  let results: ChannelResolveResult[];
-  if (preferredKind) {
-    results = resolved.map(({ input, resolved: isResolved, id, name, note }) => ({
-      input,
-      resolved: isResolved,
-      id,
-      name,
-      note,
-    }));
-  } else {
-    const byInput = new Map(resolved.map((entry) => [entry.input, entry]));
-    results = entries.map((input) => {
-      const entry = byInput.get(input);
-      return {
-        input,
-        resolved: entry?.resolved ?? false,
-        id: entry?.id,
-        name: entry?.name,
-        note: entry?.note,
-      };
-    });
-  }
+  const byInput = new Map(resolved.map((entry) => [entry.input, entry]));
+  const orderedResults: ChannelResolveResult[] = preferredKind
+    ? resolved
+    : entries.map((input) => byInput.get(input) ?? { input, resolved: false });
+  const results = orderedResults.map(({ input, resolved: isResolved, id, name, note }) => ({
+    input,
+    resolved: preferredKind ? isResolved : (isResolved ?? false),
+    id,
+    name,
+    note,
+  }));
 
   if (opts.json) {
     writeRuntimeJson(runtime, results);
@@ -206,7 +171,9 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
 
   for (const result of results) {
     if (result.resolved && result.id) {
-      runtime.log(formatResolveResult(result));
+      const name = result.name ? ` (${result.name})` : "";
+      const note = result.note ? ` [${result.note}]` : "";
+      runtime.log(`${result.input} -> ${result.id}${name}${note}`);
     } else {
       runtime.error(
         danger(`${result.input} -> unresolved${result.note ? ` (${result.note})` : ""}`),

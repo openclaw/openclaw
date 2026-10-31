@@ -2,7 +2,8 @@
 set -euo pipefail
 
 # Called after the canonical source build, before the app is signed. The npm
-# artifact is only an installation source; the full published package is retained.
+# artifact is only an installation source; trim development files before sealing.
+# Type-only metadata belongs to the public SDK artifact.
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DESTINATION="$1"
 shift
@@ -19,6 +20,12 @@ mkdir -p "$(dirname "$DESTINATION")"
 STAGE="$(cd "$(dirname "$DESTINATION")" && mktemp -d "$PWD/.openclaw-mac-runtime.XXXXXX")"
 trap 'rm -rf "$STAGE" "$SCRATCH"' EXIT
 mkdir -p "$SCRATCH/home" "$SCRATCH/package"
+node "$ROOT_DIR/scripts/lib/desktop-runtime-plugins.mjs" plan "$ROOT_DIR" > "$SCRATCH/plugins.json"
+PACKAGE_ARGS=(--skip-build --pnpm-pack --runtime-only --allow-unreleased-changelog --output-dir "$SCRATCH/package" --output-name openclaw.tgz)
+while IFS= read -r plugin; do
+  [[ -z "$plugin" ]] || PACKAGE_ARGS+=(--bundle-plugin "$plugin")
+done < <(node -e 'for (const id of require(process.argv[1]).pluginIds) console.log(id)' "$SCRATCH/plugins.json")
+node -e 'const p = require(process.argv[1]); console.error(p.releaseTag ? `Release ${p.releaseTag}: official plugins remain external` : `Staging official plugins ${p.pluginIds.join(", ")} (all-plugin estimate: ${p.allPluginBytes} bytes)`)' "$SCRATCH/plugins.json"
 
 # Lifecycle hooks must never see operator config, credentials, or state;
 # installer main discovers launchd by UID even with a new HOME.
@@ -29,8 +36,7 @@ TARBALL="$(env -i HOME="$SCRATCH/home" PATH="$PATH" TMPDIR="$SCRATCH" \
   OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS="${OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS:-}" \
   OPENCLAW_DOCKER_PACKAGE_TARBALL_CHECK_TIMEOUT_MS="${OPENCLAW_DOCKER_PACKAGE_TARBALL_CHECK_TIMEOUT_MS:-}" \
   node "$ROOT_DIR/scripts/package-openclaw-for-docker.mjs" \
-  --skip-build --pnpm-pack --allow-unreleased-changelog --output-dir "$SCRATCH/package" \
-  --output-name openclaw.tgz)"
+  "${PACKAGE_ARGS[@]}")"
 [[ -f "$TARBALL" ]] || { echo "ERROR: Canonical runtime package missing" >&2; exit 1; }
 
 for arch in "$@"; do
@@ -63,6 +69,8 @@ env -i HOME="$SCRATCH/home" PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
   ' bash "$ROOT_DIR" "$SCRATCH" "$TARBALL" "$STAGE" "$@"
 
 for arch in "$@"; do
+node "$ROOT_DIR/scripts/lib/desktop-runtime-plugins.mjs" stamp \
+  "$STAGE/installed-$arch/lib/node_modules/openclaw" "$SCRATCH/plugins.json"
 node - "$STAGE/installed-$arch/lib/node_modules/openclaw" "$arch" <<'JS'
 const fs = require("node:fs");
 const path = require("node:path");
@@ -107,6 +115,7 @@ function visit(dir, packageDirectory = false) {
 }
 visit(process.argv[2]);
 JS
+  node "$ROOT_DIR/scripts/lib/desktop-runtime-prune.mjs" "$STAGE/installed-$arch/lib/node_modules"
 
   runtime="$STAGE/runtime"
   [[ "$arch" = "$1" ]] || runtime="$STAGE/runtime-$arch"
@@ -121,7 +130,9 @@ cat > "$STAGE/runtime/lib/node_modules/openclaw/openclaw-install-owner.json" <<'
 {"schemaVersion":1,"owner":"macos-app","displayName":"OpenClaw.app","updateHint":"Update OpenClaw.app to update this Gateway."}
 JSON
 
-/bin/bash "$ROOT_DIR/scripts/stage-openclaw-bun-macos.sh" "$STAGE/runtime" "$@"
+bun_archs=()
+for arch in "$@"; do bun_archs+=("${arch/x86_64/x64}"); done
+/bin/bash "$ROOT_DIR/scripts/stage-openclaw-bun.sh" "$STAGE/runtime" darwin "${bun_archs[@]}"
 sqlite_arch="$1"
 [[ "$#" -eq 1 ]] || sqlite_arch=universal
 /bin/bash "$ROOT_DIR/scripts/build-mac-sqlite.sh" "$sqlite_arch" "$STAGE/runtime"

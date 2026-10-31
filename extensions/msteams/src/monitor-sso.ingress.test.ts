@@ -1,22 +1,20 @@
 import { createServer, type Server } from "node:http";
 import type { ILogger } from "@microsoft/teams.common";
+import express from "express";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   createEmptyPluginRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { acquireTestPortBlock, useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterAll, expect, it, vi } from "vitest";
+import { acquireTestPortBlock } from "openclaw/plugin-sdk/test-env";
+import { expect, it, vi } from "vitest";
 import { getMSTeamsIngressMockState } from "./monitor-ingress-mock.test-support.js";
 import {
   createConfig,
   createRuntime,
-  createStores,
   updateMSTeamsConfig,
 } from "./monitor-lifecycle.test-helpers.js";
 import { createSigninEvent } from "./monitor-sso.test-helpers.js";
@@ -24,6 +22,7 @@ import { monitorMSTeamsProvider } from "./monitor.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { createMSTeamsSsoTokenStoreFs } from "./sso-token-store.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
+import { useMSTeamsStateTempDirs } from "./test-support/state.js";
 
 const fixture = vi.hoisted(() => ({ origin: "", botToken: "" }));
 
@@ -75,13 +74,7 @@ vi.mock("@microsoft/teams.apps", async (importOriginal) => {
   };
 });
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterAll(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    resetPluginStateStoreForTests();
-    cleanup();
-  }),
-);
+const tempDirs = useMSTeamsStateTempDirs();
 
 async function closeServer(server: Server) {
   await new Promise<void>((resolve, reject) => {
@@ -100,11 +93,7 @@ it("authenticates SSO webhooks before real sender authorization, token I/O, and 
   const kid = "synthetic-sso-signing-key";
   const jwks = { keys: [{ ...(await exportJWK(publicKey)), kid, alg: "RS256", use: "sig" }] };
   const mintToken = (audience: string) =>
-    new SignJWT({
-      aud: audience,
-      iss: "https://api.botframework.com",
-      serviceurl: serviceUrl,
-    })
+    new SignJWT({ aud: audience, iss: "https://api.botframework.com", serviceurl: serviceUrl })
       .setProtectedHeader({ alg: "RS256", kid })
       .setIssuedAt()
       .setExpirationTime("1h")
@@ -124,51 +113,36 @@ it("authenticates SSO webhooks before real sender authorization, token I/O, and 
     body: unknown;
   }> = [];
   let keyRequests = 0;
-  const infra = createServer((req, res) => {
-    void (async () => {
-      const url = new URL(req.url ?? "/", fixture.origin);
-      res.setHeader("content-type", "application/json");
-      if (url.pathname === "/keys") {
-        keyRequests++;
-        res.end(JSON.stringify(jwks));
-        return;
-      }
-      if (
-        url.pathname !== "/api/usertoken/GetToken" &&
-        url.pathname !== "/api/usertoken/exchange"
-      ) {
-        res.writeHead(404).end();
-        return;
-      }
-      const chunks: Buffer[] = [];
-      for await (const chunk of req) {
-        chunks.push(Buffer.from(chunk));
-      }
-      const text = Buffer.concat(chunks).toString("utf8");
-      tokenRequests.push({
-        method: req.method,
-        path: url.pathname,
-        query: Object.fromEntries(url.searchParams),
-        body: text ? JSON.parse(text) : undefined,
-      });
-      if (req.headers.authorization !== `Bearer ${fixture.botToken}`) {
-        res.writeHead(401).end(JSON.stringify({ error: "Missing bot credential" }));
-        return;
-      }
-      res.end(
-        JSON.stringify(
-          url.pathname.endsWith("/exchange") || url.searchParams.has("code")
-            ? {
-                channelId: "msteams",
-                connectionName: "graph",
-                token: "synthetic-delegated-token",
-                expiration: "2030-01-01T00:00:00Z",
-              }
-            : {},
-        ),
-      );
-    })().catch(() => res.writeHead(500).end());
+  const infraApp = express();
+  infraApp.all("/keys", (_req, res) => {
+    keyRequests++;
+    res.json(jwks);
   });
+  infraApp.use(express.json());
+  infraApp.all(["/api/usertoken/GetToken", "/api/usertoken/exchange"], (req, res) => {
+    const url = new URL(req.url, fixture.origin);
+    tokenRequests.push({
+      method: req.method,
+      path: url.pathname,
+      query: Object.fromEntries(url.searchParams),
+      body: req.body,
+    });
+    if (req.headers.authorization !== `Bearer ${fixture.botToken}`) {
+      res.status(401).json({ error: "Missing bot credential" });
+      return;
+    }
+    res.json(
+      url.pathname.endsWith("/exchange") || url.searchParams.has("code")
+        ? {
+            channelId: "msteams",
+            connectionName: "graph",
+            token: "synthetic-delegated-token",
+            expiration: "2030-01-01T00:00:00Z",
+          }
+        : {},
+    );
+  });
+  const infra = createServer(infraApp);
   const claim = await acquireTestPortBlock({ offsets: [0, 1] });
   fixture.origin = `http://127.0.0.1:${claim.port}`;
   const registry = createEmptyPluginRegistry();
@@ -205,7 +179,7 @@ it("authenticates SSO webhooks before real sender authorization, token I/O, and 
   // createPluginRuntimeMock retains the production stable ingress policy resolver.
   const policy = vi.spyOn(runtime.channel.inbound.ingress, "resolveStable");
   setMSTeamsRuntime(runtime);
-  const store = createMSTeamsSsoTokenStoreFs({ stateDir });
+  const store = createMSTeamsSsoTokenStoreFs();
   const cfg = createConfig();
   updateMSTeamsConfig(cfg, {
     webhook: { path: "" },
@@ -228,7 +202,6 @@ it("authenticates SSO webhooks before real sender authorization, token I/O, and 
       cfg,
       runtime: createRuntime(),
       abortSignal: abort.signal,
-      ...createStores(),
       statusSink: (patch) => {
         if (patch.connected) {
           ready.resolve();
@@ -259,31 +232,18 @@ it("authenticates SSO webhooks before real sender authorization, token I/O, and 
       expect(await post(body, signedToken), `${name}: allowed`).toBe(200);
       await persisted.promise;
       expect(policy).toHaveBeenCalledTimes(2);
+      const query = { channelId: "msteams", userId: body.from.id, connectionName: "graph" };
+      const getToken = { method: "GET", path: "/api/usertoken/GetToken", query, body: undefined };
       expect(tokenRequests).toEqual([
-        {
-          method: "GET",
-          path: "/api/usertoken/GetToken",
-          query: { channelId: "msteams", userId: body.from.id, connectionName: "graph" },
-          body: undefined,
-        },
+        getToken,
         name === "signin/tokenExchange"
           ? {
               method: "POST",
               path: "/api/usertoken/exchange",
-              query: { channelId: "msteams", userId: body.from.id, connectionName: "graph" },
+              query,
               body: { token: "fixture-user-token" },
             }
-          : {
-              method: "GET",
-              path: "/api/usertoken/GetToken",
-              query: {
-                channelId: "msteams",
-                userId: body.from.id,
-                connectionName: "graph",
-                code: "fixture-state",
-              },
-              body: undefined,
-            },
+          : { ...getToken, query: { ...query, code: "fixture-state" } },
       ]);
       for (const userId of [body.from.id, allowedId]) {
         expect(await store.get({ connectionName: "graph", userId })).toMatchObject({
@@ -295,23 +255,18 @@ it("authenticates SSO webhooks before real sender authorization, token I/O, and 
         await store.remove({ connectionName: "graph", userId });
       }
 
-      body.from = { id: `29:denied-${name}`, aadObjectId: deniedId };
-      policy.mockClear();
-      tokenRequests.length = 0;
-      expect(await post(body, signedToken), `${name}: denied`).toBe(200);
-      expect(tokenRequests).toEqual([]);
-      expect(policy).toHaveBeenCalledTimes(1);
-      for (const userId of [body.from.id, deniedId]) {
-        expect(await store.get({ connectionName: "graph", userId })).toBeNull();
-      }
-
-      body.from = { id: `29:unauthenticated-${name}`, aadObjectId: allowedId };
-      for (const token of [wrongAudienceToken, invalidSignatureToken]) {
+      for (const [token, sender, label, status, policyCalls] of [
+        [signedToken, deniedId, "denied", 200, 1],
+        [wrongAudienceToken, allowedId, "unauthenticated", 401, 0],
+        [invalidSignatureToken, allowedId, "unauthenticated", 401, 0],
+      ] as const) {
+        body.from = { id: `29:${label}-${name}`, aadObjectId: sender };
         policy.mockClear();
-        expect(await post(body, token), `${name}: invalid authentication`).toBe(401);
-        expect(policy).not.toHaveBeenCalled();
+        tokenRequests.length = 0;
+        expect(await post(body, token), `${name}: ${label}`).toBe(status);
+        expect(policy).toHaveBeenCalledTimes(policyCalls);
         expect(tokenRequests).toEqual([]);
-        for (const userId of [body.from.id, allowedId]) {
+        for (const userId of [body.from.id, sender]) {
           expect(await store.get({ connectionName: "graph", userId })).toBeNull();
         }
       }

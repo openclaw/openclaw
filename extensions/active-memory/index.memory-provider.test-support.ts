@@ -1,6 +1,11 @@
+import type { MemorySearchHit } from "openclaw/plugin-sdk/memory-host-search";
 import { expect, it, vi, type Mock } from "vitest";
 
 type MemoryProviderTestParams = {
+  memoryCapability: {
+    deterministicRecallToolName: string | undefined;
+    recallToolNames: readonly string[] | undefined;
+  };
   getActiveMemoryProvider: Mock;
   getActiveMemorySearchManager: Mock;
   /** Selects a slot owner that registers the provider-neutral runtime. */
@@ -11,47 +16,131 @@ type MemoryProviderTestParams = {
     event: Record<string, unknown>,
     context?: Record<string, unknown>,
   ) => Promise<unknown>;
+  writeUsableMemoryTranscript: (sessionFile: string, text: string) => Promise<void>;
+  seedSession: (sessionKey: string, sessionId: string, updatedAt?: number) => void;
+  expectPrependContextContains: (result: unknown, text: string) => void;
+  lastRuntimeEmbeddedRunParams: () => Record<string, unknown>;
 };
 
-/** Registers legacy and provider-neutral Active Memory trigger admission coverage. */
-export function registerActiveMemoryProviderTests(params: MemoryProviderTestParams): void {
-  it.each([" \n "])(
-    "does not recall historical text for an explicit empty request %j",
-    async (currentUserMessage) => {
-      params.useNativeProvider();
-      params.registerPluginConfig({ mode: "always" });
-      const search = vi.fn(async () => ({ hits: [] }));
-      params.getActiveMemoryProvider.mockResolvedValue({
-        provider: {
-          search,
-          capabilities: { candidates: ["trigger"] },
-          candidates: vi.fn(async () => ({ hits: [] })),
-          close: vi.fn(),
-        },
-      });
-      await params.runPromptBuild({
-        prompt: "What do you remember about my preferences?",
-        currentUserMessage,
-        currentUserMessageId: "empty-admission",
-        messages: [{ role: "user", content: "What do you remember about my preferences?" }],
-      });
-      expect(search).not.toHaveBeenCalled();
-      expect(params.runEmbeddedAgent).not.toHaveBeenCalled();
+function triggerProvider(hits: MemorySearchHit[] = []) {
+  return {
+    provider: {
+      search: vi.fn(async () => ({ hits: [] })),
+      capabilities: { candidates: ["trigger"] },
+      candidates: vi.fn(async () => ({ hits })),
+      close: vi.fn(),
     },
-  );
+  };
+}
+
+/** Registers legacy and provider-neutral Active Memory recall, cache, authority, and tool-selection coverage. */
+export function registerActiveMemoryProviderTests(params: MemoryProviderTestParams): void {
+  const ownerAudience = { kind: "owner-private", agentId: "main" } as const;
+  const ownerContext = {
+    sessionKey: "agent:main:telegram:direct:owner",
+    sessionId: "owner-session",
+    messageProvider: "telegram",
+    channelId: "owner",
+  };
+  function nativeProvider(config: Record<string, unknown>, hits: MemorySearchHit[] = []) {
+    params.useNativeProvider();
+    params.registerPluginConfig(config);
+    const lookup = triggerProvider(hits);
+    params.getActiveMemoryProvider.mockResolvedValue(lookup);
+    return lookup.provider.search;
+  }
+  it("keeps native and deep recall scoped to the live audience", async () => {
+    const search = nativeProvider({ mode: "always", cacheTtlMs: 1_000 }, [
+      {
+        reference: { providerId: "records", id: "travel" },
+        score: 1,
+        excerpt: "Prefer aisle seats.",
+        citations: [{ label: "Travel preference" }],
+        automaticRecall: { eligible: true, triggers: "booking a flight" },
+      },
+    ]);
+    let audienceCurrent = true;
+    let recall = 0;
+    params.runEmbeddedAgent.mockImplementation(async (run: { sessionFile: string }) => {
+      const text =
+        ++recall === 1
+          ? "stale private memory"
+          : recall === 2
+            ? "owner-private memory"
+            : "conversation memory";
+      if (recall === 1) {
+        audienceCurrent = false;
+      }
+      await params.writeUsableMemoryTranscript(run.sessionFile, text);
+      return { payloads: [{ text }] };
+    });
+    const { sessionKey, sessionId } = ownerContext;
+    const event = {
+      prompt: "what did I order last time?",
+      currentUserMessage: "Help when booking a flight",
+      currentUserMessageId: "same-request",
+    };
+    const context = {
+      runId: "run-audience-cache",
+      ...ownerContext,
+      assertMemoryAudienceCurrent: vi.fn(() => {
+        if (!audienceCurrent) {
+          throw new Error("memory audience is no longer current");
+        }
+      }),
+    };
+    params.seedSession(sessionKey, sessionId);
+
+    const owner = {
+      ...context,
+      memoryAudience: ownerAudience,
+    };
+    await expect(
+      params.runPromptBuild(event, { ...owner, runId: "stale-audience" }),
+    ).resolves.toBeUndefined();
+    audienceCurrent = true;
+    const ownerResult = await params.runPromptBuild(event, owner);
+    const conversationAudience = { kind: "conversation", agentId: "main", sessionKey, sessionId };
+    const conversationResult = await params.runPromptBuild(event, {
+      ...context,
+      memoryAudience: conversationAudience,
+    });
+
+    params.expectPrependContextContains(ownerResult, "owner-private memory");
+    params.expectPrependContextContains(conversationResult, "conversation memory");
+    params.expectPrependContextContains(
+      ownerResult,
+      "Prefer aisle seats. (Source: Travel preference)",
+    );
+    expect(params.getActiveMemorySearchManager).not.toHaveBeenCalled();
+    expect(params.getActiveMemoryProvider.mock.calls[0]?.[0].context.authority).toEqual({
+      kind: "session",
+      sessionKey,
+      sessionId,
+      sandboxed: false,
+      audience: ownerAudience,
+    });
+    expect(context.assertMemoryAudienceCurrent).toHaveBeenCalled();
+    expect(params.lastRuntimeEmbeddedRunParams().memoryAudience).toBe(conversationAudience);
+    expect(params.getActiveMemoryProvider).toHaveBeenCalledTimes(3);
+    expect(search).toHaveBeenCalledTimes(3);
+    expect(params.runEmbeddedAgent).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not recall historical text for an explicit empty request", async () => {
+    const search = nativeProvider({ mode: "always" });
+    await params.runPromptBuild({
+      prompt: "What do you remember about my preferences?",
+      currentUserMessage: " \n ",
+      currentUserMessageId: "empty-admission",
+      messages: [{ role: "user", content: "What do you remember about my preferences?" }],
+    });
+    expect(search).not.toHaveBeenCalled();
+    expect(params.runEmbeddedAgent).not.toHaveBeenCalled();
+  });
 
   it("reuses one trigger admission across history changes and keeps authority separate", async () => {
-    params.useNativeProvider();
-    params.registerPluginConfig({ mode: "escalate" });
-    const search = vi.fn(async () => ({ hits: [] }));
-    params.getActiveMemoryProvider.mockResolvedValue({
-      provider: {
-        search,
-        capabilities: { candidates: ["trigger"] },
-        candidates: vi.fn(async () => ({ hits: [] })),
-        close: vi.fn(),
-      },
-    });
+    const search = nativeProvider({ mode: "escalate" });
     for (const [history, fingerprint, admission] of [
       ["old history", "authority-a", "same-admission"],
       ["rebuilt history", "authority-a", "same-admission"],
@@ -79,82 +168,43 @@ export function registerActiveMemoryProviderTests(params: MemoryProviderTestPara
     expect(params.runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
-  it("serves native trigger recall through the provider instead of a legacy manager", async () => {
+  it("skips native trigger recall when tool policy denies a declared recall tool", async () => {
+    params.memoryCapability.recallToolNames = ["record_find", "record_get"];
     params.useNativeProvider();
-    params.registerPluginConfig({ mode: "escalate" });
-    params.getActiveMemoryProvider.mockResolvedValue({
-      provider: {
-        search: vi.fn(async () => ({ hits: [] })),
-        capabilities: { candidates: ["trigger"] },
-        candidates: vi.fn(async () => ({
-          hits: [
-            {
-              reference: { providerId: "records", id: "travel" },
-              score: 1,
-              excerpt: "Prefer aisle seats.",
-              citations: [{ label: "Travel preference" }],
-              automaticRecall: { eligible: true, triggers: "booking a flight" },
-            },
-          ],
-        })),
-        close: vi.fn(),
+    await params.runPromptBuild(
+      { prompt: "Help when booking a flight" },
+      {
+        ...ownerContext,
+        toolAuthority: {
+          fingerprint: "record-find-denied",
+          allows: (toolName: string) => toolName !== "record_find",
+          assertActive: () => undefined,
+        },
       },
-    });
-    const result = await params.runPromptBuild({
-      prompt: "Help when booking a flight",
-      currentUserMessage: "Help when booking a flight",
-      currentUserMessageId: "native-trigger",
-      messages: [{ role: "user", content: "Help when booking a flight" }],
-    });
-    expect(params.getActiveMemorySearchManager).not.toHaveBeenCalled();
-    expect(JSON.stringify(result)).toContain("Prefer aisle seats. (Source: Travel preference)");
+    );
+    expect(params.getActiveMemoryProvider).not.toHaveBeenCalled();
   });
 
-  it.each([" \n "])(
-    "does not recall legacy historical text for an explicit empty request %j",
-    async (currentUserMessage) => {
-      params.registerPluginConfig({ mode: "always" });
-      const search = vi.fn(async () => []);
-      params.getActiveMemorySearchManager.mockResolvedValue({
-        manager: { search, listTriggerCandidates: vi.fn(async () => []) },
-      } as never);
-      await params.runPromptBuild({
-        prompt: "What do you remember about my preferences?",
-        currentUserMessage,
-        currentUserMessageId: "empty-admission",
-        messages: [{ role: "user", content: "What do you remember about my preferences?" }],
-      });
-      expect(search).not.toHaveBeenCalled();
-      expect(params.runEmbeddedAgent).not.toHaveBeenCalled();
-    },
-  );
-
-  it("reuses one legacy trigger admission across history changes and keeps authority separate", async () => {
-    params.registerPluginConfig({ mode: "escalate" });
-    const search = vi.fn(async () => []);
-    params.getActiveMemorySearchManager.mockResolvedValue({
-      manager: { search, listTriggerCandidates: vi.fn(async () => []) },
-    } as never);
-    for (const [history, fingerprint, admission] of [
-      ["old history", "authority-a", "same-admission"],
-      ["rebuilt history", "authority-a", "same-admission"],
-      ["rebuilt history", "authority-b", "same-admission"],
-      ["rebuilt history", "authority-b", "new-admission"],
-    ] as const) {
+  it.each([["denies the deterministic recall tool", "memory_search", "memory_search"]])(
+    "skips legacy trigger recall when the owner %s",
+    async (_label, toolName, denied) => {
+      params.memoryCapability.deterministicRecallToolName = toolName;
       await params.runPromptBuild(
+        { prompt: "Help when booking a flight" },
         {
-          prompt: history,
-          currentUserMessage: "ok",
-          currentUserMessageId: admission,
-          messages: [{ role: "user", content: history }],
-        },
-        {
-          runId: "trigger-rebuild",
-          toolAuthority: { fingerprint, allows: () => true, assertActive: () => undefined },
+          sessionKey: "agent:main:telegram:direct:owner",
+          sessionId: "owner-session",
+          messageProvider: "telegram",
+          channelId: "owner",
+          toolAuthority: {
+            fingerprint: "legacy-policy",
+            allows: (name: string) => name !== denied,
+            assertActive: () => undefined,
+          },
         },
       );
-    }
-    expect(search).toHaveBeenCalledTimes(3);
-    expect(params.runEmbeddedAgent).not.toHaveBeenCalled();
-  });
+      expect(params.getActiveMemorySearchManager).not.toHaveBeenCalled();
+      expect(params.getActiveMemoryProvider).not.toHaveBeenCalled();
+    },
+  );
 }

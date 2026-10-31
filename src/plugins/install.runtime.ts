@@ -7,23 +7,17 @@ export {
   resolveTimedInstallModeOptions,
 } from "../infra/install-mode-options.js";
 export { installPackageDir } from "../infra/install-package-dir.js";
-export {
-  type NpmIntegrityDrift,
-  type NpmSpecResolution,
-  resolveArchiveSourcePath,
-} from "../infra/install-source-utils.js";
+export { type NpmSpecResolution, resolveArchiveSourcePath } from "../infra/install-source-utils.js";
 export {
   ensureInstallTargetAvailable,
   resolveCanonicalInstallTarget,
 } from "../infra/install-target.js";
 export { readJson as readJsonFile } from "../infra/json-files.js";
-export { validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 export { resolveCompatibilityHostVersion, resolveRuntimeServiceVersion } from "../version.js";
 export { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
 export {
   scanInstalledPackageDependencyTree,
   scanBundleInstallSource,
-  scanFileInstallSource,
   scanPackageInstallSource,
 } from "./install-security-scan.js";
 export {

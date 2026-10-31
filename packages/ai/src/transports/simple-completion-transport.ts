@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Api, Model, StreamFn, StreamOptions } from "@openclaw/llm-core";
+import type { Api, Model, ModelRequestHeaders, StreamFn, StreamOptions } from "@openclaw/llm-core";
 import type { ApiRegistry } from "../api-registry.js";
 import {
   getAiTransportHost,
@@ -19,7 +19,7 @@ import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
 export function prepareHeadersForSimpleCompletion(
   model: Pick<Model, "baseUrl" | "headers">,
   options?: Pick<StreamOptions, "sessionId" | "headers">,
-): Record<string, string> | undefined {
+): ModelRequestHeaders | undefined {
   // Keep the synthetic identity in the required header only: a stream sessionId
   // would also enable unrelated cache and WebSocket session ownership.
   return resolveOpencodeSessionHeaders(model, {
@@ -49,148 +49,46 @@ function resolveAnthropicVertexSimpleApi(baseUrl?: string): Api {
 
 export function normalizeCodexResponsesBaseUrlForOpenAISdk(baseUrl?: string): string {
   const normalized = baseUrl?.trim() || "https://chatgpt.com/backend-api";
-  try {
-    const parsed = new URL(normalized);
-    const pathname = parsed.pathname.replace(/\/+$/u, "");
-    const path = pathname.toLowerCase();
-    if (
-      parsed.hostname.toLowerCase() === "chatgpt.com" &&
-      [
-        "/backend-api",
-        "/backend-api/v1",
-        "/backend-api/codex",
-        "/backend-api/codex/v1",
-        "/backend-api/codex/responses",
-      ].includes(path)
-    ) {
-      parsed.pathname = "/backend-api/codex";
-      parsed.search = "";
-      parsed.hash = "";
-      return parsed.toString().replace(/\/$/u, "");
-    }
-    if (normalized.includes("?") || normalized.includes("#")) {
-      throw new Error(INVALID_CODEX_BASE_URL_MESSAGE);
-    }
+  const parsed = URL.parse(normalized);
+  const pathname = parsed?.pathname.replace(/\/+$/u, "") ?? "";
+  const path = pathname.toLowerCase();
+  if (
+    parsed?.hostname.toLowerCase() === "chatgpt.com" &&
+    [
+      "/backend-api",
+      "/backend-api/v1",
+      "/backend-api/codex",
+      "/backend-api/codex/v1",
+      "/backend-api/codex/responses",
+    ].includes(path)
+  ) {
+    parsed.pathname = "/backend-api/codex";
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString().replace(/\/$/u, "");
+  }
+  if (normalized.includes("?") || normalized.includes("#")) {
+    throw new Error(INVALID_CODEX_BASE_URL_MESSAGE);
+  }
+  if (parsed) {
     parsed.pathname = path.endsWith("/codex/responses")
       ? pathname.slice(0, -"/responses".length)
       : path.endsWith("/codex")
         ? pathname
         : `${pathname}/codex`;
     return parsed.toString();
-  } catch (error) {
-    if (error instanceof Error && error.message === INVALID_CODEX_BASE_URL_MESSAGE) {
-      throw error;
-    }
-    // Keep non-URL custom values on the same suffix contract transport callers accept.
   }
-  if (normalized.includes("?") || normalized.includes("#")) {
-    throw new Error(INVALID_CODEX_BASE_URL_MESSAGE);
+  // Keep non-URL custom values on the same suffix contract transport callers accept.
+  const customPath = normalized.replace(/\/+$/u, "");
+  if (customPath.endsWith("/codex/responses")) {
+    return customPath.slice(0, -"/responses".length);
   }
-  const path = normalized.replace(/\/+$/u, "");
-  if (path.endsWith("/codex/responses")) {
-    return path.slice(0, -"/responses".length);
-  }
-  return path.endsWith("/codex") ? path : `${path}/codex`;
-}
-
-function resolveProviderSimpleCompletionApi(
-  model: Model,
-  auth?: AiProviderStreamHookContext["auth"],
-  agentId?: string,
-): Api {
-  const parts = [model.provider, model.id, model.api, model.baseUrl || "default"];
-  // Registered wrappers retain their preparation context. A credential switch
-  // must select its own policy instead of reusing another grant's wrapper.
-  if (auth) {
-    parts.push(auth.mode, auth.authFlow ?? "");
-  }
-  if (agentId) {
-    parts.push("agent", agentId);
-  }
-  return `${PROVIDER_SIMPLE_COMPLETION_API_PREFIX}${parts
-    .map((part) => encodeURIComponent(part))
-    .join(":")}`;
+  return customPath.endsWith("/codex") ? customPath : `${customPath}/codex`;
 }
 
 function resolveProviderStreamApi(model: Model): Api {
   const parts = [model.provider, model.id, model.api, model.baseUrl || "default"];
   return `${PROVIDER_STREAM_API_PREFIX}${parts.map((part) => encodeURIComponent(part)).join(":")}`;
-}
-
-function applyProviderSimpleCompletionWrapper(
-  registry: ApiRegistry,
-  model: Model,
-  cfg?: unknown,
-  hookSourceApi: Api = model.api,
-  auth?: AiProviderStreamHookContext["auth"],
-  agentId?: string,
-): Model {
-  if (model.api.startsWith(PROVIDER_SIMPLE_COMPLETION_API_PREFIX)) {
-    return model;
-  }
-  const sourceProvider = registry.getApiProvider(model.api);
-  if (!sourceProvider) {
-    return model;
-  }
-
-  const dispatchApi = model.api;
-  const sourceStreamFn: StreamFn = (runtimeModel, context, options) =>
-    sourceProvider.streamSimple(projectModel(runtimeModel, { api: dispatchApi }), context, options);
-  const streamFn = getAiTransportHost().plugin.wrapSimpleCompletionStream({
-    provider: model.provider,
-    config: cfg,
-    context: {
-      config: cfg,
-      provider: model.provider,
-      modelId: model.id,
-      model,
-      sourceApi: hookSourceApi,
-      auth,
-      agentId,
-      streamFn: sourceStreamFn,
-    },
-  });
-  if (!streamFn) {
-    return model;
-  }
-
-  // The registered simple-completion alias is only a dispatch key. Keep the
-  // original wire API visible while the wrapped stream applies request-body
-  // policy; the source stream projects back to dispatchApi before calling the
-  // provider, so provider routing still uses its registered alias.
-  const registeredStreamFn: StreamFn = (runtimeModel, context, options) =>
-    streamFn(projectModel(runtimeModel, { api: hookSourceApi }), context, options);
-
-  const api = resolveProviderSimpleCompletionApi(model, auth, agentId);
-  return registerCustomApi(registry, api, registeredStreamFn)
-    ? projectModel(model, { api })
-    : model;
-}
-
-function prepareCodexSimpleTransportModel<TApi extends Api>(
-  registry: ApiRegistry,
-  model: Model<TApi>,
-  cfg?: unknown,
-): Model | undefined {
-  if (model.provider !== "openai" || model.api !== "openai-chatgpt-responses") {
-    return undefined;
-  }
-
-  // Static Codex provider catalogs intentionally omit credentials; the simple
-  // completion path must use OpenClaw's transport so resolved request auth is applied.
-  const transportModel = projectModel(model, {
-    baseUrl: normalizeCodexResponsesBaseUrlForOpenAISdk(model.baseUrl),
-  });
-  const api = resolveTransportAwareSimpleApi(model.api);
-  const streamFn = createOpenClawTransportStreamFnForModel(transportModel, { cfg });
-  if (!api || !streamFn) {
-    return undefined;
-  }
-
-  if (!registerCustomApi(registry, api, streamFn)) {
-    return undefined;
-  }
-  return projectModel(transportModel, { api });
 }
 
 function resolveModelTransportSentinels<TApi extends Api>(
@@ -221,54 +119,6 @@ function wrapPluginProviderStream(streamFn: StreamFn): StreamFn {
   };
 }
 
-function prepareProviderStreamModel<TApi extends Api>(params: {
-  model: Model<TApi>;
-  cfg?: unknown;
-  apiRegistry: ApiRegistry;
-}): Model | undefined {
-  const pluginModel = resolveModelTransportSentinels(
-    params.model,
-    "plugin simple-completion stream construction",
-  );
-  const providerStreamFn = getAiTransportHost().plugin.resolveProviderStream({
-    provider: params.model.provider,
-    config: params.cfg,
-    context: {
-      config: params.cfg,
-      provider: params.model.provider,
-      modelId: params.model.id,
-      model: pluginModel,
-    },
-  });
-  const transportFallback = providerStreamFn
-    ? undefined
-    : createTransportAwareStreamFnForModel(
-        params.model.api === "google-generative-ai" ? pluginModel : params.model,
-        { cfg: params.cfg },
-      );
-  const streamFn = providerStreamFn
-    ? wrapPluginProviderStream(providerStreamFn)
-    : transportFallback && params.model.api === "google-generative-ai"
-      ? wrapPluginProviderStream(transportFallback)
-      : transportFallback;
-  if (!streamFn) {
-    return undefined;
-  }
-  // A plugin can own one model while reusing a built-in wire-format id. Keep
-  // that stream on a model-specific alias instead of replacing the shared API.
-  const api = params.apiRegistry.getApiProvider(params.model.api)
-    ? resolveProviderStreamApi(params.model)
-    : params.model.api;
-  // The alias selects this stream; wire policy still needs the original API.
-  const sourceApi = params.model.api;
-  const sourceStreamFn: StreamFn = (runtimeModel, context, options) =>
-    streamFn(projectModel(runtimeModel, { api: sourceApi }), context, options);
-  if (!registerCustomApi(params.apiRegistry, api, sourceStreamFn)) {
-    return undefined;
-  }
-  return api === params.model.api ? params.model : projectModel(params.model, { api });
-}
-
 export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
   apiRegistry: ApiRegistry;
   model: Model<TApi>;
@@ -277,22 +127,122 @@ export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
   agentId?: string;
 }): Model {
   const { apiRegistry, model, cfg, auth, agentId } = params;
-  const wrap = (prepared: Model) =>
-    applyProviderSimpleCompletionWrapper(apiRegistry, prepared, cfg, model.api, auth, agentId);
-  const providerStreamModel = prepareProviderStreamModel({ model, cfg, apiRegistry });
-  if (providerStreamModel) {
-    return wrap(providerStreamModel);
+  const wrap = (prepared: Model): Model => {
+    const hookSourceApi = model.api;
+    if (prepared.api.startsWith(PROVIDER_SIMPLE_COMPLETION_API_PREFIX)) {
+      return prepared;
+    }
+    const sourceProvider = apiRegistry.getApiProvider(prepared.api);
+    if (!sourceProvider) {
+      return prepared;
+    }
+
+    const dispatchApi = prepared.api;
+    const sourceStreamFn: StreamFn = (runtimeModel, context, options) =>
+      sourceProvider.streamSimple(
+        projectModel(runtimeModel, { api: dispatchApi }),
+        context,
+        options,
+      );
+    const streamFn = getAiTransportHost().plugin.wrapSimpleCompletionStream({
+      provider: prepared.provider,
+      config: cfg,
+      context: {
+        config: cfg,
+        provider: prepared.provider,
+        modelId: prepared.id,
+        model: prepared,
+        sourceApi: hookSourceApi,
+        auth,
+        agentId,
+        streamFn: sourceStreamFn,
+      },
+    });
+    if (!streamFn) {
+      return prepared;
+    }
+
+    // The registered simple-completion alias is only a dispatch key. Keep the
+    // original wire API visible while the wrapped stream applies request-body
+    // policy; the source stream projects back to dispatchApi before calling the
+    // provider, so provider routing still uses its registered alias.
+    const registeredStreamFn: StreamFn = (runtimeModel, context, options) =>
+      streamFn(projectModel(runtimeModel, { api: hookSourceApi }), context, options);
+    const parts = [prepared.provider, prepared.id, prepared.api, prepared.baseUrl || "default"];
+    // Registered wrappers retain their preparation context. A credential switch
+    // must select its own policy instead of reusing another grant's wrapper.
+    if (auth) {
+      parts.push(auth.mode, auth.authFlow ?? "");
+    }
+    if (agentId) {
+      parts.push("agent", agentId);
+    }
+    const api = `${PROVIDER_SIMPLE_COMPLETION_API_PREFIX}${parts
+      .map((part) => encodeURIComponent(part))
+      .join(":")}`;
+    return registerCustomApi(apiRegistry, api, registeredStreamFn)
+      ? projectModel(prepared, { api })
+      : prepared;
+  };
+
+  const pluginModel = resolveModelTransportSentinels(
+    model,
+    "plugin simple-completion stream construction",
+  );
+  const providerStreamFn = getAiTransportHost().plugin.resolveProviderStream({
+    provider: model.provider,
+    config: cfg,
+    context: {
+      config: cfg,
+      provider: model.provider,
+      modelId: model.id,
+      model: pluginModel,
+    },
+  });
+  const transportFallback = providerStreamFn
+    ? undefined
+    : createTransportAwareStreamFnForModel(
+        model.api === "google-generative-ai" ? pluginModel : model,
+        { cfg },
+      );
+  const streamFn = providerStreamFn
+    ? wrapPluginProviderStream(providerStreamFn)
+    : transportFallback && model.api === "google-generative-ai"
+      ? wrapPluginProviderStream(transportFallback)
+      : transportFallback;
+  if (streamFn) {
+    // A plugin can own one model while reusing a built-in wire-format id. Keep
+    // that stream on a model-specific alias instead of replacing the shared API.
+    const api = apiRegistry.getApiProvider(model.api) ? resolveProviderStreamApi(model) : model.api;
+    // The alias selects this stream; wire policy still needs the original API.
+    const sourceApi = model.api;
+    const sourceStreamFn: StreamFn = (runtimeModel, context, options) =>
+      streamFn(projectModel(runtimeModel, { api: sourceApi }), context, options);
+    if (registerCustomApi(apiRegistry, api, sourceStreamFn)) {
+      return wrap(api === model.api ? model : projectModel(model, { api }));
+    }
   }
 
-  const codexTransportModel = prepareCodexSimpleTransportModel(apiRegistry, model, cfg);
-  if (codexTransportModel) {
-    return wrap(codexTransportModel);
+  if (model.provider === "openai" && model.api === "openai-chatgpt-responses") {
+    // Static Codex provider catalogs intentionally omit credentials; the simple
+    // completion path must use OpenClaw's transport so resolved request auth is applied.
+    const transportModel = projectModel(model, {
+      baseUrl: normalizeCodexResponsesBaseUrlForOpenAISdk(model.baseUrl),
+    });
+    const api = resolveTransportAwareSimpleApi(model.api);
+    const codexStreamFn = createOpenClawTransportStreamFnForModel(transportModel, { cfg });
+    if (api && codexStreamFn && registerCustomApi(apiRegistry, api, codexStreamFn)) {
+      return wrap(projectModel(transportModel, { api }));
+    }
   }
 
   const transportAwareModel = prepareTransportAwareSimpleModel(model, { cfg });
   if (transportAwareModel !== model) {
-    const streamFn = buildTransportAwareSimpleStreamFn(model, { cfg });
-    if (streamFn && registerCustomApi(apiRegistry, transportAwareModel.api, streamFn)) {
+    const transportStreamFn = buildTransportAwareSimpleStreamFn(model, { cfg });
+    if (
+      transportStreamFn &&
+      registerCustomApi(apiRegistry, transportAwareModel.api, transportStreamFn)
+    ) {
       return wrap(transportAwareModel);
     }
   }
@@ -300,8 +250,8 @@ export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
   if (model.provider === "anthropic-vertex") {
     const api = resolveAnthropicVertexSimpleApi(model.baseUrl);
     const host = getAiTransportHost();
-    const streamFn = host.plugin.createAnthropicVertexStream(model);
-    if (registerCustomApi(apiRegistry, api, streamFn)) {
+    const vertexStreamFn = host.plugin.createAnthropicVertexStream(model);
+    if (registerCustomApi(apiRegistry, api, vertexStreamFn)) {
       return wrap(projectModel(model, { api }));
     }
   }

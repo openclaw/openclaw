@@ -1,7 +1,10 @@
 import fs from "node:fs";
-import { afterAll, beforeAll, beforeEach, vi } from "vitest";
+import path from "node:path";
+import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import * as pluginMetadata from "../../../plugins/plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import { resetPluginRuntimeStateForTest } from "../../../plugins/runtime.js";
 
 vi.mock("../../../plugins/setup-registry.js", () => ({
@@ -54,73 +57,22 @@ vi.mock("../../../plugins/manifest-registry.js", () => {
   };
 });
 
-vi.mock("./channel-legacy-config-migrate.js", () => ({
+vi.mock("./channel-legacy-config-migrate.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./channel-legacy-config-migrate.js")>()),
   applyChannelDoctorCompatibilityMigrations: (cfg: OpenClawConfig) => ({
     next: cfg,
     changes: [],
   }),
 }));
 
-vi.mock("../../../secrets/target-registry.js", async () => {
-  const { asNullableRecord: readRecord } =
-    await import("@openclaw/normalization-core/record-coerce");
-  const entry = {
-    id: "channels.discord.token",
-    targetType: "channels.discord.token",
-    configFile: "openclaw.json",
-    pathPattern: "channels.discord.token",
-    secretShape: "secret_input",
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  };
-
-  return {
-    discoverConfigSecretTargets: (cfg: OpenClawConfig) => {
-      const targets: Array<{
-        entry: typeof entry;
-        path: string;
-        pathSegments: string[];
-        value: unknown;
-        accountId?: string;
-      }> = [];
-      const channels = readRecord(cfg.channels);
-      const discord = readRecord(channels?.discord);
-      if (!discord) {
-        return targets;
-      }
-      targets.push({
-        entry,
-        path: "channels.discord.token",
-        pathSegments: ["channels", "discord", "token"],
-        value: discord.token,
-      });
-
-      const accounts = readRecord(discord.accounts);
-      for (const [accountId, accountConfig] of Object.entries(accounts ?? {})) {
-        const account = readRecord(accountConfig);
-        if (!account) {
-          continue;
-        }
-        targets.push({
-          entry,
-          path: `channels.discord.accounts.${accountId}.token`,
-          pathSegments: ["channels", "discord", "accounts", accountId, "token"],
-          value: account.token,
-          accountId,
-        });
-      }
-      return targets;
-    },
-  };
-});
-
-export function legacyConfig(value: unknown): OpenClawConfig {
-  return value as OpenClawConfig;
+export function mockPluginProviders(providers: string[] = []) {
+  vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshot").mockReturnValueOnce(
+    createPluginMetadataSnapshotFixture({ plugins: [{ id: "fixture", providers }] }),
+  );
 }
 
 export function useDoctorLegacyConfigFixture() {
+  afterEach(() => vi.restoreAllMocks());
   let previousOauthDir: string | undefined;
   let tempOauthDir = "";
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -147,6 +99,11 @@ export function useDoctorLegacyConfigFixture() {
   });
 
   return {
+    seedProviderCatalog(agentId: string) {
+      const agentDir = path.join(tempOauthDir, "agents", agentId, "agent");
+      fs.mkdirSync(agentDir, { recursive: true });
+      fs.writeFileSync(path.join(agentDir, "models.json"), '{"providers":{"agent-local":{}}}');
+    },
     get oauthDir() {
       return tempOauthDir;
     },

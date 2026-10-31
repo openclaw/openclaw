@@ -1,8 +1,8 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { VirtualizerController } from "@tanstack/lit-virtual";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Virtualizer } from "@tanstack/virtual-core";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { measureTranscriptRow } from "./chat-transcript-geometry.ts";
 import { TranscriptRowRefs } from "./chat-transcript-row-refs.ts";
 import {
@@ -12,7 +12,73 @@ import {
   resizeObservers,
 } from "./chat-transcript.test-support.ts";
 
-function mountRows(scrolling = true) {
+beforeEach(installTranscriptDomMocks);
+afterEach(resetTranscriptTestDom);
+
+it("reobserves a retained row after its detached observer receipt retires the cache", async () => {
+  const viewport = document.body.appendChild(document.createElement("div"));
+  const row = viewport.appendChild(document.createElement("div"));
+  row.dataset.index = "0";
+  row.dataset.virtualRowKey = "retained";
+  const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
+    count: 1,
+    getScrollElement: () => viewport,
+    getItemKey: () => "retained",
+    estimateSize: () => 100,
+    observeElementRect: (_, callback) => callback({ width: 800, height: 300 }),
+    observeElementOffset: (_, callback) => callback(0, false),
+    scrollToFn: vi.fn(),
+    measureElement: measureTranscriptRow,
+  });
+  const { _didMount: mountVirtualizer, _willUpdate: updateVirtualizer } = virtualizer;
+  onTestFinished(mountVirtualizer());
+  updateVirtualizer();
+  virtualizer.getVirtualItems();
+  const refs = new TranscriptRowRefs(virtualizer, {
+    isCurrentRow: (element) => viewport.contains(element),
+    beforeMeasure: () => {},
+    onMount: () => {},
+  });
+  const bind = refs.forKey("retained");
+  bind(row);
+  await Promise.resolve();
+  expect(virtualizer.elementsCache.get("retained")).toBe(row);
+
+  viewport.remove();
+  for (const observer of resizeObservers) {
+    observer.emitTarget(row, 0, 0);
+  }
+  expect(virtualizer.elementsCache.has("retained")).toBe(false);
+  expect(observedElements.has(row)).toBe(false);
+
+  // The transcript island returns without remounting its retained Solid rows.
+  document.body.append(viewport);
+  expect([...refs.elements]).toEqual([row]);
+  refs.observeConnected();
+  expect(virtualizer.elementsCache.get("retained")).toBe(row);
+  expect(observedElements.has(row)).toBe(true);
+  for (const observer of resizeObservers) {
+    observer.emitTarget(row, 800, 160);
+  }
+  expect(virtualizer.itemSizeCache.get("retained")).toBe(160);
+
+  row.remove();
+  bind();
+  await Promise.resolve();
+  expect([...refs.elements]).toEqual([]);
+  expect(virtualizer.elementsCache.has("retained")).toBe(false);
+  expect(observedElements.has(row)).toBe(false);
+});
+
+it.each([
+  { kind: "cached", scrolling: true, indexes: [0, 1, 2] },
+  { kind: "overscan", scrolling: true, indexes: [6, 7, 8] },
+  { kind: "cold idle", scrolling: false, indexes: [0, 1, 2] },
+  { kind: "cold scrolling", scrolling: true, indexes: [0, 1, 2] },
+  { kind: "re-stamped", scrolling: false, indexes: [0, 1, 2], restamped: true },
+  { kind: "later microtask", scrolling: true, indexes: [0, 1], deferred: true },
+])("defers $kind measurement without layout reads", async (scenario) => {
+  const { kind, scrolling, indexes, deferred, restamped } = scenario;
   const viewport = document.body.appendChild(document.createElement("div"));
   const rows = Array.from({ length: 12 }, (_, index) => {
     const row = viewport.appendChild(document.createElement("div"));
@@ -20,121 +86,60 @@ function mountRows(scrolling = true) {
     row.dataset.virtualRowKey = String(index);
     return row;
   });
-  const controller = new VirtualizerController<HTMLDivElement, HTMLElement>(
-    {
-      addController: vi.fn(),
-      removeController: vi.fn(),
-      requestUpdate: vi.fn(),
-      updateComplete: Promise.resolve(true),
-    },
-    {
-      count: rows.length,
-      getScrollElement: () => viewport,
-      getItemKey: (index) => String(index),
-      estimateSize: () => 100,
-      observeElementRect: (_, callback) => {
-        callback({ width: 800, height: 300 });
-      },
-      observeElementOffset: (_, callback) => {
-        callback(0, scrolling);
-      },
-      scrollToFn: vi.fn(),
-      measureElement: measureTranscriptRow,
-    },
-  );
-  controller.hostConnected();
-  controller.hostUpdated();
-  const virtualizer = controller.getVirtualizer();
-  const cleanup = () => controller.hostDisconnected();
+  const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
+    count: rows.length,
+    getScrollElement: () => viewport,
+    getItemKey: (index) => String(index),
+    estimateSize: () => 100,
+    observeElementRect: (_, callback) => callback({ width: 800, height: 300 }),
+    observeElementOffset: (_, callback) => callback(0, scrolling),
+    scrollToFn: vi.fn(),
+    measureElement: measureTranscriptRow,
+  });
+  const { _didMount: mountVirtualizer, _willUpdate: updateVirtualizer } = virtualizer;
+  onTestFinished(mountVirtualizer());
+  updateVirtualizer();
   virtualizer.getVirtualItems();
   const readViewport = vi.fn(() => 300);
   Object.defineProperty(viewport, "clientHeight", { configurable: true, get: readViewport });
   const refs = new TranscriptRowRefs(virtualizer, {
     isCurrentRow: (row) => viewport.contains(row),
+    beforeMeasure: () => {},
     onMount: () => {},
   });
-  return { rows, virtualizer, refs, readViewport, cleanup };
-}
-
-describe("transcript mounted-row measurement", () => {
-  beforeEach(installTranscriptDomMocks);
-  afterEach(resetTranscriptTestDom);
-
-  it.each(["cached", "overscan"])(
-    "avoids layout reads for %s row mounts while scrolling",
-    async (kind) => {
-      const { rows, virtualizer, refs, readViewport, cleanup } = mountRows();
-      const indexes = kind === "cached" ? [0, 1, 2] : [6, 7, 8];
-      try {
-        for (const index of indexes) {
-          if (kind === "cached") {
-            virtualizer.resizeItem(index, 80);
-          }
-          refs.forKey(String(index))(rows[index]);
-        }
-        await Promise.resolve();
-        await Promise.resolve();
-        await Promise.resolve();
-        expect(readViewport).not.toHaveBeenCalled();
-        for (const index of indexes) {
-          expect(observedElements.has(expectDefined(rows[index], "mounted row"))).toBe(true);
-        }
-      } finally {
-        cleanup();
-      }
-    },
-  );
-
-  it.each([false, true])("lets observers measure cold rows (scrolling=%s)", async (scrolling) => {
-    const { rows, virtualizer, refs, readViewport, cleanup } = mountRows(scrolling);
-    const readHeight = vi.fn(() => 80);
-    for (const row of rows.slice(0, 3)) {
-      Object.defineProperty(row, "offsetHeight", { configurable: true, get: readHeight });
+  const mounted = indexes.map((index) => expectDefined(rows[index], "mounted row"));
+  let height = deferred ? 160 : 80;
+  const readHeight = vi.fn(() => height);
+  for (const [position, index] of indexes.entries()) {
+    const row = mounted[position]!;
+    Object.defineProperty(row, "offsetHeight", { configurable: true, get: readHeight });
+    if (kind === "cached") {
+      virtualizer.resizeItem(index, 80);
     }
-    try {
-      for (let index = 0; index < 3; index++) {
-        refs.forKey(String(index))(rows[index]);
-      }
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(readHeight).not.toHaveBeenCalled();
-      expect(readViewport).not.toHaveBeenCalled();
-      expect(rows.slice(0, 3).every((row) => observedElements.has(row))).toBe(true);
-      for (const observer of resizeObservers) {
-        for (const row of rows.slice(0, 3)) {
-          observer.emitTarget(row, 800, 80);
-        }
-      }
-      expect([...virtualizer.itemSizeCache.values()]).toEqual([80, 80, 80]);
-      expect(readHeight).not.toHaveBeenCalled();
-    } finally {
-      cleanup();
+    if (restamped) {
+      refs.forKey(String(index))();
     }
-  });
-
-  it("waits for preview clamps on rows mounted in a later microtask", async () => {
-    const { rows, virtualizer, refs, cleanup } = mountRows();
-    const secondRow = expectDefined(rows[1], "second row");
-    let height = 160;
-    Object.defineProperty(secondRow, "offsetHeight", { configurable: true, get: () => height });
-    try {
-      refs.forKey("0")(rows[0]);
+    if (deferred && index === 1) {
       queueMicrotask(() => {
-        refs.forKey("1")(secondRow);
+        refs.forKey("1")(row);
         queueMicrotask(() => {
           height = 80;
         });
       });
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-      for (const observer of resizeObservers) {
-        observer.emitTarget(secondRow, 800, height);
-      }
-      expect(virtualizer.itemSizeCache.get("1")).toBe(80);
-      expect(observedElements.has(secondRow)).toBe(true);
-    } finally {
-      cleanup();
+    } else {
+      refs.forKey(String(index))(row);
     }
-  });
+  }
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  expect([readHeight.mock.calls, readViewport.mock.calls]).toEqual([[], []]);
+  expect(mounted.every((row) => observedElements.has(row))).toBe(true);
+  for (const observer of resizeObservers) {
+    for (const row of mounted) {
+      observer.emitTarget(row, 800, height);
+    }
+  }
+  expect([...virtualizer.itemSizeCache.values()]).toEqual(indexes.map(() => 80));
+  expect(readHeight).not.toHaveBeenCalled();
 });

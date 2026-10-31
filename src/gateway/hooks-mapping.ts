@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   normalizeOptionalString,
   readStringValue,
@@ -7,7 +8,7 @@ import {
 import { resolveConfigPathCandidate } from "../config/paths.js";
 import type { HookMappingConfig, HooksConfig, HookSessionMode } from "../config/types.hooks.js";
 import { resolveGmailHookMaxBytes } from "../hooks/gmail.js";
-import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
+import { resolveFunctionModuleExport } from "../hooks/module-loader.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { HookMessageChannel } from "./hooks.types.js";
@@ -168,10 +169,7 @@ type HookTransformFn = (
 ) => HookTransformResult | Promise<HookTransformResult>;
 
 /** Resolve configured hook mappings plus preset mappings into normalized matcher entries. */
-export function resolveHookMappings(
-  hooks?: HooksConfig,
-  opts?: { configDir?: string },
-): HookMappingResolved[] {
+export function resolveHookMappings(hooks?: HooksConfig): HookMappingResolved[] {
   const presets = hooks?.presets ?? [];
   const gmailAllowUnsafe = hooks?.gmail?.allowUnsafeExternalContent;
   const mappings: HookMappingConfig[] = [];
@@ -198,7 +196,7 @@ export function resolveHookMappings(
     return [];
   }
 
-  const configDir = path.resolve(opts?.configDir ?? path.dirname(resolveConfigPathCandidate()));
+  const configDir = path.resolve(path.dirname(resolveConfigPathCandidate()));
   const transformsRootDir = path.join(configDir, "hooks", "transforms");
   const transformsDir = resolveOptionalContainedPath(
     transformsRootDir,
@@ -361,18 +359,10 @@ function normalizeForEachKey(raw: string | undefined): string | undefined {
 }
 
 function mappingMatches(mapping: HookMappingResolved, ctx: HookMappingContext) {
-  if (mapping.matchPath) {
-    if (mapping.matchPath !== normalizeHookMatchPath(ctx.path)) {
-      return false;
-    }
-  }
-  if (mapping.matchSource) {
-    const source = readStringValue(ctx.payload.source);
-    if (!source || source !== mapping.matchSource) {
-      return false;
-    }
-  }
-  return true;
+  return (
+    (!mapping.matchPath || mapping.matchPath === normalizeHookMatchPath(ctx.path)) &&
+    (!mapping.matchSource || mapping.matchSource === readStringValue(ctx.payload.source))
+  );
 }
 
 function buildActionFromMapping(mapping: HookMappingResolved, ctx: HookMappingContext): HookAction {
@@ -417,7 +407,10 @@ function mergeAction(base: HookAction, override: HookTransformResult): HookMappi
   if (kind === "wake") {
     const baseWake = base.kind === "wake" ? base : undefined;
     const text = typeof override.text === "string" ? override.text : (baseWake?.text ?? "");
-    const mode = override.mode === "next-heartbeat" ? "next-heartbeat" : (baseWake?.mode ?? "now");
+    const mode =
+      override.mode === "now" || override.mode === "next-heartbeat"
+        ? override.mode
+        : (baseWake?.mode ?? "now");
     return validateAction({
       kind: "wake",
       mappingId: base.mappingId,
@@ -432,7 +425,9 @@ function mergeAction(base: HookAction, override: HookTransformResult): HookMappi
   const message =
     typeof override.message === "string" ? override.message : (baseAgent?.message ?? "");
   const wakeMode =
-    override.wakeMode === "next-heartbeat" ? "next-heartbeat" : (baseAgent?.wakeMode ?? "now");
+    override.wakeMode === "now" || override.wakeMode === "next-heartbeat"
+      ? override.wakeMode
+      : (baseAgent?.wakeMode ?? "now");
   return validateAction({
     kind: "agent",
     mappingId: base.mappingId,
@@ -518,11 +513,9 @@ async function loadTransform(transform: HookMappingTransformResolved): Promise<H
     return cached;
   }
   const generation = transformCacheBustVersion;
-  const mod = await importFileModule({
-    modulePath: transform.modulePath,
-    cacheBust: true,
-    nowMs: generation,
-  });
+  const mod: Record<string, unknown> = await import(
+    `${pathToFileURL(transform.modulePath).href}?t=${generation}`
+  );
   const fn = resolveFunctionModuleExport<HookTransformFn>({
     mod,
     exportName: transform.exportName,
@@ -602,14 +595,7 @@ function resolveOptionalContainedPath(
 }
 
 export function normalizeHookMatchPath(raw?: string): string | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  return trimmed.replace(/^\/+/, "").replace(/\/+$/, "");
+  return normalizeOptionalString(raw)?.replace(/^\/+/, "").replace(/\/+$/, "");
 }
 
 function renderOptional(value: string | undefined, ctx: HookMappingContext) {
@@ -621,9 +607,6 @@ function renderOptional(value: string | undefined, ctx: HookMappingContext) {
 }
 
 function renderTemplate(template: string, ctx: HookMappingContext) {
-  if (!template) {
-    return "";
-  }
   return template.replace(/\{\{\s*([^}]+)\s*\}\}/g, (_, expr: string) => {
     const value = resolveTemplateExpr(expr.trim(), ctx);
     if (value === undefined || value === null) {

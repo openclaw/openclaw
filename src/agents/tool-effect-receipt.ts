@@ -1,7 +1,7 @@
 import {
   attachInternalToolResultProvenance,
   getInternalToolResultProvenance,
-} from "./runtime/internal-hooks.js";
+} from "../../packages/agent-core/src/internal-hooks.js";
 
 /** Host-owned effect provenance for one completed tool lifecycle. */
 export type ToolEffectReceipt = Readonly<{
@@ -9,10 +9,31 @@ export type ToolEffectReceipt = Readonly<{
 }>;
 
 const NO_START_RECEIPT: ToolEffectReceipt = Object.freeze({ state: "not_started" });
+type ToolExecutionRefusal = Readonly<{ kind: "gated" | "blocked"; reason: string }>;
+const executionRefusals = new WeakMap<object, ToolExecutionRefusal>();
+
+/** Host refusals are not successful tool outputs, even when presented as guidance. */
+export function markToolExecutionRefused<T extends object>(
+  result: T,
+  refusal: ToolExecutionRefusal,
+): T {
+  const provenance = Object.freeze({ ...refusal });
+  executionRefusals.set(provenance, provenance);
+  return attachInternalToolResultProvenance(result, provenance);
+}
+
+/** Private provenance survives host result transforms, but cannot be forged in tool details. */
+export function readToolExecutionRefusal(value: unknown): ToolExecutionRefusal | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  const provenance = getInternalToolResultProvenance(value);
+  return provenance ? executionRefusals.get(provenance) : undefined;
+}
 
 /** Keep effect proof private while the lifecycle copies or projects the result. */
 export function markToolExecutionNotStarted<T>(value: T): T {
-  if (typeof value === "object" && value !== null) {
+  if (typeof value === "object" && value !== null && !readToolExecutionRefusal(value)) {
     attachInternalToolResultProvenance(value, NO_START_RECEIPT);
   }
   return value;
@@ -21,7 +42,7 @@ export function markToolExecutionNotStarted<T>(value: T): T {
 export function readToolEffectReceipt(value: unknown): ToolEffectReceipt | undefined {
   return typeof value === "object" &&
     value !== null &&
-    getInternalToolResultProvenance(value) === NO_START_RECEIPT
+    (getInternalToolResultProvenance(value) === NO_START_RECEIPT || readToolExecutionRefusal(value))
     ? NO_START_RECEIPT
     : undefined;
 }
@@ -30,7 +51,7 @@ export function consumeToolExecutionNotStarted(value: unknown): boolean {
   if (
     typeof value !== "object" ||
     value === null ||
-    getInternalToolResultProvenance(value) !== NO_START_RECEIPT
+    readToolEffectReceipt(value) !== NO_START_RECEIPT
   ) {
     return false;
   }

@@ -68,15 +68,13 @@ enum SessionLoader {
     static let fallbackModel = "claude-opus-4-6"
     static let fallbackContextTokens = 200_000
 
-    static let defaultStorePath = standardize(
-        OpenClawPaths.stateDirURL
-            .appendingPathComponent("sessions/sessions.json").path)
+    static let defaultStorePath = (OpenClawPaths.stateDirURL
+        .appendingPathComponent("sessions/sessions.json").path as NSString)
+        .expandingTildeInPath.replacingOccurrences(of: "//", with: "/")
 
     static func loadSnapshot(
-        activeMinutes: Int? = nil,
         limit: Int? = nil,
-        includeGlobal: Bool = true,
-        includeUnknown: Bool = true) async throws -> SessionStoreSnapshot
+        control: ControlChannel = .shared) async throws -> SessionStoreSnapshot
     {
         let data: Data
         do {
@@ -84,10 +82,8 @@ enum SessionLoader {
                 limit: limit,
                 search: nil,
                 archived: false,
-                includeGlobal: includeGlobal,
-                includeUnknown: includeUnknown,
-                activeMinutes: activeMinutes)
-            data = try await ControlChannel.shared.request(request)
+                includeUnknown: true)
+            data = try await control.request(request)
         } catch {
             let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             if msg.localizedCaseInsensitiveContains("unknown method: sessions.list") {
@@ -112,32 +108,22 @@ enum SessionLoader {
             contextTokens: decoded.defaults?.contextTokens ?? self.fallbackContextTokens)
 
         let rows = decoded.sessions.map { entry -> SessionRow in
-            let updated = entry.updatedAt.map { Date(timeIntervalSince1970: $0 / 1000) }
-            let input = entry.inputTokens ?? 0
-            let output = entry.outputTokens ?? 0
-            let total = entry.totalTokens ?? input + output
-            let context = entry.contextTokens ?? defaults.contextTokens
-
-            return SessionRow(
+            SessionRow(
                 id: entry.key,
                 key: entry.key,
                 kind: SessionKind.from(entry),
                 displayName: entry.displayName,
-                updatedAt: updated,
+                updatedAt: entry.updatedAt.map { Date(timeIntervalSince1970: $0 / 1000) },
                 sessionId: entry.sessionId,
                 thinkingLevel: entry.thinkingLevel,
                 verboseLevel: entry.verboseLevel,
                 tokens: SessionTokenStats(
-                    total: total,
-                    contextTokens: context),
+                    total: entry.totalTokens ?? (entry.inputTokens ?? 0) + (entry.outputTokens ?? 0),
+                    contextTokens: entry.contextTokens ?? defaults.contextTokens),
                 color: entry.color)
         }.sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
 
         return SessionStoreSnapshot(storePath: storePath, defaults: defaults, rows: rows)
-    }
-
-    private static func standardize(_ path: String) -> String {
-        (path as NSString).expandingTildeInPath.replacingOccurrences(of: "//", with: "/")
     }
 }
 

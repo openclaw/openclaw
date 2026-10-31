@@ -32,14 +32,9 @@ extension ControlUIDocumentHost {
         isMainFrame && self.isTrustedLinkSource(sourceURL, dashboardURL: dashboardURL)
     }
 
-    static func isHTTPURL(_ url: URL) -> Bool {
-        guard let scheme = url.scheme?.lowercased(),
-              scheme == "http" || scheme == "https",
-              url.host?.isEmpty == false
-        else {
-            return false
-        }
-        return true
+    nonisolated static func isHTTPURL(_ url: URL) -> Bool {
+        let scheme = url.scheme?.lowercased()
+        return (scheme == "http" || scheme == "https") && url.host?.isEmpty == false
     }
 
     static func isExternalURL(_ url: URL) -> Bool {
@@ -75,13 +70,7 @@ extension ControlUIDocumentHost {
         if self.sameOrigin(url, dashboardURL) {
             return true
         }
-        guard !isMainFrame,
-              isTrustedDashboardSource,
-              host?.isEmpty == false
-        else {
-            return false
-        }
-        return true
+        return !isMainFrame && isTrustedDashboardSource && host?.isEmpty == false
     }
 
     static func shouldAllowBrowserNavigation(to url: URL, isMainFrame: Bool) -> Bool {
@@ -90,6 +79,30 @@ extension ControlUIDocumentHost {
         }
         guard let scheme = url.scheme?.lowercased() else { return false }
         return scheme == "about" || scheme == "blob" || scheme == "data" || self.isHTTPURL(url)
+    }
+
+    static func shouldShowDashboardResponseFailure(
+        _ response: URLResponse,
+        isMainFrame: Bool,
+        dashboardURL: URL) -> Bool
+    {
+        guard isMainFrame,
+              let response = response as? HTTPURLResponse,
+              response.statusCode >= 400,
+              let url = response.url,
+              self.sameOrigin(url, dashboardURL)
+        else { return false }
+        let mimeType = response.mimeType?.lowercased()
+        return mimeType != "text/html" && mimeType != "application/xhtml+xml"
+    }
+
+    static func shouldIgnoreDashboardPolicyInterruption(
+        _ error: NSError,
+        isShowingFailurePage: Bool) -> Bool
+    {
+        // WKError.Code has no case for the legacy policy interruption (102).
+        // Ignore it only after the response policy has installed its failure page.
+        isShowingFailurePage && error.domain == "WebKitErrorDomain" && error.code == 102
     }
 
     static func browserResponseAction(
@@ -208,6 +221,13 @@ extension ControlUIDocumentHost {
             decisionHandler(.allow)
             return
         }
+        if navigationAction.shouldPerformDownload {
+            let allowed = self.hasCurrentBrowserSession && navigationAction.sourceFrame.isMainFrame &&
+                Self.isTrustedLinkSource(navigationAction.sourceFrame.request.url, dashboardURL: self.currentURL) &&
+                Self.shouldAllowNavigation(to: url, dashboardURL: self.currentURL, isMainFrame: true)
+            decisionHandler(allowed ? .download : .cancel)
+            return
+        }
         if navigationAction.targetFrame == nil {
             let allowEditorURLs = ControlUIDocumentHost.shouldAllowEditorURLLaunch(
                 from: navigationAction.sourceFrame.request.url,
@@ -266,7 +286,7 @@ extension ControlUIDocumentHost {
             navigationType: navigationAction.navigationType,
             buttonNumber: navigationAction.buttonNumber)
         {
-            self.openExternal(url)
+            Self.openExternal(url)
         }
         decisionHandler(.cancel)
     }
@@ -345,15 +365,15 @@ extension ControlUIDocumentHost {
         case .allow:
             decisionHandler(.allow)
         case .openExternal:
-            self.openExternal(url)
+            Self.openExternal(url)
             decisionHandler(.cancel)
         case .cancel:
             decisionHandler(.cancel)
         }
     }
 
-    private func openExternal(_ url: URL) {
-        guard Self.isExternalURL(url) || Self.isEditorURL(url) else { return }
-        NSWorkspace.shared.open(url)
+    static func openExternal(_ url: URL) {
+        guard self.isExternalURL(url) || self.isEditorURL(url) else { return }
+        AppActivation.shared.open(url)
     }
 }

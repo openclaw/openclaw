@@ -1,16 +1,25 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 
-export function readSessionColdStorageInventory(database?: { db: DatabaseSync; path: string }) {
+export function readSessionColdStorageInventory(database?: { db: EngineConnection; path: string }) {
   if (!database) {
     return { hotTranscripts: 0, coldTranscripts: 0, embeddedArchiveBytes: 0 };
   }
-  return runSqliteDeferredTransactionSync(
+  return runSqliteReadSnapshotSync(
     database.db,
     () => {
       const db = getNodeSqliteKysely<DB>(database.db);
+      const cold = executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("session_transcript_cold_archives")
+          .select((eb) => [
+            eb.fn.countAll<number>().as("count"),
+            eb.fn.sum<number>("archive_bytes").filterWhere("storage", "=", "sqlite").as("bytes"),
+          ]),
+      );
       return {
         hotTranscripts:
           executeSqliteQueryTakeFirstSync(
@@ -33,21 +42,8 @@ export function readSessionColdStorageInventory(database?: { db: DatabaseSync; p
                 ),
               ),
           )?.count ?? 0,
-        embeddedArchiveBytes:
-          executeSqliteQueryTakeFirstSync(
-            database.db,
-            db
-              .selectFrom("session_transcript_cold_archives")
-              .select((eb) => eb.fn.sum<number>("archive_bytes").as("bytes"))
-              .where("storage", "=", "sqlite"),
-          )?.bytes ?? 0,
-        coldTranscripts:
-          executeSqliteQueryTakeFirstSync(
-            database.db,
-            db
-              .selectFrom("session_transcript_cold_archives")
-              .select((eb) => eb.fn.countAll<number>().as("count")),
-          )?.count ?? 0,
+        embeddedArchiveBytes: cold?.bytes ?? 0,
+        coldTranscripts: cold?.count ?? 0,
       };
     },
     { databaseLabel: database.path, operationLabel: "session cold storage inventory" },

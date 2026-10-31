@@ -4,24 +4,56 @@ import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import * as delivery from "../agents/tools/sessions-send-tool.delivery.js";
 import { createSessionsSendTool } from "../agents/tools/sessions-send-tool.js";
 import { withPersonalToolTurn } from "../auto-reply/reply/personal-tool-turn.test-support.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import {
-  deleteSessionEntryLifecycle,
-  upsertSessionEntryCore,
-} from "../config/sessions/session-accessor.js";
+import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
 import { drainSystemEvents } from "../infra/system-events.js";
-import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   drainSessionToolsFixture,
   withSessionToolsFixture,
+  sessionToolsContext,
+  sessionToolsStorePath,
+  seedSessionToolsEntry,
 } from "./local-request-context.session-tools.test-support.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import * as sessionRowProjection from "./session-row-projection.js";
 import { roleClient } from "./session-sharing.test-utils.js";
 
 const REQUESTER = "agent:main:dashboard:notify-parent";
 const TARGET = "agent:main:dashboard:notify-child";
 const FOREIGN = "agent:main:dashboard:notify-foreign";
+
+async function withSlowProjectionStartup(run: () => Promise<void>) {
+  const entered = createDeferredCore();
+  const resume = createDeferredCore();
+  const createProjection = sessionRowProjection.createSessionRowProjection;
+  const prepare = vi
+    .spyOn(sessionRowProjection, "createSessionRowProjection")
+    .mockImplementationOnce(async (...args) => {
+      entered.resolve();
+      await resume.promise;
+      return createProjection(...args);
+    });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const pending = run();
+  void pending.catch(() => {});
+  try {
+    await awaitGateBeforeSettlement(
+      entered.promise,
+      pending,
+      "Notification settled before projection startup",
+    );
+    // Slow fixture initialization must not spend the real router's 10-second request budget.
+    await vi.advanceTimersByTimeAsync(10_001);
+    vi.useRealTimers();
+    resume.resolve();
+    await pending;
+  } finally {
+    vi.useRealTimers();
+    resume.resolve();
+    await pending.catch(() => {});
+    prepare.mockRestore();
+  }
+}
 
 async function withNotification(
   scope: "operator.sessions.write" | "operator.write",
@@ -49,20 +81,15 @@ async function withNotification(
       [TARGET, "notify-child-session", profileId],
       [FOREIGN, "notify-foreign-session", "another-person"],
     ] as const) {
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        {
-          sessionId,
-          updatedAt: 1,
-          visibility: "shared",
-          createdVia: "operator",
-          createdActor: { type: "human", source: "profile", id: creatorId },
-          sandbox: "required",
-          ...(sessionKey !== REQUESTER ? { spawnedBy: REQUESTER } : {}),
-        },
-      );
+      await seedSessionToolsEntry(sessionKey, sessionId, {
+        visibility: "shared",
+        createdVia: "operator",
+        createdActor: { type: "human", source: "profile", id: creatorId },
+        sandbox: "required",
+        ...(sessionKey !== REQUESTER ? { spawnedBy: REQUESTER } : {}),
+      });
     }
-    const context = expectDefined(getPluginRuntimeGatewayRequestScope()?.context, "Gateway");
+    const context = sessionToolsContext();
     const source = new AbortController();
     const captured = expectDefined(
       await captureGatewayOperatorRunAuthority({
@@ -103,7 +130,7 @@ async function withNotification(
             deleteTarget: async () => {
               const removed = await deleteSessionEntryLifecycle({
                 agentId: "main",
-                storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" }),
+                storePath: sessionToolsStorePath(cfg),
                 target: { canonicalKey: TARGET, storeKeys: [TARGET] },
                 archiveTranscript: false,
                 deleteTranscriptWithoutArchive: true,
@@ -128,34 +155,38 @@ async function withNotification(
 describe("session notification authority", () => {
   afterEach(drainSessionToolsFixture);
 
-  it.each(["operator.sessions.write", "operator.write"] as const)(
-    "queues an owned-child notification for %s through the real tool and router",
-    async (scope) => {
-      await withNotification(scope, async ({ notify, revoke }) => {
-        await expect(notify()).resolves.toMatchObject({
-          details: {
-            status: "queued",
-            sessionKey: TARGET,
-            notificationId: expect.any(String),
-            durability: "process",
-            runStarted: false,
-          },
-        });
-        revoke();
-        expect(drainSystemEvents(TARGET)).toEqual([
-          expect.stringContaining("Inspect the prepared change."),
-        ]);
-        expect(drainSystemEvents(REQUESTER)).toEqual([]);
-      });
+  it.each([
+    ["operator.sessions.write", TARGET, true],
+    ["operator.write", TARGET, true],
+    ["operator.sessions.write", FOREIGN, false],
+  ] as const)(
+    "authorizes %s notification to %s (allowed: %s)",
+    async (scope, sessionKey, allowed) => {
+      await withSlowProjectionStartup(() =>
+        withNotification(scope, async ({ notify, revoke }) => {
+          if (!allowed) {
+            await expect(notify(sessionKey)).rejects.toThrow(/own session|not allowed/);
+            expect(drainSystemEvents(sessionKey)).toEqual([]);
+            return;
+          }
+          await expect(notify(sessionKey)).resolves.toMatchObject({
+            details: {
+              status: "queued",
+              sessionKey: TARGET,
+              notificationId: expect.any(String),
+              durability: "process",
+              runStarted: false,
+            },
+          });
+          revoke();
+          expect(drainSystemEvents(TARGET)).toEqual([
+            expect.stringContaining("Inspect the prepared change."),
+          ]);
+          expect(drainSystemEvents(REQUESTER)).toEqual([]);
+        }),
+      );
     },
   );
-
-  it("denies a visible child now owned by another person", async () => {
-    await withNotification("operator.sessions.write", async ({ notify }) => {
-      await expect(notify(FOREIGN)).rejects.toThrow(/own session|not allowed/);
-      expect(drainSystemEvents(FOREIGN)).toEqual([]);
-    });
-  });
 
   it.each(["source revoked", "role changed", "target deleted"] as const)(
     "cannot queue when %s during notification authorization",
@@ -163,7 +194,7 @@ describe("session notification authority", () => {
       await withNotification(
         "operator.sessions.write",
         async ({ notify, revoke, changeRole, deleteTarget }) => {
-          const context = expectDefined(getPluginRuntimeGatewayRequestScope()?.context, "Gateway");
+          const context = sessionToolsContext();
           const entered = createDeferredCore();
           const resume = createDeferredCore();
           const prepare = context.ensureSessionRowProjection;

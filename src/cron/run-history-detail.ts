@@ -10,6 +10,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { FAILOVER_REASONS } from "../../packages/gateway-protocol/src/failover-reasons.js";
+import { parseAutomationResult } from "./automation-result.js";
 import { resolveCronCompletionStatus } from "./completion-status.js";
 import { isCronTimeoutErrorText } from "./execution-error-constants.js";
 import { normalizeCronRunDiagnosticsCore } from "./run-diagnostics-normalize.js";
@@ -75,6 +76,7 @@ const cronRunLogEntrySchema = z.looseObject({
   error: optionalCronStringSchema,
   errorReason: z.enum(FAILOVER_REASONS).optional().catch(undefined),
   summary: optionalCronStringSchema,
+  result: z.unknown().optional().transform(parseAutomationResult),
   runId: optionalNonBlankCronStringSchema,
   diagnostics: z.unknown().optional(),
   runAtMs: optionalCronTimestampSchema,
@@ -100,32 +102,10 @@ const cronRunLogEntrySchema = z.looseObject({
   sessionKey: optionalNonBlankCronStringSchema,
 });
 
-function isJsonValue(value: unknown): value is JsonValue {
-  const pending: unknown[] = [value];
-  while (pending.length > 0) {
-    const current = pending.pop();
-    if (
-      current === null ||
-      typeof current === "string" ||
-      typeof current === "boolean" ||
-      typeof current === "number"
-    ) {
-      continue;
-    }
-    if (!Array.isArray(current) && !isRecord(current)) {
-      return false;
-    }
-    for (const child of Object.values(current)) {
-      pending.push(child);
-    }
-  }
-  return true;
-}
-
 /** Native JSON parsing keeps released scalar/null and numeric-overflow semantics. */
 export function parseCronRunDetailJson(serialized: string): JsonValue | undefined {
-  const value = safeParseJson(serialized);
-  return isJsonValue(value) ? value : undefined;
+  // SAFETY: Native parsing only produces JSON values; undefined denotes a syntax error.
+  return safeParseJson(serialized) as JsonValue | undefined;
 }
 
 function toJsonValue(value: unknown): JsonValue | undefined {
@@ -180,6 +160,7 @@ export function parseCronRunLogEntryObject(
     error: entryObj.error,
     errorReason: entryObj.errorReason,
     summary: entryObj.summary,
+    result: entryObj.result,
     runId: entryObj.runId,
     diagnostics: normalizeCronRunDiagnosticsCore(entryObj.diagnostics),
     runAtMs: entryObj.runAtMs,
@@ -215,6 +196,7 @@ export function cronRunLogEntryToDetail(
     completionStatus: entry.completionStatus,
     error: entry.error ?? null,
     summary: entry.summary ?? null,
+    result: entry.result,
     storeKey: options.storeKey,
     errorReason: entry.errorReason,
     diagnostics: entry.diagnostics,
@@ -346,8 +328,6 @@ export function cronRunRecordToRunLogEntry(record: CronRunRecord): CronRunLogEnt
   if (record.detail.kind !== CRON_RUN_DETAIL_KIND) {
     return null;
   }
-  const wireDetail = { ...record.detail };
-  delete wireDetail.storeKey;
   // Cron detail is canonical write-time state; history reads do not rederive error reasons.
   return parseCronRunLogEntryObject(
     {
@@ -355,12 +335,13 @@ export function cronRunRecordToRunLogEntry(record: CronRunRecord): CronRunLogEnt
       // when operator cancellation and the underlying execution have different outcomes.
       error: record.error,
       summary: record.summary,
-      ...wireDetail,
+      ...record.detail,
       ts: resolveCronRunRecordTimestamp(record),
       jobId: record.jobId,
       action: "finished",
       sessionKey: record.sessionKey,
-      runId: typeof record.detail.runId === "string" ? record.detail.runId : undefined,
+      // Public request IDs win; scheduled and on-exit runs still need their receipt-backed ID.
+      runId: typeof record.detail.runId === "string" ? record.detail.runId : record.runId,
     },
     { jobId: record.jobId },
   );

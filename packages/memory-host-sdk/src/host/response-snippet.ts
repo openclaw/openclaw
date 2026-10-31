@@ -1,5 +1,5 @@
-import { consumeResponseBytes, decodeTextPrefix } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { readResponseTextPrefix, readResponseWithLimit } from "./openclaw-runtime-network.js";
 
 const DEFAULT_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const DEFAULT_ERROR_BODY_MAX_CHARS = 1_000;
@@ -19,12 +19,6 @@ type ResponseJsonOptions = {
   signal?: AbortSignal;
 };
 
-type ResponsePrefix = {
-  bytes: Uint8Array[];
-  length: number;
-  truncated: boolean;
-};
-
 /** Read a small collapsed text snippet from a response body. */
 export async function readMemoryHostResponseTextSnippet(
   res: Response,
@@ -32,15 +26,17 @@ export async function readMemoryHostResponseTextSnippet(
 ): Promise<string> {
   const maxBytes = options.maxBytes ?? DEFAULT_ERROR_BODY_MAX_BYTES;
   const maxChars = options.maxChars ?? DEFAULT_ERROR_BODY_MAX_CHARS;
-  const prefix = await readResponsePrefix(res, maxBytes, options.signal);
-  if (prefix.length === 0) {
+  if (!res.body || typeof res.body.getReader !== "function") {
     return "";
   }
-
-  const text = decodeTextPrefix(joinChunks(prefix.bytes, prefix.length), {
-    truncated: prefix.truncated,
-  });
-  const collapsed = text.replace(/\s+/g, " ").trim();
+  const prefix = await readResponseTextPrefix(res, maxBytes, { signal: options.signal }).catch(
+    (error: unknown) => {
+      throw options.signal?.aborted
+        ? toAbortError(options.signal, "Response snippet body read aborted")
+        : error;
+    },
+  );
+  const collapsed = prefix.text.replace(/\s+/g, " ").trim();
   if (!collapsed) {
     return "";
   }
@@ -58,14 +54,22 @@ export async function readResponseJsonWithLimit(
   const maxBytes = options.maxBytes ?? DEFAULT_JSON_BODY_MAX_BYTES;
   const contentLength = parseContentLength(res.headers.get("content-length"), options.errorPrefix);
   if (typeof contentLength === "number" && contentLength > maxBytes) {
-    await cancelResponseBody(res);
+    cancelResponseBody(res);
     throw responseTooLarge(options.errorPrefix, contentLength, maxBytes);
   }
 
-  const prefix = await readResponsePrefix(res, maxBytes, options.signal, options.errorPrefix);
-  const text = new TextDecoder("utf-8", { fatal: true }).decode(
-    joinChunks(prefix.bytes, prefix.length),
-  );
+  const bytes =
+    res.body && typeof res.body.getReader === "function"
+      ? await readResponseWithLimit(res, maxBytes, {
+          signal: options.signal,
+          onOverflow: ({ size }) => responseTooLarge(options.errorPrefix, size, maxBytes),
+        }).catch((error: unknown) => {
+          throw options.signal?.aborted
+            ? toAbortError(options.signal, `${options.errorPrefix}: response body read aborted`)
+            : error;
+        })
+      : new Uint8Array();
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 
   try {
     return JSON.parse(text);
@@ -78,84 +82,7 @@ function toAbortError(signal: AbortSignal, fallbackMessage: string): Error {
   return signal.reason instanceof Error ? signal.reason : new Error(fallbackMessage);
 }
 
-async function readChunkWithAbort(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  signal: AbortSignal | undefined,
-  fallbackMessage: string,
-): Promise<ReadableStreamReadResult<Uint8Array>> {
-  if (!signal) {
-    return await reader.read();
-  }
-  if (signal.aborted) {
-    void reader.cancel().catch(() => undefined);
-    throw toAbortError(signal, fallbackMessage);
-  }
-
-  let removeAbortListener: (() => void) | undefined;
-  const abortPromise = new Promise<ReadableStreamReadResult<Uint8Array>>((_resolve, reject) => {
-    const onAbort = () => {
-      reject(toAbortError(signal, fallbackMessage)); // Cancel resolves pending reads.
-      void reader.cancel().catch(() => undefined);
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    removeAbortListener = () => signal.removeEventListener("abort", onAbort);
-  });
-
-  try {
-    return await Promise.race([reader.read(), abortPromise]);
-  } finally {
-    removeAbortListener?.();
-  }
-}
-
-async function readResponsePrefix(
-  res: Response,
-  maxBytes: number,
-  signal?: AbortSignal,
-  errorPrefix?: string,
-): Promise<ResponsePrefix> {
-  const body = res.body;
-  if (!body || typeof body.getReader !== "function") {
-    return { bytes: [], length: 0, truncated: false };
-  }
-
-  const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
-  let result: { size: number; truncated: boolean };
-  try {
-    result = await consumeResponseBytes({
-      maxBytes,
-      stopAtLimit: errorPrefix === undefined,
-      read: () =>
-        readChunkWithAbort(
-          reader,
-          signal,
-          errorPrefix === undefined
-            ? "Response snippet body read aborted"
-            : `${errorPrefix}: response body read aborted`,
-        ),
-      onChunk: (chunk) => chunks.push(chunk),
-      onLimit: (size) => {
-        void reader.cancel().catch(() => undefined);
-        if (errorPrefix !== undefined) {
-          throw responseTooLarge(errorPrefix, size, maxBytes);
-        }
-      },
-    });
-  } finally {
-    try {
-      reader.releaseLock();
-    } catch {}
-  }
-
-  return {
-    bytes: chunks,
-    length: result.truncated ? Math.max(0, maxBytes) : result.size,
-    truncated: result.truncated,
-  };
-}
-
-async function cancelResponseBody(res: Response): Promise<void> {
+function cancelResponseBody(res: Response): void {
   const body = res.body;
   if (!body || typeof body.cancel !== "function") {
     return;
@@ -168,11 +95,8 @@ function parseContentLength(raw: string | null, errorPrefix: string): number | u
   if (!trimmed) {
     return undefined;
   }
-  if (!/^\d+$/.test(trimmed)) {
-    throw new Error(`${errorPrefix}: invalid content-length header: ${raw}`);
-  }
   const value = Number(trimmed);
-  if (!Number.isSafeInteger(value)) {
+  if (!/^\d+$/.test(trimmed) || !Number.isSafeInteger(value)) {
     throw new Error(`${errorPrefix}: invalid content-length header: ${raw}`);
   }
   return value;
@@ -182,17 +106,4 @@ function responseTooLarge(errorPrefix: string, size: number, maxBytes: number): 
   return new Error(
     `${errorPrefix}: response body too large: ${size} bytes (limit: ${maxBytes} bytes)`,
   );
-}
-
-function joinChunks(chunks: Uint8Array[], length: number): Uint8Array {
-  if (chunks.length === 1 && chunks[0]?.length === length) {
-    return chunks[0];
-  }
-  const joined = new Uint8Array(length);
-  let offset = 0;
-  for (const chunk of chunks) {
-    joined.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return joined;
 }

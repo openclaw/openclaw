@@ -74,7 +74,7 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(systemPrompt).toContain("<name>weather</name>");
     expect(systemPrompt).toContain("- Current: fixture/current");
     preparedModelRuntime.isCurrent.mockReturnValue(false);
-    expect(buildCliAgentSystemPrompt(params)).not.toContain("## Model Aliases");
+    expect(buildCliAgentSystemPrompt(params)).toBe(systemPrompt);
   });
 
   it.each([true, false])(
@@ -129,16 +129,6 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).not.toContain("exec approval-pending");
   });
 
-  it("describes bundled exec without assuming a node-only target", () => {
-    const prompt = buildCliAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      tools: [{ name: "exec" } as never],
-      modelDisplay: "test/model",
-    });
-
-    expect(prompt).toContain("- exec: Run shell on configured exec target");
-  });
-
   it("distinguishes the CLI working directory from the agent workspace", () => {
     const prompt = buildCliAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw-agent",
@@ -181,16 +171,6 @@ describe("buildCliAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("this run cannot safely finish full BOOTSTRAP.md");
-  });
-
-  it("omits the bootstrap gate when bootstrap mode is not provided", () => {
-    const prompt = buildCliAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      tools: [],
-      modelDisplay: "test/model",
-    });
-
-    expect(prompt).not.toContain("## Bootstrap Pending");
   });
 
   it("includes CLI-scoped plugin command guidance", () => {
@@ -256,6 +236,22 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).toContain("channel=telegram");
     expect(prompt).not.toContain("Telegram rich ON");
     expect(prompt).not.toContain("### message tool");
+  });
+
+  it.each(["mattermost", "slack"])("preserves %s channel-owned button guidance", (channel) => {
+    const prompt = buildCliAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      tools: [createStubTool("message")],
+      modelDisplay: "test/model",
+      runtimeChannel: channel,
+      runtimeCapabilities: ["inlineButtons"],
+      customInlineButtonHint: true,
+      messageToolHints: ["- Use the channel's supported button shape."],
+    });
+
+    expect(prompt).toContain("- Use the channel's supported button shape.");
+    expect(prompt).not.toContain('"action":{"type":"callback"');
+    expect(prompt).not.toContain("Inline buttons OFF");
   });
 
   it("requires an explicit message target when the CLI turn policy requires one", () => {

@@ -5,17 +5,16 @@ import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as privateWorkspaceRemoval from "../../infra/fs-safe-remove.js";
-import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
-import {
-  createNpmTarget,
-  writePackageRoot,
-} from "../../infra/package-update-steps.test-support.js";
+import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
+import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
+import { resolveGlobalInstallTarget } from "../../infra/update-global.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createNodeEvalArgs, resolveTestNodeExecPath } from "../../test-utils/node-process.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import { runFreshUpdateArtifact } from "./update-command-artifact.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import * as packageUpdate from "./update-command-package.js";
@@ -45,6 +44,7 @@ afterEach(() => {
 
 it.each([
   "activate",
+  "unsafe-temp",
   "refuse",
   "directory",
   "activation-refusal",
@@ -59,10 +59,19 @@ it.each([
     const canonicalConfig = path.join(canonicalState, "openclaw.json");
     const canonicalTmp = path.join(base, "inherited-tmp");
     const control = path.join(base, "control");
-    await fs.mkdir(canonicalState, { recursive: true });
+    await fs.mkdir(home, { mode: 0o700 });
+    await fs.mkdir(canonicalState, { mode: 0o700 });
     await fs.mkdir(canonicalTmp);
     await fs.mkdir(control, { mode: 0o700 });
-    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
+    const resolveTempRoot = tempRoot.resolvePreferredOpenClawTmpDir;
+    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockImplementation(() =>
+      action === "unsafe-temp"
+        ? resolveTempRoot({ preferredDir: path.join(control, "openclaw"), tmpdir: () => control })
+        : control,
+    );
+    if (action === "unsafe-temp") {
+      await fs.chmod(control, 0o775);
+    }
     await fs.writeFile(canonicalConfig, "{}\n");
     vi.stubEnv("HOME", home);
     vi.stubEnv("OPENCLAW_STATE_DIR", canonicalState);
@@ -71,23 +80,34 @@ it.each([
     vi.stubEnv("NODE_COMPILE_CACHE", canonicalTmp);
     vi.stubEnv("OPENCLAW_AGENT_DIR", canonicalState);
     vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", path.join(canonicalState, "continuation"));
-    const target = createNpmTarget(path.join(base, "prefix", "lib", "node_modules"));
-    target.npmOwner = { version: "11.10.0", lifecyclePolicy: "unflagged" };
-    const root = target.packageRoot!;
+    const root = path.join(base, "prefix", "lib", "node_modules", "openclaw");
     await writePackageRoot(root, "1.0.0");
+    const target = await resolveGlobalInstallTarget({
+      manager: "npm",
+      pkgRoot: root,
+      honorPackageRoot: true,
+      runCommand: (argv, options) =>
+        runCommandWithTimeout(argv, {
+          ...options,
+          env: { NODE_COMPILE_CACHE: undefined, NODE_DISABLE_COMPILE_CACHE: "1" },
+        }),
+      timeoutMs: 30_000,
+    });
+    expect(target).toMatchObject({
+      manager: "npm",
+      globalRoot: path.dirname(root),
+      packageRoot: root,
+    });
     const source = path.join(base, "package");
     await writePackageRoot(source, "1.0.1");
-    await fs.writeFile(
-      path.join(source, "package.json"),
-      JSON.stringify({
-        name: "openclaw",
-        version: "1.0.1",
-        type: "module",
-        bin: { openclaw: "dist/index.js" },
-        openclaw: { schemaVersions: { state: 17, agent: 19 } },
-        scripts: { postinstall: "node lifecycle.cjs" },
-      }),
-    );
+    await writeFixtureJson(path.join(source, "package.json"), {
+      name: "openclaw",
+      version: "1.0.1",
+      type: "module",
+      bin: { openclaw: "dist/index.js" },
+      openclaw: { schemaVersions: { state: 17, agent: 19 } },
+      scripts: { postinstall: "node lifecycle.cjs" },
+    });
     await fs.writeFile(
       path.join(source, "lifecycle.cjs"),
       `const fs=require('node:fs'),path=require('node:path'),os=require('node:os');
@@ -239,12 +259,18 @@ it.each([
           await fs.readFile(path.join(stage.root, "lifecycle-paths.json"), "utf8"),
         );
         isolatedHome = paths.openclawHome;
+        if (action === "unsafe-temp") {
+          expect(path.relative(canonicalState, paths.openclawHome).split(path.sep)[0]).toBe("tmp");
+          expect((await fs.stat(paths.openclawHome)).mode & 0o7777).toBe(0o700);
+        }
         expect(paths.home).toBe(home);
         expect(paths.state).not.toBe(canonicalState);
         expect(await fs.readFile(path.join(paths.state, "lifecycle"), "utf8")).toBe("private");
         expect(await fs.readFile(path.join(paths.tmp, "lifecycle"), "utf8")).toBe("private");
         expect(initialization.target.targetVersion).toBe("1.0.1");
-        expect(await fs.readdir(canonicalState)).toEqual(["openclaw.json"]);
+        expect((await fs.readdir(canonicalState)).toSorted()).toEqual(
+          action === "unsafe-temp" ? ["openclaw.json", "tmp"] : ["openclaw.json"],
+        );
         expect(await fs.readdir(canonicalTmp)).toEqual([]);
         expect(await fs.readFile(canonicalConfig, "utf8")).toBe("{}\n");
         if (action === "replace-workspace") {
@@ -302,10 +328,14 @@ it.each([
     } else {
       await outcome;
     }
-    const activated = action === "activate" || action === "directory";
+    const activated = action === "activate" || action === "directory" || action === "unsafe-temp";
     expect(await fs.readdir(canonicalTmp)).toEqual([]);
     expect((await fs.readdir(canonicalState)).toSorted()).toEqual(
-      activated ? ["openclaw.json", "openclaw.json.pre-update"] : ["openclaw.json"],
+      action === "unsafe-temp"
+        ? ["openclaw.json", "openclaw.json.pre-update", "tmp"]
+        : activated
+          ? ["openclaw.json", "openclaw.json.pre-update"]
+          : ["openclaw.json"],
     );
     expect(isolatedHome).toBeDefined();
     await expect(fs.stat(isolatedHome!)).rejects.toMatchObject({ code: "ENOENT" });
@@ -325,14 +355,11 @@ it("preserves an artifact refusal when private workspace cleanup also fails", as
     vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
     const root = path.join(base, "candidate");
     await writePackageRoot(root, "1.0.1");
-    await fs.writeFile(
-      path.join(root, "package.json"),
-      JSON.stringify({
-        name: "openclaw",
-        version: "1.0.1",
-        openclaw: { schemaVersions: { state: 17, agent: 19 } },
-      }),
-    );
+    await writeFixtureJson(path.join(root, "package.json"), {
+      name: "openclaw",
+      version: "1.0.1",
+      openclaw: { schemaVersions: { state: 17, agent: 19 } },
+    });
     const stage = { root, run: vi.fn(), close: vi.fn().mockResolvedValue(undefined) };
     vi.spyOn(packageUpdate, "stagePackageInstallUpdate").mockResolvedValue(stage);
     const primary = new Error("fixture original artifact refusal");

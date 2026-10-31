@@ -1,71 +1,53 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as metadataState from "../plugins/current-plugin-metadata-state.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../state/openclaw-state-db.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import * as version from "../version.js";
-import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
 import * as bundles from "./worker-environments/bundle.js";
 import type { WorkerConnectionIdentity } from "./worker-environments/connection-identity.js";
+import { createWorkerConnectionIdentity } from "./worker-environments/connection-identity.test-support.js";
 import * as bootstrapArtifacts from "./worker-environments/node-bootstrap-artifact.js";
 import type {
   createWorkerEnvironmentService,
   WorkerEnvironmentService,
 } from "./worker-environments/service.js";
 
-type GatewayToolFactory = NonNullable<
-  Parameters<typeof createWorkerEnvironmentService>[0]["createGatewayTools"]
->;
+type ServiceOptions = Parameters<typeof createWorkerEnvironmentService>[0];
 type WorkerGatewayTools =
   typeof import("./worker-environments/worker-session-tool-executor.js").createWorkerGatewayTools;
 
-const mocks = vi.hoisted(() => {
-  return {
-    createTools: vi.fn<WorkerGatewayTools>(() => []),
-    createGatewayTools: undefined as GatewayToolFactory | undefined,
-    prepareNodeArtifacts: undefined as Parameters<
-      typeof createWorkerEnvironmentService
-    >[0]["prepareNodeArtifacts"],
-    service: {
-      get: vi.fn<WorkerEnvironmentService["get"]>(),
-      ready: vi.fn<WorkerEnvironmentService["ready"]>(async () => {}),
-      stop: vi.fn<WorkerEnvironmentService["stop"]>(async () => {}),
-    } satisfies Pick<WorkerEnvironmentService, "get" | "ready" | "stop">,
-  };
-});
+const mocks = vi.hoisted(() => ({
+  createTools: vi.fn<WorkerGatewayTools>(async () => []),
+  options: undefined as ServiceOptions | undefined,
+  service: {
+    ready: vi.fn<WorkerEnvironmentService["ready"]>(async () => {}),
+    stop: vi.fn<WorkerEnvironmentService["stop"]>(async () => {}),
+  } satisfies Pick<WorkerEnvironmentService, "ready" | "stop">,
+}));
 
+// mock-isolation: observe lazy startup without launching worker processes.
 vi.mock("./worker-environments/service.js", () => ({
-  createWorkerEnvironmentService: vi.fn(
-    (options: Parameters<typeof createWorkerEnvironmentService>[0]) => {
-      mocks.createGatewayTools = options.createGatewayTools;
-      mocks.prepareNodeArtifacts = options.prepareNodeArtifacts;
-      return mocks.service;
-    },
-  ),
+  createWorkerEnvironmentService: (options: ServiceOptions) => {
+    mocks.options = options;
+    return mocks.service;
+  },
 }));
 
 vi.mock("./worker-environments/worker-session-tool-executor.js", () => ({
   createWorkerGatewayTools: mocks.createTools,
 }));
 
-import {
-  createGatewayWorkerEnvironmentRuntime,
-  loadGatewayWorkerEnvironmentStartupState,
-} from "./server-worker-environment-startup.js";
+import { loadGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.js";
+import { createWorkerStartupRuntime } from "./server-worker-environment-startup.runtime.test-support.js";
 import { withGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.state.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    mocks.createGatewayTools = undefined;
-    mocks.prepareNodeArtifacts = undefined;
+    await closeStateDatabaseForTest();
+    mocks.options = undefined;
     vi.restoreAllMocks();
     vi.clearAllMocks();
     cleanup();
@@ -77,52 +59,34 @@ async function withWorkerRuntime(run: () => Promise<void>) {
   await withGatewayWorkerEnvironmentStartupState(stateDir, async () => {
     const startup = await loadGatewayWorkerEnvironmentStartupState();
     const registry = createEmptyPluginRegistry();
-    await createGatewayWorkerEnvironmentRuntime({
-      scheduler: createTestGatewayScheduler(),
-      getPluginRegistry: () => registry,
-      getPortalRuntime: () => undefined,
-      resolveGatewayContext: () => undefined,
-      desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
-      startup,
-      log: { child: () => ({ info: () => {}, warn: () => {} }) },
-    });
-
+    await createWorkerStartupRuntime(startup, () => registry);
     await run();
   });
 }
 
-describe("gateway worker tool-surface startup", () => {
-  it("loads Gateway tools lazily and binds each requested surface", async () => {
-    await withWorkerRuntime(async () => {
-      expect(mocks.service.ready).toHaveBeenCalledOnce();
-      expect(mocks.createTools).not.toHaveBeenCalled();
-      const createGatewayTools = mocks.createGatewayTools;
-      if (!createGatewayTools) {
-        throw new Error("worker tool-surface callback was not composed");
-      }
-      const identity: WorkerConnectionIdentity = {
-        environmentId: "environment",
-        credentialHash: "credential",
-        bundleHash: "bundle",
-        sessionId: null,
-        runId: null,
-        turnClaim: null,
-        ownerEpoch: 1,
-        rpcSetVersion: 1,
-        protocolFeatures: [],
-        credentialExpiresAtMs: Date.now() + 60_000,
-      };
-      const results = await Promise.all([
-        createGatewayTools({ identity }),
-        createGatewayTools({ identity }),
-      ]);
-      expect(results).toEqual([[], []]);
-      expect(results[0]).not.toBe(results[1]);
-      expect(mocks.createTools).toHaveBeenCalledTimes(2);
-      expect(mocks.createTools).toHaveBeenCalledWith(
-        expect.objectContaining({ identity, environments: mocks.service }),
-      );
+it("loads Gateway tools lazily and binds each requested surface", async () => {
+  await withWorkerRuntime(async () => {
+    expect(mocks.service.ready).toHaveBeenCalledOnce();
+    expect(mocks.createTools).not.toHaveBeenCalled();
+    const createGatewayTools = mocks.options?.createGatewayTools;
+    if (!createGatewayTools) {
+      throw new Error("worker tool-surface callback was not composed");
+    }
+    const identity: WorkerConnectionIdentity = createWorkerConnectionIdentity(null, {
+      credentialHash: "credential",
+      bundleHash: "bundle",
+      credentialExpiresAtMs: Date.now() + 60_000,
     });
+    const results = await Promise.all([
+      createGatewayTools({ identity }),
+      createGatewayTools({ identity }),
+    ]);
+    expect(results).toEqual([[], []]);
+    expect(results[0]).not.toBe(results[1]);
+    expect(mocks.createTools).toHaveBeenCalledTimes(2);
+    expect(mocks.createTools).toHaveBeenCalledWith(
+      expect.objectContaining({ identity, environments: mocks.service }),
+    );
   });
 });
 
@@ -164,7 +128,7 @@ it.each(["success", "failure", "abort"] as const)(
     });
     await withWorkerRuntime(async () => {
       const controller = new AbortController();
-      const preparation = mocks.prepareNodeArtifacts!({}, controller.signal);
+      const preparation = mocks.options!.prepareNodeArtifacts!({}, controller.signal);
       const published = vi.fn();
       const rejected = vi.fn();
       void preparation.then(published, rejected);

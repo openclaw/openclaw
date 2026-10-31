@@ -26,9 +26,9 @@ export function reconcileUpdateRunCandidatesInWorker(
 ): UpdateRunReconciliationResult {
   const { candidates, selection: input, busyTimeoutMs, redactPaths } = command;
   const options = { ...stateOptions, busyTimeoutMs, redactPaths };
+  assertCurrent("transaction");
   return runExistingOpenClawStateWriteTransaction(
     ({ db }) => {
-      assertCurrent("transaction");
       const selected = candidates.flatMap(({ record }) => {
         const current = readUpdateRunRecord(db, record.runId);
         return current ? [inspectUpdateRunReconciliation(db, current, input)] : [];
@@ -70,29 +70,39 @@ export function reconcileUpdateRunCandidatesInWorker(
         return { current, reconciled: [] };
       }
       const reconciled: UpdateRunRecord[] = [];
-      const result = {
-        current: selected.map(({ record, rule }) => {
-          if (!rule || (input.legacyOnly && rule !== LEGACY_UPDATE_RUN_EXPIRED_REASON)) {
-            return record;
-          }
-          upsertStep(record, {
-            step: "reconcile:abandoned",
-            status: "failed",
-            endedAtMs: Date.now(),
-            detail: rule,
-          });
-          finishUpdateRunRecord(record, {
-            status: "failed",
-            reason: rule === LEGACY_UPDATE_RUN_EXPIRED_REASON ? rule : "abandoned",
-          });
-          const saved = persistRun(db, record, options);
-          reconciled.push(saved);
-          return saved;
-        }),
-        reconciled,
-      };
+      for (const [index, { record, rule }] of selected.entries()) {
+        if (
+          !rule ||
+          (input.legacyOnly && rule !== LEGACY_UPDATE_RUN_EXPIRED_REASON) ||
+          (input.statusOnly &&
+            rule !== LEGACY_UPDATE_RUN_EXPIRED_REASON &&
+            rule !== "handoff-terminated")
+        ) {
+          continue;
+        }
+        upsertStep(record, {
+          step: "reconcile:abandoned",
+          status: "failed",
+          endedAtMs: Date.now(),
+          detail:
+            rule === "handoff-terminated"
+              ? `Managed handoff terminated during ${record.phase}; last recorded phase: ${record.phase}. Check the handoff log and systemd journal for termination or OOM diagnostics.`
+              : rule,
+        });
+        finishUpdateRunRecord(record, {
+          status: "failed",
+          reason:
+            rule === LEGACY_UPDATE_RUN_EXPIRED_REASON || rule === "handoff-terminated"
+              ? rule
+              : "abandoned",
+          nextAction: "Run `openclaw update repair` before retrying the update.",
+        });
+        const saved = persistRun(db, record, options);
+        current[index] = saved;
+        reconciled.push(saved);
+      }
       assertCurrent("commit");
-      return result;
+      return { current, reconciled };
     },
     options,
     { schemaSql: schema, operationLabel: "update.run", busyTimeoutMs: options.busyTimeoutMs },

@@ -18,14 +18,10 @@ function resolveDurationParts(ms: number, unitCount: number, showYears = false):
   return selected.length ? selected : [{ value: 0, unit: "millisecond" }];
 }
 
-function formatDurationPart({ value, unit }: DurationPart, verbose = false): string {
-  return verbose
-    ? `${value} ${unit}${value === 1 || value === 1n ? "" : "s"}`
-    : `${value}${unit === "millisecond" ? "ms" : unit[0]}`;
-}
-
-export function formatDurationParts(parts: DurationPart[], verbose = false): string {
-  return parts.map((part) => formatDurationPart(part, verbose)).join(" ");
+export function formatDurationParts(parts: DurationPart[]): string {
+  return parts
+    .map(({ value, unit }) => `${value}${unit === "millisecond" ? "ms" : unit[0]}`)
+    .join(" ");
 }
 
 export function resolveCompactDurationParts(ms?: number | null, showYears = false) {
@@ -50,9 +46,4 @@ export function resolveSingleUnitDurationParts(ms: number): DurationPart[] {
     scale = nextScale;
   }
   return resolveDurationParts(Math.round(ms / scale) * scale, 1);
-}
-
-/** Keep single-unit rounding identical for compact and verbose core displays. */
-export function formatSingleUnitDuration(ms: number, verbose = false): string {
-  return formatDurationParts(resolveSingleUnitDurationParts(ms), verbose);
 }

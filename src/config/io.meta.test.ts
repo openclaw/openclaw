@@ -21,7 +21,7 @@ const restricted = withModels(models, { allow: Object.keys(models) });
 const perAgent: OpenClawConfig = {
   agents: {
     defaults: legacy.agents?.defaults,
-    list: [{ id: "worker", models: { "anthropic/claude-sonnet-4-6": {} } }],
+    entries: { worker: { models: { "anthropic/claude-sonnet-4-6": {} } } },
   },
 };
 
@@ -51,7 +51,7 @@ describe("config write metadata stamping", () => {
     const original = structuredClone({ previous, next });
     const stamped = stampConfigWriteMetadata(next, "2026.7.2", previous);
     expect(stamped.agents?.defaults?.modelPolicy).toEqual(policy);
-    expect(stamped.agents?.list).toEqual(next.agents?.list);
+    expect(stamped.agents?.entries).toEqual(next.agents?.entries);
     expect(stamped.meta?.migrations?.modelPolicyAllowlist).toBe(true);
     expect(stamped.meta?.lastTouchedVersion).toBe("2026.7.2");
     expect({ previous, next }).toEqual(original);

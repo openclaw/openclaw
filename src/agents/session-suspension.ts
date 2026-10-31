@@ -1,8 +1,3 @@
-/**
- * Session suspension persistence and lifecycle helpers.
- *
- * Records quota/manual/circuit suspensions for diagnostics and recovery flows.
- */
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
   resolveExpiresAtMsFromDurationMs,
@@ -23,26 +18,17 @@ const DEFAULT_QUOTA_SUSPENSION_RESUME_MS = 30 * 60 * 1000; // 30 min
 
 type SessionSuspensionRuntimeState = {
   suspensionWriteChain: Promise<void>;
-  cleanupGeneration: number;
   cleanupActive: boolean;
 };
 
-/**
- * Bundled gateway chunks share one write queue and shutdown fence so one
- * module copy cannot persist a suspension after another copy cleaned up.
- */
-const SESSION_SUSPENSION_STATE_KEY = Symbol.for("openclaw.sessionSuspensionRuntimeState");
-
-function getSessionSuspensionState(): SessionSuspensionRuntimeState {
-  return resolveGlobalSingleton<SessionSuspensionRuntimeState>(
-    SESSION_SUSPENSION_STATE_KEY,
-    () => ({
-      suspensionWriteChain: Promise.resolve(),
-      cleanupGeneration: 0,
-      cleanupActive: false,
-    }),
-  );
-}
+/** Bundled Gateway chunks share serialization and shutdown admission. */
+const suspensionState = resolveGlobalSingleton<SessionSuspensionRuntimeState>(
+  Symbol.for("openclaw.sessionSuspensionRuntimeState"),
+  () => ({
+    suspensionWriteChain: Promise.resolve(),
+    cleanupActive: false,
+  }),
+);
 
 const deferredSessionSuspension = new AsyncLocalStorage<{
   claimed: boolean;
@@ -50,9 +36,6 @@ const deferredSessionSuspension = new AsyncLocalStorage<{
 }>();
 
 type SessionSuspensionReason = "quota_exhausted" | "manual" | "circuit_open";
-type SessionSuspensionTarget =
-  | { mode: "defer"; defer: (params: SessionSuspensionParams) => void }
-  | { mode: "suspend" };
 export type SessionSuspensionParams = {
   cfg: OpenClawConfig | undefined;
   agentId?: string;
@@ -82,45 +65,43 @@ export function runWithDeferredSessionSuspension<T>(
   return deferredSessionSuspension.run({ claimed: false, onDeferred }, run);
 }
 
-export function resolveSessionSuspensionTarget(): SessionSuspensionTarget {
+export function captureSessionSuspension(): (params: SessionSuspensionParams) => void {
   const scope = deferredSessionSuspension.getStore();
   if (!scope || scope.claimed) {
-    return { mode: "suspend" };
+    return (params) => {
+      void suspendSession(params);
+    };
   }
   // One candidate callback may launch nested direct embedded runs. Only its
   // first embedded run inherits the outer fallback's remaining-candidate fact.
   scope.claimed = true;
-  return { mode: "defer", defer: (params) => scope.onDeferred?.(params) };
+  return (params) => scope.onDeferred?.(params);
 }
 
 export function fenceSessionSuspensionWritesForGatewayShutdown(): void {
-  const state = getSessionSuspensionState();
-  state.cleanupGeneration += 1;
-  state.cleanupActive = true;
+  suspensionState.cleanupActive = true;
 }
 
 export function enableSessionSuspensionWritesForGatewayStart(): void {
-  const state = getSessionSuspensionState();
-  state.cleanupGeneration += 1;
-  state.cleanupActive = false;
+  suspensionState.cleanupActive = false;
 }
 
 export async function suspendSession(params: SessionSuspensionParams) {
-  const state = getSessionSuspensionState();
-  const queuedGeneration = state.cleanupGeneration;
+  const state = suspensionState;
   const run = state.suspensionWriteChain
-    .catch(() => undefined)
-    .then(() => suspendSessionQueued(params, queuedGeneration));
-  // Suspension persistence is per-process and rare; serialize it so cleanup
-  // rollback has one winner and cannot erase another in-flight suspension.
-  state.suspensionWriteChain = run.then(
-    () => undefined,
-    () => undefined,
-  );
+    .then(() => suspendSessionQueued(params))
+    .catch((err: unknown) => {
+      log.warn("failed to persist quota suspension", {
+        sessionId: params.sessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+  // Complete each accepted marker write before the next one begins.
+  state.suspensionWriteChain = run;
   await run;
 }
 
-async function suspendSessionQueued(params: SessionSuspensionParams, queuedGeneration: number) {
+async function suspendSessionQueued(params: SessionSuspensionParams) {
   if (!params.cfg) {
     return;
   }
@@ -130,7 +111,7 @@ async function suspendSessionQueued(params: SessionSuspensionParams, queuedGener
   const agentIdFromDir = params.agentDir
     ? resolveRegisteredAgentIdForDir(params.agentDir)
     : undefined;
-  const { sessionKey, storePath } = resolveStoredSessionKeyForSessionId({
+  const { sessionKey, storePath } = await resolveStoredSessionKeyForSessionId({
     cfg: params.cfg,
     sessionId: params.sessionId,
     agentId: params.agentId ?? agentIdFromDir,
@@ -143,88 +124,42 @@ async function suspendSessionQueued(params: SessionSuspensionParams, queuedGener
   const ttlMs = resolveTimerTimeoutMs(params.ttlMs, DEFAULT_QUOTA_SUSPENSION_RESUME_MS, 0);
   const now = Date.now();
   const expectedResumeBy = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: now }) ?? now;
-  const state = getSessionSuspensionState();
-  if (state.cleanupActive || state.cleanupGeneration !== queuedGeneration) {
+  const state = suspensionState;
+  if (state.cleanupActive) {
     return;
   }
-  const suspensionGeneration = state.cleanupGeneration;
-  let previousQuotaSuspension: QuotaSuspension | undefined;
-  // Assigned at the end of the try; the catch path returns, so every read
-  // below sees the real patch outcome.
-  let persistedSuspension: boolean;
-
-  try {
-    const patchedEntry = await patchSessionEntryCore(
-      { storePath, sessionKey },
-      (entry) => {
-        if (getSessionSuspensionState().cleanupGeneration !== suspensionGeneration) {
-          return null;
-        }
-        previousQuotaSuspension = entry.quotaSuspension;
-        return {
-          quotaSuspension: {
-            schemaVersion: 1,
-            suspendedAt: now,
-            reason: params.reason,
-            failedProvider: params.failedProvider,
-            failedModel: params.failedModel,
-            summary: params.summary,
-            expectedResumeBy,
-            state: "suspended",
-          },
-        };
-      },
-      { skipMaintenance: true, takeCacheOwnership: true },
-    );
-    persistedSuspension = patchedEntry !== null;
-  } catch (err) {
-    log.warn("failed to persist quota suspension", {
-      sessionId: params.sessionId,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return;
-  }
-
-  const postPatchState = getSessionSuspensionState();
-  if (
-    persistedSuspension &&
-    (postPatchState.cleanupActive || suspensionGeneration !== postPatchState.cleanupGeneration)
-  ) {
-    try {
-      await patchSessionEntryCore(
-        { storePath, sessionKey },
-        (entry) =>
-          entry.quotaSuspension?.suspendedAt === now &&
-          entry.quotaSuspension.reason === params.reason &&
-          entry.quotaSuspension.failedProvider === params.failedProvider &&
-          entry.quotaSuspension.failedModel === params.failedModel
-            ? { quotaSuspension: previousQuotaSuspension }
-            : null,
-        {
-          skipMaintenance: true,
-          takeCacheOwnership: true,
-        },
-      );
-    } catch (err) {
-      log.warn("failed to clear quota suspension after shutdown cleanup", {
-        sessionId: params.sessionId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
+  // A committed diagnostic marker may survive a crossing restart; its TTL owns recovery.
+  await patchSessionEntryCore(
+    { storePath, sessionKey },
+    () => {
+      if (state.cleanupActive) {
+        return null;
+      }
+      return {
+        quotaSuspension: {
+          schemaVersion: 1,
+          suspendedAt: now,
+          reason: params.reason,
+          failedProvider: params.failedProvider,
+          failedModel: params.failedModel,
+          summary: params.summary,
+          expectedResumeBy,
+          state: "suspended",
+        } satisfies QuotaSuspension,
+      };
+    },
+    { skipMaintenance: true, takeCacheOwnership: true },
+  );
 }
 
 function resetSessionSuspensionStateForTest(): void {
-  const state = getSessionSuspensionState();
-  // Invalidate in-flight writes before clearing test state. Rewinding to a
-  // reused generation lets a fire-and-forget suspension regain ownership.
-  state.cleanupGeneration += 1;
+  const state = suspensionState;
   state.suspensionWriteChain = Promise.resolve();
   state.cleanupActive = false;
 }
 
 function isSessionSuspensionWriteCleanupActiveForTest(): boolean {
-  return getSessionSuspensionState().cleanupActive;
+  return suspensionState.cleanupActive;
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

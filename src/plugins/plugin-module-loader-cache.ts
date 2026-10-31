@@ -5,6 +5,10 @@ import { pathToFileURL } from "node:url";
 import type { NodePath } from "@babel/traverse";
 import type { CallExpression, Program, Statement } from "@babel/types";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import {
+  annotateRuntimeExecutionError,
+  noteRuntimePluginExecution,
+} from "../infra/runtime-profile.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { createJiti } from "./jiti-factory.js";
 import {
@@ -23,6 +27,7 @@ import {
   getPluginCacheSource,
   withPluginCache,
 } from "./plugin-cache.js";
+import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { installOpenClawInternalCorePackageNativeResolver } from "./plugin-sdk-native-resolver.js";
@@ -35,12 +40,12 @@ import {
   isPluginSdkAliasSpecifier,
   type PluginSdkResolutionPreference,
 } from "./sdk-alias.js";
+import { recordPluginSdkDeprecatedImport } from "./sdk-deprecated-imports.js";
 
 export type PluginModuleLoaderFactory = typeof createJiti;
 type ResolvePluginModuleLoaderCacheEntryParams = {
   modulePath: string;
   importerUrl: string;
-  argvEntry?: string;
   preferBuiltDist?: boolean;
   loaderFilename?: string;
   aliasMap?: Record<string, string>;
@@ -109,7 +114,7 @@ function resolveAutomaticJitiTsconfig(loaderFilename: string): string | undefine
   }
 }
 
-function createBunJitiImportCachePlugin(babel: {
+function createJitiImportCachePlugin(babel: {
   types: Pick<typeof import("@babel/types"), "callExpression" | "identifier">;
   template: { statements: { ast(source: string): Statement[] } };
 }) {
@@ -166,8 +171,9 @@ function createBunJitiImportCachePlugin(babel: {
   };
 }
 
-function preserveBunJitiDynamicImportResults(loader: ReturnType<typeof createJiti>): void {
-  if (!process.versions.bun || typeof loader.options?.transform !== "function") {
+// Jiti exposes partial exports during async evaluation; concurrent callers must join the first import.
+function preserveJitiDynamicImportResults(loader: ReturnType<typeof createJiti>): void {
+  if (typeof loader.options?.transform !== "function") {
     return;
   }
   const transform = loader.options.transform;
@@ -178,7 +184,7 @@ function preserveBunJitiDynamicImportResults(loader: ReturnType<typeof createJit
         ...options.babel,
         plugins: [
           ...(Array.isArray(options.babel?.plugins) ? options.babel.plugins : []),
-          createBunJitiImportCachePlugin,
+          createJitiImportCachePlugin,
         ],
       },
     });
@@ -187,8 +193,8 @@ function preserveBunJitiDynamicImportResults(loader: ReturnType<typeof createJit
 function resolvePluginModuleLoaderCacheEntry(params: ResolvePluginModuleLoaderCacheEntryParams) {
   const loaderFilename = toSafeImportPath(params.loaderFilename ?? params.modulePath);
   const tryNative = params.tryNative ?? resolvePluginLoaderTryNative(params.modulePath, params);
-  // Explicit maps are content-keyed and captured before a retained loader can escape.
-  const explicit = params.aliasMap ? { ...params.aliasMap } : undefined;
+  // Explicit maps are producer-owned facts; loaders retain their content-keyed view.
+  const explicit = params.aliasMap;
   const aliases = explicit
     ? {
         cacheKey: createPluginLoaderModuleCacheKey({ tryNative, aliasMap: explicit }),
@@ -198,7 +204,7 @@ function resolvePluginModuleLoaderCacheEntry(params: ResolvePluginModuleLoaderCa
       }
     : preparePluginLoaderAliases({
         modulePath: params.modulePath,
-        argv1: params.argvEntry ?? process.argv[1],
+        argv1: process.argv[1],
         moduleUrl: params.importerUrl,
         devSourceRoot: params.devSourceRoot,
         pluginSdkResolution: params.pluginSdkResolution,
@@ -225,6 +231,14 @@ function createPluginModuleLoader(
   },
 ): PluginModuleLoader {
   let loadWithSourceTransform: PluginModuleLoader | undefined;
+  const resolveNativeAlias = (specifier: string, parent?: string) => {
+    const target = params.resolveAlias(specifier);
+    const instance = target && pluginInstanceInvocation.getStore()?.instance;
+    if (instance && parent && instance.hasModuleSource(parent)) {
+      recordPluginSdkDeprecatedImport(instance.pluginId, specifier);
+    }
+    return target;
+  };
   const getLoadWithSourceTransform = () => {
     if (loadWithSourceTransform) {
       return loadWithSourceTransform;
@@ -236,6 +250,8 @@ function createPluginModuleLoader(
     const automaticTsconfig = resolveAutomaticJitiTsconfig(params.loaderFilename);
     const jitiLoader = (params.createLoader ?? createJiti)(params.loaderFilename, {
       ...jitiOptions,
+      // Old Node transforms can contain partial-import reads even when source bytes are unchanged.
+      fsCache: jitiOptions.fsCache ? path.join(jitiOptions.fsCache, "settled-imports") : false,
       ...(automaticTsconfig ? { tsconfigPaths: automaticTsconfig } : {}),
       // Source SDK aliases resolve outside node_modules, so Jiti's nativeModules
       // matcher misses them. Keep host state native while plugin source remains
@@ -263,13 +279,17 @@ function createPluginModuleLoader(
                 `Unable to load host Plugin SDK natively: ${target}. Use a supported native TypeScript loader for a source host, or rebuild the host SDK.`,
               );
             }
+            const instance = pluginInstanceInvocation.getStore()?.instance;
+            if (instance && typeof key === "string") {
+              recordPluginSdkDeprecatedImport(instance.pluginId, key);
+            }
             return native.moduleExport;
           },
         },
       ),
       tryNative: false,
     });
-    preserveBunJitiDynamicImportResults(jitiLoader);
+    preserveJitiDynamicImportResults(jitiLoader);
     loadWithSourceTransform = (target) => jitiLoader(toSourceTransformImportPath(target));
     return loadWithSourceTransform;
   };
@@ -280,31 +300,36 @@ function createPluginModuleLoader(
     if (cached) {
       return cached.value;
     }
+    noteRuntimePluginExecution(target);
     // Lazy transforms and nested imports must read the creating generation,
     // even when a retained loader is invoked from a newer operation scope.
-    const loaded = withPluginCache(params.cache, () => {
-      pluginModuleLoaderStats.calls += 1;
-      if (params.tryNative) {
-        const native = tryNativeRequireJavaScriptModule(target, {
-          aliasMap: params.resolveAlias,
-          fallbackOnMissingDependency: true,
-        });
-        if (native.ok) {
-          pluginModuleLoaderStats.nativeHits += 1;
-          return native.moduleExport;
+    try {
+      const loaded = withPluginCache(params.cache, () => {
+        pluginModuleLoaderStats.calls += 1;
+        if (params.tryNative) {
+          const native = tryNativeRequireJavaScriptModule(target, {
+            aliasMap: resolveNativeAlias,
+            fallbackOnMissingDependency: true,
+          });
+          if (native.ok) {
+            pluginModuleLoaderStats.nativeHits += 1;
+            return native.moduleExport;
+          }
+          pluginModuleLoaderStats.nativeMisses += 1;
+          pluginModuleLoaderStats.sourceTransformFallbacks += 1;
+        } else {
+          // Jiti shares Node's CJS cache, but native ESM chunks are not in it.
+          // Explicit source-transform callers keep their graph separate from native loads.
+          pluginModuleLoaderStats.sourceTransformForced += 1;
         }
-        pluginModuleLoaderStats.nativeMisses += 1;
-        pluginModuleLoaderStats.sourceTransformFallbacks += 1;
-      } else {
-        // Jiti shares Node's CJS cache, but native ESM chunks are not in it.
-        // Explicit source-transform callers keep their graph separate from native loads.
-        pluginModuleLoaderStats.sourceTransformForced += 1;
-      }
-      recordSourceTransformTarget(target);
-      return getLoadWithSourceTransform()(target);
-    });
-    source.variants.set(params.scopedCacheKey, { exports: { value: loaded } });
-    return loaded;
+        recordSourceTransformTarget(target);
+        return getLoadWithSourceTransform()(target);
+      });
+      source.variants.set(params.scopedCacheKey, { exports: { value: loaded } });
+      return loaded;
+    } catch (error) {
+      throw annotateRuntimeExecutionError(error, "Plugin module loading");
+    }
   };
 }
 
@@ -388,7 +413,7 @@ export function preparePluginModule(params: PluginModuleBoundaryParams) {
     throw new Error(`Unable to open ${params.surfaceLabel}`, { cause: opened.error });
   }
   fs.closeSync(opened.fd);
-  if (!sameFileIdentity(opened.stat, fs.statSync(opened.path))) {
+  if (!sameFileIdentity(opened.exactIdentity, fs.statSync(opened.path, { bigint: true }))) {
     throw new Error(`${params.surfaceLabel} changed after validation`);
   }
   const root = bindPluginCacheRoot(params.boundaryRoot, opened.rootRealPath);
@@ -409,9 +434,10 @@ export function preparePluginModule(params: PluginModuleBoundaryParams) {
 export function loadPluginPublicSurfaceModuleSync(
   params: PluginModuleBoundaryParams & {
     loadModule: (modulePath: string) => unknown;
+    capturedSource?: true;
   },
 ): object {
-  const instance = resolvePublicSurfaceInstance(params);
+  const instance = params.capturedSource ? undefined : resolvePublicSurfaceInstance(params);
   if (instance) {
     // SAFETY: Public-surface entrypoints have object exports; the instance owns this exact source.
     return instance.loadModule(params.modulePath) as object;
@@ -423,7 +449,9 @@ export function loadPluginPublicSurfaceModuleSync(
   }
   const sentinel: Record<string, unknown> = {};
   const boundaryRoot = getPluginCacheRoot(params.boundaryRoot).rootDir;
-  source.disposeModule ??= () => clearPluginModuleRequireCache(modulePath, boundaryRoot);
+  if (params.capturedSource || params.origin !== "bundled") {
+    source.disposeModule ??= () => clearPluginModuleRequireCache(modulePath, boundaryRoot);
+  }
   source.publicSurface = { exports: sentinel };
   try {
     Object.assign(sentinel, params.loadModule(modulePath));

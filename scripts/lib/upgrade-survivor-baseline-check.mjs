@@ -7,7 +7,9 @@ import {
   parseUpgradeSurvivorScenarios,
 } from "./upgrade-survivor-policy.mjs";
 
-const survivorLanes = new Set(["published-upgrade-survivor", "update-migration"]);
+const survivorLanes = ["published-upgrade-survivor", "update-migration"];
+const isSurvivorLane = (lane) =>
+  survivorLanes.some((name) => lane === name || lane.startsWith(`${name}-`));
 
 function probeBaseline(baseline) {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-baseline-check-"));
@@ -84,7 +86,7 @@ export function checkUpgradeSurvivorBaselines(
   const selections = new Map();
   const groupBaselines = new Map();
   for (const group of groups) {
-    const lanes = group.docker_lanes.split(/\s+/u).filter((lane) => survivorLanes.has(lane));
+    const lanes = group.docker_lanes.split(/\s+/u).filter((lane) => isSurvivorLane(lane));
     if (lanes.length === 0) {
       continue;
     }
@@ -142,7 +144,7 @@ export function checkUpgradeSurvivorBaselines(
     if (!groupBaselines.get(group)?.some((spec) => unusable.has(spec))) {
       return [group];
     }
-    const remaining = group.docker_lanes.split(/\s+/u).filter((lane) => !survivorLanes.has(lane));
+    const remaining = group.docker_lanes.split(/\s+/u).filter((lane) => !isSurvivorLane(lane));
     return remaining.length ? [{ ...group, docker_lanes: remaining.join(" ") }] : [];
   });
 }

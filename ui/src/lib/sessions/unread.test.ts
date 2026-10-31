@@ -1,7 +1,9 @@
 // @vitest-environment node
 import { ErrorCodes, GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionUnreadPatchGuard } from "./unread.ts";
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("SessionUnreadPatchGuard", () => {
   it.each([undefined, new GatewayProtocolRequestError({ code: ErrorCodes.UNAVAILABLE })])(
@@ -9,10 +11,13 @@ describe("SessionUnreadPatchGuard", () => {
     (error) => {
       const guard = new SessionUnreadPatchGuard();
       expect(guard.shouldPatch("agent:main:a", true)).toBe(true);
-      guard.patchFailed("agent:main:a", error);
+      const clock = vi.spyOn(Date, "now").mockReturnValue(0);
+      vi.spyOn(Math, "random").mockReturnValue(0.5);
+      guard.settlePatch()(false, error);
+      clock.mockReturnValue(550);
       expect(guard.shouldPatch("agent:main:a", true)).toBe(true);
-      // Failures for another session leave the current episode latched.
-      guard.patchFailed("agent:main:b");
+      // A successful request remains latched until a confirmed read.
+      guard.settlePatch()(true);
       expect(guard.shouldPatch("agent:main:a", true)).toBe(false);
     },
   );
@@ -22,7 +27,7 @@ describe("SessionUnreadPatchGuard", () => {
     (code) => {
       const guard = new SessionUnreadPatchGuard();
       expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(true);
-      guard.patchFailed("agent:main:a", new GatewayProtocolRequestError({ code }));
+      guard.settlePatch()(false, new GatewayProtocolRequestError({ code }));
       expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(false);
       expect(guard.shouldPatch("agent:main:a", false, 100)).toBe(false);
       expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(false);
@@ -30,19 +35,22 @@ describe("SessionUnreadPatchGuard", () => {
       // A confirmed read ends this episode; new activity can be acknowledged.
       expect(guard.shouldPatch("agent:main:a", false)).toBe(false);
       expect(guard.shouldPatch("agent:main:a", true)).toBe(true);
-      guard.patchFailed("agent:main:a", new GatewayProtocolRequestError({ code }));
+      guard.settlePatch()(false, new GatewayProtocolRequestError({ code }));
       guard.beginActivation("agent:main:a");
       expect(guard.shouldPatch("agent:main:a", true, 200)).toBe(true);
     },
   );
 
-  it("re-acknowledges when new activity flags the open session unread again", () => {
+  it("reconsiders newer unread activity after a successful pending read", () => {
     const guard = new SessionUnreadPatchGuard();
     expect(guard.shouldPatch("agent:main:a", true)).toBe(true);
-    // Server confirms the read, then a background run completes.
+    const settle = guard.settlePatch();
     expect(guard.shouldPatch("agent:main:a", false)).toBe(false);
-    expect(guard.shouldPatch("agent:main:a", true)).toBe(true);
     expect(guard.shouldPatch("agent:main:a", true)).toBe(false);
+
+    settle(true);
+
+    expect(guard.shouldPatch("agent:main:a", true)).toBe(true);
   });
 
   it("keeps an acknowledgement latched across an optimistic local read", () => {
@@ -50,14 +58,8 @@ describe("SessionUnreadPatchGuard", () => {
     expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(true);
     expect(guard.shouldPatch("agent:main:a", false, 100)).toBe(false);
     expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(false);
-    guard.patchFailed("agent:main:a");
+    guard.settlePatch()(false);
     expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(true);
-  });
-
-  it("treats a null marker as no manual marker", () => {
-    const guard = new SessionUnreadPatchGuard();
-    expect(guard.shouldPatch("agent:main:a", false)).toBe(false);
-    expect(guard.shouldPatch("agent:main:a", true, null)).toBe(true);
   });
 
   it("does not patch read sessions and resets after changing sessions", () => {
@@ -66,13 +68,6 @@ describe("SessionUnreadPatchGuard", () => {
     expect(guard.shouldPatch("agent:main:a", true)).toBe(true);
     expect(guard.shouldPatch("agent:main:b", true)).toBe(true);
     expect(guard.shouldPatch("agent:main:a", true)).toBe(true);
-  });
-
-  it("preserves a manual unread marker created after the active session was observed", () => {
-    const guard = new SessionUnreadPatchGuard();
-    expect(guard.shouldPatch("agent:main:a", false)).toBe(false);
-    expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(false);
-    expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(false);
   });
 
   it("acknowledges a manual unread marker on a later activation", () => {

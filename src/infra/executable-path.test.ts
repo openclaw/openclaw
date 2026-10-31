@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import { createNodeEvalArgs } from "../test-utils/node-process.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
@@ -24,14 +25,6 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
   clearExecutablePathCache();
 });
-
-function restoreEnvValue(name: string, value: string | undefined): void {
-  if (value === undefined) {
-    delete process.env[name];
-  } else {
-    process.env[name] = value;
-  }
-}
 
 describe("executable path helpers", () => {
   it("detects regular files and rejects directories", async () => {
@@ -319,6 +312,24 @@ describe("executable path helpers", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "preserves whitespace in cwd for relative executable candidates",
+    () => {
+      expect(resolveExecutablePathCandidate("./tool", { cwd: "/srv/data " })).toBe(
+        "/srv/data /tool",
+      );
+      expect(resolveExecutablePathCandidate("./tool", { cwd: " job" })).toBe(
+        path.resolve(" job", "tool"),
+      );
+      expect(resolveExecutablePathCandidate("./tool", { cwd: "job " })).toBe(
+        path.resolve("job ", "tool"),
+      );
+      expect(resolveExecutablePathCandidate("./tool", { cwd: "   " })).toBe(
+        path.resolve(process.cwd(), "tool"),
+      );
+    },
+  );
+
   it("does not treat drive-less rooted windows paths as cwd-relative executables", () => {
     withMockedPlatform("win32", () => {
       expect(
@@ -334,6 +345,29 @@ describe("executable path helpers", () => {
     });
   });
 });
+
+it.runIf(process.platform !== "win32")(
+  "preserves whitespace cwd in PATH-relative executable resolution",
+  async () => {
+    await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+      const dirWithSpace = `${base}/data `;
+      const dirNoSpace = `${base}/data`;
+      await fs.mkdir(dirWithSpace, { recursive: true });
+      await fs.mkdir(dirNoSpace, { recursive: true });
+      const toolWithSpace = path.join(dirWithSpace, "runner");
+      const toolNoSpace = path.join(dirNoSpace, "runner");
+      await fs.writeFile(toolWithSpace, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      await fs.writeFile(toolNoSpace, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+
+      expect(resolveExecutablePath("runner", { env: { PATH: "" }, cwd: dirWithSpace })).toBe(
+        toolWithSpace,
+      );
+      expect(resolveExecutablePath("runner", { env: { PATH: "" }, cwd: dirNoSpace })).toBe(
+        toolNoSpace,
+      );
+    });
+  },
+);
 
 describe("resolveExecutable", () => {
   afterEach(() => {
@@ -365,16 +399,9 @@ describe("resolveExecutable", () => {
         await fs.writeFile(cmdPath, "@echo off\n", "utf8");
         await fs.writeFile(exePath, "exe\n", "utf8");
 
-        const originalPath = process.env.PATH;
-        const originalPathext = process.env.PATHEXT;
-        process.env.PATH = binDir;
-        process.env.PATHEXT = ".EXE;.CMD;.BAT;.COM";
-        try {
+        withEnv({ PATH: binDir, PATHEXT: ".EXE;.CMD;.BAT;.COM" }, () => {
           expect(resolveExecutable("gcloud")).toBe(cmdPath);
-        } finally {
-          restoreEnvValue("PATH", originalPath);
-          restoreEnvValue("PATHEXT", originalPathext);
-        }
+        });
       });
     });
   });
@@ -387,13 +414,9 @@ describe("resolveExecutable", () => {
         const exePath = path.join(binDir, "tailscale.exe");
         await fs.writeFile(exePath, "exe\n", "utf8");
 
-        const originalPath = process.env.PATH;
-        process.env.PATH = binDir;
-        try {
+        withEnv({ PATH: binDir }, () => {
           expect(resolveExecutable("tailscale")).toBe(exePath);
-        } finally {
-          restoreEnvValue("PATH", originalPath);
-        }
+        });
       });
     });
   });
@@ -406,16 +429,9 @@ describe("resolveExecutable", () => {
         const ps1Path = path.join(binDir, "gcloud.ps1");
         await fs.writeFile(ps1Path, "Write-Output ok\n", "utf8");
 
-        const originalPath = process.env.PATH;
-        const originalPathext = process.env.PATHEXT;
-        process.env.PATH = binDir;
-        process.env.PATHEXT = ".PS1";
-        try {
+        withEnv({ PATH: binDir, PATHEXT: ".PS1" }, () => {
           expect(resolveExecutable("gcloud")).toBe(ps1Path);
-        } finally {
-          restoreEnvValue("PATH", originalPath);
-          restoreEnvValue("PATHEXT", originalPathext);
-        }
+        });
       });
     });
   });
@@ -469,9 +485,7 @@ describe("caller env PATHEXT propagation", () => {
   });
 
   it("resolveExecutableFromPathEnv uses caller env PATHEXT on Windows", async () => {
-    const orig = process.env.PATHEXT;
-    process.env.PATHEXT = ".TXT";
-    try {
+    await withEnvAsync({ PATHEXT: ".TXT" }, async () => {
       await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
         const binDir = path.join(base, "bin");
         await fs.mkdir(binDir, { recursive: true });
@@ -487,9 +501,7 @@ describe("caller env PATHEXT propagation", () => {
           expect(result).toBe(ps1Path);
         });
       });
-    } finally {
-      restoreEnvValue("PATHEXT", orig);
-    }
+    });
   });
 
   it("keeps PATHEXT checks for non-native explicit PATH extensions", async () => {
@@ -512,9 +524,7 @@ describe("caller env PATHEXT propagation", () => {
   });
 
   it("resolveExecutablePath with path separator passes env to PATHEXT check on Windows", async () => {
-    const orig = process.env.PATHEXT;
-    process.env.PATHEXT = ".TXT";
-    try {
+    await withEnvAsync({ PATHEXT: ".TXT" }, async () => {
       await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
         const ps1File = path.join(base, "script.ps1");
         await fs.writeFile(ps1File, 'Write-Output "ok"\n', "utf8");
@@ -525,15 +535,11 @@ describe("caller env PATHEXT propagation", () => {
           expect(result).toBe(ps1File);
         });
       });
-    } finally {
-      restoreEnvValue("PATHEXT", orig);
-    }
+    });
   });
 
   it("resolveExecutablePath without path separator falls back to PATH env", async () => {
-    const orig = process.env.PATHEXT;
-    process.env.PATHEXT = ".TXT";
-    try {
+    await withEnvAsync({ PATHEXT: ".TXT" }, async () => {
       await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
         const binDir = path.join(base, "bin");
         await fs.mkdir(binDir, { recursive: true });
@@ -547,9 +553,7 @@ describe("caller env PATHEXT propagation", () => {
           expect(result).toBe(ps1Path);
         });
       });
-    } finally {
-      restoreEnvValue("PATHEXT", orig);
-    }
+    });
   });
 
   it("resolveExecutablePath with path separator falls back to process.env when no caller env given", async () => {
@@ -557,16 +561,12 @@ describe("caller env PATHEXT propagation", () => {
       const ps1File = path.join(base, "script.ps1");
       await fs.writeFile(ps1File, 'Write-Output "ok"\n', "utf8");
 
-      const orig = process.env.PATHEXT;
-      process.env.PATHEXT = ".TXT";
-      try {
+      withEnv({ PATHEXT: ".TXT" }, () => {
         withMockedPlatform("win32", () => {
           // No caller env given, process.env.PATHEXT is .TXT -> .PS1 not matched -> undefined
           expect(resolveExecutablePath(ps1File)).toBeUndefined();
         });
-      } finally {
-        restoreEnvValue("PATHEXT", orig);
-      }
+      });
     });
   });
 });

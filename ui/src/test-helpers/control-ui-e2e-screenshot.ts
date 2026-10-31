@@ -1,5 +1,5 @@
 import photon from "@silvia-odwyer/photon-node";
-import type { Locator, Page } from "playwright";
+import type { ElementHandle, Locator, Page } from "playwright";
 import { expect } from "vitest";
 
 export async function waitForControlUiProofSurface(
@@ -54,19 +54,14 @@ export async function takeControlUiViewportScreenshot(
 }
 
 async function captureControlUiViewport(page: Page): Promise<Buffer> {
-  // CDP repaints the current viewport but does not settle semantic presentation.
-  // Keep capture independent of unrelated dashboard RPCs and descendant motion.
-  const session = await page.context().newCDPSession(page);
-  try {
-    const result = await session.send("Page.captureScreenshot", {
-      captureBeyondViewport: false,
-      format: "png",
-      fromSurface: true,
-    });
-    return Buffer.from(result.data, "base64");
-  } finally {
-    await session.detach();
-  }
+  // Playwright retains its viewport emulation while capturing the full frame.
+  // Element crops stay outside the browser so recording geometry does not change.
+  return page.screenshot({
+    fullPage: false,
+    animations: "allow",
+    caret: "initial",
+    scale: "device",
+  });
 }
 
 export async function takeControlUiElementScreenshot(
@@ -77,43 +72,479 @@ export async function takeControlUiElementScreenshot(
   await waitForControlUiProofSurface(surface, content);
   // Playwright's scroll waits for stable geometry without changing the hover target.
   await surface.scrollIntoViewIfNeeded();
-  const bounds = await surface.boundingBox();
-  const viewport = page.viewportSize();
-  if (
-    !bounds ||
-    !viewport ||
-    bounds.width <= 0 ||
-    bounds.height <= 0 ||
-    bounds.x < 0 ||
-    bounds.y < 0 ||
-    bounds.x + bounds.width > viewport.width ||
-    bounds.y + bounds.height > viewport.height
-  ) {
-    throw new Error(
-      `Proof surface is not contained by the viewport: ${JSON.stringify({ bounds, viewport })}`,
-    );
+  const frame = await captureControlUiFrame(page, [surface]);
+  return frame.elements[0]!.png;
+}
+
+type ScreenshotFrameOptions = {
+  elements?: readonly Locator[];
+  viewport?: { width: number; height: number };
+  scrollTo?: Locator;
+  animations?: "disabled";
+  animationFrameBeforeCapture?: boolean;
+  fullPage?: boolean;
+};
+
+export async function takeControlUiScreenshotFrame(
+  page: Page,
+  surface: Locator,
+  content: readonly Locator[],
+  options: ScreenshotFrameOptions = {},
+) {
+  if (options.viewport) {
+    await page.setViewportSize(options.viewport);
   }
-  const png = await captureControlUiViewport(page);
-  expect(await surface.boundingBox(), "Proof surface moved during viewport capture").toEqual(
-    bounds,
+  await Promise.all(content.map((target) => target.waitFor({ state: "attached" })));
+  const preparation = await createControlUiFramePreparation(
+    page,
+    options.animations === "disabled",
   );
-  // Browser-side clips can replace recording frames with the clipped surface.
-  // Crop only the completed PNG, enclosing fractional CSS bounds in device pixels.
-  const image = photon.PhotonImage.new_from_byteslice(png);
-  let crop: ReturnType<typeof photon.crop> | undefined;
+  const targetElements = new Map<Locator, ElementHandle>();
   try {
-    const scaleX = image.get_width() / viewport.width;
-    const scaleY = image.get_height() / viewport.height;
-    crop = photon.crop(
-      image,
-      Math.floor(bounds.x * scaleX),
-      Math.floor(bounds.y * scaleY),
-      Math.ceil((bounds.x + bounds.width) * scaleX),
-      Math.ceil((bounds.y + bounds.height) * scaleY),
+    await expect
+      .poll(async () => {
+        await preparation.evaluate((state) => state.prepare());
+        return (await Promise.all(content.map((target) => target.isVisible()))).every(Boolean);
+      })
+      .toBe(true);
+    await waitForControlUiProofSurface(surface, content);
+    const targets = [
+      ...new Set([
+        surface,
+        ...content,
+        ...(options.elements ?? []),
+        ...(options.scrollTo ? [options.scrollTo] : []),
+      ]),
+    ];
+    const inspect = async () => ({
+      presentation: await inspectControlUiFrameTargets(targets, targetElements),
+      scroll: options.scrollTo
+        ? await inspectControlUiProofScroll(options.scrollTo, false)
+        : undefined,
+    });
+    let previous: string | undefined;
+    let settled: Awaited<ReturnType<typeof inspect>> | undefined;
+    let requestedScroll: string | null | undefined;
+    await expect
+      .poll(
+        async () => {
+          await preparation.evaluate((state) => state.prepare());
+          await waitForControlUiFrameLayout(targets);
+          await preparation.evaluate((state) => state.freezeTransitions());
+          if (options.scrollTo) {
+            requestedScroll = await inspectControlUiProofScroll(options.scrollTo, true);
+            await waitForControlUiFrameLayout(targets);
+          }
+          await page.evaluate(() => document.fonts.ready.then(() => undefined));
+          await preparation.evaluate((state) => state.decodeImages());
+          await preparation.evaluate((state) => state.prepare());
+          await waitForControlUiFrameLayout(targets);
+          const images = await preparation.evaluate((state) => state.images());
+          const { presentation, scroll } = await inspect();
+          const current = JSON.stringify({ images, presentation, scroll });
+          const stable = current === previous;
+          previous = current;
+          // A recenter can expose another lazy image; repeat readiness, never captures.
+          const ready =
+            stable &&
+            requestedScroll !== null &&
+            scroll === requestedScroll &&
+            presentation.every((target) => target.visible && target.sameTarget) &&
+            images.every((image) => image.decoded);
+          if (!ready) {
+            return false;
+          }
+          // A renderer can replace a target while its intersection is pending.
+          // Keep the final readiness read inside preparation, not after polling.
+          settled = await inspect();
+          return (
+            settled.presentation.every((target) => target.visible && target.sameTarget) &&
+            JSON.stringify(settled) === JSON.stringify({ presentation, scroll })
+          );
+        },
+        { message: "Proof frame did not reach visible, settled targets" },
+      )
+      .toBe(true);
+    if (options.animationFrameBeforeCapture) {
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          }),
+      );
+    }
+    const frame = await captureControlUiFrame(page, options.elements ?? [], options);
+    expect(await inspect(), "Proof content moved or disappeared during frame capture").toEqual(
+      settled,
     );
-    return Buffer.from(crop.get_bytes());
+    return frame;
   } finally {
-    crop?.free();
+    try {
+      if (!page.isClosed()) {
+        await preparation.evaluate((state) => state.restore());
+      }
+    } finally {
+      await Promise.all([
+        preparation.dispose(),
+        ...[...targetElements.values()].map((element) => element.dispose()),
+      ]);
+    }
+  }
+}
+
+async function inspectControlUiFrameTargets(
+  targets: readonly Locator[],
+  targetElements: Map<Locator, ElementHandle>,
+) {
+  return Promise.all(
+    targets.map(async (target) => {
+      const matches = await target.elementHandles();
+      if (matches.length > 1) {
+        await Promise.all(matches.map((element) => element.dispose()));
+        throw new Error("Proof target must resolve to one element");
+      }
+      const element = matches[0];
+      if (!element) {
+        return { bounds: null, visible: false, sameTarget: false };
+      }
+      const previous = targetElements.get(target);
+      targetElements.set(target, element);
+      try {
+        // Retain one DOM identity across the asynchronous intersection delivery
+        // and Playwright's frame-relative bounds read; never re-resolve a locator.
+        const presentation = await element.evaluate((node, previousNode) => {
+          if (!(node instanceof Element)) {
+            throw new Error("Proof target must be an element");
+          }
+          return new Promise<{ sameTarget: boolean; visible: boolean }>((resolve) => {
+            const observer = new IntersectionObserver(([entry]) => {
+              observer.disconnect();
+              resolve({
+                sameTarget: !previousNode || node === previousNode,
+                visible: Boolean(
+                  node.isConnected &&
+                  entry &&
+                  entry.intersectionRect.width > 0 &&
+                  entry.intersectionRect.height > 0 &&
+                  node.checkVisibility({ checkOpacity: true, visibilityProperty: true }),
+                ),
+              });
+            });
+            observer.observe(node);
+          });
+        }, previous ?? null);
+        const bounds = await element.boundingBox();
+        return {
+          sameTarget: presentation.sameTarget,
+          bounds,
+          visible: presentation.visible && bounds !== null && bounds.width > 0 && bounds.height > 0,
+        };
+      } finally {
+        await previous?.dispose();
+      }
+    }),
+  );
+}
+
+async function createControlUiFramePreparation(page: Page, disableAnimations: boolean) {
+  return page.evaluateHandle((staticFrame) => {
+    const roots = () => {
+      const result: Array<Document | ShadowRoot> = [document];
+      for (const root of result) {
+        for (const element of root.querySelectorAll("*")) {
+          if (element.shadowRoot) {
+            result.push(element.shadowRoot);
+          }
+        }
+      }
+      return result;
+    };
+    const resumed = new Set<Animation>();
+    const transitionStyles = new Map<Document | ShadowRoot, HTMLStyleElement>();
+    const listeners = new Map<Document | ShadowRoot, () => void>();
+    const carets = new Map<HTMLElement, { value: string; priority: string }>();
+    const decoded = new Map<HTMLImageElement, string>();
+    const visibleImages = () =>
+      roots()
+        .flatMap((root) => Array.from(root.querySelectorAll("img")))
+        .filter((image) => {
+          const rect = image.getBoundingClientRect();
+          return (
+            image.isConnected &&
+            image.checkVisibility() &&
+            rect.right > 0 &&
+            rect.bottom > 0 &&
+            rect.left < innerWidth &&
+            rect.top < innerHeight &&
+            Boolean(image.currentSrc || image.src)
+          );
+        });
+    return {
+      prepare() {
+        if (!staticFrame) {
+          return;
+        }
+        for (const root of roots()) {
+          const settle = () => {
+            for (const animation of root.getAnimations()) {
+              if (
+                !animation.effect ||
+                animation.playbackRate === 0 ||
+                resumed.has(animation) ||
+                animation.playState === "finished"
+              ) {
+                continue;
+              }
+              if (Number.isFinite(animation.effect.getComputedTiming().endTime)) {
+                animation.finish();
+              } else {
+                animation.cancel();
+                resumed.add(animation);
+              }
+            }
+          };
+          if (!listeners.has(root)) {
+            root.addEventListener("animationstart", settle);
+            root.addEventListener("transitionrun", settle);
+            listeners.set(root, settle);
+          }
+          settle();
+          for (const element of root.querySelectorAll("input,textarea,[contenteditable]")) {
+            if (element instanceof HTMLElement && !carets.has(element)) {
+              carets.set(element, {
+                value: element.style.getPropertyValue("caret-color"),
+                priority: element.style.getPropertyPriority("caret-color"),
+              });
+              element.style.setProperty("caret-color", "transparent", "important");
+            }
+          }
+        }
+      },
+      freezeTransitions() {
+        if (!staticFrame) {
+          return;
+        }
+        // Finite effects and their completion handlers settle before removing the
+        // transition layers, which can otherwise retain fractional shadow paints.
+        for (const root of roots()) {
+          if (transitionStyles.has(root)) {
+            continue;
+          }
+          const style = document.createElement("style");
+          style.textContent = "*, *::before, *::after { transition: none !important; }";
+          (root instanceof Document ? root.head : root).append(style);
+          transitionStyles.set(root, style);
+        }
+      },
+      async decodeImages() {
+        await Promise.all(
+          visibleImages().map(async (image) => {
+            const source = image.currentSrc || image.src;
+            try {
+              await image.decode();
+            } catch (error) {
+              if (source !== (image.currentSrc || image.src) || !image.isConnected) {
+                return;
+              }
+              // A completed broken image is also a settled, visible UI state.
+              if (!image.complete || image.naturalWidth !== 0) {
+                throw error;
+              }
+            }
+            if (source === (image.currentSrc || image.src)) {
+              decoded.set(image, source);
+            }
+          }),
+        );
+      },
+      images() {
+        return visibleImages().map((image) => {
+          const source = image.currentSrc || image.src;
+          const rect = image.getBoundingClientRect();
+          return {
+            source,
+            decoded: decoded.get(image) === source,
+            width: image.naturalWidth,
+            height: image.naturalHeight,
+            bounds: [rect.x, rect.y, rect.width, rect.height],
+          };
+        });
+      },
+      restore() {
+        for (const style of transitionStyles.values()) {
+          style.remove();
+        }
+        for (const [root, listener] of listeners) {
+          root.removeEventListener("animationstart", listener);
+          root.removeEventListener("transitionrun", listener);
+        }
+        for (const [element, caret] of carets) {
+          element.style.setProperty("caret-color", caret.value, caret.priority);
+        }
+        for (const animation of resumed) {
+          animation.play();
+        }
+      },
+    };
+  }, disableAnimations);
+}
+
+async function inspectControlUiProofScroll(target: Locator, shouldCenter: boolean) {
+  return (
+    await target.evaluate(
+      inspectProofGeometry,
+      shouldCenter ? ("center" as const) : ("read" as const),
+    )
+  ).scroll;
+}
+
+export async function waitForControlUiFrameLayout(targets: readonly Locator[]): Promise<void> {
+  await expect
+    .poll(async () =>
+      (
+        await Promise.all(
+          targets.map((target) => target.evaluate(inspectProofGeometry, "settle" as const)),
+        )
+      ).every((result) => result.settled),
+    )
+    .toBe(true);
+}
+
+// Serialized by Playwright: keep the shared geometry reader inside this function.
+async function inspectProofGeometry(element: Element, mode: "read" | "center" | "settle") {
+  const geometry = () => {
+    const rows: Array<[Element, ...number[]]> = [];
+    for (let owner: Element | null = element; owner;) {
+      const { x, y, width, height } = owner.getBoundingClientRect();
+      rows.push([owner, x, y, width, height, owner.scrollLeft, owner.scrollTop]);
+      const root = owner.getRootNode();
+      owner = owner.parentElement ?? (root instanceof ShadowRoot ? root.host : null);
+    }
+    return rows;
+  };
+  if (mode !== "settle") {
+    if (!element.isConnected) {
+      return { scroll: null, settled: false };
+    }
+    // Record achieved centering in this task, not a later reset.
+    if (mode === "center") {
+      element.scrollIntoView({ behavior: "instant", block: "center", inline: "center" });
+    }
+    return { scroll: JSON.stringify(geometry().map(([, ...values]) => values)), settled: false };
+  }
+  let previous: ReturnType<typeof geometry> = [];
+  let stableFrames = 0;
+  for (let frame = 0; frame < 60; frame += 1) {
+    await new Promise<void>((resolve) => {
+      // Intersection delivery continues when fixtures pause the application clock.
+      const observer = new IntersectionObserver(() => {
+        observer.disconnect();
+        resolve();
+      });
+      observer.observe(element);
+    });
+    if (!element.isConnected) {
+      return { scroll: null, settled: false };
+    }
+    const current = geometry();
+    const unchanged =
+      current.length === previous.length &&
+      current.every((row, index) =>
+        row.every((value, column) => value === previous[index]![column]),
+      );
+    stableFrames = unchanged ? stableFrames + 1 : 0;
+    if (stableFrames >= 3) {
+      return { scroll: null, settled: true };
+    }
+    previous = current;
+  }
+  throw new Error("Proof layout did not settle within 60 layout updates");
+}
+
+async function captureControlUiFrame(
+  page: Page,
+  elements: readonly Locator[],
+  options: Pick<ScreenshotFrameOptions, "fullPage"> = {},
+) {
+  const viewport = page.viewportSize();
+  if (!viewport) {
+    throw new Error("Proof capture requires a viewport");
+  }
+  if (options.fullPage) {
+    const extent = await page.evaluate(() => {
+      const maximum = (axis: "Width" | "Height") =>
+        Math.max(
+          document.documentElement[`client${axis}`],
+          ...[document.body, document.documentElement].flatMap((element) => [
+            element[`scroll${axis}`],
+            element[`offset${axis}`],
+          ]),
+        );
+      return { width: maximum("Width"), height: maximum("Height") };
+    });
+    expect(extent, "Full-page proof must fit the viewport-frame dimensions").toEqual(viewport);
+  }
+  const bounds = await Promise.all(elements.map((element) => element.boundingBox()));
+  const rectangles = bounds.map((rect) => {
+    if (
+      !rect ||
+      rect.width <= 0 ||
+      rect.height <= 0 ||
+      rect.x < 0 ||
+      rect.y < 0 ||
+      rect.x + rect.width > viewport.width ||
+      rect.y + rect.height > viewport.height
+    ) {
+      throw new Error(
+        `Proof surface is not contained by the viewport: ${JSON.stringify({ bounds: rect, viewport })}`,
+      );
+    }
+    return rect;
+  });
+  // Keep the prepared presentation in place while taking one unclipped frame.
+  const deviceScale = await page.evaluate(() => window.devicePixelRatio);
+  const png = await captureControlUiViewport(page);
+  expect(
+    await Promise.all(elements.map((element) => element.boundingBox())),
+    "Proof surfaces moved during frame capture",
+  ).toEqual(rectangles);
+  const image = photon.PhotonImage.new_from_byteslice(png);
+  try {
+    const width = image.get_width();
+    const height = image.get_height();
+    // Backing dimensions can round independently at fractional device scales.
+    expect(Math.abs(width - viewport.width * deviceScale), "Proof frame width").toBeLessThanOrEqual(
+      1,
+    );
+    expect(
+      Math.abs(height - viewport.height * deviceScale),
+      "Proof frame height",
+    ).toBeLessThanOrEqual(1);
+    const scaleX = width / viewport.width;
+    const scaleY = height / viewport.height;
+    expect(scaleX, "Proof frame horizontal scale").toBeGreaterThan(0);
+    expect(scaleY, "Proof frame vertical scale").toBeGreaterThan(0);
+    return {
+      png,
+      elements: rectangles.map((rect) => {
+        const x = Math.floor(rect.x * scaleX);
+        const y = Math.floor(rect.y * scaleY);
+        const right = Math.min(width, Math.ceil((rect.x + rect.width) * scaleX));
+        const bottom = Math.min(height, Math.ceil((rect.y + rect.height) * scaleY));
+        const crop = photon.crop(image, x, y, right, bottom);
+        try {
+          expect([crop.get_width(), crop.get_height()]).toEqual([right - x, bottom - y]);
+          return {
+            png: Buffer.from(crop.get_bytes()),
+            bounds: rect,
+            pixelBounds: { x, y, width: right - x, height: bottom - y },
+          };
+        } finally {
+          crop.free();
+        }
+      }),
+    };
+  } finally {
     image.free();
   }
 }

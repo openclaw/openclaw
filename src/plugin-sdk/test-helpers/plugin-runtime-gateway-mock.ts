@@ -9,5 +9,12 @@ export function createPluginGatewayRuntimeMock(): PluginRuntime["gateway"] {
     readSessionFacts: vi.fn<PluginRuntime["gateway"]["readSessionFacts"]>(async () => ({
       sessions: [],
     })),
+    withSessionFacts: async (_select, run) =>
+      run({ scope: undefined, revision: "mock", sessions: [] }),
+    appendAgentMessage: vi.fn<PluginRuntime["gateway"]["appendAgentMessage"]>(async () => ({
+      messageId: "mock",
+      replayed: false,
+    })),
+    subscribeSessionChanges: vi.fn(() => () => {}),
   };
 }

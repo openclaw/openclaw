@@ -1,13 +1,15 @@
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import type { GatewayServer } from "./server-public.js";
+import { createStartupTestState } from "./server-startup.test-support.js";
 
-let state: Awaited<ReturnType<typeof createOpenClawTestState>> | undefined;
+let state: Awaited<ReturnType<typeof createStartupTestState>> | undefined;
 let claim: Awaited<ReturnType<typeof acquireTestPortBlock>> | undefined;
 let server: GatewayServer | undefined;
-const loadedPlugins: string[] = [];
+const pluginId = "canary-startup-fixture";
+let loadedPlugin: { id: string; status: string } | undefined;
 const deferredCalls: string[] = [];
 
 function rejectDeferredWork(name: string): never {
@@ -17,27 +19,12 @@ function rejectDeferredWork(name: string): never {
 
 beforeAll(async () => {
   claim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-  state = await createOpenClawTestState({
-    label: "gateway-update-canary-startup",
-    env: {
-      OPENCLAW_GATEWAY_PASSWORD: undefined,
-      OPENCLAW_GATEWAY_TOKEN: undefined,
-      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-    },
+  state = await createStartupTestState("gateway-update-canary-startup", {
+    OPENCLAW_GATEWAY_PASSWORD: undefined,
+    OPENCLAW_GATEWAY_TOKEN: undefined,
+    OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
   });
-  const pluginId = "canary-startup-fixture";
-  await state.writeJson("plugin/package.json", {
-    name: pluginId,
-    version: "1.0.0",
-    type: "module",
-    openclaw: { extensions: ["./index.mjs"] },
-  });
+  await state.writeJson("plugin/package.json", { openclaw: { extensions: ["./index.mjs"] } });
   await state.writeJson("plugin/openclaw.plugin.json", {
     id: pluginId,
     activation: { onStartup: true },
@@ -64,57 +51,32 @@ beforeAll(async () => {
     },
   });
 
-  const [
-    cliShim,
-    githubCleanup,
-    plugins,
-    workers,
-    projection,
-    lifetime,
-    discovery,
-    skills,
-    subagents,
-  ] = await Promise.all([
-    import("../infra/openclaw-cli-shim.js"),
-    import("../agents/github-tool-profile-cleanup.js"),
-    import("./server-startup-plugins.js"),
-    import("./server-worker-environment-startup.js"),
-    import("./session-row-projection.js"),
-    import("./server-lifetime-sidecars.js"),
-    import("./server-discovery-runtime.js"),
-    import("../skills/runtime/remote.js"),
-    import("../agents/subagents/registry/subagent-registry.js"),
-  ]);
-  vi.spyOn(cliShim, "prepareGatewayAgentCliShim").mockImplementation(() =>
-    rejectDeferredWork("agent CLI shim"),
-  );
-  vi.spyOn(githubCleanup, "cleanupRetiredManagedGitHubProfiles").mockImplementation(() =>
-    rejectDeferredWork("managed GitHub profile cleanup"),
-  );
-  vi.spyOn(plugins, "runGatewayStartupMaintenance").mockImplementation(() =>
-    rejectDeferredWork("channel and session maintenance"),
-  );
-  vi.spyOn(workers, "loadGatewayWorkerEnvironmentStartupState").mockImplementation(() =>
-    rejectDeferredWork("worker environment recovery"),
-  );
-  vi.spyOn(projection, "createSessionRowProjection").mockImplementation(() =>
-    rejectDeferredWork("session catalog hydration"),
-  );
-  vi.spyOn(lifetime, "attachInitialGatewayLifetimeSidecars").mockImplementation(() =>
-    rejectDeferredWork("initial lifetime sidecars"),
-  );
-  vi.spyOn(discovery, "startGatewayDiscovery").mockImplementation(() =>
-    rejectDeferredWork("discovery"),
-  );
-  vi.spyOn(skills, "primeRemoteSkillsCache").mockImplementation(() =>
-    rejectDeferredWork("remote skills warmup"),
-  );
-  vi.spyOn(subagents, "initSubagentRegistry").mockImplementation(() =>
-    rejectDeferredWork("subagent recovery hydration"),
-  );
-  vi.spyOn(subagents, "activateSubagentRegistry").mockImplementation(() =>
-    rejectDeferredWork("subagent recovery activation"),
-  );
+  const [cli, gh, plugins, workers, rows, sidecars, discovery, skills, subagents] =
+    await Promise.all([
+      import("../infra/openclaw-cli-shim.js"),
+      import("../agents/github-tool-profile-cleanup.js"),
+      import("./server-startup-plugins.js"),
+      import("./server-worker-environment-startup.js"),
+      import("./session-row-projection.js"),
+      import("./server-lifetime-sidecars.js"),
+      import("./server-discovery-runtime.js"),
+      import("../skills/runtime/remote.js"),
+      import("../agents/subagents/registry/subagent-registry.js"),
+    ]);
+  for (const [spy, name] of [
+    [vi.spyOn(cli, "prepareGatewayAgentCliShim"), "agent CLI shim"],
+    [vi.spyOn(gh, "cleanupRetiredManagedGitHubProfiles"), "managed GitHub profile cleanup"],
+    [vi.spyOn(plugins, "runGatewayPostReadyStartupMaintenance"), "channel and session maintenance"],
+    [vi.spyOn(workers, "loadGatewayWorkerEnvironmentStartupState"), "worker environment recovery"],
+    [vi.spyOn(rows, "createSessionRowProjection"), "session catalog hydration"],
+    [vi.spyOn(sidecars, "attachInitialGatewayLifetimeSidecars"), "initial lifetime sidecars"],
+    [vi.spyOn(discovery, "startGatewayDiscovery"), "discovery"],
+    [vi.spyOn(skills, "primeRemoteSkillsCache"), "remote skills warmup"],
+    [vi.spyOn(subagents, "initSubagentRegistry"), "subagent recovery hydration"],
+    [vi.spyOn(subagents, "activateSubagentRegistry"), "subagent recovery activation"],
+  ] as const) {
+    spy.mockImplementation(() => rejectDeferredWork(name));
+  }
   const pluginLoad = vi.spyOn(plugins, "loadGatewayStartupPluginRuntime");
   await withAgentDatabaseStartupAdmission(async (admission) => {
     vi.spyOn(admission, "activate").mockImplementation(() =>
@@ -130,36 +92,30 @@ beforeAll(async () => {
   });
   for (const result of pluginLoad.mock.results) {
     if (result.type === "return") {
-      const loaded = await result.value;
-      loadedPlugins.push(
-        ...loaded.pluginRegistry.plugins
-          .filter((plugin) => plugin.status === "loaded")
-          .map((plugin) => plugin.id),
-      );
+      const {
+        pluginRegistry: { plugins: registered },
+      } = await result.value;
+      loadedPlugin ??= registered.find((item) => item.id === pluginId && item.status === "loaded");
     }
   }
 });
 
-afterAll(async () => {
-  try {
-    await server?.close({ reason: "update canary startup proof complete" });
-  } finally {
-    vi.restoreAllMocks();
-    try {
-      await state?.cleanup();
-    } finally {
-      await claim?.release();
-    }
-  }
-});
+afterAll(() =>
+  runQaGatewayFixture(
+    async () => server?.close({ reason: "update canary startup proof complete" }),
+    () => vi.restoreAllMocks(),
+    () => state?.cleanup(),
+    () => claim?.release(),
+  ),
+);
 
 it("serves candidate readiness without starting normal Gateway maintenance", async () => {
-  const startup = await fetch(`http://127.0.0.1:${claim!.port}/startupz`);
-  expect(startup.status).toBe(200);
-  await expect(startup.json()).resolves.toMatchObject({ status: "started" });
-  const readiness = await fetch(`http://127.0.0.1:${claim!.port}/readyz`);
-  expect(readiness.status).toBe(200);
-  await expect(readiness.json()).resolves.toMatchObject({ ready: true });
-  expect(loadedPlugins).toContain("canary-startup-fixture");
+  const health = { startupz: { status: "started" }, readyz: { ready: true } };
+  for (const [route, body] of Object.entries(health)) {
+    const response = await fetch(`http://127.0.0.1:${claim!.port}/${route}`);
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject(body);
+  }
+  expect(loadedPlugin).toMatchObject({ id: pluginId, status: "loaded" });
   expect(deferredCalls).toEqual([]);
 });

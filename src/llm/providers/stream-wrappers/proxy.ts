@@ -4,6 +4,7 @@ import {
   applyCompletionsAnthropicCacheControl,
   resolveAnthropicEphemeralCacheControl,
 } from "@openclaw/ai/transports";
+import { normalizeOpenRouterModelFamilyId } from "@openclaw/model-catalog-core/provider-model-id-normalize";
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalLowercaseString,
@@ -19,20 +20,18 @@ import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { normalizeOpenAICompatibleReasoningPayload } from "../../../plugin-sdk/provider-stream-shared.js";
 import { parseBooleanValue } from "../../../utils/boolean.js";
 import { streamSimple } from "../../stream.js";
-import { isAnthropicModelRef } from "./anthropic-family-cache-semantics.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
-const KILOCODE_FEATURE_HEADER = "X-KILOCODE-FEATURE";
-const KILOCODE_FEATURE_DEFAULT = "openclaw";
-const KILOCODE_FEATURE_ENV_VAR = "KILOCODE_FEATURE";
 const BOOLEAN_PARAM_PARSE_OPTIONS = {
   truthy: ["1", "true", "yes", "on", "enable", "enabled"],
   falsy: ["0", "false", "no", "off", "disable", "disabled"],
 };
 
-function resolveKilocodeAppHeaders(): Record<string, string> {
-  const feature = process.env[KILOCODE_FEATURE_ENV_VAR]?.trim() || KILOCODE_FEATURE_DEFAULT;
-  return { [KILOCODE_FEATURE_HEADER]: feature };
-}
+export const OPENROUTER_RESPONSE_CACHE_TTL_KEYS = [
+  "responseCacheTtlSeconds",
+  "response_cache_ttl_seconds",
+  "responseCacheTtl",
+  "response_cache_ttl",
+] as const;
 
 function resolveModelEndpointClass(model: Parameters<StreamFn>[0]) {
   return (
@@ -63,12 +62,7 @@ function readExtraParam(
 }
 
 function resolveOpenRouterResponseCacheTtlSeconds(value: unknown): string | undefined {
-  const parsed =
-    typeof value === "number"
-      ? value
-      : typeof value === "string"
-        ? parseStrictFiniteNumber(value)
-        : undefined;
+  const parsed = parseStrictFiniteNumber(value);
   if (parsed === undefined) {
     return undefined;
   }
@@ -112,12 +106,7 @@ function resolveOpenRouterResponseCacheHeaders(
   }
 
   const ttl = resolveOpenRouterResponseCacheTtlSeconds(
-    readExtraParam(extraParams, [
-      "responseCacheTtlSeconds",
-      "response_cache_ttl_seconds",
-      "responseCacheTtl",
-      "response_cache_ttl",
-    ]),
+    readExtraParam(extraParams, OPENROUTER_RESPONSE_CACHE_TTL_KEYS),
   );
   if (ttl) {
     headers["X-OpenRouter-Cache-TTL"] = ttl;
@@ -135,10 +124,12 @@ export function createOpenRouterSystemCacheWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    const modelId = readStringValue(model.id);
     // Keep OpenRouter-specific cache markers on verified OpenRouter routes
     // (or the provider's default route), but not on arbitrary OpenAI proxies.
-    if (!isOpenRouterEndpoint(model) || !modelId || !isAnthropicModelRef(modelId)) {
+    if (
+      !isOpenRouterEndpoint(model) ||
+      !normalizeOpenRouterModelFamilyId(model.id)?.startsWith("anthropic/")
+    ) {
       return underlying(model, context, options);
     }
 
@@ -219,9 +210,7 @@ export function createOpenRouterWrapper(
 
 /** @deprecated Proxy provider-owned stream helper; do not use from third-party plugins. */
 export function isProxyReasoningUnsupported(modelId: string): boolean {
-  const trimmed = normalizeOptionalLowercaseString(modelId);
-  const slashIndex = trimmed?.indexOf("/") ?? -1;
-  return slashIndex > 0 && trimmed?.slice(0, slashIndex) === "x-ai";
+  return normalizeOptionalLowercaseString(modelId)?.startsWith("x-ai/") ?? false;
 }
 
 /** @deprecated Kilocode provider-owned stream helper; do not use from third-party plugins. */
@@ -239,7 +228,9 @@ export function createKilocodeWrapper(
       transport: "stream",
       routeFacts: getModelProviderRequestRouteFacts(model),
       callerHeaders: options?.headers,
-      providerHeaders: resolveKilocodeAppHeaders(),
+      providerHeaders: {
+        "X-KILOCODE-FEATURE": process.env.KILOCODE_FEATURE?.trim() || "openclaw",
+      },
       precedence: "defaults-win",
     }).headers;
     return streamWithPayloadPatch(

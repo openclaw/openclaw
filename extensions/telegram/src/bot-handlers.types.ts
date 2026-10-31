@@ -5,13 +5,7 @@ import type {
   TelegramAccountConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import type { TelegramBotDeps } from "./bot-deps.js";
-import type {
-  BuildTelegramMessageContextParams,
-  TelegramMediaRef,
-  TelegramMessageContextOptions,
-  TelegramPromptContextEntry,
-} from "./bot-message-context.types.js";
+import type { BuildTelegramMessageContextParams } from "./bot-message-context.types.js";
 import type {
   TelegramMessageProcessingResult,
   TelegramSpooledReplayDeferredParticipant,
@@ -20,7 +14,6 @@ import type { TelegramUpdateKeyContext } from "./bot-updates.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import type { TelegramContext } from "./bot/types.js";
 import type { TelegramTransport } from "./fetch.js";
-import type { TelegramReplyChainEntry } from "./message-cache-codec.js";
 import type { TelegramThreadSpec } from "./thread-spec.js";
 
 export type TelegramPendingInboundTarget = {
@@ -33,6 +26,8 @@ type TelegramMessageProcessorTurnContext = {
   cfg: OpenClawConfig;
   telegramCfg: TelegramAccountConfig;
   onDispatchStart?: () => Promise<void> | void;
+  /** The turn holds its FIFO slot in the session lane while it waits for adoption. */
+  onTurnDeferred?: () => void;
   spooledReplayAbortSignal?: AbortSignal;
   spooledReplayParticipant?: TelegramSpooledReplayDeferredParticipant;
   finalizeSpooledReplayResult?: (
@@ -44,24 +39,17 @@ type TelegramMessageProcessorTurnContext = {
   ) => Promise<TelegramMessageProcessingResult> | TelegramMessageProcessingResult;
 };
 
-type ProcessTelegramMessageOptions = {
+type ProcessTelegramMessageOptions = Pick<
+  BuildTelegramMessageContextParams,
+  "allMedia" | "storeAllowFrom" | "options" | "replyMedia" | "replyChain" | "promptContext"
+> & {
   ctx: TelegramContext;
-  allMedia: TelegramMediaRef[];
-  storeAllowFrom: string[];
   turnContext: TelegramMessageProcessorTurnContext;
-  options?: TelegramMessageContextOptions;
-  replyMedia?: TelegramMediaRef[];
-  replyChain?: TelegramReplyChainEntry[];
-  promptContext?: TelegramPromptContextEntry[];
 };
 
 type ProcessTelegramMessage = (
   options: ProcessTelegramMessageOptions,
 ) => Promise<TelegramMessageProcessingResult>;
-
-export type TelegramResolvedGroupConfig = ReturnType<
-  BuildTelegramMessageContextParams["resolveTelegramGroupConfig"]
->;
 
 export type TelegramNativeCommandCallbackDispatcher = (params: {
   botUser: Context["me"];
@@ -85,7 +73,6 @@ export type RegisterTelegramHandlerParams = {
   telegramTransport?: TelegramTransport;
   runtime: RuntimeEnv;
   telegramCfg: TelegramAccountConfig;
-  telegramDeps: TelegramBotDeps;
   resolveGroupPolicy: (chatId: string | number, cfg: OpenClawConfig) => ChannelGroupPolicy;
   resolveGroupActivation: BuildTelegramMessageContextParams["resolveGroupActivation"];
   resolveGroupRequireMention: BuildTelegramMessageContextParams["resolveGroupRequireMention"];
@@ -104,12 +91,4 @@ export type TelegramInboundDisposition =
 
 export interface TelegramInboundPipeline {
   handle: (ctx: Context) => Promise<TelegramInboundDisposition>;
-}
-
-export interface TelegramEventBindings {
-  registerChatMembership(): void;
-  registerReaction(): void;
-  registerPolls(): void;
-  registerMigration(): void;
-  registerMessages(): void;
 }

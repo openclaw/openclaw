@@ -1,5 +1,6 @@
 import { Type, type Static } from "typebox";
-import { lazyCompile } from "../protocol-validator.js";
+import * as Checks from "../compiled/protocol.generated/schema-worker-gateway-tool.js";
+import { createProtocolValidator } from "../protocol-validator.js";
 import { closedObject } from "./closed-object.js";
 import {
   isWorkerFrameWithinBudget,
@@ -18,13 +19,81 @@ export const WORKER_GATEWAY_TOOL_METHODS = {
 } as const;
 
 const JsonObjectSchema = Type.Record(Type.String(), Type.Unknown());
+const ToolSearchSelectorSchema = Type.Object(
+  {
+    source: Type.Optional(Type.Enum(["openclaw", "mcp", "client"])),
+    name: Type.Optional(Type.String({ minLength: 1, pattern: "\\S" })),
+  },
+  { additionalProperties: false, minProperties: 1 },
+);
+export const AgentToolSurfacePresentationSchema = closedObject({
+  codeMode: closedObject({
+    enabled: Type.Boolean(),
+    executor: Type.Enum(["node", "quickjs"]),
+    mode: Type.Literal("only"),
+    timeoutMs: Type.Integer({ minimum: 1 }),
+    memoryLimitBytes: Type.Integer({ minimum: 1 }),
+    maxOutputBytes: Type.Integer({ minimum: 1 }),
+    maxSnapshotBytes: Type.Integer({ minimum: 1 }),
+    maxPendingToolCalls: Type.Integer({ minimum: 1 }),
+    snapshotTtlSeconds: Type.Integer({ minimum: 1 }),
+    searchDefaultLimit: Type.Integer({ minimum: 1 }),
+    maxSearchLimit: Type.Integer({ minimum: 1 }),
+  }),
+  toolSearch: closedObject({
+    enabled: Type.Boolean(),
+    mode: Type.Enum(["tools", "directory"]),
+    include: Type.Optional(Type.Array(ToolSearchSelectorSchema)),
+    exclude: Type.Optional(Type.Array(ToolSearchSelectorSchema)),
+    searchDefaultLimit: Type.Integer({ minimum: 1 }),
+    maxSearchLimit: Type.Integer({ minimum: 1 }),
+  }),
+  toolSearchDirectoryLean: Type.Optional(Type.Boolean()),
+  forceDirectMessageTool: Type.Boolean(),
+  skills: Type.Optional(
+    Type.Array(
+      closedObject({ name: Type.String(), description: Type.String(), location: Type.String() }),
+    ),
+  ),
+});
+export type AgentToolSurfacePresentation = Static<typeof AgentToolSurfacePresentationSchema>;
+
 export const WorkerToolSurfaceSchema = closedObject({
   generation: WorkerIdentifierSchema,
+  presentation: AgentToolSurfacePresentationSchema,
   tools: Type.Array(
     closedObject({
       id: WorkerIdentifierSchema,
       execution: Type.Enum(["placement", "gateway"]),
       replay: Type.Optional(Type.Literal(true)),
+      plugin: Type.Optional(
+        closedObject({
+          pluginId: WorkerIdentifierSchema,
+          optional: Type.Boolean(),
+          replaySafe: Type.Optional(Type.Boolean()),
+          sideEffecting: Type.Optional(Type.Boolean()),
+          mcp: Type.Optional(
+            closedObject({
+              serverName: Type.String(),
+              safeServerName: Type.String(),
+              toolName: Type.String(),
+              operation: Type.Enum([
+                "tool",
+                "resources_list",
+                "resources_read",
+                "prompts_list",
+                "prompts_get",
+              ]),
+              node: Type.Optional(
+                closedObject({
+                  id: WorkerIdentifierSchema,
+                  displayName: Type.Optional(Type.String()),
+                }),
+              ),
+            }),
+          ),
+        }),
+      ),
       timeout: Type.Optional(
         closedObject({
           minimumMs: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -42,6 +111,8 @@ export const WorkerToolSurfaceSchema = closedObject({
         hideFromChannelProgress: Type.Optional(Type.Literal(true)),
         resultContentSource: Type.Optional(Type.Literal("network")),
         executionMode: Type.Optional(Type.Enum(["sequential", "parallel"])),
+        catalogMode: Type.Optional(Type.Literal("direct-only")),
+        async: Type.Optional(Type.Literal(false)),
       }),
     }),
     { maxItems: 256 },
@@ -110,13 +181,18 @@ export const WorkerGatewayToolUpdateFrameSchema = closedObject({
   }),
 });
 
-export const validateWorkerGatewayToolInvokeParams = lazyCompile(
+export const validateWorkerGatewayToolInvokeParams = createProtocolValidator(
   WorkerGatewayToolInvokeParamsSchema,
+  Checks.isWorkerGatewayToolInvokeParams,
 );
-export const validateWorkerGatewayToolCancelParams = lazyCompile(
+export const validateWorkerGatewayToolCancelParams = createProtocolValidator(
   WorkerGatewayToolCancelParamsSchema,
+  Checks.isWorkerGatewayToolCancelParams,
 );
-export const validateWorkerGatewayToolUpdateFrame = lazyCompile(WorkerGatewayToolUpdateFrameSchema);
+export const validateWorkerGatewayToolUpdateFrame = createProtocolValidator(
+  WorkerGatewayToolUpdateFrameSchema,
+  Checks.isWorkerGatewayToolUpdateFrame,
+);
 
 export type WorkerToolSurface = Static<typeof WorkerToolSurfaceSchema>;
 export type WorkerGatewayToolInvokeParams = Static<typeof WorkerGatewayToolInvokeParamsSchema>;

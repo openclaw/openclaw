@@ -1,0 +1,178 @@
+import { beforeEach, expect, it, vi } from "vitest";
+import { createGatewayMethodRegistry } from "../methods/registry.js";
+import { createContext } from "../server-plugin-in-process-dispatch.test-support.js";
+import { makeGatewayClient } from "../server-request-context.test-support.js";
+import { mcpEventsHandlers } from "./mcp-events.js";
+import type { GatewayClient, GatewayRequestHandlerOptions } from "./types.js";
+
+const mocks = vi.hoisted(() => ({
+  request: vi.fn<typeof import("../../agents/mcp-event-request.js").requestMcpEvent>(),
+  prepare: vi.fn<typeof import("../../plugins/service-mcp-events.js").prepareMcpEventConnection>(),
+  release: vi.fn(),
+}));
+vi.mock("../../agents/mcp-event-request.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/mcp-event-request.js")>()),
+  requestMcpEvent: mocks.request,
+  MCP_EVENTS_PROTOCOL_VERSION: "2026-07-28",
+}));
+vi.mock("../../plugins/service-mcp-events.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/service-mcp-events.js")>()),
+  prepareMcpEventConnection: mocks.prepare,
+}));
+
+const event = {
+  name: "calendar.changed",
+  description: "A calendar changed",
+  delivery: ["webhook"],
+  inputSchema: { type: "object" },
+  payloadSchema: { type: "object" },
+};
+const discovery = { supportedVersions: ["2026-07-28"], capabilities: { events: {} } };
+function fixture() {
+  const respond = vi.fn();
+  const client: GatewayClient = {
+    ...makeGatewayClient({ connId: "catalog-client", clientId: "cli", scopes: ["operator.read"] }),
+    authenticatedUserId: "alice@example.test",
+  };
+  let current = true;
+  const cfg = { agents: { entries: { main: {} } } };
+  const registry = createGatewayMethodRegistry([
+    {
+      name: "mcp-events.status",
+      owner: { kind: "plugin", pluginId: "mcp-events" },
+      scope: "operator.admin",
+      handler: () => {},
+    },
+  ]);
+  const context = createContext([], () => cfg);
+  context.getGatewayMethodRegistry = () => registry;
+  const options: GatewayRequestHandlerOptions = {
+    req: { type: "req", id: "catalog", method: "mcp.events.list" },
+    isWebchatConnect: () => false,
+    params: { serverName: "calendar" },
+    client,
+    context,
+    respond,
+    hasCurrentClientAuthority: () => current,
+  };
+  return {
+    options,
+    respond,
+    client,
+    revoke: () => {
+      current = false;
+    },
+    run: () => mcpEventsHandlers["mcp.events.list"]!(options),
+  };
+}
+beforeEach(() => {
+  mocks.request.mockReset();
+  mocks.prepare.mockReset();
+  mocks.release.mockReset();
+  mocks.prepare.mockImplementation(async (input) => {
+    input.assertCurrent();
+    return {
+      endpoint: "https://calendar.example/mcp",
+      server: {},
+      cfg: input.cfg,
+      agentDir: "/agent",
+      configurationIdentity: "fixture-config",
+      authorizationIdentity: "fixture-authorization",
+      selector: {
+        serverName: input.serverName,
+        server: {},
+        cfg: input.cfg,
+        agentDir: "/agent",
+        requesterScope: input.principal.requester,
+        requesterResolver: false,
+      },
+      revalidate: async () => input.assertCurrent(),
+      requesterScope: input.principal.requester,
+      assertCurrent: input.assertCurrent,
+      release: mocks.release,
+    };
+  });
+  mocks.request.mockImplementation(async (input) => {
+    input.assertCurrent();
+    return input.method === "server/discover"
+      ? discovery
+      : {
+          events: [{ ...event, privateServerField: "not-public" }],
+          nextCursor: "page-two",
+          remoteAccount: "not-public",
+        };
+  });
+});
+it("discovers before listing and returns one explicit page without server-private fields", async () => {
+  const f = fixture();
+  f.options.params.cursor = "page-one";
+  await f.run();
+  expect(mocks.request.mock.calls.map(([input]) => input.method)).toEqual([
+    "server/discover",
+    "events/list",
+  ]);
+  expect(mocks.request.mock.lastCall?.[0].params).toEqual({ cursor: "page-one" });
+  expect(f.respond).toHaveBeenCalledWith(
+    true,
+    { serverName: "calendar", events: [event], nextCursor: "page-two" },
+    undefined,
+  );
+  expect(mocks.release).toHaveBeenCalledOnce();
+  expect(mocks.prepare.mock.calls[0]?.[0].principal.requester).toBeUndefined();
+});
+it("keeps an astral event description whole at the catalog cap", async () => {
+  const f = fixture();
+  const prefix = "a".repeat(4095);
+  mocks.request.mockImplementation(async (input) =>
+    input.method === "server/discover"
+      ? discovery
+      : { events: [{ ...event, description: `${prefix}\u{1F600}tail` }] },
+  );
+  await f.run();
+  expect(f.respond).toHaveBeenCalledWith(
+    true,
+    { serverName: "calendar", events: [{ ...event, description: prefix }] },
+    undefined,
+  );
+});
+it("refuses wire-supplied requester identities and connection URLs", async () => {
+  const f = fixture();
+  f.options.params.requesterSenderId = "another-user";
+  f.options.params.url = "https://other.example/mcp";
+  await f.run();
+  expect(mocks.prepare).not.toHaveBeenCalled();
+  expect(f.respond.mock.calls[0]?.[0]).toBe(false);
+});
+it("does not connect when the optional plugin is absent", async () => {
+  const f = fixture();
+  f.options.context.getGatewayMethodRegistry = () => createGatewayMethodRegistry([]);
+  await f.run();
+  expect(mocks.prepare).not.toHaveBeenCalled();
+  expect(f.respond.mock.calls[0]?.[0]).toBe(false);
+});
+it.each(["caller revoked after discovery", "read scope lost", "oversized page"] as const)(
+  "mcp.events.list rejects %s",
+  async (scenario) => {
+    const f = fixture();
+    mocks.request.mockImplementation(async (input) => {
+      if (input.method === "server/discover") {
+        if (scenario === "caller revoked after discovery") {
+          f.revoke();
+        }
+        return discovery;
+      }
+      if (scenario === "read scope lost") {
+        f.client.connect.scopes = [];
+      }
+      return {
+        events: scenario === "oversized page" ? Array.from({ length: 1001 }, () => event) : [event],
+      };
+    });
+    await f.run();
+    expect(f.respond.mock.calls[0]?.[0]).toBe(false);
+    if (scenario === "caller revoked after discovery") {
+      expect(mocks.request).toHaveBeenCalledOnce();
+      expect(mocks.release).toHaveBeenCalledOnce();
+    }
+  },
+);

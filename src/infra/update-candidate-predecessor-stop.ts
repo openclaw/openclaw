@@ -1,6 +1,5 @@
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { registerSignalExitGate } from "../cli/signal-exit-barrier.js";
-import { needsCandidateManagedServiceStop } from "../cli/update-cli/update-command-legacy-service-stop.js";
 import { UpdateCommandRecoveryPendingError } from "../cli/update-cli/update-command-recovery-error.js";
 import type { PreManagedServiceStop } from "../cli/update-cli/update-command-service-context-types.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "../cli/update-cli/update-command-service-maintenance.js";
@@ -107,8 +106,8 @@ export async function stopSupervisedPredecessorGateway(
   input: { runId: string; repair: boolean },
   params: {
     root: string;
-    timeoutMs?: number;
     assertCurrent: () => void;
+    serviceInspectionBudget?: () => number | undefined;
     warn: (message: string) => void;
   },
 ): Promise<boolean> {
@@ -154,7 +153,7 @@ export async function stopSupervisedPredecessorGateway(
       },
     ).then((result) => {
       if (
-        result.runId !== runId ||
+        result?.runId !== runId ||
         result.status !== "running" ||
         !result.steps.some((stored) => stored.step === step && stored.status === "completed")
       ) {
@@ -171,16 +170,21 @@ export async function stopSupervisedPredecessorGateway(
   try {
     // The native stop reports its mutation before later checks can still throw;
     // the ledger keeps that fact for finalization and recovery either way.
+    const doctorRemainingMs = params.serviceInspectionBudget?.();
+    params.assertCurrent();
     const state = await maybeStopManagedServiceBeforeMutableUpdate({
       updateInstallKind: "package",
       root: params.root,
       shouldRestart: true,
       jsonMode: true,
       phase: "prepare",
-      // The delegated Doctor input carries no step budget; bound the drain and
-      // stop by the service stop budget so a stuck predecessor cannot outlive
-      // the parent's Doctor allowance.
-      timeoutMs: params.timeoutMs ?? GATEWAY_SERVICE_STOP_TIMEOUT_MS,
+      // The parent Doctor deadline also bounds this stop, while the existing
+      // service stop budget remains the cap when more Doctor time is available.
+      timeoutMs:
+        doctorRemainingMs === undefined
+          ? GATEWAY_SERVICE_STOP_TIMEOUT_MS
+          : Math.min(GATEWAY_SERVICE_STOP_TIMEOUT_MS, doctorRemainingMs),
+      assertDeadline: params.serviceInspectionBudget,
       onStopped: record,
       assertCurrent: params.assertCurrent,
       warn: params.warn,
@@ -325,7 +329,12 @@ export async function adoptCandidateManagedServiceStop(params: {
   }
   if (
     params.status !== "ok" ||
-    !needsCandidateManagedServiceStop({ ...params, preManagedServiceStop: params.transferred })
+    !params.shouldRestart ||
+    params.mode === "unknown" ||
+    params.transferred?.serviceUpdateVerdict?.kind !== "unavailable" ||
+    params.transferred.stopped ||
+    params.transferred.inspected ||
+    params.windowsTaskAutoStartSuspended === true
   ) {
     return unchanged;
   }

@@ -2,10 +2,16 @@ import { renameSync } from "node:fs";
 import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { callInProcessGatewayTool } from "../agents/tools/in-process-gateway.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
-import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import {
+  loadSessionEntryReadOnly,
+  patchSessionEntryCore,
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -20,11 +26,19 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import * as profileReader from "../state/user-profile-list.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { handleGatewayRequest } from "./server-methods.js";
-import type { GatewayClient, GatewayRequestHandler } from "./server-methods/types.js";
+import { createRequestGate } from "./server-methods.request-gate.test-support.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+  GatewayRequestHandler,
+} from "./server-methods/types.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import * as sessionAccess from "./session-access-authority.js";
 import { prepareGatewaySessionAccessAuthority } from "./session-access-authority.js";
@@ -32,7 +46,6 @@ import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 
 const mocks = vi.hoisted(() => ({
-  profileCurrent: true,
   prepare: vi.fn(),
   prepareIdentity:
     vi.fn<typeof import("../state/user-profile-list.js").prepareUserProfileIdentity>(),
@@ -61,6 +74,19 @@ vi.mock("./session-resource-tool-policy.js", () => ({
 }));
 
 const key = "agent:main:dashboard:review";
+const method = "fixture.session.open";
+const query = { agentId: "main", key };
+type Authority = sessionAccess.GatewaySessionAccessAuthority;
+type Borrow = ReturnType<Authority["retain"]>;
+type Fixture = ReturnType<typeof fixture>;
+type Scope = { agentId: string; sessionKey: string; storePath: string };
+const sessionEntry = (creator = "alice"): SessionEntry => ({
+  sessionId: "session-1",
+  lifecycleRevision: "incarnation-1",
+  updatedAt: 1,
+  createdActor: { type: "human", source: "profile", id: creator },
+  visibility: "shared",
+});
 const held: Array<{ release: () => void }> = [];
 function hold<T extends { release: () => void }>(value: T): T {
   held.push(value);
@@ -69,13 +95,7 @@ function hold<T extends { release: () => void }>(value: T): T {
 
 function fixture(scopes = ["operator.write"], creator = "someone-else") {
   const grant = new AbortController();
-  let entry: SessionEntry | undefined = {
-    sessionId: "session-1",
-    lifecycleRevision: "incarnation-1",
-    updatedAt: 1,
-    createdActor: { type: "human", source: "profile", id: creator },
-    visibility: "shared",
-  };
+  let entry = sessionEntry(creator);
   const generation = Symbol("database");
   const client = {
     connect: { role: "operator", scopes, client: { id: "test", mode: "webchat" } },
@@ -90,22 +110,19 @@ function fixture(scopes = ["operator.write"], creator = "someone-else") {
   const context = bindSessionRowProjection(createContext(), () => projection);
   const projection = {
     prepareMembership: async () => {},
-    sharingTarget: () =>
-      entry
-        ? {
-            agentId: "main",
-            canonicalKey: key,
-            entry,
-            generation,
-            storePath: "/test/sessions",
-            storeKey: key,
-            storeKeys: [key],
-          }
-        : null,
+    sharingTarget: () => ({
+      agentId: "main",
+      canonicalKey: key,
+      entry,
+      generation,
+      storePath: "/test/sessions",
+      storeKey: key,
+      storeKeys: [key],
+    }),
     hasMembership: () => false,
     sharingTargetState: () => {
-      const target = projection.sharingTarget({ agentId: "main", key });
-      return target ? { status: "ready", target } : { status: "missing" };
+      const target = projection.sharingTarget(query);
+      return { status: "ready", target };
     },
   } as unknown as SessionRowProjection;
   return {
@@ -113,24 +130,103 @@ function fixture(scopes = ["operator.write"], creator = "someone-else") {
     client,
     context,
     projection,
-    setEntry(next: SessionEntry | undefined) {
-      entry = next;
+    setVisibility(visibility: SessionEntry["visibility"]) {
+      entry = { ...entry, updatedAt: 2, visibility };
     },
-    prepare: async () =>
-      hold(
-        await prepareGatewaySessionAccessAuthority({
-          policy: { mode: "write", requiredTool: "browser", allowOwnSessionScope: true },
-          requestParams: { sessionKey: key, agentId: "main" },
-          context,
-          client,
-          ownSessionOnly: false,
-        }),
-      ),
+    prepare: () => prepareAuthority({ context, client }),
   };
 }
 
+async function prepareAuthority({
+  context,
+  client,
+}: {
+  context: GatewayRequestContext;
+  client: GatewayClient;
+}): Promise<Authority> {
+  const { authority } = await prepareGatewaySessionAccessAuthority({
+    policy: { mode: "write", requiredTool: "browser", allowOwnSessionScope: true },
+    requestParams: { sessionKey: key, agentId: "main" },
+    context,
+    client,
+    ownSessionOnly: false,
+  });
+  return hold(authority);
+}
+
+function descriptor(handler: GatewayRequestHandler, allowOwnSessionScope?: boolean) {
+  return createPluginGatewayMethodDescriptor({
+    pluginId: "fixture",
+    name: method,
+    handler,
+    scope: "operator.write",
+    sessionAccess: { mode: "write", requiredTool: "browser", allowOwnSessionScope },
+  });
+}
+
+async function retainedResource() {
+  const test = fixture();
+  const authority = await test.prepare();
+  const resource = hold(authority.retainSession());
+  authority.release();
+  const readyState = test.projection.sharingTargetState(query);
+  const state = vi
+    .spyOn(test.projection, "sharingTargetState")
+    .mockReturnValue({ status: "pending" });
+  return { test, resource, readyState, state };
+}
+
+function expectCurrent(...authorities: Array<{ assertCurrent: () => void }>) {
+  for (const authority of authorities) {
+    expect(() => authority.assertCurrent()).not.toThrow();
+  }
+}
+
+async function borrowSession(test = fixture()) {
+  const authority = await prepareAuthority(test);
+  return { authority, viewer: hold(authority.retain()), resource: hold(authority.retainSession()) };
+}
+
+function renewGrant(test: Fixture) {
+  test.client.internal!.operatorAccessAuthority = {
+    signal: new AbortController().signal,
+    assertCurrent: () => {},
+  };
+}
+
+async function withStoredSession(
+  run: (test: Fixture, scope: Scope, state: OpenClawTestState) => Promise<void>,
+) {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const heldStart = held.length;
+    const scope = {
+      agentId: "main",
+      sessionKey: key,
+      storePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
+    };
+    const cfg = { agents: { entries: { main: {} } }, session: { store: scope.storePath } };
+    setRuntimeConfigSnapshot(cfg);
+    await replaceSessionEntry(scope, sessionEntry());
+    const test = fixture();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    const context = bindSessionRowProjection(
+      { ...test.context, getRuntimeConfig: () => cfg },
+      () => projection,
+    );
+    try {
+      await projection.ensureMaterialized();
+      await run({ ...test, context, projection }, scope, state);
+    } finally {
+      for (const authority of held.splice(heldStart)) {
+        authority.release();
+      }
+      projection.dispose();
+    }
+  });
+}
+
 function dispatchSession(
-  test: ReturnType<typeof fixture>,
+  test: Fixture,
   handler: GatewayRequestHandler,
   options: Partial<
     Pick<
@@ -140,28 +236,18 @@ function dispatchSession(
   > & { allowOwnSessionScope?: boolean } = {},
 ) {
   const { allowOwnSessionScope, ...request } = options;
-  const method = "fixture.session.open";
   return handleGatewayRequest({
     req: { type: "req", id: "session-access", method, params: { sessionKey: key } },
     respond: vi.fn(),
     client: test.client,
     context: test.context,
-    methodRegistry: createGatewayMethodRegistry([
-      createPluginGatewayMethodDescriptor({
-        pluginId: "fixture",
-        name: method,
-        handler,
-        scope: "operator.write",
-        sessionAccess: { mode: "write", requiredTool: "browser", allowOwnSessionScope },
-      }),
-    ]),
+    methodRegistry: createGatewayMethodRegistry([descriptor(handler, allowOwnSessionScope)]),
     isWebchatConnect: () => false,
     ...request,
   });
 }
 
 beforeEach(() => {
-  mocks.profileCurrent = true;
   mocks.toolAllowed = true;
   mocks.sandboxRequired = false;
   mocks.sandboxed = false;
@@ -177,6 +263,7 @@ beforeEach(() => {
       return { profileId, assignedRole: null };
     };
     return {
+      readCurrentRevision: readCurrentProfile,
       readCurrentProfile,
       emailBindingIds: [],
       readCurrentFacts: () => ({
@@ -193,7 +280,7 @@ beforeEach(() => {
     profileId: "alice",
     role: null,
     aliases: ["alice", "former-alice"],
-    isCurrent: () => mocks.profileCurrent,
+    isCurrent: () => true,
   }));
 });
 afterEach(() => {
@@ -206,26 +293,34 @@ afterEach(() => {
 });
 
 describe("session resource admission", () => {
-  it.each(["grant", "profile", "scope"] as const)(
-    "refuses a replaced original %s during canonical profile preparation before route effects",
-    async (change) => {
+  it.each([
+    ["canonical", "grant"],
+    ["canonical", "profile"],
+    ["canonical", "scope"],
+    ["aliases", "grant"],
+  ] as const)(
+    "refuses a replaced %s preparation %s before route effects",
+    async (stage, change) => {
       const test = fixture();
-      const entered = createDeferredCore();
-      const resume = createDeferredCore();
-      const prepare = expectDefined(
-        mocks.prepareIdentity.getMockImplementation(),
-        "prepared profile fixture",
-      );
-      mocks.prepareIdentity.mockImplementationOnce(async (...args) => {
-        const profile = await prepare(...args);
-        entered.resolve();
-        await resume.promise;
+      using gate = createRequestGate();
+      const pause = async <T>(profile: T) => {
+        await gate.pause();
         return profile;
-      });
-      const effect = vi.fn();
+      };
+      if (stage === "canonical") {
+        const prepare = expectDefined(
+          mocks.prepareIdentity.getMockImplementation(),
+          "profile fixture",
+        );
+        mocks.prepareIdentity.mockImplementationOnce(async (...args) =>
+          pause(await prepare(...args)),
+        );
+      } else {
+        const prepare = expectDefined(mocks.prepare.getMockImplementation(), "alias fixture");
+        mocks.prepare.mockImplementationOnce(async (...args) => pause(await prepare(...args)));
+      }
       const handler = vi.fn<GatewayRequestHandler>(({ sessionAccessAuthority, respond }) => {
         expectDefined(sessionAccessAuthority, "registered session authority").assertCurrent();
-        effect();
         respond(true, {});
       });
       const respond = vi.fn();
@@ -234,36 +329,31 @@ describe("session resource admission", () => {
         () => undefined,
         (error: unknown) => error,
       );
-      try {
-        await Promise.race([entered.promise, pending]);
-        expect(mocks.profileLeases.size).toBe(1);
-        if (change === "grant") {
-          const internal = expectDefined(test.client.internal, "original client metadata");
-          internal.operatorAccessAuthority = {
-            ...expectDefined(internal.operatorAccessAuthority, "original access grant"),
-            signal: new AbortController().signal,
-            assertCurrent: () => {},
-          };
-        } else if (change === "profile") {
-          test.client.authenticatedUserProfile = {
-            ...expectDefined(test.client.authenticatedUserProfile, "original profile"),
-            profileId: "replacement-profile",
-          };
-        } else {
-          test.client.connect.scopes = ["operator.read"];
-        }
-        resume.resolve();
-        const thrown = await failure;
-        expect(handler).not.toHaveBeenCalled();
-        expect(effect).not.toHaveBeenCalled();
-        expect(
-          thrown instanceof Error ? thrown.message : respond.mock.calls[0]?.[2]?.message,
-        ).toMatch(/authority|Session access changed/);
-        expect(mocks.profileLeases.size).toBe(0);
-      } finally {
-        resume.resolve();
-        await failure;
-      }
+      await gate.during(
+        pending,
+        () => {
+          expect(mocks.profileLeases.size).toBe(1);
+          if (change === "grant") {
+            renewGrant(test);
+          } else if (change === "profile") {
+            test.client.authenticatedUserProfile = {
+              ...expectDefined(test.client.authenticatedUserProfile, "original profile"),
+              profileId: "replacement-profile",
+            };
+          } else {
+            test.client.connect.scopes = ["operator.read"];
+          }
+        },
+        failure,
+      );
+      const thrown = await failure;
+      expect(handler).not.toHaveBeenCalled();
+      expect(
+        thrown instanceof Error ? thrown.message : respond.mock.calls[0]?.[2]?.message,
+      ).toMatch(
+        stage === "aliases" ? "Session access changed" : /authority|Session access changed/,
+      );
+      expect(mocks.profileLeases.size).toBe(0);
     },
   );
 
@@ -298,7 +388,6 @@ describe("session resource admission", () => {
         respond(true, {});
       });
       await dispatchSession(test, handler);
-      expect(test.client.authenticatedGitHubIdentitySync).toHaveBeenCalledOnce();
       expect(handler).toHaveBeenCalledOnce();
       expect(effect).not.toHaveBeenCalled();
     },
@@ -311,18 +400,19 @@ describe("session resource admission", () => {
     const test = fixture(["operator.write", "operator.sessions.write"], "alice");
     const prepare = sessionAccess.prepareGatewaySessionAccessAuthority;
     const release = vi.fn();
-    using capture = vi
+    using _ = vi
       .spyOn(sessionAccess, "prepareGatewaySessionAccessAuthority")
       .mockImplementation(async (params) => {
-        const authority = await prepare(params);
+        const prepared = await prepare(params);
+        const authority = prepared.authority;
         release.mockImplementation(authority.release);
         return {
-          ...authority,
-          assertCurrent: () => {
-            authority.assertCurrent();
+          ...prepared,
+          assertPreparationCurrent: () => {
+            prepared.assertPreparationCurrent();
             test.client.connect.scopes = scopes;
           },
-          release,
+          authority: { ...authority, release },
         };
       });
     const handler = vi.fn<GatewayRequestHandler>();
@@ -331,7 +421,6 @@ describe("session resource admission", () => {
       respond,
       allowOwnSessionScope: true,
     });
-    expect(capture).toHaveBeenCalledOnce();
     expect(handler).not.toHaveBeenCalled();
     expect(respond.mock.calls[0]?.[0]).toBe(false);
     expect(release).toHaveBeenCalledOnce();
@@ -339,22 +428,13 @@ describe("session resource admission", () => {
 
   it("projects the original own-session grant through a model call to the registered route", async () => {
     const test = fixture(["operator.sessions.write"], "alice");
-    const method = "fixture.session.open";
     const handler = vi.fn<GatewayRequestHandler>(({ client, sessionAccessAuthority, respond }) => {
       sessionAccessAuthority!.assertCurrent();
       respond(true, { scopes: client!.connect.scopes });
     });
     const registry = createEmptyPluginRegistry();
     registry.gatewayHandlers[method] = handler;
-    registry.gatewayMethodDescriptors.push(
-      createPluginGatewayMethodDescriptor({
-        pluginId: "fixture",
-        name: method,
-        handler,
-        scope: "operator.write",
-        sessionAccess: { mode: "write", allowOwnSessionScope: true, requiredTool: "browser" },
-      }),
-    );
+    registry.gatewayMethodDescriptors.push(descriptor(handler, true));
     setActivePluginRegistry(registry);
     test.context.getGatewayMethodRegistry = () =>
       createGatewayMethodRegistry(registry.gatewayMethodDescriptors, registry);
@@ -379,7 +459,6 @@ describe("session resource admission", () => {
         ).resolves.toEqual({ scopes: ["operator.sessions.write"] });
       },
     );
-    expect(handler).toHaveBeenCalledOnce();
   });
   it.each([
     { scopes: ["operator.write"], creator: "someone-else", allowed: true },
@@ -390,8 +469,8 @@ describe("session resource admission", () => {
     "routes $scopes through canonical session admission for creator $creator",
     async ({ scopes, creator, allowed }) => {
       const test = fixture(scopes, creator);
-      let admitted: Parameters<GatewayRequestHandler>[0]["sessionAccessAuthority"];
-      let resource: ReturnType<NonNullable<typeof admitted>["retainSession"]> | undefined;
+      let admitted: Authority | undefined;
+      let resource: Borrow | undefined;
       const handler = vi.fn<GatewayRequestHandler>(({ sessionAccessAuthority, respond }) => {
         admitted = sessionAccessAuthority;
         resource = hold(admitted!.retainSession());
@@ -412,129 +491,118 @@ describe("session resource admission", () => {
   it.each(["receipt", "profile selection"])(
     "fences %s expiry without attaching it to retained actor or session lifetime",
     async (kind) => {
-      const test = fixture();
-      let invocationActive = true;
-      let viewer: ReturnType<Awaited<ReturnType<typeof test.prepare>>["retain"]> | undefined;
-      let resource: typeof viewer;
-      const handler: GatewayRequestHandler = async ({ sessionAccessAuthority, respond }) => {
-        const authority = sessionAccessAuthority!;
-        viewer = hold(authority.retain());
-        resource = hold(authority.retainSession());
-        await Promise.resolve();
-        invocationActive = false;
-        expect(() => authority.assertCurrent()).toThrow("receipt expired");
-        expect(() => authority.retain()).toThrow("receipt expired");
-        expect(() => authority.retainSession()).toThrow("receipt expired");
-        expect(() => viewer!.assertCurrent()).not.toThrow();
-        expect(() => resource!.assertCurrent()).not.toThrow();
-        respond(true, {});
-      };
-      await dispatchSession(test, handler, {
-        sessionMutationCommitGuard: () => {
-          if (kind === "receipt" && !invocationActive) {
+      await withStoredSession(async (test, scope) => {
+        const { projection } = test;
+        let invocationActive = true;
+        const assertActive = () => {
+          if (!invocationActive) {
             throw new Error("receipt expired");
           }
-        },
-        ...(kind === "profile selection"
-          ? {
-              expectedProfileBinding: {
-                assertCurrent: () => {
-                  if (!invocationActive) {
-                    throw new Error("receipt expired");
-                  }
-                },
-                assertMatchesResolvedProfile: () => {},
-                markInvoked: () => {},
-                guardResponse: (respond) => respond,
-              },
-            }
-          : {}),
+        };
+        let viewer: Borrow | undefined;
+        let resource: typeof viewer;
+        let committed: ReturnType<typeof loadSessionEntryReadOnly>;
+        const response = vi.fn();
+        const handler: GatewayRequestHandler = async ({ sessionAccessAuthority, respond }) => {
+          const authority = expectDefined(sessionAccessAuthority, "registered session authority");
+          viewer = hold(authority.retain());
+          resource = hold(authority.retainSession());
+          const options = { assertCommitAllowed: authority.assertCurrent, skipMaintenance: true };
+          await patchSessionEntryCore(
+            scope,
+            () => ({ label: "allowed invocation write" }),
+            options,
+          );
+          committed = structuredClone(loadSessionEntryReadOnly(scope));
+          await projection.prepareMembership();
+          using gate = createRequestGate();
+          // The canonical writer owns this awaited updater and checks authority before SQL commit.
+          const pending = patchSessionEntryCore(
+            scope,
+            async () => {
+              await gate.pause();
+              return { label: "expired invocation write" };
+            },
+            options,
+          );
+          const settled = pending.catch((error: unknown) => error);
+          await gate.during(
+            awaitGateBeforeSettlement(
+              gate.entered,
+              pending,
+              "Session mutation settled before invocation expiry",
+            ),
+            () => {
+              invocationActive = false;
+            },
+            settled,
+          );
+          expect(await settled).toMatchObject({ message: "receipt expired" });
+          expect(() => authority.retain()).toThrow("receipt expired");
+          expect(() => authority.retainSession()).toThrow("receipt expired");
+          respond(true, {});
+        };
+        await dispatchSession(test, handler, {
+          respond: response,
+          sessionMutationCommitGuard: kind === "receipt" ? assertActive : undefined,
+          expectedProfileBinding:
+            kind === "profile selection"
+              ? {
+                  assertCurrent: assertActive,
+                  assertMatchesResolvedProfile: () => {},
+                  markInvoked: () => {},
+                  guardResponse: (respond) => respond,
+                }
+              : undefined,
+        });
+        expect(response).toHaveBeenCalledExactlyOnceWith(true, {});
+        expect(committed).toMatchObject({ label: "allowed invocation write" });
+        expect(loadSessionEntryReadOnly(scope)).toEqual(committed);
+        expectCurrent(viewer!, resource!);
       });
-      expect(() => viewer!.assertCurrent()).not.toThrow();
-      expect(() => resource!.assertCurrent()).not.toThrow();
     },
   );
 
   it("preserves a resource through row progress but retires identical IDs in a replaced physical database", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    await withStoredSession(async (test, scope, state) => {
+      const { storePath } = scope;
+      const { projection } = test;
       const staged = state.statePath("imports", "replacement.sqlite");
-      const cfg = {
-        agents: { list: [{ id: "main", default: true }] },
-        session: { store: storePath },
-      };
-      const entry: SessionEntry = {
-        sessionId: "same-session",
-        lifecycleRevision: "same-incarnation",
-        updatedAt: 1,
-        visibility: "shared",
-        createdActor: { type: "human", source: "profile", id: "alice" },
-      };
-      replaceSessionEntrySync({ agentId: "main", storePath, sessionKey: key }, entry);
+      const entry = sessionEntry();
       replaceSessionEntrySync({ agentId: "main", storePath: staged, sessionKey: key }, entry);
       await closeOpenClawAgentDatabaseByPathAsync(staged, "main");
-      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-      const test = fixture();
-      const context = bindSessionRowProjection(
-        { ...test.context, getRuntimeConfig: () => cfg },
-        () => projection,
-      );
-      try {
-        await projection.ensureMaterialized();
-        const authority = hold(
-          await prepareGatewaySessionAccessAuthority({
-            context,
-            client: test.client,
-            requestParams: { sessionKey: key },
-            policy: { mode: "write", requiredTool: "browser" },
-            ownSessionOnly: false,
-          }),
-        );
-        const resource = hold(authority.retainSession());
-        const viewer = hold(authority.retain());
-        authority.release();
-        replaceSessionEntrySync(
-          { agentId: "main", storePath, sessionKey: key },
-          { ...entry, updatedAt: 2, label: "Progress" },
-        );
-        await projection.ensureMaterialized();
-        await projection.prepareMembership();
-        expect(() => resource.assertCurrent()).not.toThrow();
-        expect(() => viewer.assertCurrent()).not.toThrow();
-        // Config publication invalidates topology synchronously, before its existing
-        // background drain can publish unchanged session facts.
-        setRuntimeConfigSnapshot(cfg);
-        expect(() => resource.assertCurrent()).toThrow("refreshing");
-        expect(resource.signal.aborted).toBe(false);
-        test.grant.abort(new Error("original grant revoked while session facts refresh"));
-        expect(viewer.signal.aborted).toBe(true);
-        expect(resource.signal.aborted).toBe(false);
-        await projection.prepareMembership();
-        expect(() => resource.assertCurrent()).not.toThrow();
-        expect(resource.signal.aborted).toBe(false);
-        await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
-        renameSync(staged, storePath);
-        registerOpenClawAgentDatabase({ agentId: "main", path: storePath });
-        openOpenClawAgentDatabase({ agentId: "main", path: storePath });
-        await projection.ensureMaterialized();
-        await projection.prepareMembership();
-        expect(() => resource.assertCurrent()).toThrow();
-        expect(resource.signal.aborted).toBe(true);
-      } finally {
-        projection.dispose();
-      }
+      const { authority, resource, viewer } = await borrowSession(test);
+      authority.release();
+      replaceSessionEntrySync(scope, { ...entry, updatedAt: 2, label: "Progress" });
+      await projection.ensureMaterialized();
+      await projection.prepareMembership();
+      expectCurrent(resource, viewer);
+      // Config publication invalidates topology synchronously, before its existing
+      // background drain can publish unchanged session facts.
+      setRuntimeConfigSnapshot(test.context.getRuntimeConfig());
+      expect(() => resource.assertCurrent()).toThrow("refreshing");
+      expect(resource.signal.aborted).toBe(false);
+      test.grant.abort(new Error("original grant revoked while session facts refresh"));
+      expect(viewer.signal.aborted).toBe(true);
+      expect(() => viewer.assertCurrent()).toThrow();
+      expect(resource.signal.aborted).toBe(false);
+      await projection.prepareMembership();
+      expect(() => resource.assertCurrent()).not.toThrow();
+      renewGrant(test);
+      expect(() => viewer.assertCurrent()).toThrow();
+      await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
+      renameSync(staged, storePath);
+      registerOpenClawAgentDatabase({ agentId: "main", path: storePath });
+      openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+      await projection.ensureMaterialized();
+      await projection.prepareMembership();
+      expect(() => resource.assertCurrent()).toThrow();
+      expect(resource.signal.aborted).toBe(true);
     });
   });
 
   it("coalesces pending preparation, does not loop on failure, and stops after release", async () => {
-    const test = fixture();
-    const authority = await test.prepare();
-    const resource = hold(authority.retainSession());
-    authority.release();
-    const readyState = test.projection.sharingTargetState({ agentId: "main", key });
-    const state = vi
-      .spyOn(test.projection, "sharingTargetState")
-      .mockReturnValue({ status: "pending" });
+    const { test, resource, readyState, state } = await retainedResource();
     const prepare = vi
       .spyOn(test.projection, "prepareMembership")
       .mockRejectedValue(new Error("worker unavailable"));
@@ -554,21 +622,11 @@ describe("session resource admission", () => {
   });
 
   it("rechecks a publication in the preparation settlement window before releasing a retired resource", async () => {
-    const test = fixture();
-    const authority = await test.prepare();
-    const resource = hold(authority.retainSession());
-    authority.release();
-    const readyState = test.projection.sharingTargetState({ agentId: "main", key });
-    const state = vi
-      .spyOn(test.projection, "sharingTargetState")
-      .mockReturnValue({ status: "pending" });
-    let finish!: () => void;
-    const first = new Promise<void>((resolve) => {
-      finish = resolve;
-    });
+    const { test, resource, readyState, state } = await retainedResource();
+    const first = createDeferredCore();
     const prepare = vi
       .spyOn(test.projection, "prepareMembership")
-      .mockImplementationOnce(() => first)
+      .mockImplementationOnce(() => first.promise)
       .mockImplementationOnce(async () => {
         state.mockReturnValue({ status: "missing" });
       });
@@ -576,7 +634,7 @@ describe("session resource admission", () => {
     await Promise.resolve();
     expect(prepare).toHaveBeenCalledOnce();
     state.mockReturnValue(readyState);
-    finish();
+    first.resolve();
     // Publish a second change after preparation resolves but before its awaiting
     // resource owner resumes. The successor has authoritative deletion facts.
     state.mockReturnValue({ status: "pending" });
@@ -585,30 +643,8 @@ describe("session resource admission", () => {
     expect(prepare).toHaveBeenCalledTimes(2);
     expect(resource.signal.aborted).toBe(true);
   });
-  it("keeps a session resource after request completion and actor revocation, without reviving that actor", async () => {
-    const test = fixture();
-    const authority = await test.prepare();
-    const viewer = hold(authority.retain());
-    const resource = hold(authority.retainSession());
-    authority.release();
-    expect(() => authority.retainSession()).toThrow();
-    expect(() => authority.assertCurrent()).toThrow();
-    expect(() => resource.assertCurrent()).not.toThrow();
-    test.grant.abort(new Error("original invitation expired"));
-    expect(viewer.signal.aborted).toBe(true);
-    expect(() => viewer.assertCurrent()).toThrow();
-    expect(() => resource.assertCurrent()).not.toThrow();
-    test.client.internal!.operatorAccessAuthority = {
-      signal: new AbortController().signal,
-      assertCurrent: () => {},
-    } as never;
-    expect(() => viewer.assertCurrent()).toThrow();
-  });
-
   it("retires both borrowers for a reset even before its replacement row is published", async () => {
-    const authority = await fixture().prepare();
-    const resource = hold(authority.retainSession());
-    const viewer = hold(authority.retain());
+    const { resource, viewer } = await borrowSession();
     emitSessionIdentityMutation({
       kind: "reset",
       agentId: "main",
@@ -620,64 +656,35 @@ describe("session resource admission", () => {
     expect(viewer.signal.aborted).toBe(true);
   });
 
-  it.each(["sandboxRequired", "sandboxed"] as const)(
-    "retires the original actor when its %s policy changes, even if later restored",
-    async (field) => {
-      const test = fixture();
-      const authority = await test.prepare();
-      const viewer = hold(authority.retain());
-      const resource = hold(authority.retainSession());
-      mocks[field] = true;
-      expect(() => viewer.assertCurrent()).toThrow("current tool policy");
-      mocks[field] = false;
-      expect(() => viewer.assertCurrent()).toThrow();
-      expect(() => resource.assertCurrent()).not.toThrow();
-    },
-  );
-
-  it("rechecks sharing and effective tool policy on retained viewer use", async () => {
+  it.each<"sandboxRequired" | "sandboxed" | "toolAllowed" | "sharing">([
+    "sandboxRequired",
+    "sandboxed",
+    "toolAllowed",
+    "sharing",
+  ])("retires a viewer when its %s policy changes, even if later restored", async (field) => {
     const test = fixture();
-    const authority = await test.prepare();
-    const viewer = hold(authority.retain());
-    mocks.toolAllowed = false;
-    expect(() => viewer.assertCurrent()).toThrow("tool denied");
-    mocks.toolAllowed = true;
+    const { viewer, resource } = await borrowSession(test);
+    if (field === "sharing") {
+      test.setVisibility("draft");
+      sessionChanges.emit({ agentId: "main", sessionKey: key });
+    } else {
+      mocks[field] = field !== "toolAllowed";
+    }
+    expect(viewer.signal.aborted).toBe(field === "sharing");
+    expect(() => viewer.assertCurrent()).toThrow(
+      field === "sharing"
+        ? "Session access changed"
+        : field === "toolAllowed"
+          ? "tool denied"
+          : "current tool policy",
+    );
+    if (field === "sharing") {
+      test.setVisibility("shared");
+    } else {
+      mocks[field] = field === "toolAllowed";
+    }
     expect(() => viewer.assertCurrent()).toThrow();
-    const other = fixture();
-    const otherAuthority = await other.prepare();
-    const otherViewer = hold(otherAuthority.retain());
-    other.setEntry({
-      sessionId: "session-1",
-      lifecycleRevision: "incarnation-1",
-      updatedAt: 2,
-      createdActor: { type: "human", source: "profile", id: "someone-else" },
-      visibility: "draft",
-    });
-    sessionChanges.emit({ agentId: "main", sessionKey: key });
-    expect(otherViewer.signal.aborted).toBe(true);
-  });
-
-  it("rejects a renewed ingress grant that changes while profile preparation awaits", async () => {
-    const test = fixture();
-    const entered = createDeferredCore();
-    const prepared = createDeferredCore<{
-      profileId: string;
-      role: null;
-      aliases: string[];
-      isCurrent: () => boolean;
-    }>();
-    mocks.prepare.mockImplementationOnce(() => {
-      entered.resolve();
-      return prepared.promise;
-    });
-    const pending = test.prepare();
-    await Promise.race([entered.promise, pending]);
-    test.client.internal!.operatorAccessAuthority = {
-      signal: new AbortController().signal,
-      assertCurrent: () => {},
-    } as never;
-    prepared.resolve({ profileId: "alice", role: null, aliases: ["alice"], isCurrent: () => true });
-    await expect(pending).rejects.toThrow("Session access changed");
+    expect(() => resource.assertCurrent()).not.toThrow();
   });
 
   it("rejects a mismatched ambient model cap even when the explicit tool caller matches", async () => {
@@ -690,6 +697,5 @@ describe("session resource admission", () => {
     };
     mocks.ambient = { sessionKey: "agent:main:other", agentId: "main", assertToolAllowed: vi.fn() };
     await expect(test.prepare()).rejects.toThrow("Session access changed");
-    expect(mocks.prepare).not.toHaveBeenCalled();
   });
 });

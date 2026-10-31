@@ -1,4 +1,5 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { isSilentReplyText } from "../../../auto-reply/tokens.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
@@ -8,22 +9,16 @@ import {
   getGatewayContextResolver,
   withPluginRuntimeGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
-import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
 } from "../../announce-idempotency.js";
-import { isSilentAgentReplyText } from "../../embedded-agent-runner/message-visibility.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
-import {
-  ensureCompletionState,
-  ensureDeliveryState,
-  loadPendingFinalDeliveryPayload,
-} from "./subagent-delivery-state.js";
-import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
+import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
+import { ensureCompletionState, ensureDeliveryState } from "./subagent-delivery-state.js";
 import { capFrozenResultText } from "./subagent-registry-helpers.js";
 import type {
   SubagentLifecycleCommonContext,
@@ -32,7 +27,7 @@ import type {
 import { commitSubagentLifecycleMutation } from "./subagent-registry-lifecycle-persistence.js";
 import { getCurrentSubagentRunOwner } from "./subagent-registry-memory.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
-import type { PendingFinalDeliveryPayload } from "./subagent-registry-read.types.js";
+import { resolveYieldedRunContinuation } from "./subagent-registry-run-pause.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { compareSubagentRunGeneration, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
@@ -57,7 +52,7 @@ export const formatAnnounceDeliveryError = (delivery: SubagentAnnounceDeliveryRe
 export const recordAnnounceDeliveryResult = (
   entry: SubagentRunRecord,
   delivery: SubagentAnnounceDeliveryResult,
-  runs?: ReadonlyMap<string, SubagentRunRecord>,
+  runs: ReadonlyMap<string, SubagentRunRecord>,
 ) => {
   const deliveryState = ensureDeliveryState(entry);
   if (typeof delivery.enqueuedAt === "number") {
@@ -76,9 +71,8 @@ export const recordAnnounceDeliveryResult = (
     }
   }
   if (delivery.delivered) {
-    const deliveredAt =
+    deliveryState.deliveredAt =
       typeof delivery.deliveredAt === "number" ? delivery.deliveredAt : Date.now();
-    deliveryState.deliveredAt = deliveredAt;
     deliveryState.lastDropReason = undefined;
     const requesterTurnRunId = entry.requesterTurnRunId?.trim();
     if (
@@ -86,7 +80,7 @@ export const recordAnnounceDeliveryResult = (
       delivery.requesterVisibleFinalDelivered &&
       requesterTurnRunId
     ) {
-      const siblings = [...(runs?.values() ?? [])].filter(
+      const siblings = [...runs.values()].filter(
         (sibling) =>
           sibling.requesterSessionKey === entry.requesterSessionKey &&
           sibling.requesterTurnRunId === requesterTurnRunId &&
@@ -136,6 +130,7 @@ export const hasPriorRequesterDeliveryMirror = async (
   const isExpectedMirrorIdempotencyKey = (value: unknown): boolean =>
     typeof value === "string" &&
     (value === expectedIdempotencyKey ||
+      value.startsWith(`outbound-delivery:${expectedIdempotencyKey}:`) ||
       value.startsWith(`${expectedIdempotencyKey}:internal-source-reply:`) ||
       value.startsWith(`${expectedIdempotencyKey}:message-tool:internal-source-reply:`) ||
       value.startsWith(`${entry.runId}:message-tool:`) ||
@@ -150,6 +145,7 @@ export const hasPriorRequesterDeliveryMirror = async (
           method: "chat.history",
           params: {
             sessionKey: entry.requesterSessionKey,
+            agentId: entry.requesterAgentId,
             limit: 25,
             maxChars: DELIVERY_MIRROR_HISTORY_MAX_CHARS,
           },
@@ -175,7 +171,7 @@ export const hasPriorRequesterDeliveryMirror = async (
       return (
         record.role === "assistant" &&
         record.provider === "openclaw" &&
-        record.model === "delivery-mirror" &&
+        (record.model === "delivery-mirror" || record.model === "automation-result") &&
         text === expectedText
       );
     });
@@ -190,15 +186,7 @@ export const captureSubagentRunResult = async (
   entry: SubagentRunRecord,
   outcome: SubagentRunOutcome,
   assertCurrent: () => void,
-): Promise<
-  | {
-      resultText: string | null;
-      capturedAt: number;
-      outcome: SubagentRunOutcome;
-      transcriptTarget: SubagentRunRecord["execution"]["transcriptTarget"];
-    }
-  | undefined
-> => {
+) => {
   const params = context.options;
   const result = (resultText: string | null) => ({
     resultText,
@@ -215,10 +203,11 @@ export const captureSubagentRunResult = async (
   }
   const isOwnerCurrent = () => {
     const current = getCurrentSubagentRunOwner(params.runs, entry);
+    // A yield pauses capture only while a continuation could still extend the transcript.
     return (
       current !== undefined &&
-      isSameSubagentRunOwner(current, entry) &&
-      current.pauseReason !== "sessions_yield" &&
+      (current.pauseReason !== "sessions_yield" ||
+        resolveYieldedRunContinuation(current).state === "unreachable") &&
       !context.newerGenerationOwnsSession(current)
     );
   };
@@ -232,7 +221,8 @@ export const captureSubagentRunResult = async (
   try {
     const transcriptTarget = entry.execution.transcriptTarget;
     const agentId =
-      transcriptTarget?.agentId ?? resolveAgentIdFromSessionKey(entry.childSessionKey);
+      transcriptTarget?.agentId ??
+      resolveSubagentChildSessionOwner(entry, params.getRuntimeConfig()).agentId;
     const sessionKey = transcriptTarget?.sessionKey ?? entry.childSessionKey;
     const configuredStorePath = agentId
       ? (transcriptTarget?.storePath ??
@@ -258,6 +248,15 @@ export const captureSubagentRunResult = async (
             waitForReply: entry.expectsCompletionMessage === true,
             outcome,
             ...(sessionTarget ? { sessionTarget } : {}),
+            // Only unreachable yielded collectors need a historical execution window.
+            ...(entry.collect === true && entry.pauseReason === "sessions_yield"
+              ? {
+                  completedCollectorTurn: {
+                    startedAt: outcome.startedAt ?? entry.execution.startedAt ?? entry.createdAt,
+                    endedAt: outcome.endedAt ?? entry.execution.endedAt ?? Number.NaN,
+                  },
+                }
+              : {}),
           }),
       );
       assertCaptureCurrent();
@@ -305,19 +304,15 @@ export const refreshFrozenResultFromSession = async (
     return false;
   }
   // A paused row's result was cleared on yield; later session text belongs to the next turn.
-  const candidates: SubagentRunRecord[] = [];
-  for (const entry of params.runs.values()) {
-    if (
+  const candidates = [...params.runs.values()].filter(
+    (entry) =>
       entry.childSessionKey === key &&
       entry.expectsCompletionMessage === true &&
       typeof entry.execution.endedAt === "number" &&
       typeof entry.cleanupCompletedAt !== "number" &&
       entry.pauseReason !== "sessions_yield" &&
-      entry.execution.outcome?.status !== "error"
-    ) {
-      candidates.push(entry);
-    }
-  }
+      entry.execution.outcome?.status !== "error",
+  );
   const entry = candidates.toSorted(compareSubagentRunGeneration).at(-1);
   if (!entry || context.newerGenerationOwnsSession(entry)) {
     return false;
@@ -327,7 +322,6 @@ export const refreshFrozenResultFromSession = async (
   const previousCapturedAt = entry.completion?.capturedAt;
   const isCurrent = (current = getCurrentSubagentRunOwner(params.runs, entry)) =>
     current !== undefined &&
-    isSameSubagentRunOwner(current, entry) &&
     current.pauseReason !== "sessions_yield" &&
     current.cleanupCompletedAt === undefined &&
     current.completion?.resultText === previousResultText &&
@@ -343,7 +337,7 @@ export const refreshFrozenResultFromSession = async (
     return false;
   }
   const trimmed = captured?.trim();
-  if (!trimmed || isSilentAgentReplyText(trimmed)) {
+  if (!trimmed || isSilentReplyText(trimmed)) {
     return false;
   }
   // Reply capture yields while registration can transfer session ownership.
@@ -375,55 +369,5 @@ export const refreshFrozenResultFromSession = async (
       completion.capturedAt = Date.now();
     },
   });
-  return true;
-};
-
-export const emitCompletionEndedHookIfNeeded = async (
-  params: SubagentLifecycleOptions,
-  entry: SubagentRunRecord,
-  reason: SubagentLifecycleEndedReason,
-  isCurrent?: () => boolean,
-  prepareCurrent?: () => Promise<boolean>,
-) => {
-  if (params.shouldEmitEndedHookForRun({ entry, reason })) {
-    await params.emitSubagentEndedHookForRun({
-      entry,
-      reason,
-      sendFarewell: true,
-      isCurrent,
-      prepareCurrent,
-    });
-  }
-};
-
-export const markPendingFinalDelivery = (args: { entry: SubagentRunRecord; error?: string }) => {
-  const now = Date.now();
-  const payload: PendingFinalDeliveryPayload = loadPendingFinalDeliveryPayload(args.entry);
-
-  const delivery = ensureDeliveryState(args.entry);
-  delivery.status = "pending";
-  delivery.createdAt ??= now;
-  delivery.lastAttemptAt = now;
-  delivery.attemptCount = (delivery.attemptCount ?? 0) + 1;
-  delivery.lastError = args.error ?? null;
-  delivery.payload = payload;
-};
-
-export const refreshPendingFinalDeliveryPayload = (entry: SubagentRunRecord): boolean => {
-  const delivery = entry.delivery;
-  if (
-    !delivery?.payload ||
-    delivery.status === "delivered" ||
-    typeof delivery.announcedAt === "number"
-  ) {
-    return false;
-  }
-  delivery.payload = {
-    ...delivery.payload,
-    startedAt: entry.execution.startedAt,
-    endedAt: entry.execution.endedAt,
-    outcome: entry.execution.outcome,
-    terminalReply: entry.completion?.terminalReply,
-  };
   return true;
 };

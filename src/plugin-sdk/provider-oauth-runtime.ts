@@ -1,4 +1,3 @@
-// Provider OAuth runtime helpers expose shared browser/OAuth flows for provider plugins.
 import { randomBytes } from "node:crypto";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import {
@@ -6,9 +5,18 @@ import {
   resolveExpiresAtMsFromDurationMs,
   resolveTimerTimeoutMs,
 } from "../../packages/normalization-core/src/number-coercion.js";
+import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import type { Model } from "../llm/types.js";
 import { generatePkceVerifierChallenge } from "./oauth-utils.js";
 export { oauthErrorHtml, oauthSuccessHtml } from "../shared/oauth-page.js";
+export {
+  createOAuthRefreshError,
+  createOAuthRefreshResponseError,
+  isRecoverableOAuthRefreshFailure,
+  readOAuthRefreshErrorReason,
+  type OAuthRefreshOutcome,
+  type OAuthRefreshErrorReason,
+} from "../shared/oauth-refresh-outcome.js";
 
 export { CODEX_CLI_PROFILE_ID } from "../agents/auth-profiles/profile-ids.js";
 export {
@@ -149,14 +157,12 @@ export function parseOAuthAuthorizationInput(
     return {};
   }
 
-  try {
-    const url = new URL(value);
+  const url = URL.parse(value);
+  if (url) {
     return {
       code: url.searchParams.get("code") ?? undefined,
       state: url.searchParams.get("state") ?? undefined,
     };
-  } catch {
-    // Plain pasted code or query-string input.
   }
 
   if (value.includes("#")) {
@@ -233,34 +239,11 @@ export function withOAuthLoginAbort<T>(
     return promise;
   }
 
-  return new Promise<T>((resolve, reject) => {
-    const cleanup = () => {
-      signal.removeEventListener("abort", abort);
-    };
-    const abort = () => {
-      cleanup();
-      onAbort?.();
-      reject(createOAuthLoginCancelledError());
-    };
-
-    if (signal.aborted) {
-      abort();
-      return;
-    }
-
-    signal.addEventListener("abort", abort, { once: true });
-    promise.then(
-      (value) => {
-        // The login step won the race; remove abort listeners so long-lived prompts do not leak.
-        cleanup();
-        resolve(value);
-      },
-      (error: unknown) => {
-        // Preserve Error rejections but wrap non-Error provider/prompt values for lint-safe callers.
-        cleanup();
-        reject(toErrorObject(error, "Non-Error rejection"));
-      },
-    );
+  return racePromiseWithAbortSignal(promise, signal, () => {
+    onAbort?.();
+    return createOAuthLoginCancelledError();
+  }).catch((error: unknown) => {
+    throw toErrorObject(error, "Non-Error rejection");
   });
 }
 

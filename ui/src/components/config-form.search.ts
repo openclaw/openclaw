@@ -11,16 +11,7 @@ import {
 } from "../lib/config-form-utils.ts";
 import { arrayItemSchema, arrayItemSchemaIndexes } from "./config-form.array-items.ts";
 
-export type ConfigSearchCriteria = {
-  text: string;
-  tags: string[];
-};
-
-type ConfigFieldMeta = {
-  label: string;
-  help?: string;
-  tags: string[];
-};
+export type ConfigSearchCriteria = ReturnType<typeof parseConfigSearchQuery>;
 
 type ConfigSearchTextMatcher = (value: string, query: string) => boolean;
 
@@ -28,7 +19,7 @@ export function hasConfigSearchCriteria(criteria: ConfigSearchCriteria | undefin
   return Boolean(criteria && (criteria.text.length > 0 || criteria.tags.length > 0));
 }
 
-export function parseConfigSearchQuery(query: string): ConfigSearchCriteria {
+export function parseConfigSearchQuery(query: string) {
   const tags = new Set<string>();
   const stripped = query.replace(/(?:^|\s)tag:([^\s]+)/gi, (_, token: string) => {
     const normalized = normalizeLowercaseStringOrEmpty(token);
@@ -53,7 +44,7 @@ export function resolveConfigFieldMeta(
   path: Array<string | number>,
   schema: JsonSchema,
   hints: ConfigUiHints,
-): ConfigFieldMeta {
+) {
   const hint = localizedHintForPath(path, hints);
   const fallbackSegment = path.findLast((segment) => typeof segment === "string") ?? path.at(-1);
   const label = hint?.label ?? schema.title ?? humanize(String(fallbackSegment));
@@ -159,6 +150,32 @@ export function matchesNodeSearch(params: {
     }
   }
   return false;
+}
+
+export function resolveConfigMapSearch(params: {
+  schema: JsonSchema;
+  value: Record<string, unknown>;
+  path: Array<string | number>;
+  hints: ConfigUiHints;
+  reservedKeys: ReadonlySet<string>;
+  searchCriteria?: ConfigSearchCriteria;
+}) {
+  const entries = Object.entries(params.value).filter(([key]) => !params.reservedKeys.has(key));
+  const criteria = params.searchCriteria;
+  const searching = hasConfigSearchCriteria(criteria);
+  const visibleEntries =
+    criteria && searching
+      ? entries.filter(([key, value]) =>
+          matchesNodeSearch({
+            schema: params.schema,
+            value,
+            path: [...params.path, key],
+            hints: params.hints,
+            criteria,
+          }),
+        )
+      : entries;
+  return { visibleEntries, visible: !searching || visibleEntries.length > 0 };
 }
 
 export function matchesConfigSectionSearch(params: {

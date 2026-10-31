@@ -7,11 +7,12 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { type Api, completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, readRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef, type SecretInput } from "../config/types.secrets.js";
 import { parseLiveCsvFilter } from "../media-generation/live-test-helpers.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
-import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
+import { discoverAuthStorageFacts, discoverModelsAsync } from "./agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
@@ -24,10 +25,12 @@ import {
   resolveLiveSystemPrompt,
 } from "./live-model-session-id.js";
 import {
+  createSingleUserPromptMessage,
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
   readLiveTestConfig,
   resolveLiveCredentialPrecedence,
+  useLiveTestRuntimeConfig,
 } from "./live-test-helpers.js";
 import { shouldSkipLiveProviderDrift } from "./live-test-provider-drift.js";
 import {
@@ -38,6 +41,7 @@ import {
   isAudioOnlyModelErrorMessage,
   isUnsupportedThinkingToggleErrorMessage,
 } from "./live-test-provider-drift.test-support.js";
+import { resolveLiveTestReasoning } from "./live-test-reasoning.js";
 import {
   getApiKeyForModelCore,
   requireApiKey,
@@ -46,9 +50,10 @@ import {
 import { normalizeDiscoveredAgentModel } from "./model-discovery-normalize.js";
 import { resolveBuiltInModelSuppressionFromManifest } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
+import { createConfiguredProviderLocalServiceAcquirer } from "./provider-local-service.js";
 import type { StreamFn } from "./runtime/index.js";
 import {
-  appendPrioritizedDynamicLiveModels,
+  appendLiveModelCandidates,
   applyLiveProviderPluginDiscoveryCompat,
   DEFAULT_SMALL_LIVE_MODEL_LIMIT,
   isHighSignalLiveModelRef,
@@ -76,7 +81,10 @@ import {
   shouldSkipLiveModelFileProbe,
   shouldSkipLiveModelImageProbe,
 } from "./test-helpers/live-model-turn-probes.js";
-import { createLiveTargetMatcher } from "./test-helpers/live-target-matcher.js";
+import {
+  createLiveTargetMatcher,
+  findUnmatchedLiveModelSelectors,
+} from "./test-helpers/live-target-matcher.js";
 
 const LIVE = isLiveTestEnabled();
 const DIRECT_ENABLED = Boolean(process.env.OPENCLAW_LIVE_MODELS?.trim());
@@ -123,16 +131,37 @@ type OllamaRuntimeApi = {
 
 const describeLive = LIVE ? describe : describe.skip;
 
+/** Keep direct transport inputs and plugin runtime readers on the same sweep config. */
+function useLiveCompletionConfig(config: OpenClawConfig): Disposable {
+  const runtimeConfig = useLiveTestRuntimeConfig(config);
+  activeLiveCompletionConfig = config;
+  return {
+    [Symbol.dispose]() {
+      activeLiveCompletionConfig = undefined;
+      runtimeConfig[Symbol.dispose]();
+    },
+  };
+}
+
+describe("direct live runtime config", () => {
+  it("prepares plugin provider reads for the sweep and releases them afterward", async () => {
+    clearRuntimeConfigSnapshot();
+    const baseUrl = "https://ollama.example.invalid";
+    const acquireLocalService = createConfiguredProviderLocalServiceAcquirer(readRuntimeConfig);
+    const target = { providerId: "ollama-cloud", baseUrl };
+    {
+      using _ = useLiveCompletionConfig({
+        models: { providers: { "ollama-cloud": { baseUrl, models: [] } } },
+      });
+      await expect(acquireLocalService(target)).resolves.toBeUndefined();
+      expect(readRuntimeConfig().models?.providers?.["ollama-cloud"]?.baseUrl).toBe(baseUrl);
+    }
+    await expect(acquireLocalService(target)).rejects.toThrow("Runtime config is not prepared");
+  });
+});
+
 function parseCsvFilter(raw?: string): Set<string> | null {
   return parseLiveCsvFilter(raw, { lowercase: false });
-}
-
-function parseProviderFilter(raw?: string): Set<string> | null {
-  return parseCsvFilter(raw);
-}
-
-function parseModelFilter(raw?: string): Set<string> | null {
-  return parseCsvFilter(raw);
 }
 
 function parseExplicitLiveModelRefs(
@@ -165,10 +194,6 @@ function parseExplicitLiveModelRefs(
   return refs;
 }
 
-function formatExplicitLiveModelRef(ref: { provider: string; id: string }): string {
-  return `${ref.provider}/${ref.id}`;
-}
-
 function filterLiveModelRefsByProvider(
   refs: readonly { provider: string; id: string }[],
   providerFilter: Set<string> | null,
@@ -180,28 +205,6 @@ function filterLiveModelRefsByProvider(
     [...providerFilter].map((provider) => normalizeProviderId(provider)).filter(Boolean),
   );
   return refs.filter((ref) => normalizedProviders.has(normalizeProviderId(ref.provider)));
-}
-
-function findUnmatchedExplicitLiveModelRefs(params: {
-  refs: readonly { provider: string; id: string }[];
-  models: readonly Pick<Model, "provider" | "id">[];
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}): string[] {
-  const unmatched: string[] = [];
-  for (const ref of params.refs) {
-    const matcher = createLiveTargetMatcher({
-      providerFilter: null,
-      modelFilter: new Set([formatExplicitLiveModelRef(ref)]),
-      config: params.config,
-      env: params.env,
-    });
-    const matched = params.models.some((model) => matcher.matchesModel(model.provider, model.id));
-    if (!matched) {
-      unmatched.push(formatExplicitLiveModelRef(ref));
-    }
-  }
-  return unmatched;
 }
 
 function applyLiveProviderDiscoveryPluginCompat(params: {
@@ -262,7 +265,13 @@ async function ensureLiveProviderApisRegistered(params: {
   config: OpenClawConfig;
   providers: readonly string[] | undefined;
 }): Promise<void> {
-  if (!params.providers?.some((provider) => normalizeProviderId(provider) === "ollama")) {
+  // Ollama Cloud models share the plugin's "ollama" API transport.
+  if (
+    !params.providers?.some((provider) => {
+      const id = normalizeProviderId(provider);
+      return id === "ollama" || id === "ollama-cloud";
+    })
+  ) {
     return;
   }
   // Live Vitest setup installs a stub plugin registry for channel tests; direct
@@ -707,9 +716,7 @@ describe("resolveLiveModelsJsonTimeoutMs", () => {
 
 describe("explicit live model discovery scope", () => {
   it("derives provider ids from explicit model refs", () => {
-    const filter = parseModelFilter(
-      "zai/glm-5.1, together/Qwen/Qwen2.5-7B-Instruct-Turbo, glm-5.1",
-    );
+    const filter = parseCsvFilter("zai/glm-5.1, together/Qwen/Qwen2.5-7B-Instruct-Turbo, glm-5.1");
     const explicitRefs = parseExplicitLiveModelRefs(filter);
 
     expect(explicitRefs).toEqual([
@@ -725,11 +732,11 @@ describe("explicit live model discovery scope", () => {
   });
 
   it("merges explicit model providers with OPENCLAW_LIVE_PROVIDERS", () => {
-    const explicitRefs = parseExplicitLiveModelRefs(parseModelFilter("zai/glm-5.1"));
+    const explicitRefs = parseExplicitLiveModelRefs(parseCsvFilter("zai/glm-5.1"));
 
     expect(
       resolveLiveProviderDiscoveryProviderIds({
-        providerFilter: parseProviderFilter("deepseek,together"),
+        providerFilter: parseCsvFilter("deepseek,together"),
         explicitRefs,
       }),
     ).toEqual(["deepseek", "together", "zai"]);
@@ -749,7 +756,7 @@ describe("explicit live model discovery scope", () => {
     expect(
       filterLiveModelRefsByProvider(
         listPrioritizedSmallLiveModelRefs(),
-        parseProviderFilter("openrouter"),
+        parseCsvFilter("openrouter"),
       ).map((ref) => ref.provider),
     ).toEqual(["openrouter", "openrouter", "openrouter"]);
   });
@@ -1073,7 +1080,16 @@ describe("explicit live model discovery scope", () => {
     }
   });
 
-  it("honors configured local Ollama credentials before the live local marker", async () => {
+  it.each([
+    {
+      name: "honors configured local Ollama credentials before the live local marker",
+      baseUrl: "http://127.0.0.1:11434",
+    },
+    {
+      name: "reuses configured local Ollama credentials across canonical base URL forms",
+      baseUrl: "http://127.0.0.1:11434/v1",
+    },
+  ])("$name", async ({ baseUrl }) => {
     const oldEnv = process.env.LOCAL_OLLAMA_API_KEY;
     process.env.LOCAL_OLLAMA_API_KEY = "secured-local-key";
     try {
@@ -1084,54 +1100,7 @@ describe("explicit live model discovery scope", () => {
             providers: {
               ollama: {
                 api: "ollama",
-                baseUrl: "http://127.0.0.1:11434",
-                apiKey: { source: "env", provider: "default", id: "LOCAL_OLLAMA_API_KEY" },
-                models: [],
-              },
-            },
-          },
-        },
-        providers: ["ollama"],
-        env: {},
-      });
-
-      await expect(
-        resolveLiveModelApiKeyInfo({
-          model: {
-            provider: "ollama",
-            id: "gemma3:4b",
-            api: "ollama",
-            baseUrl: "http://127.0.0.1:11434",
-          } as Model,
-          cfg,
-          requireProfileKeys: false,
-        }),
-      ).resolves.toEqual({
-        apiKey: "secured-local-key",
-        source: "env: LOCAL_OLLAMA_API_KEY (models.json secretref)",
-        mode: "api-key",
-      });
-    } finally {
-      if (oldEnv === undefined) {
-        delete process.env.LOCAL_OLLAMA_API_KEY;
-      } else {
-        process.env.LOCAL_OLLAMA_API_KEY = oldEnv;
-      }
-    }
-  });
-
-  it("reuses configured local Ollama credentials across canonical base URL forms", async () => {
-    const oldEnv = process.env.LOCAL_OLLAMA_API_KEY;
-    process.env.LOCAL_OLLAMA_API_KEY = "secured-local-key";
-    try {
-      const cfg = applyLiveProviderDiscoveryPluginCompat({
-        config: {
-          plugins: {},
-          models: {
-            providers: {
-              ollama: {
-                api: "ollama",
-                baseUrl: "http://127.0.0.1:11434/v1",
+                baseUrl,
                 apiKey: { source: "env", provider: "default", id: "LOCAL_OLLAMA_API_KEY" },
                 models: [],
               },
@@ -1221,44 +1190,20 @@ describe("explicit live model discovery scope", () => {
     });
   });
 
-  it("reports explicit refs that never become runnable candidates", () => {
+  it.each([
+    { label: "all providers", providers: null, missing: ["zai/glm-5.1", "deepseek/"] },
+    { label: "provider allowlist", providers: new Set(["deepseek"]), missing: ["deepseek/"] },
+  ])("reports unresolved raw selectors within $label", ({ providers, missing }) => {
     expect(
-      findUnmatchedExplicitLiveModelRefs({
-        refs: [
-          { provider: "deepseek", id: "deepseek-v4-flash" },
-          { provider: "zai", id: "glm-5.1" },
-        ],
+      findUnmatchedLiveModelSelectors({
+        modelFilter: new Set(["deepseek/deepseek-v4-flash", "zai/glm-5.1", "deepseek/"]),
+        providerFilter: providers,
         models: [{ provider: "deepseek", id: "deepseek-v4-flash" }],
         env: {},
       }),
-    ).toEqual(["zai/glm-5.1"]);
+    ).toEqual(missing);
   });
 });
-
-function resolveTestReasoning(
-  model: Model,
-): "minimal" | "low" | "medium" | "high" | "xhigh" | undefined {
-  if (!model.reasoning) {
-    return undefined;
-  }
-  const id = model.id.toLowerCase();
-  if (id.includes("deep-research")) {
-    return "medium";
-  }
-  if (model.provider === "openrouter" && id.startsWith("qwq")) {
-    return undefined;
-  }
-  if (model.provider === "xai" && id.startsWith("grok-4")) {
-    return undefined;
-  }
-  if (model.provider === "openai") {
-    if (id.includes("pro")) {
-      return "high";
-    }
-    return "medium";
-  }
-  return "low";
-}
 
 describe("resolveLiveSystemPrompt", () => {
   it("matches OpenAI Codex HTML interruption pages", () => {
@@ -1297,11 +1242,14 @@ async function completeSimpleWithTimeout<TApi extends Api>(
       model,
       cfg: activeLiveCompletionConfig,
     });
+    const reasoning =
+      options?.reasoning === undefined ? undefined : resolveLiveTestReasoning(completionModel);
     return await withLiveHeartbeat(
       Promise.race([
         completeSimple(completionModel, context, {
           ...options,
           sessionId: options?.sessionId ?? resolveLiveCompletionSessionId(model),
+          reasoning,
           signal: controller.signal,
         }),
         timeout,
@@ -1355,17 +1303,11 @@ async function completeOkWithRetry(params: {
       params.model,
       {
         systemPrompt: resolveLiveSystemPrompt(params.model),
-        messages: [
-          {
-            role: "user",
-            content: "Reply with the word ok.",
-            timestamp: Date.now(),
-          },
-        ],
+        messages: createSingleUserPromptMessage("Reply with the word ok."),
       },
       {
         apiKey: params.apiKey,
-        reasoning: resolveTestReasoning(params.model),
+        reasoning: resolveLiveTestReasoning(params.model),
         maxTokens,
       },
       params.timeoutMs,
@@ -1415,7 +1357,7 @@ async function runDeepSeekV4ReplayRegression(params: {
     { messages: [firstUser], tools: [noopTool] },
     {
       apiKey: params.apiKey,
-      reasoning: resolveTestReasoning(params.model),
+      reasoning: resolveLiveTestReasoning(params.model),
       maxTokens: 256,
     },
     params.timeoutMs,
@@ -1434,7 +1376,7 @@ async function runDeepSeekV4ReplayRegression(params: {
       { messages: [firstUser], tools: [noopTool] },
       {
         apiKey: params.apiKey,
-        reasoning: resolveTestReasoning(params.model),
+        reasoning: resolveLiveTestReasoning(params.model),
         maxTokens: 256,
       },
       params.timeoutMs,
@@ -1471,7 +1413,7 @@ async function runDeepSeekV4ReplayRegression(params: {
     },
     {
       apiKey: params.apiKey,
-      reasoning: resolveTestReasoning(params.model),
+      reasoning: resolveLiveTestReasoning(params.model),
       maxTokens: 256,
     },
     params.timeoutMs,
@@ -1495,7 +1437,7 @@ async function runExtraTurnProbes(params: {
   }
   const options = {
     apiKey: params.apiKey,
-    reasoning: resolveTestReasoning(params.model),
+    reasoning: resolveLiveTestReasoning(params.model),
     maxTokens: 128,
   };
   if (LIVE_FILE_PROBE_ENABLED && !shouldSkipLiveModelFileProbe(params.model)) {
@@ -1594,9 +1536,9 @@ describeLive("live models (profile keys)", () => {
       const useModern = rawModels === "modern" || rawModels === "all";
       const useSmall = rawModels === "small";
       const useExplicit = Boolean(rawModels) && !useModern && !useSmall;
-      const filter = useExplicit ? parseModelFilter(rawModels) : null;
+      const filter = useExplicit ? parseCsvFilter(rawModels) : null;
       const explicitRefs = useExplicit ? parseExplicitLiveModelRefs(filter) : [];
-      const providers = parseProviderFilter(process.env.OPENCLAW_LIVE_PROVIDERS);
+      const providers = parseCsvFilter(process.env.OPENCLAW_LIVE_PROVIDERS);
       const priorityRefs = useSmall
         ? filterLiveModelRefsByProvider(listPrioritizedSmallLiveModelRefs(), providers)
         : [];
@@ -1610,11 +1552,11 @@ describeLive("live models (profile keys)", () => {
         providers: providerList,
         env: process.env,
       });
+      using _ = useLiveCompletionConfig(cfg);
       await ensureLiveProviderApisRegistered({
         config: cfg,
         providers: providerList,
       });
-      activeLiveCompletionConfig = cfg;
       logProgress("[live-models] preparing models.json");
       await withLiveStageTimeout(
         ensureOpenClawModelsJson(
@@ -1652,12 +1594,15 @@ describeLive("live models (profile keys)", () => {
           logProgress("[live-models] loading configured small model refs");
         }
         logProgress("[live-models] loading auth storage");
-        const authStorage = await withLiveStageTimeout(
+        const { authStorage } = await withLiveStageTimeout(
           Promise.resolve().then(() =>
-            discoverAuthStorage(agentDir, {
+            discoverAuthStorageFacts(agentDir, {
               config: cfg,
               env: process.env,
-              externalCli: externalCliDiscoveryForProviders({ cfg, providers: providerList ?? [] }),
+              externalCli: externalCliDiscoveryForProviders({
+                cfg,
+                providers: providerList ?? [],
+              }),
               ...(providerList
                 ? {
                     skipExternalAuthProfiles: true,
@@ -1671,26 +1616,30 @@ describeLive("live models (profile keys)", () => {
         logProgress("[live-models] loading model registry");
         const modelRegistry = await withLiveStageTimeout(
           Promise.resolve().then(() =>
-            discoverModels(authStorage, agentDir, { config: cfg, normalizeModels: false }),
+            discoverModelsAsync(authStorage, agentDir, { config: cfg, normalizeModels: false }),
           ),
           "[live-models] load model registry",
         );
         const configuredModels = modelRegistry.getAll();
-        const augmented = await appendPrioritizedDynamicLiveModels({
+        const augmented = await appendLiveModelCandidates({
           models: configuredModels,
           config: cfg,
           agentDir,
           env: process.env,
           modelRegistry,
-          ...(explicitRefs.length > 0
-            ? { refs: explicitRefs }
-            : useSmall
-              ? { refs: priorityRefs }
-              : {}),
+          ...(useExplicit
+            ? {
+                resolution: {
+                  kind: "explicit" as const,
+                  getDiscoveryStores: async () => ({ authStorage, modelRegistry }),
+                },
+              }
+            : {}),
+          ...(useExplicit ? { refs: explicitRefs } : useSmall ? { refs: priorityRefs } : {}),
         });
         if (augmented.added.length > 0) {
           logProgress(
-            `[live-models] loaded ${augmented.added.length} prioritized dynamic model refs`,
+            `[live-models] loaded ${augmented.added.length} ${useExplicit ? "explicit" : "prioritized dynamic"} model refs`,
           );
         }
         return augmented.models;
@@ -1719,8 +1668,12 @@ describeLive("live models (profile keys)", () => {
 
       for (const model of models) {
         if (
-          resolveBuiltInModelSuppressionFromManifest({ provider: model.provider, id: model.id })
-            ?.suppress
+          resolveBuiltInModelSuppressionFromManifest({
+            provider: model.provider,
+            id: model.id,
+            baseUrl: model.baseUrl,
+            config: cfg,
+          })?.suppress
         ) {
           continue;
         }
@@ -1796,9 +1749,10 @@ describeLive("live models (profile keys)", () => {
         logProgress(`[live-models] ${reason}; skipping`);
         return;
       }
-      if (useExplicit && explicitRefs.length > 0) {
-        const unmatched = findUnmatchedExplicitLiveModelRefs({
-          refs: explicitRefs,
+      if (useExplicit && filter) {
+        const unmatched = findUnmatchedLiveModelSelectors({
+          modelFilter: filter,
+          providerFilter: providers,
           models: candidates.map((entry) => entry.model),
           config: cfg,
           env: process.env,
@@ -1870,7 +1824,7 @@ describeLive("live models (profile keys)", () => {
                 { messages: [firstUser], tools: [noopTool] },
                 {
                   apiKey,
-                  reasoning: resolveTestReasoning(model),
+                  reasoning: resolveLiveTestReasoning(model),
                   maxTokens: 128,
                   onPayload: requireToolChoicePayload,
                 },
@@ -1901,7 +1855,7 @@ describeLive("live models (profile keys)", () => {
                   { messages: [firstUser], tools: [noopTool] },
                   {
                     apiKey,
-                    reasoning: resolveTestReasoning(model),
+                    reasoning: resolveLiveTestReasoning(model),
                     maxTokens: 128,
                     onPayload: requireToolChoicePayload,
                   },
@@ -1951,7 +1905,7 @@ describeLive("live models (profile keys)", () => {
                 },
                 {
                   apiKey,
-                  reasoning: resolveTestReasoning(model),
+                  reasoning: resolveLiveTestReasoning(model),
                   // Headroom: reasoning summary can consume most of the output budget.
                   maxTokens: 256,
                 },
@@ -2065,6 +2019,10 @@ describeLive("live models (profile keys)", () => {
             break;
           } catch (err) {
             const message = String(err);
+            const recordSkip = (label: string) => {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (${label})`);
+            };
             if (
               model.provider === "anthropic" &&
               isLiveRateLimitDrift(message) &&
@@ -2074,8 +2032,7 @@ describeLive("live models (profile keys)", () => {
               continue;
             }
             if (model.provider === "anthropic" && isLiveRateLimitDrift(message)) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (anthropic rate limit)`);
+              recordSkip("anthropic rate limit");
               break;
             }
             if (model.provider === "anthropic" && isLiveBillingDrift(message)) {
@@ -2083,16 +2040,14 @@ describeLive("live models (profile keys)", () => {
                 logProgress(`${progressLabel}: billing issue, retrying with next key`);
                 continue;
               }
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (anthropic billing)`);
+              recordSkip("anthropic billing");
               break;
             }
             if (
               (model.provider === "google" || model.provider === "google-gemini-cli") &&
               isGoogleModelNotFoundError(err)
             ) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (google model not found)`);
+              recordSkip("google model not found");
               break;
             }
             if (
@@ -2100,8 +2055,7 @@ describeLive("live models (profile keys)", () => {
               model.provider === "minimax" &&
               message.includes("request ended without sending any chunks")
             ) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (minimax empty response)`);
+              recordSkip("minimax empty response");
               break;
             }
             if (
@@ -2111,8 +2065,7 @@ describeLive("live models (profile keys)", () => {
                 model.provider === "openrouter") &&
               isRateLimitErrorMessage(message)
             ) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (rate limit)`);
+              recordSkip("rate limit");
               break;
             }
             if (
@@ -2120,13 +2073,11 @@ describeLive("live models (profile keys)", () => {
               (model.provider === "opencode" || model.provider === "opencode-go") &&
               isRateLimitErrorMessage(message)
             ) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (rate limit)`);
+              recordSkip("rate limit");
               break;
             }
             if (allowNotFoundSkip && model.provider === "openai" && isRefreshTokenReused(message)) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (codex refresh token reused)`);
+              recordSkip("codex refresh token reused");
               break;
             }
             if (
@@ -2134,8 +2085,7 @@ describeLive("live models (profile keys)", () => {
               model.provider === "openai" &&
               isAccountIdExtractionError(message)
             ) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (codex account id extraction)`);
+              recordSkip("codex account id extraction");
               break;
             }
             if (
@@ -2143,8 +2093,7 @@ describeLive("live models (profile keys)", () => {
               model.provider === "openai" &&
               isChatGPTUsageLimitErrorMessage(message)
             ) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (chatgpt usage limit)`);
+              recordSkip("chatgpt usage limit");
               break;
             }
             if (
@@ -2152,8 +2101,7 @@ describeLive("live models (profile keys)", () => {
               model.provider === "openai" &&
               isInstructionsRequiredError(message)
             ) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (instructions required)`);
+              recordSkip("instructions required");
               break;
             }
             if (
@@ -2161,8 +2109,7 @@ describeLive("live models (profile keys)", () => {
               model.provider === "openai" &&
               isOpenAiCodexHtmlInterruption(message)
             ) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (codex html interruption)`);
+              recordSkip("codex html interruption");
               break;
             }
             const driftSkip = shouldSkipLiveProviderDrift({
@@ -2173,8 +2120,7 @@ describeLive("live models (profile keys)", () => {
               allowTimeout: allowNotFoundSkip,
             });
             if (driftSkip) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (${driftSkip.label})`);
+              recordSkip(driftSkip.label);
               break;
             }
             if (
@@ -2182,33 +2128,27 @@ describeLive("live models (profile keys)", () => {
               model.provider === "openrouter" &&
               isOpenRouterOpaqueBadRequestErrorMessage(message)
             ) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (openrouter upstream bad request)`);
+              recordSkip("openrouter upstream bad request");
               break;
             }
             if (allowNotFoundSkip && isModelNotFoundErrorMessage(message)) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (model not found)`);
+              recordSkip("model not found");
               break;
             }
             if (allowNotFoundSkip && isAudioOnlyModelErrorMessage(message)) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (audio-only model)`);
+              recordSkip("audio-only model");
               break;
             }
             if (allowNotFoundSkip && isUnsupportedReasoningEffortErrorMessage(message)) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (reasoning unsupported)`);
+              recordSkip("reasoning unsupported");
               break;
             }
             if (allowNotFoundSkip && isUnsupportedThinkingToggleErrorMessage(message)) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (thinking toggle unsupported)`);
+              recordSkip("thinking toggle unsupported");
               break;
             }
             if (allowNotFoundSkip && isUnsupportedPlanErrorMessage(message)) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (plan unsupported)`);
+              recordSkip("plan unsupported");
               break;
             }
             if (
@@ -2216,8 +2156,7 @@ describeLive("live models (profile keys)", () => {
               model.provider === "ollama" &&
               isOllamaUnavailableErrorMessage(message)
             ) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (ollama unavailable)`);
+              recordSkip("ollama unavailable");
               break;
             }
             logProgress(`${progressLabel}: failed`);

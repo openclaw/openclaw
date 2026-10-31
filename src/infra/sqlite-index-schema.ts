@@ -3,20 +3,23 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   assertSqliteIntegrity,
   assertSqliteTableIntegrity,
+  classifySqliteFtsIntegrityFindings,
   isTerminalSqliteIntegrityError,
-  runSqliteIntegrityOperationSync,
+  readSqliteIntegrityFindings,
   sqliteIntegrityCheckSteps,
+  type SqliteIntegrityCheckOptions,
   type SqliteIntegrityDiagnostics,
   type SqliteIntegrityOperation,
-  type SqliteIntegrityTableCheck,
 } from "./sqlite-integrity.js";
-import { runSqlitePinnedReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
-import type { SqliteIndexListRow } from "./sqlite-schema-contract-assembly.js";
+import { runSqliteSchemaReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
 import {
-  collectSqliteNamedIndexContract,
+  createSqliteTableContractReader,
   getCanonicalSqliteNamedIndexContracts,
   getCanonicalSqliteTableNames,
+  hasCanonicalSqliteSchemaFingerprint,
   type CanonicalSqliteNamedIndexContract,
+  type SqliteSchemaSource,
+  type SqliteTableContractReader,
 } from "./sqlite-schema-contract.js";
 import { quoteSqliteIdentifier } from "./sqlite-schema-sql.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
@@ -31,41 +34,32 @@ type RepairCanonicalSqliteIndexesOptions = {
   allowMissingColumns?: boolean;
   /** Keep index repair atomic with the caller's whole-schema validation. */
   validateAfterRepair?: () => void;
+  /** Reuse the inspection catalog only while its unchanged snapshot is still pinned. */
+  validateUnchanged?: (readTable?: SqliteTableContractReader) => void;
   verifyPhysicalIntegrity?: boolean;
+  integrity?: SqliteIntegrityCheckOptions;
 };
 
 /**
  * Verify the whole file before schema convergence. Physical corruption belongs
  * to explicit Doctor maintenance, including when only an index is damaged.
  */
-export function verifyAndRepairCanonicalSqliteIndexes(
-  db: DatabaseSync,
-  databaseLabel: string,
-  schemaSql: string,
-  options: Omit<RepairCanonicalSqliteIndexesOptions, "verifyPhysicalIntegrity"> = {},
-): string[] {
-  return runSqliteIntegrityOperationSync(
-    verifyAndRepairCanonicalSqliteIndexSteps(db, databaseLabel, schemaSql, options),
-  );
-}
-
 export function* verifyAndRepairCanonicalSqliteIndexSteps(
   db: DatabaseSync,
   databaseLabel: string,
-  schemaSql: string,
+  schemaSql: SqliteSchemaSource,
   options: Omit<RepairCanonicalSqliteIndexesOptions, "verifyPhysicalIntegrity"> & {
     diagnostics?: SqliteIntegrityDiagnostics;
     reuseIntegrity?: boolean;
-    integrityTables?: SqliteIntegrityTableCheck[];
   } = {},
 ): SqliteIntegrityOperation<string[]> {
-  const { diagnostics, reuseIntegrity, integrityTables, ...repairOptions } = options;
+  const { diagnostics, reuseIntegrity, ...repairOptions } = options;
   if (reuseIntegrity) {
     if (diagnostics) {
       diagnostics.integrityGateOutcome = "cached";
     }
   } else {
-    yield* sqliteIntegrityCheckSteps(db, databaseLabel, diagnostics, integrityTables);
+    yield* sqliteIntegrityCheckSteps(db, databaseLabel, diagnostics, options.integrity);
   }
 
   const indexesStartedAt = performance.now();
@@ -87,35 +81,58 @@ export function* verifyAndRepairCanonicalSqliteIndexSteps(
 export function repairCanonicalSqliteIndexes(
   db: DatabaseSync,
   databaseLabel: string,
-  schemaSql: string,
+  schemaSql: SqliteSchemaSource,
   options: RepairCanonicalSqliteIndexesOptions = {},
 ): string[] {
-  const indexes = getCanonicalSqliteNamedIndexContracts(schemaSql);
-  const indexesByTable = new Map<string, CanonicalSqliteNamedIndexContract[]>();
   const repairIndexes = new Set<CanonicalSqliteNamedIndexContract>();
   // One read snapshot also avoids a network lock round trip per metadata query.
-  runSqlitePinnedReadSnapshotSync(db, () => {
-    for (const index of indexes) {
-      assertSqliteIdentifier(index.name);
-      assertSqliteIdentifier(index.tableName);
-      const tableExists = db
-        .prepare("SELECT 1 FROM main.sqlite_schema WHERE type = 'table' AND name = ?")
-        .get(index.tableName);
-      if (!tableExists) {
-        continue;
+  runSqliteSchemaReadSnapshotSync(db, () => {
+    const readTable = createSqliteTableContractReader(db);
+    if (!hasCanonicalSqliteSchemaFingerprint(schemaSql, readTable)) {
+      const indexes = getCanonicalSqliteNamedIndexContracts(schemaSql);
+      const indexesByTable = new Map<string, CanonicalSqliteNamedIndexContract[]>();
+      for (const index of indexes) {
+        assertSqliteIdentifier(index.name);
+        assertSqliteIdentifier(index.tableName);
+        const tableIndexes = indexesByTable.get(index.tableName) ?? [];
+        tableIndexes.push(index);
+        indexesByTable.set(index.tableName, tableIndexes);
       }
-      const tableIndexes = indexesByTable.get(index.tableName) ?? [];
-      tableIndexes.push(index);
-      indexesByTable.set(index.tableName, tableIndexes);
-      const actual = collectSqliteNamedIndexContract(db, index.name);
-      if (JSON.stringify(actual) !== JSON.stringify(index.fingerprint)) {
-        repairIndexes.add(index);
+      for (const tableName of getCanonicalSqliteTableNames(schemaSql)) {
+        assertSqliteIdentifier(tableName);
+        const table = readTable(tableName);
+        if (!table) {
+          continue;
+        }
+        const tableIndexes = indexesByTable.get(tableName) ?? [];
+        const canonicalIndexNames = new Set(tableIndexes.map((index) => index.name));
+        const actualIndexes = table.indexes;
+        const unexpected = actualIndexes.find(
+          (index) =>
+            index.unique === 1 &&
+            index.origin === "c" &&
+            index.name !== null &&
+            !canonicalIndexNames.has(index.name),
+        );
+        if (unexpected) {
+          throw new Error(
+            `SQLite schema is incomplete or noncanonical for ${databaseLabel}: unexpected unique index ${unexpected.name}`,
+          );
+        }
+        for (const index of tableIndexes) {
+          const actual = actualIndexes.find((candidate) => candidate.name === index.name);
+          if (JSON.stringify(actual) !== JSON.stringify(index.fingerprint)) {
+            repairIndexes.add(index);
+          }
+        }
       }
     }
-    assertNoUnexpectedUniqueIndexes(db, databaseLabel, schemaSql, indexesByTable);
 
     if (options.verifyPhysicalIntegrity !== false) {
-      assertSqliteIntegrity(db, databaseLabel);
+      assertSqliteIntegrity(db, databaseLabel, options.integrity);
+    }
+    if (repairIndexes.size === 0) {
+      options.validateUnchanged?.(readTable);
     }
   });
   if (repairIndexes.size === 0) {
@@ -128,30 +145,34 @@ export function repairCanonicalSqliteIndexes(
   try {
     for (const index of repairIndexes) {
       activeIndex = index;
-      const probeName = findUnusedProbeIndexName(db, index.name);
-      // Build the canonical constraint first. If existing rows conflict, the
-      // wrong same-name index remains in place and the whole repair rolls back.
+      // Transactional DDL preserves the old index on failure or process death;
+      // a probe would build the same index twice. Isolate skipped migrations too.
+      db.exec("SAVEPOINT repair_canonical_index;");
       try {
-        db.exec(createIndexSql(index, probeName));
+        db.exec(`DROP INDEX IF EXISTS main.${index.name};`);
+        const create = index.unique ? "CREATE UNIQUE INDEX" : "CREATE INDEX";
+        db.exec(`${create} main.${index.name} ${index.definition};`);
       } catch (error) {
+        db.exec("ROLLBACK TO SAVEPOINT repair_canonical_index;");
         if (options.allowMissingColumns && isMissingColumnError(error)) {
           repairIndexes.delete(index);
           continue;
         }
         throw error;
+      } finally {
+        db.exec("RELEASE SAVEPOINT repair_canonical_index;");
       }
-      db.exec(`DROP INDEX IF EXISTS main.${index.name};`);
-      db.exec(createIndexSql(index, index.name));
-      db.exec(`DROP INDEX main.${probeName};`);
     }
     if (repairIndexes.size === 0) {
+      // Skipped column migrations rolled back DDL after the inspection snapshot ended.
+      options.validateUnchanged?.();
       db.exec(`RELEASE SAVEPOINT ${savepoint};`);
       return [];
     }
-    for (const tableName of indexesByTable.keys()) {
-      assertSqliteTableIntegrity(db, databaseLabel, tableName);
+    // The source was already admitted; index-only DDL needs no second whole-file scan.
+    for (const table of new Set([...repairIndexes].map((index) => index.tableName))) {
+      assertSqliteTableIntegrity(db, databaseLabel, table);
     }
-    assertSqliteIntegrity(db, databaseLabel);
     options.validateAfterRepair?.();
     db.exec(`RELEASE SAVEPOINT ${savepoint};`);
   } catch (error) {
@@ -176,16 +197,29 @@ export function repairCanonicalSqliteIndexes(
 export function repairSqliteIndexCorruption(
   database: DatabaseSync,
   pathname: string,
-  options: { backup: () => void; assertCurrent: () => void },
+  options: {
+    backup: () => void;
+    assertCurrent: () => void;
+    ftsSchemas?: readonly string[];
+    ftsOnly?: boolean;
+  },
 ): string[] {
   let repaired: string[] = [];
   return runSqliteImmediateTransactionSync(
     database,
     () => {
       const names = new Set<string>();
-      // Stream every finding: SQLite's default 100-row limit can hide later damage.
-      for (const row of database.prepare("PRAGMA integrity_check(2147483647)").iterate()) {
-        const finding = row.integrity_check;
+      // Inspect every finding: SQLite's default 100-row limit can hide later damage.
+      const findings = readSqliteIntegrityFindings(database);
+      const ftsTables = classifySqliteFtsIntegrityFindings(
+        database,
+        findings,
+        options.ftsSchemas ?? [],
+      );
+      if (options.ftsOnly && !ftsTables) {
+        throw new Error("Startup repair requires only canonical FTS integrity findings");
+      }
+      for (const finding of ftsTables ? [] : findings) {
         if (finding === "ok") {
           continue;
         }
@@ -201,7 +235,7 @@ export function repairSqliteIndexCorruption(
         }
         names.add(name);
       }
-      if (names.size === 0) {
+      if (names.size === 0 && !ftsTables) {
         return [];
       }
 
@@ -227,9 +261,14 @@ export function repairSqliteIndexCorruption(
       }
 
       options.backup();
-      repaired = [...names].toSorted();
+      repaired = ftsTables ?? [...names].toSorted();
       for (const name of repaired) {
-        database.exec(`REINDEX main.${quoteSqliteIdentifier(name)}`);
+        const identifier = quoteSqliteIdentifier(name);
+        database.exec(
+          ftsTables
+            ? `INSERT INTO main.${identifier}(${identifier}) VALUES('rebuild')`
+            : `REINDEX main.${identifier}`,
+        );
       }
       // Foreign-key checks use parent indexes, so corrupt keys can look like
       // missing parent rows until REINDEX. Real violations still roll back repair.
@@ -247,56 +286,6 @@ export function repairSqliteIndexCorruption(
       },
     },
   );
-}
-
-function assertNoUnexpectedUniqueIndexes(
-  db: DatabaseSync,
-  databaseLabel: string,
-  schemaSql: string,
-  indexesByTable: ReadonlyMap<string, readonly CanonicalSqliteNamedIndexContract[]>,
-): void {
-  for (const tableName of getCanonicalSqliteTableNames(schemaSql)) {
-    assertSqliteIdentifier(tableName);
-    const tableExists = db
-      .prepare("SELECT 1 FROM main.sqlite_schema WHERE type = 'table' AND name = ?")
-      .get(tableName);
-    if (!tableExists) {
-      continue;
-    }
-    const canonicalIndexNames = new Set(
-      (indexesByTable.get(tableName) ?? []).map((index) => index.name),
-    );
-    const unexpected = (
-      db.prepare(`PRAGMA main.index_list(${tableName})`).all() as SqliteIndexListRow[]
-    ).find(
-      (index) => index.unique === 1 && index.origin === "c" && !canonicalIndexNames.has(index.name),
-    );
-    if (unexpected) {
-      throw new Error(
-        `SQLite schema is incomplete or noncanonical for ${databaseLabel}: unexpected unique index ${unexpected.name}`,
-      );
-    }
-  }
-}
-
-function createIndexSql(index: CanonicalSqliteNamedIndexContract, name: string): string {
-  assertSqliteIdentifier(name);
-  const create = index.unique ? "CREATE UNIQUE INDEX" : "CREATE INDEX";
-  return `${create} main.${name} ${index.definition};`;
-}
-
-function findUnusedProbeIndexName(db: DatabaseSync, canonicalName: string): string {
-  const prefix = `openclaw_probe_${canonicalName}`;
-  for (let suffix = 0; suffix < 100; suffix += 1) {
-    const candidate = suffix === 0 ? prefix : `${prefix}_${suffix}`;
-    const row = db
-      .prepare("SELECT 1 AS found FROM main.sqlite_schema WHERE name = ?")
-      .get(candidate);
-    if (!row) {
-      return candidate;
-    }
-  }
-  throw new Error(`could not allocate a probe index name for ${canonicalName}`);
 }
 
 function assertSqliteIdentifier(identifier: string): void {

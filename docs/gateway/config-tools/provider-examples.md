@@ -12,7 +12,7 @@ Worked `models.providers` configurations. For what each field means, see [Custom
 ## Provider examples
 
 <AccordionGroup>
-  <Accordion title="Cerebras (GLM 4.7 / GPT OSS)">
+  <Accordion title="Cerebras (GPT OSS)">
     The official external `cerebras` provider plugin can configure this via `openclaw onboard --auth-choice cerebras-api-key`. Use explicit provider config only when overriding defaults.
 
     ```json5
@@ -21,12 +21,10 @@ Worked `models.providers` configurations. For what each field means, see [Custom
       agents: {
         defaults: {
           model: {
-            primary: "cerebras/zai-glm-4.7",
-            fallbacks: ["cerebras/gpt-oss-120b"],
+            primary: "cerebras/gpt-oss-120b",
           },
           models: {
-            "cerebras/zai-glm-4.7": { alias: "GLM 4.7 (Cerebras)" },
-            "cerebras/gpt-oss-120b": { alias: "GPT OSS 120B (Cerebras)" },
+            "cerebras/gpt-oss-120b": { alias: "Cerebras GPT OSS 120B" },
           },
         },
       },
@@ -38,7 +36,6 @@ Worked `models.providers` configurations. For what each field means, see [Custom
             apiKey: "${CEREBRAS_API_KEY}",
             api: "openai-completions",
             models: [
-              { id: "zai-glm-4.7", name: "GLM 4.7 (Cerebras)" },
               { id: "gpt-oss-120b", name: "GPT OSS 120B (Cerebras)" },
             ],
           },
@@ -47,7 +44,7 @@ Worked `models.providers` configurations. For what each field means, see [Custom
     }
     ```
 
-    Use `cerebras/zai-glm-4.7` for Cerebras; `zai/glm-4.7` for Z.AI direct.
+    Use `cerebras/gpt-oss-120b` for Cerebras. For Z.AI models, use the separate `zai` provider.
 
   </Accordion>
   <Accordion title="Kimi Coding">
@@ -67,7 +64,7 @@ Worked `models.providers` configurations. For what each field means, see [Custom
 
   </Accordion>
   <Accordion title="Local models (llama.cpp / llama-server)">
-    The canonical `llama-cpp` provider applies the llama.cpp schema cleaner in managed and existing-server modes. If you instead point a **custom provider ID** at a remote `llama-server` (or another OpenAI-compatible llama.cpp endpoint), set `compat.toolSchemaProfile: "llamacpp"` on each model whose chat template compiles tool arguments into GBNF. The profile removes `pattern` and `maxLength` values at or above 2000, covering the `cron` tool's `trigger.script` limit of 65536. It is a targeted mitigation, not complete compatibility for every JSON Schema constraint or `minLength`.
+    The built-in `llama-cpp` provider applies the llama.cpp schema cleaner in managed and existing-server modes. If you instead point a **custom provider ID** at a remote `llama-server` (or another OpenAI-compatible llama.cpp endpoint), set `compat.toolSchemaProfile: "llamacpp"` on each model whose chat template compiles tool arguments into GBNF. The profile removes `pattern` and `maxLength` values at or above 2000, covering the `cron` tool's `trigger.script` limit of 65536. It is a targeted mitigation, not complete compatibility for every JSON Schema constraint or `minLength`.
 
     ```json5
     {
@@ -248,12 +245,89 @@ Worked `models.providers` configurations. For what each field means, see [Custom
     }
     ```
 
-    Set `ZAI_API_KEY`. Model refs use the canonical `zai/*` provider ID. Shortcut: `openclaw onboard --auth-choice zai-api-key`.
+    Set `ZAI_API_KEY`. Model refs use the standard `zai/*` provider ID. Shortcut: `openclaw onboard --auth-choice zai-api-key`.
 
     - General endpoint: `https://api.z.ai/api/paas/v4`
     - Coding endpoint: `https://api.z.ai/api/coding/paas/v4`
-    - The default `zai-api-key` auth choice probes your key and auto-detects which endpoint it belongs to (falling back to a prompt, defaulting to Global, if detection is inconclusive). Dedicated CN and Coding-Plan auth choices are also available for explicit selection.
+    - The default `zai-api-key` auth choice checks your key and auto-detects which endpoint it belongs to (falling back to a prompt, defaulting to Global, if detection is inconclusive). Dedicated CN and Coding-Plan auth choices are also available for explicit selection.
     - For the general endpoint, define a custom provider with the base URL override.
 
   </Accordion>
 </AccordionGroup>
+
+## Route interactive and background requests to different URLs
+
+Some gateways expose separate URLs for interactive traffic and background or delegated work while serving the same model.
+You can represent those routes as two custom providers without changing the runtime model or adding automatic task classification.
+
+1. Copy the provider entry under a second provider id and change only the `baseUrl`.
+   Keep the same authentication, API transport, model id, capabilities, context limits, and token limits unless the gateway actually differs.
+2. Use the interactive provider as the default model and the background provider as the sub-agent model.
+3. Copy the exact model's generation settings to the second fully qualified model key.
+   Give the interactive entry the picker alias and omit it on the background entry to avoid assigning the same shortcut name to both routes. Both provider-qualified model entries can still appear separately in model pickers.
+
+```json5
+{
+  models: {
+    mode: "merge",
+    providers: {
+      "acme-interactive": {
+        baseUrl: "https://interactive.example/v1",
+        apiKey: "${ACME_API_KEY}",
+        api: "openai-completions",
+        models: [
+          {
+            id: "acme-model",
+            name: "Acme model",
+            input: ["text", "image"],
+            contextWindow: 131072,
+            maxTokens: 16384,
+          },
+        ],
+      },
+      "acme-background": {
+        baseUrl: "https://background.example/v1",
+        apiKey: "${ACME_API_KEY}",
+        api: "openai-completions",
+        models: [
+          {
+            id: "acme-model",
+            name: "Acme model (background)",
+            input: ["text", "image"],
+            contextWindow: 131072,
+            maxTokens: 16384,
+          },
+        ],
+      },
+    },
+  },
+  agents: {
+    defaults: {
+      model: {
+        primary: "acme-interactive/acme-model",
+        fallbacks: ["acme-background/acme-model"],
+      },
+      subagents: {
+        model: {
+          primary: "acme-background/acme-model",
+          fallbacks: ["acme-interactive/acme-model"],
+        },
+      },
+      models: {
+        "acme-interactive/acme-model": {
+          alias: "Acme model",
+          params: { temperature: 0.2 },
+        },
+        "acme-background/acme-model": {
+          params: { temperature: 0.2 },
+        },
+      },
+    },
+  },
+}
+```
+
+The model reference used for a sub-agent is selected in this order: an explicit spawn choice, the per-agent sub-agent model, then `agents.defaults.subagents.model`.
+For cron or automation jobs, set the model and fallback list explicitly when the job must use the background route, for example `openclaw automations add ... --model acme-background/acme-model --fallbacks acme-interactive/acme-model`.
+When the API transport is unchanged, an existing non-empty `models.json` `baseUrl` takes precedence over the matching config entry, so update that file or remove the override when changing routes.
+See [Sub-agents](/tools/subagents), [Model configuration](/gateway/config-agents/models), [Custom providers and base URLs](/gateway/config-tools/custom-providers), and [Automation payloads](/automation/cron-jobs/payloads) for the detailed selection and precedence rules.

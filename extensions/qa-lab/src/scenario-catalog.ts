@@ -9,7 +9,7 @@ import { parseQaYamlWithContext } from "./qa-yaml.js";
 import { isRepoRootRelativeRef, resolveQaRepoPath, type QaRepoPathKind } from "./repo-path.js";
 import { qaScenarioModuleFlow } from "./scenario-module-flow.js";
 
-export const DEFAULT_QA_AGENT_IDENTITY_MARKDOWN = `# Dev C-3PO
+const DEFAULT_QA_AGENT_IDENTITY_MARKDOWN = `# Dev C-3PO
 
 You are the OpenClaw QA operator agent.
 
@@ -394,12 +394,6 @@ export type QaScenarioPack = z.infer<typeof qaScenarioPackSchema> & {
   scenarios: QaSeedScenarioWithSource[];
 };
 
-export type QaBootstrapScenarioCatalog = {
-  agentIdentityMarkdown: string;
-  kickoffTask: string;
-  scenarios: QaSeedScenarioWithSource[];
-};
-
 export function resolveQaScenarioRequiredProviderMode(
   scenario: Pick<QaSeedScenarioWithSource, "id" | "execution">,
 ) {
@@ -454,14 +448,6 @@ function readTextFile(relativePath: string): string {
   return fs.readFileSync(resolved, "utf8");
 }
 
-function parseQaYamlFileWithContext<T>(schema: z.ZodType<T>, relativePath: string): T {
-  return parseQaYamlWithContext(
-    schema,
-    YAML.parse(readTextFile(relativePath)) as unknown,
-    relativePath,
-  );
-}
-
 export function readQaScenarioPackYamlSource(): string {
   const chunks = [readTextFile(QA_SCENARIO_PACK_INDEX_PATH).trim()];
   for (const relativePath of listQaScenarioYamlPaths()) {
@@ -512,8 +498,8 @@ export function readQaScenarioPack(): QaScenarioPack {
   if (qaScenarioPackCache) {
     return qaScenarioPackCache;
   }
-  const packYaml = readTextFile(QA_SCENARIO_PACK_INDEX_PATH).trim();
-  if (!packYaml) {
+  const packYaml = readTextFile(QA_SCENARIO_PACK_INDEX_PATH);
+  if (!packYaml.trim()) {
     // The QA scenario pack is absent from some npm distributions. Return an
     // empty pack so completion cache updates and other consumers remain safe.
     qaScenarioPackCache = {
@@ -524,8 +510,9 @@ export function readQaScenarioPack(): QaScenarioPack {
     };
     return qaScenarioPackCache;
   }
-  const parsedPackFile = parseQaYamlFileWithContext(
+  const parsedPackFile = parseQaYamlWithContext(
     qaScenarioPackFileSchema,
+    YAML.parse(packYaml) as unknown,
     QA_SCENARIO_PACK_INDEX_PATH,
   );
   const scenarios = listQaScenarioYamlPaths().map((relativePath) => {
@@ -575,7 +562,7 @@ function listQaScenarioYamlPaths(): string[] {
   return qaScenarioYamlPathsCache;
 }
 
-export function readQaBootstrapScenarioCatalog(): QaBootstrapScenarioCatalog {
+export function readQaBootstrapScenarioCatalog() {
   const pack = readQaScenarioPack();
   return {
     agentIdentityMarkdown: pack.agent.identityMarkdown,

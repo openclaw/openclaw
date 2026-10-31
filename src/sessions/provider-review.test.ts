@@ -1,23 +1,26 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { resolveSessionWorkStartError as workStartError } from "../config/sessions/lifecycle.js";
 import type { SessionProviderReview } from "../config/sessions/provider-review.types.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
+import * as runs from "../infra/agent-run-registry.js";
 import {
-  acceptProviderReviewAcknowledgment,
-  assertSessionProviderReviewWorkStart,
+  captureAgentRunProviderReview,
+  readAgentRunProviderReview,
+} from "./provider-review-terminal.js";
+import {
+  acceptProviderReviewAcknowledgment as acceptAcknowledgment,
+  assertSessionProviderReviewWorkStart as assertWorkStart,
   canContinueSessionProviderReview,
   claimProviderReviewAttempt,
+  createSessionProviderReview,
   issueProviderReviewAcknowledgment,
-  readProviderReviewAcknowledgment,
+  readProviderReviewAcknowledgment as readAcknowledgment,
   recordSessionProviderReview,
   retireProviderReviewAcknowledgment,
-  type ProviderReviewAcknowledgment,
+  type ProviderReviewAcknowledgment as Ack,
 } from "./provider-review.js";
 
-const store = vi.hoisted(() => ({
-  read: vi.fn(),
-  compare: vi.fn(),
-}));
+const store = vi.hoisted(() => ({ read: vi.fn(), compare: vi.fn() }));
 vi.mock("../config/sessions/provider-review-store.js", () => ({
   readSessionProviderReview: store.read,
   compareSessionProviderReview: store.compare,
@@ -45,6 +48,19 @@ const refusal: SessionProviderReview = {
     continuation: { message: "/literal steer" },
   },
 };
+const runtime = {
+  provider: refusal.provider,
+  model: refusal.model,
+  runtimeId: refusal.runtimeId,
+  api: refusal.api,
+  assertCurrent: () => {},
+};
+const accepted = {
+  runId: "next-run",
+  nativeThreadId: "native-thread",
+  nativeTurnId: "new-native-turn",
+  assertCurrent: () => {},
+};
 let entry: InternalSessionEntry;
 let sourceCurrent: boolean;
 const assertCurrent = () => {
@@ -52,13 +68,26 @@ const assertCurrent = () => {
     throw new Error("source revoked");
   }
 };
-const issue = () =>
+const issue = (reviewTarget = target) =>
   issueProviderReviewAcknowledgment({
-    target,
+    target: reviewTarget,
     reviewId: refusal.id,
-    nextRunId: "next-run",
+    nextRunId: accepted.runId,
     assertCurrent,
   });
+const accept = (ack: Ack, overrides: Partial<typeof accepted> = {}) =>
+  acceptAcknowledgment(ack, { ...accepted, ...overrides });
+const start = (acknowledgment: Ack, overrides: Partial<typeof runtime> = {}) =>
+  assertWorkStart({
+    target,
+    acknowledgment,
+    runId: accepted.runId,
+    ...runtime,
+    assertCurrent,
+    ...overrides,
+  });
+const admission = (ack: Ack, runId?: string) =>
+  workStartError(target.sessionKey, entry, { providerReviewAcknowledgment: ack, runId });
 
 beforeEach(() => {
   sourceCurrent = true;
@@ -78,339 +107,219 @@ beforeEach(() => {
     return structuredClone(entry);
   });
 });
+afterEach(() => runs.resetAgentRunRegistryForTest());
 
-describe("provider review admission", () => {
-  it("blocks ordinary work across turns and rejects client-forged acknowledgments", () => {
-    expect(resolveSessionWorkStartError(target.sessionKey, entry)).toContain(
-      "paused as a precaution",
-    );
-    expect(
-      resolveSessionWorkStartError(target.sessionKey, entry, {
-        providerReviewAcknowledgment: {} as ProviderReviewAcknowledgment,
-      }),
-    ).toContain("review changed");
-    expect(
-      resolveSessionWorkStartError(target.sessionKey, { ...entry, providerReview: undefined }),
-    ).toBeUndefined();
-  });
+it("enforces pause, settlement and unforgeable admission", async () => {
+  const paused = entry;
+  const ack = await issue();
+  const settlement = {
+    purpose: "accepted-result-settlement" as const,
+    expectedSessionId: target.sessionId,
+  };
+  const forged = { providerReviewAcknowledgment: {} as Ack };
+  const cases: Array<
+    [InternalSessionEntry, Parameters<typeof workStartError>[2], string | undefined]
+  > = [
+    [paused, undefined, "paused as a precaution"],
+    [paused, forged, "review changed"],
+    [{ ...paused, providerReview: undefined }, undefined, undefined],
+    [paused, settlement, undefined],
+    [{ ...paused, sessionId: "replacement" }, settlement, "changed"],
+    [{ ...paused, archivedAt: 2 }, settlement, "archived"],
+    [paused, { providerReviewAcknowledgment: ack, runId: accepted.runId }, undefined],
+  ];
+  for (const [candidate, options, error] of cases) {
+    const result = workStartError(target.sessionKey, candidate, options);
+    expect(result).toEqual(error ? expect.stringContaining(error) : undefined);
+  }
+});
 
-  it("allows accepted output to settle while keeping generation and archive guards", () => {
-    const options = {
-      purpose: "accepted-result-settlement" as const,
-      expectedSessionId: target.sessionId,
-    };
-    expect(resolveSessionWorkStartError(target.sessionKey, entry, options)).toBeUndefined();
-    expect(
-      resolveSessionWorkStartError(
-        target.sessionKey,
-        { ...entry, sessionId: "replacement" },
-        options,
-      ),
-    ).toContain("changed");
-    expect(
-      resolveSessionWorkStartError(target.sessionKey, { ...entry, archivedAt: 2 }, options),
-    ).toContain("archived");
-  });
-
-  it("does not let restart recovery replace a paused conversation, even with acknowledgment", async () => {
-    entry.mainRestartRecovery = {
-      cycleId: "recovery-cycle",
-      revision: 1,
-      chargedAttempts: 1,
-      tombstone: { reason: "automatic recovery exhausted" },
-    };
-    const options = { allowRestartTombstoneReplacement: true };
-    expect(resolveSessionWorkStartError(target.sessionKey, entry, options)).toContain(
-      "paused as a precaution",
-    );
-    const acknowledgment = await issue();
-    expect(
-      resolveSessionWorkStartError(target.sessionKey, entry, {
-        ...options,
-        providerReviewAcknowledgment: acknowledgment,
-        runId: "next-run",
-      }),
-    ).toContain("ended during restart recovery");
-    expect(
-      resolveSessionWorkStartError(
-        target.sessionKey,
-        { ...entry, providerReview: undefined },
-        options,
-      ),
-    ).toBeUndefined();
-  });
-
-  it("admits only the current host capability and retains the literal continuation", async () => {
-    const ack = await issue();
-    expect(
-      resolveSessionWorkStartError(target.sessionKey, entry, {
-        providerReviewAcknowledgment: ack,
-        runId: "next-run",
-      }),
-    ).toBeUndefined();
-    expect(readProviderReviewAcknowledgment(ack).review.review?.continuation?.message).toBe(
-      "/literal steer",
-    );
-    expect(
-      resolveSessionWorkStartError(target.sessionKey, entry, {
-        providerReviewAcknowledgment: ack,
-        runId: "unrelated-run",
-      }),
-    ).toContain("review changed");
-  });
-
-  it("binds plugin operations to the issued identity and retires retained methods", async () => {
-    const acknowledgment = await issue();
-    const { read, assertRuntime, acceptNativeTurn } = acknowledgment;
-    expect(Object.isFrozen(acknowledgment)).toBe(true);
-    expect(Object.isFrozen(read())).toBe(true);
-    expect(read()).not.toHaveProperty("target");
-    expect(read()).not.toHaveProperty("nextRunId");
-    store.read.mockClear();
-    const runtime = {
-      provider: refusal.provider,
-      model: refusal.model,
-      runtimeId: refusal.runtimeId,
-      api: refusal.api,
-      assertCurrent: () => {},
-    };
-    await assertRuntime(runtime);
-    expect(store.read.mock.calls[0]?.[0]).toEqual(target);
-    await acceptNativeTurn({
-      nativeThreadId: "native-thread",
-      nativeTurnId: "new-native-turn",
-      assertCurrent: () => {},
-    });
-    expect(store.compare.mock.calls[0]?.[0]).toEqual(target);
-    expect(read().phase).toBe("accepted");
-    retireProviderReviewAcknowledgment(acknowledgment);
-    expect(() => read()).toThrow("no longer current");
-    await expect(assertRuntime(runtime)).rejects.toThrow("no longer current");
-    await expect(
-      acceptNativeTurn({
-        nativeThreadId: "native-thread",
-        nativeTurnId: "another-turn",
-        assertCurrent: () => {},
-      }),
-    ).rejects.toThrow("no longer current");
-  });
-
-  it("keeps source revocation effective when a plugin runtime assertion remains live", async () => {
-    const acknowledgment = await issue();
-    store.read.mockImplementation(async () => {
-      sourceCurrent = false;
-      return entry;
-    });
-    await expect(
-      acknowledgment.assertRuntime({
-        provider: refusal.provider,
-        model: refusal.model,
-        runtimeId: refusal.runtimeId,
-        api: refusal.api,
-        assertCurrent: () => {},
-      }),
-    ).rejects.toThrow("source revoked");
-    expect(store.compare).not.toHaveBeenCalled();
-  });
-
-  it("does not let a new attempt inherit the accepted continuation", async () => {
-    const acknowledgment = await issue();
-    claimProviderReviewAttempt(acknowledgment, "next-run");
-    await acceptProviderReviewAcknowledgment(acknowledgment, {
-      runId: "next-run",
-      nativeThreadId: refusal.nativeThreadId,
-      nativeTurnId: "new-native-turn",
-    });
-    expect(readProviderReviewAcknowledgment(acknowledgment).phase).toBe("accepted");
-    expect(() => claimProviderReviewAttempt(acknowledgment, "next-run")).toThrow(
-      "single admitted attempt",
-    );
-  });
-
-  it.each(["review", "generation", "source"])(
-    "rejects an acknowledgement after %s replacement",
-    async (replacement) => {
-      const ack = await issue();
-      if (replacement === "review") {
-        entry.providerReview = { ...refusal, id: "new-review" };
-      } else if (replacement === "generation") {
-        entry = { ...entry, lifecycleRevision: "new-revision" };
-      } else {
-        sourceCurrent = false;
-      }
-      expect(
-        resolveSessionWorkStartError(target.sessionKey, entry, {
-          providerReviewAcknowledgment: ack,
-        }),
-      ).toContain("review changed");
-    },
+it("binds literal continuation to native acceptance and retires capabilities", async () => {
+  const ack = await issue();
+  const { read, assertRuntime, acceptNativeTurn } = ack;
+  expect(admission(ack, accepted.runId)).toBeUndefined();
+  expect(readAcknowledgment(ack).review.review?.continuation?.message).toBe("/literal steer");
+  expect([Object.isFrozen(ack), Object.isFrozen(read())]).toEqual([true, true]);
+  expect(read()).not.toHaveProperty("target");
+  expect(read()).not.toHaveProperty("nextRunId");
+  claimProviderReviewAttempt(ack, accepted.runId);
+  store.read.mockClear();
+  await assertRuntime(runtime);
+  expect(store.read.mock.calls[0]?.[0]).toEqual(target);
+  await expect(accept(ack, { nativeTurnId: refusal.nativeTurnId })).rejects.toThrow(
+    "acceptance does not match",
   );
+  expect(entry.providerReview).toEqual(refusal);
+  await acceptNativeTurn(accepted);
+  expect(store.compare.mock.calls[0]?.[0]).toEqual(target);
+  expect(entry.providerReview).toBeUndefined();
+  expect([read().phase, readAcknowledgment(ack).phase]).toEqual(["accepted", "accepted"]);
+  expect(() => claimProviderReviewAttempt(ack, accepted.runId)).toThrow("single admitted attempt");
+  await start(ack);
+  retireProviderReviewAcknowledgment(ack);
+  expect(() => read()).toThrow("no longer current");
+  expect(() => readAcknowledgment(ack)).toThrow("no longer current");
+  await expect(assertRuntime(runtime)).rejects.toThrow("no longer current");
+  await expect(acceptNativeTurn({ ...accepted, nativeTurnId: "another-turn" })).rejects.toThrow(
+    "no longer current",
+  );
+});
 
-  it("revalidates source authority after loading a review", async () => {
-    store.read.mockImplementation(async () => {
+it.each(["review", "generation", "source", "run", "accepted-review"])(
+  "rejects an acknowledgement after %s replacement",
+  async (replacement) => {
+    const ack = await issue();
+    if (replacement === "accepted-review") {
+      await accept(ack);
+    }
+    if (replacement === "review" || replacement === "accepted-review") {
+      entry.providerReview = { ...refusal, id: "new-review" };
+      if (replacement === "accepted-review") {
+        entry.providerReview.runId = accepted.runId;
+      }
+    } else if (replacement === "generation") {
+      entry = { ...entry, lifecycleRevision: "new-revision" };
+    } else if (replacement === "source") {
       sourceCurrent = false;
-      return entry;
-    });
-    await expect(issue()).rejects.toThrow("source revoked");
-    expect(store.compare).not.toHaveBeenCalled();
-  });
+    }
+    const runIds: Partial<Record<string, string>> = {
+      run: "unrelated-run",
+      "accepted-review": accepted.runId,
+    };
+    expect(admission(ack, runIds[replacement])).toContain("review changed");
+    if (replacement === "accepted-review") {
+      expect(entry.providerReview?.id).toBe("new-review");
+    }
+  },
+);
 
-  it("clears only after native acceptance and retains only the accepted run authority", async () => {
-    const ack = await issue();
-    await expect(
-      acceptProviderReviewAcknowledgment(ack, {
-        runId: "next-run",
-        nativeThreadId: refusal.nativeThreadId,
-        nativeTurnId: refusal.nativeTurnId,
-      }),
-    ).rejects.toThrow("acceptance does not match");
-    expect(entry.providerReview).toEqual(refusal);
-    await acceptProviderReviewAcknowledgment(ack, {
-      runId: "next-run",
-      nativeThreadId: refusal.nativeThreadId,
-      nativeTurnId: "new-native-turn",
-    });
-    expect(entry.providerReview).toBeUndefined();
-    expect(readProviderReviewAcknowledgment(ack).phase).toBe("accepted");
-    await assertSessionProviderReviewWorkStart({
-      target,
-      acknowledgment: ack,
-      runId: "next-run",
-      provider: refusal.provider,
-      model: refusal.model,
-      runtimeId: refusal.runtimeId,
-      api: refusal.api,
-      assertCurrent,
-    });
-    retireProviderReviewAcknowledgment(ack);
-    expect(() => readProviderReviewAcknowledgment(ack)).toThrow("no longer current");
+it.each(["issuance", "runtime"])("revalidates authority after %s loads a review", async (phase) => {
+  const ack = phase === "runtime" ? await issue() : undefined;
+  store.read.mockImplementation(async () => {
+    sourceCurrent = false;
+    return entry;
   });
+  await expect(ack ? ack.assertRuntime(runtime) : issue()).rejects.toThrow("source revoked");
+  expect(store.compare).not.toHaveBeenCalled();
+});
 
-  it("retains a replacement block when acceptance loses its compare-and-set", async () => {
-    const ack = await issue();
+it.each(["replacement", "cancellation"])("blocks acceptance after %s", async (failure) => {
+  const ack = await issue();
+  let accepting = true;
+  if (failure === "replacement") {
     entry.providerReview = { ...refusal, id: "replacement" };
-    await expect(
-      acceptProviderReviewAcknowledgment(ack, {
-        runId: "next-run",
-        nativeThreadId: refusal.nativeThreadId,
-        nativeTurnId: "new-native-turn",
-      }),
-    ).rejects.toThrow("review changed");
-    expect(entry.providerReview.id).toBe("replacement");
-  });
-
-  it("retains the block when the accepting request is cancelled before commit", async () => {
-    const ack = await issue();
-    let accepting = true;
+  } else {
     store.compare.mockImplementation(async (_target, params) => {
       accepting = false;
       params.assertCurrent();
       throw new Error("unreachable commit");
     });
-    await expect(
-      acceptProviderReviewAcknowledgment(ack, {
-        runId: "next-run",
-        nativeThreadId: refusal.nativeThreadId,
-        nativeTurnId: "new-native-turn",
-        assertCurrent: () => {
-          if (!accepting) {
-            throw new Error("request cancelled");
-          }
-        },
-      }),
-    ).rejects.toThrow("request cancelled");
+  }
+  await expect(
+    accept(ack, {
+      assertCurrent: () => {
+        if (!accepting) {
+          throw new Error("request cancelled");
+        }
+      },
+    }),
+  ).rejects.toThrow(failure === "replacement" ? "review changed" : "request cancelled");
+  if (failure === "replacement") {
+    expect(entry.providerReview?.id).toBe("replacement");
+  } else {
     expect(entry.providerReview).toEqual(refusal);
-    expect(readProviderReviewAcknowledgment(ack).phase).toBe("pending");
-  });
+    expect(readAcknowledgment(ack).phase).toBe("pending");
+  }
+});
 
-  it("does not let an accepted continuation authorize a newer refusal", async () => {
-    const ack = await issue();
-    await acceptProviderReviewAcknowledgment(ack, {
-      runId: "next-run",
-      nativeThreadId: refusal.nativeThreadId,
-      nativeTurnId: "new-native-turn",
-    });
-    entry.providerReview = { ...refusal, id: "new-review", runId: "next-run" };
-    expect(
-      resolveSessionWorkStartError(target.sessionKey, entry, {
-        providerReviewAcknowledgment: ack,
-        runId: "next-run",
-      }),
-    ).toContain("review changed");
-    expect(entry.providerReview.id).toBe("new-review");
-  });
+it("rejects changed runtimes, API-key and incognito continuation", async () => {
+  const ack = await issue();
+  await expect(start(ack, { model: "another-model" })).rejects.toThrow(
+    "keep the reviewed runtime and model",
+  );
+  for (const [review, sessionKey, allowed] of [
+    [{ ...refusal, runtimeId: "openclaw", api: "openai-responses" }, target.sessionKey, false],
+    [{ ...refusal, runtimeId: "openclaw" }, target.sessionKey, true],
+    [{ ...refusal, api: undefined, nativeTurnId: undefined }, target.sessionKey, false],
+    [refusal, "agent:main:dashboard:incognito-review", false],
+  ] as const) {
+    expect(canContinueSessionProviderReview(review, sessionKey)).toBe(allowed);
+  }
+  store.read.mockClear();
+  await expect(
+    issue({ ...target, sessionKey: "agent:main:dashboard:incognito-review" }),
+  ).rejects.toThrow("cannot be continued in an incognito session");
+  expect(store.read).not.toHaveBeenCalled();
+});
 
-  it("rejects runtime changes before dispatch and never offers ordinary API-key continuation", async () => {
-    const ack = await issue();
-    await expect(
-      assertSessionProviderReviewWorkStart({
-        target,
-        acknowledgment: ack,
-        runId: "next-run",
-        provider: refusal.provider,
-        model: "another-model",
-        runtimeId: refusal.runtimeId,
-        api: refusal.api,
-        assertCurrent,
-      }),
-    ).rejects.toThrow("keep the reviewed runtime and model");
-    expect(
-      canContinueSessionProviderReview(
-        {
-          ...refusal,
-          runtimeId: "openclaw",
-          api: "openai-responses",
-        },
-        target.sessionKey,
-      ),
-    ).toBe(false);
-    expect(
-      canContinueSessionProviderReview({ ...refusal, runtimeId: "openclaw" }, target.sessionKey),
-    ).toBe(true);
-    expect(
-      canContinueSessionProviderReview(
-        { ...refusal, api: undefined, nativeTurnId: undefined },
-        target.sessionKey,
-      ),
-    ).toBe(false);
-    expect(canContinueSessionProviderReview(refusal, "agent:main:dashboard:incognito-review")).toBe(
-      false,
-    );
-    store.read.mockClear();
-    await expect(
-      issueProviderReviewAcknowledgment({
-        target: { ...target, sessionKey: "agent:main:dashboard:incognito-review" },
-        reviewId: refusal.id,
-        nextRunId: "next-run",
-        assertCurrent,
-      }),
-    ).rejects.toThrow("cannot be continued in an incognito session");
-    expect(store.read).not.toHaveBeenCalled();
+it("persists new refusal identity and keeps duplicate terminal notification identity", async () => {
+  entry.providerReview = undefined;
+  const { id: _id, sessionId: _sessionId, ...runtimeRefusal } = refusal;
+  const record = (value = runtimeRefusal) =>
+    recordSessionProviderReview({ target, refusal: value, assertCurrent });
+  const first = await record();
+  const second = await record();
+  const duplicateWithoutDetails = await record({ ...runtimeRefusal, review: undefined });
+  expect(first.id).toBe(second.id);
+  expect(duplicateWithoutDetails).toEqual(first);
+  expect(store.compare).toHaveBeenCalledOnce();
+  expect(workStartError(target.sessionKey, entry)).toContain("paused as a precaution");
+});
+it.each(["run", "source", "capture"])("guards incognito facts against %s revocation", (revoked) => {
+  const incognito = {
+    ...target,
+    sessionKey: "agent:main:dashboard:incognito-test",
+    sessionId: "incognito-session",
+    storePath: ":memory:",
+  };
+  runs.registerAgentRunContext("incognito-run", {
+    sessionKey: incognito.sessionKey,
+    sessionId: incognito.sessionId,
+    lifecycleGeneration: runs.getAgentRunLifecycleGeneration(),
+    lifecycleStartedAt: 1,
+    assertSourceCurrent: assertCurrent,
   });
-
-  it("persists new refusal identity and keeps duplicate terminal notification identity", async () => {
-    entry.providerReview = undefined;
-    const { id: _id, sessionId: _sessionId, ...runtimeRefusal } = refusal;
-    const first = await recordSessionProviderReview({
-      target,
-      refusal: runtimeRefusal,
+  const review = createSessionProviderReview({
+    sessionId: incognito.sessionId,
+    refusal: {
+      ...refusal,
+      runId: "incognito-run",
+      api: undefined,
+      nativeThreadId: undefined,
+      nativeTurnId: undefined,
+    },
+  });
+  const capture = () =>
+    captureAgentRunProviderReview({
+      runId: "incognito-run",
+      target: incognito,
+      review,
+      expectedWriterRunId: "incognito-run",
       assertCurrent,
     });
-    const second = await recordSessionProviderReview({
-      target,
-      refusal: runtimeRefusal,
-      assertCurrent,
+  if (revoked === "capture") {
+    sourceCurrent = false;
+    expect(capture).toThrow("source revoked");
+    sourceCurrent = true;
+    expect(readAgentRunProviderReview("incognito-run")).toBeUndefined();
+    return;
+  }
+  capture();
+  const fact = readAgentRunProviderReview("incognito-run");
+  expect(fact?.review).toEqual(review);
+  const context = runs.getAgentRunContext("incognito-run")!;
+  expect(JSON.stringify(context)).not.toContain(refusal.review!.explanation);
+  expect(Object.keys(context)).not.toContain("providerReviewTerminal");
+  if (revoked === "source") {
+    sourceCurrent = false;
+    expect(() => readAgentRunProviderReview("incognito-run")).toThrow("source revoked");
+  } else {
+    runs.clearAgentRunContext("incognito-run");
+    runs.registerAgentRunContext("incognito-run", {
+      sessionKey: incognito.sessionKey,
+      sessionId: incognito.sessionId,
     });
-    const duplicateWithoutDetails = await recordSessionProviderReview({
-      target,
-      refusal: { ...runtimeRefusal, review: undefined },
-      assertCurrent,
-    });
-    expect(first.id).toBe(second.id);
-    expect(duplicateWithoutDetails).toEqual(first);
-    expect(store.compare).toHaveBeenCalledOnce();
-    expect(resolveSessionWorkStartError(target.sessionKey, entry)).toContain(
-      "paused as a precaution",
-    );
-  });
+    expect(readAgentRunProviderReview("incognito-run")).toBeUndefined();
+    expect(() => fact?.assertCurrent()).toThrow("ownership changed");
+  }
 });

@@ -22,7 +22,7 @@ import { BOARD_REPORT_WIDGET_KIND, parseBoardReport } from "./board-report.js";
 import { BOARD_WEBSITE_WIDGET_KIND, parseBoardWebsite } from "./board-website.js";
 import { GITHUB_ACTIONS_GRANT_PREFIX } from "./github-actions-capability.js";
 
-export type BoardWidgetHtmlDocument = {
+type BoardWidgetHtmlDocument = {
   html: string;
   revision: number;
   sha256: string;
@@ -32,14 +32,6 @@ export type BoardWidgetHtmlDocument = {
   resourceOrigins?: string[];
 };
 export type BoardWidgetHtmlViewMetadata = Omit<BoardWidgetHtmlDocument, "html">;
-export type BoardWidgetRegisteredDocument = Omit<
-  BoardWidgetHtmlDocument,
-  "html" | "resourceOrigins"
-> & {
-  pluginKind: string;
-  source: string;
-  title?: string;
-};
 export type BoardWidgetMcpAppDocument = {
   descriptor: BoardMcpAppDescriptor;
   revision: number;
@@ -48,10 +40,7 @@ export type BoardWidgetMcpAppDocument = {
   declaredTools: string[];
   interactive: boolean;
 };
-export type BoardWidgetDocument =
-  | BoardWidgetHtmlDocument
-  | BoardWidgetRegisteredDocument
-  | BoardWidgetMcpAppDocument;
+export type BoardWidgetDocument = BoardWidgetHtmlDocument | BoardWidgetMcpAppDocument;
 export type BoardSnapshotWithHtmlViewMetadata = {
   snapshot: BoardSnapshot;
   htmlViewMetadata: ReadonlyMap<string, BoardWidgetHtmlViewMetadata>;
@@ -60,7 +49,7 @@ export type BoardSnapshotWithHtmlViewMetadata = {
 export type BoardSessionTarget = { sessionKey: string; agentId?: string };
 
 export type BoardWriteOptions = {
-  /** Recheck the caller after write admission, inside the synchronous mutation. */
+  /** Check owner-held source authority at admission; admitted writes may finish after revocation. */
   assertCurrent?: () => void;
 };
 
@@ -109,7 +98,6 @@ export interface BoardStore {
 }
 
 const BOARD_MAX_WIDGETS = 48;
-const BOARD_MAX_REGISTERED_SOURCE_BYTES = 256 * 1024;
 type BoardWidgetGeneratedIdentityMarker = Pick<BoardWidgetGeneratedIdentity, "source" | "key"> & {
   kind: "generated";
 };
@@ -118,29 +106,8 @@ export type BoardWidgetNameIdentityMarker =
   | BoardWidgetGeneratedIdentityMarker
   | { kind: "invalid" };
 
-export function cloneBoardSnapshot(snapshot: BoardSnapshot): BoardSnapshot {
-  return {
-    sessionKey: snapshot.sessionKey,
-    revision: snapshot.revision,
-    tabs: snapshot.tabs.map((tab) => ({ ...tab })),
-    widgets: snapshot.widgets.map((widget) => ({
-      ...widget,
-      ...(widget.props !== undefined ? { props: structuredClone(widget.props) } : {}),
-      ...(widget.declaredSummary !== undefined
-        ? { declaredSummary: [...widget.declaredSummary] }
-        : {}),
-      ...(widget.declared !== undefined
-        ? {
-            declared: {
-              ...(widget.declared.netOrigins
-                ? { netOrigins: [...widget.declared.netOrigins] }
-                : {}),
-              ...(widget.declared.tools ? { tools: [...widget.declared.tools] } : {}),
-            },
-          }
-        : {}),
-    })),
-  };
+function cloneBoardSnapshot(snapshot: BoardSnapshot): BoardSnapshot {
+  return structuredClone(snapshot);
 }
 
 export function createBoardDeclaredSummary(
@@ -155,13 +122,6 @@ export function createBoardDeclaredSummary(
     ),
   ];
   return lines.length > 0 ? lines : undefined;
-}
-
-function generatedIdentityMatches(
-  left: BoardWidgetNameIdentityMarker | undefined,
-  right: BoardWidgetGeneratedIdentityMarker,
-): boolean {
-  return left?.kind === "generated" && left.source === right.source && left.key === right.key;
 }
 
 export function resolveBoardWidgetPutParams(
@@ -179,14 +139,14 @@ export function resolveBoardWidgetPutParams(
       "generated widget fallback name must differ from its preferred name",
     );
   }
-  const marker: BoardWidgetGeneratedIdentityMarker = {
-    kind: "generated",
-    source: generatedIdentity.source,
-    key: generatedIdentity.key,
-  };
-  const existingGenerated = prior.widgets.find((widget) =>
-    generatedIdentityMatches(nameIdentities.get(widget.name), marker),
-  );
+  const existingGenerated = prior.widgets.find((widget) => {
+    const identity = nameIdentities.get(widget.name);
+    return (
+      identity?.kind === "generated" &&
+      identity.source === generatedIdentity.source &&
+      identity.key === generatedIdentity.key
+    );
+  });
   if (existingGenerated) {
     return { ...params, name: existingGenerated.name };
   }
@@ -253,18 +213,6 @@ function validatePluginContent(params: BoardWidgetMaterializedPutParams): void {
   }
 }
 
-function validateRegisteredContent(params: BoardWidgetMaterializedPutParams): void {
-  if (params.content.kind !== "registered") {
-    return;
-  }
-  if (Buffer.byteLength(params.content.source, "utf8") > BOARD_MAX_REGISTERED_SOURCE_BYTES) {
-    throw new BoardValidationError(
-      "invalid_operation",
-      `board registered widget source exceeds ${BOARD_MAX_REGISTERED_SOURCE_BYTES} UTF-8 bytes`,
-    );
-  }
-}
-
 export function createBoardWidgetPutSnapshot(
   prior: BoardSnapshot,
   params: BoardWidgetMaterializedPutParams,
@@ -275,7 +223,6 @@ export function createBoardWidgetPutSnapshot(
   },
 ): BoardSnapshot {
   validatePluginContent(params);
-  validateRegisteredContent(params);
   if (
     params.content.kind === "html" &&
     Buffer.byteLength(params.content.html, "utf8") > WIDGET_HTML_MAX_UTF8_BYTES
@@ -293,15 +240,10 @@ export function createBoardWidgetPutSnapshot(
   if (
     existing &&
     (existing.contentOwner !== params.content.kind ||
-      ((params.content.kind === "plugin" || params.content.kind === "registered") &&
-        (existing.pluginKind !== params.content.pluginKind ||
-          (params.content.kind === "registered" &&
-            existing.registeredContentKind !== params.content.contentKind))))
+      (params.content.kind === "plugin" && existing.pluginKind !== params.content.pluginKind))
   ) {
     const incomingOwner =
-      params.content.kind === "plugin" || params.content.kind === "registered"
-        ? params.content.pluginKind
-        : params.content.kind;
+      params.content.kind === "plugin" ? params.content.pluginKind : params.content.kind;
     throw new BoardValidationError(
       "invalid_operation",
       `board widget ${params.name} contains ${existing.pluginKind ?? existing.contentOwner} content; update it with the same content kind or remove it before replacing it with ${incomingOwner} content`,
@@ -325,9 +267,7 @@ export function createBoardWidgetPutSnapshot(
   const contentSha256 =
     params.content.kind === "html"
       ? createHash("sha256").update(params.content.html).digest("hex")
-      : params.content.kind === "registered"
-        ? createHash("sha256").update(params.content.source).digest("hex")
-        : undefined;
+      : undefined;
   // HTML grants are frozen to approved bytes. MCP App grants stay within the
   // source server. Either kind may narrow, but never widen, its declaration.
   const preservesGrant =
@@ -335,9 +275,7 @@ export function createBoardWidgetPutSnapshot(
     context.grantScopeMatches &&
     (params.content.kind !== "mcp-app" || params.content.interactive) &&
     existing?.grantState === "granted" &&
-    (params.content.kind === "html" || params.content.kind === "registered"
-      ? contentSha256 === context.grantedSha256
-      : true) &&
+    (params.content.kind === "html" ? contentSha256 === context.grantedSha256 : true) &&
     boardDeclarationIsSubset(declared, existing.declared);
   layout = insertBoardWidget(
     layout,
@@ -349,11 +287,8 @@ export function createBoardWidgetPutSnapshot(
         : existing?.title !== undefined
           ? { title: existing.title }
           : {}),
-      contentKind: params.content.kind === "registered" ? "plugin" : params.content.kind,
+      contentKind: params.content.kind,
       contentOwner: params.content.kind,
-      ...(params.content.kind === "registered"
-        ? { registeredContentKind: params.content.contentKind }
-        : {}),
       ...(params.presentation !== undefined
         ? { presentation: params.presentation }
         : existing?.presentation !== undefined
@@ -364,12 +299,10 @@ export function createBoardWidgetPutSnapshot(
         : existing?.heightMode !== undefined
           ? { heightMode: existing.heightMode }
           : {}),
-      ...(params.content.kind === "plugin" || params.content.kind === "registered"
+      ...(params.content.kind === "plugin"
         ? {
             pluginKind: params.content.pluginKind,
-            ...(params.content.kind === "plugin" && params.content.props !== undefined
-              ? { props: structuredClone(params.content.props) }
-              : {}),
+            ...(params.content.props !== undefined ? { props: params.content.props } : {}),
           }
         : {}),
       sizeW: params.placement?.size ? size.sizeW : (existing?.sizeW ?? size.sizeW),

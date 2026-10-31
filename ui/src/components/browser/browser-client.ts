@@ -2,10 +2,12 @@ import type { GatewayClientRequestOptions } from "@openclaw/gateway-client";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { buildAssistantMediaUrl } from "../../app/assistant-media.ts";
 import { t } from "../../i18n/index.ts";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
+import { readBlobAsDataUrl } from "../../lib/blob-data-url.ts";
 import { browserInspectScript } from "./browser-inspect-script.ts";
 import {
   readBrowserTabTarget,
@@ -30,22 +32,13 @@ export type BrowserDashboardTarget = {
   sessionScoped?: boolean;
 };
 
-export type BrowserDashboard = {
-  sessionKey: string;
-  name: string;
-  instanceId: string;
-  revision: number;
-  paused: boolean;
-  stopping: boolean;
-  url: string;
-  browserTab?: BrowserTabTarget;
-};
+export type BrowserDashboard = Awaited<ReturnType<typeof requestBrowserDashboard>>;
 
 export async function requestBrowserDashboard(
   client: BrowserRequestClient,
   params: BrowserDashboardTarget,
   action: "open" | "resume" | "stop" | "inspect" = "open",
-): Promise<BrowserDashboard> {
+) {
   const result = asRecord(
     await client.request(
       params.sessionScoped ? "browser.dashboard.request" : "browser.request",
@@ -120,42 +113,15 @@ export type BrowserPanelTab = {
   urlUnavailableReason?: "navigation_blocked" | "navigation_check_failed";
 };
 
-type BrowserTabsSnapshot = {
-  running: boolean;
-  tabs: BrowserPanelTab[];
-};
-
-type BrowserScreenshotCapture = {
-  path: string;
-  targetId: string;
-  url: string;
-};
-
 /** CSS-pixel geometry of the remote page, used to map panel coords to page coords. */
-export type BrowserPageMetrics = {
-  cssWidth: number;
-  cssHeight: number;
-  title: string;
-  url: string;
-};
+export type BrowserPageMetrics = NonNullable<Awaited<ReturnType<typeof readBrowserPageMetrics>>>;
 
-export type BrowserInspectedNode = {
-  tag: string;
-  id: string;
-  classes: string[];
-  role: string;
-  name: string;
-  /** Bounding rect in remote CSS viewport pixels. */
-  rect: { x: number; y: number; width: number; height: number };
-  focusable: boolean;
-};
+export type BrowserInspectedNode = NonNullable<ReturnType<typeof readBrowserInspectedNode>>;
 
 type BrowserRequestEnvelope = {
   method: "GET" | "POST" | "DELETE";
   path: string;
-  query?: Record<string, unknown>;
   body?: unknown;
-  timeoutMs?: number;
 };
 
 function withoutBrowserTarget(value: unknown): Record<string, unknown> {
@@ -190,26 +156,23 @@ export function bindBrowserRequestClient(
         throw new DOMException("Browser request scope ended", "AbortError");
       }
       const envelope = asRecord(params);
-      if (dashboard?.sessionScoped) {
-        // Scoped routes bind their browser target on the server. Never forward a
-        // panel's cached profile or tab selection into that authority boundary.
-        const scopedParams = {
-          method: envelope?.method,
-          path: envelope?.path,
-          ...(envelope?.timeoutMs !== undefined ? { timeoutMs: envelope.timeoutMs } : {}),
-          ...(envelope?.query ? { query: withoutBrowserTarget(envelope.query) } : {}),
-          ...(envelope?.body ? { body: withoutBrowserTarget(envelope.body) } : {}),
-          sessionKey: dashboard.sessionKey,
-          ...(dashboard.agentId ? { agentId: dashboard.agentId } : {}),
-          dashboard: { name: dashboard.name, instanceId: dashboard.instanceId },
-        };
-        return options
-          ? await client.request<T>("browser.dashboard.request", scopedParams, options)
-          : await client.request<T>("browser.dashboard.request", scopedParams);
-      }
+      const scopedDashboard = dashboard?.sessionScoped ? dashboard : undefined;
       const session = !dashboard && method === BROWSER_REQUEST_METHOD ? tabScope?.() : undefined;
-      const routedParams =
-        route || dashboard || session
+      // Scoped routes bind their browser target on the server. Never forward a
+      // panel's cached profile or tab selection into that authority boundary.
+      const requestMethod = scopedDashboard ? "browser.dashboard.request" : method;
+      const routedParams = scopedDashboard
+        ? {
+            method: envelope?.method,
+            path: envelope?.path,
+            ...(envelope?.timeoutMs !== undefined ? { timeoutMs: envelope.timeoutMs } : {}),
+            ...(envelope?.query ? { query: withoutBrowserTarget(envelope.query) } : {}),
+            ...(envelope?.body ? { body: withoutBrowserTarget(envelope.body) } : {}),
+            sessionKey: scopedDashboard.sessionKey,
+            ...(scopedDashboard.agentId ? { agentId: scopedDashboard.agentId } : {}),
+            dashboard: { name: scopedDashboard.name, instanceId: scopedDashboard.instanceId },
+          }
+        : route || dashboard || session
           ? {
               ...envelope,
               ...(route
@@ -233,8 +196,8 @@ export function bindBrowserRequestClient(
             }
           : params;
       return options
-        ? await client.request<T>(method, routedParams, options)
-        : await client.request<T>(method, routedParams);
+        ? await client.request<T>(requestMethod, routedParams, options)
+        : await client.request<T>(requestMethod, routedParams);
     },
   };
 }
@@ -277,12 +240,16 @@ function normalizeTab(value: unknown): BrowserPanelTab | null {
   };
 }
 
-export async function listBrowserTabs(client: BrowserRequestClient): Promise<BrowserTabsSnapshot> {
+export async function listBrowserTabs(client: BrowserRequestClient) {
   const result = asRecord(await browserRequest(client, { method: "GET", path: "/tabs" }));
   const tabs = Array.isArray(result?.tabs)
     ? result.tabs.flatMap((tab) => normalizeTab(tab) ?? [])
     : [];
-  return { running: result?.running === true, tabs };
+  return {
+    running: result?.running === true,
+    tabs,
+    canAutoResizeViewport: result?.canAutoResizeViewport === true,
+  };
 }
 
 export async function startBrowser(client: BrowserRequestClient): Promise<void> {
@@ -340,21 +307,15 @@ export async function downloadBrowserDocument(
 export async function navigateBrowser(
   client: BrowserRequestClient,
   params: { url: string; targetId?: string },
-): Promise<{ targetId: string; url: string }> {
-  const result = asRecord(
-    await browserRequest(client, { method: "POST", path: "/navigate", body: params }),
-  );
-  return {
-    targetId: stringOrEmpty(result?.targetId) || params.targetId || "",
-    url: stringOrEmpty(result?.url) || params.url,
-  };
+): Promise<void> {
+  await browserRequest(client, { method: "POST", path: "/navigate", body: params });
 }
 
 export async function requestBrowserScreencast(
   client: BrowserRequestClient,
   params: { targetId: string; maxWidth: number; maxHeight: number },
   options?: GatewayClientRequestOptions,
-): Promise<{ token: string; wsPath: string; targetId: string; url: string }> {
+): Promise<string> {
   const result = asRecord(
     await browserRequest(client, { method: "POST", path: "/screencast", body: params }, options),
   );
@@ -363,12 +324,7 @@ export async function requestBrowserScreencast(
   if (!token || !wsPath) {
     throw new Error("browser screencast response is malformed");
   }
-  return {
-    token,
-    wsPath,
-    targetId: stringOrEmpty(result?.targetId),
-    url: stringOrEmpty(result?.url),
-  };
+  return wsPath;
 }
 
 export function isBrowserScreencastUnsupportedError(error: unknown): boolean {
@@ -381,10 +337,7 @@ export function isBrowserScreencastUnsupportedError(error: unknown): boolean {
   );
 }
 
-export async function captureBrowserScreenshot(
-  client: BrowserRequestClient,
-  targetId: string,
-): Promise<BrowserScreenshotCapture> {
+export async function captureBrowserScreenshot(client: BrowserRequestClient, targetId: string) {
   const result = asRecord(
     await browserRequest(client, {
       method: "POST",
@@ -398,21 +351,19 @@ export async function captureBrowserScreenshot(
   }
   return {
     path,
-    targetId: stringOrEmpty(result?.targetId) || targetId,
     url: stringOrEmpty(result?.url),
   };
 }
 
 export async function clickBrowserCoords(
   client: BrowserRequestClient,
-  params: { targetId: string; x: number; y: number; doubleClick?: boolean },
+  params: { targetId: string; x: number; y: number },
 ) {
   await browserAction(client, {
     kind: "clickCoords",
     targetId: params.targetId,
     x: Math.max(0, Math.round(params.x)),
     y: Math.max(0, Math.round(params.y)),
-    ...(params.doubleClick ? { doubleClick: true } : {}),
   });
 }
 
@@ -478,13 +429,51 @@ export function isBrowserEvaluateDisabledError(err: unknown): boolean {
 
 export async function scrollBrowserBy(
   client: BrowserRequestClient,
-  params: { targetId: string; deltaX: number; deltaY: number },
+  params: { targetId: string; deltaX: number; deltaY: number; point?: { x: number; y: number } },
 ) {
   const dx = Math.round(params.deltaX);
   const dy = Math.round(params.deltaY);
+  const point = params.point
+    ? `[${Math.max(0, Math.round(params.point.x))}, ${Math.max(0, Math.round(params.point.y))}]`
+    : "null";
+  const fn = `() => {
+  const dx = ${dx}, dy = ${dy}, point = ${point};
+  const scrolls = (value) => value === "auto" || value === "scroll" || value === "overlay";
+  const canScroll = (el) => {
+    const style = getComputedStyle(el);
+    const flexDirection = style.display.endsWith("flex") ? style.flexDirection : "";
+    const maxY = el.scrollHeight - el.clientHeight;
+    const reversedY = flexDirection === "column-reverse";
+    const y = dy !== 0 && scrolls(style.overflowY) &&
+      (dy > 0 ? el.scrollTop < (reversedY ? 0 : maxY) : el.scrollTop > (reversedY ? -maxY : 0));
+    const maxX = el.scrollWidth - el.clientWidth;
+    const reversedX = (style.direction === "rtl") !== (flexDirection === "row-reverse");
+    const minLeft = reversedX ? -maxX : 0;
+    const maxLeft = reversedX ? 0 : maxX;
+    const x = dx !== 0 && scrolls(style.overflowX) &&
+      (dx > 0 ? el.scrollLeft < maxLeft : el.scrollLeft > minLeft);
+    return x || y;
+  };
+  let el = point ? document.elementFromPoint(point[0], point[1]) : null;
+  while (el && el.shadowRoot) {
+    const inner = el.shadowRoot.elementFromPoint(point[0], point[1]);
+    if (!inner || inner === el) break;
+    el = inner;
+  }
+  while (el && el !== document.scrollingElement) {
+    if (canScroll(el)) {
+      el.scrollBy(dx, dy);
+      return true;
+    }
+    const root = el.getRootNode();
+    el = el.parentElement || (root instanceof ShadowRoot ? root.host : null);
+  }
+  window.scrollBy(${dx}, ${dy});
+  return true;
+}`;
   await evaluateInBrowser(client, {
     targetId: params.targetId,
-    fn: `() => { window.scrollBy(${dx}, ${dy}); return true; }`,
+    fn,
   });
 }
 
@@ -498,10 +487,7 @@ export async function goBrowserHistory(
   });
 }
 
-export async function readBrowserPageMetrics(
-  client: BrowserRequestClient,
-  targetId: string,
-): Promise<BrowserPageMetrics | null> {
+export async function readBrowserPageMetrics(client: BrowserRequestClient, targetId: string) {
   const result = asRecord(
     await evaluateInBrowser(client, {
       targetId,
@@ -535,7 +521,7 @@ export async function inspectBrowserElementAt(
   );
 }
 
-export function readBrowserInspectedNode(value: unknown): BrowserInspectedNode | null {
+export function readBrowserInspectedNode(value: unknown) {
   const result = asRecord(value);
   if (!result) {
     return null;
@@ -549,6 +535,7 @@ export function readBrowserInspectedNode(value: unknown): BrowserInspectedNode |
       : [],
     role: stringOrEmpty(result.role),
     name: stringOrEmpty(result.name),
+    /** Bounding rect in remote CSS viewport pixels. */
     rect: {
       x: asFiniteNumber(rect?.x) ?? 0,
       y: asFiniteNumber(rect?.y) ?? 0,
@@ -599,18 +586,5 @@ export async function fetchBrowserScreenshotDataUrl(params: {
   } finally {
     clearTimeout(timeout);
   }
-  return await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      if (typeof reader.result === "string") {
-        resolve(reader.result);
-      } else {
-        reject(new Error(t("browser.errors.screenshotReadFailed")));
-      }
-    });
-    reader.addEventListener("error", () =>
-      reject(reader.error ?? new Error(t("browser.errors.screenshotReadFailed"))),
-    );
-    reader.readAsDataURL(blob);
-  });
+  return readBlobAsDataUrl(blob, () => t("browser.errors.screenshotReadFailed"));
 }

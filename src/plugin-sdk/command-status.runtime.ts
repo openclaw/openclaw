@@ -6,8 +6,9 @@ import { resolveDefaultModel } from "../auto-reply/reply/directive-handling.defa
 import { resolveCurrentDirectiveLevels } from "../auto-reply/reply/directive-handling.levels.js";
 import { createModelSelectionState } from "../auto-reply/reply/model-selection.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
+import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadGatewaySessionEntryReadOnly } from "../gateway/session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../gateway/session-utils-store-worker.js";
 
 /** Inputs for rendering direct-session status replies outside the active channel turn. */
 export type ResolveDirectStatusReplyForSessionParams = {
@@ -42,7 +43,10 @@ export async function resolveDirectStatusReplyForSessionCore(
     return undefined;
   }
 
-  const statusLoaded = loadGatewaySessionEntryReadOnly(requestedSessionKey);
+  const statusLoaded = await loadGatewaySessionEntryReadOnlyInWorker({
+    cfg: getRuntimeConfig(),
+    key: requestedSessionKey,
+  });
   const statusCfg = statusLoaded.cfg ?? params.cfg;
   const statusSessionKey = statusLoaded.canonicalKey;
   const statusEntry = statusLoaded.entry;
@@ -68,15 +72,21 @@ export async function resolveDirectStatusReplyForSessionCore(
     statusModel.provider;
   const selectedModel =
     statusEntry?.modelOverride?.trim() || statusEntry?.model?.trim() || statusModel.model;
+  // Selection may normalize stale model/auth pins. Give it a coherent private
+  // snapshot without a persistence path so inspecting status cannot change them.
+  const selectionEntry = statusEntry ? structuredClone(statusEntry) : undefined;
+  const selectionStore = { ...statusLoaded.store };
+  if (selectionEntry) {
+    selectionStore[statusSessionKey] = selectionEntry;
+  }
   const modelState = await createModelSelectionState({
     cfg: statusCfg,
     agentId: statusAgentId,
     agentCfg,
-    sessionEntry: statusEntry,
-    sessionStore: statusLoaded.store,
+    sessionEntry: selectionEntry,
+    sessionStore: selectionStore,
     sessionKey: statusSessionKey,
     parentSessionKey: statusEntry?.parentSessionKey,
-    storePath: statusLoaded.storePath,
     defaultProvider,
     defaultModel,
     provider: selectedProvider,

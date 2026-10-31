@@ -10,12 +10,14 @@ export type NewSessionRouteData = {
   groupStatus?: "resolved" | "missing" | "unavailable";
   groupCwd?: string;
   groupWorktree?: boolean;
-  groupCatalogGeneration?: number;
-  groupDefaultsStatus?: import("../../lib/sessions/session-capability.ts").SessionGroupDefaultsStatus;
   catalogLabel: string;
   startTerminal: boolean;
   terminalHosts?: Array<{ hostId: string; label: string }>;
 };
+
+export function isNewSessionCatalogTarget(data?: NewSessionRouteData): boolean {
+  return Boolean(data?.catalogId);
+}
 
 export type NewSessionTarget =
   | { catalogId: string; group?: never }

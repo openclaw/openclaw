@@ -42,13 +42,9 @@ export function resolveWorkspaceSkillSourcePath(
   ) {
     return undefined;
   }
-  let locator: URL;
-  try {
-    locator = new URL(requestedPath);
-  } catch {
-    return undefined;
-  }
+  const locator = URL.parse(requestedPath);
   if (
+    !locator ||
     locator.protocol !== WORKSPACE_SKILL_PROTOCOL ||
     locator.hostname !== WORKSPACE_SKILL_HOST ||
     locator.username ||

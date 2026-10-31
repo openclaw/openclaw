@@ -25,48 +25,46 @@ export {
 const PACKAGE_DIST_INVENTORY_SCAN_CONCURRENCY = 32;
 const LEGACY_QA_CHANNEL_DIR = ["qa", "channel"].join("-");
 const LEGACY_QA_LAB_DIR = ["qa", "lab"].join("-");
-const OMITTED_QA_EXTENSION_PREFIXES = [
-  `dist/extensions/${LEGACY_QA_CHANNEL_DIR}/`,
-  `dist/extensions/${LEGACY_QA_LAB_DIR}/`,
-];
-const OMITTED_PRIVATE_QA_PLUGIN_SDK_PREFIXES = [
-  `dist/plugin-sdk/extensions/${LEGACY_QA_CHANNEL_DIR}/`,
-  `dist/plugin-sdk/extensions/${LEGACY_QA_LAB_DIR}/`,
-];
-const OMITTED_PRIVATE_QA_PLUGIN_SDK_FILES = new Set([
-  `dist/plugin-sdk/${LEGACY_QA_CHANNEL_DIR}.d.ts`,
-  `dist/plugin-sdk/${LEGACY_QA_CHANNEL_DIR}.js`,
-  `dist/plugin-sdk/${LEGACY_QA_CHANNEL_DIR}-protocol.d.ts`,
-  `dist/plugin-sdk/${LEGACY_QA_CHANNEL_DIR}-protocol.js`,
-  `dist/plugin-sdk/${LEGACY_QA_LAB_DIR}.d.ts`,
-  `dist/plugin-sdk/${LEGACY_QA_LAB_DIR}.js`,
-  "dist/plugin-sdk/qa-runtime.d.ts",
-  "dist/plugin-sdk/qa-runtime.js",
-]);
 // The build keeps source-shaped SDK declarations for local boundary projects,
 // but the npm package ships flat declarations and must not inventory the old tree.
-const OMITTED_DEEP_PLUGIN_SDK_DECLARATION_PREFIX = "dist/plugin-sdk/src/";
-const OMITTED_PRIVATE_QA_DIST_PREFIXES = ["dist/qa-runtime-"];
-const OMITTED_PLUGIN_SDK_TEST_FILES = new Set(
-  [
-    "agent-runtime-test-contracts",
-    "channel-contract-testing",
-    "channel-target-testing",
-    "channel-test-helpers",
-    "compiled-subprocess-testing",
-    "plugin-test-api",
-    "plugin-test-contracts",
-    "plugin-test-runtime",
-    "provider-http-test-mocks",
-    "provider-test-contracts",
-    "test-env",
-    "test-fixtures",
-    "test-live",
-    "test-live-auth",
-    "test-media-generation",
-    "test-media-understanding",
-    "test-node-mocks",
-  ].flatMap((name) => [`dist/plugin-sdk/${name}.d.ts`, `dist/plugin-sdk/${name}.js`]),
+const OMITTED_DIST_PREFIXES = [
+  "dist/plugin-sdk/src/",
+  "dist/qa-runtime-",
+  ...[LEGACY_QA_CHANNEL_DIR, LEGACY_QA_LAB_DIR].flatMap((name) => [
+    `dist/plugin-sdk/extensions/${name}/`,
+    `dist/extensions/${name}/`,
+  ]),
+];
+const OMITTED_PLUGIN_SDK_TEST_NAMES = [
+  "agent-runtime-test-contracts",
+  "channel-contract-testing",
+  "channel-target-testing",
+  "channel-test-helpers",
+  "compiled-subprocess-testing",
+  "plugin-test-api",
+  "plugin-test-contracts",
+  "plugin-test-runtime",
+  "provider-http-test-mocks",
+  "provider-test-contracts",
+  "test-env",
+  "test-fixtures",
+  "test-live",
+  "test-live-auth",
+  "test-media-generation",
+  "test-media-understanding",
+  "test-node-mocks",
+];
+const sdkFiles = (names: string[]) =>
+  names.flatMap((name) => [`dist/plugin-sdk/${name}.d.ts`, `dist/plugin-sdk/${name}.js`]);
+const OMITTED_PLUGIN_SDK_TEST_FILES = new Set(sdkFiles(OMITTED_PLUGIN_SDK_TEST_NAMES));
+const OMITTED_PLUGIN_SDK_FILES = new Set(
+  sdkFiles([
+    ...OMITTED_PLUGIN_SDK_TEST_NAMES,
+    LEGACY_QA_CHANNEL_DIR,
+    `${LEGACY_QA_CHANNEL_DIR}-protocol`,
+    LEGACY_QA_LAB_DIR,
+    "qa-runtime",
+  ]),
 );
 const OMITTED_DIST_SUBTREE_PATTERNS = [
   /^dist\/extensions\/node_modules(?:\/|$)/u,
@@ -86,7 +84,7 @@ function normalizeRelativePath(value: string): string {
   return value.replace(/\\/g, "/");
 }
 function isLegacyPluginDependencyDirPath(relativePath: string): boolean {
-  const parts = normalizeRelativePath(relativePath).split("/");
+  const parts = relativePath.split("/");
   if (parts[0]?.toLowerCase() !== "dist" || parts[1]?.toLowerCase() !== "extensions") {
     return false;
   }
@@ -159,13 +157,6 @@ function collectPackageDistExclusionRules(rootPackageJson: unknown): PackageDist
   };
 }
 
-async function collectPackageDistExclusionRulesForRoot(
-  packageRoot: string,
-): Promise<PackageDistExclusionRules> {
-  const packageJsonPath = path.join(packageRoot, "package.json");
-  return collectPackageDistExclusionRules(await readJsonIfExists<unknown>(packageJsonPath));
-}
-
 function isPackageFilesExcludedDistPath(
   relativePath: string,
   exclusions: PackageDistExclusionRules,
@@ -194,12 +185,8 @@ function isPackagedDistPath(relativePath: string, rules: PackageDistExclusionRul
     isLocalBuildMetadataDistPath(relativePath) ||
     relativePath.endsWith(".map") ||
     relativePath === "dist/plugin-sdk/.tsbuildinfo" ||
-    OMITTED_PLUGIN_SDK_TEST_FILES.has(relativePath) ||
-    relativePath.startsWith(OMITTED_DEEP_PLUGIN_SDK_DECLARATION_PREFIX) ||
-    OMITTED_PRIVATE_QA_PLUGIN_SDK_PREFIXES.some((prefix) => relativePath.startsWith(prefix)) ||
-    OMITTED_PRIVATE_QA_PLUGIN_SDK_FILES.has(relativePath) ||
-    OMITTED_PRIVATE_QA_DIST_PREFIXES.some((prefix) => relativePath.startsWith(prefix)) ||
-    OMITTED_QA_EXTENSION_PREFIXES.some((prefix) => relativePath.startsWith(prefix))
+    OMITTED_PLUGIN_SDK_FILES.has(relativePath) ||
+    OMITTED_DIST_PREFIXES.some((prefix) => relativePath.startsWith(prefix))
   );
 }
 
@@ -222,7 +209,6 @@ async function collectRelativeFiles(
   baseDir: string,
   rules: PackageDistExclusionRules,
   fsLimit: LimitFunction,
-  onDirectory?: (directoryPath: string) => Promise<void>,
 ): Promise<string[]> {
   const rootRelativePath = normalizeRelativePath(path.relative(baseDir, rootDir));
   if (rootRelativePath && isOmittedDistSubtree(rootRelativePath, rules)) {
@@ -231,11 +217,8 @@ async function collectRelativeFiles(
   try {
     const rootStats = await fsLimit(() => fs.lstat(rootDir));
     if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) {
-      throw new Error(
-        `Unsafe package dist path: ${normalizeRelativePath(path.relative(baseDir, rootDir))}`,
-      );
+      throw new Error(`Unsafe package dist path: ${rootRelativePath}`);
     }
-    await onDirectory?.(rootDir);
     const entries = await fsLimit(() => fs.readdir(rootDir, { withFileTypes: true }));
     const files = await Promise.all(
       entries.map(async (entry) => {
@@ -245,7 +228,7 @@ async function collectRelativeFiles(
           throw new Error(`Unsafe package dist path: ${relativePath}`);
         }
         if (entry.isDirectory()) {
-          return await collectRelativeFiles(entryPath, baseDir, rules, fsLimit, onDirectory);
+          return await collectRelativeFiles(entryPath, baseDir, rules, fsLimit);
         }
         if (entry.isFile()) {
           return isPackagedDistPath(relativePath, rules) ? [relativePath] : [];
@@ -265,11 +248,9 @@ async function collectRelativeFiles(
   }
 }
 
-/** Collects package dist files that should be present after install/update publication. */
 export async function collectPackageDistInventory(
   packageRoot: string,
   options: {
-    onDirectory?: (directoryPath: string) => Promise<void>;
     packageManifest?: unknown;
     includePackageExcludedFiles?: boolean;
   } = {},
@@ -277,19 +258,14 @@ export async function collectPackageDistInventory(
   const rules = options.includePackageExcludedFiles
     ? { ...collectPackageDistExclusionRules({}), includePackageExcludedFiles: true }
     : options.packageManifest === undefined
-      ? await collectPackageDistExclusionRulesForRoot(packageRoot)
+      ? collectPackageDistExclusionRules(
+          await readJsonIfExists<unknown>(path.join(packageRoot, "package.json")),
+        )
       : collectPackageDistExclusionRules(options.packageManifest);
   const fsLimit = pLimit(PACKAGE_DIST_INVENTORY_SCAN_CONCURRENCY);
-  return await collectRelativeFiles(
-    path.join(packageRoot, "dist"),
-    packageRoot,
-    rules,
-    fsLimit,
-    options.onDirectory,
-  );
+  return await collectRelativeFiles(path.join(packageRoot, "dist"), packageRoot, rules, fsLimit);
 }
 
-/** Reads an existing package dist inventory, returning null when the inventory is absent. */
 export async function readPackageDistInventoryIfPresent(
   packageRoot: string,
 ): Promise<string[] | null> {
@@ -306,11 +282,9 @@ export async function readPackageDistInventoryIfPresent(
   return sortUniqueStrings(parsed.map(normalizeRelativePath));
 }
 
-type PackageDistFsRoot = Awaited<ReturnType<typeof openFsRoot>>;
-
 async function openPackageDistFsRootIfPresent(
   packageRoot: string,
-): Promise<PackageDistFsRoot | null> {
+): Promise<Awaited<ReturnType<typeof openFsRoot>> | null> {
   const packageFs = await openFsRoot(packageRoot, {
     hardlinks: "allow",
     symlinks: "reject",
@@ -407,6 +381,7 @@ export async function readPackageDistContentInventoryIfPresent(
 
 export async function collectPackageDistContentInventoryErrors(
   packageRoot: string,
+  warnings?: string[],
 ): Promise<string[]> {
   const expected = await readPackageDistContentInventoryIfPresent(packageRoot);
   if (expected === null) {
@@ -415,5 +390,6 @@ export async function collectPackageDistContentInventoryErrors(
   return comparePackageDistContentInventory(
     expected,
     await collectPackageDistContentInventory(packageRoot),
+    warnings,
   );
 }

@@ -1,26 +1,33 @@
+import type { GatewaySessionRow } from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { resolveSessionRenamePatch, resolveSessionRenameValue } from "../../lib/session-rename.ts";
+import type { SessionPatch } from "../../lib/sessions/patch.ts";
+import type { SessionsPageMutationResult } from "./mutation-runner.ts";
+import type { SessionsPageRequestScope } from "./request-scope.ts";
 
 /** Type-only, so the dialog itself stays behind its lazy boundary. */
-type InputDialogOpener = (typeof import("../../components/input-dialog.ts"))["showInputDialog"];
+type InputDialogOpener = (typeof import("../../components/input-dialog.tsx"))["showInputDialog"];
 
-export class SessionsPageDialog {
+export function createSessionsDialog(onError: (error: unknown) => void) {
   /** Only one dialog is open at a time; disconnect closes whichever it is. */
-  private lifecycle: AbortController | null = null;
+  let currentLifetime: AbortController | null = null;
 
-  constructor(private readonly onError: (message: string) => void) {}
-
-  abort() {
-    this.lifecycle?.abort();
+  function abort() {
+    currentLifetime?.abort();
   }
 
-  async open(options: () => Parameters<InputDialogOpener>[0]): Promise<string | null> {
+  async function open(options: () => Parameters<InputDialogOpener>[0]): Promise<string | null> {
     // Reentrant opens share the live controller but must not retire it on completion.
-    const active = this.lifecycle;
+    const active = currentLifetime;
     const lifecycle = active ?? new AbortController();
-    this.lifecycle = lifecycle;
+    currentLifetime = lifecycle;
     try {
-      const showInputDialog = await this.load();
-      if (!showInputDialog) {
+      let showInputDialog: InputDialogOpener;
+      try {
+        ({ showInputDialog } = await import("../../components/input-dialog.tsx"));
+      } catch (error) {
+        onError(error);
         return null;
       }
       const resolved = options();
@@ -33,19 +40,45 @@ export class SessionsPageDialog {
         })) ?? null
       );
     } finally {
-      if (!active && this.lifecycle === lifecycle) {
-        this.lifecycle = null;
+      if (!active && currentLifetime === lifecycle) {
+        currentLifetime = null;
       }
     }
   }
-
-  /** A dialog that never opens still owes the operator a visible outcome. */
-  private async load(): Promise<InputDialogOpener | null> {
-    try {
-      return (await import("../../components/input-dialog.ts")).showInputDialog;
-    } catch (error) {
-      this.onError(formatUiError(error));
-      return null;
+  function rename(
+    row: GatewaySessionRow,
+    scope: SessionsPageRequestScope | null,
+    isCurrent: (scope: SessionsPageRequestScope) => boolean,
+    patch: (
+      scope: SessionsPageRequestScope,
+      value: SessionPatch,
+    ) => Promise<SessionsPageMutationResult>,
+  ) {
+    if (!scope) {
+      onError(t("sessionsView.actionRequiresConnection"));
+      return undefined;
     }
+    const initialValue = resolveSessionRenameValue(row);
+    return open(() => ({
+      signal: scope.signal,
+      title: t("sessionsView.renameSessionPrompt"),
+      defaultValue: initialValue,
+      submit: async (value) => {
+        if (!isCurrent(scope)) {
+          return t("sessionsView.actionRequiresConnection");
+        }
+        const next = resolveSessionRenamePatch(value, initialValue, row.label);
+        if (!next) {
+          return null;
+        }
+        const result = await patch(scope, next);
+        return typeof result === "object"
+          ? formatUiError(result.error)
+          : result === "completed"
+            ? null
+            : t("sessionsView.actionRequiresConnection");
+      },
+    }));
   }
+  return { abort, open, rename };
 }

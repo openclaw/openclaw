@@ -1,5 +1,10 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("node:dns", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:dns")>()),
+  getDefaultResultOrder: () => "verbatim",
+}));
+
 vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
   isWSL2Sync: vi.fn(() => false),
@@ -28,10 +33,13 @@ afterAll(() => {
 describe("resolveTelegramAutoSelectFamilyDecision", () => {
   beforeEach(() => {
     vi.mocked(isWSL2Sync).mockReset().mockReturnValue(false);
+    vi.stubEnv("OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY", undefined);
+    vi.stubEnv("OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY", undefined);
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   describe("WSL2 detection", () => {
@@ -44,50 +52,37 @@ describe("resolveTelegramAutoSelectFamilyDecision", () => {
     it.each([
       {
         name: "disables autoSelectFamily on WSL2",
-        env: {},
-        expected: { value: false, source: "default-wsl2" },
+        expected: false,
       },
       {
         name: "respects config override on WSL2",
-        env: {},
         network: { autoSelectFamily: true },
-        expected: { value: true, source: "config" },
+        expected: true,
       },
       {
         name: "respects env override on WSL2",
-        env: { OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY: "1" },
-        expected: {
-          value: true,
-          source: "env:OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY",
-        },
+        enabled: true,
+        expected: true,
       },
       {
-        name: "uses Node 22 default when not on WSL2",
+        name: "uses the supported runtime default when not on WSL2",
         wsl2: false,
-        env: {},
-        expected: { value: true, source: "default-node22" },
+        expected: true,
       },
-    ])("$name", ({ env, network, expected, wsl2 = true }) => {
+    ])("$name", ({ enabled, network, expected, wsl2 = true }) => {
       vi.mocked(isWSL2Sync).mockReturnValue(wsl2);
+      vi.stubEnv("OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY", enabled ? "1" : undefined);
       const decision = resolveTelegramAutoSelectFamilyDecision({
-        env,
         network,
-        nodeMajor: 22,
       });
       expect(decision).toEqual(expected);
     });
 
     it("memoizes WSL2 detection across repeated defaults", () => {
       vi.mocked(isWSL2Sync).mockReturnValue(true);
-      expect(resolveTelegramAutoSelectFamilyDecision({ env: {}, nodeMajor: 22 })).toEqual({
-        value: false,
-        source: "default-wsl2",
-      });
+      expect(resolveTelegramAutoSelectFamilyDecision()).toBe(false);
       vi.mocked(isWSL2Sync).mockReturnValue(false);
-      expect(resolveTelegramAutoSelectFamilyDecision({ env: {}, nodeMajor: 22 })).toEqual({
-        value: false,
-        source: "default-wsl2",
-      });
+      expect(resolveTelegramAutoSelectFamilyDecision()).toBe(false);
       expect(isWSL2Sync).toHaveBeenCalledTimes(1);
     });
   });

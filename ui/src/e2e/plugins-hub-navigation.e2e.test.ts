@@ -2,10 +2,11 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
-import type { PluginsListResult } from "../../../packages/gateway-protocol/src/schema/plugins.js";
-import { joinClawHubPluginCatalog } from "../../../src/plugins/catalog-discovery.js";
-import { projectPluginCatalogCategoryFacts } from "../../../src/plugins/management-catalog.js";
-import { metadataSnapshot } from "../../../src/plugins/management-service.test-helpers.js";
+import type {
+  PluginDiscoveryEntry,
+  PluginsCatalogBrowseResult,
+  PluginsListResult,
+} from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
@@ -67,18 +68,14 @@ const methodResponses = {
   },
   "plugins.catalog.browse": discoveryResult,
   "plugins.catalog.categories": discoveryCategories,
-  "skills.proposals.historyStatus": {
-    hasScanned: false,
-    hasMore: false,
-    ideasFound: 0,
-    reviewedSessions: 0,
-    lastScanReviewed: 0,
+  "skills.workshop.list": {
+    agentId: "main",
+    mode: "auto",
+    root: "/tmp/openclaw-e2e/agents/main/workshop-skills",
+    skills: [],
+    archived: [],
   },
-  "skills.proposals.list": {
-    proposals: [],
-    schema: "openclaw.skill-workshop.proposals-manifest.v1",
-    updatedAt: "2026-08-17T12:00:00.000Z",
-  },
+  "skills.workshop.changes": { changes: [] },
   "skills.status": {
     workspaceDir: "/tmp/openclaw-e2e/workspace",
     managedSkillsDir: "/tmp/openclaw-e2e/skills",
@@ -157,8 +154,7 @@ async function expectHeaderCopy(page: Page, active: "plugins" | "skills" | "skil
     },
     "skill-workshop": {
       title: "Skill workshop",
-      subtitle:
-        "The skills your agent uses now, suggestions waiting for review, and past decisions.",
+      subtitle: "Skills your agent learned, recent changes, and undo.",
       docs: "https://docs.openclaw.ai/tools/skill-workshop",
     },
   }[active];
@@ -230,14 +226,7 @@ suite.define(() => {
     const page = await context.newPage();
     const local: PluginsListResult = {
       plugins: ["novita", "zai"].map((id) => {
-        const snapshot = metadataSnapshot({
-          enabled: true,
-          id,
-          name: id === "zai" ? "Z.AI" : "Novita",
-          categories: ["models"],
-          contracts: { videoGenerationProviders: [id] },
-        });
-        const plugin: PluginsListResult["plugins"][number] = {
+        return {
           id,
           name: id === "zai" ? "Z.AI" : "Novita",
           packageName: "@openclaw/" + id,
@@ -247,11 +236,9 @@ suite.define(() => {
           enabled: true,
           state: "enabled" as const,
           description: "Model inference and video generation.",
+          categories: ["models"],
+          capabilityCategories: ["media"],
         };
-        return Object.assign(
-          plugin,
-          projectPluginCatalogCategoryFacts(snapshot.byPluginId.get(id), plugin.enabled),
-        );
       }),
       diagnostics: [],
       mutationAllowed: true,
@@ -261,58 +248,83 @@ suite.define(() => {
       ["media"],
       ["media"],
     ]);
-    // The baseline used the same purpose metadata but published no derived membership.
-    // Both captures render the real UI; only the Gateway catalog input differs.
-    const before = {
-      ...local,
-      plugins: local.plugins.map((plugin) => {
-        const previous = { ...plugin };
-        delete previous.capabilityCategories;
-        return previous;
-      }),
-    };
+    // Gateway wire fixtures; the catalog owners test category derivation and joining.
+    const novita = {
+      id: "ch_QG9wZW5jbGF3L25vdml0YQ",
+      catalog: {
+        name: "Novita",
+        packageName: "@openclaw/novita",
+        summary: "Model inference and video generation.",
+        official: true,
+        author: "openclaw",
+        categories: ["models", "media"],
+        publishedToClawHub: true,
+      },
+      local: {
+        present: true,
+        installed: true,
+        enabled: true,
+        state: "enabled",
+        pluginId: "novita",
+        action: "manage",
+      },
+    } satisfies PluginDiscoveryEntry;
+    const zai = {
+      id: "ch_QG9wZW5jbGF3L3phaQ",
+      catalog: { ...novita.catalog, name: "Z.AI", packageName: "@openclaw/zai" },
+      local: { ...novita.local, pluginId: "zai" },
+    } satisfies PluginDiscoveryEntry;
     const fal = {
-      packageName: "@openclaw/fal",
-      displayName: "fal",
-      family: "code-plugin" as const,
-      isOfficial: true,
-      categories: ["media"],
-      summary: "Image, video, and music generation.",
-      downloads: 1000,
-    };
-    const browse = (
-      inventory: PluginsListResult,
-      category?: string,
-      cursor?: string,
-      published = false,
-    ) => ({
-      items: joinClawHubPluginCatalog({
-        local: inventory,
-        intent: "all",
-        includeBundledOnly: true,
-        category,
-        cursor,
-        remote: published
-          ? [
-              {
-                ...fal,
-                packageName: "@openclaw/novita",
-                displayName: "Novita",
-                categories: ["models"],
-              },
-            ]
-          : [fal].filter((plugin) => !category || plugin.categories.includes(category)),
+      id: "ch_QG9wZW5jbGF3L2ZhbA",
+      catalog: {
+        name: "fal",
+        packageName: "@openclaw/fal",
+        summary: "Image, video, and music generation.",
+        family: "code-plugin",
+        official: true,
+        categories: ["media"],
+        downloads: 1000,
+        publishedToClawHub: true,
+      },
+      local: {
+        present: false,
+        installed: false,
+        enabled: false,
+        state: "not-installed",
+        action: "install",
+      },
+    } satisfies PluginDiscoveryEntry;
+    const publishedNovita = {
+      id: novita.id,
+      catalog: {
+        ...fal.catalog,
+        name: "Novita",
+        packageName: "@openclaw/novita",
+        categories: ["models", "media"],
+      },
+      local: novita.local,
+    } satisfies PluginDiscoveryEntry;
+    // The baseline exposed purpose metadata but no derived Media membership.
+    const beforeNovita = { ...novita, catalog: { ...novita.catalog, categories: ["models"] } };
+    const beforeZai = { ...zai, catalog: { ...zai.catalog, categories: ["models"] } };
+    const catalogPages = {
+      beforeAll: {
+        items: [fal, beforeNovita, beforeZai],
         categories: discoveryCategories.categories,
-      }),
-      ...(!category ? { categories: discoveryCategories.categories } : {}),
-      ...(category === "media" && !cursor ? { nextCursor: "media-page-two" } : {}),
-    });
+      },
+      beforeModels: { items: [beforeNovita, beforeZai] },
+      beforeMedia: { items: [fal], nextCursor: "media-page-two" },
+      all: { items: [fal, novita, zai], categories: discoveryCategories.categories },
+      models: { items: [novita, zai] },
+      media: { items: [fal, novita, zai], nextCursor: "media-page-two" },
+      nextMedia: { items: [publishedNovita] },
+    } satisfies Record<string, PluginsCatalogBrowseResult>;
     const gateway = await installMockGateway(page, {
       featureMethods: ["plugins.list", "plugins.catalog.browse", "plugins.catalog.categories"],
       methodResponses: {
         ...methodResponses,
         "plugins.list": local,
-        "plugins.catalog.browse": browse(captureUiProof ? before : local),
+        "plugins.catalog.browse": captureUiProof ? catalogPages.beforeAll : catalogPages.all,
       },
     });
     try {
@@ -335,17 +347,17 @@ suite.define(() => {
           .toEqual({ selected: "true", names: names.toSorted() });
       };
       if (captureUiProof) {
-        await gateway.setMethodResponse("plugins.catalog.browse", browse(before, "models"));
+        await gateway.setMethodResponse("plugins.catalog.browse", catalogPages.beforeModels);
         await chips.getByRole("button", { name: "Models", exact: true }).click();
         await gateway.waitForRequest("plugins.catalog.browse", { match: { category: "models" } });
         await expectFilteredCards("Models", ["Novita", "Z.AI"]);
         await captureScreenshot(page, "models-discovery-before.png");
-        await gateway.setMethodResponse("plugins.catalog.browse", browse(before, "media"));
+        await gateway.setMethodResponse("plugins.catalog.browse", catalogPages.beforeMedia);
         await chips.getByRole("button", { name: "Media", exact: true }).click();
         await gateway.waitForRequest("plugins.catalog.browse", { match: { category: "media" } });
         await expectFilteredCards("Media", ["fal"]);
         await captureScreenshot(page, "media-discovery-before.png");
-        await gateway.setMethodResponse("plugins.catalog.browse", browse(local));
+        await gateway.setMethodResponse("plugins.catalog.browse", catalogPages.all);
         await chips.getByRole("button", { name: "All", exact: true }).click();
       }
       await expect
@@ -358,7 +370,7 @@ suite.define(() => {
         const priorModels = (
           await gateway.getRequests("plugins.catalog.browse", { category: "models" })
         ).length;
-        await gateway.setMethodResponse("plugins.catalog.browse", browse(local, "models"));
+        await gateway.setMethodResponse("plugins.catalog.browse", catalogPages.models);
         await chips.getByRole("button", { name: "Models", exact: true }).click();
         await gateway.waitForRequest("plugins.catalog.browse", {
           after: priorModels,
@@ -370,7 +382,7 @@ suite.define(() => {
       const priorMedia = (
         await gateway.getRequests("plugins.catalog.browse", { category: "media" })
       ).length;
-      await gateway.setMethodResponse("plugins.catalog.browse", browse(local, "media"));
+      await gateway.setMethodResponse("plugins.catalog.browse", catalogPages.media);
       await chips.getByRole("button", { name: "Media", exact: true }).click();
       await gateway.waitForRequest("plugins.catalog.browse", {
         after: priorMedia,
@@ -381,10 +393,7 @@ suite.define(() => {
         expect(await cards.filter({ hasText: name }).count()).toBe(1);
       }
       await captureScreenshot(page, "media-discovery-after.png");
-      await gateway.setMethodResponse(
-        "plugins.catalog.browse",
-        browse(local, "media", "media-page-two", true),
-      );
+      await gateway.setMethodResponse("plugins.catalog.browse", catalogPages.nextMedia);
       await page.getByRole("button", { name: "Load more", exact: true }).click();
       await gateway.waitForRequest("plugins.catalog.browse", {
         match: { category: "media", cursor: "media-page-two" },
@@ -484,8 +493,8 @@ suite.define(() => {
           "plugins.list",
           "plugins.catalog.browse",
           "plugins.catalog.categories",
-          "skills.proposals.historyStatus",
-          "skills.proposals.list",
+          "skills.workshop.changes",
+          "skills.workshop.list",
           "skills.status",
           "skills.search",
           "skills.library.list",
@@ -523,22 +532,42 @@ suite.define(() => {
         await expectActivePanelLabel(page, "plugins-tab-plugins");
         const pluginInstallPresentation = await installButtonPresentation(page);
 
-        await page
+        const skillsTab = page
           .locator(".plugins-hub-tabs")
-          .getByRole("tab", { name: "Skills", exact: true })
-          .click();
+          .getByRole("tab", { name: "Skills", exact: true });
+        await skillsTab.focus();
+        await page.keyboard.press("Enter");
         await waitForControlUiRoute(page, { pathname: "/skills", routeId: "skills" });
+        await expect
+          .poll(() =>
+            page
+              .getByRole("searchbox", { name: "Search skills", exact: true })
+              .evaluate((input) => input === document.activeElement),
+          )
+          .toBe(true);
         expectStableHeader(await headerGeometry(page), pluginsHeader);
         await expectHeaderCopy(page, "skills");
         await expectActivePanelLabel(page, "plugins-tab-skills");
         expect(await installButtonPresentation(page)).toEqual(pluginInstallPresentation);
         await captureScreenshot(page, `${label}-02-skills.png`);
 
-        await page.getByRole("tab", { name: "Skill workshop", exact: true }).click();
+        const workshopTab = page.getByRole("tab", { name: "Skill workshop", exact: true });
+        await workshopTab.focus();
+        await page.keyboard.press("Enter");
         await waitForControlUiRoute(page, {
           pathname: "/skills/workshop",
           routeId: "skill-workshop",
         });
+        await expect
+          .poll(() =>
+            page.evaluate(
+              () =>
+                document.activeElement?.id ||
+                document.activeElement?.getAttribute("aria-label") ||
+                document.activeElement?.tagName,
+            ),
+          )
+          .toBe("plugins-tab-skill-workshop");
         expectStableHeader(await headerGeometry(page), pluginsHeader);
         await expectHeaderCopy(page, "skill-workshop");
         await expectActivePanelLabel(page, "plugins-tab-skill-workshop");

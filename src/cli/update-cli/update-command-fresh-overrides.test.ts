@@ -3,17 +3,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { assert, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.js";
-import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
 import {
   createNpmTarget,
   writePackageRoot,
 } from "../../infra/package-update-steps.test-support.js";
+import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import * as updateGlobal from "../../infra/update-global.js";
 import { finishUpdateRun } from "../../infra/update-run-ledger.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import * as shared from "./shared.js";
 import * as execution from "./update-command-execution.js";
-import { installFreshUpdateFixture } from "./update-command-fresh.test-support.js";
+import { installFreshUpdateFixture, writeFreshJson } from "./update-command-fresh.test-support.js";
 import * as packageUpdate from "./update-command-package.js";
 import * as commandRun from "./update-command-run.js";
 import * as runtimePlan from "./update-command-runtime-preflight.js";
@@ -44,15 +44,12 @@ it.each([false, true])(
     fs.writeFileSync(path.join(fixture.root, relativeFile), marker, { mode: 0o600 });
     const candidate = path.join(base, "package");
     await writePackageRoot(candidate, "2026.9.4");
-    fs.writeFileSync(
-      path.join(candidate, "package.json"),
-      JSON.stringify({
-        name: "openclaw",
-        version: "2026.9.4",
-        type: "module",
-        openclaw: { schemaVersions: { state: OPENCLAW_STATE_SCHEMA_VERSION, agent: 20 } },
-      }),
-    );
+    writeFreshJson(path.join(candidate, "package.json"), {
+      name: "openclaw",
+      version: "2026.9.4",
+      type: "module",
+      openclaw: { schemaVersions: { state: OPENCLAW_STATE_SCHEMA_VERSION, agent: 20 } },
+    });
     await writePackageDistInventory(candidate);
     const artifact = path.join(base, "candidate.tgz");
     execFileSync("tar", ["-czf", artifact, "-C", base, "package"], {
@@ -77,8 +74,7 @@ it.each([false, true])(
       value: { nodeRunner: process.execPath },
     });
     vi.spyOn(execution, "executeMutableUpdate").mockImplementation(async (params) => {
-      // Keep real admission, staging, npm, replay and backup ownership; this synthetic
-      // package has no Gateway lifecycle or post-core plugin convergence to finalize.
+      // Exercise real staging/replay without a Gateway lifecycle in the synthetic package.
       assert(params.stagedPackage);
       const run = params.opts.run;
       assert(run);
@@ -106,26 +102,22 @@ it.each([false, true])(
       expect(fs.existsSync(path.join(fixture.root, relativeFile))).toBe(reapplyLocalOverrides);
       if (reapplyLocalOverrides) {
         expect(fs.readFileSync(path.join(fixture.root, relativeFile), "utf8")).toBe(marker);
-        expect(result.localOverrides?.warnings).toEqual([]);
-      } else {
-        expect(result.localOverrides?.warnings).toEqual([
-          expect.stringContaining("were not reapplied"),
-        ]);
       }
       expect(result.localOverrides).toMatchObject({
         status: reapplyLocalOverrides ? "applied" : "preserved",
         added: 1,
         applied: reapplyLocalOverrides ? 1 : 0,
         conflicts: [],
+        warnings: reapplyLocalOverrides ? [] : [expect.stringContaining("were not reapplied")],
       });
       const recoveryDir = result.localOverrides!.recoveryDir!;
       expect(fs.readFileSync(path.join(recoveryDir, "files", relativeFile), "utf8")).toBe(marker);
-      expect(
-        result.steps.some(
-          (step) =>
-            step.name === "local-package-overrides" && step.advisory?.message.includes(recoveryDir),
-        ),
-      ).toBe(true);
+      expect(result.steps).toContainEqual(
+        expect.objectContaining({
+          name: "local-package-overrides",
+          advisory: expect.objectContaining({ message: expect.stringContaining(recoveryDir) }),
+        }),
+      );
       finishUpdateRun(run.runId, { status: "succeeded" }, { env: run.env });
       return null;
     });

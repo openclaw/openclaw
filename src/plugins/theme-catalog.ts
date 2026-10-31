@@ -19,12 +19,22 @@ function pluginThemes(plugin: PluginManifestRecord): ThemeCatalogEntry[] {
   }
   const themes: ThemeCatalogEntry[] = [];
   for (const { id, definition, artwork } of plugin.themeDefinitions ?? []) {
-    const resourceUrl = (kind: "hat" | "critter", artId: string, svg: string) => {
-      const hash = createHash("sha256").update(svg).digest("hex").slice(0, 12);
+    const resourceUrl = (kind: PluginThemeArtworkKind, artId: string, content: string) => {
+      const hash = createHash("sha256").update(content).digest("hex").slice(0, 12);
       return `${buildControlUiResourcePath("pluginThemeArt", "", plugin.id, [id, kind, artId])}?v=${hash}`;
     };
     const projected: ThemeArtwork | undefined = artwork
       ? {
+          ...(artwork.icons
+            ? {
+                icons: Object.fromEntries(
+                  Object.entries(artwork.icons).map(([artId, art]) => [
+                    artId,
+                    { url: resourceUrl("icon", artId, art.svg) },
+                  ]),
+                ),
+              }
+            : {}),
           ...(artwork.hats
             ? {
                 hats: Object.fromEntries(
@@ -45,6 +55,16 @@ function pluginThemes(plugin: PluginManifestRecord): ThemeCatalogEntry[] {
                 ),
               }
             : {}),
+          ...(artwork.backgrounds
+            ? {
+                backgrounds: Object.fromEntries(
+                  Object.entries(artwork.backgrounds).map(([mode, { base64 }]) => [
+                    mode,
+                    { url: resourceUrl("background", mode, base64) },
+                  ]),
+                ),
+              }
+            : {}),
         }
       : undefined;
     themes.push({
@@ -52,6 +72,15 @@ function pluginThemes(plugin: PluginManifestRecord): ThemeCatalogEntry[] {
       name: definition.name,
       description: definition.description,
       ...(definition.mascot !== undefined ? { mascot: definition.mascot } : {}),
+      ...(definition.brandName !== undefined ? { brandName: definition.brandName } : {}),
+      ...(definition.brandIcon !== undefined ? { brandIcon: definition.brandIcon } : {}),
+      ...(definition.workingIndicator !== undefined
+        ? { workingIndicator: definition.workingIndicator }
+        : {}),
+      ...(definition.lobsterdex !== undefined ? { lobsterdex: definition.lobsterdex } : {}),
+      ...(definition.communityLinks !== undefined
+        ? { communityLinks: definition.communityLinks }
+        : {}),
       ...(definition.workingPhrases !== undefined
         ? { workingPhrases: definition.workingPhrases }
         : {}),
@@ -68,13 +97,15 @@ function pluginThemes(plugin: PluginManifestRecord): ThemeCatalogEntry[] {
   return themes;
 }
 
+export type PluginThemeArtworkKind = "icon" | "hat" | "critter" | "background";
+
 /** Returns captured bytes from the enabled owner's current published generation. */
 export function resolvePluginThemeArtwork(
   pluginId: string,
   themeId: string,
-  kind: "hat" | "critter",
+  kind: PluginThemeArtworkKind,
   artId: string,
-): string | undefined {
+): { sourceName: string; body: Buffer } | undefined {
   const snapshot = currentSnapshot();
   if (!snapshot?.index.plugins.some((plugin) => plugin.pluginId === pluginId && plugin.enabled)) {
     return undefined;
@@ -82,8 +113,22 @@ export function resolvePluginThemeArtwork(
   const theme = snapshot.plugins
     .find((plugin) => plugin.id === pluginId)
     ?.themeDefinitions?.find((entry) => entry.id === themeId);
-  const artwork = kind === "hat" ? theme?.artwork?.hats : theme?.artwork?.critters;
-  return artwork && Object.hasOwn(artwork, artId) ? artwork[artId]?.svg : undefined;
+  if (kind === "background") {
+    const background =
+      artId === "light" || artId === "dark" ? theme?.artwork?.backgrounds?.[artId] : undefined;
+    // The route sniffs raster bytes; the name only keeps them off the SVG path.
+    return background
+      ? { sourceName: "theme-background", body: Buffer.from(background.base64, "base64") }
+      : undefined;
+  }
+  const artwork =
+    kind === "icon"
+      ? theme?.artwork?.icons
+      : kind === "hat"
+        ? theme?.artwork?.hats
+        : theme?.artwork?.critters;
+  const svg = artwork && Object.hasOwn(artwork, artId) ? artwork[artId]?.svg : undefined;
+  return svg ? { sourceName: "theme-art.svg", body: Buffer.from(svg, "utf8") } : undefined;
 }
 
 /** Reads the published inventory only; explicit plugin lifecycle operations replace its palettes. */

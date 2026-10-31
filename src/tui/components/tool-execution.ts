@@ -9,20 +9,18 @@ import { extractTuiImageSources } from "../tui-images.js";
 import { HyperlinkMarkdown } from "./hyperlink-markdown.js";
 import { MessageImages, type TuiImageRenderer } from "./message-images.js";
 
-type ToolResultContent = {
-  type?: string;
-  text?: string;
-  mimeType?: string;
-  bytes?: number;
-  omitted?: boolean;
-  data?: string;
-  url?: string;
-  artifactId?: string;
-  source?: unknown;
-};
-
 type ToolResult = {
-  content?: ToolResultContent[];
+  content?: {
+    type?: string;
+    text?: string;
+    mimeType?: string;
+    bytes?: number;
+    omitted?: boolean;
+    data?: string;
+    url?: string;
+    artifactId?: string;
+    source?: unknown;
+  }[];
   details?: Record<string, unknown>;
 };
 
@@ -138,11 +136,12 @@ function isCodeModeResult(toolName: string, result?: ToolResult): boolean {
 
 /** Displays a running or completed tool call with optional expandable output. */
 export class ToolExecutionComponent extends Container {
-  private box: Box;
-  private header: Text;
-  private argsLine: Text;
-  private output: ToolOutputComponent;
-  private toolName: string;
+  private box = new Box(1, 1, theme.toolPendingBg);
+  private header = new Text("", 0, 0);
+  private argsLine = new Text("", 0, 0);
+  private output = new ToolOutputComponent("", 0, 0, markdownTheme, {
+    color: (line) => theme.toolOutput(line),
+  });
   private title = "";
   private isPartial = true;
   private isError = false;
@@ -150,15 +149,12 @@ export class ToolExecutionComponent extends Container {
   private activity?: AgentItemEventData | null;
   private expanded = false;
 
-  constructor(toolName: string, args: unknown, imageRenderer?: TuiImageRenderer) {
+  constructor(
+    private readonly toolName: string,
+    args: unknown,
+    imageRenderer?: TuiImageRenderer,
+  ) {
     super();
-    this.toolName = toolName;
-    this.box = new Box(1, 1, theme.toolPendingBg);
-    this.header = new Text("", 0, 0);
-    this.argsLine = new Text("", 0, 0);
-    this.output = new ToolOutputComponent("", 0, 0, markdownTheme, {
-      color: (line) => theme.toolOutput(line),
-    });
     this.addChild(new Spacer(1));
     this.addChild(this.box);
     this.box.addChild(this.header);
@@ -172,7 +168,7 @@ export class ToolExecutionComponent extends Container {
 
   setArgs(args: unknown) {
     const display = resolveToolDisplay({ name: this.toolName, args });
-    this.title = `${display.emoji} ${display.label}`;
+    this.title = display.label;
     this.refreshTitle();
     const argLine = formatArgs(formatToolDetail(display), args);
     this.argsLine.setText(argLine ? theme.dim(argLine) : theme.dim(" "));

@@ -25,6 +25,9 @@ function readJsonFile(filePath: string): unknown {
 
 /** Collect tracked metadata paths without reading plugin JSON or scanning directories. */
 export function collectTrackedBundledPluginSourceCandidates(repoRoot: string) {
+  if (!fs.existsSync(path.join(repoRoot, ".git"))) {
+    return null;
+  }
   const pathspecs = [
     ":(glob)extensions/*/openclaw.plugin.json",
     ":(glob)extensions/*/package.json",

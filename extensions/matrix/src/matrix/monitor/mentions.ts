@@ -50,10 +50,26 @@ function hasVisibleNativeMatrixUserMention(text: string | undefined, userId: str
   return pattern.test(text);
 }
 
-function resolveMatrixMentionPrefixCandidates(params: {
+function stripMatchedMatrixMentionPrefix(
+  text: string,
+  source: string,
+  flags: string,
+): string | null {
+  const match = text.match(new RegExp(`^\\s*${source}(?:\\s*[:,])?(?:\\s+|$)`, flags));
+  return match ? text.slice(match[0].length).trimStart() : null;
+}
+
+export function stripMatrixMentionPrefix(params: {
+  text: string;
   userId?: string | null;
   displayName?: string | null;
-}): string[] {
+  mentionRegexes?: RegExp[];
+}): string {
+  const text = params.text;
+  if (!text) {
+    return text;
+  }
+
   const candidates: string[] = [];
   const seen = new Set<string>();
 
@@ -77,30 +93,7 @@ function resolveMatrixMentionPrefixCandidates(params: {
     candidates.push(trimmed);
   }
 
-  return candidates;
-}
-
-function stripMatchedMatrixMentionPrefix(
-  text: string,
-  source: string,
-  flags: string,
-): string | null {
-  const match = text.match(new RegExp(`^\\s*${source}(?:\\s*[:,])?(?:\\s+|$)`, flags));
-  return match ? text.slice(match[0].length).trimStart() : null;
-}
-
-export function stripMatrixMentionPrefix(params: {
-  text: string;
-  userId?: string | null;
-  displayName?: string | null;
-  mentionRegexes?: RegExp[];
-}): string {
-  const text = params.text;
-  if (!text) {
-    return text;
-  }
-
-  for (const candidate of resolveMatrixMentionPrefixCandidates(params)) {
+  for (const candidate of candidates) {
     const stripped = stripMatchedMatrixMentionPrefix(text, escapeRegExp(candidate), "i");
     if (stripped !== null) {
       return stripped;
@@ -119,80 +112,9 @@ export function stripMatrixMentionPrefix(params: {
   return text;
 }
 
-function isVisibleMentionLabel(params: {
-  text: string;
-  userId: string;
-  mentionRegexes: RegExp[];
-  displayName?: string | null;
-}): boolean {
-  const cleaned = extractVisibleMentionText(params.text);
-  if (!cleaned) {
-    return false;
-  }
-  if (params.mentionRegexes.some((pattern) => pattern.test(cleaned))) {
-    return true;
-  }
-  const localpart = resolveMatrixUserLocalpart(params.userId);
-  const candidates = [
-    extractVisibleMentionText(params.userId),
-    localpart ? extractVisibleMentionText(localpart) : null,
-    localpart ? extractVisibleMentionText(`@${localpart}`) : null,
-    params.displayName ? extractVisibleMentionText(params.displayName) : null,
-    params.displayName ? extractVisibleMentionText(`@${params.displayName}`) : null,
-    params.displayName ? extractVisibleMentionText(`@[${params.displayName}]`) : null,
-  ].filter((value): value is string => Boolean(value));
-  return candidates.includes(cleaned);
-}
-
 function hasVisibleRoomMention(value?: string): boolean {
   const cleaned = extractVisibleMentionText(value);
   return /(^|[^a-z0-9_])@room\b/i.test(cleaned);
-}
-
-/**
- * Check if formatted_body contains a matrix.to link whose visible label still
- * looks like a real mention for the given user. Do not trust href alone, since
- * senders can hide arbitrary matrix.to links behind unrelated link text.
- * Many Matrix clients (including Element) use HTML links in formatted_body instead of
- * or in addition to the m.mentions field.
- */
-function checkFormattedBodyMention(params: {
-  formattedBody?: string;
-  userId: string;
-  displayName?: string | null;
-  mentionRegexes: RegExp[];
-}): boolean {
-  if (!params.formattedBody || !params.userId) {
-    return false;
-  }
-  const anchorPattern = /<a\b[^>]*href=(["'])(https:\/\/matrix\.to\/#[^"']+)\1[^>]*>(.*?)<\/a>/gis;
-  for (const match of params.formattedBody.matchAll(anchorPattern)) {
-    const href = match[2];
-    const visibleLabel = match[3] ?? "";
-    if (!href) {
-      continue;
-    }
-    try {
-      const parsed = new URL(href);
-      const fragmentTarget = decodeURIComponent(parsed.hash.replace(/^#\/?/, "").trim());
-      if (fragmentTarget !== params.userId.trim()) {
-        continue;
-      }
-      if (
-        isVisibleMentionLabel({
-          text: visibleLabel,
-          userId: params.userId,
-          mentionRegexes: params.mentionRegexes,
-          displayName: params.displayName,
-        })
-      ) {
-        return true;
-      }
-    } catch {
-      continue;
-    }
-  }
-  return false;
 }
 
 export function resolveMentions(params: {
@@ -213,14 +135,60 @@ export function resolveMentions(params: {
   const visibleRoomMention =
     hasVisibleRoomMention(params.text) || hasVisibleRoomMention(params.content.formatted_body);
 
-  const mentionedInFormattedBody = params.userId
-    ? checkFormattedBodyMention({
-        formattedBody: params.content.formatted_body,
-        userId: params.userId,
-        displayName: params.displayName,
-        mentionRegexes: params.mentionRegexes,
-      })
-    : false;
+  /**
+   * Check if formatted_body contains a matrix.to link whose visible label still
+   * looks like a real mention for the given user. Do not trust href alone, since
+   * senders can hide arbitrary matrix.to links behind unrelated link text.
+   * Many Matrix clients (including Element) use HTML links in formatted_body instead of
+   * or in addition to the m.mentions field.
+   */
+  function checkFormattedBodyMention(userId: string): boolean {
+    const formattedBody = params.content.formatted_body;
+    const { displayName, mentionRegexes } = params;
+    if (!formattedBody || !userId) {
+      return false;
+    }
+    const anchorPattern =
+      /<a\b[^>]*href=(["'])(https:\/\/matrix\.to\/#[^"']+)\1[^>]*>(.*?)<\/a>/gis;
+    for (const match of formattedBody.matchAll(anchorPattern)) {
+      const href = match[2];
+      const visibleLabel = match[3] ?? "";
+      if (!href) {
+        continue;
+      }
+      try {
+        const parsed = new URL(href);
+        const fragmentTarget = decodeURIComponent(parsed.hash.replace(/^#\/?/, "").trim());
+        if (fragmentTarget !== userId.trim()) {
+          continue;
+        }
+        const cleaned = extractVisibleMentionText(visibleLabel);
+        if (!cleaned) {
+          continue;
+        }
+        if (mentionRegexes.some((pattern) => pattern.test(cleaned))) {
+          return true;
+        }
+        const localpart = resolveMatrixUserLocalpart(userId);
+        const candidates = [
+          extractVisibleMentionText(userId),
+          localpart ? extractVisibleMentionText(localpart) : null,
+          localpart ? extractVisibleMentionText(`@${localpart}`) : null,
+          displayName ? extractVisibleMentionText(displayName) : null,
+          displayName ? extractVisibleMentionText(`@${displayName}`) : null,
+          displayName ? extractVisibleMentionText(`@[${displayName}]`) : null,
+        ].filter((value): value is string => Boolean(value));
+        if (candidates.includes(cleaned)) {
+          return true;
+        }
+      } catch {
+        continue;
+      }
+    }
+    return false;
+  }
+
+  const mentionedInFormattedBody = params.userId ? checkFormattedBodyMention(params.userId) : false;
   // Native mentions may use visible plain-text Matrix IDs without HTML. Keep
   // exact metadata ownership and visibility so forged mentions stay inert.
   const metadataBackedUserMention = Boolean(

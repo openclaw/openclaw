@@ -1,4 +1,7 @@
-import { resolveOpenAIReasoningEffortForModel } from "@openclaw/ai/internal/openai";
+import {
+  resolveOpenAIReasoningEffortForModel,
+  type OpenAIResponsesOptions,
+} from "@openclaw/ai/internal/openai";
 import {
   createEmptyTransportUsage,
   resolveOpenAIReasoningEffortMap,
@@ -23,10 +26,13 @@ import {
 import { mapThinkingLevelToReasoningEffort } from "../llm/providers/stream-wrappers/reasoning-effort-utils.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import { streamSimple } from "../llm/stream.js";
-import type { Model } from "../llm/types.js";
+import type { AssistantMessage, Model } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
+import { mapAssistantMessageStream } from "../llm/utils/stream-wrapper.js";
 import { findCodeRegions } from "../shared/text/code-regions.js";
 import { assertProviderStreamEvent } from "./provider-stream-event-normalization.js";
+export { recordSuppressedReasoning } from "@openclaw/llm-core/diagnostics";
+export { applyOpenAICompletionsToolReasoning } from "@openclaw/ai/internal/openai";
 export {
   isGoogleGemini3FlashModel,
   isGoogleGemini3ProModel,
@@ -40,6 +46,27 @@ export {
 } from "@openclaw/ai/internal/anthropic";
 export { createDeferredEventBuffer } from "@openclaw/ai/internal/runtime";
 export { notifyLlmRequestActivity, onLlmRequestActivity } from "@openclaw/ai/internal/runtime";
+// Native stream primitives must not initialize the full agent/plugin transport host.
+// Keep these on their canonical owners, not the provider-transport-runtime barrel.
+export { buildAssistantMessage } from "../agents/stream-message-shared.js";
+export {
+  describeUnsupportedToolResultMedia,
+  extractToolResultText,
+  formatToolResultText,
+  isImageWithMediaPayload,
+  sortPromptCacheToolsByName,
+  splitSystemPromptRelocatableBoundary,
+  stripSystemPromptCacheBoundary,
+} from "@openclaw/ai/internal/shared";
+export {
+  createEmptyTransportUsage,
+  mergeTransportHeaders,
+  createProviderWaitObserver,
+  failTransportStream,
+  MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
+  notifyProviderHttpResponse,
+  parseTerminalToolCallArguments,
+} from "@openclaw/ai/transports";
 
 type ProviderWrapStreamFnContext = import("../plugins/types.js").ProviderWrapStreamFnContext;
 
@@ -59,20 +86,6 @@ export function composeProviderStreamWrappers(
     (streamFn, wrapper) => (wrapper ? wrapper(streamFn) : streamFn),
     baseStreamFn,
   );
-}
-
-function resolveContextToolNames(context: Parameters<StreamFn>[1]): Set<string> {
-  const tools = (context as { tools?: unknown }).tools;
-  if (!Array.isArray(tools)) {
-    return new Set();
-  }
-  const names = tools
-    .map((tool) => {
-      const record = asOptionalObjectRecord(tool);
-      return typeof record?.name === "string" && record.name.trim() ? record.name : undefined;
-    })
-    .filter((name): name is string => Boolean(name));
-  return new Set(names);
 }
 
 function promotePlainTextToolCalls(
@@ -139,8 +152,10 @@ function wrapPlainTextToolCallStream(
   source: Awaited<ReturnType<StreamFn>>,
   context: Parameters<StreamFn>[1],
   model: Model,
-): ReturnType<StreamFn> {
-  const toolNames = resolveContextToolNames(context);
+): Awaited<ReturnType<StreamFn>> {
+  const toolNames = new Set(
+    (context.tools ?? []).map((tool) => tool.name).filter((name) => name.trim()),
+  );
   if (toolNames.size === 0) {
     return source;
   }
@@ -205,13 +220,9 @@ export function createPlainTextToolCallCompatWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    const maybeStream = underlying(model, context, options);
-    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
-      return Promise.resolve(maybeStream).then((stream) =>
-        wrapPlainTextToolCallStream(stream, context, model),
-      );
-    }
-    return wrapPlainTextToolCallStream(maybeStream, context, model);
+    return mapAssistantMessageStream(underlying(model, context, options), (stream) =>
+      wrapPlainTextToolCallStream(stream, context, model),
+    );
   };
 }
 
@@ -265,6 +276,45 @@ export function createPayloadPatchStreamWrapper(
   };
 }
 
+/** OpenAI Responses hosted-search wire policy shared by native and admitted proxy routes. */
+export function createOpenAIHostedWebSearchWrapper(
+  baseStreamFn: StreamFn | undefined,
+  shouldPatch: NonNullable<
+    NonNullable<Parameters<typeof createPayloadPatchStreamWrapper>[2]>["shouldPatch"]
+  >,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (
+    model,
+    context,
+    options?: Parameters<StreamFn>[2] &
+      Pick<OpenAIResponsesOptions, "openclawCodeModeAllowedHostedToolTypes">,
+  ) => {
+    if (!shouldPatch({ model, context, options })) {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payload) => {
+      options?.openclawCodeModeAllowedHostedToolTypes?.add("web_search");
+      const existingTools = Array.isArray(payload.tools) ? payload.tools : [];
+      const filteredTools = existingTools.filter((tool) => {
+        const record = asOptionalObjectRecord(tool);
+        return record?.type !== "function" || record.name !== "web_search";
+      });
+      if (filteredTools.some((tool) => asOptionalObjectRecord(tool)?.type === "web_search")) {
+        if (filteredTools.length !== existingTools.length) {
+          payload.tools = filteredTools;
+        }
+      } else {
+        payload.tools = [...filteredTools, { type: "web_search" }];
+      }
+      const reasoning = asOptionalObjectRecord(payload.reasoning);
+      if (reasoning?.effort === "minimal") {
+        reasoning.effort = "low";
+      }
+    });
+  };
+}
+
 /**
  * Applies explicit disabled-thinking intent to OpenAI-compatible Chat
  * Completions payloads without changing enabled reasoning levels.
@@ -305,28 +355,14 @@ export function createOpenAICompatibleCompletionsThinkingOffWrapper(
   };
 }
 
-function isAnthropicThinkingEnabled(payload: Record<string, unknown>): boolean {
-  const thinking = payload.thinking;
-  if (!thinking || typeof thinking !== "object") {
-    return false;
-  }
-  return (thinking as { type?: unknown }).type !== "disabled";
-}
-
 function assistantMessageHasAnthropicToolUse(message: Record<string, unknown>): boolean {
-  if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
-    return true;
-  }
-  const content = message.content;
-  if (!Array.isArray(content)) {
-    return false;
-  }
-  return content.some(
-    (block) =>
-      block &&
-      typeof block === "object" &&
-      ((block as { type?: unknown }).type === "tool_use" ||
-        (block as { type?: unknown }).type === "toolCall"),
+  return (
+    (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) ||
+    (Array.isArray(message.content) &&
+      message.content.some((block) => {
+        const type = asOptionalObjectRecord(block)?.type;
+        return type === "tool_use" || type === "toolCall";
+      }))
   );
 }
 
@@ -358,10 +394,10 @@ export function stripTrailingAssistantPrefillMessages(payload: Record<string, un
 export function stripTrailingAnthropicAssistantPrefillWhenThinking(
   payload: Record<string, unknown>,
 ): number {
-  if (!isAnthropicThinkingEnabled(payload)) {
-    return 0;
-  }
-  return stripTrailingAssistantPrefillMessages(payload);
+  const thinking = asOptionalObjectRecord(payload.thinking);
+  return thinking && thinking.type !== "disabled"
+    ? stripTrailingAssistantPrefillMessages(payload)
+    : 0;
 }
 
 /** @deprecated Anthropic-family provider stream helper; do not use from third-party plugins. */
@@ -426,27 +462,20 @@ export function normalizeOpenAICompatibleReasoningPayload(
   }
 }
 
-/** Applies Qwen chat-template thinking flags without discarding provider-specific kwargs. */
 export function setQwenChatTemplateThinking(
   payload: Record<string, unknown>,
   enabled: boolean,
-): void {
+): Record<string, unknown> {
   const existing = payload.chat_template_kwargs;
-  if (existing && typeof existing === "object" && !Array.isArray(existing)) {
-    const next: Record<string, unknown> = {
-      ...(existing as Record<string, unknown>),
-      enable_thinking: enabled,
-    };
-    if (!Object.hasOwn(next, "preserve_thinking")) {
-      next.preserve_thinking = true;
-    }
-    payload.chat_template_kwargs = next;
-    return;
-  }
-  payload.chat_template_kwargs = {
+  const next: Record<string, unknown> = {
+    ...(existing && typeof existing === "object" && !Array.isArray(existing) ? existing : {}),
     enable_thinking: enabled,
-    preserve_thinking: true,
   };
+  if (!Object.hasOwn(next, "preserve_thinking")) {
+    next.preserve_thinking = true;
+  }
+  payload.chat_template_kwargs = next;
+  return next;
 }
 
 /** @deprecated DeepSeek provider stream helper; do not use from third-party plugins. */
@@ -546,38 +575,17 @@ export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
   };
 }
 
-function promoteThinkingOnlyFinalOutputToText(message: unknown): void {
-  if (!message || typeof message !== "object") {
-    return;
-  }
-  const record = message as { content?: unknown; stopReason?: unknown };
-  if (record.stopReason !== "stop" && record.stopReason !== "length") {
-    return;
-  }
-  if (!Array.isArray(record.content) || record.content.length === 0) {
+function promoteThinkingOnlyFinalOutputToText(message: AssistantMessage): void {
+  if (message.stopReason !== "stop" && message.stopReason !== "length") {
     return;
   }
 
   let hasVisibleThinking = false;
-  for (const block of record.content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const typedBlock = block as { type?: unknown; text?: unknown; thinking?: unknown };
-    if (
-      (typedBlock.type === "text" &&
-        typeof typedBlock.text === "string" &&
-        typedBlock.text.trim()) ||
-      typedBlock.type === "toolCall" ||
-      typedBlock.type === "tool_use"
-    ) {
+  for (const block of message.content) {
+    if ((block.type === "text" && block.text.trim()) || block.type === "toolCall") {
       return;
     }
-    if (
-      typedBlock.type === "thinking" &&
-      typeof typedBlock.thinking === "string" &&
-      typedBlock.thinking.trim()
-    ) {
+    if (block.type === "thinking" && block.thinking.trim()) {
       hasVisibleThinking = true;
     }
   }
@@ -585,23 +593,17 @@ function promoteThinkingOnlyFinalOutputToText(message: unknown): void {
     return;
   }
 
-  record.content = record.content.map((block) => {
-    if (!block || typeof block !== "object") {
-      return block;
-    }
-    const typedBlock = block as { type?: unknown; thinking?: unknown };
-    return typedBlock.type === "thinking" &&
-      typeof typedBlock.thinking === "string" &&
-      typedBlock.thinking.trim()
-      ? { type: "text", text: typedBlock.thinking }
-      : block;
-  });
+  message.content = message.content.map((block) =>
+    block.type === "thinking" && block.thinking.trim()
+      ? { type: "text", text: block.thinking }
+      : block,
+  );
 }
 
 /** Mutate streamed and final message objects without replacing or buffering events. */
 export function transformProviderStreamMessages(
   stream: Awaited<ReturnType<StreamFn>>,
-  transformMessage: (message: unknown) => void,
+  transformMessage: (message: AssistantMessage) => void,
 ): Awaited<ReturnType<StreamFn>> {
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
@@ -611,30 +613,32 @@ export function transformProviderStreamMessages(
   };
 
   const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
-  (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
-    function () {
-      const iterator = originalAsyncIterator();
-      return {
-        async next() {
-          const result = await iterator.next();
-          if (!result.done && result.value && typeof result.value === "object") {
-            const event = result.value as { partial?: unknown; message?: unknown };
-            transformMessage(event.partial);
+  stream[Symbol.asyncIterator] = function () {
+    const iterator = originalAsyncIterator();
+    return {
+      async next() {
+        const result = await iterator.next();
+        if (!result.done) {
+          const event = result.value;
+          if (event.type === "done") {
             transformMessage(event.message);
+          } else if (event.type !== "error" && event.partial) {
+            transformMessage(event.partial);
           }
-          return result;
-        },
-        async return(value?: unknown) {
-          return iterator.return?.(value) ?? { done: true as const, value: undefined };
-        },
-        async throw(error?: unknown) {
-          return iterator.throw?.(error) ?? { done: true as const, value: undefined };
-        },
-        [Symbol.asyncIterator]() {
-          return this;
-        },
-      };
+        }
+        return result;
+      },
+      async return(value?: unknown) {
+        return iterator.return?.(value) ?? { done: true as const, value: undefined };
+      },
+      async throw(error?: unknown) {
+        return iterator.throw?.(error) ?? { done: true as const, value: undefined };
+      },
+      [Symbol.asyncIterator]() {
+        return this;
+      },
     };
+  };
   return stream;
 }
 
@@ -652,12 +656,9 @@ export function createThinkingOnlyFinalTextWrapper(params: {
     if (!params.shouldPatchModel(model)) {
       return maybeStream;
     }
-    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
-      return Promise.resolve(maybeStream).then((stream) =>
-        transformProviderStreamMessages(stream, promoteThinkingOnlyFinalOutputToText),
-      );
-    }
-    return transformProviderStreamMessages(maybeStream, promoteThinkingOnlyFinalOutputToText);
+    return mapAssistantMessageStream(maybeStream, (stream) =>
+      transformProviderStreamMessages(stream, promoteThinkingOnlyFinalOutputToText),
+    );
   };
 }
 
@@ -705,6 +706,10 @@ export {
   resolveMoonshotThinkingType,
 } from "../llm/providers/stream-wrappers/moonshot-thinking.js";
 export { streamWithPayloadPatch };
+/** @deprecated Bundled provider stream composition; not a third-party SDK contract. */
+export { wrapProviderPayloadHook } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
+/** @deprecated Bundled provider stream composition; not a third-party SDK contract. */
+export { mapAssistantMessageStream };
 export { createToolStreamWrapper } from "../llm/providers/stream-wrappers/zai.js";
 
 export { applyCompletionsAnthropicCacheControl } from "@openclaw/ai/transports";

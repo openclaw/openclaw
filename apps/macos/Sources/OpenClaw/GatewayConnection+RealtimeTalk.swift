@@ -4,17 +4,14 @@ import OpenClawKit
 import OpenClawProtocol
 
 private actor RealtimeTalkEventIterator {
-    private var iterator: AsyncStream<GatewayConnection.PushDelivery>.Iterator?
+    private var iterator: AsyncStream<GatewayConnection.PushDelivery>.Iterator
 
     init(stream: AsyncStream<GatewayConnection.PushDelivery>) {
         self.iterator = stream.makeAsyncIterator()
     }
 
     func next() async -> EventFrame? {
-        guard var iterator = self.iterator else {
-            preconditionFailure("Concurrent AsyncStream iteration is unsupported")
-        }
-        self.iterator = nil
+        var iterator = self.iterator
         defer { self.iterator = iterator }
         guard !Task.isCancelled else { return nil }
         while let delivery = await iterator.next(isolation: self) {
@@ -68,11 +65,11 @@ extension GatewayConnection {
             throw OpenClawChatTransportSendError.notDispatched
         }
         let configuredSessionKey = snapshot.config?["session"]?.dictionaryValue?["mainKey"]?
-            .stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+            .stringValue?.nonEmpty
         return RealtimeTalkBootstrap(
             transport: self.realtimeTalkTransport(ifCurrentServerLease: lease),
             configSnapshot: snapshot,
-            sessionKey: configuredSessionKey?.isEmpty == false ? configuredSessionKey! : "main")
+            sessionKey: configuredSessionKey ?? "main")
     }
 
     /// Creates a realtime Talk transport bound to one physical Gateway socket.
@@ -110,6 +107,11 @@ extension GatewayConnection {
             },
             isCurrent: {
                 await self.isCurrentServerLease(lease)
+            },
+            supportsCloseDisposition: {
+                await self.supportsServerCapability(
+                    .talkSessionCloseDisposition,
+                    ifCurrentServerLease: lease) == true
             })
     }
 
@@ -155,10 +157,4 @@ extension GatewayConnection {
         }
         subscribers.forEach { $0.finish() }
     }
-
-    #if DEBUG
-    func _test_activeSocketGeneration() -> UInt64? {
-        self.socketGenerationState.activeGeneration
-    }
-    #endif
 }

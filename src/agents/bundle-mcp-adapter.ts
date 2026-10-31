@@ -1,6 +1,6 @@
 // Shared mechanics for projecting bundle MCP config into provider-owned runners.
-import { filterStringRecord } from "@openclaw/normalization-core/record-coerce";
-import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
+import { filterStringRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
+import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.types.js";
 export {
   filterStringRecord as normalizeMcpStringRecord,
   isRecord,
@@ -33,10 +33,7 @@ export function normalizeBundleMcpServerConfig(
       next[field] = server[field];
     }
   }
-  const args =
-    Array.isArray(server.args) && server.args.every((entry) => typeof entry === "string")
-      ? [...server.args]
-      : undefined;
+  const args = isStringArray(server.args) ? [...server.args] : undefined;
   if (args) {
     next.args = args;
   }

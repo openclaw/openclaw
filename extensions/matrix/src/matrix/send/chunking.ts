@@ -1,4 +1,3 @@
-// Matrix helper module prepares and chunks outbound formatted text.
 import {
   resolveMarkdownTableMode,
   type MarkdownTableMode,
@@ -23,20 +22,6 @@ import {
   renderMatrixBody,
   renderMatrixMarkdownTables,
 } from "../format.js";
-
-type MatrixPreparedSingleText = {
-  trimmedText: string;
-  convertedText: string;
-  preparedBody: string;
-  singleEventLimit: number;
-  eventTextLength: number;
-  fitsInSingleEvent: boolean;
-  tableMode: MarkdownTableMode;
-};
-
-type MatrixPreparedChunkedText = MatrixPreparedSingleText & {
-  chunks: string[];
-};
 
 function normalizeMatrixEventLimit(limit: number): number {
   if (!Number.isFinite(limit) || limit <= 0) {
@@ -181,11 +166,9 @@ export function prepareMatrixSingleText(
     cfg: CoreConfig;
     accountId?: string;
     tableMode?: MarkdownTableMode;
-    preserveWhitespace?: boolean;
   },
-): MatrixPreparedSingleText {
-  const normalizedText = text.replace(/\r\n?/gu, "\n");
-  const trimmedText = opts.preserveWhitespace ? normalizedText : normalizedText.trim();
+) {
+  const trimmedText = text.replace(/\r\n?/gu, "\n");
   const cfg = requireRuntimeConfig(opts.cfg, "Matrix text preparation") as CoreConfig;
   const tableMode =
     opts.tableMode ??
@@ -221,9 +204,8 @@ export function chunkMatrixText(
     cfg: CoreConfig;
     accountId?: string;
     tableMode?: MarkdownTableMode;
-    preserveWhitespace?: boolean;
   },
-): MatrixPreparedChunkedText {
+) {
   const preparedText = prepareMatrixSingleText(text, opts);
   if (preparedText.fitsInSingleEvent) {
     return {
@@ -231,8 +213,11 @@ export function chunkMatrixText(
       chunks: preparedText.convertedText ? [preparedText.convertedText] : [],
     };
   }
-  const cfg = requireRuntimeConfig(opts.cfg, "Matrix text chunking") as CoreConfig;
-  const chunkMode = getMatrixRuntime().channel.text.resolveChunkMode(cfg, "matrix", opts.accountId);
+  const chunkMode = getMatrixRuntime().channel.text.resolveChunkMode(
+    opts.cfg,
+    "matrix",
+    opts.accountId,
+  );
   const analysis = analyzeMatrixSpoilers(preparedText.convertedText);
   const collisionRedacted = analysis.metadataCollision ? renderMatrixBody(analysis) : undefined;
   const chunkSegment = (segmentText: string): string[] => {

@@ -2,6 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
+import { hasNonEmptyString, stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString as normalizeOptionalStringValue } from "@openclaw/normalization-core/string-coerce";
 import {
   getAgentWorkspaceAccess,
@@ -33,6 +34,7 @@ import type {
   ClawHubSkillDownloadedArtifactLock,
   ClawHubSkillFileLock,
   ClawHubSkillOrigin,
+  ClawHubSkillLockEntry,
   ClawHubSkillsLockfile,
   ClawHubSkillRef,
 } from "./workspace-types.js";
@@ -48,7 +50,6 @@ export type {
 export { normalizeOptionalStringValue };
 
 const DOT_DIR = ".clawhub";
-const LEGACY_DOT_DIR = ".clawdhub";
 const CLAWHUB_OWNER_HANDLE_PATTERN = /^[a-z0-9](?:[a-z0-9._-]{0,38}[a-z0-9])?$/;
 const GITHUB_OWNER_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
 const GITHUB_REPO_PATTERN = /^[A-Za-z0-9._-]{1,100}$/;
@@ -62,10 +63,6 @@ type StrictOriginReadResult =
   | { kind: "found"; origin: ClawHubSkillOrigin; path: string }
   | { kind: "missing" }
   | { kind: "malformed"; path: string; error: string };
-
-function metadataPaths(rootDir: string, filename: string): string[] {
-  return [path.join(rootDir, DOT_DIR, filename), path.join(rootDir, LEGACY_DOT_DIR, filename)];
-}
 
 function normalizeClawHubOwnerHandle(raw: string): string {
   const ownerHandle = raw.trim().toLowerCase();
@@ -124,6 +121,21 @@ export function formatClawHubSkillRef(ref: ClawHubSkillRef): string {
   return ref.ownerHandle ? `@${ref.ownerHandle}/${ref.slug}` : ref.slug;
 }
 
+export function describeClawHubSkillRefMismatch(
+  requested: ClawHubSkillRef,
+  tracked: Pick<ClawHubSkillRef, "ownerHandle" | "requestedReference">,
+): string | undefined {
+  const { slug } = requested;
+  if (requested.ownerHandle && tracked.ownerHandle !== requested.ownerHandle) {
+    const trackedRef = formatClawHubSkillRef({ slug, ownerHandle: tracked.ownerHandle });
+    return `Skill "${slug}" is tracked as ${trackedRef}, not @${requested.ownerHandle}/${slug}.`;
+  }
+  if (requested.requestedReference && tracked.requestedReference !== requested.requestedReference) {
+    return `Skill "${slug}" is not tracked from ${requested.requestedReference}.`;
+  }
+  return undefined;
+}
+
 export function normalizeStoredRegistry(registry: string): string {
   const trimmed = registry.trim();
   return trimmed.replace(/\/+$/, "") || trimmed;
@@ -132,10 +144,6 @@ export function normalizeStoredRegistry(registry: string): string {
 export function normalizeGitHubCommitSegment(raw: unknown): string | undefined {
   const commit = normalizeOptionalStringValue(raw);
   return commit && /^[0-9a-f]{40}$/i.test(commit) ? commit : undefined;
-}
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
 }
 
 export function normalizeDownloadedArtifactLock(
@@ -147,8 +155,8 @@ export function normalizeDownloadedArtifactLock(
   const candidate = raw as Partial<ClawHubSkillDownloadedArtifactLock>;
   if (
     (candidate.kind === "archive" || candidate.kind === "clawpack") &&
-    isNonEmptyString(candidate.sha256) &&
-    isNonEmptyString(candidate.integrity)
+    hasNonEmptyString(candidate.sha256) &&
+    hasNonEmptyString(candidate.integrity)
   ) {
     return { kind: candidate.kind, sha256: candidate.sha256, integrity: candidate.integrity };
   }
@@ -160,7 +168,7 @@ export function normalizeSkillFileLock(raw: unknown): ClawHubSkillFileLock | und
     return undefined;
   }
   const candidate = raw as Partial<ClawHubSkillFileLock>;
-  return isNonEmptyString(candidate.path) && isNonEmptyString(candidate.sha256)
+  return hasNonEmptyString(candidate.path) && hasNonEmptyString(candidate.sha256)
     ? { path: candidate.path, sha256: candidate.sha256 }
     : undefined;
 }
@@ -170,9 +178,9 @@ function normalizeClawHubSkillOrigin(
 ): ClawHubSkillOrigin | null {
   if (
     raw?.version !== 1 ||
-    !isNonEmptyString(raw.registry) ||
-    !isNonEmptyString(raw.slug) ||
-    !isNonEmptyString(raw.installedVersion) ||
+    !hasNonEmptyString(raw.registry) ||
+    !hasNonEmptyString(raw.slug) ||
+    !hasNonEmptyString(raw.installedVersion) ||
     typeof raw.installedAt !== "number"
   ) {
     return null;
@@ -239,18 +247,15 @@ function parseClawHubSkillsLockfile(
 export async function readClawHubSkillsLockfile(
   workspaceDir: Parameters<WorkspaceSkillLifecycle["readClawHubSkillsLockfile"]>[0],
 ): Promise<ClawHubSkillsLockfile> {
-  for (const candidate of metadataPaths(workspaceDir, "lock.json")) {
-    try {
-      // Missing metadata is normal before installation. Leave present-file races
-      // and uncertain paths to the strict reader, including its error diagnostics.
-      if ((await statRegularFile(candidate).catch(() => undefined))?.missing) {
-        continue;
-      }
+  const candidate = path.join(workspaceDir, DOT_DIR, "lock.json");
+  try {
+    // Missing metadata is normal before installation. Leave present-file races
+    // and uncertain paths to the strict reader, including its error diagnostics.
+    if (!(await statRegularFile(candidate).catch(() => undefined))?.missing) {
       return parseClawHubSkillsLockfile(await readJson<Partial<ClawHubSkillsLockfile>>(candidate));
-    } catch (err) {
-      if (err instanceof JsonFileReadError && hasErrnoCode(err.cause, "ENOENT")) {
-        continue;
-      }
+    }
+  } catch (err) {
+    if (!(err instanceof JsonFileReadError && hasErrnoCode(err.cause, "ENOENT"))) {
       throw new Error(
         `Malformed workspace ClawHub lockfile at ${candidate}: ${formatErrorMessage(err)}. Repair or restore it before retrying.`,
         { cause: err },
@@ -260,11 +265,35 @@ export async function readClawHubSkillsLockfile(
   return { version: 1, skills: {} };
 }
 
+function writeClawHubTrackingJsonSync(
+  filePath: string,
+  value: ClawHubSkillsLockfile | ClawHubSkillOrigin,
+  assertCurrent?: () => void,
+): void {
+  assertCurrent?.();
+  replaceFileAtomicSync({
+    filePath,
+    content: `${JSON.stringify(value, null, 2)}\n`,
+    mode: 0o600,
+    dirMode: 0o777 & ~process.umask(),
+    copyFallbackOnPermissionError: true,
+    syncTempFile: true,
+    syncParentDir: true,
+    beforeRename: assertCurrent,
+  });
+}
+
 async function writeClawHubSkillsLockfile(
   workspaceDir: string,
   lockfile: ClawHubSkillsLockfile,
+  beforePersistentApply?: () => void,
 ): Promise<void> {
-  await writeJson(path.join(workspaceDir, DOT_DIR, "lock.json"), lockfile, {
+  const filePath = path.join(workspaceDir, DOT_DIR, "lock.json");
+  if (beforePersistentApply) {
+    writeClawHubTrackingJsonSync(filePath, lockfile, beforePersistentApply);
+    return;
+  }
+  await writeJson(filePath, lockfile, {
     trailingNewline: true,
   });
 }
@@ -285,20 +314,18 @@ function readJsonIfExistsSync(
 export function readClawHubSkillsLockfileStatusSync(
   workspaceDir: string,
 ): ClawHubSkillsLockfileStatusRead {
-  for (const candidate of metadataPaths(workspaceDir, "lock.json")) {
-    try {
-      const read = readJsonIfExistsSync(candidate);
-      if (!read.exists) {
-        continue;
-      }
+  const candidate = path.join(workspaceDir, DOT_DIR, "lock.json");
+  try {
+    const read = readJsonIfExistsSync(candidate);
+    if (read.exists) {
       return {
         kind: "found",
         path: candidate,
         lock: parseClawHubSkillsLockfile(read.value as Partial<ClawHubSkillsLockfile>),
       };
-    } catch (err) {
-      return { kind: "malformed", path: candidate, error: formatErrorMessage(err) };
     }
+  } catch (err) {
+    return { kind: "malformed", path: candidate, error: formatErrorMessage(err) };
   }
   return { kind: "missing" };
 }
@@ -318,31 +345,24 @@ function originResult(
 }
 
 export async function readClawHubSkillOrigin(skillDir: string): Promise<ClawHubSkillOrigin | null> {
-  for (const candidate of metadataPaths(skillDir, "origin.json")) {
-    try {
-      const origin = normalizeClawHubSkillOrigin(
-        await tryReadJson<Partial<ClawHubSkillOrigin>>(candidate),
-      );
-      if (origin) {
-        return origin;
-      }
-    } catch {
-      // ignore
-    }
+  try {
+    return normalizeClawHubSkillOrigin(
+      await tryReadJson<Partial<ClawHubSkillOrigin>>(path.join(skillDir, DOT_DIR, "origin.json")),
+    );
+  } catch {
+    return null;
   }
-  return null;
 }
 
 export function readClawHubSkillOriginStatusSync(skillDir: string): StrictOriginReadResult {
-  for (const candidate of metadataPaths(skillDir, "origin.json")) {
-    try {
-      const read = readJsonIfExistsSync(candidate);
-      if (read.exists) {
-        return originResult(read.value as Partial<ClawHubSkillOrigin>, candidate);
-      }
-    } catch (err) {
-      return { kind: "malformed", path: candidate, error: formatErrorMessage(err) };
+  const candidate = path.join(skillDir, DOT_DIR, "origin.json");
+  try {
+    const read = readJsonIfExistsSync(candidate);
+    if (read.exists) {
+      return originResult(read.value as Partial<ClawHubSkillOrigin>, candidate);
     }
+  } catch (err) {
+    return { kind: "malformed", path: candidate, error: formatErrorMessage(err) };
   }
   return { kind: "missing" };
 }
@@ -350,15 +370,14 @@ export function readClawHubSkillOriginStatusSync(skillDir: string): StrictOrigin
 export async function readClawHubSkillOriginStrict(
   skillDir: string,
 ): Promise<StrictOriginReadResult> {
-  for (const candidate of metadataPaths(skillDir, "origin.json")) {
-    try {
-      const raw = await readJsonIfExists<Partial<ClawHubSkillOrigin>>(candidate);
-      if (raw) {
-        return originResult(raw, candidate);
-      }
-    } catch (err) {
-      return { kind: "malformed", path: candidate, error: formatErrorMessage(err) };
+  const candidate = path.join(skillDir, DOT_DIR, "origin.json");
+  try {
+    const raw = await readJsonIfExists<Partial<ClawHubSkillOrigin>>(candidate);
+    if (raw) {
+      return originResult(raw, candidate);
     }
+  } catch (err) {
+    return { kind: "malformed", path: candidate, error: formatErrorMessage(err) };
   }
   return { kind: "missing" };
 }
@@ -366,8 +385,14 @@ export async function readClawHubSkillOriginStrict(
 async function writeClawHubSkillOrigin(
   skillDir: string,
   origin: ClawHubSkillOrigin,
+  beforePersistentApply?: () => void,
 ): Promise<void> {
-  await writeJson(path.join(skillDir, DOT_DIR, "origin.json"), origin, { trailingNewline: true });
+  const filePath = path.join(skillDir, DOT_DIR, "origin.json");
+  if (beforePersistentApply) {
+    writeClawHubTrackingJsonSync(filePath, origin, beforePersistentApply);
+    return;
+  }
+  await writeJson(filePath, origin, { trailingNewline: true });
 }
 
 async function readInstalledSkillFileLock(
@@ -385,13 +410,11 @@ async function readInstalledSkillFileLock(
 }
 
 /** Finalize native tracking beside the installed files, preserving other tracked skills. */
-export async function recordClawHubSkillInstall(
-  params: Parameters<WorkspaceSkillLifecycle["recordClawHubSkillInstall"]>[0],
-): Promise<void> {
-  const { origin, verification } = params;
-  await writeClawHubSkillOrigin(params.skillDir, origin);
-  const lock = await readClawHubSkillsLockfile(params.workspaceDir);
-  lock.skills[origin.slug] = {
+export function clawHubSkillLockEntry(
+  origin: ClawHubSkillOrigin,
+  verification?: ClawHubSkillLockEntry["verification"],
+): ClawHubSkillLockEntry {
+  return {
     version: origin.installedVersion,
     registry: origin.registry,
     installedAt: origin.installedAt,
@@ -404,7 +427,48 @@ export async function recordClawHubSkillInstall(
     ...(origin.fileTreeSha256 ? { fileTreeSha256: origin.fileTreeSha256 } : {}),
     ...(verification ? { verification } : {}),
   };
-  await writeClawHubSkillsLockfile(params.workspaceDir, lock);
+}
+
+export async function recordClawHubSkillInstall(
+  params: Parameters<WorkspaceSkillLifecycle["recordClawHubSkillInstall"]>[0],
+): Promise<void> {
+  const { origin, verification } = params;
+  await writeClawHubSkillOrigin(params.skillDir, origin, params.beforePersistentApply);
+  const lock = await readClawHubSkillsLockfile(params.workspaceDir);
+  lock.skills[origin.slug] = clawHubSkillLockEntry(origin, verification);
+  await writeClawHubSkillsLockfile(params.workspaceDir, lock, params.beforePersistentApply);
+}
+
+export function replaceClawHubSkillLockEntryExpected(params: {
+  workspaceDir: string;
+  slug: string;
+  expected: ClawHubSkillLockEntry;
+  replacement: ClawHubSkillLockEntry;
+  assertCurrent?: () => void;
+}): void {
+  const current = readClawHubSkillsLockfileStatusSync(params.workspaceDir);
+  if (
+    current.kind !== "found" ||
+    stableStringify(current.lock.skills[params.slug]) !== stableStringify(params.expected)
+  ) {
+    throw new Error(`Skill ${JSON.stringify(params.slug)} tracking changed during rollback.`);
+  }
+  const next: ClawHubSkillsLockfile = {
+    ...current.lock,
+    skills: { ...current.lock.skills, [params.slug]: params.replacement },
+  };
+  const beforeRename = () => {
+    params.assertCurrent?.();
+    const latest = readClawHubSkillsLockfileStatusSync(params.workspaceDir);
+    if (latest.kind !== "found" || stableStringify(latest.lock) !== stableStringify(current.lock)) {
+      throw new Error(`Skill ${JSON.stringify(params.slug)} tracking changed during rollback.`);
+    }
+  };
+  writeClawHubTrackingJsonSync(
+    path.join(params.workspaceDir, DOT_DIR, "lock.json"),
+    next,
+    beforeRename,
+  );
 }
 
 export function resolveWorkspaceClawHubSkills(workspaceDir: string) {
@@ -442,19 +506,12 @@ export async function untrackClawHubSkill(
   }
   // Keep the authority check and atomic publication in one synchronous commit section.
   // The async atomic writer awaits identity checks after its pre-rename callback.
-  const writeLock = (value: ClawHubSkillsLockfile, assertCurrent = beforePersistentApply) => {
-    assertCurrent?.();
-    return replaceFileAtomicSync({
-      filePath: path.join(workspaceDir, DOT_DIR, "lock.json"),
-      content: `${JSON.stringify(value, null, 2)}\n`,
-      mode: 0o600,
-      dirMode: 0o777 & ~process.umask(),
-      copyFallbackOnPermissionError: true,
-      syncTempFile: true,
-      syncParentDir: true,
-      beforeRename: assertCurrent,
-    });
-  };
+  const writeLock = (value: ClawHubSkillsLockfile, assertCurrent = beforePersistentApply) =>
+    writeClawHubTrackingJsonSync(
+      path.join(workspaceDir, DOT_DIR, "lock.json"),
+      value,
+      assertCurrent,
+    );
   delete lock.skills[trackedSlug];
   writeLock(lock);
   return async () => {

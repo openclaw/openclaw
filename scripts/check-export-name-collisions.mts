@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
@@ -56,7 +56,13 @@ export type ModuleExports = {
   valueDefinitions: Map<string, ExportedValueDefinition>;
 };
 
-const extraExcludedFileSuffixes = [".test-support.ts", ".test-helpers.ts", ".d.ts"];
+const extraExcludedFileSuffixes = [
+  ".test-support.ts",
+  ".test-helpers.ts",
+  ".d.ts",
+  ".d.mts",
+  ".d.cts",
+];
 
 function normalizeRelativePath(filePath: string) {
   return filePath.replaceAll(path.sep, "/");
@@ -214,13 +220,13 @@ function returnCall(statement: ts.Statement | undefined) {
 function isStaticImportForwarder(
   call: ts.CallExpression,
   functionName: string,
-  importedNamesByLocalName: ReadonlyMap<string, string>,
+  importedSymbolsByLocalName: ReadonlyMap<string, ImportedSymbolReference>,
 ) {
   const callee = unwrapExpression(call.expression);
   return (
     ts.isIdentifier(callee) &&
     callee.text !== functionName &&
-    importedNamesByLocalName.get(callee.text) === functionName
+    importedSymbolsByLocalName.get(callee.text)?.importedName === functionName
   );
 }
 
@@ -243,7 +249,7 @@ function isLazyModuleForwarderCall(
 function isForwardingOnlyFunction(
   declaration: ts.FunctionDeclaration | ts.ArrowFunction,
   functionName: string,
-  importedNamesByLocalName: ReadonlyMap<string, string>,
+  importedSymbolsByLocalName: ReadonlyMap<string, ImportedSymbolReference>,
 ) {
   const body = declaration.body;
   if (!body) {
@@ -281,7 +287,8 @@ function isForwardingOnlyFunction(
   return Boolean(
     call &&
     parametersAreForwarded(declaration.parameters, call.arguments) &&
-    ((!moduleObjectName && isStaticImportForwarder(call, functionName, importedNamesByLocalName)) ||
+    ((!moduleObjectName &&
+      isStaticImportForwarder(call, functionName, importedSymbolsByLocalName)) ||
       isLazyModuleForwarderCall(call, functionName, moduleObjectName)),
   );
 }
@@ -289,7 +296,7 @@ function isForwardingOnlyFunction(
 function isForwardingOnlyConst(
   declaration: ts.VariableDeclaration,
   exportName: string,
-  importedNamesByLocalName: ReadonlyMap<string, string>,
+  importedSymbolsByLocalName: ReadonlyMap<string, ImportedSymbolReference>,
   lazyRuntimeMethods: ReadonlyMap<string, number>,
 ) {
   if (!ts.isIdentifier(declaration.name) || !declaration.initializer) {
@@ -297,7 +304,7 @@ function isForwardingOnlyConst(
   }
   const initializer = unwrapExpression(declaration.initializer);
   if (ts.isIdentifier(initializer)) {
-    return importedNamesByLocalName.get(initializer.text) === exportName;
+    return importedSymbolsByLocalName.get(initializer.text)?.importedName === exportName;
   }
   if (ts.isCallExpression(initializer) && ts.isIdentifier(initializer.expression)) {
     const arity = lazyRuntimeMethods.get(initializer.expression.text);
@@ -326,17 +333,15 @@ function isForwardingOnlyConst(
   }
   return (
     ts.isArrowFunction(initializer) &&
-    isForwardingOnlyFunction(initializer, exportName, importedNamesByLocalName)
+    isForwardingOnlyFunction(initializer, exportName, importedSymbolsByLocalName)
   );
 }
 
 /** Collects value exports and locally defined exported functions/consts from one module. */
 export function collectModuleExportNames(
-  _content: string,
   fileName: string,
   sourceFile: ts.SourceFile,
 ): ModuleExports {
-  const importedNamesByLocalName = new Map<string, string>();
   const importedSymbolsByLocalName = new Map<string, ImportedSymbolReference>();
   const namespaceImportsByLocalName = new Map<string, string>();
   const localConstDeclarations = new Map<string, ts.VariableDeclaration[]>();
@@ -362,7 +367,6 @@ export function collectModuleExportNames(
             const moduleSpecifier = ts.isStringLiteral(statement.moduleSpecifier)
               ? statement.moduleSpecifier.text
               : "";
-            importedNamesByLocalName.set(specifier.name.text, importedName);
             importedSymbolsByLocalName.set(specifier.name.text, {
               importedName,
               localName: specifier.name.text,
@@ -582,7 +586,12 @@ export function collectModuleExportNames(
       if (
         constDeclarations.length === 1 &&
         constDeclaration &&
-        isForwardingOnlyConst(constDeclaration, name, importedNamesByLocalName, lazyRuntimeMethods)
+        isForwardingOnlyConst(
+          constDeclaration,
+          name,
+          importedSymbolsByLocalName,
+          lazyRuntimeMethods,
+        )
       ) {
         continue;
       }
@@ -608,7 +617,7 @@ export function collectModuleExportNames(
     // argument forwarding so those boundaries do not become duplicate behavior.
     if (
       implementation &&
-      isForwardingOnlyFunction(implementation, name, importedNamesByLocalName)
+      isForwardingOnlyFunction(implementation, name, importedSymbolsByLocalName)
     ) {
       continue;
     }
@@ -682,9 +691,10 @@ function collectSdkExportNames(modulesByPath: ReadonlyMap<string, ModuleExports>
 // exports its own `testing`/`testApi` object and tests import it qualified from that
 // exact module. Flagging them would push burn-down work to "fix" a deliberate idiom.
 const intentionalSameNameFamilies = new Set(["testing", "testApi"]);
-// The handoff build substitutes this exact module pair, so both loaders must
-// implement the same export. A third implementation is still a collision.
-const managedHandoffNativeLoaderModules = [
+// Sealed recovery builds substitute these exact loaders for the shared one, so
+// all must implement the same export. Any other implementation is a collision.
+const sealedRecoveryNativeLoaderModules = [
+  "src/infra/package-update-activation-native-loader.ts",
   "src/infra/update-managed-service-handoff-native-loader.ts",
   "src/shared/freebsd-process-identity-native.ts",
 ];
@@ -707,11 +717,15 @@ const sqliteWorkerProtocolModules = new Map<string, ReadonlySet<string>>([
       "src/agents/plugin-model-catalog.worker.ts",
       "src/boards/sqlite-board-store.worker.ts",
       "src/agents/sessions/session-manager-metadata.worker.ts",
+      "src/config/sessions/goals-operations.worker.ts",
       "src/config/sessions/session-accessor.sqlite-transcript-reports.worker.ts",
+      "src/config/sessions/session-fork-domain.worker.ts",
+      "src/config/sessions/session-lifecycle-projection.worker.ts",
+      "src/config/sessions/session-message-rewrite.worker.ts",
       "src/config/sessions/session-sharing-store.worker.ts",
       "src/config/sessions/session-transcript-projection-publication.worker.ts",
       "src/gateway/worker-environments/transcript-commit.worker.ts",
-      "src/infra/heartbeat-outcome-store.worker.ts",
+      "src/session-cards/progress-card-store.worker.ts",
     ]),
   ],
 ]);
@@ -726,7 +740,6 @@ function analyzeExportNames(modules: SourceModule[]) {
   )) {
     const relativePath = normalizeRelativePath(sourceModule.path);
     const moduleExports = collectModuleExportNames(
-      sourceModule.content,
       relativePath,
       parser.parseSourceFile(relativePath, sourceModule.content),
     );
@@ -756,8 +769,8 @@ function analyzeExportNames(modules: SourceModule[]) {
       fileSet.size < 2 ||
       intentionalSameNameFamilies.has(name) ||
       (name === "loadFreeBsdProcessIdentityNative" &&
-        fileSet.size === managedHandoffNativeLoaderModules.length &&
-        managedHandoffNativeLoaderModules.every((file) => fileSet.has(file))) ||
+        fileSet.size === sealedRecoveryNativeLoaderModules.length &&
+        sealedRecoveryNativeLoaderModules.every((file) => fileSet.has(file))) ||
       (protocolModules !== undefined && [...fileSet].every((file) => protocolModules.has(file)))
     ) {
       continue;

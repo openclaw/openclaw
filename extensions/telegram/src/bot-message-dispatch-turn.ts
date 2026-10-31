@@ -1,3 +1,4 @@
+import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
   readAgentRunTerminalOutcome,
@@ -10,13 +11,14 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { PLUGIN_COMMAND_DISPATCH } from "openclaw/plugin-sdk/plugin-command-runtime";
 import { isFastModeAutoProgressPayload } from "openclaw/plugin-sdk/reply-payload";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
+import { resolveTelegramBotLoopProtection } from "./bot-loop-protection.js";
 import { sendPayload } from "./bot-message-dispatch-delivery.js";
 import {
   beginDraftQueuedFollowup,
   cleanupDrafts,
   enqueueDraftEvent,
-  handleBeforeDeliverCancelled,
+  dropQueuedAnswerBlockRotation,
   ingestDraftLaneSegments,
   prepareQueuedAnswerBlock,
   repositionLaneForNewMessage,
@@ -41,7 +43,6 @@ import {
   handleReplySkip,
   resetReasoningStepState,
 } from "./bot-message-dispatch-reply.js";
-import { resolveHumanDelayConfig } from "./bot-message-dispatch.agent.runtime.js";
 import type { TelegramDispatchTurn as Turn } from "./bot-message-dispatch.types.js";
 import { TELEGRAM_CHAT_ACTION_INTERVAL_MS } from "./chat-action-timing.js";
 import { telegramInboundEventDelivery } from "./inbound-event-delivery.js";
@@ -50,15 +51,12 @@ const TELEGRAM_MAX_CONSECUTIVE_TYPING_FAILURES = 5;
 
 export async function runTelegramDispatchTurn(turn: Turn) {
   const { context } = turn;
-  let sessionMetaTask: Promise<unknown> | undefined;
+  const hasRepliedRef = { value: false };
   const isRoomEvent = context.ctxPayload.InboundEventKind === "room_event";
+  // Quiet drafts do not disable explicit /verbose diagnostics; only configured opt-outs do.
   const toolProgressEnabled =
     turn.streamMode !== "off" &&
-    resolveChannelStreamingPreviewToolProgress(
-      turn.telegramCfg,
-      turn.streamMode !== "progress",
-      turn.streamMode,
-    );
+    resolveChannelStreamingPreviewToolProgress(turn.telegramCfg, true, turn.streamMode);
   const beginDeliveryCorrelation = () =>
     telegramInboundEventDelivery.begin(
       context.ctxPayload.SessionKey,
@@ -74,9 +72,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
     enqueueDraftEvent(turn, task).then(() => false);
 
   try {
-    const { onModelSelected, ...replyPipeline } = (
-      turn.telegramDeps.createChannelMessageReplyPipeline ?? createChannelMessageReplyPipeline
-    )({
+    const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
       cfg: turn.cfg,
       agentId: context.route.agentId,
       channel: "telegram",
@@ -123,21 +119,20 @@ export async function runTelegramDispatchTurn(turn: Turn) {
             sessionKey: context.route.sessionKey,
           },
           ctxPayload: context.ctxPayload,
-          record: {
-            ...context.turn.record,
-            trackSessionMetaTask: (task) => {
-              sessionMetaTask = task;
-            },
-          },
-          afterRecord: async () => {
-            await sessionMetaTask;
-          },
+          record: context.turn.record,
+          botLoopProtection: resolveTelegramBotLoopProtection({
+            cfg: turn.cfg,
+            accountId: context.route.accountId,
+            msg: context.msg,
+            botUserId: context.primaryCtx.me?.id,
+          }),
           dispatchReplyFromConfig: turn.opts.dispatchReplyFromConfig,
           delivery: {
-            deliverWithProviderMessageSending: async (payload, info) =>
-              await deliverReply(turn, payload, info),
-            deliverPreparedWithProviderMessageSending: async (plan, info) =>
-              await deliverPreparedReply(turn, plan, info),
+            // Delivery owns its full draft mutation, including native questions and receipts.
+            deliverWithProviderMessageSending: (payload, info) =>
+              enqueueDraftEvent(turn, () => deliverReply(turn, payload, info), "delivery"),
+            deliverPreparedWithProviderMessageSending: (plan, info) =>
+              enqueueDraftEvent(turn, () => deliverPreparedReply(turn, plan, info), "delivery"),
             onError: (err, info) => handleReplyError(turn, err, info),
             onDelivered: (_payload, info, result) => {
               const reason = result?.suppression?.reason;
@@ -156,10 +151,18 @@ export async function runTelegramDispatchTurn(turn: Turn) {
             humanDelay: resolveHumanDelayConfig(turn.cfg, context.route.agentId),
             beforeDeliver: async (payload) => payload,
             onBeforeDeliverCancelled: (payload, info) =>
-              handleBeforeDeliverCancelled(turn, payload, info),
+              info.kind === "block"
+                ? enqueueDraftEvent(turn, async () => {
+                    dropQueuedAnswerBlockRotation(turn, payload, info.assistantMessageIndex);
+                  })
+                : undefined,
             onSkip: (payload, info) => handleReplySkip(turn, payload, info),
           },
           replyOptions: {
+            hasRepliedRef,
+            onPreparedAgentRunStart: ({ runId }) => {
+              turn.transcriptMirrorRunId = runId;
+            },
             ...(context.ctxPayload.CommandSource === "native"
               ? { [PLUGIN_COMMAND_DISPATCH]: { kind: "non-plugin" as const } }
               : {}),
@@ -265,6 +268,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
                   })
               : () => false,
             onQueuedFollowupAdmitted: () => {
+              hasRepliedRef.value = false;
               beginDraftQueuedFollowup(turn);
               turn.previewLifecycle.reset();
               turn.finalDispatchClaimed = false;
@@ -277,10 +281,11 @@ export async function runTelegramDispatchTurn(turn: Turn) {
             },
             suppressDefaultToolProgressMessages:
               !turn.streamDeliveryEnabled || Boolean(turn.answerLane.stream),
+            progressRequiresReply: turn.streamMode === "progress" ? true : undefined,
             suppressToolProgressMessages: !toolProgressEnabled,
             allowProgressCallbacksWhenSourceDeliverySuppressed:
               !isRoomEvent && Boolean(turn.answerLane.stream),
-            onVerboseProgressVisibility: (isActive) => {
+            onVerboseProgressVisibilityAsync: (isActive) => {
               turn.verboseProgressActive = isActive;
             },
             commentaryProgressEnabled:
@@ -293,45 +298,61 @@ export async function runTelegramDispatchTurn(turn: Turn) {
             shouldDeliverCommentaryPayloads:
               turn.progressPreambleEnabled === true ? () => false : undefined,
             reasoningPayloadsEnabled: turn.durableReasoningPayloadsEnabled,
-            onToolStart: (payload) => handleToolStart(turn, payload),
+            onToolStart: (payload) => enqueueDraftEvent(turn, () => handleToolStart(turn, payload)),
             onItemEvent: (payload) => handleItemEvent(turn, payload),
-            onPlanUpdate: (payload) => handlePlanUpdate(turn, payload),
-            onApprovalEvent: async (payload) =>
-              canPushToolProgress(turn)
-                ? await turn.progressCompositor.pushApprovalEvent(payload)
-                : false,
-            onToolResult: async (payload) => {
-              const text = payload.text?.trim();
-              if (!text) {
+            onPlanUpdate: (payload) =>
+              enqueueDraftEvent(turn, () => handlePlanUpdate(turn, payload)),
+            onApprovalEvent: (payload) =>
+              enqueueDraftEvent(turn, async () =>
+                (await canPushToolProgress(turn))
+                  ? await turn.progressCompositor.pushApprovalEvent(payload)
+                  : false,
+              ),
+            onToolResult: (payload) =>
+              enqueueDraftEvent(turn, async () => {
+                const text = payload.text?.trim();
+                if (!text) {
+                  return false;
+                }
+                const progressId = payload.channelData?.openclawToolProgressId;
+                const updatedDraft = await pushToolProgress(turn, text, {
+                  startImmediately: true,
+                  id: typeof progressId === "string" ? progressId : undefined,
+                });
+                if (updatedDraft) {
+                  return true;
+                }
+                if (isFastModeAutoProgressPayload(payload) && !(await canPushToolProgress(turn))) {
+                  return (await sendPayload(turn, payload)).visibleReplySent;
+                }
                 return false;
-              }
-              const progressId = payload.channelData?.openclawToolProgressId;
-              const updatedDraft = await pushToolProgress(turn, text, {
-                startImmediately: true,
-                id: typeof progressId === "string" ? progressId : undefined,
-              });
-              if (updatedDraft) {
-                return true;
-              }
-              if (isFastModeAutoProgressPayload(payload) && !canPushToolProgress(turn)) {
-                return (await sendPayload(turn, payload)).visibleReplySent;
-              }
-              return false;
-            },
+              }),
             // Ambient room events are intentionally invisible, including reactions.
             // User requests in group chats are not room_event turns and retain these callbacks.
             onCompactionStart: isRoomEvent
               ? undefined
-              : async () => await handleCompactionStart(turn),
+              : () => enqueueDraftEvent(turn, () => handleCompactionStart(turn)),
             onCompactionEnd: isRoomEvent
               ? undefined
-              : async (payload) => await handleCompactionEnd(turn, payload),
+              : (payload) => enqueueDraftEvent(turn, () => handleCompactionEnd(turn, payload)),
             onModelSelected,
           },
         }),
       },
     });
     if (!turnResult.dispatched) {
+      if (
+        turnResult.admission.kind === "drop" &&
+        turnResult.admission.reason === "bot-loop-protection"
+      ) {
+        // Core reports this drop only to a turn log callback, which Telegram does not pass.
+        // Without this line an over-budget bot pair reads as lost delivery.
+        turn.runtime.log?.(
+          warn(
+            `telegram: bot-loop protection dropped message ${context.msg.message_id} from bot ${context.msg.from?.id} in chat ${context.chatId} (account ${context.route.accountId})`,
+          ),
+        );
+      }
       return false;
     }
     // Dispatch custody prevents replay, but only provider acceptance proves visibility.

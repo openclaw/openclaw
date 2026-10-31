@@ -111,17 +111,13 @@ export function readSessionEntryCount(
 
 export function* iterateSessionEntryKeys(
   database: OpenClawAgentDatabaseReader,
-  options: { limit?: number } = {},
 ): IterableIterator<string> {
   const db = getSessionKysely(database.db);
   const query = db
     .selectFrom("session_nodes")
     .select([sessionEntryInventoryJson, "session_key"])
     .orderBy("session_key", "asc");
-  for (const row of iterateSqliteQuerySync(
-    database.db,
-    options.limit === undefined ? query : query.limit(options.limit),
-  )) {
+  for (const row of iterateSqliteQuerySync(database.db, query)) {
     if (row.entry_json === null || parseSessionEntryJson({ entry_json: row.entry_json })) {
       yield row.session_key;
     }

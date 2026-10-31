@@ -2,11 +2,15 @@
 
 This gate starts only after stable publication. It is a narrow shipped-state
 closeout, not permission to heal broader `main`. Stable publication is not
-complete until `main` carries the actual shipped release state.
+complete until `main` carries the actual shipped release state and the handoff
+records the exact merged closeout commit. Publication from the release branch
+and closeout on `main` are separate state transitions; never imply that
+publishing stable also advanced `main`.
 
-Closeout requires the original strict stable/full publication evidence with
-soak, blocking performance, and successful selected validation lanes. Historical
-waiver-bearing receipt replay and repair are unsupported. Completion requires both the closeout manifest and its matching checksum. If only the checksum is missing,
+Closeout requires the original successful stable/full FRV with soak and blocking
+performance, including any recorded [release-tooling policy](../../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers)
+decisions. Closeout cannot grant a waiver to a failed FRV. Historical candidate-side
+skip-waiver receipt replay and repair remain unsupported. Completion requires both the closeout manifest and its matching checksum. If only the checksum is missing,
 replay an eligible strict-evidence closeout to regenerate identical bytes; do not manufacture
 new evidence. Invalid or mismatched assets remain blocking.
 
@@ -21,9 +25,9 @@ new evidence. Invalid or mismatched assets remain blocking.
    train. For late closeout, do not downgrade an already-started later stable
    train; retain the validator's exact shipped-note and version checks. Run
    `pnpm release:prep` after any root version change, then
-   `pnpm deps:npm-lock:check`. `release:prep` requires npm `latest` and `beta`
-   in `scripts/lib/update-compat-inventory.json`. Record the shipped tarball
-   first, following [older updater checks](validation.md#older-updater-checks)
+   `pnpm deps:npm-lock:check`. Record the shipped tarball in
+   `scripts/lib/update-compat-inventory.json` so first-hop update lanes cover
+   it, following [older updater checks](validation.md#older-updater-checks)
    (integrity-verified download, `pnpm update:compat:gen`). Expect recorder or
    bridge-writer failures when the release added post-swap updater imports or a
    nested bundle directory. Reproduce them with `pnpm build` before pushing.
@@ -52,9 +56,21 @@ new evidence. Invalid or mismatched assets remain blocking.
 4. Do not add `YYYY.M.PATCH+1`, a beta version, or an empty future changelog
    section to `main` until the operator explicitly starts that release train.
 5. Run `pnpm release:generated:check`, `pnpm deps:npm-lock:check`, and
-   `OPENCLAW_TESTBOX=1 pnpm check:changed`. Push, then verify `origin/main`
-   contains the exact shipped notes and the validator-accepted shipped-or-later
-   stable version before calling the stable release done.
+   `OPENCLAW_TESTBOX=1 pnpm check:changed`. Push, resolve the closeout PR's exact
+   merged commit as `mainCloseoutSha`, fetch `origin/main` once, and require
+   `git merge-base --is-ancestor "$mainCloseoutSha" origin/main` to succeed. Do
+   not require equality with the branch tip or wait for a quiet `main`; later
+   commits are expected and do not invalidate the merged closeout commit. Read
+   the changelog and `package.json` from `mainCloseoutSha` itself; require the
+   exact shipped notes and the validator-accepted shipped-or-later stable
+   version, then record that version as `mainCloseoutVersion`. Use
+   `mainCloseoutSha`, not the moving branch name or tip, for the release's
+   main-source handoff. A deployment that intentionally wants newer `main`
+   resolves the branch once to `deploymentSha`, then binds its version checks,
+   configured-plugin checks, build, and launch to that same commit. It never
+   expects `origin/main` to remain equal to either recorded SHA and never
+   resamples merely because the branch advanced. Do not call the stable release
+   done until the exact closeout SHA and version are recorded.
 6. Keep repository variables `RELEASE_ROLLBACK_DRILL_ID` and
    `RELEASE_ROLLBACK_DRILL_DATE` current after each private rollback drill.
    `openclaw-stable-main-closeout.yml` starts from the `main` push carrying the
@@ -81,13 +97,24 @@ new evidence. Invalid or mismatched assets remain blocking.
    when repository drill variables are configured. Replay requires successful
    stable/full evidence with soak and blocking performance. Complete
    manifest/checksum pairs remain recorded without rewriting. Historical
-   waiver-bearing receipt replay and repair are unsupported: the original
+   candidate-side skip-waiver receipt replay and repair remain unsupported: the original
    postpublish evidence binds its validation run, which a fresh run cannot
    replace. Preserve those artifacts and stop instead of overwriting them or
    publishing again to repair a receipt.
    Push runs are never cancelled by later `main` pushes; verification serializes
    per resolved stable tag.
-7. A macOS build pulled from Sparkle on purpose (for example a crashing
+7. Verify the public website through its existing read-only
+   `companion-downloads-deployed.yml` workflow on `openclaw/openclaw.ai` main.
+   Require success for that exact run: stable download routes resolve current
+   assets at request time, and the verifier follows every homepage/install button
+   to its current stable artifact. New app releases need no website rebuild or
+   source change. The website cache expires within five minutes of resolution;
+   a check during propagation can fail and be resumed after expiry.
+   The orchestrator performs this gate even when immutable closeout assets
+   already exist; those assets are not evidence of current website downloads.
+   Record failed runs and permit a fresh verification on resume. Permit
+   cross-repository Actions dispatch/read with `OPENCLAW_GH_TOKEN` in core.
+8. A macOS build pulled from Sparkle on purpose (for example a crashing
    in-app update) is a third appcast state, not a contract failure. Withdraw
    it with a `main` commit whose subject is exactly
    `chore(release): withdraw the <version> macOS build from the Sparkle feed`
@@ -100,6 +127,10 @@ new evidence. Invalid or mismatched assets remain blocking.
    replay preserves those fields byte-for-byte. Any other feed mismatch still
    fails. The later hotfix release (for example `2026.9.7`) verifies its own
    appcast at its own closeout; the withdrawn record is never rewritten.
+9. Finish with the [release retrospective](retrospective.md): once publication,
+   platform assets, and this closeout are terminal, write the report and open
+   its `openclaw/maintainers` PR with the shared issue-ledger update. The stable
+   release is not done until that PR is open and its ledger check passes.
 
 ## Recover a failed publication parent
 

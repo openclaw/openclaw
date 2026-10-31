@@ -1,7 +1,6 @@
 import { kindFromMime, normalizeMimeType } from "@openclaw/media-core/mime";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-// DashScope-compatible video provider adapts DashScope-style generation APIs.
 import { toImageDataUrl } from "../image-generation/image-assets.js";
 import { resolveGeneratedMediaMaxBytes } from "../media/configured-max-bytes.js";
 import {
@@ -10,11 +9,12 @@ import {
   createProviderOperationTimeoutResolver,
   executeProviderOperationWithRetry,
   fetchWithTimeoutGuarded,
-  postJsonRequest,
+  postJsonResponse,
   readProviderBinaryResponse,
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   waitProviderOperationPollInterval,
+  type postJsonRequest,
   type ProviderOperationDeadline,
   type ProviderOperationTimeoutMs,
 } from "../plugin-sdk/provider-http.js";
@@ -23,6 +23,7 @@ import {
   DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL,
   DASHSCOPE_WAN_VIDEO_SIZE_BY_GEOMETRY,
 } from "./dashscope-wan-models.js";
+import { normalizeVideoGenerationDuration } from "./duration-support.js";
 import type {
   GeneratedVideoAsset,
   VideoGenerationRequest,
@@ -30,8 +31,6 @@ import type {
   VideoGenerationSourceAsset,
 } from "./types.js";
 
-// DashScope-compatible video helper for Wan-style async task APIs: submit JSON,
-// poll task status, then download generated video URLs with byte limits.
 export {
   DASHSCOPE_WAN_VIDEO_CAPABILITIES,
   DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL,
@@ -50,7 +49,7 @@ export const DEFAULT_VIDEO_RESOLUTION_TO_SIZE: Record<string, string> = {
 const DEFAULT_VIDEO_GENERATION_POLL_INTERVAL_MS = 2_500;
 const DEFAULT_VIDEO_GENERATION_MAX_POLL_ATTEMPTS = 120;
 
-export type DashscopeVideoGenerationResponse = {
+type DashscopeVideoGenerationResponse = {
   output?: {
     task_id?: string;
     task_status?: string;
@@ -251,8 +250,9 @@ export function buildDashscopeVideoGenerationParameters(
       parameters.size = size;
     }
   }
-  if (typeof req.durationSeconds === "number" && Number.isFinite(req.durationSeconds)) {
-    parameters.duration = Math.max(1, Math.round(req.durationSeconds));
+  const duration = normalizeVideoGenerationDuration({ durationSeconds: req.durationSeconds });
+  if (duration !== undefined) {
+    parameters.duration = duration;
   }
   if (typeof req.audio === "boolean" && !wan27) {
     parameters.audio = req.audio;
@@ -480,7 +480,7 @@ export async function runDashscopeVideoGenerationTask(params: {
     timeoutMs: createProviderOperationTimeoutResolver({ deadline, defaultTimeoutMs }),
     totalTimeoutMs: deadline.timeoutMs,
   });
-  const { response, release } = await postJsonRequest({
+  const submitted = await postJsonResponse<DashscopeVideoGenerationResponse>({
     url: params.url,
     headers: params.headers,
     body: {
@@ -501,22 +501,14 @@ export async function runDashscopeVideoGenerationTask(params: {
     fetchFn: params.fetchFn,
     allowPrivateNetwork: params.allowPrivateNetwork,
     dispatcherPolicy: params.dispatcherPolicy,
-  });
-
-  let submitted: DashscopeVideoGenerationResponse;
-  try {
-    await assertOkOrThrowHttpError(response, `${params.providerLabel} video generation failed`, {
+    errorLabel: `${params.providerLabel} video generation failed`,
+    responseLabel: `${params.providerLabel} video generation`,
+    errorOptions: {
       bodyTimeoutMs: bodyReadOptions.timeoutMs,
       onBodyTimeout: bodyReadOptions.onTimeout,
-    });
-    submitted = await readProviderJsonResponse<DashscopeVideoGenerationResponse>(
-      response,
-      `${params.providerLabel} video generation`,
-      bodyReadOptions,
-    );
-  } finally {
-    await release();
-  }
+    },
+    readOptions: bodyReadOptions,
+  });
 
   const taskId = submitted.output?.task_id?.trim();
   if (!taskId) {

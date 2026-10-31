@@ -1,47 +1,127 @@
-import { describe, expect, it, vi } from "vitest";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import * as onboardingPlugins from "../commands/onboarding-plugin-install.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as clawHubSkills from "../infra/clawhub-skills.js";
+import * as catalog from "../plugins/official-external-plugin-catalog.js";
 import type { RuntimeEnv } from "../runtime.js";
+import * as skillLifecycle from "../skills/lifecycle/clawhub.js";
+import * as recommendationsStore from "../state/onboarding-recommendations.js";
 import {
   createOnboardingRecommendationsStore,
   type OnboardingRecommendationsRecord,
-  type OnboardingRecommendationsStore,
+  type OnboardingRecommendationsStore as Store,
 } from "../state/onboarding-recommendations.js";
+import * as recommendations from "../system-agent/setup-app-recommendations.js";
 import type {
   SetupAppRecommendationsResult,
   SetupAppScanPhase,
 } from "../system-agent/setup-app-recommendations.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { WizardPrompter } from "./prompts.js";
-import { setupAppRecommendations as setupAppRecommendationsWithOutcome } from "./setup.app-recommendations.js";
+import { setupAppRecommendations as runAppRecommendations } from "./setup.app-recommendations.js";
 
-async function setupAppRecommendations(
-  params: Partial<Parameters<typeof setupAppRecommendationsWithOutcome>[0]>,
-): Promise<OpenClawConfig> {
-  const outcome = await setupAppRecommendationsWithOutcome({
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const createStore = createOnboardingRecommendationsStore;
+afterEach(() => vi.restoreAllMocks());
+
+beforeEach(() => {
+  vi.spyOn(skillLifecycle, "resolveClawHubSkillVerificationTarget").mockResolvedValue({
+    ok: false,
+    error: "Synthetic skill is not installed",
+  });
+  vi.spyOn(catalog, "listOfficialExternalPluginCatalogEntries").mockReturnValue([
+    {
+      name: "@openclaw/chat-plugin",
+      openclaw: { plugin: { id: "chat-plugin", label: "Chat plugin" } },
+    },
+  ]);
+});
+
+type SetupFixture = Partial<Parameters<typeof runAppRecommendations>[0]> & {
+  platform?: NodeJS.Platform;
+  deps?: {
+    recommend?: (
+      onPhase?: (phase: SetupAppScanPhase) => void,
+    ) => Promise<SetupAppRecommendationsResult>;
+    ensurePlugin?: typeof onboardingPlugins.ensureOnboardingPluginInstalled;
+    installSkill?: typeof skillLifecycle.installSkillFromClawHub;
+    readStored?: Store["read"];
+    writeOffer?: Store["writeOffer"];
+    acknowledgeStored?: Store["acknowledge"];
+    updatePendingStored?: Store["updatePending"];
+    clearPendingStored?: Store["clearPending"];
+    deferOfferToBootstrap?: () => boolean;
+  };
+};
+
+async function setupAppRecommendationsWithOutcome(params: SetupFixture) {
+  const { deps = {}, platform = "darwin", ...request } = params;
+  const workspaceDir = request.workspaceDir ?? tempDirs.make("openclaw-wizard-recommendations-");
+  if (deps.deferOfferToBootstrap?.()) {
+    writeFileSync(join(workspaceDir, "BOOTSTRAP.md"), "Synthetic bootstrap");
+  }
+  if (deps.recommend) {
+    const recommend = deps.recommend;
+    vi.spyOn(recommendations, "getSetupAppRecommendations").mockImplementation(({ onPhase }) =>
+      recommend(onPhase),
+    );
+  }
+  if (deps.ensurePlugin) {
+    vi.spyOn(onboardingPlugins, "ensureOnboardingPluginInstalled").mockImplementation(
+      deps.ensurePlugin,
+    );
+  }
+  if (deps.installSkill) {
+    vi.spyOn(skillLifecycle, "installSkillFromClawHub").mockImplementation(deps.installSkill);
+  }
+  vi.spyOn(recommendationsStore, "createOnboardingRecommendationsStore").mockImplementation(
+    (options) => {
+      const store = createStore(options);
+      return {
+        ...store,
+        read: deps.readStored ?? store.read,
+        writeOffer: deps.writeOffer ?? store.writeOffer,
+        acknowledge: deps.acknowledgeStored ?? store.acknowledge,
+        updatePending: deps.updatePendingStored ?? store.updatePending,
+        clearPending: deps.clearPendingStored ?? store.clearPending,
+      };
+    },
+  );
+  const runParams = {
     config: {},
     prompter: createPrompter(),
     runtime,
-    workspaceDir: "/tmp/workspace",
     modelRouteVerified: true,
-    platform: "darwin",
-    ...params,
-  });
+    ...request,
+    workspaceDir,
+  };
+  // Override only the wizard gate; SQLite workers must keep the real OS identity.
+  const platformMock = vi.spyOn(process, "platform", "get").mockReturnValueOnce(platform);
+  try {
+    return runAppRecommendations(runParams);
+  } finally {
+    platformMock.mockRestore();
+  }
+}
+
+async function setupAppRecommendations(params: SetupFixture): Promise<OpenClawConfig> {
+  const outcome = await setupAppRecommendationsWithOutcome(params);
   await outcome.commitResult();
   return outcome.config;
 }
 
 function createPrompter(selected: string[] = []): WizardPrompter {
-  return {
-    intro: vi.fn(async () => undefined),
-    outro: vi.fn(async () => undefined),
-    note: vi.fn(async () => undefined),
+  return createWizardPrompter({
     plain: vi.fn(async () => undefined),
     select: vi.fn(),
     multiselect: vi.fn(async () => selected) as WizardPrompter["multiselect"],
     text: vi.fn(),
     confirm: vi.fn(async () => true),
-    progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-  };
+  });
 }
 
 const runtime: RuntimeEnv = {
@@ -53,54 +133,75 @@ const runtime: RuntimeEnv = {
 function storeDeps(initial: OnboardingRecommendationsRecord | null = null) {
   let current = initial;
   let now = 0;
-  const writeOffer = vi.fn(
-    async (params: Parameters<OnboardingRecommendationsStore["writeOffer"]>[0]) => {
+  function update(
+    expected: Pick<OnboardingRecommendationsRecord, "inventoryHash" | "updatedAt"> | undefined,
+    patch: Partial<OnboardingRecommendationsRecord>,
+  ) {
+    if (
+      !current ||
+      (expected &&
+        (expected.inventoryHash !== current.inventoryHash ||
+          expected.updatedAt !== current.updatedAt))
+    ) {
+      return null;
+    }
+    current = { ...current, ...patch, updatedAt: ++now };
+    return current;
+  }
+  return {
+    readStored: vi.fn(async (): Promise<OnboardingRecommendationsRecord | null> => current),
+    writeOffer: vi.fn<Store["writeOffer"]>(async (params) => {
       now += 1;
-      current = {
-        inventoryHash: "hash",
-        matches: [...params.matches],
+      current = storedRecord([...params.matches], {
         offeredAt: now,
         acceptedAt: params.answered ? now : null,
         updatedAt: now,
-      };
+      });
       return current;
-    },
-  );
-  const acknowledgeStored = vi.fn(
-    async (params: Parameters<OnboardingRecommendationsStore["acknowledge"]>[0] = {}) => {
-      if (
-        !current ||
-        (params.expected &&
-          (params.expected.inventoryHash !== current.inventoryHash ||
-            params.expected.updatedAt !== current.updatedAt))
-      ) {
-        return null;
-      }
-      now += 1;
-      current = { ...current, acceptedAt: now, updatedAt: now };
-      return current;
-    },
-  );
-  const updatePendingStored = vi.fn(
-    async (params: Parameters<OnboardingRecommendationsStore["updatePending"]>[0]) => {
-      if (
-        !current ||
-        params.expected.inventoryHash !== current.inventoryHash ||
-        params.expected.updatedAt !== current.updatedAt
-      ) {
-        return null;
-      }
-      now += 1;
-      current = { ...current, matches: [...params.matches], updatedAt: now };
-      return current;
-    },
-  );
-  return {
-    readStored: vi.fn(async (): Promise<OnboardingRecommendationsRecord | null> => current),
-    writeOffer,
-    acknowledgeStored,
-    updatePendingStored,
+    }),
+    acknowledgeStored: vi.fn<Store["acknowledge"]>(async (params = {}) =>
+      update(params.expected, { acceptedAt: now + 1 }),
+    ),
+    updatePendingStored: vi.fn<Store["updatePending"]>(async (params) =>
+      update(params.expected, { matches: [...params.matches] }),
+    ),
     deferOfferToBootstrap: vi.fn(() => false),
+  };
+}
+
+function storedRecord(
+  matches = recommendationResult().matches,
+  overrides: Partial<OnboardingRecommendationsRecord> = {},
+): OnboardingRecommendationsRecord {
+  return {
+    inventoryHash: "hash",
+    matches,
+    offeredAt: 1,
+    acceptedAt: null,
+    updatedAt: 1,
+    ...overrides,
+  };
+}
+
+function fixture(initial: OnboardingRecommendationsRecord | null = null, selected: string[] = []) {
+  const store = storeDeps(initial);
+  const recommend = vi.fn(async () => recommendationResult());
+  const prompter = createPrompter(selected);
+  const run = (params: SetupFixture = {}) =>
+    setupAppRecommendations({
+      prompter,
+      ...params,
+      deps: { ...store, recommend, ...params.deps },
+    });
+  return { store, recommend, prompter, run };
+}
+
+function legacySkill() {
+  const skill = recommendationResult().matches[1]!;
+  return {
+    ...skill,
+    candidateId: "chat-skill",
+    candidate: { ...skill.candidate, id: "chat-skill" },
   };
 }
 
@@ -151,21 +252,10 @@ describe("setupAppRecommendations", () => {
       });
       const persistedBeforeInstall: string[][] = [];
       const outcome = await setupAppRecommendationsWithOutcome({
-        config: {},
         prompter,
-        runtime,
         workspaceDir: state.workspaceDir,
-        modelRouteVerified: true,
-        platform: "darwin",
         deps: {
           recommend,
-          deferOfferToBootstrap: () => false,
-          isSkillInstalled: async () => false,
-          resolveOfficialEntry: (pluginId) => ({
-            pluginId,
-            label: "Chat plugin",
-            install: { npmSpec: "@openclaw/chat-plugin" },
-          }),
           ensurePlugin: async ({ cfg }) => {
             const pending = await store.read();
             expect(pending?.acceptedAt).toBeNull();
@@ -226,75 +316,36 @@ describe("setupAppRecommendations", () => {
     [{ wizard: { appRecommendations: false } }, "darwin" as const],
     [{}, "linux" as const],
   ])("skips when gated", async (config, platform) => {
-    const recommend = vi.fn(async () => recommendationResult());
-    const store = storeDeps();
-    await setupAppRecommendations({
-      config,
-      platform,
-      deps: { recommend, ...store },
-    });
+    const { recommend, store, run } = fixture();
+    await run({ config, platform });
     expect(recommend).not.toHaveBeenCalled();
     expect(store.readStored).not.toHaveBeenCalled();
   });
 
   it("short-circuits before scanning when the offer was already answered", async () => {
-    const recommend = vi.fn(async () => recommendationResult());
-    const writeOffer = vi.fn();
+    const { recommend, prompter, store, run } = fixture(
+      storedRecord([legacySkill()], { acceptedAt: 2, updatedAt: 2 }),
+    );
     const clearPendingStored = vi.fn();
-    const prompter = createPrompter();
-    const legacyMatch = recommendationResult().matches[1]!;
-
-    await setupAppRecommendations({
-      prompter,
-      deps: {
-        recommend,
-        writeOffer,
-        clearPendingStored,
-        readStored: async () => ({
-          inventoryHash: "hash",
-          matches: [
-            {
-              ...legacyMatch,
-              candidateId: "chat-skill",
-              candidate: { ...legacyMatch.candidate, id: "chat-skill" },
-            },
-          ],
-          offeredAt: 1,
-          acceptedAt: 2,
-          updatedAt: 2,
-        }),
-      },
-    });
-
+    await run({ deps: { clearPendingStored } });
     expect(recommend).not.toHaveBeenCalled();
     expect(prompter.progress).not.toHaveBeenCalled();
-    expect(writeOffer).not.toHaveBeenCalled();
+    expect(store.writeOffer).not.toHaveBeenCalled();
     expect(clearPendingStored).not.toHaveBeenCalled();
   });
 
   it("rescans a pending offer with a bare ClawHub id", async () => {
     const pendingMatches = recommendationResult().matches;
-    pendingMatches[1] = {
-      ...pendingMatches[1]!,
-      candidateId: "chat-skill",
-      candidate: { ...pendingMatches[1]!.candidate, id: "chat-skill" },
-    };
+    pendingMatches[1] = legacySkill();
     const recommend = vi.fn(async () => recommendationResult());
     const clearPendingStored = vi.fn(async () => true);
 
     await setupAppRecommendations({
       deps: {
         recommend,
-        readStored: async () => ({
-          inventoryHash: "hash",
-          matches: pendingMatches,
-          offeredAt: 1,
-          acceptedAt: null,
-          updatedAt: 1,
-        }),
+        readStored: async () => storedRecord(pendingMatches),
         writeOffer: vi.fn(),
         clearPendingStored,
-        deferOfferToBootstrap: () => false,
       },
     });
 
@@ -305,34 +356,15 @@ describe("setupAppRecommendations", () => {
   });
 
   it("leaves a pending stored offer to the bootstrap without rescanning", async () => {
-    const recommend = vi.fn(async () => recommendationResult());
-    const writeOffer = vi.fn();
-    const prompter = createPrompter();
-
-    await setupAppRecommendations({
-      prompter,
-      deps: {
-        recommend,
-        writeOffer,
-        readStored: async () => ({
-          inventoryHash: "hash",
-          matches: recommendationResult().matches,
-          offeredAt: 1,
-          acceptedAt: null,
-          updatedAt: 1,
-        }),
-        deferOfferToBootstrap: () => true,
-      },
-    });
-
+    const { recommend, prompter, store, run } = fixture(storedRecord());
+    await run({ deps: { deferOfferToBootstrap: () => true } });
     expect(recommend).not.toHaveBeenCalled();
     expect(prompter.multiselect).not.toHaveBeenCalled();
-    expect(writeOffer).not.toHaveBeenCalled();
+    expect(store.writeOffer).not.toHaveBeenCalled();
   });
 
   it("reoffers a failed install and consumes it after a successful retry", async () => {
-    const store = storeDeps();
-    const recommend = vi.fn(async () => recommendationResult());
+    const { store, recommend, prompter, run } = fixture();
     const installSkill = vi
       .fn()
       .mockResolvedValueOnce({ ok: false as const, error: "offline" })
@@ -342,26 +374,17 @@ describe("setupAppRecommendations", () => {
         version: "1.0.0",
         targetDir: "/tmp/workspace/skills/chat-skill",
       });
-    const prompter = createPrompter();
     vi.mocked(prompter.multiselect)
       .mockResolvedValueOnce(["recommendation:1"])
       .mockResolvedValueOnce(["recommendation:0"]);
-    const deps = { recommend, installSkill, ...store };
-
-    await setupAppRecommendations({
-      prompter,
-      deps,
-    });
+    await run({ deps: { installSkill } });
 
     expect(await store.readStored()).toMatchObject({
       acceptedAt: null,
       matches: [expect.objectContaining({ candidateId: "@demo-owner/chat-skill" })],
     });
 
-    await setupAppRecommendations({
-      prompter,
-      deps,
-    });
+    await run({ deps: { installSkill } });
 
     expect(recommend).toHaveBeenCalledOnce();
     expect(installSkill).toHaveBeenCalledTimes(2);
@@ -371,28 +394,41 @@ describe("setupAppRecommendations", () => {
 
   it("consumes an exact installed skill left pending by an interrupted run", async () => {
     const skill = recommendationResult().matches[1]!;
-    const stored: OnboardingRecommendationsRecord = {
-      inventoryHash: "hash",
-      matches: [skill],
-      offeredAt: 1,
-      acceptedAt: null,
-      updatedAt: 1,
-    };
-    const store = storeDeps(stored);
+    const store = storeDeps(storedRecord([skill]));
     const installSkill = vi.fn();
+    vi.mocked(skillLifecycle.resolveClawHubSkillVerificationTarget).mockResolvedValue({
+      ok: true,
+      slug: "chat-skill",
+      ownerHandle: "demo-owner",
+      baseUrl: "https://clawhub.ai",
+      version: "1.0.0",
+      tag: undefined,
+      resolution: {
+        source: "installed",
+        selector: "installed-version",
+        registry: "https://clawhub.ai",
+        skillDir: undefined,
+        installedVersion: "1.0.0",
+      },
+    });
+    vi.spyOn(clawHubSkills, "fetchClawHubSkillVerification").mockResolvedValue({
+      schema: "clawhub.skill.verify.v1",
+      ok: true,
+      decision: "pass",
+      reasons: [],
+      skill: null,
+      publisher: null,
+      version: null,
+      card: null,
+      artifact: null,
+      provenance: null,
+      security: null,
+      signature: null,
+    });
 
     const outcome = await setupAppRecommendationsWithOutcome({
-      config: {},
       prompter: createPrompter(["recommendation:0"]),
-      runtime,
-      workspaceDir: "/tmp/workspace",
-      modelRouteVerified: true,
-      platform: "darwin",
-      deps: {
-        ...store,
-        installSkill,
-        isSkillInstalled: vi.fn(async ({ skillRef }) => skillRef === skill.candidate.id),
-      },
+      deps: { ...store, installSkill },
     });
 
     expect(installSkill).not.toHaveBeenCalled();
@@ -407,18 +443,12 @@ describe("setupAppRecommendations", () => {
     const ensurePlugin = vi.fn();
     const installSkill = vi.fn();
     const config: OpenClawConfig = {};
-    const store = storeDeps();
+    const { store, run } = fixture(null, ["__skip__", "recommendation:0"]);
 
     await expect(
-      setupAppRecommendations({
+      run({
         config,
-        prompter: createPrompter(["__skip__", "recommendation:0"]),
-        deps: {
-          ...store,
-          recommend: async () => recommendationResult(),
-          ensurePlugin,
-          installSkill,
-        },
+        deps: { ensurePlugin, installSkill },
       }),
     ).resolves.toBe(config);
     expect(ensurePlugin).not.toHaveBeenCalled();
@@ -429,18 +459,11 @@ describe("setupAppRecommendations", () => {
   });
 
   it("stores a pending offer for a fresh workspace bootstrap", async () => {
-    const store = storeDeps();
+    const { store, prompter, recommend, run } = fixture();
     store.deferOfferToBootstrap.mockReturnValue(true);
-    const prompter = createPrompter();
     delete prompter.plain;
     const log = vi.fn();
-    const recommend = vi.fn(async () => recommendationResult());
-
-    await setupAppRecommendations({
-      prompter,
-      runtime: { ...runtime, log },
-      deps: { recommend, ...store },
-    });
+    await run({ runtime: { ...runtime, log } });
 
     expect(store.writeOffer).toHaveBeenCalledWith(
       expect.objectContaining({ answered: false, matches: recommendationResult().matches }),

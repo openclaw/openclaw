@@ -1,0 +1,24 @@
+.templates-trust-warning {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.templates-trust-warning__title {
+  display: block;
+}
+
+.templates-trust-warning div strong {
+  margin-right: 3px;
+}
+
+.templates-trust-warning a {
+  color: inherit;
+  overflow-wrap: anywhere;
+  text-decoration: underline;
+}
+
+.templates-trust-warning__plain {
+  white-space: pre-wrap;
+}

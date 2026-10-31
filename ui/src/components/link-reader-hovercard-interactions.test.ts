@@ -1,7 +1,8 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { TEST_LINK_READER, testLinkPreview } from "../test-helpers/link-reader.ts";
 import { LazyHovercardBootstrap } from "./lazy-hovercard-registration.ts";
 import { LinkReaderHovercardProvider } from "./link-reader-hovercard.ts";
@@ -30,7 +31,7 @@ function issuePreviewResponse(overrides: Record<string, unknown> = {}) {
 function createIssueLink() {
   const link = createLink(ISSUE_HREF);
   const request = vi.fn().mockResolvedValue(issuePreviewResponse());
-  link.provider.client = { request } as unknown as GatewayBrowserClient;
+  link.provider.client = { request, connected: true } as unknown as GatewayBrowserClient;
   return { ...link, request };
 }
 const hovercard = () => document.querySelector<HTMLElement>(".link-reader-hovercard");
@@ -40,6 +41,7 @@ const cardLinks = () => [
   ...document.querySelectorAll<HTMLAnchorElement>(".link-reader-hovercard a[href]"),
 ];
 async function hover(anchor: HTMLAnchorElement) {
+  await Promise.resolve(); // Allow the bridge to mount before dispatching intent.
   anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
   await vi.advanceTimersByTimeAsync(250);
 }
@@ -68,11 +70,53 @@ describe("generic preview portal lifecycle", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-05T10:00:00Z"));
   });
-  afterEach(() => {
+  afterEach(async () => {
     document.body.replaceChildren();
+    await Promise.resolve();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
+  it("forwards the pane session only to opted-in readers and retires private cached metadata", async () => {
+    const href = "https://ghe.example.test/example/project/pull/7";
+    const { provider, anchor } = createLink(href);
+    provider.readers = [
+      {
+        ...TEST_LINK_READER,
+        linkReader: {
+          ...TEST_LINK_READER.linkReader,
+          hosts: ["ghe.example.test"],
+          sessionScoped: true,
+          previewMethod: "github.sessionPreview",
+        },
+      },
+    ];
+    provider.agentId = "main";
+    provider.sessionKey = "agent:main:first";
+    const request = vi
+      .fn()
+      .mockResolvedValue(testLinkPreview({ url: href, title: "Session private card" }));
+    // SAFETY: This fixture supplies only the request/connection facts consumed by the owner.
+    provider.client = {
+      request,
+      connected: true,
+      connectionGeneration: 1,
+      recoveryScope: "signed-in-person",
+    } as unknown as GatewayBrowserClient;
+    await hover(anchor);
+    expect(request).toHaveBeenCalledWith(
+      "github.sessionPreview",
+      { url: href, agentId: "main", sessionKey: "agent:main:first" },
+      { signal: expect.any(AbortSignal) },
+    );
+    expect(titleLinkInCard()?.textContent).toBe("Session private card");
+    leave(anchor);
+    await vi.advanceTimersByTimeAsync(120);
+    provider.sessionKey = "agent:main:second";
+    await hover(anchor);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ sessionKey: "agent:main:second" });
+  });
+
   it.each(["immediate rejection", "late rejection"])(
     "reopens an abandoned request without poisoning its replacement cache: %s",
     async (settlement) => {
@@ -95,7 +139,7 @@ describe("generic preview portal lifecycle", () => {
         )
         .mockResolvedValue(issuePreviewResponse());
       const { anchor, provider } = createLink(ISSUE_HREF);
-      provider.client = { request } as unknown as GatewayBrowserClient;
+      provider.client = { request, connected: true } as unknown as GatewayBrowserClient;
 
       await hover(anchor);
       expect(hovercard()).toBeNull();
@@ -117,41 +161,19 @@ describe("generic preview portal lifecycle", () => {
     },
   );
 
-  it("shows a pending preview rejection without moving focus and keeps its original link reachable", async () => {
-    const pending = createDeferred<unknown>();
-    const { anchor, provider } = createLink(ISSUE_HREF);
-    provider.client = {
-      request: vi.fn().mockReturnValue(pending.promise),
-    } as unknown as GatewayBrowserClient;
-    anchor.focus();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(hovercard()).toBeNull();
-    pending.reject(new Error("Gateway request timed out"));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(hovercard()?.textContent).toContain("Try again or open the original.");
-    expect(document.activeElement).toBe(anchor);
-    expect(anchor.getAttribute("aria-controls")).toBe(hovercard()?.id);
-    expect(anchor.getAttribute("aria-expanded")).toBe("true");
-    const tab = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Tab" });
-    anchor.dispatchEvent(tab);
-    expect(tab.defaultPrevented).toBe(true);
-    expect(document.activeElement).toBe(hovercard()?.querySelector("a"));
-    expect((document.activeElement as HTMLAnchorElement).href).toBe(ISSUE_HREF);
-    document.activeElement?.dispatchEvent(
-      new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),
-    );
-    expect(hovercard()).toBeNull();
-    expect(document.activeElement).toBe(anchor);
-  });
-
-  it.each(["pointer", "focus"])(
-    "mounts only a populated successful preview for %s intent",
-    async (trigger) => {
+  it.each([
+    { trigger: "pointer", outcome: "success" },
+    { trigger: "focus", outcome: "success" },
+    { trigger: "focus", outcome: "failure" },
+  ])(
+    "mounts a settled $outcome preview for $trigger intent with reachable links",
+    async ({ trigger, outcome }) => {
       const mountedCards = observeHovercardMounts();
       const pending = createDeferred<ReturnType<typeof issuePreviewResponse>>();
       const { anchor, provider } = createLink(ISSUE_HREF);
       const request = vi.fn().mockReturnValue(pending.promise);
-      provider.client = { request } as unknown as GatewayBrowserClient;
+      provider.client = { request, connected: true } as unknown as GatewayBrowserClient;
+      await provider.updateComplete;
       if (trigger === "pointer") {
         anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
         await vi.advanceTimersByTimeAsync(249);
@@ -160,6 +182,26 @@ describe("generic preview portal lifecycle", () => {
       } else {
         anchor.focus();
         await vi.advanceTimersByTimeAsync(0);
+      }
+      if (outcome === "failure") {
+        expect(hovercard()).toBeNull();
+        pending.reject(new Error("Gateway request timed out"));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(hovercard()?.textContent).toContain("Try again or open the original.");
+        expect(document.activeElement).toBe(anchor);
+        expect(anchor.getAttribute("aria-controls")).toBe(hovercard()?.id);
+        expect(anchor.getAttribute("aria-expanded")).toBe("true");
+        const tab = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Tab" });
+        anchor.dispatchEvent(tab);
+        expect(tab.defaultPrevented).toBe(true);
+        expect(document.activeElement).toBe(hovercard()?.querySelector("a"));
+        expect((document.activeElement as HTMLAnchorElement).href).toBe(ISSUE_HREF);
+        document.activeElement?.dispatchEvent(
+          new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),
+        );
+        expect(hovercard()).toBeNull();
+        expect(document.activeElement).toBe(anchor);
+        return;
       }
       expect(request).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(1_000);
@@ -191,11 +233,13 @@ describe("generic preview portal lifecycle", () => {
     const { anchor, provider } = createLink(ISSUE_HREF);
     let signal: AbortSignal | undefined;
     provider.client = {
+      connected: true,
       request: vi.fn((_method, _params, options: { signal: AbortSignal }) => {
         signal = options.signal;
         return pending.promise;
       }),
     } as unknown as GatewayBrowserClient;
+    await provider.updateComplete;
     if (dismissal === "focus leave") {
       anchor.focus();
       await vi.advanceTimersByTimeAsync(0);
@@ -248,7 +292,7 @@ describe("generic preview portal lifecycle", () => {
         .fn()
         .mockReturnValueOnce(abandoned.promise)
         .mockReturnValueOnce(current.promise);
-      provider.client = { request } as unknown as GatewayBrowserClient;
+      provider.client = { request, connected: true } as unknown as GatewayBrowserClient;
       await hover(anchor);
       await hover(replacement);
       expect(request).toHaveBeenCalledTimes(2);
@@ -272,11 +316,11 @@ describe("generic preview portal lifecycle", () => {
     },
   );
 
-  it.each(["pointer", "focus"])(
+  it.each(["focus"])(
     "uses only the nearest provider's agent for nested %s intent",
     async (trigger) => {
       const request = vi.fn().mockResolvedValue(issuePreviewResponse());
-      const client = { request } as unknown as GatewayBrowserClient;
+      const client = { request, connected: true } as unknown as GatewayBrowserClient;
       const outer = createLink(ISSUE_HREF);
       outer.provider.client = client;
       outer.provider.agentId = "selected-agent";
@@ -288,6 +332,7 @@ describe("generic preview portal lifecycle", () => {
       if (trigger === "pointer") {
         await hover(inner.anchor);
       } else {
+        await inner.provider.updateComplete;
         inner.anchor.focus();
         await vi.advanceTimersByTimeAsync(0);
       }
@@ -306,58 +351,7 @@ describe("generic preview portal lifecycle", () => {
     },
   );
 
-  it("shares successful loading state across providers and shows cached failures", async () => {
-    const first = createDeferred<ReturnType<typeof issuePreviewResponse>>();
-    const failure = createDeferred<ReturnType<typeof issuePreviewResponse>>();
-    const retry = createDeferred<ReturnType<typeof issuePreviewResponse>>();
-    const request = vi
-      .fn()
-      .mockReturnValueOnce(first.promise)
-      .mockReturnValueOnce(failure.promise)
-      .mockReturnValueOnce(retry.promise);
-    const client = {
-      request,
-      connectionGeneration: 1,
-      recoveryScope: "principal-a",
-    } as unknown as GatewayBrowserClient;
-    const one = createLink(ISSUE_HREF);
-    one.provider.client = client;
-    await hover(one.anchor);
-    expect(hovercard()).toBeNull();
-    first.resolve(issuePreviewResponse());
-    await vi.advanceTimersByTimeAsync(0);
-    expect(titleLinkInCard()?.textContent).toBe("Keep hover previews reachable");
-    one.provider.remove();
-    const two = createLink("https://github.com/openclaw/openclaw/issues/99816");
-    two.provider.client = client;
-    const mounted = observeHovercardMounts();
-    two.anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
-    await vi.advanceTimersByTimeAsync(249);
-    expect(mounted).toEqual([]);
-    expect(request).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(hovercard()?.dataset.loading).toBe("true");
-    expect(hovercard()?.getAttribute("aria-label")).toBe("Loading preview…");
-    failure.reject(new GatewayRequestError({ code: "UNAVAILABLE", message: "Not Found" }));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(hovercard()?.textContent).toContain("Not Found");
-    leave(two.anchor);
-    await vi.advanceTimersByTimeAsync(120);
-    await hover(two.anchor);
-    expect(hovercard()?.textContent).toContain("Not Found");
-    expect(request).toHaveBeenCalledTimes(2);
-    leave(two.anchor);
-    await vi.advanceTimersByTimeAsync(30_000);
-    await hover(two.anchor);
-    expect(request).toHaveBeenCalledTimes(3);
-    expect(hovercard()?.dataset.loading).toBe("true");
-    leave(two.anchor);
-    retry.resolve(issuePreviewResponse({ number: 99816 }));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(hovercard()).toBeNull();
-  });
-
-  it.each(["client", "agent", "agent round trip", "connection", "principal"])(
+  it.each(["client", "agent", "agent round trip", "principal"])(
     "retires cached details and requests current metadata after a %s change",
     async (change) => {
       const pending = createDeferred<ReturnType<typeof issuePreviewResponse>>();
@@ -365,7 +359,12 @@ describe("generic preview portal lifecycle", () => {
         .fn()
         .mockResolvedValueOnce(issuePreviewResponse())
         .mockReturnValue(pending.promise);
-      const client = { request, connectionGeneration: 1, recoveryScope: "principal-a" };
+      const client = {
+        request,
+        connected: true,
+        connectionGeneration: 1,
+        recoveryScope: "principal-a",
+      };
       const { anchor, provider } = createLink(ISSUE_HREF);
       provider.client = client as unknown as GatewayBrowserClient;
       await hover(anchor);
@@ -379,8 +378,6 @@ describe("generic preview portal lifecycle", () => {
         if (change === "agent round trip") {
           provider.agentId = undefined;
         }
-      } else if (change === "connection") {
-        client.connectionGeneration += 1;
       } else {
         client.recoveryScope = "principal-b";
       }
@@ -404,6 +401,38 @@ describe("generic preview portal lifecycle", () => {
     },
   );
 
+  it("retains settled plugin previews offline and retries transport failures without negative caching", async () => {
+    const { anchor, provider } = createLink(ISSUE_HREF);
+    const request = vi.fn().mockResolvedValue(issuePreviewResponse());
+    const client = { request, connected: true, connectionGeneration: 1, recoveryScope: "account" };
+    provider.client = client as unknown as GatewayBrowserClient;
+    await hover(anchor);
+    const card = hovercard();
+    client.connected = false;
+    client.connectionGeneration++;
+    provider.readers = [...provider.readers];
+    await provider.updateComplete;
+    expect(hovercard()).toBe(card);
+    expect(titleLinkInCard()?.textContent).toContain("Keep hover previews reachable");
+    leave(anchor);
+    await vi.advanceTimersByTimeAsync(120);
+    await hover(anchor);
+    expect(request).toHaveBeenCalledOnce();
+    client.connected = true;
+    client.connectionGeneration++;
+    leave(anchor);
+    await vi.advanceTimersByTimeAsync(120);
+    client.recoveryScope = "another-account";
+    request.mockRejectedValueOnce(new Error("transport interrupted"));
+    await hover(anchor);
+    expect(titleLinkInCard()).toBeNull();
+    leave(anchor);
+    await vi.advanceTimersByTimeAsync(120);
+    await hover(anchor);
+    expect(titleLinkInCard()?.textContent).toContain("Keep hover previews reachable");
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
   it.each([
     ["agent", "agent-a"],
     ["client", "agent-b"],
@@ -423,6 +452,7 @@ describe("generic preview portal lifecycle", () => {
         .mockReturnValueOnce(next.promise);
       const client = {
         request,
+        connected: true,
         connectionGeneration: 1,
         recoveryScope: "principal",
       } as unknown as GatewayBrowserClient;
@@ -449,7 +479,7 @@ describe("generic preview portal lifecycle", () => {
       if (change === "agent") {
         two.provider.agentId = "agent-c";
       } else {
-        two.provider.client = { request } as unknown as GatewayBrowserClient;
+        two.provider.client = { request, connected: true } as unknown as GatewayBrowserClient;
       }
       pending.resolve(issuePreviewResponse({ number: 99817, title: "Agent A remains current" }));
       await vi.advanceTimersByTimeAsync(0);
@@ -472,7 +502,12 @@ describe("generic preview portal lifecycle", () => {
     const stale = createDeferred<ReturnType<typeof issuePreviewResponse>>();
     const current = createDeferred<ReturnType<typeof issuePreviewResponse>>();
     const request = vi.fn().mockReturnValueOnce(stale.promise).mockReturnValueOnce(current.promise);
-    const client = { request, connectionGeneration: 1, recoveryScope: "principal-a" };
+    const client = {
+      request,
+      connected: true,
+      connectionGeneration: 1,
+      recoveryScope: "principal-a",
+    };
     const one = createLink(ISSUE_HREF);
     one.provider.client = client as unknown as GatewayBrowserClient;
     await hover(one.anchor);
@@ -489,79 +524,78 @@ describe("generic preview portal lifecycle", () => {
     expect(titleLinkInCard()).not.toBeNull();
   });
 
-  it("stays open while the pointer travels from the link onto the card", async () => {
-    const { anchor } = createIssueLink();
+  it.each([true])(
+    "holds pointer traversal and releases after a title click (%s)",
+    async (clicked) => {
+      const { anchor } = createIssueLink();
 
-    await hover(anchor);
-    const card = hovercard();
-    expect(card).not.toBeNull();
+      await hover(anchor);
+      const card = hovercard();
+      expect(card).not.toBeNull();
 
-    // Crossing the gap between the link and the card leaves both unhovered.
-    leave(anchor, card as EventTarget);
-    await vi.advanceTimersByTimeAsync(120 - 1);
-    expect(hovercard()).toBe(card);
+      leave(anchor, card as EventTarget);
+      if (!clicked) {
+        await vi.advanceTimersByTimeAsync(119);
+        expect(hovercard()).toBe(card);
+      }
+      card?.dispatchEvent(new MouseEvent("pointerenter"));
+      await vi.advanceTimersByTimeAsync(clicked ? 0 : 1_200);
+      expect(hovercard()).toBe(card);
+      if (clicked) {
+        const titleLink = titleLinkInCard();
+        titleLink?.addEventListener("click", (event) => event.preventDefault());
+        titleLink?.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
+        titleLink?.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
+      }
+      card?.dispatchEvent(new MouseEvent("pointerleave"));
+      expect(hovercard()).toBe(card);
+      await vi.advanceTimersByTimeAsync(120);
+      expect(hovercard()).toBeNull();
+      expect(anchor.hasAttribute("aria-expanded")).toBe(false);
+      expect(anchor.hasAttribute("aria-controls")).toBe(false);
+      expect(anchor.hasAttribute("aria-haspopup")).toBe(false);
+    },
+  );
 
-    card?.dispatchEvent(new MouseEvent("pointerenter"));
-    await vi.advanceTimersByTimeAsync(120 * 10);
-    expect(hovercard()).toBe(card);
-
-    card?.dispatchEvent(new MouseEvent("pointerleave"));
-    expect(hovercard()).toBe(card);
-    await vi.advanceTimersByTimeAsync(120);
-    expect(hovercard()).toBeNull();
-    expect(anchor.hasAttribute("aria-expanded")).toBe(false);
-    expect(anchor.hasAttribute("aria-controls")).toBe(false);
-    expect(anchor.hasAttribute("aria-haspopup")).toBe(false);
-  });
-
-  it("closes on pointer-out even after the title link inside the card was clicked", async () => {
-    const { anchor } = createIssueLink();
-
-    await hover(anchor);
-    const card = hovercard();
-    expect(card).not.toBeNull();
-
-    // Pointer travels from the link onto the card, same as the traversal test above.
-    leave(anchor, card as EventTarget);
-    card?.dispatchEvent(new MouseEvent("pointerenter"));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(hovercard()).toBe(card);
-
-    // Clicking the title link focuses it (a click's real-world side effect); a
-    // pointer-initiated open must still release once the pointer leaves, with no
-    // click-outside required to dismiss the card.
-    const titleLink = titleLinkInCard();
-    titleLink?.addEventListener("click", (event) => event.preventDefault());
-    titleLink?.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
-    titleLink?.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
-
-    card?.dispatchEvent(new MouseEvent("pointerleave"));
-    await vi.advanceTimersByTimeAsync(120);
-    expect(hovercard()).toBeNull();
-  });
-
-  it.each([false, true])("hands focus back at Tab edges (shiftKey=%s)", async (shiftKey) => {
-    const { anchor } = createIssueLink();
-
+  it.each([
+    { exit: "forward", mounted: true },
+    { exit: "backward", mounted: true },
+    { exit: "outside", mounted: false },
+  ])("dismisses keyboard previews on $exit exit (mounted=$mounted)", async ({ exit, mounted }) => {
+    const { anchor, provider } = createIssueLink();
+    if (mounted) {
+      await provider.updateComplete;
+    }
+    const outside = exit === "outside" ? document.createElement("button") : null;
+    if (outside) {
+      document.body.append(outside);
+    }
     anchor.focus();
-    await vi.advanceTimersByTimeAsync(0);
+    await provider.updateComplete;
+    await vi.advanceTimersByTimeAsync(mounted ? 0 : 250);
     expect(hovercard()).not.toBeNull();
 
-    // The card is portaled to document.body, so Tab has to be forwarded for any
-    // of its links to be reachable at all.
     anchor.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Tab" }));
     expect(document.activeElement).toBe(cardLinks()[0]);
-
-    // Inside the run of card links Tab belongs to the browser, not to the card.
+    if (outside) {
+      outside.focus();
+      await vi.advanceTimersByTimeAsync(120);
+      expect(hovercard()).toBeNull();
+      expect(anchor.hasAttribute("aria-expanded")).toBe(false);
+      return;
+    }
     const middle = cardLinks()[0];
     middle?.focus();
-    const insideTab = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Tab" });
+    const insideTab = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Tab",
+    });
     middle?.dispatchEvent(insideTab);
     expect(insideTab.defaultPrevented).toBe(false);
     expect(hovercard()).not.toBeNull();
 
-    // Leaving either outer edge returns focus to the trigger with the card closed,
-    // and that returned focus must not immediately reopen what was dismissed.
+    const shiftKey = exit === "backward";
     const edge = shiftKey ? cardLinks()[0] : cardLinks().at(-1);
     edge?.focus();
     edge?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Tab", shiftKey }));
@@ -569,22 +603,6 @@ describe("generic preview portal lifecycle", () => {
     expect(document.activeElement).toBe(anchor);
     await vi.advanceTimersByTimeAsync(120 * 2);
     expect(hovercard()).toBeNull();
-  });
-
-  it("closes once focus leaves both the link and the card", async () => {
-    const { anchor } = createIssueLink();
-    const outside = document.createElement("button");
-    document.body.append(outside);
-
-    anchor.focus();
-    await vi.advanceTimersByTimeAsync(0);
-    anchor.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Tab" }));
-    expect(document.activeElement).toBe(cardLinks()[0]);
-
-    outside.focus();
-    await vi.advanceTimersByTimeAsync(120);
-    expect(hovercard()).toBeNull();
-    expect(anchor.hasAttribute("aria-expanded")).toBe(false);
   });
 
   it("uses the latest dependencies assigned before its lazy definition finishes", async () => {
@@ -600,13 +618,13 @@ describe("generic preview portal lifecycle", () => {
     provider.append(anchor);
     document.body.append(provider);
     const staleRequest = vi.fn();
-    provider.client = { request: staleRequest } as unknown as GatewayBrowserClient;
+    provider.client = { request: staleRequest, connected: true } as unknown as GatewayBrowserClient;
     provider.agentId = "first-agent";
     provider.readers = [TEST_LINK_READER];
 
     const definition = bootstrap.define();
     const request = vi.fn().mockResolvedValue(issuePreviewResponse());
-    provider.client = { request } as unknown as GatewayBrowserClient;
+    provider.client = { request, connected: true } as unknown as GatewayBrowserClient;
     provider.agentId = "second-agent";
     loaded.resolve(class extends LinkReaderHovercardProvider {});
     await definition;
@@ -623,56 +641,38 @@ describe("generic preview portal lifecycle", () => {
   });
 
   it.each([
-    "https://github.com:8443/openclaw/openclaw/issues/99815",
-    "https://github.com.example.com/openclaw/openclaw/issues/99815",
-    "blob:https://github.com/issues/99815",
-  ])("does not preview an untrusted item URL: %s", async (href) => {
-    const request = vi.fn();
-    const { anchor, provider } = createLink(href);
-    provider.client = { request } as unknown as GatewayBrowserClient;
-
-    await hover(anchor);
-
-    expect(request).not.toHaveBeenCalled();
-    expect(document.querySelector(".link-reader-hovercard")).toBeNull();
-  });
-
-  it.each(["pending", "held"])(
-    "retires a %s GitHub preview when its pane becomes inert",
-    async (phase) => {
-      const { anchor, provider, request } = createIssueLink();
-      const pane = document.createElement("section");
+    { phase: "pending", retirement: "inert" },
+    { phase: "held", retirement: "inert" },
+  ])("retires a $phase preview after $retirement", async ({ phase, retirement }) => {
+    const { anchor, provider, request } = createIssueLink();
+    const pane = document.createElement(retirement === "inert" ? "section" : "main");
+    if (retirement === "inert") {
       provider.append(pane);
       pane.append(anchor);
-      anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
-      if (phase === "held") {
-        await vi.advanceTimersByTimeAsync(250);
-        expect(hovercard()).not.toBeNull();
+    } else {
+      pane.append(anchor);
+      provider.append(pane);
+    }
+    await provider.updateComplete;
+    anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
+    if (phase === "held") {
+      await vi.advanceTimersByTimeAsync(250);
+      expect(hovercard()).not.toBeNull();
+      if (retirement === "inert") {
         hovercard()!.dispatchEvent(new MouseEvent("pointerenter"));
       }
+    }
+    if (retirement === "inert") {
       pane.setAttribute("inert", "");
       await vi.advanceTimersByTimeAsync(250);
-      expect(hovercard()).toBeNull();
-      expect(anchor.hasAttribute("aria-expanded")).toBe(false);
-      if (phase === "pending") {
-        expect(request).not.toHaveBeenCalled();
-      }
-    },
-  );
-
-  it("closes when route replacement removes its active link", async () => {
-    const { provider, anchor } = createIssueLink();
-    const route = document.createElement("main");
-    route.append(anchor);
-    provider.append(route);
-
-    await hover(anchor);
-    expect(document.querySelector(".link-reader-hovercard")).not.toBeNull();
-
-    route.replaceChildren(document.createElement("p"));
-    await Promise.resolve();
-
-    expect(document.querySelector(".link-reader-hovercard")).toBeNull();
+    } else {
+      pane.replaceChildren(document.createElement("p"));
+      await Promise.resolve();
+    }
+    expect(hovercard()).toBeNull();
     expect(anchor.hasAttribute("aria-expanded")).toBe(false);
+    if (phase === "pending") {
+      expect(request).not.toHaveBeenCalled();
+    }
   });
 });

@@ -6,33 +6,26 @@ import {
   readChatOutboxRecovery,
   restoreChatOutboxRecovery,
 } from "../../lib/chat/outbox-recovery.ts";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import {
   captureChatOutboxAdmission,
   storageTargetForComposer,
 } from "../../lib/chat/outbox-store.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { loadChatComposerState, persistChatComposerState } from "./composer-draft-storage.ts";
+import { ChatComposerPersistence } from "./composer-persistence.ts";
 import {
-  ChatComposerPersistence,
-  admitStoredChatComposerQueueItem,
-  loadChatComposerSnapshot,
-  listStoredChatOutboxes,
-  persistChatComposerState,
-  removeStoredChatComposerQueueItem,
-} from "./composer-persistence.ts";
+  admitStoredChatComposerQueueItemResult,
+  updateStoredChatComposerQueueItems,
+} from "./composer-queue-persistence.ts";
 
 type ComposerState = Parameters<typeof persistChatComposerState>[0] & {
   selectedChatSessionIncognito: boolean;
 };
 
-const LEGACY_STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v1:";
-
-function gatewayOwner(gatewayUrl: string | null | undefined): string {
-  return gatewayUrl?.trim() || "default";
-}
-
 export function legacyStorageKeyForGateway(gatewayUrl: string | null | undefined): string {
-  return `${LEGACY_STORAGE_KEY_PREFIX}${encodeURIComponent(gatewayOwner(gatewayUrl)).slice(0, 240)}`;
+  return `openclaw.control.chatComposer.v1:${encodeURIComponent(gatewayUrl?.trim() || "default").slice(0, 240)}`;
 }
 
 export function createState(overrides: Partial<ComposerState> = {}): ComposerState {
@@ -69,15 +62,12 @@ export function admitItem(
   item: ChatQueueItem,
   sessionKey = state.sessionKey,
 ) {
-  return admitStoredChatComposerQueueItem(
-    state,
-    captureChatOutboxAdmission(state, sessionKey, item.agentId),
-    item,
-  );
+  const admission = captureChatOutboxAdmission(state, sessionKey, item.agentId);
+  return admitStoredChatComposerQueueItemResult(state, admission, item) === "admitted";
 }
 
 export function reviewLegacyItem(state: ComposerState, id: string) {
-  expect(loadChatComposerSnapshot(state, state.sessionKey)).toBeNull();
+  expect(loadChatComposerState(state, state.sessionKey).snapshot).toBeNull();
   expect(listStoredChatOutboxes(state)).toEqual([]);
   const entry = readChatOutboxRecovery(state).entries.find((candidate) =>
     candidate.session.queue?.some((item) => item.id === id),
@@ -89,7 +79,7 @@ export function reviewLegacyItem(state: ComposerState, id: string) {
   );
   expect(destination).not.toBeNull();
   expect(restoreChatOutboxRecovery(state, entry!, destination!)).toBe("restored");
-  return loadChatComposerSnapshot(state, state.sessionKey)!.queue[0]!;
+  return loadChatComposerState(state, state.sessionKey).snapshot!.queue[0]!;
 }
 
 export function fillOutboxes(prefix: string, count = 20) {
@@ -102,7 +92,9 @@ export function fillOutboxes(prefix: string, count = 20) {
 }
 
 export function releaseOutbox({ state, item }: ReturnType<typeof fillOutboxes>[number]) {
-  expect(removeStoredChatComposerQueueItem(state, state.sessionKey, item.id, item)).toBe(true);
+  expect(
+    updateStoredChatComposerQueueItems(state, state.sessionKey, [{ expected: item, next: null }]),
+  ).toBe(true);
 }
 
 export function startPersistence(state: ComposerState) {

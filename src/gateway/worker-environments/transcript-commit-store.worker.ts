@@ -1,39 +1,34 @@
-import type { DatabaseSync } from "node:sqlite";
-import type { Insertable, Selectable } from "kysely";
+import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
-import {
-  deferSqliteWorkerCommitReceipt,
-  requestSqliteWorkerOperationAdmission,
-} from "../../infra/sqlite-worker-operation-admission.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type {
   DB as StateDatabase,
   WorkerTranscriptCommitHeads,
   WorkerTranscriptCommits,
 } from "../../state/openclaw-state-db.generated.js";
-import {
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
-import type { WorkerOperationHandlers } from "../../state/worker-operation-registry.js";
+import type {
+  WorkerOperationHandlers,
+  WorkerWriteOperationContext,
+} from "../../state/worker-operation-registry.js";
 import {
   isWorkerTranscriptCommitOutcome,
   type WorkerTranscriptCommitInput,
   type WorkerTranscriptCommitOutcome,
   type WorkerTranscriptCommitBeginResult,
+  type WorkerTranscriptCommitOperations,
 } from "./transcript-commit-store.worker-contract.js";
+import { createWorkerLedgerInputValidation } from "./worker-ledger-validation.js";
 
 type TranscriptCommitDb = Pick<
   StateDatabase,
   "worker_transcript_commit_heads" | "worker_transcript_commits"
 >;
 type HeadRow = Selectable<WorkerTranscriptCommitHeads>;
-type HeadInsert = Insertable<WorkerTranscriptCommitHeads>;
 type CommitRow = Selectable<WorkerTranscriptCommits>;
-type CommitInsert = Insertable<WorkerTranscriptCommits>;
 
 type NormalizedCommitInput = WorkerTranscriptCommitInput & { nowMs: number };
 type ExistingCommitResult = Extract<
@@ -41,35 +36,9 @@ type ExistingCommitResult = Extract<
   { kind: "recover" | "replay" | "rejected" }
 >;
 
-const REQUEST_HASH_PATTERN = /^[a-f0-9]{64}$/u;
-
-function required(value: unknown, field: string): string {
-  if (typeof value !== "string" || !value.trim()) {
-    throw new Error(`Worker transcript commit ${field} must be a non-empty string`);
-  }
-  return value.trim();
-}
-
-function nonNegativeInteger(value: unknown, field: string): number {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-    throw new Error(`Worker transcript commit ${field} must be a non-negative integer`);
-  }
-  return value;
-}
-
-function positiveInteger(value: unknown, field: string): number {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
-    throw new Error(`Worker transcript commit ${field} must be a positive integer`);
-  }
-  return value;
-}
-
-function normalizeRequestHash(value: unknown): string {
-  if (typeof value !== "string" || !REQUEST_HASH_PATTERN.test(value)) {
-    throw new Error("Worker transcript commit request hash must be lowercase SHA-256 hex");
-  }
-  return value;
-}
+const { required, integer, requestHash } = createWorkerLedgerInputValidation(
+  "Worker transcript commit",
+);
 
 function parseOutcomeJson(value: string): WorkerTranscriptCommitOutcome {
   let parsed: unknown;
@@ -88,16 +57,16 @@ function normalizeInput(input: WorkerTranscriptCommitInput, nowMs: number): Norm
   return {
     environmentId: required(input.environmentId, "environment id"),
     sessionId: required(input.sessionId, "session id"),
-    runEpoch: nonNegativeInteger(input.runEpoch, "run epoch"),
-    seq: positiveInteger(input.seq, "sequence"),
-    requestHash: normalizeRequestHash(input.requestHash),
-    nowMs: nonNegativeInteger(nowMs, "timestamp"),
+    runEpoch: integer(input.runEpoch, "run epoch"),
+    seq: integer(input.seq, "sequence", 1),
+    requestHash: requestHash(input.requestHash),
+    nowMs: integer(nowMs, "timestamp"),
   };
 }
 
-const query = (db: DatabaseSync) => getNodeSqliteKysely<TranscriptCommitDb>(db);
+const query = (db: EngineConnection) => getNodeSqliteKysely<TranscriptCommitDb>(db);
 
-function findHead(db: DatabaseSync, input: NormalizedCommitInput): HeadRow | undefined {
+function findHead(db: EngineConnection, input: NormalizedCommitInput): HeadRow | undefined {
   return executeSqliteQueryTakeFirstSync(
     db,
     query(db)
@@ -108,7 +77,7 @@ function findHead(db: DatabaseSync, input: NormalizedCommitInput): HeadRow | und
   );
 }
 
-function findCommit(db: DatabaseSync, input: NormalizedCommitInput): CommitRow | undefined {
+function findCommit(db: EngineConnection, input: NormalizedCommitInput): CommitRow | undefined {
   return executeSqliteQueryTakeFirstSync(
     db,
     query(db)
@@ -146,186 +115,166 @@ function classifyExistingCommit(params: {
   throw new Error("Worker transcript commit row has invalid terminal state");
 }
 
-function insertHead(db: DatabaseSync, input: NormalizedCommitInput): void {
-  const head: HeadInsert = {
-    session_id: input.sessionId,
-    run_epoch: input.runEpoch,
-    environment_id: input.environmentId,
-    next_seq: 1,
-    updated_at_ms: input.nowMs,
-  };
-  executeSqliteQuerySync(db, query(db).insertInto("worker_transcript_commit_heads").values(head));
-}
-
-function insertPendingCommit(db: DatabaseSync, input: NormalizedCommitInput): void {
-  const commit: CommitInsert = {
-    session_id: input.sessionId,
-    run_epoch: input.runEpoch,
-    seq: input.seq,
-    request_hash: input.requestHash,
-    state: "pending",
-    result_json: null,
-    created_at_ms: input.nowMs,
-    updated_at_ms: input.nowMs,
-  };
-  executeSqliteQuerySync(db, query(db).insertInto("worker_transcript_commits").values(commit));
-}
-
-function createWorkerTranscriptCommitKernel(
-  database: OpenClawStateDatabase,
-  nowMs: number,
-  operationLabel: string,
-) {
-  const write = <T>(operation: (db: DatabaseSync) => T): T =>
-    runOpenClawStateWriteTransaction(
+export const workerTranscriptCommitOperations = {
+  "placementTranscript.begin": (
+    rawInput: WorkerTranscriptCommitOperations["placementTranscript.begin"]["input"],
+    { writeAdmitted },
+  ): WorkerTranscriptCommitBeginResult => {
+    const input = normalizeInput(rawInput, rawInput.nowMs);
+    return writeAdmitted<WorkerTranscriptCommitBeginResult>(
       ({ db }) => {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-        const result = operation(db);
-        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: result });
-        deferSqliteWorkerCommitReceipt(db, result);
-        return result;
+        const head = findHead(db, input);
+        const existing = classifyExistingCommit({ head, commit: findCommit(db, input), input });
+        if (existing) {
+          return existing;
+        }
+        if (head && head.environment_id !== input.environmentId) {
+          return { kind: "rejected", reason: "conflict" };
+        }
+        const expectedSeq = head?.next_seq ?? 1;
+        if (input.seq !== expectedSeq) {
+          return { kind: "rejected", reason: "out-of-order", expectedSeq };
+        }
+        if (!head) {
+          executeSqliteQuerySync(
+            db,
+            query(db).insertInto("worker_transcript_commit_heads").values({
+              session_id: input.sessionId,
+              run_epoch: input.runEpoch,
+              environment_id: input.environmentId,
+              next_seq: 1,
+              updated_at_ms: input.nowMs,
+            }),
+          );
+        }
+        executeSqliteQuerySync(
+          db,
+          query(db).insertInto("worker_transcript_commits").values({
+            session_id: input.sessionId,
+            run_epoch: input.runEpoch,
+            seq: input.seq,
+            request_hash: input.requestHash,
+            state: "pending",
+            result_json: null,
+            created_at_ms: input.nowMs,
+            updated_at_ms: input.nowMs,
+          }),
+        );
+        return { kind: "claimed" };
       },
-      { database },
-      { operationLabel },
+      {
+        operationLabel: "placementTranscript.begin",
+        receipt: "result",
+        transactionEnvironment: "process",
+      },
     );
+  },
 
-  const begin = (rawInput: WorkerTranscriptCommitInput): WorkerTranscriptCommitBeginResult => {
-    const input = normalizeInput(rawInput, nowMs);
-    return write<WorkerTranscriptCommitBeginResult>((db) => {
-      const head = findHead(db, input);
-      const existing = classifyExistingCommit({ head, commit: findCommit(db, input), input });
-      if (existing) {
-        return existing;
-      }
-      if (head && head.environment_id !== input.environmentId) {
-        return { kind: "rejected", reason: "conflict" };
-      }
-      const expectedSeq = head?.next_seq ?? 1;
-      if (input.seq !== expectedSeq) {
-        return { kind: "rejected", reason: "out-of-order", expectedSeq };
-      }
-      if (!head) {
-        insertHead(db, input);
-      }
-      insertPendingCommit(db, input);
-      return { kind: "claimed" };
-    });
-  };
-
-  const complete = (
-    rawInput: WorkerTranscriptCommitInput & { outcome: WorkerTranscriptCommitOutcome },
+  "placementTranscript.complete": (
+    rawInput: WorkerTranscriptCommitOperations["placementTranscript.complete"]["input"],
+    { writeAdmitted },
   ): WorkerTranscriptCommitOutcome => {
-    const input = normalizeInput(rawInput, nowMs);
+    const input = normalizeInput(rawInput, rawInput.nowMs);
     const resultJson = JSON.stringify(rawInput.outcome);
-    return write<WorkerTranscriptCommitOutcome>((db) => {
-      const head = findHead(db, input);
-      const commit = findCommit(db, input);
-      const existing = classifyExistingCommit({ head, commit, input });
-      if (!existing) {
-        throw new Error("Worker transcript commit must begin before terminal completion");
-      }
-      if (existing.kind === "rejected") {
-        throw new Error(
-          `Worker transcript commit terminal completion rejected: ${existing.reason}`,
-        );
-      }
-      if (existing.kind === "replay") {
-        return existing.outcome;
-      }
-      if (!head) {
-        throw new Error("Worker transcript commit row has no sequence head");
-      }
-      if (head.next_seq !== input.seq) {
-        throw new Error(
-          `Worker transcript commit terminal completion expected sequence ${head.next_seq}`,
-        );
-      }
+    return writeAdmitted<WorkerTranscriptCommitOutcome>(
+      ({ db }) => {
+        const head = findHead(db, input);
+        const commit = findCommit(db, input);
+        const existing = classifyExistingCommit({ head, commit, input });
+        if (!existing) {
+          throw new Error("Worker transcript commit must begin before terminal completion");
+        }
+        if (existing.kind === "rejected") {
+          throw new Error(
+            `Worker transcript commit terminal completion rejected: ${existing.reason}`,
+          );
+        }
+        if (existing.kind === "replay") {
+          return existing.outcome;
+        }
+        if (!head) {
+          throw new Error("Worker transcript commit row has no sequence head");
+        }
+        if (head.next_seq !== input.seq) {
+          throw new Error(
+            `Worker transcript commit terminal completion expected sequence ${head.next_seq}`,
+          );
+        }
 
-      const commitUpdate = executeSqliteQuerySync(
-        db,
-        query(db)
-          .updateTable("worker_transcript_commits")
-          .set({ state: "terminal", result_json: resultJson, updated_at_ms: input.nowMs })
-          .where("session_id", "=", input.sessionId)
-          .where("run_epoch", "=", input.runEpoch)
-          .where("seq", "=", input.seq)
-          .where("request_hash", "=", input.requestHash)
-          .where("state", "=", "pending"),
-      );
-      if (commitUpdate.numAffectedRows !== 1n) {
-        throw new Error("Worker transcript commit changed during terminal completion");
-      }
-      const headUpdate = executeSqliteQuerySync(
-        db,
-        query(db)
-          .updateTable("worker_transcript_commit_heads")
-          .set({ next_seq: input.seq + 1, updated_at_ms: input.nowMs })
-          .where("session_id", "=", input.sessionId)
-          .where("run_epoch", "=", input.runEpoch)
-          .where("environment_id", "=", input.environmentId)
-          .where("next_seq", "=", input.seq),
-      );
-      if (headUpdate.numAffectedRows !== 1n) {
-        throw new Error("Worker transcript commit sequence changed during terminal completion");
-      }
-      return rawInput.outcome;
-    });
-  };
+        const commitUpdate = executeSqliteQuerySync(
+          db,
+          query(db)
+            .updateTable("worker_transcript_commits")
+            .set({ state: "terminal", result_json: resultJson, updated_at_ms: input.nowMs })
+            .where("session_id", "=", input.sessionId)
+            .where("run_epoch", "=", input.runEpoch)
+            .where("seq", "=", input.seq)
+            .where("request_hash", "=", input.requestHash)
+            .where("state", "=", "pending"),
+        );
+        if (commitUpdate.numAffectedRows !== 1n) {
+          throw new Error("Worker transcript commit changed during terminal completion");
+        }
+        const headUpdate = executeSqliteQuerySync(
+          db,
+          query(db)
+            .updateTable("worker_transcript_commit_heads")
+            .set({ next_seq: input.seq + 1, updated_at_ms: input.nowMs })
+            .where("session_id", "=", input.sessionId)
+            .where("run_epoch", "=", input.runEpoch)
+            .where("environment_id", "=", input.environmentId)
+            .where("next_seq", "=", input.seq),
+        );
+        if (headUpdate.numAffectedRows !== 1n) {
+          throw new Error("Worker transcript commit sequence changed during terminal completion");
+        }
+        return rawInput.outcome;
+      },
+      {
+        operationLabel: "placementTranscript.complete",
+        receipt: "result",
+        transactionEnvironment: "process",
+      },
+    );
+  },
 
   // Only the invocation that freshly claimed this row may discard it after a
   // known rollback. Recovered reservations can describe an already committed batch.
-  const discardUncommitted = (rawInput: WorkerTranscriptCommitInput): true => {
-    const input = normalizeInput(rawInput, nowMs);
-    return write<true>((db) => {
-      executeSqliteQuerySync(
-        db,
-        query(db)
-          .deleteFrom("worker_transcript_commits")
-          .where("session_id", "=", input.sessionId)
-          .where("run_epoch", "=", input.runEpoch)
-          .where("seq", "=", input.seq)
-          .where("request_hash", "=", input.requestHash)
-          .where("state", "=", "pending")
-          .where((eb) =>
-            eb.exists(
-              eb
-                .selectFrom("worker_transcript_commit_heads")
-                .select("session_id")
-                .where("session_id", "=", input.sessionId)
-                .where("run_epoch", "=", input.runEpoch)
-                .where("environment_id", "=", input.environmentId)
-                .where("next_seq", "=", input.seq),
-            ),
-          ),
-      );
-      return true;
-    });
-  };
-
-  return { begin, complete, discardUncommitted };
-}
-
-export const workerTranscriptCommitOperations = {
-  "placementTranscript.begin": (input: WorkerTranscriptCommitInput & { nowMs: number }, { open }) =>
-    createWorkerTranscriptCommitKernel(open(), input.nowMs, "placementTranscript.begin").begin(
-      input,
-    ),
-  "placementTranscript.complete": (
-    input: WorkerTranscriptCommitInput & { outcome: WorkerTranscriptCommitOutcome; nowMs: number },
-    { open },
-  ) =>
-    createWorkerTranscriptCommitKernel(
-      open(),
-      input.nowMs,
-      "placementTranscript.complete",
-    ).complete(input),
   "placementTranscript.discard": (
-    input: WorkerTranscriptCommitInput & { nowMs: number },
-    { open },
-  ) =>
-    createWorkerTranscriptCommitKernel(
-      open(),
-      input.nowMs,
-      "placementTranscript.discard",
-    ).discardUncommitted(input),
-} satisfies WorkerOperationHandlers;
+    rawInput: WorkerTranscriptCommitOperations["placementTranscript.discard"]["input"],
+    { writeAdmitted },
+  ): true => {
+    const input = normalizeInput(rawInput, rawInput.nowMs);
+    return writeAdmitted<true>(
+      ({ db }) => {
+        executeSqliteQuerySync(
+          db,
+          query(db)
+            .deleteFrom("worker_transcript_commits")
+            .where("session_id", "=", input.sessionId)
+            .where("run_epoch", "=", input.runEpoch)
+            .where("seq", "=", input.seq)
+            .where("request_hash", "=", input.requestHash)
+            .where("state", "=", "pending")
+            .where((eb) =>
+              eb.exists(
+                eb
+                  .selectFrom("worker_transcript_commit_heads")
+                  .select("session_id")
+                  .where("session_id", "=", input.sessionId)
+                  .where("run_epoch", "=", input.runEpoch)
+                  .where("environment_id", "=", input.environmentId)
+                  .where("next_seq", "=", input.seq),
+              ),
+            ),
+        );
+        return true;
+      },
+      {
+        operationLabel: "placementTranscript.discard",
+        receipt: "result",
+        transactionEnvironment: "process",
+      },
+    );
+  },
+} satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;

@@ -1,6 +1,7 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { notifyGatewayObservers } from "../../app/gateway-observers.ts";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { currentWorkIdentity } from "./current-work.ts";
@@ -13,27 +14,18 @@ type LiveActivitySnapshot = {
   readonly error: string | null;
 };
 
-export type LiveActivity = {
-  readonly snapshot: LiveActivitySnapshot;
-  subscribe: (listener: (snapshot: LiveActivitySnapshot) => void) => () => void;
-  syncSessions: (rows: readonly GatewaySessionRow[]) => void;
-  retry: () => void;
-  clear: () => void;
-  dispose: () => void;
-};
-
-export function createLiveActivity(
-  gateway: ApplicationGateway,
-  sessions: SessionCapability,
-): LiveActivity {
+export function createLiveActivity(gateway: ApplicationGateway, sessions: SessionCapability) {
   let entries: ActivityEntry[] = [];
   let snapshot: LiveActivitySnapshot = { entries, revision: 0, error: null };
   const errors = new Map<string, string>();
   let eventLogRevision = gateway.eventLogRevision;
+  let presentationScope = gatewayPresentationScope(gateway);
   let disposed = false;
   let rows: readonly GatewaySessionRow[] = [];
   let client = gateway.snapshot.client;
   let visible = document.visibilityState !== "hidden";
+  let pendingEvents: NonNullable<ReturnType<typeof parseActivityEvent>>[] = [];
+  let scheduledFlush: ReturnType<typeof setTimeout> | undefined;
   const subscriptions = new Map<string, ReturnType<SessionCapability["subscribeMessages"]>>();
   const release = (key: string) => {
     const pending = subscriptions.get(key);
@@ -86,13 +78,14 @@ export function createLiveActivity(
     }
   };
   const handleVisibility = (event: Event) => {
+    flushPending();
     visible = event.type !== "pagehide" && document.visibilityState !== "hidden";
     syncSubscriptions();
   };
-  document.addEventListener("visibilitychange", handleVisibility);
-  globalThis.addEventListener("pagehide", handleVisibility);
-  globalThis.addEventListener("pageshow", handleVisibility);
-  const listeners = new Set<(snapshot: LiveActivitySnapshot) => void>();
+  const stopVisibility = listen(document, "visibilitychange", handleVisibility);
+  const stopPageHide = listen(globalThis, "pagehide", handleVisibility);
+  const stopPageShow = listen(globalThis, "pageshow", handleVisibility);
+  let render: ((snapshot: LiveActivitySnapshot) => void) | undefined;
 
   const publish = (next: ActivityEntry[], reset = false) => {
     const error = errors.values().next().value ?? null;
@@ -101,28 +94,55 @@ export function createLiveActivity(
     }
     entries = next;
     snapshot = { entries, revision: snapshot.revision + (reset ? 1 : 0), error };
-    notifyGatewayObservers(
-      listeners,
-      snapshot,
-      "activity",
-      (current) => !disposed && current === snapshot,
-    );
+    if (!disposed) {
+      try {
+        render?.(snapshot);
+      } catch (handlerError) {
+        console.error("[gateway] activity handler error:", handlerError);
+      }
+    }
+  };
+
+  const cancelFlush = () => {
+    if (scheduledFlush !== undefined) {
+      clearTimeout(scheduledFlush);
+      scheduledFlush = undefined;
+    }
+  };
+  const flushPending = () => {
+    cancelFlush();
+    if (pendingEvents.length === 0) {
+      return;
+    }
+    const batch = pendingEvents;
+    pendingEvents = [];
+    let next = entries;
+    for (const event of batch) {
+      next = updateToolActivity(next, event);
+    }
+    publish(next);
   };
 
   const retireChangedContext = () => {
     const revision = gateway.eventLogRevision;
-    if (revision === eventLogRevision) {
+    const nextPresentationScope = gatewayPresentationScope(gateway);
+    if (revision === eventLogRevision && nextPresentationScope === presentationScope) {
       return;
     }
     eventLogRevision = revision;
+    presentationScope = nextPresentationScope;
+    pendingEvents = [];
+    cancelFlush();
     rows = [];
     syncSubscriptions();
     publish([], true);
   };
 
+  // Every connection transition retires stale activity and rebinds the owned message leases synchronously.
   const stopGateway = gateway.subscribe(() => {
     if (!disposed) {
       retireChangedContext();
+      flushPending();
       syncSubscriptions();
     }
   });
@@ -132,10 +152,12 @@ export function createLiveActivity(
     }
     const eventClient = gateway.snapshot.client;
     const revision = gateway.eventLogRevision;
+    const eventPresentationScope = gatewayPresentationScope(gateway);
     retireChangedContext();
     if (
       disposed ||
       eventClient !== gateway.snapshot.client ||
+      eventPresentationScope !== gatewayPresentationScope(gateway) ||
       revision !== gateway.eventLogRevision
     ) {
       return;
@@ -147,22 +169,35 @@ export function createLiveActivity(
         currentWorkIdentity({ key: activityEvent.sessionKey, agentId: activityEvent.agentId }),
       )
     ) {
-      publish(updateToolActivity(entries, activityEvent));
+      // Admission stays synchronous and ordered. Only this feed's presentation
+      // work moves off transport delivery; chat/sidebar still receive every event.
+      // A task boundary yields without waiting an extra display frame in WebKit.
+      pendingEvents.push(activityEvent);
+      scheduledFlush ??= setTimeout(() => {
+        scheduledFlush = undefined;
+        retireChangedContext();
+        flushPending();
+      }, 0);
     }
   });
 
   return {
     get snapshot() {
+      // Plain owner callers retain synchronous mutate-then-read semantics.
+      flushPending();
       return snapshot;
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+    subscribe(listener: (snapshot: LiveActivitySnapshot) => void) {
+      render = listener;
+      return () => {
+        render = undefined;
+      };
     },
-    syncSessions(nextRows) {
+    syncSessions(nextRows: readonly GatewaySessionRow[]) {
       if (rows === nextRows) {
         return;
       }
+      flushPending();
       rows = nextRows;
       syncSubscriptions();
     },
@@ -173,19 +208,23 @@ export function createLiveActivity(
       syncSubscriptions();
     },
     clear() {
+      pendingEvents = [];
+      cancelFlush();
       publish([], true);
     },
     dispose() {
       disposed = true;
+      pendingEvents = [];
+      cancelFlush();
       syncSubscriptions();
-      document.removeEventListener("visibilitychange", handleVisibility);
-      globalThis.removeEventListener("pagehide", handleVisibility);
-      globalThis.removeEventListener("pageshow", handleVisibility);
+      stopVisibility();
+      stopPageHide();
+      stopPageShow();
       stopGateway();
       stopEvents();
       entries = [];
       snapshot = { entries, revision: snapshot.revision + 1, error: null };
-      listeners.clear();
+      render = undefined;
     },
   };
 }

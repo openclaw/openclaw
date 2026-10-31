@@ -1,4 +1,3 @@
-import type { GatewayProtocolRequestOptions } from "@openclaw/gateway-client/browser";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ModelsListParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
@@ -14,27 +13,43 @@ export type ModelCatalogReadScope = Pick<
   ModelsListParams,
   "agentId" | "sessionKey" | "authProfileId"
 >;
-type ModelCatalogInvalidationScope = ModelCatalogReadScope & { sessionsOnly?: boolean };
-export type ModelCatalogCacheUpdate =
-  | { type: "published" }
-  | { type: "invalidated"; matches: (scope: ModelsListParams, key: string) => boolean };
+type ModelCatalogInvalidationScope = ModelCatalogReadScope & {
+  sessionsOnly?: boolean;
+  pendingOnly?: boolean;
+  sessionModelRevision?: string;
+};
+export type ModelCatalogCacheUpdate = {
+  type: "published" | "invalidated";
+  matches: (scope: ModelsListParams, key: string) => boolean;
+};
 
 export type ModelCatalogClient = Pick<GatewayBrowserClient, "request">;
-export type ModelCatalogInvalidation = "clear" | "refresh";
+export type ModelCatalogInvalidation = "clear" | "refresh" | "pending";
 
 export function modelCatalogEventInvalidation(
   event: Pick<GatewayEventFrame, "event" | "payload">,
+  scope?: ModelCatalogReadScope,
 ): ModelCatalogInvalidation | undefined {
   if (event.event === "config.changed") {
     return "refresh";
   }
   if (event.event === "chat.metadata.changed") {
     const payload = asNullableRecord(event.payload);
-    return payload?.modelSelectionChanged === true
-      ? "clear"
-      : payload?.modelCatalogChanged === false
-        ? undefined
-        : "refresh";
+    if (payload?.modelSelectionChanged === true) {
+      return "clear";
+    }
+    if (
+      scope?.agentId !== undefined &&
+      typeof payload?.agentId === "string" &&
+      scope.agentId.trim() !== payload.agentId.trim()
+    ) {
+      return undefined;
+    }
+    return payload?.modelCatalogChanged === false
+      ? payload.modelCatalogStatusChanged === true
+        ? "pending"
+        : undefined
+      : "refresh";
   }
   return undefined;
 }
@@ -42,28 +57,17 @@ export function modelCatalogEventInvalidation(
 export type ModelCatalogRequest = {
   refresh: boolean;
   controller: AbortController;
-  read: ModelCatalogRead;
-  preparing: boolean;
-  settled: boolean;
   promise: Promise<ModelCatalogResult>;
-  transportSettled: Promise<void>;
   resolve: (result: ModelCatalogResult) => void;
   reject: (error: unknown) => void;
-  start: () => void;
   subscribers: Set<object>;
-};
-
-export type ModelCatalogRequestLane = {
-  active?: ModelCatalogRequest;
-  queued?: ModelCatalogRequest;
 };
 
 type ModelCatalogCache = {
   entries: Map<string, ModelCatalogEntry>;
+  snapshot?: ModelCatalogRead & { promise: Promise<void>; release: () => void };
   requiresSnapshot?: boolean;
-  reads: Set<ModelCatalogRead>;
-  nextRead: number;
-  requests: Map<string, Map<GatewayProtocolRequestOptions["timeoutMs"], ModelCatalogRequestLane>>;
+  requests: Map<string, Map<string, ModelCatalogRequest>>;
 };
 
 export type ModelCatalogRead = {
@@ -71,15 +75,12 @@ export type ModelCatalogRead = {
   cache: ModelCatalogCache;
   scope?: ModelsListParams;
   signal?: AbortSignal;
-  order: number;
-  unresolvedScope: boolean;
 };
 export type ModelCatalogEntry = {
   scope: ModelCatalogReadScope;
   result?: ModelCatalogResult;
   invalidated?: boolean;
   expiresAt?: number;
-  publishedRead?: number;
 };
 
 // Application lifecycle invalidation must not eagerly load catalog readers or presentation.
@@ -92,7 +93,7 @@ export const modelCatalogObservers = new WeakMap<
 export function getModelCatalogCache(client: ModelCatalogClient): ModelCatalogCache {
   let cache = modelCatalogCache.get(client);
   if (!cache) {
-    cache = { entries: new Map(), reads: new Set(), nextRead: 0, requests: new Map() };
+    cache = { entries: new Map(), requests: new Map() };
     modelCatalogCache.set(client, cache);
   }
   return cache;
@@ -102,6 +103,16 @@ function notifyModelCatalogCache(
   client: ModelCatalogClient,
   update: ModelCatalogCacheUpdate,
 ): void {
+  const cache = modelCatalogCache.get(client);
+  if (cache && update.type === "invalidated") {
+    const snapshot = cache.snapshot;
+    if (
+      snapshot &&
+      (!snapshot.scope || update.matches(snapshot.scope, modelCatalogKey(snapshot.scope)))
+    ) {
+      snapshot.release();
+    }
+  }
   for (const listener of Array.from(modelCatalogObservers.get(client) ?? [])) {
     listener(update);
   }
@@ -111,48 +122,36 @@ export function beginModelCatalogRead(
   client: ModelCatalogClient,
   scope?: ModelsListParams,
   signal?: AbortSignal,
-  unresolvedScope = false,
 ): ModelCatalogRead {
-  const cache = getModelCatalogCache(client);
-  const read: ModelCatalogRead = {
-    client,
-    cache,
-    scope,
-    signal,
-    unresolvedScope,
-    order: ++cache.nextRead,
+  return { client, cache: getModelCatalogCache(client), scope, signal };
+}
+
+/** Bootstrap owns one read before connected views can request the same projection. */
+export function beginModelCatalogSnapshot(
+  client: ModelCatalogClient,
+  scope?: ModelsListParams,
+): ModelCatalogRead {
+  const controller = new AbortController();
+  const read = beginModelCatalogRead(client, scope && modelCatalogParams(scope), controller.signal);
+  const { promise, resolve } = Promise.withResolvers<void>();
+  const release = () => {
+    clearTimeout(timer);
+    controller.abort();
+    if (read.cache.snapshot === snapshot) {
+      read.cache.snapshot = undefined;
+    }
+    resolve();
   };
-  cache.reads.add(read);
+  // Failed bootstrap replies are unsolicited responses. A missing snapshot must
+  // fall back to the ordinary read, without waiting its full RPC timeout.
+  const timer = setTimeout(resolve, 1_000);
+  const snapshot = { ...read, promise, release };
+  read.cache.snapshot?.release();
+  read.cache.snapshot = snapshot;
   return read;
 }
 
 const MAX_CACHED_MODEL_CATALOGS = 64;
-
-function trimModelCatalogCache(client: ModelCatalogClient, cache: ModelCatalogCache): void {
-  const retired = new Set<string>();
-  for (const key of cache.entries.keys()) {
-    if (cache.entries.size <= MAX_CACHED_MODEL_CATALOGS) {
-      break;
-    }
-    cache.entries.delete(key);
-    retired.add(key);
-    // Display eviction retires publication, never an unsettled transport's ownership.
-    for (const read of cache.reads) {
-      if (
-        read.unresolvedScope ||
-        (read.scope && modelCatalogKey(modelCatalogParams(read.scope)) === key)
-      ) {
-        cache.reads.delete(read);
-      }
-    }
-  }
-  if (retired.size && modelCatalogCache.get(client) === cache) {
-    notifyModelCatalogCache(client, {
-      type: "invalidated",
-      matches: (_scope, key) => retired.has(key),
-    });
-  }
-}
 
 export function modelCatalogParams(options: ModelsListParams): ModelsListParams {
   const { agentId, view = "configured", ...params } = options;
@@ -174,7 +173,7 @@ export function publishModelCatalogResult(
   result: ModelCatalogResult,
 ): boolean {
   const { cache, client } = read;
-  if (modelCatalogCache.get(client) !== cache || !cache.reads.has(read) || read.signal?.aborted) {
+  if (modelCatalogCache.get(client) !== cache || read.signal?.aborted) {
     return false;
   }
   const key = modelCatalogKey(modelCatalogParams(params));
@@ -187,35 +186,23 @@ export function publishModelCatalogResult(
       return false;
     }
   }
-  const entry: ModelCatalogEntry = cache.entries.get(key) ?? { scope: params };
-  if (!params.refresh && (entry.publishedRead ?? 0) > read.order) {
+  const snapshot = cache.snapshot;
+  // A completed fallback owns this projection, but an unsettled read can still use bootstrap.
+  if (snapshot && snapshot.signal === read.signal && cache.entries.has(key)) {
+    snapshot.release();
     return false;
   }
+  const entry: ModelCatalogEntry = cache.entries.get(key) ?? { scope: params };
   const discoverySucceeded = !result.refreshFailed;
-  // Partial inventory updates display without settling another reader's discovery.
-  for (const pending of cache.reads) {
-    if (
-      discoverySucceeded &&
-      pending !== read &&
-      pending.scope &&
-      modelCatalogKey(modelCatalogParams(pending.scope)) === key &&
-      (params.refresh || !pending.scope.refresh)
-    ) {
-      cache.reads.delete(pending);
-    }
-  }
-  cache.reads.delete(read);
   if (params.refresh && discoverySucceeded) {
     for (const other of cache.entries.values()) {
       if (other !== entry) {
         markModelCatalogInvalid(other);
       }
     }
-    cache.reads.clear();
   }
   entry.result = result;
   entry.invalidated = !discoverySucceeded;
-  entry.publishedRead = read.order;
   // Cooldown expiry changes readiness without publishing a new Gateway generation.
   entry.expiresAt = discoverySucceeded
     ? result.models.reduce(
@@ -225,22 +212,44 @@ export function publishModelCatalogResult(
     : undefined;
   cache.entries.delete(key);
   cache.entries.set(key, entry);
+  const requiredSnapshot = cache.requiresSnapshot;
   cache.requiresSnapshot = result.modelSelectionPolicy?.restricted === true;
-  for (const lane of cache.requests.get(key)?.values() ?? []) {
-    for (const pending of [lane.active, lane.queued]) {
-      if (pending && discoverySucceeded && (params.refresh || !pending.refresh)) {
-        pending.resolve(result);
-      }
+  const admissionChanged = requiredSnapshot !== cache.requiresSnapshot;
+  if (snapshot && snapshot.signal === read.signal) {
+    snapshot.release();
+  }
+  for (const pending of cache.requests.get(key)?.values() ?? []) {
+    if (discoverySucceeded && (params.refresh || !pending.refresh)) {
+      pending.resolve(result);
     }
   }
-  trimModelCatalogCache(client, cache);
+  const retired = new Set<string>();
+  for (const candidateKey of cache.entries.keys()) {
+    if (cache.entries.size <= MAX_CACHED_MODEL_CATALOGS) {
+      break;
+    }
+    cache.entries.delete(candidateKey);
+    retired.add(candidateKey);
+  }
+  if (retired.size && modelCatalogCache.get(client) === cache) {
+    notifyModelCatalogCache(client, {
+      type: "invalidated",
+      matches: (_scope, candidateKey) => retired.has(candidateKey),
+    });
+  }
   if (params.refresh && discoverySucceeded) {
     notifyModelCatalogCache(client, {
       type: "invalidated",
       matches: (_scope, candidateKey) => candidateKey !== key,
     });
   }
-  notifyModelCatalogCache(client, { type: "published" });
+  notifyModelCatalogCache(client, {
+    type: "published",
+    // Global admission changes matter to cold scopes. Held projections keep their
+    // own receipt; successful refresh/eviction invalidations are published above.
+    matches: (_scope, candidateKey) =>
+      candidateKey === key || (admissionChanged && !cache.entries.get(candidateKey)?.result),
+  });
   return true;
 }
 
@@ -267,15 +276,17 @@ export function clearModelCatalogCache(
   options?: { requireSnapshot?: boolean },
 ): void {
   const cache = modelCatalogCache.get(client);
+  cache?.snapshot?.release();
   modelCatalogCache.delete(client);
   getModelCatalogCache(client).requiresSnapshot =
     options?.requireSnapshot === true ||
     cache?.requiresSnapshot === true ||
     (cache?.entries.size ?? 0) > 0;
   for (const budgets of cache?.requests.values() ?? []) {
-    for (const lane of budgets.values()) {
-      lane.active?.reject(new DOMException("Model catalog connection retired", "AbortError"));
-      lane.queued?.reject(new DOMException("Model catalog connection retired", "AbortError"));
+    for (const pending of budgets.values()) {
+      const error = new DOMException("Model catalog connection retired", "AbortError");
+      pending.controller.abort(error);
+      pending.reject(error);
     }
   }
   notifyModelCatalogCache(client, { type: "invalidated", matches: () => true });
@@ -306,14 +317,24 @@ export function invalidateModelCatalogCache(
   client: ModelCatalogClient,
   scope?: ModelCatalogInvalidationScope,
   sessionDefaults?: UiSessionDefaultsHost,
-  retainedKeys?: ReadonlySet<string>,
-): void {
+): (scope: ModelsListParams | undefined) => boolean {
   const cache = modelCatalogCache.get(client);
   if (!cache) {
-    return;
+    return () => true;
   }
-  const matches = (readScope: ModelCatalogReadScope | undefined) => {
-    if (readScope && retainedKeys?.has(modelCatalogKey(modelCatalogParams(readScope)))) {
+  const unchanged = new Set(
+    scope?.sessionModelRevision || scope?.pendingOnly
+      ? Array.from(cache.entries)
+          .filter(([, entry]) =>
+            scope.pendingOnly
+              ? entry.result !== undefined && !entry.result.pendingProviders?.length
+              : entry.result?.sessionModelRevision === scope.sessionModelRevision,
+          )
+          .map(([key]) => key)
+      : [],
+  );
+  const matches = (readScope: ModelsListParams | undefined) => {
+    if (readScope && unchanged.has(modelCatalogKey(modelCatalogParams(readScope)))) {
       return false;
     }
     if (!scope || !readScope) {
@@ -350,11 +371,6 @@ export function invalidateModelCatalogCache(
       readScope.agentId,
     );
   };
-  for (const read of cache.reads) {
-    if (matches(read.scope)) {
-      cache.reads.delete(read);
-    }
-  }
   for (const entry of cache.entries.values()) {
     if (matches(entry.scope)) {
       markModelCatalogInvalid(entry);
@@ -364,4 +380,5 @@ export function invalidateModelCatalogCache(
     type: "invalidated",
     matches,
   });
+  return matches;
 }

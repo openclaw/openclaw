@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { ContentBlockSchema, type ContentBlock } from "@modelcontextprotocol/sdk/types.js";
+import type { ContentBlock } from "@modelcontextprotocol/client";
+import { ContentBlockSchema } from "@modelcontextprotocol/core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ImageContent } from "../llm/types.js";
 import { notifyListeners } from "../shared/listeners.js";
@@ -36,7 +37,7 @@ export function subscribeMcpAppModelContext(
   listeners.set(view, subscribed);
   return () => {
     subscribed.delete(listener);
-    if (!subscribed.size) {
+    if (!subscribed.size && listeners.get(view) === subscribed) {
       listeners.delete(view);
     }
   };
@@ -102,12 +103,7 @@ export function updateMcpAppModelContext(
   const serialized = JSON.stringify(next);
   const views = contexts.get(runtime) ?? new Map<object, Snapshot>();
   const previous = views.get(view);
-  const previousData = previous && {
-    ...(previous.content ? { content: previous.content } : {}),
-    ...(previous.structuredContent !== undefined
-      ? { structuredContent: previous.structuredContent }
-      : {}),
-  };
+  const { updateId: _updateId, leased: _leased, ...previousData } = previous ?? {};
   const updateId =
     previous && JSON.stringify(previousData) === serialized ? previous.updateId : randomUUID();
   const totalBytes =
@@ -136,7 +132,10 @@ export function removeMcpAppModelContextItem(
   index?: number,
 ): McpAppModelContextState {
   const state = getMcpAppModelContext(runtime, view);
-  if (!state || state.updateId !== updateId) {
+  if (!state) {
+    return null;
+  }
+  if (state.updateId !== updateId) {
     throw new Error("MCP App context changed; refresh before removing it");
   }
   if (index === undefined) {
@@ -158,7 +157,7 @@ function modelContent(block: ContentBlock): ContentBlock {
   const { _meta: _presentation, ...content } = block;
   if (content.type === "resource") {
     const { _meta: _resourcePresentation, ...resource } = content.resource;
-    return { ...content, resource };
+    content.resource = resource;
   }
   return content;
 }
@@ -239,12 +238,10 @@ export function leaseMcpAppModelContextForTurn(params: {
       ? { structuredContent: snapshot.structuredContent }
       : {}),
   }));
-  const input = projectMcpAppModelContextInput(modelContext);
   let committed = false;
   return {
     // Harness adapters consume these as conversation input, including native image blocks.
     modelContext,
-    ...input,
     assertCurrent: () => {
       params.runtime.assertOwnerCurrent?.();
       if (

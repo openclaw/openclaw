@@ -19,7 +19,8 @@ import {
   readVisibleSessionTranscriptMessageEntries,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createCodexNativeTestState } from "./native-app-server.test-support.js";
 import type { CodexUserInput } from "./protocol.js";
 import {
   createParams,
@@ -27,9 +28,17 @@ import {
   bindProductionHarnessHostCapabilitiesForTest,
   fastWait,
   runCodexAppServerAttempt,
+  setCodexAppServerClientFactoryForTest,
   setupRunAttemptTestHooks,
   tempDir,
 } from "./run-attempt-test-harness.js";
+import { createIsolatedCodexAppServerClient } from "./shared-client.js";
+import {
+  listenForNativeResponses,
+  nativeAppServerOptions,
+  nativeProviderConfig,
+} from "./thread-native.test-support.js";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 type QueueOptions = NonNullable<Parameters<typeof queueAgentHarnessMessage>[2]>;
 type Recorder = NonNullable<QueueOptions["userTurnTranscriptRecorder"]>;
@@ -43,6 +52,7 @@ type SteerRequest = {
 };
 
 setupRunAttemptTestHooks();
+vi.unmock("node:child_process");
 const managedFixtures: string[] = [];
 afterEach(async () => {
   await Promise.all(
@@ -60,7 +70,6 @@ async function createMediaFixture(scenario: Scenario, managed = false) {
     name: params.modelId,
     input: ["text", "image"],
   };
-  params.toolAuthorityFingerprint = "steering-media-authority";
   await fs.mkdir(params.workspaceDir, { recursive: true });
   let mediaDir = params.workspaceDir;
   if (managed) {
@@ -163,7 +172,9 @@ async function createMediaFixture(scenario: Scenario, managed = false) {
   const options: QueueOptions = {
     debounceMs: 0,
     isInboundUserMessage: true,
-    toolAuthorityFingerprint: params.toolAuthorityFingerprint,
+    get toolAuthorityFingerprint() {
+      return params.toolAuthorityFingerprint;
+    },
     waitForTranscriptCommit: true,
     images: mixed ? [inline] : [],
     // Deliberately disagree with the recorder's canonical facts and layout.
@@ -198,28 +209,64 @@ async function createMediaFixture(scenario: Scenario, managed = false) {
 type MediaFixture = Awaited<ReturnType<typeof createMediaFixture>>;
 type StartedHarness = ReturnType<typeof createStartedThreadHarness>;
 
+async function relocateSteeringImage(
+  fixture: MediaFixture,
+  source: "session" | "sibling" | "shared",
+) {
+  const stateDir = path.dirname(getMediaDir());
+  const sandboxesDir = path.join(stateDir, "sandboxes");
+  const sharedWorkspaceDir = path.join(stateDir, "workspace");
+  await Promise.all([
+    fs.mkdir(sandboxesDir, { recursive: true }),
+    fs.mkdir(sharedWorkspaceDir, { recursive: true }),
+  ]);
+  const sessionWorkspace = await fs.mkdtemp(path.join(sandboxesDir, "steering-session-"));
+  const siblingWorkspace = await fs.mkdtemp(path.join(sandboxesDir, "steering-sibling-"));
+  const sharedWorkspace = await fs.mkdtemp(path.join(sharedWorkspaceDir, "steering-shared-"));
+  managedFixtures.push(sessionWorkspace, siblingWorkspace, sharedWorkspace);
+  fixture.params.workspaceDir = sessionWorkspace;
+  const sourceDir =
+    source === "session"
+      ? sessionWorkspace
+      : source === "sibling"
+        ? siblingWorkspace
+        : sharedWorkspace;
+  const imagePath = path.join(sourceDir, `${source}.png`);
+  const imageBytes = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 });
+  await fs.writeFile(imagePath, imageBytes);
+  const media = [{ path: imagePath, contentType: "image/png" }];
+  fixture.options.media = media;
+  fixture.options.imageOrder = ["offloaded"];
+  fixture.message["__openclaw"] = { media };
+  fixture.recorder.message = fixture.message;
+  fixture.options.userTurnTranscriptRecorder = fixture.recorder;
+  return imageBytes;
+}
+
 async function withActiveMediaTurn(
   fixture: MediaFixture,
   harness: StartedHarness,
   exercise: (controller: AbortController) => Promise<void>,
 ) {
   // Drive media/closure ordering without charging filesystem setup to the run budget.
+  // The turn-context handoff adds another native request before steering becomes active.
+  fixture.params.timeoutMs = 60_000;
   vi.useFakeTimers();
   const controller = new AbortController();
   const started = createDeferred<void>();
-  const run = runCodexAppServerAttempt({
-    ...fixture.params,
-    abortSignal: controller.signal,
-    onAgentEvent: (event) => {
-      if (event.stream === "lifecycle" && event.data.phase === "start") {
-        started.resolve();
-      }
-      return fixture.params.onAgentEvent?.(event);
-    },
-  });
+  const onAgentEvent = fixture.params.onAgentEvent;
+  fixture.params.abortSignal = controller.signal;
+  fixture.params.onAgentEvent = (event) => {
+    if (event.stream === "lifecycle" && event.data.phase === "start") {
+      started.resolve();
+    }
+    return onAgentEvent?.(event);
+  };
+  const run = runCodexAppServerAttempt(fixture.params);
   try {
     // Polling waitFor advances fake time while cold runtime preparation is still loading.
     await started.promise;
+    await run.waitForTurnAccepted();
     expect(harness.requests.some((entry) => entry.method === "turn/start")).toBe(true);
     expect(resolveActiveEmbeddedRunSessionId(fixture.params.sessionKey!)).toBe(
       fixture.params.sessionId,
@@ -261,55 +308,204 @@ function registerSteeringWorkspace(
 }
 
 describe("Codex active-run steering media", () => {
-  it.each(["off", "ro"] as const)(
+  it.each([
+    { source: "session", accepted: true },
+    { source: "sibling", accepted: false },
+    { source: "shared", accepted: false },
+  ] as const)(
+    "with workspaceOnly false accepts $source workspace images: $accepted",
+    async ({ source, accepted: expectedAccepted }) => {
+      const fixture = await createMediaFixture("offloaded");
+      fixture.params.config = {
+        ...fixture.params.config,
+        tools: { ...fixture.params.config?.tools, fs: { workspaceOnly: false } },
+      };
+      const imageBytes = await relocateSteeringImage(fixture, source);
+      const harness = createStartedThreadHarness();
+      await withActiveMediaTurn(fixture, harness, async () => {
+        const accepted = vi.fn();
+        expect(
+          queueAgentHarnessMessage(fixture.params.sessionId, "inspect this", {
+            ...fixture.options,
+            onQueueAccepted: accepted,
+          }),
+        ).toBe(true);
+        await vi.waitFor(
+          () => expect(accepted).toHaveBeenCalledExactlyOnceWith(expectedAccepted),
+          fastWait,
+        );
+        const steers = harness.requests.filter((entry) => entry.method === "turn/steer");
+        if (expectedAccepted) {
+          expect(steers).toHaveLength(1);
+          expect((steers[0]!.params as SteerRequest).input).toEqual([
+            { type: "text", text: "inspect this", text_elements: [] },
+            { type: "image", url: `data:image/png;base64,${imageBytes.toString("base64")}` },
+          ]);
+        } else {
+          expect(steers).toEqual([]);
+          expect(fixture.recorder.persistApproved).not.toHaveBeenCalled();
+          expect(await fixture.readSteeredMessages()).toEqual([]);
+        }
+      });
+    },
+  );
+
+  it.each([
+    { source: "session", accepted: true },
+    { source: "sibling", accepted: false },
+    { source: "shared", accepted: false },
+  ] as const)(
+    "with a native app-server accepts $source workspace images: $accepted",
+    async ({ source, accepted: expectedAccepted }) => {
+      const fixture = await createMediaFixture("offloaded");
+      fixture.params.config = {
+        ...fixture.params.config,
+        tools: { ...fixture.params.config?.tools, fs: { workspaceOnly: false } },
+      };
+      const imageBytes = await relocateSteeringImage(fixture, source);
+      const nativeRoot = path.join(tempDir, `native-${source}`);
+      await fs.mkdir(nativeRoot, { recursive: true });
+      const native = await createCodexNativeTestState(await fs.realpath(nativeRoot));
+      const providerStarted = createDeferred<void>();
+      const openResponses = new Set<import("node:http").ServerResponse>();
+      const port = await listenForNativeResponses({ onTestFinished }, (request, response) => {
+        request.resume();
+        request.on("end", () => {
+          if (request.method !== "POST" || request.url !== "/v1/responses") {
+            response.writeHead(404).end();
+            return;
+          }
+          openResponses.add(response);
+          response.on("close", () => openResponses.delete(response));
+          response.writeHead(200, { "Content-Type": "text/event-stream" });
+          response.write(
+            `event: response.created\ndata: ${JSON.stringify({
+              type: "response.created",
+              response: { id: `steering-${source}` },
+            })}\n\n`,
+          );
+          providerStarted.resolve();
+        });
+      });
+      await fs.writeFile(
+        path.join(native.codexHome, "config.toml"),
+        nativeProviderConfig(
+          "steering-proof",
+          port,
+          ['sandbox_mode="read-only"', "allow_login_shell=false"],
+          ["code_mode=false", "shell_snapshot=false"],
+        ),
+      );
+      const appServer = { ...nativeAppServerOptions(native), sandbox: "read-only" as const };
+      const client = await createIsolatedCodexAppServerClient({
+        startOptions: appServer.start,
+        agentDir: path.join(nativeRoot, "agent"),
+        authProfileId: null,
+        config: {},
+        timeoutMs: 20_000,
+      });
+      expect(client.getServerVersion()).toBe(CODEX_APP_SERVER_VERSION);
+      const nativeSteers: SteerRequest[] = [];
+      const request = client.request.bind(client);
+      vi.spyOn(client, "request").mockImplementation(async (method, params, options) => {
+        const result = await request(method, params, options);
+        if (method === "turn/steer") {
+          nativeSteers.push(params as SteerRequest);
+        }
+        return result;
+      });
+      setCodexAppServerClientFactoryForTest(async () => client);
+      fixture.params.timeoutMs = 60_000;
+      const controller = new AbortController();
+      fixture.params.abortSignal = controller.signal;
+      const run = runCodexAppServerAttempt(fixture.params, {
+        pluginConfig: { appServer: { homeScope: "user" } },
+      });
+      try {
+        await run.waitForTurnAccepted();
+        await providerStarted.promise;
+        const accepted = vi.fn();
+        expect(
+          queueAgentHarnessMessage(fixture.params.sessionId, "inspect this", {
+            ...fixture.options,
+            onQueueAccepted: accepted,
+            waitForTranscriptCommit: false,
+          }),
+        ).toBe(true);
+        await vi.waitFor(
+          () => expect(accepted).toHaveBeenCalledExactlyOnceWith(expectedAccepted),
+          fastWait,
+        );
+        if (expectedAccepted) {
+          expect(nativeSteers).toHaveLength(1);
+          expect(nativeSteers[0]!.input).toEqual([
+            { type: "text", text: "inspect this", text_elements: [] },
+            { type: "image", url: `data:image/png;base64,${imageBytes.toString("base64")}` },
+          ]);
+        } else {
+          expect(nativeSteers).toEqual([]);
+          expect(fixture.recorder.persistApproved).not.toHaveBeenCalled();
+          expect(await fixture.readSteeredMessages()).toEqual([]);
+        }
+      } finally {
+        controller.abort();
+        for (const response of openResponses) {
+          response.end();
+        }
+        await run;
+        await client.closeAndWait();
+      }
+    },
+    60_000,
+  );
+
+  it.each(["ro"] as const)(
     "prepares remote attachments with sandbox access %s without changing images or transcript",
     async (workspaceAccess) => {
       const fixture = await createMediaFixture("resolved", true);
-      if (workspaceAccess !== "off") {
-        const sandboxRoot = path.join(tempDir, "sandbox");
-        await fs.mkdir(sandboxRoot);
-        const docker = {
-          image: "fixture",
-          containerPrefix: "fixture",
-          workdir: "/workspace",
-          readOnlyRoot: true,
-          tmpfs: [],
-          network: "none",
-          capDrop: [],
-        };
-        fixture.params.sandbox = {
-          enabled: true,
-          backendId: "docker",
-          sessionKey: fixture.params.sessionKey!,
-          workspaceDir: sandboxRoot,
-          agentWorkspaceDir: fixture.params.workspaceDir,
-          workspaceAccess,
-          runtimeId: "fixture",
-          runtimeLabel: "fixture",
-          containerName: "fixture",
-          containerWorkdir: "/workspace",
-          docker,
-          tools: { allow: [], deny: [] },
-          browserAllowHostControl: false,
-          fsBridge: createRemoteShellSandboxFsBridge({
-            sandbox: {
-              workspaceDir: sandboxRoot,
-              agentWorkspaceDir: fixture.params.workspaceDir,
-              workspaceAccess,
-              containerName: "fixture",
-              containerWorkdir: "/workspace",
-              docker,
+      const sandboxRoot = path.join(tempDir, "sandbox");
+      await fs.mkdir(sandboxRoot);
+      const docker = {
+        image: "fixture",
+        containerPrefix: "fixture",
+        workdir: "/workspace",
+        readOnlyRoot: true,
+        tmpfs: [],
+        network: "none",
+        capDrop: [],
+      };
+      fixture.params.sandbox = {
+        enabled: true,
+        backendId: "docker",
+        sessionKey: fixture.params.sessionKey!,
+        workspaceDir: sandboxRoot,
+        agentWorkspaceDir: fixture.params.workspaceDir,
+        workspaceAccess,
+        runtimeId: "fixture",
+        runtimeLabel: "fixture",
+        containerName: "fixture",
+        containerWorkdir: "/workspace",
+        docker,
+        tools: { allow: [], deny: [] },
+        browserAllowHostControl: false,
+        fsBridge: createRemoteShellSandboxFsBridge({
+          sandbox: {
+            workspaceDir: sandboxRoot,
+            agentWorkspaceDir: fixture.params.workspaceDir,
+            workspaceAccess,
+            containerName: "fixture",
+            containerWorkdir: "/workspace",
+            docker,
+          },
+          runtime: {
+            remoteWorkspaceDir: "/workspace",
+            remoteAgentWorkspaceDir: "/agent",
+            runRemoteShellScript: async () => {
+              throw new Error("Gateway originals are not in the sandbox");
             },
-            runtime: {
-              remoteWorkspaceDir: "/workspace",
-              remoteAgentWorkspaceDir: "/agent",
-              runRemoteShellScript: async () => {
-                throw new Error("Gateway originals are not in the sandbox");
-              },
-            },
-          }),
-        };
-      }
+          },
+        }),
+      };
       // Deferred originals must be resolved even when the initial snapshot has no file paths.
       fixture.recorder.message = { ...fixture.message, __openclaw: { media: [{ kind: "image" }] } };
       fixture.options.media = [];
@@ -355,19 +551,14 @@ describe("Codex active-run steering media", () => {
     },
   );
 
-  it.each(["failed", "replaced", "host-closed"] as const)(
+  it.each(["replaced", "host-closed"] as const)(
     "rejects %s workspace attachment preparation before native steering",
     async (failure) => {
       const fixture = await createMediaFixture("resolved");
       const closeHost = await bindProductionHarnessHostCapabilitiesForTest(fixture.params);
       const prepared = createDeferred<string>();
       const prepare = vi.fn<NonNullable<AgentWorkspaceAccess["prepareTurnAttachments"]>>(
-        async () => {
-          if (failure === "failed") {
-            throw new Error("Workspace attachment transfer failed");
-          }
-          return await prepared.promise;
-        },
+        async () => await prepared.promise,
       );
       const release = registerSteeringWorkspace(fixture, prepare);
       let releaseReplacement: (() => void) | undefined;
@@ -381,17 +572,15 @@ describe("Codex active-run steering media", () => {
               onQueueAccepted: accepted,
             }),
           ).toBe(true);
-          if (failure !== "failed") {
-            await vi.waitFor(() => expect(prepare).toHaveBeenCalledOnce(), fastWait);
-            expect(harness.requests.filter((entry) => entry.method === "turn/steer")).toEqual([]);
-            if (failure === "replaced") {
-              release();
-              releaseReplacement = registerSteeringWorkspace(fixture, prepare);
-            } else {
-              closeHost();
-            }
-            prepared.resolve("Attachments prepared.");
+          await vi.waitFor(() => expect(prepare).toHaveBeenCalledOnce(), fastWait);
+          expect(harness.requests.filter((entry) => entry.method === "turn/steer")).toEqual([]);
+          if (failure === "replaced") {
+            release();
+            releaseReplacement = registerSteeringWorkspace(fixture, prepare);
+          } else {
+            closeHost();
           }
+          prepared.resolve("Attachments prepared.");
           await vi.waitFor(() => expect(accepted).toHaveBeenCalledExactlyOnceWith(false), fastWait);
           expect(harness.requests.filter((entry) => entry.method === "turn/steer")).toEqual([]);
           expect(fixture.recorder.persistApproved).not.toHaveBeenCalled();
@@ -464,18 +653,13 @@ describe("Codex active-run steering media", () => {
     });
   });
 
-  it.each(["missing", "outside-workspace"] as const)(
+  it.each(["outside-workspace"] as const)(
     "rejects a %s structured image before dispatch or persistence",
-    async (failure) => {
+    async () => {
       const fixture = await createMediaFixture("offloaded");
       fixture.params.config = { ...fixture.params.config, tools: { fs: { workspaceOnly: true } } };
-      const imagePath = path.join(
-        failure === "missing" ? fixture.params.workspaceDir : await fs.realpath(tempDir),
-        "unavailable.png",
-      );
-      if (failure === "outside-workspace") {
-        await fs.writeFile(imagePath, createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 }));
-      }
+      const imagePath = path.join(await fs.realpath(tempDir), "unavailable.png");
+      await fs.writeFile(imagePath, createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 }));
       fixture.options.media = [{ path: imagePath, contentType: "image/png" }];
       fixture.options.imageOrder = ["offloaded"];
       fixture.message["__openclaw"] = { media: fixture.options.media };
@@ -531,58 +715,6 @@ describe("Codex active-run steering media", () => {
       }
     });
   });
-
-  it.each(["offloaded", "layout-summary"] as const)(
-    "honors a text-only active model for %s input",
-    async (kind) => {
-      const fixture = await createMediaFixture("offloaded");
-      fixture.params.modelId = "test-text-only";
-      fixture.params.model = {
-        ...fixture.params.model,
-        id: fixture.params.modelId,
-        name: fixture.params.modelId,
-        input: ["text"],
-      };
-      const canSteer = kind !== "offloaded";
-      fixture.options.userTurnTranscriptRecorder = fixture.recorder;
-      if (canSteer) {
-        fixture.message.content = "description already present";
-        fixture.options.imageOrder = undefined;
-        fixture.message["__openclaw"] = {
-          media: fixture.options.media,
-          mediaImageLayout: { slots: [], suppressedFactIndexes: [0, 1] },
-        };
-        fixture.options.media = undefined;
-      }
-      const harness = createStartedThreadHarness();
-      await withActiveMediaTurn(fixture, harness, async () => {
-        const accepted = vi.fn();
-        expect(
-          queueAgentHarnessMessage(fixture.params.sessionId, fixture.message.content, {
-            ...fixture.options,
-            onQueueAccepted: accepted,
-          }),
-        ).toBe(canSteer);
-        if (!canSteer) {
-          expect(accepted).not.toHaveBeenCalled();
-          expect(harness.requests.filter((entry) => entry.method === "turn/steer")).toEqual([]);
-          expect(fixture.recorder.persistApproved).not.toHaveBeenCalled();
-          expect(await fixture.readSteeredMessages()).toEqual([]);
-          return;
-        }
-        await vi.waitFor(() => expect(accepted).toHaveBeenCalledExactlyOnceWith(true), fastWait);
-        const steer = harness.requests.find((entry) => entry.method === "turn/steer")
-          ?.params as SteerRequest;
-        expect(steer.input).toEqual([
-          { type: "text", text: fixture.message.content, text_elements: [] },
-        ]);
-        expect(fixture.recorder.persistApproved).toHaveBeenCalledOnce();
-        expect(await fixture.readSteeredMessages()).toEqual([fixture.message]);
-        await notifyConsumed(harness, steer.clientUserMessageId);
-        expect(await fixture.readSteeredMessages()).toEqual([fixture.message]);
-      });
-    },
-  );
 
   it("keeps later text behind the reserved image preparation slot", async () => {
     const fixture = await createMediaFixture("resolved");

@@ -1,40 +1,28 @@
 /** Tests credential validation during cross-agent OAuth settlement. */
-import fs from "node:fs/promises";
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import {
-  detectSharedAuthStoreMigration,
-  migrateSharedAuthStore,
-} from "../../infra/state-migrations.shared-auth-store.js";
-import { resetFileLockStateForTest } from "../../plugin-sdk/file-lock.js";
 import { resolveOpenAICodexAuthIdentity } from "../../plugin-sdk/provider-openai-chatgpt-auth.js";
-import { captureEnv } from "../../test-utils/env.js";
-import "./oauth-external-auth-passthrough.test-support.js";
 import {
   withCanonicalAuthProfileCredentialObserver,
   type CanonicalAuthProfileCredentialObservation,
 } from "./credential-observation.js";
-import { getOAuthProviderRuntimeMocks } from "./oauth-common-mocks.test-support.js";
-import { isOAuthRefreshFence, isPendingOAuthRefreshFence } from "./oauth-refresh-marker.js";
-import {
-  OAUTH_AGENT_ENV_KEYS,
-  createOAuthMainAgentDir,
-  createOAuthTestTempRoot,
-  createExpiredOauthStore,
-  removeOAuthTestTempRoot,
-  resolveApiKeyForProfileInTest,
-  resetOAuthProviderRuntimeMocks,
-} from "./oauth-test-utils.js";
+import { expectTerminal, useOAuthCoordinationFixture } from "./oauth-coordination.test-support.js";
+import { storeWith } from "./oauth-test-utils.js";
 import { loadPersistedAuthProfileStore, loadPersistedSharedAuthProfileStore } from "./persisted.js";
-import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
-import { resolveAuthProfileDatabasePath, writePersistedAuthProfileStoreRaw } from "./sqlite.js";
-import { ensureAuthProfileStore, saveAuthProfileStore } from "./store-runtime.js";
+import { resolveAuthProfileDatabasePath } from "./sqlite.js";
+import { saveAuthProfileStore } from "./store-runtime.js";
+import type { AuthProfileStore, OAuthCredential } from "./types.js";
 import { persistAuthProfileBatch } from "./upsert-with-lock.js";
 
-const {
-  refreshProviderOAuthCredentialWithPluginMock,
-  formatProviderAuthProfileApiKeyWithPluginMock,
-} = getOAuthProviderRuntimeMocks();
+const fx = useOAuthCoordinationFixture();
+
+function holdRefresh(result: OAuthCredential | Error) {
+  return fx.blockRefresh(() => {
+    if (result instanceof Error) {
+      throw result;
+    }
+    return result;
+  });
+}
 
 function createWorkspaceAccessToken(accountId: string, rotation: string): string {
   const payload = Buffer.from(
@@ -45,472 +33,201 @@ function createWorkspaceAccessToken(accountId: string, rotation: string): string
   return `e30.${payload}.${rotation}`;
 }
 
-let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
-let resetOAuthRefreshQueuesForTest: typeof import("./oauth.test-support.js").resetOAuthRefreshQueuesForTest;
-
-async function loadOAuthModuleForTest() {
-  ({ resolveApiKeyForProfile } = await import("./oauth.js"));
-  ({ resetOAuthRefreshQueuesForTest } = await import("./oauth.test-support.js"));
-  resetOAuthRefreshQueuesForTest();
-}
-
 vi.mock("../../llm/oauth.js", () => ({
   getOAuthApiKey: vi.fn(async () => null),
   getOAuthProviders: () => [{ id: "openai" }],
 }));
 
 describe("createOAuthManager settlement credential validation", () => {
-  it.each([{ storage: "fresh" as const }, { storage: "upgraded" as const }])(
-    "preserves an independent local rotation with $storage shared storage",
-    async ({ storage }) => {
-      const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
-      let tempRoot = "";
-
-      try {
-        resetFileLockStateForTest();
-        resetOAuthProviderRuntimeMocks({
-          refreshProviderOAuthCredentialWithPluginMock,
-          formatProviderAuthProfileApiKeyWithPluginMock,
-        });
-        clearRuntimeAuthProfileStoreSnapshots();
-        tempRoot = await createOAuthTestTempRoot("openclaw-oauth-independent-validator-");
-        const mainAgentDir = await createOAuthMainAgentDir(tempRoot);
-        await loadOAuthModuleForTest();
-        const profileId = "openai:default";
-        const provider = "openai";
-        const localAgentDir = path.join(tempRoot, "agents", "independent", "agent");
-        await fs.mkdir(localAgentDir, { recursive: true });
-        const local = createExpiredOauthStore({
-          profileId,
-          provider,
-          access: createWorkspaceAccessToken("workspace-a", "original"),
-          accountId: "workspace-a",
-          email: "same@example.test",
-        });
-        const shared = createExpiredOauthStore({
-          profileId,
-          provider,
-          access: createWorkspaceAccessToken("workspace-b", "shared"),
-          accountId: "workspace-b",
-          email: "same@example.test",
-        });
-        const sharedCredential = shared.profiles[profileId];
-        if (sharedCredential?.type !== "oauth") {
-          throw new Error("expected shared OAuth credential");
-        }
-        sharedCredential.refresh = "workspace-b-refresh";
-        sharedCredential.expires = Date.now() + 60 * 60 * 1000;
-        saveAuthProfileStore(local, localAgentDir);
-        if (storage === "fresh") {
-          saveAuthProfileStore(shared);
-        } else {
-          writePersistedAuthProfileStoreRaw(shared, mainAgentDir);
-          const detected = detectSharedAuthStoreMigration({
-            stateDir: tempRoot,
-            env: process.env,
-            doctorOnlyStateMigrations: true,
-          });
-          expect(detected.hasLegacy).toBe(true);
-          await migrateSharedAuthStore({ detected, stateDir: tempRoot, env: process.env });
-        }
-        expect(loadPersistedAuthProfileStore(mainAgentDir)).toBeNull();
-
-        refreshProviderOAuthCredentialWithPluginMock.mockResolvedValue({
-          type: "oauth",
-          provider,
-          access: createWorkspaceAccessToken("workspace-a", "rotated"),
-          refresh: "workspace-a-rotated-refresh",
-          expires: Date.now() + 60 * 60 * 1000,
-          accountId: "workspace-a",
-        } as never);
-        const validatedWorkspaceIds: Array<string | undefined> = [];
-        const observations: CanonicalAuthProfileCredentialObservation[] = [];
-
-        await expect(
-          withCanonicalAuthProfileCredentialObserver(
-            (value) => observations.push(value),
-            () =>
-              resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
-                store: ensureAuthProfileStore(localAgentDir),
-                profileId,
-                agentDir: localAgentDir,
-                validateOAuthCredential: (credential) => {
-                  const accountId = resolveOpenAICodexAuthIdentity({
-                    access: credential.access,
-                  }).accountId;
-                  validatedWorkspaceIds.push(accountId);
-                  if (accountId !== "workspace-a") {
-                    throw new Error("credential owner mismatch");
-                  }
-                },
-              }),
-          ),
-        ).resolves.toEqual(
-          expect.objectContaining({
-            apiKey: createWorkspaceAccessToken("workspace-a", "rotated"),
-          }),
-        );
-
-        expect(
-          validatedWorkspaceIds.filter((accountId) => accountId === "workspace-b"),
-        ).toHaveLength(0);
-        expect(observations).toEqual(
-          expect.arrayContaining([
-            {
-              databasePath: resolveAuthProfileDatabasePath(localAgentDir),
-              profiles: {
-                [profileId]: expect.objectContaining({
-                  access: createWorkspaceAccessToken("workspace-a", "rotated"),
-                  refresh: "workspace-a-rotated-refresh",
-                }),
-              },
-            },
-          ]),
-        );
-        expect(loadPersistedAuthProfileStore(localAgentDir)?.profiles[profileId]).toMatchObject({
-          access: createWorkspaceAccessToken("workspace-a", "rotated"),
-          refresh: "workspace-a-rotated-refresh",
-        });
-        expect(loadPersistedSharedAuthProfileStore(process.env)?.profiles[profileId]).toMatchObject(
-          {
-            access: createWorkspaceAccessToken("workspace-b", "shared"),
-            refresh: "workspace-b-refresh",
-          },
-        );
-      } finally {
-        envSnapshot.restore();
-        resetFileLockStateForTest();
-        clearRuntimeAuthProfileStoreSnapshots();
-        await removeOAuthTestTempRoot(tempRoot);
+  const profileId = "openai:default";
+  const provider = "openai";
+  const expiredStore = (rotation: string, options: Partial<OAuthCredential> = {}) =>
+    storeWith(
+      profileId,
+      createWorkspaceCredential("workspace-a", rotation, {
+        refresh: "refresh-token",
+        expires: Date.now() - 60_000,
+        ...options,
+      }),
+    );
+  const tokens = (accountId: string, rotation: string, refresh = `${rotation}-refresh`) => ({
+    access: createWorkspaceAccessToken(accountId, rotation),
+    refresh,
+  });
+  function createWorkspaceCredential(
+    accountId: string,
+    rotation: string,
+    overrides: Partial<OAuthCredential> = {},
+  ): OAuthCredential {
+    return {
+      type: "oauth",
+      provider,
+      ...tokens(accountId, rotation),
+      expires: Date.now() + 60 * 60 * 1000,
+      ...overrides,
+    };
+  }
+  const resolve = (agentDir: string, validateOAuthCredential: (value: OAuthCredential) => void) =>
+    fx.resolve(agentDir, profileId, { validateOAuthCredential });
+  const publish = (value: OAuthCredential, agentDir?: string) =>
+    persistAuthProfileBatch({
+      agentDir,
+      profiles: [{ profileId, credential: value }],
+      resetFailureState: true,
+      allowOAuthGenerationReplacement: true,
+    });
+  const readLocal = (agentDir: string) =>
+    loadPersistedAuthProfileStore(agentDir)?.profiles[profileId];
+  const readShared = () => loadPersistedSharedAuthProfileStore(process.env)?.profiles[profileId];
+  function workspaceValidator(seen: Array<string | undefined> = []) {
+    return (credential: { access: string }) => {
+      const accountId = resolveOpenAICodexAuthIdentity({ access: credential.access }).accountId;
+      seen.push(accountId);
+      if (accountId !== "workspace-a") {
+        throw new Error("credential owner mismatch");
       }
-    },
-  );
+    };
+  }
+  async function createPeers(original: AuthProfileStore) {
+    async function createPeer(index: number) {
+      const agentDir = await fx.agentDirectory(`peer-${index}`);
+      saveAuthProfileStore(original, agentDir);
+      return agentDir;
+    }
+    return Promise.all([createPeer(0), createPeer(1)]);
+  }
+
+  async function startPeerRefresh(result: OAuthCredential | Error) {
+    const original = expiredStore("original", { email: "shared@example.test" });
+    const peers = await createPeers(original);
+    const refresh = holdRefresh(result);
+    const resolving = resolve(peers[0], workspaceValidator());
+    await refresh.started;
+    return { peers, refresh, resolving };
+  }
+
+  it("preserves an independent local rotation beside shared storage", async () => {
+    const localAgentDir = await fx.agentDirectory("independent");
+    const local = expiredStore("original", {
+      accountId: "workspace-a",
+      email: "same@example.test",
+    });
+    const shared = expiredStore("shared", {
+      ...tokens("workspace-b", "shared", "workspace-b-refresh"),
+      accountId: "workspace-b",
+      email: "same@example.test",
+      expires: Date.now() + 60 * 60 * 1000,
+    });
+    saveAuthProfileStore(local, localAgentDir);
+    saveAuthProfileStore(shared);
+    expect(loadPersistedAuthProfileStore(fx.mainDir)).toBeNull();
+
+    fx.refresh.mockResolvedValue(
+      createWorkspaceCredential("workspace-a", "rotated", {
+        refresh: "workspace-a-rotated-refresh",
+        accountId: "workspace-a",
+      }),
+    );
+    const validatedWorkspaceIds: Array<string | undefined> = [];
+    const observations: CanonicalAuthProfileCredentialObservation[] = [];
+    const rotated = tokens("workspace-a", "rotated", "workspace-a-rotated-refresh");
+
+    await expect(
+      withCanonicalAuthProfileCredentialObserver(
+        (value) => observations.push(value),
+        () => resolve(localAgentDir, workspaceValidator(validatedWorkspaceIds)),
+      ),
+    ).resolves.toMatchObject({ apiKey: createWorkspaceAccessToken("workspace-a", "rotated") });
+
+    expect(validatedWorkspaceIds).not.toContain("workspace-b");
+    expect(observations).toContainEqual({
+      databasePath: resolveAuthProfileDatabasePath(localAgentDir),
+      profiles: {
+        [profileId]: expect.objectContaining(rotated),
+      },
+    });
+    expect(readLocal(localAgentDir)).toMatchObject(rotated);
+    expect(readShared()).toMatchObject(tokens("workspace-b", "shared", "workspace-b-refresh"));
+  });
 
   it("keeps a newer same-account shared credential authoritative for historical peers", async () => {
-    const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
-    let tempRoot = "";
+    const [ownerAgentDir, peerAgentDir] = await Promise.all([
+      fx.agentDirectory("owner"),
+      fx.agentDirectory("peer"),
+    ]);
+    const local = expiredStore("original", { accountId: "workspace-a" });
+    const olderShared = expiredStore("older-shared", {
+      refresh: "older-shared-refresh",
+      accountId: "workspace-a",
+      expires: Date.now() - 120_000,
+    });
+    saveAuthProfileStore(local, ownerAgentDir);
+    saveAuthProfileStore(local, peerAgentDir);
+    saveAuthProfileStore(olderShared);
 
-    try {
-      resetFileLockStateForTest();
-      resetOAuthProviderRuntimeMocks({
-        refreshProviderOAuthCredentialWithPluginMock,
-        formatProviderAuthProfileApiKeyWithPluginMock,
-      });
-      clearRuntimeAuthProfileStoreSnapshots();
-      tempRoot = await createOAuthTestTempRoot("openclaw-oauth-newer-shared-validator-");
-      await createOAuthMainAgentDir(tempRoot);
-      await loadOAuthModuleForTest();
-      const profileId = "openai:default";
-      const provider = "openai";
-      const ownerAgentDir = path.join(tempRoot, "agents", "owner", "agent");
-      const peerAgentDir = path.join(tempRoot, "agents", "peer", "agent");
-      await Promise.all([
-        fs.mkdir(ownerAgentDir, { recursive: true }),
-        fs.mkdir(peerAgentDir, { recursive: true }),
-      ]);
-      const local = createExpiredOauthStore({
-        profileId,
-        provider,
-        access: createWorkspaceAccessToken("workspace-a", "original"),
+    const refresh = holdRefresh(
+      createWorkspaceCredential("workspace-a", "local-rotation", {
+        expires: Date.now() + 30 * 60 * 1000,
         accountId: "workspace-a",
-      });
-      const olderShared = createExpiredOauthStore({
-        profileId,
-        provider,
-        access: createWorkspaceAccessToken("workspace-a", "older-shared"),
-        refresh: "older-shared-refresh",
-        accountId: "workspace-a",
-      });
-      const olderSharedCredential = olderShared.profiles[profileId];
-      if (olderSharedCredential?.type !== "oauth") {
-        throw new Error("expected shared OAuth credential");
-      }
-      olderSharedCredential.expires = Date.now() - 120_000;
-      saveAuthProfileStore(local, ownerAgentDir);
-      saveAuthProfileStore(local, peerAgentDir);
-      saveAuthProfileStore(olderShared);
+      }),
+    );
+    const validatedRotations: string[] = [];
+    const resolving = fx.resolve(ownerAgentDir, profileId, {
+      validateOAuthCredential: (credential) => {
+        const accountId = resolveOpenAICodexAuthIdentity({
+          access: credential.access,
+        }).accountId;
+        if (accountId !== "workspace-a") {
+          throw new Error("credential owner mismatch");
+        }
+        validatedRotations.push(credential.access);
+      },
+    });
+    await refresh.started;
+    const newerShared = createWorkspaceCredential("workspace-a", "newer-shared", {
+      accountId: "workspace-a",
+    });
+    await publish(newerShared);
+    refresh.finishRefresh();
 
-      let finishRefresh: (() => void) | undefined;
-      let markStarted: (() => void) | undefined;
-      const started = new Promise<void>((resolve) => {
-        markStarted = resolve;
-      });
-      refreshProviderOAuthCredentialWithPluginMock.mockImplementation(async () => {
-        markStarted?.();
-        await new Promise<void>((resolve) => {
-          finishRefresh = resolve;
-        });
-        return {
-          type: "oauth",
-          provider,
-          access: createWorkspaceAccessToken("workspace-a", "local-rotation"),
-          refresh: "local-rotation-refresh",
-          expires: Date.now() + 30 * 60 * 1000,
-          accountId: "workspace-a",
-        } as never;
-      });
-      const validatedRotations: string[] = [];
-      const resolving = resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
-        store: ensureAuthProfileStore(ownerAgentDir),
-        profileId,
-        agentDir: ownerAgentDir,
-        validateOAuthCredential: (credential) => {
-          const accountId = resolveOpenAICodexAuthIdentity({
-            access: credential.access,
-          }).accountId;
-          if (accountId !== "workspace-a") {
-            throw new Error("credential owner mismatch");
-          }
-          validatedRotations.push(credential.access);
-        },
-      });
-      await started;
-      const newerShared = {
-        type: "oauth" as const,
-        provider,
-        access: createWorkspaceAccessToken("workspace-a", "newer-shared"),
-        refresh: "newer-shared-refresh",
-        expires: Date.now() + 60 * 60 * 1000,
-        accountId: "workspace-a",
-      };
-      await persistAuthProfileBatch({
-        profiles: [{ profileId, credential: newerShared }],
-        resetFailureState: true,
-        allowOAuthGenerationReplacement: true,
-      });
-      finishRefresh?.();
-
-      await expect(resolving).resolves.toEqual(
-        expect.objectContaining({
-          apiKey: createWorkspaceAccessToken("workspace-a", "local-rotation"),
-        }),
-      );
-      expect(validatedRotations).toContain(
-        createWorkspaceAccessToken("workspace-a", "newer-shared"),
-      );
-      expect(loadPersistedSharedAuthProfileStore(process.env)?.profiles[profileId]).toEqual(
-        newerShared,
-      );
-      expect(loadPersistedAuthProfileStore(peerAgentDir)?.profiles[profileId]).toBeUndefined();
-      expect(loadPersistedAuthProfileStore(ownerAgentDir)?.profiles[profileId]).toMatchObject({
-        access: createWorkspaceAccessToken("workspace-a", "local-rotation"),
-        refresh: "local-rotation-refresh",
-      });
-    } finally {
-      envSnapshot.restore();
-      resetFileLockStateForTest();
-      clearRuntimeAuthProfileStoreSnapshots();
-      await removeOAuthTestTempRoot(tempRoot);
-    }
+    await expect(resolving).resolves.toMatchObject({
+      apiKey: createWorkspaceAccessToken("workspace-a", "local-rotation"),
+    });
+    expect(validatedRotations).toContain(createWorkspaceAccessToken("workspace-a", "newer-shared"));
+    expect(readShared()).toEqual(newerShared);
+    expect(readLocal(peerAgentDir)).toBeUndefined();
+    expect(readLocal(ownerAgentDir)).toMatchObject(tokens("workspace-a", "local-rotation"));
   });
 
-  it("preserves an upgraded local owner and fences its historical peer beside another account", async () => {
-    const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
-    let tempRoot = "";
-
-    try {
-      resetFileLockStateForTest();
-      resetOAuthProviderRuntimeMocks({
-        refreshProviderOAuthCredentialWithPluginMock,
-        formatProviderAuthProfileApiKeyWithPluginMock,
-      });
-      clearRuntimeAuthProfileStoreSnapshots();
-      tempRoot = await createOAuthTestTempRoot("openclaw-oauth-relogin-validator-");
-      const mainAgentDir = await createOAuthMainAgentDir(tempRoot);
-      await loadOAuthModuleForTest();
-      const profileId = "openai:default";
-      const provider = "openai";
-      const original = createExpiredOauthStore({
-        profileId,
-        provider,
-        access: createWorkspaceAccessToken("workspace-a", "original"),
-        email: "shared@example.test",
-      });
-      const peers = await Promise.all(
-        Array.from({ length: 2 }, async (_, index) => {
-          const agentDir = path.join(tempRoot, "agents", `peer-${index}`, "agent");
-          await fs.mkdir(agentDir, { recursive: true });
-          saveAuthProfileStore(original, agentDir);
-          return agentDir;
-        }),
-      );
-
-      let finishRefresh: (() => void) | undefined;
-      let markStarted: (() => void) | undefined;
-      const started = new Promise<void>((resolve) => {
-        markStarted = resolve;
-      });
-      refreshProviderOAuthCredentialWithPluginMock.mockImplementation(async () => {
-        markStarted?.();
-        await new Promise<void>((resolve) => {
-          finishRefresh = resolve;
-        });
-        return {
-          type: "oauth",
-          provider,
-          access: createWorkspaceAccessToken("workspace-a", "stale-rotation"),
-          refresh: "stale-rotation-refresh",
-          expires: Date.now() + 60 * 60 * 1000,
-          email: "shared@example.test",
-        } as never;
-      });
-
-      const validatedWorkspaceIds: Array<string | undefined> = [];
-      const resolving = resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
-        store: ensureAuthProfileStore(peers[0]),
-        profileId,
-        agentDir: peers[0],
-        validateOAuthCredential: (credential) => {
-          const accountId = resolveOpenAICodexAuthIdentity({
-            access: credential.access,
-          }).accountId;
-          validatedWorkspaceIds.push(accountId);
-          if (accountId !== "workspace-a") {
-            throw new Error("credential owner mismatch");
-          }
-        },
-      });
-      await started;
-      await persistAuthProfileBatch({
-        agentDir: mainAgentDir,
-        profiles: [
-          {
-            profileId,
-            credential: {
-              type: "oauth",
-              provider,
-              access: createWorkspaceAccessToken("workspace-b", "relogin"),
-              refresh: "relogin-other-workspace-refresh",
-              expires: Date.now() + 10 * 60 * 1000,
+  it.each(["shared", "local"] as const)(
+    "preserves a conflicting %s owner and fences historical peers during settlement",
+    async (owner) => {
+      const result =
+        owner === "local"
+          ? new Error("provider refresh failed")
+          : createWorkspaceCredential("workspace-a", "stale-rotation", {
               email: "shared@example.test",
-            },
-          },
-        ],
-        resetFailureState: true,
-        allowOAuthGenerationReplacement: true,
+            });
+      const { peers, refresh, resolving } = await startPeerRefresh(result);
+      const conflicting = createWorkspaceCredential("workspace-b", "relogin", {
+        refresh: "relogin-other-workspace-refresh",
+        expires: Date.now() + 10 * 60 * 1000,
+        email: "shared@example.test",
       });
-      finishRefresh?.();
-
-      await expect(resolving).resolves.toEqual(
-        expect.objectContaining({
+      await publish(conflicting, owner === "shared" ? fx.mainDir : peers[0]);
+      refresh.finishRefresh();
+      if (owner === "local") {
+        await expect(resolving).rejects.toThrow("credential owner mismatch");
+        expect(readLocal(peers[0])).toEqual(conflicting);
+      } else {
+        await expect(resolving).resolves.toMatchObject({
           apiKey: createWorkspaceAccessToken("workspace-a", "stale-rotation"),
-        }),
-      );
-      expect(validatedWorkspaceIds.filter((accountId) => accountId === "workspace-b")).toHaveLength(
-        1,
-      );
-      expect(loadPersistedSharedAuthProfileStore(process.env)?.profiles[profileId]).toMatchObject({
-        access: createWorkspaceAccessToken("workspace-b", "relogin"),
-        refresh: "relogin-other-workspace-refresh",
-      });
-      expect(loadPersistedAuthProfileStore(peers[0])?.profiles[profileId]).toMatchObject({
-        access: createWorkspaceAccessToken("workspace-a", "stale-rotation"),
-        refresh: "stale-rotation-refresh",
-      });
-      const peer = loadPersistedAuthProfileStore(peers[1])?.profiles[profileId];
-      expect(peer?.type === "oauth" && isOAuthRefreshFence(peer)).toBe(true);
-      expect(peer?.type === "oauth" && isPendingOAuthRefreshFence(peer)).toBe(false);
-      expect(peer).not.toMatchObject({
-        access: createWorkspaceAccessToken("workspace-b", "relogin"),
-      });
-    } finally {
-      envSnapshot.restore();
-      resetFileLockStateForTest();
-      clearRuntimeAuthProfileStoreSnapshots();
-      await removeOAuthTestTempRoot(tempRoot);
-    }
-  });
-
-  it("does not recover a conflicting owner after provider refresh failure", async () => {
-    const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
-    let tempRoot = "";
-
-    try {
-      resetFileLockStateForTest();
-      resetOAuthProviderRuntimeMocks({
-        refreshProviderOAuthCredentialWithPluginMock,
-        formatProviderAuthProfileApiKeyWithPluginMock,
-      });
-      clearRuntimeAuthProfileStoreSnapshots();
-      tempRoot = await createOAuthTestTempRoot("openclaw-oauth-failed-relogin-validator-");
-      await createOAuthMainAgentDir(tempRoot);
-      await loadOAuthModuleForTest();
-      const profileId = "openai:default";
-      const provider = "openai";
-      const original = createExpiredOauthStore({
-        profileId,
-        provider,
-        access: createWorkspaceAccessToken("workspace-a", "original"),
-        email: "shared@example.test",
-      });
-      const peers = await Promise.all(
-        Array.from({ length: 2 }, async (_, index) => {
-          const agentDir = path.join(tempRoot, "agents", `peer-${index}`, "agent");
-          await fs.mkdir(agentDir, { recursive: true });
-          saveAuthProfileStore(original, agentDir);
-          return agentDir;
-        }),
-      );
-
-      let rejectRefresh: ((error: Error) => void) | undefined;
-      let markStarted: (() => void) | undefined;
-      const started = new Promise<void>((resolve) => {
-        markStarted = resolve;
-      });
-      refreshProviderOAuthCredentialWithPluginMock.mockImplementation(async () => {
-        markStarted?.();
-        return await new Promise<never>((_, reject) => {
-          rejectRefresh = reject;
         });
-      });
-
-      const validatedWorkspaceIds: Array<string | undefined> = [];
-      const resolving = resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
-        store: ensureAuthProfileStore(peers[0]),
-        profileId,
-        agentDir: peers[0],
-        validateOAuthCredential: (credential) => {
-          const accountId = resolveOpenAICodexAuthIdentity({
-            access: credential.access,
-          }).accountId;
-          validatedWorkspaceIds.push(accountId);
-          if (accountId !== "workspace-a") {
-            throw new Error("credential owner mismatch");
-          }
-        },
-      });
-      await started;
-      const conflictingOwner = {
-        type: "oauth" as const,
-        provider,
-        access: createWorkspaceAccessToken("workspace-b", "relogin"),
-        refresh: "relogin-other-workspace-refresh",
-        expires: Date.now() + 60 * 60 * 1000,
-        email: "shared@example.test",
-      };
-      await persistAuthProfileBatch({
-        agentDir: peers[0],
-        profiles: [{ profileId, credential: conflictingOwner }],
-        resetFailureState: true,
-        allowOAuthGenerationReplacement: true,
-      });
-      rejectRefresh?.(new Error("provider refresh failed"));
-
-      await expect(resolving).rejects.toThrow("credential owner mismatch");
-      expect(validatedWorkspaceIds.filter((accountId) => accountId === "workspace-b")).toHaveLength(
-        1,
-      );
-      expect(loadPersistedAuthProfileStore(peers[0])?.profiles[profileId]).toEqual(
-        conflictingOwner,
-      );
-      const peer = loadPersistedAuthProfileStore(peers[1])?.profiles[profileId];
-      expect(peer?.type === "oauth" && isOAuthRefreshFence(peer)).toBe(true);
-      expect(peer?.type === "oauth" && isPendingOAuthRefreshFence(peer)).toBe(false);
-    } finally {
-      envSnapshot.restore();
-      resetFileLockStateForTest();
-      clearRuntimeAuthProfileStoreSnapshots();
-      await removeOAuthTestTempRoot(tempRoot);
-    }
-  });
+        expect(readShared()).toMatchObject(tokens("workspace-b", "relogin", conflicting.refresh));
+        expect(readLocal(peers[0])).toMatchObject(tokens("workspace-a", "stale-rotation"));
+        expect(readLocal(peers[1])).not.toMatchObject({ access: conflicting.access });
+      }
+      expectTerminal(readLocal(peers[1]));
+    },
+  );
 });

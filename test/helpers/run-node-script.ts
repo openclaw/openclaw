@@ -1,10 +1,12 @@
 import type { ChildProcess } from "node:child_process";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
+import { resolveRuntimeWorkerArgv } from "../../src/infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createBoundedChildOutput } from "./bounded-child-output.js";
 
+/** Worker argv is resolved against the executable selected for this child. */
 export async function runNodeScript(
-  scriptPathOrArgs: string | string[],
+  scriptPathOrArgs: string | string[] | ((workerArgv: (url: URL) => string[]) => string[]),
   env: NodeJS.ProcessEnv,
   timeoutMs: number | undefined,
   {
@@ -31,9 +33,16 @@ export async function runNodeScript(
   let status: number | null = null;
   let error: unknown;
   try {
+    const execPath = executable ?? resolveTestNodeExecPath();
+    const args =
+      typeof scriptPathOrArgs === "function"
+        ? scriptPathOrArgs((url) => resolveRuntimeWorkerArgv(url, execPath))
+        : typeof scriptPathOrArgs === "string"
+          ? [scriptPathOrArgs]
+          : scriptPathOrArgs;
     status = await runManagedCommand({
-      bin: executable ?? resolveTestNodeExecPath(),
-      args: typeof scriptPathOrArgs === "string" ? [scriptPathOrArgs] : scriptPathOrArgs,
+      bin: execPath,
+      args,
       cwd,
       env,
       timeoutMs,

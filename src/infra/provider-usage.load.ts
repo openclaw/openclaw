@@ -1,4 +1,4 @@
-import { ensureAuthProfileStore, type AuthProfileStore } from "../agents/auth-profiles.js";
+import { ensureAuthProfileStoreAsync, type AuthProfileStore } from "../agents/auth-profiles.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import {
   listProviderUsagePluginDescriptors,
@@ -7,8 +7,9 @@ import {
 } from "../plugins/provider-runtime.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { formatErrorMessage } from "./errors.js";
-import { resolveFetch } from "./fetch.js";
+import { wrapFetchWithAbortSignal } from "./fetch.js";
 import { resolveProxyFetchFromEnv } from "./net/proxy-fetch.js";
+import { fetchWithRuntimeDispatcherOrMockedGlobal } from "./net/runtime-fetch.js";
 import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.js";
 import {
   PROVIDER_USAGE_TIMEOUT_MS,
@@ -22,67 +23,20 @@ import type {
   UsageSummary,
 } from "./provider-usage.types.js";
 
-type UsageSummaryOptions = {
-  now?: number;
-  timeoutMs?: number;
-  providers?: UsageProviderId[];
-  auth?: ProviderAuth[];
-  authStore?: AuthProfileStore;
-  agentDir?: string;
-  workspaceDir?: string;
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  fetch?: typeof fetch;
-};
-
-async function fetchProviderUsageSnapshot(params: {
-  auth: ProviderAuth;
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  agentDir?: string;
-  workspaceDir?: string;
-  timeoutMs: number;
-  signal: AbortSignal;
-  fetchFn: typeof fetch;
-}): Promise<ProviderUsageSnapshot> {
-  const pluginSnapshot = await resolveProviderUsageSnapshotWithPlugin({
-    provider: params.auth.hookProvider ?? params.auth.provider,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    context: {
-      config: params.config,
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-      provider: params.auth.provider,
-      token: params.auth.token,
-      accountId: params.auth.accountId,
-      authProfileId: params.auth.authProfileId,
-      subscriptionType: params.auth.subscriptionType,
-      authFlow: params.auth.authFlow,
-      rateLimitTier: params.auth.rateLimitTier,
-      email: params.auth.email,
-      timeoutMs: params.timeoutMs,
-      signal: params.signal,
-      fetchFn: params.fetchFn,
-    },
-  });
-  return (
-    pluginSnapshot ?? {
-      provider: params.auth.provider,
-      displayName: providerUsageLabel(params.auth.provider) ?? params.auth.provider,
-      windows: [],
-      error: "Unsupported provider",
-    }
-  );
-}
-
 /** Loads usage snapshots from configured provider auth and plugin-backed usage hooks. */
 export async function loadProviderUsageSummary(
-  opts: UsageSummaryOptions = {},
+  opts: {
+    timeoutMs?: number;
+    providers?: UsageProviderId[];
+    auth?: ProviderAuth[];
+    authStore?: AuthProfileStore;
+    agentDir?: string;
+    workspaceDir?: string;
+    config?: OpenClawConfig;
+    env?: NodeJS.ProcessEnv;
+  } = {},
 ): Promise<UsageSummary> {
-  const now = opts.now ?? Date.now();
+  const now = Date.now();
   const timeoutMs = opts.timeoutMs ?? PROVIDER_USAGE_TIMEOUT_MS;
   const config = opts.config ?? getRuntimeConfig();
   const env = opts.env ?? process.env;
@@ -100,7 +54,6 @@ export async function loadProviderUsageSummary(
   const displayNames = new Map(
     descriptors.map((descriptor) => [descriptor.provider, descriptor.displayName]),
   );
-  const providerOrder = new Map(descriptors.map(({ provider }, index) => [provider, index]));
   const failureSnapshot = (provider: UsageProviderId, error: string): ProviderUsageSnapshot => ({
     provider,
     displayName: displayNames.get(provider) ?? providerUsageLabel(provider) ?? provider,
@@ -113,15 +66,13 @@ export async function loadProviderUsageSummary(
       providers: descriptors.map(({ provider }) => failureSnapshot(provider, "Timeout")),
     };
   }
-  const fetchFn = opts.fetch
-    ? resolveFetch(opts.fetch)
-    : (resolveProxyFetchFromEnv(env) ?? resolveFetch());
-  if (!fetchFn) {
-    throw new Error("fetch is not available");
-  }
-  let authStore = opts.authStore;
+  const fetchFn =
+    resolveProxyFetchFromEnv(env) ??
+    wrapFetchWithAbortSignal(fetchWithRuntimeDispatcherOrMockedGlobal);
+  let authStore: Promise<AuthProfileStore> | undefined;
   const getAuthStore = () =>
-    (authStore ??= ensureAuthProfileStore(opts.agentDir, { allowKeychainPrompt: false }));
+    opts.authStore ??
+    (authStore ??= ensureAuthProfileStoreAsync(opts.agentDir, { allowKeychainPrompt: false }));
   const tasks = descriptors.map(({ provider }) => {
     return raceUsageTimeout(
       (signal) =>
@@ -151,26 +102,47 @@ export async function loadProviderUsageSummary(
           if (!auth) {
             return undefined;
           }
-          return await fetchProviderUsageSnapshot({
-            auth,
+          const snapshot = await resolveProviderUsageSnapshotWithPlugin({
+            provider: auth.hookProvider ?? auth.provider,
             config,
-            env,
-            agentDir: opts.agentDir,
             workspaceDir: opts.workspaceDir,
-            timeoutMs,
-            signal,
-            fetchFn: (input, init) => {
-              signal.throwIfAborted();
-              const callerSignal =
-                init?.signal === undefined && input instanceof Request
-                  ? input.signal
-                  : init?.signal;
-              return fetchFn(input, {
-                ...init,
-                signal: callerSignal ? AbortSignal.any([signal, callerSignal]) : signal,
-              });
+            env,
+            context: {
+              config,
+              agentDir: opts.agentDir,
+              workspaceDir: opts.workspaceDir,
+              env,
+              provider: auth.provider,
+              token: auth.token,
+              accountId: auth.accountId,
+              authProfileId: auth.authProfileId,
+              subscriptionType: auth.subscriptionType,
+              authFlow: auth.authFlow,
+              rateLimitTier: auth.rateLimitTier,
+              email: auth.email,
+              timeoutMs,
+              signal,
+              fetchFn: (input, init) => {
+                signal.throwIfAborted();
+                const callerSignal =
+                  init?.signal === undefined && input instanceof Request
+                    ? input.signal
+                    : init?.signal;
+                return fetchFn(input, {
+                  ...init,
+                  signal: callerSignal ? AbortSignal.any([signal, callerSignal]) : signal,
+                });
+              },
             },
           });
+          return (
+            snapshot ?? {
+              provider: auth.provider,
+              displayName: providerUsageLabel(auth.provider) ?? auth.provider,
+              windows: [],
+              error: "Unsupported provider",
+            }
+          );
         }),
       timeoutMs,
       failureSnapshot(provider, "Timeout"),
@@ -180,13 +152,9 @@ export async function loadProviderUsageSummary(
     });
   });
 
-  const snapshots = (await Promise.all(tasks))
-    .filter((snapshot): snapshot is ProviderUsageSnapshot => snapshot !== undefined)
-    .toSorted(
-      (left, right) =>
-        (providerOrder.get(left.provider) ?? Number.MAX_SAFE_INTEGER) -
-        (providerOrder.get(right.provider) ?? Number.MAX_SAFE_INTEGER),
-    );
+  const snapshots = (await Promise.all(tasks)).filter(
+    (snapshot): snapshot is ProviderUsageSnapshot => snapshot !== undefined,
+  );
   const providers = snapshots.filter(
     (entry) =>
       entry.windows.length > 0 ||

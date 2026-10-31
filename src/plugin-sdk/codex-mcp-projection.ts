@@ -16,6 +16,7 @@ import type {
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 
 export { pinExecToolTarget };
+export { classifyAgentToolSource } from "../plugins/tool-metadata.js";
 export { resolveBootstrapFilesForPreparation } from "../agents/bootstrap-files.js";
 export { loadCodexBundleMcpApprovalConfig } from "../agents/codex-mcp-config.js";
 export {
@@ -118,27 +119,17 @@ export async function createHarnessMcpFormResourceContext(
   params.origin.assertCurrent();
   const { prepareMcpAppFormUpload } = await import("../agents/mcp-form-resource-upload.js");
   const prepare = params.origin.prepareToolCall;
-  const origin = {
+  const origin: AgentHarnessMcpFormResourceParamsV1["origin"] = {
     ...params.origin,
     // Gateway request options stay with the Gateway. A native harness receives
     // only the exact tool and a closure-bound current-authority assertion.
     prepareToolCall: prepare
-      ? async ({
-          toolName,
-          input,
-          assertCurrent,
-          signal,
-        }: {
-          toolName: string;
-          input: Record<string, unknown>;
-          assertCurrent: () => void;
-          signal?: AbortSignal;
-        }) => prepare({ toolName, input, assertCurrent, signal })
+      ? async ({ toolName, input, assertCurrent, signal }) =>
+          prepare({ toolName, input, assertCurrent, signal })
       : undefined,
   };
   return await createMcpAppFormResourceContext({
     origin,
-    requestId: params.requestId,
     snapshot: params.snapshot,
     signal: params.signal,
     uploadResources: await prepareMcpAppFormUpload(origin),

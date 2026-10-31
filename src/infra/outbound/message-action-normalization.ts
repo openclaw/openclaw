@@ -1,6 +1,9 @@
-// Message-action input normalization infers channel/target context and rewrites
-// legacy target fields before dispatch validation.
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  hasNonEmptyString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { isMessageToolSendActionName } from "../../agents/embedded-agent-messaging.js";
+import { resolveChannelMessageActionFacts } from "../../channels/plugins/message-action-names.js";
 import type {
   ChannelMessageActionName,
   ChannelThreadingToolContext,
@@ -15,7 +18,6 @@ import {
   actionHasResourceReference,
   actionHasTarget,
   actionRequiresTarget,
-  applyTargetToParams,
   resolveActionDeliveryTargetAlias,
   type ActionDeliveryTargetAliasSpec,
 } from "./message-action-spec.js";
@@ -23,13 +25,17 @@ import { missingMessageActionTargetError } from "./target-errors.js";
 
 export function resolveImplicitMessageActionTarget(
   toolContext: ChannelThreadingToolContext | undefined,
+  action?: ChannelMessageActionName,
 ): string | undefined {
-  for (const value of [toolContext?.currentChannelId, toolContext?.currentMessagingTarget]) {
+  // Content replies follow the effective delivery route; message resources still
+  // belong to the native conversation that supplied the inbound message.
+  const candidates =
+    isMessageToolSendActionName(action) || action === "poll"
+      ? [toolContext?.currentMessagingTarget, toolContext?.currentChannelId]
+      : [toolContext?.currentChannelId, toolContext?.currentMessagingTarget];
+  for (const value of candidates) {
     const target = normalizeOptionalString(value);
-    if (!target) {
-      continue;
-    }
-    if (isInternalNonDeliveryChannel(target)) {
+    if (!target || isInternalNonDeliveryChannel(target)) {
       continue;
     }
     // A session can arrive bare or wrapped as a channel target; neither is
@@ -42,7 +48,6 @@ export function resolveImplicitMessageActionTarget(
   return undefined;
 }
 
-/** Normalizes message-action args before target validation and dispatch. */
 export function normalizeMessageActionInput(params: {
   action: ChannelMessageActionName;
   args: Record<string, unknown>;
@@ -97,31 +102,44 @@ export function normalizeMessageActionInput(params: {
     normalizedArgs.target = deliveryAliasTarget;
   }
 
-  if (
-    !explicitTarget &&
-    !hasExplicitTargets &&
-    !legacyTarget &&
-    !deliveryAliasTarget &&
-    actionRequiresTarget(action) &&
-    (hasResourceReference || !actionHasTarget(action, normalizedArgs, targetAliasOptions))
-  ) {
-    const inferredTarget = resolveImplicitMessageActionTarget(toolContext);
-    if (inferredTarget) {
-      normalizedArgs.target = inferredTarget;
+  if (!explicitTarget && actionRequiresTarget(action)) {
+    if (legacyTarget) {
+      normalizedArgs.target = legacyTarget;
+      delete normalizedArgs.to;
+      delete normalizedArgs.channelId;
+    } else if (
+      !hasExplicitTargets &&
+      !deliveryAliasTarget &&
+      (hasResourceReference || !actionHasTarget(action, normalizedArgs, targetAliasOptions))
+    ) {
+      const inferredTarget = resolveImplicitMessageActionTarget(toolContext, action);
+      if (inferredTarget) {
+        normalizedArgs.target = inferredTarget;
+      }
     }
-  }
-
-  if (!explicitTarget && actionRequiresTarget(action) && legacyTarget) {
-    normalizedArgs.target = legacyTarget;
-    delete normalizedArgs.to;
-    delete normalizedArgs.channelId;
   }
 
   if (!explicitChannel && inferredChannel && isDeliverableMessageChannel(inferredChannel)) {
     normalizedArgs.channel = inferredChannel;
   }
 
-  applyTargetToParams({ action, args: normalizedArgs });
+  const target = normalizeOptionalString(normalizedArgs.target) ?? "";
+  const hasLegacyTo = hasNonEmptyString(normalizedArgs.to);
+  const hasLegacyChannelId = hasNonEmptyString(normalizedArgs.channelId);
+  const mode = resolveChannelMessageActionFacts(action)?.targetMode ?? "none";
+
+  if (mode !== "none" && (hasLegacyTo || hasLegacyChannelId)) {
+    throw new Error("Use `target` instead of `to`/`channelId`.");
+  } else if (mode === "none" && hasLegacyTo) {
+    throw new Error("Use `target` for actions that accept a destination.");
+  }
+
+  if (target) {
+    if (mode === "none") {
+      throw new Error(`Action ${action} does not accept a target.`);
+    }
+    normalizedArgs[mode] = target;
+  }
   const hasCanonicalTarget = [
     normalizedArgs.target,
     normalizedArgs.to,
@@ -132,7 +150,11 @@ export function normalizeMessageActionInput(params: {
     (!actionHasTarget(action, normalizedArgs, targetAliasOptions) ||
       (hasResourceReference && !hasCanonicalTarget && !params.allowResourceOnly))
   ) {
-    throw missingMessageActionTargetError(action);
+    throw missingMessageActionTargetError(action, {
+      hasCurrentSourceConversation: Boolean(
+        resolveImplicitMessageActionTarget(toolContext, "send"),
+      ),
+    });
   }
 
   return normalizedArgs;

@@ -29,23 +29,6 @@ export type PlaybackMediaProbeResult = MediaProbeResult & {
   videoStreamIndex?: number;
 };
 
-type MediaProbeOptions = {
-  timeoutMs?: number;
-};
-
-type MediaFileProbeInput = {
-  filePath: string;
-  kind: MediaProbeKind;
-};
-
-type MediaProbeBatchOptions = {
-  budgetMs: number;
-  concurrency: number;
-  maxProbes: number;
-};
-
-type FfprobeSource = { kind: "fileDescriptor"; fd: number } | { kind: "buffer"; buffer: Buffer };
-
 function parseDurationMs(value: unknown): number | undefined {
   if (typeof value !== "number" && typeof value !== "string") {
     return undefined;
@@ -133,22 +116,6 @@ function parseFfprobeMediaMetadata(
   };
 }
 
-function buildFfprobeMetadataArgs(protocol: "fd" | "pipe"): string[] {
-  const isFileDescriptor = protocol === "fd";
-  return [
-    "-v",
-    "error",
-    "-protocol_whitelist",
-    protocol,
-    "-show_entries",
-    "format=duration:stream=index,codec_type,codec_name,profile,pix_fmt,duration,width,height,sample_aspect_ratio:stream_disposition=default,attached_pic:stream_side_data=rotation",
-    "-of",
-    "json",
-    ...(isFileDescriptor ? ["-fd", "0"] : []),
-    isFileDescriptor ? "fd:" : "pipe:0",
-  ];
-}
-
 function isMissingFdProtocolError(error: unknown): boolean {
   const stderr = readRecord(error)?.stderr;
   const message = typeof stderr === "string" ? stderr : error instanceof Error ? error.message : "";
@@ -160,22 +127,34 @@ function isMissingFdProtocolError(error: unknown): boolean {
 }
 
 async function probeMediaSource(
-  source: FfprobeSource,
+  source: { stdinFileDescriptor: number } | { input: Buffer },
   kind: MediaProbeKind,
-  options: MediaProbeOptions = {},
+  options: {
+    timeoutMs?: number;
+  } = {},
 ): Promise<PlaybackMediaProbeResult | null> {
+  const isFileDescriptor = "stdinFileDescriptor" in source;
   const runProbe = async (protocol: "fd" | "pipe") =>
     await runFfprobe(
-      buildFfprobeMetadataArgs(protocol),
-      source.kind === "buffer"
-        ? { input: source.buffer, ...options }
-        : { stdinFileDescriptor: source.fd, ...options },
+      [
+        "-v",
+        "error",
+        "-protocol_whitelist",
+        protocol,
+        "-show_entries",
+        "format=duration:stream=index,codec_type,codec_name,profile,pix_fmt,duration,width,height,sample_aspect_ratio:stream_disposition=default,attached_pic:stream_side_data=rotation",
+        "-of",
+        "json",
+        ...(protocol === "fd" ? ["-fd", "0"] : []),
+        protocol === "fd" ? "fd:" : "pipe:0",
+      ],
+      { ...source, ...options },
     );
   try {
-    const stdout = await runProbe(source.kind === "fileDescriptor" ? "fd" : "pipe");
+    const stdout = await runProbe(isFileDescriptor ? "fd" : "pipe");
     return parseFfprobeMediaMetadata(stdout, kind);
   } catch (error) {
-    if (source.kind === "fileDescriptor" && isMissingFdProtocolError(error)) {
+    if (isFileDescriptor && isMissingFdProtocolError(error)) {
       try {
         return parseFfprobeMediaMetadata(await runProbe("pipe"), kind);
       } catch {
@@ -208,30 +187,17 @@ export function toMediaProbeResult(result: PlaybackMediaProbeResult | null): Med
   };
 }
 
-/** Probes a local audio or video file; every failure degrades to absent fields. */
-async function probeMediaFile(
-  filePath: string,
-  kind: MediaProbeKind,
-  options: MediaProbeOptions = {},
-): Promise<MediaProbeResult> {
-  try {
-    const handle = await fs.open(filePath, "r");
-    try {
-      return toMediaProbeResult(
-        await probeMediaSource({ kind: "fileDescriptor", fd: handle.fd }, kind, options),
-      );
-    } finally {
-      await handle.close().catch(() => {});
-    }
-  } catch {
-    return {};
-  }
-}
-
 /** Probes a bounded batch under one elapsed-time budget, unaffected by wall-clock steps. */
 export async function probeMediaFilesWithinBudget(
-  inputs: readonly MediaFileProbeInput[],
-  options: MediaProbeBatchOptions,
+  inputs: readonly {
+    filePath: string;
+    kind: MediaProbeKind;
+  }[],
+  options: {
+    budgetMs: number;
+    concurrency: number;
+    maxProbes: number;
+  },
 ): Promise<MediaProbeResult[]> {
   const results: MediaProbeResult[] = inputs.map(() => ({}));
   const deadlineMs = performance.now() + options.budgetMs;
@@ -244,7 +210,20 @@ export async function probeMediaFilesWithinBudget(
     const batchEnd = Math.min(offset + options.concurrency, probeCount);
     const batch = inputs.slice(offset, batchEnd);
     const batchResults = await Promise.all(
-      batch.map((input) => probeMediaFile(input.filePath, input.kind, { timeoutMs })),
+      batch.map(async ({ filePath, kind }) => {
+        try {
+          const handle = await fs.open(filePath, "r");
+          try {
+            return toMediaProbeResult(
+              await probeMediaSource({ stdinFileDescriptor: handle.fd }, kind, { timeoutMs }),
+            );
+          } finally {
+            await handle.close().catch(() => {});
+          }
+        } catch {
+          return {};
+        }
+      }),
     );
     for (const [batchIndex, metadata] of batchResults.entries()) {
       results[offset + batchIndex] = metadata;
@@ -257,9 +236,8 @@ export async function probeMediaFilesWithinBudget(
 export async function probePlaybackMediaFileDescriptor(
   fd: number,
   kind: MediaProbeKind,
-  options: MediaProbeOptions = {},
 ): Promise<PlaybackMediaProbeResult | null> {
-  return await probeMediaSource({ kind: "fileDescriptor", fd }, kind, options);
+  return await probeMediaSource({ stdinFileDescriptor: fd }, kind);
 }
 
 type VideoDimensions = {
@@ -269,8 +247,6 @@ type VideoDimensions = {
 
 /** Probes a video buffer while preserving the existing public media-runtime API. */
 export async function probeVideoDimensions(buffer: Buffer): Promise<VideoDimensions | undefined> {
-  const { width, height } = toMediaProbeResult(
-    await probeMediaSource({ kind: "buffer", buffer }, "video"),
-  );
+  const { width, height } = toMediaProbeResult(await probeMediaSource({ input: buffer }, "video"));
   return width && height ? { width, height } : undefined;
 }

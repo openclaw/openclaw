@@ -1,15 +1,16 @@
 import type { AsyncLocalStorage } from "node:async_hooks";
-import { readCommittedIncognitoSessionSharing } from "../config/sessions/session-accessor.sqlite-incognito-sharing.js";
+import {
+  captureSessionActorStorageOwner,
+  getSessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
-import { getOpenIncognitoAgentDatabase } from "../state/openclaw-agent-db-lifecycle.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import type { createSessionRowPlacementProjection } from "./session-row-placement-projection.js";
 import {
   SessionRowFactsPending,
   withReadySessionRows,
   type SessionRowReadView,
   type SessionRowPreparationOptions,
-  type withPreparedSessionRows,
+  type SessionRowSelectionPreparationOptions,
 } from "./session-row-prepared-read.js";
 import * as records from "./session-row-projection-record.js";
 import {
@@ -17,12 +18,14 @@ import {
   selectStoredSessionLineage,
 } from "./session-store-key.js";
 import { projectGatewaySessionRunState } from "./session-utils-display.js";
+import { reuseSessionRowChildLinks } from "./session-utils-projection.js";
 
 /** Materialization reads current physical relations from the projection's existing indexes. */
 export function createSessionRowRelationReads(owner: {
   env: NodeJS.ProcessEnv;
   inOwnerContext: ReturnType<typeof AsyncLocalStorage.snapshot>;
   isReady: () => boolean;
+  assertCurrent: () => void;
   preparedContext: () => SessionRowReadView["state"]["rowContext"] | undefined;
   lookup: (query: records.Lookup) => records.Row | undefined;
   config: () => records.Inputs["cfg"];
@@ -38,6 +41,7 @@ export function createSessionRowRelationReads(owner: {
       if (!owner.isReady()) {
         return undefined;
       }
+      const memory = getSessionActorStorageBinding({});
       return owner.inOwnerContext(() => {
         const { key, value: entry } = selectStoredSessionLineage({
           cfg: owner.config(),
@@ -48,18 +52,14 @@ export function createSessionRowRelationReads(owner: {
               const row = owner.lookup({ ...query, agentId, key: storedKey });
               return row?.key === storedKey ? row.sharingEntry : undefined;
             }
-            const database = getOpenIncognitoAgentDatabase(
-              agentId,
-              resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: owner.env }),
+            const selected = captureSessionActorStorageOwner(
+              { agentId, sessionKey: storedKey, sessionActor: memory, env: owner.env },
+              memory?.authority ?? {
+                assertCurrent: owner.assertCurrent,
+                authorize: owner.assertCurrent,
+              },
             );
-            try {
-              return (
-                database && readCommittedIncognitoSessionSharing(database.db, storedKey)?.entry
-              );
-            } catch {
-              // A pending private write cannot supply optional display enrichment yet.
-              return undefined;
-            }
+            return selected?.owner?.readSession(storedKey, selected.authority)?.entry;
           },
         });
         if (!entry) {
@@ -106,12 +106,19 @@ export function createSessionRowRelationReads(owner: {
           value = owner.acquireEntry(value, owner.readEntry(value));
         }
         return value?.entry && [...value.parents].some((ref) => owner.referenced(ref) === row)
-          ? [{ key: value.key, entry: value.entry }]
+          ? [
+              {
+                key: value.key,
+                entry: value.entry,
+                agentId: value.agentId,
+                storePath: value.storeTarget.storePath,
+              },
+            ]
           : [];
       });
       // Keyed child refreshes reorder the parent index; presentation must stay stable.
       links.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
-      return links;
+      return reuseSessionRowChildLinks(links, row.materialized?.source.childLinks);
     },
   };
 }
@@ -178,10 +185,13 @@ export function createSessionRowAncestorReads(owner: {
   state: () => { cfg: records.Inputs["cfg"]; context: SessionRowReadView["state"]["rowContext"] };
   referenced: (reference: string) => records.Row | undefined;
   lookup: (query: records.Lookup) => records.Row | undefined;
-  prepareExactRows: (queries: readonly records.Lookup[]) => Promise<void> | undefined;
-  prepareSelection: () => Promise<void> | undefined;
+  prepareExactRows: (
+    queries: readonly records.Lookup[],
+    fromSelection?: boolean,
+    selectedRows?: readonly (records.Row | undefined)[],
+  ) => Promise<void> | undefined;
+  prepareSelection: (options?: SessionRowSelectionPreparationOptions) => Promise<void> | undefined;
   retainExactPreparation: () => () => void;
-  assertExactRowsPrepared: (queries: readonly records.Lookup[]) => void;
   retainArchiveRows: () => { update: (ids: readonly string[]) => void; release: () => void };
   describe: SessionRowReadView["describe"];
   inOwnerContext: ReturnType<typeof AsyncLocalStorage.snapshot>;
@@ -216,7 +226,7 @@ export function createSessionRowAncestorReads(owner: {
       queries: (config: records.Inputs["cfg"]) => readonly records.Lookup[],
       consume: (read: SessionRowReadView) => T,
       options?: SessionRowPreparationOptions,
-    ): ReturnType<typeof withPreparedSessionRows<T>> {
+    ): Promise<T> {
       const selected = options?.includeAncestors
         ? (config: records.Inputs["cfg"]) => {
             const targets = queries(config);
@@ -250,9 +260,6 @@ export function createSessionRowAncestorReads(owner: {
       try {
         while (owner.isActive()) {
           try {
-            while (owner.isActive() && owner.membership.needsPreparation(selected)) {
-              await owner.membership.prepare();
-            }
             const prepared = await owner.placementFacts.withPreparedRows<
               T | typeof membershipPending
             >(
@@ -260,10 +267,11 @@ export function createSessionRowAncestorReads(owner: {
               owner.isActive,
               owner.lookup,
               selected,
-              (targets) => {
+              (targets, selectedRows) => {
                 archivedRows.update(
-                  targets.flatMap((query) => {
+                  targets.flatMap((query, index) => {
                     if (
+                      !options?.selection &&
                       isIncognitoSessionKey(
                         resolveStoredSessionKeyForAgentStore({
                           cfg: owner.state().cfg,
@@ -274,29 +282,30 @@ export function createSessionRowAncestorReads(owner: {
                     ) {
                       return [];
                     }
-                    const row = owner.lookup(query);
+                    const row = selectedRows[index];
                     return row?.entry?.archivedAt !== undefined ? [records.identity(row)] : [];
                   }),
                 );
                 if (owner.membership.needsPreparation(() => targets)) {
                   return owner.membership.prepare();
                 }
-                return owner.prepareExactRows(targets);
+                return owner.prepareExactRows(targets, Boolean(options?.selection), selectedRows);
               },
               (read, targets) => {
                 if (owner.membership.needsPreparation(() => targets)) {
                   return membershipPending;
                 }
-                owner.assertExactRowsPrepared(targets);
                 return consume(read);
               },
-              options?.selection ? owner.prepareSelection : undefined,
+              options?.selection
+                ? () =>
+                    owner.prepareSelection(
+                      typeof options.selection === "object" ? options.selection : undefined,
+                    )
+                : undefined,
             );
-            if (prepared.kind === "pending") {
+            if (prepared !== membershipPending) {
               return prepared;
-            }
-            if (prepared.value !== membershipPending) {
-              return { kind: "complete", value: prepared.value };
             }
           } catch (error) {
             if (!(error instanceof SessionRowFactsPending)) {

@@ -39,8 +39,15 @@ source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}./install-policy.sh"
 installer_node() { "$(node_bin)" "$@"; }
 installer_npm() { "$(npm_bin)" "$@"; }
 installer_step() { shift; "$@"; }
+installer_error() {
+  local msg="$1"
+  emit_json error message "$msg"
+  log "ERROR: $msg"
+  log "Support: https://community.openclaw.ai/"
+}
 installer_npm_version_error() {
   log "ERROR: unable to determine npm version; no package changes were made"
+  log "Support: https://community.openclaw.ai/" >&2
 }
 installer_clone_error() {
   fail "Could not publish the cloned checkout: ${1}. Inspect the destination for partial files, move it or choose another --git-dir, then retry."
@@ -116,12 +123,13 @@ OPENCLAW_EFFECTIVE_HOME="$(resolve_home_path "${OPENCLAW_HOME:-$HOME}")"
 PREFIX="${OPENCLAW_PREFIX:-${HOME}/.openclaw}"
 OPENCLAW_VERSION="${OPENCLAW_VERSION:-latest}"
 REQUIRED_COMPATIBLE_VERSION=""
-DEFAULT_NODE_VERSION="24.21.0"
+DEFAULT_NODE_VERSION="24.22.1"
 NODE_VERSION="${OPENCLAW_NODE_VERSION:-${DEFAULT_NODE_VERSION}}"
 NODE_VERSION_REQUESTED=0
 if [[ -n "${OPENCLAW_NODE_VERSION:-}" ]]; then
   NODE_VERSION_REQUESTED=1
 fi
+# Compatibility floors mirror node-version.mjs, not the patched download default.
 MIN_NODE_24_VERSION="24.16.0"
 MIN_NODE_26_VERSION="26.1.0"
 SUPPORTED_NODE_VERSION_LABEL="Node 24.16.0+ or Node 26.1.0+"
@@ -143,6 +151,10 @@ FRESH_GIT_MIN_FREE_KIB=$((6 * 1024 * 1024))
 print_usage() {
   cat <<EOF
 Usage: install-cli.sh [options]
+
+Support: https://community.openclaw.ai/
+FAQ: https://docs.openclaw.ai/start/faq
+
   --json                              Emit NDJSON events (no human output)
   --prefix <path>                     Install prefix (default: ~/.openclaw; use \$OPENCLAW_PREFIX to override)
   --install-method, --method npm|git  Install via npm (default) or from a git checkout
@@ -151,7 +163,7 @@ Usage: install-cli.sh [options]
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw, or \$OPENCLAW_HOME/openclaw)
   --version <ver>                     OpenClaw version (default: latest)
   --compatible-with <ver>             Refuse a CLI that cannot modify config written by <ver>
-  --node-version <ver>                Node version (default: 24.21.0)
+  --node-version <ver>                Node version (default: 24.22.1)
   --node-only                         Install only a private Node runtime (no system package changes)
   --runtime-only                      Install CLI runtime without Gateway probes, service changes, or onboarding
   --onboard                           Run "openclaw onboard" after install
@@ -176,47 +188,6 @@ log() {
 }
 
 DOWNLOADER=""
-detect_downloader() {
-  if command -v curl >/dev/null 2>&1; then
-    DOWNLOADER="curl"
-    return 0
-  fi
-  if command -v wget >/dev/null 2>&1; then
-    DOWNLOADER="wget"
-    return 0
-  fi
-  fail "Missing downloader (curl or wget required)"
-}
-
-download_file() {
-  local url="$1"
-  local output="$2"
-  if [[ -z "$DOWNLOADER" ]]; then
-    detect_downloader
-  fi
-  if [[ "$DOWNLOADER" == "curl" ]]; then
-    # Bound connection and transfer stalls without a total download duration.
-    curl -fsSL --proto '=https' --tlsv1.2 \
-      --connect-timeout "$UPDATE_NETWORK_TIMEOUT_SECONDS" \
-      --speed-limit 1 --speed-time "$UPDATE_NETWORK_TIMEOUT_SECONDS" \
-      --retry 3 --retry-delay 1 --retry-connrefused \
-      -o "$output" "$url"
-    return
-  fi
-  wget -q --https-only --secure-protocol=TLSv1_2 --tries=3 --timeout="$UPDATE_NETWORK_TIMEOUT_SECONDS" -O "$output" "$url"
-}
-
-cleanup_legacy_submodules() {
-  local repo_dir="${1:-${OPENCLAW_GIT_DIR:-${OPENCLAW_EFFECTIVE_HOME}/openclaw}}"
-  local legacy_dir="${repo_dir}/Peekaboo"
-  if [[ -d "$legacy_dir" ]]; then
-    emit_json step name legacy-submodule status start path "$legacy_dir"
-    log "Removing legacy submodule checkout: ${legacy_dir}"
-    rm -rf "$legacy_dir"
-    emit_json step name legacy-submodule status ok path "$legacy_dir"
-  fi
-}
-
 sha256_file() {
   local file="$1"
   if command -v sha256sum >/dev/null 2>&1; then
@@ -290,9 +261,7 @@ emit_json() {
 }
 
 fail() {
-  local msg="$1"
-  emit_json error message "$msg"
-  log "ERROR: $msg"
+  installer_error "$@"
   exit 1
 }
 
@@ -335,7 +304,7 @@ preflight_fresh_git_disk_space() {
   local available_kib
   local available_gib
 
-  if [[ -d "$repo_dir/.git" ]]; then
+  if [[ -e "$repo_dir/.git" ]]; then
     return 0
   fi
 
@@ -585,7 +554,7 @@ link_node_runtime_paths() {
   dir="$(node_dir)"
   runtime_bin="${node_path%/*}"
 
-  mkdir -p "${dir}/bin" "${PREFIX}/tools"
+  (umask 077; mkdir -p "${dir}/bin" "${PREFIX}/tools")
   ln -sfn "$node_path" "${dir}/bin/node"
   ln -sfn "$npm_path" "${dir}/bin/npm"
   for name in npx corepack; do
@@ -627,62 +596,7 @@ linked_node_is_usable() {
     return 1
   fi
 
-  "$candidate_node" -e '
-    const { DatabaseSync } = require("node:sqlite");
-    const db = new DatabaseSync(":memory:");
-    try {
-      const value = db.prepare("SELECT sqlite_version() AS version").get()?.version;
-      const match = typeof value === "string" ? /^(\d+)\.(\d+)\.(\d+)$/.exec(value) : null;
-      const major = Number(match?.[1]);
-      const minor = Number(match?.[2]);
-      const patch = Number(match?.[3]);
-      const safe =
-        major > 3 ||
-        (major === 3 &&
-          (minor > 51 ||
-            (minor === 51 && patch >= 3) ||
-            (minor === 50 && patch >= 7) ||
-            (minor === 44 && patch >= 6)));
-      const text = "a\u0000b\u0000";
-      const bytes = Buffer.from(text, "utf8");
-      const json = JSON.stringify({ value: text });
-      db.exec("CREATE TABLE probe (text_value TEXT, blob_value BLOB, json_value TEXT)");
-      db.prepare("INSERT INTO probe VALUES (?, ?, ?)").run(text, bytes, json);
-      const row = db.prepare("SELECT text_value, blob_value, json_value FROM probe").get();
-      const textSafe = typeof row?.text_value === "string" && row.text_value.length === text.length && Buffer.from(row.text_value, "utf8").equals(bytes);
-      const blobSafe = row?.blob_value instanceof Uint8Array && Buffer.from(row.blob_value).equals(bytes);
-      const jsonSafe = row?.json_value === json && JSON.parse(row.json_value).value === text;
-      if (!textSafe) {
-        console.error("Node " + process.versions.node + ": node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix");
-      } else if (!blobSafe || !jsonSafe) {
-        console.error("Node " + process.versions.node + ": node:sqlite NUL round-trip capability probe failed; use 24.16+/26.1+ or a build with the fix");
-      } else if (!safe) {
-        console.error("Node " + process.versions.node + ": SQLite " + value + " is not WAL-reset-safe");
-      }
-      if (!safe || !textSafe || !blobSafe || !jsonSafe) process.exitCode = 1;
-    } finally {
-      db.close();
-    }
-  ' --no-warnings >/dev/null
-}
-
-linked_node_sqlite_version() {
-  local candidate_node="${1-$(node_bin)}"
-  if [[ ! -x "$candidate_node" ]]; then
-    printf 'unavailable\n'
-    return
-  fi
-  local version
-  version="$("$candidate_node" -e '
-    const { DatabaseSync } = require("node:sqlite");
-    const db = new DatabaseSync(":memory:");
-    try {
-      process.stdout.write(String(db.prepare("SELECT sqlite_version() AS version").get()?.version ?? "unknown"));
-    } finally {
-      db.close();
-    }
-  ' 2>/dev/null || true)"
-  printf '%s\n' "${version:-unavailable}"
+  node_binary_has_safe_sqlite "$candidate_node"
 }
 
 semver_at_least() {
@@ -722,7 +636,7 @@ parse_node_release_version() {
   NODE_RELEASE_VERSION_CORE=""
   while [[ "$version" == [[:space:]]* ]]; do version="${version#?}"; done
   while [[ "$version" == *[[:space:]] ]]; do version="${version%?}"; done
-  if [[ ! "$version" =~ ^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+  if [[ ! "$version" =~ ^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
     return 1
   fi
   major="${BASH_REMATCH[1]}"
@@ -733,6 +647,9 @@ parse_node_release_version() {
       return 1
     fi
   done
+  if [[ -n "${BASH_REMATCH[4]}" ]] && ((major <= 26)); then
+    return 1
+  fi
 
   NODE_RELEASE_VERSION_CORE="${major}.${minor}.${patch}"
 }
@@ -744,7 +661,7 @@ node_release_version_is_supported() {
 
 # Download labels are plain numeric Node distribution versions. Installed
 # runtimes use node_release_version_is_supported, which accepts canonical
-# release labels with a leading v or build metadata.
+# release labels with a leading v, build metadata, or future-major prereleases.
 node_version_is_supported() {
   local version="${1#v}"
   local major minor patch
@@ -825,7 +742,7 @@ install_alpine_node() {
     if ! linked_node_is_usable "${APK_NODE_BIN_DIR}/node" "${APK_NODE_BIN_DIR}/npm"; then
       installed_version="$("${APK_NODE_BIN_DIR}/node" -v 2>/dev/null || echo unknown)"
       required_version="$(required_node_version)"
-      sqlite_version="$(linked_node_sqlite_version "${APK_NODE_BIN_DIR}/node")"
+      sqlite_version="$(node_binary_sqlite_version "${APK_NODE_BIN_DIR}/node")"
       fail "Alpine Node package must provide Node >= ${required_version} with WAL-reset-safe SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x; found Node ${installed_version}, SQLite ${sqlite_version}."
     fi
     link_node_runtime_paths "${APK_NODE_BIN_DIR}/node" "${APK_NODE_BIN_DIR}/npm"
@@ -954,86 +871,6 @@ resolve_git_checkout_openclaw_version() {
   ' "$repo_dir"
 }
 
-checkout_git_openclaw_ref() {
-  local repo_dir="$1"
-  local ref="$2"
-  local original_head=""
-  local original_status=""
-  local namespaces=(heads tags)
-
-  GIT_REF_KIND=""
-
-  if [[ -z "$ref" ]]; then
-    return 0
-  fi
-
-  # Full commit IDs pin source bytes, even when a remote ref has the same name.
-  # Bundled/existing checkouts already have the object and need no remote lookup.
-  if [[ "$ref" =~ ^[[:xdigit:]]{40}$ ]]; then
-    if ! git -C "$repo_dir" cat-file -e "$ref" 2>/dev/null; then
-      git -C "$repo_dir" fetch --no-tags origin "$ref" ||
-        fail "Could not fetch requested git commit: ${ref}"
-    fi
-    git -C "$repo_dir" rev-parse --verify --quiet "${ref}^{commit}" >/dev/null ||
-      fail "Requested git version is not a commit: ${ref}"
-    git -C "$repo_dir" checkout --detach "$ref"
-    GIT_REF_KIND="immutable"
-    return 0
-  fi
-
-  if [[ "$ref" == "main" ]]; then
-    git -C "$repo_dir" fetch --no-tags origin "refs/heads/main:refs/remotes/origin/main"
-    git -C "$repo_dir" checkout main
-    if [[ "$GIT_UPDATE" == "1" ]]; then
-      if ! original_head="$(git -C "$repo_dir" rev-parse --verify HEAD 2>/dev/null)"; then
-        fail "Could not record repository state before updating from origin/main"
-      fi
-      if ! original_status="$(git -C "$repo_dir" status --porcelain=v1 --untracked-files=all 2>/dev/null)"; then
-        fail "Could not record repository state before updating from origin/main"
-      fi
-      if ! git -C "$repo_dir" rebase origin/main; then
-        if verify_git_rebase_recovery "$repo_dir" "$original_head" "$original_status"; then
-          fail "Could not update repository from origin/main; the checkout was restored to its pre-update state"
-        fi
-        fail "Could not update repository from origin/main; checkout recovery was not verified. Run git -C \"$repo_dir\" rebase --abort and inspect the checkout before retrying"
-      fi
-    fi
-    GIT_REF_KIND="moving"
-    return 0
-  fi
-
-  # Normalized release selectors prefer immutable tags. A same-name branch
-  # remains a fallback for operator-supplied v-prefixed branch names.
-  if [[ "$ref" == v[0-9]* ]]; then
-    namespaces=(tags heads)
-  fi
-
-  local namespace=""
-  local probe_status=0
-  for namespace in "${namespaces[@]}"; do
-    if git -C "$repo_dir" ls-remote --exit-code origin "refs/${namespace}/${ref}" >/dev/null 2>&1; then
-      if [[ "$namespace" == "heads" ]]; then
-        git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"
-        git -C "$repo_dir" checkout -B "$ref" "origin/$ref"
-        GIT_REF_KIND="moving"
-      else
-        git -C "$repo_dir" fetch --no-tags origin "refs/tags/${ref}:refs/tags/${ref}"
-        git -C "$repo_dir" rev-parse --verify --quiet "refs/tags/${ref}^{commit}" >/dev/null ||
-          fail "Requested git version is not a commit: ${ref}"
-        git -C "$repo_dir" checkout --detach "refs/tags/${ref}"
-        GIT_REF_KIND="immutable"
-      fi
-      return 0
-    else
-      probe_status=$?
-    fi
-    (( probe_status == 2 )) || fail "Could not resolve requested git ref: ${ref}"
-  done
-
-  fail "Requested git version not found: ${ref}"
-}
-
-
 install_node() {
   # Packaging provisions each requested architecture in a fresh private prefix.
   # It must execute that Node (Rosetta for x64 on ARM), never link the host runtime.
@@ -1088,7 +925,7 @@ install_node() {
   emit_json step name node status start version "$NODE_VERSION"
   log "Installing Node ${NODE_VERSION} (user-space)..."
 
-  mkdir -p "${PREFIX}/tools"
+  (umask 077; mkdir -p "${PREFIX}/tools")
   # Darwin's default mktemp location can ignore TMPDIR; use the prepared path explicitly.
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-node.XXXXXX")"
   TMPFILES+=("$tmp")
@@ -1112,7 +949,7 @@ install_node() {
   fi
 
   rm -rf "$dir"
-  mkdir -p "$dir"
+  (umask 077; mkdir -p "$dir")
   tar -xzf "$tmp/node.tgz" -C "$dir" --strip-components=1
   rm -rf "$tmp"
 
@@ -1122,8 +959,8 @@ install_node() {
     local sqlite_version
     installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
     required_version="$(required_node_version)"
-    sqlite_version="$(linked_node_sqlite_version)"
-    fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with WAL-reset-safe SQLite; found Node ${installed_version}, SQLite ${sqlite_version}. Re-run with --node-version 24.21.0 (or newer)"
+    sqlite_version="$(node_binary_sqlite_version "$(node_bin)")"
+    fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with WAL-reset-safe SQLite; found Node ${installed_version}, SQLite ${sqlite_version}. Re-run with --node-version 24.22.1 (or newer)"
   fi
   # Existing CLI wrappers use this alias; activate only a runtime that can start.
   ln -sfn "$dir" "${PREFIX}/tools/node"
@@ -1134,7 +971,7 @@ ensure_pnpm() {
   local repo_dir="${1:-$PWD}"
   local spec version pnpm_dir corepack_cmd="" npm_cmd lifecycle_arg selected_version
   spec="$(repo_pnpm_spec "$repo_dir" || true)"
-  [[ "$spec" == pnpm@* ]] || spec="pnpm@12.5.1"
+  [[ "$spec" == pnpm@* ]] || spec="pnpm@12.15.0"
   version="${spec#pnpm@}"
   version="${version%%+*}"
   pnpm_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pnpm.XXXXXX")" || return 1
@@ -1187,11 +1024,12 @@ fix_npm_prefix_if_needed() {
   fi
 
   local target="${HOME}/.npm-global"
-  mkdir -p "$target"
+  (umask 077; mkdir -p "$target")
   "$(npm_bin)" config set prefix "$target"
 
   local path_line="export PATH=\"${target}/bin:\$PATH\""
-  for rc in "${HOME}/.bashrc" "${HOME}/.zshrc"; do
+  local zsh_rc_dir="${ZDOTDIR:-$HOME}"
+  for rc in "${HOME}/.bashrc" "${zsh_rc_dir}/.zshrc"; do
     if [[ -f "$rc" ]] && ! grep -q ".npm-global" "$rc"; then
       echo "$path_line" >> "$rc"
     fi
@@ -1205,7 +1043,7 @@ fix_npm_prefix_if_needed() {
 publish_executable_wrapper() {
   local target="$1" target_dir="" temp="" backup=""
   target_dir="${target%/*}"
-  mkdir -p "$target_dir"
+  (umask 077; mkdir -p "$target_dir")
   temp="$(mktemp "${target_dir}/.openclaw-wrapper.XXXXXX")" || return 1
   TMPFILES+=("$temp")
   cat > "$temp"
@@ -1234,18 +1072,8 @@ install_openclaw() {
     fi
     fail "npm installs do not support OpenClaw GitHub source targets like '${requested}'. Use --install-method git --version main, latest, beta, an exact version, or a built .tgz package."
   fi
-  local freshness_flag="--min-release-age=0"
-  local min_release_age=""
-  min_release_age="$(env -u NPM_CONFIG_BEFORE -u npm_config_before "$(npm_bin)" config get min-release-age --global 2>/dev/null || true)"
-  if npm_config_has_raw_key "$(npm_bin)" "min-release-age"; then
-    freshness_flag="--min-release-age=0"
-  elif [[ -z "$min_release_age" || "$min_release_age" == "null" || "$min_release_age" == "undefined" ]]; then
-    local before_value=""
-    before_value="$(env -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" config get before --global 2>/dev/null || true)"
-    if [[ -n "$before_value" && "$before_value" != "null" && "$before_value" != "undefined" ]]; then
-      freshness_flag="--before=$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')"
-    fi
-  fi
+  local freshness_flag
+  freshness_flag="$(npm_freshness_flag "$(npm_bin)")"
   local npm_args=(
     --loglevel "$NPM_LOGLEVEL"
     --no-fund
@@ -1286,51 +1114,17 @@ install_openclaw() {
   if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$npm_cmd" "${npm_install_args[@]}" || [[ ! -f "$installed_entry" || -e "$lifecycle_pending" || -e "$legacy_install_guard" ]]; then
     log "npm install openclaw@${resolved_requested} did not produce a usable package; retrying once"
     if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$npm_cmd" "${npm_install_args[@]}" || [[ ! -f "$installed_entry" || -e "$lifecycle_pending" || -e "$legacy_install_guard" ]]; then
-      emit_json error message "npm install did not produce a usable OpenClaw package"
-      log "ERROR: npm install did not produce a usable OpenClaw package"
+      installer_error "npm install did not produce a usable OpenClaw package"
       return 1
     fi
   fi
 
-  mkdir -p "${PREFIX}/bin"
   publish_executable_wrapper "${PREFIX}/bin/openclaw" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 exec "${PREFIX}/tools/node/bin/node" "$(node_dir)/lib/node_modules/openclaw/dist/entry.js" "\$@"
 EOF
   emit_json step name openclaw status ok version "$requested"
-}
-
-ensure_pnpm_git_prepare_allowlist() {
-  local repo_dir="$1"
-  local workspace_file="${repo_dir}/pnpm-workspace.yaml"
-  local dep="@tloncorp/api"
-  local tmp
-
-  if [[ -f "$workspace_file" ]] && ! grep -Fq "\"${dep}\"" "$workspace_file" && ! grep -Fq "${dep}:" "$workspace_file" && ! grep -Fq -- "- ${dep}" "$workspace_file"; then
-    tmp="$(mktemp "${TMPDIR:-/tmp}/openclaw-workspace.XXXXXX")"
-    TMPFILES+=("$tmp")
-    if grep -q '^allowBuilds:[[:space:]]*$' "$workspace_file"; then
-      awk -v dep="$dep" '
-        BEGIN { inserted = 0 }
-        {
-          print
-          if (!inserted && $0 ~ /^allowBuilds:[[:space:]]*$/) {
-            print "  \"" dep "\": true"
-            inserted = 1
-          }
-        }
-      ' "$workspace_file" >"$tmp"
-    else
-      cat "$workspace_file" >"$tmp"
-      printf '\nallowBuilds:\n  "%s": true\n' "$dep" >>"$tmp"
-    fi
-    mv "$tmp" "$workspace_file"
-  elif [[ ! -f "$workspace_file" ]]; then
-    printf 'allowBuilds:\n  "%s": true\n' "$dep" >"$workspace_file"
-  fi
-
-  log "Updated pnpm allowlist for git-hosted build dependency: ${dep}"
 }
 
 install_openclaw_from_git() {
@@ -1341,7 +1135,7 @@ install_openclaw_from_git() {
   if [[ -z "$repo_dir" ]]; then
     fail "Git install dir cannot be empty"
   fi
-  mkdir -p "$(dirname "$repo_dir")"
+  (umask 077; mkdir -p "$(dirname "$repo_dir")")
   if [[ -d "$repo_dir" ]]; then
     repo_dir="$(cd "$repo_dir" && pwd -P)"
   else
@@ -1349,7 +1143,7 @@ install_openclaw_from_git() {
   fi
 
   emit_json step name openclaw status start method git repo "$repo_url"
-  if [[ -d "$repo_dir/.git" ]]; then
+  if [[ -e "$repo_dir/.git" ]]; then
     log "Installing Openclaw from git checkout: ${repo_dir}"
   else
     log "Installing Openclaw from GitHub (${repo_url})..."
@@ -1359,15 +1153,9 @@ install_openclaw_from_git() {
   ensure_git
   emit_json step name git-tools status ok
 
-  if [[ -d "$repo_dir/.git" ]] &&
-    ! git --git-dir="$repo_dir/.git" --work-tree="$repo_dir" rev-parse --verify --quiet 'HEAD^{commit}' >/dev/null 2>&1; then
-    fail "Git checkout has no commit: ${repo_dir}. Move or remove this incomplete checkout, then retry."
-  fi
+  validate_git_checkout "$repo_dir" || return 1
 
-  if [[ ! -d "$repo_dir/.git" ]]; then
-    if [[ -d "$repo_dir" && -n "$(ls -A "$repo_dir" 2>/dev/null || true)" ]]; then
-      fail "Git install dir exists but is not a git repo: ${repo_dir}"
-    fi
+  if [[ ! -e "$repo_dir/.git" ]]; then
     emit_json step name git-clone status start
     clone_git_checkout_transactionally "$repo_url" "$repo_dir" --filter=blob:none
     emit_json step name git-clone status ok
@@ -1404,8 +1192,6 @@ install_openclaw_from_git() {
     require_openclaw_version_compatible "$resolved_version"
   fi
 
-  cleanup_legacy_submodules "$repo_dir"
-  ensure_pnpm_git_prepare_allowlist "$repo_dir"
   ensure_pnpm "$repo_dir"
 
   local install_lockfile_flag
@@ -1429,7 +1215,6 @@ install_openclaw_from_git() {
   run_pnpm -C "$repo_dir" build
   emit_json step name cli-build status ok
 
-  mkdir -p "${PREFIX}/bin"
   publish_executable_wrapper "${PREFIX}/bin/openclaw" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
@@ -1579,6 +1364,7 @@ main() {
   fi
   emit_json "done" version "$installed_version"
   log "OpenClaw installed (${installed_version})."
+  log "Support: https://community.openclaw.ai/"
 
   if [[ "$RUN_ONBOARD" -eq 1 && "$RUNTIME_ONLY" -eq 0 ]]; then
     "${PREFIX}/bin/openclaw" onboard

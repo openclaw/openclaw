@@ -5,11 +5,11 @@ import {
 } from "./status.gateway-connection.js";
 import { resolveNodeOnlyGatewayInfo } from "./status.node-mode.js";
 
-const mocks = vi.hoisted(() => ({ loadNodeHostConfigReadOnly: vi.fn() }));
+const mocks = vi.hoisted(() => ({ loadNodeHostConfig: vi.fn() }));
 vi.mock("../node-host/config.js", () => ({
-  loadNodeHostConfigReadOnly: mocks.loadNodeHostConfigReadOnly,
+  loadNodeHostConfig: mocks.loadNodeHostConfig,
 }));
-beforeEach(() => mocks.loadNodeHostConfigReadOnly.mockReset());
+beforeEach(() => mocks.loadNodeHostConfig.mockReset());
 const connection = {
   nodeOnlyGateway: null,
   remoteUrlMissing: true,
@@ -36,21 +36,25 @@ it("does not claim node-only mode when the node service is installed but inactiv
   ).resolves.toBeNull();
 });
 
-it("prefers node-only diagnostics with an unknown target when node config is missing", async () => {
-  mocks.loadNodeHostConfigReadOnly.mockResolvedValueOnce(null);
+it.each([
+  [null, "(gateway address unknown)"],
+  [{ gateway: { host: "remote.example" } }, "remote.example:18789"],
+  [{ gateway: { host: "remote.example", port: 12345 } }, "remote.example:12345"],
+] as const)("prefers node-only diagnostics for %j", async (config, gatewayTarget) => {
+  mocks.loadNodeHostConfig.mockResolvedValueOnce(config);
   const nodeOnlyGateway = await resolveNodeOnlyGatewayInfo({
     daemon: { installed: false },
     node: { installed: true, loadState: { status: "loaded" }, externallyManaged: false },
   });
   expect(nodeOnlyGateway).toMatchObject({
-    gatewayTarget: "(gateway address unknown)",
-    gatewayValue: "node → (gateway address unknown) · no local gateway",
+    gatewayTarget,
+    gatewayValue: `node → ${gatewayTarget} · no local gateway`,
   });
   expect(resolveStatusAllConnectionDetails({ ...connection, nodeOnlyGateway })).toBe(
     [
       "Node-only mode detected",
       "Local gateway: not expected on this machine",
-      "Remote gateway target: (gateway address unknown)",
+      `Remote gateway target: ${gatewayTarget}`,
       "Inspect the remote gateway host for live channel and health details.",
     ].join("\n"),
   );

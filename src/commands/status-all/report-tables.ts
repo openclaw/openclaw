@@ -1,4 +1,6 @@
-import { formatTimeAgo } from "./format.js";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
+import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
+import type { buildChannelsTable } from "./channels.js";
 
 type AgentStatusLike = {
   agents: Array<{
@@ -11,12 +13,6 @@ type AgentStatusLike = {
     lastActiveAgeMs?: number | null;
     sessionsPath: string;
   }>;
-};
-
-type ChannelDetailLike = {
-  title: string;
-  columns: string[];
-  rows: Array<Record<string, string>>;
 };
 
 export const statusOverviewTableColumns = [
@@ -38,7 +34,7 @@ export function buildStatusAgentTableRows(params: {
   warn: (text: string) => string;
 }) {
   return params.agentStatus.agents.map((agent) => ({
-    Agent: `${agent.name?.trim() ? `${agent.id} (${agent.name.trim()})` : agent.id}${agent.status === "degraded" ? params.warn(" (degraded)") : ""}`,
+    Agent: `${sanitizeTerminalText(agent.name?.trim() ? `${agent.id} (${agent.name.trim()})` : agent.id)}${agent.status === "degraded" ? params.warn(" (degraded)") : ""}`,
     BootstrapFile:
       agent.bootstrapPending === true
         ? params.warn("PRESENT")
@@ -52,28 +48,35 @@ export function buildStatusAgentTableRows(params: {
         : agent.lastActiveAgeMs != null
           ? formatTimeAgo(agent.lastActiveAgeMs)
           : "unknown",
-    Store: agent.admissionRefusal
-      ? `${agent.sessionsPath}\n${agent.admissionRefusal.reason}\n${agent.admissionRefusal.repairHint}`
-      : agent.sessionsPath,
+    Store: [
+      agent.sessionsPath,
+      ...(agent.admissionRefusal
+        ? [agent.admissionRefusal.reason, agent.admissionRefusal.repairHint]
+        : []),
+    ]
+      .map(sanitizeTerminalText)
+      .join("\n"),
   }));
 }
 
 export function buildStatusChannelDetailSections(params: {
-  details: ChannelDetailLike[];
+  details: Awaited<ReturnType<typeof buildChannelsTable>>["details"];
   ok: (text: string) => string;
   warn: (text: string) => string;
 }) {
   return params.details.map((detail) => ({
-    title: detail.title,
+    title: sanitizeTerminalText(detail.title),
     columns: detail.columns.map((column) => ({
       key: column,
-      header: column,
+      header: sanitizeTerminalText(column),
       // Notes can include file paths and credential source summaries; give them remaining width.
       flex: column === "Notes",
       minWidth: column === "Notes" ? 28 : 10,
     })),
     rows: detail.rows.map((row) => ({
-      ...row,
+      ...Object.fromEntries(
+        Object.entries(row).map(([key, value]) => [key, sanitizeTerminalText(value)]),
+      ),
       ...(row.Status === "OK"
         ? { Status: params.ok("OK") }
         : row.Status === "WARN"

@@ -1,34 +1,19 @@
+import type { CopilotClient, CopilotSession, SessionConfig } from "@github/copilot-sdk";
 import {
   buildAgentHookContextChannelFields,
   type AgentHarnessCompactParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createCopilotAbortError } from "./prompt-error.js";
 
-export interface CopilotHistoryCompactResult {
-  success: boolean;
-  tokensRemoved: number;
-  messagesRemoved: number;
-  summaryContent?: string;
-  contextWindow?: {
-    tokenLimit: number;
-    currentTokens: number;
-    messagesLength: number;
-    systemTokens?: number;
-    conversationTokens?: number;
-    toolDefinitionsTokens?: number;
-  };
-}
+export type CopilotHistoryCompactResult = Awaited<
+  ReturnType<CopilotSession["rpc"]["history"]["compact"]>
+>;
 
-export interface CopilotHistoryCompactSession {
-  abort(): Promise<void>;
-  disconnect(): Promise<void>;
+export type CopilotHistoryCompactSession = Pick<CopilotSession, "abort" | "disconnect"> & {
   rpc: {
-    history: {
-      abortManualCompaction(): Promise<{ aborted: boolean }>;
-      compact(params?: { customInstructions?: string }): Promise<CopilotHistoryCompactResult>;
-    };
+    history: Pick<CopilotSession["rpc"]["history"], "abortManualCompaction" | "compact">;
   };
-}
+};
 
 export function throwIfAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) {
@@ -55,4 +40,39 @@ export function buildCopilotCompactionHookContext(params: AgentHarnessCompactPar
     trigger: params.trigger,
     ...buildAgentHookContextChannelFields(params),
   };
+}
+
+export async function compactTrackedSdkSession(params: {
+  abortSignal?: AbortSignal;
+  assertCurrent: () => void;
+  client: CopilotClient;
+  customInstructions?: string;
+  gitHubToken?: string;
+  onSession?: (session: CopilotHistoryCompactSession) => void;
+  sessionConfig: SessionConfig;
+  sdkSessionId: string;
+}): Promise<CopilotHistoryCompactResult> {
+  params.assertCurrent();
+  throwIfAborted(params.abortSignal);
+  const session = await params.client.resumeSession(params.sdkSessionId, {
+    ...params.sessionConfig,
+    continuePendingWork: false,
+    ...(params.gitHubToken ? { gitHubToken: params.gitHubToken } : {}),
+    suppressResumeEvent: true,
+  });
+  params.onSession?.(session);
+  const request = params.customInstructions?.trim()
+    ? { customInstructions: params.customInstructions }
+    : undefined;
+  try {
+    params.assertCurrent();
+    throwIfAborted(params.abortSignal);
+    return await session.rpc.history.compact(request);
+  } finally {
+    try {
+      await session.disconnect();
+    } catch {
+      // Preserve the compaction or cancellation outcome; cleanup is best-effort here.
+    }
+  }
 }

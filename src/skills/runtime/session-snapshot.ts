@@ -1,23 +1,23 @@
-import { stableStringify } from "@openclaw/normalization-core";
+import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { matchesSkillFilter } from "../discovery/filter.js";
+import type { Skill } from "../loading/skill-contract.js";
+import { compactPromptSkills } from "../loading/skill-paths.js";
+import { parseSkillsPromptCatalog } from "../loading/skill-prompt-catalog.js";
 import { buildSkillSnapshot } from "../loading/workspace-skill-prompt.js";
 import { normalizeWorkspaceSkillRoots } from "../loading/workspace-skill-roots.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import type { SkillEligibilityContext, SkillSnapshot } from "../types.js";
-import {
-  getSkillsSnapshotVersion,
-  getSkillsSourceVersion,
-  shouldRefreshSnapshotForVersion,
-} from "./refresh-state.js";
+import { isWorkspaceSkillReadPath, resolveSkillReadPath } from "../workspace-skill-read-path.js";
+import { getSkillsSnapshotVersion, shouldRefreshSnapshotForVersion } from "./refresh-state.js";
 import { ensureSkillsWatcher } from "./refresh.js";
 import { prepareRemoteSkillConnections } from "./remote-skills.js";
 import { recordSkillRootsExecutionFileHost } from "./skill-snapshot-provenance.js";
 import { fingerprintSkillSnapshotConfig } from "./snapshot-config-fingerprint.js";
 
-// Full snapshots let fresh sessions and runtime-only hydration share one versioned rebuild.
+// Completed projections are reusable only for the same persisted selection.
 const skillSnapshotCache = new Map<string, SkillSnapshot>();
 const pendingSkillSnapshots = new Map<
   string,
@@ -51,7 +51,6 @@ type ReusableSkillSnapshotParams = {
 type ReusableSkillSnapshotResult = {
   snapshot: SkillSnapshot;
   shouldRefresh: boolean;
-  snapshotVersion: number;
 };
 
 export async function resolveReusableWorkspaceSkillSnapshot(
@@ -83,7 +82,7 @@ export async function resolveReusableWorkspaceSkillSnapshot(
       : undefined;
   const eligibility = params.resolveEligibility?.() ?? params.eligibility;
   if (params.watch !== false) {
-    ensureSkillsWatcher({
+    await ensureSkillsWatcher({
       workspaceDir: watcherWorkspaceDir,
       ...(skillRoots
         ? {
@@ -105,18 +104,20 @@ export async function resolveReusableWorkspaceSkillSnapshot(
     params.existingSnapshot?.version,
     snapshotVersion,
   );
-  const nodeSkillsEligibilityChanged =
-    stableStringify(params.existingSnapshot?.nodeSkillsEligibility) !==
-    stableStringify(eligibility?.nodeSkills);
-  const skillOverridesChanged =
-    stableStringify(params.existingSnapshot?.skillOverrides) !==
-    stableStringify(params.skillOverrides);
-  const skillRootsChanged =
-    stableStringify(params.existingSnapshot?.skillRoots) !== stableStringify(skillRoots);
+  const nodeSkillsEligibilityChanged = !isDeepStrictEqual(
+    params.existingSnapshot?.nodeSkillsEligibility,
+    eligibility?.nodeSkills,
+  );
+  const skillOverridesChanged = !isDeepStrictEqual(
+    params.existingSnapshot?.skillOverrides,
+    params.skillOverrides,
+  );
+  const skillRootsChanged = !isDeepStrictEqual(params.existingSnapshot?.skillRoots, skillRoots);
   const librarySelections = params.librarySelections ?? params.existingSnapshot?.librarySelections;
-  const libraryChanged =
-    stableStringify(librarySelections) !==
-    stableStringify(params.existingSnapshot?.librarySelections);
+  const libraryChanged = !isDeepStrictEqual(
+    librarySelections,
+    params.existingSnapshot?.librarySelections,
+  );
   const shouldRefresh =
     libraryChanged ||
     promptFormatChanged ||
@@ -133,26 +134,38 @@ export async function resolveReusableWorkspaceSkillSnapshot(
     return {
       snapshot: params.existingSnapshot,
       shouldRefresh,
-      snapshotVersion,
     };
   }
-  const sourceScope = {
-    executionWorkspaceDir: normalizedRoots.executionWorkspaceDir,
-    executionWorkspaceFileHost: normalizedRoots.executionWorkspaceFileHost,
-  };
-  const sourceVersion = getSkillsSourceVersion(watcherWorkspaceDir, sourceScope);
-  const effectiveVersion = getSkillsSnapshotVersion(watcherWorkspaceDir);
-  const eligibilityKey = stableStringify(eligibility);
-  const projectionIsCurrent = () =>
-    getSkillsSourceVersion(watcherWorkspaceDir, sourceScope) === sourceVersion &&
-    getSkillsSnapshotVersion(watcherWorkspaceDir) === effectiveVersion &&
-    stableStringify(params.resolveEligibility?.() ?? params.eligibility) === eligibilityKey;
+  const retainedSnapshot = shouldRefresh ? undefined : params.existingSnapshot;
   const buildSnapshot = async (assertCurrent: () => void) => {
+    const catalog = parseSkillsPromptCatalog(retainedSnapshot?.prompt ?? "");
+    const matchesSnapshotSkill = (skill: Skill) =>
+      !retainedSnapshot ||
+      retainedSnapshot.skills.some((saved) => {
+        if (saved.name !== skill.name) {
+          return false;
+        }
+        const source =
+          saved.source ??
+          (saved.gatewayFilePath
+            ? { filePath: saved.gatewayFilePath, fileHost: "gateway" }
+            : undefined);
+        if (source) {
+          return source.filePath === skill.filePath && source.fileHost === skill.fileHost;
+        }
+        const location = resolveSkillReadPath(compactPromptSkills([skill], params)[0]!);
+        return (
+          skill.fileHost === undefined &&
+          !isWorkspaceSkillReadPath(location) &&
+          catalog.some((entry) => entry.name === saved.name && entry.location === location)
+        );
+      });
     const snapshot = await buildSkillSnapshot(normalizedRoots.agentWorkspaceDir, {
       executionWorkspaceDir: normalizedRoots.executionWorkspaceDir,
       executionWorkspaceFileHost: normalizedRoots.executionWorkspaceFileHost,
       librarySelections,
       config: params.config,
+      watch: params.watch,
       preserveEntryOrder: Boolean(skillRoots),
       agentId: params.agentId,
       skillFilter: params.skillFilter,
@@ -161,7 +174,18 @@ export async function resolveReusableWorkspaceSkillSnapshot(
       assertCurrent,
       pluginMetadataSnapshot: params.pluginMetadataSnapshot,
       snapshotVersion,
+      matchesSnapshotSkill: retainedSnapshot ? matchesSnapshotSkill : undefined,
     });
+    if (retainedSnapshot) {
+      const discoverySkills = snapshot.discoverySkills ?? snapshot.resolvedSkills ?? [];
+      return {
+        ...retainedSnapshot,
+        resolvedSkills: catalog.flatMap(({ name }) =>
+          discoverySkills.filter((skill) => skill.name === name),
+        ),
+        discoverySkills,
+      };
+    }
     return {
       ...snapshot,
       ...(skillRoots ? { skillRoots } : {}),
@@ -180,9 +204,11 @@ export async function resolveReusableWorkspaceSkillSnapshot(
       params.agentId,
       eligibility,
       fingerprintSkillSnapshotConfig(params.config),
+      // Cache the completed hydration, including its original prompt and selection.
+      retainedSnapshot,
     ]);
     const cachedSnapshot = skillSnapshotCache.get(snapshotCacheKey);
-    if (cachedSnapshot) {
+    if (cachedSnapshot && retainedSnapshot) {
       return cachedSnapshot;
     }
     const assertCurrent = () => params.assertCurrent?.();
@@ -205,9 +231,7 @@ export async function resolveReusableWorkspaceSkillSnapshot(
       };
       const promise = buildSnapshot(assertLiveWaiter).then((snapshot) => {
         assertLiveWaiter();
-        if (!projectionIsCurrent()) {
-          return undefined;
-        }
+        // Mid-build catalog changes are picked up by the next request's revision key.
         skillSnapshotCache.set(snapshotCacheKey, snapshot);
         pruneMapToMaxSize(skillSnapshotCache, SKILL_SNAPSHOT_CACHE_MAX);
         return snapshot;
@@ -236,18 +260,8 @@ export async function resolveReusableWorkspaceSkillSnapshot(
     }
   };
 
-  const snapshot =
-    !params.existingSnapshot || shouldRefresh
-      ? await cachedRebuild()
-      : await cachedRebuild().then(
-          (rebuilt) =>
-            rebuilt && {
-              ...params.existingSnapshot!,
-              resolvedSkills: rebuilt.resolvedSkills,
-              discoverySkills: rebuilt.discoverySkills,
-            },
-        );
-  if (!snapshot || !projectionIsCurrent()) {
+  const snapshot = await cachedRebuild();
+  if (!snapshot) {
     const currentVersion = getSkillsSnapshotVersion(watcherWorkspaceDir);
     return resolveReusableWorkspaceSkillSnapshot({
       ...params,
@@ -261,6 +275,5 @@ export async function resolveReusableWorkspaceSkillSnapshot(
   return {
     snapshot,
     shouldRefresh,
-    snapshotVersion,
   };
 }

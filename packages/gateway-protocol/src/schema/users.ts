@@ -17,6 +17,8 @@ import { NonEmptyString, UserProfileIdSchema } from "./primitives.js";
 import { USER_PREFS_ENTRY_LIMIT } from "./user-profile-constants.js";
 import { WizardAnswerSchema, WizardStepSchema } from "./wizard.js";
 
+export * from "./users-background.js";
+
 export {
   ChatAccountSelectionSchema,
   type ChatAccountSelection,
@@ -25,6 +27,8 @@ export {
 export {
   GATEWAY_OWNER_PROFILE_ID,
   GIT_COAUTHOR_PREFERENCE_KEY,
+  PR_ATTRIBUTION_PREFERENCE_KEY,
+  PR_ATTRIBUTION_FOOTER,
   isGitCoauthorCreditEnabled,
   USER_PREFS_ENTRY_LIMIT,
   USER_PREFS_PROFILE_KEY_LIMIT,
@@ -50,6 +54,7 @@ export const UserProfileAvatarMimeSchema = Type.Union([
   Type.Literal("image/webp"),
 ]);
 export const UserProfileGitHubIdentitySchema = closedObject({
+  host: Type.Optional(NonEmptyString),
   login: Type.String({ minLength: 1, maxLength: 39 }),
   profileUrl: NonEmptyString,
   avatarUrl: NonEmptyString,
@@ -63,9 +68,14 @@ export const UserProfileSchema = closedObject({
   createdAt: Type.Integer({ minimum: 0 }),
   updatedAt: Type.Integer({ minimum: 0 }),
   emails: Type.Array(NonEmptyString),
+  // Display primary only; null does not disable profile-wide consent or host-selected credit.
   githubIdentity: Type.Union([UserProfileGitHubIdentitySchema, Type.Null()]),
   hasAvatar: Type.Boolean(),
   role: Type.Optional(UserProfileRoleSchema),
+  effectiveRole: Type.Optional(UserProfileRoleSchema),
+  roleSource: Type.Optional(
+    Type.Union([Type.Literal("assigned"), Type.Literal("githubLogin"), Type.Literal("default")]),
+  ),
 });
 
 export const UsersListParamsSchema = closedObject({
@@ -411,6 +421,7 @@ export const UsersGitHubAuthorizeCancelResultSchema = closedObject({ cancelled: 
 export const UsersGitHubDisconnectParamsSchema = closedObject({});
 export const UsersGitHubDisconnectResultSchema = closedObject({ disconnected: Type.Literal(true) });
 export const PersonalGitHubStatusSchema = closedObject({
+  stale: Type.Optional(Type.Boolean()),
   state: Type.Union([
     Type.Literal("connected"),
     Type.Literal("disconnected"),

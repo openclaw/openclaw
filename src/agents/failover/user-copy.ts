@@ -3,6 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatCommandErrorForUser } from "../../process/command-error.js";
 import {
+  CONTEXT_OVERFLOW_ERROR_MESSAGE,
   extractErrorHttpStatus,
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
@@ -14,9 +15,13 @@ import {
   parseApiErrorPayload,
 } from "../../shared/assistant-error-format.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
-import type { CliTimeoutContext, FallbackAttemptRecord } from "../failover-error.js";
 import { ERROR_DETAILS_HINT, ERROR_PREFIX_RE } from "./assistant-request-failure-copy.js";
 import { classifyFailoverReasonCore } from "./classify-core.js";
+import {
+  AUTH_PROFILE_COOLDOWN_ERROR_CODE,
+  type CliTimeoutContext,
+  type FallbackAttemptRecord,
+} from "./error.js";
 import {
   isPeriodicUsageLimitErrorMessage,
   isProviderCompletedErrorFinishReasonMessage,
@@ -32,23 +37,34 @@ const RATE_LIMIT_ERROR_USER_MESSAGE =
   "⚠️ The AI service needs a short break. Please try again in a few minutes.";
 export const AUTH_INVALID_TOKEN_USER_TEXT =
   "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.";
+export const TLS_CERTIFICATE_ERROR_USER_TEXT =
+  "Couldn't connect securely to the AI service. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
+export const OAUTH_REFRESH_CONTENTION_USER_TEXT =
+  "Another sign-in is still in progress. Wait a moment, then try again.";
 const SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT =
   "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.";
 export const renderFailoverCodeUserCopy = (code: unknown): string | undefined =>
   code === "selected_auth_profile_unavailable"
     ? SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT
-    : undefined;
+    : code === AUTH_PROFILE_COOLDOWN_ERROR_CODE
+      ? RATE_LIMIT_ERROR_USER_MESSAGE
+      : code === "refresh_contention"
+        ? OAUTH_REFRESH_CONTENTION_USER_TEXT
+        : undefined;
 const MODEL_CAPACITY_ERROR_USER_MESSAGE =
   "⚠️ Selected model is at capacity. Try a different model, or wait and retry.";
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
-const RATE_LIMIT_RETRY_MESSAGE =
-  "⚠️ The AI service needs a short break. Please try again in a few minutes.";
 const MODEL_CAPACITY_ERROR_RE = /\b(?:selected\s+)?model\s+(?:is\s+)?at capacity\b/i;
 const RATE_LIMIT_SPECIFIC_HINT_RE =
-  /\bmin(ute)?s?\b|\bhours?\b|\bseconds?\b|\btry again in\b|\bresets?\b|\bplan\b|\bquota\b/i;
+  /\bmin(ute)?s?\b|\bhours?\b|\bseconds?\b|\btry again in\b|\bresets?\b|\bplan\b|\bquota\b|重置|分钟|小时|秒后|额度|配额/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
-  /^(?:context overflow:|request_too_large\b|request size exceeds\b|request exceeds the maximum size\b|context length exceeded\b|maximum context length\b|prompt is too long\b|exceeds model context window\b)/i;
+  /^(?:context overflow:|request_too_large\b|request size exceeds\b|request exceeds the maximum size\b|context (?:length|window) exceeded\b|maximum context length\b|prompt is too long\b|exceeds model context window\b)/i;
+const PROVIDER_PROMPT_SIZE_LIMIT_RE =
+  /\b(?:this\s+)?prompt\s+(?:is\s+)?(?:too long|longer than)\b.{0,120}\b(?:free tier|single request|per[- ]request)\b/i;
+const PROVIDER_PROMPT_SIZE_LIMIT_USER_MESSAGE =
+  "⚠️ The provider rejected this request because the prompt exceeds its per-request limit. Shorten the prompt and try again, or choose a model with a larger limit.";
+const PROVIDER_PROMPT_SIZE_ERROR_PARSE_MAX_LENGTH = 16_384;
 const NON_ERROR_PROVIDER_PAYLOAD_MAX_LENGTH = 16_384;
 const NON_ERROR_PROVIDER_PAYLOAD_PREFIX_RE = /^codex\s*error(?:\s+\d{3})?[:\s-]+/i;
 
@@ -64,9 +80,7 @@ export function formatBillingErrorMessage(
     providerName && modelName ? `${providerName} (${modelName})` : providerName || undefined;
   const isSubscriptionAuth = authMode === "oauth" || authMode === "token";
   if (isSubscriptionAuth) {
-    return providerLabel
-      ? `⚠️ ${providerLabel} returned a billing error — check your account for subscription or usage limits, then try again.`
-      : "⚠️ API provider returned a billing error — check your account for subscription or usage limits, then try again.";
+    return `⚠️ ${providerLabel ?? "API provider"} returned a billing error — check your account for subscription or usage limits, then try again.`;
   }
   return providerLabel
     ? `⚠️ ${providerLabel} returned a billing error — check your account's balance and usage limits before trying again.`
@@ -97,17 +111,66 @@ function extractProviderRateLimitMessage(raw: string): string | undefined {
   return `⚠️ ${trimmed}`;
 }
 
+function renderProviderPromptSizeLimitCopy(raw: string): string | undefined {
+  if (raw.length > PROVIDER_PROMPT_SIZE_ERROR_PARSE_MAX_LENGTH) {
+    return undefined;
+  }
+  const status = extractErrorHttpStatus(raw);
+  if (status?.code !== 400) {
+    return undefined;
+  }
+  const info = parseApiErrorInfo(raw) ?? parseApiErrorInfo(status.rest);
+  const providerMessage = info?.message ?? status.rest;
+  return providerMessage.length <= 300 && PROVIDER_PROMPT_SIZE_LIMIT_RE.test(providerMessage)
+    ? PROVIDER_PROMPT_SIZE_LIMIT_USER_MESSAGE
+    : undefined;
+}
+
+/** Render only controller-recorded exhaustion, never infer it from provider text. */
+export function renderRateLimitRetryExhaustion(
+  retries: number | undefined,
+  finalModel = false,
+): string | undefined {
+  if (retries === undefined) {
+    return undefined;
+  }
+  const scope = finalModel ? " on the final model" : "";
+  return retries === 0
+    ? `Automatic rate-limit recovery is disabled${scope} for this session (retry.provider.maxRetries: 0).`
+    : `Rate-limit recovery stopped${scope} after ${retries} automatic ${retries === 1 ? "retry" : "retries"} without a completed model response. Check completed work before trying again.`;
+}
+
+/** A watchdog stop mid-backoff interrupted recovery; zero retries never means it was disabled. */
+export function renderRateLimitRecoveryStopped(retries: number): string {
+  return (
+    (retries > 0 && renderRateLimitRetryExhaustion(retries)) ||
+    "Rate-limit recovery stopped without a completed model response. Check completed work before trying again."
+  );
+}
+
 /** Render rate-limit versus overload copy from the canonical classified reason. */
 export function renderRateLimitOrOverloadedCopy(params: {
   reason: Extract<FailoverReason, "rate_limit" | "overloaded">;
   raw?: string;
+  rateLimitRetriesExhausted?: number;
 }): string {
+  const exhaustion =
+    params.reason === "rate_limit"
+      ? renderRateLimitRetryExhaustion(params.rateLimitRetriesExhausted)
+      : undefined;
+  if (exhaustion) {
+    return exhaustion;
+  }
   const raw = params.raw ?? "";
   if (MODEL_CAPACITY_ERROR_RE.test(raw)) {
     return MODEL_CAPACITY_ERROR_USER_MESSAGE;
   }
   if (params.reason === "overloaded") {
     return OVERLOADED_ERROR_USER_MESSAGE;
+  }
+  const promptSizeCopy = renderProviderPromptSizeLimitCopy(raw);
+  if (promptSizeCopy) {
+    return promptSizeCopy;
   }
   for (const leg of splitFailoverAggregateLegs(raw)) {
     const fromLeg = extractProviderRateLimitMessage(leg);
@@ -196,17 +259,15 @@ export function renderSanitizedUserFacingText(
       ? formatRawAssistantErrorForUi(trimmed)
       : sanitized;
   }
-  const commandError = formatCommandErrorForUser(trimmed);
-  if (commandError) {
-    return commandError;
-  }
-  const execDenied = formatExecDeniedUserMessage(trimmed);
-  if (execDenied) {
-    return execDenied;
-  }
-  const diskSpace = formatDiskSpaceErrorCopy(trimmed);
-  if (diskSpace) {
-    return diskSpace;
+  for (const format of [
+    formatCommandErrorForUser,
+    formatExecDeniedUserMessage,
+    formatDiskSpaceErrorCopy,
+  ]) {
+    const copy = format(trimmed);
+    if (copy) {
+      return copy;
+    }
   }
   if (/incorrect role information|roles must alternate/i.test(trimmed)) {
     return "Message ordering conflict - please try again. If this persists, use /new to start a fresh session.";
@@ -221,7 +282,7 @@ export function renderSanitizedUserFacingText(
       ERROR_PREFIX_RE.test(trimmed) ||
       CONTEXT_OVERFLOW_ERROR_HEAD_RE.test(trimmed))
   ) {
-    return "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.";
+    return CONTEXT_OVERFLOW_ERROR_MESSAGE;
   }
   if (reason === "billing" || reason === "rate_limit" || reason === "overloaded") {
     return reason === "billing"
@@ -267,19 +328,6 @@ export function renderSanitizedUserFacingText(
 
 export const GENERIC_EXTERNAL_RUN_FAILURE_TEXT =
   "⚠️ OpenClaw couldn't finish this request. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
-// A failed background turn can have partial effects; it does not establish chat health.
-const HEARTBEAT_FAILURE_LEAD = "⚠️ The background check did not complete.";
-const HEARTBEAT_FAILURE_LOG_HINT = "Troubleshooting: run `openclaw logs --follow` in a terminal.";
-export const HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT = `${HEARTBEAT_FAILURE_LEAD}\n\n${HEARTBEAT_FAILURE_LOG_HINT}`;
-
-/** `reason` is the failure-reply owner's already sanitized and capped detail. */
-export function renderHeartbeatRunFailureCopy(reason?: string): string {
-  if (!reason) {
-    return HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT;
-  }
-  const terminator = /[.!?]$/u.test(reason) ? "" : ".";
-  return `${HEARTBEAT_FAILURE_LEAD}\n\nDetails: ${reason}${terminator}\n${HEARTBEAT_FAILURE_LOG_HINT}`;
-}
 
 export const PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE =
   "⚠️ The model provider rejected the conversation state. Please try again, or use /new to start a fresh session.";
@@ -331,7 +379,6 @@ export function resolveProviderRequestFailureCopy(params: {
   classification: FailoverClassification | null;
   facet: ProviderRequestFacet | null;
   status?: number;
-  technicalMessage: string;
 }) {
   const code = resolveProviderRequestFailureCode(params);
   if (!code) {
@@ -340,85 +387,94 @@ export function resolveProviderRequestFailureCopy(params: {
   return {
     code,
     userMessage: PROVIDER_REQUEST_COPY[code],
-    technicalMessage: params.technicalMessage,
   };
 }
 
 export type ReplyFallbackAttempt = FallbackAttemptRecord & { authMode?: string };
-
-function extractCodexUsageLimitErrorMessage(
-  attempts: readonly ReplyFallbackAttempt[],
-  directMessage: string,
-  directReason: FailoverReason | undefined,
-  directProvider: string | undefined,
-  sanitizeText?: (text: string) => string,
-): string | undefined {
-  const attempt = attempts.find(
-    (candidate) =>
-      candidate.provider === "openai" && candidate.reason === "rate_limit" && candidate.error,
-  );
-  const text =
-    attempt?.error ??
-    (directProvider === "openai" && directReason === "rate_limit" ? directMessage : undefined);
-  if (!text) {
-    return undefined;
-  }
-  const message = renderSanitizedUserFacingText(sanitizeText?.(text) ?? text, {
-    errorContext: true,
-  })
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .join(" ")
-    .trim();
-  if (!message) {
-    return undefined;
-  }
-  const truncated = message.length > 500 ? `${truncateUtf16Safe(message, 497)}...` : message;
-  return truncated.startsWith("⚠️") ? truncated : `⚠️ ${truncated}`;
-}
 
 /** Render the reply surface's rate-limit copy, including structured cooldown context. */
 export function renderRateLimitReplyCopy(params: {
   message: string;
   reason?: FailoverReason;
   provider?: string;
+  code?: string;
   attempts?: readonly ReplyFallbackAttempt[];
+  rateLimitRetriesExhausted?: number;
   cooldownExpiry?: number | null;
   nowMs?: number;
   sanitizeText?: (text: string) => string;
 }): string {
   const attempts = params.attempts ?? [];
-  const usageLimit = extractCodexUsageLimitErrorMessage(
-    attempts,
-    params.message,
-    params.reason,
-    params.provider,
-    params.sanitizeText,
-  );
-  if (usageLimit) {
-    return usageLimit;
+  // Local cooldown diagnostics name the operator's saved login; only provider text becomes copy.
+  const providerMessage = params.code === AUTH_PROFILE_COOLDOWN_ERROR_CODE ? "" : params.message;
+  if (params.reason === "rate_limit") {
+    const promptSizeCopy = renderProviderPromptSizeLimitCopy(params.message);
+    if (promptSizeCopy) {
+      return promptSizeCopy;
+    }
   }
+  const exhaustion =
+    params.reason === "rate_limit" && !attempts.some((attempt) => attempt.reason === "billing")
+      ? renderRateLimitRetryExhaustion(
+          attempts.length
+            ? attempts.at(-1)?.rateLimitRetriesExhausted
+            : params.rateLimitRetriesExhausted,
+          attempts.length > 1,
+        )
+      : undefined;
+  if (exhaustion) {
+    return exhaustion;
+  }
+  const { reason: directReason, provider: directProvider, sanitizeText } = params;
+  const usageAttempt = attempts.find(
+    (candidate) =>
+      candidate.provider === "openai" &&
+      candidate.reason === "rate_limit" &&
+      candidate.code !== AUTH_PROFILE_COOLDOWN_ERROR_CODE &&
+      candidate.error,
+  );
+  const text =
+    usageAttempt?.error ??
+    (directProvider === "openai" && directReason === "rate_limit" ? providerMessage : undefined);
+  if (text) {
+    const message = renderSanitizedUserFacingText(sanitizeText?.(text) ?? text, {
+      errorContext: true,
+    })
+      .split(/\r?\n/u)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+    if (message) {
+      const truncated = message.length > 500 ? `${truncateUtf16Safe(message, 497)}...` : message;
+      return truncated.startsWith("⚠️") ? truncated : `⚠️ ${truncated}`;
+    }
+  }
+
   if (attempts.some((attempt) => attempt.reason === "billing") || params.reason === "billing") {
     return BILLING_ERROR_USER_MESSAGE;
   }
   if (attempts.length === 0) {
-    if (params.reason === "rate_limit" && isPeriodicUsageLimitErrorMessage(params.message)) {
-      const providerMessage = renderSanitizedUserFacingText(
-        params.sanitizeText?.(params.message) ?? params.message,
+    if (params.reason === "rate_limit" && isPeriodicUsageLimitErrorMessage(providerMessage)) {
+      const copy = renderSanitizedUserFacingText(
+        params.sanitizeText?.(providerMessage) ?? providerMessage,
         { errorContext: true },
       );
-      return providerMessage.startsWith("⚠️") ? providerMessage : `⚠️ ${providerMessage}`;
+      return copy.startsWith("⚠️") ? copy : `⚠️ ${copy}`;
     }
-    return RATE_LIMIT_RETRY_MESSAGE;
+    return RATE_LIMIT_ERROR_USER_MESSAGE;
   }
   for (const attempt of attempts) {
-    if (attempt.reason !== "rate_limit" || !attempt.error) {
+    if (
+      attempt.reason !== "rate_limit" ||
+      attempt.code === AUTH_PROFILE_COOLDOWN_ERROR_CODE ||
+      !attempt.error
+    ) {
       continue;
     }
     const hint = extractProviderRateLimitMessage(attempt.error);
     if (hint) {
-      return params.sanitizeText?.(attempt.error) ?? hint;
+      return params.sanitizeText?.(hint) ?? hint;
     }
   }
   const expiry = params.cooldownExpiry;
@@ -435,7 +491,7 @@ export function renderRateLimitReplyCopy(params: {
   return attemptedModels.size > 1 &&
     attempts.every((attempt) => attempt.reason === "rate_limit" || attempt.reason === "overloaded")
     ? "⚠️ The AI services are busy. Please try again in a few minutes."
-    : RATE_LIMIT_RETRY_MESSAGE;
+    : RATE_LIMIT_ERROR_USER_MESSAGE;
 }
 
 export function renderBillingReplyCopy(params: {
@@ -478,6 +534,32 @@ export function renderMissingApiKeyReplyCopy(params?: {
   return provider === "openai"
     ? "⚠️ Couldn't connect to OpenAI. Run `openclaw doctor --fix`, then try again. If it still fails, open Models in the Control UI or run `openclaw configure`."
     : "⚠️ This AI service isn't set up yet. Sign in under Models in the Control UI or run `openclaw configure`.";
+}
+
+const CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE =
+  /\bcodex app-server client closed before turn completed\b/iu;
+const CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE =
+  /\bcodex app-server turn idle timed out waiting for turn\/completed\b/iu;
+const CODEX_SESSION_GENERATION_NOT_CURRENT_RE =
+  /\bcodex session generation is no longer current\b/iu;
+const CODEX_EXECUTION_NODE_DISCONNECTED_RE =
+  /^Codex execution node disconnected; start a fresh attempt\. \((?:execution node (?:failed|disconnected)|execution socket (?:closed|failed))(?:: [^\r\n]{1,240})?\)(?:\r?\n|$)/u;
+
+export function renderCodexAppServerFailureCopy(message: string): string | null {
+  const normalizedMessage = message.trim();
+  if (CODEX_SESSION_GENERATION_NOT_CURRENT_RE.test(normalizedMessage)) {
+    return "⚠️ This Codex session changed before your message could run. Please send it again.";
+  }
+  if (CODEX_EXECUTION_NODE_DISCONNECTED_RE.test(normalizedMessage)) {
+    return "⚠️ Codex execution node disconnected. Start a fresh attempt.";
+  }
+  if (CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE.test(normalizedMessage)) {
+    return "⚠️ Lost the connection to Codex before it confirmed the task was finished. It may still be running. Check the conversation in the Control UI before trying again.";
+  }
+  if (CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE.test(normalizedMessage)) {
+    return "⚠️ Codex hasn't confirmed whether the task finished. It may still be running. Check the conversation in the Control UI before trying again.";
+  }
+  return null;
 }
 
 const CLI_BACKEND_NO_OUTPUT_STALL_RE =
@@ -582,21 +664,4 @@ export function renderAuthProfileFailoverCopy(params: AuthProfileFailureCopyPara
 
 export function renderControlUiAgentFailureCopy(): string {
   return `⚠️ OpenClaw couldn't finish this reply. Check the conversation before trying again. ${ERROR_DETAILS_HINT}`;
-}
-
-export function replaceGenericExternalRunFailureText(text: string): {
-  text: string;
-  replaced: boolean;
-} {
-  const start = text.indexOf(GENERIC_EXTERNAL_RUN_FAILURE_TEXT);
-  if (start < 0 || text.slice(start + GENERIC_EXTERNAL_RUN_FAILURE_TEXT.length).trim()) {
-    return { text, replaced: false };
-  }
-  const prefix = text.slice(0, start).trimEnd();
-  return {
-    text: prefix
-      ? `${prefix} ${HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT}`
-      : HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
-    replaced: true,
-  };
 }

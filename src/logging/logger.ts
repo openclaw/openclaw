@@ -1,6 +1,6 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Logger as TsLogger } from "tslog";
@@ -21,6 +21,7 @@ import {
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { DEFAULT_POSIX_TMP_ROOT } from "../infra/tmp-openclaw-dir.js";
+import { readParsedField } from "../utils/string-readers.js";
 import { invalidateLoggingConfigCache, readLoggingConfig } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, isLogLevelEnabled, levelToMinLevel, normalizeLogLevel } from "./levels.js";
@@ -30,16 +31,9 @@ import {
   resolveDefaultRollingLogFile,
 } from "./log-file-path.js";
 import { canUseNodeFs, formatLocalDate, LOG_PREFIX, LOG_SUFFIX } from "./log-file-shared.js";
-import { buildFileLogMessage, type FileLogMessagePart } from "./logger-file-message.js";
-import { fileLogTransport } from "./logger-file-transport.js";
-import { defaultLoggerHostnameResolver, loggerHostnameState } from "./logger-hostname-state.js";
-import { setLoggerFileTargetResolver } from "./logger-settings-internal.js";
-import {
-  redactSecrets,
-  redactSensitiveText,
-  resolveFileLogRedactOptions,
-  serializeRedactedFileLogRecord,
-} from "./redact.js";
+import { serializeFileLogRecord, type FileLogMessagePart } from "./logger-file-message.js";
+import { ensureLogDirectorySync, fileLogTransport } from "./logger-file-transport.js";
+import { redactSecrets, redactSensitiveText } from "./redact.js";
 import { APPLIED_LOGGING_CONFIG_UNOWNED, loggingState } from "./state.js";
 import { formatTimestamp } from "./timestamps.js";
 import type { LoggerSettings } from "./types.js";
@@ -50,6 +44,7 @@ const DEFAULT_LOG_FILE = `${DEFAULT_LOG_DIR}/openclaw.log`; // legacy single-fil
 
 const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
 const DEFAULT_MAX_LOG_FILE_BYTES = 100 * 1024 * 1024; // 100 MB
+let cachedHostname: string | null = null;
 
 type LogObj = { date?: Date } & Record<string, unknown>;
 
@@ -61,11 +56,6 @@ type ResolvedSettings = {
 type ResolvedRuntimeSettings = ResolvedSettings & { rolling: boolean };
 export type LoggerResolvedSettings = ResolvedSettings;
 type TsLogRecord = Record<string, unknown>;
-
-type DiagnosticLogCode = {
-  line?: number;
-  functionName?: string;
-};
 
 const MAX_DIAGNOSTIC_LOG_BINDINGS_JSON_CHARS = 8 * 1024;
 const MAX_DIAGNOSTIC_LOG_MESSAGE_CHARS = 4 * 1024;
@@ -213,28 +203,23 @@ function readFirstContextString(
   keys: readonly string[],
 ): string | undefined {
   for (const source of sources) {
-    if (!source) {
-      continue;
-    }
-    for (const key of keys) {
-      const value = normalizeFileLogContextValue(source[key]);
-      if (value) {
-        return value;
-      }
+    const value = source ? readParsedField(source, keys, normalizeFileLogContextValue) : undefined;
+    if (value) {
+      return value;
     }
   }
   return undefined;
 }
 
 function resolveLogHostname(): string {
-  if (loggerHostnameState.cached) {
-    return loggerHostnameState.cached;
+  if (cachedHostname) {
+    return cachedHostname;
   }
-  const hostname = loggerHostnameState.resolver().trim();
+  const hostname = os.hostname().trim();
   if (!hostname) {
     return "unknown";
   }
-  loggerHostnameState.cached = hostname;
+  cachedHostname = hostname;
   return hostname;
 }
 
@@ -266,30 +251,15 @@ function extractLogBindingPrefix(numericArgs: unknown[]): {
   return { args: numericArgs };
 }
 
-function findLogTraceContext(
-  bindings: Record<string, unknown> | undefined,
-  numericArgs: readonly unknown[],
-): DiagnosticTraceContext | undefined {
-  const fromBindings = extractTraceContext(bindings);
-  if (fromBindings) {
-    return fromBindings;
-  }
-  for (const arg of numericArgs) {
-    const fromArg = extractTraceContext(arg);
-    if (fromArg) {
-      return fromArg;
-    }
-  }
-  return undefined;
-}
-
 function resolveLogTraceContext(
   bindings: Record<string, unknown> | undefined,
   numericArgs: readonly unknown[],
 ): { trace?: DiagnosticTraceContext; trustedTraceContext: boolean } {
-  const explicitTrace = findLogTraceContext(bindings, numericArgs);
-  if (explicitTrace) {
-    return { trace: explicitTrace, trustedTraceContext: false };
+  for (const value of [bindings, ...numericArgs]) {
+    const trace = extractTraceContext(value);
+    if (trace) {
+      return { trace, trustedTraceContext: false };
+    }
   }
   const activeTrace = getActiveDiagnosticTraceContext();
   return activeTrace
@@ -298,7 +268,7 @@ function resolveLogTraceContext(
 }
 
 function prepareFileLogRecord(logObj: TsLogRecord): {
-  fields: Record<string, string>;
+  fields: Record<string, string> & { hostname: string };
   messageParts: FileLogMessagePart[];
 } {
   const entries = getSortedNumericLogEntries(logObj);
@@ -386,7 +356,10 @@ function buildDiagnosticLogRecord(logObj: TsLogRecord) {
   addDiagnosticLogAttributesFrom(attributes, attributeState, bindings);
   addDiagnosticLogAttributesFrom(attributes, attributeState, structuredBindings);
 
-  const code: DiagnosticLogCode = {};
+  const code: {
+    line?: number;
+    functionName?: string;
+  } = {};
   if (meta?.path?.fileLine) {
     const line = Number(meta.path.fileLine);
     if (Number.isFinite(line)) {
@@ -492,10 +465,10 @@ function resolveSettings(): ResolvedRuntimeSettings {
   return { level, file, maxFileBytes, rolling };
 }
 
-setLoggerFileTargetResolver(() => {
+export function getResolvedLoggerFileTarget(): { file: string; rolling: boolean } {
   const { file, rolling } = resolveSettings();
   return { file, rolling };
-});
+}
 
 function getRuntimeSettings(): ResolvedRuntimeSettings {
   const settings =
@@ -552,7 +525,7 @@ function buildLogger(): TsLogger<LogObj> {
   inheritLogLevel(logger, () => levelToMinLevel(getRuntimeSettings().level));
   let activeFile: string | undefined;
   logger.attachTransport({
-    // OpenClaw owns redacted serialization; tslog's formatted line is unused.
+    // OpenClaw owns JSON serialization; tslog's formatted line is unused.
     format: () => "",
     write: (logObj: LogObj) => {
       try {
@@ -563,31 +536,29 @@ function buildLogger(): TsLogger<LogObj> {
         const nextActiveFile = resolveActiveLogFileWithMode(settings.file, settings.rolling);
         if (nextActiveFile !== activeFile) {
           activeFile = nextActiveFile;
-          fs.mkdirSync(path.dirname(activeFile), { recursive: true });
-          if (settings.rolling) {
-            pruneOldRollingLogs(path.dirname(activeFile));
+          try {
+            ensureLogDirectorySync(path.dirname(activeFile));
+            if (settings.rolling) {
+              pruneOldRollingLogs(path.dirname(activeFile));
+            }
+          } catch {
+            // Still enqueue: the failed append reports this record through the transport warning.
           }
         }
         const time = formatTimestamp(logObj.date ?? new Date(), { style: "long" });
         const { fields, messageParts } = prepareFileLogRecord(logObj as TsLogRecord);
-        const line = serializeRedactedFileLogRecord(
+        const line = serializeFileLogRecord(
           {
             ...logObj,
-            _meta: withResolvedLogMetaHostname(
-              logObj["_meta"],
-              expectDefined(fields.hostname, "structured log hostname"),
-            ),
+            _meta: withResolvedLogMetaHostname(logObj["_meta"], fields.hostname),
             time,
             ...fields,
           },
-          {
-            deriveMessage: (materialized) => buildFileLogMessage(materialized, messageParts),
-            decodedOptions: resolveFileLogRedactOptions(),
-          },
+          messageParts,
         );
         fileLogTransport.enqueue({
           file: activeFile,
-          hostname: expectDefined(fields.hostname, "structured log hostname"),
+          hostname: fields.hostname,
           maxFileBytes: settings.maxFileBytes,
           payload: `${line}\n`,
         });
@@ -685,8 +656,7 @@ export function resetLogger() {
   loggingState.appliedConfig = APPLIED_LOGGING_CONFIG_UNOWNED;
   loggingState.overrideSettings = null;
   invalidateLoggingConfigCache();
-  loggerHostnameState.resolver = defaultLoggerHostnameResolver;
-  loggerHostnameState.cached = null;
+  cachedHostname = null;
   invalidateLoggerSettings();
 }
 

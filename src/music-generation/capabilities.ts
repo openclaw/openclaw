@@ -17,17 +17,10 @@ export function listSupportedMusicGenerationModes(
   return modes;
 }
 
-/** Resolve the active mode and provider capability contract for one request. */
+/** Resolve the provider capability contract for one request. */
 export function resolveMusicGenerationModeCapabilities(params: {
-  provider?: Pick<MusicGenerationProvider, "capabilities">;
-  inputImageCount?: number;
-}): {
-  mode: MusicGenerationMode;
-  capabilities: MusicGenerationModeCapabilities | MusicGenerationEditCapabilities | undefined;
-} {
-  const mode = (params.inputImageCount ?? 0) > 0 ? "edit" : "generate";
-  return {
-    mode,
-    capabilities: params.provider?.capabilities?.[mode],
-  };
+  provider: Pick<MusicGenerationProvider, "capabilities">;
+  inputImageCount: number;
+}): MusicGenerationModeCapabilities | MusicGenerationEditCapabilities | undefined {
+  return params.provider.capabilities[params.inputImageCount > 0 ? "edit" : "generate"];
 }

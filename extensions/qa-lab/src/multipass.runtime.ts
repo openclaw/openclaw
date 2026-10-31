@@ -7,13 +7,13 @@ import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { shellEscape as shellQuote } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { createQaArtifactRunId } from "./artifact-run-id.js";
 import type { QaProviderMode } from "./model-selection.js";
 import { resolveQaForwardedLiveEnv, resolveQaLiveProviderConfigPath } from "./providers/env.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE, getQaProvider } from "./providers/index.js";
 import type { RuntimeId } from "./runtime-id.js";
-import { shellQuote } from "./shell-quote.js";
 
 const MULTIPASS_MOUNTED_REPO_PATH = "/workspace/openclaw-host";
 const MULTIPASS_GUEST_REPO_PATH = "/workspace/openclaw";
@@ -55,10 +55,6 @@ type ExecFileOptions = {
 };
 
 type QaMultipassPlan = ReturnType<typeof createQaMultipassPlan>;
-
-type RenderGuestScriptOptions = {
-  redactSecrets?: boolean;
-};
 
 function createOutputStamp() {
   return new Date().toISOString().replaceAll(":", "").replaceAll(".", "").replace("T", "-");
@@ -180,17 +176,18 @@ function createQaMultipassPlan(params: {
   const transportId = params.transportId?.trim() || "qa-channel";
   const providerMode = params.providerMode ?? DEFAULT_QA_LIVE_PROVIDER_MODE;
   const provider = getQaProvider(providerMode);
-  const forwardedEnv = provider.appliesLiveEnvAliases ? resolveQaForwardedLiveEnv() : {};
+  const forwardedEnv = provider.kind === "live" ? resolveQaForwardedLiveEnv() : {};
   const hostCodexHomePath = forwardedEnv.CODEX_HOME;
-  const liveProviderConfig = provider.usesModelProviderPlugins
-    ? resolveQaLiveProviderConfigPath()
-    : undefined;
+  const liveProviderConfig =
+    provider.kind === "live" ? resolveQaLiveProviderConfigPath() : undefined;
   const hostLiveProviderConfigPath =
     liveProviderConfig && fs.existsSync(liveProviderConfig.path)
       ? liveProviderConfig.path
       : undefined;
   const vmName = `openclaw-qa-${createQaArtifactRunId()}`;
-  const guestOutputDir = resolveMountedOutputPath(params.repoRoot, outputDir);
+  const guestMountedOutputDir = resolveMountedOutputPath(params.repoRoot, outputDir);
+  const relativeOutputDir = path.posix.relative(MULTIPASS_MOUNTED_REPO_PATH, guestMountedOutputDir);
+  const guestOutputDir = path.posix.join(MULTIPASS_GUEST_REPO_PATH, relativeOutputDir);
   const qaCommand = [
     "pnpm",
     "openclaw",
@@ -201,7 +198,7 @@ function createQaMultipassPlan(params: {
     "--provider-mode",
     providerMode,
     "--output-dir",
-    guestOutputDir,
+    relativeOutputDir,
     ...(params.primaryModel ? ["--model", params.primaryModel] : []),
     ...(params.alternateModel ? ["--alt-model", params.alternateModel] : []),
     ...(params.fastMode ? ["--fast"] : []),
@@ -241,6 +238,7 @@ function createQaMultipassPlan(params: {
       : undefined,
     guestMountedRepoPath: MULTIPASS_MOUNTED_REPO_PATH,
     guestRepoPath: MULTIPASS_GUEST_REPO_PATH,
+    guestMountedOutputDir,
     guestOutputDir,
     guestScriptPath: `/tmp/${vmName}-qa-suite.sh`,
     guestBootstrapLogPath: `/tmp/${vmName}-bootstrap.log`,
@@ -248,17 +246,13 @@ function createQaMultipassPlan(params: {
   };
 }
 
-function renderQaMultipassGuestScript(
-  plan: QaMultipassPlan,
-  options: RenderGuestScriptOptions = {},
-) {
+function renderQaMultipassGuestScript(plan: QaMultipassPlan, redactSecrets = false) {
   const nodeVersionCheck = [
     `import { isSupportedOpenClawNodeVersion } from ${JSON.stringify(
       `file://${plan.guestMountedRepoPath}/node-version.mjs`,
     )};`,
-    "process.exit(isSupportedOpenClawNodeVersion(process.versions.node) ? 0 : 1);",
+    "process.exitCode = isSupportedOpenClawNodeVersion(process.versions.node) ? 0 : 1;",
   ].join(" ");
-  const redactSecrets = options.redactSecrets ?? false;
   const rsyncCommand = [
     "rsync -a --delete",
     ...MULTIPASS_REPO_SYNC_EXCLUDES.flatMap((value) => ["--exclude", shellQuote(value)]),
@@ -315,7 +309,7 @@ function renderQaMultipassGuestScript(
     '    aarch64|arm64) node_arch="arm64" ;;',
     '    *) echo "unsupported guest architecture for node bootstrap: $(uname -m)" >&2; return 1 ;;',
     "  esac",
-    "  local node_tmp_dir tarball_name extract_dir base_url",
+    "  local node_tmp_dir tarball_name extract_dir base_url node_binary",
     '  node_tmp_dir="$(mktemp -d)"',
     "  trap 'rm -rf \"${node_tmp_dir}\"' RETURN",
     '  base_url="https://nodejs.org/dist/latest-v24.x"',
@@ -328,10 +322,9 @@ function renderQaMultipassGuestScript(
     '  sudo mkdir -p /usr/local/lib/nodejs >>"$BOOTSTRAP_LOG" 2>&1',
     '  sudo rm -rf "/usr/local/lib/nodejs/${extract_dir}" >>"$BOOTSTRAP_LOG" 2>&1',
     '  sudo tar -xJf "${node_tmp_dir}/${tarball_name}" -C /usr/local/lib/nodejs >>"$BOOTSTRAP_LOG" 2>&1',
-    '  sudo ln -sf "/usr/local/lib/nodejs/${extract_dir}/bin/node" /usr/local/bin/node >>"$BOOTSTRAP_LOG" 2>&1',
-    '  sudo ln -sf "/usr/local/lib/nodejs/${extract_dir}/bin/npm" /usr/local/bin/npm >>"$BOOTSTRAP_LOG" 2>&1',
-    '  sudo ln -sf "/usr/local/lib/nodejs/${extract_dir}/bin/npx" /usr/local/bin/npx >>"$BOOTSTRAP_LOG" 2>&1',
-    '  sudo ln -sf "/usr/local/lib/nodejs/${extract_dir}/bin/corepack" /usr/local/bin/corepack >>"$BOOTSTRAP_LOG" 2>&1',
+    "  for node_binary in node npm npx corepack; do",
+    '    sudo ln -sf "/usr/local/lib/nodejs/${extract_dir}/bin/${node_binary}" "/usr/local/bin/${node_binary}" >>"$BOOTSTRAP_LOG" 2>&1',
+    "  done",
     '  export PATH="/usr/local/bin:$PATH"',
     "  hash -r",
     `  node --input-type=module -e ${shellQuote(nodeVersionCheck)}`,
@@ -353,11 +346,13 @@ function renderQaMultipassGuestScript(
     `mkdir -p ${shellQuote(path.posix.dirname(plan.guestRepoPath))}`,
     `rm -rf ${shellQuote(plan.guestRepoPath)}`,
     `mkdir -p ${shellQuote(plan.guestRepoPath)}`,
-    `mkdir -p ${shellQuote(plan.guestOutputDir)}`,
     rsyncCommand,
     `cd ${shellQuote(plan.guestRepoPath)}`,
     'pnpm install --frozen-lockfile >>"$BOOTSTRAP_LOG" 2>&1',
     'pnpm build >>"$BOOTSTRAP_LOG" 2>&1',
+    `mkdir -p ${shellQuote(plan.guestOutputDir)}`,
+    // Bind after building so dependency installation and compilation stay guest-local.
+    `sudo mount --bind ${shellQuote(plan.guestMountedOutputDir)} ${shellQuote(plan.guestOutputDir)}`,
     qaCommand,
     "",
   ];
@@ -409,17 +404,6 @@ async function mountPath(logPath: string, hostPath: string, guestPath: string, r
   await retryMultipassCommand(logPath, ["mount", hostPath, guestPath], retryLabel, 5);
 }
 
-async function transferLiveProviderConfig(plan: QaMultipassPlan) {
-  if (!plan.hostLiveProviderConfigPath || !plan.guestLiveProviderConfigPath) {
-    return;
-  }
-  await runMultipassCommand(plan.hostLogPath, [
-    "transfer",
-    plan.hostLiveProviderConfigPath,
-    `${plan.vmName}:${plan.guestLiveProviderConfigPath}`,
-  ]);
-}
-
 async function tryCopyGuestBootstrapLog(plan: QaMultipassPlan) {
   try {
     await runMultipassCommand(plan.hostLogPath, [
@@ -445,14 +429,10 @@ export async function runQaMultipass(
     `# OpenClaw QA Multipass host log\nvmName=${plan.vmName}\noutputDir=${plan.outputDir}\n\n`,
     "utf8",
   );
-  await writeFile(
-    plan.hostGuestScriptPath,
-    renderQaMultipassGuestScript(plan, { redactSecrets: true }),
-    {
-      encoding: "utf8",
-      mode: 0o600,
-    },
-  );
+  await writeFile(plan.hostGuestScriptPath, renderQaMultipassGuestScript(plan, true), {
+    encoding: "utf8",
+    mode: 0o600,
+  });
 
   try {
     await execFileAsync("multipass", ["version"]);
@@ -512,7 +492,13 @@ export async function runQaMultipass(
         "codex-home mount",
       );
     }
-    await transferLiveProviderConfig(plan);
+    if (plan.hostLiveProviderConfigPath && plan.guestLiveProviderConfigPath) {
+      await runMultipassCommand(plan.hostLogPath, [
+        "transfer",
+        plan.hostLiveProviderConfigPath,
+        `${plan.vmName}:${plan.guestLiveProviderConfigPath}`,
+      ]);
+    }
     await runMultipassCommand(plan.hostLogPath, [
       "transfer",
       hostTransferScriptPath,

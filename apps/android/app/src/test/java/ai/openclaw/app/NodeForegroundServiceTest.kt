@@ -1721,7 +1721,7 @@ class NodeForegroundServiceTest {
       lifetimeGateway { role ->
         if (role == "node") {
           nodeConnects.incrementAndGet()
-          """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":[]},"snapshot":{},"auth":{"deviceTokens":[{"role":"node","deviceToken":"synthetic-node-token","scopes":[]},{"role":"operator","deviceToken":"synthetic-operator-token","scopes":["operator.read","operator.write"]}]}}"""
+          """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":["agents.list"]},"snapshot":{},"auth":{"deviceTokens":[{"role":"node","deviceToken":"synthetic-node-token","scopes":[]},{"role":"operator","deviceToken":"synthetic-operator-token","scopes":["operator.read","operator.write"]}]}}"""
         } else {
           bootstrapHello(role)
         }
@@ -1925,9 +1925,9 @@ class NodeForegroundServiceTest {
     val gateway =
       lifetimeGateway { role ->
         if (role == "operator") {
-          """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":[]},"snapshot":{},"auth":{"deviceToken":"synthetic-operator-token","role":"operator","scopes":["operator.read","operator.write"]}}"""
+          """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":["agents.list"]},"snapshot":{},"auth":{"deviceToken":"synthetic-operator-token","role":"operator","scopes":["operator.read","operator.write"]}}"""
         } else {
-          """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":[]},"snapshot":{}}"""
+          """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":["agents.list"]},"snapshot":{}}"""
         }
       }
     val endpoint = GatewayEndpoint.manual("127.0.0.1", gateway.port)
@@ -2015,7 +2015,7 @@ class NodeForegroundServiceTest {
       )
       assertFalse("The deadline must not admit a replacement socket", admitted.isCompleted)
       assertEquals("synthetic-old-setup", app.prefs.loadGatewayCredentials(endpoint.stableId).token)
-      assertFalse("Queued configuration must not be persisted before cleanup", app.prefs.manualEnabled.value)
+      assertFalse("Queued configuration must not be persisted before cleanup", app.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE).getBoolean("gateway.manual.enabled", false))
 
       if (disconnectBeforeRelease) {
         viewModel.disconnect()
@@ -2044,13 +2044,13 @@ class NodeForegroundServiceTest {
       if (disconnectBeforeRelease) {
         assertFalse(admitted.isCompleted)
         assertEquals("synthetic-old-setup", app.prefs.loadGatewayCredentials(endpoint.stableId).token)
-        assertFalse(app.prefs.manualEnabled.value)
+        assertFalse(app.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE).getBoolean("gateway.manual.enabled", false))
         assertEquals("Offline", runtime.gatewayConnectionDisplay.value.statusText)
         assertNull(runtime.gatewayConnectionDisplay.value.problem)
       } else {
         drainWithMainLooper { withTimeout(10_000) { admitted.await() } }
         assertEquals("synthetic-replacement-setup", app.prefs.loadGatewayCredentials(endpoint.stableId).token)
-        assertTrue(app.prefs.manualEnabled.value)
+        assertTrue(app.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE).getBoolean("gateway.manual.enabled", false))
         assertNull(runtime.gatewayConnectionDisplay.value.problem)
       }
     } finally {
@@ -2136,13 +2136,13 @@ class NodeForegroundServiceTest {
       }) { role ->
         if (role == "operator") {
           val token = if (helloCount.incrementAndGet() == 1) "synthetic-old-token" else "synthetic-new-token"
-          """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":[]},"snapshot":{},"auth":{"deviceToken":"$token","role":"operator","scopes":["operator.read","operator.write"]}}"""
+          """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":["agents.list"]},"snapshot":{},"auth":{"deviceToken":"$token","role":"operator","scopes":["operator.read","operator.write"]}}"""
         } else {
           if (holdPrimaryWriteUntilNode && heldNodeHello.claimed.compareAndSet(false, true)) {
             heldNodeHello.entered.countDown()
             check(heldNodeHello.release.await(10, TimeUnit.SECONDS)) { "Node hello was not released" }
           }
-          """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":[]},"snapshot":{}}"""
+          """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":["agents.list"]},"snapshot":{}}"""
         }
       }
     val endpoint = GatewayEndpoint.manual("127.0.0.1", gateway.port)
@@ -2295,7 +2295,7 @@ class NodeForegroundServiceTest {
     val controller = Robolectric.buildService(NodeForegroundService::class.java).create()
     val gateway =
       lifetimeGateway {
-        """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":[]},"snapshot":{},"auth":{"deviceToken":"synthetic-secondary-issued-token","role":"operator","scopes":["operator.read","operator.write"]}}"""
+        """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":["agents.list"]},"snapshot":{},"auth":{"deviceToken":"synthetic-secondary-issued-token","role":"operator","scopes":["operator.read","operator.write"]}}"""
       }
     val endpoint = GatewayEndpoint.manual("127.0.0.1", gateway.port)
     app.prefs.gatewayRegistry.upsert(gatewayRegistryEntry(endpoint, null))
@@ -2700,9 +2700,9 @@ class NodeForegroundServiceTest {
 
   private fun bootstrapHello(role: String): String =
     if (role == "node") {
-      """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":[]},"snapshot":{},"auth":{"deviceTokens":[{"role":"operator","deviceToken":"synthetic-operator-token","scopes":["operator.read","operator.write"]}]}}"""
+      """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":["agents.list"]},"snapshot":{},"auth":{"deviceTokens":[{"role":"operator","deviceToken":"synthetic-operator-token","scopes":["operator.read","operator.write"]}]}}"""
     } else {
-      """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":[]},"snapshot":{}}"""
+      """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":["agents.list"]},"snapshot":{}}"""
     }
 
   private fun lifetimeGatewayTlsSocketFactory(): SSLSocketFactory {
@@ -2745,7 +2745,7 @@ class NodeForegroundServiceTest {
     onConnect: ((JsonObject) -> Unit)? = null,
     sslSocketFactory: SSLSocketFactory? = null,
     hello: (String) -> String = {
-      """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":[]},"snapshot":{}}"""
+      """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":["agents.list"]},"snapshot":{}}"""
     },
   ): MockWebServer =
     MockWebServer().apply {
@@ -2779,6 +2779,8 @@ class NodeForegroundServiceTest {
                           ?.content
                           .orEmpty(),
                       )
+                    } else if (frame["method"]?.jsonPrimitive?.content == "agents.list") {
+                      """{"defaultId":"main","mainKey":"main","agents":[{"id":"main"}]}"""
                     } else {
                       onRequest(frame)
                     }

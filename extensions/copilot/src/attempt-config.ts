@@ -1,4 +1,4 @@
-import type { MessageOptions, SessionConfig, Tool as SdkTool } from "@github/copilot-sdk";
+import type { MessageOptions } from "@github/copilot-sdk";
 import type { AgentMessage, SandboxContext } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   detectAndLoadAgentHarnessPromptImages,
@@ -8,26 +8,19 @@ import {
 import { toStringifiedError as toCopilotError } from "openclaw/plugin-sdk/error-runtime";
 import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  COPILOT_ASK_USER_AVAILABLE_TOOLS,
-  COPILOT_SETTLED_FINALIZATION_SYSTEM_MESSAGE,
   withPromptFailure,
   type AgentHarnessAttemptResult,
   type AttemptParamsLike,
   type AttemptResultWithSdkSessionId,
-  type CopilotAttemptOperation,
-  type CopilotSessionConfig,
   type ModelRef,
   type ModelRefInputObject,
 } from "./attempt-types.js";
 import { createCopilotByokAuth, resolveCopilotAuth } from "./auth-bridge.js";
 import type { AssistantMessage, AssistantUsageSnapshot } from "./event-bridge.js";
-import { createHooksBridge } from "./hooks-bridge.js";
-import { createPermissionBridge, rejectAllPolicy } from "./permission-bridge.js";
 import type { PromptErrorWithCode } from "./prompt-error.js";
 import { resolveCopilotProvider, type ResolvedCopilotProvider } from "./provider-bridge.js";
 import { computeReplayMetadata, copilotToolMetasHavePotentialSideEffects } from "./replay-shim.js";
 import type { ClientCreateOptions, PoolKey } from "./runtime.js";
-import { createCopilotIsolatedSessionRestrictions } from "./session-restrictions.js";
 
 export { toCopilotError };
 export function createResult(
@@ -52,6 +45,7 @@ export function createResult(
     nativeReplayInvalid?: boolean;
     promptError: Error | undefined;
     resumeFailureRecovered?: boolean;
+    runtimeArtifact?: AgentHarnessAttemptResult["runtimeArtifact"];
     sdkSessionId?: string;
     timedOut?: boolean;
     timedOutDuringCompaction?: boolean;
@@ -100,6 +94,7 @@ export function createResult(
     promptError !== undefined ? withPromptFailure(interruption, promptError) : interruption;
   return {
     terminal,
+    ...(state.runtimeArtifact ? { runtimeArtifact: state.runtimeArtifact } : {}),
     ...(state.acceptedSessionSpawns?.length
       ? { acceptedSessionSpawns: state.acceptedSessionSpawns }
       : {}),
@@ -144,82 +139,6 @@ export function createResult(
     ...(state.yieldAcknowledgment ? { yieldAcknowledgment: state.yieldAcknowledgment } : {}),
   };
 }
-export function createSessionConfig(
-  params: AttemptParamsLike,
-  sdkModelId: string,
-  sdkTools: SdkTool[],
-  resolvedAuth: ReturnType<typeof resolveCopilotAuth>,
-  resolvedProvider: ResolvedCopilotProvider,
-  systemMessageContent: string | undefined,
-  effectiveWorkspaceDir: string | undefined,
-  effectiveCwd: string | undefined,
-  onUserInputRequest: SessionConfig["onUserInputRequest"] | undefined,
-  options: {
-    hooksBridgeOptions?: Parameters<typeof createHooksBridge>[1];
-    includeAskUser: boolean;
-    operation: CopilotAttemptOperation;
-  },
-): CopilotSessionConfig {
-  const settledToolFinalization = options.operation === "settled-tool-finalization";
-  const permissionPolicy = settledToolFinalization
-    ? rejectAllPolicy
-    : (params.permissionPolicy ?? rejectAllPolicy);
-  const hooks = settledToolFinalization
-    ? undefined
-    : createHooksBridge(params.hooksConfig, options.hooksBridgeOptions);
-  return {
-    model: sdkModelId,
-    onPermissionRequest: createPermissionBridge(permissionPolicy),
-    ...(onUserInputRequest ? { onUserInputRequest } : {}),
-    ...(resolvedProvider.provider ? { provider: resolvedProvider.provider } : {}),
-    ...(hooks ? { hooks } : {}),
-    ...(typeof params.enableSessionTelemetry === "boolean"
-      ? { enableSessionTelemetry: params.enableSessionTelemetry }
-      : {}),
-    ...(settledToolFinalization
-      ? {}
-      : params.infiniteSessionConfig
-        ? { infiniteSessions: params.infiniteSessionConfig }
-        : {}),
-    reasoningEffort: params.reasoningEffort,
-    tools: sdkTools,
-    availableTools: buildCopilotAvailableTools(sdkTools, options.includeAskUser),
-    ...(settledToolFinalization ? createCopilotIsolatedSessionRestrictions() : {}),
-    workingDirectory:
-      effectiveCwd ?? effectiveWorkspaceDir ?? readResolvedAttemptPath(params.workspaceDir),
-    ...(!settledToolFinalization &&
-    effectiveWorkspaceDir &&
-    effectiveCwd &&
-    effectiveCwd !== effectiveWorkspaceDir
-      ? { instructionDirectories: [effectiveWorkspaceDir] }
-      : {}),
-    ...(resolvedAuth.authMode === "gitHubToken" && resolvedAuth.gitHubToken
-      ? { gitHubToken: resolvedAuth.gitHubToken }
-      : {}),
-    ...(settledToolFinalization
-      ? {
-          systemMessage: {
-            mode: "customize" as const,
-            content: COPILOT_SETTLED_FINALIZATION_SYSTEM_MESSAGE,
-          },
-        }
-      : systemMessageContent
-        ? {
-            systemMessage: {
-              mode: "append" as const,
-              content: systemMessageContent,
-            },
-          }
-        : {}),
-  };
-}
-function buildCopilotAvailableTools(sdkTools: SdkTool[], includeAskUser: boolean): string[] {
-  const availableTools = sdkTools.map((tool) => tool.name);
-  if (includeAskUser) {
-    availableTools.push(...COPILOT_ASK_USER_AVAILABLE_TOOLS);
-  }
-  return [...new Set(availableTools)];
-}
 export async function createMessageOptions(
   params: AttemptParamsLike,
   context: {
@@ -230,7 +149,38 @@ export async function createMessageOptions(
     workspaceOnly: boolean;
   },
 ): Promise<MessageOptions> {
-  const attachments = (await resolvePromptImages(params, context)).map((image, index) => ({
+  async function resolvePromptImages() {
+    const workspaceDir =
+      context.effectiveCwd ??
+      context.effectiveWorkspaceDir ??
+      readResolvedAttemptPath(params.cwd) ??
+      readResolvedAttemptPath(params.workspaceDir);
+    if (!workspaceDir) {
+      return [];
+    }
+    const localRoots =
+      context.workspaceOnly && context.effectiveWorkspaceDir
+        ? [context.effectiveWorkspaceDir]
+        : undefined;
+    const model = params.model;
+    const result = await detectAndLoadAgentHarnessPromptImages({
+      prompt: params.prompt,
+      workspaceDir,
+      model: { input: typeof model === "object" ? (model.input ?? ["image"]) : ["image"] },
+      existingImages: params.images,
+      imageOrder: params.imageOrder,
+      media: params.media,
+      config: params.config,
+      workspaceOnly: context.workspaceOnly,
+      localRoots,
+      sandbox:
+        context.sandbox?.enabled && context.sandbox.fsBridge
+          ? { root: context.sandbox.workspaceDir, bridge: context.sandbox.fsBridge }
+          : undefined,
+    });
+    return result.images;
+  }
+  const attachments = (await resolvePromptImages()).map((image, index) => ({
     type: "blob" as const,
     data: image.data,
     mimeType: image.mimeType,
@@ -238,57 +188,12 @@ export async function createMessageOptions(
   }));
   const providerHeaders = context.provider.provider?.headers;
   const requestHeaders =
-    providerHeaders && Object.keys(providerHeaders).length > 0 ? { ...providerHeaders } : undefined;
+    providerHeaders && Object.keys(providerHeaders).length > 0 ? providerHeaders : undefined;
   return {
     prompt: params.prompt,
     ...(attachments.length > 0 ? { attachments } : {}),
     ...(requestHeaders ? { requestHeaders } : {}),
   };
-}
-async function resolvePromptImages(
-  params: AttemptParamsLike,
-  context: {
-    effectiveCwd: string | undefined;
-    effectiveWorkspaceDir: string | undefined;
-    sandbox: SandboxContext | null;
-    workspaceOnly: boolean;
-  },
-) {
-  const workspaceDir =
-    context.effectiveCwd ??
-    context.effectiveWorkspaceDir ??
-    readResolvedAttemptPath(params.cwd) ??
-    readResolvedAttemptPath(params.workspaceDir);
-  if (!workspaceDir) {
-    return [];
-  }
-  const localRoots =
-    context.workspaceOnly && context.effectiveWorkspaceDir
-      ? [context.effectiveWorkspaceDir]
-      : undefined;
-  const result = await detectAndLoadAgentHarnessPromptImages({
-    prompt: params.prompt,
-    workspaceDir,
-    model: resolveImageCapabilityModel(params),
-    existingImages: Array.isArray(params.images) ? params.images : undefined,
-    imageOrder: Array.isArray(params.imageOrder) ? params.imageOrder : undefined,
-    media: Array.isArray(params.media) ? params.media : undefined,
-    config: params.config,
-    workspaceOnly: context.workspaceOnly,
-    localRoots,
-    sandbox:
-      context.sandbox?.enabled && context.sandbox.fsBridge
-        ? { root: context.sandbox.workspaceDir, bridge: context.sandbox.fsBridge }
-        : undefined,
-  });
-  return result.images;
-}
-function resolveImageCapabilityModel(params: AttemptParamsLike): { input?: string[] } {
-  const model = params.model;
-  if (model && typeof model === "object" && Array.isArray((model as { input?: unknown }).input)) {
-    return { input: (model as { input: string[] }).input };
-  }
-  return { input: ["image"] };
 }
 export { readNonEmptyString };
 export function readResolvedAttemptPath(value: unknown): string | undefined {
@@ -354,7 +259,6 @@ export function resolvePoolAcquire(params: AttemptParamsLike): {
   const authContext = {
     agentId: readNonEmptyString(params.agentId),
     agentDir: readNonEmptyString(params.agentDir),
-    workspaceDir: readNonEmptyString(params.workspaceDir),
     copilotHome: readNonEmptyString(params.copilotHome),
   };
   const auth =

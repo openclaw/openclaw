@@ -1,9 +1,12 @@
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import {
   GatewayProtocolRequestTimeoutError,
   type GatewayProtocolRequestOptions,
 } from "./protocol-request.js";
-import type { GatewaySessionMessageRequestClient } from "./session-subscriptions.js";
+import {
+  GatewaySessionMessageSubscriptionCoordinator,
+  type GatewaySessionMessageRequestClient,
+} from "./session-subscriptions.js";
 
 type SessionRequestHandler = (method: string, params: Record<string, unknown>) => Promise<unknown>;
 
@@ -12,12 +15,39 @@ export function createClient(
     method === "sessions.messages.subscribe" ? { key: params.key } : {},
 ) {
   const request = vi.fn(handler);
+  const client = {
+    request: (method: string, params: Record<string, unknown>) => request(method, params),
+  } as unknown as GatewaySessionMessageRequestClient;
   return {
-    client: {
-      request: (method: string, params: Record<string, unknown>) => request(method, params),
-    } as unknown as GatewaySessionMessageRequestClient,
+    client,
     request,
+    coordinator: new GatewaySessionMessageSubscriptionCoordinator(client),
   };
+}
+
+export function expectWire(
+  request: ReturnType<typeof createClient>["request"],
+  method: "subscribe" | "unsubscribe",
+  params: Record<string, unknown> = {},
+) {
+  expect(request).toHaveBeenLastCalledWith(...wireCall(method, params));
+}
+
+function wireCall(method: "subscribe" | "unsubscribe", params: Record<string, unknown>) {
+  return [
+    `sessions.messages.${method}`,
+    { subscriptionId: expect.any(String), key: "main", ...params },
+  ] as const;
+}
+
+export function expectWireCalls(
+  request: ReturnType<typeof createClient>["request"],
+  method: "subscribe" | "unsubscribe",
+  params: Record<string, unknown>[],
+) {
+  expect(request.mock.calls.filter(([name]) => name === `sessions.messages.${method}`)).toEqual(
+    params.map((fields) => wireCall(method, fields)),
+  );
 }
 
 export function createStalledRequestClient(stalledMethod: string, stalledKey: string) {

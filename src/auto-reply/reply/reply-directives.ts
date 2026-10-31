@@ -1,41 +1,32 @@
-/** Parses inline reply directives such as media, reply targets, audio, and silence. */
 import { trySafeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import { splitMediaFromOutput } from "../../media/parse.js";
 import {
   parseInlineDirectives,
   stripInlineDirectiveTagsForDelivery,
 } from "../../utils/directive-tags.js";
-import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import { appendReplyMediaFailures, type ReplyMediaFailure } from "../reply-payload.js";
 
-/** Parsed outbound reply directives and media extracted from model text. */
 export type ReplyDirectiveParseResult = {
   text: string;
   mediaUrls?: string[];
+  mediaFailures?: ReplyMediaFailure[];
   replyToId?: string;
   replyToCurrent?: boolean;
   replyToTag: boolean;
   audioAsVoice?: boolean;
-  isSilent: boolean;
 };
 
-/** Options for extracting reply directives from model text. */
-type ReplyDirectiveParseOptions = {
-  currentMessageId?: string;
-  silentToken?: string;
-  extractMarkdownImages?: boolean;
-  extractMediaDirectives?: boolean;
-  preserveTrailingWhitespace?: boolean;
-  onAudioDirective?: () => void;
-};
-
-/** Parses media, reply-target, audio, and silent directives from reply text. */
 export function parseReplyDirectives(
   raw: string,
-  options: ReplyDirectiveParseOptions = {},
+  options: {
+    currentMessageId?: string;
+    extractMarkdownImages?: boolean;
+    preserveTrailingWhitespace?: boolean;
+    onAudioDirective?: () => void;
+  } = {},
 ): ReplyDirectiveParseResult {
   const split = splitMediaFromOutput(raw, {
     extractMarkdownImages: options.extractMarkdownImages,
-    extractMediaDirectives: options.extractMediaDirectives,
     preserveTrailingWhitespace: options.preserveTrailingWhitespace,
     onAudioDirective: options.onAudioDirective,
   });
@@ -53,18 +44,23 @@ export function parseReplyDirectives(
     preserveTrailingWhitespace: options.preserveTrailingWhitespace,
   }).text;
 
-  const silentToken = options.silentToken ?? SILENT_REPLY_TOKEN;
-  const isSilent = isSilentReplyPayloadText(text, silentToken);
+  const mediaFailures = Array.from(
+    { length: split.rejectedMediaCount ?? 0 },
+    (): ReplyMediaFailure => ({
+      code: "invalid-reference",
+      kind: "document",
+      label: "Media not attached",
+    }),
+  );
 
   return {
-    // Silent payloads must not leak the control token into channel delivery.
-    text: isSilent ? "" : text,
+    text: appendReplyMediaFailures(text, mediaFailures) ?? "",
     // Keep native path conversion outside the browser-shared parser and before reply policy.
     mediaUrls: split.mediaUrls?.map((source) => trySafeFileURLToPath(source) ?? source),
+    ...(mediaFailures.length ? { mediaFailures } : {}),
     replyToId: replyParsed?.replyToId,
     replyToCurrent: replyParsed?.replyToCurrent || undefined,
     replyToTag: replyParsed?.hasReplyTag ?? false,
     audioAsVoice: split.audioAsVoice,
-    isSilent,
   };
 }

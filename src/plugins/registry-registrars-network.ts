@@ -1,5 +1,13 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import {
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/schema/error-codes.js";
+import { listChatChannels } from "../channels/chat-meta.js";
+import { normalizeChannelMeta } from "../channels/plugins/meta-normalization.js";
+import type { AnyChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { ChannelMeta } from "../channels/plugins/types.public.js";
+import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
 import {
   createPluginGatewayMethodDescriptor,
   type GatewayMethodProfileAccess,
@@ -7,11 +15,14 @@ import {
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler, RespondFn } from "../gateway/server-methods/types.js";
 import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";
-import { normalizeRegisteredChannelPlugin } from "./channel-validation.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findPluginHttpRouteRegistrationConflicts } from "./http-route-overlap.js";
 import { getPluginHttpRouteViews, replacePluginHttpRoutes } from "./http-route-owner.js";
-import { wrapCurrentPluginInstance } from "./plugin-instance-scope.js";
+import {
+  getOfficialExternalPluginCatalogManifest,
+  listOfficialExternalChannelCatalogEntries,
+} from "./official-external-plugin-catalog.js";
+import { getPluginInstance, wrapCurrentPluginInstance } from "./plugin-instance-scope.js";
 import { capturePluginLifecycleAuthority, getPluginRecordRegistry } from "./registry-lifecycle.js";
 import {
   resolvePluginRegistrationCapabilities,
@@ -23,25 +34,83 @@ import type {
   PluginRecord,
 } from "./registry-types.js";
 import {
+  PluginCapabilityRemovedError,
+  removedPluginCapabilityDescriptor,
+} from "./removed-capability-error.js";
+import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "./runtime/gateway-request-scope.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
 import type {
-  OpenClawPluginChannelRegistration,
-  OpenClawPluginHostedMediaResolver,
+  OpenClawPluginApi,
   OpenClawPluginHttpRouteParams,
   OpenClawPluginMcpServerConnectionResolver,
   PluginRegistrationMode,
 } from "./types.js";
 
 const GATEWAY_METHOD_DISPATCH_CONTRACT = "authenticated-request";
+const CHANNEL_CAPABILITY_CHAT_TYPES = new Set(["direct", "group", "channel", "thread"]);
+const REMOVED_SESSION_CONTEXT_CAPABILITIES = Object.fromEntries(
+  ["chatAbortControllers", "chatQueuedTurns"].map((name) => [
+    name,
+    removedPluginCapabilityDescriptor(
+      `context.${name}`,
+      'Use dispatchGatewayMethod from openclaw/plugin-sdk/gateway-method-runtime with chat.send, chat.abort, sessions.abort, or agent.wait; declare contracts.gatewayMethodDispatch: ["authenticated-request"].',
+    ),
+  ]),
+);
+
+function resolveKnownChannelMeta(id: string): Partial<ChannelMeta> | undefined {
+  return (
+    listChatChannels().find((meta) => meta?.id === id) ??
+    resolveGeneratedBundledChannelMeta(id) ??
+    resolveOfficialExternalChannelMeta(id)
+  );
+}
+
+function resolveOfficialExternalChannelMeta(id: string): Partial<ChannelMeta> | undefined {
+  const normalizedId = id.toLowerCase();
+  const channel = listOfficialExternalChannelCatalogEntries()
+    .map((entry) => getOfficialExternalPluginCatalogManifest(entry)?.channel)
+    .find((candidate) => candidate?.id?.trim().toLowerCase() === normalizedId);
+  return channel?.aliases?.length ? { aliases: channel.aliases } : undefined;
+}
+
+function resolveGeneratedBundledChannelMeta(id: string): ChannelMeta | undefined {
+  const channel = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.find(
+    (entry) => entry.channelId === id && entry.configurable !== false,
+  );
+  const label = normalizeOptionalString(channel?.label);
+  if (!channel || !label) {
+    return undefined;
+  }
+  return {
+    id,
+    label,
+    selectionLabel: label,
+    docsPath: `/channels/${id}`,
+    blurb: normalizeOptionalString(channel.description) ?? "",
+  };
+}
+
+function collectMissingChannelMetaFields(meta?: Partial<ChannelMeta> | null): string[] {
+  const missing: string[] = (["label", "selectionLabel", "docsPath"] as const).filter(
+    (key) => !normalizeOptionalString(meta?.[key]),
+  );
+  if (typeof meta?.blurb !== "string") {
+    missing.push("blurb");
+  }
+  return missing;
+}
 
 function adaptPluginGatewayMethodHandler(
   handler: GatewayRequestHandler,
   mayDispatch: boolean,
 ): GatewayRequestHandler {
   return async (opts) => {
+    // Preserve the real context identity; these accessors expose no mutable state.
+    Object.defineProperties(opts.context, REMOVED_SESSION_CONTEXT_CAPABILITIES);
     let responded = false;
     const respond: RespondFn = (ok, payload, error, meta) => {
       responded = true;
@@ -51,16 +120,30 @@ function adaptPluginGatewayMethodHandler(
     const invoke = () => handler({ ...opts, respond });
     // A declared authenticated-request contract composes RPCs with the exact
     // admitted client, never a synthetic identity or inherited unrelated grant.
-    const result = (
-      scope
-        ? await withPluginRuntimeGatewayRequestScope(
-            { ...scope, gatewayMethodDispatchAllowed: mayDispatch && scope.client != null },
-            invoke,
-          )
-        : await invoke()
-    ) as unknown;
-    if (!responded && result !== undefined) {
-      respond(true, result);
+    try {
+      const result = (
+        scope
+          ? await withPluginRuntimeGatewayRequestScope(
+              { ...scope, gatewayMethodDispatchAllowed: mayDispatch && scope.client != null },
+              invoke,
+            )
+          : await invoke()
+      ) as unknown;
+      if (!responded && result !== undefined) {
+        respond(true, result);
+      }
+    } catch (error) {
+      if (!(error instanceof PluginCapabilityRemovedError) || responded) {
+        throw error;
+      }
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, error.message, {
+          retryable: false,
+          details: { code: error.code, capability: error.capability },
+        }),
+      );
     }
   };
 }
@@ -71,7 +154,6 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     createRegistration,
     coreGatewayMethods,
     pluginsWithChannelRegistrationConflict,
-    pushDiagnostic,
     reportRegistrationError,
     reportRegistrationWarning,
   } = state;
@@ -85,6 +167,9 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       scope?: OperatorScope;
       profileAccess?: GatewayMethodProfileAccess;
       sessionAccess?: import("../gateway/methods/descriptor.js").GatewayMethodSessionAccess;
+      shareKey?: import("../gateway/methods/descriptor.js").GatewayReadSharing["shareKey"];
+      shareInvalidationEvents?: readonly string[];
+      shareMaxAgeMs?: number;
     },
   ) => {
     const trimmed = method.trim();
@@ -115,6 +200,18 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
         scope: normalizedScope.scope,
         ...(opts?.profileAccess ? { profileAccess: opts.profileAccess } : {}),
         ...(opts?.sessionAccess ? { sessionAccess: opts.sessionAccess } : {}),
+        ...(opts?.shareKey
+          ? {
+              shareKey: (caller, params) =>
+                capturePluginLifecycleAuthority(getPluginRecordRegistry(registry, record), record, {
+                  scopedRuntime: true,
+                })?.() === true
+                  ? opts.shareKey!(caller, params)
+                  : null,
+              shareInvalidationEvents: opts.shareInvalidationEvents,
+              shareMaxAgeMs: opts.shareMaxAgeMs,
+            }
+          : {}),
       }),
     );
   };
@@ -144,13 +241,16 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       );
       return;
     }
+    if (provider.continueSession) {
+      getPluginInstance(record)?.admitFactory(provider.continueSession, ["afterConversationBound"]);
+    }
     const normalizedProvider = { ...provider, id, label };
-    registry.sessionCatalogs.push(
-      createRegistration(record, {
-        provider:
-          state.getNativeCatalogGate(record)?.catalog(normalizedProvider) ?? normalizedProvider,
-      }),
-    );
+    const catalog =
+      state.getNativeCatalogGate(record)?.catalog(normalizedProvider) ?? normalizedProvider;
+    if (catalog.continueSession) {
+      getPluginInstance(record)?.admitFactory(catalog.continueSession, ["afterConversationBound"]);
+    }
+    registry.sessionCatalogs.push(createRegistration(record, { provider: catalog }));
   };
 
   const describeHttpRouteOwner = (entry: PluginHttpRouteRegistration): string => {
@@ -223,21 +323,6 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     replacePluginHttpRoutes(registry, registration, canonicalMatches, true);
   };
 
-  const registerHostedMediaResolver = (
-    record: PluginRecord,
-    resolver: OpenClawPluginHostedMediaResolver,
-  ) => {
-    if (typeof resolver !== "function") {
-      reportRegistrationError(record, "hosted media resolver registration missing resolver");
-      return;
-    }
-    registry.hostedMediaResolvers.push(
-      createRegistration(record, {
-        resolver,
-      }),
-    );
-  };
-
   const registerMcpServerConnectionResolver = (
     record: PluginRecord,
     resolver: OpenClawPluginMcpServerConnectionResolver,
@@ -279,7 +364,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
 
   const registerChannel = (
     record: PluginRecord,
-    registration: OpenClawPluginChannelRegistration | ChannelPlugin,
+    registration: Parameters<OpenClawPluginApi["registerChannel"]>[0],
     mode: PluginRegistrationMode = "full",
     resolveChannelRuntime?: PluginChannelRegistration["resolveChannelRuntime"],
   ) => {
@@ -291,20 +376,57 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       return;
     }
     const registrationCapabilities = resolvePluginRegistrationCapabilities(mode);
-    const normalized =
-      typeof (registration as OpenClawPluginChannelRegistration).plugin === "object"
-        ? (registration as OpenClawPluginChannelRegistration)
-        : { plugin: registration as ChannelPlugin };
-    const plugin = normalizeRegisteredChannelPlugin({
-      pluginId: record.id,
-      source: record.source,
-      plugin: normalized.plugin,
-      pushDiagnostic,
-    });
-    if (!plugin) {
+    const pluginRegistration = "plugin" in registration ? registration.plugin : registration;
+    const id =
+      normalizeOptionalString(pluginRegistration?.id) ??
+      normalizeStringifiedOptionalString(pluginRegistration?.id) ??
+      "";
+    if (!id) {
+      reportRegistrationError(record, "channel registration missing id");
       return;
     }
-    const id = plugin.id;
+    const chatTypes = pluginRegistration.capabilities?.chatTypes;
+    if (
+      !Array.isArray(chatTypes) ||
+      chatTypes.length === 0 ||
+      chatTypes.some((chatType) => !CHANNEL_CAPABILITY_CHAT_TYPES.has(chatType))
+    ) {
+      reportRegistrationError(
+        record,
+        `channel "${id}" registration missing or invalid required capabilities.chatTypes`,
+      );
+      return;
+    }
+    if (
+      typeof pluginRegistration.config?.listAccountIds !== "function" ||
+      typeof pluginRegistration.config?.resolveAccount !== "function"
+    ) {
+      reportRegistrationError(
+        record,
+        `channel "${id}" registration missing required config helpers`,
+      );
+      return;
+    }
+    const rawMeta: Partial<ChannelMeta> | undefined = pluginRegistration.meta;
+    const rawMetaId = normalizeOptionalString(rawMeta?.id);
+    if (rawMetaId && rawMetaId !== id) {
+      reportRegistrationWarning(
+        record,
+        `channel "${id}" meta.id mismatch ("${rawMetaId}"); using registered channel id`,
+      );
+    }
+    const missingFields = collectMissingChannelMetaFields(rawMeta);
+    if (missingFields.length > 0) {
+      reportRegistrationWarning(
+        record,
+        `channel "${id}" registered incomplete metadata; filled missing ${missingFields.join(", ")}`,
+      );
+    }
+    const plugin: AnyChannelPlugin = {
+      ...pluginRegistration,
+      id,
+      meta: normalizeChannelMeta({ id, meta: rawMeta, existing: resolveKnownChannelMeta(id) }),
+    };
     const existingRuntime = registrationCapabilities.runtimeChannel
       ? registry.channels.find((entry) => entry.plugin.id === id)
       : undefined;
@@ -317,6 +439,11 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       );
       pluginsWithChannelRegistrationConflict.add(record.id);
       return;
+    }
+    const agentTools = plugin.agentTools;
+    if (agentTools) {
+      plugin.agentTools = typeof agentTools === "function" ? agentTools : () => agentTools;
+      getPluginInstance(record)?.admitFactory(plugin.agentTools, "tool");
     }
     const metadata = {
       // Normalization copied the input; teardown must retain its registration owner.
@@ -370,7 +497,6 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     registerGatewayMethod,
     registerSessionCatalog,
     registerHttpRoute,
-    registerHostedMediaResolver,
     registerMcpServerConnectionResolver,
     registerChannel,
   };

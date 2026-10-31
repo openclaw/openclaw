@@ -5,7 +5,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isMissingPathError } from "./errors.js";
 import { readGitHead, readGitMetadataPrefix } from "./git-root.js";
-import { pruneMapToMaxSize } from "./map-size.js";
+import { LruCache } from "./lru-cache.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 
 const formatCommit = (value?: string | null) => {
@@ -23,15 +23,9 @@ export function gitCommitPrefixesMatch(left: string, right: string): boolean {
   );
 }
 
-const cachedGitCommitBySearchDir = new Map<string, string | null>();
 const GIT_COMMIT_CACHE_LIMIT = 256;
+const cachedGitCommitBySearchDir = new LruCache<string | null>(GIT_COMMIT_CACHE_LIMIT);
 declare const WORKER_DEPLOY_BUILD: boolean;
-
-type CommitMetadataReaders = {
-  readGitCommit?: (searchDir: string, packageRoot: string | null) => string | null | undefined;
-  readBuildInfoCommit?: () => string | null;
-  readPackageJsonCommit?: () => string | null;
-};
 
 const resolveCommitSearchDir = (options: { cwd?: string; moduleUrl?: string }) => {
   if (options.cwd) {
@@ -49,7 +43,6 @@ const resolveCommitSearchDir = (options: { cwd?: string; moduleUrl?: string }) =
 
 const cacheGitCommit = (searchDir: string, commit: string | null) => {
   cachedGitCommitBySearchDir.set(searchDir, commit);
-  pruneMapToMaxSize(cachedGitCommitBySearchDir, GIT_COMMIT_CACHE_LIMIT);
   return commit;
 };
 const resolveGitLookupDepth = (searchDir: string, packageRoot: string | null) => {
@@ -145,24 +138,17 @@ export const resolveCommitHash = (
     cwd?: string;
     env?: NodeJS.ProcessEnv;
     moduleUrl?: string;
-    readers?: CommitMetadataReaders;
   } = {},
 ) => {
   const env = options.env ?? process.env;
-  const readers = options.readers ?? {};
-  const readGitCommit = readers.readGitCommit ?? readCommitFromGit;
   const envCommit = env.GIT_COMMIT?.trim() || env.GIT_SHA?.trim();
   const normalized = formatCommit(envCommit);
   if (normalized) {
     return normalized;
   }
   const searchDir = resolveCommitSearchDir(options);
-  if (cachedGitCommitBySearchDir.has(searchDir)) {
-    const cached = cachedGitCommitBySearchDir.get(searchDir) ?? null;
-    // Git discovery reads multiple files; keep active directories ahead of cold entries when
-    // the shared insertion-order pruning helper enforces the bound.
-    cachedGitCommitBySearchDir.delete(searchDir);
-    cachedGitCommitBySearchDir.set(searchDir, cached);
+  const cached = cachedGitCommitBySearchDir.get(searchDir);
+  if (cached !== undefined) {
     return cached;
   }
   const packageRoot = resolveOpenClawPackageRootSync({
@@ -170,26 +156,22 @@ export const resolveCommitHash = (
     moduleUrl: options.moduleUrl,
   });
   try {
-    const gitCommit = readGitCommit(searchDir, packageRoot);
+    const gitCommit = readCommitFromGit(searchDir, packageRoot);
     if (gitCommit !== undefined) {
       return cacheGitCommit(searchDir, gitCommit);
     }
   } catch {
     // Fall through to baked metadata for packaged installs that are not in a live checkout.
   }
-  const buildInfoCommit = readers.readBuildInfoCommit?.() ?? readCommitFromBuildInfo();
+  const buildInfoCommit = readCommitFromBuildInfo();
   if (buildInfoCommit) {
     return cacheGitCommit(searchDir, buildInfoCommit);
   }
-  const pkgCommit = readers.readPackageJsonCommit?.() ?? readCommitFromPackageJson();
+  const pkgCommit = readCommitFromPackageJson();
   if (pkgCommit) {
     return cacheGitCommit(searchDir, pkgCommit);
   }
-  try {
-    return cacheGitCommit(searchDir, readGitCommit(searchDir, packageRoot) ?? null);
-  } catch {
-    return cacheGitCommit(searchDir, null);
-  }
+  return cacheGitCommit(searchDir, null);
 };
 
 /** Resolve the commit that produced the loaded artifact, not the checkout's current revision. */

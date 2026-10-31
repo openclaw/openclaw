@@ -32,18 +32,9 @@ async function clearStaleApnsRegistrationIfNeeded(
   nodeId: string,
   params: { status: number; reason?: string },
 ) {
-  if (
-    !shouldClearStoredApnsRegistration({
-      registration,
-      result: params,
-    })
-  ) {
-    return;
+  if (shouldClearStoredApnsRegistration({ registration, result: params })) {
+    await clearApnsRegistrationIfCurrent({ nodeId, registration });
   }
-  await clearApnsRegistrationIfCurrent({
-    nodeId,
-    registration,
-  });
 }
 
 export async function maybeWakeNodeWithApns(
@@ -252,12 +243,10 @@ export async function waitForNodeReconnect(params: {
     };
   };
   timeoutMs?: number;
-  pollMs?: number;
   lifecycle?: NodeWakeLifecycle;
   pairingGeneration?: string;
 }): Promise<boolean> {
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, NODE_WAKE_RECONNECT_WAIT_MS, 1);
-  const pollMs = resolveTimerTimeoutMs(params.pollMs, NODE_WAKE_RECONNECT_POLL_MS, 50);
   const deadline = performance.now() + timeoutMs;
 
   for (;;) {
@@ -277,6 +266,6 @@ export async function waitForNodeReconnect(params: {
     if (!beforeDeadline) {
       return false;
     }
-    await sleep(Math.min(pollMs, Math.max(0, deadline - performance.now())));
+    await sleep(Math.min(NODE_WAKE_RECONNECT_POLL_MS, Math.max(0, deadline - performance.now())));
   }
 }

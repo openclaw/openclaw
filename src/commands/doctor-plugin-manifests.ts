@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -20,22 +21,11 @@ const LEGACY_MANIFEST_CONTRACT_KEYS = [
 ] as const;
 const LEGACY_PLUGIN_MANIFESTS_CHECK_ID = "core/doctor/legacy-plugin-manifests";
 
-type LegacyManifestContractMigration = {
-  manifestPath: string;
-  pluginId: string;
-  nextRaw: Record<string, unknown>;
-  changeLines: string[];
-};
+type LegacyManifestContractMigration = NonNullable<
+  ReturnType<typeof buildLegacyManifestContractMigration>
+>;
 
 const JsonRecordSchema = z.record(z.string(), z.unknown());
-
-function readManifestJson(manifestPath: string): Record<string, unknown> | null {
-  try {
-    return safeParseJsonWithSchema(JsonRecordSchema, fs.readFileSync(manifestPath, "utf-8"));
-  } catch {
-    return null;
-  }
-}
 
 function manifestSeenKey(manifestPath: string): string {
   try {
@@ -48,7 +38,7 @@ function manifestSeenKey(manifestPath: string): string {
 function buildLegacyManifestContractMigration(params: {
   manifestPath: string;
   raw: Record<string, unknown>;
-}): LegacyManifestContractMigration | null {
+}) {
   const nextRaw = { ...params.raw };
   const parsedContracts = safeParseWithSchema(JsonRecordSchema, params.raw.contracts);
   const nextContracts = parsedContracts ? { ...parsedContracts } : {};
@@ -92,45 +82,34 @@ function buildLegacyManifestContractMigration(params: {
   };
 }
 
-export function collectLegacyPluginManifestContractMigrations(params?: {
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  manifestRoots?: string[];
-  workspaceDir?: string;
+export function collectLegacyPluginManifestContractMigrations(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  runtime?: Pick<RuntimeEnv, "error">;
 }): LegacyManifestContractMigration[] {
   const seen = new Set<string>();
   const migrations: LegacyManifestContractMigration[] = [];
-  const inspectManifest = (manifestPath: string) => {
+  for (const { manifestPath } of loadPluginManifestRegistryCore(params).plugins) {
     const seenKey = manifestSeenKey(manifestPath);
     if (seen.has(seenKey)) {
-      return;
+      continue;
     }
     seen.add(seenKey);
-    const raw = readManifestJson(manifestPath);
+    let raw: Record<string, unknown> | null;
+    try {
+      const bytes = fs.readFileSync(manifestPath);
+      if (!isUtf8(bytes)) {
+        params.runtime?.error("Invalid UTF-8; plugin manifest left unchanged:", manifestPath);
+        continue;
+      }
+      raw = safeParseJsonWithSchema(JsonRecordSchema, bytes.toString("utf-8"));
+    } catch {
+      continue;
+    }
     const migration = raw && buildLegacyManifestContractMigration({ manifestPath, raw });
     if (migration) {
       migrations.push(migration);
     }
-  };
-
-  for (const root of params?.manifestRoots ?? []) {
-    if (!fs.existsSync(root)) {
-      continue;
-    }
-    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
-      inspectManifest(path.join(root, entry.name, "openclaw.plugin.json"));
-    }
-  }
-
-  for (const plugin of loadPluginManifestRegistryCore({
-    ...(params?.config ? { config: params.config } : {}),
-    ...(params?.env ? { env: params.env } : {}),
-    ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-  }).plugins) {
-    inspectManifest(plugin.manifestPath);
   }
 
   return migrations.toSorted((left, right) => left.manifestPath.localeCompare(right.manifestPath));
@@ -142,6 +121,8 @@ export function legacyPluginManifestContractMigrationToHealthFinding(
   return {
     checkId: LEGACY_PLUGIN_MANIFESTS_CHECK_ID,
     severity: "warning",
+    category: "fix-now",
+    docsUrl: "https://docs.openclaw.ai/cli/doctor/checks",
     message: `Plugin manifest ${migration.pluginId} uses legacy top-level capability keys.`,
     path: migration.manifestPath,
     target: migration.pluginId,
@@ -151,22 +132,18 @@ export function legacyPluginManifestContractMigrationToHealthFinding(
   };
 }
 
-export async function maybeRepairLegacyPluginManifestContracts(params: {
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  manifestRoots?: string[];
-  workspaceDir?: string;
-  runtime: RuntimeEnv;
-  prompter: DoctorPrompter;
-  note?: typeof note;
-}): Promise<boolean> {
+export async function maybeRepairLegacyPluginManifestContracts(
+  params: NonNullable<Parameters<typeof collectLegacyPluginManifestContractMigrations>[0]> & {
+    runtime: RuntimeEnv;
+    prompter: DoctorPrompter;
+  },
+): Promise<boolean> {
   const migrations = collectLegacyPluginManifestContractMigrations(params);
   if (migrations.length === 0) {
     return false;
   }
 
-  const emitNote = params.note ?? note;
-  emitNote(
+  note(
     [
       "Legacy plugin manifest capability keys detected.",
       ...migrations.flatMap((migration) => migration.changeLines),
@@ -201,7 +178,7 @@ export async function maybeRepairLegacyPluginManifestContracts(params: {
   }
 
   if (applied.length > 0) {
-    emitNote(applied.join("\n"), "Doctor changes");
+    note(applied.join("\n"), "Doctor changes");
   }
   return applied.length > 0;
 }

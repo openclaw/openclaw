@@ -1,7 +1,12 @@
 import type { ModelsListParams } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import type { RuntimeAuthMaterialization } from "../../agents/auth-profiles/runtime-materializations.js";
+import type { createModelCatalogDecisions } from "../../agents/model-catalog-decisions.js";
+import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import type { createOpenAIModelRoutesResolver } from "../../agents/openai-model-routes.js";
 import type { ResolvedPublishedModelCatalogOwner } from "../../agents/prepared-model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { CurrentReadAuthority } from "../../shared/current-read-authority.js";
+import type { ChatMetadataReadParams } from "./chat-metadata-contract.js";
 import type { GatewayRequestContext } from "./shared-types.js";
 
 export type GatewayModelCatalogContext = Pick<
@@ -11,19 +16,42 @@ export type GatewayModelCatalogContext = Pick<
   logGateway: Pick<GatewayRequestContext["logGateway"], "debug">;
 };
 
-export type ModelsListCatalogSource =
+type ModelsListCatalogSource =
   | { kind: "gateway"; context: GatewayModelCatalogContext }
   | {
       kind: "published";
-      getConfig?: () => OpenClawConfig;
       owner: ResolvedPublishedModelCatalogOwner & {
         authMaterializations: readonly RuntimeAuthMaterialization[];
       };
     };
+
+export type BuildModelsListResultParams = {
+  source: ModelsListCatalogSource;
+  agentId?: string;
+  requesterProfileId?: string;
+  readScope?: ChatMetadataReadParams;
+  /** Request authority does not imply a session/account-selection projection. */
+  publicationScope?: Pick<
+    ChatMetadataReadParams,
+    "isCurrent" | "assertCurrent" | "withCurrent" | "beforeRequest"
+  >;
+  preparationAuthority?: CurrentReadAuthority;
+  params: ModelsListParams;
+  includeManualSelection?: boolean;
+  preloadedCatalog?: {
+    agentId: string;
+    config: OpenClawConfig;
+    snapshot: ModelCatalogSnapshot;
+  };
+  catalogProjector?: ReturnType<typeof createModelCatalogDecisions>;
+  preloadedOnly?: boolean;
+  routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
+};
 
 export type PreparedModelsListRequest = {
   agentId: string;
   params: ModelsListParams;
   includeManualSelection?: boolean;
   requesterProfileId?: string;
+  readScope?: ChatMetadataReadParams;
 };

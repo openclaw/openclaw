@@ -37,12 +37,16 @@ type ConfigSnapshotWrite = ConfigAuditStoreContext & {
 
 const configJournalFingerprintKeys = new Map<string, Buffer>();
 
-function loadConfigJournalFingerprintKey(params?: ConfigAuditStoreContext): Buffer | null {
+function loadConfigJournalFingerprintKey(
+  params?: ConfigAuditStoreContext & { readOnly?: boolean },
+): Buffer | null {
   const context = resolveConfigAuditStoreContext(params);
   const stateDir = resolveStateDir(context.env, context.homedir);
   const keyPath = path.join(stateDir, CONFIG_JOURNAL_FINGERPRINT_KEY_FILENAME);
+  // Privileged update inspection must neither create/harden the Gateway's key nor
+  // retain a cached key after replacement across an activation/recovery boundary.
   const cached = configJournalFingerprintKeys.get(keyPath);
-  if (cached) {
+  if (cached && !params?.readOnly) {
     return cached;
   }
   try {
@@ -52,6 +56,9 @@ function loadConfigJournalFingerprintKey(params?: ConfigAuditStoreContext): Buff
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
+      }
+      if (params?.readOnly) {
+        return null;
       }
       fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
       const created = randomBytes(CONFIG_JOURNAL_FINGERPRINT_KEY_BYTES);
@@ -73,8 +80,10 @@ function loadConfigJournalFingerprintKey(params?: ConfigAuditStoreContext): Buff
     if (key.length !== CONFIG_JOURNAL_FINGERPRINT_KEY_BYTES) {
       return null;
     }
-    fs.chmodSync(keyPath, 0o600);
-    configJournalFingerprintKeys.set(keyPath, key);
+    if (!params?.readOnly) {
+      fs.chmodSync(keyPath, 0o600);
+      configJournalFingerprintKeys.set(keyPath, key);
+    }
     return key;
   } catch {
     return null;
@@ -112,11 +121,11 @@ function fingerprintConfigSnapshotLeaves(value: unknown, key: Buffer | null): un
 
 export function fingerprintConfigSnapshotAuthoredConfig(
   value: unknown,
-  params?: ConfigAuditStoreContext,
+  params?: ConfigAuditStoreContext & { readOnly?: boolean },
 ): unknown {
   const key = loadConfigJournalFingerprintKey(params);
   // This slot is a diff baseline, not a data store; fingerprint every leaf.
-  return fingerprintConfigSnapshotLeaves(structuredClone(value), key);
+  return fingerprintConfigSnapshotLeaves(value, key);
 }
 
 function resolveConfigAuditStoreContext(
@@ -171,7 +180,7 @@ export async function readLatestConfigSnapshotAuditRecordAsync(
     );
     context.admission.assertCurrent();
     assertCurrent?.();
-    return result?.ok && result.type === "config.snapshot.read" ? result.snapshot : null;
+    return result?.snapshot ?? null;
   } catch {
     assertCurrent?.();
     return null;

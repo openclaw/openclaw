@@ -19,7 +19,6 @@ import type {
   PluginCompatibilityHealthNotice,
   PluginDiagnosticRecord,
   PluginHealthRecord,
-  RuntimeToolQuarantineRecord,
   StatusPluginHealthSnapshot,
 } from "./status-plugin-health.js";
 
@@ -114,30 +113,6 @@ function collectChannelPluginFailures(params: {
   }
 }
 
-function parsePluginOwner(owner: string | undefined): string | undefined {
-  const prefix = "plugin:";
-  if (!owner?.startsWith(prefix)) {
-    return undefined;
-  }
-  const pluginId = owner.slice(prefix.length).trim();
-  return pluginId.length > 0 ? pluginId : undefined;
-}
-
-function filterRuntimeToolQuarantinesForRegistry(params: {
-  quarantines: readonly RuntimeToolQuarantineRecord[];
-  plugins: readonly PluginHealthRecord[];
-}): RuntimeToolQuarantineRecord[] {
-  const loadedPluginIds = new Set(
-    params.plugins
-      .filter((plugin) => plugin.enabled !== false && plugin.status !== "disabled")
-      .map((plugin) => plugin.id),
-  );
-  return params.quarantines.filter((quarantine) => {
-    const pluginId = parsePluginOwner(quarantine.owner);
-    return !pluginId || loadedPluginIds.has(pluginId);
-  });
-}
-
 // Compact status reads only the active registry and persisted health stores;
 // full config-driven channel inspection is reserved for the installed path.
 export async function collectRuntimePluginHealthSnapshot(): Promise<StatusPluginHealthSnapshot> {
@@ -149,13 +124,20 @@ export async function collectRuntimePluginHealthSnapshot(): Promise<StatusPlugin
   const diagnostics = (registry?.diagnostics ?? []).map(normalizeDiagnostic);
   const plugins = (registry?.plugins ?? []).map(normalizeSnapshotPlugin);
   const runtimeLoadedPluginIds = listLoadedRuntimePluginIds();
+  const loadedPluginIds = new Set(
+    plugins
+      .filter((plugin) => plugin.enabled !== false && plugin.status !== "disabled")
+      .map((plugin) => plugin.id),
+  );
   return {
     plugins,
     diagnostics,
     contextEngineQuarantines,
-    runtimeToolQuarantines: filterRuntimeToolQuarantinesForRegistry({
-      quarantines: runtimeToolQuarantines,
-      plugins,
+    runtimeToolQuarantines: runtimeToolQuarantines.filter((quarantine) => {
+      const pluginId = quarantine.owner?.startsWith("plugin:")
+        ? quarantine.owner.slice("plugin:".length).trim()
+        : undefined;
+      return !pluginId || loadedPluginIds.has(pluginId);
     }),
     channelPluginFailures: collectChannelPluginFailures({
       diagnostics,

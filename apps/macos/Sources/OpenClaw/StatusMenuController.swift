@@ -50,9 +50,6 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         StatusMenuAppearance.pin(self.menu)
 
         let renderer = StatusMenuRenderer(menu: self.menu, state: self.state, approvalQueue: self.approvals)
-        renderer.onInstallUpdate = { [weak self] in
-            self?.updater.checkForUpdates(nil)
-        }
         self.renderer = renderer
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -106,7 +103,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
                 self.observeVoiceChanges()
             }
         }
-        self.hotkey.setEnabled(voiceWakeSupported && enabled)
+        self.hotkey.setEnabled(enabled)
     }
 
     func menuWillOpen(_ menu: NSMenu) {
@@ -235,7 +232,6 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             isPaused: self.state.isPaused,
             connection: connection,
             quickChatEnabled: self.state.quickChatEnabled,
-            voiceWakeSupported: voiceWakeSupported,
             debugEnabled: self.state.debugPaneEnabled,
             updateReady: self.updater.isAvailable && self.updater.updateStatus.isUpdateReady,
             hasUsage: self.summaries.hasUsage,
@@ -245,6 +241,14 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             mainSessionKey: self.activityStore.mainSessionKey,
             approvals: self.approvals.requests,
             gateways: DashboardGatewayMenuModel.items(from: self.dashboard.gatewayEntries))
+        if self.updater.isAvailable {
+            self.renderer?.onInstallUpdate = { [weak self] in
+                guard let self, self.updater.isAvailable else { return }
+                self.updater.checkForUpdates(nil)
+            }
+        } else {
+            self.renderer?.onInstallUpdate = nil
+        }
         self.renderer?.isSleeping = statusMenuGatewayIsSleeping(state: self.state)
         self.renderer?.reconcile(StatusMenuDescriptor.build(from: snapshot))
     }
@@ -309,7 +313,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
                 if modeChanged, self.state.connectionMode == mode,
                    AppLaunchRuntimePlan.current.allowsAutomaticPresentation
                 {
-                    CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "connection-mode")
+                    CLIInstallPrompter.shared.checkAndPromptIfNeeded()
                 }
             }
             if modeChanged {
@@ -341,9 +345,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         }
         if flag("OPENCLAW_DEBUG_OPEN_MENU", "--debug-open-menu") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                guard let self, let button = self.statusItem?.button else { return }
-                self.statusItem?.menu = self.menu
-                button.performClick(nil)
+                self?.presentMenu()
             }
         }
         if flag("OPENCLAW_DEBUG_PROBE_RIGHTCLICK", "--debug-probe-rightclick") {

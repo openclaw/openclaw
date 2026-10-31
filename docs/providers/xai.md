@@ -105,6 +105,12 @@ subscription quota are separate billing buckets.
 - If sign-in succeeds but Grok is not the default model, run
   `openclaw models set xai/grok-4.7`. OAuth login preserves an existing
   primary model unless you explicitly change it.
+- With OAuth, thinking levels follow the reasoning efforts your account's
+  model listing reports. When a listed model cannot turn reasoning off, `off`
+  is not offered. If a model shows effort levels in the picker but
+  `--thinking` rejects them, the login predates this behavior: rerun
+  `openclaw models auth login --provider xai --method oauth` to refresh the
+  saved model rows.
 - Inspect saved xAI auth profiles:
 
   ```bash
@@ -277,7 +283,7 @@ An explicit tool model remains selected; the Grok 4.3 examples below are overrid
   tool calls, plus the model's input and output tokens. With each tool's
   `enabled` setting omitted, OpenClaw exposes it only for an active xAI model.
   A known non-xAI model provider requires an explicit per-tool `enabled: true`;
-  a missing or unresolved provider fails closed. xAI auth is always required,
+  a missing or unresolved provider blocks the request. xAI auth is always required,
   and `enabled: false` disables the tool for every provider.
 </Warning>
 
@@ -354,7 +360,7 @@ An explicit tool model remains selected; the Grok 4.3 examples below are overrid
     `image_generate` tool.
 
     - Default image model: `xai/grok-imagine-image`
-    - Additional model: `xai/grok-imagine-image-quality`
+    - Additional models: `xai/grok-imagine-image-2.0`, `xai/grok-imagine-image-quality`
     - Modes: text-to-image and reference-image edit
     - Reference inputs: one `image` or up to three `images`
     - Aspect ratios: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2`, `2:3`, `2:1`,
@@ -368,6 +374,16 @@ An explicit tool model remains selected; the Grok 4.3 examples below are overrid
     stored and delivered through the normal channel attachment path. Local
     reference images are converted to data URLs; remote `http(s)` references
     pass through unchanged.
+
+    For an operator-controlled private image endpoint, set `models.providers.xai.baseUrl`
+    and `models.providers.xai.request.allowPrivateNetwork: true`. Private endpoints
+    remain blocked without that opt-in. Returned image URLs and their redirects
+    cannot use this endpoint opt-in to reach other private origins.
+
+    Select `xai/grok-imagine-image-2.0` explicitly to use Image 2.0; the default
+    remains `xai/grok-imagine-image`. Explicit provider-qualified image model IDs
+    pass through to xAI, including IDs not yet in OpenClaw's catalog. An unknown
+    bare model override fails with an error instead of selecting the default.
 
     To use xAI as the default image provider:
 
@@ -492,6 +508,10 @@ An explicit tool model remains selected; the Grok 4.3 examples below are overrid
     - Default endpointing: `800ms`
     - Interim transcripts: enabled by default
 
+    Dictation previews retain locked chunks across short pauses. A replacement
+    connection commits those chunks as an interrupted utterance before showing
+    new speech; unconfirmed text from the old connection is discarded.
+
     Voice Call's Twilio media stream sends G.711 mu-law audio frames, so the
     xAI provider forwards those frames directly without transcoding:
 
@@ -590,7 +610,7 @@ An explicit tool model remains selected; the Grok 4.3 examples below are overrid
     xAI to retain enough session state to resume the same conversation after a
     reconnect and then reconnects with the returned conversation id. Leave it
     disabled when provider-side replay/retention is not acceptable; interrupted
-    sockets then fail closed instead of silently starting a fresh conversation.
+    sockets then stop instead of silently starting a fresh conversation.
     </Note>
 
   </Accordion>
@@ -695,7 +715,7 @@ An explicit tool model remains selected; the Grok 4.3 examples below are overrid
     Other Responses-compatible providers can opt in with
     `params.responsesCompactEndpoint: true`; non-Responses routes ignore the
     setting. The public OpenAI Responses API also enables this endpoint by
-    default for budget compaction. Its inline `context_management`
+    default for budget compaction and `/compact`. Its inline `context_management`
     compaction is separately controlled by `responsesServerCompaction`.
 
     Endpoint failures fall back to OpenClaw's client-side summarization.
@@ -745,6 +765,8 @@ An explicit tool model remains selected; the Grok 4.3 examples below are overrid
       configurable effort control, but still request
       `include: ["reasoning.encrypted_content"]` so prior encrypted reasoning
       can be replayed on follow-up turns.
+      For those models, OpenClaw's `off` setting omits the effort override;
+      it does not turn off the model's native reasoning.
     - `web_search`, `x_search`, and `code_execution` are exposed as OpenClaw
       tools. OpenClaw attaches only the specific xAI built-in each tool needs
       to that tool's request instead of attaching every native tool to every
@@ -762,7 +784,7 @@ An explicit tool model remains selected; the Grok 4.3 examples below are overrid
 ## Live testing
 
 The xAI media paths are covered by unit tests and opt-in live suites. Export
-`XAI_API_KEY` in the process environment before running live probes.
+`XAI_API_KEY` in the process environment before running live checks.
 
 ```bash
 pnpm test extensions/xai

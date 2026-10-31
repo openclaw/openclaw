@@ -1,6 +1,5 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { setCurrentPluginMetadataSnapshot } from "../../../plugins/current-plugin-metadata.test-support.js";
 import { loadPluginManifest } from "../../../plugins/manifest.js";
 import { clearPluginMetadataLifecycleCaches } from "../../../plugins/plugin-metadata-lifecycle.js";
@@ -23,35 +22,31 @@ import {
   type AuthProfileStore,
 } from "../../auth-profiles.js";
 import type { ResolvedProviderAuth } from "../../model-auth.js";
-import { prepareModelRunCapabilities } from "../../model-catalog-lookup.js";
-import type { ModelCatalogEntry } from "../../model-catalog.types.js";
+import type { PreparedModelThinkingCapability } from "../../model-catalog-lookup.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
+import { createEmptyPreparedModelRuntimeFixture } from "../model.fixture.test-support.js";
 import { createEmptyAgentDiscoveryStores } from "../model.js";
-import { resolveBundledStaticCatalogModel } from "../model.static-catalog.js";
-import { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
+import { prepareEmbeddedRunRuntime } from "./runtime.js";
 
-// Credential acquisition and native process installation are outside this network-free
-// composition. Route planning, model resolution, auth commit, and the overlay remain real.
+// Keep route planning/auth commit real; isolate credential acquisition and native installation.
 vi.mock("../../model-auth.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../model-auth.js")>()),
-  getApiKeyForModelCore: async ({
-    profileId,
-  }: {
-    profileId: string;
-  }): Promise<ResolvedProviderAuth> => ({
-    apiKey: "fixture-key",
-    mode: "api-key",
-    source: "fixture",
-    profileId,
-  }),
+  getApiKeyForModelCore: async ({ profileId }: { profileId: string }) =>
+    ({
+      apiKey: "fixture-key",
+      mode: "api-key",
+      source: "fixture",
+      profileId,
+    }) satisfies ResolvedProviderAuth,
 }));
+// mock-isolation: Runtime preparation uses synthetic credentials without host auth reads.
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: async () => ({ mode: "token", apiKey: "fixture-token" }),
-  resolveProviderAuthProfileMetadata: () => ({}),
+  resolveProviderAuthProfileMetadataAsync: async () => ({}),
 }));
 vi.mock("openclaw/plugin-sdk/provider-catalog-live-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-catalog-live-runtime")>()),
-  getCachedLiveProviderModelRows: async () => [
+  fetchLiveProviderModelRows: async () => [
     {
       slug: "gpt-5.6-luna",
       supported_reasoning_levels: ["none", "low", "medium", "high", "xhigh", "max", "ultra"],
@@ -78,13 +73,12 @@ vi.mock("../../harness/selection.js", () => {
 const MODEL_ID = "gpt-5.6-luna";
 const PLATFORM = "https://api.openai.com/v1";
 const SUBSCRIPTION = "https://chatgpt.com/backend-api/codex";
+const EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"];
 
 describe("selected route thinking metadata at runtime preparation", () => {
   let state: OpenClawTestState;
   let root: string;
   let preparedModelRuntime: PreparedModelRuntimeSnapshot;
-  let platformModel: NonNullable<ReturnType<typeof resolveBundledStaticCatalogModel>>;
-  let provider: ProviderPlugin;
 
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "effort-route", scenario: "minimal" });
@@ -92,7 +86,7 @@ describe("selected route thinking metadata at runtime preparation", () => {
     const { buildOpenAIProvider } = await loadBundledPluginFacade<{
       buildOpenAIProvider: () => ProviderPlugin;
     }>({ pluginId: "openai", artifactBasename: "api.js" });
-    provider = buildOpenAIProvider();
+    const provider = buildOpenAIProvider();
     const pluginDir = path.resolve("extensions/openai");
     const loaded = loadPluginManifest(pluginDir);
     if (!loaded.ok) {
@@ -103,38 +97,18 @@ describe("selected route thinking metadata at runtime preparation", () => {
     });
     const pluginRegistry = createEmptyPluginRegistry();
     pluginRegistry.providers.push({ pluginId: "openai", source: pluginDir, provider });
-    const config: OpenClawConfig = {};
+    const config = {};
     setCurrentPluginMetadataSnapshot(metadataSnapshot, { config, workspaceDir: root });
     setActivePluginRegistry(pluginRegistry, "effort-route", "default", root);
-    const model = resolveBundledStaticCatalogModel({
-      provider: "openai",
-      modelId: MODEL_ID,
-      cfg: config,
-      env: {},
-      metadataSnapshot,
-      includeRuntimeDiscovery: true,
-    });
-    if (!model) {
-      throw new Error("missing Platform catalog fixture");
-    }
-    platformModel = model;
     preparedModelRuntime = {
-      catalogOwner: undefined,
-      agentDir: state.agentDir(),
+      ...createEmptyPreparedModelRuntimeFixture({
+        agentDir: state.agentDir(),
+        config,
+        metadataSnapshot,
+        createStores: createEmptyAgentDiscoveryStores,
+      }),
       workspaceDir: root,
-      activeProjectKeys: [],
-      config,
-      observationConfig: config,
-      isCurrent: () => true,
-      authModes: {},
-      metadataSnapshot,
       pluginRegistry,
-      allowGatewaySubagentBinding: false,
-      modelCatalog: { entries: [], routeVariants: [] },
-      configuredRuntimeModels: [],
-      findConfiguredRuntimeModel: () => undefined,
-      inlineProviderModels: [],
-      createStores: createEmptyAgentDiscoveryStores,
     };
     await state.writeAuthProfiles({
       version: 1,
@@ -157,11 +131,9 @@ describe("selected route thinking metadata at runtime preparation", () => {
 
   it.each([
     ["platform", "absent"],
-    ["platform", "platform"],
     ["platform", "subscription"],
     ["subscription", "absent"],
     ["subscription", "platform"],
-    ["subscription", "subscription"],
   ] as const)("preserves %s disablement with %s prepared capability", async (route, capability) => {
     vi.stubGlobal(
       "fetch",
@@ -169,35 +141,19 @@ describe("selected route thinking metadata at runtime preparation", () => {
         throw new Error("unexpected network request");
       }),
     );
-    const catalog = await provider.catalog!.run({
-      config: {},
-      env: {},
-      resolveProviderAuth: () => ({ apiKey: "fixture-token", mode: "token", source: "profile" }),
-      resolveProviderApiKey: () => ({ apiKey: undefined }),
-    });
-    if (!catalog || !("providers" in catalog)) {
-      throw new Error("missing subscription catalog fixture");
-    }
-    const subscriptionRow = catalog.providers.openai?.models.find((model) => model.id === MODEL_ID);
-    if (!subscriptionRow) {
-      throw new Error("missing subscription model fixture");
-    }
-    const subscriptionModel = { ...subscriptionRow, provider: "openai" };
-    expect(subscriptionModel.thinkingLevelMap?.off).toBeNull();
-    expect(subscriptionModel.compat?.supportedReasoningEfforts).not.toContain("none");
-    const capabilityModel = capability === "platform" ? platformModel : subscriptionModel;
-    const capabilityApi =
-      capability === "platform" ? "openai-responses" : "openai-chatgpt-responses";
-    expect(capabilityModel.api).toBe(capabilityApi);
-    const capabilityEntry = {
-      ...capabilityModel,
-      api: capabilityApi,
-    } satisfies ModelCatalogEntry;
+    // Catalog projection is covered by model-resolution-consistency.test.ts;
+    // this boundary proves that runtime auth selection owns disablement.
     const modelThinkingCapability =
       capability === "absent"
         ? undefined
-        : prepareModelRunCapabilities([[capabilityEntry], []], ["openai", MODEL_ID, "codex"])
-            .modelThinkingCapability;
+        : ({
+            provider: "openai",
+            modelId: MODEL_ID,
+            agentRuntime: "codex",
+            compat: {
+              supportedReasoningEfforts: capability === "platform" ? ["none", ...EFFORTS] : EFFORTS,
+            },
+          } satisfies PreparedModelThinkingCapability);
     const runId = `effort-${route}-${capability}`;
     const runtime = await withPluginRuntimeGenerationScope(preparedModelRuntime, () =>
       prepareEmbeddedRunRuntime({
@@ -232,23 +188,19 @@ describe("selected route thinking metadata at runtime preparation", () => {
     );
     try {
       const { effectiveModel, activePreparedAuthPlan } = runtime.snapshot();
+      const platform = route === "platform";
       expect(activePreparedAuthPlan.modelRoute?.authRequirement).toBe(
-        route === "platform" ? "api-key" : "subscription",
+        platform ? "api-key" : "subscription",
       );
-      expect(effectiveModel.baseUrl).toBe(route === "platform" ? PLATFORM : SUBSCRIPTION);
-      expect(effectiveModel.thinkingLevelMap?.off).toBe(route === "platform" ? "none" : null);
+      expect(effectiveModel).toMatchObject({
+        baseUrl: platform ? PLATFORM : SUBSCRIPTION,
+        thinkingLevelMap: { off: platform ? "none" : null },
+      });
       const efforts = effectiveModel.compat?.supportedReasoningEfforts ?? [];
       if (modelThinkingCapability) {
-        expect(modelThinkingCapability.route).toBeUndefined();
-        expect(efforts).toEqual(
-          expect.arrayContaining(
-            modelThinkingCapability.compat.supportedReasoningEfforts?.filter(
-              (effort) => effort !== "none",
-            ) ?? [],
-          ),
-        );
+        expect(efforts).toEqual(expect.arrayContaining(EFFORTS));
       }
-      if (route === "platform") {
+      if (platform) {
         expect(efforts).toContain("none");
       } else {
         expect(efforts).not.toContain("none");

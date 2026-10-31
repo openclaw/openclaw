@@ -40,6 +40,11 @@ OpenClaw uses stable per-source roots:
 - Local/path/archive installs are copied or referenced without dependency
   repair.
 
+These roots are durable install state, not caches. Deleting `~/.openclaw/npm` or
+`~/.openclaw/git` removes every installed external plugin; deployment cleanup
+scripts must leave them in place. Superseded plugin generations are retired by
+the Gateway itself.
+
 npm installs run in that per-plugin project root with:
 
 ```bash
@@ -208,6 +213,50 @@ recover downloadable plugins that are missing from local install records when
 config still references them. Doctor does not repair dependencies for an
 already-installed local plugin.
 
+### Nested dependency missing under preserve-symlinks
+
+Known issue in OpenClaw 2026.9.33 and later
+([#175591](https://github.com/openclaw/openclaw/issues/175591)): if the
+Gateway's Node process runs with `--preserve-symlinks` or
+`NODE_PRESERVE_SYMLINKS=1`, an external plugin can fail during register on
+every Gateway start even though its installed package is complete. The missing
+package belongs to one of the plugin's nested dependencies, and the importing
+path is under the Gateway's `plugin-captures` directory:
+
+```text
+[gateway] [plugins] plugin failed during register: runtime dependencies are missing for externally distributed plugin discord; reinstall or update the plugin package, then restart the Gateway. (Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'mdast-util-to-string' imported from ~/.openclaw/tmp/plugin-captures/<id>/captures/<build>/package-0/node_modules/@openclaw/discord/node_modules/mdast-util-from-markdown/lib/index.js)
+```
+
+Before it loads a plugin, the Gateway copies each package into its own capture
+directory and connects them with symlinks. A nested dependency's own
+dependencies are linked next to its captured copy. Node normally follows the
+symlink to that copy and finds them there. With `--preserve-symlinks`, Node
+resolves from the symlink's location inside the plugin's directory instead,
+where those packages are not linked. Reinstalling or updating the plugin does
+not help, because the installed package already has every file.
+
+To check whether the Gateway runs with the flag:
+
+- Run `openclaw gateway status`. Look for `--preserve-symlinks` in the
+  `Command:` line.
+- Status does not print `NODE_OPTIONS` or `NODE_PRESERVE_SYMLINKS`. Open the
+  file shown as `Service file:`, and any environment file it loads, and look
+  for either variable. On Linux, `systemctl --user cat openclaw-gateway` prints
+  the unit and its drop-ins; use `systemctl cat <unit>` for a system unit.
+- For a foreground Gateway, check `NODE_OPTIONS` and `NODE_PRESERVE_SYMLINKS`
+  in the shell that starts it.
+
+To work around it, remove `--preserve-symlinks` from the service command and
+from `NODE_OPTIONS`, and remove `NODE_PRESERVE_SYMLINKS=1`. After editing a
+systemd unit, run `systemctl --user daemon-reload` (or
+`sudo systemctl daemon-reload` for a system unit). Then restart the Gateway and
+confirm the channel loads:
+
+```bash
+openclaw gateway restart
+openclaw channels status
+```
+
 ## Bundled plugins
 
 Lightweight and core-critical bundled plugins ship as part of OpenClaw. They
@@ -227,6 +276,15 @@ manifests. Runtime dependencies that are not compiled into `dist` must also
 be declared in the root OpenClaw package's `dependencies` or
 `optionalDependencies`, because the root package ships their runtime.
 External plugins keep their runtime dependencies plugin-local.
+
+Source-built Docker images are a composed distribution when
+`OPENCLAW_EXTENSIONS` selects an otherwise external plugin. The frozen install
+first resolves the ordinary root and selected-plugin production trees. Final
+artifact materialization then adds the selected plugins' existing exact runtime
+pins to the distribution manifest and links those installed identities at both
+the root resolution scope and each packaged plugin root. This supports unified
+root chunks without transferring the dependencies into the source plugin or
+running another install; incompatible existing root bindings fail closed.
 
 Package verification uses build-generated
 `dist/runtime-dependency-ownership.json` to identify chunks used only by

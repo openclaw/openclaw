@@ -37,7 +37,6 @@ export function reconcileNpmPluginLoadPath(params: {
   config: OpenClawConfig;
   previousInstall: NpmInstallPathRecord | undefined;
   nextInstall: NpmInstallPathRecord;
-  env?: NodeJS.ProcessEnv;
 }): OpenClawConfig {
   const previousPath = params.previousInstall?.installPath;
   const nextPath = params.nextInstall.installPath;
@@ -49,26 +48,22 @@ export function reconcileNpmPluginLoadPath(params: {
   ) {
     return params.config;
   }
-  const previousResolved = resolveUserPath(previousPath, params.env);
-  const nextResolved = resolveUserPath(nextPath, params.env);
+  const previousResolved = resolveUserPath(previousPath);
+  const nextResolved = resolveUserPath(nextPath);
   const existing = params.config.plugins?.load?.paths;
   if (previousResolved === nextResolved || !existing?.length) {
     return params.config;
   }
-  const replaceAt = existing.findIndex(
-    (entry) => resolveUserPath(entry, params.env) === previousResolved,
-  );
+  const replaceAt = existing.findIndex((entry) => resolveUserPath(entry) === previousResolved);
   if (replaceAt < 0) {
     return params.config;
   }
-  const existingNextAt = existing.findIndex(
-    (entry) => resolveUserPath(entry, params.env) === nextResolved,
-  );
+  const existingNextAt = existing.findIndex((entry) => resolveUserPath(entry) === nextResolved);
 
   // An explicit reference to the prior managed root carries precedence intent.
   // Preserve an existing target slot; otherwise move the prior slot with the record.
   const paths = existing.flatMap((entry, index) => {
-    const resolved = resolveUserPath(entry, params.env);
+    const resolved = resolveUserPath(entry);
     if (existingNextAt >= 0) {
       if (
         resolved === previousResolved ||
@@ -92,21 +87,30 @@ export function reconcileNpmPluginLoadPath(params: {
   };
 }
 
-function isExactRegistryNpmSpec(spec: string | undefined): spec is string {
-  const parsed = spec ? parseRegistryNpmSpec(spec) : null;
-  return parsed?.selectorKind === "exact-version";
-}
-
 export function resolveNpmInstallRecordSpec(params: {
   requestedSpec?: string;
   resolution?: NpmSpecResolution;
   pinResolvedRegistrySpec?: boolean;
 }): string | undefined {
   const resolvedSpec = params.resolution?.resolvedSpec;
-  if (!params.pinResolvedRegistrySpec || !isExactRegistryNpmSpec(resolvedSpec)) {
-    return params.requestedSpec;
-  }
-  return resolvedSpec;
+  return params.pinResolvedRegistrySpec &&
+    resolvedSpec &&
+    parseRegistryNpmSpec(resolvedSpec)?.selectorKind === "exact-version"
+    ? resolvedSpec
+    : params.requestedSpec;
+}
+
+export function recordPluginInstallInRecords(
+  records: Record<string, PluginInstallRecord> | undefined,
+  update: PluginInstallUpdate,
+): Record<string, PluginInstallRecord> {
+  const { pluginId, ...record } = update;
+  const installs = copyPluginInstallRecordMap(records);
+  setPluginInstallRecordMapEntry(installs, pluginId, {
+    ...record,
+    installedAt: record.installedAt ?? new Date().toISOString(),
+  });
+  return installs;
 }
 
 /** Replaces a plugin install record with the authoritative completed install. */
@@ -114,25 +118,16 @@ export function recordPluginInstall(
   cfg: OpenClawConfig,
   update: PluginInstallUpdate,
 ): OpenClawConfig {
-  const { pluginId, ...record } = update;
-  const nextRecord = {
-    ...record,
-    installedAt: record.installedAt ?? new Date().toISOString(),
-  };
-  const installs = copyPluginInstallRecordMap(cfg.plugins?.installs);
-  setPluginInstallRecordMapEntry(installs, pluginId, nextRecord);
-
   const next = {
     ...cfg,
     plugins: {
-      // cfg.plugins may be absent on first install; spreading undefined is {}.
       ...cfg.plugins,
-      installs,
+      installs: recordPluginInstallInRecords(cfg.plugins?.installs, update),
     },
   };
   return reconcileNpmPluginLoadPath({
     config: next,
-    previousInstall: getPluginInstallRecordMapEntry(cfg.plugins?.installs, pluginId),
-    nextInstall: nextRecord,
+    previousInstall: getPluginInstallRecordMapEntry(cfg.plugins?.installs, update.pluginId),
+    nextInstall: update,
   });
 }

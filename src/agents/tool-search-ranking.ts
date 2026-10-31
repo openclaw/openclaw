@@ -1,10 +1,9 @@
-// Lexical ranking for the OpenClaw Tool Search runtime.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 /** Collects property names and descriptions from a JSON-Schema-shaped value. */
-export function readParameterText(parameters: unknown, depth = 0): string {
+export function readParameterText(parameters: unknown): string {
   const parts: string[] = [];
-  collectParameterText(parameters, depth, parts);
+  collectParameterText(parameters, 0, parts);
   return parts.join(" ");
 }
 
@@ -25,9 +24,11 @@ function collectParameterText(parameters: unknown, depth: number, parts: string[
       collectParameterText(child, depth + 1, parts);
     }
   }
-  const items = parameters.items;
-  if (items !== undefined) {
-    collectParameterText(items, depth + 1, parts);
+  for (const keyword of ["items", "anyOf", "oneOf", "allOf"]) {
+    const schemas = parameters[keyword];
+    for (const child of Array.isArray(schemas) ? schemas : [schemas]) {
+      collectParameterText(child, depth + 1, parts);
+    }
   }
 }
 
@@ -197,18 +198,71 @@ function stripOneSuffix(token: string): string {
   return token;
 }
 
-// Keep acronyms and their plural s together: "URLs" must not split into "UR"/"Ls".
-const WORD_PARTS = /\p{Lu}+s?(?![\p{Ll}])|\p{Lu}?\p{Ll}+|\p{N}+/gu;
+// Bound Unicode separator matches; unbounded runs can exhaust the RegExp stack.
+const WORD_SEPARATORS = /[^\p{L}\p{N}_]{1,1024}/u;
+const UPPERCASE_CHARACTER = /\p{Lu}/u;
+const LOWERCASE_CHARACTER = /\p{Ll}/u;
+const NUMBER_CHARACTER = /\p{N}/u;
+
+function characterAt(input: string, index: number): string {
+  const point = input.codePointAt(index);
+  return point === undefined ? "" : String.fromCodePoint(point);
+}
+
+function readCharacterRun(input: string, start: number, category: RegExp) {
+  let end = start;
+  let lastStart = start;
+  while (end < input.length) {
+    const character = characterAt(input, end);
+    if (!category.test(character)) {
+      break;
+    }
+    lastStart = end;
+    end += character.length;
+  }
+  return { end, lastStart };
+}
+
+function readWordParts(input: string): string[] {
+  const parts: string[] = [];
+  let index = 0;
+  while (index < input.length) {
+    const start = index;
+    const character = characterAt(input, index);
+    if (UPPERCASE_CHARACTER.test(character)) {
+      const uppercase = readCharacterRun(input, index, UPPERCASE_CHARACTER);
+      index = uppercase.end;
+      // Keep plural acronyms intact, but leave the last capital for a following word.
+      if (input[index] === "s" && !LOWERCASE_CHARACTER.test(characterAt(input, index + 1))) {
+        index += 1;
+      } else if (LOWERCASE_CHARACTER.test(characterAt(input, index))) {
+        index =
+          uppercase.lastStart > start
+            ? uppercase.lastStart
+            : readCharacterRun(input, index, LOWERCASE_CHARACTER).end;
+      }
+    } else if (LOWERCASE_CHARACTER.test(character)) {
+      index = readCharacterRun(input, index, LOWERCASE_CHARACTER).end;
+    } else if (NUMBER_CHARACTER.test(character)) {
+      index = readCharacterRun(input, index, NUMBER_CHARACTER).end;
+    } else {
+      index += character.length;
+      continue;
+    }
+    parts.push(input.slice(start, index));
+  }
+  return parts;
+}
 
 // Index whole identifiers plus underscore/camelCase parts; retain non-Latin words.
 function splitWords(input: string): string[] {
   const words: string[] = [];
-  for (const raw of input.split(/[^\p{L}\p{N}_]+/u)) {
+  for (const raw of input.split(WORD_SEPARATORS)) {
     if (!raw) {
       continue;
     }
     words.push(raw.toLowerCase());
-    const parts = raw.match(WORD_PARTS) ?? [];
+    const parts = readWordParts(raw);
     if (parts.length >= 2) {
       for (const part of parts) {
         words.push(part.toLowerCase());
@@ -278,34 +332,38 @@ export function tokenizeQuery(input: string): WeightedTerm[] {
 
 type RankedDocument<T> = { value: T; terms: readonly string[] };
 
-type IndexedDocument<T> = { readonly value: T; readonly length: number; readonly position: number };
+type IndexedDocument<T> = { readonly value: T; readonly length: number };
 
 type LexicalIndex<T> = {
-  postings: ReadonlyMap<string, ReadonlyMap<IndexedDocument<T>, number>>;
-  documentCount: number;
+  postings: ReadonlyMap<string, readonly number[]>;
+  documents: readonly IndexedDocument<T>[];
   averageLength: number;
 };
 
 export function buildLexicalIndex<T>(documents: ReadonlyArray<RankedDocument<T>>): LexicalIndex<T> {
-  const postings = new Map<string, Map<IndexedDocument<T>, number>>();
-  const documentCount = documents.length;
+  const postings = new Map<string, number[]>();
+  const indexed = documents.map(({ value, terms }) => ({ value, length: terms.length }));
   let totalLength = 0;
   documents.forEach((document, position) => {
-    const indexed = { value: document.value, length: document.terms.length, position };
     for (const term of document.terms) {
       let matches = postings.get(term);
       if (!matches) {
-        matches = new Map();
+        matches = [];
         postings.set(term, matches);
       }
-      matches.set(indexed, (matches.get(indexed) ?? 0) + 1);
+      // Documents arrive in order, so a repeated term updates its last position/frequency pair.
+      if (matches[matches.length - 2] === position) {
+        matches[matches.length - 1]! += 1;
+      } else {
+        matches.push(position, 1);
+      }
     }
-    totalLength += indexed.length;
+    totalLength += document.terms.length;
   });
   return {
     postings,
-    documentCount,
-    averageLength: documentCount > 0 ? totalLength / documentCount : 0,
+    documents: indexed,
+    averageLength: documents.length > 0 ? totalLength / documents.length : 0,
   };
 }
 
@@ -317,23 +375,26 @@ export function scoreLexical<T>(
   index: LexicalIndex<T>,
   queryTerms: readonly WeightedTerm[],
 ): Array<{ value: T; score: number; matchedLiteral: boolean }> {
-  if (queryTerms.length === 0 || index.documentCount === 0) {
+  if (queryTerms.length === 0 || index.documents.length === 0) {
     return [];
   }
-  const total = index.documentCount;
+  const total = index.documents.length;
   const results: Array<{ value: T; score: number; matchedLiteral: boolean }> = [];
   for (const { term, weight } of queryTerms) {
     const matches = index.postings.get(term);
     if (!matches) {
       continue;
     }
-    const matching = matches.size;
+    const matching = matches.length / 2;
     const idf = Math.log(1 + (total - matching + 0.5) / (matching + 0.5));
-    for (const [document, frequency] of matches) {
-      let result = results[document.position];
+    for (let offset = 0; offset < matches.length; offset += 2) {
+      const position = matches[offset]!;
+      const frequency = matches[offset + 1]!;
+      const document = index.documents[position]!;
+      let result = results[position];
       if (!result) {
         result = { value: document.value, score: 0, matchedLiteral: false };
-        results[document.position] = result;
+        results[position] = result;
       }
       if (weight >= 1) {
         result.matchedLiteral = true;

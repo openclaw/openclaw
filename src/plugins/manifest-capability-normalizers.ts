@@ -1,11 +1,17 @@
-import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
+import {
+  isRecord,
+  omitUndefinedFields,
+} from "../../packages/normalization-core/src/record-coerce.js";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   normalizeOptionalTrimmedStringList,
   normalizeTrimmedStringList,
 } from "../../packages/normalization-core/src/string-normalization.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { PLUGIN_MANIFEST_CONTRACT_KEYS } from "./manifest-contract-keys.js";
+import {
+  PLUGIN_MANIFEST_CONTRACT_KEYS,
+  TRANSCRIPT_SOURCE_LOCATOR_FIELDS,
+} from "./manifest-contract-keys.js";
 import type {
   DecisionProviderCapabilities,
   PluginManifest,
@@ -22,13 +28,30 @@ import type {
   PluginManifestMcpServer,
   PluginManifestMediaUnderstandingCapability,
   PluginManifestMediaUnderstandingProviderMetadata,
+  PluginManifestOnboardingScope,
+  PluginManifestProviderAuthChoice,
   PluginManifestProviderBaseUrlGuard,
+  PluginManifestProviderEndpoint,
   PluginManifestSecretInputContracts,
   PluginManifestSecretInputPath,
   PluginManifestToolMetadata,
   PluginManifestToolProfile,
   PluginManifestTranscriptSource,
 } from "./manifest-types.js";
+
+export function normalizeProviderAssistantVisibility(
+  value: unknown,
+): PluginManifestProviderAuthChoice["assistantVisibility"] {
+  return value === "visible" || value === "manual-only" || value === "detected-only"
+    ? value
+    : undefined;
+}
+
+export function isPluginManifestOnboardingScope(
+  value: unknown,
+): value is PluginManifestOnboardingScope {
+  return value === "text-inference" || value === "image-generation" || value === "music-generation";
+}
 
 // Accept only bounded declarative facts; unknown or malformed fields never enter tool guidance.
 function normalizeDecisionCapabilities(value: unknown): DecisionProviderCapabilities | undefined {
@@ -93,6 +116,37 @@ export function normalizeManifestDecisionModels(
     const capabilities = normalizeDecisionCapabilities(entry.capabilities);
     seen.add(ref);
     return { provider, id, name, ...(capabilities ? { capabilities } : {}) };
+  });
+}
+
+export function normalizeManifestProviderEndpoints(
+  value: unknown,
+): PluginManifestProviderEndpoint[] | undefined {
+  return normalizeManifestObjectList(value, (rawEndpoint) => {
+    const endpointClass = normalizeOptionalString(rawEndpoint.endpointClass);
+    if (!endpointClass) {
+      return undefined;
+    }
+    const hosts = normalizeOptionalTrimmedStringList(rawEndpoint.hosts)?.map((host) =>
+      host.toLowerCase(),
+    );
+    const hostSuffixes = normalizeOptionalTrimmedStringList(rawEndpoint.hostSuffixes)?.map((host) =>
+      host.toLowerCase(),
+    );
+    const baseUrls = normalizeOptionalTrimmedStringList(rawEndpoint.baseUrls);
+    if (!hosts && !hostSuffixes && !baseUrls) {
+      return undefined;
+    }
+    return omitUndefinedFields({
+      endpointClass,
+      hosts,
+      hostSuffixes,
+      baseUrls,
+      googleVertexRegion: normalizeOptionalString(rawEndpoint.googleVertexRegion),
+      googleVertexRegionHostSuffix: normalizeOptionalString(
+        rawEndpoint.googleVertexRegionHostSuffix,
+      )?.toLowerCase(),
+    });
   });
 }
 
@@ -183,7 +237,6 @@ export function normalizeManifestTranscriptSources(
   value: unknown,
   ownedProviders: readonly string[] = [],
 ): Record<string, PluginManifestTranscriptSource> | undefined {
-  const locatorKeys = ["accountId", "guildId", "channelId", "meetingUrl"] as const;
   return normalizeNamedMetadataRecord(value, (entry, id) => {
     if (!ownedProviders.includes(id)) {
       return undefined;
@@ -194,7 +247,7 @@ export function normalizeManifestTranscriptSources(
       isRecord(raw) &&
       Object.entries(raw).every(
         ([key, mode]) =>
-          locatorKeys.some((locator) => locator === key) &&
+          TRANSCRIPT_SOURCE_LOCATOR_FIELDS.some((locator) => locator === key) &&
           (mode === "optional" || mode === "required"),
       )
         ? Object.fromEntries(Object.entries(raw))
@@ -253,41 +306,32 @@ function normalizeMediaUnderstandingDocumentModels(
   if (!isRecord(pdfRaw)) {
     return undefined;
   }
-  const textExtraction = normalizeOptionalString(pdfRaw.textExtraction);
-  const image: string | false | undefined =
-    pdfRaw.image === false ? false : normalizeOptionalString(pdfRaw.image);
-  const pdf = {
-    ...(textExtraction ? { textExtraction } : {}),
-    ...(image !== undefined ? { image } : {}),
-  };
-  return Object.keys(pdf).length > 0 ? { pdf } : undefined;
+  const pdf = optionalManifestFields({
+    textExtraction: normalizeOptionalString(pdfRaw.textExtraction),
+    image: pdfRaw.image === false ? (false as const) : normalizeOptionalString(pdfRaw.image),
+  });
+  return pdf ? { pdf } : undefined;
 }
 
 export function normalizeMediaUnderstandingProviderMetadata(
   value: unknown,
 ): Record<string, PluginManifestMediaUnderstandingProviderMetadata> | undefined {
-  return normalizeNamedMetadataRecord(value, (rawMetadata) => {
-    const capabilities = normalizeMediaUnderstandingCapabilities(rawMetadata.capabilities);
-    const defaultModels = normalizeMediaUnderstandingRecord(
-      rawMetadata.defaultModels,
-      normalizeOptionalString,
-    );
-    const autoPriority = normalizeMediaUnderstandingRecord(rawMetadata.autoPriority, (priority) =>
-      typeof priority === "number" && Number.isFinite(priority) ? priority : undefined,
-    );
-    const nativeDocumentInputs = normalizeMediaUnderstandingNativeDocumentInputs(
-      rawMetadata.nativeDocumentInputs,
-    );
-    const documentModels = normalizeMediaUnderstandingDocumentModels(rawMetadata.documentModels);
-    const metadata = {
-      ...(capabilities ? { capabilities } : {}),
-      ...(defaultModels ? { defaultModels } : {}),
-      ...(autoPriority ? { autoPriority } : {}),
-      ...(nativeDocumentInputs ? { nativeDocumentInputs } : {}),
-      ...(documentModels ? { documentModels } : {}),
-    } satisfies PluginManifestMediaUnderstandingProviderMetadata;
-    return Object.keys(metadata).length > 0 ? metadata : undefined;
-  });
+  return normalizeNamedMetadataRecord(value, (rawMetadata) =>
+    optionalManifestFields({
+      capabilities: normalizeMediaUnderstandingCapabilities(rawMetadata.capabilities),
+      defaultModels: normalizeMediaUnderstandingRecord(
+        rawMetadata.defaultModels,
+        normalizeOptionalString,
+      ),
+      autoPriority: normalizeMediaUnderstandingRecord(rawMetadata.autoPriority, (priority) =>
+        typeof priority === "number" && Number.isFinite(priority) ? priority : undefined,
+      ),
+      nativeDocumentInputs: normalizeMediaUnderstandingNativeDocumentInputs(
+        rawMetadata.nativeDocumentInputs,
+      ),
+      documentModels: normalizeMediaUnderstandingDocumentModels(rawMetadata.documentModels),
+    }),
+  );
 }
 
 function normalizeProviderBaseUrlGuard(
@@ -309,82 +353,63 @@ function normalizeProviderBaseUrlGuard(
   };
 }
 
-function normalizeCapabilityProviderAuthSignals(
-  value: unknown,
-): PluginManifestCapabilityProviderAuthSignal[] | undefined {
-  return normalizeManifestObjectList(value, (rawSignal) => {
-    const provider = normalizeOptionalString(rawSignal.provider);
-    if (!provider) {
-      return undefined;
-    }
-    const providerBaseUrl = normalizeProviderBaseUrlGuard(rawSignal.providerBaseUrl);
-    return {
-      provider,
-      ...(providerBaseUrl ? { providerBaseUrl } : {}),
-    };
-  });
-}
-
 function normalizeCapabilityProviderModeConfigSignal(
   value: unknown,
 ): PluginManifestCapabilityProviderModeConfigSignal | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
-  const pathResult = normalizeOptionalString(value.path);
-  const defaultValue = normalizeOptionalString(value.default);
-  const allowed = normalizeTrimmedStringList(value.allowed);
-  const disallowed = normalizeTrimmedStringList(value.disallowed);
-  const signal = {
-    ...(pathResult ? { path: pathResult } : {}),
-    ...(defaultValue ? { default: defaultValue } : {}),
-    ...(allowed.length > 0 ? { allowed } : {}),
-    ...(disallowed.length > 0 ? { disallowed } : {}),
-  } satisfies PluginManifestCapabilityProviderModeConfigSignal;
-  return Object.keys(signal).length > 0 ? signal : undefined;
-}
-
-function normalizeCapabilityProviderConfigSignals(
-  value: unknown,
-): PluginManifestCapabilityProviderConfigSignal[] | undefined {
-  return normalizeManifestObjectList(value, (rawSignal) => {
-    const rootPath = normalizeOptionalString(rawSignal.rootPath);
-    if (!rootPath) {
-      return undefined;
-    }
-    const overlayPath = normalizeOptionalString(rawSignal.overlayPath);
-    const overlayMapPath = normalizeOptionalString(rawSignal.overlayMapPath);
-    const required = normalizeTrimmedStringList(rawSignal.required);
-    const requiredAny = normalizeTrimmedStringList(rawSignal.requiredAny);
-    const mode = normalizeCapabilityProviderModeConfigSignal(rawSignal.mode);
-    const signal = {
-      rootPath,
-      ...(overlayPath ? { overlayPath } : {}),
-      ...(overlayMapPath ? { overlayMapPath } : {}),
-      ...(required.length > 0 ? { required } : {}),
-      ...(requiredAny.length > 0 ? { requiredAny } : {}),
-      ...(mode ? { mode } : {}),
-    } satisfies PluginManifestCapabilityProviderConfigSignal;
-    return required.length > 0 || requiredAny.length > 0 || mode ? signal : undefined;
+  return optionalManifestFields({
+    path: normalizeOptionalString(value.path),
+    default: normalizeOptionalString(value.default),
+    allowed: normalizeOptionalTrimmedStringList(value.allowed),
+    disallowed: normalizeOptionalTrimmedStringList(value.disallowed),
   });
 }
 
 function normalizeCapabilityProviderMetadataEntry(
   rawMetadata: Record<string, unknown>,
 ): PluginManifestCapabilityProviderMetadata | undefined {
-  const aliases = normalizeTrimmedStringList(rawMetadata.aliases);
-  const authProviders = normalizeTrimmedStringList(rawMetadata.authProviders);
-  const authSignals = normalizeCapabilityProviderAuthSignals(rawMetadata.authSignals);
-  const configSignals = normalizeCapabilityProviderConfigSignals(rawMetadata.configSignals);
-  const referenceAudioInputs = rawMetadata.referenceAudioInputs === true ? true : undefined;
-  const metadata = {
-    ...(aliases.length > 0 ? { aliases } : {}),
-    ...(authProviders.length > 0 ? { authProviders } : {}),
-    ...(authSignals ? { authSignals } : {}),
-    ...(configSignals ? { configSignals } : {}),
-    ...(referenceAudioInputs ? { referenceAudioInputs } : {}),
-  } satisfies PluginManifestCapabilityProviderMetadata;
-  return Object.keys(metadata).length > 0 ? metadata : undefined;
+  return optionalManifestFields<PluginManifestCapabilityProviderMetadata>({
+    aliases: normalizeOptionalTrimmedStringList(rawMetadata.aliases),
+    authProviders: normalizeOptionalTrimmedStringList(rawMetadata.authProviders),
+    authSignals: normalizeManifestObjectList<PluginManifestCapabilityProviderAuthSignal>(
+      rawMetadata.authSignals,
+      (rawSignal) => {
+        const provider = normalizeOptionalString(rawSignal.provider);
+        if (!provider) {
+          return undefined;
+        }
+        return omitUndefinedFields({
+          provider,
+          providerBaseUrl: normalizeProviderBaseUrlGuard(rawSignal.providerBaseUrl),
+        });
+      },
+    ),
+    configSignals: normalizeManifestObjectList<PluginManifestCapabilityProviderConfigSignal>(
+      rawMetadata.configSignals,
+      (rawSignal) => {
+        const rootPath = normalizeOptionalString(rawSignal.rootPath);
+        if (!rootPath) {
+          return undefined;
+        }
+        const required = normalizeOptionalTrimmedStringList(rawSignal.required);
+        const requiredAny = normalizeOptionalTrimmedStringList(rawSignal.requiredAny);
+        const mode = normalizeCapabilityProviderModeConfigSignal(rawSignal.mode);
+        return required || requiredAny || mode
+          ? omitUndefinedFields({
+              rootPath,
+              overlayPath: normalizeOptionalString(rawSignal.overlayPath),
+              overlayMapPath: normalizeOptionalString(rawSignal.overlayMapPath),
+              required,
+              requiredAny,
+              mode,
+            })
+          : undefined;
+      },
+    ),
+    referenceAudioInputs: rawMetadata.referenceAudioInputs === true ? true : undefined,
+  });
 }
 
 export function normalizeCapabilityProviderMetadata(
@@ -414,16 +439,11 @@ export function normalizeManifestCatalog(value: unknown): PluginManifestCatalog 
   if (!isRecord(value)) {
     return undefined;
   }
-  const featured = typeof value.featured === "boolean" ? value.featured : undefined;
-  const order =
-    typeof value.order === "number" && Number.isFinite(value.order) ? value.order : undefined;
-  if (featured === undefined && order === undefined) {
-    return undefined;
-  }
-  return {
-    ...(featured !== undefined ? { featured } : {}),
-    ...(order !== undefined ? { order } : {}),
-  };
+  return optionalManifestFields({
+    featured: typeof value.featured === "boolean" ? value.featured : undefined,
+    order:
+      typeof value.order === "number" && Number.isFinite(value.order) ? value.order : undefined,
+  });
 }
 
 export function normalizeManifestContracts(value: unknown): PluginManifestContracts | undefined {
@@ -449,36 +469,6 @@ function isManifestConfigLiteral(value: unknown): value is PluginManifestConfigL
   );
 }
 
-function normalizeManifestDangerousConfigFlags(
-  value: unknown,
-): PluginManifestDangerousConfigFlag[] | undefined {
-  return normalizeManifestObjectList(value, (entry) => {
-    const pathValue = normalizeOptionalString(entry.path) ?? "";
-    return pathValue && isManifestConfigLiteral(entry.equals)
-      ? { path: pathValue, equals: entry.equals }
-      : undefined;
-  });
-}
-
-function normalizeManifestSecretInputPaths(
-  value: unknown,
-): PluginManifestSecretInputPath[] | undefined {
-  return normalizeManifestObjectList(value, (entry) => {
-    const pathLocal = normalizeOptionalString(entry.path) ?? "";
-    if (!pathLocal) {
-      return undefined;
-    }
-    const expected = entry.expected === "string" ? entry.expected : undefined;
-    const ownerKind =
-      entry.ownerKind === "capability" || entry.ownerKind === "route" ? entry.ownerKind : undefined;
-    return {
-      path: pathLocal,
-      ...(expected ? { expected } : {}),
-      ...(ownerKind ? { ownerKind } : {}),
-    };
-  });
-}
-
 export function normalizeManifestConfigContracts(
   value: unknown,
 ): PluginManifestConfigContracts | undefined {
@@ -488,9 +478,32 @@ export function normalizeManifestConfigContracts(
   const compatibilityMigrationPaths = normalizeTrimmedStringList(value.compatibilityMigrationPaths);
   const compatibilityRuntimePaths = normalizeTrimmedStringList(value.compatibilityRuntimePaths);
   const rawSecretInputs = isRecord(value.secretInputs) ? value.secretInputs : undefined;
-  const dangerousFlags = normalizeManifestDangerousConfigFlags(value.dangerousFlags);
+  const dangerousFlags = normalizeManifestObjectList<PluginManifestDangerousConfigFlag>(
+    value.dangerousFlags,
+    (entry) => {
+      const pathValue = normalizeOptionalString(entry.path) ?? "";
+      return pathValue && isManifestConfigLiteral(entry.equals)
+        ? { path: pathValue, equals: entry.equals }
+        : undefined;
+    },
+  );
   const secretInputPaths = rawSecretInputs
-    ? normalizeManifestSecretInputPaths(rawSecretInputs.paths)
+    ? normalizeManifestObjectList<PluginManifestSecretInputPath>(rawSecretInputs.paths, (entry) => {
+        const pathLocal = normalizeOptionalString(entry.path) ?? "";
+        if (!pathLocal) {
+          return undefined;
+        }
+        const expected = entry.expected === "string" ? entry.expected : undefined;
+        const ownerKind =
+          entry.ownerKind === "capability" || entry.ownerKind === "route"
+            ? entry.ownerKind
+            : undefined;
+        return {
+          path: pathLocal,
+          ...(expected ? { expected } : {}),
+          ...(ownerKind ? { ownerKind } : {}),
+        };
+      })
     : undefined;
   const secretInputs = secretInputPaths
     ? ({
@@ -507,4 +520,10 @@ export function normalizeManifestConfigContracts(
     ...(secretInputs ? { secretInputs } : {}),
   } satisfies PluginManifestConfigContracts;
   return Object.keys(configContracts).length > 0 ? configContracts : undefined;
+}
+
+/** Only fresh field projections belong here; never mutate the authored manifest. */
+export function optionalManifestFields<T extends object>(fields: T): T | undefined {
+  omitUndefinedFields(fields);
+  return Object.keys(fields).length > 0 ? fields : undefined;
 }

@@ -1,9 +1,9 @@
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { resolveMessageVisibleContent } from "../../../lib/chat/message-visibility.ts";
-import type { coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
+import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
-import { isInterSessionGroup } from "../chat-turn-boundary.ts";
-import { prepareChatMessageRender } from "./chat-message-markdown.ts";
+import { isSessionActivityGroup } from "../chat-turn-boundary.ts";
+import { prepareChatStreamRender } from "./chat-message-markdown-view.tsx";
 
 type ChatPositionMarker = {
   id: string;
@@ -12,16 +12,25 @@ type ChatPositionMarker = {
   message: unknown;
 };
 
-export type ChatPositionIndex = {
-  markers: ChatPositionMarker[];
-  /** Transcript order, including continuations after an intervening user steer. */
-  markerIdsByMessageId: Map<string, string>;
-};
+export type ChatPositionIndex = Readonly<{
+  markers: readonly Readonly<ChatPositionMarker>[];
+  markerIdsByMessageId: ReadonlyMap<string, string>;
+  /** A mounted preview reads current text without invalidating marker membership. */
+  resolveLiveMessage?: (message: unknown) => unknown;
+}>;
 
-type RenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
+type RenderItem = SystemEventRenderItem;
+
+export function isVisibleChatStream(part: Parameters<typeof prepareChatStreamRender>[0]): boolean {
+  const prepared = prepareChatStreamRender(part);
+  return (
+    resolveMessageVisibleContent(prepared.message, prepared.normalizedMessage) === "non-text" ||
+    Boolean(prepared.displayMarkdown.trim())
+  );
+}
 
 export function projectChatPositions(
-  items: readonly RenderItem[],
+  items: Iterable<RenderItem>,
   expandedWork: ReadonlyMap<string, boolean>,
   messageRowKeysById: Map<string, string>,
   searchActive = false,
@@ -46,9 +55,9 @@ export function projectChatPositions(
   };
   const group = (item: MessageGroup, rowKey: string) => {
     if (
-      isInterSessionGroup(item) &&
+      isSessionActivityGroup(item) &&
       !searchActive &&
-      !expandedWork.get("inter-session:" + item.key)
+      !expandedWork.get("session-activity:" + item.key)
     ) {
       return;
     }
@@ -92,24 +101,22 @@ export function projectChatPositions(
         if (part.kind !== "stream") {
           continue;
         }
-        const message = {
-          role: "assistant",
-          content: [{ type: "text", text: part.text }],
-          timestamp: part.startedAt,
-        };
-        const { normalizedMessage, displayMarkdown } = prepareChatMessageRender(message);
-        if (
-          resolveMessageVisibleContent(message, normalizedMessage) !== "non-text" &&
-          !displayMarkdown.trim()
-        ) {
+        if (!isVisibleChatStream(part)) {
           continue;
         }
-        add(item.runId ? `run:${item.runId}` : item.key, "assistant", part.key, message, rowKey);
+        add(
+          item.runId ? `run:${item.runId}` : item.key,
+          "assistant",
+          part.key,
+          prepareChatStreamRender(part).message,
+          rowKey,
+        );
       }
     }
   };
   for (const item of items) {
     visit(item, item.key);
   }
+  // Transcript order includes continuations after an intervening user steer.
   return { markers: [...markers.values()], markerIdsByMessageId };
 }

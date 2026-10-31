@@ -1,6 +1,15 @@
 import { resolveSessionStoreEntryCore, type SessionEntry } from "../../config/sessions.js";
-import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  matchesSessionAbortTargetOwner,
+  patchSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import { sessionSnapshotChangesApplied } from "../../config/sessions/session-snapshot-merge.js";
+import {
+  captureExternalSessionCommitGuard,
+  sessionEntryCommitGuardOptions,
+  type SessionSourceCheck,
+  type AsyncSessionSourceCheck,
+} from "../../config/sessions/session-source-authority.js";
 import { applyAbortCutoffToSessionEntry, type AbortCutoff } from "./abort-cutoff.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
 import { persistReplySessionEntry } from "./session-entry-persistence.js";
@@ -82,7 +91,7 @@ export function sessionEntryPersistenceConflictReply(): CommandHandlerResult {
 }
 
 export async function persistAbortTargetEntry(params: {
-  isCurrent?: () => boolean;
+  isCurrent?: SessionSourceCheck | AsyncSessionSourceCheck;
   entry?: SessionEntry;
   key?: string;
   sessionStore?: Record<string, SessionEntry>;
@@ -90,7 +99,12 @@ export async function persistAbortTargetEntry(params: {
   abortCutoff?: AbortCutoff;
 }): Promise<boolean> {
   const { entry, key, sessionStore, storePath, abortCutoff } = params;
-  if (!entry || !key || !sessionStore || params.isCurrent?.() === false) {
+  if (
+    !entry ||
+    !key ||
+    !sessionStore ||
+    (!params.isCurrent?.sessionSource && params.isCurrent?.() === false)
+  ) {
     return false;
   }
 
@@ -105,7 +119,10 @@ export async function persistAbortTargetEntry(params: {
     await patchSessionEntryCore(
       { storePath, sessionKey: key },
       (nextEntry) => {
-        if (params.isCurrent?.() === false) {
+        if (
+          (!params.isCurrent?.sessionSource && params.isCurrent?.() === false) ||
+          !matchesSessionAbortTargetOwner(nextEntry, entry)
+        ) {
           return null;
         }
         applied = true;
@@ -119,11 +136,15 @@ export async function persistAbortTargetEntry(params: {
         replaceEntry: true,
         skipMaintenance: true,
         // Reassignment can leave the selected row unchanged across the patch await.
-        assertCommitAllowed: () => {
-          if (applied && params.isCurrent?.() === false) {
-            throw new Error("The selected session changed before it could be stopped.");
-          }
-        },
+        ...sessionEntryCommitGuardOptions(
+          params.isCurrent?.sessionSource ??
+            (params.isCurrent &&
+              captureExternalSessionCommitGuard(() => {
+                if (applied && params.isCurrent?.() === false) {
+                  throw new Error("The selected session changed before it could be stopped.");
+                }
+              })),
+        ),
       },
     );
     return applied;

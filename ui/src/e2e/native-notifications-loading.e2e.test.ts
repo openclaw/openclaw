@@ -10,6 +10,7 @@ type NotificationProof = {
   userActivation: boolean;
 };
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const suite = createControlUiE2eSuite({
   name: "Native notification loading",
   startServer: () => startControlUiE2eServer(undefined, { source: true }),
@@ -30,7 +31,7 @@ suite.define(() => {
           locale: "en-US",
           serviceWorkers: "block",
           viewport,
-          recordVideo: { dir: suite.artifactDir, size: viewport },
+          ...(captureUiProof ? { recordVideo: { dir: suite.artifactDir, size: viewport } } : {}),
         },
         async ({ context, page }) => {
           const notificationModules: string[] = [];
@@ -102,7 +103,9 @@ suite.define(() => {
           }
           await composer.fill("Check notification startup.");
           expect(notificationModules).toHaveLength(native ? 1 : 0);
-          await page.screenshot({ path: path.join(suite.artifactDir, "ready.png") });
+          if (captureUiProof) {
+            await page.screenshot({ path: path.join(suite.artifactDir, "ready.png") });
+          }
           if (background) {
             await expect
               .poll(() =>
@@ -139,9 +142,119 @@ suite.define(() => {
           }
           expect(notificationModules).toHaveLength(native ? 1 : 0);
           expect(errors).toEqual([]);
-          await page.screenshot({ path: path.join(suite.artifactDir, "sent.png") });
+          if (captureUiProof) {
+            await page.screenshot({ path: path.join(suite.artifactDir, "sent.png") });
+          }
         },
       );
     },
   );
+  it("opens a completed background session in a new tab without leaving the draft", async () => {
+    const viewport = { width: 1360, height: 1000 };
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport,
+        ...(captureUiProof ? { recordVideo: { dir: suite.artifactDir, size: viewport } } : {}),
+      },
+      async ({ context, page }) => {
+        const gateway = await installMockGateway(page, {
+          deferredMethods: ["agent.wait"],
+          methodResponses: {
+            "sessions.create": {
+              key: "agent:main:toast-completion",
+              runStarted: true,
+              runId: "toast-completion-run",
+            },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}new`);
+        const composer = page.locator(".new-session-page__composer textarea");
+        await composer.fill("Prepare a garden plan in the background.");
+        await composer.press("Control+Shift+Enter");
+        await gateway.waitForRequest("agent.wait");
+        await composer.fill("Keep this unsent draft in the current tab.");
+        await gateway.resolveDeferred("agent.wait", { status: "ok", endedAt: Date.now() });
+        const action = page.locator(".app-toast__action");
+        await action.waitFor();
+        await action.hover();
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(suite.artifactDir, "completion-toast.png") });
+        }
+        await action.click({ button: "right" });
+        expect(new URL(page.url()).pathname).toBe("/new");
+        expect(await action.isVisible()).toBe(true);
+        await page.keyboard.press("Escape");
+        for (const activation of [
+          { button: "middle" as const },
+          { modifiers: ["ControlOrMeta" as const] },
+        ]) {
+          const popupPromise = context.waitForEvent("page");
+          await action.click(activation);
+          const popup = await popupPromise;
+          await popup.waitForURL((url) => url.pathname === "/chat/main/toast-completion");
+          expect(new URL(page.url()).pathname).toBe("/new");
+          expect(await composer.inputValue()).toBe("Keep this unsent draft in the current tab.");
+          expect(await action.isVisible()).toBe(true);
+          await popup.close();
+        }
+        await action.click();
+        await page.waitForURL((url) => url.pathname === "/chat/main/toast-completion");
+        expect(await page.locator(".app-toast").count()).toBe(0);
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+      },
+      async ({ page }) => {
+        const video = page.video();
+        await page.close();
+        if (captureUiProof && video) {
+          await video.saveAs(path.join(suite.artifactDir, "completion-navigation.webm"));
+        }
+      },
+    );
+  });
+  it("retires notification presentation before a held native acknowledgement", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { width: 1360, height: 1000 } },
+      async ({ page }) => {
+        const errors: string[] = [];
+        page.on("pageerror", (error) => errors.push(error.message));
+        await page.addInitScript(() => {
+          Object.assign(window, {
+            __OPENCLAW_NATIVE_NOTIFICATIONS__: { permission: "granted", test: null },
+            webkit: { messageHandlers: { openclawNotifications: { postMessage() {} } } },
+          });
+        });
+        await installMockGateway(page, { awaitInitialRoster: false });
+        await page.goto(`${suite.server.baseUrl}settings/notifications`);
+        const send = page.getByRole("button", { name: "Send test", exact: true });
+        await send.click();
+        const pending = page.getByRole("button", { name: "Sending test…", exact: true });
+        await expect.poll(() => pending.isDisabled()).toBe(true);
+        await page.locator('a[href="/settings/appearance"]').first().click();
+        // The title can advance while Solid still retains the old body.
+        const themes = page.locator(".settings-theme-card").first();
+        await themes.waitFor();
+        await expect.poll(() => pending.count()).toBe(0);
+        await page.evaluate(() => {
+          for (const test of [{ state: "pending" }, { state: "sent" }]) {
+            window.dispatchEvent(
+              new CustomEvent("openclaw:native-notifications-status", {
+                detail: { permission: "granted", test },
+              }),
+            );
+          }
+        });
+        await themes.waitFor();
+        expect(await send.count()).toBe(0);
+        await page.locator('a[href="/settings/notifications"]').first().click();
+        await expect.poll(() => send.isEnabled()).toBe(true);
+        await page
+          .locator(".settings-status")
+          .getByText("Test notification queued", { exact: true })
+          .waitFor();
+        expect(errors).toEqual([]);
+      },
+    );
+  });
 });

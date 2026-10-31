@@ -4,10 +4,8 @@ import { expect, it, vi, type Mock } from "vitest";
 import { createConfigIO } from "../../config/io.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
-import {
-  swapStagedPackageInstall,
-  type PackageUpdateTransaction,
-} from "../../infra/package-update-swap.js";
+import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
+import { swapStagedPackageInstall } from "../../infra/package-update-swap.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
 import * as stateSchemas from "../../infra/update-candidate-state.js";
 import { UpdateDoctorError } from "../../infra/update-doctor-result.js";
@@ -18,7 +16,10 @@ import {
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
-import { runFixtureGit } from "../../infra/update-runner-git-candidate.test-support.js";
+import {
+  isolateGitIdentity,
+  runFixtureGit,
+} from "../../infra/update-runner-git-candidate.test-support.js";
 import { updateGitCheckout } from "../../infra/update-runner-git.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -34,15 +35,7 @@ type Restart = typeof import("./update-command-service.js").maybeRestartService;
 type VerifyGateway = typeof import("./update-command-verification.js").verifyUpdatedGateway;
 
 async function createGitRollbackFixture(base: string) {
-  vi.stubEnv("GIT_CONFIG_COUNT", "0");
-  for (const key of [
-    "GIT_AUTHOR_NAME",
-    "GIT_AUTHOR_EMAIL",
-    "GIT_COMMITTER_NAME",
-    "GIT_COMMITTER_EMAIL",
-  ]) {
-    vi.stubEnv(key, undefined);
-  }
+  isolateGitIdentity();
   const remote = path.join(base, "remote");
   const root = path.join(base, "checkout");
   await fs.mkdir(remote);
@@ -401,7 +394,10 @@ export function registerDoctorRestorationRollbackTests(
           }),
         );
       } else {
-        expect(failure?.result.steps.flatMap((step) => step.failureFacts ?? [])).toEqual(facts);
+        expect(failure?.result.steps.flatMap((step) => step.failureFacts ?? [])).toEqual([
+          ...facts,
+          { check: "update", code: "update-failed" },
+        ]);
       }
       const recorded = getUpdateRun(run.runId, { env });
       expect(recorded?.status).toBe("rolled-back");

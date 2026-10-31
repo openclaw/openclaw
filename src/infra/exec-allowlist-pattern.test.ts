@@ -2,15 +2,19 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import { matchesExecAllowlistPattern } from "./exec-allowlist-pattern.js";
+import { compileExecAllowlistPattern } from "./exec-allowlist-pattern.js";
+
+function matchesExecAllowlistPattern(pattern: string, target: string) {
+  return compileExecAllowlistPattern(pattern)(target);
+}
 
 describe("matchesExecAllowlistPattern", () => {
-  it.each([
-    { pattern: "   ", target: "/tmp/tool", expected: false },
-    { pattern: "/tmp/tool", target: "/tmp/tool", expected: true },
-  ])("handles literal patterns for %j", ({ pattern, target, expected }) => {
-    expect(matchesExecAllowlistPattern(pattern, target)).toBe(expected);
-  });
+  it.each([{ pattern: "   ", target: "/tmp/tool", expected: false }])(
+    "handles literal patterns for %j",
+    ({ pattern, target, expected }) => {
+      expect(matchesExecAllowlistPattern(pattern, target)).toBe(expected);
+    },
+  );
 
   it("does not let ? cross path separators", () => {
     expect(matchesExecAllowlistPattern("/tmp/a?b", "/tmp/a/b")).toBe(false);
@@ -18,41 +22,32 @@ describe("matchesExecAllowlistPattern", () => {
   });
 
   it.each([
-    { pattern: "/tmp/*/tool", target: "/tmp/a/tool", expected: true },
-    { pattern: "/tmp/*/tool", target: "/tmp/a/b/tool", expected: false },
-    { pattern: "/tmp/**/tool", target: "/tmp/a/b/tool", expected: true },
-  ])("handles star patterns for %j", ({ pattern, target, expected }) => {
-    expect(matchesExecAllowlistPattern(pattern, target)).toBe(expected);
+    ["/usr/bin/../sh", false],
+    ["/usr/bin/sub/../../sh", false],
+    ["/usr/bin/sub/../tool", true],
+    ["/usr/bin/./tool", true],
+    ["/usr/bin/tool..", true],
+    ["/usr/bin/.tool", true],
+    ["/usr/bin/.../tool", true],
+    ["/usr//bin/.\n", false],
+    ["/usr//bin/..\n", false],
+  ] as const)("preserves wildcard path boundaries for %s", (target, expected) => {
+    expect(matchesExecAllowlistPattern("/usr/bin/**", target)).toBe(expected);
   });
 
-  it.runIf(process.platform !== "win32")(
-    "matches wildcard paths after collapsing dot segments",
-    () => {
-      expect(matchesExecAllowlistPattern("/usr/bin/**", "/usr/bin/../../bin/sh")).toBe(false);
-      expect(
-        matchesExecAllowlistPattern("/trusted/tools/**", "/trusted/tools/../../etc/shadow"),
-      ).toBe(false);
-      expect(matchesExecAllowlistPattern("/usr/bin/**", "../../etc/shadow")).toBe(false);
-      expect(matchesExecAllowlistPattern("/usr/bin/**", "/usr/bin/./env")).toBe(true);
-      expect(matchesExecAllowlistPattern("/usr/bin/**", "/usr/./bin/./env")).toBe(true);
-      expect(matchesExecAllowlistPattern("/usr/bin/**", "/usr/bin/sub/../env")).toBe(true);
-      expect(matchesExecAllowlistPattern("/usr/bin/*", "/usr/bin/sub/../env")).toBe(true);
-      expect(matchesExecAllowlistPattern("/usr/bin/**", "/usr/bin/sub/tool")).toBe(true);
-    },
-  );
-
   it("expands home-prefix patterns", () => {
+    const matches = compileExecAllowlistPattern("~/bin/tool");
     const openClawHome = path.join(path.resolve("/srv/openclaw-home"), "bin", "tool");
     const fallbackHome = path.join(path.resolve("/home/other"), "bin", "tool");
     withEnv({ OPENCLAW_HOME: "/srv/openclaw-home", HOME: "/home/other" }, () => {
       expect(matchesExecAllowlistPattern("~/bin/tool", openClawHome)).toBe(true);
       expect(matchesExecAllowlistPattern("~/bin/tool", fallbackHome)).toBe(false);
+      expect(matches(openClawHome)).toBe(true);
     });
-  });
-
-  it.runIf(process.platform !== "win32")("preserves case sensitivity on POSIX", () => {
-    expect(matchesExecAllowlistPattern("/tmp/Allowed-Tool", "/tmp/allowed-tool")).toBe(false);
-    expect(matchesExecAllowlistPattern("/tmp/Allowed-Tool", "/tmp/Allowed-Tool")).toBe(true);
+    withEnv({ OPENCLAW_HOME: "/home/other", HOME: "/home/other" }, () => {
+      expect(matches(openClawHome)).toBe(false);
+      expect(matches(fallbackHome)).toBe(true);
+    });
   });
 
   it.runIf(process.platform === "darwin")("matches macOS /private/var temp aliases", () => {

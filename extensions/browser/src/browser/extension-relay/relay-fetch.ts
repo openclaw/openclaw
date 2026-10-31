@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 
 type PhysicalSender = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
 type EventSender = (method: string, params: unknown) => void;
@@ -29,14 +30,14 @@ type OwnedStream = {
 };
 
 const STREAM_PREFIX = "openclaw-fetch-stream:";
-const REQUEST_COMMANDS = new Set([
-  "Fetch.continueRequest",
-  "Fetch.continueResponse",
-  "Fetch.continueWithAuth",
-  "Fetch.failRequest",
-  "Fetch.fulfillRequest",
-  "Fetch.getResponseBody",
-  "Fetch.takeResponseBodyAsStream",
+const REQUEST_STAGES = new Map<string, readonly PauseKind[]>([
+  ["Fetch.continueRequest", ["request", "response", "buffered"]],
+  ["Fetch.continueResponse", ["response", "buffered"]],
+  ["Fetch.continueWithAuth", ["auth"]],
+  ["Fetch.failRequest", ["request", "response", "buffered", "stream"]],
+  ["Fetch.fulfillRequest", ["request", "response", "buffered", "stream"]],
+  ["Fetch.getResponseBody", ["response", "buffered"]],
+  ["Fetch.takeResponseBodyAsStream", ["response"]],
 ]);
 
 /** One physical Fetch domain; exact logical-session objects own its exclusive lease. */
@@ -78,10 +79,70 @@ export class RelayFetch {
         throw new Error("Fetch session detached");
       }
       if (ownedIO && typeof handle === "string") {
-        return this.streamCommand(owner, method, handle, input);
+        const stream = this.streams.get(handle);
+        if (!stream || stream.owner !== owner || stream.closing) {
+          throw new Error("Invalid Fetch stream handle for this session");
+        }
+        if (method === "IO.close") {
+          return this.closeStream(handle, stream);
+        }
+        if (!stream.readable) {
+          throw new Error("Fetch stream is no longer readable");
+        }
+        if (stream.reading) {
+          throw new Error("Fetch stream already has a read in flight");
+        }
+        stream.reading = true;
+        return this.send(method, { ...input, handle: stream.nativeHandle })
+          .then((result) => {
+            if (this.streams.get(handle) !== stream || this.closedOwners.has(owner)) {
+              throw new Error("Fetch stream retired during read");
+            }
+            return result;
+          })
+          .catch((error: unknown) => {
+            // A relay error may follow a native read that already advanced the cursor.
+            stream.readable = false;
+            throw error;
+          })
+          .finally(() => {
+            stream.reading = false;
+          });
       }
       if (method === "Fetch.enable") {
-        return this.enable(owner, emit, input);
+        if (this.state.kind === "idle") {
+          this.state = {
+            kind: "owned",
+            lease: {
+              owner,
+              emit,
+              prefix: `openclaw-fetch:${this.instanceId}:${++this.nextLease}:`,
+              pauses: new Map(),
+              operations: new Set(),
+              control: Promise.resolve(),
+              acceptEvents: true,
+            },
+          };
+        }
+        const lease = this.ownedLease(owner);
+        const operation = lease.control.then(async () => {
+          this.assertLiveLease(lease);
+          if (this.state.kind !== "owned") {
+            throw new Error("Fetch enable superseded by release");
+          }
+          const result = await this.nativeFetch(lease, "Fetch.enable", input);
+          this.assertLiveLease(lease);
+          if (this.state.kind !== "owned" || this.closedOwners.has(owner)) {
+            throw new Error("Fetch enable superseded by release");
+          }
+          return result;
+        });
+        this.trackOperation(lease, operation);
+        lease.control = operation.then(
+          () => undefined,
+          () => undefined,
+        );
+        return operation;
       }
       if (method === "Fetch.disable") {
         if (!("lease" in this.state) || this.state.lease.owner !== owner) {
@@ -89,7 +150,8 @@ export class RelayFetch {
         }
         return this.release(this.state.lease, "disable").then(() => ({}));
       }
-      if (!REQUEST_COMMANDS.has(method)) {
+      const stages = REQUEST_STAGES.get(method);
+      if (!stages) {
         throw new Error(`Unsupported Fetch command: ${method}`);
       }
       const lease = this.ownedLease(owner);
@@ -102,8 +164,60 @@ export class RelayFetch {
       if (!pause) {
         throw new Error("Invalid Fetch requestId for this session");
       }
-      this.validatePause(pause, method, input);
-      return this.runPause(lease, pause, method, input);
+      if (pause.pending) {
+        throw new Error("Fetch request already has a command in flight");
+      }
+      if (
+        !stages.includes(pause.kind) ||
+        (pause.kind === "stream" &&
+          method === "Fetch.fulfillRequest" &&
+          typeof input?.body !== "string")
+      ) {
+        throw new Error(`Invalid Fetch request stage for ${method}`);
+      }
+      const operation: Promise<unknown> = Promise.resolve().then(async () => {
+        this.assertLiveLease(lease);
+        if (lease.pauses.get(pause.nativeId) !== pause) {
+          throw new Error("Fetch pause retired before command dispatch");
+        }
+        let result = await this.nativeFetch(lease, method, { ...input, requestId: pause.nativeId });
+        this.assertLiveLease(lease);
+        if (method === "Fetch.takeResponseBodyAsStream") {
+          const response = asOptionalRecord(result);
+          if (typeof response?.stream !== "string") {
+            const error = new Error("Fetch stream response did not contain a stream handle");
+            this.fence(lease, error);
+            throw error;
+          }
+          const streamHandle = `${STREAM_PREFIX}${this.instanceId}:${++this.nextStream}`;
+          this.streams.set(streamHandle, {
+            owner: lease.owner,
+            nativeHandle: response.stream,
+            readable: true,
+            reading: false,
+          });
+          result = { ...response, stream: streamHandle };
+        }
+        if (lease.pauses.get(pause.nativeId) === pause) {
+          if (method === "Fetch.getResponseBody") {
+            pause.kind = "buffered";
+          } else if (method === "Fetch.takeResponseBodyAsStream") {
+            pause.kind = "stream";
+          } else {
+            lease.pauses.delete(pause.nativeId);
+          }
+        }
+        // Only native success proves body acquisition is quiescent. A rejected
+        // relay promise leaves this pause pending until physical retirement.
+        pause.pending = undefined;
+        if (this.closedOwners.has(lease.owner) || this.state.kind === "retiring") {
+          throw new Error("Fetch session closed during command");
+        }
+        return result;
+      });
+      pause.pending = operation;
+      this.trackOperation(lease, operation);
+      return operation;
     } catch (error) {
       return Promise.reject(error instanceof Error ? error : new Error(String(error)));
     }
@@ -196,17 +310,12 @@ export class RelayFetch {
           }
         }),
       );
-      let timer: NodeJS.Timeout | undefined;
-      const timedOut = await Promise.race([
+      const timedOut = await raceWithTimeout(
         settled.then(() => false),
-        new Promise<true>((resolve) => {
-          timer = setTimeout(() => resolve(true), timeoutMs);
-          timer.unref?.();
-        }),
-      ]);
-      if (timer) {
-        clearTimeout(timer);
-      }
+        timeoutMs,
+        () => true,
+        { ref: false },
+      );
       return {
         errors: [
           ...errors,
@@ -274,116 +383,6 @@ export class RelayFetch {
     }
   }
 
-  private enable(
-    owner: object,
-    emit: EventSender,
-    params?: Record<string, unknown>,
-  ): Promise<unknown> {
-    if (this.state.kind === "idle") {
-      this.state = {
-        kind: "owned",
-        lease: {
-          owner,
-          emit,
-          prefix: `openclaw-fetch:${this.instanceId}:${++this.nextLease}:`,
-          pauses: new Map(),
-          operations: new Set(),
-          control: Promise.resolve(),
-          acceptEvents: true,
-        },
-      };
-    }
-    const lease = this.ownedLease(owner);
-    const operation = lease.control.then(async () => {
-      this.assertLiveLease(lease);
-      if (this.state.kind !== "owned") {
-        throw new Error("Fetch enable superseded by release");
-      }
-      const result = await this.nativeFetch(lease, "Fetch.enable", params);
-      this.assertLiveLease(lease);
-      if (this.state.kind !== "owned" || this.closedOwners.has(owner)) {
-        throw new Error("Fetch enable superseded by release");
-      }
-      return result;
-    });
-    this.trackOperation(lease, operation);
-    lease.control = operation.then(
-      () => undefined,
-      () => undefined,
-    );
-    return operation;
-  }
-
-  private validatePause(pause: Pause, method: string, params?: Record<string, unknown>): void {
-    if (pause.pending) {
-      throw new Error("Fetch request already has a command in flight");
-    }
-    const auth = method === "Fetch.continueWithAuth";
-    const body = method === "Fetch.getResponseBody" || method === "Fetch.takeResponseBodyAsStream";
-    const response = pause.kind === "response" || pause.kind === "buffered";
-    if (
-      auth !== (pause.kind === "auth") ||
-      ((body || method === "Fetch.continueResponse") && !response) ||
-      (method === "Fetch.takeResponseBodyAsStream" && pause.kind !== "response") ||
-      (pause.kind === "stream" &&
-        method !== "Fetch.failRequest" &&
-        !(method === "Fetch.fulfillRequest" && typeof params?.body === "string"))
-    ) {
-      throw new Error(`Invalid Fetch request stage for ${method}`);
-    }
-  }
-
-  private runPause(
-    lease: Lease,
-    pause: Pause,
-    method: string,
-    params?: Record<string, unknown>,
-  ): Promise<unknown> {
-    const operation: Promise<unknown> = Promise.resolve().then(async () => {
-      this.assertLiveLease(lease);
-      if (lease.pauses.get(pause.nativeId) !== pause) {
-        throw new Error("Fetch pause retired before command dispatch");
-      }
-      let result = await this.nativeFetch(lease, method, { ...params, requestId: pause.nativeId });
-      this.assertLiveLease(lease);
-      if (method === "Fetch.takeResponseBodyAsStream") {
-        const response = asOptionalRecord(result);
-        if (typeof response?.stream !== "string") {
-          const error = new Error("Fetch stream response did not contain a stream handle");
-          this.fence(lease, error);
-          throw error;
-        }
-        const handle = `${STREAM_PREFIX}${this.instanceId}:${++this.nextStream}`;
-        this.streams.set(handle, {
-          owner: lease.owner,
-          nativeHandle: response.stream,
-          readable: true,
-          reading: false,
-        });
-        result = { ...response, stream: handle };
-      }
-      if (lease.pauses.get(pause.nativeId) === pause) {
-        if (method === "Fetch.getResponseBody") {
-          pause.kind = "buffered";
-        } else if (method === "Fetch.takeResponseBodyAsStream") {
-          pause.kind = "stream";
-        } else {
-          lease.pauses.delete(pause.nativeId);
-        }
-      }
-      // Only native success proves body acquisition is quiescent. A rejected
-      // relay promise leaves this pause pending until physical retirement.
-      pause.pending = undefined;
-      if (this.closedOwners.has(lease.owner) || this.state.kind === "retiring") {
-        throw new Error("Fetch session closed during command");
-      }
-      return result;
-    });
-    pause.pending = operation;
-    this.trackOperation(lease, operation);
-    return operation;
-  }
-
   private trackOperation(lease: Lease, operation: Promise<unknown>): void {
     lease.operations.add(operation);
     void operation
@@ -446,43 +445,6 @@ export class RelayFetch {
           authChallengeResponse: { response: "CancelAuth" },
         })
       : this.send("Fetch.failRequest", { requestId: pause.nativeId, errorReason: "Aborted" });
-  }
-
-  private streamCommand(
-    owner: object,
-    method: string,
-    handle: string,
-    params?: Record<string, unknown>,
-  ): Promise<unknown> {
-    const stream = this.streams.get(handle);
-    if (!stream || stream.owner !== owner || stream.closing) {
-      throw new Error("Invalid Fetch stream handle for this session");
-    }
-    if (method === "IO.close") {
-      return this.closeStream(handle, stream);
-    }
-    if (!stream.readable) {
-      throw new Error("Fetch stream is no longer readable");
-    }
-    if (stream.reading) {
-      throw new Error("Fetch stream already has a read in flight");
-    }
-    stream.reading = true;
-    return this.send(method, { ...params, handle: stream.nativeHandle })
-      .then((result) => {
-        if (this.streams.get(handle) !== stream || this.closedOwners.has(owner)) {
-          throw new Error("Fetch stream retired during read");
-        }
-        return result;
-      })
-      .catch((error: unknown) => {
-        // A relay error may follow a native read that already advanced the cursor.
-        stream.readable = false;
-        throw error;
-      })
-      .finally(() => {
-        stream.reading = false;
-      });
   }
 
   private closeStream(handle: string, stream: OwnedStream): Promise<unknown> {

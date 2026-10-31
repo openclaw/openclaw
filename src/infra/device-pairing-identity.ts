@@ -1,11 +1,43 @@
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
-import type { NodePairingGeneration, NodePairingState } from "./device-pairing-core.types.js";
+import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
+import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import type {
+  NodePairingGeneration,
+  NodePairingState,
+  PairedDeviceTokenIdentity,
+} from "./device-pairing-core.types.js";
 import {
   mergeDevicePairingRoles,
   normalizeDevicePairingRole,
 } from "./device-pairing-state.kernel.js";
 import type { DeviceAuthToken, PairedDevice } from "./device-pairing.types.js";
 export type { NodePairingGeneration, NodePairingState } from "./device-pairing-core.types.js";
+
+/** Use the same persisted approval ceiling for token verification and retained authority. */
+export function resolveApprovedDeviceScopeBaseline(device: PairedDevice): string[] | null {
+  const baseline = device.approvedScopes ?? device.scopes;
+  return Array.isArray(baseline) ? normalizeDeviceAuthScopes(baseline) : null;
+}
+
+/** Pin the credential actually accepted or issued, never a successor found on a later read. */
+export function resolveAuthenticatedDeviceTokenIdentity(
+  device: PairedDevice | null,
+  authenticated: { role: string; publicKey: string; token: string; scopes: readonly string[] },
+): PairedDeviceTokenIdentity | null {
+  if (
+    !device ||
+    device.publicKey !== authenticated.publicKey ||
+    device.tokens?.[authenticated.role]?.token !== authenticated.token
+  ) {
+    return null;
+  }
+  const identity = resolvePairedDeviceTokenIdentity(
+    device,
+    authenticated.role,
+    authenticated.scopes,
+  );
+  return identity ? Object.freeze(identity) : null;
+}
 
 function listActiveTokenRoles(
   tokens: Record<string, DeviceAuthToken> | undefined,
@@ -57,28 +89,61 @@ export function hasEffectivePairedDeviceRole(
   return listEffectivePairedDeviceRoles(device).includes(normalized);
 }
 
-/** Resolve the authenticated node pairing independently of surface approval. */
-function resolveNodePairingIdentity(
+/** Resolve one exact active role-token generation without exposing its credential. */
+function resolvePairedDeviceTokenIdentity(
   device: PairedDevice | null,
-): NodePairingState["identity"] | null {
-  if (!device || !hasEffectivePairedDeviceRole(device, "node")) {
+  role: string,
+  scopes?: readonly string[],
+): PairedDeviceTokenIdentity | null {
+  const normalizedRole = normalizeDevicePairingRole(role);
+  if (!device || !normalizedRole || !hasEffectivePairedDeviceRole(device, normalizedRole)) {
     return null;
   }
-  const nodeToken = device.tokens?.node;
-  if (!nodeToken) {
+  const token = device.tokens?.[normalizedRole];
+  if (!token || token.role !== normalizedRole || token.revokedAtMs) {
     return null;
+  }
+  if (scopes) {
+    const approvedScopes = resolveApprovedDeviceScopeBaseline(device);
+    // The whole token must remain approved, not just this request's scopes.
+    if (
+      approvedScopes === null ||
+      !roleScopesAllow({
+        role: normalizedRole,
+        requestedScopes: token.scopes,
+        allowedScopes: approvedScopes,
+      }) ||
+      !roleScopesAllow({
+        role: normalizedRole,
+        requestedScopes: scopes,
+        allowedScopes: token.scopes,
+      })
+    ) {
+      return null;
+    }
   }
   const key = sha256Hex(
     [
       device.publicKey,
       device.createdAtMs,
-      nodeToken.token,
-      nodeToken.createdAtMs,
-      nodeToken.rotatedAtMs ?? "",
-      nodeToken.revokedAtMs ?? "",
+      token.token,
+      token.createdAtMs,
+      token.rotatedAtMs ?? "",
+      token.revokedAtMs ?? "",
     ].join("\0"),
   );
-  return { nodeId: device.deviceId, key };
+  return { deviceId: device.deviceId, key };
+}
+
+/** Re-admission retains the original token generation and current approved scope ceiling. */
+export function isPairedDeviceTokenIdentityCurrent(
+  device: PairedDevice | null,
+  role: string,
+  identity: PairedDeviceTokenIdentity,
+  scopes: readonly string[],
+): boolean {
+  const current = resolvePairedDeviceTokenIdentity(device, role, scopes);
+  return current !== null && current.deviceId === identity.deviceId && current.key === identity.key;
 }
 
 /** Resolve the durable node-owned identity used to admit asynchronous work. */
@@ -120,9 +185,12 @@ export function clearNodePairingGenerationState(
 
 /** Resolve connection identity and optional approved surface generation from one row. */
 export function resolveNodePairingState(device: PairedDevice | null): NodePairingState | null {
-  const identity = resolveNodePairingIdentity(device);
+  const identity = resolvePairedDeviceTokenIdentity(device, "node");
   if (!identity) {
     return null;
   }
-  return { identity, generation: resolveNodePairingGeneration(device) };
+  return {
+    identity: { nodeId: identity.deviceId, key: identity.key },
+    generation: resolveNodePairingGeneration(device),
+  };
 }

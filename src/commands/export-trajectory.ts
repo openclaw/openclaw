@@ -1,24 +1,26 @@
-/** CLI command for exporting a session transcript as a trajectory artifact. */
+import fsp from "node:fs/promises";
 import path from "node:path";
+import { pathScope } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString, readStringValue } from "@openclaw/normalization-core/string-coerce";
-import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
+import {
+  resolveAgentOperationAgentId,
+  resolveConfiguredAgentId,
+} from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { ExpectedCliError } from "../cli/failure-output.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { throwExpectedCliError } from "../cli/failure-output.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   loadSessionEntryReadOnly,
   resolveSessionTranscriptReadTarget,
 } from "../config/sessions/session-accessor.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { root } from "../infra/fs-safe.js";
+import { isPathStrictlyInside } from "../infra/path-guards.js";
+import { classifySessionKeyShape, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import {
-  exportTrajectoryForCommand,
-  formatTrajectoryCommandExportSummary,
-  type TrajectoryCommandExportSummary,
-} from "../trajectory/command-export.js";
+import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "../trajectory/export.js";
 import { resolveExplicitSessionStorePath } from "./session-store-targets.js";
 
 type ExportTrajectoryCommandOptions = {
@@ -64,60 +66,50 @@ function decodeExportTrajectoryRequest(encoded: string): Partial<ExportTrajector
   return opts;
 }
 
-function resolveExportTrajectoryOptions(
-  opts: ExportTrajectoryCommandOptions,
-): ExportTrajectoryCommandOptions {
-  const encoded = opts.requestJsonBase64;
-  if (encoded === undefined || encoded.length === 0) {
-    return opts;
-  }
-  return {
-    ...opts,
-    ...decodeExportTrajectoryRequest(encoded),
-  };
-}
-
-function throwTrajectoryExportError(message: string): never {
-  throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
-}
-
-/** Resolves the requested session and exports its trajectory summary or JSON result. */
 export async function exportTrajectoryCommand(
   opts: ExportTrajectoryCommandOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
   let resolvedOpts: ExportTrajectoryCommandOptions;
   try {
-    resolvedOpts = resolveExportTrajectoryOptions(opts);
+    resolvedOpts = opts.requestJsonBase64
+      ? { ...opts, ...decodeExportTrajectoryRequest(opts.requestJsonBase64) }
+      : opts;
   } catch (error) {
-    throwTrajectoryExportError(
+    throwExpectedCliError(
       `Failed to decode trajectory export request: ${formatErrorMessage(error)}`,
     );
   }
   const sessionKey = resolvedOpts.sessionKey?.trim();
   if (!sessionKey) {
-    throwTrajectoryExportError(
+    throwExpectedCliError(
       `--session-key is required. Run ${formatCliCommand("openclaw sessions")} to choose a session.`,
     );
   }
   const requestedAgent = resolvedOpts.agent?.trim();
   if (resolvedOpts.agent !== undefined && !requestedAgent) {
-    throwTrajectoryExportError("--agent must not be blank");
+    throwExpectedCliError("--agent must not be blank");
   }
   if (resolvedOpts.store !== undefined && !resolvedOpts.store.trim()) {
-    throwTrajectoryExportError("--store must not be blank");
+    throwExpectedCliError("--store must not be blank");
   }
   let targetAgentId: string;
+  const readConfig = captureRuntimeConfigAsyncReader();
   try {
     targetAgentId = requestedAgent
-      ? resolveConfiguredAgentId(getRuntimeConfig(), requestedAgent)
-      : resolveAgentIdFromSessionKey(sessionKey);
+      ? resolveConfiguredAgentId(await readConfig(), requestedAgent)
+      : resolveAgentIdFromSessionKey(
+          sessionKey,
+          classifySessionKeyShape(sessionKey) === "legacy_or_alias"
+            ? resolveAgentOperationAgentId(await readConfig())
+            : undefined,
+        );
   } catch (error) {
-    throwTrajectoryExportError(formatErrorMessage(error));
+    throwExpectedCliError(formatErrorMessage(error));
   }
   let storePath = resolvedOpts.store
     ? resolveSessionStorePathCore(resolvedOpts.store, { agentId: targetAgentId })
-    : resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId: targetAgentId });
+    : resolveSessionStorePathCore((await readConfig()).session?.store, { agentId: targetAgentId });
   if (resolvedOpts.store) {
     try {
       storePath = resolveExplicitSessionStorePath({
@@ -126,7 +118,7 @@ export async function exportTrajectoryCommand(
         agentId: targetAgentId,
       });
     } catch (error) {
-      throwTrajectoryExportError(formatErrorMessage(error));
+      throwExpectedCliError(formatErrorMessage(error));
     }
   }
   // CLI reads must not join the Gateway's writable SQLite lifecycle (#101290).
@@ -136,7 +128,7 @@ export async function exportTrajectoryCommand(
     storePath,
   });
   if (!entry?.sessionId) {
-    throwTrajectoryExportError(
+    throwExpectedCliError(
       `Session not found: ${sessionKey}. Run ${formatCliCommand("openclaw sessions")} to see available sessions.`,
     );
   }
@@ -151,29 +143,92 @@ export async function exportTrajectoryCommand(
       storePath,
     });
   } catch (error) {
-    throwTrajectoryExportError(`Failed to resolve session file: ${formatErrorMessage(error)}`);
+    throwExpectedCliError(`Failed to resolve session file: ${formatErrorMessage(error)}`);
   }
-  let summary: TrajectoryCommandExportSummary;
+  let summary;
   try {
-    summary = await exportTrajectoryForCommand({
-      outputPath: resolvedOpts.output,
-      sessionTarget: {
-        agentId: sessionTarget.agentId ?? targetAgentId,
-        sessionId: sessionTarget.sessionId,
-        sessionKey: sessionTarget.sessionKey ?? sessionKey,
-        storePath: sessionTarget.storePath,
+    const exportTarget = {
+      agentId: sessionTarget.agentId ?? targetAgentId,
+      sessionId: sessionTarget.sessionId,
+      sessionKey: sessionTarget.sessionKey ?? sessionKey,
+      storePath: sessionTarget.storePath,
+    };
+    const sessionId = entry.sessionId;
+    const workspaceDir = path.resolve(resolvedOpts.workspace ?? process.cwd());
+    const realWorkspace = await fsp.realpath(workspaceDir);
+    const relativeBase = path.join(".openclaw", "trajectory-exports");
+    const prepared = await pathScope(realWorkspace, { label: "workspace" }).ensureDir(
+      relativeBase,
+      {
+        mode: 0o700,
       },
-      sessionId: entry.sessionId,
+    );
+    if (!prepared.ok) {
+      throw prepared.diagnostic ?? new Error(prepared.error);
+    }
+    const baseDir = path.join(workspaceDir, relativeBase);
+    const raw = readNonBlankString(resolvedOpts.output);
+    let outputDir: string;
+    if (!raw) {
+      const defaultDir = resolveDefaultTrajectoryExportDir({ workspaceDir, sessionId });
+      outputDir = path.join(baseDir, path.basename(defaultDir));
+    } else {
+      if (path.isAbsolute(raw) || raw.startsWith("~")) {
+        throw new Error(
+          "Output path must be relative to the workspace trajectory exports directory",
+        );
+      }
+      const resolvedBase = path.resolve(baseDir);
+      outputDir = path.resolve(resolvedBase, raw);
+      const relative = path.relative(resolvedBase, outputDir);
+      if (!isPathStrictlyInside(resolvedBase, outputDir)) {
+        throw new Error("Output path must stay inside the workspace trajectory exports directory");
+      }
+      // Prefix with `./` so normalized literal `~/...` names do not expand to HOME.
+      await (await root(prepared.path)).resolve(`.${path.sep}${relative}`);
+    }
+    const bundle = await exportTrajectoryBundle({
+      outputDir,
+      sessionTarget: exportTarget,
+      sessionId,
       sessionKey,
-      workspaceDir: path.resolve(resolvedOpts.workspace ?? process.cwd()),
+      workspaceDir,
     });
+    const relativePath = path.relative(workspaceDir, bundle.outputDir);
+    const displayPath =
+      relativePath && !relativePath.startsWith("..") && !path.isAbsolute(relativePath)
+        ? relativePath
+        : path.basename(bundle.outputDir);
+    summary = {
+      outputDir: bundle.outputDir,
+      displayPath,
+      sessionId,
+      eventCount: bundle.manifest.eventCount,
+      runtimeEventCount: bundle.manifest.runtimeEventCount,
+      transcriptEventCount: bundle.manifest.transcriptEventCount,
+      files: [
+        ...bundle.files.filter((file) => !bundle.supplementalFiles.includes(file)),
+        ...bundle.supplementalFiles,
+      ],
+    };
   } catch (error) {
-    throwTrajectoryExportError(`Failed to export trajectory: ${formatErrorMessage(error)}`);
+    throwExpectedCliError(`Failed to export trajectory: ${formatErrorMessage(error)}`);
   }
 
   if (resolvedOpts.json) {
     writeRuntimeJson(runtime, summary);
     return;
   }
-  runtime.log(formatTrajectoryCommandExportSummary(summary));
+  runtime.log(
+    [
+      "✅ Trajectory exported!",
+      "",
+      `📦 Bundle: ${summary.displayPath}`,
+      `🧵 Session: ${summary.sessionId}`,
+      `📊 Events: ${summary.eventCount}`,
+      `🧪 Runtime events: ${summary.runtimeEventCount}`,
+      `📝 Transcript events: ${summary.transcriptEventCount}`,
+      `📁 Files: ${summary.files.join(", ")}`,
+    ].join("\n"),
+  );
 }

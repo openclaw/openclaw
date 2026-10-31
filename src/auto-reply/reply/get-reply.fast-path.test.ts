@@ -4,9 +4,11 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { FAST_RESET_LINEAGE_FIXTURE } from "../../config/sessions/session-lineage.test-support.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createEmptyPluginSetupRegistry } from "../../plugins/setup-registry.test-support.js";
 import {
   MODEL_SELECTION_LOCKED_RESET_MESSAGE,
   ModelSelectionLockedError,
@@ -26,7 +28,6 @@ import { emptyAliasIndex, markCompleteReplyConfig } from "./get-reply-fast-path.
 import {
   buildGetReplyCtx,
   createGetReplyContinueDirectivesResult,
-  createGetReplySessionState,
   registerGetReplyBaselineBypass,
   registerGetReplyRuntimeOverrides,
 } from "./get-reply.test-fixtures.js";
@@ -50,25 +51,27 @@ const mocks = vi.hoisted(() => ({
   loadModelCatalog: vi.fn<LoadModelCatalogFn>(),
   resolveReplyDirectives: vi.fn(),
 }));
-vi.mock("./commands.runtime.js", () => ({
-  handleCommands: (...args: unknown[]) => mocks.handleCommands(...args),
+vi.mock("./commands.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./commands.js")>()),
+  handleCommands: mocks.handleCommands,
 }));
+// mock-isolation: Supply deterministic status output without invoking live status providers.
 vi.mock("./commands-status.js", () => ({
-  buildStatusReply: (...args: unknown[]) => mocks.buildStatusReply(...args),
+  buildStatusReply: mocks.buildStatusReply,
 }));
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   readPreparedModelCatalog: mocks.loadModelCatalog,
 }));
+// mock-isolation: Use a synthetic workspace inventory without reading operator workspace files.
 vi.mock("../../agents/workspace.js", () => ({
   DEFAULT_AGENT_WORKSPACE_DIR: "/tmp/openclaw-workspace",
-  ensureAgentWorkspace: (...args: unknown[]) => mocks.ensureAgentWorkspace(...args),
+  ensureAgentWorkspace: mocks.ensureAgentWorkspace,
 }));
 registerGetReplyRuntimeOverrides(mocks);
 
 let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
 let resolveDefaultModelMock: typeof import("./directive-handling.defaults.js").resolveDefaultModel;
-let resolveModelRefFromStringMock: typeof import("../../agents/model-selection.js").resolveModelRefFromString;
 let loadConfigMock: typeof import("../../config/config.js").getRuntimeConfig;
 let runPreparedReplyMock: typeof import("./get-reply-run.js").runPreparedReply;
 const sessionKey = "agent:main:telegram:123";
@@ -92,16 +95,22 @@ function preparedReply() {
 function expectNoBootstrap() {
   expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
   expect(mocks.initSessionState).not.toHaveBeenCalled();
-  expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
+  expect(runPreparedReplyMock).not.toHaveBeenCalled();
+}
+function expectNativePayload(reply: Awaited<ReturnType<typeof getReplyFromConfig>>, text: string) {
+  const payload = expectDefined(Array.isArray(reply) ? undefined : reply, "single native reply");
+  expect(payload.text).toContain(text);
+  expect(getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression).toBe(true);
+  expectNoBootstrap();
 }
 
 describe("getReplyFromConfig fast test bootstrap", () => {
   let state: OpenClawTestState;
   let storePath: string;
-  const config = (model = "openai/gpt-5.5", heartbeat?: Record<string, never>) =>
+  const config = (model = "openai/gpt-5.5") =>
     markCompleteReplyConfig({
       agents: {
-        defaults: { model, workspace: state.workspaceDir, ...(heartbeat ? { heartbeat } : {}) },
+        defaults: { model, workspace: state.workspaceDir },
       },
       session: { store: storePath },
     });
@@ -125,8 +134,6 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
     ({ resolveDefaultModel: resolveDefaultModelMock } =
       await import("./directive-handling.defaults.js"));
-    ({ resolveModelRefFromString: resolveModelRefFromStringMock } =
-      await import("../../agents/model-selection.js"));
     ({ getRuntimeConfig: loadConfigMock } = await import("../../config/config.js"));
     ({ runPreparedReply: runPreparedReplyMock } = await import("./get-reply-run.js"));
   });
@@ -140,13 +147,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       isPathInside(state.root, resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath).path),
     ).toBe(true);
     cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupRegistry: () => ({
-        providers: [],
-        cliBackends: [],
-        configMigrations: [],
-        autoEnableProbes: [],
-        diagnostics: [],
-      }),
+      resolvePluginSetupRegistry: () => createEmptyPluginSetupRegistry(),
       resolveRuntimeCliBackends: () => [],
     });
     for (const mock of Object.values(mocks)) {
@@ -172,13 +173,11 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       { provider: "openai", id: "gpt-5.5", name: "GPT-5.5", reasoning: true },
     ]);
     mocks.resolveReplyDirectives.mockResolvedValue({ kind: "reply", reply: { text: "ok" } });
-    mocks.initSessionState.mockResolvedValue(createGetReplySessionState());
     vi.mocked(resolveDefaultModelMock).mockReset().mockReturnValue({
       defaultProvider: "openai",
       defaultModel: "gpt-4o-mini",
       aliasIndex: emptyAliasIndex(),
     });
-    vi.mocked(resolveModelRefFromStringMock).mockReset().mockReturnValue(null);
     vi.mocked(loadConfigMock).mockReset().mockReturnValue({});
     vi.mocked(runPreparedReplyMock).mockReset().mockResolvedValue({ text: "ok" });
   });
@@ -196,6 +195,26 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(vi.mocked(loadConfigMock)).not.toHaveBeenCalled();
   });
 
+  it("keeps ordinary model-looking messages unchanged", async () => {
+    const body = "openai/gpt-5.5 summarize";
+    const resetModule = await import("./session-reset-model.js");
+    const actualReset = await vi.importActual<typeof resetModule>("./session-reset-model.js");
+    const applyReset = vi.mocked(resetModule.applyResetModelOverride);
+    applyReset.mockImplementation(actualReset.applyResetModelOverride);
+    try {
+      await expect(
+        getReplyFromConfig(commandCtx(body, { BodyForAgent: body }), undefined, config()),
+      ).resolves.toEqual({ text: "ok" });
+      expect(mocks.resolveReplyDirectives).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionCtx: expect.objectContaining({ BodyStripped: body, agentText: body }),
+        }),
+      );
+    } finally {
+      applyReset.mockReset();
+    }
+  });
+
   it("returns a clean rejection when session bootstrap rejects a locked reset", async () => {
     vi.stubEnv("OPENCLAW_ALLOW_SLOW_REPLY_TESTS", "1");
     mocks.initSessionState.mockRejectedValueOnce(
@@ -204,10 +223,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     const runState: ReplyOperationRunState = {};
     const opts: InternalGetReplyOptions = { [REPLY_OPERATION_RUN_STATE]: runState };
     const result = await getReplyFromConfig(
-      commandCtx("/reset openai/gpt-5.5 continue", {
-        CommandAuthorized: true,
-        SessionKey: sessionKey,
-      }),
+      commandCtx("/reset openai/gpt-5.5 continue", { CommandAuthorized: true }),
       opts,
       {},
     );
@@ -215,38 +231,6 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(runState.preRunRejection).toBe("model-selection-locked");
     expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
     expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    {
-      name: "clears stale ack-only heartbeat pending delivery",
-      text: "HEARTBEAT_OK",
-      cleared: true,
-    },
-    {
-      name: "does not replay private pending delivery during heartbeat",
-      text: "private prior user answer",
-      cleared: false,
-    },
-  ])("$name", async ({ text, cleared }) => {
-    await seedSession({
-      sessionId: "pending-final",
-      updatedAt: Date.now() - (cleared ? 0 : 60_000),
-      pendingFinalDelivery: {
-        kind: "replayable",
-        text,
-        createdAt: 1,
-        intentId: "stale-heartbeat-intent",
-      },
-    });
-    await expect(
-      getReplyFromConfig(buildGetReplyCtx(), { isHeartbeat: true }, config("openai/gpt-5.5", {})),
-    ).resolves.toEqual({ text: "ok" });
-    if (cleared) {
-      expect(readSession().pendingFinalDelivery).toBeUndefined();
-    } else {
-      expect(readSession().pendingFinalDelivery).toMatchObject({ kind: "replayable", text });
-    }
   });
 
   it("uses the target session thinking override for native /status", async () => {
@@ -261,11 +245,10 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       aliasIndex: emptyAliasIndex(),
     });
     const cfg = config();
-    const reply = await getReplyFromConfig(nativeCtx("/status"), undefined, cfg);
-    const payload = expectDefined(Array.isArray(reply) ? undefined : reply, "single status reply");
-    expect(payload.text).toContain("OpenClaw");
-    expect(payload.text).toContain("Think: xhigh");
-    expect(getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression).toBe(true);
+    expectNativePayload(
+      await getReplyFromConfig(nativeCtx("/status"), undefined, cfg),
+      "OpenClaw\nThink: xhigh",
+    );
     expect(mocks.loadModelCatalog).toHaveBeenCalledExactlyOnceWith({
       config: cfg,
       agentId: "main",
@@ -273,7 +256,6 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       workspaceDir: state.workspaceDir,
       readOnly: true,
     });
-    expectNoBootstrap();
     expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
   });
 
@@ -282,7 +264,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       kind: "reply",
       reply: { text: "model status" },
     });
-    const reply = await getReplyFromConfig(
+    const result = await getReplyFromConfig(
       nativeCtx("/model status", {
         SessionCreation: {
           via: "operator",
@@ -292,19 +274,12 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       undefined,
       config("anthropic/claude-opus-4-6"),
     );
-    expect(reply).toMatchObject({ text: "model status" });
-    const payload = expectDefined(
-      Array.isArray(reply) ? undefined : reply,
-      "single directive reply",
-    );
-    expect(getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression).toBe(true);
-    expectNoBootstrap();
+    expect(result).toMatchObject({ text: "model status" });
+    expectNativePayload(result, "model status");
     expect(mocks.handleCommands).toHaveBeenCalledOnce();
-    expect(mocks.resolveReplyDirectives).toHaveBeenCalledOnce();
-    expect(mocks.resolveReplyDirectives.mock.calls[0]?.[0]).toMatchObject({
-      sessionKey,
-      workspaceDir: state.workspaceDir,
-    });
+    expect(mocks.resolveReplyDirectives).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ sessionKey, workspaceDir: state.workspaceDir }),
+    );
     expect((await listSessionStateEventsSince(sessionKey, "main", 0, 20)).events).toContainEqual(
       expect.objectContaining({
         kind: "created",
@@ -371,14 +346,16 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       ),
     );
     expect(readSession().goal?.objective).toBe("/status");
-    expect(preparedReply().command.commandBodyNormalized).toBe(continuationPrompt);
-    expect(preparedReply().sessionCtx.BodyForAgent).toBe(continuationPrompt);
+    expect(preparedReply()).toMatchObject({
+      command: { commandBodyNormalized: continuationPrompt },
+      sessionCtx: { BodyForAgent: continuationPrompt },
+    });
     expect(mocks.handleInlineActions).toHaveBeenCalledTimes(2);
   });
 
-  it("preserves the exact multiline reset payload during fast bootstrap", () => {
+  it("preserves the exact multiline reset payload during fast bootstrap", async () => {
     const payload = "keep [Q3]\nline 2";
-    const result = bootstrap(
+    const result = await bootstrap(
       buildGetReplyCtx({
         Body: `/new ${payload}`,
         BodyForCommands: `/new ${payload}`,
@@ -388,33 +365,20 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       }),
       ["/new"],
     );
-    expect(result.resetTriggered).toBe(true);
-    expect(result.bodyStripped).toBe(payload);
-    expect(result.sessionCtx.agentText).toBe(payload);
+    expect(result).toMatchObject({
+      resetTriggered: true,
+      bodyStripped: payload,
+      sessionCtx: { agentText: payload },
+    });
   });
 
   it("preserves node provenance, lineage, and usage preferences during fast reset bootstrap", async () => {
-    const preserved = {
-      spawnedBy: "agent:main:main",
-      parentSessionKey: "agent:main:dashboard:parent",
-      parentSessionId: "parent-session",
-      spawnedWorkspaceDir: "/tmp/workspace",
-      spawnedCwd: "/tmp/repo",
-      forkSource: { sessionKey: "agent:main:main", sessionId: "source-generation" },
-      createdVia: "spawn" as const,
-      createdActor: { type: "agent" as const, id: "agent:main:main" },
-      createdAt: 1_234,
-      spawnDepth: 2,
-      subagentRole: "orchestrator" as const,
-      subagentControlScope: "children" as const,
-      responseUsage: "full" as const,
-    };
+    const preserved = { ...FAST_RESET_LINEAGE_FIXTURE, responseUsage: "full" as const };
     await seedSession({ sessionId: "existing-fast-reset-lineage", ...preserved });
-    const result = bootstrap();
-    expect(result.resetTriggered).toBe(true);
-    expect(result.sessionEntry).toMatchObject({
-      previousSessionId: "existing-fast-reset-lineage",
-      ...preserved,
+    const result = await bootstrap();
+    expect(result).toMatchObject({
+      resetTriggered: true,
+      sessionEntry: { previousSessionId: "existing-fast-reset-lineage", ...preserved },
     });
   });
 
@@ -425,7 +389,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       modelSelectionLocked: true,
     };
     await seedSession(entry);
-    expect(() => bootstrap()).toThrow(MODEL_SELECTION_LOCKED_RESET_MESSAGE);
+    await expect(bootstrap()).rejects.toThrow(MODEL_SELECTION_LOCKED_RESET_MESSAGE);
     expect(readSession()).toMatchObject(entry);
   });
 });

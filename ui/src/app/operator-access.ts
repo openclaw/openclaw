@@ -1,32 +1,22 @@
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import type { GatewaySessionRow } from "../api/types.ts";
-import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
+import { canCallGatewayMethod, canPresentGatewayMethod } from "../lib/gateway-methods.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
-
-type GatewayOperatorAccess = Readonly<{
-  canWrite: boolean;
-  canAdmin: boolean;
-  canPair: boolean;
-  canReviewApprovals: boolean;
-  canGrantApprovals: boolean;
-}>;
 
 type OperatorAuth = {
   role?: string;
   scopes?: readonly string[];
   sessionCap?: NonNullable<ApplicationGatewaySnapshot["hello"]>["auth"]["sessionCap"];
 } | null;
-type OperatorScope =
-  | "operator.read"
-  | "operator.sessions.read"
-  | "operator.write"
-  | "operator.admin"
-  | "operator.pairing"
-  | "operator.approvals";
-
 function hasOperatorScope(
   auth: OperatorAuth,
-  requestedScope: OperatorScope,
+  requestedScope:
+    | "operator.read"
+    | "operator.sessions.read"
+    | "operator.write"
+    | "operator.admin"
+    | "operator.pairing"
+    | "operator.approvals",
   missingAuthHasAccess: boolean,
 ): boolean {
   if (!auth) {
@@ -44,7 +34,7 @@ function hasOperatorScope(
 
 export function readGatewayOperatorAccess(
   snapshot: Pick<ApplicationGatewaySnapshot, "hello"> | null | undefined,
-): GatewayOperatorAccess {
+) {
   const auth = snapshot?.hello?.auth ?? null;
   return {
     canWrite: hasOperatorWriteAccess(auth),
@@ -77,6 +67,15 @@ export function hasOperatorApprovalsAccess(auth: OperatorAuth): boolean {
   return hasOperatorScope(auth, "operator.approvals", false);
 }
 
+/**
+ * Guests: session-only operators who can view, not write, other people's sessions.
+ * Matches the restricted role shape Visitor Access requires. Presentation defaults
+ * only; the Gateway still owns every authorization decision.
+ */
+export function isRestrictedSessionGuest(auth: OperatorAuth): boolean {
+  return auth?.sessionCap === "view" && !hasOperatorReadAccess(auth);
+}
+
 export function hasOperatorSelfReadAccess(auth: OperatorAuth): boolean {
   return hasOperatorReadAccess(auth) || hasOperatorScope(auth, "operator.sessions.read", true);
 }
@@ -89,13 +88,18 @@ export function canReactToSession(
   const auth = snapshot.hello?.auth;
   const cap = auth?.sessionCap;
   const role = session?.sharingRole;
+  const canDefer =
+    snapshot.phase !== "stopped" && snapshot.client && !snapshot.client.offlineRecoveryRetired;
+  const actionAvailable = canDefer
+    ? canPresentGatewayMethod(snapshot, "session.reactions.set", "operator.write")
+    : canCallGatewayMethod(snapshot, "session.reactions.set", "operator.write");
   if (
     !session ||
     !role ||
     options.archived ||
     options.catalog ||
     cap === "none" ||
-    !canCallGatewayMethod(snapshot, "session.reactions.set", "operator.write")
+    !actionAvailable
   ) {
     return false;
   }

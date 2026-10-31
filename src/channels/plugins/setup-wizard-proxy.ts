@@ -1,5 +1,4 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createDelegatedSetupWizardStatusResolvers } from "./setup-wizard-binary.js";
 import type { ChannelSetupDmPolicy } from "./setup-wizard-types.js";
 import type { ChannelSetupWizard } from "./setup-wizard.js";
 
@@ -36,13 +35,22 @@ export function createDelegatedSetupWizardProxy(params: {
   delegatePrepare?: boolean;
   delegateFinalize?: boolean;
 }): ChannelSetupWizard {
+  const loadWizard = params.loadWizard;
   return {
     channel: params.channel,
     status: {
       ...params.status,
       resolveConfigured: async (statusParams) =>
         await (await params.loadWizard()).status.resolveConfigured(statusParams),
-      ...createDelegatedSetupWizardStatusResolvers(params.loadWizard),
+      async resolveStatusLines(statusParams) {
+        return (await loadWizard()).status.resolveStatusLines?.(statusParams) ?? [];
+      },
+      async resolveSelectionHint(statusParams) {
+        return await (await loadWizard()).status.resolveSelectionHint?.(statusParams);
+      },
+      async resolveQuickstartScore(statusParams) {
+        return await (await loadWizard()).status.resolveQuickstartScore?.(statusParams);
+      },
     },
     // Keep static setup metadata available immediately, while expensive
     // prepare/finalize/status behavior loads only when the wizard needs it.

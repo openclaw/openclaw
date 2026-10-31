@@ -15,17 +15,20 @@ Collect sanitized diagnostics and open a coding agent on this machine to diagnos
 openclaw triage
 ```
 
-In an interactive terminal, triage starts the first directly launchable agent on `PATH` in this detection order: Codex (`codex`), Claude Code (`claude`), Pi (`pi`), OpenCode (`opencode`), Muse Code (`muse`), Grok Build (`grok`), Cursor (`cursor-agent`), Kimi Code (`kimi`), then Qwen Code (`qwen`). When both Codex and Claude Code are available, Codex takes priority unless you select an agent with `--agent`. An explicit `openclaw triage` invocation prints the selected agent and passes a bounded repair prompt directly, without a picker or launch confirmation. The agent uses its existing authentication and native execution policy.
+In an interactive terminal, triage starts the first directly launchable agent on `PATH` in this detection order: Codex (`codex`), Claude Code (`claude`), Pi (`pi`), OpenCode (`opencode`), Muse Code (`muse`), Grok Build (`grok`), Cursor (`cursor-agent`), Kimi Code (`kimi`), Qwen Code (`qwen`), then Google Antigravity CLI (`agy`). When both Codex and Claude Code are available, Codex takes priority unless you select an agent with `--agent`. An explicit `openclaw triage` invocation prints the selected agent and passes a bounded repair prompt directly, without a picker or launch confirmation. The agent uses its existing authentication and native execution policy.
+
+Google Antigravity CLI uses `agy --prompt-interactive` to start with the repair prompt and keep the session open. Install and sign in to the [official CLI](https://antigravity.google/docs/cli/install/) first. Triage uses Antigravity's existing authentication and permission settings; it does not import Google credentials or bypass tool approvals.
 
 Cursor selection uses `--agent cursor` and requires the `cursor-agent` alias installed by Cursor's CLI installer. Triage does not use the `cursor` editor command or the generic `agent` alias, which Grok also installs.
 
 Kimi Code uses `kimi --prompt` for a single repair turn. Its native prompt mode uses automatic permissions without approval prompts; triage prints this policy before launch or manual handoff. Kimi Code does not expose an interactive initial-prompt flag. Qwen Code uses `qwen --prompt-interactive` to start with the repair prompt and keep the interactive session open, including its normal tool approvals.
 
-Claude Code starts with `--safe-mode`, which disables custom hooks, plugins, skills, MCP servers, and project instructions while retaining authentication and built-in tools. This prevents project startup hooks, such as dependency installation, from delaying the repair prompt. Direct launch requires Claude Code 2.1.169 or newer. When the installed CLI does not advertise safe-mode support, triage prints a manual handoff instead. Printed manual commands use Claude's normal customization settings, including plugins and MCP servers.
+Claude Code starts with `--safe-mode` when supported, which disables custom hooks, plugins, skills, MCP servers, and project instructions while retaining authentication and built-in tools. This prevents project startup hooks, such as dependency installation, from delaying the repair prompt. When the installed CLI does not advertise safe-mode support, triage prints a notice and runs `claude -p` with normal customization settings. Printed manual commands also use Claude's normal customization settings, including plugins and MCP servers.
 
 Choose a particular agent with `--agent`, or collect diagnostics without starting one with `--json` or `--non-interactive`:
 
 ```bash
+openclaw triage --agent agy
 openclaw triage --agent codex
 openclaw triage --agent cursor
 openclaw triage --agent grok
@@ -42,24 +45,19 @@ The diagnostics archive excludes secrets, tokens, raw chat payloads, and raw log
 
 The archive's config summary counts agent, plugin, and channel entries declared in the saved file. Shared channel settings and `$include` directives are excluded from those counts. Diagnostics do not expand included files.
 
-## Failed update recovery
+In sanitized config and snapshots, map keys recognized as private identifiers (such as phone numbers, email addresses, user/chat IDs, and tokens) become opaque numbered placeholders. Known private config maps, including per-DM overrides (`dms`), also hide identifiers without a recognizable text pattern. Repeated identifier keys share a placeholder within the archive; ordinary field names remain intact. Placeholders contain no hash or recoverable portion of the identifier.
 
-Before a failed update reaches triage, the updater may run
-[bounded unattended repair](/install/updating#unattended-repair-on-your-own-inference)
-for candidate validation failures or failed post-activation verification when
-rollback is unsafe or fails. Those attempts use configured inference and appear
-in the update run report. The updater owns any service restart and decides
-success from validation. Triage remains the handoff when recovery cannot finish.
+## Failed update recovery
 
 Interactive update recovery uses this same handoff after the updater releases its maintenance state. It starts from the captured update failure. It defers fresh Doctor checks and archive collection to the repair agent, so checks against the broken installation do not delay the handoff. The agent starts in the operator's captured working directory, or their OS home if that directory was removed or became inaccessible. Absolute installation selectors still identify the state, config, and default workspace to repair, even when the state directory cannot be accessed or created.
 
-Before an automatic interactive launch, OpenClaw shows what it will run. It shows the selected binary, or the embedded OpenClaw agent using your configured model. It also shows the saved prompt path when available, and a notice that it uses your own account or tokens. OpenClaw then asks for confirmation. Only an affirmative Yes starts the agent. Enter, `n`, cancellation, or 30 seconds without an answer skips the launch, prints one manual next step for the selected agent, and preserves diagnostics and the failed update's exit status. To choose another external agent, run `openclaw triage --agent codex` or another supported `--agent` value. This replaces the earlier timeout-as-Yes default; explicit standalone triage and unattended owned recovery keep their existing behavior.
+Before an automatic interactive launch, OpenClaw shows what it will run. It shows the selected binary, or the embedded OpenClaw agent using your configured model. It also shows the saved prompt path when available, and a notice that it uses your own account or tokens. OpenClaw then asks for confirmation. Only an affirmative Yes starts the agent. Enter, `n`, cancellation, or 30 seconds without an answer skips the launch, prints one manual next step for the selected agent, and preserves diagnostics and the failed update's exit status. To choose another external agent, run `openclaw triage --agent codex` or another supported `--agent` value. This replaces the earlier timeout-as-Yes default; explicit standalone triage keeps its existing behavior.
 
 The prompt preserves the original error, before and after versions, and recorded recovery state ahead of current Doctor findings. It includes up to three failed or interrupted steps, excluding advisory Doctor results, with bounded excerpts from both stderr and stdout. It also retains bounded plugin failures and the terminal Doctor warning. The failure record is limited to 4 KiB and the whole prompt to 8 KiB. A healthy Doctor check does not erase the failed attempt, and an absent restart-safety verdict remains unknown.
 
-Updates using `--yes`, JSON output, or a non-interactive session can start one owned automatic repair after an eligible mutation or restart failure, as described below. Other failures report that they are preparing triage diagnostics and retain one manual next step; they do not claim to start a repair agent. Initial argument, ownership, and installation refusals remain outside automatic repair. For a background or Control UI failure that cannot admit owned recovery, use the installation-specific command printed on the Gateway host, or run `openclaw triage` there. Standalone diagnostics preserve a pending failed-update notification as context. Embedded validation selects current ledger history through the resolution owner. These reads do not consume the notification or create a state database. Delivery routes and continuation instructions are excluded.
+Updates using `--yes`, JSON output, or a session without a TTY never start a repair agent. They save triage diagnostics and print the explicit opt-in command `openclaw triage --run --update-result <path>`. Managed handoff updates and foreground `gateway run` startup failures also collect diagnostics only. Initial argument, ownership, and installation refusals retain their existing output. Standalone diagnostics preserve a pending failed-update notification as context. Embedded validation selects current ledger history through the resolution owner. These reads do not consume the notification or create a state database. Delivery routes and continuation instructions are excluded.
 
-Use `--update-result <path>` to include an updater's saved failure artifact. Triage reads at most 8 KiB of valid UTF-8 JSON and validates the failure record. Its printed embedded handoff command uses a sanitized support export, so it remains usable after a temporary updater input is deleted. Interactive handoffs with a captured failure defer fresh diagnostics. JSON and forced non-interactive runs still collect them.
+Use `--update-result <path>` to include an updater's saved failure artifact. Triage requires a regular file (or a symlink to one), rejects FIFOs without waiting for a writer, and reads at most 8 KiB of valid UTF-8 JSON before validating the failure record. Its printed embedded handoff command uses a sanitized support export, so it remains usable after a temporary updater input is deleted. Interactive handoffs with a captured failure defer fresh diagnostics. JSON and forced non-interactive runs still collect them.
 
 The repair prompt directs the agent to preserve migrated state, investigate before rolling back or restarting, and verify the intended installation plus Gateway health and RPC connectivity after repair. A successful agent exit does not change the original updater failure into a successful update.
 
@@ -79,6 +77,15 @@ Plain `triage --run` validates update history through the resolution owner, even
 
 An explicit `--update-result` artifact or pending notification without a run identity or recorded target remains **unrepaired**, including Doctor/config failures. Triage reports that it cannot establish the update target and directs you to inspect `openclaw update status --json`, then run `openclaw update repair`. It never falls back to a healthy Doctor verdict for an uncorrelated update failure. An intentionally stopped or unmanaged Gateway cannot supply managed-service verification. When the initial checks prove resolution, the human output says **already resolved**; after a repair turn, it says **repaired** only when the same checks pass. The worker protocol retains its existing `repaired` and `unrepaired` statuses. An agent's successful exit or claim that it fixed the problem is not evidence of resolution.
 
+Pending package activation also prevents triage from reporting resolution, even
+when Doctor passes, the last run succeeded, and no recovery sets are listed.
+For a missing or changed handoff lease database after a reboot, triage directs you
+to `openclaw update repair` before retrying the update. Run repair from a CLI
+containing the [lease recovery fix](/cli/update/repair-and-recovery#update-repair);
+an older blocked CLI may need the manual installation hop described there.
+If triage has no resolution predicate for a recorded failure, it says so and names
+`openclaw update repair` as the next step.
+
 Post-turn Doctor checks run only after the executor confirms cleanup. If cleanup fails or times out, repair reports failure, retains execution state, and refuses another repair in that CLI process. Inspect the diagnostics and stop any remaining work before retrying from a new process.
 
 The operator owns the update or the explicit `--run` request. Embedded repair therefore replaces interactive exec approval with a prompt-free run, scoped to the installation or staged candidate root (`fs.workspaceOnly: true`). It preserves safe-bin and tool allowlists. It never overrides explicit exec or repair-tool denies. It refuses configured sandbox, node, and remote execution routes instead of redirecting them onto the host, and does not launch external coding-agent CLIs. An explicit deny reports `exec-denied-by-policy`. Use `openclaw triage` for an external handoff. The saved execution policy is unchanged.
@@ -97,9 +104,10 @@ On Windows, recognized npm `.cmd` and `.bat` shims launch their Node.js or nativ
 
 ## Manual handoff
 
-Non-interactive sessions save diagnostics without starting an agent. Human output prints one next step for the explicitly selected or first detected coding agent. If no coding agent is detected, it explains how to install one and rerun triage. Windows wrappers that require a shell remain available as manual commands. JSON output retains all external handoff commands and the explicit embedded route. Saved external prompts are read from stdin or, for Grok and Muse, with `--prompt-file`. Kimi Code receives a short instruction to read the saved prompt because it has no prompt-file or stdin input option. On macOS and Linux, the commands look like this:
+Non-interactive sessions save diagnostics without starting an agent. Human output prints one next step for the explicitly selected or first detected coding agent. If no coding agent is detected, it explains how to install one and rerun triage. Windows wrappers that require a shell remain available as manual commands. JSON output retains all external handoff commands and the explicit embedded route. Saved external prompts are read from stdin or, for Grok and Muse, with `--prompt-file`. Kimi Code and Antigravity CLI receive a short instruction to read the saved prompt rather than piping it to stdin. On macOS and Linux, the commands look like this:
 
 ```bash
+env OPENCLAW_STATE_DIR='<state-dir>' OPENCLAW_CONFIG_PATH='<config-path>' OPENCLAW_WORKSPACE_DIR='<default-workspace-dir>' agy --prompt-interactive 'Read the debugging prompt at <prompt-path> and follow its repair and verification instructions.'
 env OPENCLAW_STATE_DIR='<state-dir>' OPENCLAW_CONFIG_PATH='<config-path>' OPENCLAW_WORKSPACE_DIR='<default-workspace-dir>' claude -p < '<prompt-path>'
 env OPENCLAW_STATE_DIR='<state-dir>' OPENCLAW_CONFIG_PATH='<config-path>' OPENCLAW_WORKSPACE_DIR='<default-workspace-dir>' codex exec --skip-git-repo-check - < '<prompt-path>'
 env OPENCLAW_STATE_DIR='<state-dir>' OPENCLAW_CONFIG_PATH='<config-path>' OPENCLAW_WORKSPACE_DIR='<default-workspace-dir>' cursor-agent --print < '<prompt-path>'
@@ -112,60 +120,27 @@ env OPENCLAW_STATE_DIR='<state-dir>' OPENCLAW_CONFIG_PATH='<config-path>' OPENCL
 env OPENCLAW_STATE_DIR='<state-dir>' OPENCLAW_CONFIG_PATH='<config-path>' OPENCLAW_WORKSPACE_DIR='<default-workspace-dir>' openclaw triage --run
 ```
 
-A captured update failure adds `--update-result <saved-failure-path>` to the embedded command. The external commands use their agent's native non-interactive tool policy, including Kimi Code's automatic permissions. Triage adds no permission overrides. Use `openclaw triage --agent <name>` to start a session; Kimi Code remains a single prompt run.
+A captured update failure adds `--update-result <saved-failure-path>` to the embedded command. The external commands use their agent's native tool policy, including Kimi Code's automatic permissions. Antigravity's saved command starts an interactive session. Triage adds no permission overrides. Use `openclaw triage --agent <name>` to start a session; Kimi Code remains a single prompt run.
 
 Printed Windows commands target PowerShell, including Windows PowerShell 5.1. They read saved prompts as UTF-8, preserve literal paths, and restore your installation selectors after the command completes. WSL uses POSIX shell commands.
 
 JSON output also includes `detectedAgents`, listing the external agents found on `PATH`. Standalone triage with JSON output, non-TTY sessions, or `--non-interactive` never starts an agent, even with `--agent`. The Codex command works outside a Git checkout. It does not change Codex sandbox or approval settings.
 
-## Automatic failure handoff
+<a id="automatic-failure-handoff" />
 
-Failed updates that reached installation changes, unhealthy update restarts, and recorded Gateway server startup failures can invoke the same triage flow automatically. Existing update settlement runs first. Restoration requires the update owner to verify that restarting is safe. After package replacement, the installed CLI owns triage. Unavailable or incompatible CLI files leave saved failure diagnostics and manual guidance. A supervised Gateway attempts triage only when its existing crash-loop breaker first trips. Later failures in the same Gateway process do not launch another agent.
+## Unattended failure diagnostics
 
-The automatic handoff selects the configured embedded agent first, otherwise a directly launchable Codex or Claude Code CLI, in that order. External agents run non-interactively with their existing authentication and permissions. Claude Code uses `--safe-mode` to disable custom hooks, plugins, and project instructions while retaining authentication and built-in tools. Finding an executable does not establish authentication. A failed selected route, including a Claude version that does not support safe mode, is reported without trying another agent. The private prompt and manual handoff commands remain available.
+Unattended updates, managed update handoffs, and recorded foreground Gateway startup failures save diagnostics without starting an agent. Update settlement and service recovery run first. After package replacement, the installed CLI collects diagnostics with `--non-interactive` or `--json`. The failure output and original exit status remain unchanged. Diagnostics go to stderr when the update uses JSON output.
 
-Automatic embedded recovery retains the configured runtime because it must investigate the original failure, including symptoms that Doctor lint cannot detect. Its repair prompt can permit an owned atomic Gateway restart when running health verification is required. An intentionally stopped installation stays stopped. This differs from manual `triage --run`, whose Doctor-validated repair loop never owns service lifecycle changes.
+The output names the saved failure artifact and the explicit opt-in command:
 
-After an in-process restart fails, the Gateway retries startup once when foreground triage completes with confirmed cleanup. The fresh startup reads the repaired configuration and records its own boot outcome; an agent's success alone does not establish recovery. If triage declines or is unavailable, the process stays alive for manual recovery. It logs the startup refusal, including the offending config key when reported, and prints the next steps: fix that refusal, run `openclaw doctor --fix`, then send `SIGUSR2` using the printed `kill -USR2 <pid>` command.
+```bash
+openclaw triage --run --update-result <path>
+```
 
-An admitted triage failure or failed startup retry exits non-zero only when the run has a recorded respawning supervisor (launchd, systemd, Scheduled Task, or explicit external supervision). Unmanaged foreground runs and containers without recorded supervision stay alive with the same manual recovery guidance. They do not serve requests until startup succeeds. A stop received during triage cancels recovery and waits for cleanup without starting another Gateway. Initial startup refusals and unsafe startup cleanup retain their existing exit behavior.
+Run that command in an interactive terminal on the Gateway host, preserving the printed installation selectors. It uses your configured inference and the existing embedded repair behavior. Interactive updates still offer **Diagnose update failure** and require an affirmative Yes before starting the agent.
 
-Windows does not support `SIGUSR2`. After fixing the refusal, restart a Scheduled Task Gateway with `openclaw gateway restart`. For an unmanaged foreground run, press Ctrl+C and rerun the original Gateway command. Runs with explicit external supervision direct you to that supervisor's restart workflow. The process prints the applicable instruction.
-
-Targeted automatic Codex repair requires an owned stdio app-server process. Unix-socket and WebSocket connections are refused. A socket server has an independent lifetime, and disconnecting does not stop its active turns. WebSocket URLs also cannot establish where native commands execute. Use the existing `plugins.entries.codex.config.appServer.transport` setting with `"stdio"`, or a saved external/manual handoff on this machine. Triage never silently switches a configured socket route to stdio. Ordinary Codex runs without an installation target retain socket and WebSocket support. ACP, provisioned sandboxes, remote/node execution and a Codex app-server with `remoteWorkspaceRoot` remain unsupported for automatic local-target repair. Native sandbox and approval policy are preserved.
-
-The fixing agent receives the original failure and a verification goal: check the intended installation with `openclaw health --json` and `openclaw status --all` or `openclaw gateway status --deep`, confirm the expected running version after an update when known, and verify the original symptom. A PID, valid config, or successful repair command alone does not prove recovery. The report must include changes, verification evidence, and any remaining blocker.
-
-Skipped or blocked updates, capability approval refusals, ownership and schema refusals, startup failures with unconfirmed cleanup, existing-Gateway lock conflicts, external supervisors, and commands already running inside a fixing agent do not trigger another automatic agent. Automatic triage honors `--no-restart` and leaves intentionally stopped services stopped. Termination signals cancel foreground triage. Diagnostics and agent output go to stderr. The original failure result and exit status remain unchanged, even if the agent reports success.
-
-When upgrading from an older managed-update helper, a leftover transient claim is
-reclaimed on the next admission only if its recorded process instance is positively
-dead. This includes an exited updater runner or a verified reused PID, not just a
-dead helper. Live, unverifiable, malformed, or concurrently replaced claims are left
-alone. This cleanup does not adopt a live older helper into automatic triage:
-incompatible live handoffs still require the saved diagnostics and manual guidance.
-
-Automatic fixing is single-flight per canonical installation, including foreground updates and unsupervised Gateway startup. A competing failure reports that triage is already owned, preserves its original output and exit status, and leaves the running attempt alone. After confirmed cleanup, a later independent failure can start a fresh attempt.
-
-Foreground triage stays attached to its caller. Cancellation or loss of that connection stops new work and gives registered OpenClaw resources their existing cleanup deadlines. The CLI gets the existing 30-second handoff grace to exit after cancellation or terminal disconnect. A stuck CLI is then terminated, and its generation remains fenced. External coding CLIs manage native commands in separate process groups, so even a normal or cooperative CLI exit leaves foreground automatic cleanup uncertain. Their result and manual handoffs remain available. A failed embedded agent can still finish cleanup normally.
-
-If the fixing process disappears abruptly, forced termination is needed, or teardown fails, automatic admission remains blocked for that OS boot. Registered embedded resources that confirm cleanup after cooperative cancellation allow another attempt. A forced or uncertain terminal outcome cannot certify that closure. Inspect the saved diagnostics and use `openclaw triage` manually. Do not delete the claim while prior work may still be running. A verified different OS boot allows a fresh attempt. Triage never initiates a reboot. Unavailable boot identity or incompatible private handoff data leaves diagnostics and manual guidance.
-
-Embedded OpenClaw repair keeps local non-PTY commands and stdio LSP/MCP servers under a process-group owner on macOS and Linux. Cleanup must confirm that the owned process group has disappeared. Closed pipes, process listings, or a completed root command are insufficient. Commands that detach from that group and close inherited descriptors remain outside this cleanup guarantee. OpenClaw `exec` requests with `pty: true` fall back to a non-PTY child without starting a native PTY and report a warning. Commands that require a terminal may fail. Windows stdio tools still lack cleanup confirmation, so their use leaves automatic cleanup uncertain.
-
-For embedded Codex repair, cleanup must observe its owned descendants stopping before the app-server exits gracefully. An inspection failure, unconfirmed native terminal termination, a still-owned shared client, or a signalled app-server exit keeps automatic recovery blocked even when the transport has closed. Commands that deliberately detach from [Codex terminal ownership](/plugins/codex-harness) remain outside that cleanup guarantee.
-
-For a Linux user-systemd Gateway, automatic managed recovery reuses the existing update handoff in a native scope attached to the Gateway service. **Cancellation begins when that native scope attachment is verified**, before readiness is announced or a fixing agent starts. Earlier update parking, restoration, and preparation keep their existing update behavior. A stop completed before attachment is not treated as cancellation of a future recovery. Failed update restoration may leave the installed service inactive, and triage can still be admitted. An unsafe installation or preserve-activation request permits offline diagnosis and repair while leaving the primary stopped. Running health verification is deferred.
-
-After a managed update, the updater stages its repair request and explicitly transfers it only after acknowledgement and a final cancellation check. A cancelled or disconnected request that was never transferred cannot start an agent. The native scope remains responsible for all process groups inside it. A failed or inactive scope is not considered closed while systemd still tracks its cgroup.
-
-When managed triage needs a restart, use the atomic `openclaw gateway restart` command. An explicit stop cancels recovery and its descendants, including `systemctl --user stop <gateway-unit>` when the primary is already inactive or a restart is pending. Do not use stop-then-start during recovery. Losing the helper, fixing child, or current handoff claim also closes recovery. The updater cannot restore the Gateway afterward. Cancellation or infeasibility must be reported, and an agent exit code or prose alone is not proof of health.
-
-Repair commands such as `openclaw doctor --fix` remain available when the target is offline and ownership, schema, and maintenance locks permit repair. If maintenance needs to stop the managed Gateway, it refuses from inside that Gateway's automatic fixing subtree before issuing the stop. Continue with read-only diagnosis, or with safe offline artifact repair followed by an atomic restart. Otherwise report the blocker, so an independent operator can run maintenance from a shell outside triage.
-
-Automatic managed execution is limited to verified Linux user-systemd ownership. Launchd, Windows, system-scope systemd, and unverifiable managed ownership retain diagnostics/manual guidance. Foreground recovery remains available. No broader native cancellation support is implied.
-
-This connection requires a working CLI. Missing Node or CLI files, failures before Gateway server startup or while recording its boot, and invalid-config paths that retain the existing Doctor recovery flow may still require `openclaw triage` manually. It does not install a separate recovery service.
+A missing or incompatible installed CLI leaves the saved failure artifact and manual guidance. Existing ownership, schema, startup cleanup, and cancellation refusals retain their behavior. A native recovery handoff admitted by an older version keeps its authority and cleanup checks across an upgrade, but the new CLI collects diagnostics only. Live or uncertain claims are left for their lifecycle owner; do not delete them while prior work may still be running.
 
 ## Output and exit codes
 
@@ -179,14 +154,14 @@ Embedded repair exits with 0 when its validation proves resolution, 2 when a tim
 
 ## Options
 
-| Option                   | Effect                                                                                                                  |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
-| `--json`                 | Emit prompt and archive paths, finding counts, detected agents, and commands.                                           |
-| `--no-export`            | Skip the diagnostics archive; still prepare the prompt and use the selected handoff route.                              |
-| `--agent <name>`         | Select `claude`, `codex`, `cursor`, `grok`, `kimi`, `muse`, `opencode`, `pi`, or `qwen` instead of automatic detection. |
-| `--run`                  | Run one bounded embedded repair turn with installation or update-resolution validation.                                 |
-| `--non-interactive`      | Prepare diagnostics without prompting or starting an agent, including on a terminal.                                    |
-| `--update-result <path>` | Include the bounded update-failure JSON diagnostics artifact written by the updater.                                    |
+| Option                   | Effect                                                                                                                         |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| `--json`                 | Emit prompt and archive paths, finding counts, detected agents, and commands.                                                  |
+| `--no-export`            | Skip the diagnostics archive; still prepare the prompt and use the selected handoff route.                                     |
+| `--agent <name>`         | Select `agy`, `claude`, `codex`, `cursor`, `grok`, `kimi`, `muse`, `opencode`, `pi`, or `qwen` instead of automatic detection. |
+| `--run`                  | Run one bounded embedded repair turn with installation or update-resolution validation.                                        |
+| `--non-interactive`      | Prepare diagnostics without prompting or starting an agent, including on a terminal.                                           |
+| `--update-result <path>` | Include the bounded update-failure JSON diagnostics artifact written by the updater.                                           |
 
 `--run` cannot be combined with `--json`, `--non-interactive`, or `--agent`.
 

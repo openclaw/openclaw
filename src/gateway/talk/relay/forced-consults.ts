@@ -150,13 +150,7 @@ export function submitRelayAgentControlProviderResults(
   };
 }
 
-export function scheduleForcedAgentConsult(
-  session: RelaySession | undefined,
-  question: string,
-): void {
-  if (!session || !question.trim()) {
-    return;
-  }
+export function scheduleForcedAgentConsult(session: RelaySession, question: string): void {
   if (session.harness.forcedConsults.hasRecentNativeConsult(question)) {
     return;
   }
@@ -180,8 +174,7 @@ export function scheduleForcedAgentConsult(
       { audioPlaybackActive: true, force: true },
       noFallbackRelayOutputFlush,
     );
-    broadcastToOwner(session.context, session.connId, {
-      relaySessionId: session.id,
+    broadcastToOwner(session, {
       type: "toolCall",
       itemId,
       callId,
@@ -294,8 +287,7 @@ export function submitRealtimeAgentConsultWorkingResponse(
     if (session.toolResultEpoch !== epoch) {
       return;
     }
-    broadcastToOwner(session.context, session.connId, {
-      relaySessionId: session.id,
+    broadcastToOwner(session, {
       type: "toolResult",
       callId,
       talkEvent: session.harness.talk.emit({

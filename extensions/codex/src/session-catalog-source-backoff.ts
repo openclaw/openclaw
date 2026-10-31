@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { CodexAppServerRpcError } from "./app-server/rpc-error.js";
+import { materializeErrorStack } from "openclaw/plugin-sdk/error-runtime";
+import {
+  CodexAppServerRpcError,
+  CodexCatalogResponseTooLargeError,
+} from "./app-server/rpc-error.js";
 import { findCodexAppServerSpawnError } from "./app-server/spawn-error.js";
 import type {
   CodexCatalogListRequest,
@@ -50,15 +54,9 @@ export class CodexCatalogSourceBackoff {
     return {
       allowed: true,
       resolved: () => {
-        if (sources.get(key) === state) {
-          // Keep a healthy generation so an older failure cannot reopen the circuit.
-          sources.set(key, {});
-        }
+        sources.set(key, {});
       },
       rejected: (error) => {
-        if (sources.get(key) !== state) {
-          return;
-        }
         if (
           error instanceof CatalogParamsError ||
           (error instanceof Error && error.name === "AbortError") ||
@@ -73,15 +71,18 @@ export class CodexCatalogSourceBackoff {
         // Transient failures retain one immediate retry; OS launch refusals are terminal.
         const delayMs = findCodexAppServerSpawnError(error)
           ? Infinity
-          : failure
-            ? Math.min(failure.delayMs * 2 || INITIAL_BACKOFF_MS, MAX_BACKOFF_MS)
-            : 0;
+          : CodexCatalogResponseTooLargeError.fromError(error)
+            ? 15 * 60_000
+            : failure
+              ? Math.min(failure.delayMs * 2 || INITIAL_BACKOFF_MS, MAX_BACKOFF_MS)
+              : 0;
+        materializeErrorStack(error);
         sources.set(key, {
           failure: { error, delayMs, retryAt: this.now() + delayMs, probing: false },
         });
       },
       abandoned: () => {
-        if (sources.get(key) === state && failure) {
+        if (failure) {
           failure.probing = false;
         }
       },

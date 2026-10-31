@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { credentialFixture, packCredential } from "./credential.test-support.mjs";
 import { resumeQaLease } from "./qa-credential-lease.mjs";
 import { runCommand, runTelegramTestScenario } from "./run-mock-sut-user-e2e.mjs";
 import {
@@ -14,48 +14,21 @@ import {
 } from "./telegram-test-credential.mjs";
 import { checkTelegramTestCredential } from "./telegram-test-doctor.mjs";
 
-function makeCredential() {
+const brokerEnv = {
+  OPENCLAW_QA_CONVEX_SITE_URL: "https://broker.example.test",
+  OPENCLAW_QA_CONVEX_SECRET_CI: "ci-secret",
+};
+const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
+function makeCredential(context) {
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "tg-test-credential-fixture-"));
-  fs.mkdirSync(path.join(fixture, "db"));
-  fs.writeFileSync(
-    path.join(fixture, "config.local.json"),
-    JSON.stringify({
-      testDc: true,
-      testerUserId: 42,
-      apiId: 123,
-      apiHash: "api-hash",
-      databaseEncryptionKey: "database-key",
-    }),
-  );
-  fs.writeFileSync(path.join(fixture, "db", "td_test.binlog"), "tdlib-session");
-  const archivePath = path.join(fixture, "session.tgz");
-  const packed = spawnSync("tar", ["-czf", archivePath, "config.local.json", "db/td_test.binlog"], {
-    cwd: fixture,
-  });
-  assert.equal(packed.status, 0);
-  const archive = fs.readFileSync(archivePath);
-  return {
-    fixture,
-    payload: {
-      schemaVersion: 1,
-      environment: "test",
-      groupId: "-1001",
-      sutToken: "100:test-token",
-      sutUsername: "sut_bot",
-      sutBotId: "100",
-      testerUserId: "42",
-      tdlibArchiveBase64: archive.toString("base64"),
-      tdlibArchiveSha256: createHash("sha256").update(archive).digest("hex"),
-      tdlibVersion: "1.8.67",
-    },
-  };
+  context.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
+  return { fixture, ...credentialFixture(fixture) };
 }
 
 test("validates and restores one isolated Test Server credential", (context) => {
-  const { fixture, payload } = makeCredential();
-  context.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
+  const { fixture, payload, hostEnv } = makeCredential(context);
   const stateRoot = path.join(fixture, "restored");
-  const restored = restoreTelegramTestCredential(payload, stateRoot);
+  const restored = restoreTelegramTestCredential(payload, stateRoot, hostEnv);
   assert.equal(restored.groupId, "-1001");
   assert.equal(
     restored.driverEnv.TELEGRAM_USER_DRIVER_STATE_DIR,
@@ -90,11 +63,10 @@ test("validates and restores one isolated Test Server credential", (context) => 
   }
   assert.equal(fs.statSync(path.join(stateRoot, "credentials.local.json")).mode & 0o777, 0o600);
   assert.equal(
-    JSON.parse(fs.readFileSync(path.join(stateRoot, "credentials.local.json"), "utf8")).sutBotToken,
+    readJson(path.join(stateRoot, "credentials.local.json")).sutBotToken,
     payload.sutToken,
   );
   assert.equal(fs.existsSync(path.join(stateRoot, "user-driver", "db", "td_test.binlog")), true);
-  fs.rmSync(fixture, { recursive: true, force: true });
 });
 
 test(
@@ -103,11 +75,10 @@ test(
     skip: process.platform !== "darwin" || spawnSync("uv", ["--version"]).status !== 0,
   },
   async (context) => {
-    const { fixture, payload } = makeCredential();
+    const { payload } = makeCredential(context);
     const root = fs.mkdtempSync("/private/tmp/telegram-readiness-test-");
     context.after(() => {
       fs.rmSync(root, { recursive: true, force: true });
-      fs.rmSync(fixture, { recursive: true, force: true });
     });
     const restored = restoreTelegramTestCredential(payload, path.join(root, "state"));
     const script = path.join(root, "status.py");
@@ -189,8 +160,8 @@ print(json.dumps({"ok": True, "authorized": True, "testDc": True, "tdlibVersion"
   },
 );
 
-test("rejects an archive hash mismatch and production credentials", () => {
-  const { fixture, payload } = makeCredential();
+test("rejects an archive hash mismatch and production credentials", (context) => {
+  const { fixture, payload } = makeCredential(context);
   assert.throws(
     () =>
       restoreTelegramTestCredential(
@@ -203,46 +174,35 @@ test("rejects an archive hash mismatch and production credentials", () => {
     () => parseTelegramTestCredential({ ...payload, environment: "production" }),
     /unsupported schema or environment/u,
   );
-  fs.rmSync(fixture, { recursive: true, force: true });
 });
 
 test(
   "rejects symbolic links in a leased TDLib archive",
   { skip: process.platform === "win32" },
-  () => {
-    const { fixture, payload } = makeCredential();
+  (context) => {
+    const { fixture, payload } = makeCredential(context);
     fs.rmSync(path.join(fixture, "db", "td_test.binlog"));
     fs.symlinkSync("../config.local.json", path.join(fixture, "db", "td_test.binlog"));
-    const archivePath = path.join(fixture, "linked-session.tgz");
-    const packed = spawnSync(
-      "tar",
-      ["-czf", archivePath, "config.local.json", "db/td_test.binlog"],
-      { cwd: fixture },
-    );
-    assert.equal(packed.status, 0);
-    const archive = fs.readFileSync(archivePath);
+    const archive = packCredential(fixture, "db/td_test.binlog", "linked-session.tgz");
     assert.throws(
       () =>
         restoreTelegramTestCredential(
           {
             ...payload,
-            tdlibArchiveBase64: archive.toString("base64"),
-            tdlibArchiveSha256: createHash("sha256").update(archive).digest("hex"),
+            ...archive,
           },
           path.join(fixture, "linked-restored"),
         ),
       /unexpected layout/u,
     );
-    fs.rmSync(fixture, { recursive: true, force: true });
   },
 );
 
-test("removes restored Convex state before releasing the lease", async () => {
-  const { fixture, payload } = makeCredential();
-  const originalFetch = globalThis.fetch;
-  let stateRoot;
+test("removes restored Convex state before releasing the lease", async (context) => {
+  const { payload, hostEnv } = makeCredential(context);
+  let stateRoot = undefined;
   let releaseObservedStateRemoved = false;
-  globalThis.fetch = async (url) => {
+  context.mock.method(globalThis, "fetch", async (url) => {
     if (String(url).endsWith("/acquire")) {
       return Response.json({
         status: "ok",
@@ -255,41 +215,36 @@ test("removes restored Convex state before releasing the lease", async () => {
       releaseObservedStateRemoved = stateRoot !== undefined && !fs.existsSync(stateRoot);
     }
     return Response.json({ status: "ok" });
-  };
-  try {
-    const credential = await acquireTelegramTestCredential({
-      env: {
-        OPENCLAW_QA_CONVEX_SITE_URL: "https://broker.example.test",
-        OPENCLAW_QA_CONVEX_SECRET_CI: "ci-secret",
-      },
-    });
-    stateRoot = credential.stateRoot;
-    const receipt = path.join(path.dirname(stateRoot), "lease.json");
-    const recovery = JSON.parse(fs.readFileSync(receipt, "utf8"));
-    assert.equal(recovery.identity.credentialId, "credential-1");
-    assert.equal(recovery.identity.leaseToken, "lease-token-1");
-    assert.equal(fs.statSync(receipt).mode & 0o777, 0o600);
-    assert.equal(fs.existsSync(stateRoot), true);
-    await credential.release();
-    assert.equal(releaseObservedStateRemoved, true);
-    assert.equal(fs.existsSync(receipt), false);
-  } finally {
-    globalThis.fetch = originalFetch;
-    fs.rmSync(fixture, { recursive: true, force: true });
-  }
+  });
+
+  const credential = await acquireTelegramTestCredential({
+    hostEnv,
+    env: brokerEnv,
+  });
+  stateRoot = credential.stateRoot;
+  const receipt = path.join(path.dirname(stateRoot), "lease.json");
+  const recovery = readJson(receipt);
+  assert.equal(recovery.identity.credentialId, "credential-1");
+  assert.equal(recovery.identity.leaseToken, "lease-token-1");
+  assert.equal(fs.statSync(receipt).mode & 0o777, 0o600);
+  assert.equal(fs.existsSync(stateRoot), true);
+  await credential.release();
+  assert.equal(releaseObservedStateRemoved, true);
+  assert.equal(fs.existsSync(receipt), false);
 });
 
-test("failed broker release retains only the private handle for same-owner recovery", async () => {
-  const { fixture, payload } = makeCredential();
-  const originalFetch = globalThis.fetch;
-  const env = {
-    OPENCLAW_QA_CONVEX_SITE_URL: "https://broker.example.test",
-    OPENCLAW_QA_CONVEX_SECRET_CI: "ci-secret",
-  };
+test("failed broker release retains only the private handle for same-owner recovery", async (context) => {
+  const { payload, hostEnv } = makeCredential(context);
+  const env = brokerEnv;
   let failRelease = true;
   let acquisitions = 0;
-  let leaseDir;
-  globalThis.fetch = async (url) => {
+  let leaseDir = undefined;
+  context.after(() => {
+    if (leaseDir) {
+      fs.rmSync(leaseDir, { recursive: true, force: true });
+    }
+  });
+  context.mock.method(globalThis, "fetch", async (url) => {
     if (String(url).endsWith("/acquire")) {
       acquisitions += 1;
       return Response.json({
@@ -299,38 +254,34 @@ test("failed broker release retains only the private handle for same-owner recov
         payload,
       });
     }
-    if (String(url).endsWith("/release") && failRelease)
+    if (String(url).endsWith("/release") && failRelease) {
       return Response.json(
         { status: "error", code: "TEMPORARY_FAILURE", message: "release unavailable" },
         { status: 503 },
       );
+    }
     return Response.json({ status: "ok" });
-  };
-  try {
-    const credential = await acquireTelegramTestCredential({ env });
-    leaseDir = path.dirname(credential.stateRoot);
-    const first = credential.release();
-    const second = credential.release();
-    const failure = await first.catch((error) => error);
-    assert.match(failure.message, /TEMPORARY_FAILURE/);
-    await assert.rejects(second, (error) => error === failure);
-    await assert.rejects(credential.release(), (error) => error === failure);
-    assert.equal(
-      fs.existsSync(credential.stateRoot),
-      false,
-      "credential material must be removed before release",
-    );
-    const recovery = JSON.parse(fs.readFileSync(path.join(leaseDir, "lease.json"), "utf8"));
-    failRelease = false;
-    const held = await resumeQaLease({ recovery, env });
-    assert.equal(held.credentialId, "retained-credential");
-    await held.release();
-    assert.equal(acquisitions, 1);
-  } finally {
-    globalThis.fetch = originalFetch;
-    if (leaseDir) fs.rmSync(leaseDir, { recursive: true, force: true });
-    fs.rmSync(fixture, { recursive: true, force: true });
-  }
+  });
+
+  const credential = await acquireTelegramTestCredential({ env, hostEnv });
+  leaseDir = path.dirname(credential.stateRoot);
+  const first = credential.release();
+  const second = credential.release();
+  const failure = await first.catch((error) => error);
+  assert.match(failure.message, /TEMPORARY_FAILURE/);
+  await assert.rejects(second, (error) => error === failure);
+  await assert.rejects(credential.release(), (error) => error === failure);
+  assert.equal(
+    fs.existsSync(credential.stateRoot),
+    false,
+    "credential material must be removed before release",
+  );
+  const recovery = readJson(path.join(leaseDir, "lease.json"));
+  failRelease = false;
+  const held = await resumeQaLease({ recovery, env });
+  assert.equal(held.credentialId, "retained-credential");
+  await held.release();
+  assert.equal(acquisitions, 1);
 });
 
 test("validates optional forum and distinct participant fixtures without echoing private fields", () => {

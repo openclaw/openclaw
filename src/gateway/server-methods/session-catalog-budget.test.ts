@@ -1,36 +1,137 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { publishSessionCatalogHost } from "../../plugin-sdk/session-catalog-paging.js";
 import {
   getActiveGatewayRootWorkCount,
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
+import {
+  catalogHost,
+  catalogProvider as provider,
+  catalogSession,
+  expectCatalog,
+  expectCatalogs,
+} from "./session-catalog.fixtures.test-support.js";
 import {
   call,
   hoisted,
-  markPluginRegistryActive,
-  provider,
   resetSessionCatalogTestState,
   setSessionCatalogEntries,
   startCall,
   type SessionCatalogProvider,
 } from "./session-catalog.test-helpers.js";
 
-const { getActivePluginRegistry } = await import("../../plugins/runtime.js");
-
 beforeEach(() => {
   resetSessionCatalogTestState();
   vi.useFakeTimers();
 });
 afterEach(() => vi.useRealTimers());
+const nodeHost = () => catalogHost({ hostId: "node:fixture", label: "Fixture node", kind: "node" });
+function registerList(list: SessionCatalogProvider["list"], requiresFreshList?: true) {
+  hoisted.activeRegistry.sessionCatalogs = [
+    {
+      provider: provider("fixture", { list, ...(requiresFreshList ? { requiresFreshList } : {}) }),
+    },
+  ];
+}
+
+it("keeps a host failure during a pending retry and clears it after host success", async () => {
+  const host = nodeHost();
+  const list = vi
+    .fn<SessionCatalogProvider["list"]>()
+    .mockResolvedValueOnce([
+      { ...host, error: { code: "NODE_INVOKE_FAILED", message: "Fixture node failed" } },
+    ])
+    .mockResolvedValueOnce([{ ...host, pending: true }])
+    .mockResolvedValueOnce([host]);
+  registerList(list);
+  const config = {};
+  const client = { connId: "host-retry-owner", connect: gatewayConnect([]) };
+  await call("sessions.catalog.list", {}, config, client);
+  const waiting = await call("sessions.catalog.list", {}, config, client);
+  expect(waiting.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]).toEqual({
+    ...host,
+    pending: true,
+    error: { code: "NODE_INVOKE_FAILED", message: "Fixture node failed" },
+  });
+  const recovered = await call("sessions.catalog.list", {}, config, client);
+  expect(recovered.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]).toEqual(host);
+});
+
+it("keeps a cached failure during retry and clears it after the next successful empty refresh", async () => {
+  const host = nodeHost();
+  const retry = createDeferredCore<(typeof host)[]>();
+  const list = vi
+    .fn<SessionCatalogProvider["list"]>()
+    .mockResolvedValueOnce([host])
+    .mockRejectedValueOnce(Object.assign(new Error("node did not respond"), { code: "TIMEOUT" }))
+    .mockImplementationOnce(() => retry.promise)
+    .mockResolvedValue([]);
+  registerList(list);
+  const config = {};
+  const client = { connId: "refresh-owner", connect: gatewayConnect([]) };
+  await call("sessions.catalog.list", {}, config, client);
+  try {
+    const failed = await call("sessions.catalog.list", {}, config, client);
+    expect(failed.mock.calls[0]?.[1]?.catalogs[0]).toMatchObject({
+      hosts: [host],
+      error: { code: "catalog_stale", message: expect.stringContaining("TIMEOUT") },
+    });
+    const retrying = startCall("sessions.catalog.list", {}, config, client);
+    await vi.advanceTimersByTimeAsync(0);
+    await retrying.completion;
+    expect(retrying.respond.mock.calls[0]?.[1]?.catalogs[0]).toMatchObject({
+      pending: true,
+      error: { code: "catalog_stale", message: expect.stringContaining("TIMEOUT") },
+    });
+    retry.resolve([]);
+    await vi.advanceTimersByTimeAsync(0);
+    const recovered = await call("sessions.catalog.list", {}, config, client);
+    expect(recovered.mock.calls[0]?.[1]?.catalogs[0]).toMatchObject({ id: "fixture", hosts: [] });
+    expect(recovered.mock.calls[0]?.[1]?.catalogs[0]).not.toHaveProperty("error");
+  } finally {
+    retry.resolve([]);
+    await vi.advanceTimersByTimeAsync(0);
+  }
+});
+const sessionRow = (respond: ReturnType<typeof startCall>["respond"], catalog = 0) =>
+  respond.mock.calls[0]?.[1]?.catalogs[catalog]?.hosts[0]?.sessions[0];
+
+it("never falls back to a previously authorized page for a fresh-list provider", async () => {
+  const host = catalogHost({ sessions: [catalogSession("previously-authorized")] });
+  const pending = createDeferredCore<(typeof host)[]>();
+  const list = vi
+    .fn<SessionCatalogProvider["list"]>()
+    .mockResolvedValueOnce([host])
+    .mockImplementationOnce(() => pending.promise)
+    .mockRejectedValueOnce(new Error("Source unavailable"));
+  registerList(list, true);
+  const config = {};
+  const client = { connId: "fresh-list-owner", connect: gatewayConnect([]) };
+  const initial = await call("sessions.catalog.list", {}, config, client);
+  expectCatalog(initial, { requiresFreshList: true, hosts: [host] });
+  try {
+    const waiting = startCall("sessions.catalog.list", {}, config, client);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await waiting.completion;
+    expectCatalog(waiting.respond, { requiresFreshList: true, pending: true, hosts: [] });
+    pending.resolve([]);
+    await vi.advanceTimersByTimeAsync(0);
+    const failed = await call("sessions.catalog.list", {}, config, client);
+    expectCatalog(failed, {
+      requiresFreshList: true,
+      hosts: [],
+      error: expect.objectContaining({ message: expect.stringContaining("Source unavailable") }),
+    });
+  } finally {
+    pending.resolve([]);
+    await vi.advanceTimersByTimeAsync(0);
+  }
+});
 
 it("returns three fast catalogs within one second while an eight-second provider finishes later", async () => {
-  const host = {
-    hostId: "gateway:local",
-    label: "Local",
-    kind: "gateway" as const,
-    connected: true,
-    sessions: [],
-  };
+  const host = catalogHost();
   hoisted.activeRegistry.sessionCatalogs = [
     ...["fast-a", "fast-b", "fast-c"].map((id) => ({
       provider: provider(id, { list: async () => [host] }),
@@ -57,17 +158,13 @@ it("returns three fast catalogs within one second while an eight-second provider
   });
   try {
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(pending.respond).toHaveBeenCalledWith(true, {
-      catalogs: [
-        ...["fast-a", "fast-b", "fast-c"].map((id) =>
-          expect.objectContaining({ id, hosts: [host] }),
-        ),
-        expect.objectContaining({
-          id: "slow",
-          error: expect.objectContaining({ code: "catalog_pending" }),
-        }),
-      ],
-    });
+    expectCatalogs(pending.respond, [
+      ...["fast-a", "fast-b", "fast-c"].map((id) => expect.objectContaining({ id, hosts: [host] })),
+      expect.objectContaining({
+        id: "slow",
+        pending: true,
+      }),
+    ]);
     expect(elapsed).toBeLessThanOrEqual(1_000);
     root!.release();
     expect(getActiveGatewayRootWorkCount()).toBe(rootsBefore + 1);
@@ -76,96 +173,93 @@ it("returns three fast catalogs within one second while an eight-second provider
     await pending.completion;
     root!.release();
     expect(getActiveGatewayRootWorkCount()).toBe(rootsBefore);
-    console.info("catalog slow-provider fixture", {
-      providers: 4,
-      providerDelayMs: 8_000,
-      responseMs: elapsed,
-    });
   }
 });
 
-it("reuses a pending provider, serves its stale page, and retains its late refresh after errors", async () => {
-  const oldHost = {
-    hostId: "node:slow",
-    label: "Old page",
-    kind: "node" as const,
-    connected: true,
-    sessions: [],
-  };
+it("reuses pending discovery and preserves authoritative host withdrawals in fallback pages", async () => {
+  const oldHost = catalogHost({ hostId: "node:slow", label: "Old page", kind: "node" });
   const freshHost = { ...oldHost, label: "Late page" };
   const late = createDeferredCore<(typeof freshHost)[]>();
+  const retry = createDeferredCore<(typeof freshHost)[]>();
+  const publication = createDeferredCore<typeof freshHost>();
   const list = vi
     .fn<SessionCatalogProvider["list"]>()
     .mockResolvedValueOnce([oldHost])
     .mockImplementationOnce(() => late.promise)
     .mockRejectedValue(Object.assign(new Error("node did not respond"), { code: "TIMEOUT" }));
-  hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("fixture", { list }) }];
+  registerList(list);
   const config = {};
-  const client = { connId: "owner" };
-  await call("sessions.catalog.list", {}, config, client);
+  const client = { connId: "owner", connect: gatewayConnect([]) };
+  const query = { allowPartialResults: true, progressId: "withdrawal" };
+  const context = { broadcastToConnIds: vi.fn() };
+  await call("sessions.catalog.list", query, config, client, context);
   try {
     for (let index = 0; index < 3; index++) {
-      const waiting = startCall("sessions.catalog.list", {}, config, client);
-      await vi.advanceTimersByTimeAsync(1_000);
-      await waiting.completion;
-      expect(waiting.respond).toHaveBeenCalledWith(true, {
-        catalogs: [
-          expect.objectContaining({
-            hosts: [{ ...oldHost, pending: true }],
-            error: expect.objectContaining({
-              code: "catalog_pending",
-              message: expect.stringContaining("stale"),
-            }),
-          }),
-        ],
+      const waiting = startCall("sessions.catalog.list", query, config, client, context);
+      await vi.advanceTimersByTimeAsync(0);
+      expectCatalog(waiting.respond, {
+        hosts: [{ ...oldHost, pending: true }],
+        pending: true,
       });
+      await waiting.completion;
     }
     expect(list).toHaveBeenCalledTimes(2);
     late.resolve([freshHost]);
     await vi.advanceTimersByTimeAsync(0);
-    const failed = await call("sessions.catalog.list", {}, config, client);
-    expect(failed).toHaveBeenCalledWith(true, {
-      catalogs: [
-        expect.objectContaining({
-          hosts: [freshHost],
-          error: expect.objectContaining({
-            code: "catalog_stale",
-            message: expect.stringContaining("TIMEOUT"),
-          }),
-        }),
-      ],
+    const failed = await call("sessions.catalog.list", query, config, client, context);
+    expectCatalog(failed, {
+      hosts: [freshHost],
+      error: expect.objectContaining({
+        code: "catalog_stale",
+        message: expect.stringContaining("TIMEOUT"),
+      }),
     });
-    list.mockResolvedValueOnce([
-      { ...freshHost, sessions: [], error: { code: "UNAVAILABLE", message: "node offline" } },
-    ]);
-    const offline = await call("sessions.catalog.list", {}, config, client);
-    expect(offline).toHaveBeenCalledWith(true, {
-      catalogs: [
-        expect.objectContaining({
-          hosts: [freshHost],
-          error: expect.objectContaining({
-            code: "catalog_stale",
-            message: expect.stringContaining("UNAVAILABLE"),
-          }),
-        }),
-      ],
+    const offlineHost = {
+      ...freshHost,
+      error: { code: "UNAVAILABLE", message: "node offline" },
+    };
+    const loadingHost = { ...oldHost, hostId: "node:loading", pending: true };
+    const completedHost = { ...freshHost, hostId: loadingHost.hostId, label: "Completed page" };
+    list.mockImplementationOnce(async (params) => {
+      publishSessionCatalogHost(params, publication.promise);
+      return [offlineHost, loadingHost];
+    });
+    const offline = await call("sessions.catalog.list", query, config, client, context);
+    expectCatalog(offline, {
+      hosts: [offlineHost, loadingHost],
+    });
+    list.mockImplementationOnce(() => retry.promise);
+    const pending = startCall("sessions.catalog.list", query, config, client, context);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await pending.completion;
+    expectCatalog(pending.respond, {
+      hosts: [offlineHost, loadingHost],
+      pending: true,
+    });
+    publication.resolve(completedHost);
+    await vi.advanceTimersByTimeAsync(0);
+    retry.reject(new Error("Provider enumeration failed"));
+    await vi.advanceTimersByTimeAsync(0);
+    const rejected = await call("sessions.catalog.list", query, config, client, context);
+    expectCatalog(rejected, {
+      hosts: [offlineHost, completedHost],
+      error: expect.objectContaining({
+        code: "catalog_stale",
+        message: expect.stringContaining("TIMEOUT"),
+      }),
     });
   } finally {
     late.resolve([freshHost]);
+    retry.resolve([]);
+    publication.resolve({ ...freshHost, hostId: "node:loading" });
     await vi.advanceTimersByTimeAsync(0);
   }
 });
 
-it.each(["caller", "query", "config", "registration", "epoch", "gateway", "archive"] as const)(
+it.each(["caller", "query", "config", "registration", "gateway", "archive"] as const)(
   "does not reuse a cached page after a change to %s",
   async (change) => {
-    const host = {
-      hostId: "gateway:local",
-      label: "Private page",
-      kind: "gateway" as const,
-      connected: true,
-      sessions: [],
-    };
+    const host = catalogHost({ label: "Private page" });
     const list = vi
       .fn<SessionCatalogProvider["list"]>()
       .mockResolvedValueOnce([host])
@@ -173,22 +267,19 @@ it.each(["caller", "query", "config", "registration", "epoch", "gateway", "archi
     const fixture = provider("fixture", { list, archive: async () => ({ ok: true }) });
     hoisted.activeRegistry.sessionCatalogs = [{ provider: fixture }];
     let config = {};
-    let client = { connId: "first" };
+    let client = { connId: "first", connect: gatewayConnect([]) };
     let gateway = new AbortController();
     await call("sessions.catalog.list", {}, config, client, {
       requestEntryLifetime: { signal: gateway.signal },
     });
     if (change === "caller") {
-      client = { connId: "second" };
+      client = { connId: "second", connect: gatewayConnect([]) };
     }
     if (change === "config") {
       config = {};
     }
     if (change === "registration") {
       hoisted.activeRegistry.sessionCatalogs = [{ provider: fixture }];
-    }
-    if (change === "epoch") {
-      markPluginRegistryActive(getActivePluginRegistry());
     }
     if (change === "gateway") {
       gateway.abort();
@@ -215,13 +306,9 @@ it.each(["caller", "query", "config", "registration", "epoch", "gateway", "archi
       client,
       { requestEntryLifetime: { signal: gateway.signal } },
     );
-    expect(refreshed).toHaveBeenCalledWith(true, {
-      catalogs: [
-        expect.objectContaining({
-          hosts: [],
-          error: expect.objectContaining({ code: "UNAVAILABLE" }),
-        }),
-      ],
+    expectCatalog(refreshed, {
+      hosts: [],
+      error: expect.objectContaining({ code: "UNAVAILABLE" }),
     });
   },
 );
@@ -234,40 +321,23 @@ it("never projects a cached adoption onto a replacement session identity", async
   const list = vi
     .fn<SessionCatalogProvider["list"]>()
     .mockResolvedValueOnce([
-      {
-        hostId: "gateway:local",
-        label: "Local",
-        kind: "gateway",
-        connected: true,
-        sessions: [
-          {
-            threadId: "old-thread",
-            sessionKey,
-            status: "stored",
-            archived: false,
-            canContinue: true,
-            canArchive: true,
-          },
-        ],
-      },
+      catalogHost({
+        sessions: [catalogSession("old-thread", { sessionKey, canArchive: true })],
+      }),
     ])
     .mockRejectedValue(new Error("offline"));
-  hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("fixture", { list }) }];
+  registerList(list);
   const config = {};
   const original = await call("sessions.catalog.list", {}, config);
-  expect(original.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions[0]?.sessionKey).toBe(
-    sessionKey,
-  );
+  expect(sessionRow(original)?.sessionKey).toBe(sessionKey);
   setSessionCatalogEntries([
     { sessionKey, entry: { sessionId: "replacement", pluginOwnerId: "fixture" } },
   ]);
   const stale = await call("sessions.catalog.list", {}, config);
-  expect(stale.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions[0]).toMatchObject({
+  expect(sessionRow(stale)).toMatchObject({
     threadId: "old-thread",
   });
-  expect(stale.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions[0]).not.toHaveProperty(
-    "sessionKey",
-  );
+  expect(sessionRow(stale)).not.toHaveProperty("sessionKey");
 });
 
 it.each([false, true])(
@@ -281,22 +351,12 @@ it.each([false, true])(
           entry: { sessionId: index === 0 ? "first" : secondId, pluginOwnerId: `fixture-${index}` },
         })),
       );
-    const hosts = keys.map((sessionKey, index) => ({
-      hostId: "gateway:local",
-      label: `Provider ${index}`,
-      kind: "gateway" as const,
-      connected: true,
-      sessions: [
-        {
-          threadId: `thread-${index}`,
-          sessionKey,
-          status: "stored",
-          archived: false,
-          canContinue: true,
-          canArchive: true,
-        },
-      ],
-    }));
+    const hosts = keys.map((sessionKey, index) =>
+      catalogHost({
+        label: `Provider ${index}`,
+        sessions: [catalogSession(`thread-${index}`, { sessionKey, canArchive: true })],
+      }),
+    );
     const late = createDeferredCore<typeof hosts>();
     const slow = vi
       .fn<SessionCatalogProvider["list"]>()
@@ -314,12 +374,8 @@ it.each([false, true])(
     try {
       await vi.advanceTimersByTimeAsync(1_000);
       await next.completion;
-      expect(next.respond.mock.calls[0]?.[1]?.catalogs[1]?.hosts[0]?.sessions[0]?.sessionKey).toBe(
-        keys[1],
-      );
-      expect(next.respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions[0]?.sessionKey).toBe(
-        reusedKey ? undefined : keys[0],
-      );
+      expect(sessionRow(next.respond, 1)?.sessionKey).toBe(keys[1]);
+      expect(sessionRow(next.respond)?.sessionKey).toBe(reusedKey ? undefined : keys[0]);
     } finally {
       late.resolve([hosts[0]!]);
       await vi.advanceTimersByTimeAsync(0);

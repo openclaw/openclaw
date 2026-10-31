@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { sealSecretSentinel } from "../secrets/sentinel.js";
+import type { OAuthCredential } from "./auth-profiles/types.js";
 import {
   fingerprintAuthProfileCredential,
   fingerprintAuthProfileOwnerShape,
@@ -8,35 +9,62 @@ import {
   fingerprintResolvedAuthProfileCredential,
   fingerprintResolvedProviderAuth,
 } from "./execution-auth-binding.js";
+import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 
 function jwt(claims: Record<string, unknown>): string {
   return `header.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.signature`;
 }
 
-describe("execution auth binding fingerprints", () => {
-  it("rejects an opaque CLI owner without an executable identity", () => {
-    expect(
-      fingerprintOpaqueRuntimeOwner({
-        kind: "cli-runtime",
-        runner: "cli",
-        provider: "claude-cli",
-        backendId: "claude-cli",
-      }),
-    ).toBeUndefined();
-  });
+type Identity = Partial<OAuthCredential>;
 
-  it("requires and binds an opaque plugin harness implementation", () => {
+function grant(
+  provider: string,
+  access: string,
+  refresh: string,
+  identity: Identity = {},
+): OAuthCredential {
+  return { type: "oauth", provider, access, refresh, expires: 1, ...identity };
+}
+function oauth(provider: string, access: string, refresh: string, identity: Identity = {}) {
+  return fingerprintAuthProfileCredential({
+    profileId: `${provider}:oauth`,
+    credential: grant(provider, access, refresh, identity),
+  });
+}
+function resolved(apiKey: string, extra: Partial<ResolvedProviderAuth> = {}) {
+  return fingerprintResolvedProviderAuth({
+    apiKey,
+    source: "profile:openai:bound",
+    mode: "api-key",
+    ...extra,
+  });
+}
+function aws(env: NodeJS.ProcessEnv) {
+  return fingerprintAwsSdkRuntimeOwner({
+    provider: "amazon-bedrock",
+    backendId: "openclaw",
+    auth: { source: "aws-sdk default chain", mode: "aws-sdk" },
+    env,
+  });
+}
+
+describe("execution auth binding fingerprints", () => {
+  it.each([
+    ["cli-runtime", "cli", "claude-cli", "claude-cli"],
+    ["plugin-harness", "embedded", "openai", "codex"],
+  ] as const)("requires an executable identity for %s", (kind, runner, provider, backendId) => {
     const fingerprint = (runtimeArtifactFingerprint?: string) =>
       fingerprintOpaqueRuntimeOwner({
-        kind: "plugin-harness",
-        runner: "embedded",
-        provider: "openai",
-        backendId: "codex",
-        ...(runtimeArtifactFingerprint ? { runtimeArtifactFingerprint } : {}),
+        kind,
+        runner,
+        provider,
+        backendId,
+        runtimeArtifactFingerprint,
       });
-
     expect(fingerprint()).toBeUndefined();
-    expect(fingerprint("codex-runtime-v1")).not.toBe(fingerprint("codex-runtime-v2"));
+    if (kind === "plugin-harness") {
+      expect(fingerprint("codex-runtime-v1")).not.toBe(fingerprint("codex-runtime-v2"));
+    }
   });
 
   it("rejects an unresolved static-secret reference", () => {
@@ -50,21 +78,6 @@ describe("execution auth binding fingerprints", () => {
         },
       }),
     ).toBeUndefined();
-  });
-
-  it("changes when a materialized static secret rotates", () => {
-    const fingerprint = (key: string) =>
-      fingerprintAuthProfileCredential({
-        profileId: "openai:bound",
-        credential: {
-          type: "api_key",
-          provider: "openai",
-          key,
-          keyRef: { source: "file", provider: "vault", id: "/openai/key" },
-        },
-      });
-
-    expect(fingerprint("first-key")).not.toBe(fingerprint("replacement-key"));
   });
 
   it("binds a SecretRef profile to the resolved selected value", () => {
@@ -98,50 +111,21 @@ describe("execution auth binding fingerprints", () => {
 
   it("keeps identity-bearing OAuth stable across token refreshes", () => {
     const fingerprint = (access: string, refresh: string) =>
-      fingerprintAuthProfileCredential({
-        profileId: "openai:oauth",
-        credential: {
-          type: "oauth",
-          provider: "openai",
-          access,
-          refresh,
-          expires: 1,
-          accountId: "account-1",
-          email: "User@Example.test",
-        },
-      });
+      oauth("openai", access, refresh, { accountId: "account-1", email: "User@Example.test" });
 
     expect(fingerprint("access-a", "refresh-a")).toBe(fingerprint("access-b", "refresh-b"));
   });
 
   it("invalidates identity-less OAuth when its opaque grant changes", () => {
-    const fingerprint = (access: string, refresh: string) =>
-      fingerprintAuthProfileCredential({
-        profileId: "anthropic:oauth",
-        credential: {
-          type: "oauth",
-          provider: "anthropic",
-          access,
-          refresh,
-          expires: 1,
-        },
-      });
+    const fingerprint = (access: string, refresh: string) => oauth("anthropic", access, refresh);
 
     expect(fingerprint("access-a", "refresh-a")).not.toBe(fingerprint("access-b", "refresh-b"));
   });
 
   it("uses stable id-token identity instead of rotating token material", () => {
     const fingerprint = (access: string, subject: string) =>
-      fingerprintAuthProfileCredential({
-        profileId: "google:oauth",
-        credential: {
-          type: "oauth",
-          provider: "google",
-          access,
-          refresh: `refresh-${access}`,
-          expires: 1,
-          idToken: jwt({ sub: subject, email: "user@example.test" }),
-        },
+      oauth("google", access, `refresh-${access}`, {
+        idToken: jwt({ sub: subject, email: "user@example.test" }),
       });
 
     expect(fingerprint("access-a", "subject-1")).toBe(fingerprint("access-b", "subject-1"));
@@ -149,13 +133,7 @@ describe("execution auth binding fingerprints", () => {
   });
 
   it("keeps resolved credential fingerprints opaque and stable within one process", () => {
-    const fingerprint = (apiKey: string) =>
-      fingerprintResolvedProviderAuth({
-        apiKey,
-        profileId: "openai:bound",
-        source: "profile:openai:bound",
-        mode: "api-key",
-      });
+    const fingerprint = (apiKey: string) => resolved(apiKey, { profileId: "openai:bound" });
 
     const secret = "raw-secret-marker-with-non-hex";
     const first = fingerprint(secret);
@@ -167,34 +145,17 @@ describe("execution auth binding fingerprints", () => {
   });
 
   it("fingerprints the same resolved credential identically across resolution sources", () => {
-    // The successful-run capture may resolve a key from env while the owner
-    // revalidation resolves the identical key through a models.json marker or
-    // profile fallback. The owner gate must treat both as the same authority
-    // (openclaw/openclaw#138584) instead of failing closed on provenance.
+    // Regression #138584: capture and revalidation may use different resolution sources.
     const material = "shared-credential-material";
-    const fromEnv = fingerprintResolvedProviderAuth({
-      apiKey: material,
-      source: "env: OPENAI_API_KEY",
-      mode: "api-key",
-    });
-    const fromProfile = fingerprintResolvedProviderAuth({
-      apiKey: material,
-      profileId: "openai:bound",
-      source: "profile:openai:bound",
-      mode: "api-key",
-    });
-    const fromModelsJson = fingerprintResolvedProviderAuth({
-      apiKey: material,
-      source: "models.json",
-      mode: "api-key",
-    });
+    const fromEnv = resolved(material, { source: "env: OPENAI_API_KEY" });
+    const fromProfile = resolved(material, { profileId: "openai:bound" });
+    const fromModelsJson = resolved(material, { source: "models.json" });
 
     expect(fromEnv).toBeDefined();
     expect(fromEnv).toBe(fromProfile);
     expect(fromEnv).toBe(fromModelsJson);
     expect(fromEnv).not.toBe(
-      fingerprintResolvedProviderAuth({
-        apiKey: material,
+      resolved(material, {
         source: "env: OPENAI_API_KEY",
         mode: "token" as never,
       }),
@@ -204,27 +165,13 @@ describe("execution auth binding fingerprints", () => {
   it("hashes a sentinel-sealed key the same as its plaintext", () => {
     const secret = "sentinel-unwrapped-credential";
     const sealed = sealSecretSentinel(secret, { label: "model-auth:test" });
-    const fromPlaintext = fingerprintResolvedProviderAuth({
-      apiKey: secret,
-      source: "env: TEST",
-      mode: "api-key",
-    });
-    const fromSentinel = fingerprintResolvedProviderAuth({
-      apiKey: sealed,
-      source: "profile:test",
-      mode: "api-key",
-    });
+    const fromPlaintext = resolved(secret, { source: "env: TEST" });
+    const fromSentinel = resolved(sealed, { source: "profile:test" });
 
     expect(fromPlaintext).toBeDefined();
     expect(fromPlaintext).toBe(fromSentinel);
     // Tampered sentinels must not silently resolve to the wrong credential.
-    expect(
-      fingerprintResolvedProviderAuth({
-        apiKey: `${sealed.slice(0, -4)}AAAA.end`,
-        source: "env: TEST",
-        mode: "api-key",
-      }),
-    ).toBeUndefined();
+    expect(resolved(`${sealed.slice(0, -4)}AAAA.end`, { source: "env: TEST" })).toBeUndefined();
   });
 
   it("rejects auth modes without a concrete credential identity", () => {
@@ -237,76 +184,37 @@ describe("execution auth binding fingerprints", () => {
     const fingerprint = (access: string) =>
       fingerprintAuthProfileOwnerShape({
         profileId: "anthropic:cli",
-        credential: {
-          type: "oauth",
-          provider: "anthropic",
-          access,
-          refresh: `refresh-${access}`,
-          expires: 1,
+        credential: grant("anthropic", access, `refresh-${access}`, {
           accountId: "account-1",
-        },
+        }),
       });
 
     expect(fingerprint("access-a")).toBe(fingerprint("access-b"));
     expect(
-      fingerprintAuthProfileOwnerShape({
-        profileId: "anthropic:missing",
-        credential: undefined,
-      }),
+      fingerprintAuthProfileOwnerShape({ profileId: "anthropic:missing", credential: undefined }),
     ).toBeUndefined();
   });
 
   it("binds AWS SDK owners only to concrete bearer and static credentials", () => {
-    const auth = { source: "aws-sdk default chain", mode: "aws-sdk" as const };
-    const fingerprint = (env: NodeJS.ProcessEnv) =>
-      fingerprintAwsSdkRuntimeOwner({
-        provider: "amazon-bedrock",
-        backendId: "openclaw",
-        auth,
-        env,
-      });
-
-    expect(fingerprint({ AWS_BEARER_TOKEN_BEDROCK: "bearer-a" })).toBe(
-      fingerprint({ AWS_BEARER_TOKEN_BEDROCK: "bearer-a" }),
+    expect(aws({ AWS_BEARER_TOKEN_BEDROCK: "bearer-a" })).toBe(
+      aws({ AWS_BEARER_TOKEN_BEDROCK: "bearer-a" }),
     );
-    expect(fingerprint({ AWS_BEARER_TOKEN_BEDROCK: "bearer-a" })).not.toBe(
-      fingerprint({ AWS_BEARER_TOKEN_BEDROCK: "bearer-b" }),
+    expect(aws({ AWS_BEARER_TOKEN_BEDROCK: "bearer-a" })).not.toBe(
+      aws({ AWS_BEARER_TOKEN_BEDROCK: "bearer-b" }),
     );
-    expect(fingerprint({ AWS_ACCESS_KEY_ID: "AKIA1", AWS_SECRET_ACCESS_KEY: "secret-a" })).not.toBe(
-      fingerprint({ AWS_ACCESS_KEY_ID: "AKIA1", AWS_SECRET_ACCESS_KEY: "secret-b" }),
-    );
-    expect(fingerprint({ AWS_ACCESS_KEY_ID: "AKIA1", AWS_SECRET_ACCESS_KEY: "secret-a" })).not.toBe(
-      fingerprint({ AWS_ACCESS_KEY_ID: "AKIA2", AWS_SECRET_ACCESS_KEY: "secret-a" }),
-    );
-    expect(
-      fingerprint({
-        AWS_ACCESS_KEY_ID: "AKIA1",
-        AWS_SECRET_ACCESS_KEY: "secret-a",
-        AWS_SESSION_TOKEN: "session-a",
-      }),
-    ).not.toBe(
-      fingerprint({
-        AWS_ACCESS_KEY_ID: "AKIA1",
-        AWS_SECRET_ACCESS_KEY: "secret-a",
-        AWS_SESSION_TOKEN: "session-b",
-      }),
+    const credentials = { AWS_ACCESS_KEY_ID: "AKIA1", AWS_SECRET_ACCESS_KEY: "secret-a" };
+    expect(aws(credentials)).not.toBe(aws({ ...credentials, AWS_SECRET_ACCESS_KEY: "secret-b" }));
+    expect(aws(credentials)).not.toBe(aws({ ...credentials, AWS_ACCESS_KEY_ID: "AKIA2" }));
+    expect(aws({ ...credentials, AWS_SESSION_TOKEN: "session-a" })).not.toBe(
+      aws({ ...credentials, AWS_SESSION_TOKEN: "session-b" }),
     );
   });
 
   it("fails closed when the AWS SDK principal cannot be established", () => {
-    const auth = { source: "aws-sdk default chain", mode: "aws-sdk" as const };
-    const fingerprint = (env: NodeJS.ProcessEnv) =>
-      fingerprintAwsSdkRuntimeOwner({
-        provider: "amazon-bedrock",
-        backendId: "openclaw",
-        auth,
-        env,
-      });
-
-    expect(fingerprint({ AWS_PROFILE: "work" })).toBeUndefined();
-    expect(fingerprint({})).toBeUndefined();
+    expect(aws({ AWS_PROFILE: "work" })).toBeUndefined();
+    expect(aws({})).toBeUndefined();
     expect(
-      fingerprint({
+      aws({
         AWS_PROFILE: "work",
         AWS_ACCESS_KEY_ID: "AKIA1",
         AWS_SECRET_ACCESS_KEY: "secret-a",

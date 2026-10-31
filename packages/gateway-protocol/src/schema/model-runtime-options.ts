@@ -14,6 +14,9 @@ export const GatewayCompletionRouteSchema = closedObject({
 export const GatewayAgentRuntimeSchema = closedObject({
   id: NonEmptyString,
   fallback: Type.Optional(Type.Union([Type.Literal("openclaw"), Type.Literal("none")])),
+  workspaceEnvironment: Type.Optional(
+    closedObject({ kind: Type.Literal("provider-hosted"), label: NonEmptyString }),
+  ),
   cloudPlacementSupported: Type.Optional(Type.Boolean()),
   cloudPlacementExecutionMode: Type.Optional(WorkerExecutionModeSchema),
   devicePlacement: Type.Optional(

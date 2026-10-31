@@ -7,9 +7,6 @@ import {
 import type { ResolvedGatewayAuth } from "../../auth.js";
 import { PROXY_ATTRIBUTION_REQUIRED_REASON } from "../../ingress-attribution.js";
 
-/**
- * Human-readable WebSocket auth failure messages for CLI, UI, and webchat clients.
- */
 export type AuthProvidedKind = "token" | "bootstrap-token" | "device-token" | "password" | "none";
 
 const SETUP_CODE_REJECTED_MESSAGE =

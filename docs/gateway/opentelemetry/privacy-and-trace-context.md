@@ -50,12 +50,20 @@ tool source, tool owner, skill name/source) and never include prompt text,
 response text, tool inputs, tool outputs, skill file paths, or session keys.
 Values that look like scoped agent session keys (for example starting with
 `agent:`) are replaced with `unknown` on low-cardinality attributes. OTLP log
-records keep severity, logger, code location, trusted trace context, and
+records keep severity, logger, available code locations, trusted trace context, and
 sanitized attributes by default; the raw log message body is exported only
-when `diagnostics.otel.captureContent` is `true`. Talk metrics export only
+when `diagnostics.otel.captureContent` is `true`. Subsystem `info` records omit code
+locations to avoid capturing a stack for each routine message. Talk metrics export only
 bounded event metadata (mode, transport, provider, event type) - no
 transcripts, audio payloads, session ids, turn ids, call ids, room ids, or
 handoff tokens.
+
+Skill-use spans can include a SHA-256 fingerprint of the instructions actually
+delivered while tracing is active, even with content capture disabled. This
+allows correlation of identical instruction bodies and comparison with known
+content; it is not anonymization. OpenClaw does not hash unread support files or
+the discovered skill catalog for this attribute, and does not export the body
+or file path. Metrics-only exporters do not request this hashing.
 
 When `diagnostics-otel` tracing is active, outbound model requests may include
 a W3C `traceparent` header from the actual exporter-owned model-call span.
@@ -72,6 +80,12 @@ inputs, tool outputs, tool definitions, and OTLP log bodies. System prompts
 remain excluded. Provider-internal `thinking` and `redacted_thinking` payloads
 are also excluded: compatibility attributes retain only a redacted structural
 marker, while GenAI message attributes omit those parts.
+
+The same setting also exports the bounded, redacted turn prompt and the model's
+final answer as `input.value` and `output.value` on `openclaw.message.processed`,
+`openclaw.harness.run`, and `openclaw.run` spans. Operators who already enable
+`captureContent` receive these attributes after upgrading; see the
+[upgrade note](/gateway/opentelemetry/spans-and-events).
 
 Completed assistant commentary uses the same setting. With content capture
 off, commentary events contain timing, sequence, harness, and text-length

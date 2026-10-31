@@ -1,30 +1,29 @@
 /**
  * User-facing tool display formatter.
  *
- * Builds redacted labels and compact details from tool metadata without affecting execution semantics.
+ * Builds labels and compact details from tool metadata without affecting execution semantics.
  */
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { redactToolDetail } from "../logging/redact.js";
 import { shortenHomeInString } from "../utils.js";
+import { unwrapToolCallForDisplay } from "./tool-display-call.js";
 import {
   defaultTitle,
   formatDetailKey,
   normalizeToolDisplayName,
-  resolveToolVerbAndDetailForArgs,
+  resolveToolDetailForArgs,
 } from "./tool-display-common.js";
 import { TOOL_DISPLAY_CONFIG } from "./tool-display-config.js";
 import type { ToolDetailMode } from "./tool-display-exec.js";
 
 type ToolDisplay = {
   name: string;
-  emoji: string;
+  icon: string;
   title: string;
   label: string;
-  verb?: string;
   detail?: string;
 };
 
@@ -48,7 +47,6 @@ const DETAIL_LABEL_OVERRIDES: Record<string, string> = {
   pollQuestion: "poll",
   maxChars: "max chars",
 };
-const MAX_DETAIL_ENTRIES = 8;
 
 /** Resolves the display model for a tool invocation. */
 export function resolveToolDisplay(params: {
@@ -57,39 +55,36 @@ export function resolveToolDisplay(params: {
   meta?: string;
   detailMode?: ToolDetailMode;
 }): ToolDisplay {
-  const name = normalizeToolDisplayName(params.name);
+  const call = unwrapToolCallForDisplay({ name: params.name, args: params.args });
+  const name = normalizeToolDisplayName(call.name);
   const key = normalizeLowercaseStringOrEmpty(name);
   const spec = TOOL_MAP[key];
-  const emoji = spec?.emoji ?? FALLBACK.emoji ?? "🧩";
   const title = spec?.title ?? defaultTitle(name);
   const label = spec?.label ?? title;
-  const { verb, detail } = resolveToolVerbAndDetailForArgs({
+  const detail = resolveToolDetailForArgs({
     toolKey: key,
-    args: params.args,
+    args: call.args,
     meta: params.meta,
     spec,
     fallbackDetailKeys: FALLBACK.detailKeys,
     detailMode: "summary",
     toolDetailMode: params.detailMode,
-    detailMaxEntries: MAX_DETAIL_ENTRIES,
     detailFormatKey: (raw) => formatDetailKey(raw, DETAIL_LABEL_OVERRIDES),
   });
   return {
     name,
-    emoji,
+    icon: spec?.icon ?? FALLBACK.icon,
     title,
     label,
-    verb,
     detail: detail ? shortenHomeInString(detail) : detail,
   };
 }
 
-/** Formats and redacts detail text for display. */
+/** Formats detail text for display. */
 export function formatToolDetail(display: ToolDisplay): string | undefined {
-  return display.detail ? redactToolDetail(display.detail) : undefined;
+  return display.detail || undefined;
 }
 
-/** Infers compact display metadata for a tool invocation from its arguments. */
 export function inferToolMetaFromArgsCore(
   toolName: string,
   args: unknown,
@@ -123,9 +118,7 @@ export function isCommandBearingToolCall(name: string | undefined, args?: unknow
 export function formatToolSummary(display: ToolDisplay): string {
   const detail = formatToolDetail(display);
   if (detail && isShellToolDisplayName(display.name)) {
-    return `${display.emoji} ${detail}`;
+    return detail;
   }
-  return detail
-    ? `${display.emoji} ${display.label}: ${detail}`
-    : `${display.emoji} ${display.label}`;
+  return detail ? `${display.label}: ${detail}` : display.label;
 }

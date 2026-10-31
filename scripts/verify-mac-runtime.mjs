@@ -44,7 +44,7 @@ if (!process.versions.bun || fs.realpathSync(process.execPath) !== bun) {
 }
 
 const pin = JSON.parse(
-  fs.readFileSync(new URL("./lib/openclaw-bun-macos.json", import.meta.url), "utf8"),
+  fs.readFileSync(new URL("./lib/openclaw-bun.json", import.meta.url), "utf8"),
 );
 const revision = execFileSync(bun, ["--revision"], { encoding: "utf8" }).trim();
 assert.equal(revision, pin.revision, "Bundled Bun revision does not match the pinned fork");
@@ -500,6 +500,24 @@ export function createSqliteWorkerBackend(_input, { databasePath }) {
       "Proof coordinator already exists",
     );
     const nativeRows = nativeFirst ? seedMacNodeWorkerProofState(databasePath) : undefined;
+    if (nativeFirst) {
+      // Shared credential retirement requires the candidate Doctor's capture custody.
+      execFileSync(
+        bun,
+        [cli, "--profile", "mac-worker-proof", "doctor", "--fix", "--non-interactive"],
+        {
+          cwd: proofHome,
+          env: {
+            ...proofEnvironment(proofHome),
+            OPENCLAW_STATE_DIR: stateDir,
+            OPENCLAW_CONFIG_PATH: path.join(proofHome, "openclaw.json"),
+            OPENCLAW_NO_RESPAWN: "1",
+          },
+          stdio: "pipe",
+          timeout: 300_000,
+        },
+      );
+    }
     let ready = false;
     let failure;
     let diagnostic = "";
@@ -611,7 +629,13 @@ export function createSqliteWorkerBackend(_input, { databasePath }) {
     if (nativeRows) {
       const initialized = new DatabaseSync(databasePath, { readOnly: true });
       try {
-        assert.deepEqual(readMacNodeWorkerProofRows(initialized), nativeRows);
+        assert.deepEqual(
+          readMacNodeWorkerProofRows(
+            initialized,
+            path.join(stateDir, "client", "credentials.sqlite"),
+          ),
+          nativeRows,
+        );
       } finally {
         initialized.close();
       }

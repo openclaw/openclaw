@@ -8,10 +8,7 @@ import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 
 class PublishedModelCatalogOwnerResolutionError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "PublishedModelCatalogOwnerResolutionError";
-  }
+  override name = "PublishedModelCatalogOwnerResolutionError";
 }
 
 export function preparePublishedModelCatalogOwnerIdentity(

@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { render } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type {
@@ -10,17 +9,15 @@ import type {
   SessionsPatchResult,
 } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
+import { withSessionMutationOperations } from "../../lib/sessions/session-mutation-operations.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
+import { renderPaneModelControl } from "./chat-pane-model-control.test-support.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
 import {
   readChatPaneMutationAccess,
   renderChatPaneComposerControls,
 } from "./chat-pane-session-controls.ts";
-import {
-  switchChatContextWindow,
-  switchChatFastMode,
-  switchChatThinkingLevel,
-} from "./chat-session.ts";
+import { switchChatSetting } from "./chat-session.ts";
 import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import {
@@ -108,11 +105,15 @@ it.each([
       );
       const connection = sessions.captureConnectionScope();
       expect(connection).not.toBeNull();
-      first = switchChatThinkingLevel(pane.state, "high");
+      first = switchChatSetting(pane.state, { kind: "thinkingLevel", value: "high" });
       const previousTail = getPendingChatPickerPatch(pane.state, placeholder.key, "main");
       expect(previousTail).toBeDefined();
-      queued = switchChatThinkingLevel(pane.state, "low");
+      queued = switchChatSetting(pane.state, { kind: "thinkingLevel", value: "low" });
       expect(getPendingChatPickerPatch(pane.state, placeholder.key, "main")).not.toBe(previousTail);
+      expect(sessions.settingsPreview(placeholder.key, "main")).toMatchObject({
+        thinkingLevel: "low",
+      });
+      await withSessionMutationOperations(() => undefined);
       expect(patch).toHaveBeenCalledOnce();
       expect(patch.mock.calls[0]?.[1]).toMatchObject({
         key: placeholder.key,
@@ -147,7 +148,6 @@ it.each([
           sessionId: materialized.sessionId,
           thinkingLevel: "low",
         });
-        expect(pane.state.chatThinkingLevel).toBe("low");
       } else {
         expect(rows[0]).toEqual(unrelated);
         expect(selectedChatSessionRow(pane.state)).toMatchObject(unrelated);
@@ -243,19 +243,21 @@ it.each(["unbound", "materialized"] as const)(
         { id: "fixture-model", name: "Fixture model", provider: "fixture", reasoning: true },
       ];
       expect(selectedChatSessionRow(pane.state)).toBeUndefined();
-      first = switchChatThinkingLevel(pane.state, "high");
-      middle = switchChatThinkingLevel(pane.state, "low");
+      first = switchChatSetting(pane.state, { kind: "thinkingLevel", value: "high" });
+      middle = switchChatSetting(pane.state, { kind: "thinkingLevel", value: "low" });
       const middleReady = getPendingChatPickerPatch(pane.state, key, "main");
       if (lastTarget === "materialized") {
         rows.push(materialized);
         await sessions.refresh({ agentId: "main", force: true });
         expect(selectedChatSessionRow(pane.state)).toMatchObject(materialized);
       }
-      last = switchChatThinkingLevel(pane.state, "medium");
+      last = switchChatSetting(pane.state, { kind: "thinkingLevel", value: "medium" });
       const lastReady = getPendingChatPickerPatch(pane.state, key, "main");
       expect(middleReady).toBeDefined();
       expect(lastReady).toBeDefined();
       expect(lastReady).not.toBe(middleReady);
+      expect(sessions.settingsPreview(key, "main")).toMatchObject({ thinkingLevel: "medium" });
+      await withSessionMutationOperations(() => undefined);
       expect(patch).toHaveBeenCalledOnce();
 
       if (lastTarget === "unbound") {
@@ -308,7 +310,7 @@ it.each(["unbound", "materialized"] as const)(
         onModelSetup: vi.fn(),
       });
       const container = document.createElement("div");
-      render(controls.composerControls, container);
+      renderPaneModelControl(controls.composerControls, container);
       expect
         .soft(
           container.querySelector<HTMLElement>("[data-chat-thinking-select]")?.dataset
@@ -316,8 +318,8 @@ it.each(["unbound", "materialized"] as const)(
         )
         .toBe("medium");
       expect
-        .soft(container.querySelector("[data-chat-thinking-preview-committed]")?.textContent)
-        .toBe("Medium");
+        .soft(container.querySelector(".chat-controls__effort-picker summary")?.textContent)
+        .toContain("Medium");
       middleReply.reject(new Error("Synthetic rejection of the middle settings choice"));
       await expect(Promise.all([first, middle, last])).resolves.toEqual([true, false, true]);
       await expect(middleReady).resolves.toBe(false);
@@ -331,7 +333,6 @@ it.each(["unbound", "materialized"] as const)(
         sessionId: materialized.sessionId,
         thinkingLevel: "medium",
       });
-      expect(pane.state.chatThinkingLevel).toBe("medium");
       expect(getPendingChatPickerPatch(pane.state, key, "main")).toBeUndefined();
     } finally {
       stopManaged?.();
@@ -370,16 +371,23 @@ it.each([
       entry: { sessionId: "unobserved-ack-session", updatedAt: 2, thinkingLevel: "high" },
     } satisfies SessionsPatchResult;
     const firstReply = createDeferred<SessionsPatchResult>();
-    const replies = Array.from({ length: 3 }, () => createDeferred<SessionsPatchResult>());
-    const dispatched = Array.from({ length: 3 }, () => createDeferred());
+    const replies = Array.from({ length: 4 }, () => createDeferred<SessionsPatchResult>());
+    const dispatched = Array.from({ length: 4 }, () => createDeferred());
     const requested = [
       { thinkingLevel: "low" },
       { fastMode: true },
       { contextWindow: "128k" },
+      { cyberAccessProgram: "daybreak_blue" },
     ] as const;
     const remainingPreviews = [
-      { fastMode: true, effectiveFastMode: true, contextWindow: "128k" },
-      { contextWindow: "128k" },
+      {
+        fastMode: true,
+        effectiveFastMode: true,
+        contextWindow: "128k",
+        cyberAccessProgram: "daybreak_blue",
+      },
+      { contextWindow: "128k", cyberAccessProgram: "daybreak_blue" },
+      { cyberAccessProgram: "daybreak_blue" },
       undefined,
     ];
     const patch = vi.fn<GatewayRequestHandler>((_method, raw): Promise<SessionsPatchResult> => {
@@ -410,19 +418,24 @@ it.each([
       const pane = mount(key);
       await refreshPane(pane);
       expect(selectedChatSessionRow(pane.state)?.sessionId).toBeUndefined();
-      first = switchChatThinkingLevel(pane.state, "high");
-      queued.push(switchChatThinkingLevel(pane.state, "low"));
-      queued.push(switchChatFastMode(pane.state, "on"));
-      queued.push(switchChatContextWindow(pane.state, "128k"));
-      expect(patch).toHaveBeenCalledOnce();
-      expect(patch.mock.calls[0]?.[1]).toEqual({ key, thinkingLevel: "high" });
+      first = switchChatSetting(pane.state, { kind: "thinkingLevel", value: "high" });
+      queued.push(switchChatSetting(pane.state, { kind: "thinkingLevel", value: "low" }));
+      queued.push(switchChatSetting(pane.state, { kind: "fastMode", value: "on" }));
+      queued.push(switchChatSetting(pane.state, { kind: "contextWindow", value: "128k" }));
+      queued.push(
+        switchChatSetting(pane.state, { kind: "cyberAccessProgram", value: "daybreak_blue" }),
+      );
       const pendingPreview = {
         thinkingLevel: "low",
         fastMode: true,
         effectiveFastMode: true,
         contextWindow: "128k",
+        cyberAccessProgram: "daybreak_blue",
       };
       expect(sessions.settingsPreview(key, "main")).toEqual(pendingPreview);
+      await withSessionMutationOperations(() => undefined);
+      expect(patch).toHaveBeenCalledOnce();
+      expect(patch.mock.calls[0]?.[1]).toEqual({ key, thinkingLevel: "high" });
 
       if (initialState === "published placeholder") {
         rows.push(placeholder);
@@ -478,7 +491,7 @@ it.each([
         expect(pane.state.chatError).toContain(
           outcome === "reasoning rejection"
             ? "Synthetic queued setting 0 rejection"
-            : "Synthetic queued setting 2 rejection",
+            : "Synthetic queued setting 3 rejection",
         );
         expect(pane.state.lastError).toBe(pane.state.chatError);
       } else {

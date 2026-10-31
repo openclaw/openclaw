@@ -1,39 +1,42 @@
 import {
-  ACTIVE_EMBEDDED_RUNS,
-  ACTIVE_EMBEDDED_RUN_REGISTRATIONS,
+  getActiveNativeAttempt,
+  getEmbeddedRunAttachment,
 } from "../agents/embedded-agent-runner/run-state.js";
-import type { ReplyToolAuthorityOverlay } from "../auto-reply/reply/reply-run-registry.contracts.js";
+import type { ReplyToolAuthorityOverlay } from "../sessions/session-controller.contracts.js";
 import {
   getAttachedBackend,
   resolveReplyRunForCurrentSessionId,
-} from "../auto-reply/reply/reply-run-registry.state.js";
+} from "../sessions/session-controller.state.js";
 
 /** A session-wide request selects one existing owner; later work cannot inherit it. */
 export function captureRealtimeVoiceRunOwner(sessionId: string, sessionKey: string) {
-  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
-  const registration = handle ? ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle) : undefined;
-  const operation = resolveReplyRunForCurrentSessionId(sessionId);
-  if (!handle && !operation) {
+  const handle = getActiveNativeAttempt(sessionId);
+  const registration = handle ? getEmbeddedRunAttachment(handle) : undefined;
+  const resolution = resolveReplyRunForCurrentSessionId(sessionId);
+  const operation = resolution.kind === "one" ? resolution.operation : undefined;
+  if (!handle && resolution.kind !== "one") {
     return undefined;
   }
   const runId = handle?.runId;
   const handleFingerprint = handle?.toolAuthorityFingerprint;
   const fingerprint = handleFingerprint ?? operation?.toolAuthorityFingerprint;
   const isCurrent = () => {
+    const currentResolution = resolveReplyRunForCurrentSessionId(sessionId);
     if (
       operation &&
       (operation.result ||
         operation.key !== sessionKey ||
         operation.sessionId !== sessionId ||
-        resolveReplyRunForCurrentSessionId(sessionId) !== operation ||
+        currentResolution.kind !== "one" ||
+        currentResolution.operation !== operation ||
         (handle && getAttachedBackend(operation) !== handle))
     ) {
       return false;
     }
     if (
       handle &&
-      (ACTIVE_EMBEDDED_RUNS.get(sessionId) !== handle ||
-        ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle) !== registration ||
+      (getActiveNativeAttempt(sessionId) !== handle ||
+        getEmbeddedRunAttachment(handle) !== registration ||
         (registration?.sessionKey !== undefined && registration.sessionKey !== sessionKey) ||
         handle.runId !== runId ||
         handle.toolAuthorityFingerprint !== handleFingerprint ||
@@ -50,7 +53,9 @@ export function captureRealtimeVoiceRunOwner(sessionId: string, sessionKey: stri
     }
   };
   return {
+    operation,
     isCurrent,
+    // Released external V2 sinks retain synchronous policy checks at their final effect.
     matchesCaller: (overlay: ReplyToolAuthorityOverlay) => {
       if (!isCurrent()) {
         return false;

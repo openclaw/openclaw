@@ -1,5 +1,3 @@
-@import "./carapace-control-ui.css";
-
 /* Plugins and Skills presentation layered on the settings design language:
  * art tiles, row messages, catalog details, and install/consent dialogs.
  * Structural layout comes from .settings-page/.settings-row. */
@@ -9,42 +7,8 @@
   font-size: 26px;
 }
 
-.content-header.hub-page-header.plugins-hub-header {
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas:
-    "title actions"
-    "tabs tabs";
-  align-items: end;
-  row-gap: var(--space-2);
-  width: 100%;
-  max-width: 1120px;
-  max-height: none;
-  margin-inline: auto;
-  padding-inline: var(--settings-header-inline-padding, var(--space-4));
-}
-
-.content-header.plugins-hub-header .hub-page-header__tabs {
-  grid-area: tabs;
-  justify-self: start;
+.plugins-hub-header .hub-tabs--sub .hub-tab {
   padding-block: var(--space-2);
-}
-
-.plugins-hub-header .hub-tabs--sub wa-tab.hub-tab::part(base) {
-  padding-block: var(--space-2);
-}
-
-.content-header.plugins-hub-header .hub-page-header__title {
-  grid-area: title;
-  justify-self: start;
-}
-
-.content-header.plugins-hub-header .hub-page-header__actions {
-  grid-area: actions;
-}
-
-.plugins-hub-header + .settings-workspace {
-  /* The settings page already contributes the lower half of the tab rhythm. */
-  margin-top: 0;
 }
 
 .plugins-hub-header__secondary {
@@ -64,7 +28,8 @@
   gap: var(--space-3);
 }
 
-.installed-plugins-card__art {
+.installed-plugins-card__art,
+.plugins-tile {
   width: 40px;
   height: 40px;
   flex: 0 0 40px;
@@ -72,6 +37,9 @@
   place-items: center;
   overflow: hidden;
   border-radius: 10px;
+}
+
+.installed-plugins-card__art {
   background: var(--bg);
 }
 
@@ -112,13 +80,13 @@
   gap: 6px;
 }
 
-.plugin-card-title-row :is(h2, h3) {
+.plugin-card-title-row :is(h2, h3),
+.plugin-catalog-card__head > .installed-plugins-card__head,
+.plugins-consent__header > div,
+.plugin-catalog-detail__heading,
+.plugin-catalog-detail__readme-section,
+.plugin-catalog-detail__panel {
   min-width: 0;
-}
-
-.installed-plugins-card__status-notice {
-  align-self: center;
-  margin-inline-start: auto;
 }
 
 .plugin-card-author {
@@ -148,15 +116,19 @@
   text-underline-offset: 2px;
 }
 
-.installed-plugins-card__summary {
+.installed-plugins-card__summary,
+.plugin-capability__copy > span {
   display: -webkit-box;
-  min-height: calc(2 * 1.4em);
-  margin: 0;
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
-  line-height: 1.4;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+.installed-plugins-card__summary {
+  min-height: calc(2 * 1.4em);
+  margin: 0;
+  line-height: 1.4;
 }
 
 .plugins-hub-header .plugins-hub-header__secondary.btn.btn--icon {
@@ -198,16 +170,20 @@
   width: 100%;
 }
 
-.plugin-catalog-search > span {
+.plugin-catalog-search > span,
+.plugins-settings-search > span[aria-hidden="true"] {
   position: absolute;
   top: 50%;
-  left: 11px;
-  z-index: 1;
   display: inline-flex;
   width: 16px;
   color: var(--muted);
   pointer-events: none;
   transform: translateY(-50%);
+}
+
+.plugin-catalog-search > span {
+  left: 11px;
+  z-index: 1;
 }
 
 .plugin-catalog-search input {
@@ -290,7 +266,15 @@
   min-width: 0;
 }
 
-.plugin-catalog-section__header {
+.plugin-catalog-section--expandable {
+  /* Overview shelves show at most two rows at every breakpoint. Remember their
+     height so offscreen cards skip layout without collapsing the scrollbar. */
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 280px;
+}
+
+.plugin-catalog-section__header,
+.plugins-settings-error {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -324,11 +308,15 @@
   gap: var(--space-3);
 }
 
+.plugin-catalog-window-item {
+  display: grid;
+  min-width: 0;
+}
+
 .plugin-catalog-card {
   position: relative;
   min-width: 0;
   display: grid;
-  grid-template-rows: auto auto;
   align-content: start;
   gap: var(--space-2);
   padding: var(--space-3);
@@ -340,6 +328,12 @@
     border-color var(--duration-fast) ease,
     box-shadow var(--duration-fast) ease,
     transform var(--duration-fast) ease;
+}
+
+.plugin-catalog-card__content {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-2);
 }
 
 .plugin-catalog-card:hover {
@@ -361,14 +355,6 @@
 }
 
 .plugin-catalog-card__head {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
-.plugin-catalog-card__head > .installed-plugins-card__head {
   min-width: 0;
 }
 
@@ -376,8 +362,10 @@
   position: relative;
   z-index: 3;
   display: flex;
-  min-height: 30px;
+  height: 1lh;
+  flex: 0 0 auto;
   align-items: center;
+  margin-inline-start: auto;
 }
 
 .plugin-catalog-card__install,
@@ -442,8 +430,7 @@
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
-  .plugin-catalog-section--expandable .plugin-catalog-card:nth-child(n + 7),
-  .plugin-catalog-grid--skeleton .plugin-catalog-card:nth-child(n + 7) {
+  .plugin-catalog-section--expandable .plugin-catalog-card:nth-child(n + 7) {
     display: none;
   }
 }
@@ -453,8 +440,7 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .plugin-catalog-section--expandable .plugin-catalog-card:nth-child(n + 5),
-  .plugin-catalog-grid--skeleton .plugin-catalog-card:nth-child(n + 5) {
+  .plugin-catalog-section--expandable .plugin-catalog-card:nth-child(n + 5) {
     display: none;
   }
 }
@@ -470,8 +456,7 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .plugin-catalog-section--expandable .plugin-catalog-card:nth-child(n + 3),
-  .plugin-catalog-grid--skeleton .plugin-catalog-card:nth-child(n + 3) {
+  .plugin-catalog-section--expandable .plugin-catalog-card:nth-child(n + 3) {
     display: none;
   }
 }
@@ -500,17 +485,12 @@
   height: var(--settings-control-height);
 }
 
-.plugins-toolbar--fields > .settings-segmented {
-  --wa-form-control-height: calc(var(--settings-control-height) - 6px);
-}
-
 .plugins-toolbar__hint {
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
   white-space: nowrap;
 }
 
-/* Labelled control in a toolbar (label text over a settings input/select). */
 .plugins-field {
   display: grid;
   gap: 6px;
@@ -528,8 +508,6 @@
   min-width: 180px;
 }
 
-/* <details> shell keeps the settings-section look while restoring the native
- * expand/collapse the pre-migration skill groups had (cfg-object pattern). */
 .skills-group__summary {
   align-items: center;
   cursor: var(--cursor-action);
@@ -551,8 +529,6 @@
 .skills-group__chevron svg {
   width: 16px;
   height: 16px;
-  fill: none;
-  stroke: currentColor;
   stroke-width: 2px;
 }
 
@@ -575,24 +551,6 @@
 
 .plugins-item--clickable:hover {
   background: var(--bg-hover);
-}
-
-/* Keyboard-accessible detail opener: the row text is a real button so the
-   row's primary action is focusable instead of a div click handler. */
-.plugins-item__detail-button {
-  border: 0;
-  border-radius: var(--radius-sm);
-  padding: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: var(--cursor-action);
-}
-
-.plugins-item__detail-button:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .clawhub-skill-icon {
@@ -653,20 +611,7 @@
   font-weight: 400;
 }
 
-/* Item titles/subheadings are semantic <h3>s for AT heading navigation; the
- * shared classes own the look, so only the UA heading margin needs a reset. */
-h3.settings-row__title {
-  margin: 0;
-}
-
 .plugins-tile {
-  display: grid;
-  width: 40px;
-  height: 40px;
-  flex: 0 0 40px;
-  place-items: center;
-  overflow: hidden;
-  border-radius: 10px;
   background: var(--bg-elevated);
 }
 
@@ -691,11 +636,7 @@ h3.settings-row__title {
 .plugins-tile--fallback svg {
   width: 21px;
   height: 21px;
-  fill: none;
-  stroke: currentColor;
   stroke-width: 1.6px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .plugins-row-message {
@@ -703,16 +644,11 @@ h3.settings-row__title {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  border-radius: var(--radius-md);
-  padding: var(--space-2) var(--space-3);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.45;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-/* Row-local message: full-width line under the row's text + controls. */
-.plugin-catalog-card > .plugins-row-message {
+.plugin-catalog-card__content > .plugins-row-message {
   position: relative;
   z-index: 3;
 }
@@ -721,9 +657,36 @@ h3.settings-row__title {
   flex: 1 1 100%;
 }
 
-.plugins-row-message--error {
-  background: var(--danger-subtle);
-  color: var(--danger);
+.plugin-catalog-detail__panel > .plugins-row-message {
+  margin-bottom: var(--space-4);
+}
+
+.plugins-row-message--info {
+  display: block;
+  padding: var(--space-2) 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.45;
+  white-space: normal;
+}
+
+.plugins-row-message--info a {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.plugin-compatibility-apis {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+}
+
+.plugin-compatibility-apis dd {
+  margin: var(--space-1) 0 0;
 }
 
 .plugins-row-message--warning {
@@ -775,10 +738,6 @@ h3.settings-row__title {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-}
-
-.plugins-consent__header > div {
-  min-width: 0;
 }
 
 .plugins-consent__section {
@@ -839,20 +798,12 @@ h3.settings-row__title {
   color: var(--muted);
 }
 
-.plugins-consent__error,
-.plugins-consent__actions {
+.plugins-consent__error {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
-}
-
-.plugins-consent__error {
   color: var(--danger);
-}
-
-.plugins-consent__actions {
-  justify-content: flex-end;
 }
 
 /* The inventory header is already inside the padded settings page. Its page
@@ -888,17 +839,12 @@ openclaw-plugins-page
 }
 
 .plugins-settings-search > span[aria-hidden="true"] {
-  position: absolute;
-  top: 50%;
   left: var(--space-3);
-  display: inline-flex;
-  width: 16px;
-  color: var(--muted);
-  transform: translateY(-50%);
-  pointer-events: none;
 }
 
-.plugins-settings-search > span[aria-hidden="true"] svg {
+.plugins-settings-search > span[aria-hidden="true"] svg,
+.plugin-catalog-detail__back svg,
+.plugin-catalog-detail__actions svg {
   width: 16px;
   height: 16px;
 }
@@ -952,13 +898,6 @@ openclaw-plugins-page
   height: 13px;
 }
 
-.plugins-settings-error {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
 .plugin-catalog-detail {
   container-type: inline-size;
   display: grid;
@@ -969,14 +908,14 @@ openclaw-plugins-page
 .plugin-catalog-detail__content {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 196px;
-  grid-template-areas: "panel sidebar" "readme sidebar";
+  grid-template-areas: "main sidebar";
   align-items: start;
   gap: 32px;
 }
 
 .plugin-catalog-detail--no-sidebar .plugin-catalog-detail__content {
   grid-template-columns: minmax(0, 1fr);
-  grid-template-areas: "panel" "readme";
+  grid-template-areas: "main";
 }
 
 .plugin-catalog-detail__back {
@@ -991,11 +930,6 @@ openclaw-plugins-page
 
 .plugin-catalog-detail__back:hover {
   color: var(--text-strong);
-}
-
-.plugin-catalog-detail__back svg {
-  width: 16px;
-  height: 16px;
 }
 
 .plugin-catalog-detail__hero {
@@ -1044,15 +978,6 @@ openclaw-plugins-page
   min-width: var(--settings-control-height);
   padding: 0;
 }
-.plugin-catalog-detail__actions svg {
-  width: 16px;
-  height: 16px;
-}
-
-.plugin-catalog-detail__heading {
-  min-width: 0;
-}
-
 .plugin-catalog-detail__title-row {
   display: flex;
   align-items: flex-start;
@@ -1195,11 +1120,16 @@ openclaw-plugins-page
   height: 1em;
 }
 .plugin-catalog-detail__security-score {
+  /* The hover fill bleeds past the label and bars so neither sits flush with its edge. */
+  --plugin-security-score-bleed: 8px;
+
   display: grid;
   grid-template-columns: 1fr repeat(3, 26px);
   align-items: center;
   gap: 6px;
-  padding: 8px 0;
+  margin-inline: calc(-1 * var(--plugin-security-score-bleed));
+  padding: 8px var(--plugin-security-score-bleed);
+  border-radius: var(--radius-md);
 }
 .plugin-catalog-detail__security-score strong {
   font-size: var(--control-ui-text-sm);
@@ -1256,6 +1186,7 @@ openclaw-plugins-page
   border-bottom: 1px solid var(--border);
 }
 .plugin-capability > button,
+.plugin-capability__disclosure > summary,
 .plugin-capability__static {
   display: flex;
   align-items: center;
@@ -1269,15 +1200,51 @@ openclaw-plugins-page
   text-align: left;
   font: inherit;
 }
-.plugin-capability > button {
+.plugin-capability > button,
+.plugin-capability__disclosure > summary {
   cursor: var(--cursor-action);
 }
-.plugin-capability > button:hover {
+.plugin-capability > button:hover,
+.plugin-capability__disclosure > summary:hover {
   background: var(--bg-elevated);
 }
-.plugin-capability > button:focus-visible {
+.plugin-capability > button:focus-visible,
+.plugin-capability__disclosure > summary:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
+}
+.plugin-capability__disclosure > summary {
+  list-style: none;
+}
+.plugin-capability__disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+.plugin-capability__chevron {
+  display: inline-flex;
+}
+.plugin-capability__disclosure[open] .plugin-capability__chevron {
+  transform: rotate(90deg);
+}
+.plugin-capability__details {
+  padding: 0 12px 12px;
+  overflow-wrap: anywhere;
+  font-size: var(--control-ui-text-sm);
+}
+.plugin-capability__details p {
+  margin: 12px 0 0;
+  color: var(--muted);
+}
+.plugin-mcp-details {
+  display: grid;
+  grid-template-columns: minmax(112px, 1fr) minmax(0, 3fr);
+  gap: 8px 16px;
+  margin: 12px 0 0;
+}
+.plugin-mcp-details dt {
+  color: var(--muted);
+}
+.plugin-mcp-details dd {
+  margin: 0;
 }
 .plugin-capability__icon {
   display: grid;
@@ -1305,17 +1272,8 @@ openclaw-plugins-page
   font-size: var(--control-ui-text-sm);
 }
 .plugin-capability__copy > span {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
   overflow: hidden;
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
   line-height: 1.5;
-}
-.plugin-catalog-detail__readme-section {
-  grid-area: readme;
-  min-width: 0;
 }
 .plugin-tool-dialog {
   --openclaw-modal-width: 760px;
@@ -1384,7 +1342,7 @@ openclaw-plugins-page
 @container (max-width: 768px) {
   .plugin-catalog-detail__content {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-areas: "panel" "sidebar" "readme";
+    grid-template-areas: "main" "sidebar";
     gap: 24px;
   }
   .plugin-catalog-detail__hero {
@@ -1435,9 +1393,19 @@ openclaw-plugins-page
   margin-bottom: 12px;
 }
 
-.plugin-catalog-detail__panel {
-  grid-area: panel;
+.plugin-catalog-detail__main {
+  grid-area: main;
+  display: grid;
+  gap: 28px;
   min-width: 0;
+}
+
+.plugin-catalog-detail__panel:empty {
+  display: none;
+}
+
+.plugin-catalog-detail__panel > .plugin-capabilities:last-child {
+  margin-bottom: 0;
 }
 
 .plugin-catalog-detail__readme {

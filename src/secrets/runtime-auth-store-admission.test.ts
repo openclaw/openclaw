@@ -16,15 +16,36 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
+type Options = Parameters<typeof prepareSecretsRuntimeSnapshot>[0];
+const credential = { type: "api_key", provider: "custom", key: "fixture-key" } as const;
+const healthyStore = () => loadAuthStoreWithProfiles({ "custom:healthy": credential });
+const entry = (agentDir: string) => ({
+  agentDir,
+  store: { profiles: { "custom:healthy": credential } },
+});
+
+function fixture(agentId = "worker") {
+  const root = tempDirs.make("openclaw-secret-admission-");
+  const env = { OPENCLAW_STATE_DIR: root };
+  const agentDir = path.join(root, "agents", agentId, "agent");
+  const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
+  const prepare = (overrides: Partial<Options> = {}) =>
+    prepareSecretsRuntimeSnapshot({
+      config: {},
+      env,
+      agentDirs: [agentDir],
+      includeConfigRefs: false,
+      loadAuthStore: healthyStore,
+      ...overrides,
+    });
+  return { root, env, agentDir, databasePath, prepare };
+}
 
 it.each(["matching", "other-state", "other-path"])(
   "isolates an unreadable auth store only with a %s admission refusal",
   async (scope) => {
-    const root = tempDirs.make("openclaw-secret-admission-");
-    const env = { OPENCLAW_STATE_DIR: root };
-    const workerDir = path.join(root, "agents/worker/agent");
+    const { root, env, agentDir, databasePath, prepare } = fixture();
     const healthyDir = path.join(root, "agents/main/agent");
-    const databasePath = path.join(workerDir, "openclaw-agent.sqlite");
     const refusal = createAgentDatabaseInspectionRefusal({
       agentId: "worker",
       paths: [scope === "other-path" ? path.join(root, "other.sqlite") : databasePath],
@@ -35,19 +56,14 @@ it.each(["matching", "other-state", "other-path"])(
       source: "startup",
     });
     const failure = new AuthProfileStoreUnreadableError(databasePath);
-    const loadAuthStore = vi.fn((agentDir?: string) => {
-      if (agentDir === workerDir) {
+    const loadAuthStore = vi.fn(async (dir?: string) => {
+      if (dir === agentDir) {
         throw failure;
       }
-      return loadAuthStoreWithProfiles({
-        "custom:healthy": { type: "api_key", provider: "custom", key: "fixture-key" },
-      });
+      return healthyStore();
     });
-    const preparing = prepareSecretsRuntimeSnapshot({
-      config: {},
-      env,
-      agentDirs: [healthyDir, workerDir],
-      includeConfigRefs: false,
+    const preparing = prepare({
+      agentDirs: [healthyDir, agentDir],
       allowUnavailableSecretOwners: true,
       loadAuthStore,
     });
@@ -56,83 +72,64 @@ it.each(["matching", "other-state", "other-path"])(
       return;
     }
     const snapshot = await preparing;
-    expect(snapshot.authStores.map((entry) => entry.agentDir)).toEqual([healthyDir]);
-    expect(snapshot.authStores[0]?.store.profiles["custom:healthy"]).toMatchObject({
-      key: "fixture-key",
+    expect(snapshot).toMatchObject({
+      authStores: [entry(healthyDir)],
+      degradedOwners: [
+        {
+          ownerKind: "route",
+          state: "unavailable",
+          degradationState: "cold",
+          paths: [databasePath],
+          reason: `${refusal.reason}\n${refusal.repairHint}`,
+        },
+      ],
     });
-    expect(loadAuthStore).not.toHaveBeenCalledWith(workerDir);
-    expect(snapshot.degradedOwners).toEqual([
-      expect.objectContaining({
-        ownerKind: "route",
-        state: "unavailable",
-        degradationState: "cold",
-        paths: [databasePath],
-        reason: `${refusal.reason}\n${refusal.repairHint}`,
-      }),
-    ]);
+    expect(loadAuthStore).not.toHaveBeenCalledWith(agentDir);
     expect(readAgentDatabaseAdmissionRefusal("worker", { env })).toBe(refusal);
   },
 );
 
-it("keeps the healthy owner's credentials when another agent is refused at its path", async () => {
-  const root = tempDirs.make("openclaw-secret-owner-");
-  const env = { OPENCLAW_STATE_DIR: root };
-  const agentDir = path.join(root, "agents/main/agent");
-  const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
-  fs.mkdirSync(agentDir, { recursive: true });
-  fs.writeFileSync(databasePath, "fixture");
-  recordAgentDatabaseAdmissions(
-    [
-      {
-        agentId: "worker",
-        paths: [databasePath],
-        code: "agent-database-ownership-mismatch",
-        embeddedOwnerId: "main",
-        reason: "The worker path belongs to main.",
-        repairHint: "Repair the worker database path.",
-      },
-    ],
-    { env, source: "startup" },
-  );
-  const snapshot = await prepareSecretsRuntimeSnapshot({
-    config: {},
-    env,
-    agentDirs: [agentDir],
-    includeConfigRefs: false,
-    loadAuthStore: () =>
-      loadAuthStoreWithProfiles({
-        "custom:healthy": { type: "api_key", provider: "custom", key: "fixture-key" },
-      }),
-  });
-  expect(snapshot.authStores[0]?.store.profiles["custom:healthy"]).toMatchObject({
-    key: "fixture-key",
-  });
-  expect(snapshot.degradedOwners).toEqual([]);
-});
-
-it("loads a pending agent's auth store under its live preparation authority", async () => {
-  const root = tempDirs.make("openclaw-secret-preparation-");
-  const env = { OPENCLAW_STATE_DIR: root };
-  const agentDir = path.join(root, "agents/worker/agent");
-  const refusal = createAgentDatabaseInspectionRefusal({
-    agentId: "worker",
-    paths: [path.join(agentDir, "openclaw-agent.sqlite")],
-    reason: "Inspection is still running.",
-    pending: true,
-  });
-  recordAgentDatabaseAdmissions([refusal], { env, source: "startup" });
-  await preparePendingAgentDatabase(refusal, { env, assertCurrent: () => {} }, async () => {
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: {},
-      env,
-      agentDirs: [agentDir],
-      includeConfigRefs: false,
-      loadAuthStore: () =>
-        loadAuthStoreWithProfiles({
-          "custom:worker": { type: "api_key", provider: "custom", key: "fixture-key" },
-        }),
-    });
-    expect(snapshot.authStores.map((entry) => entry.agentDir)).toEqual([agentDir]);
-    expect(snapshot.degradedOwners).toEqual([]);
-  });
-});
+it.each(["other-owner", "pending-authority"])(
+  "loads healthy credentials under %s admission",
+  async (scope) => {
+    const agentId = scope === "other-owner" ? "main" : "worker";
+    const { env, agentDir, databasePath, prepare } = fixture(agentId);
+    if (scope === "other-owner") {
+      fs.mkdirSync(agentDir, { recursive: true });
+      fs.writeFileSync(databasePath, "fixture");
+    }
+    const refusal =
+      scope === "other-owner"
+        ? {
+            agentId: "worker",
+            paths: [databasePath],
+            code: "agent-database-ownership-mismatch" as const,
+            embeddedOwnerId: "main",
+            reason: "The worker path belongs to main.",
+            repairHint: "Repair the worker database path.",
+          }
+        : createAgentDatabaseInspectionRefusal({
+            agentId,
+            paths: [databasePath],
+            reason: "Inspection is still running.",
+            pending: true,
+          });
+    recordAgentDatabaseAdmissions([refusal], { env, source: "startup" });
+    const prepareHealthy = async () => {
+      expect(await prepare()).toMatchObject({ authStores: [entry(agentDir)], degradedOwners: [] });
+    };
+    if (scope === "pending-authority") {
+      const loadAuthStore = vi.fn();
+      expect(await prepare({ loadAuthStore })).toMatchObject({
+        authStores: [],
+        degradedOwners: [],
+      });
+      expect(loadAuthStore).not.toHaveBeenCalled();
+      expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toBe(refusal);
+      await preparePendingAgentDatabase(refusal, { env, assertCurrent: () => {} }, prepareHealthy);
+      expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toBeUndefined();
+    } else {
+      await prepareHealthy();
+    }
+  },
+);

@@ -1,4 +1,5 @@
 import { beforeEach, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import type { NodeHostClient } from "./client.js";
 
@@ -10,7 +11,6 @@ const mocks = vi.hoisted(() => {
     retireIdleWorkers: vi.fn<() => Promise<void>>(async () => undefined),
     workerHasActiveWork: vi.fn(async () => false),
     pluginHasActiveWork: vi.fn(() => false),
-    initializeWorkerSupervisor: vi.fn(async () => undefined),
     disconnectPlugins: vi.fn<() => Promise<void>>(async () => undefined),
     handleInvoke: vi.fn(async () => undefined),
     progressStartHeartbeats: vi.fn(),
@@ -24,17 +24,12 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("../infra/path-env.js", () => ({
-  ensureOpenClawCliOnPath: vi.fn(),
-}));
-
-vi.mock("./invoke.js", () => ({
-  handleInvoke: mocks.handleInvoke,
-}));
-
-vi.mock("./mcp.js", () => ({
-  startNodeHostMcpManager: mocks.startMcp,
-}));
+// mock-isolation: runtime lifecycle tests must not mutate the host PATH.
+vi.mock("../infra/path-env.js", () => ({ ensureOpenClawCliOnPath: vi.fn() }));
+// mock-isolation: the controlled invocation promise exposes runtime cancellation and cleanup.
+vi.mock("./invoke.js", () => ({ handleInvoke: mocks.handleInvoke }));
+// mock-isolation: controlled MCP startup and close avoid launching real MCP services.
+vi.mock("./mcp.js", () => ({ startNodeHostMcpManager: mocks.startMcp }));
 
 vi.mock("./node-invoke-progress.js", () => ({
   createNodeInvokeProgressWriter: vi.fn(() => ({
@@ -45,9 +40,10 @@ vi.mock("./node-invoke-progress.js", () => ({
   })),
 }));
 
+// mock-isolation: runtime lifecycle tests control worker activity and settlement without workers.
 vi.mock("./node-worker-supervisor.js", () => ({
   createNodeWorkerSupervisor: vi.fn(() => ({
-    initialize: mocks.initializeWorkerSupervisor,
+    initialize: async () => undefined,
     hasActiveWork: mocks.workerHasActiveWork,
     retireIdle: mocks.retireIdleWorkers,
     close: mocks.closeWorkerSupervisor,
@@ -73,29 +69,19 @@ vi.mock("./plugin-node-host.js", () => ({
   })),
 }));
 
-vi.mock("./skills.js", () => ({
-  scanNodeHostedSkills: vi.fn(() => []),
-}));
+// mock-isolation: runtime lifecycle tests have no host skills to discover.
+vi.mock("./skills.js", () => ({ scanNodeHostedSkills: vi.fn(() => []) }));
 
 // Retain local bindings after mock registration for Vitest's export transform.
 const { prepareNodeHostRuntime } = await import("./runtime.js");
-const { listRegisteredNodeHostCapsAndCommands } = await import("./plugin-node-host.js");
-export { mocks, prepareNodeHostRuntime, listRegisteredNodeHostCapsAndCommands };
+export { mocks };
 
-export const frame = {
-  id: "invoke-1",
-  nodeId: "node-1",
-  command: "test.duplex",
-  paramsJSON: null,
-  timeoutMs: 0,
-  idempotencyKey: null,
-};
+export const frame = { id: "invoke-1", nodeId: "node-1", command: "test.duplex", paramsJSON: null };
 
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.closeMcp.mockResolvedValue(undefined);
   mocks.closeWorkerSupervisor.mockResolvedValue(undefined);
-  mocks.initializeWorkerSupervisor.mockResolvedValue(undefined);
   mocks.workerHasActiveWork.mockResolvedValue(false);
   mocks.retireIdleWorkers.mockResolvedValue(undefined);
   mocks.pluginHasActiveWork.mockReturnValue(false);
@@ -106,9 +92,8 @@ export function createNodeHostClient(
   request: (...args: Parameters<NodeHostClient["request"]>) => Promise<unknown>,
 ): NodeHostClient {
   return {
-    async request<T>(...args: Parameters<NodeHostClient["request"]>) {
-      return (await request(...args)) as T;
-    },
+    request: async <T>(...args: Parameters<NodeHostClient["request"]>) =>
+      (await request(...args)) as T,
   };
 }
 
@@ -119,37 +104,24 @@ export async function startRuntime(
     config: { nodeHost: { skills: { enabled: false }, workerRuns: { enabled: true } } },
     env: { PATH: "/usr/bin" },
     enableAgentRuns: true,
-    enableWorkerRuns: true,
   });
   return prepared.start({ client });
 }
 
-export function holdInvoke(onCommand?: (io: OpenClawPluginNodeHostCommandIo) => void) {
-  let io: OpenClawPluginNodeHostCommandIo | undefined;
-  let signal: AbortSignal | undefined;
-  let release: (() => void) | undefined;
-  const held = new Promise<void>((resolve) => {
-    release = resolve;
-  });
+export function holdInvoke() {
+  let context: { pluginCommandIo?: OpenClawPluginNodeHostCommandIo; signal?: AbortSignal } = {};
+  const held = createDeferred();
   mocks.handleInvoke.mockImplementationOnce(async (...args: unknown[]) => {
-    const runtime = args[4] as {
-      pluginCommandIo?: OpenClawPluginNodeHostCommandIo;
-      signal?: AbortSignal;
-    };
-    io = runtime.pluginCommandIo;
-    signal = runtime.signal;
-    if (io) {
-      onCommand?.(io);
-    }
-    await held;
+    context = args[4] as typeof context;
+    await held.promise;
   });
   return {
     get io() {
-      return io;
+      return context.pluginCommandIo;
     },
     get signal() {
-      return signal;
+      return context.signal;
     },
-    release: () => release?.(),
+    release: () => held.resolve(),
   };
 }

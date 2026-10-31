@@ -16,10 +16,11 @@ installConnectedControlUiServerSuite((started) => {
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let file: string;
-beforeEach(() => {
+function resetLogFile() {
   file = path.join(tempDirs.make("openclaw-gateway-log-tail-"), "stored.log");
   setLoggerOverride({ file, level: "silent", consoleLevel: "silent" });
-});
+}
+beforeEach(resetLogFile);
 afterEach(() => {
   applyLoggingConfig(undefined);
   setLoggerOverride({ level: "silent", consoleLevel: "silent" });
@@ -29,51 +30,53 @@ const pem = [
   "ABCDEF1234567890",
   "-----END PRIVATE KEY-----",
 ] as const;
-const record = (message: string) => JSON.stringify({ message });
+const record = (message: string, fields: Record<string, unknown> = {}) =>
+  JSON.stringify({ message, ...fields });
 
-async function readTail(params: { cursor?: number; limit?: number; maxBytes?: number }) {
+async function readTail(
+  params: { cursor?: number; limit?: number; maxBytes?: number },
+  stored?: string,
+) {
   const response = await rpcReq<LogTailPayload>(ws, "logs.tail", params);
   expect(response.ok).toBe(true);
   assert(response.payload);
+  if (stored !== undefined) {
+    expect(response.payload.cursor).toBe(Buffer.byteLength(stored));
+    expect(await fs.readFile(file, "utf8")).toBe(stored);
+  }
   return response.payload;
 }
 
 it("logs.tail masks complete stored batches while preserving JSON records and byte cursors", async () => {
   const cases = [
-    { lines: pem.map(record), json: [0, 1, 2] },
-    { lines: [record(pem.join("\n"))], json: [0] },
-    { lines: pem, json: [] },
-    { lines: [record(pem[0]), pem[1], record(pem[2])], json: [0, 2] },
-    { lines: [record(pem[0]), pem[1], pem[1], pem[1], record(pem[2])], json: [0, 4] },
-    {
-      lines: pem.map((message, index) =>
-        JSON.stringify({ message, ordinary: `keep-${index}`, sequence: index }),
-      ),
-      json: [0, 1, 2],
-    },
-    { lines: [record("Authorization: Basic c2VjcmV0OnBhc3M=")], json: [0] },
-    { lines: ["before", "[[],[],[]]", "Authorization: Basic c2VjcmV0OnBhc3M="], json: [1] },
-    { lines: [record("token=synthetic-credential-123456")], json: [0] },
+    pem.map((message) => record(message)),
+    [record(pem.join("\n"))],
+    pem,
+    [record(pem[0]), pem[1], record(pem[2])],
+    [record(pem[0]), pem[1], pem[1], pem[1], record(pem[2])],
+    pem.map((message, index) => record(message, { ordinary: `keep-${index}`, sequence: index })),
+    [record("Authorization: Basic c2VjcmV0OnBhc3M=")],
+    ["before", "[[],[],[]]", "Authorization: Basic c2VjcmV0OnBhc3M="],
+    [record("token=synthetic-credential-123456")],
   ];
-  for (const { lines, json } of cases) {
+  for (const lines of cases) {
     const stored = `${lines.join("\n")}\n`;
     await fs.writeFile(file, stored);
-    const tail = await readTail({ limit: 100 });
-    expect(tail.cursor).toBe(Buffer.byteLength(stored));
+    const tail = await readTail({ limit: 100 }, stored);
     expect(tail.size).toBe(Buffer.byteLength(stored));
     expect(tail.lines).toHaveLength(lines.length);
-    expect(tail.lines.join("\n")).not.toContain(pem[1]);
-    expect(tail.lines.join("\n")).not.toContain("c2VjcmV0OnBhc3M=");
-    expect(tail.lines.join("\n")).not.toContain("synthetic-credential-123456");
-    for (const index of json) {
+    for (const secret of [pem[1], "c2VjcmV0OnBhc3M=", "synthetic-credential-123456"]) {
+      expect(tail.lines.join("\n")).not.toContain(secret);
+    }
+    for (const [index, originalLine] of lines.entries()) {
+      if (!originalLine.startsWith("{") && !originalLine.startsWith("[")) {
+        continue;
+      }
       const line = tail.lines[index];
       assert(line !== undefined);
-      expect(() => JSON.parse(line)).not.toThrow();
-      const originalLine = lines[index];
-      assert(originalLine !== undefined);
+      const masked = JSON.parse(line);
       const original = JSON.parse(originalLine);
       if (!Array.isArray(original)) {
-        const masked = JSON.parse(line);
         expect(Object.keys(masked)).toEqual(Object.keys(original));
         expect(masked.message).toEqual(expect.any(String));
         expect(masked.message.trim()).not.toBe("");
@@ -82,7 +85,6 @@ it("logs.tail masks complete stored batches while preserving JSON records and by
         }
       }
     }
-    expect(await fs.readFile(file, "utf8")).toBe(stored);
     const next = await readTail({ cursor: tail.cursor });
     expect(next.lines).toEqual([]);
   }
@@ -90,25 +92,21 @@ it("logs.tail masks complete stored batches while preserving JSON records and by
 
 it("logs.tail applies current ordered patterns and secrets registered after the file was written", async () => {
   const fresh = '{ "message": "already ***", "ordinary": 42 }';
-  const stored =
-    [JSON.stringify({ message: "MASKME PRIVATE_STORED", numeric: 73928164 }), fresh].join("\n") +
-    "\n";
+  const stored = [record("MASKME PRIVATE_STORED", { numeric: 73928164 }), fresh].join("\n") + "\n";
   await fs.writeFile(file, stored);
   applyLoggingConfig({ redactPatterns: ["MASKME", String.raw`/\*\*\* (PRIVATE_[A-Z]+)/g`] });
   registerSecretValueForRedaction("73928164");
-  const response = await readTail({ limit: 100 });
+  const response = await readTail({ limit: 100 }, stored);
   expect(response.lines.map((line) => JSON.parse(line))).toEqual([
     { message: "*** ***", numeric: "***" },
     { message: "already ***", ordinary: 42 },
   ]);
   expect(response.lines[1]).toBe(fresh);
-  expect(response.cursor).toBe(Buffer.byteLength(stored));
-  expect(await fs.readFile(file, "utf8")).toBe(stored);
 
   const containers = '[[],[]]\n{ "message": [[],[]] }\n{"message":"[[],[]]"}\n';
   await fs.writeFile(file, containers);
   registerSecretValueForRedaction("[[],[]]");
-  const containerResponse = await readTail({ limit: 100 });
+  const containerResponse = await readTail({ limit: 100 }, containers);
   expect(containerResponse.lines).toHaveLength(3);
   for (const line of containerResponse.lines) {
     expect(line).not.toContain("[[],[]]");
@@ -118,16 +116,12 @@ it("logs.tail applies current ordered patterns and secrets registered after the 
   assert(containerObject !== undefined && containerString !== undefined);
   expect(JSON.parse(containerObject).message).toBeDefined();
   expect(JSON.parse(containerString).message).toBe("***");
-  expect(containerResponse.cursor).toBe(Buffer.byteLength(containers));
-  expect(await fs.readFile(file, "utf8")).toBe(containers);
 
   const ordered = "123456\nsuperprivate\n";
   await fs.writeFile(file, ordered);
   applyLoggingConfig({ redactPatterns: ["123456", String.raw`\*\*\*\n(superprivate)`] });
-  const orderedResponse = await readTail({ limit: 100 });
+  const orderedResponse = await readTail({ limit: 100 }, ordered);
   expect(orderedResponse.lines).toEqual(['"***"', "***"]);
-  expect(orderedResponse.cursor).toBe(Buffer.byteLength(ordered));
-  expect(await fs.readFile(file, "utf8")).toBe(ordered);
 });
 
 it("logs.tail masks late secrets and confined pattern captures inside JSON property names", async () => {
@@ -144,7 +138,7 @@ it("logs.tail masks late secrets and confined pattern captures inside JSON prope
   applyLoggingConfig({
     redactPatterns: [String.raw`"prefix\\"(MASKME)\\"suffix":`, "VALUE_ONLY"],
   });
-  const response = await readTail({ limit: 100 });
+  const response = await readTail({ limit: 100 }, stored);
   expect(response.lines.join("\n")).not.toContain(secret);
   const [keyRecord, valueRecord, patternKey, patternValue] = response.lines.map((line) =>
     JSON.parse(line),
@@ -152,14 +146,12 @@ it("logs.tail masks late secrets and confined pattern captures inside JSON prope
   expect(keyRecord).toEqual({ [valueRecord.ordinary]: "diagnostic" });
   expect(patternKey).toEqual({ 'prefix"***"suffix': "diagnostic" });
   expect(patternValue).toEqual({ message: "***", ordinary: "keep" });
-  expect(response.cursor).toBe(Buffer.byteLength(stored));
-  expect(await fs.readFile(file, "utf8")).toBe(stored);
 });
 
 it.each(["raw", "JSON"])(
   "logs.tail masks %s PEM bodies across selection windows and separate cursor polls",
   async (format) => {
-    const lines = format === "JSON" ? pem.map(record) : [...pem];
+    const lines = format === "JSON" ? pem.map((message) => record(message)) : [...pem];
     const messages = (tail: LogTailPayload) =>
       tail.lines.map((line) => (format === "JSON" ? JSON.parse(line).message : line));
     const stored = `${lines.join("\n")}\n`;
@@ -173,9 +165,8 @@ it.each(["raw", "JSON"])(
       { maxBytes: bodyAndFooterBytes },
       { maxBytes: Buffer.byteLength(stored) - middleOfHeader },
     ]) {
-      const response = await readTail(selection);
+      const response = await readTail(selection, stored);
       expect(response).toMatchObject({
-        cursor: Buffer.byteLength(stored),
         size: Buffer.byteLength(stored),
         truncated: true,
         reset: false,
@@ -185,7 +176,6 @@ it.each(["raw", "JSON"])(
         pem[2],
       ]);
       expect(response.lines.join("\n")).not.toContain(pem[1]);
-      expect(await fs.readFile(file, "utf8")).toBe(stored);
     }
 
     for (const chunks of [[lines.slice(0, 2), lines.slice(2)], lines.map((line) => [line])]) {
@@ -197,9 +187,8 @@ it.each(["raw", "JSON"])(
         const appended = `${chunk.join("\n")}\n`;
         written += appended;
         await fs.appendFile(file, appended);
-        const response = await readTail({ cursor });
+        const response = await readTail({ cursor }, written);
         expect(response).toMatchObject({
-          cursor: Buffer.byteLength(written),
           size: Buffer.byteLength(written),
           truncated: false,
           reset: false,
@@ -210,11 +199,9 @@ it.each(["raw", "JSON"])(
         });
         expect(messages(response)).toEqual(expected);
         expect(response.lines.join("\n")).not.toContain(pem[1]);
-        expect(await fs.readFile(file, "utf8")).toBe(written);
         cursor = response.cursor;
         const repeated = await readTail({ cursor });
-        expect(repeated.lines).toEqual([]);
-        expect(repeated.cursor).toBe(cursor);
+        expect(repeated).toMatchObject({ lines: [], cursor });
       }
     }
   },
@@ -222,6 +209,7 @@ it.each(["raw", "JSON"])(
 
 it("logs.tail preserves ambiguous and long PEM prefix context at a byte cursor", async () => {
   for (const inherited of [false, true]) {
+    resetLogFile();
     const prefix =
       (inherited ? `${pem[0]}\n` : "") + "ordinary padding\n".repeat(500) + `${pem[0]}${pem[2]}\n`;
     await fs.writeFile(file, `${prefix}following value\n`);
@@ -230,6 +218,7 @@ it("logs.tail preserves ambiguous and long PEM prefix context at a byte cursor",
     });
     expect(response.lines).toEqual([inherited ? "following value" : "…redacted…"]);
   }
+  resetLogFile();
   const prefix = `-----BEGIN ${"A".repeat(300_000)} PRIVATE KEY-----\n`;
   await fs.writeFile(file, `${prefix}long body\n`);
   const response = await readTail({

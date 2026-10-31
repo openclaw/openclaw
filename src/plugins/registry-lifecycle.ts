@@ -1,8 +1,10 @@
 /** Registry handles expire at publication; unchanged plugin instances retain their own authority. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
+import { summarizePluginRetirementResults } from "./host-hook-cleanup-result.js";
 import { PluginLoaderCacheState } from "./loader-cache-state.js";
 import {
   getPluginCache,
@@ -15,9 +17,20 @@ import {
   getPluginInstanceOwner,
   pluginInstanceState,
   resolvePluginInstanceOwner,
+  type PluginInstanceOwner,
 } from "./plugin-instance-scope.js";
-import type { PluginChannelRegistration, PluginRecord, PluginRegistry } from "./registry-types.js";
+import type {
+  PluginChannelRegistration,
+  PluginRecord,
+  PluginRegistry,
+  PluginRegistryGatewayOwner,
+} from "./registry-types.js";
 import { getPluginRegistryState } from "./runtime-state.js";
+import { getPluginRuntimeLoadContextState } from "./runtime/load-context-state.js";
+
+type GatewayChannelAdmission = Pick<PluginChannelRegistration, "pluginId" | "plugin"> & {
+  config: OpenClawConfig | undefined;
+};
 
 type PluginRegistryLifecycleState = {
   // The 2026.9.1 updater retains opaque epoch objects without a controller.
@@ -34,23 +47,14 @@ type PluginRegistryLifecycleStore = {
   retiredRegistries: WeakSet<PluginRegistry>;
   activatedRegistries: WeakSet<PluginRegistry>;
   registryEpochs: WeakMap<PluginRegistry, PluginRegistryLifecycleState>;
-  preparation?: AsyncLocalStorage<{ registry: PluginRegistry; active: boolean }>;
+  preparation?: AsyncLocalStorage<{ registry: PluginRegistry | undefined; active: boolean }>;
   loaderCaches?: WeakMap<PluginRegistry, Set<PluginLoaderCacheState<PluginRegistry>>>;
   registryLoads?: WeakMap<PluginCache, PluginLoaderCacheState<PluginRegistry>>;
   registryResourceOwners?: WeakMap<PluginRegistry, PluginRegistry>;
   registryLifetimes?: WeakMap<PluginRegistry, PluginRegistryLifetime>;
   gatewayOwners?: WeakMap<PluginRegistry, PluginRegistryGatewayOwner | null>;
-  gatewayChannels?: WeakMap<
-    PluginRegistry,
-    ReadonlyMap<string, Pick<PluginChannelRegistration, "pluginId" | "plugin">>
-  >;
+  gatewayChannels?: WeakMap<PluginRegistry, ReadonlyMap<string, GatewayChannelAdmission>>;
   borrowedRecords?: WeakMap<PluginRegistry, WeakSet<PluginRecord>>;
-};
-
-/** The Gateway registry owner that admitted work in a registry generation. */
-export type PluginRegistryGatewayOwner = {
-  /** The owner's published registry while it stays open; closing owners return undefined. */
-  readonly current: () => PluginRegistry | undefined;
 };
 
 const lifecycle = resolveGlobalSingleton<PluginRegistryLifecycleStore>(
@@ -111,8 +115,8 @@ export function bindPluginRegistryGatewayOwner(
   const key = getPluginRegistryResourceOwner(registry);
   const existing = gatewayOwners.get(key);
   if (existing === undefined) {
-    // Disposal clears a retired registry's arrays. Keep its admitted registrations,
-    // not callable authority, for successor continuity checks while turns retain it.
+    // Keep publication facts across teardown and filtered views. Prepared turn
+    // load contexts can change; they must not replace the admitting Gateway's config.
     const inherited =
       admittedFrom && getPluginRegistryGatewayOwner(admittedFrom) === owner
         ? gatewayChannels.get(getPluginRegistryResourceOwner(admittedFrom))
@@ -122,9 +126,15 @@ export function bindPluginRegistryGatewayOwner(
         gatewayChannels.set(key, inherited);
       }
     } else {
+      const config = getPluginRuntimeLoadContextState(registry)?.rawConfig;
       gatewayChannels.set(
         key,
-        new Map(registry.channels.map(({ pluginId, plugin }) => [plugin.id, { pluginId, plugin }])),
+        new Map(
+          registry.channels.map(({ pluginId, plugin }) => [
+            plugin.id,
+            { pluginId, plugin, config },
+          ]),
+        ),
       );
     }
   }
@@ -135,6 +145,14 @@ export function getPluginRegistryGatewayOwner(
   registry: PluginRegistry,
 ): PluginRegistryGatewayOwner | undefined {
   return gatewayOwners.get(getPluginRegistryResourceOwner(registry)) ?? undefined;
+}
+
+/** Drop the back-reference only after physical cleanup and all admitted work have settled. */
+export function releasePluginInstanceRegistry(owner: PluginInstanceOwner): void {
+  if (!owner.revoked) {
+    throw new Error("Cannot release an active plugin instance registry");
+  }
+  owner.registry = undefined;
 }
 
 /** Prepared views inherit the publication snapshot, not a successor generation. */
@@ -156,7 +174,7 @@ export function isPluginRegistryGatewayViewOf(
 export function getPluginRegistryGatewayChannelRegistration(
   registry: PluginRegistry,
   channel: string,
-): Pick<PluginChannelRegistration, "pluginId" | "plugin"> | undefined {
+): GatewayChannelAdmission | undefined {
   return gatewayChannels.get(getPluginRegistryResourceOwner(registry))?.get(channel);
 }
 
@@ -170,6 +188,25 @@ export function bindPluginRegistryLifetime(
   lifetime: PluginRegistryLifetime,
 ): void {
   registryLifetimes.set(getPluginRegistryResourceOwner(registry), lifetime);
+}
+
+// Published records move to their runtime owner; unpublished cached registries retire with the cache.
+function isRetiredWithPluginCache(registry: PluginRegistry, record: PluginRecord): boolean {
+  return (
+    !isPluginRecordActive(registry, record) && registryEpochs.get(registry)?.epoch === undefined
+  );
+}
+
+/** Lists the lazily loaded registries that retiring this cache will dispose. */
+export function listPluginCacheRetiringRegistries(cache: PluginCache): PluginRegistry[] {
+  const registries = new Set<PluginRegistry>();
+  for (const instance of cache.instances) {
+    const owner = getPluginInstanceOwner(instance);
+    if (owner?.registry && isRetiredWithPluginCache(owner.registry, owner.record)) {
+      registries.add(owner.registry);
+    }
+  }
+  return [...registries];
 }
 
 export function getPluginLoaderCacheState(cache = getPluginCache()) {
@@ -196,13 +233,13 @@ export function getPluginLoaderCacheState(cache = getPluginCache()) {
     const registries = new Set<PluginRegistry>();
     for (const instance of cache.instances) {
       const owner = getPluginInstanceOwner(instance);
-      if (!owner) {
+      if (!owner?.registry) {
         continue;
       }
       // Publication transfers exact instances to their runtime owner, including adopted records.
       if (isPluginRecordActive(owner.registry, owner.record)) {
         releasePluginCacheInstance(instance, cache);
-      } else if (registryEpochs.get(owner.registry)?.epoch === undefined) {
+      } else if (isRetiredWithPluginCache(owner.registry, owner.record)) {
         instance.quiesce();
         registries.add(owner.registry);
       }
@@ -218,19 +255,7 @@ export function getPluginLoaderCacheState(cache = getPluginCache()) {
     const results = await Promise.allSettled(
       [...registries].map((registry) => disposePluginRegistryInstances(registry)),
     );
-    const failures = results.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
-    if (failures.length) {
-      throw new AggregateError(failures, "Plugin cached registry cleanup failed");
-    }
-    const completed = results.flatMap((result) =>
-      result.status === "fulfilled" ? [result.value] : [],
-    );
-    return {
-      cleanupCount: completed.reduce((count, result) => count + result.cleanupCount, 0),
-      failures: completed.flatMap((result) => result.failures),
-    };
+    return summarizePluginRetirementResults(results, "Plugin cached registry cleanup failed");
   };
   return loads;
 }
@@ -271,6 +296,7 @@ export function adoptPluginRegistryRecords(registryView: PluginRegistry | null |
 function closePluginRegistryAdmissions(
   registries: Iterable<PluginRegistry>,
   revokeRecords: boolean,
+  settledConsumers = false,
 ): void {
   const instances = new Set<NonNullable<ReturnType<typeof getPluginInstance>>>();
   const controllers: AbortController[] = [];
@@ -290,7 +316,11 @@ function closePluginRegistryAdmissions(
         }
         if (owner.instance) {
           for (const entry of registry.decisionProviders) {
-            entry.host.cancelConsumer(record.id);
+            // A superseded instance has already settled its work. Canceling by
+            // plugin ID here could abort its successor's calls on a retained host.
+            if (!settledConsumers) {
+              entry.host.cancelConsumer(record.id);
+            }
             if (entry.pluginId === record.id) {
               entry.host.retire();
             }
@@ -319,8 +349,29 @@ export function quiescePluginRegistry(registry: PluginRegistry | null | undefine
   closePluginRegistryAdmissions(registry ? [registry] : [], false);
 }
 
-export function markPluginRegistryRetired(registry: PluginRegistry | null | undefined): void {
-  closePluginRegistryAdmissions(registry ? [registry] : [], true);
+/** Withdraw fresh admission without revoking the exact consumers finishing on this generation. */
+export function supersedePluginRegistry(registryView: PluginRegistry): void {
+  const registry = getPluginRegistryResourceOwner(registryView);
+  const previous = registryEpochs.get(registry);
+  registryEpochs.delete(registry);
+  for (const record of registry.plugins) {
+    const owner = resolvePluginInstanceOwner(record, registry);
+    if (owner.registry === registry) {
+      owner.instance?.quiesce();
+    }
+  }
+  for (const cache of loaderCaches.get(registry) ?? []) {
+    cache.deleteValue(registry);
+  }
+  loaderCaches.delete(registry);
+  previous?.controller?.abort();
+}
+
+export function markPluginRegistryRetired(
+  registry: PluginRegistry | null | undefined,
+  options?: { settledConsumers?: true },
+): void {
+  closePluginRegistryAdmissions(registry ? [registry] : [], true, options?.settledConsumers);
 }
 
 /** Revoke all attached inspection views before any abort callback observes retirement. */
@@ -403,6 +454,23 @@ export function isPluginRecordActive(registry: PluginRegistry, record: PluginRec
   );
 }
 
+/**
+ * A retained scoped registry can outlive one plugin's replacement: the replaced
+ * instance is disposed while the registry itself is never retired. Callers that
+ * cache such a registry must stop reusing it once any loaded plugin it dispatches
+ * can no longer admit calls.
+ */
+export function isPluginRegistryRecordSetAdmitting(registryView: PluginRegistry): boolean {
+  const registry = getPluginRegistryResourceOwner(registryView);
+  return registry.plugins.every(
+    (record) =>
+      !record.enabled ||
+      record.status !== "loaded" ||
+      (!pluginInstanceState.records.get(record)?.revoked &&
+        getPluginInstance(record)?.acceptingCalls !== false),
+  );
+}
+
 export function revokePluginRecord(registry: PluginRegistry, record: PluginRecord): void {
   resolvePluginInstanceOwner(record, registry).revoked = true;
 }
@@ -422,7 +490,10 @@ export function withPluginRegistryPreparationScope<T>(
   if (retiredRegistries.has(registry)) {
     throw new Error("Cannot prepare a retired plugin registry");
   }
-  const scope = { registry, active: true };
+  const scope: { registry: PluginRegistry | undefined; active: boolean } = {
+    registry,
+    active: true,
+  };
   return preparation.run(scope, () => {
     let pending = false;
     try {
@@ -431,12 +502,14 @@ export function withPluginRegistryPreparationScope<T>(
         pending = true;
         return Promise.resolve(result).finally(() => {
           scope.active = false;
+          scope.registry = undefined;
         }) as T; // SAFETY: Preserves the callback's resolved value and async shape.
       }
       return result;
     } finally {
       if (!pending) {
         scope.active = false;
+        scope.registry = undefined;
       }
     }
   });
@@ -460,11 +533,11 @@ export function capturePluginLifecycleAuthority(
   const registry = getPluginRegistryResourceOwner(registryView);
   if (record && borrowedRecords.get(registry)?.has(record)) {
     // A borrower mints from the lender's current custody and loses it when it retires.
-    const lent = capturePluginLifecycleAuthority(
-      getPluginRecordRegistry(registry, record),
-      record,
-      options,
-    );
+    const owner = pluginInstanceState.records.get(record);
+    if (!owner || owner.revoked) {
+      return undefined;
+    }
+    const lent = capturePluginLifecycleAuthority(owner.registry, record, options);
     return lent && (() => !retiredRegistries.has(registry) && lent());
   }
   if (record) {
@@ -488,9 +561,9 @@ export function capturePluginLifecycleAuthority(
             registration.instance === owner.instance &&
             owner.instance?.hasActiveCall === true) ||
           (options?.scopedRuntime === true &&
-            registryEpochs.get(registry)?.epoch === undefined &&
-            !retiredRegistries.has(registry) &&
-            registry.plugins.includes(record)))
+            registryEpochs.get(owner.registry)?.epoch === undefined &&
+            !retiredRegistries.has(owner.registry) &&
+            owner.registry.plugins.includes(record)))
       );
     };
     // Mint only from the current owner; retained closures follow legitimate adoption.

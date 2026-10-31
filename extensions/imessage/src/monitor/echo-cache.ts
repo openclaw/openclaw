@@ -10,28 +10,7 @@ type SentMessageLookup = {
   messageId?: string;
 };
 
-type SentMessageLookupOptions = {
-  skipIdShortCircuit?: boolean;
-  includePendingText?: boolean;
-};
-
-export type SentMessageCache = {
-  remember: (scope: string, lookup: SentMessageLookup) => void;
-  /**
-   * Check whether an inbound message matches a recently-sent outbound message.
-   *
-   * @param skipIdShortCircuit - When true, skip the early return on message-ID
-   *   mismatch and fall through to text-based matching. Use this for self-chat
-   *   `is_from_me=true` messages where the inbound ID is a numeric SQLite row ID
-   *   that will never match the GUID outbound IDs, but text matching is still
-   *   the right way to identify agent reply echoes.
-   */
-  has: (
-    scope: string,
-    lookup: SentMessageLookup,
-    options?: boolean | SentMessageLookupOptions,
-  ) => Promise<boolean>;
-};
+export type SentMessageCache = ReturnType<typeof createSentMessageCache>;
 
 // Echo arrival observed at ~2.2s on M4 Mac Mini (SQLite poll interval is the bottleneck).
 // 4s provides ~80% margin. If echoes arrive after TTL expiry, the system degrades to
@@ -39,118 +18,91 @@ export type SentMessageCache = {
 const SENT_MESSAGE_TEXT_TTL_MS = 4_000;
 const SENT_MESSAGE_ID_TTL_MS = 60_000;
 
-class DefaultSentMessageCache implements SentMessageCache {
-  private textCache = new Map<string, number>();
-  private textBackedByIdCache = new Map<string, number>();
-  private mediaCache = new Map<string, number>();
-  private mediaBackedByIdCache = new Map<string, number>();
-  private messageIdCache = new Map<string, number>();
+export function createSentMessageCache() {
+  type ContentEntry = { timestamp: number; idTimestamp?: number };
+  const textCache = new Map<string, ContentEntry>();
+  const mediaCache = new Map<string, ContentEntry>();
+  const messageIdCache = new Map<string, number>();
 
-  remember(scope: string, lookup: SentMessageLookup): void {
-    const textKey = normalizeIMessageEchoText(lookup.text);
-    if (textKey) {
-      this.textCache.set(`${scope}:${textKey}`, Date.now());
-    }
-    const mediaKey = resolveIMessageEchoMediaKey(lookup.media);
-    if (mediaKey) {
-      this.mediaCache.set(`${scope}:${mediaKey}`, Date.now());
-    }
+  function remember(scope: string, lookup: SentMessageLookup): void {
+    const now = Date.now();
     const messageIdKey = normalizeIMessageMessageId(lookup.messageId);
     if (messageIdKey) {
-      this.messageIdCache.set(`${scope}:${messageIdKey}`, Date.now());
-      if (textKey) {
-        this.textBackedByIdCache.set(`${scope}:${textKey}`, Date.now());
-      }
-      if (mediaKey) {
-        this.mediaBackedByIdCache.set(`${scope}:${mediaKey}`, Date.now());
+      messageIdCache.set(`${scope}:${messageIdKey}`, now);
+    }
+    for (const [cache, value] of [
+      [textCache, normalizeIMessageEchoText(lookup.text)],
+      [mediaCache, resolveIMessageEchoMediaKey(lookup.media)],
+    ] as const) {
+      if (value) {
+        const key = `${scope}:${value}`;
+        cache.set(key, {
+          timestamp: now,
+          idTimestamp: messageIdKey ? now : cache.get(key)?.idTimestamp,
+        });
       }
     }
-    this.cleanup();
+    cleanup();
   }
 
-  async has(
+  async function has(
     scope: string,
     lookup: SentMessageLookup,
-    options: boolean | SentMessageLookupOptions = false,
+    options: {
+      // Self-chat SQLite row IDs differ from outbound GUIDs; allow text matching after an ID miss.
+      skipIdShortCircuit?: boolean;
+      includePendingText?: boolean;
+    } = {},
   ): Promise<boolean> {
-    this.cleanup();
-    const resolvedOptions =
-      typeof options === "boolean" ? { skipIdShortCircuit: options } : options;
     if (
       await hasPersistedIMessageEcho({
         scope,
         text: lookup.text,
         media: lookup.media,
         messageId: lookup.messageId,
-        skipIdShortCircuit: resolvedOptions.skipIdShortCircuit,
-        includePendingText: resolvedOptions.includePendingText,
+        skipIdShortCircuit: options.skipIdShortCircuit,
+        includePendingText: options.includePendingText,
       })
     ) {
       return true;
     }
+    cleanup();
     const textKey = normalizeIMessageEchoText(lookup.text);
     const mediaKey = resolveIMessageEchoMediaKey(lookup.media);
+    const text = textKey ? textCache.get(`${scope}:${textKey}`) : undefined;
+    const media = mediaKey ? mediaCache.get(`${scope}:${mediaKey}`) : undefined;
+    const hasContentOnlyMatch = (entry: ContentEntry | undefined) =>
+      Boolean(entry && (!entry.idTimestamp || entry.timestamp > entry.idTimestamp));
     const messageIdKey = normalizeIMessageMessageId(lookup.messageId);
     let canUseMediaFallback = !messageIdKey;
     if (messageIdKey) {
-      const idTimestamp = this.messageIdCache.get(`${scope}:${messageIdKey}`);
-      if (idTimestamp && Date.now() - idTimestamp <= SENT_MESSAGE_ID_TTL_MS) {
+      if (messageIdCache.has(`${scope}:${messageIdKey}`)) {
         return true;
       }
-      const textTimestamp = textKey ? this.textCache.get(`${scope}:${textKey}`) : undefined;
-      const textBackedByIdTimestamp = textKey
-        ? this.textBackedByIdCache.get(`${scope}:${textKey}`)
-        : undefined;
-      const hasTextOnlyMatch =
-        typeof textTimestamp === "number" &&
-        (!textBackedByIdTimestamp || textTimestamp > textBackedByIdTimestamp);
-      const mediaTimestamp = mediaKey ? this.mediaCache.get(`${scope}:${mediaKey}`) : undefined;
-      const mediaBackedByIdTimestamp = mediaKey
-        ? this.mediaBackedByIdCache.get(`${scope}:${mediaKey}`)
-        : undefined;
-      const hasMediaOnlyMatch =
-        typeof mediaTimestamp === "number" &&
-        (!mediaBackedByIdTimestamp || mediaTimestamp > mediaBackedByIdTimestamp);
+      const hasTextOnlyMatch = hasContentOnlyMatch(text);
+      const hasMediaOnlyMatch = hasContentOnlyMatch(media);
       canUseMediaFallback = hasMediaOnlyMatch;
-      if (!resolvedOptions.skipIdShortCircuit && !hasTextOnlyMatch && !hasMediaOnlyMatch) {
+      if (!options.skipIdShortCircuit && !hasTextOnlyMatch && !hasMediaOnlyMatch) {
         return false;
       }
     }
-    if (textKey) {
-      const textTimestamp = this.textCache.get(`${scope}:${textKey}`);
-      if (textTimestamp && Date.now() - textTimestamp <= SENT_MESSAGE_TEXT_TTL_MS) {
-        return true;
-      }
-    }
-    if (mediaKey && canUseMediaFallback) {
-      const mediaTimestamp = this.mediaCache.get(`${scope}:${mediaKey}`);
-      if (mediaTimestamp && Date.now() - mediaTimestamp <= SENT_MESSAGE_TEXT_TTL_MS) {
-        return true;
-      }
-    }
-    return false;
+    return Boolean(text || (canUseMediaFallback && media));
   }
 
-  private cleanup(): void {
+  function cleanup(): void {
     const now = Date.now();
-    for (const cache of [
-      this.textCache,
-      this.textBackedByIdCache,
-      this.mediaCache,
-      this.mediaBackedByIdCache,
-      this.messageIdCache,
-    ]) {
-      const ttlMs =
-        cache === this.messageIdCache ? SENT_MESSAGE_ID_TTL_MS : SENT_MESSAGE_TEXT_TTL_MS;
-      for (const [key, timestamp] of cache) {
-        if (now - timestamp > ttlMs) {
+    for (const cache of [textCache, mediaCache]) {
+      for (const [key, entry] of cache) {
+        if (now - entry.timestamp > SENT_MESSAGE_TEXT_TTL_MS) {
           cache.delete(key);
         }
       }
     }
+    for (const [key, timestamp] of messageIdCache) {
+      if (now - timestamp > SENT_MESSAGE_ID_TTL_MS) {
+        messageIdCache.delete(key);
+      }
+    }
   }
-}
-
-export function createSentMessageCache(): SentMessageCache {
-  return new DefaultSentMessageCache();
+  return { remember, has };
 }

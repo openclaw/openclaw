@@ -7,9 +7,8 @@ import {
 } from "../../worker/node-workspace-protocol.js";
 import type { WorkerWorkspaceCommand, WorkerWorkspaceQuiescence } from "./tunnel-contract.js";
 import {
-  REMOTE_WORKSPACE_QUIESCE_JS,
-  REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
-  REMOTE_WORKSPACE_RESUME_JS,
+  legacyWindowsWorkspaceQuiescenceAcquireArgv,
+  workspaceQuiescenceArgv,
 } from "./workspace-quiescence-scripts.js";
 import {
   waitForQuiescenceRenewal,
@@ -29,10 +28,11 @@ export function createWorkerWorkspaceQuiescence(params: {
   return async (remoteWorkspaceDir) => {
     const posixAbsolute = path.posix.isAbsolute(remoteWorkspaceDir);
     const windowsAbsolute = path.win32.isAbsolute(remoteWorkspaceDir);
+    const windowsOnlyAbsolute = !posixAbsolute && windowsAbsolute;
     if (!posixAbsolute && !windowsAbsolute) {
       throw new Error("Worker workspace quiescence path must be absolute");
     }
-    if (!posixAbsolute && windowsAbsolute && !params.sharedHost) {
+    if (windowsOnlyAbsolute && !params.sharedHost) {
       throw new Error("Windows worker workspace quiescence requires a shared host");
     }
     const hostMode = params.sharedHost ? "shared-host" : "dedicated";
@@ -40,10 +40,14 @@ export function createWorkerWorkspaceQuiescence(params: {
     const nativeWatchdog = (await params.nativeWatchdog?.()) ?? false;
     params.ownerSignal.throwIfAborted();
     const nativeNonce = randomBytes(16).toString("hex");
-    const run = async (argv: string[], operation: NodeWorkerWorkspaceQuiescenceInput) => {
+    const run = async (operation: NodeWorkerWorkspaceQuiescenceInput) => {
       const result = await params.runWorkspaceCommand({
         transportRetry: "never",
-        argv: nativeWatchdog ? [NODE_WORKSPACE_QUIESCENCE_COMMAND, remoteWorkspaceDir] : argv,
+        argv: nativeWatchdog
+          ? [NODE_WORKSPACE_QUIESCENCE_COMMAND, remoteWorkspaceDir]
+          : windowsOnlyAbsolute && operation.action === "acquire"
+            ? legacyWindowsWorkspaceQuiescenceAcquireArgv(remoteWorkspaceDir, operation, hostMode)
+            : workspaceQuiescenceArgv(remoteWorkspaceDir, operation, hostMode),
         ...(nativeWatchdog ? { quiescence: operation } : { legacyQuiescence: true }),
       });
       if (!workerWorkspaceCommandSucceeded(result)) {
@@ -53,17 +57,11 @@ export function createWorkerWorkspaceQuiescence(params: {
     };
     let nonce: string;
     try {
-      const result = await run(
-        [
-          "node",
-          "-e",
-          REMOTE_WORKSPACE_QUIESCE_JS,
-          remoteWorkspaceDir,
-          String(WORKSPACE_QUIESCENCE_TIMEOUT_MS),
-          hostMode,
-        ],
-        { action: "acquire", nonce: nativeNonce, timeoutMs: WORKSPACE_QUIESCENCE_TIMEOUT_MS },
-      );
+      const result = await run({
+        action: "acquire",
+        nonce: nativeNonce,
+        timeoutMs: WORKSPACE_QUIESCENCE_TIMEOUT_MS,
+      });
       const acknowledgement = /^quiesced ([a-f0-9]{32})$/u.exec(result.stdout.trim());
       if (!acknowledgement || (nativeWatchdog && acknowledgement[1] !== nativeNonce)) {
         throw new Error("Worker workspace quiescence returned an invalid acknowledgement");
@@ -74,10 +72,7 @@ export function createWorkerWorkspaceQuiescence(params: {
         try {
           // No lease handle was delivered. Join host recovery (or retire a lost
           // acknowledgement) and unpin the dialect only through a real release.
-          await run(["node", "-e", REMOTE_WORKSPACE_RESUME_JS, remoteWorkspaceDir, nativeNonce], {
-            action: "release",
-            nonce: nativeNonce,
-          });
+          await run({ action: "release", nonce: nativeNonce });
         } catch (recoveryError) {
           throw new AggregateError(
             [error, recoveryError],
@@ -95,19 +90,12 @@ export function createWorkerWorkspaceQuiescence(params: {
     let renewalQueue = Promise.resolve();
     const renew = (validationMode: "heartbeat" | "final") => {
       const operation = renewalQueue.then(async () => {
-        const renewedResult = await run(
-          [
-            "node",
-            "-e",
-            REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
-            remoteWorkspaceDir,
-            nonce,
-            String(WORKSPACE_QUIESCENCE_TIMEOUT_MS),
-            validationMode,
-            hostMode,
-          ],
-          { action: "renew", nonce, timeoutMs: WORKSPACE_QUIESCENCE_TIMEOUT_MS, validationMode },
-        );
+        const renewedResult = await run({
+          action: "renew",
+          nonce,
+          timeoutMs: WORKSPACE_QUIESCENCE_TIMEOUT_MS,
+          validationMode,
+        });
         if (renewedResult.stdout.trim() !== `renewed ${nonce}`) {
           throw new Error(
             "Worker workspace quiescence renewal returned an invalid acknowledgement",
@@ -152,10 +140,7 @@ export function createWorkerWorkspaceQuiescence(params: {
           // Teardown can retain an attached row after fencing the tunnel. Recheck after
           // draining renewals: a closed owner releases only local state, never remote work.
           if (!params.ownerSignal.aborted) {
-            await run(["node", "-e", REMOTE_WORKSPACE_RESUME_JS, remoteWorkspaceDir, nonce], {
-              action: "release",
-              nonce,
-            });
+            await run({ action: "release", nonce });
           }
         })().catch((error: unknown) => {
           if (params.ownerSignal.aborted) {

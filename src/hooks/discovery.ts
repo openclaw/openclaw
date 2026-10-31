@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { formatErrorStackWithMessage } from "@openclaw/normalization-core/error-coercion";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
@@ -7,7 +8,7 @@ import { parseFrontmatterBlockResult } from "../../packages/markdown-core/src/fr
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { openRootFileSync, readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
-import { resolveHookInvocationPolicy, resolveHookManifestMetadata } from "./frontmatter.js";
+import { resolveHookManifestMetadata } from "./frontmatter.js";
 import type { Hook, HookEntry, HookSource } from "./types.js";
 
 // Hook descriptors are small metadata. Bounding the pinned descriptor read also
@@ -122,10 +123,9 @@ function loadHookFromDir(
       frontmatter,
       invalidMetadata: issues.length > 0,
       metadata: resolveHookManifestMetadata(frontmatter),
-      invocation: resolveHookInvocationPolicy(frontmatter),
     };
   } catch (err) {
-    const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
+    const message = err instanceof Error ? formatErrorStackWithMessage(err) : String(err);
     warn?.(`Failed to load hook from ${params.hookDir}: ${message}`);
     return null;
   }
@@ -208,6 +208,10 @@ function readRootFileUtf8(
       if (err instanceof RangeError) {
         warn?.(
           `Ignoring oversized hook metadata ${params.absolutePath}: file exceeds the ${params.maxBytes}-byte limit`,
+        );
+      } else {
+        warn?.(
+          `Failed to read hook metadata ${params.absolutePath}; check file permissions and disk health.`,
         );
       }
       return null;

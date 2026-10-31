@@ -2,9 +2,9 @@ import {
   CHARS_PER_TOKEN_ESTIMATE,
   estimateStringChars,
 } from "@openclaw/normalization-core/cjk-chars";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { buildTextEmbeddingInput, type EmbeddingInput } from "./embedding-inputs.js";
-import { hashText } from "./hash.js";
+import type { EmbeddingInput } from "./embedding-inputs.js";
 import type { MemoryEntryProvenance } from "./types.js";
 
 export type MemoryChunk = {
@@ -19,9 +19,9 @@ export type MemoryChunk = {
 };
 
 // Persisted with index metadata so boundary changes rebuild unchanged files.
-export const MEMORY_CHUNKING_VERSION = 5;
+export const MEMORY_CHUNKING_VERSION = 6;
 
-export type CuratedMarkdownEntry = {
+type CuratedMarkdownEntry = {
   startLine: number;
   endLine: number;
   text: string;
@@ -32,34 +32,28 @@ function curatedMarkdownEntryKind(line: string): CuratedMarkdownEntry["kind"] | 
   return line.startsWith("- ") ? "entry" : /^#{1,6}(?:\s|$)/u.test(line) ? "section" : undefined;
 }
 
+function* curatedMarkdownEntrySpans(lines: string[]) {
+  let startLine = 1;
+  let kind: CuratedMarkdownEntry["kind"] = lines[0]?.startsWith("- ") ? "entry" : "section";
+  for (let index = 1; index < lines.length; index += 1) {
+    const nextKind = curatedMarkdownEntryKind(lines[index] ?? "");
+    if (nextKind) {
+      yield { startLine, endLine: index, kind };
+      startLine = index + 1;
+      kind = nextKind;
+    }
+  }
+  yield { startLine, endLine: lines.length, kind };
+}
+
 export function splitCuratedMarkdownEntries(content: string): CuratedMarkdownEntry[] {
   const lines = content.split("\n");
-  const entries: CuratedMarkdownEntry[] = [];
-  let startIndex = 0;
-  let kind: CuratedMarkdownEntry["kind"] = lines[0]?.startsWith("- ") ? "entry" : "section";
-  const flush = (endIndex: number) => {
-    if (endIndex < startIndex) {
-      return;
-    }
-    entries.push({
-      startLine: startIndex + 1,
-      endLine: endIndex + 1,
-      text: lines.slice(startIndex, endIndex + 1).join("\n"),
-      kind,
-    });
-  };
-  for (let index = 1; index < lines.length; index += 1) {
-    const line = lines[index] ?? "";
-    const nextKind = curatedMarkdownEntryKind(line);
-    if (!nextKind) {
-      continue;
-    }
-    flush(index - 1);
-    startIndex = index;
-    kind = nextKind;
-  }
-  flush(lines.length - 1);
-  return entries;
+  return Array.from(curatedMarkdownEntrySpans(lines), ({ startLine, endLine, kind }) => ({
+    startLine,
+    endLine,
+    text: lines.slice(startLine - 1, endLine).join("\n"),
+    kind,
+  }));
 }
 
 /** Takes the trailing slice of text within the weighted char budget, without splitting surrogate pairs. */
@@ -77,19 +71,17 @@ function takeTailByEstimatedChars(text: string, budget: number): string {
   return text.slice(start);
 }
 
-export function chunkMarkdown(
-  content: string,
-  chunking: { tokens: number; overlap: number; perEntry?: boolean },
-): MemoryChunk[] {
-  const lines = content.split("\n");
+/** Incremental text chunking: callers retain only the current chunk and overlap. */
+export function createMarkdownChunker(
+  chunking: { tokens: number; overlap: number },
+  onChunk: (chunk: MemoryChunk) => void,
+) {
   const maxChars = Math.max(32, chunking.tokens * CHARS_PER_TOKEN_ESTIMATE);
   const overlapChars = Math.max(0, chunking.overlap * CHARS_PER_TOKEN_ESTIMATE);
-  const chunks: MemoryChunk[] = [];
 
   let current: Array<{ line: string; lineNo: number }> = [];
   let currentChars = 0;
-  let entryStartLine: number | undefined;
-  let entryFirstChunk = 0;
+  let pendingLine = "";
 
   const flush = () => {
     const firstEntry = current[0];
@@ -100,12 +92,12 @@ export function chunkMarkdown(
     const text = current.map((entry) => entry.line).join("\n");
     const startLine = firstEntry.lineNo;
     const endLine = lastEntry.lineNo;
-    chunks.push({
+    onChunk({
       startLine,
       endLine,
       text,
-      hash: hashText(text),
-      embeddingInput: buildTextEmbeddingInput(text),
+      hash: sha256Hex(text),
+      embeddingInput: { text },
     });
   };
 
@@ -155,66 +147,74 @@ export function chunkMarkdown(
     currentChars += lineSize;
   };
 
-  const finishEntry = (entryEndLine: number) => {
-    if (entryStartLine === undefined) {
-      return;
-    }
-    // Every size fragment remains part of the same curated entry and inherits
-    // its full annotation span; dropping scope on later fragments can leak them.
-    for (const chunk of chunks.slice(entryFirstChunk)) {
-      chunk.entryStartLine = entryStartLine;
-      chunk.entryEndLine = entryEndLine;
-    }
-  };
-
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i] ?? "";
-    const lineNo = i + 1;
-    const entryKind = chunking.perEntry
-      ? (curatedMarkdownEntryKind(line) ?? (i === 0 ? "section" : undefined))
-      : undefined;
-    if (entryKind) {
-      if (current.length > 0) {
-        flush();
+  return {
+    appendLine(part: string, lineNo: number, endOfLine = true) {
+      const line = pendingLine + part;
+      pendingLine = "";
+      if (line.length === 0 && endOfLine) {
+        appendSegment("", lineNo, 0);
+      } else {
+        for (let start = 0; start < line.length;) {
+          if (!endOfLine && line.length - start <= maxChars) {
+            pendingLine = line.slice(start);
+            break;
+          }
+          const coarse = truncateUtf16Safe(line.slice(start), maxChars);
+          const coarseChars = estimateStringChars(coarse);
+          if (coarseChars > maxChars) {
+            // Rare and supplementary ideographs can cost several tokens each.
+            // Split by the estimator's units while keeping every code point intact.
+            let partStart = 0;
+            let partEnd = 0;
+            let partChars = 0;
+            for (const character of coarse) {
+              const chars = estimateStringChars(character);
+              if (partChars + chars > maxChars) {
+                appendSegment(coarse.slice(partStart, partEnd), lineNo, partChars);
+                partStart = partEnd;
+                partChars = 0;
+              }
+              partEnd += character.length;
+              partChars += chars;
+            }
+            appendSegment(coarse.slice(partStart), lineNo, partChars);
+          } else {
+            appendSegment(coarse, lineNo, coarseChars);
+          }
+          start += coarse.length;
+        }
       }
-      finishEntry(lineNo - 1);
+    },
+    flush() {
+      flush();
       current = [];
       currentChars = 0;
-      entryStartLine = entryKind === "entry" ? lineNo : undefined;
-      entryFirstChunk = chunks.length;
-    }
-    if (line.length === 0) {
-      appendSegment("", lineNo, 0);
-    } else {
-      for (let start = 0; start < line.length;) {
-        const coarse = truncateUtf16Safe(line.slice(start), maxChars);
-        const coarseChars = estimateStringChars(coarse);
-        if (coarseChars > maxChars) {
-          // Rare and supplementary ideographs can cost several tokens each.
-          // Split by the estimator's units while keeping every code point intact.
-          let partStart = 0;
-          let partEnd = 0;
-          let partChars = 0;
-          for (const character of coarse) {
-            const chars = estimateStringChars(character);
-            if (partChars + chars > maxChars) {
-              appendSegment(coarse.slice(partStart, partEnd), lineNo, partChars);
-              partStart = partEnd;
-              partChars = 0;
-            }
-            partEnd += character.length;
-            partChars += chars;
-          }
-          appendSegment(coarse.slice(partStart), lineNo, partChars);
-        } else {
-          appendSegment(coarse, lineNo, coarseChars);
-        }
-        start += coarse.length;
+    },
+  };
+}
+
+export function chunkMarkdown(
+  content: string,
+  chunking: { tokens: number; overlap: number; perEntry?: boolean },
+): MemoryChunk[] {
+  const lines = content.split("\n");
+  const chunks: MemoryChunk[] = [];
+  const entries = chunking.perEntry
+    ? curatedMarkdownEntrySpans(lines)
+    : [{ startLine: 1, endLine: lines.length, kind: "section" }];
+  for (const entry of entries) {
+    const chunker = createMarkdownChunker(chunking, (chunk) => {
+      if (entry.kind === "entry") {
+        chunk.entryStartLine = entry.startLine;
+        chunk.entryEndLine = entry.endLine;
       }
+      chunks.push(chunk);
+    });
+    for (let i = entry.startLine - 1; i < entry.endLine; i += 1) {
+      chunker.appendLine(lines[i] ?? "", i + 1);
     }
+    chunker.flush();
   }
-  flush();
-  finishEntry(lines.length);
   return chunks;
 }
 

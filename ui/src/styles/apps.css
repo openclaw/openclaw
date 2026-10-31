@@ -1,5 +1,3 @@
-/* Apps & extensions promo page — hero, card grid, and community pills. */
-
 .apps-hero {
   display: flex;
   flex-direction: column;
@@ -202,27 +200,6 @@
   margin: 10px 2px 0;
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
-}
-
-.apps-pair-hint button {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--text);
-  font: inherit;
-  cursor: var(--cursor-action);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.apps-pair-hint button:hover {
-  color: var(--text-strong);
-}
-
-.apps-pair-hint button:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-  border-radius: 4px;
 }
 
 .apps-community {

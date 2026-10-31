@@ -26,3 +26,24 @@ export const ClawHubPluginMetadataSchema = closedObject({
   readme: Type.Union([Type.Literal("available"), Type.Literal("missing")]),
   security: Type.Union([Type.Literal("available"), Type.Literal("missing")]),
 });
+
+export const ClawHubPluginConfigFieldSchema = closedObject({
+  name: NonEmptyString,
+  description: Type.Optional(Type.String()),
+  required: Type.Boolean(),
+  sensitive: Type.Boolean(),
+});
+
+export const ClawHubPluginMcpServerSchema = closedObject({
+  name: NonEmptyString,
+  url: Type.Optional(Type.String({ minLength: 1, maxLength: 2048 })),
+  transport: Type.Optional(
+    Type.Union([Type.Literal("streamable-http"), Type.Literal("sse"), Type.Literal("stdio")]),
+  ),
+  auth: Type.Optional(
+    Type.Union([Type.Literal("oauth"), Type.Literal("api-key"), Type.Literal("none")]),
+  ),
+  scope: Type.Optional(Type.String({ maxLength: 1000 })),
+  setup: Type.Optional(Type.String({ maxLength: 2000 })),
+  endpointRedacted: Type.Optional(Type.Boolean()),
+});

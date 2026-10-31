@@ -1,32 +1,40 @@
 import { spawn } from "node:child_process";
 import { constants } from "node:os";
 import { toErrorObject } from "../infra/errors.js";
+import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import { resolveNodeRuntimeExecutable } from "../infra/node-runtime-executable.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { killProcessTree, signalPtySessionTree } from "./kill-tree.js";
-import { decodeTerminalPtyEvent, type TerminalPtyControl } from "./terminal-pty-protocol.js";
+import type { SpawnInitiation } from "./spawn-initiation.js";
+import type { TerminalPtyControl, TerminalPtyEvent } from "./terminal-pty-protocol.js";
 import type { TerminalPtyHandle, TerminalPtySpawnParams } from "./terminal-pty.js";
 
 const STARTUP_TIMEOUT_MS = 10_000;
 const CLEANUP_TIMEOUT_MS = 2_000;
 
-/** Keeps native PTY I/O on Node while the Gateway or node host runs on Bun. */
+/** Owns native PTY I/O and inherited exec resource policy outside the Gateway. */
 export async function spawnNodeTerminalPty(
   params: TerminalPtySpawnParams,
   beforeSpawn?: () => void,
+  initiateSpawn?: SpawnInitiation,
 ): Promise<TerminalPtyHandle> {
   const node = resolveNodeRuntimeExecutable();
   if (!node) {
-    throw new Error("A Node executable is required for terminals on Bun; add node to PATH.");
+    throw new Error("A Node executable is required for this terminal helper; add node to PATH.");
   }
   const worker = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.terminalPty);
-  const child = spawn(node, resolveRuntimeWorkerArgv(worker, node), {
-    stdio: ["ignore", "pipe", "pipe", "ipc"],
-    serialization: "json",
-    env: process.env,
-  });
+  const child = runWithMainThreadTask(
+    "process:spawn",
+    () =>
+      spawn(node, resolveRuntimeWorkerArgv(worker, node), {
+        stdio: ["ignore", "pipe", "pipe", "ipc"],
+        serialization: "json",
+        env: process.env,
+      }),
+    "pty-helper",
+  );
   const stdout = child.stdout;
   const stderrPipe = child.stderr;
   if (!stdout || !stderrPipe) {
@@ -41,7 +49,6 @@ export async function spawnNodeTerminalPty(
   let startupError: Error | undefined;
   let stderr = "";
   let paused = false;
-  let subscribed = false;
   let ptyPid: number | undefined;
   let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
   let helperExit: typeof exited;
@@ -119,16 +126,26 @@ export async function spawnNodeTerminalPty(
     ipcClosed = true;
     finish();
   });
-  child.on("message", (raw: unknown) => {
-    const message = decodeTerminalPtyEvent(raw);
-    if (!message) {
-      fail(new Error("Invalid terminal worker message"));
-      return;
-    }
-    if (message.type === "boot") {
+  // The version-matched PTY helper is the sole writer on this private IPC channel.
+  child.on("message", (message: TerminalPtyEvent) => {
+    if (message.type === "boot" || message.type === "prepared") {
       try {
         beforeSpawn?.();
-        send({ type: "start", params });
+        if (message.type === "boot") {
+          send({ type: initiateSpawn ? "prepare" : "start", params });
+        } else {
+          if (!initiateSpawn) {
+            throw new Error("Terminal launch authority is unavailable");
+          }
+          // Rejection already joins helper exit, IPC close, and output EOF in finish().
+          initiateSpawn(
+            () => send({ type: "launch" }),
+            ready.promise.then(
+              () => {},
+              () => {},
+            ),
+          );
+        }
       } catch (error) {
         fail(toErrorObject(error, "PTY launch denied"));
       }
@@ -181,21 +198,19 @@ export async function spawnNodeTerminalPty(
     },
     resume: () => {
       paused = false;
-      if (subscribed) {
+      if (stdout.listenerCount("data") > 0) {
         stdout.resume();
       }
     },
     onData: (listener) => {
       stdout.on("data", listener);
-      subscribed = true;
       if (!paused) {
         stdout.resume();
       }
       return {
         dispose() {
           stdout.off("data", listener);
-          subscribed = stdout.listenerCount("data") > 0;
-          if (!subscribed) {
+          if (stdout.listenerCount("data") === 0) {
             stdout.pause();
           }
         },

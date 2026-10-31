@@ -1,18 +1,19 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import assert from "node:assert/strict";
+import { beforeAll, expect, it, vi } from "vitest";
 import {
   createChannelAdmissionAudit,
   consumeChannelAdmissionEvidence,
   readChannelContextAdmissionEvidence,
 } from "../channels/message-access/admission-evidence.js";
 import { importBundledChannelContractSourceArtifact } from "../channels/plugins/contracts/test-helpers/runtime-artifacts.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { runChannelInboundEvent } from "../plugin-sdk/channel-inbound.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
 import { markPluginRegistryActive, markPluginRegistryRetired } from "./registry-lifecycle.js";
-import { createPluginRegistry } from "./registry.js";
+import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { bindGatewayContextResolver } from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -20,18 +21,21 @@ import { createPluginRecord } from "./status.test-helpers.js";
 
 const transport = await vi.hoisted(async () => {
   const { createDeferred } = await import("../../test/helpers/promise.js");
-  type NativeMessage = {
-    id: string;
-    userInfo: {
-      userName: string;
-      displayName: string;
-      userId?: string;
-      isMod: boolean;
-      isBroadcaster: boolean;
-      isVip: boolean;
-      isSubscriber: boolean;
+  function nativeMessage(userId: string | undefined) {
+    return {
+      id: crypto.randomUUID(),
+      userInfo: {
+        userName: "viewer",
+        displayName: "Viewer",
+        userId,
+        isMod: true,
+        isBroadcaster: false,
+        isVip: false,
+        isSubscriber: false,
+      },
     };
-  };
+  }
+  type NativeMessage = ReturnType<typeof nativeMessage>;
   class ChatClient {
     static ready: ((client: ChatClient) => void) | undefined;
     auth = new Set<() => void>();
@@ -45,12 +49,10 @@ const transport = await vi.hoisted(async () => {
       this.auth.add(handler);
       return { unbind: () => this.auth.delete(handler) };
     }
-    onAuthenticationFailure() {
+    onAuthenticationFailure(this: void) {
       return { unbind() {} };
     }
-    onDisconnect() {
-      return { unbind() {} };
-    }
+    onDisconnect = this.onAuthenticationFailure;
     onMessage(
       handler: (channel: string, user: string, text: string, message: NativeMessage) => void,
     ) {
@@ -63,11 +65,11 @@ const transport = await vi.hoisted(async () => {
         handler();
       }
     }
-    receive(message: NativeMessage, text = "@testbot hello") {
+    receive(userId: string | undefined) {
       // Native socket events arrive after connection-setup microtasks finish.
       setImmediate(() => {
         for (const handler of this.messages) {
-          handler("#testchannel", "viewer", text, message);
+          handler("#testchannel", "viewer", "@testbot hello", nativeMessage(userId));
         }
       });
     }
@@ -86,19 +88,17 @@ const { twitchPlugin, setTwitchRuntime } = await importBundledChannelContractSou
 });
 
 type Policy = { allowFrom?: string[]; allowedRoles?: string[] };
-type EvidenceResult = ReturnType<typeof consumeChannelAdmissionEvidence>;
+const unknownEvidence = {
+  ingressState: "unknown",
+  invoker: { state: "unknown" },
+  decisionCoverage: "unknown",
+  identifierAuthentication: "unknown",
+};
 
 async function withTwitchMonitor(
-  accountId: string,
-  policy: Policy,
-  run: (fixture: {
-    client: InstanceType<typeof transport.ChatClient>;
-    contexts: object[];
-    evidence: EvidenceResult[];
-    errors: string[];
-    waitForReply: () => Promise<void>;
-  }) => Promise<void>,
-  collectionEnabled = true,
+  accountId = "default",
+  policy: Policy = {},
+  options: { collectionEnabled?: boolean; userId?: string | null; warmup?: boolean } = {},
 ) {
   return withOpenClawTestState({ label: "twitch-provenance" }, async (state) => {
     const accountConfig = {
@@ -111,13 +111,11 @@ async function withTwitchMonitor(
     const cfg: OpenClawConfig = {
       channels: { twitch: { accounts: { [accountId]: accountConfig } } },
     };
-    const account = twitchPlugin.config.resolveAccount(cfg, accountId);
     await state.writeConfig(cfg);
-    const contexts: object[] = [];
-    const evidence: EvidenceResult[] = [];
-    const errors: string[] = [];
-    const failure = transport.createDeferred<string>();
-    const audit = createChannelAdmissionAudit({ enabled: collectionEnabled });
+    const rawEvidence: ReturnType<typeof readChannelContextAdmissionEvidence>[] = [];
+    const evidence: ReturnType<typeof consumeChannelAdmissionEvidence>[] = [];
+    const failure = transport.createDeferred<unknown[]>();
+    const audit = createChannelAdmissionAudit({ enabled: options.collectionEnabled ?? true });
     const gateway = {
       channelAdmissionAudit: audit,
       getRuntimeConfig: () => cfg,
@@ -131,54 +129,40 @@ async function withTwitchMonitor(
           ...input.adapter,
           resolveTurn: async (...args) => {
             const turn = await input.adapter.resolveTurn(...args);
-            if (!("delivery" in turn) || !turn.delivery.deliver) {
-              throw new Error("Expected Twitch native reply delivery");
-            }
-            const delivery = turn.delivery;
-            contexts.push(turn.ctxPayload);
-            evidence.push(
-              consumeChannelAdmissionEvidence(readChannelContextAdmissionEvidence(turn.ctxPayload)),
+            assert(
+              "delivery" in turn && turn.delivery.deliver,
+              "Expected Twitch native reply delivery",
             );
+            rawEvidence.push(readChannelContextAdmissionEvidence(turn.ctxPayload));
+            evidence.push(consumeChannelAdmissionEvidence(rawEvidence.at(-1)));
             return {
               ...turn,
               // The real ingress queue owns adoption; outbound persistence is not this test's contract.
-              delivery: { ...delivery, durable: false },
+              delivery: { ...turn.delivery, durable: false },
               replyResolver: async () => ({ text: "reply" }),
             };
           },
         },
       });
-    const builder = createPluginRegistry({
-      logger: { info() {}, warn() {}, error() {}, debug() {} },
-      runtime,
-      activateGlobalSideEffects: false,
-    });
+    const builder = createTestPluginRegistry(runtime);
     const record = createPluginRecord({ id: "twitch", origin: "bundled" });
     const api = builder.createApi(record, { config: cfg, registrationMode: "full" });
     api.registerChannel({ plugin: twitchPlugin });
     builder.registry.plugins.push(record);
     markPluginRegistryActive(builder.registry);
-    const registered = builder.registry.channels
-      .find((entry) => entry.plugin.id === "twitch")
-      ?.resolveChannelRuntime?.();
-    if (!registered) {
-      throw new Error("Missing registered Twitch runtime");
-    }
+    const registered = builder.registry.channels[0]?.resolveChannelRuntime?.();
+    assert(registered, "Missing registered Twitch runtime");
     setTwitchRuntime(api.runtime);
     const abort = new AbortController();
     const ready = new Promise<InstanceType<typeof transport.ChatClient>>((resolve) => {
       transport.ChatClient.ready = resolve;
     });
     const runtimeEnv = createRuntimeEnv();
-    runtimeEnv.error = (...args) => {
-      const message = args.map(String).join(" ");
-      errors.push(message);
-      failure.resolve(message);
-    };
+    runtimeEnv.error = vi.fn((...args) => failure.resolve(args));
     const ctx = {
       cfg,
       accountId,
-      account,
+      account: twitchPlugin.config.resolveAccount(cfg, accountId),
       channelRuntime: registered,
       abortSignal: abort.signal,
       runtime: runtimeEnv,
@@ -188,9 +172,7 @@ async function withTwitchMonitor(
     };
     const start = twitchPlugin.gateway?.startAccount;
     const stop = twitchPlugin.gateway?.stopAccount;
-    if (!start || !stop) {
-      throw new Error("Missing Twitch account lifecycle");
-    }
+    assert(start && stop, "Missing Twitch account lifecycle");
     const task = start(ctx);
     try {
       const client = await Promise.race([
@@ -199,21 +181,13 @@ async function withTwitchMonitor(
           throw new Error("Twitch stopped before client registration");
         }),
       ]);
-      await run({
-        client,
-        contexts,
-        evidence,
-        errors,
-        waitForReply: async () => {
-          const error = await Promise.race([client.sent.promise, failure.promise]);
-          if (error !== undefined) {
-            throw new Error(error);
-          }
-          expect(errors).toEqual([]);
-          expect(client.say).toHaveBeenCalledExactlyOnceWith("testchannel", "reply");
-        },
-      });
-      expect(errors).toEqual([]);
+      if (!options.warmup) {
+        client.receive(options.userId === null ? undefined : (options.userId ?? "123456"));
+        expect(await Promise.race([client.sent.promise, failure.promise])).toBeUndefined();
+        expect(client.say).toHaveBeenCalledExactlyOnceWith("testchannel", "reply");
+      }
+      expect(runtimeEnv.error).not.toHaveBeenCalled();
+      return { rawEvidence, evidence };
     } finally {
       abort.abort();
       await task;
@@ -225,121 +199,46 @@ async function withTwitchMonitor(
   });
 }
 
-function nativeMessage(
-  userId: string | undefined = "123456",
-): Parameters<InstanceType<typeof transport.ChatClient>["receive"]>[0] {
-  return {
-    id: crypto.randomUUID(),
-    userInfo: {
-      userName: "viewer",
-      displayName: "Viewer",
+beforeAll(() => withTwitchMonitor("default", {}, { warmup: true }));
+
+it.each([
+  ["secondary", { allowFrom: ["123456"] }, "allowlist", "enforced"],
+  ["default", { allowedRoles: ["moderator"] }, "role", "enforced"],
+  ["default", {}, "open", "attribution-only"],
+  ["default", { allowedRoles: ["all"] }, "wildcard", "attribution-only"],
+] satisfies [string, Policy, string, string][])(
+  "preserves %s %j (%s) sender through actual ingress and reply",
+  async (accountId, policy, name, coverage) => {
+    const { evidence } = await withTwitchMonitor(accountId, policy);
+    expect(evidence).toEqual([
+      {
+        ingressState: "present",
+        invoker: {
+          state: "present",
+          kind: "person",
+          rawPrincipalRef: JSON.stringify(["twitch", accountId, "123456"]),
+        },
+        assuranceRef: "channel-admission",
+        decisionCoverage: coverage,
+        identifierAuthentication: name === "open" ? "not-evaluated" : "evaluated",
+      },
+    ]);
+  },
+);
+
+it.each([
+  ["native user id absent", { allowedRoles: ["moderator"] }, null, true],
+  ["collection disabled", { allowFrom: ["123456"] }, "123456", false],
+] satisfies [string, Policy, string | null, boolean][])(
+  "keeps replies but no attribution: %s",
+  async (_name, policy, userId, collectionEnabled) => {
+    const { evidence, rawEvidence } = await withTwitchMonitor("secondary", policy, {
       userId,
-      isMod: true,
-      isBroadcaster: false,
-      isVip: false,
-      isSubscriber: false,
-    },
-  };
-}
-
-describe("Twitch registered participant provenance", () => {
-  beforeAll(async () => {
-    // Load the real lazy monitor through public startup before timing individual cases.
-    await withTwitchMonitor("default", {}, async () => {});
-  });
-
-  it.each([
-    {
-      accountId: "default",
-      policy: { allowFrom: ["123456"] },
-      name: "allowlist",
-      coverage: "enforced",
-    },
-    {
-      accountId: "secondary",
-      policy: { allowFrom: ["123456"] },
-      name: "allowlist",
-      coverage: "enforced",
-    },
-    {
-      accountId: "default",
-      policy: { allowedRoles: ["moderator"] },
-      name: "role",
-      coverage: "enforced",
-    },
-    { accountId: "default", policy: {}, name: "open", coverage: "attribution-only" },
-    {
-      accountId: "default",
-      policy: { allowedRoles: ["all"] },
-      name: "wildcard",
-      coverage: "attribution-only",
-    },
-  ] satisfies { accountId: string; policy: Policy; name: string; coverage: string }[])(
-    "preserves $accountId $name sender through actual ingress and reply",
-    async ({ accountId, policy, coverage, name }) => {
-      await withTwitchMonitor(accountId, policy, async ({ client, evidence, waitForReply }) => {
-        client.receive(nativeMessage());
-        await waitForReply();
-        expect(evidence).toEqual([
-          {
-            ingressState: "present",
-            invoker: {
-              state: "present",
-              kind: "person",
-              rawPrincipalRef: JSON.stringify(["twitch", accountId, "123456"]),
-            },
-            assuranceRef: "channel-admission",
-            decisionCoverage: coverage,
-            identifierAuthentication: name === "open" ? "not-evaluated" : "evaluated",
-          },
-        ]);
-      });
-    },
-  );
-
-  it("does not promote a role or username when the native user id is absent", async () => {
-    await withTwitchMonitor(
-      "secondary",
-      { allowedRoles: ["moderator"] },
-      async ({ client, evidence, waitForReply }) => {
-        const message = nativeMessage();
-        message.userInfo.userId = undefined;
-        client.receive(message);
-        await waitForReply();
-        expect(evidence).toEqual([
-          {
-            ingressState: "unknown",
-            invoker: { state: "unknown" },
-            decisionCoverage: "unknown",
-            identifierAuthentication: "unknown",
-          },
-        ]);
-      },
-    );
-  });
-
-  it("keeps normal replies working with collection disabled", async () => {
-    await withTwitchMonitor(
-      "secondary",
-      { allowFrom: ["123456"] },
-      async ({ client, contexts, evidence, waitForReply }) => {
-        client.receive(nativeMessage());
-        await waitForReply();
-        const [context] = contexts;
-        if (!context) {
-          throw new Error("Missing admitted Twitch context");
-        }
-        expect(readChannelContextAdmissionEvidence(context)).toBeUndefined();
-        expect(evidence).toEqual([
-          {
-            ingressState: "unknown",
-            invoker: { state: "unknown" },
-            decisionCoverage: "unknown",
-            identifierAuthentication: "unknown",
-          },
-        ]);
-      },
-      false,
-    );
-  });
-});
+      collectionEnabled,
+    });
+    expect(evidence).toEqual([unknownEvidence]);
+    if (!collectionEnabled) {
+      expect(rawEvidence).toEqual([undefined]);
+    }
+  },
+);

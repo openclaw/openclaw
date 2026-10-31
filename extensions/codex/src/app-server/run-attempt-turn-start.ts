@@ -12,7 +12,7 @@ import {
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { emitCodexAppServerEvent, runCodexAgentEndHook } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
-import type { CodexAttemptResources } from "./run-attempt-resources.js";
+import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 import {
   isCodexActiveCompactTurnError,
   clearCodexBindingAfterInvalidImagePayload,
@@ -23,22 +23,20 @@ import type {
   prepareCodexAttemptTurnRequest,
 } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
-import { assertCodexBindingMayBeReplaced } from "./session-binding.js";
-import { isCodexContextRestartSelectionChangedError } from "./thread-lifecycle-errors.js";
+import { assertCodexBindingMayBeReplaced, clearCodexBindingForClient } from "./session-binding.js";
 import {
-  CodexUsageLimitPromptError,
-  formatCodexTurnStartUsageLimitError,
+  resolveCodexTurnStartError,
   markCodexAuthProfileBlockedFromRateLimits,
 } from "./usage-limit-error.js";
 import { buildCodexUserPromptMessage } from "./user-prompt-message.js";
 
 export async function startCodexAttemptTurn(
-  resources: CodexAttemptResources,
+  resources: StartedCodexAttemptResources,
   turnRuntime: CodexAttemptTurnState,
   notifications: CodexAttemptNotificationController,
   requestRuntime: Awaited<ReturnType<typeof prepareCodexAttemptTurnRequest>>,
 ): Promise<{ result: EmbeddedRunAttemptResult } | CodexStartedTurn> {
-  const { prompt, state: resourceState, trajectoryRecorder, markTrajectoryEndRecorded } = resources;
+  const { prompt, state: resourceState, trajectoryRecorder } = resources;
   const { context, turnState, systemPromptReport } = prompt;
   const { runtime, historyState, hookContext, hookRunner } = context;
   const { connection, runtimeParams } = runtime;
@@ -108,10 +106,11 @@ export async function startCodexAttemptTurn(
           "codex app-server context-engine turn overflowed on resume; retrying with fresh thread",
           { threadId: resourceState.thread.threadId, error: formatErrorMessage(turnStartError) },
         );
-        const clearedBinding = await bindingStore.mutate(
+        const clearedBinding = await clearCodexBindingForClient(
+          bindingStore,
           bindingIdentity,
-          { kind: "clear", threadId: resourceState.thread.threadId },
-          connection.assertCurrent,
+          resourceState.thread,
+          connection.authority,
         );
         if (!clearedBinding) {
           embeddedAgentLog.warn(
@@ -124,18 +123,14 @@ export async function startCodexAttemptTurn(
             stream: "codex_app_server.lifecycle",
             data: { phase: "thread_ready_retry", threadId: resourceState.thread.threadId },
           });
-          try {
-            started = await startCodexTurn();
-          } catch (retryError) {
-            turnStartError = retryError;
-          }
+          started = await startCodexTurn();
         }
       } catch (retrySetupError) {
         turnStartError = retrySetupError;
       }
     }
     if (started === undefined) {
-      const usageLimitError = await formatCodexTurnStartUsageLimitError({
+      const startupFailure = await resolveCodexTurnStartError({
         client: resourceState.client,
         error: turnStartError,
         errorNotification: state.latestStartupErrorNotification,
@@ -143,12 +138,18 @@ export async function startCodexAttemptTurn(
         timeoutMs: appServer.requestTimeoutMs,
         signal: runAbortController.signal,
       });
-      const message = usageLimitError?.message ?? formatErrorMessage(turnStartError);
+      const message = startupFailure?.message ?? formatErrorMessage(turnStartError);
       if (!params.providerReviewAcknowledgment && isInvalidCodexImagePayloadError(message)) {
         await clearCodexBindingAfterInvalidImagePayload(
           bindingStore,
           bindingIdentity,
-          { phase: "turn_start", threadId: resourceState.thread.threadId, error: message },
+          {
+            phase: "turn_start",
+            threadId: resourceState.thread.threadId,
+            clientId: resourceState.thread.clientId,
+            error: message,
+          },
+          connection.authority,
           params.expectedSessionRuntimeOwnership,
         );
       }
@@ -163,7 +164,7 @@ export async function startCodexAttemptTurn(
         aborted: runAbortController.signal.aborted,
         promptError: message,
       });
-      markTrajectoryEndRecorded();
+      resourceState.trajectoryEndRecorded = true;
       runAgentHarnessLlmOutputHook({
         event: {
           ...buildLlmOutputEvent(),
@@ -195,41 +196,23 @@ export async function startCodexAttemptTurn(
         ctx: hookContext,
         hookRunner,
       });
-      if (usageLimitError) {
-        await markCodexAuthProfileBlockedFromRateLimits({
+      if (!startupFailure) {
+        throw turnStartError;
+      }
+      await markCodexAuthProfileBlockedFromRateLimits({
+        params,
+        authProfileId: startupAuthProfileId,
+        rateLimits: startupFailure.rateLimitsForProfile,
+      });
+      return {
+        result: buildCodexTurnStartFailureResult({
           params,
-          authProfileId: startupAuthProfileId,
-          rateLimits: usageLimitError.rateLimitsForProfile,
-        });
-        return {
-          result: buildCodexTurnStartFailureResult({
-            params,
-            message: usageLimitError.message,
-            promptError: new CodexUsageLimitPromptError(usageLimitError.message),
-            messagesSnapshot,
-            systemPromptReport,
-          }),
-        };
-      }
-      if (isCodexContextRestartSelectionChangedError(turnStartError)) {
-        return {
-          result: {
-            ...buildCodexTurnStartFailureResult({
-              params,
-              message,
-              messagesSnapshot,
-              systemPromptReport,
-            }),
-            codexAppServerFailure: {
-              kind: "client_closed_before_turn_completed" as const,
-              transport: appServer.start.transport,
-              threadId: resourceState.thread.threadId,
-              replaySafe: true,
-            },
-          },
-        };
-      }
-      throw turnStartError;
+          message,
+          promptError: startupFailure.promptError,
+          messagesSnapshot,
+          systemPromptReport,
+        }),
+      };
     }
   }
   if (!started) {

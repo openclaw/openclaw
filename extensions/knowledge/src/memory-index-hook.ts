@@ -1,0 +1,145 @@
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { memoryPrincipal } from "./access.js";
+import type { MemoryCallerContext } from "./memory-provider-types.js";
+import type { Stores } from "./stores.js";
+
+type SessionAuthority = Extract<MemoryCallerContext["authority"], { kind: "session" }>;
+/** The before_prompt_build context fields the index reads. */
+type HookContext = {
+  agentId?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  sandboxed?: boolean;
+  memoryAudience?: SessionAuthority["audience"];
+  assertMemoryAudienceCurrent?: () => void;
+  hookInvocation?: Readonly<{ assertActive(): void }>;
+};
+
+/** The index cutoff: the first retained message's timestamp. It is the session's
+ * first turn until compaction, then the compaction summary, so the rendered index
+ * stays byte-stable between those points. A first turn with no history uses now;
+ * its next turn moves the cutoff back to that turn's own message (accepted: a
+ * record saved in that gap changes the index once). */
+export function memoryIndexCutoff(messages: readonly unknown[], now: number): number {
+  const first = messages.find(
+    (m): m is { timestamp: unknown } => typeof m === "object" && m !== null && "timestamp" in m,
+  );
+  const at =
+    typeof first?.timestamp === "number"
+      ? first.timestamp
+      : typeof first?.timestamp === "string"
+        ? Date.parse(first.timestamp)
+        : Number.NaN;
+  return Number.isFinite(at) ? Math.min(at, now) : now;
+}
+
+// Rendered indexes pinned per session incarnation, store binding and cutoff.
+// Edits keep a record's recorded_at, so re-rendering current records could
+// change the system prompt between turns; the pin keeps it byte-stable until
+// compaction or a new session moves the cutoff. Authority is still checked live
+// on every turn before a pinned text is reused. A Gateway restart or plugin
+// reload starts with no pins and re-renders once, including mid-turn when a
+// reload hands a running turn over (accepted: one prefix change per reload).
+const MAX_PINNED_INDEXES = 512;
+const pinnedIndexes = new Map<string, string>();
+
+function pinIndex(key: string, text: string): void {
+  pinnedIndexes.set(key, text);
+  if (pinnedIndexes.size > MAX_PINNED_INDEXES) {
+    pinnedIndexes.delete(pinnedIndexes.keys().next().value!);
+  }
+}
+
+// Builds the provider-style caller context from the host-resolved hook audience.
+function callerContext(ctx: HookContext): MemoryCallerContext | undefined {
+  const audience = ctx.memoryAudience;
+  if (!ctx.sessionKey || ctx.sandboxed || !audience) {
+    return undefined;
+  }
+  return {
+    authority: {
+      kind: "session",
+      sessionKey: ctx.sessionKey,
+      ...(ctx.sessionId ? { sessionId: ctx.sessionId } : {}),
+      sandboxed: false,
+      audience,
+    },
+    assertCurrent() {
+      ctx.hookInvocation?.assertActive();
+      ctx.assertMemoryAudienceCurrent?.();
+    },
+  };
+}
+
+/** Reads the rendered standing index for a session that reads the private
+ * partition (the owner's audience, or a conversation the owner granted read
+ * access), or "" for any other session or when the agent has no provisioned
+ * store. Conversation partitions have no standing index. */
+export async function readMemoryIndex(
+  stores: Stores,
+  ctx: HookContext,
+  asOf: number,
+): Promise<string> {
+  const context = callerContext(ctx);
+  if (!context || !ctx.agentId) {
+    return "";
+  }
+  // Grants live in the registry; the first turn after a restart waits for it.
+  await stores.ensure();
+  const principal = memoryPrincipal(context, ctx.agentId, false, "default", stores.grantFor);
+  // An ungranted conversation gets no index. A grant made or revoked mid-session
+  // changes the prompt on the next turn: the owner's change is the invalidation.
+  if (!principal().sessionPrivate) {
+    return "";
+  }
+  // Reading never provisions: an agent without a store has nothing to index.
+  const opened = await stores.open(principal, { provision: false });
+  if (opened.kind !== "ready") {
+    return "";
+  }
+  const { runtime, access, binding } = opened;
+  // A grant revoked while the store opened pins a conversation principal; only
+  // a principal pinned to the private partition may reuse or render the index.
+  if (access.scope.visibility !== "private") {
+    return "";
+  }
+  // A binding can move to a different physical store (share, then use own), so the
+  // vault identity keys the pin too.
+  const key = JSON.stringify([
+    ctx.agentId,
+    ctx.sessionKey,
+    ctx.sessionId ?? null,
+    binding,
+    runtime.vaultId,
+    asOf,
+  ]);
+  const pinned = pinnedIndexes.get(key);
+  if (pinned !== undefined) {
+    access.assertCurrent();
+    return pinned;
+  }
+  const result = await runtime.enqueue(access.assertCurrent, () =>
+    runtime.client.call("memoryIndex", access, { asOf }),
+  );
+  access.assertCurrent();
+  pinIndex(key, result.text);
+  return result.text;
+}
+
+/** Appends the standing Knowledge index to private-partition sessions' system prompt.
+ * Failures omit the index; they never block the turn. */
+export function registerMemoryIndexHook(api: OpenClawPluginApi, stores: Stores): void {
+  api.on("before_prompt_build", async (event, ctx) => {
+    try {
+      const text = await readMemoryIndex(
+        stores,
+        ctx,
+        memoryIndexCutoff(event.messages, Date.now()),
+      );
+      return text ? { appendSystemContext: text } : undefined;
+    } catch (error) {
+      api.logger?.debug?.(`knowledge index omitted: ${String(error)}`);
+      return undefined;
+    }
+  });
+}

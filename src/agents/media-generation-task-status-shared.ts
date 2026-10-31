@@ -1,11 +1,4 @@
 import { stableStringify } from "@openclaw/normalization-core";
-/**
- * Shared media generation task status and duplicate-guard helpers.
- *
- * Image/video task modules use this to track recent starts, find active
- * background tasks, and build consistent user/prompt status messages.
- */
-import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -21,65 +14,8 @@ import { buildSessionAsyncTaskStatusDetails } from "./session-async-task-status.
 export const MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS =
   "Generated media; delivering completion";
 
-type RecentMediaGenerationTaskStart = {
-  task: MediaGenerationOperation;
-  requestKey?: string;
-};
-
-const recentMediaGenerationTaskStarts = new Map<string, RecentMediaGenerationTaskStart[]>();
-const RECENT_MEDIA_GENERATION_TASK_START_CACHE_MS = 2 * 60_000;
-
-/** Builds a stable request key for media generation duplicate detection. */
 export function buildMediaGenerationRequestKey(value: Record<string, unknown>): string {
   return stableStringify(value);
-}
-
-function buildRecentMediaGenerationTaskKey(params: {
-  sessionKey?: string;
-  agentId?: string;
-  taskKind: string;
-  sourcePrefix: string;
-}): string | undefined {
-  const sessionKey = normalizeOptionalString(params.sessionKey);
-  const taskKind = normalizeOptionalString(params.taskKind);
-  const sourcePrefix = normalizeOptionalString(params.sourcePrefix);
-  if (!sessionKey || !taskKind || !sourcePrefix) {
-    return undefined;
-  }
-  return `${params.agentId?.trim() ?? "unknown"}\0${sessionKey}\0${taskKind}\0${sourcePrefix}`;
-}
-
-function isRecentMediaGenerationMediaGenerationOperation(params: {
-  task: MediaGenerationOperation;
-  maxAgeMs: number;
-  nowMs: number;
-}) {
-  const activityAt =
-    params.task.endedAt ??
-    params.task.lastEventAt ??
-    params.task.startedAt ??
-    params.task.createdAt;
-  return Number.isFinite(activityAt) && params.nowMs - activityAt <= params.maxAgeMs;
-}
-
-function pruneRecentMediaGenerationTaskStarts(params: {
-  maxAgeMs: number;
-  nowMs: number;
-  preserveKey?: string;
-}) {
-  for (const [key, entries] of recentMediaGenerationTaskStarts.entries()) {
-    if (params.preserveKey === key) {
-      continue;
-    }
-    const freshEntries = entries.filter((entry) =>
-      isRecentMediaGenerationMediaGenerationOperation({ task: entry.task, ...params }),
-    );
-    if (freshEntries.length > 0) {
-      recentMediaGenerationTaskStarts.set(key, freshEntries);
-    } else {
-      recentMediaGenerationTaskStarts.delete(key);
-    }
-  }
 }
 
 function mediaGenerationSourceMatches(
@@ -90,225 +26,26 @@ function mediaGenerationSourceMatches(
   return sourceId === sourcePrefix || sourceId.startsWith(`${sourcePrefix}:`);
 }
 
-function mediaGenerationTaskLabelMatches(
-  task: MediaGenerationOperation,
-  taskLabel: string,
-): boolean {
-  return normalizeOptionalString(task.task) === taskLabel;
-}
-
 function resolveMediaGenerationTaskRequesterAgentId(
   task: MediaGenerationOperation,
 ): string | undefined {
-  const explicit = normalizeOptionalString(task.requesterAgentId);
-  if (explicit) {
-    return explicit;
-  }
-  return parseAgentSessionKey(normalizeOptionalString(task.requesterSessionKey))?.agentId;
+  return (
+    normalizeOptionalString(task.requesterAgentId) ??
+    parseAgentSessionKey(normalizeOptionalString(task.requesterSessionKey))?.agentId
+  );
 }
 
 function isTaskStillBlockingDuplicateGuard(task: MediaGenerationOperation): boolean {
   return task.status === "queued" || task.status === "running";
 }
 
-function isTaskRecentSuccessfulDuplicate(params: {
-  task: MediaGenerationOperation;
-  requestKey?: string;
-  cachedRequestKey?: string;
-  maxAgeMs: number;
-  nowMs: number;
-}): boolean {
-  return (
-    params.task.status === "succeeded" &&
-    params.task.terminalOutcome !== "blocked" &&
-    Boolean(params.requestKey && params.cachedRequestKey === params.requestKey) &&
-    isRecentMediaGenerationMediaGenerationOperation({
-      task: params.task,
-      maxAgeMs: params.maxAgeMs,
-      nowMs: params.nowMs,
-    })
-  );
-}
-
-function recentMediaGenerationTaskStartMatches(
-  left: RecentMediaGenerationTaskStart,
-  right: RecentMediaGenerationTaskStart,
-): boolean {
-  if (left.requestKey && right.requestKey) {
-    return left.requestKey === right.requestKey;
-  }
-  if (left.task.runId && right.task.runId) {
-    return left.task.runId === right.task.runId;
-  }
-  return left.task.taskId === right.task.taskId;
-}
-
-function findPersistedTaskForRecentMediaGenerationStart(params: {
-  tasks: readonly MediaGenerationOperation[];
-  agentId?: string;
-  cachedTask: MediaGenerationOperation;
-  taskKind: string;
-  sourcePrefix: string;
-}): MediaGenerationOperation | undefined {
-  return params.tasks.find((task) => {
-    if (
-      task.taskKind !== params.taskKind ||
-      !mediaGenerationSourceMatches(task, params.sourcePrefix) ||
-      (params.agentId && resolveMediaGenerationTaskRequesterAgentId(task) !== params.agentId)
-    ) {
-      return false;
-    }
-    return (
-      task.taskId === params.cachedTask.taskId ||
-      Boolean(task.runId && task.runId === params.cachedTask.runId)
-    );
-  });
-}
-
-/** Correlates a request with its already-admitted native media operation. */
-export function recordRecentMediaGenerationTaskStartForSession(params: {
-  sessionKey?: string;
-  agentId?: string;
-  taskKind: string;
-  sourcePrefix: string;
-  taskId: string;
-  runId?: string;
-  taskLabel: string;
-  requestKey?: string;
-  providerId?: string;
-  progressSummary: string;
-  nowMs?: number;
-}) {
-  const key = buildRecentMediaGenerationTaskKey(params);
-  const sessionKey = normalizeOptionalString(params.sessionKey);
-  if (!key || !sessionKey) {
-    return;
-  }
-  const nowMs = params.nowMs ?? Date.now();
-  pruneRecentMediaGenerationTaskStarts({
-    maxAgeMs: RECENT_MEDIA_GENERATION_TASK_START_CACHE_MS,
-    nowMs,
-    preserveKey: key,
-  });
-  const entry: RecentMediaGenerationTaskStart = {
-    requestKey: normalizeOptionalString(params.requestKey),
-    task: {
-      taskId: params.taskId,
-      taskKind: params.taskKind,
-      sourceId: params.providerId?.trim()
-        ? `${params.sourcePrefix}:${params.providerId.trim()}`
-        : params.sourcePrefix,
-      requesterSessionKey: sessionKey,
-      requesterAgentId: params.agentId,
-      ...(params.runId ? { runId: params.runId } : {}),
-      task: params.taskLabel,
-      status: "running",
-      createdAt: nowMs,
-      startedAt: nowMs,
-      lastEventAt: nowMs,
-      progressSummary: params.progressSummary,
-    },
-  };
-  const previousEntries = (recentMediaGenerationTaskStarts.get(key) ?? []).filter((entryLocal) =>
-    isRecentMediaGenerationMediaGenerationOperation({
-      task: entryLocal.task,
-      maxAgeMs: RECENT_MEDIA_GENERATION_TASK_START_CACHE_MS,
-      nowMs,
-    }),
-  );
-  recentMediaGenerationTaskStarts.set(key, [
-    ...previousEntries.filter(
-      (previousEntry) => !recentMediaGenerationTaskStartMatches(previousEntry, entry),
-    ),
-    entry,
-  ]);
-}
-
-/** Finds a recent matching request only while its native operation is retained. */
-function findRecentStartedMediaGenerationTaskForSession(params: {
-  tasks: readonly MediaGenerationOperation[];
-  sessionKey?: string;
-  agentId?: string;
-  taskKind: string;
-  sourcePrefix: string;
-  taskLabel?: string;
-  maxAgeMs: number;
-  requestKey?: string;
-  nowMs?: number;
-}): MediaGenerationOperation | undefined {
-  const key = buildRecentMediaGenerationTaskKey(params);
-  const sessionKey = normalizeOptionalString(params.sessionKey);
-  if (!key || !sessionKey) {
-    return undefined;
-  }
-  const nowMs = params.nowMs ?? Date.now();
-  const maxAgeMs = resolveNonNegativeIntegerOption(params.maxAgeMs, 0);
-  const taskLabel = normalizeOptionalString(params.taskLabel);
-  // The operation owner is registered before request metadata; a cache entry
-  // cannot restore work that owner has retired.
-  pruneRecentMediaGenerationTaskStarts({ maxAgeMs, nowMs, preserveKey: key });
-  const entries = recentMediaGenerationTaskStarts.get(key);
-  if (!entries?.length) {
-    return undefined;
-  }
-  const retainedEntries: RecentMediaGenerationTaskStart[] = [];
-  for (const entry of entries.toReversed()) {
-    const task = entry.task;
-    const persistedTask = findPersistedTaskForRecentMediaGenerationStart({
-      agentId: params.agentId,
-      tasks: params.tasks,
-      cachedTask: task,
-      taskKind: params.taskKind,
-      sourcePrefix: params.sourcePrefix,
-    });
-    if (persistedTask) {
-      const persistedTaskLabelMatches =
-        !taskLabel || mediaGenerationTaskLabelMatches(persistedTask, taskLabel);
-      if (isTaskStillBlockingDuplicateGuard(persistedTask) && persistedTaskLabelMatches) {
-        return persistedTask;
-      }
-      if (
-        isTaskRecentSuccessfulDuplicate({
-          task: persistedTask,
-          requestKey: params.requestKey,
-          cachedRequestKey: entry.requestKey,
-          maxAgeMs,
-          nowMs,
-        })
-      ) {
-        return persistedTask;
-      }
-      if (
-        isRecentMediaGenerationMediaGenerationOperation({ task: persistedTask, maxAgeMs, nowMs })
-      ) {
-        retainedEntries.push(entry);
-      }
-    }
-  }
-  if (retainedEntries.length > 0) {
-    recentMediaGenerationTaskStarts.set(key, retainedEntries.toReversed());
-  } else {
-    recentMediaGenerationTaskStarts.delete(key);
-  }
-  return undefined;
-}
-
-/** Clears in-memory duplicate guards between tests. */
-function resetRecentMediaGenerationDuplicateGuardsForTests() {
-  recentMediaGenerationTaskStarts.clear();
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.mediaGenerationDuplicateGuardTestApi")
-  ] = { resetRecentMediaGenerationDuplicateGuardsForTests };
-}
-
-/** Extracts a provider id from a media task source id with the given prefix. */
 function getMediaGenerationTaskProviderId(
   task: MediaGenerationOperation,
   sourcePrefix: string,
 ): string | undefined {
+  if (task.provider) {
+    return task.provider;
+  }
   const sourceId = task.sourceId?.trim() ?? "";
   if (!sourceId.startsWith(`${sourcePrefix}:`)) {
     return undefined;
@@ -342,27 +79,16 @@ function selectActiveMediaGenerationTasks(
 ): MediaGenerationOperation[] {
   const taskLabel = normalizeOptionalString(params.taskLabel);
   const sourcePrefix = normalizeOptionalString(params.sourcePrefix);
-  const matches = tasks.filter((task) => {
-    if (task.taskKind !== params.taskKind || !isTaskStillBlockingDuplicateGuard(task)) {
-      return false;
-    }
-    if (params.agentId && resolveMediaGenerationTaskRequesterAgentId(task) !== params.agentId) {
-      return false;
-    }
-    if (sourcePrefix && !mediaGenerationSourceMatches(task, sourcePrefix)) {
-      return false;
-    }
-    if (taskLabel && !mediaGenerationTaskLabelMatches(task, taskLabel)) {
-      return false;
-    }
-    if (
-      params.excludeDeliveringCompletion &&
-      task.progressSummary === MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS
-    ) {
-      return false;
-    }
-    return true;
-  });
+  const matches = tasks.filter(
+    (task) =>
+      task.taskKind === params.taskKind &&
+      isTaskStillBlockingDuplicateGuard(task) &&
+      (!params.agentId || resolveMediaGenerationTaskRequesterAgentId(task) === params.agentId) &&
+      (!sourcePrefix || mediaGenerationSourceMatches(task, sourcePrefix)) &&
+      (!taskLabel || normalizeOptionalString(task.task) === taskLabel) &&
+      (!params.excludeDeliveringCompletion ||
+        task.progressSummary !== MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS),
+  );
   return [
     ...matches.filter((task) => task.status === "running"),
     ...matches.filter((task) => task.status !== "running"),
@@ -377,98 +103,26 @@ async function findDuplicateGuardMediaGenerationTaskForSession(params: {
   sourcePrefix: string;
   taskLabel?: string;
   requestKey?: string;
-  maxAgeMs: number;
 }): Promise<MediaGenerationOperation | undefined> {
   const sessionKey = normalizeOptionalString(params.sessionKey);
   if (!sessionKey) {
     return undefined;
   }
   const tasks = listMediaGenerationOperations(sessionKey, params.agentId);
-  return (
-    findRecentStartedMediaGenerationTaskForSession({ ...params, sessionKey, tasks }) ??
-    selectActiveMediaGenerationTasks(params, tasks)[0]
+  const active = selectActiveMediaGenerationTasks(params, tasks)[0];
+  if (active || !params.requestKey) {
+    return active;
+  }
+  const recent = tasks.findLast(
+    (task) =>
+      task.requestKey === params.requestKey &&
+      task.taskKind === params.taskKind &&
+      mediaGenerationSourceMatches(task, params.sourcePrefix) &&
+      (!params.agentId || resolveMediaGenerationTaskRequesterAgentId(task) === params.agentId),
   );
-}
-
-/** Builds structured status details for one media generation task. */
-function buildMediaGenerationTaskStatusDetails(params: {
-  task: MediaGenerationOperation;
-  sourcePrefix: string;
-}): Record<string, unknown> {
-  const provider = getMediaGenerationTaskProviderId(params.task, params.sourcePrefix);
-  return {
-    ...buildSessionAsyncTaskStatusDetails(params.task),
-    active: isTaskStillBlockingDuplicateGuard(params.task),
-    ...(provider ? { provider } : {}),
-  };
-}
-
-/** Builds structured status details for a list of media generation tasks. */
-function buildMediaGenerationTaskStatusListDetails(params: {
-  tasks: MediaGenerationOperation[];
-  sourcePrefix: string;
-}): Record<string, unknown> {
-  return {
-    async: true,
-    active: true,
-    existingTask: true,
-    taskCount: params.tasks.length,
-    tasks: params.tasks.map((task) =>
-      buildMediaGenerationTaskStatusDetails({
-        task,
-        sourcePrefix: params.sourcePrefix,
-      }),
-    ),
-  };
-}
-
-/** Builds user-facing status text for one media generation task. */
-function buildMediaGenerationTaskStatusText(params: {
-  task: MediaGenerationOperation;
-  sourcePrefix: string;
-  nounLabel: string;
-  toolName: string;
-  completionLabel: string;
-  duplicateGuard?: boolean;
-}): string {
-  const provider = getMediaGenerationTaskProviderId(params.task, params.sourcePrefix);
-  const active =
-    isTaskStillBlockingDuplicateGuard(params.task) || params.task.terminalOutcome === "blocked";
-  const lines = [
-    active
-      ? `${params.nounLabel} task ${params.task.taskId} is already ${params.task.status}${provider ? ` with ${provider}` : ""}.`
-      : `${params.nounLabel} task ${params.task.taskId} recently ${params.task.status}${provider ? ` with ${provider}` : ""}.`,
-    params.task.progressSummary ? `Progress: ${params.task.progressSummary}.` : null,
-    params.duplicateGuard
-      ? active
-        ? `Do not call ${params.toolName} again for this request. Do not wait, poll, or yield for it: end this turn; the completion arrives as a later turn and sends the finished ${params.completionLabel} here.`
-        : `Do not call ${params.toolName} again for the same request; this recent ${params.completionLabel} generation already completed.`
-      : `Do not wait, poll, or yield for it: end this turn; the completion arrives as a later turn and sends the finished ${params.completionLabel} here.`,
-  ].filter((entry): entry is string => Boolean(entry));
-  return lines.join("\n");
-}
-
-/** Builds user-facing status text for multiple active media generation tasks. */
-function buildMediaGenerationTaskStatusListText(params: {
-  tasks: MediaGenerationOperation[];
-  sourcePrefix: string;
-  nounLabel: string;
-  toolName: string;
-  completionLabel: string;
-}): string {
-  const nounLabel = normalizeLowercaseStringOrEmpty(params.nounLabel);
-  const lines = [
-    `${params.tasks.length} active ${nounLabel} tasks are queued or running for this session.`,
-    ...params.tasks.map((task) => {
-      const provider = getMediaGenerationTaskProviderId(task, params.sourcePrefix);
-      const runId = task.runId ? ` (run ${task.runId})` : "";
-      const progress = task.progressSummary ? ` Progress: ${task.progressSummary}.` : "";
-      return `- Task ${task.taskId}${runId} is ${task.status}${provider ? ` with ${provider}` : ""}.${progress}`;
-    }),
-    `Do not wait, poll, or yield for them: end this turn; each completion arrives as a later turn and sends the finished ${params.completionLabel} here.`,
-    `Only start a new ${params.toolName} call if the user clearly asks for different/new ${params.completionLabel}.`,
-  ];
-  return lines.join("\n");
+  return recent && recent.status === "succeeded" && recent.terminalOutcome !== "blocked"
+    ? recent
+    : undefined;
 }
 
 /** Builds bounded current-turn facts without instructions or elapsed-time fields. */
@@ -508,7 +162,6 @@ export function buildActiveMediaGenerationTaskPromptContext(params: {
   return lines.join("\n");
 }
 
-/** Specializes shared task lookup, duplicate guards, and status text for one media tool. */
 export function createMediaGenerationTaskStatusOwner(params: {
   taskKind: string;
   toolName: string;
@@ -517,11 +170,18 @@ export function createMediaGenerationTaskStatusOwner(params: {
   promptCompletionLabel: string;
 }) {
   const taskIdentity = { taskKind: params.taskKind, sourcePrefix: params.toolName };
-  const taskPresentation = {
-    sourcePrefix: params.toolName,
-    nounLabel: params.nounLabel,
-    toolName: params.toolName,
-  };
+  function buildTaskStatusDetails(
+    this: void,
+    task: MediaGenerationOperation,
+  ): Record<string, unknown> {
+    const provider = getMediaGenerationTaskProviderId(task, params.toolName);
+    return {
+      ...buildSessionAsyncTaskStatusDetails(task),
+      active: isTaskStillBlockingDuplicateGuard(task),
+      ...(provider ? { provider } : {}),
+      ...(task.model ? { model: task.model } : {}),
+    };
+  }
   return {
     async findActiveTaskForSession(
       this: void,
@@ -551,33 +211,55 @@ export function createMediaGenerationTaskStatusOwner(params: {
         taskLabel: request?.prompt,
         requestKey: request?.requestKey,
         agentId: request?.agentId,
-        maxAgeMs: RECENT_MEDIA_GENERATION_TASK_START_CACHE_MS,
       });
     },
-    buildTaskStatusDetails(this: void, task: MediaGenerationOperation) {
-      return buildMediaGenerationTaskStatusDetails({ task, sourcePrefix: params.toolName });
-    },
-    buildTaskStatusListDetails(this: void, tasks: MediaGenerationOperation[]) {
-      return buildMediaGenerationTaskStatusListDetails({ tasks, sourcePrefix: params.toolName });
+    buildTaskStatusDetails,
+    buildTaskStatusListDetails(
+      this: void,
+      tasks: MediaGenerationOperation[],
+    ): Record<string, unknown> {
+      return {
+        async: true,
+        active: true,
+        existingTask: true,
+        taskCount: tasks.length,
+        tasks: tasks.map(buildTaskStatusDetails),
+      };
     },
     buildTaskStatusText(
       this: void,
       task: MediaGenerationOperation,
       options?: { duplicateGuard?: boolean },
     ) {
-      return buildMediaGenerationTaskStatusText({
-        ...taskPresentation,
-        task,
-        completionLabel: params.completionLabel,
-        duplicateGuard: options?.duplicateGuard,
-      });
+      const provider = getMediaGenerationTaskProviderId(task, params.toolName);
+      const active = isTaskStillBlockingDuplicateGuard(task) || task.terminalOutcome === "blocked";
+      return [
+        active
+          ? `${params.nounLabel} task ${task.taskId} is already ${task.status}${provider ? ` with ${provider}` : ""}.`
+          : `${params.nounLabel} task ${task.taskId} recently ${task.status}${provider ? ` with ${provider}` : ""}.`,
+        task.progressSummary ? `Progress: ${task.progressSummary}.` : null,
+        options?.duplicateGuard
+          ? active
+            ? `Do not call ${params.toolName} again for this request. Do not wait, poll, or yield for it: end this turn; the completion arrives as a later turn and sends the finished ${params.completionLabel} here.`
+            : `Do not call ${params.toolName} again for the same request; this recent ${params.completionLabel} generation already completed.`
+          : `Do not wait, poll, or yield for it: end this turn; the completion arrives as a later turn and sends the finished ${params.completionLabel} here.`,
+      ]
+        .filter(Boolean)
+        .join("\n");
     },
     buildTaskStatusListText(this: void, tasks: MediaGenerationOperation[]) {
-      return buildMediaGenerationTaskStatusListText({
-        ...taskPresentation,
-        tasks,
-        completionLabel: params.promptCompletionLabel,
-      });
+      const nounLabel = normalizeLowercaseStringOrEmpty(params.nounLabel);
+      return [
+        `${tasks.length} active ${nounLabel} tasks are queued or running for this session.`,
+        ...tasks.map((task) => {
+          const provider = getMediaGenerationTaskProviderId(task, params.toolName);
+          const runId = task.runId ? ` (run ${task.runId})` : "";
+          const progress = task.progressSummary ? ` Progress: ${task.progressSummary}.` : "";
+          return `- Task ${task.taskId}${runId} is ${task.status}${provider ? ` with ${provider}` : ""}.${progress}`;
+        }),
+        `Do not wait, poll, or yield for them: end this turn; each completion arrives as a later turn and sends the finished ${params.promptCompletionLabel} here.`,
+        `Only start a new ${params.toolName} call if the user clearly asks for different/new ${params.promptCompletionLabel}.`,
+      ].join("\n");
     },
   };
 }

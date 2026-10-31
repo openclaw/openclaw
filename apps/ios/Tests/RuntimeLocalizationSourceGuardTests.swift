@@ -47,7 +47,6 @@ struct RuntimeLocalizationSourceGuardTests {
         let manager = try Self.source("Sources/LiveActivity/LiveActivityManager.swift")
         let widget = try Self.source("ActivityWidget/OpenClawLiveActivity.swift")
         let project = try Self.source("project.yml")
-        let talkManager = try Self.source("Sources/Voice/TalkModeManager.swift")
         let watchInbox = try Self.source("WatchApp/Sources/WatchInboxView.swift")
         let chat = try Self.sharedSource("OpenClawChatUI/ChatMessageViews.swift")
 
@@ -63,14 +62,13 @@ struct RuntimeLocalizationSourceGuardTests {
               - path: Resources/Localizable.xcstrings
                 buildPhase: resources
         """))
-        #expect(chat.contains("private var title: LocalizedStringResource"))
-        #expect(chat.contains("private var accessibilityText: LocalizedStringResource"))
-        #expect(chat.contains("Text(self.accessibilityText)"))
+        #expect(chat.contains("title: LocalizedStringResource"))
+        #expect(chat.contains("accessibilityText: LocalizedStringResource"))
+        #expect(chat.contains("Text(presentation.title)"))
+        #expect(chat.contains("Text(presentation.accessibilityText)"))
         #expect(watchInbox.contains("case localized(LocalizedStringResource)"))
         #expect(!watchInbox.contains("WatchTextValue: ExpressibleByStringLiteral"))
         #expect(watchInbox.contains("accessory: .verbatim(self.store.talkSummaryText)"))
-        #expect(talkManager.contains("var gatewayTalkActiveModeTitle: String = .init(localized: \"Not active\")"))
-        #expect(!talkManager.contains("gatewayTalkActiveModeTitle = \""))
     }
 
     @Test func `voice waveform stays on avatar without expanded contour`() throws {

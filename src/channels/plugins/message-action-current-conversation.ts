@@ -1,6 +1,7 @@
 import { normalizeOptionalAccountId, normalizeAccountId } from "../../routing/account-id.js";
 import { normalizeChatType, type ChatType } from "../chat-type.js";
-import type { ChannelMessageActionContext, ChannelPlugin } from "./types.js";
+import type { ChannelMessageActionContext } from "./types.core.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "./types.plugin.js";
 
 const HOST_TARGET_KIND_PREFIXES = [
   "user",
@@ -23,19 +24,6 @@ function isHostConversationTargetKind(value: string): value is HostConversationT
   return HOST_TARGET_KIND_PREFIXES.some((kind) => kind === value);
 }
 
-function stripHostProviderPrefix(params: {
-  value: string;
-  channel: string;
-  providerPrefixes?: readonly string[];
-}): string {
-  const prefixes = [params.channel, ...(params.providerPrefixes ?? [])]
-    .map((prefix) => prefix.trim().toLowerCase())
-    .filter((prefix) => Boolean(prefix) && !isHostConversationTargetKind(prefix));
-  const lowered = params.value.toLowerCase();
-  const prefix = prefixes.find((candidate) => lowered.startsWith(`${candidate}:`));
-  return prefix ? params.value.slice(prefix.length + 1).trim() : params.value;
-}
-
 export function normalizeHostConversationTarget(params: {
   value: unknown;
   channel: string;
@@ -51,11 +39,12 @@ export function normalizeHostConversationTarget(params: {
   if (!value) {
     return undefined;
   }
-  const withoutProvider = stripHostProviderPrefix({
-    value,
-    channel: params.channel,
-    providerPrefixes: params.providerPrefixes,
-  });
+  const prefixes = [params.channel, ...(params.providerPrefixes ?? [])]
+    .map((prefix) => prefix.trim().toLowerCase())
+    .filter((prefix) => Boolean(prefix) && !isHostConversationTargetKind(prefix));
+  const lowered = value.toLowerCase();
+  const prefix = prefixes.find((candidate) => lowered.startsWith(`${candidate}:`));
+  const withoutProvider = prefix ? value.slice(prefix.length + 1).trim() : value;
   if (!withoutProvider) {
     return undefined;
   }

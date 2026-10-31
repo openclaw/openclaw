@@ -25,6 +25,7 @@ struct ChatSidebarQueryState {
     var page: OpenClawChatSessionsListResponse?
     var owners: [OpenClawChatSessionEntry.CreatedActor]?
     var pageIDs: [String] = []
+    var readRevision = 0
     var searchIDs: [String]?
     var metadataIDs: Set<String> = []
     var hits: [SessionsSearchHit] = []
@@ -35,7 +36,6 @@ struct ChatSidebarQueryState {
     var excluded = 0
     var didLoad = false
     var failedAppend = false
-    var refreshPending = false
 }
 
 extension OpenClawChatSessionSidebarData {
@@ -83,7 +83,7 @@ extension OpenClawChatSessionSidebarData {
     var queryRows: [OpenClawChatSessionEntry] {
         guard let state = self.queryState else { return [] }
         return self.cachedProjection(.sidebar) {
-            let candidates: [OpenClawChatSessionEntry] = if let ids = state.searchIDs {
+            var candidates: [OpenClawChatSessionEntry] = if let ids = state.searchIDs {
                 self.project(ids)
             } else if state.page == nil, state.query.agentID != nil, state.query.wire.status == .active,
                       state.query.involvingMe != true
@@ -91,6 +91,13 @@ extension OpenClawChatSessionSidebarData {
                 self.conversationRows(agentID: state.query.agentID)
             } else {
                 self.project(state.pageIDs)
+            }
+            if state.query.search.isEmpty, state.query.involvingMe != true {
+                let held = Set(candidates.map(Self.identity))
+                candidates += self.project(self.restoredIDs(after: state.readRevision)).filter {
+                    !held.contains(Self.identity($0)) && ChatSessionSidebarModel.isSessionInActiveAgentScope(
+                        key: $0.key, agentID: $0.agentId, activeAgentID: state.query.agentID)
+                }
             }
             let rows = candidates.filter {
                 state.query.involvingMe == true || state.query.ownerId == nil || $0.owner?.actor.id == state.query
@@ -173,15 +180,13 @@ extension OpenClawChatSessionSidebarData {
     }
 
     public func invalidateQuery(clear: Bool = false) {
-        self.queryTask?.cancel()
-        self.queryTask = nil
+        self.refreshCoordinator.cancel()
         self.queryState?.generation += 1
         self.queryState?.loading = false
         self.queryState?.error = nil
         self.queryState?.indexing = false
         self.queryState?.excluded = 0
         self.queryState?.didLoad = false
-        self.queryState?.refreshPending = false
         if clear {
             self.queryState?.searchIDs = nil
             self.queryState?.metadataIDs = []
@@ -189,18 +194,15 @@ extension OpenClawChatSessionSidebarData {
             self.queryState?.page = nil
             self.queryState?.owners = nil
             self.queryState?.pageIDs = []
+            self.queryState?.readRevision = 0
         }
         self.invalidateQueryProjection()
     }
 
     public func scheduleLoad(debounce: Bool = false, coalescing: Bool = false) {
-        // ui/src/lib/sessions/event-refresh-coordinator.ts:18 retains one trailing invalidation.
-        if coalescing, self.isLoading {
-            self.queryState?.refreshPending = true
-            return
+        self.refreshCoordinator.scheduleLoad(isLoading: self.isLoading, coalescing: coalescing) { [weak self] in
+            await self?.load(debounce: debounce)
         }
-        self.queryTask?.cancel()
-        self.queryTask = Task { [weak self] in await self?.load(debounce: debounce) }
     }
 
     public func retry() async {
@@ -220,10 +222,7 @@ extension OpenClawChatSessionSidebarData {
         defer {
             if generation == self.queryState?.generation {
                 self.queryState?.loading = false
-                if self.queryState?.refreshPending == true {
-                    self.queryState?.refreshPending = false
-                    self.scheduleLoad()
-                }
+                self.refreshCoordinator.finishLoad()
             }
         }
         do {
@@ -276,6 +275,7 @@ extension OpenClawChatSessionSidebarData {
                 page.sessions = []
                 self.queryState?.page = page
                 self.queryState?.pageIDs = ids
+                self.queryState?.readRevision = read.revision
             }
             self.queryState?.didLoad = true
             self.invalidateQueryProjection()

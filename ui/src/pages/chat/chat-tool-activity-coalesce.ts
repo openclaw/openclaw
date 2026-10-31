@@ -65,6 +65,7 @@ function resultBlock(card: ToolCard): Record<string, unknown> {
       id: card.resultMessageId,
       toolOutput: card.toolOutput,
       truncated: card.outputTruncated,
+      ...(card.catalogTruncated ? { catalogTruncated: true } : {}),
     },
   };
 }
@@ -177,6 +178,7 @@ function readProjections(item: MessageItem, index: number): Projection[] {
                 id: card?.resultMessageId,
                 toolOutput: card?.toolOutput,
                 truncated: card?.outputTruncated,
+                ...(card?.catalogTruncated ? { catalogTruncated: true } : {}),
               },
             }),
         ...(card?.details !== undefined ? { details: card.details } : {}),
@@ -266,11 +268,8 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       projections: [],
     };
     invocation.projections.push(projection);
-    if (projection.call) {
-      invocation.call = preferProjection(invocation.call, projection);
-    } else {
-      invocation.result = preferProjection(invocation.result, projection);
-    }
+    const kind = projection.call ? "call" : "result";
+    invocation[kind] = preferProjection(invocation[kind], projection);
     if (projection.source.message["__openclawToolStreamLive"] === true) {
       invocation.live = projection.source.message;
     }
@@ -311,7 +310,9 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       ? owner.source.index
       : invocation.first;
     const result = invocation.result;
-    const completed = result !== undefined && result.rank > 1;
+    const resultReceived = result !== undefined && result.rank > 1;
+    const itemEnded = invocation.live?.["__openclawToolStreamItemEnded"] === true;
+    const completed = resultReceived || itemEnded;
     const transcript =
       message.messageId ??
       metadata?.id ??
@@ -328,6 +329,8 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       owner.runId,
       Boolean(invocation.live),
       completed,
+      resultReceived,
+      itemEnded,
       transcript,
       invocation.live?.["__openclawToolStreamDiffStat"],
       invocation.live?.["__openclawToolStreamReceivedAt"],
@@ -362,7 +365,9 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       }
       for (const activity of activityItems) {
         const previous = prepared.get(activity.itemId);
-        if (previous?.phase !== "end" || activity.phase === "end") {
+        // Only an explicitly unpaired history call yields to live progress.
+        // A real terminal receipt stays terminal even when its outcome is unknown.
+        if (previous?.phase !== "end" || previous.unpairedCall || activity.phase === "end") {
           prepared.set(activity.itemId, activity);
         }
       }
@@ -390,7 +395,8 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
         ...(invocation.live
           ? {
               __openclawToolStreamLive: true,
-              __openclawToolStreamResultReceived: completed,
+              __openclawToolStreamResultReceived: resultReceived,
+              __openclawToolStreamItemEnded: itemEnded,
               __openclawToolStreamDiffStat: completed
                 ? undefined
                 : invocation.live["__openclawToolStreamDiffStat"],
@@ -513,7 +519,7 @@ export function coalesceToolActivityMessages(
         return;
       }
       owner ??= message;
-      inputs.push(item.kind, item.key, message, item.duplicateCount, item.startsTurn);
+      inputs.push(item.kind, item.key, message, item.startsTurn);
       // Preserve the content-replacement contract of the tool-card owner too.
       inputs.push(message.content);
       if (Array.isArray(message.content)) {

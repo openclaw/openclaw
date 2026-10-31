@@ -18,7 +18,12 @@ import {
   type ContextEngineLogicalTurnLease,
 } from "./harness/context-engine-logical-turn.js";
 import { shellQuoteArgs } from "./harness/native-hook-relay-utils.js";
-import { isLiveTestEnabled, logLiveProgress } from "./live-test-helpers.js";
+import {
+  createLiveResponsesConfig,
+  isLiveTestEnabled,
+  logLiveProgress,
+  useLiveTestRuntimeConfig,
+} from "./live-test-helpers.js";
 import { SessionManager } from "./sessions/session-manager.js";
 
 const describeLive =
@@ -84,38 +89,12 @@ describeLive("embedded Responses output-limit recovery live", () => {
       );
       const command = shellQuoteArgs([process.execPath, scriptPath]);
       const config = {
-        models: {
-          providers: {
-            openai: {
-              api: "openai-responses",
-              auth: "api-key",
-              baseUrl: "https://api.openai.com/v1",
-              timeoutSeconds: 90,
-              models: [
-                {
-                  id: modelId,
-                  name: modelId,
-                  reasoning: true,
-                  input: ["text"],
-                  contextWindow: 200_000,
-                  maxTokens: 1024,
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                },
-              ],
-            },
-          },
-        },
-        agents: {
-          list: [{ id: "main", default: true, workspace: state.workspaceDir }],
-          defaults: {
-            skipBootstrap: true,
-            models: { [`openai/${modelId}`]: { params: { transport: "sse" } } },
-          },
-        },
+        ...createLiveResponsesConfig(modelId, state.workspaceDir, 1024),
         tools: { exec: { host: "gateway", mode: "full" } },
         plugins: { allow: ["openai"], slots: { memory: "none" } },
       } satisfies OpenClawConfig;
       await state.writeConfig(config);
+      using _ = useLiveTestRuntimeConfig(config);
       const sessionManager = SessionManager.inMemory(state.workspaceDir);
       const events: EmbeddedAgentEvent[] = [];
       const requests: ResponseCreateParamsStreaming[] = [];
@@ -257,7 +236,6 @@ describeLive("embedded Responses output-limit recovery live", () => {
         expect(failures).toEqual([
           expect.objectContaining({
             stopReason: "error",
-            usage: expect.objectContaining({ output: 256 }),
             diagnostics: expect.arrayContaining([
               expect.objectContaining({
                 type: "openai_responses_terminal",
@@ -269,6 +247,13 @@ describeLive("embedded Responses output-limit recovery live", () => {
             ]),
           }),
         ]);
+        // OpenAI can report a few tokens past max_output_tokens on a truncated response (260 for 256).
+        const [failure] = failures;
+        if (failure?.role !== "assistant") {
+          throw new Error("Expected one incomplete assistant tool-call failure");
+        }
+        expect(failure.usage.output).toBeGreaterThanOrEqual(256);
+        expect(failure.usage.output).toBeLessThanOrEqual(256 + 32);
         expect(
           messages.filter(
             (message) => message.role === "toolResult" && message.toolName === "exec",

@@ -50,12 +50,50 @@ tracked defaults unchanged.
 
 ## Release Workflow
 
+Store releases also run every **Monday at 11:00 AM Pacific**, using
+`America/Los_Angeles` for daylight saving time. The weekly schedule follows the
+manual `release` path below, including qualification, phone/Wear screenshots,
+and the `android-store-release` environment. It is independent of
+`ANDROID_INTERNAL_ENABLED`. Only weekly store runs send Discord results; see
+[weekly mobile releases](https://docs.openclaw.ai/ci/scheduled-workflows#weekly-mobile-store-releases)
+for notification setup and scheduling behavior.
+
+Both operations fetch the selected commit's complete ancestry without fetching
+unrelated branches, tags, or historical file contents. Git fetches historical file
+contents on demand when release notes read them. The release owner separately
+fetches current `main` for its ancestry check and each public phone/Wear source
+ref for release notes, retaining the same blobless filter.
+
+Compare read-only history acquisition against a base revision without building
+or uploading a release:
+
+```bash
+node --import ./scripts/tsx.mjs scripts/bench-android-release-history.mts \
+  --remote <repository-url> --source <main-sha> --base <base-revision> \
+  --baseline-ref <public-phone-ref> --baseline-ref <public-wear-ref>
+```
+
+This runs five serial pairs with fresh Git object stores, compares release-note
+inventories and selected evidence, and reports acquisition time and object bytes.
+
 1. Run the manual **Android Store Release** GitHub Action from `main` with its default `release` operation. The upload uses the `android-store-release` environment and freezes the commit selected at dispatch, even if `main` advances while the run is queued. The `internal` operation and daily schedule use the same release owner with the differences described below.
 2. The workflow derives the Gateway version from the root `package.json`, selects the Android revision from source refs and current public releases, and chooses the next sequential phone/Wear codes above the uploaded codes and pinned floor. It refuses a version regression, an exhausted revision or native code range, and uploaded new-format codes whose source refs are missing.
 3. Planning identifies the public releases in `production` and `wear:production`. OpenAI generates separate phone and Wear notes from changes since those releases. Internal uploads do not advance the public baseline. Staged, halted, or ambiguous public releases stop preparation.
 4. The workflow saves the plan and generated notes for the selected clean source commit. Fastlane and Gradle consume those artifacts at runtime. No tracked release files, preparation commits, or follow-up PRs are needed.
-5. The upload lane validates auth, signing, version metadata, and generated notes; captures phone and Wear screenshots; and builds the signed phone AAB, Wear AAB, and third-party APK. It rechecks the public baselines before uploading both AABs, metadata, and screenshots in one Google Play edit. A changed baseline stops the upload.
+5. The upload lane validates auth, signing, version metadata, and generated notes; captures phone and Wear screenshots; and builds the signed phone and Wear AABs together in one Gradle invocation. It rechecks the public baselines before uploading both AABs, metadata, and screenshots in one Google Play edit. A changed baseline stops the upload.
 6. Before the first new-format upload, the lane records the immutable legacy-code cutover marker. The phone and Wear bundles go to `internal` and `wear:internal`. Production promotion remains manual in Google Play Console. A successful upload records the unchanged source SHA and planned identity in its immutable release ref.
+
+Both release operations omit `changesNotSentForReview` when the selected Play
+track is `internal`, and disable Fastlane's review-setting fallback. Play handles
+review automatically on these tracks; setting the parameter to `false` still
+sends it and is rejected. Local uploads to other tracks retain their configured
+review settings. Store releases still include listing metadata and screenshots.
+
+Google Play can also submit changes already staged in Play Console when an API
+edit commits. Resolve unrelated pending store changes before either release
+operation or enabling the daily schedule; skipping listing uploads does not
+isolate those staged changes. See Google's
+[concurrency guidance](https://developers.google.com/android-publisher/concurrency-considerations).
 
 `pnpm android:release:upload` runs the same planning, note generation, and upload
 flow from a clean local `main` matching `origin/main`, with no
@@ -80,16 +118,7 @@ and Wear notes, signing, artifact validation, atomic upload, and immutable
 source-ref recording. They publish to `internal` and `wear:internal`, then upload
 the exact same signed phone and Wear AABs to Firebase App Distribution. They skip
 screenshot capture and its emulator/image tooling, and leave the store listing
-metadata and images unchanged. Internal distributions omit
-`changesNotSentForReview` so Play handles review automatically, and disable
-Fastlane's review-setting fallback. Ordinary store releases retain their
-configured review settings; production promotion remains manual.
-
-Google Play can also submit changes already staged in Play Console when an API
-edit commits. Resolve unrelated pending store changes before running an internal
-distribution or enabling its daily schedule; skipping listing uploads does not
-isolate those staged changes. See Google's
-[concurrency guidance](https://developers.google.com/android-publisher/concurrency-considerations).
+metadata and images unchanged. Production promotion remains manual.
 
 To configure unattended runs:
 
@@ -212,7 +241,7 @@ saved plan, notes, and exact AABs when investigating a failed or uncertain uploa
 Agent-driven recovery requires explicit maintainer direction after reporting the
 failure; do not automatically rerun the upload or record its ref.
 
-The third-party flavor is archived as a signed APK for non-Play distribution. The Play release lane never uploads it. Official GitHub distribution is owned only by `.github/workflows/android-release.yml`, which publishes regular final and correction tags through the protected `android-release` environment as `OpenClaw-Android.apk`.
+Store and Internal releases build only the phone and Wear AABs. The third-party flavor is built as a signed APK for non-Play distribution by `.github/workflows/android-release.yml`, which publishes regular final and correction tags through the protected `android-release` environment as `OpenClaw-Android.apk`. Local `pnpm android:release:archive` continues to build all three artifacts.
 
 ## Release SHA tracking
 
@@ -251,6 +280,13 @@ point to existing source commits; they create no commits or PRs. Existing refs
 are immutable: the same ref at the same SHA is accepted, while a different SHA
 fails. `GOOGLE_PLAY_VALIDATE_ONLY=1` does not record an uploaded-build ref.
 
+Source-ref reads and writes tolerate recognized transient Git failures, including
+GitHub's workflow-check timeout, with up to four attempts and waits of 5, 10, and
+20 seconds. Every push is reconciled against the remote ref before another
+attempt; an unreadable remote never authorizes another push. Authentication
+failures and conflicting source SHAs stop the release. These retries do not
+repeat the build or upload.
+
 For release-note generation, each public phone or Wear code resolves through its
 v2 ref. Legacy Wear codes resolve to their paired phone ref by subtracting `50`.
 Phone and Wear may have different public baselines. If a historical public
@@ -265,10 +301,11 @@ For each audience, the shared generator shortlists up to ten changed files from
 a compact inventory and commit subjects, then drafts highlights from focused
 endpoint diffs. Current source and Play flavor configuration check availability.
 A separate factual review can request one correction. Each stage reports
-progress, with at most five model requests per audience and a five-minute budget
-for the complete generation. Exhausted budgets or unapproved notes stop
-preparation before upload. Retrying a saved, valid artifact reuses its exact text
-without another model call.
+progress, with at most five model stages per audience. Each stage permits one SDK
+retry for a transient connection, timeout, or retryable API failure, including
+backoff within the unchanged five-minute budget for the complete generation.
+Exhausted budgets or unapproved notes stop preparation before upload. Retrying a
+saved, valid artifact reuses its exact text without another model call.
 
 If Play accepted an upload but recording its v2 ref failed, the next run stops on
 the unmapped codes. Preserve `android-plan.json`, the notes, and both uploaded

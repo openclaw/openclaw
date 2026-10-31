@@ -1,7 +1,6 @@
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { listMusicGenerationProviders } from "../../media-generation/registry.js";
 import { listSupportedMusicGenerationModes } from "../../music-generation/capabilities.js";
-import { listRuntimeMusicGenerationProviders } from "../../music-generation/runtime.js";
-import type { AuthProfileStore } from "../auth-profiles/types.js";
+import type { MusicGenerationProvider } from "../../music-generation/types.js";
 import {
   buildMusicGenerationTaskStatusDetails,
   buildMusicGenerationTaskStatusText,
@@ -9,14 +8,11 @@ import {
   findDuplicateGuardMusicGenerationTaskForSession,
 } from "../media-generation-task-status.js";
 import {
-  createMediaGenerateProviderListActionResult,
+  createMediaGenerateProviderListAction,
   createMediaGenerateTaskActions,
-  type MediaGenerateActionResult,
 } from "./media-generate-tool-actions-shared.js";
 
-function summarizeMusicGenerationCapabilities(
-  provider: ReturnType<typeof listRuntimeMusicGenerationProviders>[number],
-): string {
+function summarizeMusicGenerationCapabilities(provider: MusicGenerationProvider): string {
   const supportedModes = listSupportedMusicGenerationModes(provider);
   const generate = provider.capabilities.generate;
   const edit = provider.capabilities.edit;
@@ -54,23 +50,13 @@ function summarizeMusicGenerationCapabilities(
   return capabilities;
 }
 
-export function createMusicGenerateListActionResult(
-  config?: OpenClawConfig,
-  options?: { workspaceDir?: string; agentDir?: string; authStore?: AuthProfileStore },
-): MediaGenerateActionResult {
-  const providers = listRuntimeMusicGenerationProviders({ config });
-  return createMediaGenerateProviderListActionResult({
-    kind: "music_generation",
-    providers,
-    emptyText: "No music-generation providers are registered.",
-    cfg: config,
-    workspaceDir: options?.workspaceDir,
-    agentDir: options?.agentDir,
-    authStore: options?.authStore,
-    listModes: listSupportedMusicGenerationModes,
-    summarizeCapabilities: summarizeMusicGenerationCapabilities,
-  });
-}
+export const createMusicGenerateListActionResult = createMediaGenerateProviderListAction({
+  kind: "music_generation",
+  listProviders: (params) => listMusicGenerationProviders(params?.config),
+  emptyText: "No music-generation providers are registered.",
+  listModes: listSupportedMusicGenerationModes,
+  summarizeCapabilities: summarizeMusicGenerationCapabilities,
+});
 
 export const {
   createStatusActionResult: createMusicGenerateStatusActionResult,

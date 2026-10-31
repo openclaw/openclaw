@@ -8,28 +8,35 @@ authoring dates (2026), not package publication dates.
 
 ## Unreleased
 
-No changes outside the dated history below.
+- **Breaking:** retire A2UI widgets and the generic registered-renderer API. Stored A2UI widgets are backed up and deleted by Doctor; recreate them as HTML widgets. The v4 registered-content wire declarations remain for parsing older messages and reporting the retired operation, not for rendering or persistence.
+- Keep wire protocol v4 after widget retirement. The retired `registered` widget-put shape remains wire-valid but returns an actionable HTML replacement error without mutating the board; surviving widget responses retain v4-compatible shapes. General clients remain on v4, and authenticated nodes and lightweight probes retain the v3 compatibility window.
 
-## Deferred to the next wire version
+## Deferred to a later wire version
 
 Changes that are agreed but intentionally NOT shipped, because they alter the
 negotiated shape of the current wire version. A version bump is an explicit
 breaking event for third-party clients (see "Notes for external versioning"), so
-each entry stays here until an owner approves the bump and lands it together with
-client follow-through. Add an entry whenever you defer a shape change; remove it
-in the commit that bumps the version.
+each entry stays here until its owner approves the specific removal and lands it
+with client follow-through. Add an entry whenever you defer a shape change;
+remove it when that change lands.
 
 - **Remove `execSecurity` / `execAsk` from `SessionsPatchMutation`.** Retired in
   favour of `permissionMode` (PR #132740, landed `a151c1e0d35`). The properties
-  remain declared in the closed v4 mutation schema so existing v4 callers keep a
+  remain declared in the closed mutation schema so existing callers keep a
   valid request shape; the applier rejects either field before any mutation with
   guidance naming `permissionMode` and `/exec`. Deleting the properties changes
-  the closed-object shape, so it waits for the bump. Code marker:
+  the closed-object shape, so this separate retirement remains deferred. Code marker:
   `packages/gateway-protocol/src/schema/sessions-patch.ts`.
 
 ## Protocol v4 (current)
 
-Introduced 2026-05-07 (commit `330ba1f`). The stable, current wire version.
+Introduced 2026-05-07 (commit `330ba1f`).
+
+The A2UI retirement briefly bumped the development protocol to v5 on 2026-10-24
+(`#182109`); that bump was reverted to keep existing v4 apps connected. The
+registered widget-put request is recognized only to report its retirement. No
+registered renderer, plugin registration API, or persisted registered content
+is restored.
 
 Wire contract:
 - Frame envelopes: `req` / `res` / `event`, discriminated on `type`.
@@ -57,7 +64,7 @@ Compatibility window (`version.ts`):
   rolling upgrades. Added 2026-07-06 (#101109).
 - A transient v5 (2026-05-16, `07f05e9`) renamed `inboundTurnKind` -> `inboundEventKind`;
   it was reverted the next day (2026-05-17, `ad155fb`, "restore v4 message action
-  protocol"). v5 never shipped as a stable ceiling; v4 remains current.
+  protocol"). That v5 experiment never shipped as a stable ceiling.
 
 ## Protocol v3
 
@@ -236,7 +243,7 @@ Enhancement-only month (no new schema modules):
 
 ## Notes for external versioning
 
-- Removals and semantic breaks have shipped in v4 builds without a wire-version bump, including the July question/catalog reshaping and August RPC/field removals above. The negotiated version remains `4`, with minimum client/node/probe versions `4` / `3` / `3`; it does not identify a fixed schema vintage. Monthly history records authoring, not a guarantee that every intermediate shape reached a stable package release.
+- Removals and semantic breaks have shipped in v4 builds without a wire-version bump, including the July question/catalog reshaping and August RPC/field removals above. During v4, the negotiated version remained `4`, with minimum client/node/probe versions `4` / `3` / `3`; it did not identify a fixed schema vintage. Monthly history records authoring, not a guarantee that every intermediate shape reached a stable package release.
 - Discover current methods, events, and capabilities through `hello-ok.features`; consult the matching release's schemas for payload contracts. The Deferred section records shape changes still waiting for an owner-approved version bump, not changes already made under v4.
 - Core method `since` values are release-train metadata (`<=2026.7` predates tracking), not exact authoring dates. Use the method table for retained methods, generated Kotlin catalog history for method/event changes, and schema/generated Swift diffs for field changes; the sparse `x-openclaw-since` annotations are not a complete schema history.
 - `schema/types.ts` was removed 2026-07-11 (#103679); it re-exported compile-time type

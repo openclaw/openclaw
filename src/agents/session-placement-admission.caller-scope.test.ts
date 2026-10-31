@@ -1,4 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  assertOwnedTranscriptWriteCommit,
+  runWithOwnedSessionTranscriptWrite,
+  withOwnedSessionTranscriptWrites,
+} from "../config/sessions/transcript-write-context.js";
 import {
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
@@ -6,24 +12,27 @@ import {
   seedActivePlacement,
   SESSION_ID,
   SESSION_KEY,
+  sessionTarget,
   setupWorkerTurnLauncherTest,
   turn,
   unusedEnvironments,
 } from "../gateway/worker-environments/worker-turn-launcher.test-support.js";
 import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
+  prepareSystemAgentRunAdmission,
+  resolveAdmittedRunActiveAssertion,
   type AdmittedRunContext,
   type PreparedAgentRunAdmission,
 } from "./admitted-run-context.js";
 import { createDeferredEmbeddedRunLifecycleManager } from "./embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import {
-  clearActiveEmbeddedRun,
   isEmbeddedAgentRunHandleActive,
   resolveActiveEmbeddedRunOwner,
-  setActiveEmbeddedRun,
 } from "./embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "./embedded-agent-runner/runs.test-support.js";
+import {
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+  createEmbeddedRunHandle,
+} from "./embedded-agent-runner/runs.test-support.js";
 import { withPreparedEmbeddedRunToolAuthority } from "./harness/tool-authority.runtime.js";
 import {
   installSessionPlacementAdmissionProvider,
@@ -33,6 +42,34 @@ import {
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 let uninstall: (() => void) | undefined;
+const parentClaim = {
+  sessionId: "parent-session",
+  sessionKey: "agent:main:parent",
+  agentId: "main",
+  runId: "parent-run",
+};
+const parent = {
+  ...parentClaim,
+  sessionFile: parentClaim.sessionKey,
+  workspaceDir: "/unused-parent-workspace",
+  provider: "openai",
+  modelId: "gpt-test",
+};
+const childClaim = (runId: string) => ({
+  sessionId: SESSION_ID,
+  sessionKey: SESSION_KEY,
+  agentId: "main",
+  runId,
+});
+function installWorkerProvider(environments = unusedEnvironments()) {
+  uninstall = installSessionPlacementAdmissionProvider(
+    createWorkerSessionTurnPlacementProvider({ placements, environments }),
+  );
+}
+function expectChildReleased() {
+  expect(isEmbeddedAgentRunHandleActive(SESSION_ID)).toBe(false);
+  expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+}
 
 // Enter a real live parent attempt, as an in-process sessions tool does.
 async function fromParent(
@@ -42,50 +79,48 @@ async function fromParent(
     register: () => void;
   }) => Promise<void>,
 ) {
-  const parent = {
-    sessionId: "parent-session",
-    sessionKey: "agent:main:parent",
-    sessionFile: "agent:main:parent",
-    agentId: "main",
-    runId: "parent-run",
-    workspaceDir: "/unused-parent-workspace",
-    config: {},
-    provider: "openai",
-    modelId: "gpt-test",
-  };
-  const admission = prepareAgentRunAdmission({
-    cfg: {},
-    operationalRunInstance: createOperationalRunInstanceRef(parent.runId),
-    facts: {
-      agentId: parent.agentId,
-      runId: parent.runId,
-      ingress: { kind: "system", state: "present", boundary: "caller-scope-test" },
-    },
-  });
+  const admission = prepareSystemAgentRunAdmission(
+    {},
+    parent.runId,
+    parent.agentId,
+    "caller-scope-test",
+  );
   const admittedRunContext = await admission.admit("embedded");
   const handle = createEmbeddedRunHandle({ runId: parent.runId });
   try {
-    await withPreparedEmbeddedRunToolAuthority(
-      { admittedRunContext },
-      parent,
-      undefined,
-      async (prepared) => {
-        const caller = getGatewayToolCallerIdentity()!;
-        handle.toolAuthorityFingerprint = prepared.toolAuthorityFingerprint;
-        await run({
-          admittedRunContext,
-          preparedRunAdmission: admission,
-          register: () =>
-            setActiveEmbeddedRun(
-              parent.sessionId,
-              handle,
-              parent.sessionKey,
-              parent.sessionFile,
-              parent.agentId,
-            ),
-        });
-        expect(getGatewayToolCallerIdentity()).toBe(caller);
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionTarget: {
+          ...parentClaim,
+          storePath: sessionTarget.storePath,
+          expectedWriterRunId: parent.runId,
+        },
+        assertCommitAllowed: resolveAdmittedRunActiveAssertion(admittedRunContext),
+        withTranscriptWrite: async (write) => await write(),
       },
+      () =>
+        withPreparedEmbeddedRunToolAuthority(
+          { admittedRunContext },
+          { ...parent, config: { session: { store: sessionTarget.storePath } } },
+          undefined,
+          async (prepared) => {
+            const caller = getGatewayToolCallerIdentity()!;
+            handle.toolAuthorityFingerprint = prepared.toolAuthorityFingerprint;
+            await run({
+              admittedRunContext,
+              preparedRunAdmission: admission,
+              register: () =>
+                setActiveEmbeddedRun(
+                  parent.sessionId,
+                  handle,
+                  parent.sessionKey,
+                  parent.sessionFile,
+                  parent.agentId,
+                ),
+            });
+            expect(getGatewayToolCallerIdentity()).toBe(caller);
+          },
+        ),
     );
   } finally {
     clearActiveEmbeddedRun(parent.sessionId, handle, parent.sessionKey, parent.sessionFile);
@@ -111,31 +146,14 @@ describe("independent placement caller scope", () => {
         expect(resolveActiveEmbeddedRunOwner(SESSION_ID)?.runId).toBe(input.runId);
         throw reachedWorkerExecution;
       });
-      uninstall = installSessionPlacementAdmissionProvider(
-        createWorkerSessionTurnPlacementProvider({
-          placements,
-          environments: { ...unusedEnvironments(), get },
-        }),
-      );
+      installWorkerProvider({ ...unusedEnvironments(), get });
       try {
         let queued: Promise<void> | undefined;
-        let release!: () => void;
-        const ready = new Promise<void>((resolve) => {
-          release = resolve;
-        });
+        const { promise: ready, resolve: release } = createDeferred();
         await fromParent(async () => {
           const execute = async () => {
             await expect(
-              withSessionPlacementTurnAdmission(
-                {
-                  sessionId: SESSION_ID,
-                  sessionKey: SESSION_KEY,
-                  agentId: "main",
-                  runId: input.runId,
-                },
-                input,
-                vi.fn(),
-              ),
+              withSessionPlacementTurnAdmission(childClaim(input.runId), input, vi.fn()),
             ).rejects.toBe(reachedWorkerExecution);
           };
           if (scenario === "closed parent") {
@@ -147,9 +165,7 @@ describe("independent placement caller scope", () => {
         });
         release();
         await queued;
-        expect(get).toHaveBeenCalledOnce();
-        expect(isEmbeddedAgentRunHandleActive(SESSION_ID)).toBe(false);
-        expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+        expectChildReleased();
       } finally {
         input.preparedRunAdmission.close();
       }
@@ -158,24 +174,15 @@ describe("independent placement caller scope", () => {
 
   it("registers the direct CLI handoff under its own placement lifecycle", async () => {
     const input = turn("child-cli-run");
-    const lifecycle = createDeferredEmbeddedRunLifecycleManager(input);
-    uninstall = installSessionPlacementAdmissionProvider(
-      createWorkerSessionTurnPlacementProvider({
-        placements,
-        environments: unusedEnvironments(),
-      }),
-    );
+    let lifecycle: ReturnType<typeof createDeferredEmbeddedRunLifecycleManager> | undefined;
+    installWorkerProvider();
     try {
       await fromParent(async () => {
         await withLocalSessionPlacementTurnSettlement(
-          {
-            sessionId: SESSION_ID,
-            sessionKey: SESSION_KEY,
-            agentId: "main",
-            runId: input.runId,
-          },
+          childClaim(input.runId),
           async (assertCurrent) => {
             assertCurrent();
+            lifecycle = createDeferredEmbeddedRunLifecycleManager(input);
             lifecycle.handoffToCli();
             expect(resolveActiveEmbeddedRunOwner(SESSION_ID)?.runId).toBe(input.runId);
             await lifecycle.complete();
@@ -184,10 +191,9 @@ describe("independent placement caller scope", () => {
           { preparedRunAdmission: input.preparedRunAdmission },
         );
       });
-      expect(isEmbeddedAgentRunHandleActive(SESSION_ID)).toBe(false);
-      expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+      expectChildReleased();
     } finally {
-      await lifecycle.complete();
+      await lifecycle?.complete();
       input.preparedRunAdmission.close();
     }
   });
@@ -205,32 +211,36 @@ describe("independent placement caller scope", () => {
           carrier === "prepared"
             ? { preparedRunAdmission: owner.preparedRunAdmission }
             : { admittedRunContext: owner.admittedRunContext };
-        const claim = {
-          sessionId: "parent-session",
-          sessionKey: "agent:main:parent",
-          agentId: "main",
-          runId: "parent-run",
-        };
         const execute = async () => {
+          const target = { ...parentClaim, storePath: sessionTarget.storePath };
+          const commit = vi.fn();
+          const write = () =>
+            runWithOwnedSessionTranscriptWrite({ sessionTarget: target }, () => {
+              assertOwnedTranscriptWriteCommit(target);
+              commit();
+            });
+          await write();
           owner.register();
-          expect(resolveActiveEmbeddedRunOwner(claim.sessionId)?.runId).toBe(claim.runId);
+          expect(resolveActiveEmbeddedRunOwner(parent.sessionId)?.runId).toBe(parent.runId);
           await Promise.resolve();
           owner.preparedRunAdmission.close();
           expect(owner.register).toThrow(/no longer active/);
+          await expect(write()).rejects.toThrow(/no longer active/);
+          expect(commit).toHaveBeenCalledOnce();
           return { meta: { durationMs: 0 } };
         };
         const input = {
-          ...claim,
+          ...parentClaim,
           ...admission,
-          sessionFile: claim.sessionKey,
-          workspaceDir: "/unused-parent-workspace",
+          sessionFile: parent.sessionFile,
+          workspaceDir: parent.workspaceDir,
           prompt: "test",
           timeoutMs: 1000,
         };
         if (path === "embedded") {
-          await withSessionPlacementTurnAdmission(claim, input, execute);
+          await withSessionPlacementTurnAdmission(parentClaim, input, execute);
         } else {
-          await withLocalSessionPlacementTurnSettlement(claim, execute, admission);
+          await withLocalSessionPlacementTurnSettlement(parentClaim, execute, admission);
         }
       });
     },

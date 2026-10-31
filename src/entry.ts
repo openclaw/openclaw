@@ -1,18 +1,15 @@
 #!/usr/bin/env node
-// Boots the OpenClaw CLI entry point under Node.
-// CLI process entrypoint for OpenClaw command execution.
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { format } from "node:util";
+import { formatErrorStackWithMessage } from "@openclaw/normalization-core/error-coercion";
+import { watchCliRespawnParent } from "../node-runtime-recovery.mjs";
 import { resolveCliArgvInvocation } from "./cli/argv-invocation.js";
 import { isRootHelpInvocation } from "./cli/argv.js";
 import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
-import {
-  tryOutputPrecomputedCommandHelp,
-  type PrecomputedCommandHelpDeps,
-} from "./cli/precomputed-help.js";
+import { resolveCliDatabaseProcessRole } from "./cli/database-process-role.js";
+import { tryOutputPrecomputedCommandHelp } from "./cli/precomputed-help.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
-import type { RootHelpRenderOptions } from "./cli/program/root-help.js";
 import { isNativeHookRelayArgv } from "./cli/respawn-policy.js";
 import {
   isUpdateAdmissionInvocation,
@@ -29,20 +26,21 @@ import {
   resolveEntryInstallRoot,
   respawnWithoutOpenClawCompileCacheIfNeeded,
 } from "./entry.compile-cache.js";
-import { installDistEsmResolveFastPath } from "./entry.esm-resolve-fast-path.js";
 import { buildCliRespawnPlan, runCliRespawnPlan } from "./entry.respawn.js";
 import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
+import { installDatabaseProcessRole } from "./infra/database-engine/admission-scope.js";
 import { normalizeEnv } from "./infra/env.js";
 import { fsSafeEnvInput } from "./infra/fs-safe-env.js";
 import { isMainModule } from "./infra/is-main.js";
 import { ensureOpenClawExecMarkerOnProcess } from "./infra/openclaw-exec-env.js";
+import "./shared/detached-async-context.js";
 import { installProcessWarningFilter } from "./infra/warning-filter.js";
 import {
   getManagedNodeHostStatePath,
   isNodeHostLauncherChild,
   requestNodeHostLauncherBootstrap,
 } from "./node-host/launcher-client.js";
-import { defaultRuntime } from "./runtime.js";
+import { defaultRuntime, ExitError } from "./runtime.js";
 
 // Recovery must not select executables from workspace/global dotenv values.
 const inheritedRuntimeEnv = { ...process.env };
@@ -53,12 +51,9 @@ const ENTRY_WRAPPER_PAIRS = [
   { wrapperBasename: "openclaw.js", entryBasename: "entry.js" },
 ] as const;
 
-const loadRootHelpLiveConfigModule = async () => await import("./cli/root-help-live-config.js");
-const loadRootHelpMetadataModule = async () => await import("./cli/root-help-metadata.js");
-
 async function writeCapturedCliArgumentError(message: string): Promise<void> {
   const { loadCliDotEnv } = await import("./cli/dotenv.js");
-  loadCliDotEnv({ quiet: true });
+  loadCliDotEnv();
   await configureGatewayStartupTraceConsoleFormatting(gatewayEntryStartupTrace);
   const { enableConsoleCapture } = await import("./logging.js");
   enableConsoleCapture();
@@ -77,14 +72,13 @@ async function prepareCliDiagnosticBlockWriter(): Promise<
 > {
   const loadWriter = async (): Promise<(message: string, error?: unknown) => void> => {
     const { loadCliDotEnv } = await import("./cli/dotenv.js");
-    loadCliDotEnv({ quiet: true });
+    loadCliDotEnv();
     await configureGatewayStartupTraceConsoleFormatting(gatewayEntryStartupTrace);
     const { formatConsoleDiagnosticBlock } = await import("./logging/json-console-line.js");
     return (message, error) => {
       const formatted = error === undefined ? message : format(message, error);
       process.stderr.write(
         formatConsoleDiagnosticBlock({
-          level: "error",
           message: formatted.endsWith("\n") ? formatted : `${formatted}\n`,
         }),
       );
@@ -117,24 +111,34 @@ function shouldForceReadOnlyAuthStore(argv: string[]): boolean {
 
 const gatewayEntryStartupTrace = createGatewayDispatchStartupTrace(process.argv, "entry");
 
-// Guard: only run entry-point logic when this file is the main module.
 // The bundler may import entry.js as a shared dependency when dist/index.js
 // is the actual entry point; without this guard the top-level code below
 // would call runCli a second time, starting a duplicate gateway that fails
 // on the lock / port and crashes the process.
-if (
-  !isMainModule({
-    currentFile: fileURLToPath(import.meta.url),
-    wrapperEntryPairs: [...ENTRY_WRAPPER_PAIRS],
-  })
-) {
-  // Imported as a dependency — skip all entry-point side effects.
-} else if (isUpdateAdmissionInvocation(resolveCliArgvInvocation(process.argv))) {
-  await tryRunUpdateAdmissionBeforeStartup(resolveCliArgvInvocation(process.argv));
-} else {
+const isEntryMain = isMainModule({
+  currentFile: fileURLToPath(import.meta.url),
+  wrapperEntryPairs: [...ENTRY_WRAPPER_PAIRS],
+});
+if (isEntryMain) {
+  try {
+    await runEntryMain();
+  } catch (error) {
+    if (!(error instanceof ExitError)) {
+      throw error;
+    }
+    process.exitCode = error.code;
+  }
+}
+
+async function runEntryMain(): Promise<void> {
+  installDatabaseProcessRole(resolveCliDatabaseProcessRole(normalizeWindowsArgv(process.argv)));
+  watchCliRespawnParent();
+  if (isUpdateAdmissionInvocation(resolveCliArgvInvocation(process.argv))) {
+    await tryRunUpdateAdmissionBeforeStartup(resolveCliArgvInvocation(process.argv));
+    return;
+  }
   const entryFile = fileURLToPath(import.meta.url);
   const installRoot = resolveEntryInstallRoot(entryFile);
-  installDistEsmResolveFastPath(import.meta.url);
   ensureOpenClawExecMarkerOnProcess();
   installProcessWarningFilter();
   normalizeEnv();
@@ -148,7 +152,7 @@ if (
     await import("./infra/runtime-guard.js");
   if (!(await isCurrentRuntimeSupported())) {
     const { loadCliDotEnv } = await import("./cli/dotenv.js");
-    loadCliDotEnv({ quiet: true });
+    loadCliDotEnv();
     await configureGatewayStartupTraceConsoleFormatting(gatewayEntryStartupTrace);
   }
   await assertSupportedRuntime(undefined, undefined, process.argv, false, inheritedRuntimeEnv);
@@ -156,7 +160,8 @@ if (
     new URL("../node-host-launcher.mjs", import.meta.url).href
   );
   if (await runNodeHostLauncher({ entryPath: entryFile, packageRoot: installRoot })) {
-    process.exit(process.exitCode ?? 0);
+    process.exitCode ??= 0;
+    return;
   }
   gatewayEntryStartupTrace.mark("bootstrap");
 
@@ -164,7 +169,6 @@ if (
     !isNodeHostLauncherChild() &&
     (await respawnWithoutOpenClawCompileCacheIfNeeded({
       currentFile: entryFile,
-      installRoot,
       env: startupEnv,
       prepareWriteError: async () => {
         // The child environment was already snapshotted. Load dotenv only to format
@@ -175,6 +179,7 @@ if (
     }));
   if (!waitingForCompileCacheRespawn) {
     enableOpenClawCompileCache({
+      currentFile: entryFile,
       installRoot,
     });
 
@@ -197,13 +202,14 @@ if (
           execArgv: plan.argv.slice(0, plan.argv.length - process.argv.length + 1),
           env: plan.env,
         });
-        process.exit(0);
+        process.exitCode = 0;
+        return true;
       }
 
       // The child environment was already snapshotted. Load dotenv only to format
       // the parent trace; command-specific dotenv ordering remains child-owned.
       const writeError = await prepareCliDiagnosticBlockWriter();
-      runCliRespawnPlan(plan, undefined, writeError);
+      await runCliRespawnPlan(plan, writeError);
       // Parent must not continue running the CLI.
       return true;
     }
@@ -216,14 +222,16 @@ if (
       const parsedContainer = parseCliContainerArgs(process.argv);
       if (!parsedContainer.ok) {
         await writeCapturedCliArgumentError(parsedContainer.error);
-        process.exit(2);
+        process.exitCode = 2;
+        return;
       }
 
       const parsed = parseCliProfileArgs(parsedContainer.argv);
       if (!parsed.ok) {
         // Keep it simple; Commander will handle rich help/errors after we strip flags.
         await writeCapturedCliArgumentError(parsed.error);
-        process.exit(2);
+        process.exitCode = 2;
+        return;
       }
 
       const containerTargetName = resolveCliContainerTarget(process.argv);
@@ -234,7 +242,8 @@ if (
       }
       if (containerTargetName && parsed.profile) {
         await writeCapturedCliArgumentError("--container cannot be combined with --profile/--dev");
-        process.exit(2);
+        process.exitCode = 2;
+        return;
       }
       gatewayEntryStartupTrace.mark("argv");
 
@@ -263,19 +272,8 @@ if (
   }
 }
 
-export async function tryHandleRootHelpFastPath(
-  argv: string[],
-  deps: {
-    outputPrecomputedRootHelpText?: () => boolean;
-    outputRootHelp?: (options?: RootHelpRenderOptions) => void | Promise<void>;
-    loadRootHelpRenderOptionsForConfigSensitivePlugins?: (
-      env?: NodeJS.ProcessEnv,
-    ) => Promise<RootHelpRenderOptions | null>;
-    onError?: (error: unknown) => void | Promise<void>;
-    env?: NodeJS.ProcessEnv;
-  } = {},
-): Promise<boolean> {
-  const env = deps.env ?? process.env;
+export async function tryHandleRootHelpFastPath(argv: string[]): Promise<boolean> {
+  const env = process.env;
   if (
     env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1" ||
     resolveCliContainerTarget(argv, env)
@@ -285,48 +283,35 @@ export async function tryHandleRootHelpFastPath(
   if (!isRootHelpInvocation(argv)) {
     return false;
   }
-  const handleError =
-    deps.onError ??
-    (async (error: unknown) => {
-      const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
-      const writeError = await prepareCliDiagnosticBlockWriter();
-      await writeError(`[openclaw] Failed to display help: ${detail}\n`);
-      process.exit(1);
-    });
   try {
-    const loadRootHelpRenderOptionsForConfigSensitivePlugins =
-      deps.loadRootHelpRenderOptionsForConfigSensitivePlugins ??
-      (await loadRootHelpLiveConfigModule()).loadRootHelpRenderOptionsForConfigSensitivePlugins;
+    const { loadRootHelpRenderOptionsForConfigSensitivePlugins } =
+      await import("./cli/root-help-live-config.js");
     const liveRootHelpOptions = await loadRootHelpRenderOptionsForConfigSensitivePlugins(env);
     if (!liveRootHelpOptions) {
-      const outputPrecomputedRootHelpText =
-        deps.outputPrecomputedRootHelpText ??
-        (await loadRootHelpMetadataModule()).outputPrecomputedRootHelpText;
+      const { outputPrecomputedRootHelpText } = await import("./cli/root-help-metadata.js");
       if (outputPrecomputedRootHelpText()) {
         return true;
       }
     }
-    const outputRootHelp =
-      deps.outputRootHelp ?? (await import("./cli/program/root-help.js")).outputRootHelp;
+    const { outputRootHelp } = await import("./cli/program/root-help.js");
     await outputRootHelp(liveRootHelpOptions ?? undefined);
     return true;
   } catch (error) {
-    await handleError(error);
+    const detail = error instanceof Error ? formatErrorStackWithMessage(error) : String(error);
+    const writeError = await prepareCliDiagnosticBlockWriter();
+    await writeError(`[openclaw] Failed to display help: ${detail}\n`);
+    process.exitCode = 1;
     return true;
   }
 }
 
-export async function tryHandlePrecomputedCommandHelpFastPath(
-  argv: string[],
-  deps: PrecomputedCommandHelpDeps = {},
-): Promise<boolean> {
-  const env = deps.env ?? process.env;
-  if (resolveCliContainerTarget(argv, env)) {
+export async function tryHandlePrecomputedCommandHelpFastPath(argv: string[]): Promise<boolean> {
+  if (resolveCliContainerTarget(argv)) {
     return false;
   }
 
   try {
-    return await tryOutputPrecomputedCommandHelp(argv, { ...deps, env });
+    return await tryOutputPrecomputedCommandHelp(argv);
   } catch {
     return false;
   }
@@ -366,7 +351,7 @@ async function prepareCliFailureHandler(argv: string[], commandStarted: () => bo
 
 export async function runMainOrRootHelp(
   argv: string[],
-  deps: RunMainOrRootHelpDeps = {},
+  options: { finalize?: () => Promise<void> } = {},
 ): Promise<void> {
   // Command-phase errors reach this handler too: runCommandWithRuntime rethrows in JSON
   // mode so the envelope is written here. Only failures before runCli are startup failures.
@@ -375,7 +360,7 @@ export async function runMainOrRootHelp(
   const { runCliWithExitFinalization, requestExitAfterOneShotOutput } =
     await import("./cli/one-shot-exit.js");
   await runCliWithExitFinalization({
-    finalize: deps.finalize,
+    finalize: options.finalize,
     run: async () => {
       if (isNativeHookRelayArgv(argv) && !argv.includes("--help") && !argv.includes("-h")) {
         const { runNativeHookRelayCliFromArgv } = await import("./cli/native-hook-relay-cli.js");
@@ -396,7 +381,7 @@ export async function runMainOrRootHelp(
       }
       const { runCli } = await gatewayEntryStartupTrace.measure(
         "run-main-import",
-        deps.loadRunCli ?? (() => import("./cli/run-main.js")),
+        () => import("./cli/run-main.js"),
       );
       // Commands can replace their own installation. Retain diagnostics before old chunks vanish.
       failureHandler = await prepareCliFailureHandler(argv, () => commandStarted);
@@ -412,8 +397,3 @@ export async function runMainOrRootHelp(
       (failureHandler ?? (await prepareCliFailureHandler(argv, () => commandStarted)))(error),
   });
 }
-
-type RunMainOrRootHelpDeps = {
-  loadRunCli?: () => Promise<Pick<typeof import("./cli/run-main.js"), "runCli">>;
-  finalize?: () => Promise<void>;
-};

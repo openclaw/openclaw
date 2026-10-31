@@ -13,6 +13,15 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import type {
+  SessionUpstreamJsonValue,
+  SessionUpstreamKind,
+} from "./session-catalog-upstream.types.js";
+
+export type {
+  SessionUpstreamJsonValue,
+  SessionUpstreamKind,
+} from "./session-catalog-upstream.types.js";
 
 export type SessionCatalogListProviderParams = {
   /** Gateway always supplies this; optional only for pre-existing external provider types. */
@@ -121,16 +130,6 @@ export type SessionCatalogEntrySnapshot = {
 
 type SessionCatalogAgentEntry = SessionCatalogEntrySummary & { agentId: string };
 
-export type SessionUpstreamJsonValue =
-  | null
-  | boolean
-  | number
-  | string
-  | SessionUpstreamJsonValue[]
-  | { [key: string]: SessionUpstreamJsonValue };
-
-export type SessionUpstreamKind = "claude-cli" | "codex-app-server" | "opencode-cli" | "pi-cli";
-
 export type SessionUpstreamProbe = {
   sessionKey: string;
   agentId: string;
@@ -185,6 +184,8 @@ export type SessionCatalogProvider = {
   label: string;
   /** Gateway artifacts are shared with all operators; remote publications follow session-viewing roles. */
   audience?: "gateway-operators" | "session-viewers";
+  /** Source authorization must be refreshed before reusing a previous list snapshot. */
+  requiresFreshList?: true;
   /** Closed plugin-owned route contract; invalid or colliding declarations are not projected. */
   shareRoute?: SessionCatalogShareRoute;
   /** Declares that every HOME-sensitive action honors the host isolation policy. */
@@ -235,13 +236,7 @@ export function listSessionCatalogEntries(params: {
   sessionEntries?: SessionCatalogEntrySnapshot;
 }): SessionCatalogAgentEntry[] {
   const requiresExplicitOwner = params.config.agents?.ownership === "explicit";
-  const requestedAgentId =
-    params.agentId || requiresExplicitOwner
-      ? resolveSessionAgentIds({
-          config: params.config,
-          agentId: params.agentId,
-        }).sessionAgentId
-      : undefined;
+  const requestedAgentId = resolveCatalogAgentId(params);
   const requestEntries = params.sessionEntries?.entriesForCatalog?.();
   if (requestEntries) {
     // Keep the shipped SDK helper as the compatibility entry point while the
@@ -266,6 +261,12 @@ export function listSessionCatalogEntries(params: {
   });
 }
 
+function resolveCatalogAgentId(params: { agentId?: string; config: OpenClawConfig }) {
+  return params.agentId || params.config.agents?.ownership === "explicit"
+    ? resolveSessionAgentIds({ config: params.config, agentId: params.agentId }).sessionAgentId
+    : undefined;
+}
+
 export function sessionCatalogAdoptedSourceKey(hostId: string, threadId: string): string {
   return `${hostId}\0${threadId}`;
 }
@@ -283,9 +284,22 @@ export function listAdoptedSessionCatalogSessions(params: {
   sourceFromEntry: (entry: SessionEntry) => { hostId: string; threadId: string } | undefined;
 }): Map<string, string> {
   const adopted = new Map<string, string>();
-  for (const { sessionKey, entry } of listSessionCatalogEntries(params)) {
+  const requestedAgentId = resolveCatalogAgentId(params);
+  const requiresExplicitOwner = params.config.agents?.ownership === "explicit";
+  // Avoid both an agent-wide filtered copy and iterator allocations on the frozen snapshot.
+  const entries = params.sessionEntries?.entriesForCatalog?.() ?? listSessionCatalogEntries(params);
+  // oxlint-disable-next-line typescript/prefer-for-of -- Frozen-array iterators allocate per row.
+  for (let index = 0; index < entries.length; index++) {
+    const { sessionKey, entry, agentId } = entries[index]!;
+    if (
+      (requiresExplicitOwner && agentId !== requestedAgentId) ||
+      entry.pluginOwnerId !== params.pluginId ||
+      entry.initializationPending === true
+    ) {
+      continue;
+    }
     const source = params.sourceFromEntry(entry);
-    if (source && entry.pluginOwnerId === params.pluginId && entry.initializationPending !== true) {
+    if (source) {
       adopted.set(sessionCatalogAdoptedSourceKey(source.hostId, source.threadId), sessionKey);
     }
   }

@@ -15,18 +15,12 @@ import {
 
 export type NormalizedLegacyDeviceIdentity = StoredDeviceIdentity;
 
-function fingerprintPublicKey(publicKeyPem: string): string {
-  return createHash("sha256").update(deriveEd25519PublicKeyRaw(publicKeyPem)).digest("hex");
-}
-
-function isValidCreatedAtMs(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
-
 function normalizeLegacyCreatedAtMs(value: unknown): number {
   // Shipped file readers accepted valid keypairs even when this metadata was
   // missing or invalid. Doctor preserves that upgrade path without weakening SQLite.
-  return isValidCreatedAtMs(value) ? value : Date.now();
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : Date.now();
 }
 
 function normalizeLegacyKeyPair(params: {
@@ -42,7 +36,7 @@ function normalizeLegacyKeyPair(params: {
     // Legacy deviceId was derived metadata. Preserve the authoritative key bytes and
     // recompute the fingerprint so stale metadata never rotates a shipped identity.
     const normalized = {
-      deviceId: fingerprintPublicKey(publicKeyPem),
+      deviceId: createHash("sha256").update(publicKeyRaw).digest("hex"),
       publicKeyPem,
       privateKeyPem,
       createdAtMs: params.createdAtMs,

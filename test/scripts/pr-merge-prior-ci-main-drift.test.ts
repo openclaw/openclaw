@@ -1,304 +1,397 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { configureMerge, expectExit } from "./pr-merge-assertions.test-support.js";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 import { createPriorCiCandidateFactory } from "./pr-merge-prior-ci.test-support.js";
 
-const { describePosix, fixture } = createMergeOutcomeFixtureHarness();
-const { preExistingCandidate } = createPriorCiCandidateFactory(fixture);
+const { describePosix, fixture, reuseCompletedSetup } = createMergeOutcomeFixtureHarness();
+const { preExistingCandidate: createCandidate } = createPriorCiCandidateFactory(fixture);
+const restoredCandidate = reuseCompletedSetup(() => ({ f: createCandidate() }));
+type Candidate = ReturnType<typeof createCandidate>;
+let f: Candidate;
+beforeEach(() => {
+  f = restoredCandidate().f;
+});
+const unknown = { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" };
+const ready = { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" };
 
-function expectNoDispatch(f: ReturnType<typeof preExistingCandidate>) {
-  expect(f.state().mutations).toBe(0);
-  expect(f.state().posts).toBe(0);
+function expectNoDispatch() {
+  expect(f.state()).toMatchObject({ mutations: 0, posts: 0 });
   expect(f.captures()).toEqual([]);
   expect(() => f.record()).toThrow();
 }
 
+function refuse(message: string) {
+  const result = f.adminPriorCi(f.path);
+  expect(result.status, result.output).not.toBe(0);
+  expect(result.output).toContain(message);
+  expectNoDispatch();
+  return result;
+}
+function admit() {
+  const result = expectExit(f.adminPriorCi(f.path));
+  expect(result.error, result.output).toBeUndefined();
+  expect(f.state().mutations).toBe(1);
+  expect(f.record()).toMatchObject({ phase: "complete", head: f.head });
+  return result;
+}
+const unchanged = (count: number) => Array.from({ length: count }, () => ({}));
 describePosix("prior-CI forward main admission", () => {
-  it("revalidates admin authority after the pre-final missing-main fetch", () => {
-    const f = preExistingCandidate();
-    const state = f.state();
-    state.priorCi.revokeAdminOnMainFetch = true;
-    // This remote-only commit reaches the last materialization window. The
-    // original ordering instead fetched it after final authority verification.
-    state.observations = [{}, {}, {}, { advanceMain: true }];
-    f.save(state);
+  it.each(["initial", "qualified"] as const)(
+    "uses projection hints during %s settlement",
+    (stage) => {
+      const state = f.state();
+      state.graphqlMergeProjection = unknown;
+      state.projectionSettlement = { seconds: stage === "initial" ? 22 : 24, pr: ready };
+      if (stage === "initial") {
+        state.observations = [{ pr: unknown }];
+      } else {
+        state.restObservations = [{}, {}, {}, { advanceMain: true, pr: unknown }];
+      }
+      f.save(state);
 
-    const result = f.adminPriorCi(f.path);
+      admit();
 
-    expect(f.state().priorCi.adminRevokedDuringMainFetch, result.output).toBe(true);
-    expect(f.state().priorCi.membership).toBe("member");
-    expectNoDispatch(f);
-    expect(result.status, result.output).not.toBe(0);
-    expect(result.output).toContain("writer must be an active organization admin");
+      const settled = f.state();
+      expect(settled.settlementSleeps.slice(-4)).toEqual([2, 4, 8, 8]);
+      const offsets = settled.settlementCallOffsets.slice(-4);
+      const polling = settled.calls.slice(offsets[0], offsets.at(-1));
+      expect(
+        polling.filter((call) =>
+          call.some((arg) =>
+            /\/(check-runs|check-suites|status|rules\/branches|protection)(\?|$)/.test(arg),
+          ),
+        ),
+      ).toEqual([]);
+      expect(f.record().transport).toBe("rest");
+    },
+  );
+
+  it("rejects a known hint with UNKNOWN snapshot", () => {
+    configureMerge(f, {
+      graphqlMergeProjection: unknown,
+      observations: [{ pr: unknown }],
+      projectionSettlement: {
+        seconds: 2,
+        pr: ready,
+      },
+      restObservations: [{ pr: unknown }],
+    });
+
+    refuse("60s settle limit");
+    expect(f.state().settlementSleeps.reduce((total, seconds) => total + seconds, 0)).toBe(60);
   });
 
-  it.each([false, true])(
-    "requalifies remote-only final main (recalculating: %s)",
-    (recalculating) => {
-      const f = preExistingCandidate();
+  it.each(["head", "main", "policy"] as const)("rechecks %s after a known hint", (fault) => {
+    const changed =
+      fault === "head"
+        ? { pr: { ...ready, headRefOid: f.base } }
+        : fault === "main"
+          ? { pr: ready, main: f.commit(f.tree("conflicting\n", "stable\n"), [f.base]) }
+          : { pr: ready, priorCi: { reviewCount: 2 } };
+    configureMerge(f, {
+      graphqlMergeProjection: unknown,
+      projectionSettlement: { seconds: 4, pr: ready },
+      restObservations: [{}, { advanceMain: true, pr: unknown }, changed],
+    });
+
+    const result = refuse(
+      fault === "main"
+        ? "main must advance from both observed and verified main"
+        : "PR or main changed during observation",
+    );
+    expect(result.error, result.output).toBeUndefined();
+    expect(f.state().projectionSettlement).toBeNull();
+  });
+
+  it("preserves UNKNOWN budget across cold-main proof", () => {
+    configureMerge(f, {
+      mainProofDelaySeconds: 197,
+      mainProofDelayAfterObservations: 5,
+      observations: [
+        ...unchanged(4),
+        { advanceMain: true, pr: unknown },
+        { pr: unknown },
+        { pr: ready },
+      ],
+    });
+
+    admit();
+    expect(f.state().mainProofDelayedAt).not.toBeNull();
+    expect(f.state().mainAdvances).toHaveLength(1);
+    expect(f.git(["rev-parse", `${f.record().landed}^1`])).toBe(f.state().mainAdvances[0]);
+  });
+
+  it.each([
+    { transport: "graphql", proofSeconds: 197, readSeconds: 55, admitted: true },
+    { transport: "rest", proofSeconds: 197, readSeconds: 55, admitted: true },
+    { transport: "graphql", proofSeconds: 197, readSeconds: 61, admitted: false },
+    { transport: "rest", proofSeconds: 197, readSeconds: 61, admitted: false },
+    { transport: "rest", proofSeconds: 901, readSeconds: 0, admitted: false },
+  ])(
+    "bounds $transport: local=$proofSeconds remote=$readSeconds",
+    ({ transport, proofSeconds, readSeconds, admitted }) => {
+      const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
       const state = f.state();
-      const unknown = { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" };
-      state.observations = [
-        {},
-        {},
-        {},
-        {},
-        { advanceMain: true, ...(recalculating ? { pr: unknown } : {}) },
-        ...(recalculating
-          ? [{ pr: unknown }, { pr: { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" } }]
-          : []),
+      const observations = [
+        { main, pr: unknown },
+        {
+          pr: ready,
+          advanceSeconds: readSeconds,
+        },
       ];
+      state.mainProofDelaySeconds = proofSeconds;
+      state.mainProofDelayMain = main;
+      if (transport === "rest") {
+        state.graphqlMergeProjection = { mergeStateStatus: "UNKNOWN" };
+        state.projectionSettlement = {
+          seconds: 4,
+          pr: ready,
+        };
+        state.restObservations = [{}, {}, {}, ...observations];
+      } else {
+        state.observations = [{}, ...observations];
+      }
       f.save(state);
 
       const result = f.adminPriorCi(f.path);
 
-      expect(f.state().mainAdvances, result.output).toHaveLength(1);
-      const main = f.state().mainAdvances[0]!;
-      expect(result.status, result.output).toBe(0);
-      expect(f.git(["cat-file", "-t", main])).toBe("commit");
-      expect(f.state().mutations).toBe(1);
-      expect(f.record()).toMatchObject({ phase: "complete", accepted: true, head: f.head });
-      expect(f.git(["rev-parse", `${f.record().landed}^1`])).toBe(main);
-      expect(result.output).toContain(`Requalifying prior-CI admission after main ${main}`);
-      expect(f.state().settlementSleeps).toEqual(recalculating ? [1] : []);
+      expect(result.error, result.output).toBeUndefined();
+      expect(f.state().mainProofDelayedAt, result.output).not.toBeNull();
+      if (admitted) {
+        expect(result.status, result.output).toBe(0);
+        expect(f.state().mutations).toBe(1);
+        expect(f.record()).toMatchObject({ phase: "complete", head: f.head });
+        expect(f.git(["rev-parse", `${f.record().landed}^1`])).toBe(main);
+      } else {
+        expect(result.status, result.output).not.toBe(0);
+        expect(result.output).toContain(
+          proofSeconds > 900 ? "900s/32-round limit" : "60s settle limit",
+        );
+        expectNoDispatch();
+      }
     },
   );
 
-  it("refuses final main movement when Git cannot guarantee local-only reads", () => {
-    const f = preExistingCandidate();
-    const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
+  it.each([
+    "unsupported Git",
+    "stderr",
+    "exit",
+    "verified pin",
+    "previous-main",
+    "reread-main",
+    "verified-main",
+    "oversized stderr",
+  ] as const)("refuses a local-only probe failure: %s", (fault) => {
     const state = f.state();
-    state.priorCi.unsupportedNoLazy = true;
-    state.observations = [{}, {}, {}, {}, { main }];
-    f.save(state);
-    const result = f.adminPriorCi(f.path);
-    expect(result.status, result.output).not.toBe(0);
-    expect(result.output).toContain("final prior-CI main cannot be verified with local-only Git");
-    expect(result.output).toContain(`role=previous-main oid=${f.base} git-exit=129`);
-    expectNoDispatch(f);
-  });
-
-  it.each(["stderr", "exit"])("refuses a missing-object query with %s failure", (fault) => {
-    const f = preExistingCandidate();
-    const state = f.state();
-    state.priorCi.localOnlyQueryFault = fault;
-    state.observations = [{}, {}, {}, {}, { advanceMain: true }];
-    f.save(state);
-    const result = f.adminPriorCi(f.path);
-    expect(result.error, result.output).toBeUndefined();
-    expect(result.status, result.output).not.toBe(0);
-    expect(result.output).toContain("final prior-CI main cannot be verified with local-only Git");
-    expect(result.output).not.toContain("Requalifying prior-CI admission");
-    expect(() => f.git(["cat-file", "-e", f.state().mainAdvances[0]!])).toThrow();
-    expectNoDispatch(f);
-  });
-
-  it("stops after three authority rounds without fetching the last missing tip", () => {
-    const f = preExistingCandidate();
-    f.save({
-      ...f.state(),
-      observations: [
-        {},
-        {},
-        {},
-        {},
-        { advanceMain: true },
-        {},
-        { advanceMain: true },
-        {},
-        { advanceMain: true },
-      ],
-    });
-    const result = f.adminPriorCi(f.path);
-    expect(result.error, result.output).toBeUndefined();
-    expect(result.status, result.output).not.toBe(0);
-    expect(result.output).toContain("main kept advancing after 3 authority rounds");
-    const advances = f.state().mainAdvances;
-    expect(advances).toHaveLength(3);
-    for (const main of advances.slice(0, 2)) {
-      expect(f.git(["cat-file", "-t", main])).toBe("commit");
-    }
-    expect(() => f.git(["cat-file", "-e", advances[2]!])).toThrow();
-    expectNoDispatch(f);
-  });
-
-  it("requires the verified pin before rematerializing a newly missing main", () => {
-    const f = preExistingCandidate();
-    const previous = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
-    const state = f.state();
-    state.priorCi.localOnlyFailureOid = f.base;
-    state.priorCi.localOnlyFailureStderr = "fatal: fixture verified pin is unreadable";
-    state.observations = [{}, {}, {}, { main: previous }, { advanceMain: true }];
-    f.save(state);
-    const result = f.adminPriorCi(f.path);
-    expect(result.error, result.output).toBeUndefined();
-    expect(result.status, result.output).not.toBe(0);
-    expect(result.output).toContain(`role=verified-main oid=${f.base}`);
-    expect(result.output).not.toContain("Requalifying prior-CI admission");
-    expect(() => f.git(["cat-file", "-e", f.state().mainAdvances[0]!])).toThrow();
-    expectNoDispatch(f);
-  });
-
-  it.each(["head", "rewind"])("refuses %s after materializing the captured tip", (fault) => {
-    const f = preExistingCandidate();
-    const state = f.state();
-    state.observations = [
-      {},
-      {},
-      {},
-      {},
-      { advanceMain: true },
-      fault === "head" ? { pr: { headRefOid: f.base } } : { main: f.base },
-    ];
-    f.save(state);
-    const result = f.adminPriorCi(f.path);
-    expect(result.error, result.output).toBeUndefined();
-    expect(result.status, result.output).not.toBe(0);
-    expect(result.output).toContain(
-      fault === "head"
-        ? "PR or main changed during observation"
-        : "both observed and verified main",
-    );
-    expect(f.git(["cat-file", "-t", f.state().mainAdvances[0]!])).toBe("commit");
-    expectNoDispatch(f);
-  });
-
-  it.each(["previous-main", "reread-main", "verified-main"] as const)(
-    "identifies a failed %s probe with a bounded redacted diagnostic",
-    (role) => {
-      const f = preExistingCandidate();
+    const secret = "fixture-sensitive-token-not-a-real-credential";
+    let probe: { role: string; oid: string; exit: number } | undefined;
+    if (fault === "stderr" || fault === "exit") {
+      state.priorCi.localOnlyQueryFault = fault;
+      state.observations = [{}, {}, {}, {}, { advanceMain: true }];
+    } else if (fault === "verified pin") {
+      const previous = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
+      state.priorCi.localOnlyFailureOid = f.base;
+      state.priorCi.localOnlyFailureStderr = "fatal: fixture verified pin is unreadable";
+      state.observations = [{}, {}, {}, { main: previous }, { advanceMain: true }];
+      probe = { role: "verified-main", oid: f.base, exit: 128 };
+    } else if (fault === "unsupported Git" || fault === "oversized stderr") {
+      const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
+      state.observations = [{}, {}, {}, {}, { main }];
+      if (fault === "unsupported Git") {
+        state.priorCi.unsupportedNoLazy = true;
+        probe = { role: "previous-main", oid: f.base, exit: 129 };
+      } else {
+        state.priorCi.localOnlyFailureOid = main;
+        state.priorCi.localOnlyFailureStderr = "Authorization: Bearer " + "sensitive".repeat(2_000);
+        probe = { role: "reread-main", oid: main, exit: 128 };
+      }
+    } else {
       const previous = f.commit(f.tree("before\n", "first advance\n"), [f.base]);
       const main = f.commit(f.tree("before\n", "second advance\n"), [previous]);
-      const failed = role === "previous-main" ? previous : role === "reread-main" ? main : f.base;
-      const secret = "fixture-sensitive-token-not-a-real-credential";
-      if (role === "previous-main") {
+      const failed = fault === "previous-main" ? previous : fault === "reread-main" ? main : f.base;
+      if (fault === "previous-main") {
         // Failure reporting must not load the PR checkout's configuration.
         writeFileSync(join(f.worktree, "tsconfig.json"), "{ invalid caller tsconfig");
       }
-      const state = f.state();
       state.observations = [{}, {}, {}, { main: previous }, { main }];
       state.priorCi.localOnlyFailureOid = failed;
       state.priorCi.localOnlyFailureStderr =
         `fatal: fixture-local object unavailable\nAuthorization: Bearer ${secret}\n` +
         "diagnostic detail ".repeat(200);
       state.priorCi.revokeAdminOnMainFetch = true;
-      f.save(state);
-
-      const result = f.adminPriorCi(f.path);
-
-      expect(result.status, result.output).not.toBe(0);
-      expect(result.output).toContain(`role=${role} oid=${failed} git-exit=128`);
+      probe = { role: fault, oid: failed, exit: 128 };
+    }
+    f.save(state);
+    const result = refuse("final prior-CI main cannot be verified with local-only Git");
+    if (probe) {
+      expect(result.output).toContain(`role=${probe.role} oid=${probe.oid} git-exit=${probe.exit}`);
+    }
+    if (fault === "stderr" || fault === "exit" || fault === "verified pin") {
+      expect(result.error, result.output).toBeUndefined();
+      expect(result.output).not.toContain("Requalifying prior-CI admission");
+      expect(() => f.git(["cat-file", "-e", f.state().mainAdvances[0]!])).toThrow();
+    }
+    if (fault.endsWith("-main")) {
       expect(result.output).toContain("fatal: fixture-local object unavailable");
       expect(result.output).not.toContain(secret);
-      const diagnostic = result.output.split("\n").find((line) => line.includes(`role=${role}`));
+      const diagnostic = result.output.split("\n").find((line) => line.includes(`role=${fault}`));
       expect(diagnostic?.length).toBeLessThan(1_024);
       expect(f.state().priorCi.adminRevokedDuringMainFetch).toBe(false);
       expect(f.state().priorCi.membership).toBe("admin");
-      expectNoDispatch(f);
-    },
-  );
-
-  it("omits oversized Git stderr instead of clipping an unredacted credential", () => {
-    const f = preExistingCandidate();
-    const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
-    const state = f.state();
-    state.observations = [{}, {}, {}, {}, { main }];
-    state.priorCi.localOnlyFailureOid = main;
-    state.priorCi.localOnlyFailureStderr = "Authorization: Bearer " + "sensitive".repeat(2_000);
-    f.save(state);
-
-    const result = f.adminPriorCi(f.path);
-
-    expect(result.status, result.output).not.toBe(0);
-    expect(result.output).toContain(`role=reread-main oid=${main} git-exit=128`);
-    expect(result.output).toContain("Git diagnostic exceeded 8192 bytes");
-    expect(result.output).not.toContain("sensitive");
-    expectNoDispatch(f);
+    }
+    if (fault === "oversized stderr") {
+      expect(result.output).toContain("Git diagnostic exceeded 8192 bytes");
+      expect(result.output).not.toContain("sensitive");
+    }
+  });
+  it("lands after four main advances", () => {
+    configureMerge(f, {
+      graphqlMergeProjection: { mergeStateStatus: "UNKNOWN" },
+      restObservations: [
+        ...unchanged(3),
+        ...Array.from({ length: 4 }, () => ({ advanceMain: true })),
+        {},
+      ],
+    });
+    admit();
+    expect(f.state().mainAdvances).toHaveLength(4);
+    expect(f.git(["rev-parse", `${f.record().landed}^1`])).toBe(f.state().mainAdvances.at(-1));
   });
 
+  it("bounds advancing-main authority before intent", () => {
+    configureMerge(f, {
+      graphqlMergeProjection: { mergeStateStatus: "UNKNOWN" },
+      restObservations: [{}, {}, {}, { advanceMain: true, advanceSeconds: 901 }],
+    });
+    const result = refuse("900s/32-round limit");
+    expect(result.error, result.output).toBeUndefined();
+  });
   it.each([
     "settlement",
     "final verification",
     "GraphQL recalculation",
     "final GraphQL recalculation",
-  ])("lands the pinned head when main advances during %s", (stage) => {
-    const f = preExistingCandidate();
-    const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
+    "remote-only final main",
+    "remote-only recalculation",
+    "remote-only delayed recalculation",
+    "final known status",
+  ] as const)("lands pinned head after %s advance", (stage) => {
+    const remoteOnly = stage.startsWith("remote-only");
+    const recalculating = stage.includes("recalculation");
+    const delayedRecalculation = stage === "remote-only delayed recalculation";
+    let main = remoteOnly ? f.base : f.commit(f.tree("before\n", "advanced\n"), [f.base]);
     const state = f.state();
+    const settled = {
+      mergeable: "MERGEABLE",
+      mergeStateStatus: stage === "final known status" ? "CLEAN" : "BLOCKED",
+    };
+    const final = remoteOnly || stage.startsWith("final ");
     state.observations =
       stage === "settlement"
-        ? [{ pr: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" } }]
-        : stage === "GraphQL recalculation" || stage === "final GraphQL recalculation"
-          ? [
-              ...Array.from({ length: stage === "GraphQL recalculation" ? 1 : 4 }, () => ({})),
-              { main, pr: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" } },
-              { pr: { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" } },
-            ]
-          : [{}, {}, {}, {}, { main }];
+        ? [{ pr: unknown }]
+        : [
+            ...unchanged(final ? 4 : 1),
+            remoteOnly
+              ? {
+                  advanceMain: true,
+                  ...(recalculating && !delayedRecalculation ? { pr: unknown } : {}),
+                }
+              : {
+                  main,
+                  ...(recalculating
+                    ? { pr: unknown }
+                    : stage === "final known status"
+                      ? { pr: settled }
+                      : {}),
+                },
+            ...(recalculating ? [...(remoteOnly ? [{ pr: unknown }] : []), { pr: settled }] : []),
+          ];
     if (stage === "settlement") {
-      state.restObservation = {
-        main,
-        pr: { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" },
-      };
+      state.projectionSettlement = { seconds: 2, pr: settled };
+      state.restObservation = { main, pr: settled };
     }
     f.save(state);
-
-    const result = f.adminPriorCi(f.path);
-
-    expect(result.status, result.output).toBe(0);
-    if (stage === "settlement") {
-      expect(f.state()).toMatchObject({
-        observationReads: 1,
-        observations: [],
-        restObservation: null,
-        restObservationAppliedAt: 0,
+    admit();
+    if (remoteOnly) {
+      expect(f.state().mainAdvances).toHaveLength(1);
+      main = f.state().mainAdvances[0]!;
+      expect(f.git(["cat-file", "-t", main])).toBe("commit");
+      expect(f.record()).toMatchObject({ accepted: true });
+      expect(f.state().settlementSleeps).toEqual(recalculating ? [2] : []);
+    } else {
+      if (stage === "settlement") {
+        expect(f.state()).toMatchObject({
+          observationReads: 1,
+          observations: [],
+          restObservation: null,
+          restObservationAppliedAt: 0,
+        });
+      }
+      if (recalculating) {
+        expect(f.state().settlementSleeps).toEqual([2]);
+        expect(f.state().restMainReads).toBe(0);
+      }
+      expect(f.state().restMergePayload).toMatchObject({ sha: f.head, merge_method: "squash" });
+      expect(f.record()).toMatchObject({
+        main: stage === "settlement" ? main : f.base,
+        priorCiAdmin: {
+          testedMerge: f.evidence.testedMerge,
+          securityReview: { sourceSha: f.base },
+        },
       });
+      expect(f.git(["show", `${f.record().landed}:owner.txt`])).toBe("resolved conflict");
+      expect(f.git(["show", `${f.record().landed}:sibling.txt`])).toBe("advanced");
     }
-    if (stage === "GraphQL recalculation" || stage === "final GraphQL recalculation") {
-      expect(f.state().settlementSleeps).toEqual([1]);
-      expect(f.state().restMainReads).toBe(0);
-    }
-    expect(f.state().mutations).toBe(1);
-    expect(f.state().restMergePayload).toMatchObject({ sha: f.head, merge_method: "squash" });
-    expect(f.record()).toMatchObject({
-      phase: "complete",
-      head: f.head,
-      main: stage === "settlement" ? main : f.base,
-      priorCiAdmin: {
-        testedMerge: f.evidence.testedMerge,
-        securityReview: { sourceSha: f.base },
-      },
+    expect(f.git(["rev-parse", `${f.record().landed}^1`])).toBe(main);
+  });
+
+  it("waits for late recalculation after main advances", () => {
+    const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
+    configureMerge(f, {
+      observations: [
+        {},
+        { main, pr: unknown },
+        ...Array.from({ length: 3 }, () => ({ pr: unknown })),
+        { pr: ready },
+      ],
     });
-    expect(f.git(["rev-parse", `${f.record().landed}^`])).toBe(main);
-    expect(f.git(["show", `${f.record().landed}:owner.txt`])).toBe("resolved conflict");
-    expect(f.git(["show", `${f.record().landed}:sibling.txt`])).toBe("advanced");
-    expect(result.output).toContain(
-      stage === "settlement"
-        ? "Admin landing parent audit matched"
-        : "Admin landing parent audit drift",
-    );
+
+    admit();
+    expect(f.state().settlementSleeps).toEqual([2, 4, 8, 8]);
+  });
+
+  it("refuses a final GraphQL fork from the preliminary observed tip", () => {
+    const first = f.commit(f.tree("before\n", "first advance\n"), [f.base]);
+    const fork = f.commit(f.tree("before\n", "forked advance\n"), [f.base]);
+    configureMerge(f, {
+      observations: [...unchanged(3), { main: first }, { main: fork }],
+    });
+
+    refuse("both observed and verified main");
   });
 
   it.each([
     ["same main", "PR or main changed during observation"],
-    ["persistent", "mergeability recalculation remained UNKNOWN after 3 observations"],
+    ["persistent", "mergeability recalculation"],
     ["conflict", "PR or main changed during observation"],
-    ["known status", "PR or main changed during observation"],
     ["head", "PR or main changed during observation"],
     ["rewind", "both observed and verified main"],
     ["final revoked admin", "writer must be an active organization admin"],
     ["final revoked review", "current enforced reviews must be satisfied"],
   ] as const)("refuses %s during GraphQL recalculation", (fault, diagnostic) => {
-    const f = preExistingCandidate();
     const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
     const state = f.state();
     state.priorCi.revokeAdminOnMainFetch = true;
+    if (fault === "persistent") {
+      state.clockStep = 20;
+    }
     state.observations = [
-      ...Array.from({ length: fault.startsWith("final ") ? 4 : 1 }, () => ({})),
+      ...unchanged(fault.startsWith("final ") ? 4 : 1),
       {
         main: fault === "same main" ? f.base : main,
-        pr: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" },
+        pr: unknown,
       },
       ...(fault === "persistent" || fault === "same main"
         ? []
@@ -307,7 +400,7 @@ describePosix("prior-CI forward main admission", () => {
               ...(fault === "rewind" ? { main: f.base } : {}),
               pr: {
                 mergeable: fault === "conflict" ? "CONFLICTING" : "MERGEABLE",
-                mergeStateStatus: fault === "known status" ? "CLEAN" : "BLOCKED",
+                mergeStateStatus: "BLOCKED",
                 ...(fault === "head" ? { headRefOid: f.base } : {}),
               },
               ...(fault === "final revoked admin" ? { priorCi: { membership: "member" } } : {}),
@@ -319,46 +412,29 @@ describePosix("prior-CI forward main admission", () => {
     ];
     f.save(state);
 
-    const result = f.adminPriorCi(f.path);
-
-    expect(result.status, result.output).not.toBe(0);
-    expect(result.output).toContain(diagnostic);
-    expect(f.state().settlementSleeps).toEqual(
-      fault === "same main" ? [] : fault === "persistent" ? [1, 2] : [1],
-    );
+    const result = refuse(diagnostic);
+    if (fault === "persistent") {
+      expect(result.output).toContain("60s");
+      expect(f.state().settlementSleeps.every((delay) => delay <= 8)).toBe(true);
+    } else {
+      expect(f.state().settlementSleeps).toEqual(fault === "same main" ? [] : [2]);
+    }
     expect(f.state().priorCi.adminRevokedDuringMainFetch).toBe(false);
-    expectNoDispatch(f);
   });
 
-  it.each(["conflict", "empty change"] as const)(
-    "checks first-observation %s composition",
-    (fault) => {
-      const f = preExistingCandidate();
-      const main = f.commit(
-        f.tree(fault === "conflict" ? "conflicting main\n" : "resolved conflict\n"),
-        [f.base],
-      );
-      f.save({ ...f.state(), observations: [{ main }] });
-
-      const result = f.adminPriorCi(f.path);
-
-      expect(result.status, result.output).not.toBe(0);
-      expect(result.output).toContain(
-        fault === "conflict" ? "cannot establish prepared-head merge tree" : "NO NET CHANGE",
-      );
-      expectNoDispatch(f);
-    },
-  );
-
   it.each([
-    ["rewritten verified main", "both observed and verified main"],
-    ["rewritten observed main", "both observed and verified main"],
-    ["conflict", "cannot establish prepared-head merge tree"],
-    ["empty change", "NO NET CHANGE"],
-    ["unavailable main", "cannot fetch authoritative main"],
-  ])("refuses %s before intent or merge I/O", (fault, message) => {
-    const f = preExistingCandidate();
+    ["conflict", "first observation", "cannot establish prepared-head merge tree"],
+    ["empty change", "first observation", "NO NET CHANGE"],
+    ["rewritten verified main", "reread", "both observed and verified main"],
+    ["rewritten observed main", "reread", "both observed and verified main"],
+    ["conflict", "reread", "cannot establish prepared-head merge tree"],
+    ["empty change", "reread", "NO NET CHANGE"],
+    ["unavailable main", "reread", "cannot fetch authoritative main"],
+    ["strict", "reread", "OPENCLAW_PR_STRICT_DRIFT=1"],
+    ["strict", "first observation", "OPENCLAW_PR_STRICT_DRIFT=1"],
+  ] as const)("refuses %s at %s before dispatch", (fault, stage, message) => {
     const state = f.state();
+    state.strictDrift = fault === "strict";
     const main = f.commit(
       f.tree(
         fault === "conflict"
@@ -371,7 +447,7 @@ describePosix("prior-CI forward main admission", () => {
       "Different main\n",
     );
     state.observations = [{}, { main }];
-    if (fault === "rewritten verified main") {
+    if (stage === "first observation" || fault === "rewritten verified main") {
       state.observations = [{ main }];
     }
     if (fault === "rewritten observed main") {
@@ -383,100 +459,118 @@ describePosix("prior-CI forward main admission", () => {
     }
     f.save(state);
 
-    const result = f.adminPriorCi(f.path);
-
-    expect(result.status, result.output).not.toBe(0);
-    expect(result.output).toContain(message);
-    expectNoDispatch(f);
+    refuse(message);
   });
 
-  it.each(
-    (
+  it.each([
+    ...(
       [
         ["admin", "writer must be an active organization admin"],
         ["review", "current enforced reviews must be satisfied"],
         ["policy", "evidence or authority changed during admission"],
         ["security source", "publisher source differs from the current owner"],
         ["evidence", "operator evidence changed while reading authority"],
+        ["new failing suite", "currently effective CI gate"],
       ] as const
     ).flatMap(([fault, message]) =>
-      [false, true].map((remoteOnly) => [fault, remoteOnly, message] as const),
+      (["reread", "rematerialization"] as const).map((stage) => [fault, stage, message] as const),
     ),
-  )("revalidates %s after main advance (remote-only: %s)", (fault, remoteOnly, message) => {
-    const f = preExistingCandidate();
+    ["admin", "pre-final fetch", "writer must be an active organization admin"],
+  ] as const)("revalidates %s during %s", (fault, stage, message) => {
     const state = f.state();
     const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
-    const priorCi: Partial<typeof state.priorCi> = {};
-    if (fault === "admin") {
-      priorCi.membership = "member";
+    const faults: Record<string, Partial<typeof state.priorCi>> = {
+      admin: { membership: "member" },
+      review: { reviewDecision: "REVIEW_REQUIRED" },
+      policy: { reviewCount: 2 },
+      "security source": {
+        security: { ...state.priorCi.security, fault: "changed-publisher-source" },
+      },
+      evidence: { mutateEvidence: true },
+    };
+    const priorCi = faults[fault] ?? {};
+    state.observations =
+      stage === "pre-final fetch"
+        ? [{}, {}, {}, { advanceMain: true }]
+        : stage === "rematerialization"
+          ? [{}, {}, {}, {}, { advanceMain: true }, { priorCi }]
+          : [{}, { main, priorCi }];
+    if (fault === "new failing suite") {
+      state.observations.at(-1)!.restUnseenSuite = "new-gate";
     }
-    if (fault === "review") {
-      priorCi.reviewDecision = "REVIEW_REQUIRED";
-    }
-    if (fault === "policy") {
-      priorCi.reviewCount = 2;
-    }
-    if (fault === "security source") {
-      priorCi.security = { ...state.priorCi.security, fault: "changed-publisher-source" };
-    }
-    if (fault === "evidence") {
-      priorCi.mutateEvidence = true;
-    }
-    state.observations = remoteOnly
-      ? [{}, {}, {}, {}, { advanceMain: true }, { priorCi }]
-      : [{}, { main, priorCi }];
-    if (remoteOnly && fault === "admin") {
+    if (stage !== "reread" && fault === "admin") {
       state.priorCi.revokeAdminOnMainFetch = true;
     }
     f.save(state);
 
-    const result = f.adminPriorCi(f.path);
+    const result = refuse(message);
     expect(result.error, result.output).toBeUndefined();
-
-    expect(result.status, result.output).not.toBe(0);
-    expect(result.output).toContain(message);
-    if (remoteOnly) {
+    if (stage === "rematerialization") {
       expect(f.git(["cat-file", "-t", f.state().mainAdvances[0]!])).toBe("commit");
     }
-    expectNoDispatch(f);
+    if (stage === "pre-final fetch") {
+      expect(f.state().priorCi.adminRevokedDuringMainFetch, result.output).toBe(true);
+      expect(f.state().priorCi.membership).toBe("member");
+    }
   });
 
-  it.each(["head", "status"])("does not normalize changed PR %s with main", (fact) => {
-    const f = preExistingCandidate();
-    const state = f.state();
-    const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
-    state.observations = [
-      {},
-      { main, pr: fact === "head" ? { headRefOid: f.base } : { mergeStateStatus: "BEHIND" } },
-    ];
-    f.save(state);
-    const result = f.adminPriorCi(f.path);
-    expect(result.status, result.output).not.toBe(0);
-    expect(result.output).toContain("PR or main changed during observation");
-    expectNoDispatch(f);
+  it.each(["head", "rewind", "rewind UNKNOWN"])(
+    "refuses changed %s during rematerialization",
+    (fault) => {
+      const state = f.state();
+      state.observations = [
+        ...unchanged(4),
+        { advanceMain: true },
+        fault === "head"
+          ? { pr: { headRefOid: f.base } }
+          : { main: f.base, ...(fault === "rewind UNKNOWN" ? { pr: unknown } : {}) },
+      ];
+      f.save(state);
+      const result = refuse(
+        fault === "rewind"
+          ? "both observed and verified main"
+          : "PR or main changed during observation",
+      );
+      expect(result.error, result.output).toBeUndefined();
+      expect(f.git(["cat-file", "-t", f.state().mainAdvances[0]!])).toBe("commit");
+    },
+  );
+  it("refuses changed publisher source on new main", () => {
+    const blob = f.git(["hash-object", "-w", "--stdin"], "changed protected publisher source\n");
+    const replace = (tree: string, name: string, entry: string) =>
+      f.git(
+        ["mktree"],
+        [
+          ...f
+            .git(["ls-tree", tree])
+            .split("\n")
+            .filter((line) => !line.endsWith(`\t${name}`)),
+          entry,
+          "",
+        ].join("\n"),
+      );
+    const lib = replace(
+      `${f.base}:scripts/lib`,
+      "bounded-response.mjs",
+      `100644 blob ${blob}\tbounded-response.mjs`,
+    );
+    const scripts = replace(`${f.base}:scripts`, "lib", `040000 tree ${lib}\tlib`);
+    const tree = replace(f.base, "scripts", `040000 tree ${scripts}\tscripts`);
+    const main = f.commit(tree, [f.base]);
+    configureMerge(f, { observations: [{}, { main }] });
+
+    refuse("publisher source differs from the current owner");
   });
 
-  it("keeps Crabbox admin main stability strict", () => {
-    const f = fixture();
-    const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
-    f.save({ ...f.state(), admin: true, gates: "fail", observations: [{}, { main }] });
-    const result = f.run();
-    expect(result.status, result.output).not.toBe(0);
-    expect(result.output).toContain("PR or main changed during observation");
-    expect(f.state().mutations).toBe(0);
-    expect(() => f.record()).toThrow();
-  });
-
-  it("keeps retained prior-CI outcomes fenced after main moves", () => {
-    const f = preExistingCandidate();
-    f.save({ ...f.state(), mode: "unapplied" });
+  it("fences prior-CI outcomes after main moves", () => {
+    configureMerge(f, { mode: "unapplied" });
     f.adminPriorCi(f.path);
     expect(f.record()).toMatchObject({ phase: "intent", route: "admin" });
     expect(f.state().mutations).toBe(1);
-    expect(f.recover()).toBe(true);
+    expect(f.recover()).toBe(false);
     const outcome = f.git(["rev-parse", "refs/openclaw/pr-merge-outcomes/123"]);
     const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
-    f.save({ ...f.state(), observations: [{}, { main }] });
+    configureMerge(f, { observations: [{}, { main }] });
 
     const result = f.run();
 

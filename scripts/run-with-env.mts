@@ -9,9 +9,6 @@ const USAGE =
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 type ForwardedSignal = "SIGHUP" | "SIGINT" | "SIGTERM";
 
-/**
- * Detects help requests before the command separator.
- */
 export function isRunWithEnvHelpRequest(argv: readonly string[]) {
   for (const arg of argv) {
     if (arg === "--") {
@@ -24,9 +21,6 @@ export function isRunWithEnvHelpRequest(argv: readonly string[]) {
   return false;
 }
 
-/**
- * Parses KEY=value assignments and the command following --.
- */
 export function parseRunWithEnvArgs(argv: string[]) {
   const separatorIndex = argv.indexOf("--");
   if (separatorIndex <= 0 || separatorIndex === argv.length - 1) {
@@ -63,14 +57,8 @@ export function resolveSpawnCommand(
   const normalizedCommand = platform === "win32" ? command.toLowerCase() : command;
   const isNodeCommand =
     normalizedCommand === "node" || (platform === "win32" && normalizedCommand === "node.exe");
-  if (isNodeCommand) {
-    return {
-      command: execPath,
-      args,
-    };
-  }
   return {
-    command,
+    command: isNodeCommand ? execPath : command,
     args,
   };
 }
@@ -95,15 +83,9 @@ function main(argv: string[] = process.argv.slice(2)) {
   }
 
   let parsed: ReturnType<typeof parseRunWithEnvArgs>;
+  let forceKillDelayMs: number;
   try {
     parsed = parseRunWithEnvArgs(argv);
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exit(2);
-  }
-
-  let forceKillDelayMs;
-  try {
     forceKillDelayMs = resolveForceKillDelayMs();
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

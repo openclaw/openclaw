@@ -226,7 +226,7 @@ class GatewaySessionCustomHeadersTest {
         token = "shared-token",
         bootstrapToken = "never-http-bootstrap",
         password = null,
-        tls = tls?.let { GatewayTlsParams(required = true, expectedFingerprint = it.second, allowTOFU = false, stableId = endpoint.stableId) },
+        tls = tls?.let { GatewayTlsParams(expectedFingerprint = it.second) },
         options =
           GatewayConnectOptions(
             role = "operator",
@@ -270,6 +270,128 @@ class GatewaySessionCustomHeadersTest {
   }
 
   @Test
+  fun canonicalInboundPhotoUsesAuthenticatedAssistantMediaRouteAndImageBounds() =
+    runBlocking {
+      val connected = CompletableDeferred<Unit>()
+      val requests = ConcurrentLinkedQueue<RecordedRequest>()
+      val retiringRequest = CompletableDeferred<Unit>()
+      val releaseRetiringRequest = CountDownLatch(1)
+      val imageBytes = byteArrayOf(5, 6, 7, 8)
+      val trap = MockWebServer().apply { start() }
+      val server =
+        MockWebServer().apply {
+          dispatcher =
+            object : Dispatcher() {
+              override fun dispatch(request: RecordedRequest): MockResponse {
+                if (request.path == "/socket") {
+                  return MockResponse().withWebSocketUpgrade(
+                    object : WebSocketListener() {
+                      override fun onOpen(
+                        webSocket: WebSocket,
+                        response: Response,
+                      ) {
+                        webSocket.send(CONNECT_CHALLENGE_FRAME)
+                      }
+
+                      override fun onMessage(
+                        webSocket: WebSocket,
+                        text: String,
+                      ) {
+                        val frame = Json.parseToJsonElement(text).jsonObject
+                        if (frame["method"]?.jsonPrimitive?.content == "connect") {
+                          val id = frame.getValue("id").jsonPrimitive.content
+                          webSocket.send("""{"type":"res","id":"$id","ok":true,"payload":{"auth":{"deviceToken":"issued-device-token","role":"operator","scopes":["operator.read"]}}}""")
+                        }
+                      }
+                    },
+                  )
+                }
+                requests.add(request)
+                if (request.requestUrl?.queryParameter("source") == "media://inbound/retired.jpg") {
+                  retiringRequest.complete(Unit)
+                  check(releaseRetiringRequest.await(TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS))
+                  return MockResponse().setResponseCode(401)
+                }
+                if (request.getHeader("Authorization") != "Bearer issued-device-token") return MockResponse().setResponseCode(401)
+                return when (request.requestUrl?.queryParameter("source")) {
+                  "media://inbound/large.jpg" -> MockResponse().setHeader("Content-Type", "image/jpeg").setChunkedBody(Buffer().write(ByteArray(12 * 1024 * 1024 + 1)), 65_536)
+                  "media://inbound/redirect.jpg" -> MockResponse().setResponseCode(302).setHeader("Location", trap.url("/must-not-load"))
+                  else -> MockResponse().setHeader("Content-Type", "image/jpeg").setBody(Buffer().write(imageBytes))
+                }
+              }
+            }
+          start()
+        }
+      val sessionScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+      val endpoint = GatewayEndpoint.manual("127.0.0.1", server.port, tlsEnabled = false, contextPath = "/socket")
+      val session =
+        GatewaySession(
+          scope = sessionScope,
+          identityStore = testDeviceIdentityStore(RuntimeEnvironment.getApplication()),
+          deviceAuthStore = NoopDeviceAuthStore(),
+          onConnected = { connected.complete(Unit) },
+          onDisconnected = {},
+          onEvent = { _, _ -> },
+          customHeadersProvider = { error("Cleartext transport must not read custom headers") },
+        )
+      try {
+        session.connect(
+          endpoint = endpoint,
+          token = "shared-token",
+          bootstrapToken = null,
+          password = null,
+          tls = null,
+          options =
+            GatewayConnectOptions(
+              role = "operator",
+              scopes = listOf("operator.read"),
+              caps = emptyList(),
+              commands = emptyList(),
+              permissions = emptyMap(),
+              client = GatewayClientInfo("openclaw-android-test", "Android Test", "1.0.0-test", "android", "ui", "sent-image-test", "android", "test"),
+            ),
+        )
+        withTimeout(TEST_TIMEOUT_MS) { connected.await() }
+
+        val source = "media://inbound/photo---af3c4068.jpg"
+        val loaded = session.loadInboundImage(endpoint.stableId, null, "agent:main:node-1", "main", source)
+        assertArrayEquals(imageBytes, loaded?.bytes)
+        assertEquals("image/jpeg", loaded?.mimeType)
+        val request = requests.single()
+        assertEquals("/socket/__openclaw__/assistant-media", request.requestUrl?.encodedPath)
+        assertEquals(source, request.requestUrl?.queryParameter("source"))
+        assertEquals("agent:main:node-1", request.requestUrl?.queryParameter("sessionKey"))
+        assertEquals("main", request.requestUrl?.queryParameter("agentId"))
+        assertEquals("image/*", request.getHeader("Accept"))
+        assertArrayEquals(imageBytes, session.loadInboundImage(endpoint.stableId, "/ui", "main", null, source)?.bytes)
+        assertEquals("/ui/__openclaw__/assistant-media", requests.last().requestUrl?.encodedPath)
+        assertNull(session.loadInboundImage(endpoint.stableId, null, "main", null, "media://inbound/large.jpg"))
+        assertNull(session.loadInboundImage(endpoint.stableId, null, "main", null, "media://inbound/redirect.jpg"))
+        assertEquals(0, trap.requestCount)
+        val before = requests.size
+        assertNull(session.loadInboundImage(endpoint.stableId, null, "main", null, "media://inbound/.."))
+        assertNull(session.loadInboundImage("wrong-endpoint", null, "main", null, source))
+        assertEquals(before, requests.size)
+
+        val pendingImage =
+          async(Dispatchers.IO) {
+            runCatching { session.loadInboundImage(endpoint.stableId, null, "main", null, "media://inbound/retired.jpg") }.getOrNull()
+          }
+        withTimeout(TEST_TIMEOUT_MS) { retiringRequest.await() }
+        session.disconnect()
+        releaseRetiringRequest.countDown()
+        assertNull(withTimeout(TEST_TIMEOUT_MS) { pendingImage.await() })
+        assertEquals("A retired connection must not try the next read credential", before + 1, requests.size)
+      } finally {
+        releaseRetiringRequest.countDown()
+        session.disconnect()
+        sessionScope.cancel()
+        server.shutdown()
+        trap.shutdown()
+      }
+    }
+
+  @Test
   fun managedMediaDownload_usesArtifactTicketWithoutGatewayBearer() = runBlocking { assertManagedMediaDownload(contextPath = "") }
 
   @Test
@@ -299,6 +421,15 @@ class GatewaySessionCustomHeadersTest {
       val audioPath = "/api/chat/media/outgoing/main/$audioAttachmentId/full?mediaTicket=audio-ticket"
       val audioPlaybackPath = "$audioPath&playback=1"
       val audioBytes = byteArrayOf(5, 6, 7, 8)
+      val fileArtifactId = "artifact_managed_media_44444444-4444-4444-8444-444444444444"
+      val filePath = "/api/chat/media/outgoing/main/44444444-4444-4444-8444-444444444444/full?mediaTicket=file-ticket"
+      val fileBytes = "%PDF-1.7\nsynthetic document\n%%EOF".toByteArray()
+      val csvBytes = "name,value\nexample,42\n".toByteArray()
+      val csvData =
+        java.util.Base64
+          .getEncoder()
+          .encodeToString(csvBytes)
+      val artifactRequests = ConcurrentLinkedQueue<kotlinx.serialization.json.JsonObject>()
       val audioRequestCount = AtomicInteger()
       val mediaRequests = ConcurrentLinkedQueue<RecordedRequest>()
       val invalidMediaPaths =
@@ -310,11 +441,25 @@ class GatewaySessionCustomHeadersTest {
           "invalid-empty-ticket" to "${imagePath.substringBefore('?')}?mediaTicket=",
           "invalid-prefix" to "/other/path?mediaTicket=ticket",
         )
+      val redirectTrap =
+        MockWebServer().apply {
+          enqueue(MockResponse().setHeader("Content-Type", "application/pdf").setBody("unexpected redirect"))
+          start()
+        }
       val server =
         MockWebServer().apply {
           dispatcher =
             object : Dispatcher() {
               override fun dispatch(request: RecordedRequest): MockResponse {
+                if (request.path?.startsWith("$contextPath$filePath") == true) {
+                  mediaRequests.add(request)
+                  return when (request.requestUrl?.queryParameter("test")) {
+                    "redirect" -> MockResponse().setResponseCode(302).setHeader("Location", redirectTrap.url("/must-not-load"))
+                    "oversized" -> MockResponse().setHeader("Content-Type", "application/pdf").setHeader("Content-Length", 100L * 1024L * 1024L + 1L)
+                    "missing-mime" -> MockResponse().setBody(Buffer().write(fileBytes))
+                    else -> MockResponse().setHeader("Content-Type", "application/pdf").setChunkedBody(Buffer().write(fileBytes), 8)
+                  }
+                }
                 if (request.path == "$contextPath$imagePath") {
                   mediaRequests.add(request)
                   imageRequest.complete(request)
@@ -364,14 +509,31 @@ class GatewaySessionCustomHeadersTest {
                         }
 
                         "artifacts.download" -> {
+                          artifactRequests.add(frame.getValue("params").jsonObject)
                           val requestedArtifactId =
                             frame["params"]
                               ?.jsonObject
                               ?.get("artifactId")
                               ?.jsonPrimitive
                               ?.content
+                          val invalidFilePath = requestedArtifactId?.removePrefix("file-")?.let(invalidMediaPaths::get)
                           val invalidMediaPath = invalidMediaPaths[requestedArtifactId]
-                          if (invalidMediaPath != null) {
+                          if (requestedArtifactId == "inline-csv") {
+                            webSocket.send(
+                              """{"type":"res","id":"$id","ok":true,"payload":{"artifact":{"id":"inline-csv","type":"file","mimeType":"text/csv","download":{"mode":"bytes"}},"encoding":"base64","data":"$csvData"}}""",
+                            )
+                          } else if (requestedArtifactId == fileArtifactId || requestedArtifactId?.startsWith("file-") == true) {
+                            val path =
+                              invalidFilePath ?: when (requestedArtifactId) {
+                                "file-redirect" -> "$filePath&test=redirect"
+                                "file-oversized" -> "$filePath&test=oversized"
+                                "file-missing-mime" -> "$filePath&test=missing-mime"
+                                else -> filePath
+                              }
+                            webSocket.send(
+                              """{"type":"res","id":"$id","ok":true,"payload":{"artifact":{"id":"$requestedArtifactId","type":"file","mimeType":"application/pdf","download":{"mode":"url"}},"url":"$path"}}""",
+                            )
+                          } else if (invalidMediaPath != null) {
                             webSocket.send(
                               """{"type":"res","id":"$id","ok":true,"payload":{"artifact":{"id":"$requestedArtifactId","type":"video","mimeType":"video/mp4","download":{"mode":"url"}},"url":"$invalidMediaPath"}}""",
                             )
@@ -474,16 +636,49 @@ class GatewaySessionCustomHeadersTest {
         assertArrayEquals(audioBytes, audio.bytes)
         assertEquals(2, audioRequestCount.get())
 
+        val file =
+          session.loadMediaArtifact(stableId, "main", "main", fileArtifactId, GatewayMediaKind.File) as? GatewayLoadedMedia.Buffered
+        assertArrayEquals(fileBytes, file?.bytes)
+        assertEquals("application/pdf", file?.mimeType)
+        val fileRequest = mediaRequests.last()
+        assertEquals("$contextPath$filePath", fileRequest.path)
+        assertEquals("*/*", fileRequest.getHeader("Accept"))
+
         val validMediaRequestCount = mediaRequests.size
+        val csv =
+          session.loadMediaArtifact(stableId, "main", "main", "inline-csv", GatewayMediaKind.File) as? GatewayLoadedMedia.Buffered
+        assertArrayEquals(csvBytes, csv?.bytes)
+        assertEquals("text/csv", csv?.mimeType)
         for (artifactId in invalidMediaPaths.keys) {
           assertNull(session.loadMediaArtifact(stableId, "main", "main", artifactId, GatewayMediaKind.Video))
+          assertNull(session.loadMediaArtifact(stableId, "main", "main", "file-$artifactId", GatewayMediaKind.File))
+        }
+        // A file load must not inherit the old untyped image fallback or accept a different media kind.
+        assertNull(session.loadMediaArtifact(stableId, "main", "main", artifactId, GatewayMediaKind.File))
+        assertNull(session.loadMediaArtifact(stableId, "main", "main", videoArtifactId, GatewayMediaKind.File))
+        for (kind in listOf(GatewayMediaKind.Image, GatewayMediaKind.Audio, GatewayMediaKind.Video)) {
+          assertNull(session.loadMediaArtifact(stableId, "main", "main", fileArtifactId, kind))
         }
         assertEquals(validMediaRequestCount, mediaRequests.size)
+        if (contextPath.isEmpty()) {
+          for (id in listOf("file-redirect", "file-oversized", "file-missing-mime")) {
+            assertNull(session.loadMediaArtifact(stableId, "main", "main", id, GatewayMediaKind.File))
+          }
+          assertEquals(0, redirectTrap.requestCount)
+        }
+        assertTrue(
+          artifactRequests.all {
+            it["sessionKey"]?.jsonPrimitive?.content == "main" && it["agentId"]?.jsonPrimitive?.content == "main"
+          },
+        )
         assertTrue(mediaRequests.all { it.getHeader("Authorization") == null })
+        session.disconnectAndJoin()
+        assertNull(session.loadMediaArtifact(stableId, "main", "main", fileArtifactId, GatewayMediaKind.File))
       } finally {
         session.disconnectAndJoin()
         scope.cancel()
         server.shutdown()
+        redirectTrap.shutdown()
       }
     }
 
@@ -499,7 +694,6 @@ class GatewaySessionCustomHeadersTest {
         .Builder()
         .addInterceptor(
           GatewayPreparingPlaybackInterceptor(
-            policy = GatewayPlaybackRetryPolicy(maxElapsedMs = 100L, initialDelayMs = 0L, maxDelayMs = 0L),
             nowMs = { nowMs++ },
             sleepMs = {},
           ),
@@ -537,9 +731,8 @@ class GatewaySessionCustomHeadersTest {
         .Builder()
         .addInterceptor(
           GatewayPreparingPlaybackInterceptor(
-            policy = GatewayPlaybackRetryPolicy(maxElapsedMs = 2L, initialDelayMs = 1L, maxDelayMs = 1L),
             nowMs = { nowMs },
-            sleepMs = { delayMs -> nowMs += delayMs + 1L },
+            sleepMs = { nowMs = 120_001L },
           ),
         ).build()
 
@@ -563,7 +756,7 @@ class GatewaySessionCustomHeadersTest {
     val prefs = SecurePrefs(app, securePrefsOverride = securePrefsBacking)
     val stableId = "manual|gateway.example|443"
     val endpoint = GatewayEndpoint.manual(host = "gateway.example", port = 443)
-    val tls = GatewayTlsParams(required = true, expectedFingerprint = "aa".repeat(32), allowTOFU = false, stableId = stableId)
+    val tls = GatewayTlsParams(expectedFingerprint = "aa".repeat(32))
 
     prefs.saveGatewayCustomHeaders(stableId, mapOf("CF-Access-Client-Id" to "client-id"))
     securePrefsBacking
@@ -1235,7 +1428,6 @@ class GatewaySessionCustomHeadersTest {
             .newBuilder()
             .addInterceptor(
               GatewayPreparingPlaybackInterceptor(
-                policy = GatewayPlaybackRetryPolicy(initialDelayMs = 1),
                 sleepMs = { valid.set(false) },
               ),
             ).build()
@@ -1312,7 +1504,7 @@ class GatewaySessionCustomHeadersTest {
           permissions = emptyMap(),
           client = GatewayClientInfo("openclaw-android-test", "Android Test", "test", "android", "node", "test", "android", "test"),
         ),
-      tls = GatewayTlsParams(required = true, expectedFingerprint = "aa".repeat(32), allowTOFU = false, stableId = endpoint.stableId),
+      tls = GatewayTlsParams(expectedFingerprint = "aa".repeat(32)),
     )
   }
 

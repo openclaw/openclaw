@@ -47,11 +47,53 @@ that supervise the Gateway as a child process, see
   the gateway closes or drops the frame. These events carry `surface`, byte
   sizes, limits, and a safe reason code, never message bodies, attachment
   contents, raw frame bytes, tokens, cookies, or secrets.
-- The Gateway does not negotiate `permessage-deflate`. Browsers can compress
-  even tiny requests when the extension is enabled; serial decompression then
-  delays each request behind busy event-loop turns before handler scheduling.
-  Uncompressed frames preserve responsive request bursts at the cost of more
-  bandwidth for large histories and rosters. Payload limits are unchanged.
+- The Gateway offers `permessage-deflate` to remote clients, with context
+  takeover disabled in both directions. Direct-local connections skip
+  compression to avoid extra RPC latency. Trusted reverse proxies and managed
+  Tailscale ingress retain compression even when their Gateway-side socket is
+  loopback. Plain TCP tunnels without proxy attribution appear direct-local
+  and also skip compression. Peers that negotiate it (browsers, `ws` clients,
+  Foundation, OkHttp) receive frames of 1 KiB and up compressed; smaller session
+  and tool updates stay raw. Browsers compress every request; the Gateway
+  inflates and deflates synchronously instead of through background zlib
+  streams, so request bursts reach handler scheduling together, as uncompressed
+  frames do. Large shared payloads are compressed once and reused across
+  recipients; worker-produced history is compressed off the Gateway thread.
+  Peers that do not offer the extension are unaffected. Payload limits apply to
+  the inflated size.
+
+### Compression threshold
+
+The 1 KiB threshold balances payload savings against synchronous deflate CPU at
+observed event rates. A synthetic corpus of 1,805 current producer frames
+(4,340,581 raw bytes), including session-row snapshots and deltas, presence resets
+and deltas, and agent, tool, observer, and chat events, produced these results
+with the shared-context level-1 codec and no context takeover:
+
+| Threshold | Wire payload bytes | Median main-thread CPU ms / 1,000 frames |
+| --------- | -----------------: | ---------------------------------------: |
+| 256 B     |          1,357,907 |                                   21.884 |
+| 512 B     |          1,402,623 |                                   18.019 |
+| **1 KiB** |      **1,464,046** |                               **16.986** |
+| 2 KiB     |          2,334,915 |                                    8.011 |
+| 4 KiB     |          3,078,930 |                                    4.002 |
+
+At 1 KiB, this mix uses 52.45% fewer payload bytes than at 4 KiB, compared with
+24.16% fewer at 2 KiB. The extra 12.984 ms of CPU per 1,000 frames costs about
+0.32 ms/s at the observed aggregate rate of 25 event frames/s (about 180,000 over
+two hours), or 1.30 ms/s at a swarm peak of 100 frames/s: roughly 0.03–0.13% of
+one core. Below 1 KiB, savings flatten: 512 B saves only another 61,423 bytes
+(4.20%) because smaller frames compress less effectively without context
+takeover. The threshold decision uses cost at these event rates rather than a
+fixed CPU budget per 1,000 frames.
+
+Measurements used an Apple M3 Ultra with Node 26.12.0, three warm-ups, and eight
+rotating measured rounds. Fresh segment identities prevented compressed-segment
+cache reuse from hiding deflate work. Corpus frequencies and text are synthetic;
+these savings are not a production egress forecast. Wire payload bytes exclude
+WebSocket, TLS, and TCP headers. See [Prometheus metrics](/gateway/prometheus) for
+per-event wire-byte counters and raw frame-size distributions that can validate
+the mix on a running Gateway.
 
 Frame shapes:
 
@@ -59,7 +101,28 @@ Frame shapes:
 - Response: `{type:"res", id, ok, payload|error}`
 - Event: `{type:"event", event, payload, seq?, stateVersion?, recipientProfileId?}`
 
-Live text uses append deltas after an initial recipient snapshot. An outer event
+Handler failures return a typed `UNAVAILABLE` response for the affected request
+and leave a healthy socket open. This includes connect preparation failures;
+a client whose connect failed must still complete a successful handshake before
+using the connection as an established session. An already admitted operator
+connection can continue to serve recovery RPCs even if its hello snapshot failed.
+Failures after hello delivery are logged without sending a second connect response.
+Malformed JSON closes with code `1007` and reason `invalid JSON`; handshake and
+authentication policy violations use their explicit policy close codes and reasons.
+A failed hello transport write closes with `1011` and reason
+`gateway hello delivery failed`.
+
+Live text uses append deltas after an initial recipient snapshot. The
+`chat.history` field `inFlightRun.text` restores only the current run's unpersisted
+assistant tail. Silent-reply suppression uses the full available source; the tail keeps existing directive and media normalization without being classified as a silent reply again. If the cap evicts source context, retained tail text stays visible conservatively. Cumulative snapshots or replacements that restore text evicted by the live buffer cap may redisplay committed text when ownership is unknown, preserving unsaved output.
+When durable history or a keyed
+commentary item takes ownership of live text, the Gateway sends an existing
+`replace: true` frame before subsequent append deltas. Terminal result snapshots
+retain their complete result in `message.content`. A buffer-backed terminal can
+also supply the existing `message.openclawDisplayContent` projection: the same
+unpersisted tail finalized for display, including an explicitly empty tail and
+any Canvas blocks. The Control UI applies that projection before storing its
+live view; delivery consumers retain the complete content. An outer event
 sequence gap means a client may have lost part of that baseline: retire the
 connection and reconnect before applying more deltas. If the frame revealing the
 gap is a `chat` final, aborted, or error event, deliver its authoritative terminal
@@ -69,6 +132,26 @@ Renew session subscriptions
 after reconnect; the Gateway sends a complete snapshot with the next text frame
 for each observed run. Run-local payload sequences can skip numbers because text
 is paced and coalesced; they are not the outer connection sequence.
+
+Canonical `agent` events with `stream: "item"` and `data.kind: "preamble"`
+include optional `preamble` metadata. When the item replaces a live preview,
+`preamble.retainedText` supplies the producer's remaining answer projection,
+including an empty string when no answer prefix remains. An empty `preamble`
+object means this event carries no new retirement projection. Earlier preview
+credit can still cover later item IDs and completion echoes. Append-only clients
+can preserve a preview they already delivered, carry its credit across those
+identities, and rebase their final-answer state. Chat and raw assistant
+frames are paced independently; their arrival order and payload sequence numbers
+are not a reclassification identity. Older clients can ignore this additive
+metadata. ACP commentary reconciliation requires an updated Gateway and bridge.
+
+Retirement uses assistant occurrence identity, never text-prefix matching.
+Producers correlate live occurrences with committed transcript idempotency keys
+or the host's exact source receipts. Native harnesses that persist part of a
+still-streaming item retain its text-merge `itemId` and separately identify each
+captured interval with `occurrenceId`. Unidentified text remains in the
+live tail until it gains an identity-bearing commit or the run terminates;
+equal durable text alone cannot hide it.
 
 Clients that share one connection among several views must keep reconstruction
 with their local stream owner. A new local listener may join after the wire
@@ -90,20 +173,32 @@ Authenticated operator requests share a bounded queue for starting RPC handlers.
 Ordinary requests have both aggregate and per-connection waiting limits, so
 concurrent Control UI setup can queue without giving one connection the entire
 request allowance. The aggregate serialized-byte bound still applies.
-Small `sessions.messages.subscribe` requests without approval replay and
+Small `sessions.messages.subscribe` requests without approval replay or initial history and
 `sessions.messages.unsubscribe` requests have separate bounded waiting capacity,
-including a per-connection limit. They keep the same FIFO order and yielding
-budget as other requests. Roster snapshots and approval replay retain the ordinary
-request budget.
-Session-list snapshots, catalog reads, and message subscriptions with approval
-replay share four preparation slots. A slot remains occupied until its request
-settles, and each start yields to ready socket I/O. WebSocket handshakes bypass
-the request queue, so reconnecting tabs cannot start an unbounded replay wave
-ahead of other clients' handshakes. Waiting requests retain FIFO order and the
-existing queue limits.
+including a per-connection limit. All requests share the same yielding budget.
+Roster subscriptions requesting a snapshot, catalog reads, and message subscriptions with approval
+replay or initial history share four preparation slots. A slot remains occupied until its request
+settles, and each start yields to ready socket I/O. A request waiting for a
+preparation slot stays in the bounded queue while eligible requests start:
+Event-only `sessions.subscribe` calls do not reserve preparation slots. A waiting
+`models.list` read still needs a preparation slot, but does not block later
+requests on its connection. Snapshot and approval subscriptions keep their
+ordering barrier for later mutations and unsubscribe requests.
+Independent reads such as `chat.history`, `sessions.list`, `sessions.resolve`,
+`sessions.describe`, `board.get`, `users.list`, `agents.list`, `agent.identity.get`,
+`plugins.controlUi.list`, and `workboard.boards.list` can pass waiting preparations,
+as can ordinary requests on other connections. Other starts preserve FIFO order within
+each connection, including subscriptions and their later unsubscribe requests.
+WebSocket handshakes bypass the request queue, so reconnecting tabs cannot start
+an unbounded replay wave ahead of other clients' handshakes.
 When waiting capacity is exhausted, the Gateway returns retryable `UNAVAILABLE`
-before the method runs; retry within the request's budget. Started requests
-complete concurrently, so responses can arrive out of order.
+before the method runs; retry within the request's budget. Starts still waiting
+after 30 seconds also return retryable `UNAVAILABLE`, with
+`details.reason: "request-start-timeout"`. The deadline runs when the event loop
+can next make progress; it does not interrupt an already-started handler.
+Gateway RPC queue-wait diagnostics include the entire wait, including preparation
+capacity and timed-out starts. Started requests complete concurrently, so
+responses can arrive out of order.
 
 During cooperative suspension, identity reads (`agent.identity.get`) wait in the
 shared browser/CLI client for `gateway.suspension` with phase `accepting`. A
@@ -140,6 +235,9 @@ HTTP scope failures mirror the `MISSING_SCOPE` object under `error.details` and
 use HTTP status `403`.
 
 Side-effecting methods require idempotency keys (see schema).
+For `chat.send`, reconnect retries preserve the original submission key;
+recorded user messages and input receipts prevent duplicate dispatch even after
+cache expiry or restart. See [chat submission idempotency](/gateway/protocol/rpc-session-control).
 
 ### Profile binding
 
@@ -150,7 +248,7 @@ unbound action. Requests that omit `expectedProfileId` retain existing behavior.
 
 `expectedProfileId` is an optional opaque string of 1 to 128 characters on an
 authenticated request frame. The Gateway compares it exactly with the current
-canonical profile ID of the authenticated principal. It does not trim, fold
+primary profile ID of the authenticated principal. It does not trim, fold
 case, or follow merge aliases on the expected value. Obtain the ID from
 `users.self`; a Gateway URL, account label, agent ID, or session key is not a
 profile ID. A missing authenticated profile cannot satisfy the precondition.
@@ -173,7 +271,7 @@ the earlier outcome before retrying uncertain work. Ordinary socket disconnects
 do not cancel already-accepted work.
 
 On authenticated operator broadcasts, optional `recipientProfileId` identifies
-the recipient's canonical profile at publication. It is a per-recipient frame
+the recipient's primary profile at publication. It is a per-recipient frame
 fact, not the event's origin, a run-owner identity, or an authorization grant.
 Existing event permissions and subscriptions still govern delivery. Bind the
 consumer to both its physical Gateway connection and selected profile; if the

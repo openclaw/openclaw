@@ -1,37 +1,39 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.js";
-import { readRecentSessionTranscriptHistoryEvents } from "../config/sessions/session-accessor.sqlite-history-events.js";
 import {
   resolveSqliteScope,
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { prepareSessionTranscriptReadTargetCore } from "../config/sessions/session-accessor.transcript-read-target.js";
-import { resolveSessionTranscriptReadTarget } from "../config/sessions/session-accessor.transcript-target.js";
+import { captureSessionActorTranscriptRead } from "../config/sessions/session-actor-transcript-read.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { resolveSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
-import { captureSessionTranscriptTargetBinding } from "../config/sessions/transcript-target-binding.js";
 import {
-  isIncognitoOpenClawAgentSqlitePath,
-  resolveOpenClawAgentSqlitePath,
-} from "../state/openclaw-agent-db.paths.js";
+  captureSessionTranscriptTargetBinding,
+  type CapturedSessionTranscriptTargetBinding,
+} from "../config/sessions/transcript-target-binding.js";
 import { buildSessionPreviewItems } from "./session-display-projection.js";
-import {
-  readBoundedSessionPreviewItems,
-  readBoundedSessionPreviewItemsAsync,
-} from "./session-transcript-preview-reader.js";
-import { toTranscriptReadScope } from "./session-transcript-read-target.js";
+import { readBoundedSessionPreviewItemsAsync } from "./session-transcript-preview-reader.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
 
-/** Durable previews share the history reader; incognito SQLite stays with its process owner. */
+/** Previews use the selected history backend and retain the existing model-context projection. */
 export async function readSessionPreviewItemsFromTranscriptAsync(
   scope: SessionTranscriptReadScope,
   maxItems: number,
   maxChars: number,
   view: "display" | "model-context" = "display",
 ): Promise<SessionPreviewItem[]> {
+  const memory = captureSessionActorTranscriptRead(scope);
+  if (memory) {
+    if (memory.missing) {
+      return [];
+    }
+    return view === "display"
+      ? (await memory.read("session.history.preview", { maxItems, maxChars })).items
+      : readSessionModelPreviewItems(memory.target, maxItems, maxChars);
+  }
   const target = prepareSessionTranscriptReadTargetCore(scope);
   if (view === "model-context") {
     const { agentId, sessionKey, storePath } = target;
@@ -46,25 +48,7 @@ export async function readSessionPreviewItemsFromTranscriptAsync(
       storePath,
       ...(scope.env ? { env: scope.env } : {}),
     });
-    return await readBoundedSessionPreviewItemsAsync(maxItems, async (maxEvents, maxBytes) => {
-      let truncated = false;
-      const manager = await SessionManager.openBoundedAsync(modelTarget, {
-        maxEvents,
-        maxBytes,
-        onTruncated: () => {
-          truncated = true;
-        },
-      });
-      return {
-        items: buildSessionPreviewItems(
-          manager.buildSessionContext().messages,
-          maxItems,
-          maxChars,
-          view,
-        ),
-        hasOlderEvents: truncated,
-      };
-    });
+    return readSessionModelPreviewItems(modelTarget, maxItems, maxChars);
   }
   const readScope: SessionTranscriptReadScope = {
     agentId: target.agentId,
@@ -76,10 +60,6 @@ export async function readSessionPreviewItemsFromTranscriptAsync(
   };
   const resolved = resolveSqliteTranscriptReadScope(readScope);
   const options = toDatabaseOptions(resolved);
-  const databasePath = resolveOpenClawAgentSqlitePath(options);
-  if (isIncognitoOpenClawAgentSqlitePath(databasePath, options)) {
-    return readSessionDisplayPreviewItems(readScope, maxItems, maxChars);
-  }
   // Qualify the key with the bound logical agent without discovering the physical store again.
   const entryValidationKey = target.entryValidationScope
     ? resolveSqliteScope({
@@ -113,25 +93,28 @@ export async function readSessionPreviewItemsFromTranscriptAsync(
   }
 }
 
-function readSessionDisplayPreviewItems(
-  scope: SessionTranscriptReadScope,
+function readSessionModelPreviewItems(
+  target: CapturedSessionTranscriptTargetBinding,
   maxItems: number,
   maxChars: number,
-): SessionPreviewItem[] {
-  const target = resolveSessionTranscriptReadTarget(scope);
-  return readBoundedSessionPreviewItems(maxItems, (maxEvents, maxBytes) => {
-    const page = readRecentSessionTranscriptHistoryEvents(toTranscriptReadScope(target), {
+): Promise<SessionPreviewItem[]> {
+  return readBoundedSessionPreviewItemsAsync(maxItems, async (maxEvents, maxBytes) => {
+    let truncated = false;
+    const manager = await SessionManager.openBoundedAsync(target, {
+      maxEvents,
       maxBytes,
-      maxLines: maxEvents,
-      maxMessages: maxEvents,
+      onTruncated: () => {
+        truncated = true;
+      },
     });
     return {
       items: buildSessionPreviewItems(
-        page.events.map((entry) => asOptionalRecord(entry.event)?.message),
+        manager.buildSessionContext().messages,
         maxItems,
         maxChars,
+        "model-context",
       ),
-      hasOlderEvents: page.totalMessages > page.events.length,
+      hasOlderEvents: truncated,
     };
   });
 }

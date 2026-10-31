@@ -8,25 +8,19 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import type { Readable } from "node:stream";
-import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  inspectManagedProcessGroup,
-  terminateManagedChild,
-} from "../../scripts/lib/managed-child-process.mts";
-import {
-  readSessionArchiveContentSync,
-  stripSessionArchiveCompressionSuffix,
-} from "../../src/config/sessions/archive-compression.js";
+import { formatCliCommand } from "../../src/cli/command-format.js";
+import { readSessionArchiveContentSync } from "../../src/config/sessions/archive-compression.js";
 import { formatSqliteSessionFileMarker } from "../../src/config/sessions/legacy-sqlite-marker.js";
 import {
   appendTranscriptMessage,
   type TranscriptEvent,
 } from "../../src/config/sessions/session-accessor.js";
 import { importSqliteSessionRows } from "../../src/config/sessions/session-accessor.sqlite-import.test-support.js";
+import { SESSION_ARCHIVE_ZSTD_SUFFIX } from "../../src/config/sessions/transcript-file-names.js";
 import type { SessionEntry } from "../../src/config/sessions/types.js";
 import { isGatewayProtocolResponseError } from "../../src/gateway/client.js";
 import {
@@ -42,6 +36,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../src/state/openclaw-stat
 import { sleep } from "../../src/utils.js";
 import {
   createOpenClawTestInstance,
+  GatewayAgentAdmissionError,
   GatewayStartupRefusedError,
 } from "./openclaw-test-instance.js";
 import { withinTest } from "./promise.js";
@@ -218,6 +213,11 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
         await record("after-doctor-fix", fixDoctor);
         scaleMigration = requireScaleMigrationProof(context, Date.now() - doctorImportStartedAt);
 
+        // The drill owns a separate store; finish stopped-writer maintenance before
+        // one Gateway serves live inspection and the session lifecycle below.
+        rollbackRestore = await runRollbackRestoreProof(inst, context);
+        await record("after-rollback-restore");
+
         await inst.startGateway();
         await record("after-gateway-start");
 
@@ -227,23 +227,8 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
         const validateDoctor = await runDoctor(inst, "validate", context.storePath);
         await record("after-doctor-validate", validateDoctor);
 
-        const { client, disconnect } = await connectProofClient(
-          inst,
-          context,
-          "sqlite-sessions-transcripts-flip-proof",
-        );
-        await waitForHistoryContains(client, context.resetSessionKey, "legacy hello");
-        await disconnect();
-
-        await inst.stopGateway();
-        // Destructive Doctor maintenance owns the stopped Gateway epoch; inspect/validate stay live.
-        rollbackRestore = await runRollbackRestoreProof(inst, context);
-        await record("after-rollback-restore");
-        await inst.startGateway();
-        await record("after-gateway-restart");
-
         let { client: restartedClient, disconnect: disconnectRestartedClient } =
-          await connectProofClient(inst, context, "sqlite-sessions-transcripts-flip-proof-restart");
+          await connectProofClient(inst, context, "sqlite-sessions-transcripts-flip-proof");
         await waitForHistoryContains(restartedClient, context.resetSessionKey, "legacy hello");
         const resetPreludeRunId = await sendGatewayUserMessage(
           restartedClient,
@@ -290,6 +275,11 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
         await requireMockOpenAiRequest(context.mockOpenAiRequestLog);
         await record("after-full-agent-turn");
 
+        // Reuse the restart and later stopped-writer maintenance boundary for
+        // the reset proof instead of launching another Gateway just for it.
+        const resetSessionId = await resetSession(restartedClient, context.resetSessionKey);
+        await record("after-sessions-reset");
+
         abruptRestart = await runAbruptRestartProof(
           inst,
           context,
@@ -308,37 +298,23 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
         await record("after-sqlite-busy-contention");
 
         await inst.startGateway();
+        await record("after-second-startup-after-reset");
         ({ client: restartedClient, disconnect: disconnectRestartedClient } =
           await connectProofClient(
             inst,
             context,
             "sqlite-sessions-transcripts-flip-proof-maintained",
           ));
-        await runConcurrentMultiClientLifecycle(inst, context, restartedClient);
-        await record("after-concurrent-multi-client");
-
-        const resetSessionId = await resetSession(restartedClient, context.resetSessionKey);
-        await record("after-sessions-reset");
-
-        await disconnectRestartedClient();
-        await inst.stopGateway();
-        await inst.startGateway();
-        await record("after-second-startup-after-reset");
-
-        const { client: postResetClient, disconnect: disconnectPostResetClient } =
-          await connectProofClient(
-            inst,
-            context,
-            "sqlite-sessions-transcripts-flip-proof-post-reset-restart",
-          );
         secondStartupAfterReset = await runSecondStartupAfterResetProof(
-          postResetClient,
+          restartedClient,
           context,
           resetSessionId,
         );
         await record("after-transcript-append");
+        await runConcurrentMultiClientLifecycle(inst, context, restartedClient);
+        await record("after-concurrent-multi-client");
 
-        await deleteSession(postResetClient, context.deleteSessionKey);
+        await deleteSession(restartedClient, context.deleteSessionKey);
         await record("after-sessions-delete");
 
         const firstSharedSessionKey = expectDefined(
@@ -349,13 +325,13 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
           context.sharedSessionKeys[1],
           "second shared SQLite proof session key",
         );
-        await deleteSession(postResetClient, firstSharedSessionKey);
-        await requireTrackedSession(postResetClient, secondSharedSessionKey);
+        await deleteSession(restartedClient, firstSharedSessionKey);
+        await requireTrackedSession(restartedClient, secondSharedSessionKey);
         await record("after-shared-first-delete");
 
-        await deleteSession(postResetClient, secondSharedSessionKey);
+        await deleteSession(restartedClient, secondSharedSessionKey);
         await record("after-shared-final-delete");
-        await disconnectPostResetClient();
+        await disconnectRestartedClient();
 
         const finalInspectDoctor = await runDoctor(inst, "inspect", context.storePath);
         await record("after-final-doctor-inspect", finalInspectDoctor);
@@ -864,11 +840,24 @@ async function requireLegacyStartupRefusal(inst: OpenClawTestInstance, context: 
       refusal = error;
       message = error instanceof Error ? error.message : String(error);
     }
-    if (
-      !(refusal instanceof GatewayStartupRefusedError) ||
-      refusal.reason !== "legacy-migration-required" ||
-      refusal.legacyStorePath !== legacyStorePath
-    ) {
+    const legacyProcessRefusal =
+      refusal instanceof GatewayStartupRefusedError &&
+      refusal.reason === "legacy-migration-required" &&
+      refusal.legacyStorePath === legacyStorePath;
+    const deferredAdmissionRefusal =
+      refusal instanceof GatewayAgentAdmissionError &&
+      refusal.refusals.some(
+        (entry) =>
+          entry.code === "agent-database-inspection-failed" &&
+          entry.agentId === context.agentId &&
+          Array.isArray(entry.paths) &&
+          entry.paths.includes(context.agentDbPath) &&
+          entry.reason ===
+            `Legacy session store requires migration: ${legacyStorePath}. Run "${formatCliCommand("openclaw doctor --fix", inst.env)}" against the same state/config before starting OpenClaw.` &&
+          typeof entry.repairHint === "string" &&
+          entry.repairHint.includes("doctor --fix"),
+      );
+    if (!legacyProcessRefusal && !deferredAdmissionRefusal) {
       throw new Error(
         `expected legacy session migration refusal on startup ${attempt}, got: ${message || "ready Gateway"}`,
       );
@@ -1392,13 +1381,9 @@ async function runAbruptRestartProof(
   // The caller has joined agent.wait and observed both committed messages. This
   // covers completed-turn durability, not an interrupted transaction or active run.
   const before = await snapshot(client);
-  const child = expectDefined(inst.child, "running Gateway before abrupt restart");
   await disconnect();
-  const forcedExit = await forceGatewayExit(child, context.signal);
+  const forcedExit = await forceGatewayExit(inst, context.signal);
   await record("after-abrupt-gateway-exit");
-  // Release the existing owner only after forced exit and tree closure are proven;
-  // its graceful stop must not turn a failed kill into a passing recovery test.
-  await inst.stopGateway();
   await inst.startGateway();
   await record("after-abrupt-gateway-restart");
   const restarted = await connectProofClient(inst, context, "sqlite-abrupt-restart");
@@ -1435,7 +1420,8 @@ async function runAbruptRestartProof(
   return await proof;
 }
 
-async function forceGatewayExit(child: ProofChildProcess, abortSignal?: AbortSignal) {
+async function forceGatewayExit(instance: OpenClawTestInstance, abortSignal?: AbortSignal) {
+  const child = expectDefined(instance.child, "running Gateway before abrupt restart");
   if (child.exitCode !== null || child.signalCode !== null) {
     throw new Error("Gateway already exited before the abrupt-restart proof");
   }
@@ -1446,33 +1432,30 @@ async function forceGatewayExit(child: ProofChildProcess, abortSignal?: AbortSig
     once(child, "close", { signal: abort.signal }),
   ]);
   try {
-    const termination = terminateManagedChild(child, "SIGKILL");
+    child.kill("SIGKILL");
     const [[code, signal], [closeCode, closeSignal]] = await (abortSignal
       ? withinTest(observed, abortSignal)
       : observed);
     if (
       (process.platform === "win32"
-        ? termination?.processTreeState !== "terminated" || code === null || code === 0
+        ? code === null || code === 0
         : code !== null || signal !== "SIGKILL") ||
       closeCode !== code ||
       closeSignal !== signal
     ) {
-      throw new Error(
-        `Gateway did not exit forcibly: ${JSON.stringify({ code, signal, termination })}`,
-      );
+      throw new Error(`Gateway did not exit forcibly: ${JSON.stringify({ code, signal })}`);
     }
-    // Child close cannot report descendants without inherited pipes. The managed
-    // owner exposes a census, not an extinction event; only cancellation bounds this check.
-    let processTreeState = inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" });
-    while (processTreeState !== "dead") {
-      try {
-        await waitForProcessTick(10, undefined, { signal: abortSignal });
-      } catch (cause) {
-        throw new Error("Gateway process tree remained alive after SIGKILL", { cause });
-      }
-      processTreeState = inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" });
-    }
-    return { code, signal, closeCode, closeSignal, platform: process.platform, processTreeState };
+    // Root exit and output closure do not certify descendants. Join the fixture's
+    // exact custody owner after proving SIGKILL, before admitting another Gateway.
+    await instance.stopGateway();
+    return {
+      code,
+      signal,
+      closeCode,
+      closeSignal,
+      platform: process.platform,
+      processTreeState: "dead" as const,
+    };
   } finally {
     abort.abort();
     await Promise.allSettled([observed]);
@@ -1498,7 +1481,7 @@ async function readRecoverySession(
         .prepare(
           "SELECT seq, event_json AS eventJson FROM transcript_events WHERE session_id = ? ORDER BY seq ASC",
         )
-        .all(sessionId) as Array<{ seq: number; eventJson: string }>,
+        .all(sessionId) as Array<{ seq: number; eventJson: string | null }>,
   );
   const messages = events.flatMap(({ seq, eventJson }) => {
     const event = parseJsonObject(eventJson);
@@ -1703,19 +1686,18 @@ async function sendGatewayUserMessage(
   sessionKey: string,
   message: string,
 ): Promise<string> {
-  const result: { runId?: string; status?: string } = await client.request(
-    "chat.send",
-    {
-      sessionKey,
-      message,
-      idempotencyKey: `sqlite-send-${randomUUID()}`,
-    },
-    { timeoutMs: SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS },
-  );
-  if (result?.status !== "started" || typeof result.runId !== "string") {
-    throw new Error(`chat.send did not start correctly: ${JSON.stringify(result)}`);
-  }
-  return result.runId;
+  const idempotencyKey = `sqlite-send-${randomUUID()}`;
+  return waitForAssertion(async () => {
+    const result = await client.request<{ runId?: string; status?: string }>(
+      "chat.send",
+      { sessionKey, message, idempotencyKey },
+      { timeoutMs: SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS },
+    );
+    if (result?.status !== "started" || typeof result.runId !== "string") {
+      throw new Error(`chat.send did not start correctly: ${JSON.stringify(result)}`);
+    }
+    return result.runId;
+  });
 }
 
 async function waitForAgentRunOk(client: GatewayClient, runId: string): Promise<void> {
@@ -1741,7 +1723,7 @@ async function waitForAgentRunSettled(client: GatewayClient, runId: string): Pro
   if (result.status === "ok") {
     return;
   }
-  // Deletion can settle with its action or an admission/runtime abort reason.
+  // Deletion can settle with its action or the runtime's terminal abort error.
   // A wait deadline has no endedAt and must still fail this proof.
   const terminalLifecycleStatus = result.status === "timeout" || result.status === "error";
   if (
@@ -1839,7 +1821,7 @@ async function waitForHistoryRoleContains(
   await waitForAssertion(() => requireHistoryRoleContains(client, sessionKey, role, expected));
 }
 
-async function waitForAssertion(assertion: () => Promise<void>): Promise<void> {
+async function waitForAssertion<T>(assertion: () => Promise<T>): Promise<T> {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     try {
@@ -1848,7 +1830,7 @@ async function waitForAssertion(assertion: () => Promise<void>): Promise<void> {
       await sleep(50);
     }
   }
-  await assertion();
+  return assertion();
 }
 
 async function pollUntil<T>(
@@ -2089,7 +2071,7 @@ async function inventoryFile(filePath: string, relativeRoot: string) {
 function parseArchiveArtifactName(
   fileName: string,
 ): { archiveReason: "bak" | "deleted" | "reset"; archiveSessionId: string } | undefined {
-  const normalized = stripSessionArchiveCompressionSuffix(fileName);
+  const normalized = path.basename(fileName, SESSION_ARCHIVE_ZSTD_SUFFIX);
   for (const archiveReason of ["deleted", "reset", "bak"] as const) {
     const marker = `.jsonl.${archiveReason}.`;
     const index = normalized.lastIndexOf(marker);
@@ -2399,7 +2381,11 @@ function findArchiveArtifact(
   );
 }
 
-function parseJsonObject(text: string): Record<string, unknown> | undefined {
+// Large events are stored compressed (`event_zstd`) with a NULL `event_json`.
+function parseJsonObject(text: string | null | undefined): Record<string, unknown> | undefined {
+  if (typeof text !== "string") {
+    return undefined;
+  }
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start < 0 || end < start) {

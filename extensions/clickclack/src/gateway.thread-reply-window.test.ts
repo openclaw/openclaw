@@ -1,19 +1,17 @@
 import { createServer } from "node:http";
-import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
-import type { ClickClackMessage, ResolvedClickClackAccount } from "./types.js";
-
-const CLICKCLACK_THREAD_DEFAULT_LIMIT = 100;
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
+import { createGatewayContext, type GatewayContext } from "./gateway.test-support.js";
+import type { ClickClackMessage } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   handleClickClackInbound: vi.fn(),
   resolveClickClackInboundAccess: vi.fn(),
 }));
 
-vi.mock("./inbound.js", () => ({
-  handleClickClackInbound: mocks.handleClickClackInbound,
-}));
+// mock-isolation: Thread-window tests observe inbound dispatch without starting agent turns.
+vi.mock("./inbound.js", () => ({ handleClickClackInbound: mocks.handleClickClackInbound }));
 
 vi.mock("./access.js", () => ({
   resolveClickClackInboundAccess: mocks.resolveClickClackInboundAccess,
@@ -21,80 +19,35 @@ vi.mock("./access.js", () => ({
 
 const { startClickClackGatewayAccount } = await import("./gateway.js");
 
-function threadReply(index: number): ClickClackMessage {
-  return {
-    id: `msg-${index}`,
-    workspace_id: "wsp_1",
+const CREATED_AT = "2026-01-01T00:00:00.000Z";
+const messageBase = {
+  workspace_id: "wsp_1",
+  author_id: "usr_human",
+  body_format: "markdown" as const,
+  created_at: CREATED_AT,
+};
+const RESOLVABLE_MESSAGES: ClickClackMessage[] = [
+  {
+    ...messageBase,
+    id: "msg-101",
     channel_id: "chn_1",
-    author_id: "usr_human",
-    parent_message_id: "msg_root",
     thread_root_id: "msg_root",
-    thread_seq: index,
-    body: `reply ${index}`,
-    body_format: "markdown",
-    created_at: "2026-01-01T00:00:00.000Z",
-    author: {
-      id: "usr_human",
-      kind: "human",
-      display_name: "Human",
-      handle: "human",
-      avatar_url: "",
-      created_at: "2026-01-01T00:00:00.000Z",
-    },
-  };
-}
+    parent_message_id: "msg_root",
+    thread_seq: 101,
+    body: "reply 101",
+  },
+  {
+    ...messageBase,
+    id: "msg_dm_reply",
+    direct_conversation_id: "dmc_1",
+    thread_root_id: "msg_dm_root",
+    parent_message_id: "msg_dm_root",
+    thread_seq: 1,
+    body: "dm thread reply",
+  },
+];
 
-const THREAD_ROOT: ClickClackMessage = {
-  id: "msg_root",
-  workspace_id: "wsp_1",
-  channel_id: "chn_1",
-  author_id: "usr_human",
-  thread_root_id: "msg_root",
-  channel_seq: 1,
-  body: "root",
-  body_format: "markdown",
-  created_at: "2026-01-01T00:00:00.000Z",
-};
-
-const ALL_REPLIES = Array.from({ length: 101 }, (_, index) => threadReply(index + 1));
-const LATEST_REPLY = ALL_REPLIES[ALL_REPLIES.length - 1];
-
-const DM_ROOT: ClickClackMessage = {
-  id: "msg_dm_root",
-  workspace_id: "wsp_1",
-  direct_conversation_id: "dmc_1",
-  author_id: "usr_human",
-  thread_root_id: "msg_dm_root",
-  channel_seq: 1,
-  body: "dm root",
-  body_format: "markdown",
-  created_at: "2026-01-01T00:00:00.000Z",
-};
-
-const DM_THREAD_REPLY: ClickClackMessage = {
-  id: "msg_dm_reply",
-  workspace_id: "wsp_1",
-  direct_conversation_id: "dmc_1",
-  author_id: "usr_human",
-  parent_message_id: "msg_dm_root",
-  thread_root_id: "msg_dm_root",
-  thread_seq: 1,
-  body: "dm thread reply",
-  body_format: "markdown",
-  created_at: "2026-01-01T00:00:00.000Z",
-};
-
-const RESOLVABLE_MESSAGES = [...ALL_REPLIES, DM_THREAD_REPLY];
-
-type ClickClackTestServer = {
-  apiBaseUrl: string;
-  requestPaths: string[];
-  emitThreadReplyEvent: (messageId: string, payload?: Record<string, string>) => Promise<void>;
-  close: () => Promise<void>;
-  missingMessageIds: Set<string>;
-};
-
-async function startClickClackTestServer(): Promise<ClickClackTestServer> {
+async function startClickClackTestServer() {
   const requestPaths: string[] = [];
   const missingMessageIds = new Set<string>();
   const server = createServer((req, res) => {
@@ -105,62 +58,15 @@ async function startClickClackTestServer(): Promise<ClickClackTestServer> {
       res.end(JSON.stringify(body));
     };
     if (url.pathname === "/api/me") {
-      json(200, {
-        user: {
-          id: "usr_bot",
-          kind: "bot",
-          display_name: "Bot",
-          handle: "bot",
-          avatar_url: "",
-          created_at: "2026-01-01T00:00:00.000Z",
-        },
-      });
-      return;
+      return json(200, { user: { id: "usr_bot", handle: "bot" } });
     }
     if (url.pathname === "/api/workspaces") {
-      json(200, {
-        workspaces: [
-          {
-            id: "wsp_1",
-            route_id: "rt_1",
-            name: "Main",
-            slug: "main",
-            created_at: "2026-01-01T00:00:00.000Z",
-          },
-        ],
+      return json(200, {
+        workspaces: [{ id: "wsp_1", name: "Main", slug: "main" }],
       });
-      return;
     }
     if (url.pathname === "/api/realtime/events") {
-      json(200, { events: [], tail_cursor: "cursor-0" });
-      return;
-    }
-    const threadMatch = url.pathname.match(/^\/api\/messages\/([^/]+)\/thread$/u);
-    if (threadMatch) {
-      const requestedLimit = Number(url.searchParams.get("limit"));
-      const limit =
-        Number.isSafeInteger(requestedLimit) && requestedLimit > 0
-          ? Math.min(requestedLimit, 200)
-          : CLICKCLACK_THREAD_DEFAULT_LIMIT;
-      const window =
-        url.searchParams.get("latest") === "true"
-          ? ALL_REPLIES.slice(-limit)
-          : ALL_REPLIES.slice(0, limit);
-      json(200, {
-        root: THREAD_ROOT,
-        replies: window,
-        thread_state: {
-          root_message_id: "msg_root",
-          reply_count: ALL_REPLIES.length,
-          last_reply_at: LATEST_REPLY?.created_at,
-          last_reply_author_ids: ["usr_human"],
-        },
-      });
-      return;
-    }
-    if (/^\/api\/dms\/[^/]+\/messages$/u.test(url.pathname)) {
-      json(200, { messages: [DM_ROOT], oldest_seq: 1, has_older: false });
-      return;
+      return json(200, { events: [], tail_cursor: "cursor-0" });
     }
     const messageMatch = url.pathname.match(/^\/api\/messages\/([^/]+)$/u);
     if (messageMatch) {
@@ -169,26 +75,13 @@ async function startClickClackTestServer(): Promise<ClickClackTestServer> {
         ? undefined
         : RESOLVABLE_MESSAGES.find((candidate) => candidate.id === messageId);
       if (!message) {
-        json(404, { error: "message not found" });
-        return;
+        return json(404, { error: "message not found" });
       }
-      json(200, { message });
-      return;
+      return json(200, { message });
     }
     json(404, { error: `unhandled ${url.pathname}` });
   });
-  const port = await new Promise<number>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        reject(new Error("expected loopback TCP address"));
-        return;
-      }
-      resolve(address.port);
-    });
-  });
+  const port = await listenOnLoopback(server);
   const wss = new WebSocketServer({ server, path: "/api/realtime/ws" });
   const sockets = new Set<import("ws").WebSocket>();
   wss.on("connection", (socket) => {
@@ -208,7 +101,7 @@ async function startClickClackTestServer(): Promise<ClickClackTestServer> {
         workspace_id: "wsp_1",
         channel_id: "chn_1",
         seq: 1,
-        created_at: "2026-01-01T00:00:00.000Z",
+        created_at: CREATED_AT,
         payload: {
           message_id: messageId,
           root_message_id: "msg_root",
@@ -234,105 +127,61 @@ async function startClickClackTestServer(): Promise<ClickClackTestServer> {
   };
 }
 
-function createGatewayContext(
-  apiBaseUrl: string,
-  abortSignal: AbortSignal,
-): ChannelGatewayContext<ResolvedClickClackAccount> {
-  return {
-    cfg: {
-      channels: {
-        clickclack: {
-          baseUrl: "https://clickclack.example",
-          apiBaseUrl,
-          token: "test-token",
-          workspace: "main",
-          reconnectMs: 5,
-          commandMenu: false,
-        },
-      },
-    } as ChannelGatewayContext<ResolvedClickClackAccount>["cfg"],
-    accountId: "default",
-    account: {} as ResolvedClickClackAccount,
-    runtime: {} as ChannelGatewayContext<ResolvedClickClackAccount>["runtime"],
-    abortSignal,
-    log: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    getStatus: () =>
-      ({ accountId: "default" }) as ReturnType<
-        ChannelGatewayContext<ResolvedClickClackAccount>["getStatus"]
-      >,
-    setStatus: vi.fn(),
-  };
-}
-
 describe("ClickClack gateway thread reply resolution", () => {
-  let testServer: ClickClackTestServer;
-  let abort: AbortController | undefined;
-  let run: Promise<void> | undefined;
-
-  function startGateway(): ChannelGatewayContext<ResolvedClickClackAccount> {
-    abort = new AbortController();
-    const ctx = createGatewayContext(testServer.apiBaseUrl, abort.signal);
-    run = startClickClackGatewayAccount(ctx);
-    return ctx;
+  async function expectDispatch(id: string, body: string) {
+    await vi.waitFor(() => expect(mocks.handleClickClackInbound).toHaveBeenCalledTimes(1));
+    expect(mocks.handleClickClackInbound).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.objectContaining({ id, body }) }),
+    );
+    expect(testServer.requestPaths).toContain(`GET /api/messages/${id}`);
   }
+
+  let testServer: Awaited<ReturnType<typeof startClickClackTestServer>>;
+  let abort: AbortController;
+  let run: Promise<void>;
+  let ctx: GatewayContext;
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    abort = undefined;
-    run = undefined;
     mocks.resolveClickClackInboundAccess.mockResolvedValue({
       shouldDispatch: true,
       commandAuthorized: true,
     });
     testServer = await startClickClackTestServer();
+    abort = new AbortController();
+    ctx = createGatewayContext(abort.signal, {
+      apiBaseUrl: testServer.apiBaseUrl,
+      reconnectMs: 5,
+      commandMenu: false,
+    });
+    run = startClickClackGatewayAccount(ctx);
   });
 
   afterEach(async () => {
     try {
-      abort?.abort();
-      if (run) {
-        await run;
-      }
+      abort.abort();
+      await run;
     } finally {
       await testServer.close();
     }
   });
 
   it("dispatches a thread reply past the server thread-reply window", async () => {
-    const ctx = startGateway();
-
     await testServer.emitThreadReplyEvent("msg-101");
-    await vi.waitFor(() => expect(mocks.handleClickClackInbound).toHaveBeenCalledTimes(1));
-
-    expect(mocks.handleClickClackInbound).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: expect.objectContaining({ id: "msg-101", body: "reply 101" }),
-      }),
-    );
-    expect(testServer.requestPaths).toContain("GET /api/messages/msg-101");
+    await expectDispatch("msg-101", "reply 101");
     expect(ctx.log?.warn).not.toHaveBeenCalled();
   });
 
   it("dispatches a DM thread reply that never enters the root DM timeline", async () => {
-    startGateway();
-
     await testServer.emitThreadReplyEvent("msg_dm_reply", {
       direct_conversation_id: "dmc_1",
       root_message_id: "msg_dm_root",
     });
-    await vi.waitFor(() => expect(mocks.handleClickClackInbound).toHaveBeenCalledTimes(1));
-
-    expect(mocks.handleClickClackInbound).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: expect.objectContaining({ id: "msg_dm_reply", body: "dm thread reply" }),
-      }),
-    );
-    expect(testServer.requestPaths).toContain("GET /api/messages/msg_dm_reply");
+    await expectDispatch("msg_dm_reply", "dm thread reply");
   });
 
   it("records a warning instead of silently handling an unreadable event message", async () => {
     testServer.missingMessageIds.add("msg-101");
-    const ctx = startGateway();
 
     await testServer.emitThreadReplyEvent("msg-101");
     await vi.waitFor(() =>

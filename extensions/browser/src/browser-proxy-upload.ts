@@ -9,6 +9,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { sanitizeUntrustedFileName } from "openclaw/plugin-sdk/security-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import {
   assertBrowserProxyFileBytesWithinLimits,
   assertBrowserProxyFileCountWithinLimit,
@@ -25,22 +26,21 @@ const BROWSER_PROXY_UPLOAD_PREFIX = "upload-";
 const BROWSER_PROXY_UPLOAD_MARKER_NAME = ".openclaw-browser-proxy-upload-v1";
 const BROWSER_PROXY_UPLOAD_MARKER_CONTENT = "openclaw-browser-proxy-upload-v1\n";
 const BROWSER_PROXY_UPLOAD_RETENTION_MS = 24 * 60 * 60 * 1000;
-const BROWSER_PROXY_UPLOAD_CLEANUP_RETRY_MS = 60 * 60 * 1000;
 const BROWSER_PROXY_UPLOAD_MAX_RETAINED_BYTES = 256 * 1024 * 1024;
 const BROWSER_PROXY_UPLOAD_MAX_RETAINED_DIRECTORIES = 64;
 const BROWSER_PROXY_MAX_ENCODED_FILE_LENGTH = Math.ceil(BROWSER_PROXY_MAX_FILE_BYTES / 3) * 4;
 const MAX_STAGED_NAME_BYTES = 180;
 const cleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const recoveryPromises = new Map<string, Promise<void>>();
-const recoveryRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const stagingLocks = new Map<string, Promise<void>>();
+let recoveryPromise: Promise<void> | undefined;
+let recoveryFailed = false;
+let stagingTail: Promise<void> | undefined;
 let activeCleanup = 0;
 let activeRecovery = 0;
 
 export function hasBrowserProxyUploadWork(): boolean {
   // Timers retain recoverable upload artifacts, not a live request. A replacement
   // process restores them; only in-flight filesystem work must delay an update.
-  return activeCleanup > 0 || activeRecovery > 0 || stagingLocks.size > 0;
+  return activeCleanup > 0 || activeRecovery > 0 || stagingTail !== undefined;
 }
 
 type PreparedBrowserProxyUploadRequest = {
@@ -51,11 +51,6 @@ type PreparedBrowserProxyUploadRequest = {
 type StagedBrowserProxyUploadRequest = {
   body: unknown;
   directory?: string;
-};
-
-type StagedUploadLimits = {
-  maxRetainedBytes: number;
-  maxRetainedDirectories: number;
 };
 
 type OwnedStagedUpload = {
@@ -98,7 +93,6 @@ async function readBrowserProxyUploadFiles(
   paths: string[],
   signal?: AbortSignal,
 ): Promise<BrowserProxyUploadFile[]> {
-  assertBrowserProxyFileCountWithinLimit(paths.length, "request");
   const files: BrowserProxyUploadFile[] = [];
   let totalBytes = 0;
   for (const filePath of paths) {
@@ -124,27 +118,19 @@ export async function prepareBrowserProxyUploadRequest(params: {
   method: string;
   path: string;
   body: unknown;
-  uploadDir?: string;
-  inboundMediaDir?: string;
   signal?: AbortSignal;
 }): Promise<PreparedBrowserProxyUploadRequest> {
   params.signal?.throwIfAborted();
-  if (!isFileChooserRequest(params.method, params.path)) {
-    return { body: params.body };
-  }
-  const body = asNullableRecord(params.body);
-  if (!body) {
-    return { body: params.body };
-  }
-  const requestedPaths = readUploadPaths(body);
-  if (!requestedPaths) {
+  const body = isFileChooserRequest(params.method, params.path)
+    ? asNullableRecord(params.body)
+    : null;
+  const requestedPaths = body && readUploadPaths(body);
+  if (!body || !requestedPaths) {
     return { body: params.body };
   }
   assertBrowserProxyFileCountWithinLimit(requestedPaths.length, "request");
   const resolved = await resolveExistingUploadPaths({
     requestedPaths,
-    ...(params.uploadDir ? { uploadDir: params.uploadDir } : {}),
-    ...(params.inboundMediaDir ? { inboundMediaDir: params.inboundMediaDir } : {}),
   });
   if (!resolved.ok) {
     throw new Error(resolved.error);
@@ -188,7 +174,6 @@ function decodeUploadFile(file: BrowserProxyUploadFile, totalBytes: number): Buf
   if (buffer.toString("base64") !== file.contentBase64) {
     throw new Error("INVALID_REQUEST: invalid browser proxy upload encoding");
   }
-  assertBrowserProxyFileBytesWithinLimits(buffer.byteLength, totalBytes + buffer.byteLength);
   return buffer;
 }
 
@@ -214,24 +199,27 @@ async function removeStagedUpload(directory: string): Promise<void> {
     if (extractErrorCode(error) === "ENOENT") {
       return;
     }
-    logger.warn(`browser proxy upload cleanup failed; retrying: ${String(error)}`);
-    scheduleCleanup(directory, BROWSER_PROXY_UPLOAD_CLEANUP_RETRY_MS);
+    // Filesystem faults need operator repair; the next process recovers marked copies.
+    logger.warn(`browser proxy upload cleanup failed; retained for recovery: ${String(error)}`);
   } finally {
     activeCleanup -= 1;
   }
 }
 
-async function readDirectoryBytes(directory: string, signal?: AbortSignal): Promise<number> {
+async function readUploadDirectoryEntries(directory: string, signal?: AbortSignal) {
   signal?.throwIfAborted();
-  let entries;
   try {
-    entries = await fs.readdir(directory, { withFileTypes: true });
+    return await fs.readdir(directory, { withFileTypes: true });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return 0;
+      return [];
     }
     throw error;
   }
+}
+
+async function readDirectoryBytes(directory: string, signal?: AbortSignal): Promise<number> {
+  const entries = await readUploadDirectoryEntries(directory, signal);
   let totalBytes = 0;
   for (const entry of entries) {
     signal?.throwIfAborted();
@@ -253,16 +241,7 @@ async function readOwnedStagedUploads(
   stagingRoot: string,
   signal?: AbortSignal,
 ): Promise<OwnedStagedUpload[]> {
-  signal?.throwIfAborted();
-  let entries;
-  try {
-    entries = await fs.readdir(stagingRoot, { withFileTypes: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
-    }
-    throw error;
-  }
+  const entries = await readUploadDirectoryEntries(stagingRoot, signal);
   const uploads = await Promise.all(
     entries
       .filter((entry) => entry.isDirectory() && entry.name.startsWith(BROWSER_PROXY_UPLOAD_PREFIX))
@@ -307,17 +286,12 @@ function scheduleCleanup(directory: string, delayMs: number): void {
   timer.unref?.();
 }
 
-async function recoverStagedUploads(params: {
-  uploadDir: string;
-  retentionMs: number;
-  nowMs: number;
-  limits: StagedUploadLimits;
-}): Promise<void> {
-  const { uploadDir, retentionMs, nowMs, limits } = params;
-  const stagingRoot = path.join(uploadDir, BROWSER_PROXY_UPLOAD_ROOT_NAME);
+async function recoverStagedUploads(): Promise<void> {
+  const nowMs = Date.now();
+  const stagingRoot = path.join(DEFAULT_UPLOAD_DIR, BROWSER_PROXY_UPLOAD_ROOT_NAME);
   const retained: OwnedStagedUpload[] = [];
   for (const upload of await readOwnedStagedUploads(stagingRoot)) {
-    if (retentionMs - Math.max(0, nowMs - upload.mtimeMs) <= 0) {
+    if (BROWSER_PROXY_UPLOAD_RETENTION_MS - Math.max(0, nowMs - upload.mtimeMs) <= 0) {
       await removeStagedUpload(upload.directory);
     } else {
       retained.push(upload);
@@ -328,7 +302,10 @@ async function recoverStagedUploads(params: {
   // copies, so oldest-first eviction safely restores the bounded retention budget.
   retained.sort((left, right) => left.mtimeMs - right.mtimeMs);
   let totalBytes = retained.reduce((total, upload) => total + upload.bytes, 0);
-  while (retained.length > limits.maxRetainedDirectories || totalBytes > limits.maxRetainedBytes) {
+  while (
+    retained.length > BROWSER_PROXY_UPLOAD_MAX_RETAINED_DIRECTORIES ||
+    totalBytes > BROWSER_PROXY_UPLOAD_MAX_RETAINED_BYTES
+  ) {
     const oldest = retained.shift();
     if (!oldest) {
       break;
@@ -337,129 +314,48 @@ async function recoverStagedUploads(params: {
     await removeStagedUpload(oldest.directory);
   }
   for (const upload of retained) {
-    const remaining = retentionMs - Math.max(0, nowMs - upload.mtimeMs);
+    const remaining = BROWSER_PROXY_UPLOAD_RETENTION_MS - Math.max(0, nowMs - upload.mtimeMs);
     scheduleCleanup(upload.directory, remaining);
   }
 }
 
-function clearRecoveryRetry(uploadDir: string): void {
-  const timer = recoveryRetryTimers.get(uploadDir);
-  if (!timer) {
-    return;
-  }
-  clearTimeout(timer);
-  recoveryRetryTimers.delete(uploadDir);
-}
-
-function scheduleRecoveryRetry(uploadDir: string, retentionMs: number): void {
-  if (recoveryRetryTimers.has(uploadDir)) {
-    return;
-  }
-  const timer = setTimeout(() => {
-    recoveryRetryTimers.delete(uploadDir);
-    recoveryPromises.set(uploadDir, ensureBrowserProxyUploadCleanup({ uploadDir, retentionMs }));
-  }, BROWSER_PROXY_UPLOAD_CLEANUP_RETRY_MS);
-  recoveryRetryTimers.set(uploadDir, timer);
-  timer.unref?.();
-}
-
-async function runRecovery(params: {
-  uploadDir: string;
-  retentionMs: number;
-  nowMs: number;
-  limits: StagedUploadLimits;
-}): Promise<void> {
+async function runRecovery(): Promise<void> {
   activeRecovery += 1;
   try {
-    await recoverStagedUploads(params);
-    clearRecoveryRetry(params.uploadDir);
+    await recoverStagedUploads();
+    recoveryFailed = false;
   } catch (error) {
-    logger.warn(`browser proxy upload recovery failed; retrying: ${String(error)}`);
-    scheduleRecoveryRetry(params.uploadDir, params.retentionMs);
+    recoveryFailed = true;
+    logger.warn(`browser proxy upload recovery failed; retry on the next upload: ${String(error)}`);
   } finally {
     activeRecovery -= 1;
   }
 }
 
 /** Restores cleanup timers for staged uploads left by a previous node process. */
-export function ensureBrowserProxyUploadCleanup(options?: {
-  uploadDir?: string;
-  retentionMs?: number;
-  nowMs?: number;
-  maxRetainedBytes?: number;
-  maxRetainedDirectories?: number;
-}): Promise<void> {
-  const uploadDir = options?.uploadDir ?? DEFAULT_UPLOAD_DIR;
-  const retentionMs = options?.retentionMs ?? BROWSER_PROXY_UPLOAD_RETENTION_MS;
-  const nowMs = options?.nowMs ?? Date.now();
-  const limits = {
-    maxRetainedBytes: options?.maxRetainedBytes ?? BROWSER_PROXY_UPLOAD_MAX_RETAINED_BYTES,
-    maxRetainedDirectories:
-      options?.maxRetainedDirectories ?? BROWSER_PROXY_UPLOAD_MAX_RETAINED_DIRECTORIES,
-  };
-  if (
-    options?.retentionMs !== undefined ||
-    options?.nowMs !== undefined ||
-    options?.maxRetainedBytes !== undefined ||
-    options?.maxRetainedDirectories !== undefined
-  ) {
-    return runRecovery({ uploadDir, retentionMs, nowMs, limits });
-  }
-  const existing = recoveryPromises.get(uploadDir);
-  if (existing) {
-    return existing;
-  }
-  const recovery = runRecovery({ uploadDir, retentionMs, nowMs, limits });
-  recoveryPromises.set(uploadDir, recovery);
-  return recovery;
+export function ensureBrowserProxyUploadCleanup(): Promise<void> {
+  return (recoveryPromise ??= runRecovery());
 }
 
-async function waitForStagingLock(previous: Promise<void>, signal?: AbortSignal): Promise<void> {
-  if (!signal) {
-    await previous;
-    return;
-  }
-  signal.throwIfAborted();
-  let onAbort: (() => void) | undefined;
-  const aborted = new Promise<never>((_, reject) => {
-    onAbort = () => {
-      try {
-        signal.throwIfAborted();
-      } catch (error) {
-        reject(error instanceof Error ? error : new Error(String(error)));
-      }
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-  try {
-    await Promise.race([previous, aborted]);
-  } finally {
-    if (onAbort) {
-      signal.removeEventListener("abort", onAbort);
-    }
-  }
-}
-
-async function withStagingLock<T>(
-  uploadDir: string,
-  task: () => Promise<T>,
-  signal?: AbortSignal,
-): Promise<T> {
-  const previous = stagingLocks.get(uploadDir) ?? Promise.resolve();
+async function withStagingLock<T>(task: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  const previous = stagingTail ?? Promise.resolve();
   let release = () => {};
   const current = new Promise<void>((resolve) => {
     release = resolve;
   });
   const tail = previous.then(() => current);
-  stagingLocks.set(uploadDir, tail);
+  stagingTail = tail;
   // A cancelled waiter must keep its predecessor visible until the entire tail settles.
   void tail.then(() => {
-    if (stagingLocks.get(uploadDir) === tail) {
-      stagingLocks.delete(uploadDir);
+    if (stagingTail === tail) {
+      stagingTail = undefined;
     }
   });
   try {
-    await waitForStagingLock(previous, signal);
+    signal?.throwIfAborted();
+    await racePromiseWithAbortSignal(previous, signal, ({ reason }) =>
+      reason instanceof Error ? reason : new Error(String(reason)),
+    );
     return await task();
   } finally {
     release();
@@ -484,9 +380,6 @@ export async function stageBrowserProxyUploadRequest(params: {
   path: string;
   body: unknown;
   upload?: BrowserProxyUploadV1;
-  uploadDir?: string;
-  maxRetainedBytes?: number;
-  maxRetainedDirectories?: number;
   signal?: AbortSignal;
 }): Promise<StagedBrowserProxyUploadRequest> {
   params.signal?.throwIfAborted();
@@ -501,17 +394,16 @@ export async function stageBrowserProxyUploadRequest(params: {
     throw new Error("INVALID_REQUEST: browser proxy upload body must omit paths");
   }
   const files = validateUploadEnvelope(params.upload);
-  const uploadDir = params.uploadDir ?? DEFAULT_UPLOAD_DIR;
-  const stagingRoot = path.join(uploadDir, BROWSER_PROXY_UPLOAD_ROOT_NAME);
+  const stagingRoot = path.join(DEFAULT_UPLOAD_DIR, BROWSER_PROXY_UPLOAD_ROOT_NAME);
   await fs.mkdir(stagingRoot, { recursive: true, mode: 0o700 });
   params.signal?.throwIfAborted();
-  // An actual upload must reclaim recoverable old copies before quota admission;
-  // ordinary browser commands reuse the scheduled recovery instead of rescanning.
-  if (recoveryRetryTimers.has(uploadDir)) {
-    clearRecoveryRetry(uploadDir);
-    recoveryPromises.delete(uploadDir);
+  // Ordinary browser commands do not repeat a failed scan. A new upload retries
+  // after an operator may have repaired the filesystem, before quota admission.
+  if (recoveryFailed) {
+    recoveryFailed = false;
+    recoveryPromise = undefined;
   }
-  await ensureBrowserProxyUploadCleanup({ uploadDir });
+  await ensureBrowserProxyUploadCleanup();
   params.signal?.throwIfAborted();
   const decodedFiles: Array<{ buffer: Buffer; name: string }> = [];
   let fileBytes = 0;
@@ -521,56 +413,47 @@ export async function stageBrowserProxyUploadRequest(params: {
     decodedFiles.push({ buffer, name: file.name });
   }
   const retainedRequestBytes = fileBytes + Buffer.byteLength(BROWSER_PROXY_UPLOAD_MARKER_CONTENT);
-  const limits = {
-    maxRetainedBytes: params.maxRetainedBytes ?? BROWSER_PROXY_UPLOAD_MAX_RETAINED_BYTES,
-    maxRetainedDirectories:
-      params.maxRetainedDirectories ?? BROWSER_PROXY_UPLOAD_MAX_RETAINED_DIRECTORIES,
-  };
-  return await withStagingLock(
-    uploadDir,
-    async () => {
-      params.signal?.throwIfAborted();
-      const retained = await readOwnedStagedUploads(stagingRoot, params.signal);
-      const retainedBytes = retained.reduce((total, upload) => total + upload.bytes, 0);
-      if (
-        retained.length >= limits.maxRetainedDirectories ||
-        retainedBytes + retainedRequestBytes > limits.maxRetainedBytes
-      ) {
-        throw new Error("RESOURCE_EXHAUSTED: browser proxy upload staging limit reached");
+  return await withStagingLock(async () => {
+    params.signal?.throwIfAborted();
+    const retained = await readOwnedStagedUploads(stagingRoot, params.signal);
+    const retainedBytes = retained.reduce((total, upload) => total + upload.bytes, 0);
+    if (
+      retained.length >= BROWSER_PROXY_UPLOAD_MAX_RETAINED_DIRECTORIES ||
+      retainedBytes + retainedRequestBytes > BROWSER_PROXY_UPLOAD_MAX_RETAINED_BYTES
+    ) {
+      throw new Error("RESOURCE_EXHAUSTED: browser proxy upload staging limit reached");
+    }
+    const directory = await fs.mkdtemp(path.join(stagingRoot, BROWSER_PROXY_UPLOAD_PREFIX));
+    const stagedPaths: string[] = [];
+    try {
+      await fs.writeFile(
+        path.join(directory, BROWSER_PROXY_UPLOAD_MARKER_NAME),
+        BROWSER_PROXY_UPLOAD_MARKER_CONTENT,
+        { flag: "wx", mode: 0o600, signal: params.signal },
+      );
+      for (const [index, file] of decodedFiles.entries()) {
+        params.signal?.throwIfAborted();
+        const fileDirectory = path.join(directory, String(index));
+        await fs.mkdir(fileDirectory, { mode: 0o700 });
+        params.signal?.throwIfAborted();
+        const filePath = path.join(fileDirectory, sanitizeUploadName(file.name));
+        await fs.writeFile(filePath, file.buffer, {
+          flag: "wx",
+          mode: 0o600,
+          signal: params.signal,
+        });
+        stagedPaths.push(filePath);
       }
-      const directory = await fs.mkdtemp(path.join(stagingRoot, BROWSER_PROXY_UPLOAD_PREFIX));
-      const stagedPaths: string[] = [];
-      try {
-        await fs.writeFile(
-          path.join(directory, BROWSER_PROXY_UPLOAD_MARKER_NAME),
-          BROWSER_PROXY_UPLOAD_MARKER_CONTENT,
-          { flag: "wx", mode: 0o600, signal: params.signal },
-        );
-        for (const [index, file] of decodedFiles.entries()) {
-          params.signal?.throwIfAborted();
-          const fileDirectory = path.join(directory, String(index));
-          await fs.mkdir(fileDirectory, { mode: 0o700 });
-          params.signal?.throwIfAborted();
-          const filePath = path.join(fileDirectory, sanitizeUploadName(file.name));
-          await fs.writeFile(filePath, file.buffer, {
-            flag: "wx",
-            mode: 0o600,
-            signal: params.signal,
-          });
-          stagedPaths.push(filePath);
-        }
-      } catch (error) {
-        await removeStagedUpload(directory);
-        throw error;
-      }
-      scheduleCleanup(directory, BROWSER_PROXY_UPLOAD_RETENTION_MS);
-      return {
-        body: { ...body, paths: stagedPaths },
-        directory,
-      };
-    },
-    params.signal,
-  );
+    } catch (error) {
+      await removeStagedUpload(directory);
+      throw error;
+    }
+    scheduleCleanup(directory, BROWSER_PROXY_UPLOAD_RETENTION_MS);
+    return {
+      body: { ...body, paths: stagedPaths },
+      directory,
+    };
+  }, params.signal);
 }
 
 /** Remove staged copies after a request fails before Browser ownership is established. */

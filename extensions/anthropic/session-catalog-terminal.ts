@@ -1,4 +1,3 @@
-// Claude catalog terminal ownership: validated local and paired-node resume plans.
 import fs from "node:fs/promises";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { SessionCatalogTerminalPlan } from "openclaw/plugin-sdk/session-catalog";
@@ -12,17 +11,6 @@ import {
   isResumableClaudeSource,
 } from "./session-catalog-shared.js";
 
-type ClaudeTerminalDependencies = {
-  listClaudeSessions: () => Promise<
-    Array<{ threadId: string; source?: string; filePath: string; cwd?: string }>
-  >;
-  resolveNodeClaudeRecord: (params: {
-    runtime: OpenClawPluginApi["runtime"];
-    nodeId: string;
-    threadId: string;
-  }) => Promise<{ source?: string; cwd?: string }>;
-};
-
 export function isClaudeCliAvailable(pathEnv = process.env.PATH ?? ""): boolean {
   const env = { ...process.env, PATH: pathEnv };
   return resolveClaudeTerminalExecutable(env) !== undefined;
@@ -32,10 +20,7 @@ export function claudeNodeTerminalCapability(node: {
   connected?: boolean;
   commands?: string[];
   invocableCommands?: string[];
-}): {
-  canOpenTerminalClaude: boolean;
-  canStartTerminal: boolean;
-} {
+}) {
   const commands = node.invocableCommands ?? node.commands;
   return {
     canOpenTerminalClaude:
@@ -50,7 +35,7 @@ export function terminalEligibility(
   host: { hostId: string; canOpenTerminalClaude?: boolean },
   source: string | undefined,
   localCliAvailable: boolean,
-): { localResumable: boolean; canOpenTerminal: boolean } {
+) {
   const resumable = isResumableClaudeSource(source);
   const local = host.hostId === CLAUDE_LOCAL_SESSION_HOST_ID;
   return {
@@ -94,13 +79,19 @@ export async function startClaudeCatalogTerminal(params: {
   };
 }
 
-export async function openClaudeCatalogTerminal(
-  params: {
-    api: OpenClawPluginApi;
-    hostId: string;
+export async function openClaudeCatalogTerminal(params: {
+  api: OpenClawPluginApi;
+  hostId: string;
+  threadId: string;
+  listClaudeSessions: () => Promise<
+    Array<{ threadId: string; source?: string; filePath: string; cwd?: string }>
+  >;
+  resolveNodeClaudeRecord: (params: {
+    runtime: OpenClawPluginApi["runtime"];
+    nodeId: string;
     threadId: string;
-  } & ClaudeTerminalDependencies,
-): Promise<SessionCatalogTerminalPlan> {
+  }) => Promise<{ source?: string; cwd?: string }>;
+}): Promise<SessionCatalogTerminalPlan> {
   const title = `claude --resume ${params.threadId.slice(0, 8)}…`;
   if (params.hostId === CLAUDE_LOCAL_SESSION_HOST_ID) {
     const record = (await params.listClaudeSessions()).find(

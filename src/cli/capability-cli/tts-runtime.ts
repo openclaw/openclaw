@@ -1,40 +1,37 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveApiKeyForProviderCore } from "../../agents/model-auth.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "../../gateway/connection-details.js";
 import { isLoopbackHost } from "../../gateway/net.js";
+import { resolveModelRefOverride } from "../../shared/model-ref-override.js";
 import { canonicalizeSpeechProviderId, listSpeechProviders } from "../../tts/provider-registry.js";
 import type { TtsResult } from "../../tts/tts-runtime-types.js";
-import { isTtsConfigReservedKey, resolveTtsPersonaList } from "../../tts/tts-settings.js";
+import { updateTtsPrefsAsync } from "../../tts/tts-settings-write-worker.js";
+import { resolveTtsPersonaList } from "../../tts/tts-settings.js";
 import {
-  getTtsProvider,
+  getTtsProviderAsync,
   listTtsPersonas,
   listSpeechVoices,
-  resolveExplicitTtsOverrides,
+  resolveExplicitTtsOverridesAsync,
   resolveTtsConfig,
-  resolveTtsPrefsPath,
-  setTtsEnabled,
-  setTtsPersona,
-  setTtsProvider,
+  resolveTtsPrefsPathAsync,
   textToSpeech,
 } from "../../tts/tts.js";
 import { getTtsCommandSecretTargetIds } from "../command-secret-targets.js";
-import { publishOutputFileAtomically } from "../media-output.js";
+import { writeOutputAsset } from "../media-output.js";
 import type { CapabilityEnvelope, CapabilityTransport } from "./metadata.js";
 import {
   pinRuntimeConfigSnapshot,
   providerHasGenericConfig,
   resolveCapabilityProviderAgentId,
   resolveLocalCapabilityRuntimeConfig,
-  resolveSelectedProviderFromModelRef,
 } from "./shared.js";
 
 export async function runTtsConvert(params: {
@@ -50,7 +47,7 @@ export async function runTtsConvert(params: {
   let attempts: NonNullable<TtsResult["attempts"]> = [];
   if (params.transport === "gateway") {
     const gatewayConnection = buildGatewayConnectionDetailsWithResolvers({
-      config: getRuntimeConfig(),
+      config: await captureRuntimeConfigAsyncReader()(),
     });
     if (params.output && !isLoopbackHost(new URL(gatewayConnection.url).hostname)) {
       throw new Error(
@@ -73,12 +70,12 @@ export async function runTtsConvert(params: {
       commandName: "infer tts convert",
       targetIds: getTtsCommandSecretTargetIds(),
     });
-    const ttsProvider = resolveTtsProviderForAuthHydration({
-      cfg,
-      provider: params.provider,
-      modelId: params.modelId,
-      channelId: params.channel,
-    });
+    const ttsConfig = resolveTtsConfig(cfg, { channelId: params.channel });
+    const prefsPath = await resolveTtsPrefsPathAsync(ttsConfig);
+    const ttsProvider =
+      params.provider ??
+      resolveModelRefOverride(params.modelId).provider ??
+      (await getTtsProviderAsync(ttsConfig, prefsPath));
     const effectiveCfg = await injectTtsAuthProfileApiKey({
       cfg,
       provider: ttsProvider,
@@ -87,24 +84,21 @@ export async function runTtsConvert(params: {
     if (effectiveCfg !== cfg) {
       pinRuntimeConfigSnapshot(effectiveCfg);
     }
-    const overrides = resolveExplicitTtsOverrides({
+    const overrides = await resolveExplicitTtsOverridesAsync({
       cfg: effectiveCfg,
+      prefsPath,
       provider: params.provider,
       modelId: params.modelId,
       voiceId: params.voiceId,
       channelId: params.channel,
     });
-    const hasExplicitSelection = Boolean(
-      overrides.provider ||
-      normalizeOptionalString(params.modelId) ||
-      normalizeOptionalString(params.voiceId),
-    );
     const localResult = await textToSpeech({
       text: params.text,
       cfg: effectiveCfg,
+      prefsPath,
       channel: params.channel,
       overrides,
-      disableFallback: hasExplicitSelection,
+      disableFallback: Boolean(overrides.provider),
     });
     if (!localResult.success || !localResult.audioPath) {
       throw new Error(localResult.error ?? "TTS conversion failed");
@@ -114,12 +108,15 @@ export async function runTtsConvert(params: {
   }
   let outputPath = result.audioPath;
   if (params.output && result.audioPath) {
-    const sourcePath = result.audioPath;
-    outputPath = path.resolve(params.output);
-    await publishOutputFileAtomically({
-      filePath: outputPath,
-      writeTemp: (tempPath) => fs.copyFile(sourcePath, tempPath),
+    // Match image/video outputs: the extension follows the audio actually returned.
+    const written = await writeOutputAsset({
+      buffer: await fs.readFile(result.audioPath),
+      outputPath: params.output,
+      outputIndex: 0,
+      outputCount: 1,
+      subdir: "tts",
     });
+    outputPath = written.path;
   }
   return {
     ok: true,
@@ -137,211 +134,95 @@ export async function runTtsConvert(params: {
   } satisfies CapabilityEnvelope;
 }
 
-function resolveTtsProviderForAuthHydration(params: {
-  cfg: OpenClawConfig;
-  provider?: string;
-  modelId?: string;
-  channelId?: string;
-}): string | undefined {
-  const explicitProvider =
-    params.provider ?? resolveSelectedProviderFromModelRef(normalizeOptionalString(params.modelId));
-  if (explicitProvider) {
-    return explicitProvider;
-  }
-  const ttsConfig = resolveTtsConfig(params.cfg, { channelId: params.channelId });
-  return getTtsProvider(ttsConfig, resolveTtsPrefsPath(ttsConfig));
-}
-
 async function injectTtsAuthProfileApiKey(params: {
   cfg: OpenClawConfig;
   provider?: string;
   channelId?: string;
 }): Promise<OpenClawConfig> {
+  const { cfg } = params;
   if (!params.provider) {
-    return params.cfg;
+    return cfg;
   }
   const providerId =
-    canonicalizeSpeechProviderId(params.provider, params.cfg) ??
+    canonicalizeSpeechProviderId(params.provider, cfg) ??
     normalizeLowercaseStringOrEmpty(params.provider);
   if (!providerId) {
-    return params.cfg;
+    return cfg;
   }
-  const effectiveTtsConfig = resolveTtsConfig(params.cfg, { channelId: params.channelId });
+  const effectiveTtsConfig = resolveTtsConfig(cfg, { channelId: params.channelId });
   if (ttsProviderConfigHasApiKey(effectiveTtsConfig.providerConfigs[providerId])) {
-    return params.cfg;
+    return cfg;
   }
-  const existingProviderConfig = resolveExistingTtsProviderConfig({
-    cfg: params.cfg,
-    providerId,
-    channelId: params.channelId,
-  });
-  if (ttsProviderConfigHasApiKey(existingProviderConfig?.value)) {
-    return params.cfg;
+
+  const channelId = normalizeOptionalString(params.channelId);
+  const channelKey =
+    isObjectRecord(cfg.channels) && channelId
+      ? Object.hasOwn(cfg.channels, channelId)
+        ? channelId
+        : Object.keys(cfg.channels).find(
+            (key) => normalizeLowercaseStringOrEmpty(key) === channelId.toLowerCase(),
+          )
+      : undefined;
+  let channel = channelKey ? cfg.channels?.[channelKey] : undefined;
+  const channelProvider = isObjectRecord(channel)
+    ? findTtsProviderConfig(channel.tts, providerId, cfg)
+    : undefined;
+  const existing = channelProvider ?? findTtsProviderConfig(cfg.tts, providerId, cfg);
+  if (ttsProviderConfigHasApiKey(existing?.value)) {
+    return cfg;
   }
   const auth = await resolveApiKeyForProviderCore({
     provider: providerId,
-    cfg: params.cfg,
+    cfg,
     credentialPrecedence: "profile-first",
   }).catch(() => undefined);
   if (!auth?.apiKey || auth.mode !== "api-key") {
-    return params.cfg;
+    return cfg;
   }
-  if (existingProviderConfig?.scope === "channel") {
-    const channels = { ...params.cfg.channels };
-    const channel = channels[existingProviderConfig.channelKey];
+
+  if (channelProvider && channelKey) {
+    channel = cfg.channels?.[channelKey];
     if (!isObjectRecord(channel)) {
-      return params.cfg;
+      return cfg;
     }
-    const nextChannel = {
-      ...channel,
-      tts: buildTtsConfigWithHydratedProvider({
-        tts: channel.tts,
-        existingProviderConfig,
-        providerId,
-        apiKey: auth.apiKey,
-      }),
-    };
-    return {
-      ...params.cfg,
-      channels: {
-        ...channels,
-        [existingProviderConfig.channelKey]: nextChannel,
-      },
-    };
   }
-  const nextTts = buildTtsConfigWithHydratedProvider({
-    tts: params.cfg.tts,
-    existingProviderConfig,
-    providerId,
+  const rawTts = channelProvider && isObjectRecord(channel) ? channel.tts : cfg.tts;
+  const tts = isObjectRecord(rawTts) ? { ...rawTts } : {};
+  const key = existing?.key ?? providerId;
+  const providerConfig = {
+    ...(isObjectRecord(existing?.value) ? existing.value : {}),
     apiKey: auth.apiKey,
-  });
-  return {
-    ...params.cfg,
-    tts: nextTts,
   };
+  tts.providers = {
+    ...(isObjectRecord(tts.providers) ? tts.providers : {}),
+    [key]: providerConfig,
+  };
+  return channelProvider && channelKey && isObjectRecord(channel)
+    ? { ...cfg, channels: { ...cfg.channels, [channelKey]: { ...channel, tts } } }
+    : { ...cfg, tts };
 }
 
-type TtsProviderConfigLocation = {
-  container: "providers" | "direct";
-  key: string;
-  value: unknown;
-};
-
-type ExistingTtsProviderConfig =
-  | (TtsProviderConfigLocation & {
-      scope: "root";
-      channelKey?: never;
-    })
-  | (TtsProviderConfigLocation & {
-      scope: "channel";
-      channelKey: string;
-    });
-
-function resolveExistingTtsProviderConfig(params: {
-  cfg: OpenClawConfig;
-  providerId: string;
-  channelId?: string;
-}): ExistingTtsProviderConfig | undefined {
-  const channelTts = resolveChannelTtsConfigForAuthHydration(params);
-  if (channelTts) {
-    const channelProviderConfig = resolveExistingTtsProviderConfigInTts({
-      cfg: params.cfg,
-      tts: channelTts.tts,
-      providerId: params.providerId,
-    });
-    if (channelProviderConfig) {
-      return {
-        ...channelProviderConfig,
-        scope: "channel",
-        channelKey: channelTts.channelKey,
-      };
-    }
-  }
-  const rootProviderConfig = resolveExistingTtsProviderConfigInTts({
-    cfg: params.cfg,
-    tts: params.cfg.tts,
-    providerId: params.providerId,
-  });
-  return rootProviderConfig ? { ...rootProviderConfig, scope: "root" } : undefined;
-}
-
-function resolveExistingTtsProviderConfigInTts(params: {
-  cfg: OpenClawConfig;
-  tts: unknown;
-  providerId: string;
-}): TtsProviderConfigLocation | undefined {
-  if (!isObjectRecord(params.tts)) {
+function findTtsProviderConfig(
+  tts: unknown,
+  providerId: string,
+  cfg: OpenClawConfig,
+): { key: string; value: unknown } | undefined {
+  if (!isObjectRecord(tts)) {
     return undefined;
   }
-  const providers = isObjectRecord(params.tts.providers) ? params.tts.providers : undefined;
-  const exact = providers?.[params.providerId];
+  const providers = isObjectRecord(tts.providers) ? tts.providers : undefined;
+  const exact = providers?.[providerId];
   if (exact !== undefined) {
-    return { container: "providers", key: params.providerId, value: exact };
+    return { key: providerId, value: exact };
   }
-  for (const [container, entries] of [
-    ["providers", providers],
-    ["direct", params.tts],
-  ] as const) {
-    for (const [key, value] of Object.entries(entries ?? {})) {
-      if (container === "direct" && isTtsConfigReservedKey(key)) {
-        continue;
-      }
-      const normalizedKey = normalizeLowercaseStringOrEmpty(
-        canonicalizeSpeechProviderId(key, params.cfg) ?? key,
-      );
-      if (normalizedKey === params.providerId) {
-        return { container, key, value };
-      }
+  for (const [key, value] of Object.entries(providers ?? {})) {
+    if (
+      normalizeLowercaseStringOrEmpty(canonicalizeSpeechProviderId(key, cfg) ?? key) === providerId
+    ) {
+      return { key, value };
     }
   }
   return undefined;
-}
-
-function resolveChannelTtsConfigForAuthHydration(params: {
-  cfg: OpenClawConfig;
-  channelId?: string;
-}): { channelKey: string; tts: unknown } | undefined {
-  const channels = params.cfg.channels;
-  const normalizedChannelId = normalizeOptionalString(params.channelId);
-  if (!isObjectRecord(channels) || !normalizedChannelId) {
-    return undefined;
-  }
-  const channelKey = Object.hasOwn(channels, normalizedChannelId)
-    ? normalizedChannelId
-    : Object.keys(channels).find(
-        (candidate) =>
-          normalizeLowercaseStringOrEmpty(candidate) ===
-          normalizeLowercaseStringOrEmpty(normalizedChannelId),
-      );
-  const channel = channelKey ? channels[channelKey] : undefined;
-  if (!channelKey || !isObjectRecord(channel)) {
-    return undefined;
-  }
-  return { channelKey, tts: channel.tts };
-}
-
-function buildTtsConfigWithHydratedProvider(params: {
-  tts: unknown;
-  existingProviderConfig?: ExistingTtsProviderConfig;
-  providerId: string;
-  apiKey: string;
-}): Record<string, unknown> {
-  const tts = isObjectRecord(params.tts) ? { ...params.tts } : {};
-  const providers = isObjectRecord(tts.providers) ? { ...tts.providers } : {};
-  const providerConfigKey = params.existingProviderConfig?.key ?? params.providerId;
-  const nextProviderConfig = {
-    ...(isObjectRecord(params.existingProviderConfig?.value)
-      ? params.existingProviderConfig.value
-      : {}),
-    apiKey: params.apiKey,
-  };
-  if (params.existingProviderConfig?.container === "direct") {
-    tts[providerConfigKey] = nextProviderConfig;
-  } else {
-    providers[providerConfigKey] = nextProviderConfig;
-    tts.providers = providers;
-  }
-  return tts;
 }
 
 function ttsProviderConfigHasApiKey(value: unknown): boolean {
@@ -349,7 +230,7 @@ function ttsProviderConfigHasApiKey(value: unknown): boolean {
 }
 
 export async function runTtsProviders(transport: CapabilityTransport, rawAgentId?: string) {
-  const cfg = getRuntimeConfig();
+  const cfg = await captureRuntimeConfigAsyncReader()();
   if (transport === "gateway") {
     if (rawAgentId !== undefined) {
       throw new Error("--agent is only supported with local TTS provider inspection.");
@@ -381,8 +262,8 @@ export async function runTtsProviders(transport: CapabilityTransport, rawAgentId
   }
   const agentId = resolveCapabilityProviderAgentId(cfg, rawAgentId);
   const config = resolveTtsConfig(cfg);
-  const prefsPath = resolveTtsPrefsPath(config);
-  const active = getTtsProvider(config, prefsPath);
+  const prefsPath = await resolveTtsPrefsPathAsync(config);
+  const active = await getTtsProviderAsync(config, prefsPath);
   return {
     providers: listSpeechProviders(cfg).map((provider) => ({
       available: true,
@@ -406,7 +287,7 @@ export async function runTtsPersonas(transport: CapabilityTransport) {
       timeoutMs: 30_000,
     });
   }
-  const cfg = getRuntimeConfig();
+  const cfg = await captureRuntimeConfigAsyncReader()();
   return resolveTtsPersonaList(cfg);
 }
 
@@ -416,8 +297,9 @@ export async function runTtsVoices(providerRaw?: string) {
     targetIds: getTtsCommandSecretTargetIds(),
   });
   const config = resolveTtsConfig(cfg);
-  const prefsPath = resolveTtsPrefsPath(config);
-  const provider = normalizeOptionalString(providerRaw) || getTtsProvider(config, prefsPath);
+  const prefsPath = await resolveTtsPrefsPathAsync(config);
+  const provider =
+    normalizeOptionalString(providerRaw) || (await getTtsProviderAsync(config, prefsPath));
   return await listSpeechVoices({
     provider,
     cfg,
@@ -452,17 +334,17 @@ export async function runTtsStateMutation(params: {
     });
   }
 
-  const cfg = getRuntimeConfig();
+  const cfg = await captureRuntimeConfigAsyncReader()();
   const config = resolveTtsConfig(cfg);
-  const prefsPath = resolveTtsPrefsPath(config);
+  const prefsPath = await resolveTtsPrefsPathAsync(config);
   if (params.capability === "tts.enable" || params.capability === "tts.disable") {
     const enabled = params.capability === "tts.enable";
-    setTtsEnabled(prefsPath, enabled);
+    await updateTtsPrefsAsync(prefsPath, { auto: enabled ? "always" : "off" });
     return { enabled };
   }
   if (params.capability === "tts.set-persona") {
     if (!params.persona) {
-      setTtsPersona(prefsPath, null);
+      await updateTtsPrefsAsync(prefsPath, { persona: null });
       return { persona: null };
     }
     const persona = listTtsPersonas(config).find(
@@ -471,7 +353,7 @@ export async function runTtsStateMutation(params: {
     if (!persona) {
       throw new Error(`Unknown TTS persona: ${params.persona}`);
     }
-    setTtsPersona(prefsPath, persona.id);
+    await updateTtsPrefsAsync(prefsPath, { persona: persona.id });
     return { persona: persona.id };
   }
   if (!params.provider) {
@@ -481,6 +363,6 @@ export async function runTtsStateMutation(params: {
   if (!provider) {
     throw new Error(`Unknown speech provider: ${params.provider}`);
   }
-  setTtsProvider(prefsPath, provider);
+  await updateTtsPrefsAsync(prefsPath, { provider });
   return { provider };
 }

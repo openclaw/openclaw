@@ -1,6 +1,6 @@
-// Node pairing commands: list, approve, reject, remove, and rename paired nodes.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { getTerminalTableWidth } from "../../../packages/terminal-core/src/table.js";
 import type { OperatorScope } from "../../gateway/method-scopes.js";
 import { resolveNodePairApprovalScopes } from "../../infra/node-pairing-authz.js";
@@ -19,29 +19,6 @@ import {
 import type { NodesRpcOpts } from "./types.js";
 
 const DEFAULT_NODE_PAIR_APPROVE_SCOPES: OperatorScope[] = ["operator.pairing"];
-const NODE_PAIR_APPROVE_SCOPE_SET = new Set<OperatorScope>([
-  "operator.pairing",
-  "operator.write",
-  "operator.admin",
-]);
-
-function normalizeNodePairApproveScopes(scopes: unknown): OperatorScope[] {
-  const normalized = new Set<OperatorScope>(DEFAULT_NODE_PAIR_APPROVE_SCOPES);
-  if (!Array.isArray(scopes)) {
-    return [...normalized];
-  }
-  for (const scope of scopes) {
-    if (typeof scope !== "string") {
-      continue;
-    }
-    if (!NODE_PAIR_APPROVE_SCOPE_SET.has(scope as OperatorScope)) {
-      continue;
-    }
-    normalized.add(scope as OperatorScope);
-  }
-  return [...normalized];
-}
-
 async function resolveApproveScopesForRequest(
   opts: NodesRpcOpts,
   requestId: string,
@@ -65,13 +42,8 @@ async function resolveApproveScopesForRequest(
   if (!request) {
     throw new Error(buildUnknownNodePairRequestIdMessage(requestId, opts, pendingRequestIds));
   }
-  const declaredScopes = normalizeNodePairApproveScopes(request.requiredApproveScopes);
-  if (declaredScopes.length > DEFAULT_NODE_PAIR_APPROVE_SCOPES.length) {
-    return { scopes: declaredScopes };
-  }
-  // Older pending requests only list requested commands; derive approval scopes from them.
   return {
-    scopes: resolveNodePairApprovalScopes(request.commands) as OperatorScope[],
+    scopes: resolveNodePairApprovalScopes(request.commands, request.requiredApproveScopes),
   };
 }
 
@@ -106,20 +78,6 @@ function buildUnknownNodePairRequestIdMessage(
     lines.push(connectionReminder);
   }
   return lines.join("\n");
-}
-
-function rethrowUnknownNodePairRequestId(
-  error: unknown,
-  requestId: string,
-  opts: NodesRpcOpts,
-): never {
-  if (!isUnknownNodePairRequestIdError(error)) {
-    throw error;
-  }
-  // Reuse the gateway error so generic formatting does not append its raw cause.
-  error.name = "Error";
-  error.message = buildUnknownNodePairRequestIdMessage(requestId, opts);
-  throw error;
 }
 
 export function registerNodesPairingCommands(nodes: Command) {
@@ -181,7 +139,12 @@ export function registerNodesPairingCommands(nodes: Command) {
                   )
                 : await callNodesGatewayCli("node.pair.reject", opts, { requestId });
             } catch (error) {
-              rethrowUnknownNodePairRequestId(error, requestId, opts);
+              if (isUnknownNodePairRequestIdError(error)) {
+                // Preserve the gateway error without appending its raw cause.
+                error.name = "Error";
+                error.message = buildUnknownNodePairRequestIdMessage(requestId, opts);
+              }
+              throw error;
             }
             defaultRuntime.writeJson(result);
           });
@@ -203,7 +166,7 @@ export function registerNodesPairingCommands(nodes: Command) {
             return;
           }
           const { warn } = getNodesTheme();
-          defaultRuntime.log(warn(`Removed paired node ${nodeId}`));
+          defaultRuntime.log(warn(sanitizeTerminalText(`Removed paired node ${nodeId}`)));
         });
       }),
   );
@@ -232,7 +195,7 @@ export function registerNodesPairingCommands(nodes: Command) {
             return;
           }
           const { ok } = getNodesTheme();
-          defaultRuntime.log(ok(`node rename ok: ${nodeId} -> ${name}`));
+          defaultRuntime.log(ok(sanitizeTerminalText(`node rename ok: ${nodeId} -> ${name}`)));
         });
       }),
   );

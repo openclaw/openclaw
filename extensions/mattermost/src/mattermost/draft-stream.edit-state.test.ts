@@ -136,17 +136,6 @@ async function withPostFixture(
 }
 
 describe("Mattermost partial edits preserve provider-owned post state", () => {
-  it("preserves pin/reaction state on text edit", async () => {
-    await withPostFixture(async ({ stream, warnings, read, setFlags }) => {
-      setFlags(true);
-      const before = await read();
-      stream.update("Working with more detail");
-      await stream.flush();
-      expect(warnings).toEqual([]);
-      expect(await read()).toEqual({ ...before, message: "Working with more detail" });
-    });
-  });
-
   it("preserves message and flags on props-only edit", async () => {
     await withPostFixture(async ({ client, read, setFlags }) => {
       setFlags(true);
@@ -157,12 +146,14 @@ describe("Mattermost partial edits preserve provider-owned post state", () => {
     });
   });
 
-  it("preserves omitted props when channel mentions are restricted", async () => {
+  it("preserves flags and omitted props when channel mentions are restricted", async () => {
     await withPostFixture(
-      async ({ stream, read }) => {
+      async ({ stream, warnings, read, setFlags }) => {
+        setFlags(true);
         const before = await read();
         stream.update("Update for @channel");
         await stream.flush();
+        expect(warnings).toEqual([]);
         expect(await read()).toEqual({
           ...before,
           message: "Update for @channel",

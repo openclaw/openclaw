@@ -1,3 +1,7 @@
+import {
+  annotateRuntimeExecutionError,
+  noteRuntimeDynamicExecution,
+} from "openclaw/plugin-sdk/runtime-env";
 import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaEvidenceRttMeasurement } from "./evidence-summary.js";
 import type { QaTransportState } from "./qa-transport.js";
@@ -20,6 +24,7 @@ const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as
 ) => (...fnArgs: unknown[]) => Promise<unknown>;
 
 const qaFlowImportLoaders: Record<string, QaFlowImportLoader> = {
+  "openclaw/plugin-sdk/qa-runtime": () => import("openclaw/plugin-sdk/qa-runtime"),
   "./auth-profile.fixture.js": () => import("./auth-profile.fixture.js"),
   "./codex-plugin.fixture.js": () => import("./codex-plugin.fixture.js"),
   "./errors.js": () => import("./errors.js"),
@@ -154,7 +159,12 @@ function createEvalContext(api: QaFlowApi, vars: QaFlowVars) {
     ...api,
     qaImport: (specifier: string) => {
       const loader = qaFlowImportLoaders[specifier];
-      return loader ? loader() : import(specifier);
+      if (loader) {
+        return loader();
+      }
+      return import(specifier).catch((error: unknown) => {
+        throw annotateRuntimeExecutionError(error, "QA scenario source import");
+      });
     },
     vars,
     ...vars,
@@ -162,11 +172,16 @@ function createEvalContext(api: QaFlowApi, vars: QaFlowVars) {
 }
 
 async function evalExpr(expr: string, api: QaFlowApi, vars: QaFlowVars) {
+  noteRuntimeDynamicExecution("qa");
   const context = createEvalContext(api, vars);
   const names = Object.keys(context);
   const values = Object.values(context);
-  const fn = new AsyncFunction(...names, `return (${expr});`);
-  return await fn(...values);
+  try {
+    const fn = new AsyncFunction(...names, `return (${expr});`);
+    return await fn(...values);
+  } catch (error) {
+    throw annotateRuntimeExecutionError(error, "QA scenario expression evaluation");
+  }
 }
 
 function buildLambda(
@@ -174,15 +189,20 @@ function buildLambda(
   api: QaFlowApi,
   vars: QaFlowVars,
 ) {
+  noteRuntimeDynamicExecution("qa");
   const context = createEvalContext(api, vars);
   const names = Object.keys(context);
   const values = Object.values(context);
   const params = spec.params ?? [];
   const Factory = spec.async ? AsyncFunction : Function;
-  const fn = new Factory(...names, ...params, `return (${spec.expr});`) as (
-    ...fnArgs: unknown[]
-  ) => unknown;
-  return (...lambdaArgs: unknown[]) => fn(...values, ...lambdaArgs);
+  try {
+    const fn = new Factory(...names, ...params, `return (${spec.expr});`) as (
+      ...fnArgs: unknown[]
+    ) => unknown;
+    return (...lambdaArgs: unknown[]) => fn(...values, ...lambdaArgs);
+  } catch (error) {
+    throw annotateRuntimeExecutionError(error, "QA scenario lambda creation");
+  }
 }
 
 async function resolveValue(node: unknown, api: QaFlowApi, vars: QaFlowVars): Promise<unknown> {
@@ -240,20 +260,6 @@ function throwIfFlowAborted(api: QaFlowApi, options: QaFlowActionOptions = {}) {
   }
 }
 
-async function runFlowAction(
-  action: unknown,
-  api: QaFlowApi,
-  vars: QaFlowVars,
-  options: QaFlowActionOptions = {},
-) {
-  throwIfFlowAborted(api, options);
-  try {
-    await runFlowActionBody(action, api, vars, options);
-  } finally {
-    throwIfFlowAborted(api, options);
-  }
-}
-
 async function runFlowActions(
   actions: readonly unknown[],
   api: QaFlowApi,
@@ -265,12 +271,13 @@ async function runFlowActions(
   }
 }
 
-async function runFlowActionBody(
+async function runFlowAction(
   action: unknown,
   api: QaFlowApi,
   vars: QaFlowVars,
   options: QaFlowActionOptions,
 ) {
+  throwIfFlowAborted(api, options);
   if (!isPlainObject(action)) {
     throw new Error(`invalid qa flow action: ${JSON.stringify(action)}`);
   }
@@ -301,7 +308,6 @@ async function runFlowActionBody(
   }
   if (action.resetTransport === true) {
     const reset = resolveCallable("transport.reset", api, vars);
-    throwIfFlowAborted(api, options);
     await reset();
     return;
   }
@@ -432,23 +438,19 @@ export async function runScenarioFlow(params: {
         return undefined;
       }
       throwIfFlowAborted(params.api);
-      try {
-        const details = step.detailsExpr
-          ? formatFlowDetails(await evalExpr(step.detailsExpr, params.api, vars))
-          : undefined;
-        const rtt = step.resultExpr
-          ? resolveFlowResultRtt(await evalExpr(step.resultExpr, params.api, vars))
-          : undefined;
-        if (!rtt) {
-          return details === undefined ? undefined : { details };
-        }
-        return {
-          ...(details === undefined ? {} : { details }),
-          ...rtt,
-        } satisfies QaSuiteStepOutcome;
-      } finally {
-        throwIfFlowAborted(params.api);
+      const details = step.detailsExpr
+        ? formatFlowDetails(await evalExpr(step.detailsExpr, params.api, vars))
+        : undefined;
+      const rtt = step.resultExpr
+        ? resolveFlowResultRtt(await evalExpr(step.resultExpr, params.api, vars))
+        : undefined;
+      if (!rtt) {
+        return details === undefined ? undefined : { details };
       }
+      return {
+        ...(details === undefined ? {} : { details }),
+        ...rtt,
+      } satisfies QaSuiteStepOutcome;
     },
   }));
   const result = await params.api.runScenario(params.scenarioTitle, steps);

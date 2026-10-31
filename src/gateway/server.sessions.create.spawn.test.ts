@@ -1,11 +1,17 @@
 import fs from "node:fs/promises";
 import { expect, test, vi } from "vitest";
-import { getRegistryWorktree, listRegistryWorktrees } from "../agents/worktrees/registry.js";
-import { managedWorktrees } from "../agents/worktrees/service.js";
+import { captureMethodCall } from "../../test/helpers/capture-method-call.js";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import {
+  getRegistryWorktree,
+  listRegistryWorktrees,
+} from "../agents/worktrees/registry.test-support.js";
+import { ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
   loadSessionEntry,
+  loadTranscriptEvents,
   onSessionIdentityMutation,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
@@ -13,7 +19,7 @@ import {
   resolveSqliteStoreScope,
   runExclusiveSqliteSessionWrite,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
+import { runSessionMutation } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -23,17 +29,23 @@ import {
   createGitWorkspace,
 } from "./server.sessions.create.projects.test-support.js";
 import {
-  setupSessionCreateTestHarness,
+  setupSessionCreateHandlerTestHarness,
   chatSendOwner,
+  sessionCreateRuntimeClient,
   requireNonEmptyString,
 } from "./server.sessions.create.test-support.js";
+import * as sessionStoreWorker from "./session-utils-store-worker.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
-import { sessionStoreEntry, directSessionReq } from "./test/server-sessions.test-helpers.js";
+import {
+  sessionStoreEntry,
+  directSessionReq,
+  seedSessionTranscript,
+} from "./test/server-sessions.test-helpers.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
 
 let gitWorkspaceTemplate: string;
-const { createSessionStoreDir } = setupSessionCreateTestHarness(async (makeTempDir) => {
+const { createSessionStoreDir } = setupSessionCreateHandlerTestHarness(async (makeTempDir) => {
   gitWorkspaceTemplate = await createGitWorkspace(makeTempDir("openclaw-session-git-template-"));
 });
 
@@ -54,74 +66,204 @@ async function holdSessionWriter(storePath: string) {
   return { releaseWriter, heldWriter };
 }
 
-test("sessions.create atomically persists trusted visible-spawn tool policy with required parent", async () => {
+test.each([
+  { drafts: true, fork: false },
+  { drafts: true, fork: true },
+  { drafts: false, fork: false },
+  { drafts: false, fork: true },
+])(
+  "sessions.create applies Draft spawn policy (draft selection=$drafts, fork=$fork)",
+  async ({ drafts, fork }) => {
+    testState.sessionConfig = { sharing: { drafts } };
+    const { storePath } = await createSessionStoreDir();
+    const parentSessionKey = "agent:main:main";
+    const actor = { type: "human", source: "profile", id: "visible-spawn-creator" } as const;
+    await writeSessionStore({
+      entries: {
+        [parentSessionKey]: {
+          ...sessionStoreEntry("sess-visible-spawn-parent"),
+          createdVia: "operator",
+          createdActor: actor,
+          sandbox: "required",
+          visibility: "draft",
+        },
+      },
+    });
+    if (fork) {
+      await seedSessionTranscript({
+        agentId: "main",
+        sessionId: "sess-visible-spawn-parent",
+        sessionKey: parentSessionKey,
+        storePath,
+        messages: [
+          { role: "user", content: "Synthetic picnic planning context" },
+          { role: "assistant", content: "We can plan around the weather.", stopReason: "stop" },
+        ],
+      });
+    }
+    const childSessionKey = "agent:main:dashboard:draft-spawn";
+
+    const created = await directSessionReq<CreatedSessionPayload>(
+      "sessions.create",
+      {
+        agentId: "main",
+        key: childSessionKey,
+        label: "Restricted visible child",
+        parentSessionKey,
+        spawnDepth: 1,
+        fork,
+      },
+      {
+        client: {
+          connect: { scopes: ["operator.write"] },
+          internal: {
+            syntheticClient: true,
+            operatorRoleActor: { kind: "system" },
+            sessionCreation: {
+              via: "spawn",
+              actor: { type: "agent", id: "main" },
+              requesterSessionKey: parentSessionKey,
+              completionOwnerSessionKey: "agent:main:discord:direct:alice",
+              inheritedToolPolicy: {
+                version: 1,
+                allow: ["read", "sessions_spawn"],
+                deny: ["exec"],
+              },
+            },
+          },
+        } as never,
+      },
+    );
+
+    if (!drafts) {
+      expect(created).toMatchObject({
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message: expect.stringContaining("Continue in the existing Draft"),
+          details: { code: "SESSION_VISIBILITY_DISABLED", visibility: "draft" },
+        },
+      });
+      expect(
+        loadSessionEntry({ agentId: "main", sessionKey: childSessionKey, storePath }),
+      ).toBeUndefined();
+      expect(
+        loadSessionEntry({ agentId: "main", sessionKey: parentSessionKey, storePath }),
+      ).toMatchObject({
+        sessionId: "sess-visible-spawn-parent",
+        visibility: "draft",
+      });
+      const explicitShared = await directSessionReq<CreatedSessionPayload>("sessions.create", {
+        agentId: "main",
+        parentSessionKey,
+        visibility: "shared",
+      });
+      expect(explicitShared.ok, JSON.stringify(explicitShared.error)).toBe(true);
+      expect(explicitShared.payload?.entry?.visibility).toBe("shared");
+      return;
+    }
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
+    expect(created.payload?.entry).toMatchObject({
+      label: "Restricted visible child",
+      spawnedBy: parentSessionKey,
+      completionOwnerSessionKey: "agent:main:discord:direct:alice",
+      parentSessionKey,
+      spawnDepth: 1,
+      inheritedToolPolicyVersion: 1,
+      inheritedToolAllow: ["read", "sessions_spawn"],
+      inheritedToolDeny: ["exec"],
+      visibility: "draft",
+    });
+    const key = requireNonEmptyString(created.payload?.key, "visible child key");
+    const child = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
+    expect(child).toMatchObject({
+      spawnedBy: parentSessionKey,
+      completionOwnerSessionKey: "agent:main:discord:direct:alice",
+      inheritedToolPolicyVersion: 1,
+      inheritedToolAllow: ["read", "sessions_spawn"],
+      inheritedToolDeny: ["exec"],
+      createdActor: actor,
+    });
+    expect(child?.sandbox).toBe("required");
+    expect(child?.visibility).toBe("draft");
+    if (fork) {
+      expect(
+        await loadTranscriptEvents({
+          agentId: "main",
+          sessionKey: key,
+          sessionId: requireNonEmptyString(child?.sessionId, "forked child session id"),
+          storePath,
+        }),
+      ).toContainEqual(
+        expect.objectContaining({
+          message: expect.objectContaining({ content: "Synthetic picnic planning context" }),
+        }),
+      );
+    }
+    const explicitShared = await directSessionReq<CreatedSessionPayload>("sessions.create", {
+      agentId: "main",
+      parentSessionKey,
+      visibility: "shared",
+    });
+    expect(explicitShared.ok, JSON.stringify(explicitShared.error)).toBe(true);
+    expect(explicitShared.payload?.entry?.visibility).toBe("shared");
+    const publishedParent = await directSessionReq("session.visibility.set", {
+      sessionKey: parentSessionKey,
+      visibility: "shared",
+    });
+    expect(publishedParent.ok, JSON.stringify(publishedParent.error)).toBe(true);
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.visibility).toBe(
+      "draft",
+    );
+  },
+);
+
+test("sessions.create rechecks inherited Draft admission after spawn preparation", async () => {
+  const { createGatewaySession } = await import("./session-create-service.js");
+  testState.sessionConfig = { sharing: { drafts: true } };
   const { storePath } = await createSessionStoreDir();
   const parentSessionKey = "agent:main:main";
-  const actor = { type: "human", source: "profile", id: "visible-spawn-creator" } as const;
+  const key = "agent:main:dashboard:draft-policy-changed";
   await writeSessionStore({
     entries: {
       [parentSessionKey]: {
-        ...sessionStoreEntry("sess-visible-spawn-parent"),
-        createdVia: "operator",
-        createdActor: actor,
-        sandbox: "required",
+        ...sessionStoreEntry("draft-policy-parent"),
+        visibility: "draft",
       },
     },
   });
-
-  const created = await directSessionReq<CreatedSessionPayload>(
-    "sessions.create",
-    {
-      agentId: "main",
-      label: "Restricted visible child",
-      parentSessionKey,
-      spawnDepth: 1,
-    },
-    {
-      client: {
-        connect: { scopes: ["operator.write"] },
-        internal: {
-          syntheticClient: true,
-          operatorRoleActor: { kind: "system" },
-          sessionCreation: {
-            via: "spawn",
-            actor: { type: "agent", id: "main" },
-            requesterSessionKey: parentSessionKey,
-            completionOwnerSessionKey: "agent:main:discord:direct:alice",
-            inheritedToolPolicy: {
-              version: 1,
-              allow: ["read", "sessions_spawn"],
-              deny: ["exec"],
-            },
-          },
-        },
-      } as never,
-    },
-  );
-
-  expect(created.ok, JSON.stringify(created.error)).toBe(true);
-  expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
-  expect(created.payload?.entry).toMatchObject({
-    label: "Restricted visible child",
-    spawnedBy: parentSessionKey,
-    completionOwnerSessionKey: "agent:main:discord:direct:alice",
+  const cfg = getRuntimeConfig();
+  let currentConfig = cfg;
+  let prepared = false;
+  const created = await createGatewaySession({
+    cfg,
+    getCurrentConfig: () => currentConfig,
+    agentId: "main",
+    key,
     parentSessionKey,
     spawnDepth: 1,
-    inheritedToolPolicyVersion: 1,
-    inheritedToolAllow: ["read", "sessions_spawn"],
-    inheritedToolDeny: ["exec"],
+    commandSource: "test",
+    creation: { via: "spawn", actor: { type: "agent", id: "main" } },
+    onPhase: (phase) => {
+      if (phase === "worktree") {
+        prepared = true;
+        currentConfig = { ...cfg, session: { ...cfg.session, sharing: { drafts: false } } };
+      }
+    },
   });
-  const key = requireNonEmptyString(created.payload?.key, "visible child key");
-  const child = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
-  expect(child).toMatchObject({
-    spawnedBy: parentSessionKey,
-    completionOwnerSessionKey: "agent:main:discord:direct:alice",
-    inheritedToolPolicyVersion: 1,
-    inheritedToolAllow: ["read", "sessions_spawn"],
-    inheritedToolDeny: ["exec"],
-    createdActor: actor,
+  expect(prepared).toBe(true);
+  expect(created).toMatchObject({
+    ok: false,
+    error: { details: { code: "SESSION_VISIBILITY_DISABLED", visibility: "draft" } },
   });
-  expect(child?.sandbox).toBe("required");
+  expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
+  expect(
+    loadSessionEntry({ agentId: "main", sessionKey: parentSessionKey, storePath }),
+  ).toMatchObject({
+    sessionId: "draft-policy-parent",
+    visibility: "draft",
+  });
 });
 
 test("sessions.create persists trusted agent-runtime spawn permissions", async () => {
@@ -194,6 +336,7 @@ test("sessions.create persists trusted agent-runtime spawn permissions", async (
     createdActor: { type: "agent", id: "main" },
   });
   expect(child?.sandbox).toBeUndefined();
+  expect(child?.visibility ?? "shared").toBe("shared");
 });
 
 test("sessions.create rejects a replaced required spawn parent before child creation", async () => {
@@ -210,7 +353,7 @@ test("sessions.create rejects a replaced required spawn parent before child crea
   const { createGatewaySession } = await import("./session-create-service.js");
   const parentMutationStarted = createDeferredCore();
   const replaceParent = createDeferredCore();
-  const replacing = runExclusiveSessionLifecycleMutation({
+  const replacing = runSessionMutation({
     scope: storePath,
     identities: [parentSessionKey, parent.sessionId],
     run: async () => {
@@ -224,6 +367,7 @@ test("sessions.create rejects a replaced required spawn parent before child crea
   });
   await parentMutationStarted.promise;
 
+  const lifecycleAdmission = createDeferredCore();
   const creating = createGatewaySession({
     cfg: getRuntimeConfig(),
     agentId: "main",
@@ -232,9 +376,19 @@ test("sessions.create rejects a replaced required spawn parent before child crea
     spawnDepth: 1,
     commandSource: "test",
     creation: { via: "spawn", actor: { type: "agent", id: "main" } },
+    onPhase: (phase) => {
+      if (phase === "lifecycleAdmission") {
+        lifecycleAdmission.resolve();
+      }
+    },
   });
 
   try {
+    await awaitGateBeforeSettlement(
+      lifecycleAdmission.promise,
+      creating,
+      "Session creation settled before lifecycle admission",
+    );
     replaceParent.resolve();
     await replacing;
     const created = await creating;
@@ -256,28 +410,22 @@ test("sessions.create commits no session after delegated authority closes", asyn
   const sessionKey = "agent:main:dashboard:authority-race";
   let authorityCurrent = true;
   const firstGuard = createDeferredCore();
+  const context = {
+    validateAgentRuntimeApprovalAuthority: () => {
+      firstGuard.resolve();
+      return authorityCurrent;
+    },
+  };
+  const listed = await directSessionReq("sessions.list", {}, { context });
+  expect(listed.ok, JSON.stringify(listed.error)).toBe(true);
   const { releaseWriter, heldWriter } = await holdSessionWriter(storePath);
 
   const creating = directSessionReq(
     "sessions.create",
     { agentId: "main", key: sessionKey },
     {
-      context: {
-        validateAgentRuntimeApprovalAuthority: () => {
-          firstGuard.resolve();
-          return authorityCurrent;
-        },
-      },
-      client: {
-        connect: { scopes: ["operator.write"] },
-        internal: {
-          agentRuntimeIdentity: {
-            kind: "agentRuntime",
-            agentId: "main",
-            sessionKey: "agent:main:main",
-          },
-        },
-      } as never,
+      context,
+      client: sessionCreateRuntimeClient(["operator.write"]) as never,
     },
   );
 
@@ -290,44 +438,6 @@ test("sessions.create commits no session after delegated authority closes", asyn
     const created = await creating;
     expect(created.ok).toBe(false);
     expect(created.error?.message).toContain("agent runtime authority is no longer active");
-    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toBeUndefined();
-  } finally {
-    releaseWriter.resolve();
-    await Promise.allSettled([heldWriter, creating]);
-  }
-});
-
-test("sessions.create commits no child after its bound Gateway is replaced", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const sessionKey = "agent:main:dashboard:gateway-replacement-race";
-  const admitted = {};
-  const replacement = {};
-  let current = admitted;
-  const firstGuard = createDeferredCore();
-  const { releaseWriter, heldWriter } = await holdSessionWriter(storePath);
-  const creating = directSessionReq(
-    "sessions.create",
-    { agentId: "main", key: sessionKey },
-    {
-      sessionMutationAuthorization: {
-        assertCurrent: () => {
-          if (current !== admitted) {
-            throw new Error("current gateway instance binding was replaced");
-          }
-          firstGuard.resolve();
-        },
-        assertTargetCurrent: vi.fn(),
-      },
-    },
-  );
-
-  try {
-    await firstGuard.promise;
-    current = replacement;
-    releaseWriter.resolve();
-    await heldWriter;
-
-    await expect(creating).rejects.toThrow("current gateway instance binding was replaced");
     expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toBeUndefined();
   } finally {
     releaseWriter.resolve();
@@ -360,7 +470,7 @@ test("sessions.create commits no child after its worker turn closes", async () =
     ],
     ["starting", "active", { activeOwnerEpoch: 7 }],
   ] as const) {
-    placement = placements.transition({
+    placement = await placements.transition({
       sessionId: placement.sessionId,
       from,
       to,
@@ -376,35 +486,49 @@ test("sessions.create commits no child after its worker turn closes", async () =
     runId: "worker-run",
     owner: { kind: "worker", environmentId: "worker-environment", ownerEpoch: 7 },
   });
-  const firstGuard = createDeferredCore();
+  const context = {};
+  const listed = await directSessionReq("sessions.list", {}, { context });
+  expect(listed.ok, JSON.stringify(listed.error)).toBe(true);
+  const readStarted = createDeferredCore();
+  const readEntry = sessionStoreWorker.loadGatewaySessionEntryReadOnlyInWorker;
+  const lookup = vi
+    .spyOn(sessionStoreWorker, "loadGatewaySessionEntryReadOnlyInWorker")
+    .mockImplementation((input) => {
+      const reading = readEntry(input);
+      readStarted.resolve();
+      return reading;
+    });
   const { releaseWriter, heldWriter } = await holdSessionWriter(storePath);
   const creating = directSessionReq(
     "sessions.create",
     { agentId: "main", key: sessionKey },
     {
+      context,
       sessionMutationAuthorization: {
         assertCurrent: () => {
           if (!placements.validateTurnClaim(turnClaim)) {
             throw new Error("worker turn authority changed");
           }
-          firstGuard.resolve();
         },
         assertTargetCurrent: vi.fn(),
       },
     },
   );
 
+  const rejected = expect(creating).rejects.toThrow("worker turn authority changed");
+
   try {
-    await firstGuard.promise;
+    await awaitGateBeforeSettlement(readStarted.promise, creating, "Session read was not queued");
     await placements.releaseTurn(turnClaim);
     releaseWriter.resolve();
     await heldWriter;
 
-    await expect(creating).rejects.toThrow("worker turn authority changed");
+    await rejected;
     expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toBeUndefined();
   } finally {
     releaseWriter.resolve();
     await Promise.allSettled([heldWriter, creating]);
+    lookup.mockRestore();
   }
 });
 
@@ -432,16 +556,7 @@ test("sessions.create starts no initial turn when authority closes after session
         context: {
           validateAgentRuntimeApprovalAuthority: () => authorityCurrent,
         },
-        client: {
-          connect: { scopes: ["operator.write"] },
-          internal: {
-            agentRuntimeIdentity: {
-              kind: "agentRuntime",
-              agentId: "main",
-              sessionKey: "agent:main:main",
-            },
-          },
-        } as never,
+        client: sessionCreateRuntimeClient(["operator.write"]) as never,
       },
     );
 
@@ -469,11 +584,11 @@ test("sessions.create removes a provisioned worktree when authority closes befor
   let authorityCurrent = true;
   let allocatedWorktree: { id: string; path: string } | undefined;
   let allocatedDirectoryExists = false;
-  const createWorktree = managedWorktrees.createWithOutcome.bind(managedWorktrees);
+  const createWorktree = captureMethodCall("createWithOutcome")(ManagedWorktreeService.prototype);
   const createSpy = vi
-    .spyOn(managedWorktrees, "createWithOutcome")
-    .mockImplementation(async (params) => {
-      const outcome = await createWorktree(params);
+    .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
+    .mockImplementation(async function (this: ManagedWorktreeService, params) {
+      const outcome = await createWorktree(this, params);
       allocatedWorktree = outcome.record;
       allocatedDirectoryExists = (await fs.stat(outcome.record.path)).isDirectory();
       authorityCurrent = false;
@@ -493,16 +608,7 @@ test("sessions.create removes a provisioned worktree when authority closes befor
         context: {
           validateAgentRuntimeApprovalAuthority: () => authorityCurrent,
         },
-        client: {
-          connect: { scopes: ["operator.admin"] },
-          internal: {
-            agentRuntimeIdentity: {
-              kind: "agentRuntime",
-              agentId: "main",
-              sessionKey: "agent:main:main",
-            },
-          },
-        } as never,
+        client: sessionCreateRuntimeClient(["operator.admin"]) as never,
       },
     );
 

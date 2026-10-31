@@ -5,7 +5,8 @@ import {
   isGatewayRestartDraining,
   runWithGatewayDetachedWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import { getAsyncWorkSignal, runInDetachedAsyncContext } from "../shared/async-work-scope.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { assertTranscriptCaptureEnabled } from "./capture-startup.js";
 import type { resolveTranscriptsConfig } from "./config.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
@@ -317,19 +318,12 @@ export async function createTranscriptSummaryUpdates(
     };
     lane.live = owner;
     lane.generation++;
-    try {
-      const initial = await params.store.readSummarySnapshot(
-        params.session,
-        params.config.maxUtterances,
-      );
-      if (!initial || stopped || lane.live !== owner) {
-        throw new TranscriptsSummaryChangedError();
-      }
-      return owner;
-    } catch (error) {
+    await Promise.resolve();
+    if (stopped || lane.live !== owner) {
       await owner.stop();
-      throw error;
+      throw new TranscriptsSummaryChangedError();
     }
+    return owner;
   } finally {
     lane.pending--;
     if (!lane.pending && !lane.live && lanes.get(key) === lane) {

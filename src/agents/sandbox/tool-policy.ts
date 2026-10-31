@@ -21,20 +21,17 @@ function pickConfiguredList(
   values?: string[];
   source: SandboxToolPolicySource;
 } {
-  const agentValues = agent?.[field];
-  const globalValues = global?.[field];
   const key = `tools.sandbox.tools.${field}`;
-  if (Array.isArray(agentValues)) {
-    return {
-      values: agentValues,
-      source: { source: "agent", key: `agents.entries.*.${key}` },
-    };
-  }
-  if (Array.isArray(globalValues)) {
-    return {
-      values: globalValues,
-      source: { source: "global", key },
-    };
+  for (const [source, values] of [
+    ["agent", agent?.[field]],
+    ["global", global?.[field]],
+  ] as const) {
+    if (Array.isArray(values)) {
+      return {
+        values,
+        source: { source, key: source === "agent" ? `agents.entries.*.${key}` : key },
+      };
+    }
   }
   return {
     values: undefined,
@@ -60,17 +57,13 @@ function pickAllowSource(params: {
   allowDefined: boolean;
   alsoAllow?: SandboxToolPolicySource;
 }): SandboxToolPolicySource {
-  if (params.allowDefined && params.allow.source === "agent") {
-    return params.allow;
-  }
-  if (params.alsoAllow?.source === "agent") {
-    return params.alsoAllow;
-  }
-  if (params.allowDefined && params.allow.source === "global") {
-    return params.allow;
-  }
-  if (params.alsoAllow?.source === "global") {
-    return params.alsoAllow;
+  for (const source of ["agent", "global"] as const) {
+    if (params.allowDefined && params.allow.source === source) {
+      return params.allow;
+    }
+    if (params.alsoAllow?.source === source) {
+      return params.alsoAllow;
+    }
   }
   return params.allow;
 }

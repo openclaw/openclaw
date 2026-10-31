@@ -1,7 +1,6 @@
 import type { Selectable } from "kysely";
 import type { ChannelIngressEvents } from "../../state/openclaw-state-db.generated.js";
 
-/** Pending or retryable inbound channel event stored in the durable ingress queue. */
 export type ChannelIngressQueueRecord<TPayload, TMetadata = unknown> = ChannelIngressScope & {
   id: string;
   payload: TPayload;
@@ -14,7 +13,6 @@ export type ChannelIngressQueueRecord<TPayload, TMetadata = unknown> = ChannelIn
   lastError?: string;
 };
 
-/** Pending ingress event currently claimed by a worker. */
 export type ChannelIngressQueueClaim<TPayload, TMetadata = unknown> = ChannelIngressQueueRecord<
   TPayload,
   TMetadata
@@ -50,7 +48,6 @@ export type ChannelIngressQueueCompletedRecord<TCompletedMetadata = unknown> =
     metadata?: TCompletedMetadata;
   };
 
-/** Retention options for pending, completed, and failed ingress queue rows. */
 export type ChannelIngressQueuePruneOptions = {
   pendingTtlMs?: number;
   completedTtlMs?: number;
@@ -84,29 +81,6 @@ export type ChannelIngressQueueDeadLetterRecord<
   lastAttemptAt?: number;
 };
 
-/** Outcome of asking a channel/account queue to re-enqueue one failed event. */
-type ChannelIngressQueueResubmitResult<
-  TPayload,
-  TMetadata = unknown,
-  TCompletedMetadata = unknown,
-> =
-  | {
-      kind: "resubmitted";
-      record: ChannelIngressQueueRecord<TPayload, TMetadata>;
-      previous: ChannelIngressQueueDeadLetterRecord<TPayload, TMetadata>;
-    }
-  | { kind: "not-found" }
-  | {
-      kind: "completed";
-      record: ChannelIngressQueueCompletedRecord<TCompletedMetadata>;
-    }
-  | { kind: "active"; status: "pending" | "claimed" }
-  | {
-      kind: "unrecoverable";
-      record: ChannelIngressQueueDeadLetterRecord<TPayload, TMetadata>;
-    };
-
-/** Result of enqueueing a possibly duplicate ingress event id. */
 type ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata> =
   | {
       kind: "accepted";
@@ -134,8 +108,38 @@ type ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata> =
       record: ChannelIngressQueueFailedRecord;
     };
 
-/** Durable FIFO-ish ingress queue with claims, duplicate detection, and retention pruning. */
+type ChannelIngressQueueInput<TPayload, TMetadata> = {
+  id: string;
+  payload: TPayload;
+  metadata?: TMetadata;
+  receivedAt?: number;
+  laneKey?: string;
+};
+
 export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadata = unknown> = {
+  /** One durable admission for a transport batch; optional for external queue implementations. */
+  enqueueBatch?(
+    events: ReadonlyArray<ChannelIngressQueueInput<TPayload, TMetadata>>,
+  ): Promise<Array<ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata>>>;
+  /** Atomic batch admission under current policy authority; absence is unsupported. */
+  enqueueBatchAuthorized?(
+    events: ReadonlyArray<ChannelIngressQueueInput<TPayload, TMetadata>>,
+    options: { assertCurrent: () => void },
+  ): Promise<Array<ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata>>>;
+  /** Claim a fresh singleton only when no pending or claimed row precedes it. */
+  enqueueAndClaim?(
+    id: string,
+    payload: TPayload,
+    options: {
+      ownerId: string;
+      metadata?: TMetadata;
+      receivedAt?: number;
+      laneKey?: string;
+    },
+  ): Promise<{
+    result: ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata>;
+    freshClaim?: ChannelIngressQueueClaim<TPayload, TMetadata>;
+  }>;
   enqueue(
     id: string,
     payload: TPayload,
@@ -145,6 +149,17 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
       laneKey?: string;
     },
   ): Promise<ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata>>;
+  /** Current-authority enqueue; absence is unsupported, never fall back to unguarded intake. */
+  enqueueAuthorized?: (
+    id: string,
+    payload: TPayload,
+    options: {
+      metadata?: TMetadata;
+      receivedAt?: number;
+      laneKey?: string;
+      assertCurrent: () => void;
+    },
+  ) => Promise<ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata>>;
   listPending(options?: {
     limit?: number | "all";
     orderBy?: "received" | "id";
@@ -176,7 +191,7 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
   }): Promise<ChannelIngressQueueClaim<TPayload, TMetadata> | null>;
   claim(
     id: string,
-    options?: { ownerId?: string },
+    options?: { ownerId?: string; laneKey?: string },
   ): Promise<ChannelIngressQueueClaim<TPayload, TMetadata> | null>;
   refreshClaim?(
     claim: ChannelIngressQueueClaimRef,
@@ -198,7 +213,23 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
   resubmit?(
     id: string,
     options?: { resubmittedAt?: number },
-  ): Promise<ChannelIngressQueueResubmitResult<TPayload, TMetadata, TCompletedMetadata>>;
+  ): Promise<
+    | {
+        kind: "resubmitted";
+        record: ChannelIngressQueueRecord<TPayload, TMetadata>;
+        previous: ChannelIngressQueueDeadLetterRecord<TPayload, TMetadata>;
+      }
+    | { kind: "not-found" }
+    | {
+        kind: "completed";
+        record: ChannelIngressQueueCompletedRecord<TCompletedMetadata>;
+      }
+    | { kind: "active"; status: "pending" | "claimed" }
+    | {
+        kind: "unrecoverable";
+        record: ChannelIngressQueueDeadLetterRecord<TPayload, TMetadata>;
+      }
+  >;
   delete(
     idOrClaim:
       | string
@@ -222,7 +253,6 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
   purge?(options?: { signal?: AbortSignal }): Promise<number>;
 };
 
-/** Construction options for a channel/account-scoped ingress queue. */
 export type CreateChannelIngressQueueOptions = {
   channelId: string;
   accountId?: string;

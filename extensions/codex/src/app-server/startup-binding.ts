@@ -1,7 +1,3 @@
-/**
- * Guards Codex app-server thread reuse during startup by rotating bindings when
- * native transcripts exceed byte or token budgets.
- */
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -14,11 +10,13 @@ import {
   readFileWindowFully,
   root as openSafeFilesystemRoot,
 } from "openclaw/plugin-sdk/file-access-runtime";
+import { floorPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { resolveCodexAppServerHomeDir } from "./auth-bridge.js";
 import { resolveProjectionPromptBudgetTokens } from "./context-engine-projection.js";
 import { isJsonObject, type JsonValue } from "./protocol.js";
 import {
   assertCodexBindingMayBeReplaced,
+  type CodexBindingAuthority,
   type CodexAppServerBindingIdentity,
   type CodexAppServerBindingStore,
   type CodexAppServerThreadBinding,
@@ -32,17 +30,9 @@ const CODEX_APP_SERVER_ROLLOUT_TAIL_READ_BYTES = 64 * 1024;
 const CODEX_APP_SERVER_BYTE_UNITS: Record<string, number> = {
   b: 1,
   k: 1024,
-  kb: 1024,
-  kib: 1024,
-  m: 1024 * 1024,
-  mb: 1024 * 1024,
-  mib: 1024 * 1024,
-  g: 1024 * 1024 * 1024,
-  gb: 1024 * 1024 * 1024,
-  gib: 1024 * 1024 * 1024,
-  t: 1024 * 1024 * 1024 * 1024,
-  tb: 1024 * 1024 * 1024 * 1024,
-  tib: 1024 * 1024 * 1024 * 1024,
+  m: 1024 ** 2,
+  g: 1024 ** 3,
+  t: 1024 ** 4,
 };
 type CodexAppServerRolloutFile = {
   path: string;
@@ -51,11 +41,8 @@ type CodexAppServerRolloutFile = {
 };
 
 function parseCodexAppServerByteLimit(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-    return Math.floor(value);
-  }
   if (typeof value !== "string") {
-    return undefined;
+    return floorPositiveFiniteNumber(value);
   }
   const match = value.trim().match(/^(\d+(?:\.\d+)?)\s*([a-z]+)?$/i);
   if (!match) {
@@ -66,7 +53,8 @@ function parseCodexAppServerByteLimit(value: unknown): number | undefined {
     return undefined;
   }
   const unit = (match[2] ?? "b").toLowerCase();
-  const multiplier = CODEX_APP_SERVER_BYTE_UNITS[unit];
+  const unitPrefix = /^[kmgt](?:i?b)?$/.test(unit) ? unit.charAt(0) : unit;
+  const multiplier = CODEX_APP_SERVER_BYTE_UNITS[unitPrefix];
   if (multiplier === undefined) {
     return undefined;
   }
@@ -152,6 +140,8 @@ async function listCodexAppServerRolloutFilesForThread(
 type CodexAppServerRolloutTokenSnapshot = {
   totalTokens?: number;
   modelContextWindow?: number;
+  // A turn started after the latest window was reported and never reported its own.
+  windowSupersededByNewerTurn?: boolean;
 };
 
 async function readCodexAppServerRolloutTokenSnapshot(
@@ -159,12 +149,10 @@ async function readCodexAppServerRolloutTokenSnapshot(
   openedHandle?: Awaited<ReturnType<typeof fs.open>>,
 ): Promise<CodexAppServerRolloutTokenSnapshot | undefined> {
   let handle = openedHandle;
-  if (!handle) {
-    try {
-      handle = await fs.open(file, "r");
-    } catch {
-      return undefined;
-    }
+  try {
+    handle ??= await fs.open(file, "r");
+  } catch {
+    return undefined;
   }
   let snapshot: CodexAppServerRolloutTokenSnapshot | undefined;
   try {
@@ -176,6 +164,10 @@ async function readCodexAppServerRolloutTokenSnapshot(
         return false;
       }
       snapshot ??= {};
+      // A newer turn without a window must not borrow an earlier model's observation.
+      if (snapshot.modelContextWindow === undefined && lineSnapshot.windowSupersededByNewerTurn) {
+        snapshot.windowSupersededByNewerTurn = true;
+      }
       snapshot.totalTokens ??= lineSnapshot.totalTokens;
       snapshot.modelContextWindow ??= lineSnapshot.modelContextWindow;
       return snapshot.totalTokens !== undefined && snapshot.modelContextWindow !== undefined;
@@ -231,6 +223,9 @@ function readCodexAppServerRolloutTokenSnapshotLine(
   }
   try {
     const parsed = JSON.parse(line) as JsonValue;
+    if (isJsonObject(parsed) && parsed.type === "turn_context") {
+      return { windowSupersededByNewerTurn: true };
+    }
     const payload = isJsonObject(parsed) ? parsed.payload : undefined;
     const info =
       isJsonObject(payload) && payload.type === "token_count" && isJsonObject(payload.info)
@@ -247,19 +242,9 @@ function readCodexAppServerRolloutTokenSnapshotLine(
     const value = usage?.total_tokens ?? usage?.totalTokens;
     const totalTokens = typeof value === "number" && Number.isFinite(value) ? value : undefined;
     const windowValue = info.model_context_window ?? info.modelContextWindow;
-    const modelContextWindow =
-      typeof windowValue === "number" && Number.isFinite(windowValue) && windowValue > 0
-        ? Math.floor(windowValue)
-        : undefined;
-    const snapshot: CodexAppServerRolloutTokenSnapshot = {};
-    if (totalTokens !== undefined) {
-      snapshot.totalTokens = totalTokens;
-    }
-    if (modelContextWindow !== undefined) {
-      snapshot.modelContextWindow = modelContextWindow;
-    }
-    return snapshot.totalTokens !== undefined || snapshot.modelContextWindow !== undefined
-      ? snapshot
+    const modelContextWindow = floorPositiveFiniteNumber(windowValue);
+    return totalTokens !== undefined || modelContextWindow !== undefined
+      ? { totalTokens, modelContextWindow }
       : undefined;
   } catch {
     return undefined;
@@ -271,12 +256,7 @@ function resolveCodexAppServerNativeThreadTokenFuse(params: {
   reserveTokens: number;
   projectedTurnTokens?: number;
 }): number {
-  const projectedTurnTokens =
-    typeof params.projectedTurnTokens === "number" &&
-    Number.isFinite(params.projectedTurnTokens) &&
-    params.projectedTurnTokens > 0
-      ? Math.floor(params.projectedTurnTokens)
-      : 0;
+  const projectedTurnTokens = params.projectedTurnTokens ?? 0;
   const contextWindow =
     params.modelContextWindow ?? CODEX_APP_SERVER_NATIVE_THREAD_FALLBACK_MAX_TOKENS;
   const promptBudget = resolveProjectionPromptBudgetTokens({
@@ -291,9 +271,9 @@ function maxDefinedNumber(values: Array<number | undefined>): number | undefined
   return nums.length ? Math.max(...nums) : undefined;
 }
 
-/** Clears and drops a binding when the native Codex thread is too large to resume safely. */
 export async function rotateOversizedCodexAppServerStartupBinding(params: {
   assertCurrent?: () => void;
+  authority?: CodexBindingAuthority;
   binding: CodexAppServerThreadBinding | undefined;
   bindingStore: CodexAppServerBindingStore;
   identity: CodexAppServerBindingIdentity;
@@ -316,6 +296,20 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
   if (binding.connectionScope === "supervision") {
     return { binding };
   }
+  const clearBinding = async () => {
+    const cleared = await params.bindingStore.mutate(
+      params.identity,
+      { kind: "clear", threadId: binding.threadId, clientId: binding.clientId },
+      params.assertCurrent,
+      params.authority,
+    );
+    if (!cleared) {
+      throw new Error(
+        "Codex startup binding changed during rotation; retry with its current owner.",
+      );
+    }
+    return { binding: undefined };
+  };
   const rolloutFiles = await listCodexAppServerRolloutFilesForThread(
     params.agentDir,
     binding.threadId,
@@ -328,17 +322,7 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
     maxBytes !== undefined &&
     params.contextEngineActive === true &&
     binding.contextEngine?.projection?.mode === "thread_bootstrap";
-  if (shouldDeferByteGuard) {
-    embeddedAgentLog.debug(
-      "codex app-server deferring native transcript byte guard for context-engine thread bootstrap",
-      {
-        threadId: binding.threadId,
-        engineId: binding.contextEngine?.engineId,
-        epoch: binding.contextEngine?.projection?.epoch,
-        fingerprint: binding.contextEngine?.projection?.fingerprint,
-      },
-    );
-  } else if (maxBytes !== undefined) {
+  if (!shouldDeferByteGuard && maxBytes !== undefined) {
     const oversizedFiles = rolloutFiles.filter((file) => file.bytes >= maxBytes);
     if (oversizedFiles.length > 0) {
       await Promise.all(
@@ -359,15 +343,7 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
           files: oversizedFiles.map((file) => ({ path: file.path, bytes: file.bytes })),
         },
       );
-      await params.bindingStore.mutate(
-        params.identity,
-        {
-          kind: "clear",
-          threadId: binding.threadId,
-        },
-        params.assertCurrent,
-      );
-      return { binding: undefined };
+      return await clearBinding();
     }
   }
   const nativeTokenSnapshots = await Promise.all(
@@ -404,18 +380,13 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
         projectedTurnTokens: params.projectedTurnTokens,
       },
     );
-    await params.bindingStore.mutate(
-      params.identity,
-      {
-        kind: "clear",
-        threadId: binding.threadId,
-      },
-      params.assertCurrent,
-    );
-    return { binding: undefined };
+    return await clearBinding();
   }
   return {
     binding,
-    ...(nativeModelContextWindow ? { startupContextTokens: nativeModelContextWindow } : {}),
+    ...(nativeModelContextWindow &&
+    !nativeTokenSnapshots.some((snapshot) => snapshot?.windowSupersededByNewerTurn)
+      ? { startupContextTokens: nativeModelContextWindow }
+      : {}),
   };
 }

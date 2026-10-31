@@ -7,6 +7,7 @@ import {
   publicationObservationJson,
   publicationPendingAuthority,
   validatePublicationSourceBinding,
+  type PublicationObservationCollection,
   type PublicationSourceFact,
 } from "./full-release-publication-contract.mjs";
 import { compareAscii } from "./lib/canonical-json.mjs";
@@ -15,11 +16,7 @@ import {
   observeClawHubPackage,
   type ClawHubPackageObservation,
 } from "./lib/plugin-clawhub-release.ts";
-import {
-  collectPluginReleasePlan,
-  observeNpmPackage,
-  type NpmPackageObservation,
-} from "./lib/plugin-npm-release.ts";
+import { collectPluginReleasePlan, observeNpmPackage } from "./lib/plugin-npm-release.ts";
 import { collectExtensionPackageJsonCandidates } from "./lib/plugin-publication-candidates.ts";
 import { collectPublishablePluginPackagesFromCandidates } from "./lib/plugin-publication-collector.ts";
 
@@ -28,19 +25,7 @@ const MAX_RESPONSE_BYTES = 128 * 1024 * 1024;
 const MAX_COLLECTION_MS = 300_000;
 const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u;
 
-type NpmRead = {
-  name: string;
-  version: string | null;
-  required: boolean;
-  observedAt: string;
-} & (
-  | { outcome: "observed"; state: NpmPackageObservation }
-  | { outcome: "unavailable"; error: string }
-);
-type ClawHubRead = {
-  name: string;
-  version: string;
-  observedAt: string;
+type ClawHubRead = PublicationObservationCollection["clawhub"][number] & {
   state: ClawHubPackageObservation;
 };
 
@@ -111,7 +96,7 @@ async function collectObservations(params: {
   const onTerminate = () => controller.abort(new Error("Publication observations cancelled."));
   let bytesConsumed = 0;
   const bodyCleanups = new Set<Promise<void>>();
-  const npm = new Map<string, NpmRead>();
+  const npm = new Map<string, PublicationObservationCollection["npm"][number]>();
   const clawhub = new Map<string, ClawHubRead>();
   const requiredNpm = roster.filter((entry) => entry.targets.includes("npm"));
   const requiredClawHub = roster.filter((entry) => entry.targets.includes("clawhub"));
@@ -245,12 +230,7 @@ async function collectObservations(params: {
     signal.throwIfAborted();
     await delay(ms, undefined, { signal: readSignal() });
   };
-  const pendingAuthority: Array<{
-    registry: "npm" | "clawhub";
-    name: string;
-    action: string;
-    status: "unresolved";
-  }> = [];
+  const pendingAuthority: PublicationObservationCollection["pendingAuthority"] = [];
   const readNpm = async (name: string, version: string | null) => {
     if (npm.has(name)) {
       throw new Error("Duplicate logical npm observation.");

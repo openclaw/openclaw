@@ -3,6 +3,7 @@ import { vi } from "vitest";
 import type { GatewayService } from "../../../daemon/service.js";
 import type { MockFn } from "../../../test-utils/vitest-mock-fn.js";
 import { createCliRuntimeCapture } from "../../test-runtime-capture.js";
+import type { runServiceRestart } from "../lifecycle-core.js";
 
 const lifecycleRuntimeCapture = createCliRuntimeCapture();
 export const lifecycleRuntimeLogs = lifecycleRuntimeCapture.runtimeLogs;
@@ -22,23 +23,16 @@ type LifecycleServiceHarness = GatewayService & {
 
 export const lifecycleTestRuntime: LifecycleRuntimeHarness = lifecycleRuntimeCapture.defaultRuntime;
 
-export function createGatewayUninstallArgs() {
-  return {
-    serviceNoun: "Gateway",
-    service,
-    opts: { json: true as const },
-    stopBeforeUninstall: true,
-    assertNotLoadedAfterUninstall: true,
-  };
-}
-
-export function createGatewayServiceRunArgs(checkTokenDrift?: boolean) {
+export function createGatewayServiceRunArgs(
+  readDriftContext?: Parameters<typeof runServiceRestart>[0]["readDriftContext"],
+) {
   return {
     serviceNoun: "Gateway",
     service,
     renderStartHints: () => [],
+    renderFailureHints: () => [],
     opts: { json: true as const },
-    ...(checkTokenDrift ? { checkTokenDrift } : {}),
+    readDriftContext,
   };
 }
 

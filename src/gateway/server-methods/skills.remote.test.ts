@@ -4,13 +4,14 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { seedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { saveSkillLibrary } from "../../skills/library/service.js";
-import { readWorkspaceSkillSources } from "../../skills/loading/workspace-skill-loader.js";
+import { readWorkspaceSkillSources } from "../../skills/loading/workspace-skill-source-reader.js";
 import {
   resolveWorkspaceSkillSourcePlan,
   type WorkspaceSkillSourceRequest,
@@ -28,9 +29,17 @@ import type { GatewayClient } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.unstubAllEnvs());
-// skills.status opens real watchers; close them before their roots are removed so they
-// cannot outlive this file and re-arm timers on a later file's fake clock.
+// Close discovery watchers before deleting roots or entering another file's fake clock.
 afterEach(() => closeSkillsWatchers(true));
+
+function writeWorkspaceSkill(workspace: string, name: string, metadata?: object) {
+  return writeSkill({
+    dir: path.join(workspace, "skills", name),
+    name,
+    description: name,
+    ...(metadata ? { metadata: JSON.stringify({ openclaw: metadata }) } : {}),
+  });
+}
 
 it("reads remote skill status, cards and binary requirements through the workspace binding", async () => {
   const root = tempDirs.make("gateway-remote-skills-");
@@ -42,47 +51,26 @@ it("reads remote skill status, cards and binary requirements through the workspa
   const gateway = path.join(root, "gateway");
   const remote = path.join(root, "remote");
   const hostPlatform = process.platform === "linux" ? "darwin" : "linux";
-  await writeSkill({
-    dir: path.join(gateway, "skills", "stale"),
-    name: "stale",
-    description: "Stale",
+  await writeWorkspaceSkill(gateway, "stale");
+  await writeWorkspaceSkill(remote, "available", {
+    os: [hostPlatform],
+    requires: { bins: ["host-tool"] },
+    install: [{ id: "host", kind: "node", package: "host-tool", os: [hostPlatform] }],
   });
-  await writeSkill({
-    dir: path.join(remote, "skills", "available"),
-    name: "available",
-    description: "Remote skill",
-    metadata: JSON.stringify({
-      openclaw: {
-        os: [hostPlatform],
-        requires: { bins: ["host-tool"] },
-        install: [{ id: "host", kind: "node", package: "host-tool", os: [hostPlatform] }],
-      },
-    }),
+  await writeWorkspaceSkill(remote, "installer", {
+    install: [
+      { id: "brew", kind: "brew", formula: "fixture-tool" },
+      { id: "host", kind: "node", package: "host-tool", os: [hostPlatform] },
+      { id: "gateway", kind: "node", package: "gateway-tool", os: [process.platform] },
+    ],
   });
-  await writeSkill({
-    dir: path.join(remote, "skills", "installer"),
-    name: "installer",
-    description: "Workspace dependency recipes",
-    metadata: JSON.stringify({
-      openclaw: {
-        install: [
-          { id: "brew", kind: "brew", formula: "fixture-tool" },
-          { id: "host", kind: "node", package: "host-tool", os: [hostPlatform] },
-          { id: "gateway", kind: "node", package: "gateway-tool", os: [process.platform] },
-        ],
-      },
-    }),
-  });
-  await writeSkill({
-    dir: path.join(remote, "skills", "missing"),
-    name: "missing",
-    description: "Missing dependency",
-    metadata: JSON.stringify({ openclaw: { requires: { bins: ["absent-tool"] } } }),
+  await writeWorkspaceSkill(remote, "missing", {
+    requires: { bins: ["absent-tool"] },
   });
   await fs.writeFile(path.join(remote, "skills", "available", "skill-card.md"), "# Remote card\n");
   const config = {
     plugins: { enabled: false },
-    agents: { list: [{ id: "main", workspace: gateway }] },
+    agents: { entries: { main: { workspace: gateway } } },
   };
   const loadSkills = vi.fn(async (request: WorkspaceSkillSourceRequest) => ({
     ...readWorkspaceSkillSources({
@@ -141,8 +129,9 @@ it.each(["unchanged", "revoked", "replaced"] as const)(
       const cfg = {
         plugins: { enabled: false },
         skills: { load: { watch: false } },
-        agents: { list: [{ id: "main", workspace: state.workspaceDir }] },
+        agents: { entries: { main: { workspace: state.workspaceDir } } },
       };
+      setRuntimeConfigSnapshot(cfg);
       const alice = ensureProfileForEmail("alice@example.test");
       const bob = ensureProfileForEmail("bob@example.test");
       const authority = {
@@ -152,9 +141,8 @@ it.each(["unchanged", "revoked", "replaced"] as const)(
         assertCurrent: () => {},
       };
       await saveSkillLibrary(authority, {
-        slug: "private-procedure",
-        content:
-          "---\nname: private-procedure\ndescription: Session-pinned private procedure\n---\nInstructions\n",
+        slug: "private",
+        content: "---\nname: private\ndescription: Private procedure\n---\nInstructions\n",
         expectedRevision: null,
       });
       const sessionKey = "agent:main:shared-skills";
@@ -165,14 +153,11 @@ it.each(["unchanged", "revoked", "replaced"] as const)(
           updatedAt: 1,
           visibility: "shared",
           createdActor: { type: "human", source: "profile", id: alice.id },
-          skillLibrarySelections: seedSkillLibrarySelection(authority),
+          skillLibrarySelections: await seedSkillLibrarySelection(authority),
         },
       );
       const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-      const requestContext = bindSessionRowProjection(
-        { getRuntimeConfig: () => cfg },
-        () => projection,
-      );
+      const context = bindSessionRowProjection({ getRuntimeConfig: () => cfg }, () => projection);
       const entered = createDeferred();
       const resume = createDeferred();
       const release = registerAgentWorkspaceAccess(state.workspaceDir, {
@@ -197,7 +182,7 @@ it.each(["unchanged", "revoked", "replaced"] as const)(
         "skills.status",
         { sessionKey },
         {
-          context: requestContext,
+          context,
           client: {
             authenticatedUserProfile: { profileId: bob.id },
             connect: { scopes: ["operator.read", "operator.write"] },
@@ -223,7 +208,7 @@ it.each(["unchanged", "revoked", "replaced"] as const)(
             response: {
               skills: expect.arrayContaining([
                 expect.objectContaining({
-                  description: "Session-pinned private procedure",
+                  description: "Private procedure",
                   source: "openclaw-library",
                 }),
               ]),
@@ -238,12 +223,10 @@ it.each(["unchanged", "revoked", "replaced"] as const)(
         }
       } finally {
         resume.resolve();
-        try {
-          await result;
-        } finally {
+        await result.finally(() => {
           projection.dispose();
           release();
-        }
+        });
       }
     });
   },

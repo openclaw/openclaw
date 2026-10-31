@@ -23,7 +23,7 @@ class ChatControllerSidebarCreationTest {
   fun sidebarCreationKeepsRootsIndependentAndChildrenLinkedForTheSelectedAgent() =
     runTest {
       val parent = "agent:ops:main"
-      for (creation in listOf(ChatSessionCreation.Independent, ChatSessionCreation.Child(parent))) {
+      for (creation in listOf(ChatSessionCreation.Default, ChatSessionCreation.Child(parent))) {
         val (controller, requests) =
           chatControllerTestSetup {
             respond("sessions.create", """{"key":"agent:ops:dashboard:new"}""")
@@ -35,7 +35,7 @@ class ChatControllerSidebarCreationTest {
         assertTrue(controller.startNewChatAwait(creation = creation))
         val params = chatControllerTestJson.parseToJsonElement(requests.single { it.first == "sessions.create" }.second!!).jsonObject
         assertEquals(JsonPrimitive("ops"), params["agentId"])
-        if (creation == ChatSessionCreation.Independent) {
+        if (creation !is ChatSessionCreation.Child) {
           assertEquals(setOf("agentId", "independent"), params.keys)
           assertEquals(JsonPrimitive(true), params["independent"])
         } else {
@@ -43,10 +43,42 @@ class ChatControllerSidebarCreationTest {
           assertTrue(key.startsWith("agent:ops:dashboard:"))
           UUID.fromString(key.removePrefix("agent:ops:dashboard:"))
           assertEquals(JsonPrimitive(parent), params["parentSessionKey"])
+          assertEquals(JsonPrimitive(true), params["explicitChild"])
           assertEquals(JsonPrimitive(false), params["succeedsParent"])
           assertEquals(JsonPrimitive(true), params["emitCommandHooks"])
         }
         assertEquals("agent:ops:dashboard:new", controller.sessionKey.value)
+      }
+    }
+
+  @Test
+  fun ordinaryNewIsParentlessAfterOpeningAChildOrGrandchild() =
+    runTest {
+      for (source in listOf("child", "grandchild")) {
+        val key = "agent:ops:dashboard:$source"
+        val parent = "agent:ops:dashboard:${if (source == "child") "project" else "child"}"
+        // Project metadata is deliberately not modeled by Android; it must not leak into New.
+        val entry = """{"key":"$key","sessionId":"loaded","parentSessionKey":"$parent","explicitChild":true,"projectId":"project-a","worktree":{"id":"worktree-a"}}"""
+        val (controller, requests) =
+          chatControllerTestSetup {
+            respond("sessions.create", """{"key":"agent:ops:dashboard:new"}""")
+            respond("chat.history", """{"sessionId":"loaded","messages":[],"sessionInfo":$entry}""")
+            respond("sessions.list", """{"sessions":[$entry]}""")
+          }
+        controller.load(key)
+        advanceUntilIdle()
+        controller.refreshSessions()
+        advanceUntilIdle()
+        val selected = controller.sessions.value.single { it.key == key }
+        assertEquals(parent, selected.parentSessionKey)
+        assertEquals(true, selected.explicitChild)
+        assertEquals("worktree-a", selected.worktreeId)
+        assertEquals(key, controller.sessionKey.value)
+        assertTrue(controller.startNewChatAwait())
+        val params = chatControllerTestJson.parseToJsonElement(requests.single { it.first == "sessions.create" }.second!!).jsonObject
+        assertEquals(setOf("agentId", "independent"), params.keys)
+        assertEquals(JsonPrimitive(true), params["independent"])
+        assertEquals(JsonPrimitive("ops"), params["agentId"])
       }
     }
 
@@ -61,7 +93,7 @@ class ChatControllerSidebarCreationTest {
             throw GatewayRequestRejected(
               GatewaySession.ErrorShape(
                 code = "INVALID_REQUEST",
-                message = "invalid sessions.create params: unexpected property 'succeedsParent'",
+                message = "invalid sessions.create params: unexpected property 'explicitChild'",
               ),
             )
           }
@@ -75,7 +107,7 @@ class ChatControllerSidebarCreationTest {
     }
 
   @Test
-  fun independentCreationExplainsOlderGatewayRejectionWithoutRetryingOrNavigating() =
+  fun ordinaryNewExplainsOlderGatewayRejectionWithoutRetryingOrNavigating() =
     runTest {
       val (controller, requests) =
         chatControllerTestSetup {
@@ -92,7 +124,7 @@ class ChatControllerSidebarCreationTest {
         }
       controller.load("main")
       advanceUntilIdle()
-      assertFalse(controller.startNewChatAwait(creation = ChatSessionCreation.Independent))
+      assertFalse(controller.startNewChatAwait())
       assertEquals(1, requests.count { it.first == "sessions.create" })
       assertEquals("main", controller.sessionKey.value)
       assertEquals("Update your Gateway to create independent sessions.", controller.errorText.value)

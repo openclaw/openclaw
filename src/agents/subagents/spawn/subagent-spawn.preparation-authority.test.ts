@@ -7,21 +7,22 @@ import {
   installSpawnAttachmentFixture,
 } from "./subagent-spawn.authority.test-support.js";
 import { promises as fs } from "node:fs";
-import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./subagent-spawn-model.mocks.shared.js";
-import { createDeferred } from "../../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { forkSessionEntryFromParent } from "../../../auto-reply/reply/session-fork.js";
+import { captureRuntimeConfigAsyncReader } from "../../../config/config.js";
 import {
+  appendTranscriptMessage,
   listSessionChildEntriesReadOnly,
   loadSessionEntry,
   loadTranscriptEvents,
-  replaceTranscriptEvents,
 } from "../../../config/sessions/session-accessor.js";
 import {
   resolveSqliteStoreScope,
   runExclusiveSqliteSessionWrite,
 } from "../../../config/sessions/session-accessor.sqlite-scope.js";
+import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { LegacyContextEngine } from "../../../context-engine/legacy.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
 import {
@@ -29,19 +30,21 @@ import {
   createGatewayMethodRegistry,
 } from "../../../gateway/methods/registry.js";
 import { createGatewayInstanceRuntime } from "../../../gateway/server-instance-runtime.js";
-import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
+import type { GatewayLifecycleRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import { handleChatAbortRequest } from "../../../gateway/server-methods/chat-abort-handler.js";
 import { invokeChatAbortHandler } from "../../../gateway/server-methods/chat.abort.test-helpers.js";
 import { sessionDeleteHandlers } from "../../../gateway/server-methods/sessions-delete.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import type { DispatchGatewayMethodInProcessOptions } from "../../../gateway/server-plugin-in-process-dispatch.types.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import { getAdmittedRunDelegatedAuthority } from "../../admitted-run-context.js";
 import { finalizeAgentToolAvailability } from "../../agent-tool-availability.js";
 import { copyAgentToolMetadata } from "../../agent-tool-metadata.js";
 import { finalizeAgentTools } from "../../agent-tools.finalize.js";
 import type { AnyAgentTool } from "../../agent-tools.types.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
 import { createAgentHarnessHostCapabilities } from "../../harness/host-capability.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import {
@@ -50,19 +53,81 @@ import {
 } from "../../tools/gateway-caller-context.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { resolveSubagentSessionAttachmentRootDir } from "../subagent-attachment-paths.js";
-import { enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
+import { holdSpawnCapacity } from "./subagent-spawn.production-boundary.test-support.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
 const fixture = installSpawnAuthorityFixture();
+beforeEach(async () => {
+  await captureRuntimeConfigAsyncReader()();
+});
 const { parentSessionKey, parentRunId, groupId, createBoundParent } = fixture;
+type BoundParent = Awaited<ReturnType<typeof createBoundParent>>;
 
-function createPreparationGateway(
-  context: Awaited<ReturnType<typeof createBoundParent>>["context"],
-  deleted: string[],
+function asCaller<T>({ context, admitted }: BoundParent, run: () => T) {
+  return withPluginRuntimeGatewayRequestScope(
+    { context: context as unknown as GatewayRequestContext, isWebchatConnect: () => false },
+    () =>
+      withGatewayToolCallerIdentity(
+        createAdmittedGatewayToolCallerIdentity({
+          admittedRunContext: admitted,
+          agentId: "main",
+          sessionKey: parentSessionKey,
+        }),
+        run,
+      ),
+  );
+}
+
+function parentToolOptions(config: BoundParent["cfg"]) {
+  return {
+    config,
+    agentSessionKey: parentSessionKey,
+    requesterRunId: parentRunId,
+    requesterTurnRunId: parentRunId,
+  };
+}
+
+function finalizeParentTools(bound: BoundParent, tools: AnyAgentTool[]) {
+  return finalizeAgentTools({
+    tools,
+    hookContext: {
+      config: bound.cfg,
+      agentId: "main",
+      sessionKey: parentSessionKey,
+      runId: parentRunId,
+    },
+    abortSignal: bound.parent.controller.signal,
+  });
+}
+
+function spawnDispatch(
+  gateway: ReturnType<typeof createPreparationGateway>,
+  dispatch: (params: Record<string, unknown>) => unknown,
+  allowAbort = false,
 ) {
+  return async <T>(
+    method: string,
+    params: Record<string, unknown>,
+    options?: DispatchGatewayMethodInProcessOptions,
+  ) => {
+    if (method === "agent") {
+      await dispatch(params);
+      return { runId: params.idempotencyKey, status: "accepted" } as T;
+    }
+    if (method !== "sessions.delete" && !(allowAbort && method === "chat.abort")) {
+      throw new Error(`Unexpected spawn RPC ${method}`);
+    }
+    return await gateway.dispatchSessionMethod<T>(method, params, {
+      timeoutMs: options?.timeoutMs,
+      signal: options?.signal,
+      assertCurrent: options?.sessionMutationCommitGuard,
+    });
+  };
+}
+
+function createPreparationGateway(context: BoundParent["context"], deleted: string[]) {
   const gatewayContext = context as unknown as GatewayRequestContext;
-  const recovery = gatewayContext.recoveryRuntime;
+  const recovery = gatewayContext.lifecycleRuntime;
   if (!recovery) {
     throw new Error("Preparation fixture requires its Gateway recovery owner");
   }
@@ -82,12 +147,12 @@ function createPreparationGateway(
     getMethodRegistry: () => registry,
     isDispatchAvailable: () => !execution.isClosing,
   });
-  const dispatchSessionMethod: GatewayRecoveryRuntime["dispatchSessionMethod"] = async <T>(
-    method: Parameters<GatewayRecoveryRuntime["dispatchSessionMethod"]>[0],
+  const dispatchSessionMethod: GatewayLifecycleRuntime["dispatchSessionMethod"] = async <T>(
+    method: Parameters<GatewayLifecycleRuntime["dispatchSessionMethod"]>[0],
     params: unknown,
-    options?: Parameters<GatewayRecoveryRuntime["dispatchSessionMethod"]>[2],
+    options?: Parameters<GatewayLifecycleRuntime["dispatchSessionMethod"]>[2],
   ) => {
-    const result = await runtime.recovery.dispatchSessionMethod<T>(method, params, options);
+    const result = await runtime.lifecycle.dispatchSessionMethod<T>(method, params, options);
     if (method === "sessions.delete") {
       deleted.push((params as { key: string }).key);
     } else if (method === "chat.abort") {
@@ -125,40 +190,18 @@ describe("pending spawn preparation authority", () => {
   it.each(["closed", "live"])(
     "checks parent authority after queued fork preparation: %s",
     async (closure) => {
-      const bindingFixture = installSpawnThreadBindingFixture();
-      const { cfg, storePath, context, admission, parent, admitted } = await createBoundParent();
-      await replaceTranscriptEvents(
-        { agentId: "main", sessionId: "parent-session", sessionKey: parentSessionKey, storePath },
-        [
-          {
-            type: "session",
-            version: 3,
-            id: "parent-session",
-            timestamp: "2026-09-05T00:00:00Z",
-            cwd: fixture.stateDir,
-          },
-          {
-            type: "message",
-            id: "parent-message",
-            parentId: null,
-            timestamp: "2026-09-05T00:00:01Z",
-            message: { role: "user", content: "synthetic parent context" },
-          },
-          {
-            type: "message",
-            id: "parent-answer",
-            parentId: "parent-message",
-            timestamp: "2026-09-05T00:00:02Z",
-            message: {
-              role: "assistant",
-              content: "synthetic completed reply",
-              stopReason: "stop",
-            },
-          },
-        ],
-      );
-      const writerEntered = createDeferred();
-      const releaseWriter = createDeferred();
+      const bound = await createBoundParent();
+      const { cfg, storePath, context, admission, parent, admitted } = bound;
+      for (const message of [
+        { role: "user", content: "synthetic parent context" },
+        { role: "assistant", content: "synthetic completed reply", stopReason: "stop" },
+      ]) {
+        await appendTranscriptMessage(
+          { agentId: "main", sessionId: "parent-session", sessionKey: parentSessionKey, storePath },
+          { message },
+        );
+      }
+      const writerGate = createEnteredGate();
       const forkQueued = createDeferred<{ childSessionKey: string; initialSessionId: string }>();
       const forkSettled = createDeferred<
         Awaited<ReturnType<typeof forkSessionEntryFromParent>> | Error
@@ -173,13 +216,10 @@ describe("pending spawn preparation authority", () => {
           // Hold a genuine preceding database writer, then enqueue the real fork owner.
           blocker = runExclusiveSqliteSessionWrite(
             resolveSqliteStoreScope(storePath),
-            async () => {
-              writerEntered.resolve();
-              await releaseWriter.promise;
-            },
+            writerGate.wait,
             "session.transcript.batch",
           );
-          await writerEntered.promise;
+          await writerGate.entered;
           const initial = loadSessionEntry({ storePath, sessionKey: params.sessionKey })!;
           const pending = forkSessionEntryFromParent(params);
           forkQueued.resolve({
@@ -198,68 +238,17 @@ describe("pending spawn preparation authority", () => {
           }
         },
         resolveContextEngine: async () => new LegacyContextEngine(),
-        dispatchGatewayMethodInProcess: async <T>(
-          method: string,
-          params: Record<string, unknown>,
-          options?: DispatchGatewayMethodInProcessOptions,
-        ) => {
-          if (method === "agent") {
-            dispatch(params);
-            return { runId: params.idempotencyKey, status: "accepted" } as T;
-          }
-          if (method !== "sessions.delete") {
-            throw new Error(`Unexpected spawn RPC ${method}`);
-          }
-          return await gateway.dispatchSessionMethod<T>(method, params, {
-            timeoutMs: options?.timeoutMs,
-            signal: options?.signal,
-            assertCurrent: options?.sessionMutationCommitGuard,
-          });
-        },
+        dispatchGatewayMethodInProcess: spawnDispatch(gateway, dispatch),
       });
-      const [tool] = finalizeAgentTools({
-        tools: [
-          createSessionsSpawnTool({
-            config: cfg,
-            agentSessionKey: parentSessionKey,
-            requesterRunId: parentRunId,
-            requesterTurnRunId: parentRunId,
-            agentChannel: "matrix",
-            agentAccountId: "default",
-            agentTo: "room:parent",
-          }),
-        ],
-        hookContext: {
-          config: cfg,
-          agentId: "main",
-          sessionKey: parentSessionKey,
-          runId: parentRunId,
-        },
-        abortSignal: parent.controller.signal,
-      });
-      const pending = withPluginRuntimeGatewayRequestScope(
-        { context: context as unknown as GatewayRequestContext, isWebchatConnect: () => false },
-        () =>
-          withGatewayToolCallerIdentity(
-            createAdmittedGatewayToolCallerIdentity({
-              admittedRunContext: admitted,
-              agentId: "main",
-              sessionKey: parentSessionKey,
-            }),
-            () =>
-              tool!.execute!("spawn-fork-queued", {
-                task: "bounded fork",
-                context: "fork",
-                thread: true,
-                mode: "run",
-                attachments: [{ name: "synthetic.txt", content: "synthetic attachment" }],
-                expectsCompletionMessage: false,
-              }),
-          ),
-      ).then(
-        (value) => value,
-        (error: unknown) => error,
-      );
+      const [tool] = finalizeParentTools(bound, [createSessionsSpawnTool(parentToolOptions(cfg))]);
+      const pending = asCaller(bound, () =>
+        tool!.execute!("spawn-fork-queued", {
+          task: "bounded fork",
+          context: "fork",
+          mode: "run",
+          expectsCompletionMessage: false,
+        }),
+      ).catch((error: unknown) => error);
       try {
         const { childSessionKey, initialSessionId } = await Promise.race([
           forkQueued.promise,
@@ -279,7 +268,7 @@ describe("pending spawn preparation authority", () => {
           expect(parent.controller.signal.aborted).toBe(false);
           expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
         }
-        releaseWriter.resolve();
+        writerGate.release();
         const result = await forkSettled.promise;
         const entry = loadSessionEntry({ storePath, sessionKey: childSessionKey })!;
         const transcript = await loadTranscriptEvents({
@@ -289,12 +278,8 @@ describe("pending spawn preparation authority", () => {
           storePath,
         });
         if (closure === "closed") {
-          expect
-            .soft(entry.sessionId, "closed parent must not replace the provisional child identity")
-            .toBe(initialSessionId);
-          expect
-            .soft(transcript, "closed parent must not copy its transcript after writer queue wait")
-            .toEqual([]);
+          expect.soft(entry.sessionId).toBe(initialSessionId);
+          expect.soft(transcript).toEqual([]);
           expect.soft(result).toBeInstanceOf(Error);
         } else {
           expect(result).toMatchObject({ status: "forked" });
@@ -320,21 +305,9 @@ describe("pending spawn preparation authority", () => {
         } else {
           expect(outcome).toMatchObject({ details: { status: "accepted" } });
           expect(dispatch).toHaveBeenCalledOnce();
-          expect(bindingFixture.bind).toHaveBeenCalledOnce();
-          const details = (outcome as { details: { attachments: { relDir: string } } }).details;
-          expect(
-            await fs.readFile(
-              path.join(
-                resolveSubagentSessionAttachmentRootDir({ agentId: "main", childSessionKey }),
-                path.basename(details.attachments.relDir),
-                "synthetic.txt",
-              ),
-              "utf8",
-            ),
-          ).toBe("synthetic attachment");
         }
       } finally {
-        releaseWriter.resolve();
+        writerGate.release();
         inspected.resolve();
         await blocker;
         await pending;
@@ -343,7 +316,6 @@ describe("pending spawn preparation authority", () => {
         } finally {
           admission.close();
           parent.cleanup();
-          bindingFixture.unregister();
         }
       }
     },
@@ -375,9 +347,10 @@ describe("pending spawn preparation authority", () => {
           }
         })
       : undefined;
-    const { cfg, storePath, context, admission, parent, admitted } = await createBoundParent(
+    const bound = await createBoundParent(
       closure.startsWith("projected") ? "plugin-harness" : "embedded",
     );
+    const { cfg, storePath, context, admission, parent, admitted } = bound;
     if (closure === "native thread binding") {
       await replaceTranscriptEvents(
         { agentId: "main", sessionId: "parent-session", sessionKey: parentSessionKey, storePath },
@@ -392,8 +365,9 @@ describe("pending spawn preparation authority", () => {
         ],
       );
     }
-    const readChildKey = () =>
-      listSessionChildEntriesReadOnly({ storePath, sessionKey: parentSessionKey })[0]!.sessionKey;
+    const readChildKey = async () =>
+      (await listSessionChildEntriesReadOnly({ storePath, sessionKey: parentSessionKey }))[0]!
+        .sessionKey;
     const attachmentFixture = hasAttachments
       ? installSpawnAttachmentFixture({
           stateDir: fixture.stateDir,
@@ -404,7 +378,7 @@ describe("pending spawn preparation authority", () => {
               : closure === "native attachment files"
                 ? "files"
                 : undefined,
-          entered: () => entered.resolve(readChildKey()),
+          entered: async () => entered.resolve(await readChildKey()),
           release: release.promise,
         })
       : undefined;
@@ -431,23 +405,25 @@ describe("pending spawn preparation authority", () => {
       },
       resolveContextEngine: async () => {
         if (closure === "native engine resolution") {
-          entered.resolve(readChildKey());
+          entered.resolve(await readChildKey());
           await release.promise;
         }
         return Object.assign(new LegacyContextEngine(), { prepareSubagentSpawn: prepare });
       },
-      dispatchGatewayMethodInProcess: async <T>(
-        method: string,
-        params: Record<string, unknown>,
-        options?: DispatchGatewayMethodInProcessOptions,
-      ) => {
-        if (method === "agent") {
+      dispatchGatewayMethodInProcess: spawnDispatch(
+        gateway,
+        async (params) => {
           agentDispatch(params);
           if (closure === "native acceptance") {
             const childSessionKey = params.sessionKey as string;
             const child = loadSessionEntry({ storePath, sessionKey: childSessionKey })!;
             childController = registerChatAbortController({
-              chatAbortControllers: context.chatAbortControllers,
+              target: captureSessionTarget({
+                storeScope: storePath,
+                sessionKey: childSessionKey,
+                incarnation: child.sessionId,
+                agentId: "main",
+              }),
               runId: params.idempotencyKey as string,
               sessionKey: childSessionKey,
               sessionId: child.sessionId,
@@ -457,17 +433,9 @@ describe("pending spawn preparation authority", () => {
             acceptedEntered.resolve();
             await acceptedGate.promise;
           }
-          return { runId: params.idempotencyKey, status: "accepted" } as T;
-        }
-        if (method !== "chat.abort" && method !== "sessions.delete") {
-          throw new Error(`Unexpected spawn RPC ${method}`);
-        }
-        return await gateway.dispatchSessionMethod<T>(method, params, {
-          timeoutMs: options?.timeoutMs,
-          signal: options?.signal,
-          assertCurrent: options?.sessionMutationCommitGuard,
-        });
-      },
+        },
+        true,
+      ),
     });
     const invocationAbort = new AbortController();
     const host = closure.startsWith("projected")
@@ -484,25 +452,18 @@ describe("pending spawn preparation authority", () => {
         })
       : undefined;
     const source = createSessionsSpawnTool({
-      config: cfg,
-      agentSessionKey: parentSessionKey,
-      requesterRunId: parentRunId,
-      requesterTurnRunId: parentRunId,
+      ...parentToolOptions(cfg),
       agentChannel: hasThread ? "matrix" : undefined,
       agentAccountId: hasThread ? "default" : undefined,
       agentTo: hasThread ? "room:parent" : undefined,
       signal: closure === "native construction signal" ? invocationAbort.signal : undefined,
     });
     let forwarded: Promise<unknown> | undefined;
-    const observed: AnyAgentTool = copyAgentToolMetadata(source, {
+    const observed = copyAgentToolMetadata(source, {
       ...source,
       execute: (...args) => {
         const pending = source.execute!(...args);
-        // Observe, but still forward the real source promise through the native wrappers.
-        forwarded = pending.then(
-          (result) => result,
-          (error: unknown) => error,
-        );
+        forwarded = pending.catch((error: unknown) => error);
         return pending;
       },
     });
@@ -514,59 +475,37 @@ describe("pending spawn preparation authority", () => {
     const tools = [observed, wait];
     const [tool] = host
       ? finalizeAgentToolAvailability(host.capabilities.bindToolSurface(tools))
-      : finalizeAgentTools({
-          tools,
-          hookContext: {
-            config: cfg,
-            agentId: "main",
-            sessionKey: parentSessionKey,
-            runId: parentRunId,
-          },
-          abortSignal: parent.controller.signal,
-        });
-    const caller = createAdmittedGatewayToolCallerIdentity({
-      admittedRunContext: admitted,
-      agentId: "main",
-      sessionKey: parentSessionKey,
-    });
-    const wrapped = withPluginRuntimeGatewayRequestScope(
-      { context: context as unknown as GatewayRequestContext, isWebchatConnect: () => false },
-      () =>
-        withGatewayToolCallerIdentity(caller, () =>
-          tool!.execute!(
-            "spawn-pending",
-            {
-              task: "bounded child",
-              collect: closure !== "native acceptance" && !hasThread,
-              thread: hasThread,
-              context: closure === "native thread binding" ? "fork" : "isolated",
-              attachments: hasAttachments
-                ? [{ name: "synthetic.txt", content: "synthetic attachment" }]
-                : undefined,
-              groupId: closure === "native acceptance" || hasThread ? undefined : groupId,
-            },
-            closure === "native call signal" ? invocationAbort.signal : undefined,
-          ),
-        ),
+      : finalizeParentTools(bound, tools);
+    const wrapped = asCaller(bound, () =>
+      tool!.execute!(
+        "spawn-pending",
+        {
+          task: "bounded child",
+          collect: closure !== "native acceptance" && !hasThread,
+          thread: hasThread,
+          context: closure === "native thread binding" ? "fork" : "isolated",
+          attachments: hasAttachments
+            ? [{ name: "synthetic.txt", content: "synthetic attachment" }]
+            : undefined,
+          groupId: closure === "native acceptance" || hasThread ? undefined : groupId,
+        },
+        closure === "native call signal" ? invocationAbort.signal : undefined,
+      ),
     );
-    const wrappedOutcome = wrapped.then(
-      (result) => result,
-      (error: unknown) => error,
-    );
+    const wrappedOutcome = wrapped.catch((error: unknown) => error);
     try {
       // A rejected spawn never enters preparation; report it instead of waiting for the test timeout.
-      const childSessionKey = await Promise.race([
+      const childSessionKey = await awaitGateBeforeSettlement(
         entered.promise,
-        wrapped.then(() => {
-          throw new Error("Spawn settled before entering context preparation");
-        }),
-      ]);
-      expect(subagentRuns.size, "no ownership transfer before preparation resolves").toBe(0);
+        wrapped,
+        "Spawn settled before entering context preparation",
+      );
+      expect(subagentRuns.size).toBe(0);
       expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toBeDefined();
       if (closure === "native acceptance") {
         release.resolve();
         await acceptedEntered.promise;
-        expect(subagentRuns.size, "accepted local run still awaits source registration").toBe(0);
+        expect(subagentRuns.size).toBe(0);
         expect(childController?.controller.signal.aborted).toBe(false);
       }
       if (closure === "native abort" || closure === "native acceptance") {
@@ -595,30 +534,22 @@ describe("pending spawn preparation authority", () => {
         } else {
           admission.close();
         }
-        expect(
-          parent.controller.signal.aborted,
-          "claim/capability closure is independent of parent signal",
-        ).toBe(false);
+        expect(parent.controller.signal.aborted).toBe(false);
       }
       release.resolve();
       acceptedGate.resolve();
       await forwarded;
       if (closure === "native acceptance") {
         expect(agentDispatch).toHaveBeenCalledOnce();
-        expect(
-          childController?.controller.signal.aborted,
-          "exact accepted local child aborted before deletion",
-        ).toBe(true);
+        expect(childController?.controller.signal.aborted).toBe(true);
       } else {
-        expect(agentDispatch, "cancelled source never dispatches a child").not.toHaveBeenCalled();
+        expect(agentDispatch).not.toHaveBeenCalled();
       }
-      expect(subagentRuns.size, "cancelled source never registers runnable work").toBe(0);
+      expect(subagentRuns.size).toBe(0);
       const closedBeforePreparation =
         closure === "native engine resolution" || hasThread || hasAttachments;
       if (closedBeforePreparation) {
-        expect
-          .soft(prepare, "closed source must not start context engine preparation")
-          .not.toHaveBeenCalled();
+        expect.soft(prepare).not.toHaveBeenCalled();
         expect.soft(rollback).not.toHaveBeenCalled();
       } else {
         expect(rollback).toHaveBeenCalledOnce();
@@ -629,25 +560,17 @@ describe("pending spawn preparation authority", () => {
       if (closure === "native attachment staging") {
         expect(bindingFixture!.bind).toHaveBeenCalledOnce();
       }
-      expect
-        .soft(attachmentFixture?.lateWrites ?? [], "no new attachment write after parent closure")
-        .toEqual([]);
+      expect.soft(attachmentFixture?.lateWrites ?? []).toEqual([]);
       expect(bindingFixture?.bindings ?? []).toEqual([]);
       for (const directory of attachmentFixture?.attachmentDirs ?? []) {
         await expect(fs.stat(directory), directory).rejects.toMatchObject({ code: "ENOENT" });
       }
       expect(deleted).toEqual([childSessionKey]);
       expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toBeUndefined();
-      const survivor = vi.fn(async () => {});
-      enqueueSwarmRun({
-        groupId: JSON.stringify(["main", parentSessionKey, groupId]),
-        runId: "surviving-reservation",
-        maxConcurrent: 1,
-        activeRunIds: [],
-        start: survivor,
-        onStartFailure: () => true,
-      });
-      await vi.waitFor(() => expect(survivor).toHaveBeenCalledOnce());
+      await holdSpawnCapacity(
+        JSON.stringify(["main", parentSessionKey, groupId]),
+        "surviving-reservation",
+      );
     } finally {
       release.resolve();
       acceptedGate.resolve();

@@ -1,51 +1,104 @@
+import { registerComputerUseProvider } from "openclaw/plugin-sdk/computer-use";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resizeToJpeg } from "openclaw/plugin-sdk/media-runtime";
+import type { OpenClawPluginNodeHostCommand } from "openclaw/plugin-sdk/plugin-entry";
 import { createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi } from "vitest";
-import { createCuaComputerProvider } from "./commands.js";
+import { readImageMetadataFromHeader } from "rastermill";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
+  createTestProvider,
   driver,
-  execution,
+  execution as openExecution,
   invalidMacOsEndpoints,
   macOsEndpoint,
+  result,
+  pngImage,
+  frameTarget,
+  type ComputerExecution,
+  type WindowObservation,
 } from "./commands.test-helpers.js";
 import {
-  CUA_DRIVER_CONTRACT_FIXTURES,
+  CUA_DRIVER_CONTRACT_FIXTURES as fixtures,
   cuaToolResult,
 } from "./cua-driver-contract.test-fixtures.js";
-import type { CuaToolResult } from "./driver-client.js";
+import {
+  ClickButton,
+  createCuaDriver,
+  ScrollDirection,
+  type CuaToolResult,
+} from "./driver-client.js";
+import { createCuaMcpDriver } from "./mcp-driver-client.js";
 
-type ComputerExecution = Awaited<ReturnType<typeof execution>>;
-type WindowObservation = {
-  observation: { observationId: string; elements: Array<{ elementRef: string }> };
-};
-
-async function listWindow(computer: ComputerExecution) {
-  const listed = JSON.parse(await computer.act('{"action":"list_windows"}')) as {
-    details: { windows: Array<{ windowRef: string }> };
-  };
-  return listed.details.windows[0]!.windowRef;
+async function execution(...args: Parameters<typeof openExecution>) {
+  const computer = await openExecution(...args);
+  onTestFinished(() => computer.close("completion"));
+  return computer;
 }
 
-async function observeWindow(computer: ComputerExecution, windowRef: string) {
-  return JSON.parse(
-    await computer.act(JSON.stringify({ action: "get_window_state", windowRef })),
-  ) as WindowObservation;
+function expectTool(
+  callTool: ReturnType<typeof driver>["callTool"],
+  name: string,
+  args: Record<string, unknown>,
+) {
+  expect(callTool).toHaveBeenCalledWith(name, args, undefined);
+}
+
+function expectLastTool(
+  callTool: ReturnType<typeof driver>["callTool"],
+  name: string,
+  args: Record<string, unknown>,
+) {
+  expect(callTool).toHaveBeenLastCalledWith(name, args, undefined);
+}
+
+const windowPoint = { x: 20, y: 30 };
+const elementToken = { element_token: "native-element-token-7" };
+
+function actionResult(name: "confirmedBackgroundAction" | "suspectedNoopAction") {
+  return cuaToolResult({}, { action: fixtures[name] as unknown as CuaToolResult["action"] });
 }
 
 function windowDriver(handle: (name: string) => CuaToolResult = () => cuaToolResult({})) {
   const native = driver();
   native.callTool.mockImplementation(async (name) => {
     if (name === "list_windows") {
-      return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.listWindows);
+      return cuaToolResult(fixtures.listWindows);
     }
     if (name === "get_window_state") {
-      return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.windowState, { image: true });
+      return cuaToolResult(fixtures.windowState, { image: true });
     }
     return handle(name);
   });
   return native;
 }
+
+const nativeWindow = { pid: 4242, window_id: 99 };
+async function windowTarget(computer: ComputerExecution) {
+  const windowRef = await computer.window();
+  const { observation } = await computer.observe(windowRef);
+  return {
+    windowRef,
+    observationId: observation.observationId,
+    elementRef: observation.elements[0]!.elementRef,
+  };
+}
+
+function clickFrame(
+  computer: ComputerExecution,
+  screen: Parameters<typeof frameTarget>[0],
+  extra: Record<string, unknown> = {},
+) {
+  return computer.send("left_click", { ...frameTarget(screen), x: 10, y: 20, ...extra });
+}
+
+async function desktopExecution() {
+  const native = driver();
+  const computer = await execution(native.session);
+  return { ...native, computer, screen: await computer.capture() };
+}
+
+type AppList = { details: { apps: Array<{ app: string }> } };
+type Recording = { details: { recording: boolean; resourceHandle: string } };
 
 describe("cua-computer provider", () => {
   it("settles the native driver during node preparation without opening a computer execution", async () => {
@@ -57,7 +110,7 @@ describe("cua-computer provider", () => {
       await ready.promise;
       available = true;
     };
-    const provider = createCuaComputerProvider({ platform: "linux", driver: session });
+    const provider = createTestProvider(session);
     const preparing = provider.prepare?.({ config: {}, env: {} });
     expect(provider.isAvailable()).toBe(false);
     ready.resolve();
@@ -66,132 +119,54 @@ describe("cua-computer provider", () => {
     expect(getDesktopState).not.toHaveBeenCalled();
   });
 
-  it("advertises the implemented Linux v2 capability", () => {
-    const { session } = driver();
-    const descriptor = createCuaComputerProvider({
-      platform: "linux",
-      driver: session,
-    }).capabilities();
-    expect(descriptor).toEqual({
-      contractVersion: 2,
-      provider: {
-        id: "cua-computer",
-        label: "CUA Computer",
-        generation: "cua-computer-v2:execution-1",
-      },
-      actions: [
-        "screenshot",
-        "left_click",
-        "right_click",
-        "middle_click",
-        "double_click",
-        "triple_click",
-        "mouse_move",
-        "left_click_drag",
-        "left_mouse_down",
-        "left_mouse_up",
-        "scroll",
-        "type",
-        "key",
-        "list_apps",
-        "list_windows",
-        "get_accessibility_tree",
-        "get_cursor_position",
-        "get_window_state",
-        "launch_app",
-        "kill_app",
-        "bring_to_front",
-        "set_value",
-        "zoom",
-        "get_browser_state",
-        "browser_prepare",
-        "browser_navigate",
-        "browser_click",
-        "browser_type",
-        "browser_dialog",
-        "browser_set_input_files",
-        "browser_download",
-        "browser_pointer",
-        "escalate_scope",
-        "get_recording_state",
-        "start_recording",
-        "stop_recording",
-        "replay_trajectory",
-        "invoke_menu",
-      ],
-      targets: ["screen", "window", "element", "browser"],
-      deliveryModes: ["background", "foreground"],
-      observations: ["image", "accessibility", "browser"],
-      features: { recording: true, agentCursor: false, multiDisplay: false },
-    });
-  });
-
-  it("omits Linux-only held-button actions on Windows", () => {
-    const { session } = driver();
-    const actions = createCuaComputerProvider({ platform: "win32", driver: session }).capabilities()
-      .actions;
-    expect(actions).not.toContain("left_mouse_down");
-    expect(actions).not.toContain("left_mouse_up");
-    expect(actions).toContain("get_window_state");
-    expect(actions).toEqual(
-      expect.arrayContaining([
-        "get_recording_state",
-        "start_recording",
-        "stop_recording",
-        "replay_trajectory",
-      ]),
-    );
-  });
-
-  it("advertises the macOS mapping only with a valid atomic app-provided endpoint", () => {
+  it("advertises platform actions and validates the atomic macOS app-provided endpoint", () => {
     const { session } = driver();
     const endpoint = macOsEndpoint();
-    const provider = createCuaComputerProvider({
-      platform: "darwin",
-      env: endpoint,
-      driver: session,
-    });
-
-    expect(provider.isAvailable()).toBe(true);
-    expect(provider.capabilities().actions).toContain("get_window_state");
-    expect(provider.capabilities().actions).not.toContain("left_mouse_down");
-    expect(provider.capabilities().features).toEqual({
+    const passive = createTestProvider(session, "darwin", endpoint);
+    expect(passive.isAvailable()).toBe(true);
+    const declared = passive.capabilities();
+    expect(declared.features).toEqual({
       recording: true,
       agentCursor: false,
       multiDisplay: false,
     });
 
-    const createDriver = vi.fn(() => session);
-    expect(
-      createCuaComputerProvider({
-        platform: "darwin",
-        env: endpoint,
-        createDriver,
-      }).isAvailable(),
-    ).toBe(true);
-    expect(createDriver).not.toHaveBeenCalled();
+    expect(passive.capabilities()).toEqual(declared);
+    expect(createCuaMcpDriver).not.toHaveBeenCalled();
+
+    for (const platform of ["darwin", "linux", "win32"] as const) {
+      const actions = createTestProvider(session, platform, endpoint).capabilities().actions;
+      expect(actions).toEqual(
+        expect.arrayContaining([
+          "screenshot",
+          "get_window_state",
+          "browser_download",
+          "replay_trajectory",
+          "invoke_menu",
+        ]),
+      );
+      expect(actions).not.toContain("hold_key");
+      expect(actions).not.toContain("wait");
+      expect(actions.includes("left_mouse_down")).toBe(platform === "linux");
+      expect(actions.includes("left_mouse_up")).toBe(platform === "linux");
+    }
 
     for (const [label, env] of invalidMacOsEndpoints()) {
-      expect(
-        createCuaComputerProvider({ platform: "darwin", env, driver: session }).isAvailable(),
-        label,
-      ).toBe(false);
+      expect(createTestProvider(session, "darwin", env).isAvailable(), label).toBe(false);
     }
   });
 
   it("lazily owns one session and closes it when node-host availability stops", async () => {
     const { session, dispose } = driver();
-    const createDriver = vi.fn(() => session);
-    const clearInterval = vi.fn();
-    const provider = createCuaComputerProvider({
-      platform: "linux",
-      createDriver,
-      imageProcessor: {
-        encode: vi.fn(async () => ({ data: Buffer.from("jpeg"), width: 100, height: 50 })),
-      },
-      setInterval: vi.fn(() => Object.assign(1, { unref: vi.fn() })) as never,
-      clearInterval: clearInterval as never,
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
     });
+    const clearInterval = vi.spyOn(globalThis, "clearInterval");
+    onTestFinished(() => clearInterval.mockRestore());
+    const createDriver = vi.mocked(createCuaDriver);
+    const provider = createTestProvider(session);
+    createDriver.mockReturnValueOnce(session);
     expect(createDriver).not.toHaveBeenCalled();
 
     const computer = await provider.openExecution({
@@ -217,10 +192,7 @@ describe("cua-computer provider", () => {
         entered.resolve();
         return retiring.promise;
       });
-      const provider = createCuaComputerProvider({
-        platform: "linux",
-        createDriver: () => session,
-      });
+      const provider = createTestProvider(session);
       const stop = provider.watchAvailability?.({ config: {}, env: {} }, vi.fn());
       const first = Promise.resolve(stop?.());
       const second = Promise.resolve(stop?.());
@@ -256,130 +228,90 @@ describe("cua-computer provider", () => {
     },
   );
 
-  it("passes node invocation cancellation to the direct SDK", async () => {
-    const { session, getDesktopState } = driver();
+  it("mints opaque refs without a screenshot and maps background evidence", async () => {
+    const { session, callTool } = windowDriver((name) =>
+      name === "click" ? actionResult("confirmedBackgroundAction") : cuaToolResult({}),
+    );
+    callTool.mockImplementationOnce(async () => cuaToolResult(fixtures.listWindows));
+    callTool.mockImplementationOnce(async (_name, args) => {
+      return cuaToolResult(fixtures.windowState, { image: args.include_screenshot !== false });
+    });
     const computer = await execution(session);
-    const signal = AbortSignal.abort();
-    await computer.snapshot('{"format":"png","maxWidth":100}', signal);
-    expect(getDesktopState).toHaveBeenCalledWith(signal);
+    const listed = await computer.read<{
+      details: { windows: Array<{ windowRef: string; appName: string; title: string }> };
+    }>("list_windows");
+    expect(listed).toMatchObject({
+      ok: true,
+      details: { windows: [{ appName: "Editor", title: "Notes" }] },
+    });
+    const windowRef = listed.details.windows[0]!.windowRef;
+    expect(windowRef).toMatch(/^cua:v2:window:/);
+
+    const observed = await computer.read<WindowObservation>("get_window_state", {
+      windowRef,
+      includeScreenshot: false,
+    });
+    expect(Boolean(observed.observation.base64)).toBe(false);
+    const { observationId, elements } = observed.observation;
+    const { elementRef } = elements[0]!;
+    expect(observed).toMatchObject({ details: { coordinateSpace: "image-pixels" } });
+    expect(observationId).toMatch(/^cua:v2:observation:/);
+    expect(elementRef).toMatch(/^cua:v2:element:/);
+
+    const clicked = await computer.read("left_click", {
+      windowRef,
+      elementRef,
+      observationId,
+      deliveryMode: "background",
+    });
+    expect(clicked).toMatchObject({
+      ok: true,
+      effect: "confirmed",
+      details: {
+        route: "accessibility",
+        deliveryMode: "background",
+        deliveredCount: 1,
+        evidence: ["value_readback"],
+      },
+    });
+    expectLastTool(callTool, "click", {
+      ...nativeWindow,
+      ...elementToken,
+      button: "left",
+      count: 1,
+      delivery_mode: "background",
+    });
   });
-
-  it.each([undefined, true, false])(
-    "mints opaque window and element refs with includeScreenshot=%s and maps background evidence",
-    async (includeScreenshot) => {
-      const { session, callTool } = driver();
-      callTool.mockImplementation(async (name, args) => {
-        switch (name) {
-          case "list_windows":
-            return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.listWindows);
-          case "get_window_state":
-            return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.windowState, {
-              image: args.include_screenshot !== false,
-            });
-          case "click":
-            return cuaToolResult(
-              {},
-              {
-                action:
-                  CUA_DRIVER_CONTRACT_FIXTURES.confirmedBackgroundAction as unknown as CuaToolResult["action"],
-              },
-            );
-          default:
-            return cuaToolResult({});
-        }
-      });
-      const computer = await execution(session);
-      const listed = JSON.parse(await computer.act('{"action":"list_windows"}')) as {
-        details: { windows: Array<{ windowRef: string }> };
-      };
-      const windowRef = listed.details.windows[0]!.windowRef;
-      expect(windowRef).toMatch(/^cua:v2:window:/);
-
-      const observed = JSON.parse(
-        await computer.act(
-          JSON.stringify({ action: "get_window_state", windowRef, includeScreenshot }),
-        ),
-      ) as {
-        observation: {
-          base64?: string;
-          observationId: string;
-          elements: Array<{ elementRef: string }>;
-        };
-      };
-      expect(Boolean(observed.observation.base64)).toBe(includeScreenshot !== false);
-      const { observationId } = observed.observation;
-      const elementRef = observed.observation.elements[0]!.elementRef;
-      expect(observed).toMatchObject({ details: { coordinateSpace: "image-pixels" } });
-      expect(observationId).toMatch(/^cua:v2:observation:/);
-      expect(elementRef).toMatch(/^cua:v2:element:/);
-
-      const clicked = JSON.parse(
-        await computer.act(
-          JSON.stringify({
-            action: "left_click",
-            windowRef,
-            elementRef,
-            observationId,
-            deliveryMode: "background",
-          }),
-        ),
-      ) as { effect: string; details: Record<string, unknown> };
-      expect(clicked).toMatchObject({
-        ok: true,
-        effect: "confirmed",
-        details: {
-          route: "accessibility",
-          deliveryMode: "background",
-          deliveredCount: 1,
-          evidence: ["value_readback"],
-        },
-      });
-      expect(callTool).toHaveBeenLastCalledWith(
-        "click",
-        {
-          pid: 4242,
-          window_id: 99,
-          element_token: "native-element-token-7",
-          button: "left",
-          count: 1,
-          delivery_mode: "background",
-        },
-        undefined,
-      );
-    },
-  );
 
   it("rejects forged window, observation, and element refs before native resolution", async () => {
     const { session, callTool } = windowDriver();
     const computer = await execution(session);
-    const windowRef = await listWindow(computer);
-    const observed = await observeWindow(computer, windowRef);
+    const target = await windowTarget(computer);
     const callsBeforeHostileRefs = callTool.mock.calls.length;
 
     for (const input of [
       { action: "get_window_state", windowRef: "/tmp/native-window" },
-      {
-        action: "left_click",
-        windowRef,
-        observationId: "/tmp/native-observation",
-        elementRef: observed.observation.elements[0]!.elementRef,
-      },
-      {
-        action: "left_click",
-        windowRef,
-        observationId: observed.observation.observationId,
-        elementRef: "../native-element",
-      },
+      { action: "left_click", ...target, observationId: "/tmp/native-observation" },
+      { action: "left_click", ...target, elementRef: "../native-element" },
     ]) {
-      await expect(computer.act(JSON.stringify(input))).rejects.toThrow(
-        "COMPUTER_STALE_OBSERVATION",
-      );
+      await expect(computer.send(input)).rejects.toThrow("COMPUTER_STALE_OBSERVATION");
     }
     expect(callTool).toHaveBeenCalledTimes(callsBeforeHostileRefs);
   });
 
   it("maps window pixels, app lifecycle, menu, zoom, and escalation tools", async () => {
-    const { session, callTool, getSessionState } = driver();
+    const { session, callTool, getSessionState } = windowDriver((name) => {
+      if (name === "list_apps") {
+        return cuaToolResult(fixtures.listApps);
+      }
+      if (name === "zoom") {
+        return {
+          ...cuaToolResult({ width: 300, height: 200, format: "jpeg", mime_type: "image/jpeg" }),
+          images: [{ mimeType: "image/jpeg", dataBase64: zoomImage }],
+        };
+      }
+      return actionResult("suspectedNoopAction");
+    });
     const zoomImage = (
       await resizeToJpeg({
         buffer: createSolidPngBuffer(300, 200, { r: 70, g: 125, b: 180 }),
@@ -387,55 +319,23 @@ describe("cua-computer provider", () => {
         quality: 85,
       })
     ).toString("base64");
-    callTool.mockImplementation(async (name) => {
-      switch (name) {
-        case "list_apps":
-          return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.listApps);
-        case "list_windows":
-          return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.listWindows);
-        case "get_window_state":
-          return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.windowState, { image: true });
-        case "zoom":
-          return {
-            ...cuaToolResult({ width: 300, height: 200, format: "jpeg", mime_type: "image/jpeg" }),
-            images: [{ mimeType: "image/jpeg", dataBase64: zoomImage }],
-          };
-        default:
-          return cuaToolResult(
-            {},
-            {
-              action:
-                CUA_DRIVER_CONTRACT_FIXTURES.suspectedNoopAction as unknown as CuaToolResult["action"],
-            },
-          );
-      }
-    });
     const computer = await execution(session);
-    const apps = JSON.parse(await computer.act('{"action":"list_apps"}')) as {
-      details: { apps: Array<{ app: string }> };
-    };
+    const apps = await computer.read<AppList>("list_apps");
     const app = apps.details.apps[0]!.app;
-    const windowRef = await listWindow(computer);
-    const observed = await observeWindow(computer, windowRef);
+    const windowRef = await computer.window();
+    const observed = await computer.observe(windowRef);
 
-    await computer.act(JSON.stringify({ action: "launch_app", app }));
-    await computer.act(JSON.stringify({ action: "kill_app", app }));
-    await computer.act(
-      JSON.stringify({ action: "invoke_menu", windowRef, path: ["File", "Save"] }),
-    );
-    const zoomed = JSON.parse(
-      await computer.act(
-        JSON.stringify({
-          action: "zoom",
-          windowRef,
-          observationId: observed.observation.observationId,
-          x1: 0,
-          y1: 0,
-          x2: 100,
-          y2: 100,
-        }),
-      ),
-    ) as { observation: { observationId: string } };
+    await computer.send("launch_app", { app });
+    await computer.send("kill_app", { app });
+    await computer.send("invoke_menu", { windowRef, path: ["File", "Save"] });
+    const zoomed = await computer.read<{ observation: { observationId: string } }>("zoom", {
+      windowRef,
+      observationId: observed.observation.observationId,
+      x1: 0,
+      y1: 0,
+      x2: 100,
+      y2: 100,
+    });
     expect(zoomed.observation.observationId).not.toBe(observed.observation.observationId);
     expect(zoomed.observation).toMatchObject({
       base64: zoomImage,
@@ -443,202 +343,126 @@ describe("cua-computer provider", () => {
       width: 300,
       height: 200,
     });
-    await computer.act(
-      JSON.stringify({
-        action: "left_click",
-        windowRef,
-        observationId: zoomed.observation.observationId,
-        x: 0,
-        y: 0,
-      }),
-    );
-    expect(callTool).toHaveBeenLastCalledWith(
-      "click",
-      { pid: 4242, window_id: 99, x: 0, y: 0, from_zoom: true, button: "left", count: 1 },
-      undefined,
-    );
-    await computer.act(
-      JSON.stringify({ action: "escalate_scope", reason: "background_delivery_failed" }),
-    );
+    await computer.send("left_click", {
+      windowRef,
+      observationId: zoomed.observation.observationId,
+      x: 0,
+      y: 0,
+    });
+    expectLastTool(callTool, "click", {
+      ...nativeWindow,
+      x: 0,
+      y: 0,
+      from_zoom: true,
+      button: "left",
+      count: 1,
+    });
+    await computer.send("escalate_scope", { reason: "background_delivery_failed" });
 
-    expect(callTool).toHaveBeenCalledWith(
-      "launch_app",
-      { launch_path: "/usr/bin/editor" },
-      undefined,
-    );
-    expect(callTool).toHaveBeenCalledWith("kill_app", { pid: 4242 }, undefined);
-    expect(callTool).toHaveBeenCalledWith(
-      "invoke_menu",
-      { pid: 4242, window_id: 99, path: ["File", "Save"] },
-      undefined,
-    );
+    expectTool(callTool, "launch_app", { launch_path: "/usr/bin/editor" });
+    expectTool(callTool, "kill_app", { pid: 4242 });
+    expectTool(callTool, "invoke_menu", { ...nativeWindow, path: ["File", "Save"] });
     expect(getSessionState).toHaveBeenCalledWith(undefined);
   });
 
   it.each([
-    {
-      label: "Darwin bundle identifier despite an observed path",
-      platform: "darwin",
-      app: {
-        name: "TextEdit",
-        bundle_id: "com.apple.TextEdit",
-        launch_path: "/System/Applications/TextEdit.app",
-      },
-      expected: { bundle_id: "com.apple.TextEdit" },
-    },
-    {
-      label: "Darwin display name without a bundle identifier",
-      platform: "darwin",
-      app: {
-        name: "Example Editor",
-        bundle_id: null,
-        launch_path: "/Applications/Example Editor.app",
-      },
-      expected: { name: "Example Editor" },
-    },
-    {
-      label: "Linux launch command despite a desktop identifier",
-      platform: "linux",
-      app: {
-        name: "Editor",
-        bundle_id: "org.example.Editor",
-        launch_path: "/usr/bin/editor --new-window",
-      },
-      expected: { launch_path: "/usr/bin/editor --new-window" },
-    },
-    {
-      label: "Windows quoted executable and arguments",
-      platform: "win32",
-      app: {
-        name: "Example Editor",
-        bundle_id: "org.example.Editor",
-        launch_path: '"C:\\Program Files\\Example\\Editor.exe" --new-window',
-      },
-      expected: { launch_path: '"C:\\Program Files\\Example\\Editor.exe" --new-window' },
-    },
-    {
-      label: "Windows packaged application launch path",
-      platform: "win32",
-      app: {
-        name: "Example Editor",
-        bundle_id: "Example.Editor_abcdefghijklm!App",
-        launch_path: "shell:appsFolder\\Example.Editor_abcdefghijklm!App",
-      },
-      expected: { launch_path: "shell:appsFolder\\Example.Editor_abcdefghijklm!App" },
-    },
-  ] as const)("launches an observed app using its $label", async ({ platform, app, expected }) => {
-    const { session, callTool } = driver();
-    callTool.mockImplementation(async (name, args) => {
-      if (name === "list_apps") {
-        return cuaToolResult({ apps: [{ ...app, running: false }] });
-      }
-      if (platform === "darwin" && !args.bundle_id && !args.name) {
-        return cuaToolResult(
-          {},
-          {
-            isError: true,
-            text: "Provide either bundle_id or name to identify the app to launch.",
-          },
-        );
-      }
-      return cuaToolResult({ ...app, pid: 4242, running: true, windows: [] });
-    });
-    const computer = await execution(session, platform);
-    try {
-      const listed = JSON.parse(await computer.act('{"action":"list_apps"}')) as {
-        details: { apps: Array<{ app: string }> };
-      };
-      const launched = JSON.parse(
-        await computer.act(
-          JSON.stringify({ action: "launch_app", app: listed.details.apps[0]!.app }),
-        ),
-      );
-
+    [
+      "TextEdit",
+      "com.apple.TextEdit",
+      "/System/Applications/TextEdit.app",
+      { bundle_id: "com.apple.TextEdit" },
+    ],
+    ["Example Editor", null, "/Applications/Example Editor.app", { name: "Example Editor" }],
+  ] as const)(
+    "launches observed Darwin app %s",
+    async (appName, bundle_id, launch_path, expected) => {
+      const app = { name: appName, bundle_id, launch_path };
+      const { session, callTool } = driver();
+      callTool.mockImplementation(async (name, args) => {
+        if (name === "list_apps") {
+          return cuaToolResult({ apps: [{ ...app, running: false }] });
+        }
+        if (!args.bundle_id && !args.name) {
+          return cuaToolResult(
+            {},
+            {
+              isError: true,
+              text: "Provide either bundle_id or name to identify the app to launch.",
+            },
+          );
+        }
+        return cuaToolResult({ ...app, pid: 4242, running: true, windows: [] });
+      });
+      const computer = await execution(session, "darwin");
+      const listed = await computer.read<AppList>("list_apps");
+      const launched = await computer.read("launch_app", { app: listed.details.apps[0]!.app });
       expect(launched).toMatchObject({
         ok: true,
         details: { app: [{ name: app.name, running: true }] },
       });
-      expect(callTool).toHaveBeenLastCalledWith("launch_app", expected, undefined);
-    } finally {
-      await computer.close("completion");
-    }
-  });
-
-  it.each(["darwin", "linux", "win32"] as const)(
-    "rejects model-supplied app paths and commands before driver dispatch on %s",
-    async (platform) => {
-      const { session, callTool } = driver();
-      const computer = await execution(session, platform);
-      try {
-        for (const app of ["/usr/bin/open", "../outside", "sh -c 'touch /tmp/owned'"]) {
-          await expect(computer.act(JSON.stringify({ action: "launch_app", app }))).rejects.toThrow(
-            "COMPUTER_STALE_OBSERVATION",
-          );
-        }
-
-        expect(callTool).not.toHaveBeenCalled();
-      } finally {
-        await computer.close("completion");
-      }
+      expectLastTool(callTool, "launch_app", expected);
     },
   );
 
-  it("maps the complete Linux window pointer and keyboard family", async () => {
-    const { session, callTool } = windowDriver(() => {
-      return cuaToolResult(
-        {},
-        {
-          action:
-            CUA_DRIVER_CONTRACT_FIXTURES.confirmedBackgroundAction as unknown as CuaToolResult["action"],
-        },
+  it("rejects model-supplied app paths and commands before driver dispatch", async () => {
+    const { session, callTool } = driver();
+    const computer = await execution(session, "darwin");
+    for (const app of ["/usr/bin/open", "../outside", "sh -c 'touch /tmp/owned'"]) {
+      await expect(computer.send("launch_app", { app })).rejects.toThrow(
+        "COMPUTER_STALE_OBSERVATION",
       );
-    });
+    }
+    expect(callTool).not.toHaveBeenCalled();
+  });
+
+  it("maps the complete Linux window pointer and keyboard family", async () => {
+    const { session, callTool } = windowDriver(() => actionResult("confirmedBackgroundAction"));
     const computer = await execution(session);
-    const windowRef = await listWindow(computer);
-    const observed = await observeWindow(computer, windowRef);
-    const observationId = observed.observation.observationId;
-    const elementRef = observed.observation.elements[0]!.elementRef;
-    const pixelTarget = { windowRef, observationId, x: 20, y: 30 };
+    const { elementRef, ...target } = await windowTarget(computer);
+    const pixelTarget = { ...target, ...windowPoint };
     const cases = [
-      ["right_click", "click", { button: "right", count: 1 }],
-      ["middle_click", "click", { button: "middle", count: 1 }],
-      ["double_click", "click", { button: "left", count: 2 }],
-      ["triple_click", "click", { button: "left", count: 3 }],
-      ["left_click_drag", "drag", { from_x: 10, from_y: 15, to_x: 20, to_y: 30, duration_ms: 250 }],
-      ["left_mouse_down", "mouse_button_down", { x: 20, y: 30, button: "left" }],
-      ["left_mouse_up", "mouse_button_up", { x: 20, y: 30 }],
-      ["scroll", "scroll", { direction: "down", by: "line", amount: 4 }],
-      ["type", "type_text", { text: "hello", element_token: "native-element-token-7" }],
-      ["key", "press_key", { key: "enter", modifiers: ["ctrl"] }],
+      ["right_click", "click", {}, { button: "right", count: 1 }],
+      ["middle_click", "click", {}, { button: "middle", count: 1 }],
+      ["double_click", "click", {}, { button: "left", count: 2 }],
+      ["triple_click", "click", {}, { button: "left", count: 3 }],
+      [
+        "left_click_drag",
+        "drag",
+        { fromX: 10, fromY: 15, durationMs: 250 },
+        { from_x: 10, from_y: 15, to_x: 20, to_y: 30, duration_ms: 250 },
+      ],
+      [
+        "left_mouse_down",
+        "mouse_button_down",
+        { deliveryMode: "background" },
+        { x: 20, y: 30, button: "left" },
+      ],
+      ["left_mouse_up", "mouse_button_up", { deliveryMode: "background" }, { x: 20, y: 30 }],
+      [
+        "scroll",
+        "scroll",
+        { scrollDirection: "down", scrollAmount: 4 },
+        { direction: "down", by: "line", amount: 4 },
+      ],
+      [
+        "type",
+        "type_text",
+        { elementRef, text: "hello", x: undefined, y: undefined },
+        { text: "hello", element_token: "native-element-token-7" },
+      ],
+      [
+        "key",
+        "press_key",
+        { keys: "ctrl+enter", x: undefined, y: undefined },
+        { key: "enter", modifiers: ["ctrl"] },
+      ],
     ] as const;
 
-    for (const [action, tool, expected] of cases) {
-      const actionInput: Record<string, unknown> = {
-        action,
-        ...pixelTarget,
-        deliveryMode: action.startsWith("left_mouse_") ? "background" : "foreground",
-      };
-      if (action === "left_click_drag") {
-        actionInput.fromX = 10;
-        actionInput.fromY = 15;
-        actionInput.durationMs = 250;
-      } else if (action === "scroll") {
-        actionInput.scrollDirection = "down";
-        actionInput.scrollAmount = 4;
-      } else if (action === "type") {
-        actionInput.elementRef = elementRef;
-        actionInput.text = "hello";
-        delete actionInput.x;
-        delete actionInput.y;
-      } else if (action === "key") {
-        actionInput.keys = "ctrl+enter";
-        delete actionInput.x;
-        delete actionInput.y;
-      }
-      await computer.act(JSON.stringify(actionInput));
+    for (const [action, tool, input, expected] of cases) {
+      await computer.send(action, { ...pixelTarget, deliveryMode: "foreground", ...input });
       expect(callTool).toHaveBeenCalledWith(
         tool,
-        expect.objectContaining({ pid: 4242, window_id: 99, ...expected }),
+        expect.objectContaining({ ...nativeWindow, ...expected }),
         undefined,
       );
     }
@@ -649,98 +473,468 @@ describe("cua-computer provider", () => {
       if (name === "get_accessibility_tree") {
         return cuaToolResult({
           processes: [{ pid: 4242, name: "Editor" }],
-          windows: CUA_DRIVER_CONTRACT_FIXTURES.listWindows.windows,
+          windows: fixtures.listWindows.windows,
         });
       }
-      return cuaToolResult(
-        {},
-        {
-          action:
-            CUA_DRIVER_CONTRACT_FIXTURES.confirmedBackgroundAction as unknown as CuaToolResult["action"],
-        },
-      );
+      return actionResult("confirmedBackgroundAction");
     });
     getCursorPosition.mockResolvedValue(cuaToolResult({ x: 11, y: 12, source: "x11" }));
     const computer = await execution(session);
-    const tree = JSON.parse(await computer.act('{"action":"get_accessibility_tree"}')) as {
-      details: { windows: unknown[]; processes: unknown[] };
-    };
+    const tree = await computer.read<{ details: { windows: unknown[]; processes: unknown[] } }>(
+      "get_accessibility_tree",
+    );
     expect(tree.details.windows).toHaveLength(1);
     expect(tree.details.processes).toHaveLength(1);
-    await expect(computer.act('{"action":"get_cursor_position"}')).resolves.toContain('"x":11');
+    await expect(computer.send("get_cursor_position")).resolves.toContain('"x":11');
     expect(getCursorPosition).toHaveBeenCalledWith(undefined);
 
-    const windowRef = await listWindow(computer);
-    const observed = await observeWindow(computer, windowRef);
-    await computer.act(JSON.stringify({ action: "bring_to_front", windowRef }));
-    await computer.act(
-      JSON.stringify({
-        action: "set_value",
-        windowRef,
-        observationId: observed.observation.observationId,
-        elementRef: observed.observation.elements[0]!.elementRef,
-        value: "new",
-        deliveryMode: "background",
-      }),
-    );
-    expect(callTool).toHaveBeenCalledWith(
-      "bring_to_front",
-      { pid: 4242, window_id: 99 },
-      undefined,
-    );
-    expect(callTool).toHaveBeenCalledWith(
-      "set_value",
-      {
-        pid: 4242,
-        window_id: 99,
-        element_token: "native-element-token-7",
-        value: "new",
-      },
-      undefined,
-    );
-  });
-
-  it("maps window delivery refusals to the closed computer error prefix", async () => {
-    const { session } = windowDriver(() => {
-      return cuaToolResult(
-        { code: "background_occluded" },
-        {
-          isError: true,
-          errorCode: "background_occluded",
-          text: "target is occluded",
-        },
-      );
+    const target = await windowTarget(computer);
+    await computer.send("bring_to_front", { windowRef: target.windowRef });
+    await computer.send("set_value", {
+      ...target,
+      value: "new",
+      deliveryMode: "background",
     });
-    const computer = await execution(session);
-    const windowRef = await listWindow(computer);
-    const observed = await observeWindow(computer, windowRef);
-    await expect(
-      computer.act(
-        JSON.stringify({
-          action: "left_click",
-          windowRef,
-          observationId: observed.observation.observationId,
-          x: 10,
-          y: 20,
-        }),
-      ),
-    ).rejects.toThrow("COMPUTER_REFUSED_background_occluded");
+    expectTool(callTool, "bring_to_front", nativeWindow);
+    expectTool(callTool, "set_value", { ...nativeWindow, ...elementToken, value: "new" });
   });
 
   it("invalidates observation references when the driver generation rotates", async () => {
-    const { session, callTool, setGeneration } = driver();
-    callTool.mockImplementation(async (name) =>
-      name === "list_windows"
-        ? cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.listWindows)
-        : cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.windowState, { image: true }),
-    );
+    const { session, callTool, setGeneration } = windowDriver();
     const computer = await execution(session);
-    const windowRef = await listWindow(computer);
+    const windowRef = await computer.window();
     setGeneration("execution-2");
 
-    await expect(
-      computer.act(JSON.stringify({ action: "get_window_state", windowRef })),
-    ).rejects.toThrow("COMPUTER_STALE_OBSERVATION");
+    await expect(computer.send("get_window_state", { windowRef })).rejects.toThrow(
+      "COMPUTER_STALE_OBSERVATION",
+    );
     expect(callTool).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("cua-computer desktop frames", () => {
+  it("preserves native effect evidence for desktop scroll", async () => {
+    const input = driver();
+    input.scroll.mockResolvedValue({
+      ...result({}),
+      action: { effect: 3, route: 2, delivery: { mode: 1 }, escalation: { target: 3, reason: 3 } },
+    });
+    const computer = await execution(input.session);
+    const screen = await computer.capture();
+    const response = await computer.read("scroll", {
+      x: 10,
+      y: 20,
+      scrollDirection: "down",
+      ...frameTarget(screen),
+      deliveryMode: "background",
+    });
+    expect(response).toMatchObject({
+      ok: true,
+      effect: "suspected_noop",
+      escalation: { recommended: "desktop", reasonCode: "suspected_noop" },
+      details: {
+        route: "global_input",
+        deliveryMode: "foreground",
+        scope: "desktop",
+        deliveryModeApplicable: false,
+      },
+    });
+  });
+
+  it.each([
+    ["linux", [1080, 1920], 1, 1280, [720, 1280], "capture cap"],
+    ["darwin", [200, 100], 2, 100, [100, 50], "returned width"],
+  ] as const)(
+    "maps the returned bitmap on %s",
+    async (platform, native, scale, cap, delivered, reference) => {
+      const geometry = {
+        platform: platform === "darwin" ? "macos" : platform,
+        display: "primary",
+        screenshot_width: native[0],
+        screenshot_height: native[1],
+        screen_width: native[0] / scale,
+        screen_height: native[1] / scale,
+        scale_factor: scale,
+      };
+      const input = driver({ geometry });
+      input.getDesktopState.mockResolvedValue({
+        ...result(geometry),
+        images: [pngImage(native[0], native[1])],
+      });
+      const provider = createTestProvider(input.session, platform);
+      const commands: OpenClawPluginNodeHostCommand[] = [];
+      registerComputerUseProvider(
+        { registerNodeHostCommand: (command) => commands.push(command) },
+        provider,
+      );
+      const executionId = "123e4567-e89b-42d3-a456-426614174000";
+      const invoke = (command: string, params: Record<string, unknown>) =>
+        commands
+          .find((entry) => entry.command === command)!
+          .handle(JSON.stringify({ executionId, ...params }));
+      onTestFinished(async () => {
+        await invoke("computer.act", { action: "__close_execution", reason: "completion" });
+      });
+      const screen = JSON.parse(
+        await invoke("screen.snapshot", { format: "png", maxWidth: cap }),
+      ) as {
+        base64: string;
+        displayFrameId: string;
+        width: number;
+        height: number;
+      };
+      expect([screen.width, screen.height]).toEqual(delivered);
+      expect(readImageMetadataFromHeader(Buffer.from(screen.base64, "base64"))).toEqual({
+        width: screen.width,
+        height: screen.height,
+      });
+      const frame = {
+        displayFrameId: screen.displayFrameId,
+        refWidth: reference === "capture cap" ? cap : screen.width,
+      };
+      const point = { x: screen.width / 2, y: screen.height / 2 };
+      const nativePoint = { x: Math.round(native[0] / 2), y: Math.round(native[1] / 2) };
+      const act = (action: string, params: Record<string, unknown> = {}) =>
+        invoke("computer.act", { action, ...frame, ...point, ...params });
+
+      await act("left_click");
+      await act("mouse_move");
+      await act("scroll", { scrollDirection: "down", scrollAmount: 4 });
+      await act("left_click_drag", { fromX: 0, fromY: 0, durationMs: 500 });
+
+      expect(input.click).toHaveBeenCalledExactlyOnceWith(
+        { ...nativePoint, button: ClickButton.Left, count: 1 },
+        undefined,
+      );
+      expect(input.moveCursor).toHaveBeenCalledExactlyOnceWith(nativePoint, undefined);
+      expect(input.scroll).toHaveBeenCalledExactlyOnceWith(
+        { ...nativePoint, direction: ScrollDirection.Down, amount: 4n },
+        undefined,
+      );
+      expect(input.drag).toHaveBeenCalledExactlyOnceWith(
+        { fromX: 0, fromY: 0, toX: nativePoint.x, toY: nativePoint.y, durationMs: 500n },
+        undefined,
+      );
+      for (const [x, y] of [
+        [delivered[0], 0],
+        [0, delivered[1]],
+      ]) {
+        await expect(act("left_click", { x, y })).rejects.toThrow("COMPUTER_INVALID_REQUEST");
+      }
+      expect(input.click).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
+    { action: "right_click", button: ClickButton.Right, count: 1 },
+    { action: "middle_click", button: ClickButton.Middle, count: 1 },
+    { action: "double_click", button: ClickButton.Left, count: 2 },
+    { action: "triple_click", button: ClickButton.Left, count: 3 },
+  ])(
+    "uses one typed session for snapshot and frame-authorized $action",
+    async ({ action, button, count }) => {
+      const { computer, screen, getDesktopState, getScreenSize, click } = await desktopExecution();
+      await computer.send(action, { ...frameTarget(screen), x: 10, y: 20 });
+      expect(getDesktopState).toHaveBeenCalledOnce();
+      expect(getScreenSize).toHaveBeenCalledOnce();
+      expect(click).toHaveBeenCalledExactlyOnceWith({ x: 10, y: 20, button, count }, undefined);
+    },
+  );
+
+  it("maps scroll and key through typed SDK enums", async () => {
+    const { session, typeText, pressKey } = driver();
+    const computer = await execution(session);
+    await computer.send("type", { text: "hello" });
+    await computer.send("key", { keys: "ctrl+enter" });
+    expect(typeText).toHaveBeenCalledWith("hello", undefined);
+    expect(pressKey).toHaveBeenCalledWith({ key: "enter", modifiers: ["ctrl"] }, undefined);
+    expect(ScrollDirection.Down).toBeTypeOf("number");
+  });
+
+  it("turns a direct SDK refusal into a typed computer error", async () => {
+    const { computer, screen, click } = await desktopExecution();
+    click.mockResolvedValueOnce({
+      ...result({}),
+      isError: true,
+      errorCode: "desktop_unavailable",
+      text: "desktop input is unavailable",
+    });
+    await expect(clickFrame(computer, screen)).rejects.toThrow(
+      "COMPUTER_REFUSED_desktop_unavailable",
+    );
+  });
+
+  it("rejects a mismatched reference width before desktop input", async () => {
+    const { computer, screen, click } = await desktopExecution();
+
+    await expect(clickFrame(computer, screen, { refWidth: screen.width + 1 })).rejects.toThrow(
+      "COMPUTER_STALE_FRAME: the coordinate reference width changed",
+    );
+    expect(click).not.toHaveBeenCalled();
+  });
+
+  it.each(["superseded capture scale", "changed display geometry", "reconnected driver"])(
+    "rejects a %s before desktop input",
+    async (cause) => {
+      const { session, click, getDesktopState, getScreenSize, setGeneration } = driver();
+      const desktop = await getDesktopState();
+      desktop.images = [pngImage(100, 50)];
+      getDesktopState.mockResolvedValue(desktop);
+      const computer = await execution(session);
+      const screen = await computer.capture();
+      const action = {
+        action: "left_click",
+        displayFrameId: screen.displayFrameId,
+        refWidth: 100,
+        x: 10,
+        y: 20,
+      };
+      switch (cause) {
+        case "superseded capture scale":
+          await computer.snapshot('{"format":"png","maxWidth":50}');
+          action.refWidth = 50;
+          break;
+        case "changed display geometry":
+          getScreenSize.mockResolvedValue(result({ width: 101, height: 50, scale_factor: 1 }));
+          break;
+        case "reconnected driver":
+          setGeneration("execution-2");
+          break;
+      }
+      await expect(computer.send(action)).rejects.toThrow("COMPUTER_STALE_FRAME");
+      expect(click).not.toHaveBeenCalled();
+    },
+  );
+});
+
+async function observedWindowTarget(computer: ComputerExecution) {
+  const windowRef = await computer.window();
+  const observed = await computer.observe(windowRef);
+  return { windowRef, observationId: observed.observation.observationId };
+}
+
+async function windowExecution(platform: NodeJS.Platform) {
+  const native = windowDriver();
+  const computer = await execution(native.session, platform);
+  return { native, computer };
+}
+
+describe("cua-computer platform modifiers", () => {
+  it.each([
+    {
+      scope: "desktop",
+      keys: "Command+Shift+Left",
+      expected: { key: "left", modifiers: ["cmd", "shift"] },
+    },
+    {
+      scope: "window",
+      keys: "Command+Shift+Left",
+      expected: { key: "left", modifiers: ["cmd", "shift"] },
+    },
+    { scope: "desktop", keys: "Cmd", expected: { key: "cmd", modifiers: [] } },
+  ] as const)("preserves $keys on macOS $scope input", async ({ scope, keys, expected }) => {
+    const { native, computer } = await windowExecution("darwin");
+    const target = scope === "window" ? await observedWindowTarget(computer) : {};
+    await computer.act(JSON.stringify({ action: "key", keys, ...target }));
+
+    if (scope === "desktop") {
+      expect(native.pressKey).toHaveBeenCalledExactlyOnceWith(expected, undefined);
+    } else {
+      expect(native.callTool).toHaveBeenLastCalledWith(
+        "press_key",
+        { pid: 4242, window_id: 99, ...expected },
+        undefined,
+      );
+      expect(native.pressKey).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each([
+    { action: "left_click", scope: "desktop" },
+    { action: "scroll", scope: "desktop" },
+    { action: "scroll", scope: "window" },
+  ])("keeps modified $scope $action unavailable", async ({ action, scope }) => {
+    const { native, computer } = await windowExecution("darwin");
+    const frame = await computer.capture();
+    const target = scope === "window" ? await observedWindowTarget(computer) : frameTarget(frame);
+    await expect(
+      computer.send(action, {
+        ...target,
+        ...windowPoint,
+        ...(action === "scroll" ? { scrollDirection: "down" } : {}),
+        modifiers: "cmd",
+      }),
+    ).rejects.toThrow("COMPUTER_UNSUPPORTED_ACTION");
+    expect(native.click).not.toHaveBeenCalled();
+    expect(native.drag).not.toHaveBeenCalled();
+    expect(native.scroll).not.toHaveBeenCalled();
+    expect(native.callTool).toHaveBeenCalledTimes(scope === "window" ? 2 : 0);
+  });
+
+  it("rejects unknown window click modifiers before dispatch", async () => {
+    const { native, computer } = await windowExecution("darwin");
+    const target = await observedWindowTarget(computer);
+    await expect(
+      computer.send("left_click", {
+        ...target,
+        ...windowPoint,
+        modifiers: "Hyper",
+        deliveryMode: "foreground",
+      }),
+    ).rejects.toThrow("COMPUTER_UNSUPPORTED_KEY");
+    expect(native.callTool).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves macOS background refusal for a modified click", async () => {
+    const { native, computer } = await windowExecution("darwin");
+    const target = await observedWindowTarget(computer);
+    native.callTool.mockResolvedValueOnce(
+      cuaToolResult(
+        { code: "background_unavailable" },
+        { isError: true, errorCode: "background_unavailable", text: "foreground required" },
+      ),
+    );
+    await expect(
+      computer.send("left_click", {
+        ...target,
+        ...windowPoint,
+        modifiers: "Command+Shift",
+        deliveryMode: "background",
+      }),
+    ).rejects.toThrow("COMPUTER_REFUSED_background_unavailable");
+    expect(native.callTool).toHaveBeenCalledTimes(3);
+    expect(native.callTool.mock.lastCall?.[1]).toMatchObject({
+      delivery_mode: "background",
+      modifier: ["cmd", "shift"],
+    });
+  });
+});
+
+function recordingResult(enabled: boolean, outputDir: unknown) {
+  return result({
+    recording: enabled,
+    enabled,
+    output_dir: outputDir ?? null,
+    next_turn: 0,
+    last_error: null,
+    video_active: false,
+    last_video_path: null,
+    owner: null,
+  });
+}
+
+describe("execution authority preflight", () => {
+  it("revokes stale input refs on renewal and accepts a fresh screenshot", async () => {
+    const { session, click, getDesktopState, setGeneration } = driver();
+    const desktop = await getDesktopState();
+    desktop.images = [pngImage(100, 50)];
+    getDesktopState.mockResolvedValue(desktop);
+    const computer = await execution(session);
+    const before = await computer.capture();
+    session.prepareExecution = vi.fn(async () => setGeneration("renewed-session"));
+    const action = {
+      action: "left_click",
+      displayFrameId: before.displayFrameId,
+      refWidth: 100,
+      x: 10,
+      y: 20,
+    };
+    await expect(computer.send(action)).rejects.toThrow("COMPUTER_STALE_FRAME");
+    expect(click).not.toHaveBeenCalled();
+    session.prepareExecution = vi.fn(async () => {});
+    const fresh = await computer.capture();
+    expect(fresh.displayFrameId).not.toBe(before.displayFrameId);
+    await computer.send({ ...action, displayFrameId: fresh.displayFrameId });
+    expect(click).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not dispatch actions when preparation refuses authority", async () => {
+    const { session, getDesktopState, click } = driver();
+    session.prepareExecution = vi.fn(async () => {
+      throw new Error("Desktop scope denied");
+    });
+    const computer = await execution(session);
+    await expect(computer.snapshot('{"format":"png"}')).rejects.toThrow("Desktop scope denied");
+    expect(getDesktopState).not.toHaveBeenCalled();
+    await expect(
+      computer.send("left_click", { displayFrameId: "old", refWidth: 100, x: 1, y: 1 }),
+    ).rejects.toThrow("Desktop scope denied");
+    expect(click).not.toHaveBeenCalled();
+  });
+  it("retires an old recording without replay and allows an explicit fresh start", async () => {
+    const { session, callTool, setGeneration } = driver();
+    let enabled = false;
+    callTool.mockImplementation(async (name, args) => {
+      if (name === "start_recording") {
+        enabled = true;
+      }
+      if (name === "stop_recording") {
+        enabled = false;
+      }
+      return recordingResult(enabled, args.output_dir);
+    });
+    const computer = await execution(session);
+    const first = await computer.read<Recording>("start_recording");
+    expect(first.details.recording).toBe(true);
+    expect(first.details.resourceHandle).toBeDefined();
+    let renewed = false;
+    session.prepareExecution = vi.fn(async () => {
+      if (!renewed) {
+        setGeneration("renewed-recording-session");
+        enabled = false;
+        renewed = true;
+      }
+    });
+    const after = await computer.read<Recording>("get_recording_state");
+    expect(after.details).toEqual({ recording: false });
+    expect(callTool.mock.calls.filter(([name]) => name === "start_recording")).toHaveLength(1);
+    expect(callTool.mock.calls.filter(([name]) => name === "stop_recording")).toHaveLength(0);
+    const fresh = await computer.read<Recording>("start_recording");
+    expect(fresh.details.recording).toBe(true);
+    expect(fresh.details.resourceHandle).not.toBe(first.details.resourceHandle);
+    await computer.send("stop_recording");
+  });
+  it("rejects input when close revokes ownership during preparation", async () => {
+    const { session, typeText } = driver();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    session.prepareExecution = async () => {
+      entered.resolve();
+      await release.promise;
+    };
+    const computer = await execution(session);
+    const acting = computer.send("type", { text: "MUST_NOT_TYPE" });
+    const rejected = expect(acting).rejects.toThrow(/closing|closed/);
+    await entered.promise;
+    const closing = computer.close("cancelled");
+    release.resolve();
+    await rejected;
+    await closing;
+    expect(typeText).not.toHaveBeenCalled();
+  });
+  it("does not recreate recording ownership when close interrupts a released runtime", async () => {
+    const { session, setGeneration } = driver();
+    const callTool = vi.fn(async (name: string, args: Record<string, unknown>) =>
+      recordingResult(name !== "stop_recording", args.output_dir),
+    );
+    session.callTool = callTool;
+    const computer = await execution(session);
+    await computer.send("start_recording");
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    session.prepareExecution = async (_signal, assertAuthority) => {
+      entered.resolve();
+      await release.promise;
+      setGeneration("released-recording-runtime");
+      assertAuthority?.();
+    };
+    const acting = computer.send("type", { text: "must not type" });
+    const rejected = expect(acting).rejects.toThrow(/closing|closed/);
+    await entered.promise;
+    const closing = computer.close("cancelled");
+    release.resolve();
+    await rejected;
+    await expect(closing).resolves.toBeUndefined();
+    expect(callTool.mock.calls.some(([name]) => name === "stop_recording")).toBe(false);
   });
 });

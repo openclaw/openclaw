@@ -1,7 +1,10 @@
-import { formatCompactTokenCount } from "@openclaw/normalization-core";
+import { formatCompactTokenCount, safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
+import {
+  asOptionalObjectRecord,
+  asOptionalRecord,
+  isRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import {
   findTranscriptEvent,
   type SessionTranscriptRuntimeTarget,
@@ -10,21 +13,23 @@ import { findSessionTranscriptArchiveEventReadOnly } from "../../../config/sessi
 import { resolveFreshSessionTotalTokens } from "../../../config/sessions/types.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
-import { isContractToolCallBlock } from "../../../shared/tool-block-contract.js";
+import { isSilentAssistantTranscriptMessage } from "../../../shared/chat-message-content.js";
+import { isContractToolCallBlock, readToolCallName } from "../../../shared/tool-block-contract.js";
+import { sleep } from "../../../utils/sleep.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
+import { resolveSubagentChildAgentId } from "../registry/subagent-child-owner-match.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import type { getLatestSubagentRunByChildSessionKey } from "../registry/subagent-registry-read.js";
+import type { SubagentRunReadRecord } from "../registry/subagent-registry-read.types.js";
 import { prepareSubagentRunsSnapshotForRunIds } from "../registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import { isRequesterCompletionCohortCurrent } from "../registry/subagent-requester-settle-identity.js";
 import { recordLatestSubagentRun } from "../registry/subagent-run-generation.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import {
-  captureSubagentCompletionReplyUsing,
-  readLatestSubagentOutputWithRetryUsing,
-} from "./subagent-announce-capture.js";
-import {
   buildChildCompletionFindings,
   readSubagentRunAnnounceResultUsing,
+  readSubagentRunFinalAnswerUsing,
+  SubagentAnnouncePreparationConflictError,
   type ChildCompletionRow,
   type PreparedAnnounceResult,
 } from "./subagent-announce-result.js";
@@ -33,10 +38,32 @@ import {
   getRuntimeConfig,
   readSubagentSessionEntry,
   readSessionMessagesAsync,
-  resolveAgentIdFromSessionKey,
   resolveSessionStorePathCore,
 } from "./subagent-announce.runtime.js";
-import { assistantCallsSessionsYield, isSessionsYieldToolResult } from "./subagent-yield-output.js";
+
+function readStructuredToolPayload(content: unknown): Record<string, unknown> | undefined {
+  const record = asOptionalRecord(content);
+  if (record) {
+    return record;
+  }
+  if (typeof content === "string") {
+    return safeParseJsonRecord(content.trim());
+  }
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  for (const block of content) {
+    const text = asOptionalRecord(block)?.text;
+    if (typeof text !== "string") {
+      continue;
+    }
+    const parsed = safeParseJsonRecord(text.trim());
+    if (parsed) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
 
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
 
@@ -68,17 +95,10 @@ export function withSubagentOutcomeTiming(
   return { ...outcome, ...nextTiming };
 }
 
-function countAssistantToolCalls(message: unknown): number {
-  const record = asOptionalObjectRecord(message);
-  const content = record?.content;
-  const contentToolCalls = Array.isArray(content)
-    ? content.filter((block) => isContractToolCallBlock(block)).length
-    : 0;
-  const toolCalls = record?.toolCalls ?? record?.tool_calls;
-  return contentToolCalls + (Array.isArray(toolCalls) ? toolCalls.length : 0);
-}
-
-function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutputSnapshot {
+function summarizeSubagentOutputHistory(
+  messages: Array<unknown>,
+  completedCollectorTurn = false,
+): SubagentOutputSnapshot {
   const snapshot: SubagentOutputSnapshot = {};
   let previousAssistantCalledYield = false;
   for (const message of messages) {
@@ -97,13 +117,44 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
       continue;
     }
     if (role === "assistant") {
-      previousAssistantCalledYield = assistantCallsSessionsYield(message);
+      previousAssistantCalledYield =
+        !Array.isArray(record) &&
+        ((Array.isArray(record.content) &&
+          record.content.some(
+            (block) =>
+              isContractToolCallBlock(block) && readToolCallName(block) === "sessions_yield",
+          )) ||
+          [record.toolCalls, record.tool_calls].some(
+            (toolCalls) =>
+              Array.isArray(toolCalls) &&
+              toolCalls.some((toolCall) => {
+                const callRecord = asOptionalRecord(toolCall);
+                return callRecord ? readToolCallName(callRecord) === "sessions_yield" : false;
+              }),
+          ));
       snapshot.waitingForContinuation = previousAssistantCalledYield;
-      if (previousAssistantCalledYield) {
+      if (completedCollectorTurn && previousAssistantCalledYield) {
+        // The yielded result replaces earlier progress, even for a timed-out collector.
+        snapshot.latestToolCallCount = undefined;
+      }
+      if (isSilentAssistantTranscriptMessage(message)) {
         snapshot.latestText = undefined;
         continue;
       }
-      const toolCallCount = countAssistantToolCalls(message);
+      if (previousAssistantCalledYield) {
+        // A completed collector cannot resume: its yield closes this execution.
+        // Ordinary subagents still wait rather than treating commentary as a result.
+        // An empty yield is not permission to reuse an earlier assistant reply.
+        snapshot.latestText = completedCollectorTurn
+          ? extractStoredAssistantText(message)?.trim() || undefined
+          : undefined;
+        continue;
+      }
+      const toolCalls = record.toolCalls ?? record.tool_calls;
+      const toolCallCount =
+        (Array.isArray(record.content)
+          ? record.content.filter(isContractToolCallBlock).length
+          : 0) + (Array.isArray(toolCalls) ? toolCalls.length : 0);
       if (toolCallCount > 0) {
         // Any assistant tool call proves this was an intermediate turn. Do not
         // retain commentary from this message or an earlier assistant message
@@ -118,8 +169,18 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
       }
       continue;
     }
-    if (isSessionsYieldToolResult(message, previousAssistantCalledYield)) {
-      snapshot.latestText = undefined;
+    // Some providers omit the tool name on results; use adjacency plus yielded status as fallback.
+    if (
+      !Array.isArray(record) &&
+      (role === "toolResult" || role === "tool") &&
+      (readToolCallName(record) === "sessions_yield" ||
+        (previousAssistantCalledYield &&
+          (asOptionalRecord(record.details)?.status === "yielded" ||
+            readStructuredToolPayload(record.content)?.status === "yielded")))
+    ) {
+      if (!completedCollectorTurn) {
+        snapshot.latestText = undefined;
+      }
       snapshot.waitingForContinuation = true;
       previousAssistantCalledYield = false;
       continue;
@@ -129,11 +190,68 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
   return snapshot;
 }
 
-function selectSubagentOutputText(
-  snapshot: SubagentOutputSnapshot,
+export async function readSubagentOutput(
+  sessionKey: string,
   outcome?: SubagentRunOutcome,
-): string | undefined {
-  if (snapshot.waitingForContinuation) {
+  options?: {
+    childAgentId?: string;
+    sessionTarget?: SessionTranscriptRuntimeTarget;
+    completedCollectorTurn?: { startedAt: number; endedAt: number };
+  },
+): Promise<string | undefined> {
+  const agentId =
+    options?.sessionTarget?.agentId ??
+    resolveSubagentChildAgentId({
+      childSessionKey: sessionKey,
+      childAgentId: options?.childAgentId,
+    });
+  if (!agentId) {
+    return undefined;
+  }
+  const collectorTurn = options?.completedCollectorTurn;
+  if (
+    collectorTurn &&
+    (!options.sessionTarget ||
+      !Number.isFinite(collectorTurn.startedAt) ||
+      !Number.isFinite(collectorTurn.endedAt) ||
+      collectorTurn.endedAt < collectorTurn.startedAt)
+  ) {
+    return undefined;
+  }
+  let messages: unknown[] | undefined;
+  if (options?.sessionTarget) {
+    messages = await readSessionMessagesAsync(
+      options.sessionTarget,
+      collectorTurn
+        ? { mode: "full", reason: "completed collector execution result" }
+        : { mode: "recent", maxMessages: 100, maxBytes: 1024 * 1024 },
+    );
+  }
+  const history =
+    messages === undefined
+      ? await callSubagentLifecycleGateway({
+          method: "chat.history",
+          params: { sessionKey, limit: 100, agentId },
+        })
+      : undefined;
+  const sourceMessages = messages ?? (Array.isArray(history?.messages) ? history.messages : []);
+  // A restart may read this session long after newer turns evicted the yielded reply
+  // from recent history. Read its original execution, never those later turns.
+  const executionMessages = collectorTurn
+    ? sourceMessages.filter((message) => {
+        const record = asOptionalObjectRecord(message);
+        const metadata = asOptionalObjectRecord(record?.["__openclaw"]);
+        const timestamp =
+          asFiniteNumber(metadata?.recordTimestampMs) ?? asFiniteNumber(record?.timestamp);
+        return (
+          timestamp !== undefined &&
+          timestamp >= collectorTurn.startedAt &&
+          timestamp <= collectorTurn.endedAt
+        );
+      })
+    : sourceMessages;
+  const snapshot = summarizeSubagentOutputHistory(executionMessages, collectorTurn !== undefined);
+  if (snapshot.waitingForContinuation && !collectorTurn) {
     return undefined;
   }
   if (snapshot.latestText) {
@@ -141,69 +259,60 @@ function selectSubagentOutputText(
   }
   // Tool activity is partial-progress evidence only for a timed-out run. It is
   // not authoritative completion output when producer terminal facts are absent.
-  if (
-    outcome?.status === "timeout" &&
-    snapshot.latestToolCallCount &&
-    snapshot.latestToolCallCount > 0
-  ) {
+  if (outcome?.status === "timeout" && (snapshot.latestToolCallCount ?? 0) > 0) {
     return `${snapshot.latestToolCallCount} tool call(s) made without visible output.`;
   }
   return undefined;
 }
 
-export async function readSubagentOutput(
-  sessionKey: string,
-  outcome?: SubagentRunOutcome,
-  options?: { sessionTarget?: SessionTranscriptRuntimeTarget },
+async function readOutputWithRetry(
+  maxWaitMs: number,
+  retryIntervalMs: number,
+  readOutput: () => Promise<string | undefined>,
 ): Promise<string | undefined> {
-  let messages: unknown[] | undefined;
-  if (options?.sessionTarget) {
-    messages = await readSessionMessagesAsync(options.sessionTarget, {
-      mode: "recent",
-      maxMessages: 100,
-      maxBytes: 1024 * 1024,
-    });
+  const waitMs = Math.max(0, Math.min(maxWaitMs, 15_000));
+  if (!(waitMs > 0)) {
+    return undefined;
   }
-  const history =
-    messages === undefined
-      ? await callSubagentLifecycleGateway({
-          method: "chat.history",
-          params: { sessionKey, limit: 100 },
-        })
-      : undefined;
-  const sourceMessages = messages ?? (Array.isArray(history?.messages) ? history.messages : []);
-  const snapshot = summarizeSubagentOutputHistory(sourceMessages);
-  const selected = selectSubagentOutputText(snapshot, outcome);
-  if (selected?.trim()) {
-    return selected;
+  const deadlineAt = performance.now() + waitMs;
+  for (;;) {
+    const result = await readOutput();
+    if (result?.trim()) {
+      return result;
+    }
+    const remainingMs = deadlineAt - performance.now();
+    if (remainingMs <= 0) {
+      return result;
+    }
+    await sleep(Math.min(retryIntervalMs, remainingMs));
   }
-  return undefined;
 }
 
 export async function readLatestSubagentOutputWithRetry(params: {
   sessionKey: string;
+  childAgentId?: string;
   maxWaitMs: number;
   outcome?: SubagentRunOutcome;
 }): Promise<string | undefined> {
-  return await readLatestSubagentOutputWithRetryUsing({
-    sessionKey: params.sessionKey,
-    maxWaitMs: params.maxWaitMs,
-    outcome: params.outcome,
-    retryIntervalMs: isFastTestRuntimeEnv() ? FAST_TEST_RETRY_INTERVAL_MS : 100,
-    readSubagentOutput,
-  });
+  return await readOutputWithRetry(
+    params.maxWaitMs,
+    isFastTestRuntimeEnv() ? FAST_TEST_RETRY_INTERVAL_MS : 100,
+    () =>
+      readSubagentOutput(params.sessionKey, params.outcome, { childAgentId: params.childAgentId }),
+  );
 }
 
 export async function readSubagentTimeoutProgress(
   sessionKey: string,
   maxWaitMs: number,
   outcome: SubagentRunOutcome,
+  childAgentId?: string,
 ): Promise<string | undefined> {
-  const initial = await readSubagentOutput(sessionKey, outcome);
+  const initial = await readSubagentOutput(sessionKey, outcome, { childAgentId });
   const progress = initial?.trim()
     ? initial
-    : await readLatestSubagentOutputWithRetry({ sessionKey, maxWaitMs, outcome });
-  return progress && !isSilentReplyText(progress, SILENT_REPLY_TOKEN) ? progress : undefined;
+    : await readLatestSubagentOutputWithRetry({ sessionKey, childAgentId, maxWaitMs, outcome });
+  return progress;
 }
 
 export async function captureSubagentCompletionReply(
@@ -212,18 +321,25 @@ export async function captureSubagentCompletionReply(
     waitForReply?: boolean;
     outcome?: SubagentRunOutcome;
     sessionTarget?: SessionTranscriptRuntimeTarget;
+    completedCollectorTurn?: { startedAt: number; endedAt: number };
   },
 ): Promise<string | undefined> {
-  return await captureSubagentCompletionReplyUsing({
-    sessionKey,
-    waitForReply: options?.waitForReply,
-    maxWaitMs: isFastTestRuntimeEnv() ? 50 : 1_500,
-    retryIntervalMs: isFastTestRuntimeEnv() ? FAST_TEST_RETRY_INTERVAL_MS : 100,
-    readSubagentOutput: async (nextSessionKey) =>
-      await readSubagentOutput(nextSessionKey, options?.outcome, {
-        sessionTarget: options?.sessionTarget,
-      }),
-  });
+  const waitForReply = options?.waitForReply;
+  const maxWaitMs = isFastTestRuntimeEnv() ? 50 : 1_500;
+  const retryIntervalMs = isFastTestRuntimeEnv() ? FAST_TEST_RETRY_INTERVAL_MS : 100;
+  const readOutput = () =>
+    readSubagentOutput(sessionKey, options?.outcome, {
+      sessionTarget: options?.sessionTarget,
+      completedCollectorTurn: options?.completedCollectorTurn,
+    });
+  const immediate = await readOutput();
+  if (immediate?.trim()) {
+    return immediate;
+  }
+  if (waitForReply === false) {
+    return undefined;
+  }
+  return await readOutputWithRetry(maxWaitMs, retryIntervalMs, readOutput);
 }
 
 type AnnounceRunReader = (runId: string) => SubagentRunRecord | undefined;
@@ -246,7 +362,19 @@ export async function readSubagentRunAnnounceResult(
     findSessionTranscriptArchiveEventReadOnly,
     getRuntimeConfig,
     readSubagentSessionEntry,
-    resolveAgentIdFromSessionKey,
+    resolveSessionStorePathCore,
+  });
+}
+
+/** The complete final answer recorded by this run, or undefined when retention removed it. */
+export async function readSubagentRunFinalAnswer(
+  child: SubagentRunRecord,
+): Promise<string | undefined> {
+  return await readSubagentRunFinalAnswerUsing(child, {
+    findTranscriptEvent,
+    findSessionTranscriptArchiveEventReadOnly,
+    getRuntimeConfig,
+    readSubagentSessionEntry,
     resolveSessionStorePathCore,
   });
 }
@@ -262,29 +390,23 @@ export async function readChildCompletionFindings(
     children.map(async (observed) => {
       const prepared = await readSubagentRunAnnounceResult(observed, readCurrent);
       const child = readCurrent(observed.runId);
-      if (!child || !prepared.isCurrent()) {
-        throw new Error("A child result changed while preparing the completion batch.");
+      if (!child) {
+        throw new SubagentAnnouncePreparationConflictError(
+          "A child result changed while preparing the completion batch.",
+        );
       }
       return { child, ...prepared };
     }),
   );
   const isCurrent = () => results.every((result) => result.isCurrent());
   if (!isCurrent()) {
-    throw new Error("A child result changed while preparing the completion batch.");
+    throw new SubagentAnnouncePreparationConflictError(
+      "A child result changed while preparing the completion batch.",
+    );
   }
   return {
     text: buildChildCompletionFindings(
-      results.map(({ child, text }) => ({
-        childSessionKey: child.childSessionKey,
-        task: child.task,
-        taskName: child.taskName,
-        label: child.label,
-        createdAt: child.createdAt,
-        endedReason: child.endedReason,
-        execution: child.execution,
-        completion: child.completion,
-        announceResult: text,
-      })),
+      results.map(({ child, text }) => Object.assign({}, child, { announceResult: text })),
     ),
     isCurrent,
   };
@@ -293,11 +415,12 @@ export async function readChildCompletionFindings(
 export function dedupeLatestChildCompletionRows<
   T extends ChildCompletionRow & { runId: string; generation?: number },
 >(children: T[]): T[] {
-  const latestByChildSessionKey = new Map<string, (typeof children)[number]>();
+  const latestByChildOwner = new Map<string, (typeof children)[number]>();
   for (const child of children) {
-    recordLatestSubagentRun(latestByChildSessionKey, child.childSessionKey, child);
+    const key = JSON.stringify([resolveSubagentChildAgentId(child), child.childSessionKey]);
+    recordLatestSubagentRun(latestByChildOwner, key, child);
   }
-  return [...latestByChildSessionKey.values()];
+  return [...latestByChildOwner.values()];
 }
 
 export function filterCurrentDirectChildCompletionRows<
@@ -312,7 +435,10 @@ export function filterCurrentDirectChildCompletionRows<
   params: {
     requesterSessionKey: string;
     requesterAgentId?: string;
-    getLatestSubagentRunByChildSessionKey: typeof getLatestSubagentRunByChildSessionKey;
+    getLatestSubagentRunByChildSessionKey: (
+      childSessionKey: string,
+      childAgentId?: string,
+    ) => SubagentRunReadRecord | null;
   },
 ): T[] {
   return children.filter((child) => {
@@ -331,6 +457,28 @@ export function filterCurrentDirectChildCompletionRows<
   });
 }
 
+export function selectCurrentRequesterCompletionRows(params: {
+  rows: SubagentRunRecord[];
+  requesterSessionKey: string;
+  requesterAgentId?: string;
+  frozenBatch: boolean;
+  latestForSession: Parameters<typeof isRequesterCompletionCohortCurrent>[1];
+}): SubagentRunRecord[] {
+  if (params.frozenBatch) {
+    return params.rows.filter((entry) =>
+      isRequesterCompletionCohortCurrent(entry, params.latestForSession),
+    );
+  }
+  return dedupeLatestChildCompletionRows(
+    filterCurrentDirectChildCompletionRows(params.rows, {
+      requesterSessionKey: params.requesterSessionKey,
+      requesterAgentId: params.requesterAgentId,
+      getLatestSubagentRunByChildSessionKey: (childSessionKey, childAgentId) =>
+        params.latestForSession(childSessionKey, undefined, childAgentId),
+    }),
+  );
+}
+
 function formatTokenCount(value?: number) {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return "0";
@@ -340,31 +488,21 @@ function formatTokenCount(value?: number) {
 
 export async function buildCompactAnnounceStatsLine(params: {
   sessionKey: string;
+  childAgentId?: string;
   startedAt?: number;
   endedAt?: number;
 }) {
   const cfg = getRuntimeConfig();
-  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
-  const storePath = resolveSessionStorePathCore(cfg.session?.store, {
-    agentId,
+  const agentId = resolveSubagentChildAgentId({
+    childSessionKey: params.sessionKey,
+    childAgentId: params.childAgentId,
   });
-  let entry = readSubagentSessionEntry(storePath, params.sessionKey);
-  const tokenWaitAttempts = isFastTestRuntimeEnv() ? 1 : 3;
-  for (let attempt = 0; attempt < tokenWaitAttempts; attempt += 1) {
-    if (
-      typeof entry?.inputTokens === "number" ||
-      typeof entry?.outputTokens === "number" ||
-      resolveFreshSessionTotalTokens(entry) !== undefined
-    ) {
-      break;
-    }
-    if (!isFastTestRuntimeEnv()) {
-      await new Promise((resolve) => {
-        setTimeout(resolve, 150);
-      });
-    }
-    entry = readSubagentSessionEntry(storePath, params.sessionKey);
-  }
+  const storePath = agentId
+    ? resolveSessionStorePathCore(cfg.session?.store, { agentId })
+    : undefined;
+  const entry = storePath
+    ? await readSubagentSessionEntry(storePath, params.sessionKey, agentId)
+    : undefined;
 
   const input = entry?.inputTokens;
   const output = entry?.outputTokens;

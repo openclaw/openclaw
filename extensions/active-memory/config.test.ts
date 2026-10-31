@@ -17,6 +17,17 @@ describe("active-memory runtime config normalization", () => {
     expect(config.circuitBreakerCooldownMs).toBe(60_000);
   });
 
+  it("prefers explicit recall tools, then provider defaults, then built-in defaults", () => {
+    expect(normalizePluginConfig({}, {}, ["record_find", "record_get"]).toolsAllow).toEqual([
+      "record_find",
+      "record_get",
+    ]);
+    expect(
+      normalizePluginConfig({ toolsAllow: ["custom_recall"] }, {}, ["record_find"]).toolsAllow,
+    ).toEqual(["custom_recall"]);
+    expect(normalizePluginConfig({}).toolsAllow).toEqual(["memory_search", "memory_get"]);
+  });
+
   it("normalizes explicit fast-mode overrides and ignores invalid values", () => {
     expect(normalizePluginConfig({}).fastMode).toBeUndefined();
     expect(normalizePluginConfig({ fastMode: true }).fastMode).toBe(true);

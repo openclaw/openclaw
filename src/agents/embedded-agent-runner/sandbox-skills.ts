@@ -1,10 +1,9 @@
 /**
- * Sandbox skill runtime input selection.
- *
  * Sandboxed runs must build prompt-facing skill entries from readable in-sandbox
  * copies instead of reusing host-path snapshots.
  */
 import path from "node:path";
+import { isPathRelativeEscape } from "@openclaw/fs-safe/path";
 import { indexFirstByKey } from "../../shared/dedupe-by-key.js";
 import { resolveExplicitSkillSelectionFileHost } from "../../skills/discovery/skill-command-provenance.js";
 import { formatSkillsForPromptBounded } from "../../skills/loading/skill-prompt-limits.js";
@@ -18,6 +17,7 @@ import type {
 } from "../../skills/types.js";
 import { resolveSkillReadPath } from "../../skills/workspace-skill-read-path.js";
 import type { SandboxContext } from "../sandbox/types.js";
+import { resolveSessionSkillResourceCatalog } from "../session-placement-skill-resources.js";
 
 const MATERIALIZED_SKILLS_WORKSPACE_CONTAINER_PARTS = [".openclaw", "sandbox-skills"] as const;
 type SandboxSkillRuntimeContext = Pick<SandboxContext, "enabled"> &
@@ -29,6 +29,7 @@ type SandboxSkillRuntimeContext = Pick<SandboxContext, "enabled"> &
       | "containerWorkdir"
       | "workspaceAccess"
       | "skillUsagePaths"
+      | "readOnlyResourceMounts"
     >
   >;
 
@@ -39,14 +40,6 @@ function containerJoin(root: string, ...parts: string[]): string {
     .filter(Boolean)
     .join("/");
   return suffix ? `${normalizedRoot}/${suffix}` : normalizedRoot;
-}
-
-function pathEscapesRoot(relativePath: string): boolean {
-  return (
-    relativePath === ".." ||
-    relativePath.startsWith(`..${path.sep}`) ||
-    path.isAbsolute(relativePath)
-  );
 }
 
 function mapPathFromWorkspaceToContainer(params: {
@@ -61,7 +54,7 @@ function mapPathFromWorkspaceToContainer(params: {
     path.resolve(params.sourceWorkspaceDir),
     path.resolve(params.filePath),
   );
-  if (pathEscapesRoot(relativePath)) {
+  if (isPathRelativeEscape(relativePath)) {
     return params.filePath;
   }
   if (!relativePath) {
@@ -130,6 +123,15 @@ export function resolveSandboxSkillRuntimeInputs(params: {
             ...MATERIALIZED_SKILLS_WORKSPACE_CONTAINER_PARTS,
           )
         : (params.sandbox.containerWorkdir ?? skillsWorkspaceDir);
+    const delivered = resolveSessionSkillResourceCatalog(params.sandbox.readOnlyResourceMounts);
+    if (delivered) {
+      return {
+        skillsWorkspaceDir,
+        skillsPromptWorkspaceDir: params.sandbox.containerWorkdir ?? skillsWorkspaceDir,
+        skillsSnapshot: delivered.snapshot,
+        workspaceOnly: true,
+      };
+    }
     const snapshot = params.skillsSnapshot;
     const sourceReadPathBySkillName = indexFirstByKey(
       snapshot?.resolvedSkills ?? [],
@@ -231,12 +233,7 @@ export function remapSkillReferencePaths(
       );
     }
   }
-  const visited = new Set<string>();
-  for (const item of items) {
-    if (visited.has(item.skillFile)) {
-      continue;
-    }
-    visited.add(item.skillFile);
+  for (const item of indexFirstByKey(items, (entry) => entry.skillFile).values()) {
     const matches = items.filter((candidate) => candidate.skillFile === item.skillFile);
     const physicalTarget =
       matches.find((candidate) => candidate.sourceReadPath === undefined) ??

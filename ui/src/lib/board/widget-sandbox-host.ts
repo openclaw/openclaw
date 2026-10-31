@@ -1,9 +1,12 @@
+import { WIDGET_HTML_MAX_UTF8_BYTES } from "../../../../packages/gateway-protocol/src/canvas-limits.js";
 import { formatUiError } from "../format-error.ts";
-import { WidgetRenderTimeoutError, WidgetSandboxHost } from "../widget-sandbox-host.ts";
+import { listen } from "../reactive/listener.ts";
+import { readResponseTextWithLimit } from "../response-body.ts";
+import { WidgetSandboxHost } from "../widget-sandbox-host.ts";
 import type { BoardWidget } from "./types.ts";
 import type { BoardWidgetFrameUrl } from "./view-types.ts";
 import {
-  BoardWidgetBridgeController,
+  BoardWidgetBridgeOwner,
   type BoardWidgetBridgeGatewayClient,
   isBoardWidgetBridgeRequest,
 } from "./widget-bridge.ts";
@@ -13,13 +16,14 @@ type BoardWidgetSandboxHostOptions = {
   widget: BoardWidget;
   bridgeEnabled?: boolean;
   connected?: boolean;
+  documentActive: boolean;
   sandboxOrigin: string;
   sandboxUrl: string;
   sourceOrigin: string;
   controlUiBaseUrl?: string;
   client?: BoardWidgetBridgeGatewayClient;
   resolveFrameUrl: BoardWidgetFrameUrl;
-  confirmPrompt: (text: string) => boolean;
+  confirmPrompt: (text: string) => boolean | Promise<boolean>;
   onFrameUrl: (url: string) => void;
   onLoadFailed: (widget: BoardWidget) => void;
   onUnauthorized: (widget: BoardWidget) => void;
@@ -50,7 +54,7 @@ function retryableDocumentError(error: unknown): boolean {
 /** Owns one trusted outer sandbox frame and its ticket-bound inner widget bridge. */
 export class BoardWidgetSandboxHost {
   private active = true;
-  private bridgeController: BoardWidgetBridgeController | null = null;
+  private bridgeOwner: BoardWidgetBridgeOwner | null = null;
   private bridgeClient: BoardWidgetBridgeGatewayClient | undefined;
   private bridgePort: MessagePort | null = null;
   private adoptedTicket = "";
@@ -58,11 +62,11 @@ export class BoardWidgetSandboxHost {
   private offeredTicket = "";
   private readonly documentHost: WidgetSandboxHost;
   private requestGeneration = 0;
-  private readonly pendingRequests = new Map<string, number>();
+  private readonly pendingRequests = new Set<string>();
 
   constructor(private options: BoardWidgetSandboxHostOptions) {
     this.documentHost = new WidgetSandboxHost(this.documentOptions());
-    this.documentHost.setActive(options.connected !== false);
+    this.documentHost.setActive(options.documentActive);
   }
 
   get frame(): HTMLIFrameElement {
@@ -74,7 +78,7 @@ export class BoardWidgetSandboxHost {
       return;
     }
     this.active = active;
-    this.documentHost.setActive(active && this.options.connected !== false);
+    this.documentHost.setActive(active && this.options.documentActive);
     if (!active) {
       this.cancelPendingRequests("Widget inactive");
       this.requestGeneration += 1;
@@ -95,7 +99,7 @@ export class BoardWidgetSandboxHost {
       // A document revision is also an authorization revision. Invalidate both
       // its pending responses and per-document bridge state before loading it.
       this.reset();
-      this.bridgeController = null;
+      this.bridgeOwner = null;
       this.bridgeClient = undefined;
     }
     if (previousClient !== options.client || connectionLost) {
@@ -105,7 +109,7 @@ export class BoardWidgetSandboxHost {
       this.retiredTicket = this.adoptedTicket || options.widget.viewTicket || "";
       this.cancelPendingRequests("Gateway connection changed");
       this.requestGeneration += 1;
-      this.bridgeController = null;
+      this.bridgeOwner = null;
       this.bridgeClient = undefined;
       // A pending HTTP response also belongs to its initiating connection.
       // Retain an already rendered document, but refetch unfinished work.
@@ -113,7 +117,7 @@ export class BoardWidgetSandboxHost {
         this.documentHost.reset();
       }
     }
-    const active = this.active && options.connected !== false;
+    const active = this.active && options.documentActive;
     if (!active) {
       this.documentHost.setActive(false);
     }
@@ -124,7 +128,7 @@ export class BoardWidgetSandboxHost {
     }
     if (options.widget.viewTicket && !documentChanged) {
       if (this.adoptedTicket) {
-        this.bridgeController?.updateIdentity(options.frame, this.adoptedTicket);
+        this.bridgeOwner?.updateIdentity(options.frame, this.adoptedTicket);
       }
       this.postHostInit();
     }
@@ -145,7 +149,7 @@ export class BoardWidgetSandboxHost {
     this.active = false;
     this.reset();
     this.documentHost.dispose();
-    this.bridgeController = null;
+    this.bridgeOwner = null;
     this.bridgeClient = undefined;
   }
 
@@ -178,7 +182,8 @@ export class BoardWidgetSandboxHost {
         return;
       }
       this.bridgePort = port;
-      port.addEventListener("message", (bridgeEvent) => {
+      // Reset closes this private port and retires its message delivery.
+      listen(port, "message", (bridgeEvent) => {
         this.handleBridgeMessage(bridgeEvent.data);
       });
       port.start();
@@ -211,7 +216,7 @@ export class BoardWidgetSandboxHost {
       // allowing earlier requests to finish on the still-valid prior ticket.
       this.offeredTicket = "";
       this.adoptedTicket = ticket;
-      this.bridgeController?.updateIdentity(this.options.frame, ticket);
+      this.bridgeOwner?.updateIdentity(this.options.frame, ticket);
       this.postHostInit();
       return;
     }
@@ -234,9 +239,9 @@ export class BoardWidgetSandboxHost {
       this.postResponse(data.id, false, undefined, "Gateway unavailable");
       return;
     }
-    if (!this.bridgeController || this.bridgeClient !== client) {
+    if (!this.bridgeOwner || this.bridgeClient !== client) {
       this.bridgeClient = client;
-      this.bridgeController = new BoardWidgetBridgeController({
+      this.bridgeOwner = new BoardWidgetBridgeOwner({
         frame: this.options.frame,
         ticket,
         client,
@@ -247,12 +252,12 @@ export class BoardWidgetSandboxHost {
         confirmPrompt: this.options.confirmPrompt,
       });
     } else {
-      this.bridgeController.updateIdentity(this.options.frame, ticket);
+      this.bridgeOwner.updateIdentity(this.options.frame, ticket);
     }
     const generation = this.requestGeneration;
     const frame = this.options.frame;
-    this.pendingRequests.set(data.id, generation);
-    void this.bridgeController
+    this.pendingRequests.add(data.id);
+    void this.bridgeOwner
       .handle(data, {
         // Only the injected wrapper owns this port, and it posts prompt
         // requests only while its inner-frame user activation is live.
@@ -274,7 +279,7 @@ export class BoardWidgetSandboxHost {
     result?: unknown,
     error?: string,
   ): void {
-    if (generation !== this.requestGeneration || this.pendingRequests.get(id) !== generation) {
+    if (generation !== this.requestGeneration || !this.pendingRequests.has(id)) {
       return;
     }
     this.pendingRequests.delete(id);
@@ -282,10 +287,8 @@ export class BoardWidgetSandboxHost {
   }
 
   private cancelPendingRequests(error: string): void {
-    for (const [id, generation] of this.pendingRequests) {
-      if (generation === this.requestGeneration) {
-        this.postResponse(id, false, undefined, error);
-      }
+    for (const id of this.pendingRequests) {
+      this.postResponse(id, false, undefined, error);
     }
     this.pendingRequests.clear();
   }
@@ -350,11 +353,6 @@ export class BoardWidgetSandboxHost {
       onError: (error) => {
         if (error instanceof WidgetDocumentError && error.kind === "unauthorized") {
           this.options.onUnauthorized(this.options.widget);
-        } else if (
-          error instanceof WidgetRenderTimeoutError ||
-          (error instanceof WidgetDocumentError && error.kind !== "unavailable")
-        ) {
-          this.options.onError(error);
         } else if (retryableDocumentError(error)) {
           this.options.onLoadFailed(this.options.widget);
         } else {
@@ -387,16 +385,21 @@ export class BoardWidgetSandboxHost {
     }
     options.onFrameUrl(sourceUrl.href);
     const response = await fetch(sourceUrl.href, { cache: "no-store", signal });
-    if (response.status === 401) {
-      throw new WidgetDocumentError("unauthorized", "widget content request failed (401)");
-    }
     if (!response.ok) {
+      // Body disposal is best effort; the HTTP status below owns the visible failure.
+      void response.body?.cancel().catch(() => undefined);
+      if (response.status === 401) {
+        throw new WidgetDocumentError("unauthorized", "widget content request failed (401)");
+      }
       throw new WidgetDocumentError(
         response.status === 408 || response.status >= 500 ? "unavailable" : "rejected",
         `widget content request failed (${response.status})`,
       );
     }
-    return await response.text();
+    return await readResponseTextWithLimit(response, {
+      maxBytes: WIDGET_HTML_MAX_UTF8_BYTES,
+      tooLargeMessage: "widget HTML exceeds 10 MiB; regenerate a smaller widget",
+    });
   }
 
   private postResponse(id: string, ok: boolean, result?: unknown, error?: string): void {

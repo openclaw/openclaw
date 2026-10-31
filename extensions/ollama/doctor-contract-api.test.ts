@@ -1,193 +1,77 @@
-// Ollama tests cover doctor contract config compatibility.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract-api.js";
 import { createModel } from "./model.test-support.js";
 
 const cloudModel = createModel("kimi-k2.5:cloud", "Kimi K2.5 Cloud", { contextWindow: 131072 });
+const localProfile = { provider: "ollama", mode: "api_key" as const };
+const otherProfile = { provider: "openai", mode: "api_key" as const };
 
-function readOllamaCloudProvider(config: OpenClawConfig): Record<string, unknown> | undefined {
-  return config.models?.providers?.["ollama-cloud"] as Record<string, unknown> | undefined;
-}
-
-function legacyLocalConfig(): OpenClawConfig {
+function legacyLocalConfig(
+  baseUrl = "http://127.0.0.1:11434",
+  profile: (typeof localProfile & { displayName?: string }) | null = localProfile,
+): OpenClawConfig {
   return {
     models: {
       providers: {
-        ollama: {
-          baseUrl: "http://127.0.0.1:11434",
-          api: "ollama",
-          apiKey: "OLLAMA_API_KEY",
-          models: [cloudModel],
-        },
+        ollama: { baseUrl, api: "ollama", apiKey: "OLLAMA_API_KEY", models: [cloudModel] },
       },
     },
     auth: {
       profiles: {
-        "ollama:default": { provider: "ollama", mode: "api_key" },
-        "openai:default": { provider: "openai", mode: "api_key" },
+        ...(profile ? { "ollama:default": profile } : {}),
+        "openai:default": otherProfile,
       },
     },
     agents: { defaults: { model: { primary: "ollama/kimi-k2.5:cloud" } } },
-  } as OpenClawConfig;
+  };
+}
+
+function matchesLegacy(config: OpenClawConfig) {
+  return legacyConfigRules[0]?.match(
+    config.models?.providers?.ollama,
+    config as unknown as Record<string, unknown>,
+  );
+}
+
+function expectUnchanged(config: OpenClawConfig) {
+  const original = structuredClone(config);
+  expect(normalizeCompatibilityConfig({ cfg: config })).toEqual({ config: original, changes: [] });
+  expect(config).toEqual(original);
 }
 
 describe("ollama doctor contract", () => {
-  it("detects retired Ollama Cloud provider endpoints", () => {
-    expect(legacyConfigRules[0]?.match({ baseUrl: "https://ai.ollama.com" })).toBe(true);
-    expect(legacyConfigRules[0]?.match({ baseUrl: "https://ollama.com" })).toBe(false);
+  it.each([
+    ["https://OLLAMA.COM:443/api", localProfile],
+    ["${OLLAMA_BASE_URL}", localProfile],
+    [undefined, null],
+    [undefined, { ...localProfile, displayName: "Remote Ollama" }],
+  ] as const)("preserves non-legacy config at %s with profile %j", (baseUrl, profile) => {
+    const config = legacyLocalConfig(baseUrl, profile);
+    if (baseUrl) {
+      config.agents = { defaults: { model: "ollama/kimi-k2.5:cloud@ollama:default" } };
+    }
+    expect(matchesLegacy(config)).toBe(false);
+    expectUnchanged(config);
   });
 
   it("migrates the pre-#123190 local marker without replacing its catalog or default", () => {
     const config = legacyLocalConfig();
-    const localRule = legacyConfigRules[1];
-
-    expect(
-      localRule?.match(
-        config.models?.providers?.ollama,
-        config as unknown as Record<string, unknown>,
-      ),
-    ).toBe(true);
-
+    expect(matchesLegacy(config)).toBe(true);
+    const original = structuredClone(config);
     const result = normalizeCompatibilityConfig({ cfg: config });
 
     expect(result.changes).toEqual([
       "Migrated models.providers.ollama.apiKey to ollama-local and removed the obsolete ollama:default auth profile marker.",
     ]);
-    expect(result.config.models?.providers?.ollama).toEqual({
-      baseUrl: "http://127.0.0.1:11434",
-      api: "ollama",
-      apiKey: "ollama-local",
-      models: [cloudModel],
-    });
-    expect(result.config.auth?.profiles).toEqual({
-      "openai:default": { provider: "openai", mode: "api_key" },
-    });
-    expect(result.config.agents?.defaults?.model).toEqual({
-      primary: "ollama/kimi-k2.5:cloud",
-    });
-    expect(config.models?.providers?.ollama?.apiKey).toBe("OLLAMA_API_KEY");
-    expect(config.auth?.profiles?.["ollama:default"]).toBeDefined();
-    expect(normalizeCompatibilityConfig({ cfg: result.config })).toEqual({
-      config: result.config,
-      changes: [],
-    });
-  });
-
-  it("preserves current env-backed marker configs without the exact legacy profile", () => {
-    const withoutProfile = legacyLocalConfig();
-    delete withoutProfile.auth?.profiles?.["ollama:default"];
-    const customizedProfile = legacyLocalConfig();
-    customizedProfile.auth!.profiles!["ollama:default"] = {
-      provider: "ollama",
-      mode: "api_key",
-      displayName: "Remote Ollama",
-    };
-
-    expect(normalizeCompatibilityConfig({ cfg: withoutProfile })).toEqual({
-      config: withoutProfile,
-      changes: [],
-    });
-    expect(normalizeCompatibilityConfig({ cfg: customizedProfile })).toEqual({
-      config: customizedProfile,
-      changes: [],
-    });
-  });
-
-  it("migrates retired Ollama Cloud provider baseUrl to the canonical endpoint", () => {
-    const config = {
+    expect(result.config).toEqual({
+      ...original,
       models: {
-        providers: {
-          "ollama-cloud": {
-            baseUrl: "https://ai.ollama.com",
-            api: "ollama",
-            models: [cloudModel],
-          },
-          ollama: {
-            baseUrl: "http://127.0.0.1:11434",
-            api: "ollama",
-            models: [],
-          },
-        },
+        providers: { ollama: { ...original.models?.providers?.ollama, apiKey: "ollama-local" } },
       },
-    } as OpenClawConfig;
-
-    const result = normalizeCompatibilityConfig({ cfg: config });
-
-    expect(result.changes).toEqual([
-      "Updated models.providers.ollama-cloud.baseUrl from the retired Ollama Cloud endpoint to https://ollama.com.",
-    ]);
-    expect(readOllamaCloudProvider(result.config)).toEqual({
-      baseUrl: "https://ollama.com",
-      api: "ollama",
-      models: [cloudModel],
+      auth: { profiles: { "openai:default": otherProfile } },
     });
-    expect(readOllamaCloudProvider(config)?.baseUrl).toBe("https://ai.ollama.com");
-  });
-
-  it.each([
-    {
-      name: "migrates retired Ollama Cloud provider baseURL aliases when canonical baseUrl is blank",
-      inputBaseUrl: " ",
-      expectedBaseUrl: "https://ollama.com",
-      expectedChange:
-        "Updated models.providers.ollama-cloud.baseURL from the retired Ollama Cloud endpoint to https://ollama.com.",
-    },
-    {
-      name: "preserves custom canonical baseUrl when removing retired baseURL aliases",
-      inputBaseUrl: "https://custom-ollama-cloud.example.test",
-      expectedBaseUrl: "https://custom-ollama-cloud.example.test",
-      expectedChange:
-        "Removed retired models.providers.ollama-cloud.baseURL while preserving models.providers.ollama-cloud.baseUrl.",
-    },
-  ])("$name", ({ inputBaseUrl, expectedBaseUrl, expectedChange }) => {
-    const config = {
-      models: {
-        providers: {
-          "ollama-cloud": {
-            baseUrl: inputBaseUrl,
-            baseURL: "https://ai.ollama.com/",
-            api: "ollama",
-            models: [],
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const result = normalizeCompatibilityConfig({ cfg: config });
-
-    expect(result.changes).toEqual([expectedChange]);
-    expect(readOllamaCloudProvider(result.config)).toEqual({
-      baseUrl: expectedBaseUrl,
-      api: "ollama",
-      models: [],
-    });
-    expect(readOllamaCloudProvider(config)).toEqual({
-      baseUrl: inputBaseUrl,
-      baseURL: "https://ai.ollama.com/",
-      api: "ollama",
-      models: [],
-    });
-  });
-
-  it("does not expose credentials or query parameters from the retired URL", () => {
-    const config = {
-      models: {
-        providers: {
-          "ollama-cloud": {
-            baseUrl: "https://user:password@ai.ollama.com/?token=secret",
-            api: "ollama",
-            models: [],
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const result = normalizeCompatibilityConfig({ cfg: config });
-
-    expect(result.changes.join("\n")).not.toContain("user");
-    expect(result.changes.join("\n")).not.toContain("password");
-    expect(result.changes.join("\n")).not.toContain("secret");
-    expect(readOllamaCloudProvider(result.config)?.baseUrl).toBe("https://ollama.com");
+    expect(config).toEqual(original);
+    expectUnchanged(result.config);
   });
 });

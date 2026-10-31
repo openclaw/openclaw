@@ -1,5 +1,6 @@
 import path from "node:path";
 import { vi, type Mock } from "vitest";
+import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import {
   loadSessionEntryReadOnly,
   loadTranscriptEvents,
@@ -10,6 +11,8 @@ import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/trans
 import type { OpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { createUsageFixture } from "../../test-helpers/usage-fixtures.js";
+import { createAttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
 import type { runEmbeddedAttemptSettledPhase } from "./attempt-settle.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 
@@ -37,6 +40,7 @@ export function createFixture(mocks: {
     getHeartbeatToolResponse: vi.fn(() => undefined),
     getItemLifecycle: vi.fn(() => ({ startedCount: 0, completedCount: 0, activeCount: 0 })),
     getLastAssistantTextMessageIndex: vi.fn(() => undefined),
+    getKeptAnswer: vi.fn(() => undefined),
     getLastAssistantUsage: vi.fn(() => undefined),
     getLastCompactionTokensAfter: vi.fn(() => undefined),
     getLastToolError: vi.fn(() => undefined),
@@ -76,14 +80,7 @@ export function createFixture(mocks: {
       api: "openai-responses",
       provider: "openai",
       model: "model",
-      usage: {
-        input: 1,
-        output: 2,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 3,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createUsageFixture(1, 2, 3),
       stopReason: "stop",
       timestamp: 100,
     },
@@ -125,7 +122,6 @@ export function createFixture(mocks: {
     cache: {},
     history: {
       contextEnginePromptAuthority: "assembled",
-      contextEngineAssemblySucceeded: true,
       unwindowedContextEngineMessagesForPrecheck: [{ role: "user", content: "history" }],
     },
     isProbeSession: false,
@@ -140,6 +136,7 @@ export function createFixture(mocks: {
     },
     timeout: {
       getRunAbortDeadlineAtMs: vi.fn(() => 123),
+      onRunAbortDeadlineChanged: () => () => {},
       clearTimers,
     },
   };
@@ -150,7 +147,10 @@ export function createFixture(mocks: {
       hasDeliveredSourceReply: vi.fn(() => true),
       hookRunner,
       setActiveSessionSystemPrompt: vi.fn(),
-      settingsManager: { getCompactionReserveTokens: vi.fn(() => 1_000) },
+      settingsManager: {
+        getCompactionEnabled: () => true,
+        getCompactionReserveTokens: vi.fn(() => 1_000),
+      },
     },
     anthropicPayloadLogger: {},
     boundary: {
@@ -161,13 +161,12 @@ export function createFixture(mocks: {
     },
     cacheTrace,
     contextGuards: {
+      checkMidTurnPrecheck: vi.fn(),
       getAfterTurnCheckpoint: vi.fn(() => 2),
       takePendingMidTurnPrecheckRequest: vi.fn(() => null),
     },
     preparedUserTurnMessage: {
-      role: "user",
-      content: "hello",
-      timestamp: 100,
+      ...makeUserMessage("hello", 100),
       __openclaw: { senderName: "Alice" },
     },
     sessionManager,
@@ -220,7 +219,7 @@ export function createFixture(mocks: {
         runtimeInfo: { model: { id: "model" } },
         systemPromptReport: { chars: 13 },
       },
-      toolBase: { nestedToolActivities: [] },
+      toolBase: { nestedToolActivityState: createAttemptNestedToolActivityState() },
       toolCatalog: {
         effectiveTools: [{ name: "read" }],
         emptyExplicitToolAllowlistError: undefined,

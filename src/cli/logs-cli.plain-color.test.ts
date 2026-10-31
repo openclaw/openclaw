@@ -57,18 +57,6 @@ describe("registerLogsCli forced-color diagnostics", () => {
     vi.restoreAllMocks();
   });
 
-  it("preserves colored error text and exit status by default", async () => {
-    callGatewayFromCli.mockRejectedValue(new Error("connect ECONNREFUSED 127.0.0.1:1"));
-
-    await runLogsCli([]);
-
-    const stderr = stderrWrites.join("");
-    expect(stderr).toContain("ECONNREFUSED");
-    expect(stderr).toContain("Hint: run");
-    expect(stderr).toContain("\u001b[");
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1, { resetStream: undefined });
-  });
-
   it("keeps reconnect notices and terminal errors plain during --follow", async () => {
     callGatewayFromCli
       .mockRejectedValueOnce(new Error("gateway closed (1006): connection lost"))

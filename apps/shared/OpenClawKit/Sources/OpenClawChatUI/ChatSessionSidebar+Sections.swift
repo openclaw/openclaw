@@ -82,17 +82,15 @@ extension ChatSessionSidebar {
 
     @ViewBuilder func sessionSection(
         _ section: ChatSessionSidebarModel.Section,
-        now: Date,
-        ownership: ChatSidebarOwnership,
-        previewRequest: ChatSessionSidebarPreviews.Request) -> some View
+        context: RowContext) -> some View
     {
         if section.id.hasPrefix("group:"), let title = section.title {
-            let attention = self.attentionSummary(sessions: section.nodes.flatMap(\.previewSessions), now: now)
+            let attention = self.attentionSummary(sessions: section.nodes.flatMap(\.previewSessions), now: context.now)
             Section {
                 if !self.isGroupCollapsed(title) || !self.query
                     .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 {
-                    self.rows(section.nodes, now: now, ownership: ownership, previewRequest: previewRequest)
+                    self.rows(section.nodes, section: section.id, context: context)
                 }
             } header: {
                 HStack(spacing: 6) {
@@ -110,6 +108,7 @@ extension ChatSessionSidebar {
                     self.attentionBadge(summary: attention, targetID: section.id)
                 }
                 .contextMenu { self.groupMenu(title) }
+                .modifier(ChatSidebarSectionInteraction(sidebar: self, section: section.id))
                 .modifier(ChatSidebarAttentionAccessibility(
                     title: title,
                     targetID: section.id,
@@ -119,15 +118,16 @@ extension ChatSessionSidebar {
             }
         } else if let title = section.title {
             Section {
-                self.rows(section.nodes, now: now, ownership: ownership, previewRequest: previewRequest)
+                self.rows(section.nodes, section: section.id, context: context)
             } header: {
                 Text(verbatim: title)
                     .font(OpenClawChatTypography.caption)
                     .help(section.id.hasPrefix("project:") ? String(section.id.dropFirst(8)) : title)
+                    .modifier(ChatSidebarSectionInteraction(sidebar: self, section: section.id))
             }
         } else {
             Section {
-                self.rows(section.nodes, now: now, ownership: ownership, previewRequest: previewRequest)
+                self.rows(section.nodes, section: section.id, context: context)
             }
         }
     }

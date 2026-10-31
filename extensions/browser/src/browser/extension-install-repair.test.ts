@@ -1,12 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chromeProductRoots, installStableChromeExtension } from "./extension-install-layout.js";
-import { installRegistration } from "./extension-install-registration.js";
 import {
+  chromeProductRoots,
+  installStableChromeExtension,
+  installRegistration,
   installChromeExtensionBootstrap,
   repairChromeExtensionNativeHosts,
-} from "./extension-install.js";
+} from "./extension-install-fixture.test-support.js";
 import {
   predictedId,
   useExtensionInstallFixture,
@@ -15,18 +16,65 @@ import {
 
 const fixture = useExtensionInstallFixture();
 
-async function prepareUnpacked(value: Awaited<ReturnType<typeof fixture>>, deps = value.deps) {
+type Fixture = Awaited<ReturnType<typeof fixture>>;
+type RepairResult = Awaited<ReturnType<typeof repairChromeExtensionNativeHosts>>;
+const read = (file: string) => fs.readFile(file, "utf8");
+const exportedContext = (content: string) =>
+  content.split("\n").filter((line) => line.startsWith("export OPENCLAW_"));
+async function launcher(manifestPath: string) {
+  const manifest = JSON.parse(await read(manifestPath)) as { path: string };
+  return { path: manifest.path, content: await read(manifest.path) };
+}
+async function relocated(value: Fixture, move = false) {
+  const target = path.join(value.root, "next-package");
+  if (move) {
+    await fs.rename(path.join(value.root, "package"), target);
+  } else {
+    await fs.cp(path.join(value.root, "package"), target, { recursive: true });
+  }
+  return {
+    bundledDir: path.join(target, "extensions/browser/chrome-extension"),
+    pluginRoot: path.join(target, "extensions/browser"),
+    fromNativeHostPath: value.nativeHostPath,
+    deps: { ...value.deps, nativeHostPath: path.join(target, "native-host-entry.js") },
+  };
+}
+function expectRepaired(result: RepairResult, paths: string[]) {
+  expect(result.warnings).toEqual([]);
+  expect(result.changes).toHaveLength(1);
+  expect(result.retentionSafe).toBe(true);
+  expect(result.retainedNativeHostPaths).toEqual(paths);
+}
+async function prepareUnpacked(
+  value: Fixture,
+  deps = value.deps,
+  roots = chromeProductRoots(deps).slice(0, 1),
+) {
   const installed = await installStableChromeExtension(value.bundledDir, deps);
-  await writeChromePreferences({
-    userDataDir: chromeProductRoots(deps)[0]!.userDataDir,
-    profile: "Default",
-    entries: { [await predictedId(installed)]: { location: 4, path: installed } },
-  });
+  const extensionId = await predictedId(installed, deps.platform);
+  for (const root of roots) {
+    await writeChromePreferences({
+      userDataDir: root.userDataDir,
+      profile: "Default",
+      entries: { [extensionId]: { location: 4, path: installed } },
+    });
+  }
+  return extensionId;
 }
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+function configDeps(value: Fixture, config?: string) {
+  return {
+    ...value.deps,
+    env: {
+      ...value.deps.env,
+      OPENCLAW_CONFIG_PATH: config ? path.join(value.root, config) : undefined,
+    },
+  };
+}
 
 describe("native host repair", () => {
   it("refuses a config selection changed while the replacement manifest is being staged", async () => {
@@ -36,17 +84,14 @@ describe("native host repair", () => {
     const extensionIds = [await predictedId(installed), await predictedId(value.bundledDir)];
     const params = { root, extensionIds, pluginRoot: value.pluginRoot, deps: value.deps };
     const original = await installRegistration({ ...params, browserProfile: "work" });
-    const manifestBefore = await fs.readFile(original.manifestPath, "utf8");
-    const launcherBefore = await fs.readFile(original.launcherPath!, "utf8");
+    const manifestBefore = await read(original.manifestPath);
+    const launcherBefore = await read(original.launcherPath!);
     const replacement = await installRegistration({
       ...params,
       browserProfile: "work",
-      deps: {
-        ...value.deps,
-        env: { ...value.deps.env, OPENCLAW_CONFIG_PATH: path.join(value.root, "other.json") },
-      },
+      deps: configDeps(value, "other.json"),
     });
-    const replacementManifest = await fs.readFile(replacement.manifestPath, "utf8");
+    const replacementManifest = await read(replacement.manifestPath);
     await fs.writeFile(original.launcherPath!, launcherBefore, { mode: 0o700 });
     await fs.writeFile(original.manifestPath, manifestBefore, { mode: 0o600 });
     const open = fs.open.bind(fs);
@@ -72,8 +117,8 @@ describe("native host repair", () => {
       }),
     ).rejects.toThrow("OPENCLAW_CONFIG_PATH");
     expect(changed).toBe(true);
-    expect(await fs.readFile(original.manifestPath, "utf8")).toBe(replacementManifest);
-    expect(await fs.readFile(replacement.launcherPath!, "utf8")).toContain("other.json");
+    expect(await read(original.manifestPath)).toBe(replacementManifest);
+    expect(await read(replacement.launcherPath!)).toContain("other.json");
   });
 
   it.each(["custom config's $& path.json", undefined])(
@@ -81,13 +126,8 @@ describe("native host repair", () => {
     async (installedConfig) => {
       const value = await fixture();
       const deps = {
-        ...value.deps,
-        env: {
-          ...value.deps.env,
-          OPENCLAW_CONFIG_PATH: installedConfig
-            ? path.join(value.root, installedConfig)
-            : undefined,
-        },
+        ...configDeps(value, installedConfig),
+        stateDir: path.join(value.homeDir, "claw $& state's dir"),
       };
       await prepareUnpacked(value, deps);
       const initial = await installChromeExtensionBootstrap({
@@ -95,12 +135,9 @@ describe("native host repair", () => {
         deps,
         browserProfile: "work",
       });
-      expect(initial.issues).toEqual([]);
+      expect(initial).toMatchObject({ issues: [], manualSetupRequired: false });
       const manifestPath = initial.registrations[0]!.manifestPath;
-      const oldManifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as { path: string };
-      const exportedContext = (content: string) =>
-        content.split("\n").filter((line) => line.startsWith("export OPENCLAW_"));
-      const before = exportedContext(await fs.readFile(oldManifest.path, "utf8"));
+      const before = exportedContext((await launcher(manifestPath)).content);
       const nativeHostPath = path.join(value.root, "replacement-entry.js");
       await fs.writeFile(nativeHostPath, "export {};\n", { mode: 0o600 });
       const repaired = await repairChromeExtensionNativeHosts({
@@ -109,46 +146,21 @@ describe("native host repair", () => {
         deps: {
           ...deps,
           nativeHostPath,
-          env: {
-            ...value.deps.env,
-            OPENCLAW_CONFIG_PATH: path.join(value.root, "different.json"),
-          },
+          env: configDeps(value, "different.json").env,
         },
       });
-      expect(repaired.warnings).toEqual([]);
-      expect(repaired.changes).toHaveLength(1);
-      const current = JSON.parse(await fs.readFile(manifestPath, "utf8")) as { path: string };
-      expect(exportedContext(await fs.readFile(current.path, "utf8"))).toEqual(before);
+      expectRepaired(repaired, [nativeHostPath]);
+      expect(exportedContext((await launcher(manifestPath)).content)).toEqual(before);
       expect(repaired.registrations[0]).toMatchObject({ browserProfile: "work" });
     },
   );
 
-  it("preserves literal replacement metacharacters in the installation path", async () => {
-    const value = await fixture();
-    const deps = { ...value.deps, stateDir: path.join(value.homeDir, "claw $& state's dir") };
-    await prepareUnpacked(value, deps);
-    const installedStatus = await installChromeExtensionBootstrap({ ...value, deps });
-    expect(installedStatus.issues).toEqual([]);
-    expect(installedStatus.manualSetupRequired).toBe(false);
-    const observed = await repairChromeExtensionNativeHosts({ ...value, deps, dryRun: true });
-    expect(observed.retentionSafe).toBe(true);
-    expect(observed.retainedNativeHostPaths).toEqual([value.nativeHostPath]);
-  });
-
   it("refreshes a retired package target without reading profiles or replacing another installation", async () => {
     const value = await fixture("darwin");
-    const installed = await installStableChromeExtension(value.bundledDir, value.deps);
-    const extensionId = await predictedId(installed, value.deps.platform);
     const roots = chromeProductRoots(value.deps).filter(
       (root) => root.product !== "chrome-for-testing",
     );
-    for (const root of roots) {
-      await writeChromePreferences({
-        userDataDir: root.userDataDir,
-        profile: "Default",
-        entries: { [extensionId]: { location: 4, path: installed } },
-      });
-    }
+    const extensionId = await prepareUnpacked(value, value.deps, roots);
     const original = await installChromeExtensionBootstrap({ ...value, deps: value.deps });
     const chromium = original.registrations.find((entry) => entry.product === "chromium")!;
     const appEntry = path.join(value.root, "app-native-host.js");
@@ -159,18 +171,8 @@ describe("native host repair", () => {
       pluginRoot: value.pluginRoot,
       deps: { ...value.deps, nativeHostPath: appEntry },
     });
-    const manifest = JSON.parse(await fs.readFile(chromium.manifestPath, "utf8")) as {
-      path: string;
-    };
-    const appLauncher = await fs.readFile(manifest.path, "utf8");
-    const relocated = path.join(value.root, "new-package");
-    await fs.rename(path.join(value.root, "package"), relocated);
-    const repairParams = {
-      bundledDir: path.join(relocated, "extensions/browser/chrome-extension"),
-      pluginRoot: path.join(relocated, "extensions/browser"),
-      fromNativeHostPath: value.nativeHostPath,
-      deps: { ...value.deps, nativeHostPath: path.join(relocated, "native-host-entry.js") },
-    };
+    const appLauncher = await launcher(chromium.manifestPath);
+    const repairParams = await relocated(value, true);
     const readFile = fs.readFile.bind(fs);
     const readSpy = vi
       .spyOn(fs, "readFile")
@@ -181,25 +183,19 @@ describe("native host repair", () => {
         return readFile(...args);
       });
     const before = await repairChromeExtensionNativeHosts({ ...repairParams, dryRun: true });
-    expect(before.retentionSafe).toBe(true);
-    expect(before.retainedNativeHostPaths).toEqual([appEntry, value.nativeHostPath].toSorted());
-    expect(before.changes).toEqual([]);
+    expect(before).toMatchObject({
+      retentionSafe: true,
+      retainedNativeHostPaths: [appEntry, value.nativeHostPath].toSorted(),
+      changes: [],
+    });
     const repaired = await repairChromeExtensionNativeHosts(repairParams);
-    expect(repaired.warnings).toEqual([]);
-    expect(repaired.changes).toHaveLength(1);
-    expect(repaired.retentionSafe).toBe(true);
-    expect(repaired.retainedNativeHostPaths).toEqual(
-      [appEntry, repairParams.deps.nativeHostPath].toSorted(),
-    );
-    expect(await fs.readFile(manifest.path, "utf8")).toBe(appLauncher);
-    expect(
-      (
-        await repairChromeExtensionNativeHosts({
-          ...repairParams,
-          fromNativeHostPath: repairParams.deps.nativeHostPath,
-        })
-      ).changes,
-    ).toEqual([]);
+    expectRepaired(repaired, [appEntry, repairParams.deps.nativeHostPath].toSorted());
+    expect(await read(appLauncher.path)).toBe(appLauncher.content);
+    const again = await repairChromeExtensionNativeHosts({
+      ...repairParams,
+      fromNativeHostPath: repairParams.deps.nativeHostPath,
+    });
+    expect(again.changes).toEqual([]);
     expect(
       readSpy.mock.calls.some(([file]) => typeof file === "string" && file.endsWith("Preferences")),
     ).toBe(false);
@@ -210,17 +206,9 @@ describe("native host repair", () => {
     await prepareUnpacked(value);
     const original = await installChromeExtensionBootstrap({ ...value, deps: value.deps });
     const manifestPath = original.registrations[0]!.manifestPath;
-    const before = await fs.readFile(manifestPath, "utf8");
-    const oldManifest = JSON.parse(before) as { path: string };
-    const oldLauncher = await fs.readFile(oldManifest.path, "utf8");
-    const newPackage = path.join(value.root, "next-package");
-    await fs.cp(path.join(value.root, "package"), newPackage, { recursive: true });
-    const params = {
-      bundledDir: path.join(newPackage, "extensions/browser/chrome-extension"),
-      pluginRoot: path.join(newPackage, "extensions/browser"),
-      fromNativeHostPath: value.nativeHostPath,
-      deps: { ...value.deps, nativeHostPath: path.join(newPackage, "native-host-entry.js") },
-    };
+    const before = await read(manifestPath);
+    const oldLauncher = await launcher(manifestPath);
+    const params = await relocated(value);
     const rename = fs.rename.bind(fs);
     const publish = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
       if (to === manifestPath) {
@@ -230,15 +218,13 @@ describe("native host repair", () => {
     });
     const failed = await repairChromeExtensionNativeHosts(params);
     expect(failed.warnings.join("\n")).toContain("synthetic manifest publication failure");
-    expect(await fs.readFile(manifestPath, "utf8")).toBe(before);
-    expect(await fs.readFile(oldManifest.path, "utf8")).toBe(oldLauncher);
+    expect(await read(manifestPath)).toBe(before);
+    expect(await read(oldLauncher.path)).toBe(oldLauncher.content);
     expect(failed.retentionSafe).toBe(true);
     expect(failed.retainedNativeHostPaths).toContain(value.nativeHostPath);
     publish.mockRestore();
     const repaired = await repairChromeExtensionNativeHosts(params);
-    expect(repaired.warnings).toEqual([]);
-    expect(repaired.changes).toHaveLength(1);
-    expect(repaired.retainedNativeHostPaths).toEqual([params.deps.nativeHostPath]);
+    expectRepaired(repaired, [params.deps.nativeHostPath]);
   });
 
   it("refuses unscoped repair and reports malformed registration targets as unsafe for retention", async () => {
@@ -249,9 +235,8 @@ describe("native host repair", () => {
     const manifestPath = path.join(root.nativeManifestDir, "ai.openclaw.browser_bootstrap.json");
     await fs.writeFile(manifestPath, "{}\n", { mode: 0o600 });
     const observed = await repairChromeExtensionNativeHosts({ ...value, dryRun: true });
-    expect(observed.retentionSafe).toBe(false);
-    expect(observed.retainedNativeHostPaths).toEqual([]);
+    expect(observed).toMatchObject({ retentionSafe: false, retainedNativeHostPaths: [] });
     expect(observed.warnings).toHaveLength(1);
-    expect(await fs.readFile(manifestPath, "utf8")).toBe("{}\n");
+    expect(await read(manifestPath)).toBe("{}\n");
   });
 });

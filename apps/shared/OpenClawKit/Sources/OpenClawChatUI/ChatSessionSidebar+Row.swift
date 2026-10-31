@@ -6,10 +6,10 @@ extension ChatSessionSidebar {
     func row(
         for node: ChatSessionSidebarModel.Node,
         isChild: Bool,
-        now: Date,
-        ownership: ChatSidebarOwnership,
-        previewRequest: ChatSessionSidebarPreviews.Request) -> some View
+        context: RowContext,
+        menu: AnyView? = nil) -> some View
     {
+        let now = context.now
         let session = node.session
         let pageAgent = self.showsAllAgents && self.query.isEmpty && !isChild && session.pinned == true
             ? self.sessionAgentID(session)
@@ -20,7 +20,7 @@ extension ChatSessionSidebar {
             sessions: pageSummary?.sessions ?? node.previewSessions,
             agentID: self.sessionAgentID(session),
             now: now)
-        let targetID = "session:\(session.key)"
+        let targetID = "session:\(self.interactionIdentity(session))"
         let agentID = OpenClawChatSessionKey.agentID(from: session.key) ??
             self.viewModel.sessionMutationTarget(key: session.key, agentID: session.agentId).agentID
         let facts = ChatSessionSidebarRowFacts(
@@ -31,21 +31,22 @@ extension ChatSessionSidebar {
             isConnected: self.viewModel.healthOK,
             webFacts: agentID.flatMap { self.viewModel.webConversation?.sidebarFacts(
                 for: .init(agentId: $0, sessionKey: session.key)) },
-            preview: self.rowPreview(for: session, previewRequest: previewRequest),
+            preview: self.rowPreview(for: session, previewRequest: context.previewRequest),
             now: now)
         let viewers = Set((self.sidebarPeople?.people ?? []).filter { $0.watchedSessions.contains(session.key) }
             .compactMap(\.profileID))
-        let attribution = ownership.attribution(
+        let attribution = context.ownership.attribution(
             for: session,
             options: self.filterOptions,
             isChild: isChild,
             decorated: facts
                 .glyph != nil || (attention != nil && !session.isArchived),
             viewingProfileIDs: viewers)
-        return ChatSidebarRow(
+        let content = ChatSidebarRow(
             viewModel: self.viewModel,
             node: node,
             isChild: isChild,
+            targetID: targetID,
             facts: facts,
             attribution: attribution,
             wakeDescription: (self.sessionStatus == .snoozed || self.sessionStatus == .all) &&
@@ -65,31 +66,47 @@ extension ChatSessionSidebar {
                     pinned: session.pinned != true,
                     agentID: session.agentId)
             },
-            archive: { self.viewModel.setSessionArchived(session, archived: !session.isArchived) },
+            archive: { Task { await self.archiveSidebarSession(session) } },
+            archiving: self.batch.isArchiving(session),
             presentedAttention: self.$presentedAttention)
-            .overlay(alignment: .leading) {
-                OpenClawSessionColorStripe(color: session.color)
-                    .offset(x: -6)
+        return Group {
+            if menu == nil {
+                self.interactionRow(content, session: session, isChild: isChild)
+            } else {
+                content
             }
-            // Raw child keys retain their Gateway owner in the List selection.
-            .tag(Optional(ChatSessionSidebarModel.selectionTarget(
-                for: session, fallbackAgentID: self.viewModel.selectedAgentID)))
-            .contextMenu { self.contextMenu(for: session, isChild: isChild, now: now) }
-            .modifier(ChatSidebarAttentionAccessibility(
-                title: ChatSessionSidebarModel.sidebarDisplayName(for: session),
-                targetID: targetID,
-                summary: attention,
-                metadata: [
-                    facts.channelLabel,
-                    facts.subtitle,
-                    !session.isArchived && (pageSummary.map { $0.unread > 0 } ?? node.badges.hasUnread)
-                        ? String(localized: "Unread") : nil,
-                    (pageSummary.map { $0.failed > 0 } ?? facts.failedDescendants)
-                        ? String(localized: "Thread failed") : nil,
-                ]
-                    .compactMap(\.self) + facts.badges.map(\.label),
-                presentation: self.$presentedAttention,
-                isOutlineHeading: !node.children.isEmpty))
+        }
+        .overlay(alignment: .leading) {
+            OpenClawSessionColorStripe(color: session.color)
+                .offset(x: -6)
+        }
+        .tag(self.interactionIdentity(session))
+        .contextMenu {
+            if let menu {
+                menu
+            } else if context.selectedRows.count > 1,
+                      self.batch.selection.keys.contains(self.interactionIdentity(session))
+            {
+                self.batchMenu(rows: context.selectedRows).disabled(self.batch.busy)
+            } else {
+                self.contextMenu(for: session, isChild: isChild, now: now)
+            }
+        }
+        .modifier(ChatSidebarAttentionAccessibility(
+            title: ChatSessionSidebarModel.sidebarDisplayName(for: session),
+            targetID: targetID,
+            summary: attention,
+            metadata: [
+                facts.channelLabel,
+                facts.subtitle,
+                !session.isArchived && (pageSummary.map { $0.unread > 0 } ?? node.badges.hasUnread)
+                    ? String(localized: "Unread") : nil,
+                (pageSummary.map { $0.failed > 0 } ?? facts.failedDescendants)
+                    ? String(localized: "Thread failed") : nil,
+            ]
+                .compactMap(\.self) + facts.badges.map(\.label),
+            presentation: self.$presentedAttention,
+            isOutlineHeading: !node.children.isEmpty))
     }
 
     func attentionSummary(
@@ -134,6 +151,7 @@ private struct ChatSidebarRow: View {
     let viewModel: OpenClawChatViewModel
     let node: ChatSessionSidebarModel.Node
     let isChild: Bool
+    let targetID: String
     let facts: ChatSessionSidebarRowFacts
     let attribution: ChatSidebarOwnership.Attribution?
     let wakeDescription: String?
@@ -145,6 +163,7 @@ private struct ChatSidebarRow: View {
     let mainSessionKey: String
     let pin: () -> Void
     let archive: () -> Void
+    let archiving: Bool
     @Binding var presentedAttention: OpenClawChatAttentionPresentation?
     @State private var hovered = false
     @FocusState private var focus: Focus?
@@ -245,7 +264,7 @@ private struct ChatSidebarRow: View {
                 ChatSidebarAgentAvatar(agent: pageAgent, size: 22).help(pageAgent.displayName)
             } else if let attention = self.attention, !self.node.session.isArchived {
                 OpenClawChatAttentionBadge(
-                    summary: attention, targetID: "session:\(self.node.id)", presentation: self.$presentedAttention)
+                    summary: attention, targetID: self.targetID, presentation: self.$presentedAttention)
                     .accessibilityValue(self.leadingUnreadValue)
             } else if let glyph = self.facts.glyph {
                 self.graphic(glyph)
@@ -297,7 +316,7 @@ private struct ChatSidebarRow: View {
             .accessibilityLabel(self.node.session
                 .isArchived ? String(localized: "Restore") : String(localized: "Archive"))
             .focused(self.$focus, equals: .archive)
-            .disabled(!self.connected || !ChatSessionSidebarEligibility.canArchive(
+            .disabled(!self.connected || self.archiving || !ChatSessionSidebarEligibility.canArchive(
                 self.node.session, mainSessionKey: self.mainSessionKey))
         }
         .buttonStyle(.borderless)

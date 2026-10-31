@@ -18,10 +18,14 @@ import android.graphics.Bitmap
 import android.os.Looper
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.isPopup
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -32,6 +36,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -50,6 +55,92 @@ class SidebarSessionCreationTest {
   @get:Rule val composeRule = createComposeRule()
 
   @Test
+  fun threadsDisplaysExplicitLineageAndKeepsOrdinaryNewIndependent() {
+    val app = RuntimeEnvironment.getApplication() as NodeApp
+    val previousRuntime = app.peekRuntime()
+    val prefs = SecurePrefs(app, app.getSharedPreferences("threads-placement", Context.MODE_PRIVATE))
+    AndroidScreenshotFixture.configure(AndroidScreenshotScene.CompletedWork)
+    val runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture)
+    val models = ViewModelStore()
+    val mounted = mutableStateOf(true)
+    NativeStringResources.install(app)
+    NativeStringResources.setApplicationLocales(LocaleListCompat.forLanguageTags("en"))
+    try {
+      bindNodeRuntimeTestFixture(app, runtime)
+      val model = MainViewModel(app, prefs, SavedStateHandle()).also { models.put("threads", it) }
+      ReflectionHelpers.getField<MutableStateFlow<NodeRuntime?>>(model, "runtimeRef").value = runtime
+      shadowOf(Looper.getMainLooper()).idle()
+      val parent = ChatSessionEntry(key = "agent:main:dashboard:project", sessionId = "project", updatedAtMs = null, displayName = "Project")
+      // Historical ordinary-New storage can be linked even though its row is a root.
+      val ordinary = parent.copy(key = "agent:main:dashboard:ordinary", displayName = "Ordinary New", parentSessionKey = parent.key, createdVia = "operator", spawnDepth = 0)
+      val child = ordinary.copy(key = "agent:main:dashboard:child", displayName = "Child")
+      val grandchild = child.copy(key = "agent:main:dashboard:grandchild", displayName = "Grandchild", parentSessionKey = child.key)
+      // Keep the real screen from replacing the synthetic rows with its default fixture refresh.
+      ReflectionHelpers.getField<MutableStateFlow<Boolean>>(runtime, "_isConnected").value = false
+      val entries = ReflectionHelpers.getField<MutableStateFlow<List<ChatSessionEntry>>>(runtime.chat, "presentedSessions")
+      composeRule.setContent {
+        if (mounted.value) {
+          ClawDesignTheme {
+            SessionsScreen(viewModel = model, showSidebarButton = false, onOpenSidebar = {}, onOpenChat = {})
+          }
+        }
+      }
+
+      fun left(label: String): Float =
+        composeRule
+          .onNodeWithText(label, useUnmergedTree = true)
+          .fetchSemanticsNode()
+          .boundsInRoot.left
+
+      fun capture(name: String) {
+        val output = File("build/outputs/threads-placement/$name.png")
+        checkNotNull(output.parentFile).mkdirs()
+        output.outputStream().use {
+          composeRule
+            .onRoot()
+            .captureToImage()
+            .asAndroidBitmap()
+            .compress(Bitmap.CompressFormat.PNG, 100, it)
+        }
+      }
+      composeRule.runOnIdle {
+        entries.value = listOf(parent, ordinary, child, grandchild)
+      }
+      composeRule.waitUntil(timeoutMillis = 5_000) {
+        model.chatSessions.value.any { it.key == grandchild.key }
+      }
+      composeRule.waitForIdle()
+      capture("diagnostic-before")
+      composeRule.onNodeWithText("Grandchild").assertIsDisplayed()
+      assertEquals(left("Project"), left("Child"), 0.1f)
+      assertEquals(left("Project"), left("Grandchild"), 0.1f)
+      capture("before-metadata")
+      composeRule.runOnIdle {
+        entries.value = listOf(parent, ordinary, child.copy(explicitChild = true), grandchild.copy(explicitChild = true))
+      }
+      composeRule.waitUntil(timeoutMillis = 5_000) {
+        model.chatSessions.value.count { it.explicitChild == true } == 2
+      }
+      composeRule.waitForIdle()
+      capture("after-metadata")
+      composeRule.onNodeWithText("Grandchild").assertIsDisplayed()
+      assertTrue(left("Child") > left("Project"))
+      assertTrue(left("Grandchild") > left("Child"))
+      assertEquals(left("Project"), left("Ordinary New"), 0.1f)
+    } finally {
+      composeRule.runOnIdle { mounted.value = false }
+      models.clear()
+      try {
+        closeNodeRuntimeTestFixture(runtime)
+      } finally {
+        AndroidScreenshotFixture.configure(AndroidScreenshotScene.Home)
+        bindNodeRuntimeTestFixture(app, previousRuntime)
+        NativeStringResources.setApplicationLocales(LocaleListCompat.getEmptyLocaleList())
+      }
+    }
+  }
+
+  @Test
   fun rootAndSelectedChildActionsAreDistinctAndRespectConnection() {
     val app = RuntimeEnvironment.getApplication() as NodeApp
     val previousRuntime = app.peekRuntime()
@@ -61,7 +152,8 @@ class SidebarSessionCreationTest {
     val mounted = mutableStateOf(true)
     val connected = mutableStateOf(true)
     val session = ChatSessionEntry(key = "agent:main:demo", sessionId = "demo", updatedAtMs = null, displayName = "Project notes", pinned = true)
-    var inherited = 0
+    val other = session.copy(key = "agent:main:other", sessionId = "other", displayName = "Other project")
+    val selected = mutableStateOf(session.key)
     var roots = 0
     var parent: String? = null
     NativeStringResources.install(app)
@@ -82,19 +174,18 @@ class SidebarSessionCreationTest {
               viewModel = model,
               agents = emptyList(),
               selectedAgentId = "main",
-              sessions = listOf(session),
-              activeSessionKey = session.key,
+              sessions = listOf(session, other),
+              activeSessionKey = selected.value,
               activeDestination = null,
               connection = GatewayConnectionDisplay(connected.value, "Connected", null),
               visible = true,
               showCloseButton = true,
               onClose = {},
               onDragActiveChange = {},
-              onNewSession = { inherited++ },
-              onNewIndependentSession = { roots++ },
+              onNewSession = { roots++ },
               onNewChildSession = { parent = it },
               onSelectAgent = {},
-              onSelectSession = {},
+              onSelectSession = { selected.value = it.key },
               onSelectCatalogSession = {},
               onCreateCatalogSession = {},
               onSelectDestination = {},
@@ -103,21 +194,39 @@ class SidebarSessionCreationTest {
         }
       }
       composeRule.onNodeWithTag("sidebar-new-session").assertIsEnabled().performClick()
-      assertEquals(1, inherited)
-      assertEquals(0, roots)
-      composeRule
-        .onNodeWithText("New independent session")
-        .assertIsDisplayed()
-        .assertIsEnabled()
-        .performClick()
-      composeRule.onNodeWithText("Pinned").performClick()
-      composeRule
-        .onNodeWithText("New child")
-        .assertIsDisplayed()
-        .assertIsEnabled()
-        .performClick()
       assertEquals(1, roots)
-      assertEquals(session.key, parent)
+      composeRule.onNodeWithText("New independent session").assertDoesNotExist()
+      val creating = ReflectionHelpers.getField<MutableStateFlow<Boolean>>(runtime.chat, "_isCreatingSession")
+      composeRule.runOnIdle { creating.value = true }
+      composeRule
+        .onNodeWithTag("sidebar-new-session")
+        .assertIsNotEnabled()
+        .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Loading"))
+      composeRule.runOnIdle { creating.value = false }
+      composeRule.onNodeWithTag("sidebar-new-session").assertIsEnabled()
+      composeRule.onNodeWithText("Pinned").performClick()
+      composeRule.onNodeWithText("New child session").assertDoesNotExist()
+      composeRule.onNodeWithTag("session-menu-${session.key}").assertExists()
+      composeRule.onNodeWithText("Other project").performClick()
+      composeRule.onNodeWithTag("session-menu-${session.key}").assertDoesNotExist()
+      composeRule.onNodeWithTag("session-menu-${other.key}").performClick()
+      val menuImage = File("build/outputs/sidebar-creation/menu-open.png")
+      checkNotNull(menuImage.parentFile).mkdirs()
+      menuImage.outputStream().use {
+        check(
+          composeRule
+            .onNode(isPopup())
+            .captureToImage()
+            .asAndroidBitmap()
+            .compress(Bitmap.CompressFormat.PNG, 100, it),
+        )
+      }
+      composeRule
+        .onNodeWithText("New child session")
+        .assertIsDisplayed()
+        .assertIsEnabled()
+        .performClick()
+      assertEquals(other.key, parent)
       val image = File("build/outputs/sidebar-creation/after.png")
       checkNotNull(image.parentFile).mkdirs()
       image.outputStream().use {
@@ -129,8 +238,8 @@ class SidebarSessionCreationTest {
       }
       composeRule.runOnIdle { connected.value = false }
       composeRule.onNodeWithTag("sidebar-new-session").assertIsNotEnabled()
-      composeRule.onNodeWithText("New independent session").assertIsNotEnabled()
-      composeRule.onNodeWithText("New child").assertIsNotEnabled()
+      composeRule.onNodeWithTag("session-menu-${other.key}").performClick()
+      composeRule.onNodeWithText("New child session").assertIsNotEnabled()
     } finally {
       composeRule.runOnIdle { mounted.value = false }
       models.clear()

@@ -7,6 +7,8 @@ import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-run
 import {
   buildHostedOutboundMediaResponseHeaders,
   createHostedOutboundMediaStore,
+  resolveHostedOutboundMediaRequest,
+  resolveOutboundMediaAccess,
   type HostedOutboundMediaChunkRecord,
   type HostedOutboundMediaEntry,
   type HostedOutboundMediaMetaRecord,
@@ -53,28 +55,32 @@ export type SynologyHostedMediaUrl = string & {
   readonly [synologyHostedMediaUrlBrand]: true;
 };
 
-type PreparedSynologyHostedMedia = {
-  url: SynologyHostedMediaUrl;
-  cleanup: () => Promise<void>;
-};
+type ServedByteWindow = { startedAt: number; bytes: number };
 
-const preparationLimiter = createWebhookInFlightLimiter({
-  maxInFlightPerKey: SYNOLOGY_OUTBOUND_MEDIA_MAX_PREPARATIONS,
-  maxTrackedKeys: 128,
-});
-const servingLimiter = createWebhookInFlightLimiter({
-  maxInFlightPerKey: SYNOLOGY_OUTBOUND_MEDIA_MAX_SERVES,
-  maxTrackedKeys: 128,
-});
+function createHostedMediaLimits() {
+  return {
+    preparationLimiter: createWebhookInFlightLimiter({
+      maxInFlightPerKey: SYNOLOGY_OUTBOUND_MEDIA_MAX_PREPARATIONS,
+      maxTrackedKeys: 128,
+    }),
+    servingLimiter: createWebhookInFlightLimiter({
+      maxInFlightPerKey: SYNOLOGY_OUTBOUND_MEDIA_MAX_SERVES,
+      maxTrackedKeys: 128,
+    }),
+    servedByteWindows: new Map<string, ServedByteWindow>(),
+  };
+}
+
+let hostedMediaLimits = createHostedMediaLimits();
 const hostedMediaStores = new Map<string, HostedOutboundMediaStore>();
-const servedByteWindows = new Map<string, { startedAt: number; bytes: number }>();
 let hostedMediaRuntime: ReturnType<typeof getSynologyRuntime> | undefined;
 
 function reserveServedBytes(
+  servedByteWindows: Map<string, ServedByteWindow>,
   accountId: string,
   byteLength: number,
-  now = Date.now(),
 ): (() => void) | undefined {
+  const now = Date.now();
   const existing = servedByteWindows.get(accountId);
   const active =
     existing && now - existing.startedAt < SYNOLOGY_OUTBOUND_MEDIA_SERVED_BYTES_WINDOW_MS
@@ -103,7 +109,7 @@ function reserveServedBytes(
 
 function holdServingLeaseUntilResponseDone(
   res: ServerResponse,
-  accountId: string,
+  releaseServingSlot: () => void,
 ): { isActive: () => boolean; release: () => void } {
   let released = false;
   const release = () => {
@@ -114,7 +120,7 @@ function holdServingLeaseUntilResponseDone(
     clearTimeout(timeout);
     res.off("finish", release);
     res.off("close", release);
-    servingLimiter.release(accountId);
+    releaseServingSlot();
   };
   // `res.end()` only queues the body. Keep the account slot until the socket
   // finishes or closes so slow readers cannot bypass the response concurrency cap.
@@ -190,9 +196,7 @@ function getHostedMediaStore(accountId: string): HostedOutboundMediaStore {
   if (hostedMediaRuntime !== runtime) {
     hostedMediaRuntime = runtime;
     hostedMediaStores.clear();
-    preparationLimiter.clear();
-    servingLimiter.clear();
-    servedByteWindows.clear();
+    hostedMediaLimits = createHostedMediaLimits();
   }
   const existing = hostedMediaStores.get(accountId);
   if (existing) {
@@ -201,40 +205,6 @@ function getHostedMediaStore(accountId: string): HostedOutboundMediaStore {
   const created = createHostedMediaStore(accountId);
   hostedMediaStores.set(accountId, created);
   return created;
-}
-
-function createCleanup(store: HostedOutboundMediaStore, id: string): () => Promise<void> {
-  let cleanup: Promise<void> | undefined;
-  return async () => {
-    const activeCleanup = cleanup ?? store.delete(id);
-    cleanup = activeCleanup;
-    try {
-      await activeCleanup;
-    } catch (error) {
-      if (cleanup === activeCleanup) {
-        cleanup = undefined;
-      }
-      throw error;
-    }
-  };
-}
-
-function normalizeMediaAccess(params: {
-  mediaAccess?: OutboundMediaLoadOptions["mediaAccess"];
-  mediaLocalRoots?: readonly string[];
-  mediaReadFile?: (filePath: string) => Promise<Buffer>;
-}): OutboundMediaLoadOptions["mediaAccess"] {
-  const localRoots = params.mediaAccess?.localRoots ?? params.mediaLocalRoots;
-  const readFile = params.mediaAccess?.readFile ?? params.mediaReadFile;
-  const workspaceDir = params.mediaAccess?.workspaceDir;
-  if (!localRoots && !readFile && !workspaceDir) {
-    return undefined;
-  }
-  return {
-    ...(localRoots ? { localRoots } : {}),
-    ...(readFile ? { readFile } : {}),
-    ...(workspaceDir ? { workspaceDir } : {}),
-  };
 }
 
 function skipAsciiWhitespace(buffer: Buffer, start: number): number {
@@ -257,8 +227,6 @@ function isAsciiMarkupStart(byte: number | undefined): boolean {
   );
 }
 
-type UnicodeMarkupEncoding = "utf-16le" | "utf-16be" | "utf-32le" | "utf-32be";
-
 function readUnicodeCodePoint(
   buffer: Buffer,
   offset: number,
@@ -271,13 +239,8 @@ function readUnicodeCodePoint(
   return littleEndian ? buffer.readUInt32LE(offset) : buffer.readUInt32BE(offset);
 }
 
-function containsEncodedMarkupStart(
-  buffer: Buffer,
-  width: 2 | 4,
-  littleEndian: boolean,
-  offset = 0,
-): boolean {
-  for (let cursor = offset; cursor + width * 2 <= buffer.length; cursor += width) {
+function containsEncodedMarkupStart(buffer: Buffer, width: 2 | 4, littleEndian: boolean): boolean {
+  for (let cursor = 0; cursor + width * 2 <= buffer.length; cursor += width) {
     if (
       readUnicodeCodePoint(buffer, cursor, width, littleEndian) === 0x3c &&
       isAsciiMarkupStart(readUnicodeCodePoint(buffer, cursor + width, width, littleEndian))
@@ -286,25 +249,6 @@ function containsEncodedMarkupStart(
     }
   }
   return false;
-}
-
-function detectBomlessUnicodeMarkupEncoding(buffer: Buffer): UnicodeMarkupEncoding | undefined {
-  // Only consider code-unit-aligned openers. Decoding then applies the same
-  // root-document policy as ordinary UTF-8, so embedded markup in source text
-  // remains a passive attachment.
-  if (containsEncodedMarkupStart(buffer, 4, true)) {
-    return "utf-32le";
-  }
-  if (containsEncodedMarkupStart(buffer, 4, false)) {
-    return "utf-32be";
-  }
-  if (containsEncodedMarkupStart(buffer, 2, true)) {
-    return "utf-16le";
-  }
-  if (containsEncodedMarkupStart(buffer, 2, false)) {
-    return "utf-16be";
-  }
-  return undefined;
 }
 
 function decodeUtf32(buffer: Buffer, littleEndian: boolean, offset: number): Buffer {
@@ -340,18 +284,20 @@ function decodeTextForActiveContentSniffing(buffer: Buffer): Buffer {
     return Buffer.from(new TextDecoder("utf-16be").decode(buffer.subarray(2)));
   }
 
-  const bomlessEncoding = detectBomlessUnicodeMarkupEncoding(buffer);
-  if (bomlessEncoding === "utf-32le") {
-    return decodeUtf32(buffer, true, 0);
-  }
-  if (bomlessEncoding === "utf-32be") {
-    return decodeUtf32(buffer, false, 0);
-  }
-  if (bomlessEncoding === "utf-16le") {
-    return Buffer.from(buffer.toString("utf16le"));
-  }
-  if (bomlessEncoding === "utf-16be") {
-    return Buffer.from(new TextDecoder("utf-16be").decode(buffer));
+  // Only consider code-unit-aligned openers, preferring UTF-32 before UTF-16.
+  // The decoded root-document check keeps embedded markup in source text passive.
+  for (const width of [4, 2] as const) {
+    for (const littleEndian of [true, false]) {
+      if (containsEncodedMarkupStart(buffer, width, littleEndian)) {
+        return width === 4
+          ? decodeUtf32(buffer, littleEndian, 0)
+          : Buffer.from(
+              littleEndian
+                ? buffer.toString("utf16le")
+                : new TextDecoder("utf-16be").decode(buffer),
+            );
+      }
+    }
   }
   return buffer;
 }
@@ -368,51 +314,6 @@ function startsWithAsciiIgnoreCase(buffer: Buffer, start: number, expected: stri
     }
   }
   return true;
-}
-
-function readAsciiRootTag(buffer: Buffer, start: number): string | undefined {
-  if (buffer[start] !== 0x3c) {
-    return undefined;
-  }
-  let cursor = start + 1;
-  const first = buffer[cursor];
-  if (
-    first === undefined ||
-    !(
-      (first >= 0x41 && first <= 0x5a) ||
-      (first >= 0x61 && first <= 0x7a) ||
-      first === 0x3a ||
-      first === 0x5f ||
-      first >= 0x80
-    )
-  ) {
-    return undefined;
-  }
-  cursor += 1;
-  while (cursor < buffer.length) {
-    const byte = buffer[cursor]!;
-    if (
-      (byte >= 0x41 && byte <= 0x5a) ||
-      (byte >= 0x61 && byte <= 0x7a) ||
-      (byte >= 0x30 && byte <= 0x39) ||
-      byte === 0x2d ||
-      byte === 0x2e ||
-      byte === 0x3a ||
-      byte === 0x5f ||
-      byte >= 0x80
-    ) {
-      cursor += 1;
-      continue;
-    }
-    if (byte === 0x2f || byte === 0x3e || skipAsciiWhitespace(buffer, cursor) > cursor) {
-      return buffer
-        .subarray(start + 1, cursor)
-        .toString("utf8")
-        .toLowerCase();
-    }
-    return undefined;
-  }
-  return undefined;
 }
 
 function skipRootHtmlComment(buffer: Buffer, start: number): number | undefined {
@@ -467,9 +368,13 @@ function sniffActiveTextContent(buffer: Buffer): string | undefined {
     if (startsWithAsciiIgnoreCase(decoded, cursor, "<!doctype")) {
       return "application/xml";
     }
-    const rootTag = readAsciiRootTag(decoded, cursor);
-    if (rootTag) {
-      return rootTag === "svg" ? "image/svg+xml" : "text/html";
+    if (
+      startsWithAsciiIgnoreCase(decoded, cursor, "<svg") &&
+      (decoded[cursor + 4] === 0x2f ||
+        decoded[cursor + 4] === 0x3e ||
+        skipAsciiWhitespace(decoded, cursor + 4) > cursor + 4)
+    ) {
+      return "image/svg+xml";
     }
     // A declaration or closing tag is still a markup-document root even when
     // it is malformed or precedes a later executable element. Reject every
@@ -504,26 +409,25 @@ export async function prepareSynologyHostedMedia(params: {
   mediaAccess?: OutboundMediaLoadOptions["mediaAccess"];
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
-}): Promise<PreparedSynologyHostedMedia> {
+}) {
   const route = resolveSynologyHostedMediaRoute(params.account);
-  // Synchronize runtime-owned stores and counters before admitting work. A
-  // runtime change clears stale leases, so doing this after acquisition would
-  // erase the current request's slot.
+  // Capture limits after synchronizing the runtime; old work settles against
+  // the same counter owner that admitted it, even after runtime replacement.
   const store = getHostedMediaStore(params.account.accountId);
+  const { preparationLimiter } = hostedMediaLimits;
   if (!preparationLimiter.tryAcquire(params.account.accountId)) {
     throw new Error(
       "Synology Chat attachment preparation is busy. Retry after the current attachments finish preparing.",
     );
   }
   try {
-    await store.cleanupExpired();
     const stagedUrl = new URL(
       await store.prepareUrl({
         mediaUrl: params.mediaUrl,
         routePath: route.localRoutePath,
         publicBaseUrl: route.publicBaseUrl,
         maxBytes: SYNOLOGY_OUTBOUND_MEDIA_MAX_BYTES,
-        mediaAccess: normalizeMediaAccess(params),
+        mediaAccess: resolveOutboundMediaAccess(params),
         requestInit: { signal: AbortSignal.timeout(SYNOLOGY_OUTBOUND_MEDIA_PREPARE_TIMEOUT_MS) },
         validateBeforePersist: (media) => {
           const activeContentType = detectActiveContentType(media);
@@ -540,7 +444,7 @@ export async function prepareSynologyHostedMedia(params: {
     if (!SYNOLOGY_OUTBOUND_MEDIA_ID_RE.test(id) || !token) {
       throw new Error("Synology Chat attachment capability could not be prepared.");
     }
-    const cleanup = createCleanup(store, id);
+    const cleanup = () => store.delete(id);
     const tokenParam = `${SYNOLOGY_HOSTED_MEDIA_TOKEN_PARAM_PREFIX}_${id}`;
     const querySeparator = route.publicSearch ? "&" : "?";
     return {
@@ -557,42 +461,19 @@ export async function tryHandleSynologyHostedMediaRequest(
   res: ServerResponse,
   account: ResolvedSynologyChatAccount,
 ): Promise<boolean> {
-  let url: URL;
-  try {
-    url = new URL(req.url ?? "/", "http://localhost");
-  } catch {
-    return false;
+  const candidate = resolveHostedOutboundMediaRequest(
+    req,
+    res,
+    SYNOLOGY_HOSTED_MEDIA_TOKEN_PARAM_PREFIX,
+  );
+  if (typeof candidate === "boolean") {
+    return candidate;
   }
-  const tokenCandidates = [...url.searchParams.entries()]
-    .filter(([key]) => key.startsWith(`${SYNOLOGY_HOSTED_MEDIA_TOKEN_PARAM_PREFIX}_`))
-    .map(([key, token]) => ({
-      id: key.slice(SYNOLOGY_HOSTED_MEDIA_TOKEN_PARAM_PREFIX.length + 1),
-      token,
-    }))
-    .filter((candidate) => SYNOLOGY_OUTBOUND_MEDIA_ID_RE.test(candidate.id));
-  if (tokenCandidates.length === 0) {
-    return false;
-  }
-  if (tokenCandidates.length !== 1) {
-    res.statusCode = 400;
-    res.end("Bad Request");
-    return true;
-  }
-  const method = req.method ?? "GET";
-  if (method !== "GET" && method !== "HEAD") {
-    res.statusCode = 405;
-    res.setHeader("Allow", "GET, HEAD");
-    res.end("Method Not Allowed");
-    return true;
-  }
-
-  const candidate = tokenCandidates[0];
-  if (!candidate) {
-    return false;
-  }
+  const { url, method } = candidate;
   // Runtime replacement resets the process-local limiter state. Resolve the
   // matching store first so the lease acquired below belongs to that runtime.
   const store = getHostedMediaStore(account.accountId);
+  const { servingLimiter, servedByteWindows } = hostedMediaLimits;
   if (!servingLimiter.tryAcquire(account.accountId)) {
     res.statusCode = 503;
     res.setHeader("Retry-After", "1");
@@ -602,7 +483,9 @@ export async function tryHandleSynologyHostedMediaRequest(
   let responseOwnsServingLease = false;
   let rollbackServedBytes: (() => void) | undefined;
   let entry: HostedOutboundMediaEntry | null | undefined;
-  const servingLease = holdServingLeaseUntilResponseDone(res, account.accountId);
+  const servingLease = holdServingLeaseUntilResponseDone(res, () =>
+    servingLimiter.release(account.accountId),
+  );
   try {
     const routePath = toSynologyHostedMediaStoreRoutePath(url.pathname);
     const metadata = await store.readMetadata(candidate.id);
@@ -622,7 +505,11 @@ export async function tryHandleSynologyHostedMediaRequest(
     if (method === "GET") {
       // Authenticate and reserve from metadata before reading stored chunks.
       // Rejected over-budget requests must not force SQLite payload reads.
-      rollbackServedBytes = reserveServedBytes(account.accountId, metadata.byteLength);
+      rollbackServedBytes = reserveServedBytes(
+        servedByteWindows,
+        account.accountId,
+        metadata.byteLength,
+      );
       if (!rollbackServedBytes) {
         res.statusCode = 429;
         res.setHeader("Retry-After", "60");

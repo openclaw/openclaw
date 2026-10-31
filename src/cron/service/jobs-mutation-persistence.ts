@@ -6,67 +6,43 @@ import {
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
+import type { CronJobMutation, CronJobMutationSnapshot } from "../store/job-mutations.types.js";
 import {
   resolveCronAuthenticatedCallerOrigin,
   resolveCronAuthenticatedChannelRequester,
 } from "../tools-allow-provenance.js";
-import type { CronJob } from "../types.js";
+import type { CronJob, CronStoredJob } from "../types.js";
 import { findJobOrThrow, isJobEnabled } from "./jobs-scheduling.js";
 import {
   cronJobMessageActionAuthorityInputsEqual,
   cronJobMessageToolAuthorityInputsEqual,
 } from "./jobs-tool-policy.js";
-import { publishCronRunReceiptMutation, type CronRunReceiptOwnerMutation } from "./run-receipts.js";
-import { emit, type CronServiceState } from "./state.js";
-import {
-  persistCronJobMutation,
-  type CronRollbackSnapshot,
-  type captureCronJobMutationSource,
-} from "./store.js";
-import { armTimer } from "./timer.js";
+import { publishCronRunReceiptMutation } from "./run-receipts.js";
+import { emit, type CronServiceState, type CronAddOptions } from "./state.js";
+import { persistCronJobMutation, type captureCronJobMutationSource } from "./store.js";
 
 export async function persistUpdatedJob(params: {
   state: CronServiceState;
-  snapshot: CronRollbackSnapshot;
-  previousJob: CronJob;
-  nextJob: CronJob;
+  previousJob: CronStoredJob;
+  nextJob: CronStoredJob;
   source: ReturnType<typeof captureCronJobMutationSource>;
   mutationMethod: "cron.add" | "cron.update";
-  ownerMutation?: CronRunReceiptOwnerMutation;
   commitGuard?: () => void;
+  streamAuthority?: Pick<
+    CronAddOptions,
+    "execPolicy" | "sessionEntryCurrent" | "streamExecApproval"
+  >;
   agentId?: string;
   preconditionJob?: CronJob;
+  jobMutation: CronJobMutation;
+  jobMutationSnapshot: CronJobMutationSnapshot;
 }) {
-  const { state, snapshot, previousJob, nextJob } = params;
-  if (!snapshot.store) {
-    throw new Error("Cron update has no loaded store");
-  }
+  const { state, previousJob, nextJob } = params;
   const defaultAgentId = state.deps.resolveDefaultAgentId
     ? state.deps.resolveDefaultAgentId()
     : state.deps.defaultAgentId;
   resolveCronJobEffectiveAgentId(previousJob, defaultAgentId);
   resolveCronJobEffectiveAgentId(nextJob, defaultAgentId);
-  const reservation = state.queuedRunReservationsByJobId.get(nextJob.id);
-  const preservesOnExitRearm =
-    reservation?.onExit === true &&
-    reservation.lifecycleGeneration === state.lifecycleGeneration &&
-    reservation.markerAtMs === previousJob.state.queuedAtMs &&
-    previousJob.schedule.kind === "on-exit" &&
-    !previousJob.enabled &&
-    nextJob.enabled &&
-    resolveCronJobConfigRevision(previousJob) ===
-      resolveCronJobConfigRevision({ ...nextJob, enabled: false });
-  if (
-    nextJob.state.queuedAtMs !== undefined &&
-    !preservesOnExitRearm &&
-    resolveCronJobConfigRevision(previousJob) !== resolveCronJobConfigRevision(nextJob)
-  ) {
-    // A consumed on-exit arm keeps its reservation when enabling its successor.
-    // Other edits retire the queued occurrence; A→B→A cannot revive it.
-    delete nextJob.state.queuedAtMs;
-  }
-  const nextStore = structuredClone(snapshot.store);
-  nextStore.jobs = nextStore.jobs.map((entry) => (entry.id === nextJob.id ? nextJob : entry));
 
   const triggerStateChanged =
     !isDeepStrictEqual(previousJob.trigger, nextJob.trigger) ||
@@ -78,6 +54,7 @@ export async function persistUpdatedJob(params: {
     (isJobEnabled(previousJob) && !isJobEnabled(nextJob)) ||
     !cronJobMessageToolAuthorityInputsEqual(previousJob, nextJob);
   const messageSourceAuthorityChanged =
+    !isDeepStrictEqual(previousJob.operatorSource, nextJob.operatorSource) ||
     !cronJobMessageActionAuthorityInputsEqual(previousJob, nextJob) ||
     (triggerStateChanged &&
       Boolean(
@@ -89,24 +66,24 @@ export async function persistUpdatedJob(params: {
   await persistCronJobMutation({
     state,
     source: params.source,
-    previous: snapshot.store,
-    next: nextStore,
     method: params.mutationMethod,
     assertCurrent: () => {
       params.commitGuard?.();
-      params.ownerMutation?.assertCurrent();
       const currentDefaultAgentId = state.deps.resolveDefaultAgentId
         ? state.deps.resolveDefaultAgentId()
         : state.deps.defaultAgentId;
       resolveCronJobEffectiveAgentId(previousJob, currentDefaultAgentId);
       resolveCronJobEffectiveAgentId(nextJob, currentDefaultAgentId);
     },
+    streamAuthority: params.streamAuthority,
     agentId: params.agentId,
     preconditionJob: params.preconditionJob,
+    expectedJob: { id: previousJob.id, configRevision: resolveCronJobConfigRevision(previousJob) },
+    jobMutation: params.jobMutation,
+    jobMutationSnapshot: params.jobMutationSnapshot,
     suppressScheduledJobId: nextJob.id,
     receiptMutation: {
       jobId: nextJob.id,
-      owner: params.ownerMutation?.prepared,
       triggerStateChanged,
       scheduleChanged,
     },
@@ -118,7 +95,11 @@ export async function persistUpdatedJob(params: {
         scheduleChanged,
       });
       try {
-        if (isJobEnabled(previousJob) && !isJobEnabled(nextJob)) {
+        if (
+          params.jobMutation.kind === "update"
+            ? params.jobMutation.patch.enabled === false
+            : isJobEnabled(previousJob) && !isJobEnabled(nextJob)
+        ) {
           requestActiveCronJobCancellation(nextJob.id, "Cron job disabled by operator.");
         }
       } finally {
@@ -129,7 +110,6 @@ export async function persistUpdatedJob(params: {
     },
     afterPublish: () => {
       const committedJob = findJobOrThrow(state, nextJob.id);
-      armTimer(state);
       emit(state, {
         jobId: nextJob.id,
         action: "updated",

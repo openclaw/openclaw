@@ -1,245 +1,134 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { sessionsResult as sessionListFixture } from "../../lib/sessions/session-capability.test-support.ts";
-import { createTestGatewayClient as clientWithRequest } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { row } from "./chat-outbox-recovery.test-support.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
-import { handleAbortChat, hasAbortableSessionRun } from "./run-lifecycle.ts";
+import { handleAbortChat } from "./run-lifecycle.ts";
 
-beforeEach(() => {
-  installOutboxBrowserStorage();
-});
+beforeEach(installOutboxBrowserStorage);
 
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
-function createSessionsResult(sessions: GatewaySessionRow[]): SessionsListResult {
-  return { ...sessionListFixture(sessions, 0), path: "" };
-}
+const sessionAbort = { key: "agent:main", clearQueued: true };
+const abortTarget = { runId: "run-main", sessionKey: "agent:main" };
+const readOnly = {
+  requestHandlers: {},
+  hello: gatewayHelloForMethods(["chat.abort"], ["operator.read"]),
+  chatRunError: { summary: "Previous run failed" },
+};
 
-function row(key: string, overrides?: Partial<GatewaySessionRow>): GatewaySessionRow {
-  return {
-    key,
-    kind: "direct",
-    updatedAt: null,
-    ...overrides,
-  };
-}
-
-describe("handleAbortChat", () => {
-  it("preserves the draft for connected toolbar aborts", async () => {
-    const host = makeChatHost({
-      requestHandlers: {
-        "chat.abort": { aborted: true },
-      },
-      chatRunId: "run-main",
-      chatMessage: "next prompt",
-      sessionKey: "agent:main",
-    });
-
-    await handleAbortChat(host, { preserveDraft: true });
-
-    expect(host.request).toHaveBeenCalledWith("chat.abort", {
-      runId: "run-main",
-      sessionKey: "agent:main",
-    });
-    expect(host.chatMessage).toBe("next prompt");
-    expect(host.chatRunId).toBe("run-main");
+it.each([
+  { action: "toolbar", message: "next prompt" },
+  { action: "typed", message: "/stop" },
+  { action: "typed", message: "stop" },
+  { action: "read-only", message: "/stop" },
+  { action: "offline", message: "/stop" },
+] as const)("handles a stop during a run via $action ($message)", async ({ action, message }) => {
+  const host = makeChatHost({
+    requestHandlers: { "chat.abort": { aborted: true }, "sessions.abort": { status: "aborted" } },
+    connected: action !== "offline",
+    chatRunId: "run-main",
+    chatMessage: message,
+    ...(action === "read-only" ? readOnly : {}),
   });
-
-  it("aborts the exact selected session when no browser run id exists", async () => {
-    const request = vi.fn(async () => ({ abortedRunId: null, status: "aborted" }));
-    const sessionKey = "agent:main:openclaw-weixin:direct:wechat-user";
-    const host = makeChatHost({
-      client: clientWithRequest(request),
-      chatRunId: null,
-      chatMessage: "/stop",
-      sessionKey,
-      sessionsResult: createSessionsResult([
-        row(sessionKey, { hasActiveRun: true, status: "running" }),
-      ]),
-    });
-
-    await handleAbortChat(host);
-
-    expect(request).toHaveBeenCalledWith("sessions.abort", {
-      key: sessionKey,
-      clearQueued: true,
-    });
-    expect(request).not.toHaveBeenCalledWith("chat.abort", expect.anything());
-    expect(host.chatMessage).toBe("");
-  });
-
-  it("keeps selected global aborts on the compatible key-only request", async () => {
-    const request = vi.fn(async () => ({ abortedRunId: null, status: "aborted" }));
-    const host = makeChatHost({
-      client: clientWithRequest(request),
-      chatRunId: null,
-      chatMessage: "/stop",
-      sessionKey: "global",
-      assistantAgentId: "work",
-      agentsList: { defaultId: "main" },
-      sessionsResult: createSessionsResult([
-        row("global", { hasActiveRun: true, agentId: "work" } as Partial<GatewaySessionRow>),
-      ]),
-    });
-
-    await handleAbortChat(host);
-
-    expect(request).toHaveBeenCalledWith("sessions.abort", {
-      key: "global",
-      agentId: "work",
-    });
-  });
-
-  it.each([
-    {
-      name: "clears queues for a per-sender agent main session",
-      scope: "per-sender",
-      expected: {
-        key: "agent:work:main",
-        clearQueued: true,
-      },
-    },
-    {
-      name: "keeps a global-scope agent main alias on the compatible request",
-      scope: "global",
-      expected: {
-        key: "agent:work:main",
-        agentId: "work",
-      },
-    },
-  ] as const)("$name", async ({ scope, expected }) => {
-    const request = vi.fn(async () => ({ abortedRunId: null, status: "aborted" }));
-    const sessionKey = "agent:work:main";
-    const host = makeChatHost({
-      client: clientWithRequest(request),
-      chatRunId: null,
-      sessionKey,
-      agentsList: { defaultId: "main", mainKey: "main", scope },
-      sessionsResult: createSessionsResult([
-        row(sessionKey, { hasActiveRun: true, status: "running" }),
-      ]),
-    });
-
-    await handleAbortChat(host);
-
-    expect(request).toHaveBeenCalledWith("sessions.abort", expected);
-  });
-
-  it.each(["/stop", "stop"])(
-    "clears the typed stop command %s after aborting the active run",
-    async (message) => {
-      const host = makeChatHost({
-        requestHandlers: {
-          "chat.abort": { aborted: true },
-        },
-        chatRunId: "run-main",
-        chatMessage: message,
-        sessionKey: "agent:main",
-      });
-
-      await handleSendChat(host);
-
-      expect(host.request).toHaveBeenCalledWith("chat.abort", {
-        runId: "run-main",
-        sessionKey: "agent:main",
-      });
-      expect(host.chatMessage).toBe("");
-    },
-  );
-
-  it("blocks a typed stop before aborting when the operator lacks write scope", async () => {
-    const host = makeChatHost({
-      requestHandlers: {},
-      chatRunId: "run-main",
-      chatMessage: "/stop",
-      hello: gatewayHelloForMethods(["chat.abort"], ["operator.read"]),
-      sessionKey: "agent:main",
-      chatRunError: { summary: "Previous run failed" },
-    });
-
-    await handleSendChat(host);
-
+  await (action === "toolbar"
+    ? handleAbortChat(host, { preserveDraft: true })
+    : handleSendChat(host));
+  if (action === "read-only") {
     expect(host.request).not.toHaveBeenCalled();
     expect(host.lastError).toBeTruthy();
     expect(host.chatError).toBe(host.lastError);
-    expect(host.chatMessage).toBe("/stop");
     expect(host.chatRunError).toEqual({ summary: "Previous run failed" });
-  });
-
-  it("queues a typed exact-run stop while disconnected", async () => {
-    const request = vi.fn();
-    const client = clientWithRequest(request);
-    const host = makeChatHost({
-      client,
-      connected: false,
-      chatRunId: "run-main",
-      chatMessage: "/stop",
-      sessionKey: "agent:main",
-    });
-
-    await handleSendChat(host);
-
+  } else if (action === "offline") {
     expect(host.pendingAbort).toEqual({
-      sourceClient: client,
-      recoveryScope: client.recoveryScope,
-      runId: "run-main",
-      sessionKey: "agent:main",
+      sourceClient: host.client,
+      recoveryScope: host.client?.recoveryScope,
+      ...abortTarget,
       conversation: { sessionKey: "agent:main" },
     });
-    expect(host.chatMessage).toBe("");
-    expect(host.chatRunId).toBe("run-main");
-    expect(request).not.toHaveBeenCalled();
+    expect(host.request).not.toHaveBeenCalled();
+  } else if (action === "typed") {
+    expect(host.request).toHaveBeenCalledWith("sessions.abort", sessionAbort);
+    expect(host.request).not.toHaveBeenCalledWith("chat.abort", expect.anything());
+  } else {
+    expect(host.request).toHaveBeenCalledWith("chat.abort", abortTarget);
+  }
+  expect(host.chatMessage).toBe(action === "toolbar" || action === "read-only" ? message : "");
+  expect(host.chatRunId).toBe("run-main");
+});
+
+it.each(["current", "terminal", "replacement"] as const)("stop errors: %s", async (scenario) => {
+  const response = Promise.withResolvers<never>();
+  const host = makeChatHost({
+    requestHandlers: { "sessions.abort": response.promise },
+    chatRunId: "run-a",
+    chatMessage: "/stop",
   });
+  const sending = handleSendChat(host);
+  expect(host.request).toHaveBeenCalledWith("sessions.abort", sessionAbort);
+  if (scenario === "replacement") {
+    host.chatRunId = "run-b";
+  } else if (scenario === "terminal") {
+    host.chatRunId = null;
+    host.lastLocalTerminalReconcile = {
+      sessionKey: host.sessionKey,
+      runId: "run-a",
+      phase: "interrupted",
+      sessionStatus: "killed",
+    };
+  }
+  response.reject(new Error("stop failed"));
+  await sending;
+  if (scenario === "current") {
+    expect(host.chatError).toContain("stop failed");
+  } else if (scenario === "terminal") {
+    expect(host.chatRunError).toMatchObject({ runId: "run-a", summary: "stop failed" });
+  } else {
+    expect(host.chatError).toBeFalsy();
+    expect(host.chatRunError).toBeFalsy();
+  }
+});
 
-  it("does not queue an unversioned session stop while disconnected", async () => {
-    const request = vi.fn();
-    const client = clientWithRequest(request);
-    const sessionKey = "agent:main:telegram:direct:queued-user";
-    const host = makeChatHost({
-      client,
-      connected: false,
-      chatRunId: null,
-      chatMessage: "draft",
-      sessionKey,
-      sessionsResult: createSessionsResult([
-        row(sessionKey, { hasActiveRun: true }),
-        row("agent:other", { hasActiveRun: true }),
-      ]),
+it.each([
+  { key: "agent:main:openclaw-weixin:direct:wechat-user", scope: "per-sender", connected: true },
+  { key: "global", scope: "global", connected: true },
+  { key: "agent:work:main", scope: "per-sender", connected: true },
+  { key: "agent:work:main", scope: "global", connected: true },
+  { key: "agent:main:telegram:direct:queued-user", scope: "per-sender", connected: false },
+] as const)("targets $key ($scope, connected: $connected)", async ({ key, scope, connected }) => {
+  const host = makeChatHost({
+    requestHandlers: { "sessions.abort": { abortedRunId: null, status: "aborted" } },
+    connected,
+    chatMessage: connected ? "/stop" : "draft",
+    sessionKey: key,
+    ...(key === "global" ? { assistantAgentId: "work" } : {}),
+    agentsList: { defaultId: "main", mainKey: "main", scope },
+    sessionsResult: sessionListFixture([
+      row(key, {
+        hasActiveRun: true,
+        status: "running",
+        ...(key === "global" ? { agentId: "work" } : {}),
+      }),
+      ...(!connected ? [row("agent:other", { hasActiveRun: true })] : []),
+    ]),
+  });
+  await handleAbortChat(host);
+  if (connected) {
+    expect(host.request).toHaveBeenCalledWith("sessions.abort", {
+      key,
+      ...(scope === "global" ? { agentId: "work" } : { clearQueued: true }),
     });
-
-    await handleAbortChat(host);
-
+    expect(host.request).not.toHaveBeenCalledWith("chat.abort", expect.anything());
+    expect(host.chatMessage).toBe("");
+  } else {
     expect(host.pendingAbort).toBeUndefined();
     expect(host.chatMessage).toBe("draft");
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    {
-      name: "ignores stale active-run flags once the current session is terminal",
-      selected: { hasActiveRun: true, status: "done" as const },
-    },
-    {
-      name: "ignores stale running status once the gateway reports no active run",
-      selected: { hasActiveRun: false, status: "running" as const },
-    },
-  ])("$name", ({ selected }) => {
-    const host = makeChatHost({
-      chatRunId: null,
-      sessionKey: "agent:main",
-      sessionsResult: createSessionsResult([
-        row("agent:main", selected),
-        row("agent:other", { hasActiveRun: true, status: "running" }),
-      ]),
-    });
-
-    expect(hasAbortableSessionRun(host)).toBe(false);
-  });
+    expect(host.request).not.toHaveBeenCalled();
+  }
 });

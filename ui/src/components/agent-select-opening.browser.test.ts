@@ -1,279 +1,142 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { duringElementAnimation } from "../test-helpers/web-awesome-animation.ts";
+import { page, userEvent } from "vitest/browser";
 import "../test-helpers/load-styles.ts";
-import "@awesome.me/webawesome/dist/styles/themes/default.css";
-import { AgentSelect } from "./agent-select.ts";
-import type { AgentSelectOption } from "./agent-select.ts";
-
-class OpeningAgentSelect extends AgentSelect {}
-customElements.define(`test-agent-select-opening-${crypto.randomUUID()}`, OpeningAgentSelect);
+import "./agent-select-registration.ts";
+import type { AgentSelectOption } from "./agent-select-types.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
-  vi.restoreAllMocks();
 });
-
 async function fixture(
-  value = "main",
+  value = "research",
   options: AgentSelectOption[] = [
     { value: "main", label: "Main" },
     { value: "research", label: "Research" },
   ],
-  onCreateAgent: (() => void) | null = null,
 ) {
-  const select = new OpeningAgentSelect();
-  select.options = options;
-  select.onCreateAgent = onCreateAgent;
-  select.value = value;
+  const select = document.createElement("openclaw-agent-select");
+  Object.assign(select, { value, options });
   document.body.append(select);
   await select.updateComplete;
-  const dropdown = select.querySelector("wa-dropdown")!;
-  await dropdown.updateComplete;
-  const items = [...select.querySelectorAll("wa-dropdown-item")];
-  await Promise.all(items.map((item) => item.updateComplete));
-  const menu = dropdown.shadowRoot!.querySelector<HTMLElement>('[part="menu"]')!;
-  const outside = document.createElement("button");
-  outside.textContent = "Outside";
-  document.body.append(outside);
-  let shown = false;
-  dropdown.addEventListener(
-    "wa-after-show",
-    () => {
-      shown = true;
-    },
-    { once: true },
-  );
-  const item = (index: number) => {
-    const entry = items[index];
-    if (!entry) {
-      throw new Error(`Missing dropdown fixture item ${index}`);
-    }
-    return entry;
+  const trigger = select.querySelector<HTMLButtonElement>(".agent-select__trigger")!;
+  const menu = select.querySelector<HTMLElement>('[role="menu"]')!;
+  const items = [...select.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')];
+  const open = async () => {
+    await page.elementLocator(trigger).click();
+    await expect.poll(() => menu.matches(":popover-open")).toBe(true);
   };
-  return { select, dropdown, items, item, menu, outside, shown: () => shown };
+  return { select, trigger, menu, items, open };
 }
 
-describe("Agent select opening focus", () => {
-  it("does not reinitialize focus after a canceled hide", async () => {
-    const { userEvent } = await import("vitest/browser");
-    const f = await fixture("research");
-    f.dropdown.open = true;
-    await expect.poll(f.shown).toBe(true);
+describe("Agent select native menu", () => {
+  it.each([false, true])(
+    "reveals the initial focus in a long menu (selected disabled: %s)",
+    async (disabled) => {
+      const f = await fixture(
+        "agent-28",
+        Array.from({ length: 40 }, (_, index) => ({
+          value: `agent-${index}`,
+          label: `Agent ${index}`,
+          disabled: disabled && index === 28,
+        })),
+      );
+      const shown = new Promise<void>((resolve) => {
+        f.menu.addEventListener("overlay-after-show", () => resolve(), { once: true });
+      });
+      await f.open();
+      await shown;
+      const row = f.items[disabled ? 0 : 28]!;
+      const bounds = f.menu.getBoundingClientRect();
+      const selected = row.getBoundingClientRect();
+      expect(selected.top).toBeGreaterThanOrEqual(bounds.top);
+      expect(selected.bottom).toBeLessThanOrEqual(bounds.bottom);
+    },
+  );
+  it.each(["main", "research"])(
+    "focuses selected %s and keeps keyboard navigation",
+    async (value) => {
+      const f = await fixture(value);
+      await f.open();
+      const index = value === "main" ? 0 : 1;
+      expect(document.activeElement).toBe(f.items[index]);
+      await userEvent.keyboard(index === 0 ? "{ArrowDown}" : "{ArrowUp}");
+      expect(document.activeElement).toBe(f.items[1 - index]);
+      await userEvent.keyboard("{Escape}");
+      await expect.poll(() => f.menu.matches(":popover-open")).toBe(false);
+      expect(document.activeElement).toBe(f.trigger);
+    },
+  );
+  it("focuses the first enabled row when the selected row is disabled", async () => {
+    const f = await fixture("main", [
+      { value: "main", label: "Main", disabled: true },
+      { value: "research", label: "Research" },
+    ]);
+    await f.open();
     expect(document.activeElement).toBe(f.items[1]);
-    f.dropdown.addEventListener("wa-hide", (event) => event.preventDefault(), { once: true });
-    f.dropdown.open = false;
-    await f.dropdown.updateComplete;
-    await f.dropdown.updateComplete;
-    expect(f.dropdown.open).toBe(true);
+  });
+  it("keeps the selected row focused after Enter opens and lets Home move to the first row", async () => {
+    const f = await fixture();
+    const shown = new Promise<void>((resolve) => {
+      f.menu.addEventListener("overlay-after-show", () => resolve(), { once: true });
+    });
+    f.trigger.focus();
+    await userEvent.keyboard("{Enter}");
+    await shown;
+    expect(document.activeElement).toBe(f.items[1]);
+    await userEvent.keyboard("{Home}");
+    expect(document.activeElement).toBe(f.items[0]);
+  });
+  it("rejects disabled selection and closes when disabled while open", async () => {
+    const f = await fixture();
+    const onSelect = vi.fn();
+    f.select.onSelect = onSelect;
+    await f.open();
+    f.select.disabled = true;
+    await f.select.updateComplete;
+    await expect.poll(() => f.menu.matches(":popover-open")).toBe(false);
+    f.items[0]!.click();
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+  it("respects a vetoed close and restores selected focus after reopening", async () => {
+    const f = await fixture();
+    await f.open();
+    f.menu.addEventListener("overlay-hide", (event) => event.preventDefault(), { once: true });
+    await userEvent.keyboard("{Escape}");
+    expect(f.menu.matches(":popover-open")).toBe(true);
     await userEvent.keyboard("{ArrowUp}");
     expect(document.activeElement).toBe(f.items[0]);
-  });
-
-  it("leaves focus outside after a canceled show and initializes a later accepted opening", async () => {
-    const f = await fixture("research");
-    f.outside.focus();
-    f.dropdown.addEventListener("wa-show", (event) => event.preventDefault(), { once: true });
-    f.dropdown.open = true;
-    await f.dropdown.updateComplete;
-    await f.dropdown.updateComplete;
-    expect(f.dropdown.open).toBe(false);
-    expect(document.activeElement).toBe(f.outside);
-    expect(f.shown()).toBe(false);
-    f.dropdown.open = true;
-    await expect.poll(f.shown).toBe(true);
+    await userEvent.keyboard("{Escape}");
+    await f.open();
     expect(document.activeElement).toBe(f.items[1]);
   });
-
-  it.each(["missing", "disabled", "create"] as const)(
-    "uses the first enabled item for a %s selection",
-    async (kind) => {
-      const f = await fixture(
-        kind === "missing" ? "absent" : "main",
-        kind === "create"
-          ? []
-          : [
-              { value: "main", label: "Main", disabled: true },
-              { value: "research", label: "Research" },
-            ],
-        kind === "create" ? () => {} : null,
-      );
-      f.dropdown.open = true;
-      await expect.poll(f.shown).toBe(true);
-      expect(document.activeElement).toBe(kind === "create" ? f.items[0] : f.items[1]);
-      expect(f.items.filter((item) => item.active)).toEqual([
-        kind === "create" ? f.items[0] : f.items[1],
-      ]);
-    },
-  );
-
-  it.each(["reopen", "reconnect"] as const)(
-    "initializes selected focus after a fast %s without retaining old ownership",
-    async (kind) => {
-      const { userEvent } = await import("vitest/browser");
-      const f = await fixture("research");
-      f.dropdown.open = true;
-      await expect.poll(f.shown).toBe(true);
-      let shownAgain = false;
-      f.dropdown.addEventListener("wa-after-show", () => (shownAgain = true), { once: true });
-      if (kind === "reopen") {
-        await duringElementAnimation(
-          f.menu,
-          "hide",
-          () => (f.dropdown.open = false),
-          () => {
-            f.dropdown.open = true;
-          },
-        );
-      } else {
-        f.select.remove();
-        f.outside.focus();
-        document.body.append(f.select);
-      }
-      await expect.poll(() => shownAgain).toBe(true);
-      expect(document.activeElement).toBe(f.items[1]);
-      await userEvent.keyboard("{ArrowUp}");
-      expect(document.activeElement).toBe(f.items[0]);
-    },
-  );
-
-  it("ignores nested visibility notifications during opening", async () => {
-    const { userEvent } = await import("vitest/browser");
-    const f = await fixture("research");
-    await duringElementAnimation(
-      f.menu,
-      "show",
-      () => (f.dropdown.open = true),
-      async () => {
-        f.item(1).dispatchEvent(new CustomEvent("wa-show", { bubbles: true }));
-        f.item(1).dispatchEvent(new CustomEvent("wa-hide", { bubbles: true }));
-        await userEvent.keyboard("{ArrowUp}");
-      },
-    );
-    await expect.poll(f.shown).toBe(true);
-    expect(document.activeElement).toBe(f.items[0]);
-  });
-
-  it("preserves a pointer selection made during opening", async () => {
-    const { page } = await import("vitest/browser");
-    const f = await fixture("research");
-    const values: string[] = [];
-    f.select.onSelect = (value) => values.push(value);
-    const hidden = new Promise<void>((resolve) => {
-      f.dropdown.addEventListener("wa-after-hide", () => resolve(), { once: true });
-    });
-    await duringElementAnimation(
-      f.menu,
-      "show",
-      () => (f.dropdown.open = true),
-      () => page.elementLocator(f.item(0)).click(),
-    );
-    await hidden;
-    expect(values).toEqual(["main"]);
-    expect(f.dropdown.open).toBe(false);
-    expect(document.activeElement).toBe(f.select.querySelector("button"));
-  });
-
-  it("preserves keyboard navigation across real opening completion", async () => {
-    const { userEvent } = await import("vitest/browser");
+  it("reopens after disconnecting an open menu", async () => {
     const f = await fixture();
-    await duringElementAnimation(
-      f.menu,
-      "show",
-      () => {
-        f.dropdown.open = true;
-      },
-      async () => {
-        expect(document.activeElement).toBe(f.items[0]);
-        await userEvent.keyboard("{ArrowDown}");
-        expect(document.activeElement).toBe(f.items[1]);
-      },
-    );
-    await expect.poll(f.shown).toBe(true);
-    expect(document.activeElement).toBe(f.items[1]);
+    await f.open();
+    f.select.remove();
+    await Promise.resolve();
+    document.body.append(f.select);
+    await f.select.updateComplete;
+    await page.elementLocator(f.select.querySelector(".agent-select__trigger")!).click();
+    await expect
+      .poll(() => f.select.querySelector('[role="menu"]')?.matches(":popover-open"))
+      .toBe(true);
+    expect(document.activeElement?.getAttribute("value")).toBe("research");
   });
+});
 
-  it("does not replace focus moved while the popup renders", async () => {
-    const f = await fixture("research");
-    const popup = f.dropdown.shadowRoot!.querySelector("wa-popup")!;
-    const update = popup.updateComplete;
-    let rendered!: () => void;
-    const gate = new Promise<boolean>((resolve) => {
-      rendered = () => resolve(true);
-    });
-    // Pause the actual owner's render boundary, not its animation completion.
-    Object.defineProperty(popup, "updateComplete", { configurable: true, value: gate });
-    try {
-      f.dropdown.open = true;
-      await f.dropdown.updateComplete;
-      f.outside.focus();
-      await update;
-    } finally {
-      Reflect.deleteProperty(popup, "updateComplete");
-      rendered();
-    }
-    await expect.poll(f.shown).toBe(true);
-    expect(document.activeElement).toBe(f.outside);
-  });
-
-  it("synchronizes roving focus when native autofocus already chose the selected row", async () => {
-    const f = await fixture("research");
-    const popup = f.dropdown.shadowRoot!.querySelector("wa-popup")!;
-    const update = popup.updateComplete;
-    let rendered!: () => void;
-    const gate = new Promise<boolean>((resolve) => {
-      rendered = () => resolve(true);
-    });
-    Object.defineProperty(popup, "updateComplete", { configurable: true, value: gate });
-    try {
-      f.dropdown.open = true;
-      await f.dropdown.updateComplete;
-      await update;
-      // Native popover autofocus can choose this row before dropdown rendering joins.
-      f.item(1).focus();
-    } finally {
-      Reflect.deleteProperty(popup, "updateComplete");
-      rendered();
-    }
-    await expect.poll(f.shown).toBe(true);
-    expect(document.activeElement).toBe(f.item(1));
-    expect(f.items.map((item) => item.active)).toEqual([false, true]);
-  });
-
-  it("preserves outside focus acquired while opening", async () => {
-    const f = await fixture();
-    await duringElementAnimation(
-      f.menu,
-      "show",
-      () => {
-        f.dropdown.open = true;
-      },
-      () => {
-        f.outside.focus();
-      },
-    );
-    await expect.poll(f.shown).toBe(true);
-    expect(document.activeElement).toBe(f.outside);
-  });
-
-  it("initializes a nonfirst selection before user navigation and does not reset it later", async () => {
-    const { userEvent } = await import("vitest/browser");
-    const f = await fixture("research");
-    const scroll = vi.spyOn(f.item(1), "scrollIntoView");
-    await duringElementAnimation(
-      f.menu,
-      "show",
-      () => {
-        f.dropdown.open = true;
-      },
-      async () => {
-        expect(document.activeElement).toBe(f.items[1]);
-        expect(f.items.map((item) => item.active)).toEqual([false, true]);
-        expect(scroll).toHaveBeenCalledWith({ block: "nearest" });
-        await userEvent.keyboard("{ArrowUp}");
-        expect(document.activeElement).toBe(f.items[0]);
-      },
-    );
-    await expect.poll(f.shown).toBe(true);
-    expect(document.activeElement).toBe(f.items[0]);
-  });
+it("selects a different agent, ignores the current value, and preserves empty values", async () => {
+  const f = await fixture("research", [
+    { value: "", label: "All agents" },
+    { value: "research", label: "Research" },
+  ]);
+  const onSelect = vi.fn();
+  f.select.onSelect = onSelect;
+  await f.open();
+  await page.elementLocator(f.items[1]!).click();
+  expect(onSelect).not.toHaveBeenCalled();
+  expect(document.activeElement).toBe(f.trigger);
+  expect(f.items[1]!.getAttribute("aria-checked")).toBe("true");
+  await f.open();
+  await page.elementLocator(f.items[0]!).click();
+  expect(onSelect).toHaveBeenCalledExactlyOnceWith("");
 });

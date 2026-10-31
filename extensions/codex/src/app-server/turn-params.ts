@@ -8,6 +8,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveCodexCyberAccessProgram } from "./access-program.js";
 import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
 import {
   neutralizeCodexExplicitMentionSigils,
@@ -42,18 +43,11 @@ function readCodexCurrentSender(params: EmbeddedRunAttemptParams): CodexCurrentS
   const metadata = asOptionalRecord(
     asOptionalRecord(params.userTurnTranscriptRecorder?.message)?.["__openclaw"],
   );
-  const recorded = [
-    normalizeOptionalString(metadata?.["senderId"]),
-    normalizeOptionalString(metadata?.["senderName"]),
-    normalizeOptionalString(metadata?.["senderUsername"]),
-  ] as const;
+  const fields = ["senderId", "senderName", "senderUsername"] as const;
+  const recorded = fields.map((key) => normalizeOptionalString(metadata?.[key]));
   const [id, name, username] = recorded.some(Boolean)
     ? recorded
-    : [
-        normalizeOptionalString(params.senderId),
-        normalizeOptionalString(params.senderName),
-        normalizeOptionalString(params.senderUsername),
-      ];
+    : fields.map((key) => normalizeOptionalString(params[key]));
   if (!id && !name && !username) {
     return undefined;
   }
@@ -78,7 +72,7 @@ export function buildCodexHistoryProvenancePrefix(
     : undefined;
 }
 
-export function buildTurnStartParams(
+export async function buildTurnStartParams(
   params: EmbeddedRunAttemptParams,
   options: {
     threadId: string;
@@ -99,10 +93,10 @@ export function buildTurnStartParams(
     requireExplicitMessageTarget?: boolean;
     historyProvenancePrefix?: string;
   },
-): CodexTurnStartParams {
+): Promise<CodexTurnStartParams> {
   const modelSelection = options.preserveNativeTurnSettings
     ? undefined
-    : resolveCodexAppServerRequestModelSelection({
+    : await resolveCodexAppServerRequestModelSelection({
         homeScope: options.appServer.start.homeScope,
         model: options.model ?? params.modelId,
         modelProvider: options.modelProvider,
@@ -142,7 +136,14 @@ export function buildTurnStartParams(
         buildHarnessVisibleReplyGuidance({
           sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           messageToolAvailable: options.messageToolAvailable === true,
+          currentConversation: {
+            agentSessionKey: params.sessionKey,
+            currentChannelProvider: params.messageChannel ?? params.messageProvider,
+            currentChannelId: params.currentChannelId,
+            currentMessagingTarget: params.currentMessagingTarget,
+          },
           requireExplicitMessageTarget: options.requireExplicitMessageTarget,
+          messageToolFinalByDefault: params.messageToolFinalByDefault,
         }),
       ].join("\n"),
     },
@@ -162,8 +163,10 @@ export function buildTurnStartParams(
       value: params.permissionChange.notice,
     };
   }
+  const cyberAccessProgram = resolveCodexCyberAccessProgram(params);
   return {
     threadId: options.threadId,
+    ...(cyberAccessProgram !== undefined ? { cyberAccessProgram } : {}),
     ...(params.trigger ? { turnTrigger: params.trigger } : {}),
     // codex-rs/app-server-protocol/src/protocol/v2/turn.rs:292-324 at 91d6f48992ad defines
     // UserInput::Skill; skills/src/selection.rs:60-92 blocks those names from duplicate text
@@ -253,8 +256,7 @@ export function buildTurnCollaborationMode(
         modelId: model,
         supportedReasoningEfforts: readCodexSupportedReasoningEfforts(params.model?.compat),
       }),
-      developer_instructions:
-        params.trigger === "cron" ? buildCronCollaborationInstructions() : null,
+      developer_instructions: params.trigger === "cron" ? CRON_COLLABORATION_INSTRUCTIONS : null,
     },
   };
 }
@@ -273,16 +275,14 @@ export function buildCodexParentLocalInstructions(
     options.memoryInstructions,
   );
   if (params.trigger === "cron") {
-    return joinPresentSections(buildCronCollaborationInstructions(), contextInstructions);
+    return joinPresentSections(CRON_COLLABORATION_INSTRUCTIONS, contextInstructions);
   }
   return contextInstructions || null;
 }
 
-function buildCronCollaborationInstructions(): string {
-  return [
-    "This is an OpenClaw cron automation turn. Apply these instructions only to this scheduled job; ordinary chat turns should stay in Codex Default mode.",
-    "Execute the cron payload directly. If it asks you to run an exact command, run that command before doing any investigation, planning, memory review, or workspace bootstrap.",
-    "Use context already provided by the runtime, but do not spend time loading or re-reading workspace bootstrap, memory, or project-doc files before executing the cron payload. Inspect those files only if the payload asks for them or the command fails and they are needed to diagnose it.",
-    "Keep output concise and automation-oriented. Prefer the final command result or a short failure summary over status narration.",
-  ].join("\n\n");
-}
+const CRON_COLLABORATION_INSTRUCTIONS = [
+  "This is an OpenClaw cron automation turn. Apply these instructions only to this scheduled job; ordinary chat turns should stay in Codex Default mode.",
+  "Execute the cron payload directly. If it asks you to run an exact command, run that command before doing any investigation, planning, memory review, or workspace bootstrap.",
+  "Use context already provided by the runtime, but do not spend time loading or re-reading workspace bootstrap, memory, or project-doc files before executing the cron payload. Inspect those files only if the payload asks for them or the command fails and they are needed to diagnose it.",
+  "Keep output concise and automation-oriented. Prefer the final command result or a short failure summary over status narration.",
+].join("\n\n");

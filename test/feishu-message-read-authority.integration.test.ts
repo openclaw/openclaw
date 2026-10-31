@@ -9,7 +9,7 @@ import type {
   ChannelMessageActionContext,
   ChannelMessageActionName,
   ChannelPlugin,
-} from "../src/channels/plugins/types.js";
+} from "../src/channels/plugins/types.public.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -113,13 +113,6 @@ function createOriginatingRun(currentChat = CURRENT) {
           messageActionTurnCapability: turnCapability,
           ...toolContext,
           config,
-          getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-          resolveCommandSecretRefsViaGateway: async ({ config: resolvedConfig }) => ({
-            resolvedConfig,
-            diagnostics: [],
-            targetStatesByPath: {},
-            hadUnresolvedTargets: false,
-          }),
         }),
         {
           agentId: "main",

@@ -33,14 +33,11 @@ export async function getMachineDisplayName(): Promise<string> {
       return fallbackHostName();
     }
     if (process.platform === "darwin") {
-      const computerName = await tryScutil("ComputerName");
-      if (computerName) {
-        return computerName;
-      }
-      const localHostName = await tryScutil("LocalHostName");
-      if (localHostName) {
-        return localHostName;
-      }
+      return (
+        (await tryScutil("ComputerName")) ??
+        (await tryScutil("LocalHostName")) ??
+        fallbackHostName()
+      );
     }
     return fallbackHostName();
   })();

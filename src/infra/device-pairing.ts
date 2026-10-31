@@ -1,5 +1,11 @@
 import { resolveStateDir } from "../config/paths.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { isProgressCardRendererClient } from "../utils/message-channel.js";
+import {
+  preparePairedDeviceAccessPatch,
+  type DevicePairingAccessIdentity,
+} from "./device-pairing-access.js";
 // Device pairing owns the worker operations and publishes their committed facts.
 import {
   invalidatePairedCardRendererCache,
@@ -12,6 +18,10 @@ import type {
 } from "./device-pairing-core.types.js";
 import type { NodePairingGeneration } from "./device-pairing-identity.js";
 import { withDevicePairingLock } from "./device-pairing-lock.js";
+import {
+  publishDevicePairingResolution,
+  refreshDevicePairingResolutionWaiters,
+} from "./device-pairing-resolution.js";
 import { loadDevicePairingStateForMutation } from "./device-pairing-state.kernel.js";
 import {
   listDevicePairingStoreRecordsReadOnly,
@@ -90,92 +100,80 @@ export function getPendingDevicePairing(requestId: string, baseDir?: string) {
 export async function requestDevicePairing(
   req: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">,
   baseDir?: string,
+  onPending?: (pairing: RequestDevicePairingResult) => void,
 ): Promise<RequestDevicePairingResult> {
-  return await withDevicePairingLock(() =>
-    executeDevicePairingMutation(
+  return await withDevicePairingLock(async () => {
+    const pairing = await executeDevicePairingMutation(
       { type: "devicePairing.request", input: { request: req, nowMs: Date.now() } },
       { baseDir },
-    ),
-  );
+    );
+    for (const superseded of pairing.superseded ?? []) {
+      publishDevicePairingResolution(superseded, "superseded", baseDir);
+    }
+    refreshDevicePairingResolutionWaiters(pairing.request, pairing.expiresAtMs, baseDir);
+    onPending?.(pairing);
+    return pairing;
+  });
 }
 
 export async function rejectDevicePairing(requestId: string, baseDir?: string) {
-  return await withDevicePairingLock(() =>
-    executeDevicePairingMutation(
+  return await withDevicePairingLock(async () => {
+    const rejected = await executeDevicePairingMutation(
       { type: "devicePairing.reject", input: { requestId, nowMs: Date.now() } },
       { baseDir },
-    ),
-  );
+    );
+    if (rejected) {
+      publishDevicePairingResolution(rejected, "rejected", baseDir);
+    }
+    return rejected;
+  });
 }
 
 export async function removePairedDevice(deviceId: string, baseDir?: string) {
-  return await withDevicePairingLock(() =>
-    executeDevicePairingMutation(
-      { type: "devicePairing.remove", input: { deviceId, nowMs: Date.now() } },
-      { baseDir },
-    ),
+  return await executeDevicePairingMutation(
+    { type: "devicePairing.remove", input: { deviceId, nowMs: Date.now() } },
+    { baseDir },
   );
 }
 
 export async function pruneSupersededSilentPairedDevices(params: {
   deviceId: string;
   baseDir?: string;
+  protectedDeviceIds?: readonly string[];
   isDeviceConnected?: (deviceId: string) => boolean;
   nowMs?: number;
 }): Promise<PrunedSupersededPairedDevice[]> {
-  return await withDevicePairingLock(async () => {
-    const protectedDeviceIds = params.isDeviceConnected
-      ? (await listDevicePairing(params.baseDir)).paired
-          .filter((device) => params.isDeviceConnected?.(device.deviceId))
-          .map((device) => device.deviceId)
-      : [];
-    try {
-      return await executeDevicePairingMutation(
-        {
-          type: "devicePairing.pruneSilent",
-          input: {
-            deviceId: params.deviceId,
-            protectedDeviceIds,
-            nowMs: params.nowMs ?? Date.now(),
-          },
-        },
-        {
-          baseDir: params.baseDir,
-          admit: (facts) => {
-            if (
-              facts.kind === "pairing-prune" &&
-              facts.deviceIds.some((deviceId) => params.isDeviceConnected?.(deviceId))
-            ) {
-              throw new DevicePairingAuthorityRefusedError(
-                "Pairing prune candidate connected before commit",
-              );
-            }
-          },
-        },
-      );
-    } catch (error) {
-      if (error instanceof DevicePairingAuthorityRefusedError) {
-        return [];
-      }
-      throw error;
-    }
-  });
+  return await executeDevicePairingMutation(
+    {
+      type: "devicePairing.pruneSilent",
+      input: {
+        deviceId: params.deviceId,
+        protectedDeviceIds: params.protectedDeviceIds ?? [],
+        nowMs: params.nowMs ?? Date.now(),
+      },
+    },
+    {
+      baseDir: params.baseDir,
+      onAuthorityRefused: () => [],
+      admit: (facts) => {
+        if (
+          facts.kind === "pairing-prune" &&
+          facts.deviceIds.some((deviceId) => params.isDeviceConnected?.(deviceId))
+        ) {
+          throw new DevicePairingAuthorityRefusedError(
+            "Pairing prune candidate connected before commit",
+          );
+        }
+      },
+    },
+  );
 }
 
-export async function removePairedDeviceRole(params: {
-  deviceId: string;
-  role: string;
-  baseDir?: string;
-}) {
-  return await withDevicePairingLock(() =>
-    executeDevicePairingMutation(
-      {
-        type: "devicePairing.removeRole",
-        input: { deviceId: params.deviceId, role: params.role, nowMs: Date.now() },
-      },
-      { baseDir: params.baseDir },
-    ),
-  );
+export async function removePairedDeviceRole(params: { deviceId: string }) {
+  return await executeDevicePairingMutation({
+    type: "devicePairing.removeRole",
+    input: { deviceId: params.deviceId, role: "node", nowMs: Date.now() },
+  });
 }
 
 export async function updatePairedDeviceMetadata(
@@ -183,11 +181,9 @@ export async function updatePairedDeviceMetadata(
   patch: Partial<PairedDeviceMetadataPatch>,
   baseDir?: string,
 ): Promise<boolean> {
-  return await withDevicePairingLock(() =>
-    executeDevicePairingMutation(
-      { type: "devicePairing.updateMetadata", input: { deviceId, patch } },
-      { baseDir },
-    ),
+  return await executeDevicePairingMutation(
+    { type: "devicePairing.updateMetadata", input: { deviceId, patch } },
+    { baseDir },
   );
 }
 
@@ -201,4 +197,73 @@ export async function updatePairedDevicePresence(
     { type: "devicePairing.updatePresence", input: { deviceId, patch, expectedPairingGeneration } },
     { baseDir },
   );
+}
+
+const reconnects = resolveGlobalSingleton(
+  Symbol.for("openclaw.devicePairingReconnects"),
+  () =>
+    new Map<
+      string,
+      {
+        patch?: Partial<PairedDeviceMetadataPatch>;
+        identity: DevicePairingAccessIdentity;
+        done: Promise<void>;
+      }
+    >(),
+);
+
+/** One tracked post-hello writer per device; queued tabs contribute their latest metadata. */
+export function recordPairedDeviceAccess(
+  deviceId: string,
+  patch: Partial<PairedDeviceMetadataPatch>,
+  identity: DevicePairingAccessIdentity,
+  baseDir?: string,
+): Promise<void> {
+  const context = captureOpenClawStateWorkerContext(
+    baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } } : {},
+  );
+  const key = `${context.admission.identity.key}:${deviceId}`;
+  const pending = reconnects.get(key);
+  if (pending) {
+    pending.patch =
+      pending.identity.publicKey === identity.publicKey &&
+      pending.identity.approvedAtMs === identity.approvedAtMs
+        ? { ...pending.patch, ...patch }
+        : patch;
+    pending.identity = identity;
+    return pending.done;
+  }
+  const entry: NonNullable<ReturnType<typeof reconnects.get>> = {
+    patch,
+    identity,
+    done: Promise.resolve(),
+  };
+  reconnects.set(key, entry);
+  entry.done = withDevicePairingLock(async () => {
+    while (entry.patch) {
+      const next = entry.patch;
+      const expected = entry.identity;
+      entry.patch = undefined;
+      context.admission.assertCurrent();
+      const device = await getPairedDevice(deviceId, baseDir);
+      if (
+        !device ||
+        device.publicKey !== expected.publicKey ||
+        device.approvedAtMs !== expected.approvedAtMs
+      ) {
+        continue;
+      }
+      const changed = preparePairedDeviceAccessPatch(device, next);
+      if (changed) {
+        await executeDevicePairingMutation(
+          {
+            type: "devicePairing.updateMetadata",
+            input: { deviceId, patch: changed, accessIdentity: expected },
+          },
+          { context },
+        );
+      }
+    }
+  }).finally(() => reconnects.delete(key));
+  return entry.done;
 }

@@ -5,10 +5,12 @@ import os from "node:os";
 import path from "node:path";
 import { minimatch } from "minimatch";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   asNullableRecord,
-  asOptionalObjectRecord,
+  asOptionalRecord,
+  normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   FILE_TRANSFER_NODE_INVOKE_COMMANDS,
@@ -47,7 +49,6 @@ type FilePolicyDecision =
   | {
       ok: true;
       reason: "ask-always";
-      askMode: FilePolicyAskMode;
       maxBytes?: number;
       followSymlinks: boolean;
       pendingReapprovalSelector?: string;
@@ -57,7 +58,6 @@ type FilePolicyDecision =
       code: "NO_POLICY" | "POLICY_DENIED" | "POLICY_MIGRATION_REQUIRED";
       reason: string;
       askable: boolean;
-      askMode?: FilePolicyAskMode;
       maxBytes?: number;
       followSymlinks?: boolean;
       pendingReapprovalSelector?: string;
@@ -81,8 +81,8 @@ type FileTransferPolicyConfig = {
   pendingReapprovals?: unknown;
 };
 
-function asFilePolicyConfig(value: unknown): FilePolicyConfig | null {
-  return asNullableRecord(value) as FilePolicyConfig | null;
+function asFilePolicyConfig(value: unknown): FilePolicyConfig | undefined {
+  return asOptionalRecord(value) as FilePolicyConfig | undefined;
 }
 
 function readFileTransferConfigFromPluginConfig(
@@ -95,7 +95,7 @@ function readFileTransferConfigFromPluginConfig(
   return {
     policyVersion:
       typeof pluginRecord.policyVersion === "number" ? pluginRecord.policyVersion : undefined,
-    nodes: asFilePolicyConfig(pluginRecord.nodes) ?? undefined,
+    nodes: asFilePolicyConfig(pluginRecord.nodes),
     literalGrants: pluginRecord.literalGrants,
     pendingReapprovals: pluginRecord.pendingReapprovals,
   };
@@ -122,40 +122,18 @@ function readPendingReapprovals(config: FileTransferPolicyConfig): PendingReappr
   });
 }
 
-function matchesPendingReapproval(
-  input: FilePolicyInput,
-  policySelector: string,
-  pending: PendingReapproval,
-): boolean {
-  return (
-    pending.kind === input.kind &&
-    pending.path === input.path &&
-    pending.selector === policySelector
-  );
-}
-
-function readPluginConfigFromRuntimeConfig(): Record<string, unknown> | null {
-  const plugins = asOptionalObjectRecord(getRuntimeConfig().plugins);
-  const entries = asOptionalObjectRecord(plugins?.entries);
-  const entry = asOptionalObjectRecord(entries?.["file-transfer"]);
-  return asNullableRecord(entry?.config);
-}
-
 function readFileTransferConfig(
   pluginConfig?: Record<string, unknown>,
 ): FileTransferPolicyConfig | null {
   return (
-    readFileTransferConfigFromPluginConfig(readPluginConfigFromRuntimeConfig()) ??
-    readFileTransferConfigFromPluginConfig(pluginConfig)
+    readFileTransferConfigFromPluginConfig(
+      resolvePluginConfigObject(getRuntimeConfig(), "file-transfer"),
+    ) ?? readFileTransferConfigFromPluginConfig(pluginConfig)
   );
 }
 
-function readNodes(config: FileTransferPolicyConfig): FilePolicyConfig | null {
-  return asFilePolicyConfig(config.nodes);
-}
-
 function hasLegacyPositiveRules(config: FileTransferPolicyConfig): boolean {
-  const nodes = readNodes(config);
+  const nodes = asFilePolicyConfig(config.nodes);
   if (!nodes) {
     return false;
   }
@@ -209,15 +187,6 @@ function expandTilde(p: string): string {
   return p;
 }
 
-function normalizeGlobs(patterns: string[] | undefined): string[] {
-  if (!Array.isArray(patterns)) {
-    return [];
-  }
-  return patterns
-    .filter((p): p is string => typeof p === "string" && p.trim().length > 0)
-    .map((p) => expandTilde(p.trim()));
-}
-
 function matchesAny(target: string, patterns: string[]): boolean {
   const normalizedTarget = target.replace(/\\/gu, "/");
   for (const pattern of patterns) {
@@ -244,9 +213,7 @@ function resolveNodePolicy(
   nodeId: string,
   nodeDisplayName?: string,
 ): { key: string; entry: NodeFilePolicyConfig } | null {
-  const candidates = [nodeId, nodeDisplayName].filter(
-    (k): k is string => typeof k === "string" && k.length > 0,
-  );
+  const candidates = [nodeId, nodeDisplayName].filter((k): k is string => Boolean(k));
   for (const key of candidates) {
     if (config[key]) {
       return { key, entry: config[key] };
@@ -296,7 +263,7 @@ function evaluateFilePolicyInternal(
       askable: false,
     };
   }
-  const config = pluginPolicy ? readNodes(pluginPolicy) : null;
+  const config = pluginPolicy?.nodes;
   if (!pluginPolicy || !config) {
     return {
       ok: false,
@@ -337,14 +304,13 @@ function evaluateFilePolicyInternal(
   const followSymlinks = nodeConfig.followSymlinks === true;
 
   // Deny patterns also constrain standing grants and interactive approvals.
-  const denyPatterns = normalizeGlobs(nodeConfig.denyPaths);
+  const denyPatterns = normalizeTrimmedStringList(nodeConfig.denyPaths).map(expandTilde);
   if (matchesAnyDeny(input.path, denyPatterns)) {
     return {
       ok: false,
       code: "POLICY_DENIED",
       reason: "path matches a denyPaths pattern",
       askable: false,
-      askMode,
       maxBytes,
       followSymlinks,
     };
@@ -354,15 +320,17 @@ function evaluateFilePolicyInternal(
     return { ok: true, reason: "matched-allow", maxBytes, followSymlinks };
   }
 
-  const pendingReapproval = readPendingReapprovals(pluginPolicy).find((pending) =>
-    matchesPendingReapproval(input, resolved.key, pending),
+  const pendingReapproval = readPendingReapprovals(pluginPolicy).find(
+    (pending) =>
+      pending.kind === input.kind &&
+      pending.path === input.path &&
+      pending.selector === resolved.key,
   );
 
   if (askMode === "always") {
     return {
       ok: true,
       reason: "ask-always",
-      askMode,
       maxBytes,
       followSymlinks,
       pendingReapprovalSelector: pendingReapproval?.selector,
@@ -371,8 +339,8 @@ function evaluateFilePolicyInternal(
 
   const allowPatterns =
     input.kind === "read"
-      ? normalizeGlobs(nodeConfig.allowReadPaths)
-      : normalizeGlobs(nodeConfig.allowWritePaths);
+      ? normalizeTrimmedStringList(nodeConfig.allowReadPaths).map(expandTilde)
+      : normalizeTrimmedStringList(nodeConfig.allowWritePaths).map(expandTilde);
 
   if (allowPatterns.length > 0 && matchesAny(input.path, allowPatterns)) {
     return { ok: true, reason: "matched-allow", maxBytes, followSymlinks };
@@ -408,7 +376,6 @@ function evaluateFilePolicyInternal(
       code: "POLICY_DENIED",
       reason: "path requires exact reapproval",
       askable: true,
-      askMode,
       maxBytes,
       followSymlinks,
       pendingReapprovalSelector: pendingReapproval.selector,
@@ -423,7 +390,6 @@ function evaluateFilePolicyInternal(
         ? `no allow${input.kind === "read" ? "Read" : "Write"}Paths configured`
         : `path does not match any allow${input.kind === "read" ? "Read" : "Write"}Paths pattern`,
     askable: askMode === "on-miss",
-    askMode,
     maxBytes,
     followSymlinks,
   };
@@ -436,7 +402,7 @@ export function snapshotNodeFileReadPolicy(input: {
   pluginConfig?: Record<string, unknown>;
 }) {
   const policy = readFileTransferConfig(input.pluginConfig);
-  const nodes = policy && readNodes(policy);
+  const nodes = policy?.nodes;
   const resolved = nodes && resolveNodePolicy(nodes, input.nodeId, input.nodeDisplayName);
   if (!resolved) {
     throw new Error("Node file read policy is unavailable");
@@ -449,8 +415,8 @@ export function snapshotNodeFileReadPolicy(input: {
       nodes: {
         [input.nodeId]: {
           ask,
-          allowReadPaths: normalizeGlobs(allowReadPaths),
-          denyPaths: normalizeGlobs(denyPaths),
+          allowReadPaths: normalizeTrimmedStringList(allowReadPaths).map(expandTilde),
+          denyPaths: normalizeTrimmedStringList(denyPaths).map(expandTilde),
           maxBytes,
           followSymlinks,
         },

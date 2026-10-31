@@ -1,3 +1,4 @@
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   loadNpmPackageVersions,
   resolveNpmSpecMetadata,
@@ -27,10 +28,14 @@ export function isNpmPackageNotFoundMessage(error: string): boolean {
   return /E404|404 not found|not in this registry/i.test(normalized);
 }
 
-type TrustedOfficialPrereleaseResolution =
+export type TrustedOfficialPrereleaseResolution = {
+  resolvedPrereleaseVersion: string;
+  warning: string;
+} & (
   | { kind: "stable"; resolution: NpmSpecResolution }
   | { kind: "prerelease-only"; resolution: NpmSpecResolution }
-  | { kind: "allow-prerelease-only" };
+  | { kind: "allow-prerelease-only" }
+);
 
 export async function resolveTrustedOfficialPrereleaseResolution(params: {
   spec: ParsedRegistryNpmSpec;
@@ -38,7 +43,6 @@ export async function resolveTrustedOfficialPrereleaseResolution(params: {
   timeoutMs?: number;
   signal?: AbortSignal;
   killProcessTree?: boolean;
-  logger?: PluginInstallLogger;
 }): Promise<TrustedOfficialPrereleaseResolution | null> {
   if (!params.spec.name.startsWith("@openclaw/")) {
     return null;
@@ -58,18 +62,16 @@ export async function resolveTrustedOfficialPrereleaseResolution(params: {
     .at(-1);
   let version = stableVersion;
   if (!stableVersion) {
-    const prereleaseVersion = semverVersions
-      .filter(isPrereleaseSemverVersion)
-      .toSorted(comparePackageUpdateVersions)
-      .at(-1);
-    if (!prereleaseVersion || !semverVersions.every(isPrereleaseSemverVersion)) {
+    const prereleaseVersion = semverVersions.toSorted(comparePackageUpdateVersions).at(-1);
+    if (!prereleaseVersion) {
       return null;
     }
     if (prereleaseVersion === params.resolvedPrereleaseVersion) {
-      params.logger?.warn?.(
-        `Resolved ${params.spec.raw} to prerelease version ${params.resolvedPrereleaseVersion}; allowing it because this trusted official OpenClaw package has no stable npm versions yet.`,
-      );
-      return { kind: "allow-prerelease-only" };
+      return {
+        kind: "allow-prerelease-only",
+        resolvedPrereleaseVersion: params.resolvedPrereleaseVersion,
+        warning: `Resolved ${params.spec.raw} to prerelease version ${params.resolvedPrereleaseVersion}; allowing it because this trusted official OpenClaw package has no stable npm versions yet.`,
+      };
     }
     version = prereleaseVersion;
   }
@@ -83,14 +85,13 @@ export async function resolveTrustedOfficialPrereleaseResolution(params: {
   if (!metadataResult.ok) {
     return null;
   }
-  params.logger?.warn?.(
-    stableVersion
-      ? `Resolved ${params.spec.raw} to prerelease version ${params.resolvedPrereleaseVersion}; falling back to stable ${spec} for this trusted official OpenClaw install.`
-      : `Resolved ${params.spec.raw} to prerelease version ${params.resolvedPrereleaseVersion}; using newest prerelease ${spec} because this trusted official OpenClaw package has no stable npm versions yet.`,
-  );
   return {
     kind: stableVersion ? "stable" : "prerelease-only",
     resolution: metadataResult.metadata,
+    resolvedPrereleaseVersion: params.resolvedPrereleaseVersion,
+    warning: stableVersion
+      ? `Resolved ${params.spec.raw} to prerelease version ${params.resolvedPrereleaseVersion}; falling back to stable ${spec} for this trusted official OpenClaw install.`
+      : `Resolved ${params.spec.raw} to prerelease version ${params.resolvedPrereleaseVersion}; using newest prerelease ${spec} because this trusted official OpenClaw package has no stable npm versions yet.`,
   };
 }
 
@@ -196,7 +197,7 @@ export async function resolveLatestCompatibleNpmResolution(params: {
     });
     if (!metadataResult.ok) {
       params.logger.warn?.(
-        `Could not inspect ${spec} while looking for a compatible plugin version: ${metadataResult.error}`,
+        terminalText`Could not inspect ${spec} while looking for a compatible plugin version: ${metadataResult.error}`,
       );
       continue;
     }
@@ -208,7 +209,7 @@ export async function resolveLatestCompatibleNpmResolution(params: {
     });
     if (!compatibilityError) {
       params.logger.warn?.(
-        `Resolved ${params.parsedSpec.raw} to ${params.currentResolution.resolvedSpec ?? currentVersion}, but that version is incompatible with this OpenClaw runtime; using newest compatible ${metadataResult.metadata.resolvedSpec ?? spec}.`,
+        terminalText`Resolved ${params.parsedSpec.raw} to ${params.currentResolution.resolvedSpec ?? currentVersion}, but that version is incompatible with this OpenClaw runtime; using newest compatible ${metadataResult.metadata.resolvedSpec ?? spec}.`,
       );
       return metadataResult.metadata;
     }

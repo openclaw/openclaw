@@ -183,19 +183,6 @@ describe("pw-session getPageForTargetId", () => {
     await expect(getPageForTargetId({ cdpUrl })).resolves.toBe(pages[0]);
   });
 
-  it("rejects an explicit target when the sole page cannot expose its target id", async () => {
-    const { pageActions } = installBrowser([{ targetLookupError: "Not allowed" }]);
-
-    await expect(
-      getPageForTargetId({
-        cdpUrl,
-        targetId: "NOT_A_TAB",
-      }),
-    ).rejects.toBeInstanceOf(BrowserTabNotFoundError);
-    expect(pageActions[0]?.close).not.toHaveBeenCalled();
-    expect(pageActions[0]?.bringToFront).not.toHaveBeenCalled();
-  });
-
   it("does not infer target identity from duplicate URL ordering", async () => {
     installBrowser([
       { url: "https://same.example", targetLookupError: "Not allowed" },

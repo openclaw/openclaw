@@ -2,11 +2,13 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { attachModelProviderLocalServiceReconciler } from "../agents/provider-local-service-reconcile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
+import { pluginProviderAuthUnavailable, resolveProviderAuthScope } from "./provider-auth-scope.js";
 import {
   hasConfiguredModelProvider,
   resolveModelCatalogScope,
   resolveProviderConfigApiOwnerHint,
 } from "./provider-config-owner.js";
+import { projectRegisteredProvider } from "./provider-registration-projection.js";
 import { findProviderRuntimeRegistrationInRegistry } from "./provider-registry-selection.js";
 import { matchesProviderPluginRef } from "./provider-registry-shared.js";
 import type { createProviderRegistryResolver } from "./providers.runtime-core.js";
@@ -71,7 +73,6 @@ export function createProviderHookRuntime(
     return { ...preparedModel, [MODEL_PROVIDER_RUNTIME_PLUGIN_HANDLE_SYMBOL]: runtimeHandle };
   }
 
-  /** Reads the provider plugin handle attached to a prepared attempt model. */
   function getModelProviderRuntimePluginHandle(
     model: object | undefined,
   ): ProviderRuntimePluginHandle | undefined {
@@ -85,10 +86,7 @@ export function createProviderHookRuntime(
   function resolveProviderRuntimeLookupModelId(
     params: ProviderRuntimePluginLookupParams & { context?: { modelId?: unknown } },
   ): string | undefined {
-    return normalizeOptionalString(
-      params.modelId ??
-        (typeof params.context?.modelId === "string" ? params.context.modelId : undefined),
-    );
+    return normalizeOptionalString(params.modelId ?? params.context?.modelId);
   }
 
   function resolveLoadedProviderPluginsForHooks(params: {
@@ -126,10 +124,25 @@ export function createProviderHookRuntime(
     });
   }
 
-  function resolveProviderRuntimePluginLookup(
-    params: ProviderRuntimePluginLookupParams,
-    registryScope?: "loaded",
-  ): ProviderRuntimePluginHandle {
+  function resolveSelectedProvider(
+    selection: ReturnType<typeof resolvePluginProviderRegistryCore>,
+    provider: string,
+    ownerRefs: readonly string[],
+  ): ProviderPlugin | undefined {
+    const registration =
+      selection &&
+      findProviderRuntimeRegistrationInRegistry({
+        registry: selection.registry,
+        provider,
+        ownerRefs,
+        isOwnerEligible: (id) => selection.isProviderOwnerEligible(id, provider),
+      });
+    return registration
+      ? projectRegisteredProvider(registration.provider, registration.pluginId)
+      : undefined;
+  }
+
+  function prepareProviderRuntimePluginLookup(params: ProviderRuntimePluginLookupParams) {
     const apiOwnerHint = resolveProviderConfigApiOwnerHint(params);
     const ownerRefs = [
       ...new Set(
@@ -137,35 +150,63 @@ export function createProviderHookRuntime(
       ),
     ];
     const modelId = resolveProviderRuntimeLookupModelId(params);
-    const selection = resolvePluginProviderRegistryCore({
-      ...params,
-      providerRefs: [params.provider, ...ownerRefs],
-      modelRefs: modelId
-        ? resolveModelCatalogScope({
-            cfg: params.config,
-            provider: params.provider,
-            model: modelId,
-          }).modelRefs
-        : undefined,
-      registryScope,
-      activate: false,
-      skipIfLoadInFlight: true,
-    });
-    const registration = selection
-      ? findProviderRuntimeRegistrationInRegistry({
-          registry: selection.registry,
-          provider: params.provider,
-          ownerRefs,
-          isOwnerEligible: (id) => selection.isProviderOwnerEligible(id, params.provider),
-        })
-      : undefined;
+    return {
+      ownerRefs,
+      options: {
+        ...params,
+        providerRefs: [params.provider, ...ownerRefs],
+        modelRefs: modelId
+          ? resolveModelCatalogScope({
+              cfg: params.config,
+              provider: params.provider,
+              model: modelId,
+            })
+          : undefined,
+        activate: false,
+        skipIfLoadInFlight: true,
+      },
+    };
+  }
+
+  function captureProviderRuntimePluginHandle(
+    params: ProviderRuntimePluginLookupParams,
+    selection: ReturnType<typeof resolvePluginProviderRegistryCore>,
+    ownerRefs: readonly string[],
+  ): ProviderRuntimePluginHandle {
+    const plugin = resolveSelectedProvider(selection, params.provider, ownerRefs);
+    if (plugin && (plugin.authScope ?? "agent") !== resolveProviderAuthScope(params)) {
+      throw pluginProviderAuthUnavailable(
+        params.provider,
+        "runtime and static credential scope differ",
+      );
+    }
     return {
       ...params,
       ...(selection ? { workspaceDir: selection.workspaceDir } : {}),
-      plugin: registration
-        ? Object.assign({}, registration.provider, { pluginId: registration.pluginId })
-        : undefined,
+      plugin,
     };
+  }
+
+  function resolveProviderRuntimePluginLookup(
+    params: ProviderRuntimePluginLookupParams,
+    registryScope?: "loaded",
+  ): ProviderRuntimePluginHandle {
+    const { options, ownerRefs } = prepareProviderRuntimePluginLookup(params);
+    const selection = resolvePluginProviderRegistryCore({ ...options, registryScope });
+    return captureProviderRuntimePluginHandle(params, selection, ownerRefs);
+  }
+
+  /** Doctor callbacks own a fresh provider inspection until their asynchronous work settles. */
+  async function withProviderRuntimePlugin<T>(
+    params: ProviderRuntimePluginLookupParams,
+    run: (plugin: ProviderPlugin | undefined) => Promise<T>,
+  ): Promise<T> {
+    const { options, ownerRefs } = prepareProviderRuntimePluginLookup(params);
+    return providers.withPluginProviderRegistry(
+      { ...options, mode: "runtime" },
+      async (selection) =>
+        run(captureProviderRuntimePluginHandle(params, selection, ownerRefs).plugin),
+    );
   }
 
   function resolveProviderRuntimePlugin(
@@ -201,23 +242,7 @@ export function createProviderHookRuntime(
       activate: false,
       skipIfLoadInFlight: true,
     });
-    const registration = selection
-      ? findProviderRuntimeRegistrationInRegistry({
-          registry: selection.registry,
-          provider: params.provider,
-          ownerRefs: [],
-          isOwnerEligible: (id) => selection.isProviderOwnerEligible(id, params.provider),
-        })
-      : undefined;
-    return registration
-      ? Object.assign({}, registration.provider, { pluginId: registration.pluginId })
-      : undefined;
-  }
-
-  function resolveProviderRuntimePluginHandle(
-    params: ProviderRuntimePluginLookupParams,
-  ): ProviderRuntimePluginHandle {
-    return resolveProviderRuntimePluginLookup(params);
+    return resolveSelectedProvider(selection, params.provider, []);
   }
 
   function ensureProviderRuntimePluginHandle(
@@ -228,7 +253,7 @@ export function createProviderHookRuntime(
       !params.runtimeHandle ||
       (modelId && !params.runtimeHandle.plugin && params.runtimeHandle.modelId !== modelId)
     ) {
-      return resolveProviderRuntimePluginHandle({
+      return resolveProviderRuntimePluginLookup({
         provider: params.provider,
         modelId,
         config: params.config ?? params.runtimeHandle?.config,
@@ -276,9 +301,10 @@ export function createProviderHookRuntime(
     resolveLoadedProviderPluginsForHooks,
     resolveProviderPluginsForHooks,
     resolveProviderRuntimePlugin,
+    withProviderRuntimePlugin,
     resolveLoadedProviderRuntimePlugin,
     resolveProviderHookPlugin,
-    resolveProviderRuntimePluginHandle,
+    resolveProviderRuntimePluginHandle: resolveProviderRuntimePluginLookup,
     ensureProviderRuntimePluginHandle,
     resolveProviderAuthProfileId,
     resolveProviderFollowupFallbackRoute,

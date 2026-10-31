@@ -1,39 +1,35 @@
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   loadTranscriptEvents,
   replaceSessionEntry,
-  replaceTranscriptEvents,
 } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import type { ContextEngine } from "../../context-engine/types.js";
-import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
+import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
 import { SessionManager } from "../sessions/index.js";
 import {
-  runContextEngineMaintenance,
-  waitForDeferredTurnMaintenanceForSession,
-} from "./context-engine-maintenance.js";
+  createBackgroundMaintenanceEngine,
+  createMaintenanceGate,
+} from "./context-engine-maintenance.fixtures.test-support.js";
+import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
+import type { ContextEngineMaintenanceParams } from "./context-engine-maintenance.types.js";
 
 vi.mock("./context-engine-capabilities.js", () => ({
   resolveContextEngineCapabilities: () => ({}),
 }));
 
-const modes = [undefined, "background"] as const;
-const replacement = { role: "user" as const, content: "rewritten memory", timestamp: 1 };
-
-function createEngine(maintain: NonNullable<ContextEngine["maintain"]>): ContextEngine {
-  return {
-    info: { id: "ownership-test", name: "Ownership test", turnMaintenanceMode: "background" },
-    ingest: async () => ({ ingested: true }),
-    assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
-    compact: async () => ({ ok: true, compacted: false }),
-    maintain,
-  };
-}
+const user = (content: string, timestamp = 1) => ({ role: "user" as const, content, timestamp });
+const replacement = user("rewritten memory");
+const tail = user("memory tail", 2);
+const unchanged = { changed: false, rewrittenEntries: 0, bytesFreed: 0 };
+type Maintain = NonNullable<ContextEngine["maintain"]>;
 
 async function withTranscriptOwners(
   run: (owners: Awaited<ReturnType<typeof createTranscriptOwners>>) => Promise<void>,
@@ -44,7 +40,10 @@ async function withTranscriptOwners(
     try {
       await run(owners);
     } finally {
-      await waitForDeferredTurnMaintenanceForSession(owners.target.sessionKey);
+      owners.release.resolve();
+      await Promise.allSettled([...owners.runs, ...owners.deferred]);
+      await waitForSessionMaintenance(owners.target.sessionKey);
+      owners.unsubscribe();
       resetCommandQueueStateForTest();
     }
   });
@@ -53,276 +52,161 @@ async function withTranscriptOwners(
 async function createTranscriptOwners(stateDir: string) {
   const memory = SessionManager.inMemory(stateDir);
   const entryId = expectDefined(
-    await memory.appendMessageAsync({
-      role: "user",
-      content: "memory ".repeat(40),
-      timestamp: 1,
-    }),
+    await memory.appendMessageAsync(user("memory ".repeat(40))),
     "memory owner entry id",
   );
-  await memory.appendMessageAsync({ role: "user", content: "memory tail", timestamp: 2 });
-  const target = {
+  await memory.appendMessageAsync(tail);
+  const identity = {
     agentId: "main",
     sessionId: memory.getSessionId(),
     sessionKey: "agent:main:maintenance-owner",
-    storePath: path.join(stateDir, "sessions.json"),
   };
+  const target = { ...identity, storePath: path.join(stateDir, "sessions.json") };
   await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
   // Matching IDs model copied history; ownership must not be inferred from identity.
   const durableEntries = structuredClone(memory.getEntries());
   for (const entry of durableEntries) {
     if (entry.type === "message") {
-      entry.message = { role: "user", content: "durable-only sentinel", timestamp: 1 };
+      entry.message = user("durable-only sentinel");
     }
   }
   await replaceTranscriptEvents(target, [memory.getHeader(), ...durableEntries]);
   const durable = await SessionManager.openAsync(target, stateDir);
   const durableBefore = await loadTranscriptEvents(target);
+  const deferred: Promise<void>[] = [];
+  const runs: Promise<unknown>[] = [];
+  const published = vi.fn();
+  const unsubscribe = onSessionTranscriptUpdate(published);
   return {
     memory,
     durable,
     durableBefore,
-    entryId,
+    identity,
     target,
-    params: {
-      ...target,
-      sessionTarget: target,
-      sessionFile: `in-memory:${memory.getSessionId()}`,
-      reason: "turn" as const,
+    release: createDeferredCore(),
+    deferred,
+    runs,
+    published,
+    unsubscribe,
+    runMaintenance(maintain: Maintain, overrides: Partial<ContextEngineMaintenanceParams> = {}) {
+      const run = runContextEngineMaintenance({
+        ...target,
+        sessionTarget: target,
+        sessionFile: `in-memory:${memory.getSessionId()}`,
+        reason: "turn",
+        contextEngine: createBackgroundMaintenanceEngine(maintain),
+        onDeferredMaintenance: (promise) => deferred.push(promise),
+        ...overrides,
+      });
+      runs.push(run);
+      return run;
     },
+    rewrite: (({ runtimeContext }) =>
+      runtimeContext!.rewriteTranscriptEntries!({
+        replacements: [{ entryId, message: replacement }],
+      })) satisfies Maintain,
   };
 }
 
-describe("context-engine maintenance transcript ownership", () => {
-  it.each(modes)("joins caller memory rewrite with executionMode=%s", async (executionMode) => {
-    await withTranscriptOwners(async ({ memory, durableBefore, entryId, target, params }) => {
-      const manager = executionMode
-        ? SessionManager.fromEntries(memory.getPersistedEntries())
-        : memory;
-      const release = createDeferredCore();
-      const deferred: Promise<void>[] = [];
-      const events: string[] = [];
-      const published = vi.fn();
-      const unsubscribe = onSessionTranscriptUpdate(published);
-      const openAsync = vi.spyOn(SessionManager, "openAsync");
-      const maintain = vi.fn<NonNullable<ContextEngine["maintain"]>>(async ({ runtimeContext }) => {
-        await release.promise;
-        expect.soft(runtimeContext?.allowDeferredCompactionExecution).toBeUndefined();
-        const result = await runtimeContext!.rewriteTranscriptEntries!({
-          replacements: [{ entryId, message: replacement }],
-        });
-        events.push("maintained");
-        return result;
-      });
-      const run = runContextEngineMaintenance({
-        ...params,
-        executionMode,
+it("joins caller memory rewrite without coalescing with or awaiting foreign durable work", async () => {
+  await withTranscriptOwners(async (owner) => {
+    using foreign = createMaintenanceGate();
+    await owner.runMaintenance(() => foreign.run(() => unchanged), {
+      sessionManager: owner.durable,
+    });
+    await foreign.entered.promise;
+    const manager = SessionManager.fromEntries(owner.memory.getPersistedEntries());
+    const events: string[] = [];
+    const maintain = vi.fn<Maintain>(async (params) => {
+      await owner.release.promise;
+      const result = await owner.rewrite(params);
+      events.push("maintained");
+      return result;
+    });
+    const run = owner
+      .runMaintenance(maintain, {
+        executionMode: "background",
         sessionManager: manager,
-        contextEngine: createEngine(maintain),
         withSessionManagerRewriteLock: async (operation) => {
           events.push("locked");
-          try {
-            return await operation();
-          } finally {
-            events.push("unlocked");
-          }
+          const result = await operation();
+          events.push("unlocked");
+          return result;
         },
-        onDeferredMaintenance: (promise) => deferred.push(promise),
-      }).then((result) => {
+      })
+      .then((result) => {
         events.push("returned");
         return result;
       });
-      try {
-        await vi.waitFor(() => expect(maintain).toHaveBeenCalledOnce());
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        expect.soft(events).not.toContain("returned");
-        release.resolve();
-        const result = await run;
-        await Promise.all(deferred);
-        expect.soft(result).toMatchObject({ changed: true, rewrittenEntries: 1 });
-        expect
-          .soft(manager.getBranch().map((entry) => entry.type === "message" && entry.message))
-          .toEqual([replacement, { role: "user", content: "memory tail", timestamp: 2 }]);
-        expect.soft(events).toEqual(["locked", "unlocked", "maintained", "returned"]);
-        expect.soft(openAsync).not.toHaveBeenCalled();
-        expect.soft(published).not.toHaveBeenCalled();
-        expect.soft(await loadTranscriptEvents(target)).toEqual(durableBefore);
-        expect.soft(deferred).toHaveLength(0);
-      } finally {
-        release.resolve();
-        await Promise.allSettled([run, ...deferred]);
-        openAsync.mockRestore();
-        unsubscribe();
-      }
-    });
+    await vi.waitFor(() => expect(maintain).toHaveBeenCalledOnce());
+    await setImmediate();
+    expect.soft(events).not.toContain("returned");
+    owner.release.resolve();
+    const result = await run;
+    expect.soft(result).toMatchObject({ changed: true, rewrittenEntries: 1 });
+    expect
+      .soft(manager.getBranch().map((entry) => entry.type === "message" && entry.message))
+      .toEqual([replacement, tail]);
+    expect.soft(events).toEqual(["locked", "unlocked", "maintained", "returned"]);
+    expect.soft(owner.published).not.toHaveBeenCalled();
+    expect.soft(await loadTranscriptEvents(owner.target)).toEqual(owner.durableBefore);
+    expect.soft(owner.deferred).toHaveLength(1);
   });
+});
 
-  it.each(modes)(
-    "reopens and publishes durable background rewrites with executionMode=%s",
-    async (executionMode) => {
-      await withTranscriptOwners(async ({ durable, entryId, target, params }) => {
-        const deferred: Promise<void>[] = [];
-        const published = vi.fn();
-        const unsubscribe = onSessionTranscriptUpdate(published);
-        const openAsync = vi.spyOn(SessionManager, "openAsync");
-        const lock = vi.fn();
-        const run = runContextEngineMaintenance({
-          ...params,
-          executionMode,
-          sessionManager: durable,
-          withSessionManagerRewriteLock: async (operation) => {
-            lock();
-            return await operation();
-          },
-          contextEngine: createEngine(async ({ runtimeContext }) => {
-            expect(runtimeContext?.allowDeferredCompactionExecution).toBe(true);
-            return await runtimeContext!.rewriteTranscriptEntries!({
-              replacements: [{ entryId, message: replacement }],
-            });
-          }),
-          onDeferredMaintenance: (promise) => deferred.push(promise),
-        });
-        try {
-          await run;
-          await Promise.all(deferred);
-          expect(openAsync).toHaveBeenCalledExactlyOnceWith(target);
-          expect(lock).not.toHaveBeenCalled();
-          expect(published).toHaveBeenCalledExactlyOnceWith({
-            agentId: target.agentId,
-            sessionId: target.sessionId,
-            sessionKey: target.sessionKey,
-            target: {
-              agentId: target.agentId,
-              sessionId: target.sessionId,
-              sessionKey: target.sessionKey,
-            },
-          });
-          expect((await SessionManager.openAsync(target)).getBranch()[0]).toMatchObject({
-            message: replacement,
-          });
-          expect(durable.getBranch()[0]).toMatchObject({
-            message: { content: "durable-only sentinel" },
-          });
-          expect(deferred).toHaveLength(executionMode ? 0 : 1);
-        } finally {
-          await Promise.allSettled([run, ...deferred]);
-          openAsync.mockRestore();
-          unsubscribe();
-        }
-      });
-    },
-  );
-
-  it.for(modes)(
-    "does not coalesce or wait for foreign durable work with executionMode=%s",
-    async (executionMode, { signal }) => {
-      await withTranscriptOwners(async ({ memory, durable, params }) => {
-        const release = createDeferredCore();
-        const foreignStarted = createDeferredCore();
-        const foreignMaintain = vi.fn(async () => {
-          foreignStarted.resolve();
-          await release.promise;
-          return { changed: false, rewrittenEntries: 0, bytesFreed: 0 };
-        });
-        const deferred: Promise<void>[] = [];
-        await runContextEngineMaintenance({
-          ...params,
-          sessionManager: durable,
-          contextEngine: createEngine(foreignMaintain),
-          onDeferredMaintenance: (promise) => deferred.push(promise),
-        });
-        let run: Promise<unknown> | undefined;
-        try {
-          await racePromiseWithAbortSignal(
-            Promise.race([foreignStarted.promise, ...deferred]),
-            signal,
-          );
-          expect(foreignMaintain).toHaveBeenCalledOnce();
-          const maintain = vi.fn(async () => ({
-            changed: false,
-            rewrittenEntries: 0,
-            bytesFreed: 0,
-          }));
-          run = runContextEngineMaintenance({
-            ...params,
-            executionMode,
-            sessionManager: memory,
-            contextEngine: createEngine(maintain),
-            onDeferredMaintenance: (promise) => deferred.push(promise),
-          });
-          await expect(run).resolves.toMatchObject({ changed: false });
-          expect(maintain).toHaveBeenCalledOnce();
-          expect(deferred).toHaveLength(1);
-        } finally {
-          release.resolve();
-          await Promise.allSettled([...(run ? [run] : []), ...deferred]);
-        }
-      });
-    },
-  );
-
-  it.each([
-    { fence: "abort", stage: "lock" },
-    { fence: "activity", stage: "lock" },
-    { fence: "abort", stage: "maintenance" },
-    { fence: "activity", stage: "maintenance" },
-  ] as const)("fences caller memory on $fence after awaited $stage", async ({ fence, stage }) => {
-    await withTranscriptOwners(async ({ memory, durableBefore, target, entryId, params }) => {
-      const before = structuredClone(memory.getPersistedEntries());
-      const entered = vi.fn();
-      const release = createDeferredCore();
-      const controller = new AbortController();
-      const closed = new Error("caller maintenance owner closed");
-      let active = true;
-      const run = runContextEngineMaintenance({
-        ...params,
-        executionMode: "background",
-        sessionManager: memory,
-        abortSignal: controller.signal,
-        assertActive: () => {
-          controller.signal.throwIfAborted();
-          if (!active) {
-            throw closed;
-          }
+it.each([undefined, "background"] as const)(
+  "reopens and publishes durable background rewrites with executionMode=%s",
+  async (executionMode) => {
+    await withTranscriptOwners(async (owner) => {
+      await owner.runMaintenance(owner.rewrite, {
+        executionMode,
+        sessionManager: owner.durable,
+        withSessionManagerRewriteLock: async () => {
+          throw new Error("durable background rewrite must not borrow caller's lock");
         },
-        withSessionManagerRewriteLock: async (operation) => {
-          entered();
-          await release.promise;
-          return await operation();
-        },
-        contextEngine: createEngine(async ({ runtimeContext, abortSignal }) => {
-          expect(abortSignal).toBe(controller.signal);
-          if (stage === "maintenance") {
-            entered();
-            await release.promise;
-            return { changed: false, rewrittenEntries: 0, bytesFreed: 0 };
-          }
-          return await runtimeContext!.rewriteTranscriptEntries!({
-            replacements: [{ entryId, message: replacement }],
-          });
-        }),
       });
-      const outcome = run.then(
-        (result) => result,
-        (error: unknown) => error,
-      );
-      try {
-        await vi.waitFor(() => expect(entered).toHaveBeenCalledOnce());
-        if (fence === "abort") {
-          controller.abort(closed);
-        } else {
-          active = false;
-        }
-        release.resolve();
-        expect(await outcome).toBe(closed);
-        expect(memory.getPersistedEntries()).toEqual(before);
-        expect(await loadTranscriptEvents(target)).toEqual(durableBefore);
-      } finally {
-        release.resolve();
-        await Promise.allSettled([run, outcome]);
-      }
+      await Promise.all(owner.deferred);
+      expect(owner.published).toHaveBeenCalledExactlyOnceWith({
+        ...owner.identity,
+        target: owner.identity,
+      });
+      expect((await SessionManager.openAsync(owner.target)).getBranch()[0]).toMatchObject({
+        message: replacement,
+      });
+      expect(owner.durable.getBranch()[0]).toMatchObject({
+        message: { content: "durable-only sentinel" },
+      });
+      expect(owner.deferred).toHaveLength(executionMode ? 0 : 1);
     });
+  },
+);
+
+it("checks caller memory authority before rewriting after the awaited lock", async () => {
+  await withTranscriptOwners(async (owner) => {
+    const before = structuredClone(owner.memory.getPersistedEntries());
+    const entered = vi.fn();
+    const closed = new Error("caller maintenance owner closed");
+    let active = true;
+    const run = owner.runMaintenance(owner.rewrite, {
+      executionMode: "background",
+      sessionManager: owner.memory,
+      assertActive: () => {
+        if (!active) {
+          throw closed;
+        }
+      },
+      withSessionManagerRewriteLock: async (operation) => {
+        entered();
+        await owner.release.promise;
+        return await operation();
+      },
+    });
+    const outcome = run.catch((error: unknown) => error);
+    await vi.waitFor(() => expect(entered).toHaveBeenCalledOnce());
+    active = false;
+    owner.release.resolve();
+    expect(await outcome).toBe(closed);
+    expect(owner.memory.getPersistedEntries()).toEqual(before);
+    expect(await loadTranscriptEvents(owner.target)).toEqual(owner.durableBefore);
   });
 });

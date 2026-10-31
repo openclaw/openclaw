@@ -59,7 +59,7 @@ describe("applyExtraParamsToAgent OpenRouter reasoning", () => {
   it("honors narrower camelCase response cache params over wider snake_case aliases", () => {
     // Model-level camelCase config is narrower than broad defaults and should
     // override snake_case aliases from defaults.
-    const calls: Array<{ headers?: Record<string, string> }> = [];
+    const calls: Array<{ headers?: NonNullable<Parameters<StreamFn>[2]>["headers"] }> = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       calls.push({ headers: options?.headers });
       return {} as ReturnType<StreamFn>;

@@ -2,10 +2,8 @@ import { randomUUID } from "node:crypto";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../config/sessions.js";
-import {
-  resolveSessionEntryAccessTarget,
-  updateResolvedSessionEntry,
-} from "../config/sessions/session-accessor.js";
+import { readResolvedSessionEntryInWorker } from "../config/sessions/session-accessor.entry.js";
+import { updateResolvedSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolvePromptInjectionAllowed } from "./hook-policy-decisions.js";
@@ -63,25 +61,6 @@ function isExpired(entry: unknown, now: number) {
   return entry.ttlMs !== undefined && now - entry.createdAt > entry.ttlMs;
 }
 
-function toPluginNextTurnInjectionRecord(params: {
-  pluginId: string;
-  pluginName?: string;
-  injection: PluginNextTurnInjection;
-  now: number;
-}): PluginNextTurnInjectionRecord {
-  return {
-    id: params.injection.idempotencyKey?.trim() || randomUUID(),
-    pluginId: params.pluginId,
-    pluginName: params.pluginName,
-    text: params.injection.text,
-    idempotencyKey: params.injection.idempotencyKey?.trim() || undefined,
-    placement: params.injection.placement ?? "prepend_context",
-    ttlMs: params.injection.ttlMs,
-    createdAt: params.now,
-    metadata: params.injection.metadata,
-  };
-}
-
 export async function enqueuePluginNextTurnInjection(params: {
   cfg: OpenClawConfig;
   pluginId: string;
@@ -111,12 +90,18 @@ export async function enqueuePluginNextTurnInjection(params: {
     return { enqueued: false, id: "", sessionKey };
   }
   const now = params.now ?? Date.now();
-  const record = toPluginNextTurnInjectionRecord({
+  const injection = { ...params.injection };
+  const record: PluginNextTurnInjectionRecord = {
+    id: injection.idempotencyKey?.trim() || randomUUID(),
     pluginId: params.pluginId,
     pluginName: params.pluginName,
-    injection: { ...params.injection, sessionKey, text },
-    now,
-  });
+    text,
+    idempotencyKey: injection.idempotencyKey?.trim() || undefined,
+    placement: injection.placement ?? "prepend_context",
+    ttlMs: injection.ttlMs,
+    createdAt: now,
+    metadata: injection.metadata,
+  };
   const scope = { cfg: params.cfg, sessionKey, agentId: params.injection.agentId };
   const updated = await updateResolvedSessionEntry(scope, (entry) => {
     const injections = { ...entry.pluginNextTurnInjections };
@@ -151,7 +136,7 @@ async function drainPluginNextTurnInjections(
     return [];
   }
   const scope = { cfg: params.cfg, sessionKey, agentId: params.agentId };
-  const { entry: selectedEntry } = resolveSessionEntryAccessTarget(scope);
+  const selectedEntry = await readResolvedSessionEntryInWorker(scope);
   // Empty queues need no qualified mutation target. Concurrent enqueues wait for the next turn.
   if (
     !selectedEntry?.pluginNextTurnInjections ||
@@ -159,48 +144,43 @@ async function drainPluginNextTurnInjections(
   ) {
     return [];
   }
-  const target = resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
-  const now = params.now ?? Date.now();
-  const updated = await updateResolvedSessionEntry(
-    scope,
-    (entry) => {
-      if (!entry?.pluginNextTurnInjections) {
-        return [];
+  const now = Date.now();
+  const updated = await updateResolvedSessionEntry(scope, (entry) => {
+    if (!entry?.pluginNextTurnInjections) {
+      return [];
+    }
+    const activePluginIds = new Set(
+      (getPluginRegistryForContext()?.plugins ?? [])
+        .filter((plugin) => plugin.status === "loaded")
+        .map((plugin) => plugin.id),
+    );
+    const drained: PluginNextTurnInjectionRecord[] = [];
+    for (const [pluginId, entries] of Object.entries(entry.pluginNextTurnInjections)) {
+      if (
+        !activePluginIds.has(pluginId) ||
+        !resolvePromptInjectionAllowed(params.cfg.plugins?.entries?.[pluginId]?.hooks)
+      ) {
+        continue;
       }
-      const activePluginIds = new Set(
-        (getPluginRegistryForContext()?.plugins ?? [])
-          .filter((plugin) => plugin.status === "loaded")
-          .map((plugin) => plugin.id),
+      // Guard against malformed/hand-edited persisted state — a non-array value
+      // here would crash .filter and break prompt-building for the session.
+      if (!Array.isArray(entries)) {
+        continue;
+      }
+      const liveEntries = entries.filter(
+        (candidate): candidate is PluginNextTurnInjectionRecord => !isExpired(candidate, now),
       );
-      const drained: PluginNextTurnInjectionRecord[] = [];
-      for (const [pluginId, entries] of Object.entries(entry.pluginNextTurnInjections)) {
-        if (
-          !activePluginIds.has(pluginId) ||
-          !resolvePromptInjectionAllowed(params.cfg.plugins?.entries?.[pluginId]?.hooks)
-        ) {
-          continue;
-        }
-        // Guard against malformed/hand-edited persisted state — a non-array value
-        // here would crash .filter and break prompt-building for the session.
-        if (!Array.isArray(entries)) {
-          continue;
-        }
-        const liveEntries = entries.filter(
-          (candidate): candidate is PluginNextTurnInjectionRecord => !isExpired(candidate, now),
-        );
-        drained.push(...liveEntries);
-      }
-      drained.sort((left, right) => left.createdAt - right.createdAt);
-      // A drain is the consume boundary for this session queue. Inactive plugin
-      // records are stale owner state and are discarded with expired records.
-      delete entry.pluginNextTurnInjections;
-      if (drained.length > 0) {
-        entry.updatedAt = now;
-      }
-      return drained;
-    },
-    { target },
-  );
+      drained.push(...liveEntries);
+    }
+    drained.sort((left, right) => left.createdAt - right.createdAt);
+    // A drain is the consume boundary for this session queue. Inactive plugin
+    // records are stale owner state and are discarded with expired records.
+    delete entry.pluginNextTurnInjections;
+    if (drained.length > 0) {
+      entry.updatedAt = now;
+    }
+    return drained;
+  });
   return updated.found ? updated.result : [];
 }
 
@@ -208,7 +188,6 @@ export async function drainPluginNextTurnInjectionContext(params: {
   cfg: OpenClawConfig;
   sessionKey?: string;
   agentId?: string;
-  now?: number;
 }): Promise<PluginAgentTurnPrepareResult & { queuedInjections: PluginNextTurnInjectionRecord[] }> {
   const queuedInjections = await drainPluginNextTurnInjections(params);
   return {
@@ -217,25 +196,23 @@ export async function drainPluginNextTurnInjectionContext(params: {
   };
 }
 
-export function getPluginSessionExtensionStateSync(params: {
+export async function getPluginSessionExtensionState(params: {
   cfg: OpenClawConfig;
   pluginId: string;
   sessionKey?: string;
   agentId?: string;
-}): Record<string, PluginJsonValue> | undefined {
+}): Promise<Record<string, PluginJsonValue> | undefined> {
   const pluginId = params.pluginId.trim();
   const sessionKey = normalizeOptionalString(params.sessionKey);
   if (!pluginId || !sessionKey) {
     return undefined;
   }
-  const target = resolveSessionEntryAccessTarget({
+  const entry = await readResolvedSessionEntryInWorker({
     cfg: params.cfg,
     sessionKey,
     agentId: params.agentId,
   });
-  const value = target.entry?.pluginExtensions?.[pluginId] as
-    | Record<string, PluginJsonValue>
-    | undefined;
+  const value = entry?.pluginExtensions?.[pluginId] as Record<string, PluginJsonValue> | undefined;
   return value ? structuredClone(value) : undefined;
 }
 
@@ -275,14 +252,7 @@ export async function patchPluginSessionExtension(params: {
   // extension opted in via `sessionEntrySlotKey`. The slot is a read-only
   // mirror: writes still go through patchSessionExtension; the host overwrites
   // the slot value on every patch and clears it on unset.
-  const rawSlotKey = normalizeOptionalString(registration.extension.sessionEntrySlotKey);
-  const normalizedSlotKey = rawSlotKey ? normalizeSessionEntrySlotKey(rawSlotKey) : undefined;
-  if (normalizedSlotKey?.ok === false) {
-    log.warn(
-      `plugin session extension slot promotion skipped for ${pluginId}/${namespace}: ${normalizedSlotKey.error}`,
-    );
-  }
-  const slotKey = normalizedSlotKey?.ok === true ? normalizedSlotKey.key : undefined;
+  const slotKey = registration.extension.sessionEntrySlotKey;
   const updated = await updateResolvedSessionEntry(
     {
       cfg: params.cfg,

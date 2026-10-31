@@ -12,6 +12,7 @@ import {
   type MintedWorkerCredential,
   type WorkerCredentialBinding,
 } from "./credential.js";
+import { workerEnvironmentServiceError as serviceError } from "./environment-errors.js";
 import type { WorkerLiveEventReceiver } from "./live-events.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
@@ -38,19 +39,17 @@ type WorkerCredentialBrokerOptions = {
   now: () => number;
   isStopping: () => boolean;
   cancelInferenceEnvironment: (environmentId: string) => Promise<void>;
-  inState: (record: WorkerEnvironmentRecord, ...states: WorkerEnvironmentState[]) => boolean;
   move: (
     record: WorkerEnvironmentRecord,
     to: WorkerEnvironmentState,
     patch?: Parameters<WorkerEnvironmentStore["transition"]>[0]["patch"],
     assertCurrent?: () => void,
   ) => Promise<WorkerEnvironmentRecord>;
-  serviceError: (code: "environment_not_found" | "invalid_state", message: string) => Error;
   withLock: <T>(environmentId: string, task: () => Promise<T>) => Promise<T>;
 };
 
 export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOptions) {
-  const { store, now, inState, move, serviceError, withLock } = options;
+  const { store, now, move, withLock } = options;
   const tunnels = options.tunnelManager;
   const pendingCredentials = new Map<string, MintedWorkerCredential>();
 
@@ -103,7 +102,7 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
   const mintCredentialLocked = async (
     request: WorkerCredentialBinding,
     claim?: WorkerSessionTurnClaim,
-  ): Promise<{ credentialHash: string; grant: MintedWorkerCredential }> => {
+  ): Promise<MintedWorkerCredential> => {
     const previous = store.getCredential(request.environmentId);
     if (previous) {
       await options.cancelInferenceEnvironment(request.environmentId);
@@ -120,10 +119,7 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
     };
     const record = await store.renewCredential(credential);
     credential.assertCurrent?.();
-    return {
-      credentialHash: material.credentialHash,
-      grant: grantFrom({ credential: material.credential, record, claim }),
-    };
+    return grantFrom({ credential: material.credential, record, claim });
   };
 
   const stageCredential = (grant: MintedWorkerCredential): MintedWorkerCredential => {
@@ -203,15 +199,16 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
       return;
     }
     pendingCredentials.delete(record.environmentId);
-    const minted = await mintCredentialLocked({
-      environmentId: record.environmentId,
-      ownerEpoch: record.ownerEpoch,
-      sessionId,
-    });
-    stageCredential(minted.grant);
+    const grant = stageCredential(
+      await mintCredentialLocked({
+        environmentId: record.environmentId,
+        ownerEpoch: record.ownerEpoch,
+        sessionId,
+      }),
+    );
     if (sessionId && credential?.ownerEpoch === record.ownerEpoch) {
       options.liveEvents?.rotateCredential({
-        credentialHash: minted.credentialHash,
+        credentialHash: grant.deliveryId,
         environmentId: record.environmentId,
         previousCredentialHash: credential.credentialHash,
         runEpoch: record.ownerEpoch,
@@ -223,17 +220,22 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
   const attachSession = async (
     request: WorkerCredentialBinding & {
       sessionId: string;
+      assertCurrent?: () => void;
       placementBinding?: PreparedEnvironmentPlacementBinding;
     },
   ): Promise<MintedWorkerCredential> => {
-    if (options.isStopping()) {
-      throw serviceError("invalid_state", "Worker environment service is stopping");
-    }
-    return withLock(request.environmentId, async () => {
-      await store.ready();
+    const { assertCurrent: assertCallerCurrent, placementBinding } = request;
+    const assertCurrent = () => {
       if (options.isStopping()) {
         throw serviceError("invalid_state", "Worker environment service is stopping");
       }
+      assertCallerCurrent?.();
+      placementBinding?.assertCurrent();
+    };
+    assertCurrent();
+    return withLock(request.environmentId, async () => {
+      await store.ready();
+      assertCurrent();
       const current = store.get(request.environmentId);
       if (!current) {
         throw serviceError(
@@ -250,6 +252,7 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
       } catch {
         throw serviceError("invalid_state", "Current worker build identity is unavailable");
       }
+      assertCurrent();
       if (!current.bootstrapReceipt || !sameWorkerBuild(current.bootstrapReceipt, currentBuild)) {
         throw new StaleWorkerBuildError();
       }
@@ -260,7 +263,8 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
           from: current.state,
           to: "attached",
           expectedOwnerEpoch: request.ownerEpoch,
-          placementBinding: request.placementBinding,
+          placementBinding,
+          assertCurrent,
           patch: {
             attachedSessionIds: [request.sessionId],
             credential: {
@@ -277,6 +281,7 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
         }
         throw error;
       }
+      // Commit transfers custody: caller closure cannot undo attachment or skip exact cleanup.
       pendingCredentials.delete(request.environmentId);
       await tunnels?.stop(request.environmentId, current.ownerEpoch);
       return stageCredential(
@@ -309,7 +314,7 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
     const checkedAtMs = now();
     if (
       !environment ||
-      !inState(environment, "ready", "idle", "attached") ||
+      !["ready", "idle", "attached"].includes(environment.state) ||
       environment.destroyRequestedAtMs !== null ||
       environment.ownerEpoch !== binding.ownerEpoch ||
       !credential ||
@@ -364,12 +369,11 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
         previous?.sessionId === binding.sessionId
           ? placementStore.readWorkerTurnLiveAckCursor(claim)
           : undefined;
-      const minted = await mintCredentialLocked(binding, claim);
-      const grant = stageCredential(minted.grant);
+      const grant = stageCredential(await mintCredentialLocked(binding, claim));
       if (previous && ackedSeq !== undefined) {
         options.liveEvents?.rotateCredential({
           ackedSeq,
-          credentialHash: minted.credentialHash,
+          credentialHash: grant.deliveryId,
           environmentId: binding.environmentId,
           newProcessTurn: true,
           previousCredentialHash: previous.credentialHash,

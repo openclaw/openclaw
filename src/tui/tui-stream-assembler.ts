@@ -13,7 +13,6 @@ type RunStreamState = {
   displayText: string;
 };
 
-/** Assembles assistant stream deltas and final messages into stable TUI display text. */
 export class TuiStreamAssembler {
   private readonly runs = new Map<string, RunStreamState>();
 
@@ -25,32 +24,6 @@ export class TuiStreamAssembler {
       contentText: "",
       displayText: "",
     };
-  }
-
-  private getTrackedRun(runId: string): RunStreamState {
-    const existing = this.runs.get(runId);
-    if (existing) {
-      // Keep a still-streaming older run ahead of abandoned runs in eviction order.
-      this.runs.delete(runId);
-      this.runs.set(runId, existing);
-      return existing;
-    }
-
-    const state = this.createRunState();
-    this.runs.set(runId, state);
-    if (this.runs.size > MAX_TRACKED_STREAM_RUNS) {
-      // A run can pause while a tool executes; unrelated deltas must not evict
-      // the partial reply that its eventual empty final still needs to render.
-      for (const trackedRunId of this.runs.keys()) {
-        if (this.runs.size <= MAX_TRACKED_STREAM_RUNS) {
-          break;
-        }
-        if (!this.isProtectedRun?.(trackedRunId)) {
-          this.runs.delete(trackedRunId);
-        }
-      }
-    }
-    return state;
   }
 
   private updateRunState(state: RunStreamState, message: unknown, showThinking: boolean) {
@@ -73,7 +46,23 @@ export class TuiStreamAssembler {
 
   /** Ingests a streaming delta and returns updated display text only when it changed. */
   ingestDelta(runId: string, message: unknown, showThinking: boolean): string | null {
-    const state = this.getTrackedRun(runId);
+    const existing = this.runs.get(runId);
+    const state = existing ?? this.createRunState();
+    // Keep a still-streaming older run ahead of abandoned runs in eviction order.
+    this.runs.delete(runId);
+    this.runs.set(runId, state);
+    if (!existing && this.runs.size > MAX_TRACKED_STREAM_RUNS) {
+      // A run can pause while a tool executes; unrelated deltas must not evict
+      // the partial reply that its eventual empty final still needs to render.
+      for (const trackedRunId of this.runs.keys()) {
+        if (this.runs.size <= MAX_TRACKED_STREAM_RUNS) {
+          break;
+        }
+        if (!this.isProtectedRun?.(trackedRunId)) {
+          this.runs.delete(trackedRunId);
+        }
+      }
+    }
     const previousDisplayText = state.displayText;
     this.updateRunState(state, message, showThinking);
 
@@ -84,7 +73,6 @@ export class TuiStreamAssembler {
     return state.displayText;
   }
 
-  /** Reports whether a run already has real displayable streamed content. */
   hasDisplayText(runId: string): boolean {
     return Boolean(this.runs.get(runId)?.displayText);
   }
@@ -93,11 +81,9 @@ export class TuiStreamAssembler {
   finalize(runId: string, message: unknown, showThinking: boolean, errorMessage?: string): string {
     // Late finals must not insert an evicted run and displace a live stream.
     const state = this.runs.get(runId) ?? this.createRunState();
-    const streamedContentText = state.contentText;
     this.updateRunState(state, message, showThinking);
     const responseText = resolveFinalAssistantText({
       finalText: state.contentText,
-      streamedText: streamedContentText,
       errorMessage,
       message,
     });

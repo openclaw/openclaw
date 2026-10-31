@@ -21,6 +21,8 @@ import {
   type WorkerWorkspaceManifestEntry,
   type WorkerWorkspaceReconciliationJournal,
 } from "./workspace-manifest.js";
+import { workspacePathAncestors } from "./workspace-path-ancestors.js";
+import { buildCacheInputPaths } from "./workspace-path-exclusions.js";
 import {
   assertWorkspaceMatchesManifest,
   ConcurrentWorkspacePathError,
@@ -32,9 +34,7 @@ import {
   reconciliationEntries,
 } from "./workspace-reconcile-derived-paths.js";
 import {
-  directoryContainsOnlyDerivedWorkspaceEntries,
-  directoryContainsOnlyJournalPaths,
-  entryMatches,
+  directoryContainsOnlyWorkspaceEntries,
   localPath,
   removeEmptyWorkspaceDirectory,
 } from "./workspace-reconcile-fs.js";
@@ -44,6 +44,7 @@ type WorkspaceRecoveryContext = {
   root: string;
   journal: WorkerWorkspaceReconciliationJournal;
   filteredBaseTree: boolean;
+  excludeBuildCaches: boolean;
   isRetainedInput: ReturnType<typeof createStagedInputPathMatcher>;
   assertCurrent?: () => void;
 };
@@ -225,7 +226,6 @@ export async function createWorkspacePatch(params: {
 export async function applyWorkspacePatch(params: {
   root: string;
   patch: Uint8Array;
-  reverse?: boolean;
   assertCurrent?: () => void;
 }): Promise<void> {
   if (params.patch.byteLength === 0) {
@@ -240,15 +240,7 @@ export async function applyWorkspacePatch(params: {
   try {
     await requireGit(
       params.root,
-      [
-        "-c",
-        "core.autocrlf=false",
-        "apply",
-        "--no-index",
-        "--binary",
-        "--whitespace=nowarn",
-        ...(params.reverse ? ["--reverse"] : []),
-      ],
+      ["-c", "core.autocrlf=false", "apply", "--no-index", "--binary", "--whitespace=nowarn"],
       params.patch,
       { GIT_DIR: path.join(temporary, ".git") },
       params.assertCurrent,
@@ -283,9 +275,8 @@ async function createWorkspaceRecoveryPatch(params: WorkspaceRecoveryContext): P
     const paths = new Set([...baseByPath.keys(), ...appliedByPath.keys()]);
     const directories = new Set<string>();
     for (const entryPath of paths) {
-      const segments = entryPath.split("/");
-      for (let index = 1; index < segments.length; index += 1) {
-        directories.add(segments.slice(0, index).join("/"));
+      for (const ancestor of workspacePathAncestors(entryPath)) {
+        directories.add(ancestor);
       }
     }
     const actualEntries: WorkerWorkspaceManifestEntry[] = [];
@@ -315,17 +306,19 @@ async function createWorkspaceRecoveryPatch(params: WorkspaceRecoveryContext): P
       const isJournalDirectory =
         actual.type === "directory" &&
         ((directories.has(entryPath) &&
-          (await directoryContainsOnlyJournalPaths(
+          (await directoryContainsOnlyWorkspaceEntries(
             params.root,
             entryPath,
-            paths,
-            directories,
             params.isRetainedInput,
+            { paths, directories },
+            params.excludeBuildCaches,
           ))) ||
-          (await directoryContainsOnlyDerivedWorkspaceEntries(
+          (await directoryContainsOnlyWorkspaceEntries(
             params.root,
             entryPath,
             params.isRetainedInput,
+            undefined,
+            params.excludeBuildCaches,
           )));
       if (!isJournalDirectory) {
         throw workspaceRecoveryConflict(entryPath);
@@ -368,9 +361,8 @@ async function assertWorkspaceRecoveryBase(params: WorkspaceRecoveryContext): Pr
   const basePaths = new Set(baseEntries.map((entry) => entry.path));
   const baseDirectories = new Set<string>();
   for (const entryPath of basePaths) {
-    const segments = entryPath.split("/");
-    for (let index = 1; index < segments.length; index += 1) {
-      baseDirectories.add(segments.slice(0, index).join("/"));
+    for (const ancestor of workspacePathAncestors(entryPath)) {
+      baseDirectories.add(ancestor);
     }
   }
   for (const entry of appliedEntries) {
@@ -382,12 +374,12 @@ async function assertWorkspaceRecoveryBase(params: WorkspaceRecoveryContext): Pr
       existing?.isDirectory() &&
       !existing.isSymbolicLink() &&
       baseDirectories.has(entry.path) &&
-      (await directoryContainsOnlyJournalPaths(
+      (await directoryContainsOnlyWorkspaceEntries(
         params.root,
         entry.path,
-        basePaths,
-        baseDirectories,
         params.isRetainedInput,
+        { paths: basePaths, directories: baseDirectories },
+        params.excludeBuildCaches,
       ))
     ) {
       continue;
@@ -405,10 +397,12 @@ async function assertWorkspaceRecoveryBase(params: WorkspaceRecoveryContext): Pr
       node &&
       !(
         node.type === "directory" &&
-        (await directoryContainsOnlyDerivedWorkspaceEntries(
+        (await directoryContainsOnlyWorkspaceEntries(
           params.root,
           entryPath,
           params.isRetainedInput,
+          undefined,
+          params.excludeBuildCaches,
         ))
       )
     ) {
@@ -432,12 +426,12 @@ async function assertWorkspaceRecoveryDirectoriesRecoverable(
       if (
         baseEntries.has(entryPath) &&
         appliedDirectories.has(entryPath) &&
-        !(await directoryContainsOnlyJournalPaths(
+        !(await directoryContainsOnlyWorkspaceEntries(
           params.root,
           entryPath,
-          appliedEntryPaths,
-          appliedDirectories,
           params.isRetainedInput,
+          { paths: appliedEntryPaths, directories: appliedDirectories },
+          params.excludeBuildCaches,
         ))
       ) {
         throw workspaceRecoveryConflict(entryPath);
@@ -453,8 +447,8 @@ async function assertWorkspaceRecoveryDirectoriesRecoverable(
     const baseEntry = baseEntries.get(entryPath);
     const appliedEntry = appliedEntries.get(entryPath);
     if (
-      (baseEntry && (await entryMatches(params.root, baseEntry))) ||
-      (appliedEntry && (await entryMatches(params.root, appliedEntry)))
+      (baseEntry && sameEntry(local, baseEntry)) ||
+      (appliedEntry && sameEntry(local, appliedEntry))
     ) {
       continue;
     }
@@ -487,18 +481,16 @@ async function restoreWorkspaceJournalDirectories(params: WorkspaceRecoveryConte
 export async function recoverWorkerWorkspaceReconciliation(params: {
   root: string;
   journal: WorkerWorkspaceReconciliationJournal;
-  preservePaths?: ReadonlySet<string>;
+  buildCacheInputs?: string[];
   assertCurrent?: () => void;
 }): Promise<void> {
   if (params.journal.appliedManifestRef) {
     throw new Error("Cloud workspace result is already applied and awaits fence acceptance");
   }
-  if (params.preservePaths?.size) {
-    throw new Error("Cloud workspace patch recovery cannot preserve partial paths");
-  }
   const root = await fs.realpath(params.root);
   validateJournalSnapshot(params.journal);
   const matchesLiveInput = createStagedInputPathMatcher(await openFsSafeRoot(root));
+  const retained = buildCacheInputPaths(params.buildCacheInputs);
   const journalEntries = [...params.journal.baseEntries, ...params.journal.appliedEntries];
   const stagedInputDirectories = stagedInputDirectoriesFromEntries(journalEntries);
   // A delta omits unchanged markers; changed markers may instead be in the journal
@@ -520,24 +512,37 @@ export async function recoverWorkerWorkspaceReconciliation(params: {
   }
   const journal = {
     ...params.journal,
-    baseEntries: reconciliationEntries(params.journal.baseEntries, stagedInputDirectories),
-    appliedEntries: reconciliationEntries(params.journal.appliedEntries, stagedInputDirectories),
+    baseEntries: reconciliationEntries(
+      params.journal.baseEntries,
+      stagedInputDirectories,
+      params.buildCacheInputs,
+    ),
+    appliedEntries: reconciliationEntries(
+      params.journal.appliedEntries,
+      stagedInputDirectories,
+      params.buildCacheInputs,
+    ),
     baseDirectories: reconciliationDirectories(
       params.journal.baseDirectories,
       stagedInputDirectories,
+      params.buildCacheInputs,
     ),
     appliedDirectories: reconciliationDirectories(
       params.journal.appliedDirectories,
       stagedInputDirectories,
+      params.buildCacheInputs,
     ),
   };
   const isRetainedInput = async (relative: string) =>
-    isStagedInputPath(relative, stagedInputDirectories) || (await matchesLiveInput(relative));
+    retained.has(relative) ||
+    isStagedInputPath(relative, stagedInputDirectories) ||
+    (await matchesLiveInput(relative));
   const recovery = {
     root,
     journal,
     isRetainedInput,
     filteredBaseTree: journal.baseEntries.length !== params.journal.baseEntries.length,
+    excludeBuildCaches: params.buildCacheInputs !== undefined,
     assertCurrent: params.assertCurrent,
   };
   try {
@@ -553,6 +558,7 @@ export async function recoverWorkerWorkspaceReconciliation(params: {
     journal.baseEntries,
     isRetainedInput,
     params.assertCurrent,
+    params.buildCacheInputs !== undefined,
   );
   await applyWorkspacePatch({ root, patch: recoveryPatch, assertCurrent: params.assertCurrent });
   await restoreWorkspaceJournalDirectories(recovery);

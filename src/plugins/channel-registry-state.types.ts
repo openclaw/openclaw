@@ -1,6 +1,6 @@
 /** Validated channel plugin retained by the active runtime registry. */
 export type ActiveChannelPluginRuntimeShape =
-  import("../channels/plugins/types.plugin.js").ChannelPlugin & {
+  import("../channels/plugins/types.plugin.js").AnyChannelPlugin & {
     meta: NonNullable<import("../channels/plugins/types.plugin.js").ChannelPlugin["meta"]>;
   };
 
@@ -14,7 +14,6 @@ export type ActivePluginChannelRegistration = {
   resolveChannelRuntime?: () => import("./runtime/types-channel.js").PluginRuntimeChannel;
 };
 
-/** Active runtime channel registry snapshot. */
 export type ActivePluginChannelRegistry = {
   channels: ActivePluginChannelRegistration[];
 };

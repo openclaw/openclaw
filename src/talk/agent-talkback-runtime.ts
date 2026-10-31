@@ -1,6 +1,4 @@
 /**
- * Debounced realtime voice talkback queue for delegated OpenClaw consults.
- *
  * Transcript fragments can arrive quickly while one consult is already running;
  * this queue batches compatible fragments, runs consults serially, and aborts
  * cleanly when the voice session closes.
@@ -58,9 +56,6 @@ export function createRealtimeVoiceAgentTalkbackQueue(
   const shouldStop = () => closed || params.isStopped();
 
   const clearDebounceTimer = () => {
-    if (!debounceTimer) {
-      return;
-    }
     clearTimeout(debounceTimer);
     debounceTimer = undefined;
   };
@@ -174,9 +169,6 @@ export function createRealtimeVoiceAgentTalkbackQueue(
   return {
     isIdle: () => !active && pendingQuestions.length === 0,
     close: () => {
-      if (closed) {
-        return;
-      }
       closed = true;
       clearDebounceTimer();
       clearPendingQuestions();

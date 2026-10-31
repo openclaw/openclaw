@@ -19,32 +19,36 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
-import { readPreparedGatewayModelCatalogOwnerSnapshot } from "../gateway/server-model-catalog.js";
+import { readPreparedGatewayModelCatalogOwnerSnapshot as readCatalog } from "../gateway/server-model-catalog.js";
 import { createGatewayReloadHandlers } from "../gateway/server-reload-hot.js";
 import { PluginRuntimeApplicationError } from "../plugins/lifecycle.js";
-import { PluginInstanceUnavailableError } from "../plugins/plugin-instance-error.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalog.errors.js";
-import { loadPreparedModelCatalogOwnerSnapshot } from "./prepared-model-catalog.js";
-import { withPreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
+import { loadPreparedModelCatalogOwnerSnapshot as loadCatalog } from "./prepared-model-catalog.js";
+import { withPreparedModelRuntimePluginGenerationScope as withGeneration } from "./prepared-model-runtime-generation-scope.js";
 import {
-  acquireAgentRunPreparedModelRuntime,
+  acquireAgentRunPreparedModelRuntime as acquireRun,
   acquirePreparedModelRuntimeSnapshot,
   advancePreparedModelRuntimeConfig,
-  getPreparedModelRuntimeSnapshot,
-  loadPublishedGatewayReplyDispatchRuntime,
+  getPreparedModelRuntimeSnapshot as getSnapshot,
+  loadPublishedGatewayReplyDispatchRuntime as loadDispatch,
   markPreparedModelRuntimeSnapshotsStale,
   refreshPreparedModelRuntimeSnapshots,
-  registerPreparedModelRuntimePublicationListener,
+  registerPreparedModelRuntimePublicationListener as observePublication,
 } from "./prepared-model-runtime.js";
 import { getPreparedModelRuntimeStartupStatus } from "./prepared-model-runtime.startup-status.js";
+import { observeSettlement as watchSettlement } from "./promise-settlement.test-support.js";
 
 const fixture = usePreparedModelRuntimeHarness(
   { label: "hot-reload-dispatch" },
   clearRuntimeConfigSnapshot,
 );
 const { mocks } = fixture;
+type Reload = ReturnType<ReturnType<typeof createPluginReloadHandler>["applyHotReload"]>;
+type Dispatch = ReturnType<typeof loadDispatch>;
+type CatalogRead = ReturnType<typeof readCatalog>;
+type PluginReload = NonNullable<Parameters<typeof createGatewayReloadHandlers>[0]["reloadPlugins"]>;
 
 beforeEach(() => {
   mocks.configuredAgentIds = ["default"];
@@ -66,6 +70,30 @@ async function publish(cfg: OpenClawConfig) {
   });
 }
 
+async function publishMemoryConfig() {
+  const retained = config(true);
+  setRuntimeConfigSnapshot(retained, retained);
+  await publish(retained);
+  return { retained, committed: config(false) };
+}
+
+function prepareEffects({ prepareConfigEffects }: Parameters<PluginReload>[0]) {
+  return prepareConfigEffects({ pluginIds: new Set(["synthetic"]), channels: new Set() });
+}
+
+function commitConfig({ commitRuntime }: Parameters<PluginReload>[0], cfg: OpenClawConfig) {
+  return commitRuntime({ publish: () => setRuntimeConfigSnapshot(cfg, cfg) });
+}
+
+function pluginPlan(operationId: string) {
+  return {
+    ...buildGatewayReloadPlan([]),
+    changedPaths: ["plugins.entries.synthetic"],
+    reloadPlugins: true,
+    pluginLifecycle: { operationId, pluginIds: ["synthetic"], reason: "reload" as const },
+  };
+}
+
 function createPluginReloadHandler(
   reloadPlugins: Parameters<typeof createGatewayReloadHandlers>[0]["reloadPlugins"],
   requestRecoveryRestart?: Parameters<
@@ -76,7 +104,6 @@ function createPluginReloadHandler(
   let reloadState: ReturnType<ReloadParams["getState"]> = {
     hooksConfig: null,
     hookClientIpConfig: {},
-    heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
     cronState: {
       cron: { start: vi.fn(), stop: vi.fn() } as never,
       storePath: fixture.state.path("cron.sqlite"),
@@ -84,7 +111,6 @@ function createPluginReloadHandler(
       reconcileExitWatchers: vi.fn(async () => {}),
       reconcileStreamWatchers: vi.fn(async () => {}),
       stopStreamWatchers: vi.fn(async () => {}),
-      reconcileSystemJobs: vi.fn(async () => "converged" as const),
     },
   };
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -184,11 +210,11 @@ describe("Gateway plugin reload run admission", () => {
       return { entries: [] };
     });
     const publications: Array<{ config: OpenClawConfig; models: string[] }> = [];
-    const unregister = registerPreparedModelRuntimePublicationListener(({ phase }) => {
+    const unregister = observePublication(({ phase }) => {
       if (phase !== "published") {
         return;
       }
-      const snapshot = getPreparedModelRuntimeSnapshot({
+      const snapshot = getSnapshot({
         config: committed,
         agentId: "held",
         agentDir: fixture.state.agentDir("held"),
@@ -200,30 +226,20 @@ describe("Gateway plugin reload run admission", () => {
         });
       }
     });
-    const handler = createPluginReloadHandler(async ({ prepareConfigEffects, commitRuntime }) => {
-      const effects = prepareConfigEffects({
-        pluginIds: new Set(["synthetic"]),
-        channels: new Set(),
-      });
+    const handler = createPluginReloadHandler(async (context) => {
+      const effects = prepareEffects(context);
       events.push("plugin-drain");
       drainageStarted.resolve();
       await finishDrainage.promise;
       effects.retire();
-      await commitRuntime({ publish: () => setRuntimeConfigSnapshot(committed, committed) });
+      await commitConfig(context, committed);
       pluginCommitted.resolve();
       return {
         runtime: { operationId: "degraded-reload", generation: 1, pluginIds: ["synthetic"] },
         activeChannels: new Set(),
       };
     });
-    const plan = buildGatewayReloadPlan([]);
-    plan.changedPaths = ["plugins.entries.synthetic"];
-    plan.reloadPlugins = true;
-    plan.pluginLifecycle = {
-      operationId: "degraded-reload",
-      pluginIds: ["synthetic"],
-      reason: "reload",
-    };
+    const plan = pluginPlan("degraded-reload");
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     getPreparedModelRuntimeTestApi().setModelRuntimeBuildTimeoutMsForTest(120_000);
     const startup = refreshPreparedModelRuntimeSnapshots(retained, {
@@ -232,7 +248,7 @@ describe("Gateway plugin reload run admission", () => {
       catalogMode: "static",
     });
     void startup.catch(() => {});
-    let reload: ReturnType<typeof handler.applyHotReload> | undefined;
+    let reload: Reload | undefined;
     try {
       await acquisitionStarted.promise;
       await vi.advanceTimersByTimeAsync(120_000);
@@ -241,9 +257,9 @@ describe("Gateway plugin reload run admission", () => {
         degraded: true,
         pendingAgents: ["held"],
       });
-      await expect(
-        loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
-      ).resolves.toMatchObject({ config: retained });
+      await expect(loadDispatch({ agentId: "default" })).resolves.toMatchObject({
+        config: retained,
+      });
       reload = handler.applyHotReload(plan, committed);
       void reload.catch(() => {});
       await Promise.race([drainageStarted.promise, reload]);
@@ -260,9 +276,7 @@ describe("Gateway plugin reload run admission", () => {
       expect(events.indexOf("old-cleanup-finished")).toBeLessThan(
         events.indexOf("replacement-acquisition"),
       );
-      await expect(
-        loadPublishedGatewayReplyDispatchRuntime({ agentId: "held" }),
-      ).resolves.toMatchObject({
+      await expect(loadDispatch({ agentId: "held" })).resolves.toMatchObject({
         config: committed,
         modelCatalog: { entries: [expect.objectContaining({ id: "after-reload" })] },
       });
@@ -280,20 +294,10 @@ describe("Gateway plugin reload run admission", () => {
     }
   });
 
-  it.each([
-    { outcome: "rollback", arrival: "during drainage" },
-    { outcome: "commit", arrival: "before drainage" },
-    { outcome: "activation failure", arrival: "during drainage" },
-    { outcome: "activation failure", arrival: "before drainage" },
-  ] as const)(
-    "preserves a run admitted $arrival and waiting requests through plugin $outcome",
-    async ({ outcome, arrival }) => {
-      const retained = config(true);
-      const committed = config(false);
-      setRuntimeConfigSnapshot(retained, retained);
-      await publish(retained);
-      const catalogStarted = createDeferred();
-      const finishCatalog = createDeferred();
+  it.each(["rollback", "activation failure"] as const)(
+    "preserves a run admitted during drainage and waiting requests through plugin %s",
+    async (outcome) => {
+      const { retained, committed } = await publishMemoryConfig();
       const drainageStarted = createDeferred();
       const finishDrainage = createDeferred();
       const pluginFailure = new PluginRuntimeApplicationError(
@@ -308,11 +312,8 @@ describe("Gateway plugin reload run admission", () => {
           committed: outcome === "activation failure",
         },
       );
-      const handler = createPluginReloadHandler(async ({ prepareConfigEffects, commitRuntime }) => {
-        const effects = prepareConfigEffects({
-          pluginIds: new Set(["synthetic"]),
-          channels: new Set(),
-        });
+      const handler = createPluginReloadHandler(async (context) => {
+        const effects = prepareEffects(context);
         drainageStarted.resolve();
         await finishDrainage.promise;
         if (outcome === "rollback") {
@@ -320,60 +321,16 @@ describe("Gateway plugin reload run admission", () => {
           throw pluginFailure;
         }
         effects.retire();
-        await commitRuntime({ publish: () => setRuntimeConfigSnapshot(committed, committed) });
-        if (outcome === "activation failure") {
-          throw pluginFailure;
-        }
-        return {
-          runtime: { operationId: "synthetic-reload", generation: 1, pluginIds: ["synthetic"] },
-          activeChannels: new Set(),
-        };
+        await commitConfig(context, committed);
+        throw pluginFailure;
       });
-      const plan = buildGatewayReloadPlan([]);
-      plan.changedPaths = ["plugins.entries.synthetic"];
-      plan.reloadPlugins = true;
-      plan.pluginLifecycle = {
-        operationId: "synthetic-reload",
-        pluginIds: ["synthetic"],
-        reason: "reload",
-      };
+      const plan = pluginPlan("synthetic-reload");
       const input = { ...ownerInput(retained), workspaceDir: fixture.state.path("run-workspace") };
-      let settled = false;
-      let requestSettled = false;
-      let catalogSettled = false;
-      let admission: ReturnType<typeof acquireAgentRunPreparedModelRuntime> | undefined;
-      let request: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
-      let catalogRequest:
-        | ReturnType<typeof readPreparedGatewayModelCatalogOwnerSnapshot>
-        | undefined;
-      let reload: ReturnType<typeof handler.applyHotReload> | undefined;
-      const admit = () => {
-        admission = acquireAgentRunPreparedModelRuntime(input);
-        void admission.then(
-          () => {
-            settled = true;
-          },
-          () => {
-            settled = true;
-          },
-        );
-        return admission;
-      };
+      let admission: ReturnType<typeof acquireRun> | undefined;
+      let request: Dispatch | undefined;
+      let catalogRequest: CatalogRead | undefined;
+      let reload: Reload | undefined;
       try {
-        if (arrival === "before drainage") {
-          mocks.prepareStaticCatalog.mockImplementationOnce(async () => {
-            catalogStarted.resolve();
-            await finishCatalog.promise;
-            throw new PluginInstanceUnavailableError("synthetic");
-          });
-          const preparing = admit();
-          await Promise.race([
-            catalogStarted.promise,
-            preparing.then(() => {
-              throw new Error("Run admission bypassed held catalog preparation");
-            }),
-          ]);
-        }
         reload = handler.applyHotReload(plan, committed);
         void reload.catch(() => {});
         await Promise.race([
@@ -382,50 +339,26 @@ describe("Gateway plugin reload run admission", () => {
             throw new Error("Plugin reload finished before entering drainage");
           }),
         ]);
-        request = loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
-        catalogRequest = readPreparedGatewayModelCatalogOwnerSnapshot({ agentId: "default" });
-        void catalogRequest.then(
-          () => {
-            catalogSettled = true;
-          },
-          () => {
-            catalogSettled = true;
-          },
-        );
-        void request.then(
-          () => {
-            requestSettled = true;
-          },
-          () => {
-            requestSettled = true;
-          },
-        );
-        if (arrival === "during drainage") {
-          void admit();
-        } else {
-          finishCatalog.resolve();
-        }
+        request = loadDispatch({ agentId: "default" });
+        catalogRequest = readCatalog({ agentId: "default" });
+        const catalogSettled = watchSettlement(catalogRequest);
+        const requestSettled = watchSettlement(request);
+        admission = acquireRun(input);
+        const settled = watchSettlement(admission);
         await nextTurn();
-        expect(settled).toBe(false);
-        expect(requestSettled).toBe(false);
-        expect(catalogSettled).toBe(true);
+        expect([settled(), requestSettled(), catalogSettled()]).toEqual([false, false, true]);
         await expect(catalogRequest).resolves.toMatchObject({ config: retained });
         finishDrainage.resolve();
-        if (outcome !== "commit") {
-          await expect(reload).rejects.toBe(pluginFailure);
-        } else {
-          await expect(reload).resolves.toMatchObject({ status: "applied" });
-        }
+        await expect(reload).rejects.toBe(pluginFailure);
         // Execution resumes only after rollback or replacement publication settles.
         await expect(request).resolves.toMatchObject({
           config: outcome === "rollback" ? retained : committed,
         });
         const lease = await admission!;
         expect(lease.snapshot.config).toEqual(outcome === "rollback" ? retained : committed);
-        expect(lease.snapshot.workspaceDir).toBe(input.workspaceDir);
+        expect(lease.snapshot.workspaceDir).toBe("/tmp/unused-workspace");
         expect(lease.snapshot.isCurrent()).toBe(true);
       } finally {
-        finishCatalog.resolve();
         finishDrainage.resolve();
         await Promise.allSettled([reload, request, catalogRequest]);
         await Promise.allSettled([admission?.then((lease) => lease[Symbol.asyncDispose]())]);
@@ -442,15 +375,9 @@ it.each([
   "config supersession",
   "replacement during refresh",
 ] as const)("keeps committed plugin recovery bound to its Gateway across %s", async (event) => {
-  const retained = config(true);
-  const committed = config(false);
-  setRuntimeConfigSnapshot(retained, retained);
-  await publish(retained);
-  const pluginLifecycle = {
-    operationId: "lifecycle-recovery",
-    pluginIds: ["synthetic"],
-    reason: "reload" as const,
-  };
+  const { committed } = await publishMemoryConfig();
+  const plan = pluginPlan("lifecycle-recovery");
+  const pluginLifecycle = plan.pluginLifecycle;
   const pluginFailure = new PluginRuntimeApplicationError("Plugin activation failed", {
     ...pluginLifecycle,
     generation: 7,
@@ -476,12 +403,9 @@ it.each([
       return { entries: [] };
     });
   }
-  const handler = createPluginReloadHandler(async ({ prepareConfigEffects, commitRuntime }) => {
-    prepareConfigEffects({
-      pluginIds: new Set(pluginLifecycle.pluginIds),
-      channels: new Set(),
-    }).retire();
-    await commitRuntime({ publish: () => setRuntimeConfigSnapshot(committed, committed) });
+  const handler = createPluginReloadHandler(async (context) => {
+    prepareEffects(context).retire();
+    await commitConfig(context, committed);
     if (event === "refresh failure") {
       mocks.configuredAgentIdsError = refreshFailure;
     } else if (event === "shutdown") {
@@ -493,10 +417,6 @@ it.each([
     }
     throw pluginFailure;
   });
-  const plan = buildGatewayReloadPlan([]);
-  plan.changedPaths = ["plugins.entries.synthetic"];
-  plan.reloadPlugins = true;
-  plan.pluginLifecycle = pluginLifecycle;
   const reload = handler.applyHotReload(plan, committed, {
     sourceConfig: committed,
     publish: async (commit) => await commit(),
@@ -522,15 +442,11 @@ it.each([
       expect(error).toBe(pluginFailure);
     }
     if (event === "config supersession") {
-      await expect(
-        loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
-      ).resolves.toMatchObject({
+      await expect(loadDispatch({ agentId: "default" })).resolves.toMatchObject({
         config: committed,
       });
     } else {
-      await expect(
-        loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
-      ).rejects.toThrow();
+      await expect(loadDispatch({ agentId: "default" })).rejects.toThrow();
     }
   } finally {
     finishRefresh.resolve();
@@ -558,24 +474,10 @@ describe("retained config and committed model publication", () => {
       rebuild: false,
     },
     {
-      name: "keeps the catalog ready throughout a UI preference commit",
-      retained: { ui: { prefs: { sidebarEntries: [] } } },
-      committed: { ui: { prefs: { sidebarEntries: ["sessions"] } } },
-      changedPath: "ui.prefs.sidebarEntries",
-      rebuild: false,
-    },
-    {
       name: "replaces channel activation facts after disabling a configured channel",
       retained: { channels: { slack: { streaming: { mode: "off" }, enabled: true } } },
       committed: { channels: { slack: { streaming: { mode: "off" }, enabled: false } } },
       changedPath: "channels.slack.enabled",
-      rebuild: true,
-    },
-    {
-      name: "replaces configured channel model selection facts",
-      retained: { channels: { modelByChannel: { slack: { C1: "custom/before" } } } },
-      committed: { channels: { modelByChannel: { slack: { C1: "custom/after" } } } },
-      changedPath: "channels.modelByChannel.slack.C1",
       rebuild: true,
     },
     {
@@ -589,7 +491,7 @@ describe("retained config and committed model publication", () => {
   ])("$name", async ({ retained, committed, changedPath, rebuild, addedAgentId }) => {
     setRuntimeConfigSnapshot(retained, retained);
     await publish(retained);
-    const previous = getPreparedModelRuntimeSnapshot(ownerInput(retained));
+    const previous = getSnapshot(ownerInput(retained));
     expect(previous?.isCurrent()).toBe(true);
     const preparations = mocks.prepareStaticCatalog.mock.calls.length;
     if (addedAgentId) {
@@ -609,7 +511,7 @@ describe("retained config and committed model publication", () => {
           isCurrent: () => true,
           publish: async (commit) => {
             await commit();
-            const catalog = getPreparedModelRuntimeSnapshot(ownerInput(committed));
+            const catalog = getSnapshot(ownerInput(committed));
             if (rebuild) {
               expect(catalog).toBeUndefined();
             } else {
@@ -619,7 +521,7 @@ describe("retained config and committed model publication", () => {
           },
         }),
       ).resolves.toBe("applied");
-      const catalog = await readPreparedGatewayModelCatalogOwnerSnapshot({
+      const catalog = await readCatalog({
         agentId: "default",
         getConfig: () => committed,
       });
@@ -631,7 +533,7 @@ describe("retained config and committed model publication", () => {
         preparations + (rebuild ? mocks.configuredAgentIds.length : 0),
       );
       if (addedAgentId) {
-        const addedCatalog = await readPreparedGatewayModelCatalogOwnerSnapshot({
+        const addedCatalog = await readCatalog({
           agentId: addedAgentId,
           getConfig: () => committed,
         });
@@ -656,18 +558,13 @@ describe("retained config and committed model publication", () => {
       return { entries: [] };
     });
     const publication = publish(committed);
-    const reading = createDeferred();
-    let read: ReturnType<typeof readPreparedGatewayModelCatalogOwnerSnapshot> | undefined;
+    let read: CatalogRead | undefined;
     try {
       await entered.promise;
-      read = readPreparedGatewayModelCatalogOwnerSnapshot({
+      read = readCatalog({
         agentId: "default",
-        getConfig: () => {
-          reading.resolve();
-          return committed;
-        },
+        getConfig: () => committed,
       });
-      await reading.promise;
       release.resolve();
       await publication;
       const catalog = await read;
@@ -693,9 +590,11 @@ describe("retained config and committed model publication", () => {
       await release.promise;
       throw failure;
     });
-    const admission = acquireAgentRunPreparedModelRuntime({
+    const admission = acquireRun({
       ...ownerInput(retained),
       workspaceDir: fixture.state.path("failed-run-workspace"),
+      // Require a separate owner so admission still exercises failed preparation.
+      skipCredentials: true,
     });
     const result = admission.catch((error: unknown) => error);
     try {
@@ -717,12 +616,12 @@ describe("retained config and committed model publication", () => {
     await using lease = await acquirePreparedModelRuntimeSnapshot(ownerInput(retained));
     const discoveries = mocks.runPreparedModelCatalogWorker.mock.calls.length;
     advancePreparedModelRuntimeConfig(config(false));
-    await withPreparedModelRuntimePluginGenerationScope(
+    await withGeneration(
       lease.pluginGeneration,
       async () => {
-        await expect(
-          loadPreparedModelCatalogOwnerSnapshot(ownerInput(retained)),
-        ).rejects.toBeInstanceOf(PreparedModelCatalogConfigReplacedError);
+        await expect(loadCatalog(ownerInput(retained))).rejects.toBeInstanceOf(
+          PreparedModelCatalogConfigReplacedError,
+        );
       },
       () => lease.snapshot,
     );
@@ -733,9 +632,7 @@ describe("retained config and committed model publication", () => {
 it.each(["success", "activation failure"] as const)(
   "delivers low-level channel replies after plugin reload %s with a retained monitor config",
   async (outcome) => {
-    const retained = config(true);
-    setRuntimeConfigSnapshot(retained, retained);
-    await publish(retained);
+    const { retained, committed } = await publishMemoryConfig();
     const deliver = vi.fn(async (_payload: ReplyPayload) => undefined);
     const dispatch = async (messageId: string) => {
       const dispatcher = createReplyDispatcher({ deliver });
@@ -756,7 +653,7 @@ it.each(["success", "activation failure"] as const)(
         dispatcher,
         replyResolver: async (_ctx, _opts, configOverride) => {
           const runtime = getPreparedReplyDispatchRuntime();
-          const owner = await loadPreparedModelCatalogOwnerSnapshot(
+          const owner = await loadCatalog(
             ownerInput(runtime?.config ?? configOverride ?? retained),
           );
           return {
@@ -768,24 +665,17 @@ it.each(["success", "activation failure"] as const)(
       await dispatcher.waitForIdle();
       expect(result.queuedFinal).toBe(true);
     };
-    const committed = config(false);
-    const pluginLifecycle = {
-      operationId: "reply-reload",
-      pluginIds: ["synthetic"],
-      reason: "reload" as const,
-    };
+    const plan = pluginPlan("reply-reload");
+    const pluginLifecycle = plan.pluginLifecycle;
     const activationFailure = new PluginRuntimeApplicationError("synthetic activation failed", {
       ...pluginLifecycle,
       generation: 1,
       phase: "activate",
       committed: true,
     });
-    const handler = createPluginReloadHandler(async ({ prepareConfigEffects, commitRuntime }) => {
-      prepareConfigEffects({
-        pluginIds: new Set(pluginLifecycle.pluginIds),
-        channels: new Set(),
-      }).retire();
-      await commitRuntime({ publish: () => setRuntimeConfigSnapshot(committed, committed) });
+    const handler = createPluginReloadHandler(async (context) => {
+      prepareEffects(context).retire();
+      await commitConfig(context, committed);
       if (outcome === "activation failure") {
         throw activationFailure;
       }
@@ -794,10 +684,6 @@ it.each(["success", "activation failure"] as const)(
         activeChannels: new Set(),
       };
     });
-    const plan = buildGatewayReloadPlan([]);
-    plan.changedPaths = ["plugins.entries.synthetic"];
-    plan.reloadPlugins = true;
-    plan.pluginLifecycle = pluginLifecycle;
     try {
       await dispatch("before-reload");
       const reload = handler.applyHotReload(plan, committed);

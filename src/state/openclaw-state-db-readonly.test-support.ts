@@ -1,4 +1,7 @@
-import { createRetainedOperation, type RetainedOperation } from "../infra/retained-operation.js";
+import {
+  createRetainedOperation,
+  type RetainedOperation,
+} from "@openclaw/worker-runtime/lifecycle";
 import type {
   OpenClawStateReadAuthority,
   OpenClawStateReadLocation,
@@ -37,24 +40,23 @@ export function createReadWorkerFixture(
   ) => Promise<OpenClawStateReadOutcome>,
   close: () => Promise<void>,
 ) {
-  const progress = new Set<() => void>();
   return {
     captureOpenClawStateReadSource: () => ({
       createTransport: () => ({
-        startRead: (source: OpenClawStateReadLocation, authority: OpenClawStateReadAuthority) =>
-          observeAsyncFixture(() => read(source, authority)),
-        startValidateFresh: () => observeAsyncFixture(async () => {}),
-        startClose: () => observeAsyncFixture(close),
+        startRead: async (
+          source: OpenClawStateReadLocation,
+          authority: OpenClawStateReadAuthority,
+        ) => {
+          authority.assertCurrent();
+          return await read(source, authority);
+        },
+        startValidateFresh: async (
+          _context: OpenClawStateReadLocation["context"],
+          authority: OpenClawStateReadAuthority,
+        ) => authority.assertCurrent(),
+        startClose: close,
       }),
-      own(service: () => void) {
-        progress.add(service);
-        return () => progress.delete(service);
-      },
-      service() {
-        for (const service of Array.from(progress)) {
-          service();
-        }
-      },
+      own: () => () => {},
     }),
   };
 }

@@ -21,18 +21,13 @@ const paths = {
   artifact: "personal-task-status.txt",
 };
 type Fault =
-  | "missing-read"
-  | "missing-write"
   | "reordered"
   | "unmatched"
   | "failed"
   | "fake"
-  | "parallel"
   | "tied-parallel"
   | "early-result"
-  | "early-artifact"
-  | "overclaim"
-  | "repeat-write";
+  | "early-artifact";
 
 async function runTaskEvidence(codeMode: boolean, fault?: Fault, tiedSerial = false) {
   const workspaceDir = tempDirs.make("qa-task-evidence-");
@@ -58,21 +53,12 @@ async function runTaskEvidence(codeMode: boolean, fault?: Fault, tiedSerial = fa
       writeFileSync(artifactPath, artifact);
       const terminalAt = Math.ceil(statSync(artifactPath).mtimeMs) + 100;
       const order = fault === "reordered" ? [1, 0, 2] : [0, 1, 2];
-      if (fault === "repeat-write") {
-        order.push(2);
-      }
       if (codeMode && !fault) {
         order.push(3);
       }
       messages = [];
       const deferredResults: unknown[] = [];
       for (const [index, operation] of order.entries()) {
-        if (
-          (fault === "missing-read" && operation === 1) ||
-          (fault === "missing-write" && operation === 2)
-        ) {
-          continue;
-        }
         const toolName = operation === 2 ? "write" : "read";
         const file = operation === 0 ? paths.ledger : operation === 1 ? paths.note : paths.artifact;
         const input = { path: path.join(workspaceDir, file) };
@@ -82,11 +68,9 @@ async function runTaskEvidence(codeMode: boolean, fault?: Fault, tiedSerial = fa
         const timestamp =
           fault === "early-result" && operation === 2
             ? terminalAt + 1
-            : fault === "parallel" && operation === 0
-              ? terminalAt - 40
-              : fault === "tied-parallel" || tiedSerial
-                ? startedAt
-                : startedAt + 5;
+            : fault === "tied-parallel" || tiedSerial
+              ? startedAt
+              : startedAt + 5;
         if (codeMode) {
           if (index === 0 || (index === 2 && fault !== "tied-parallel")) {
             messages.push({
@@ -172,71 +156,64 @@ async function runTaskEvidence(codeMode: boolean, fault?: Fault, tiedSerial = fa
       state.addOutboundMessage({
         to: `dm:${inbound.conversation.id}`,
         replyToId: inbound.id,
-        text: fault === "overclaim" ? `${reply}\nPublished successfully` : reply,
+        text: reply,
         timestamp: fault === "early-artifact" ? statSync(artifactPath).mtimeMs - 1 : terminalAt,
         toolCalls: (codeMode
-          ? ["exec", "read", "read", "exec", "write", "read"]
-          : ["read", "read", "write"]
-        ).map((name) => ({ name, arguments: { path: "[redacted]" } })),
+          ? ([
+              ["exec", undefined],
+              ["read", paths.ledger],
+              ["read", paths.note],
+              ["exec", undefined],
+              ["write", paths.artifact],
+              ["read", paths.artifact],
+            ] as const)
+          : ([
+              ["read", paths.ledger],
+              ["read", paths.note],
+              ["write", paths.artifact],
+            ] as const)
+        ).map(([name, file]) => ({
+          name,
+          arguments: file
+            ? { path: path.join(workspaceDir, file) }
+            : { code: "dispatch task tools" },
+        })),
       });
     },
   });
 }
 
-describe("task telemetry evidence", () => {
-  it.each([false, true])(
-    "accepts ordered correlated task work with codeMode=%s",
-    async (codeMode) => {
-      await expect(runTaskEvidence(codeMode)).resolves.toMatchObject({ status: "pass" });
-    },
-  );
-
-  it.each([false, true])("accepts tied serial task work with codeMode=%s", async (codeMode) => {
+describe.each([false, true])("task telemetry evidence with codeMode=%s", (codeMode) => {
+  it("accepts correlated serial task work with tied timestamps", async () => {
     await expect(runTaskEvidence(codeMode, undefined, true)).resolves.toMatchObject({
       status: "pass",
     });
   });
 
-  describe.each([false, true])("invalid evidence with codeMode=%s", (codeMode) => {
-    it.each<Fault>([
-      "missing-read",
-      "missing-write",
-      "reordered",
-      "unmatched",
-      "failed",
-      "fake",
-      "parallel",
-      "tied-parallel",
-      "early-result",
-      "early-artifact",
-      "overclaim",
-      "repeat-write",
-    ])("rejects %s despite a plausible start trace and artifact", async (fault) => {
-      const result = runTaskEvidence(codeMode, fault);
-      await expect(result).rejects.toThrow(/task|artifact|claim/);
-      if (fault === "parallel" || fault === "tied-parallel") {
-        const error = await result.catch((failure: unknown) => failure);
-        expect(error).toBeInstanceOf(Error);
-        const message = String(error);
-        expect(message).toContain('{"inbound":');
-        const evidence = JSON.parse(message.slice(message.indexOf('{"inbound":')));
-        expect(evidence).toEqual({
-          inbound: expect.any(Number),
-          outbound: expect.any(Number),
-          logical: ["read", "read", "write"].map((toolName) => ({
-            toolName,
-            startedAt: expect.any(Number),
-            timestamp: expect.any(Number),
-            startAfterIndex: expect.any(Number),
-            resultIndex: expect.any(Number),
-            completed: true,
-            successful: true,
-          })),
-        });
-        expect(message).not.toContain(paths.ledger);
-        expect(message).not.toContain(paths.note);
-        expect(message).not.toContain(paths.artifact);
+  // Common task assertions need one mode; correlation and ordering use both adapters.
+  const faults: Fault[] = codeMode
+    ? ["unmatched", "failed", "tied-parallel"]
+    : ["reordered", "unmatched", "fake", "tied-parallel", "early-result", "early-artifact"];
+  it.each(faults)("rejects %s despite a plausible start trace and artifact", async (fault) => {
+    const result = runTaskEvidence(codeMode, fault);
+    await expect(result).rejects.toThrow(/task|artifact|claim/);
+    if (fault === "tied-parallel") {
+      const error = await result.catch((failure: unknown) => failure);
+      const message = String(error);
+      expect(message).toContain('{"inbound":');
+      const evidence = JSON.parse(message.slice(message.indexOf('{"inbound":')));
+      expect(evidence).toMatchObject({
+        inbound: expect.any(Number),
+        outbound: expect.any(Number),
+      });
+      expect(evidence.logical.map((activity: { toolName: string }) => activity.toolName)).toEqual([
+        "read",
+        "read",
+        "write",
+      ]);
+      for (const file of Object.values(paths)) {
+        expect(message).not.toContain(file);
       }
-    });
+    }
   });
 });

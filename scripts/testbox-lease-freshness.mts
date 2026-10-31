@@ -14,10 +14,10 @@ import { resolve } from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 const STATE_VERSION = 2;
-const DEPENDENCY_INPUTS = ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", ".npmrc"];
 const ENVIRONMENT_INPUTS = [
   ".crabbox.yaml",
   ".github/actions/prepare-testbox-shell",
+  ".github/actions/setup-android-toolchain",
   ".node-version",
   "scripts/crabbox-wrapper.mjs",
   "scripts/crabbox-wrapper.mts",
@@ -140,7 +140,21 @@ function buildTestboxLeaseFingerprint(
     checkoutKey: digest(realpathSync(repoRoot)),
     baseSha,
     headSha: git(repoRoot, ["rev-parse", "HEAD"]),
-    dependencyDigest: digestInputs(repoRoot, [...DEPENDENCY_INPUTS, "patches"]),
+    // Share one audited install contract, including raw patch bytes and sparse
+    // index inputs, so cache and lease reuse cannot disagree about install work.
+    dependencyDigest: digest(
+      execFileSync(
+        process.execPath,
+        [
+          resolve(repoRoot, ".github/actions/setup-node-env/dependency-fingerprint.mjs"),
+          "--workspace",
+          repoRoot,
+          "--frozen-lockfile",
+          "true",
+        ],
+        { cwd: repoRoot, env: { ...process.env, ...env }, encoding: "utf8" },
+      ).trim(),
+    ),
     environmentDigest: digestInputs(repoRoot, [
       ...ENVIRONMENT_INPUTS,
       ...(workflow ? [workflow] : []),
@@ -151,7 +165,7 @@ function buildTestboxLeaseFingerprint(
   };
 }
 
-export function testboxLeaseStaleReasons(saved: unknown, current: unknown) {
+function testboxLeaseStaleReasons(saved: unknown, current: unknown) {
   if (!isRecord(saved) || saved.version !== STATE_VERSION || !isRecord(current)) {
     return ["state schema"];
   }
@@ -235,18 +249,6 @@ export function prepareTestboxLeaseFreshness({
     retained: args[0] === "warmup" || keep || Boolean(id),
     keepOnFailure,
     assertCurrent() {
-      const latest = buildTestboxLeaseFingerprint(repoRoot, args, env);
-      const changed = testboxLeaseStaleReasons(current, latest);
-      // A new command may refresh compatible source. An already prepared
-      // command must still delegate exactly the revision it captured.
-      if (current.headSha !== latest.headSha) {
-        changed.unshift("headSha");
-      }
-      if (changed.length > 0) {
-        throw new Error(
-          `Testbox inputs changed during preparation (${changed.join(", ")}); rerun from the current checkout`,
-        );
-      }
       assertAllocationReceipt(stateDir, id, current);
     },
     attribution: {

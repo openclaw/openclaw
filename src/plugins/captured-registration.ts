@@ -14,7 +14,6 @@ import {
 } from "./agent-tool-result-middleware.js";
 import { buildPluginApi, createUnavailableRuntime } from "./api-builder.js";
 import { resolveCapabilityProviderRegistration } from "./capability-catalog.js";
-import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type { EmbeddingProviderAdapter } from "./embedding-providers.js";
 import type {
   PluginAgentEventSubscriptionRegistration,
@@ -44,7 +43,6 @@ import type {
   MusicGenerationProviderPlugin,
   OpenClawPluginCliRootCommandDescriptor,
   OpenClawPluginCliRegistrar,
-  PluginTextTransformRegistration,
   ProviderPlugin,
   RealtimeTranscriptionProviderPlugin,
   RealtimeVoiceProviderPlugin,
@@ -63,41 +61,7 @@ type CapturedPluginCliRegistration = {
   descriptors: OpenClawPluginCliRootCommandDescriptor[];
 };
 
-export type CapturedPluginRegistration = {
-  api: OpenClawPluginApi;
-  providers: ProviderPlugin[];
-  agentHarnesses: AgentHarness[];
-  cliRegistrars: CapturedPluginCliRegistration[];
-  cliBackends: CliBackendPlugin[];
-  textTransforms: PluginTextTransformRegistration[];
-  codexAppServerExtensionFactories: CodexAppServerExtensionFactory[];
-  agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];
-  embeddingProviders: EmbeddingProviderAdapter[];
-  speechProviders: SpeechProviderPlugin[];
-  realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[];
-  realtimeVoiceProviders: RealtimeVoiceProviderPlugin[];
-  mediaUnderstandingProviders: MediaUnderstandingProviderPlugin[];
-  transcriptSourceProviders: TranscriptSourceProvider[];
-  imageGenerationProviders: ImageGenerationProviderPlugin[];
-  videoGenerationProviders: VideoGenerationProviderPlugin[];
-  musicGenerationProviders: MusicGenerationProviderPlugin[];
-  webFetchProviders: WebFetchProviderPlugin[];
-  webSearchProviders: WebSearchProviderPlugin[];
-  workerProviders: WorkerProvider[];
-  storageProviders: StorageProvider[];
-  migrationProviders: MigrationProviderPlugin[];
-  sessionExtensions: PluginSessionExtensionRegistration[];
-  trustedToolPolicies: PluginTrustedToolPolicyRegistration[];
-  toolMetadata: PluginToolMetadataRegistration[];
-  controlUiDescriptors: PluginControlUiDescriptor[];
-  runtimeLifecycles: PluginRuntimeLifecycleRegistration[];
-  agentEventSubscriptions: PluginAgentEventSubscriptionRegistration[];
-  sessionSchedulerJobs: PluginSessionSchedulerJobRegistration[];
-  sessionActions: PluginSessionActionRegistration[];
-  tools: AnyAgentTool[];
-  modelCatalogProviders: UnifiedModelCatalogProviderPlugin[];
-  sessionCatalogs: SessionCatalogProvider[];
-};
+export type CapturedPluginRegistration = ReturnType<typeof createCapturedPluginRegistration>;
 
 function captureInto<T>(entries: T[]): (entry: T) => void {
   return (entry) => {
@@ -120,40 +84,38 @@ export function createCapturedPluginRegistration(params?: {
   name?: string;
   registrationMode?: OpenClawPluginApi["registrationMode"];
   source?: string;
-}): CapturedPluginRegistration {
-  const captured: Omit<CapturedPluginRegistration, "api"> = {
-    providers: [],
-    agentHarnesses: [],
-    cliRegistrars: [],
-    cliBackends: [],
-    textTransforms: [],
-    codexAppServerExtensionFactories: [],
-    agentToolResultMiddlewares: [],
-    embeddingProviders: [],
-    speechProviders: [],
-    realtimeTranscriptionProviders: [],
-    realtimeVoiceProviders: [],
-    mediaUnderstandingProviders: [],
-    transcriptSourceProviders: [],
-    imageGenerationProviders: [],
-    videoGenerationProviders: [],
-    musicGenerationProviders: [],
-    webFetchProviders: [],
-    webSearchProviders: [],
-    workerProviders: [],
-    storageProviders: [],
-    migrationProviders: [],
-    sessionExtensions: [],
-    trustedToolPolicies: [],
-    toolMetadata: [],
-    controlUiDescriptors: [],
-    runtimeLifecycles: [],
-    agentEventSubscriptions: [],
-    sessionSchedulerJobs: [],
-    sessionActions: [],
-    tools: [],
-    modelCatalogProviders: [],
-    sessionCatalogs: [],
+}) {
+  const captured = {
+    providers: new Array<ProviderPlugin>(),
+    agentHarnesses: new Array<AgentHarness>(),
+    cliRegistrars: new Array<CapturedPluginCliRegistration>(),
+    cliBackends: new Array<CliBackendPlugin>(),
+    agentToolResultMiddlewares: new Array<PluginAgentToolResultMiddlewareRegistration>(),
+    embeddingProviders: new Array<EmbeddingProviderAdapter>(),
+    speechProviders: new Array<SpeechProviderPlugin>(),
+    realtimeTranscriptionProviders: new Array<RealtimeTranscriptionProviderPlugin>(),
+    realtimeVoiceProviders: new Array<RealtimeVoiceProviderPlugin>(),
+    mediaUnderstandingProviders: new Array<MediaUnderstandingProviderPlugin>(),
+    transcriptSourceProviders: new Array<TranscriptSourceProvider>(),
+    imageGenerationProviders: new Array<ImageGenerationProviderPlugin>(),
+    videoGenerationProviders: new Array<VideoGenerationProviderPlugin>(),
+    musicGenerationProviders: new Array<MusicGenerationProviderPlugin>(),
+    webFetchProviders: new Array<WebFetchProviderPlugin>(),
+    webSearchProviders: new Array<WebSearchProviderPlugin>(),
+    workerProviders: new Array<WorkerProvider>(),
+    storageProviders: new Array<StorageProvider>(),
+    migrationProviders: new Array<MigrationProviderPlugin>(),
+    sessionExtensions: new Array<PluginSessionExtensionRegistration>(),
+    trustedToolPolicies: new Array<PluginTrustedToolPolicyRegistration>(),
+    toolMetadata: new Array<PluginToolMetadataRegistration>(),
+    controlUiDescriptors: new Array<PluginControlUiDescriptor>(),
+    runtimeLifecycles: new Array<PluginRuntimeLifecycleRegistration>(),
+    agentEventSubscriptions: new Array<PluginAgentEventSubscriptionRegistration>(),
+    sessionSchedulerJobs: new Array<PluginSessionSchedulerJobRegistration>(),
+    sessionActions: new Array<PluginSessionActionRegistration>(),
+    tools: new Array<AnyAgentTool>(),
+    modelCatalogProviders: new Array<UnifiedModelCatalogProviderPlugin>(),
+    sessionCatalogs: new Array<SessionCatalogProvider>(),
   };
   let capturedSessionTurnCount = 0;
   const pluginId = params?.id ?? "captured-plugin-registration";
@@ -219,9 +181,6 @@ export function createCapturedPluginRegistration(params?: {
         registerModelCatalogProvider: captureInto(captured.modelCatalogProviders),
         registerSessionCatalog: captureInto(captured.sessionCatalogs),
         registerAgentHarness: captureInto(captured.agentHarnesses),
-        registerCodexAppServerExtensionFactory: captureInto(
-          captured.codexAppServerExtensionFactories,
-        ),
         registerAgentToolResultMiddleware(
           handler: AgentToolResultMiddleware,
           options?: AgentToolResultMiddlewareOptions,
@@ -260,7 +219,6 @@ export function createCapturedPluginRegistration(params?: {
           captured.agentToolResultMiddlewares.push(registration);
         },
         registerCliBackend: captureInto(captured.cliBackends),
-        registerTextTransforms: captureInto(captured.textTransforms),
         registerEmbeddingProvider: captureInto(captured.embeddingProviders),
         registerSpeechProvider: captureCapabilityInto(captured.speechProviders),
         registerRealtimeTranscriptionProvider: captureCapabilityInto(

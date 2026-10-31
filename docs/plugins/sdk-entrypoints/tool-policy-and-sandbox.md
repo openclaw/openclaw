@@ -7,8 +7,7 @@ read_when:
   - You are parsing a sandbox bind specification
 ---
 
-The synchronous policy and sandbox parsing primitives that
-`openclaw/plugin-sdk/agent-harness-runtime` exposes to plugins. Part of the
+Shared policy and sandbox parsing primitives for plugins. Part of the
 [Plugin entry points](/plugins/sdk-entrypoints) reference.
 
 ## Tool policy vocabulary
@@ -42,6 +41,18 @@ matching. A harness that exposes a tool under another name can supply
 `options.toolAliases(tool)` with its accepted policy aliases. Each restriction
 can match the original name or an alias; the result retains the original tool
 objects and their execution wrappers.
+
+## Exec policy layering
+
+`openclaw/plugin-sdk/agent-harness-runtime` exposes
+`execPolicy.resolveExecModePolicy({ mode?, security, ask })` to resolve an exec
+policy before projecting it into a backend's permission flags.
+
+Layer global and per-agent exec policy before calling the resolver. An explicit
+`mode` supplies its corresponding security and approval settings.
+Otherwise, explicitly supplied `security` or `ask` fields replace those fields
+and clear the inherited mode; unspecified fields retain their inherited values.
+An empty or absent layer preserves the base policy.
 
 ## Sandbox bind parsing
 

@@ -1,62 +1,66 @@
 import fs from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Command } from "commander";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { readLibraryInput, uploadLibraryZip } from "./skills-library-input.js";
+import { defaultRuntime } from "../runtime.js";
+import * as gatewayRpc from "./gateway-rpc.js";
+import { registerSkillsLibraryCli } from "./skills-library-cli.js";
 
-const call = vi.hoisted(() => vi.fn());
-vi.mock("./gateway-rpc.js", () => ({ callGatewayFromCliWithTransport: call }));
+const rpc = () => vi.mocked(gatewayRpc.callGatewayFromCliWithTransport);
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
-    vi.restoreAllMocks();
-    syncBuiltinESMExports();
-    cleanup();
-  }),
-);
+async function parseLibraryInput(input: string, zip = false) {
+  const program = new Command().exitOverride();
+  registerSkillsLibraryCli(program.command("skills"));
+  await program.parseAsync(
+    ["skills", "library", zip ? "import" : "create", input, "--slug", "skill", "--json"],
+    { from: "user" },
+  );
+}
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => {
+  vi.restoreAllMocks();
+  syncBuiltinESMExports();
+});
 const MIB = 1024 * 1024;
 
 beforeEach(() => {
-  call.mockReset();
-  call.mockImplementation(async (_method, _opts, params) => {
-    if (params.action === "begin") {
-      return { uploadId: "upload", offset: 0, maxChunkBytes: MIB };
-    }
-    if (params.action === "chunk") {
-      return { offset: params.offset + Buffer.from(params.data, "base64").length };
-    }
-    return { state: "published" };
-  });
+  vi.spyOn(gatewayRpc, "callGatewayFromCliWithTransport").mockResolvedValue({ state: "published" });
+  for (const method of ["error", "exit", "writeJson"] as const) {
+    vi.spyOn(defaultRuntime, method).mockImplementation(() => {});
+  }
 });
 
+function inputFixture() {
+  const directory = tempDirs.make("skills-library-input-");
+  const write = (name: string, data: string | Buffer, mode?: number) => {
+    const file = path.join(directory, name);
+    return fs.writeFile(file, data, { mode }).then(() => file);
+  };
+  return { directory, write };
+}
+
+function expectRejectedInput(expected: RegExp) {
+  expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringMatching(expected));
+  expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  expect(rpc()).not.toHaveBeenCalled();
+}
+
 function mutateBeforeFileRead(target: string, mutate: () => Promise<void>, beforeOpen = false) {
-  const originalReadFile = fs.readFile;
   const originalOpen = fs.open;
   const mutation = vi.fn(mutate);
-  let changed = false;
-  const changeOnce = async () => {
-    if (!changed) {
-      changed = true;
-      await mutation();
-    }
-  };
-  // Cover pathname reads and borrowed-handle reads without replacing their real I/O.
-  vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
-    if (args[0] === target) {
-      await changeOnce();
-    }
-    return originalReadFile(...args);
-  });
+  // readRegularFile captures identity before open and reads through the returned handle.
   vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-    if (args[0] === target && beforeOpen) {
-      await changeOnce();
+    if (args[0] === target && beforeOpen && mutation.mock.calls.length === 0) {
+      await mutation();
     }
     const handle = await originalOpen(...args);
     if (args[0] === target && !beforeOpen) {
       const originalRead = handle.read.bind(handle);
-      vi.spyOn(handle, "read").mockImplementation(async (...readArgs) => {
-        await changeOnce();
+      vi.spyOn(handle, "read").mockImplementationOnce(async (...readArgs) => {
+        await mutation();
         return originalRead(...readArgs);
       });
     }
@@ -66,107 +70,80 @@ function mutateBeforeFileRead(target: string, mutate: () => Promise<void>, befor
   return mutation;
 }
 
-async function captureReadFailure(operation: () => Promise<unknown>): Promise<unknown> {
-  return operation().then(
-    () => undefined,
-    (error: unknown) => error,
-  );
-}
+it("keeps the 256-file boundary including empty supporting files", async () => {
+  const { directory, write } = inputFixture();
+  await write("SKILL.md", "skill");
+  for (let index = 0; index < 255; index++) {
+    await write(`${index}.txt`, "");
+  }
+  await parseLibraryInput(directory);
+  expect(rpc().mock.calls[0]?.[2]).toHaveProperty("files.length", 255);
+  expect(defaultRuntime.error).not.toHaveBeenCalled();
 
-describe("skills library file admission", () => {
-  it("keeps the 256-file boundary including empty supporting files", async () => {
-    const directory = tempDirs.make("skills-library-count-");
-    await fs.writeFile(path.join(directory, "SKILL.md"), "skill");
-    for (let index = 0; index < 255; index++) {
-      await fs.writeFile(path.join(directory, `${index}.txt`), "");
-    }
-    const bundle = await readLibraryInput(directory);
-    expect(bundle.files).toHaveLength(255);
-
-    await fs.writeFile(path.join(directory, "extra.txt"), "");
-    await expect(readLibraryInput(directory)).rejects.toThrow("256-file limit");
-  });
-
-  it("preserves hardlinks, ancestor symlinks, and executable metadata", async () => {
-    const directory = tempDirs.make("skills-library-aliases-");
-    const parent = path.join(directory, "parent");
-    const bundle = path.join(parent, "bundle");
-    const alias = path.join(directory, "alias");
-    await fs.mkdir(bundle, { recursive: true });
-    await fs.symlink(parent, alias, "junction");
-    await fs.writeFile(path.join(bundle, "SKILL.md"), "skill\r\n");
-    const original = path.join(directory, "original.bin");
-    await fs.writeFile(original, Buffer.from([0, 255, 13, 10]), { mode: 0o755 });
-    await fs.link(original, path.join(bundle, "linked.bin"));
-
-    const result = await readLibraryInput(path.join(alias, "bundle"));
-
-    expect(result.content).toBe("skill\r\n");
-    expect(result.files).toEqual([
-      {
-        path: "linked.bin",
-        content: "AP8NCg==",
-        encoding: "base64",
-        executable: ((await fs.stat(original)).mode & 0o111) !== 0,
-      },
-    ]);
-  });
-
-  it("rejects a skill file that grows beyond 1 MiB after metadata capture", async () => {
-    const directory = tempDirs.make("skills-library-growth-");
-    const file = path.join(directory, "SKILL.md");
-    await fs.writeFile(file, "skill");
-    const mutation = mutateBeforeFileRead(file, () => fs.writeFile(file, Buffer.alloc(MIB + 1)));
-
-    const error = await captureReadFailure(() => readLibraryInput(file));
-
-    expect(mutation).toHaveBeenCalledTimes(1);
-    expect(error).toMatchObject({ message: expect.stringMatching(/exceeds|limit/iu) });
-  });
-
-  it.each([
-    { name: "grows beyond 8 MiB", bytes: 8 * MIB + 1 },
-    { name: "becomes empty", bytes: 0 },
-  ])("rejects a ZIP that $name before starting an upload", async ({ bytes }) => {
-    const directory = tempDirs.make("skills-library-zip-");
-    const file = path.join(directory, "skill.zip");
-    await fs.writeFile(file, "zip");
-    const mutation = mutateBeforeFileRead(file, () => fs.writeFile(file, Buffer.alloc(bytes)));
-
-    const error = await captureReadFailure(() => uploadLibraryZip(file, "skill", {}));
-
-    expect(mutation).toHaveBeenCalledTimes(1);
-    expect(error).toMatchObject({ message: expect.stringMatching(/exceeds|between|empty/iu) });
-    expect(call).not.toHaveBeenCalled();
-  });
-
-  it("counts bytes actually read toward the 8 MiB bundle limit", async () => {
-    const directory = tempDirs.make("skills-library-total-");
-    const grown = path.join(directory, "00-grown.bin");
-    await fs.writeFile(grown, "x");
-    await fs.writeFile(path.join(directory, "SKILL.md"), "skill");
-    for (let index = 1; index <= 7; index++) {
-      await fs.writeFile(path.join(directory, `0${index}.bin`), Buffer.alloc(MIB));
-    }
-    const mutation = mutateBeforeFileRead(grown, () => fs.writeFile(grown, Buffer.alloc(MIB)));
-
-    const error = await captureReadFailure(() => readLibraryInput(directory));
-
-    expect(mutation).toHaveBeenCalledTimes(1);
-    expect(error).toMatchObject({ message: expect.stringMatching(/exceeds|limit/iu) });
-  });
-
-  it("rejects an input replaced by another inode after preview", async () => {
-    const directory = tempDirs.make("skills-library-replaced-");
-    const file = path.join(directory, "SKILL.md");
-    const replacement = path.join(directory, "replacement.md");
-    await fs.writeFile(file, "original");
-    await fs.writeFile(replacement, "replacement");
-    const mutation = mutateBeforeFileRead(file, () => fs.rename(replacement, file), true);
-
-    const error = await captureReadFailure(() => readLibraryInput(file));
-
-    expect(mutation).toHaveBeenCalledTimes(1);
-    expect(error).toMatchObject({ message: expect.stringMatching(/identity|changed/iu) });
-  });
+  await write("extra.txt", "");
+  rpc().mockClear();
+  await parseLibraryInput(directory);
+  expectRejectedInput(/256-file limit/);
 });
+
+it("preserves hardlinks, ancestor symlinks, and executable metadata", async () => {
+  const { directory, write } = inputFixture();
+  const bundle = path.join(directory, "parent", "bundle");
+  const alias = path.join(directory, "alias");
+  await fs.mkdir(bundle, { recursive: true });
+  await fs.symlink(path.dirname(bundle), alias, "junction");
+  await fs.writeFile(path.join(bundle, "SKILL.md"), "skill\r\n");
+  const original = await write("original.bin", Buffer.from([0, 255, 13, 10]), 0o755);
+  await fs.link(original, path.join(bundle, "linked.bin"));
+
+  await parseLibraryInput(path.join(alias, "bundle"));
+
+  expect(defaultRuntime.error).not.toHaveBeenCalled();
+  expect(rpc().mock.calls[0]?.[2]).toHaveProperty("content", "skill\r\n");
+  expect(rpc().mock.calls[0]?.[2]).toHaveProperty("files", [
+    {
+      path: "linked.bin",
+      content: "AP8NCg==",
+      encoding: "base64",
+      executable: ((await fs.stat(original)).mode & 0o111) !== 0,
+    },
+  ]);
+});
+
+it.each([
+  ["skill", MIB + 1, /exceeds|limit/iu],
+  ["zip", 8 * MIB + 1, /exceeds|between|empty/iu],
+  ["zip", 0, /exceeds|between|empty/iu],
+  ["bundle", MIB, /exceeds|limit/iu],
+  ["skill", undefined, /identity|changed/iu],
+] as const)(
+  "rejects %s input after metadata capture (%s bytes; undefined replaces inode)",
+  async (kind, bytes, expectedError) => {
+    const { directory, write } = inputFixture();
+    const file = await write(
+      kind === "zip" ? "skill.zip" : kind === "bundle" ? "00-grown.bin" : "SKILL.md",
+      bytes === undefined ? "original" : "skill",
+    );
+    if (kind === "bundle") {
+      await write("SKILL.md", "skill");
+      for (let index = 1; index <= 7; index++) {
+        await write(`0${index}.bin`, Buffer.alloc(MIB));
+      }
+    }
+    const replacement = path.join(directory, "replacement.md");
+    if (bytes === undefined) {
+      await write("replacement.md", "replacement");
+    }
+    const mutation = mutateBeforeFileRead(
+      file,
+      () =>
+        bytes === undefined
+          ? fs.rename(replacement, file)
+          : fs.writeFile(file, Buffer.alloc(bytes)),
+      bytes === undefined,
+    );
+    await parseLibraryInput(kind === "bundle" ? directory : file, kind === "zip");
+    expectRejectedInput(expectedError);
+    expect(mutation).toHaveBeenCalledTimes(1);
+  },
+);

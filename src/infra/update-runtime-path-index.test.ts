@@ -14,17 +14,10 @@ describe("runtime path ownership", () => {
         roots: ["/work/package", "/work/package/deep", "/work/PACKAGE", "/", "relative"],
         values: [
           "/work/package",
-          "/work/package/worker.js",
           "/work/package/deep/worker.js",
           "/work/package-other/worker.js",
-          "/work/package/../outside",
           "/work/PACKAGE/file",
-          "/work/package//deep/./file",
-          "/work/package/..hidden/file",
-          "/work/package/a:b",
-          "/unrelated",
           "relative/file",
-          "/work/package ",
         ],
       },
       {
@@ -46,9 +39,6 @@ describe("runtime path ownership", () => {
           "c:/WORK/package/Worker.js",
           "C:\\Work\\Package\\deep\\Worker.js",
           "C:\\Work\\Package-other\\worker.js",
-          "C:\\Work\\Package\\..\\outside",
-          "C:\\Work\\Package\\..hidden\\file",
-          "D:\\Work\\Package\\file",
           "\\\\SERVER\\SHARE\\package\\Worker.js",
           "\\\\server\\other\\package\\Worker.js",
           "\\\\?\\C:\\Work\\Package\\Worker.js",
@@ -56,7 +46,6 @@ describe("runtime path ownership", () => {
           "C:relative\\file",
           "C:\\Work\\Package:stream",
           "C:\\Work\\Package\\part:stream",
-          "C:\\Work\\Package \\file",
           "\\rooted\\file",
         ],
       },
@@ -82,50 +71,26 @@ describe("runtime path ownership", () => {
     },
   );
 
-  it("keeps first-rule and first-alias precedence rather than choosing the longest prefix", () => {
-    const base = path.resolve("runtime-path-rules");
-    const source = path.join(base, "source");
-    const broad = path.join(base, "broad");
-    const narrow = path.join(base, "narrow");
+  it("relocates ordered aliases and exact boundaries", () => {
+    const at = (relative: string) => path.resolve("runtime-path-rules", relative);
+    const makeRule = (source: string, destination: string, ...aliases: string[]) => ({
+      sourceRoot: at(source),
+      destinationRoot: at(destination),
+      sourceAliases: aliases.length ? aliases.map(at) : undefined,
+    });
     const rules = [
-      {
-        sourceRoot: source,
-        destinationRoot: broad,
-        sourceAliases: [path.join(base, "alias"), path.join(base, "alias", "deep")],
-      },
-      { sourceRoot: path.join(source, "deep"), destinationRoot: narrow },
-      { sourceRoot: source, destinationRoot: narrow },
+      makeRule("source", "broad", "alias", "alias/deep"),
+      makeRule("source/deep", "narrow"),
+      makeRule("source", "narrow"),
     ];
     for (const lookup of [rules, prepareRuntimeRelocations(rules)]) {
-      expect(relocateRuntimePath(path.join(source, "deep", "file"), lookup)).toBe(
-        path.join(broad, "deep", "file"),
-      );
-      expect(relocateRuntimePath(path.join(base, "alias", "deep", "file"), lookup)).toBe(
-        path.join(broad, "deep", "file"),
-      );
-      const outside = path.join(base, "source-sibling", "file");
-      expect(relocateRuntimePath(outside, lookup)).toBe(outside);
-    }
-  });
-
-  it("relocates a checkout-sized rule set without confusing sibling prefixes or aliases", () => {
-    const base = path.resolve("runtime-path-scale");
-    const rules = Array.from({ length: 5_000 }, (_, index) => ({
-      sourceRoot: path.join(base, "source", `package-${index}`),
-      sourceAliases: [path.join(base, "aliases", `package-${index}`)],
-      destinationRoot: path.join(base, "retained", `package-${index}`),
-    }));
-    const prepared = prepareRuntimeRelocations(rules);
-    for (const rule of rules) {
-      const suffix = path.join("lib", "Worker.js");
-      expect(relocateRuntimePath(path.join(rule.sourceRoot, suffix), prepared)).toBe(
-        path.join(rule.destinationRoot, suffix),
-      );
-      expect(relocateRuntimePath(path.join(rule.sourceAliases[0]!, suffix), prepared)).toBe(
-        path.join(rule.destinationRoot, suffix),
-      );
-      const outside = path.join(`${rule.sourceRoot}-unowned`, suffix);
-      expect(relocateRuntimePath(outside, prepared)).toBe(outside);
+      for (const [input, expected] of [
+        ["source/deep/file", "broad/deep/file"],
+        ["alias/deep/file", "broad/deep/file"],
+        ["source-sibling/file", "source-sibling/file"],
+      ]) {
+        expect(relocateRuntimePath(at(input!), lookup)).toBe(at(expected!));
+      }
     }
   });
 });

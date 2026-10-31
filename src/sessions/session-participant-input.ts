@@ -1,5 +1,6 @@
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { SessionParticipantIdentity } from "../config/sessions/session-participant-identity.js";
+import { isCronSessionKey } from "./session-key-utils.js";
 
 // Core and SDK chunks share one private key; context spreads retain the same consumed fact.
 export const sessionParticipantInput = Symbol.for("openclaw.sessionParticipantInput");
@@ -27,10 +28,17 @@ export function readSessionInputProfileId(ctx: SessionParticipantInputContext): 
   return identity?.type === "profile" ? identity.id : undefined;
 }
 
-/** Only external turns may load the session's personal preferences; sender identity does not select them. */
 export function isSessionPersonalBootstrapTurn(ctx: SessionParticipantInputContext): boolean {
+  if (
+    ctx.InternalTurnSource !== undefined ||
+    ctx.InputProvenance?.kind === "inter_session" ||
+    ctx.InputProvenance?.kind === "internal_system"
+  ) {
+    // Isolated cron sessions keep shared defaults; wakes in other sessions keep their selection.
+    return !isCronSessionKey(ctx.SessionKey);
+  }
+  // Unqualified external turns must still omit the overlay and restart the prompt series.
   return (
-    ctx.InternalTurnSource === undefined &&
     (!ctx.InputProvenance || ctx.InputProvenance.kind === "external_user") &&
     Boolean(ctx[sessionParticipantInput]?.length)
   );

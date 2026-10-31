@@ -1,4 +1,3 @@
-// Googlechat tests cover automatic reply target reconciliation at the monitor boundary.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import type { GoogleChatCoreRuntime, GoogleChatRuntimeEnv } from "./monitor-types.js";
@@ -16,41 +15,37 @@ const accessMocks = vi.hoisted(() => ({
   applyGoogleChatInboundAccessPolicy: vi.fn(),
 }));
 
-const routingMocks = vi.hoisted(() => ({
-  processEvent: undefined as
-    | ((event: GoogleChatEvent, target: Record<string, unknown>) => Promise<void>)
-    | undefined,
-}));
+type EventProcessor = (event: GoogleChatEvent, target: Record<string, unknown>) => Promise<void>;
+const routingMocks = vi.hoisted(() => ({ processEvent: undefined as EventProcessor | undefined }));
 
 const inboundMocks = vi.hoisted(() => ({
-  resolveChannelInboundRouteEnvelope: vi.fn(),
+  resolveAgentRoute: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>()),
-  resolveChannelInboundRouteEnvelope: inboundMocks.resolveChannelInboundRouteEnvelope,
+  createChannelInboundEnvelopeBuilderAsync:
+    async () =>
+    ({ body }: { body: string }) =>
+      body,
 }));
 
-vi.mock("./api.js", () => ({
-  deleteGoogleChatMessage: apiMocks.deleteGoogleChatMessage,
-  downloadGoogleChatMedia: apiMocks.downloadGoogleChatMedia,
-  sendGoogleChatMessage: apiMocks.sendGoogleChatMessage,
-  updateGoogleChatMessage: apiMocks.updateGoogleChatMessage,
+vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/routing")>()),
+  resolveAgentRoute: inboundMocks.resolveAgentRoute,
 }));
 
-vi.mock("./monitor-access.js", () => ({
-  applyGoogleChatInboundAccessPolicy: accessMocks.applyGoogleChatInboundAccessPolicy,
-}));
+// mock-isolation: capture delivery without issuing Google Chat API requests.
+vi.mock("./api.js", () => apiMocks);
+// mock-isolation: this routing fixture supplies its admitted access result.
+vi.mock("./monitor-access.js", () => accessMocks);
 
+// mock-isolation: capture the event processor without registering shared webhook state.
 vi.mock("./monitor-routing.js", () => ({
   registerGoogleChatWebhookTarget: vi.fn(),
-  setGoogleChatWebhookEventProcessor: vi.fn(
-    (
-      eventProcessor: (event: GoogleChatEvent, target: Record<string, unknown>) => Promise<void>,
-    ) => {
-      routingMocks.processEvent = eventProcessor;
-    },
-  ),
+  setGoogleChatWebhookEventProcessor: (eventProcessor: EventProcessor) => {
+    routingMocks.processEvent = eventProcessor;
+  },
 }));
 
 type GoogleChatTestReplyPayload = { text: string; replyToId?: string };
@@ -66,61 +61,28 @@ beforeEach(() => {
   apiMocks.updateGoogleChatMessage.mockReset().mockResolvedValue({});
   accessMocks.applyGoogleChatInboundAccessPolicy.mockReset().mockResolvedValue({
     ok: true,
-    commandAuthorized: undefined,
-    effectiveWasMentioned: undefined,
-    groupBotLoopProtection: undefined,
-    groupSystemPrompt: undefined,
   });
-  inboundMocks.resolveChannelInboundRouteEnvelope.mockReset().mockReturnValue({
-    route: {
-      agentId: "agent-1",
-      accountId: "work",
-      sessionKey: "session-1",
-    },
-    buildEnvelope: ({ body }: { body: string }) => body,
+  inboundMocks.resolveAgentRoute.mockReset().mockReturnValue({
+    agentId: "agent-1",
+    accountId: "work",
+    sessionKey: "session-1",
   });
 });
 
-function createCore(params: {
-  run: (delivery: GoogleChatTestDelivery) => Promise<void>;
-  chunks?: string[];
-}) {
-  return {
-    logging: { shouldLogVerbose: () => false },
-    channel: {
-      inbound: {
-        buildContext: vi.fn((payload: unknown) => payload),
-        run: vi.fn(
-          async (turn: {
-            adapter: { resolveTurn: () => { delivery: GoogleChatTestDelivery } };
-          }) => {
-            await params.run(turn.adapter.resolveTurn().delivery);
-          },
-        ),
-      },
-      text: {
-        resolveChunkMode: vi.fn(() => "markdown"),
-        chunkMarkdownTextWithMode: vi.fn((text: string) => params.chunks ?? [text]),
-      },
-    },
-  } as unknown as GoogleChatCoreRuntime;
-}
-
 function createEvent(params?: {
-  messageName?: string;
-  // `null` omits the inbound thread entirely (unthreaded group message); `undefined` uses the default.
-  threadName?: string | null;
+  messageName?: string | null;
   spaceType?: string;
 }): GoogleChatEvent {
-  const threadName =
-    params?.threadName === undefined ? "spaces/CLASSIFY/threads/requested" : params.threadName;
   return {
     type: "MESSAGE",
     space: { name: "spaces/CLASSIFY", spaceType: params?.spaceType ?? "SPACE" },
     message: {
-      name: params?.messageName ?? "spaces/CLASSIFY/messages/1",
+      name:
+        params?.messageName === null
+          ? undefined
+          : (params?.messageName ?? "spaces/CLASSIFY/messages/1"),
       text: "hello",
-      ...(threadName ? { thread: { name: threadName } } : {}),
+      thread: { name: "spaces/CLASSIFY/threads/requested" },
       sender: { name: "users/alice", displayName: "Alice", type: "HUMAN" },
     },
   } satisfies GoogleChatEvent;
@@ -136,280 +98,165 @@ function createAccount(config: ResolvedGoogleChatAccount["config"]): ResolvedGoo
 
 async function processEvent(params: {
   account: ResolvedGoogleChatAccount;
-  core: GoogleChatCoreRuntime;
+  run: (delivery: GoogleChatTestDelivery) => Promise<void>;
+  chunks?: string[];
   event?: GoogleChatEvent;
   runtime?: GoogleChatRuntimeEnv;
 }) {
   if (!routingMocks.processEvent) {
     throw new Error("Expected Google Chat webhook event processor registration");
   }
+  const core = {
+    logging: { shouldLogVerbose: () => false },
+    channel: {
+      inbound: {
+        buildContext: (payload: unknown) => payload,
+        run: async (turn: {
+          adapter: { resolveTurn: () => { delivery: GoogleChatTestDelivery } };
+        }) => params.run(turn.adapter.resolveTurn().delivery),
+      },
+      text: {
+        resolveChunkMode: () => "markdown",
+        chunkMarkdownTextWithMode: (text: string) => params.chunks ?? [text],
+      },
+    },
+  } as unknown as GoogleChatCoreRuntime;
   await routingMocks.processEvent(params.event ?? createEvent(), {
     account: params.account,
     config: {},
     runtime: params.runtime ?? { error: vi.fn(), log: vi.fn() },
-    core: params.core,
+    core,
     mediaMaxMb: 10,
     path: "/googlechat",
   });
 }
 
+const SPACE = "spaces/CLASSIFY";
+const SOURCE = `${SPACE}/messages/1`;
+const THREAD = `${SPACE}/threads/requested`;
+const TYPING = `${SPACE}/messages/typing`;
+
+const sent = (account: ResolvedGoogleChatAccount, text: string, thread?: string) => ({
+  account,
+  space: SPACE,
+  text,
+  thread,
+});
+const updated = (account: ResolvedGoogleChatAccount, text: string) => ({
+  account,
+  messageName: TYPING,
+  text,
+});
+
 describe("Google Chat automatic reply target reconciliation", () => {
-  it.each([undefined, "off"] as const)(
-    "keeps automatic replies top-level with reply mode %s",
-    async (replyToMode) => {
-      const account = createAccount({ replyToMode });
-      const payload = { text: "top-level reply", replyToId: "spaces/CLASSIFY/messages/1" };
-      const core = createCore({
-        run: async (delivery) => {
-          await delivery.deliver(payload);
-          expect(delivery.durable(payload, { kind: "final" })).toEqual({
-            to: "spaces/CLASSIFY",
-            replyToId: null,
-          });
-        },
-      });
-      apiMocks.sendGoogleChatMessage.mockResolvedValueOnce({
-        messageName: "spaces/CLASSIFY/messages/typing",
-        threadName: "spaces/CLASSIFY/threads/typing",
-      });
-
-      await processEvent({ account, core });
-
-      expect(apiMocks.updateGoogleChatMessage).toHaveBeenCalledWith({
-        account,
-        messageName: "spaces/CLASSIFY/messages/typing",
-        text: "top-level reply",
-      });
-      expect(apiMocks.deleteGoogleChatMessage).not.toHaveBeenCalled();
-      expect(apiMocks.sendGoogleChatMessage).toHaveBeenCalledOnce();
-    },
-  );
-
-  it.each([undefined, "off"] as const)(
-    "keeps automatic replies top-level without typing with reply mode %s",
-    async (replyToMode) => {
-      const account = createAccount({ replyToMode, typingIndicator: "none" });
-      const core = createCore({
-        run: async (delivery) => {
-          const payload = { text: "top-level reply", replyToId: "spaces/CLASSIFY/messages/1" };
-          expect(delivery.durable(payload, { kind: "final" })).toEqual({
-            to: "spaces/CLASSIFY",
-            replyToId: null,
-          });
-          await delivery.deliver(payload);
-        },
-      });
-
-      await processEvent({ account, core });
-
-      expect(apiMocks.sendGoogleChatMessage).toHaveBeenCalledWith({
-        account,
-        space: "spaces/CLASSIFY",
-        text: "top-level reply",
-        thread: undefined,
-      });
-    },
-  );
-
-  it("keeps the typing thread when automatic delivery supplies the source message name", async () => {
-    const sourceMessageName = "spaces/CLASSIFY/messages/1";
-    const requestedThread = "spaces/CLASSIFY/threads/requested";
-    const deliveredThread = "spaces/CLASSIFY/threads/fallback";
-    const account = createAccount({ replyToMode: "all" });
-    const core = createCore({
-      chunks: ["first chunk", "second chunk"],
+  it.each<{ typing: "message" | "none"; kind: string }>([
+    { typing: "message", kind: "final" },
+    { typing: "none", kind: "block" },
+  ])("keeps $kind delivery with $typing typing off the durable path", async ({ typing, kind }) => {
+    apiMocks.sendGoogleChatMessage.mockResolvedValueOnce({
+      messageName: TYPING,
+      threadName: THREAD,
+    });
+    await processEvent({
+      account: createAccount({ replyToMode: "all", typingIndicator: typing }),
       run: async (delivery) => {
-        await delivery.deliver({ text: "two chunks", replyToId: sourceMessageName });
+        expect(delivery.durable({ text: "hello", replyToId: THREAD }, { kind })).toBe(false);
       },
-    });
-    apiMocks.sendGoogleChatMessage
-      .mockResolvedValueOnce({
-        messageName: "spaces/CLASSIFY/messages/typing",
-        threadName: deliveredThread,
-      })
-      .mockResolvedValueOnce({
-        messageName: "spaces/CLASSIFY/messages/second",
-        threadName: deliveredThread,
-      });
-
-    await processEvent({ account, core });
-
-    expect(apiMocks.updateGoogleChatMessage).toHaveBeenCalledWith({
-      account,
-      messageName: "spaces/CLASSIFY/messages/typing",
-      text: "first chunk",
-    });
-    expect(apiMocks.sendGoogleChatMessage).toHaveBeenNthCalledWith(2, {
-      account,
-      space: "spaces/CLASSIFY",
-      text: "second chunk",
-      thread: deliveredThread,
-    });
-    expect(apiMocks.sendGoogleChatMessage).toHaveBeenNthCalledWith(1, {
-      account,
-      space: "spaces/CLASSIFY",
-      text: "_OpenClaw is typing..._",
-      thread: requestedThread,
     });
   });
 
-  it("reconciles delivery and durable metadata without a typing message", async () => {
-    const sourceMessageName = "spaces/CLASSIFY/messages/1";
-    const replyThreadName = "spaces/CLASSIFY/threads/requested";
-    let durableResult: unknown;
-    const account = createAccount({ replyToMode: "all", typingIndicator: "none" });
-    const core = createCore({
-      run: async (delivery) => {
-        const payload = { text: "threaded reply", replyToId: sourceMessageName };
-        durableResult = delivery.durable(payload, { kind: "final" });
-        await delivery.deliver(payload);
-      },
+  it("keeps automatic replies top-level with reply mode off", async () => {
+    const account = createAccount({ replyToMode: "off" });
+    const payload = Object.freeze({ text: "top-level reply", replyToId: SOURCE });
+    apiMocks.sendGoogleChatMessage.mockResolvedValueOnce({
+      messageName: TYPING,
+      threadName: `${SPACE}/threads/typing`,
     });
-    apiMocks.sendGoogleChatMessage.mockResolvedValue({
-      messageName: "spaces/CLASSIFY/messages/reply",
-      threadName: replyThreadName,
-    });
-
-    await processEvent({ account, core });
-
-    expect(durableResult).toEqual({
-      to: "spaces/CLASSIFY",
-      replyToId: replyThreadName,
-      threadId: replyThreadName,
-    });
-    expect(apiMocks.sendGoogleChatMessage).toHaveBeenCalledOnce();
-    expect(apiMocks.sendGoogleChatMessage).toHaveBeenCalledWith({
-      account,
-      space: "spaces/CLASSIFY",
-      text: "threaded reply",
-      thread: replyThreadName,
-    });
-  });
-
-  it("reconciles delivery after the typing message fails", async () => {
-    const sourceMessageName = "spaces/CLASSIFY/messages/1";
-    const replyThreadName = "spaces/CLASSIFY/threads/requested";
-    const account = createAccount({ replyToMode: "all" });
-    const core = createCore({
-      run: async (delivery) => {
-        await delivery.deliver({ text: "threaded reply", replyToId: sourceMessageName });
-      },
-    });
-    const runtime = { error: vi.fn(), log: vi.fn() };
-    apiMocks.sendGoogleChatMessage
-      .mockRejectedValueOnce(new Error("typing unavailable"))
-      .mockResolvedValueOnce({
-        messageName: "spaces/CLASSIFY/messages/reply",
-        threadName: replyThreadName,
-      });
-
-    await processEvent({ account, core, runtime });
-
-    expect(runtime.error).toHaveBeenCalledWith(
-      "Failed sending typing message: Error: typing unavailable",
-    );
-    expect(apiMocks.sendGoogleChatMessage).toHaveBeenNthCalledWith(2, {
-      account,
-      space: "spaces/CLASSIFY",
-      text: "threaded reply",
-      thread: replyThreadName,
-    });
-  });
-
-  it.each([
-    ["different message", "spaces/CLASSIFY/messages/other"],
-    ["whitespace-decorated message", " spaces/CLASSIFY/messages/1 "],
-  ])("does not reinterpret a %s target", async (_name, targetMessageName) => {
-    let durableResult: unknown;
-    const account = createAccount({ replyToMode: "all", typingIndicator: "none" });
-    const core = createCore({
-      run: async (delivery) => {
-        const payload = { text: "explicit reply", replyToId: targetMessageName };
-        durableResult = delivery.durable(payload, { kind: "final" });
-        await delivery.deliver(payload);
-      },
-    });
-
-    await processEvent({ account, core });
-
-    expect(durableResult).toEqual({
-      to: "spaces/CLASSIFY",
-      replyToId: targetMessageName.trim(),
-      threadId: targetMessageName.trim(),
-    });
-    expect(apiMocks.sendGoogleChatMessage).toHaveBeenCalledWith({
-      account,
-      space: "spaces/CLASSIFY",
-      text: "explicit reply",
-      thread: targetMessageName.trim(),
-    });
-  });
-
-  it("delivers top-level in a direct message when automatic delivery supplies the source message name", async () => {
-    // Regression guard: DMs have no inbound thread, so `replyThreadName` is undefined. The
-    // source-message target must collapse to top-level rather than being sent as a message
-    // resource (which Google Chat rejects as a thread), and the placeholder must not be deleted.
-    const sourceMessageName = "spaces/CLASSIFY/messages/1";
-    let durableResult: unknown;
-    const account = createAccount({ replyToMode: "all", typingIndicator: "none" });
-    const core = createCore({
-      run: async (delivery) => {
-        const payload = { text: "dm reply", replyToId: sourceMessageName };
-        durableResult = delivery.durable(payload, { kind: "final" });
-        await delivery.deliver(payload);
-      },
-    });
-    apiMocks.sendGoogleChatMessage.mockResolvedValue({
-      messageName: "spaces/CLASSIFY/messages/reply",
-      threadName: undefined,
-    });
-
-    await processEvent({ account, core, event: createEvent({ spaceType: "DIRECT_MESSAGE" }) });
-
-    expect(durableResult).toEqual({ to: "spaces/CLASSIFY", replyToId: null });
-    expect(apiMocks.sendGoogleChatMessage).toHaveBeenCalledOnce();
-    expect(apiMocks.sendGoogleChatMessage).toHaveBeenCalledWith({
-      account,
-      space: "spaces/CLASSIFY",
-      text: "dm reply",
-      thread: undefined,
-    });
-    expect(apiMocks.deleteGoogleChatMessage).not.toHaveBeenCalled();
-  });
-
-  it("delivers top-level in a group space that carries no inbound thread", async () => {
-    // Regression guard: a group message can arrive without a thread resource, so
-    // `replyThreadName` is undefined here too. The source-message target must still collapse
-    // to top-level instead of echoing the message resource back as the thread.
-    const sourceMessageName = "spaces/CLASSIFY/messages/1";
-    let durableResult: unknown;
-    const account = createAccount({ replyToMode: "all", typingIndicator: "none" });
-    const core = createCore({
-      run: async (delivery) => {
-        const payload = { text: "group reply", replyToId: sourceMessageName };
-        durableResult = delivery.durable(payload, { kind: "final" });
-        await delivery.deliver(payload);
-      },
-    });
-    apiMocks.sendGoogleChatMessage.mockResolvedValue({
-      messageName: "spaces/CLASSIFY/messages/reply",
-      threadName: undefined,
-    });
-
     await processEvent({
       account,
-      core,
-      event: createEvent({ spaceType: "SPACE", threadName: null }),
+      run: async (delivery) => {
+        await delivery.deliver(payload);
+        expect(delivery.durable(payload, { kind: "final" })).toEqual({
+          to: SPACE,
+          replyToId: null,
+        });
+      },
     });
-
-    expect(durableResult).toEqual({ to: "spaces/CLASSIFY", replyToId: null });
-    expect(apiMocks.sendGoogleChatMessage).toHaveBeenCalledOnce();
-    expect(apiMocks.sendGoogleChatMessage).toHaveBeenCalledWith({
-      account,
-      space: "spaces/CLASSIFY",
-      text: "group reply",
-      thread: undefined,
-    });
+    expect(apiMocks.updateGoogleChatMessage).toHaveBeenCalledWith(updated(account, payload.text));
     expect(apiMocks.deleteGoogleChatMessage).not.toHaveBeenCalled();
+    expect(apiMocks.sendGoogleChatMessage).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the typing thread when automatic delivery supplies the source message name", async () => {
+    const deliveredThread = `${SPACE}/threads/fallback`;
+    const account = createAccount({ replyToMode: "all" });
+    apiMocks.sendGoogleChatMessage
+      .mockResolvedValueOnce({ messageName: TYPING, threadName: deliveredThread })
+      .mockResolvedValueOnce({
+        messageName: `${SPACE}/messages/second`,
+        threadName: deliveredThread,
+      });
+    await processEvent({
+      account,
+      chunks: ["first chunk", "second chunk"],
+      run: async (delivery) => {
+        await delivery.deliver(Object.freeze({ text: "two chunks", replyToId: SOURCE }));
+      },
+    });
+    expect(apiMocks.updateGoogleChatMessage).toHaveBeenCalledWith(updated(account, "first chunk"));
+    expect(apiMocks.sendGoogleChatMessage).toHaveBeenNthCalledWith(
+      1,
+      sent(account, "_OpenClaw is typing..._", THREAD),
+    );
+    expect(apiMocks.sendGoogleChatMessage).toHaveBeenNthCalledWith(
+      2,
+      sent(account, "second chunk", deliveredThread),
+    );
+  });
+
+  it.each<{
+    label: string;
+    event?: GoogleChatEvent;
+    thread?: string;
+    failTyping?: boolean;
+  }>([
+    { label: "threaded after typing fails", thread: THREAD, failTyping: true },
+    { label: "unknown source message", event: createEvent({ messageName: null }), thread: SOURCE },
+    { label: "direct message", event: createEvent({ spaceType: "DIRECT_MESSAGE" }) },
+  ])("reconciles delivery and durable metadata: $label", async ({ event, thread, failTyping }) => {
+    const account = createAccount({
+      replyToMode: "all",
+      typingIndicator: failTyping ? "message" : "none",
+    });
+    const runtime = { error: vi.fn(), log: vi.fn() };
+    if (failTyping) {
+      apiMocks.sendGoogleChatMessage.mockRejectedValueOnce(new Error("typing unavailable"));
+    }
+    apiMocks.sendGoogleChatMessage.mockResolvedValue({
+      messageName: `${SPACE}/messages/reply`,
+      threadName: thread,
+    });
+    await processEvent({
+      account,
+      event,
+      runtime,
+      run: async (delivery) => {
+        const payload = Object.freeze({ text: "reply", replyToId: SOURCE });
+        expect(delivery.durable(payload, { kind: "final" })).toEqual(
+          thread
+            ? { to: SPACE, replyToId: thread, threadId: thread }
+            : { to: SPACE, replyToId: null },
+        );
+        await delivery.deliver(payload);
+      },
+    });
+    expect(apiMocks.sendGoogleChatMessage).toHaveBeenCalledTimes(failTyping ? 2 : 1);
+    expect(apiMocks.sendGoogleChatMessage).toHaveBeenLastCalledWith(sent(account, "reply", thread));
+    expect(apiMocks.deleteGoogleChatMessage).not.toHaveBeenCalled();
+    if (failTyping) {
+      expect(runtime.error).toHaveBeenCalledWith(
+        "Failed sending typing message: Error: typing unavailable",
+      );
+    }
   });
 });

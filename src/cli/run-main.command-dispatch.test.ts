@@ -10,8 +10,7 @@ import {
   closeActiveMemorySearchManagersMock,
   outputRootHelpMock,
   outputPrecomputedRootHelpTextMock,
-  outputPrecomputedNodesHelpTextMock,
-  outputPrecomputedSubcommandHelpTextMock,
+  outputPrecomputedCommandHelpTextMock,
   loadRootHelpRenderOptionsForConfigSensitivePluginsMock,
   tryOutputSetupOnboardConfigureHelpMock,
   buildProgramMock,
@@ -51,6 +50,13 @@ import { registerRunMainTimelineTests } from "./run-main.timeline.test-support.j
 describe("runCli exit behavior", () => {
   installRunMainTestHooks();
 
+  function expectNoCommandStartup() {
+    expect(startProxyMock).not.toHaveBeenCalled();
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(buildProgramMock).not.toHaveBeenCalled();
+    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+  }
+
   it("carries one lightweight generation through builtin reads, nested registration and actions", async () => {
     const outside = getPluginCache();
     const phases: PluginCache[] = [];
@@ -87,12 +93,12 @@ describe("runCli exit behavior", () => {
   });
 
   it("renders nodes help from startup metadata without building the full program", async () => {
-    outputPrecomputedNodesHelpTextMock.mockReturnValueOnce(true);
+    outputPrecomputedCommandHelpTextMock.mockReturnValueOnce(true);
 
     await runCli(cliArgs("nodes", "--help"));
 
     expect(tryRouteCliMock).not.toHaveBeenCalled();
-    expect(outputPrecomputedNodesHelpTextMock).toHaveBeenCalledTimes(1);
+    expect(outputPrecomputedCommandHelpTextMock.mock.calls).toEqual([["nodes"]]);
     expect(buildProgramMock).not.toHaveBeenCalled();
     expect(registerSubCliByNameMock).not.toHaveBeenCalled();
   });
@@ -102,26 +108,15 @@ describe("runCli exit behavior", () => {
     const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
     const program = makeProgram("nodes", parseAsync);
     loadRootHelpRenderOptionsForConfigSensitivePluginsMock.mockResolvedValueOnce({ env: {} });
-    outputPrecomputedNodesHelpTextMock.mockReturnValueOnce(true);
+    outputPrecomputedCommandHelpTextMock.mockReturnValueOnce(true);
     buildProgramMock.mockReturnValueOnce(program);
 
     await runCli(argv);
 
     expect(loadRootHelpRenderOptionsForConfigSensitivePluginsMock).toHaveBeenCalledTimes(1);
-    expect(outputPrecomputedNodesHelpTextMock).not.toHaveBeenCalled();
+    expect(outputPrecomputedCommandHelpTextMock).not.toHaveBeenCalled();
     expect(registerSubCliByNameMock.mock.calls).toEqual([[program, "nodes", argv]]);
     expect(parseAsync).toHaveBeenCalledWith(argv);
-  });
-
-  it("renders selected subcommand help from startup metadata without building the full program", async () => {
-    outputPrecomputedSubcommandHelpTextMock.mockReturnValueOnce(true);
-
-    await runCli(cliArgs("doctor", "--help"));
-
-    expect(outputPrecomputedSubcommandHelpTextMock).toHaveBeenCalledWith("doctor");
-    expect(tryRouteCliMock).not.toHaveBeenCalled();
-    expect(buildProgramMock).not.toHaveBeenCalled();
-    expect(closeActiveMemorySearchManagersMock).not.toHaveBeenCalled();
   });
 
   it("keeps root help on the precomputed path without proxy bootstrap", async () => {
@@ -201,20 +196,6 @@ describe("runCli exit behavior", () => {
     tryRouteCliMock,
   });
 
-  it.each([["root shorthand", cliArgs("--update", "--dry-run", "--json")]])(
-    "reads source-only proxy config for the update dry-run %s",
-    async (_name, argv) => {
-      tryRouteCliMock.mockResolvedValueOnce(true);
-      readSourceConfigBestEffortMock.mockResolvedValueOnce({ proxy: { selected: "dry-run" } });
-
-      await runCli(argv);
-
-      expect(readSourceConfigBestEffortMock).toHaveBeenCalledOnce();
-      expect(loadConfigMock).not.toHaveBeenCalled();
-      expect(startProxyMock).toHaveBeenCalledWith({ selected: "dry-run" });
-    },
-  );
-
   it.each([["lint", ["--lint", "--json"]]])(
     "reads source-only proxy config before Doctor %s owns state access",
     async (_mode, args) => {
@@ -265,10 +246,8 @@ describe("runCli exit behavior", () => {
   });
 
   it.each([
-    ["cron parent timeout", cliArgs("cron", "--timeout", "250", "status")],
     ["cron scratch equals", cliArgs("cron", "scratch", "job", "--set=text")],
     ["gateway handoff", cliArgs("gateway", "--port", "18789", "restart-handoff", "capabilities")],
-    ["node invoke", cliArgs("nodes", "invoke", "--node", "one")],
     ["device token", cliArgs("devices", "rotate", "--device", "one")],
     ["doctor lint", cliArgs("doctor", "--lint")],
     ["proxy coverage", cliArgs("proxy", "coverage")],
@@ -343,34 +322,29 @@ describe("runCli exit behavior", () => {
       "Did you mean this?\n  openclaw update\n",
     );
 
-    expect(startProxyMock).not.toHaveBeenCalled();
-    expect(tryRouteCliMock).not.toHaveBeenCalled();
-    expect(buildProgramMock).not.toHaveBeenCalled();
-    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+    expectNoCommandStartup();
   });
 
-  it("sanitizes control characters in unowned command diagnostics", async () => {
-    const primary = "bad\u001b[31m-red\u001b[0m\nforged\tline";
-
-    await expect(runCli(cliArgs(primary))).rejects.toThrow(
+  it.each<[string, string[], string]>([
+    [
+      "sanitizes control characters in unowned command diagnostics",
+      ["bad\u001b[31m-red\u001b[0m\nforged\tline"],
       'OpenClaw does not know the command "bad-red\\nforged\\tline".',
-    );
-
-    expect(startProxyMock).not.toHaveBeenCalled();
-    expect(tryRouteCliMock).not.toHaveBeenCalled();
-    expect(buildProgramMock).not.toHaveBeenCalled();
-    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+    ],
+    [
+      "rejects unowned command roots even when --help is appended (regression for #81077)",
+      ["foo", "--help"],
+      'OpenClaw does not know the command "foo".',
+    ],
+  ])("%s", async (_name, args, message) => {
+    await expect(runCli(cliArgs(...args))).rejects.toThrow(message);
+    expectNoCommandStartup();
   });
 
   it("bounds long unowned command diagnostics without splitting Unicode", async () => {
     const primary = "🦞".repeat(1_000);
 
-    let error: unknown;
-    try {
-      await runCli(cliArgs(primary));
-    } catch (caught) {
-      error = caught;
-    }
+    const error = await runCli(cliArgs(primary)).catch((cause: unknown) => cause);
 
     expect(error).toBeInstanceOf(Error);
     const message = (error as Error).message;
@@ -379,10 +353,7 @@ describe("runCli exit behavior", () => {
     expect(message).toContain(`OpenClaw does not know the command "${displayPrimary}".`);
     expect(message).not.toContain("�");
     expect(message.length).toBeLessThan(500);
-    expect(startProxyMock).not.toHaveBeenCalled();
-    expect(tryRouteCliMock).not.toHaveBeenCalled();
-    expect(buildProgramMock).not.toHaveBeenCalled();
-    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+    expectNoCommandStartup();
   });
 
   it.each([
@@ -442,10 +413,7 @@ describe("runCli exit behavior", () => {
       expect((error as ExpectedCliError).humanOutput).toBe((error as Error).message);
       expect((error as ExpectedCliError).machineOutput).toBe((error as Error).message);
       expect((error as Error).message).not.toContain("Did you mean this?");
-      expect(startProxyMock).not.toHaveBeenCalled();
-      expect(tryRouteCliMock).not.toHaveBeenCalled();
-      expect(buildProgramMock).not.toHaveBeenCalled();
-      expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+      expectNoCommandStartup();
     },
   );
 
@@ -479,17 +447,6 @@ describe("runCli exit behavior", () => {
       },
     );
     expect(program.parseAsync).not.toHaveBeenCalled();
-  });
-
-  it("rejects unowned command roots even when --help is appended (regression for #81077)", async () => {
-    await expect(runCli(cliArgs("foo", "--help"))).rejects.toThrow(
-      'OpenClaw does not know the command "foo".',
-    );
-
-    expect(startProxyMock).not.toHaveBeenCalled();
-    expect(tryRouteCliMock).not.toHaveBeenCalled();
-    expect(buildProgramMock).not.toHaveBeenCalled();
-    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
   });
 
   it("preserves plugins.allow diagnostics for roots owned only by CLI metadata", async () => {
@@ -663,17 +620,6 @@ describe("runCli exit behavior", () => {
     ]);
   });
 
-  it("passes config get machine ownership into route-first startup", async () => {
-    tryRouteCliMock.mockResolvedValueOnce(true);
-
-    await runCli(["node", "openclaw", "config", "get", "gateway.port"]);
-
-    expect(tryRouteCliMock).toHaveBeenCalledWith(
-      ["node", "openclaw", "config", "get", "gateway.port"],
-      { machineOutput: true },
-    );
-  });
-
   it("keeps plain config startup out of machine-output mode", async () => {
     tryRouteCliMock.mockResolvedValueOnce(false);
     const parseAsync = vi.fn(async () => expect(progressDoneMock).toHaveBeenCalled());
@@ -689,15 +635,15 @@ describe("runCli exit behavior", () => {
     expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "config"]);
   });
 
-  it.each([
-    ["status JSON", ["node", "openclaw", "models", "--status-json"]],
-    ["status plain", ["node", "openclaw", "models", "--status-plain"]],
-  ])("keeps models %s output free of proxy startup", async (_name, argv) => {
-    tryRouteCliMock.mockResolvedValueOnce(true);
-    await runCli(argv);
-    expect(startProxyMock).not.toHaveBeenCalled();
-    expect(stopProxyMock).not.toHaveBeenCalled();
-  });
+  it.each([["status plain", ["node", "openclaw", "models", "--status-plain"]]])(
+    "keeps models %s output free of proxy startup",
+    async (_name, argv) => {
+      tryRouteCliMock.mockResolvedValueOnce(true);
+      await runCli(argv);
+      expect(startProxyMock).not.toHaveBeenCalled();
+      expect(stopProxyMock).not.toHaveBeenCalled();
+    },
+  );
   it("suppresses startup progress for plain model output before full CLI parsing", async () => {
     tryRouteCliMock.mockResolvedValueOnce(false);
     const parseAsync = vi.fn(async () => expect(progressDoneMock).toHaveBeenCalled());

@@ -14,6 +14,7 @@ import { registerContextEngineInRegistry } from "../context-engine/registry.js";
 import { getModelLlmRuntime } from "../llm/model-runtime-binding.js";
 import * as llmStream from "../llm/stream.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
+import { writeFixtureJson } from "../plugins/loader-fixture-builders.test-support.js";
 import { acquirePluginRegistryForInspection, loadPluginRegistryHandle } from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -22,6 +23,7 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
+import { cleanupNativeFixture, nativeFixtureEnv } from "../plugins/native-resource.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -30,6 +32,10 @@ import {
   getPluginRuntimeGenerationRegistry,
   withPluginRuntimeGenerationScope,
 } from "../plugins/runtime/generation-scope.js";
+import {
+  createColdPluginFixture,
+  isColdPluginRuntimeLoaded,
+} from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -180,14 +186,11 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   });
 }};`,
   });
-  fs.writeFileSync(
-    path.join(dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id,
-      providers: [id],
-      configSchema: { type: "object", properties: {}, additionalProperties: false },
-    }),
-  );
+  writeFixtureJson(dir, "openclaw.plugin.json", {
+    id,
+    providers: [id],
+    configSchema: { type: "object", properties: {}, additionalProperties: false },
+  });
   const config: OpenClawConfig = {
     models: {
       providers: {
@@ -230,26 +233,14 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       timeoutMs: 1000,
     },
     environment: <T>(run: () => Promise<T>) =>
-      withEnvAsync(
-        {
-          OPENCLAW_HOME: dir,
-          OPENCLAW_STATE_DIR: path.join(dir, "state"),
-          OPENCLAW_CONFIG_PATH: path.join(dir, "config.json"),
-        },
-        run,
-      ),
+      withEnvAsync(nativeFixtureEnv(dir, path.join(dir, "state")), run),
     cleanup() {
       state.finish.resolve();
       state.resumeSetup.resolve();
       state.finishCleanup.resolve();
       state.finishWork.resolve();
       state.finishSetupTail.resolve();
-      for (const connection of connections) {
-        if (connection.database.isOpen) {
-          connection.database.close();
-        }
-      }
-      Reflect.deleteProperty(globalThis, stateKey);
+      cleanupNativeFixture(stateKey, connections);
     },
   };
 }
@@ -275,6 +266,52 @@ afterEach(async () => {
   resetPluginLoaderTestStateForTest();
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
+
+it("describes images without evaluating configured memory or context plugins", async () => {
+  const fixture = nativeImageFixture();
+  const agentOwners = ["memory", "context"].map((kind) => {
+    const rootDir = path.join(fixture.dir, kind);
+    fs.mkdirSync(rootDir);
+    return createColdPluginFixture({
+      rootDir,
+      pluginId: `expensive-${kind}`,
+      manifest: kind === "memory" ? { kind: "memory" } : {},
+      runtimeMessage: "Image descriptions must not evaluate agent-owned plugins",
+    });
+  });
+  const cfg: OpenClawConfig = {
+    ...fixture.config,
+    plugins: {
+      allow: [fixture.id, ...agentOwners.map((plugin) => plugin.pluginId)],
+      load: {
+        paths: [
+          ...(fixture.config.plugins?.load?.paths ?? []),
+          ...agentOwners.map((plugin) => plugin.rootDir),
+        ],
+      },
+      slots: { memory: "expensive-memory", contextEngine: "expensive-context" },
+      entries: Object.fromEntries(
+        agentOwners.map((plugin) => [plugin.pluginId, { enabled: true }]),
+      ),
+    },
+  };
+  try {
+    await fixture.environment(async () => {
+      useNoBundledPlugins();
+      fixture.state.finish.resolve();
+      expect(
+        await describeImageWithModelCore({ ...fixture.request, cfg, timeoutMs: 30_000 }),
+      ).toMatchObject({
+        text: "native image 42",
+      });
+      for (const owner of agentOwners) {
+        expect(isColdPluginRuntimeLoaded(owner)).toBe(false);
+      }
+    });
+  } finally {
+    fixture.cleanup();
+  }
+});
 
 it("does not dispatch an image completion retired during transport initialization", async () => {
   const fixture = nativeImageFixture();

@@ -1,127 +1,77 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 
-describe("Code Mode JavaScript config migration", () => {
-  it.each(["entries", "list"])(
-    "removes retired language settings from global config and the %s roster without changing activation or limits",
-    (roster) => {
-      const agent = {
-        tools: { codeMode: { enabled: false, languages: ["typescript"], timeoutMs: 2500 } },
-      };
-      const raw = {
-        tools: {
-          codeMode: {
-            enabled: "auto",
-            languages: ["javascript", "typescript"],
-            maxOutputBytes: 4096,
-          },
-        },
-        agents:
-          roster === "entries"
-            ? { entries: { main: agent } }
-            : { list: [{ id: "main", ...agent }] },
-      };
-      const original = structuredClone(raw);
+function agentRoster<T>(roster: string, agent: T) {
+  return roster === "entries" ? { entries: { main: agent } } : { list: [{ id: "main", ...agent }] };
+}
 
-      expect(findLegacyConfigIssues(raw)).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ path: "tools.codeMode.languages" }),
-          expect.objectContaining({
-            path: "agents",
-            message: expect.stringContaining("JavaScript only"),
-          }),
-        ]),
-      );
-
-      const migrated = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
-
-      expect(migrated.partiallyValid).toBeUndefined();
-      expect(migrated.config?.tools?.codeMode).toEqual({ enabled: "auto", maxOutputBytes: 4096 });
-      expect(migrated.config?.agents?.entries?.main?.tools?.codeMode).toEqual({
-        enabled: false,
-        timeoutMs: 2500,
-      });
-      expect(raw).toEqual(original);
-      expect(migrated.sourceConfig).toBeDefined();
-      expect(findLegacyConfigIssues(migrated.sourceConfig)).toEqual([]);
-      expect(
-        migrateLegacyConfig(migrated.sourceConfig, {
-          sourceConfigBeforeMigrations: migrated.sourceConfig,
-        }).changes,
-      ).toEqual([]);
-    },
+function checkMigration(raw: unknown, key: string, message: string) {
+  const original = structuredClone(raw);
+  expect(findLegacyConfigIssues(raw)).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ path: `tools.codeMode.${key}` }),
+      expect.objectContaining({ path: "agents", message: expect.stringContaining(message) }),
+    ]),
   );
+  const migrated = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
+  expect(migrated.partiallyValid).toBeUndefined();
+  expect(raw).toEqual(original);
+  expect(migrated.sourceConfig).toBeDefined();
+  expect(findLegacyConfigIssues(migrated.sourceConfig)).toEqual([]);
+  expect(
+    migrateLegacyConfig(migrated.sourceConfig, {
+      sourceConfigBeforeMigrations: migrated.sourceConfig,
+    }).changes,
+  ).toEqual([]);
+  return migrated;
+}
 
-  it("removes a null language setting without enabling Code Mode", () => {
-    const raw = { tools: { codeMode: { languages: null } } };
-    const migrated = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
-
-    expect(migrated.partiallyValid).toBeUndefined();
-    expect(migrated.config?.tools?.codeMode).toEqual({});
-    expect(migrated.sourceConfig).toBeDefined();
-    expect(findLegacyConfigIssues(migrated.sourceConfig)).toEqual([]);
-  });
-});
-
-describe("Code Mode executor config migration", () => {
-  it.each(["entries", "list"])(
-    "preserves an explicit QuickJS runtime and newer executor selections in the %s roster",
-    (roster) => {
-      const agent = {
-        tools: {
-          codeMode: {
-            enabled: false,
-            runtime: "quickjs-wasi",
-            executor: "node",
-            timeoutMs: 2500,
-          },
-        },
-      };
-      const raw = {
-        tools: {
-          codeMode: { enabled: "auto", runtime: "quickjs-wasi", maxOutputBytes: 4096 },
-        },
-        plugins: roster === "entries" ? { enabled: false } : { allow: ["openai"] },
-        agents:
-          roster === "entries"
-            ? { entries: { main: agent } }
-            : { list: [{ id: "main", ...agent }] },
-      };
-      const original = structuredClone(raw);
-
-      expect(findLegacyConfigIssues(raw)).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ path: "tools.codeMode.runtime" }),
-          expect.objectContaining({
-            path: "agents",
-            message: expect.stringContaining("tools.codeMode.executor"),
-          }),
-        ]),
-      );
-
-      const migrated = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
-
-      expect(migrated.partiallyValid).toBeUndefined();
-      expect(migrated.config?.tools?.codeMode).toEqual({
-        enabled: "auto",
-        executor: "quickjs",
-        maxOutputBytes: 4096,
-      });
-      expect(migrated.config?.agents?.entries?.main?.tools?.codeMode).toEqual({
-        enabled: false,
-        executor: "node",
-        timeoutMs: 2500,
-      });
-      expect(raw).toEqual(original);
-      expect(migrated.sourceConfig).toBeDefined();
-      expect(migrated.sourceConfig?.plugins).toEqual(raw.plugins);
-      expect(findLegacyConfigIssues(migrated.sourceConfig)).toEqual([]);
-      expect(
-        migrateLegacyConfig(migrated.sourceConfig, {
-          sourceConfigBeforeMigrations: migrated.sourceConfig,
-        }).changes,
-      ).toEqual([]);
-    },
-  );
-});
+const migrations = [
+  {
+    key: "languages",
+    message: "JavaScript only",
+    global: { languages: null },
+    agent: { languages: ["typescript"] },
+    globalAfter: {},
+    agentAfter: {},
+  },
+  {
+    key: "runtime",
+    message: "tools.codeMode.executor",
+    global: { enabled: "auto", runtime: "quickjs-wasi" },
+    agent: { runtime: "quickjs-wasi", executor: "node" },
+    globalAfter: { enabled: "auto", executor: "quickjs" },
+    agentAfter: { executor: "node" },
+  },
+];
+const cases = migrations.flatMap((migration) =>
+  ["entries", "list"].map((roster) => ({ migration, roster })),
+);
+it.each(cases)(
+  "Code Mode migrates $migration.key in $roster without changing activation or limits",
+  ({ migration: entry, roster }) => {
+    const globalLimits = { maxOutputBytes: 4096 };
+    const agentLimits = { enabled: false, timeoutMs: 2500 };
+    const plugins =
+      entry.key === "runtime"
+        ? { plugins: roster === "entries" ? { enabled: false } : { allow: ["openai"] } }
+        : {};
+    const raw = {
+      tools: { codeMode: { ...globalLimits, ...entry.global } },
+      agents: agentRoster(roster, {
+        tools: { codeMode: { ...agentLimits, ...entry.agent } },
+      }),
+      ...plugins,
+    };
+    const migrated = checkMigration(raw, entry.key, entry.message);
+    expect(migrated.config?.tools?.codeMode).toEqual({ ...globalLimits, ...entry.globalAfter });
+    expect(migrated.config?.agents?.entries?.main?.tools?.codeMode).toEqual({
+      ...agentLimits,
+      ...entry.agentAfter,
+    });
+    if (entry.key === "runtime") {
+      expect(migrated.sourceConfig?.plugins).toEqual(plugins.plugins);
+    }
+  },
+);

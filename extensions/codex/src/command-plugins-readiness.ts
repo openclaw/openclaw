@@ -1,9 +1,6 @@
-import {
-  renderMessagePresentationFallbackText,
-  type MessagePresentation,
-  type MessagePresentationBlock,
-} from "openclaw/plugin-sdk/interactive-runtime";
+import type { MessagePresentationBlock } from "openclaw/plugin-sdk/interactive-runtime";
 import type { PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
+import { readCodexExperimentalFeature } from "./app-server/experimental-features.js";
 import {
   findCodexMarketplacePluginSummary,
   pluginReadParams,
@@ -27,6 +24,7 @@ import {
   type CodexPluginsConfigBlock,
 } from "./command-plugin-config.js";
 import type { CodexPluginCommandContext } from "./command-plugins-runtime.js";
+import { buildCodexPresentationReply } from "./command-presentation.js";
 import { discoverCodexMarketplacePlugins } from "./plugin-marketplace-discovery.js";
 
 type Evidence<T> =
@@ -41,7 +39,6 @@ type CodexHostedAppsSupport =
   | "unknown";
 
 export type CodexPluginReadiness = {
-  configKey: string;
   commandId: string;
   openClawEnabled: boolean;
   agentId: string;
@@ -68,32 +65,14 @@ export async function readCodexHostedAppsSupport(
   if (!isJsonObject(account.value.account) || account.value.account.type !== "chatgpt") {
     return "sign_in_required";
   }
-  const features = await readEvidence(async () => {
-    let cursor: string | undefined;
-    const visited = new Set<string>();
-    do {
-      const response = await context.request<CodexExperimentalFeatureListResponse>(
-        "experimentalFeature/list",
-        {
-          ...(context.threadId ? { threadId: context.threadId } : {}),
-          ...(cursor ? { cursor } : {}),
-          limit: 100,
-        },
-      );
-      const apps = response.data.find((feature) => feature.name === "apps");
-      if (apps) {
-        return apps.enabled;
-      }
-      cursor = response.nextCursor ?? undefined;
-      if (cursor && visited.has(cursor)) {
-        return undefined;
-      }
-      if (cursor) {
-        visited.add(cursor);
-      }
-    } while (cursor);
-    return undefined;
-  });
+  const features = await readEvidence(() =>
+    readCodexExperimentalFeature(
+      (params) =>
+        context.request<CodexExperimentalFeatureListResponse>("experimentalFeature/list", params),
+      "apps",
+      context.threadId,
+    ),
+  );
   if (features.status !== "known") {
     return features.reason === "unsupported" ? "unsupported" : "unknown";
   }
@@ -162,7 +141,6 @@ export async function readCodexPluginReadiness(params: {
     );
   }
   const result: CodexPluginReadiness = {
-    configKey,
     commandId: `${identity.pluginName}@${identity.marketplaceName}`,
     openClawEnabled: current.enabled === true && entry.enabled !== false,
     agentId: context.agentId,
@@ -410,12 +388,7 @@ export function formatCodexPluginReadiness(
       blocks.push(buildCodexPluginStatusButtons(readiness.commandId, canRefreshHostedApps));
     }
   }
-  const presentation: MessagePresentation = { title: "Codex plugin status", blocks };
-  return {
-    text: renderMessagePresentationFallbackText({ presentation }),
-    presentation,
-    presentationTextMode: "fallback",
-  };
+  return buildCodexPresentationReply({ title: "Codex plugin status", blocks });
 }
 
 async function readEvidence<T>(read: () => Promise<T>): Promise<Evidence<T>> {

@@ -16,7 +16,7 @@ describe("skills descriptor formatting", () => {
   });
   afterAll(() => envSnapshot.restore());
 
-  it("keeps C1 tab-separated descriptions in their table cell", async () => {
+  it("escapes descriptor controls before laying out table cells", async () => {
     const description = "left\x9b31\tmright\x9b0m";
     const workspaceDir = tempDirs.make("tab-spacing-");
     await writeWorkspaceSkills(workspaceDir, [
@@ -36,7 +36,7 @@ describe("skills descriptor formatting", () => {
     const row = stripAnsi(formatSkillsList(report, {}))
       .split("\n")
       .find((line) => line.includes("tab-spacing"));
-    expect(row?.split(/[|│]/u)[3]?.trim()).toBe("left right");
+    expect(row?.split(/[|│]/u)[3]?.trim()).toBe("left\\tright");
   });
 
   it("preserves description and path whitespace in skills JSON output", async () => {

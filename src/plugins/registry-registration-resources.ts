@@ -1,5 +1,10 @@
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
-import { PluginRuntimeCloseRetainedError } from "./runtime-close-error.js";
+import { pluginInvocationContext } from "./plugin-instance-scope.js";
+import {
+  hasRetainedPluginRuntimeCloseError,
+  PluginRuntimeCloseRetainedError,
+} from "./runtime-close-error.js";
 
 export type RegistrationDisposer = { id: string; dispose: () => void | Promise<void> };
 export type RegistrationCleanup = (run: () => Promise<void>) => Promise<void>;
@@ -9,7 +14,6 @@ type RegistrationResources = {
   runCleanup?: RegistrationCleanup;
   rolledBack?: boolean;
   disposal?: Promise<Error[]>;
-  disposalStarted?: boolean;
   retire?: () => Promise<void>;
 };
 
@@ -22,7 +26,10 @@ export class PluginRegistrationResourceSource {
   #claims = 0;
   #closed = false;
 
-  constructor(private readonly retire: () => Promise<void>) {}
+  constructor(
+    private readonly retire: () => void | Promise<void>,
+    private readonly disposed: () => void,
+  ) {}
 
   acquireClaim(owner: "inspection" | "borrower"): { release: () => Promise<Error[]> } {
     if (this.#closed) {
@@ -35,6 +42,7 @@ export class PluginRegistrationResourceSource {
         if (!release) {
           const last = --this.#claims === 0;
           this.#closed = last;
+          let registrationsCompleted = false;
           // Physical custody can outlive the releasing caller's captured work scope.
           const cleanup = this.#cleanupWork.track(async () => {
             // Cache the release promise before cleanup can synchronously reenter it.
@@ -55,8 +63,14 @@ export class PluginRegistrationResourceSource {
             if (last) {
               // Rollback errors belong to construction; join its work before
               // the final physical claim retires the shared instances and cache.
-              await Promise.allSettled(
+              const registrations = await Promise.allSettled(
                 [...this.#registrations].map(([pluginId, entry]) => this.#dispose(pluginId, entry)),
+              );
+              // Earlier claims report rollback errors, but final custody still depends on them.
+              registrationsCompleted = registrations.every(
+                (result) =>
+                  result.status === "fulfilled" &&
+                  !result.value.some(hasRetainedPluginRuntimeCloseError),
               );
               try {
                 await this.retire();
@@ -87,13 +101,21 @@ export class PluginRegistrationResourceSource {
             return failures;
           });
           release = (async () => {
+            let failures: Error[];
             try {
-              return await cleanup;
+              failures = await cleanup;
             } finally {
               if (last) {
                 await this.#cleanupWork.run(() => this.#cleanupWork.drain());
+                // This retained abort reason must not pin the completed cleanup's stack frames.
+                materializeErrorStack(this.#cleanupWork.signal.reason);
               }
             }
+            if (registrationsCompleted && !failures.some(hasRetainedPluginRuntimeCloseError)) {
+              this.#registrations.clear();
+              this.disposed();
+            }
+            return failures;
           })();
         }
         return release;
@@ -153,66 +175,64 @@ export class PluginRegistrationResourceSource {
     void this.#dispose(pluginId, entry);
   }
 
+  /** Move a completed registration together with its successor instance custody. */
+  transferRegistrationTo(pluginId: string, target: PluginRegistrationResourceSource): void {
+    const entry = this.#registrations.get(pluginId);
+    if (entry) {
+      if (this.#closed || target.#closed || target.#registrations.has(pluginId)) {
+        throw new Error(`Plugin registration custody cannot transfer: ${pluginId}`);
+      }
+      this.#registrations.delete(pluginId);
+      target.#registrations.set(pluginId, entry);
+    }
+  }
+
   async #waitForRegistrations(): Promise<void> {
     while (this.#pending.size > 0) {
       await Promise.all(this.#pending);
     }
   }
 
-  #pendingWork(): AsyncWorkScope[] {
-    return [...this.#registrations.values()]
-      .filter((entry) => !entry.disposalStarted)
-      .map((entry) => entry.work);
-  }
-
   #dispose(pluginId: string, entry: RegistrationResources): Promise<Error[]> {
-    return (entry.disposal ??= Promise.resolve().then(async () => {
-      const signalCleanup = async () => {
-        entry.work.beginClose();
-        // Abort listeners can queue work in a sibling. Keep this cleanup admission
-        // until those descendants join, before any registration resource is disposed.
-        await this.#waitForRegistrations();
-        await AsyncWorkScope.runWhenAllIdle(
-          () => this.#pendingWork(),
-          () => undefined,
-        );
-      };
-      await (entry.runCleanup ? entry.runCleanup(signalCleanup) : signalCleanup());
-      const failures: Error[] = [];
-      try {
-        await AsyncWorkScope.runWhenAllIdle(
-          () => this.#pendingWork(),
-          () =>
-            entry.work.track(async () => {
-              entry.disposalStarted = true;
-              const disposers = entry.disposers.splice(0);
-              for (const { id, dispose } of disposers) {
-                try {
-                  await dispose();
-                } catch (cause) {
-                  failures.push(
-                    new Error(`Plugin inspection disposal failed: ${pluginId}:${id}`, { cause }),
-                  );
-                }
-              }
-            }),
-        );
+    // Physical cleanup owns its authority independently of the releasing caller.
+    return (entry.disposal ??= pluginInvocationContext.exit(() =>
+      Promise.resolve().then(async () => {
+        const signalCleanup = async () => {
+          entry.work.beginClose();
+          await this.#waitForRegistrations();
+        };
+        await (entry.runCleanup ? entry.runCleanup(signalCleanup) : signalCleanup());
+        const failures: Error[] = [];
         try {
-          // Instance cleanup can use the same captured tracker as raw disposal.
-          await entry.work.runWhenIdle(() => entry.retire?.());
-        } catch (cause) {
-          failures.push(new Error(`Plugin inspection retirement failed: ${pluginId}`, { cause }));
+          await entry.work.runWhenIdle(async () => {
+            const disposers = entry.disposers.splice(0);
+            for (const { id, dispose } of disposers) {
+              try {
+                await dispose();
+              } catch (cause) {
+                failures.push(
+                  new Error(`Plugin inspection disposal failed: ${pluginId}:${id}`, { cause }),
+                );
+              }
+            }
+          });
+          try {
+            // Instance cleanup can use the same captured tracker as raw disposal.
+            await entry.work.runWhenIdle(() => entry.retire?.());
+          } catch (cause) {
+            failures.push(new Error(`Plugin inspection retirement failed: ${pluginId}`, { cause }));
+          }
+          return failures;
+        } finally {
+          // Rollback owns its final drain. Successful instances remain owned by the
+          // last physical claim, so their captured cleanup scope must stay usable.
+          if (entry.rolledBack) {
+            await entry.work.drain();
+          } else {
+            await entry.work.runWhenIdle(() => undefined);
+          }
         }
-        return failures;
-      } finally {
-        // Rollback owns its final drain. Successful instances remain owned by the
-        // last physical claim, so their captured cleanup scope must stay usable.
-        if (entry.rolledBack) {
-          await entry.work.drain();
-        } else {
-          await entry.work.runWhenIdle(() => undefined);
-        }
-      }
-    }));
+      }),
+    ));
   }
 }

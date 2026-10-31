@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as asNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import type {
@@ -16,7 +15,8 @@ import {
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { resolveSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { hasSqlitePostCommitScope } from "../infra/sqlite-post-commit.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { hasUncommittedSqliteWrites } from "../infra/sqlite-schema-facts.js";
 import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import type { TranscriptReadWindow } from "../sessions/transcript-read-window.js";
 import {
@@ -30,16 +30,19 @@ import {
   prepareArtifactDownload,
   prepareArtifactDownloadResponse,
 } from "./artifact-download-projection.js";
-import { parseManagedOutgoingArtifactId } from "./managed-outgoing-artifact-id.js";
-import { MAX_PAYLOAD_BYTES } from "./server-constants.js";
 import {
   type ArtifactRecord,
   mediaUrlValue,
   resolveBlockDownload,
   resolveMessageRunId,
   toArtifactSummary,
-} from "./server-methods/artifacts-content.js";
-import type { createSessionTranscriptReader } from "./session-transcript-read-kernel.js";
+} from "./artifacts-content.js";
+import { parseManagedOutgoingArtifactId } from "./managed-outgoing-artifact-id.js";
+import { MAX_PAYLOAD_BYTES } from "./payload-limits.js";
+import type {
+  SessionTranscriptPageReader,
+  SessionTranscriptVisitor,
+} from "./session-transcript-read.types.js";
 import {
   parseTranscriptImageArtifactId,
   projectTranscriptImageArtifacts,
@@ -51,10 +54,8 @@ const IMAGE_PAGE_BYTES = 1024 * 1024;
 const IMAGE_INLINE_PREVIEW_MAX_BYTES = 256 * 1024;
 
 type SessionArtifactFilters = Pick<ArtifactsListParams, "runId" | "messageRole">;
-type ArtifactReaders = Pick<
-  ReturnType<typeof createSessionTranscriptReader>,
-  "visitSessionMessagesAsync" | "readSessionMessagesPageWithStatsAsync"
->;
+type ArtifactReaders = SessionTranscriptVisitor &
+  Pick<SessionTranscriptPageReader, "readSessionMessagesPageWithStatsAsync">;
 
 export type SessionArtifactReadQuery = SessionArtifactFilters &
   (
@@ -202,9 +203,8 @@ function collectArtifactsFromMessage(
       }
     }
   }
-  for (let contentIndex = 0; contentIndex < content.length; contentIndex += 1) {
-    const block = asOptionalRecord(content[contentIndex]);
-    if (!block || !isArtifactBlock(block)) {
+  for (const [contentIndex, block] of content.entries()) {
+    if (!isArtifactBlock(block)) {
       continue;
     }
     // Fallback titles participate in existing artifact IDs. Count omitted roles
@@ -307,7 +307,7 @@ function collectArtifactsFromMessage(
       download: { mode: previewOnly ? "unsupported" : download.mode },
       ...(imageUrl ? { image: { url: imageUrl } } : {}),
       ...(download.data !== undefined ? { data: download.data } : {}),
-      ...(download.url ? { url: download.url } : {}),
+      ...(params.includeDownloadData !== false && download.url ? { url: download.url } : {}),
     };
     params.collection.artifacts.push(summary);
   }
@@ -335,7 +335,7 @@ function createArtifactListCollector(query: Extract<SessionArtifactReadQuery, { 
 }
 
 const summaryLists = new WeakMap<
-  DatabaseSync,
+  EngineConnection,
   Map<string, { revision: string; artifacts: ArtifactRecord[] }>
 >();
 
@@ -345,7 +345,7 @@ export function readArtifactSummariesFromProjection(
   query: Extract<SessionArtifactReadQuery, { kind: "list" }>,
 ): ArtifactRecord[] {
   const cacheable =
-    !hasSqlitePostCommitScope(projection.database.db) &&
+    !hasUncommittedSqliteWrites(projection.database.db) &&
     !resolveSessionTranscriptReadFence(projection.resolved);
   let cache = summaryLists.get(projection.database.db);
   if (!cache && cacheable) {

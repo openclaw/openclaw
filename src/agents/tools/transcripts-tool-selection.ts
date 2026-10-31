@@ -94,17 +94,16 @@ export async function resolveTranscriptToolSession(params: {
     };
   } else {
     const candidates = explicit ? qualified : [...qualified, ...unqualified];
-    const distinct = candidates.filter(
-      (candidate, index) =>
-        candidates.findIndex((other) => sameSessionIdentity(candidate.session, other.session)) ===
-        index,
-    );
-    if (distinct.length > 1) {
+    const first = candidates[0];
+    if (
+      first &&
+      candidates.some((candidate) => !sameSessionIdentity(candidate.session, first.session))
+    ) {
       throw new Error(
         "Ambiguous transcripts session; pass selector from start, import, status, or the local transcripts list.",
       );
     }
-    entry = distinct[0];
+    entry = first;
   }
   const activeCandidate = preferActive
     ? exactActive
@@ -118,7 +117,7 @@ export async function resolveTranscriptToolSession(params: {
       : undefined;
   // Reads authorize the durable descriptor that owns the notes. Mutations keep
   // the admitted capture's authority even after a same-tuple durable rewrite.
-  const session = durableRead ? entry?.session : (selectedActive?.session ?? entry?.session);
+  const session = selectedActive?.session ?? entry?.session;
   // The revision belongs to the matched descriptor, even if its row changes while matching waits.
   const historicalRevision = !selectedActive ? entry?.inputRevision : undefined;
   if (

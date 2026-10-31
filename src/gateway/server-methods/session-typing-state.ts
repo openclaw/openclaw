@@ -1,3 +1,4 @@
+import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 import { listSystemPresence } from "../../infra/system-presence.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { presenceUserKey } from "../../shared/presence-user.js";
@@ -6,18 +7,17 @@ export const TYPING_THROTTLE_MS = 1_000;
 export const TYPING_PREVIEW_THROTTLE_MS = 250;
 const TYPING_ACTIVE_TTL_MS = 2_500;
 const MAX_TYPING_THROTTLE_KEYS = 2_048;
-type PendingTypingBroadcast = {
-  signature: string;
-  intervalMs: number;
-  emit: () => boolean;
-};
 type TypingBroadcastState = {
   at: number;
   signature: string;
-  pending?: PendingTypingBroadcast;
+  pending?: {
+    signature: string;
+    intervalMs: number;
+    emit: () => boolean;
+  };
   timer?: ReturnType<typeof setTimeout>;
 };
-type TypingConnectionState = { updatedAt: number; preview?: string };
+type TypingConnectionState = { updatedAt: number; preview?: string; cursor?: number };
 type TypingConnections = {
   connections: Map<string, TypingConnectionState>;
   timer: ReturnType<typeof setTimeout>;
@@ -127,12 +127,17 @@ export function broadcastTypingThrottled(params: {
         rememberTypingBroadcast(params.key, next);
       },
       params.intervalMs - (params.now - previous.at),
-    );
-    timer.unref?.();
+    ).unref();
     previous.timer = timer;
   }
   rememberTypingBroadcast(params.key, previous);
   return false;
+}
+
+export function normalizeTypingRequestParams(params: Record<string, unknown>) {
+  return typeof params.preview === "string"
+    ? { ...params, preview: truncateCodePoints(params.preview, 400) }
+    : params;
 }
 
 export function updateTypingConnections(params: {
@@ -140,8 +145,9 @@ export function updateTypingConnections(params: {
   connectionId: string;
   typing: boolean;
   preview?: string;
+  cursor?: number;
   now: number;
-}): { typing: boolean; preview?: string } {
+}): { typing: boolean; preview?: string; cursor?: number } {
   let bucket = typingConnections.get(params.key);
   if (!bucket) {
     if (!params.typing) {
@@ -149,16 +155,19 @@ export function updateTypingConnections(params: {
     }
     const timer = setTimeout(() => {
       typingConnections.delete(params.key);
-    }, TYPING_ACTIVE_TTL_MS);
-    timer.unref?.();
+    }, TYPING_ACTIVE_TTL_MS).unref();
     bucket = { connections: new Map(), timer };
   }
   const { connections } = bucket;
   if (params.typing) {
     bucket.timer.refresh();
+    const preview = params.preview?.trim() ? params.preview : undefined;
     connections.set(params.connectionId, {
       updatedAt: params.now,
-      ...(params.preview ? { preview: params.preview } : {}),
+      ...(preview ? { preview } : {}),
+      ...(preview && params.cursor !== undefined
+        ? { cursor: Math.min(params.cursor, preview.length) }
+        : {}),
     });
   } else {
     connections.delete(params.connectionId);
@@ -188,5 +197,9 @@ export function updateTypingConnections(params: {
       typingConnections.delete(oldestKey);
     }
   }
-  return { typing: true, ...(latestPreview?.preview ? { preview: latestPreview.preview } : {}) };
+  return {
+    typing: true,
+    ...(latestPreview?.preview ? { preview: latestPreview.preview } : {}),
+    ...(latestPreview?.cursor !== undefined ? { cursor: latestPreview.cursor } : {}),
+  };
 }

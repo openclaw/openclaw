@@ -79,7 +79,7 @@ function encodeDiscoveryId(prefix: string, identity: string): string {
   return `${prefix}${Buffer.from(normalized, "utf8").toString("base64url")}`;
 }
 
-export function encodePluginDiscoveryId(packageName: string): string {
+function encodePluginDiscoveryId(packageName: string): string {
   const normalized = packageName.trim();
   if (!normalized) {
     throw new Error("Cannot encode an empty ClawHub package identity.");
@@ -87,8 +87,15 @@ export function encodePluginDiscoveryId(packageName: string): string {
   return encodeDiscoveryId(DISCOVERY_ID_PREFIX, normalized);
 }
 
-export function encodeLocalPluginDiscoveryId(identity: string): string {
+function encodeLocalPluginDiscoveryId(identity: string): string {
   return encodeDiscoveryId(LOCAL_DISCOVERY_ID_PREFIX, identity);
+}
+
+/** Discovery identity that joins an installed inventory row to its catalog entry. */
+export function pluginCatalogId(plugin: Pick<PluginCatalogEntry, "id" | "clawhubPackage">): string {
+  return plugin.clawhubPackage
+    ? encodePluginDiscoveryId(plugin.clawhubPackage)
+    : encodeLocalPluginDiscoveryId(plugin.id);
 }
 
 export function resolvePluginDiscoveryIdentity(
@@ -362,6 +369,7 @@ export function joinClawHubPluginDetail(params: {
       : {}),
     configuration: params.remote.configFields,
     mcpServers: params.remote.mcpServers,
+    ...(params.remote.mcpServerDetails ? { mcpServerDetails: params.remote.mcpServerDetails } : {}),
     skills: params.remote.skills,
     versions: params.remote.versions,
     ...(params.remote.verification ? { verification: params.remote.verification } : {}),
