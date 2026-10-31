@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   cleanup: vi.fn(),
   tail: vi.fn(),
   compact: vi.fn(),
+  search: vi.fn(),
   lifecycle: vi.fn(),
   exportTrajectory: vi.fn(),
   ownerLoaded: vi.fn(),
@@ -38,6 +39,11 @@ vi.mock("../../commands/sessions-tail.js", () => {
 vi.mock("../../commands/sessions-compact.js", () => {
   mocks.ownerLoaded();
   return { sessionsCompactCommand: mocks.compact };
+});
+// mock-isolation: Capture lazy loading without searching session state.
+vi.mock("../../commands/sessions-search.js", () => {
+  mocks.ownerLoaded();
+  return { sessionsSearchCommand: mocks.search };
 });
 vi.mock("../../commands/sessions-lifecycle.js", async (importOriginal) => {
   mocks.ownerLoaded();
@@ -98,6 +104,13 @@ it.each([
     "`sessions compact` does not support the parent `sessions` options --store, --all-agents, --limit, --verbose; the gateway resolves the target store from <key> and --agent.",
   ],
   [`sessions delete ${key} --timeout 0 --json`, mocks.lifecycle, timeoutError],
+  [
+    `sessions --store /tmp/other.sqlite search backup`,
+    mocks.search,
+    "`sessions search` does not support the parent `sessions` option --store; the gateway resolves the visible roster from --agent, --key, and --active-minutes.",
+  ],
+  [`sessions search backup --limit 0 --json`, mocks.search, "--limit must be a positive integer."],
+  [`sessions search backup --limit 30 --json`, mocks.search, "--limit must be between 1 and 25."],
   [
     `sessions compact ${key} --max-lines 0 --json`,
     mocks.compact,
@@ -179,6 +192,18 @@ it.each([
 it("compact inherits parent agent and JSON options (#91378)", async () => {
   await run(`sessions --agent work --json compact ${key}`);
   expectOptions(mocks.compact, { key, agent: "work", json: true });
+});
+it("forwards sessions search query, agent, keys, and window", async () => {
+  await run(
+    `sessions --json search backup --agent work --key ${key} --key agent:work:scratch --active-minutes 60`,
+  );
+  expectOptions(mocks.search, {
+    query: "backup",
+    agent: "work",
+    keys: [key, "agent:work:scratch"],
+    activeMinutes: 60,
+    json: true,
+  });
 });
 it("forwards archive keys, inherited scope and RPC options", async () => {
   await run(
