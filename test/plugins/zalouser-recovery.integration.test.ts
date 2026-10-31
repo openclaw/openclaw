@@ -1,31 +1,33 @@
+import { AsyncResource } from "node:async_hooks";
 import { EventEmitter } from "node:events";
 import { afterEach, expect, it, vi } from "vitest";
 import * as zalouserPublicApi from "../../extensions/zalouser/api.js";
 import zalouserEntry from "../../extensions/zalouser/index.js";
 import * as zalouserRuntimeApi from "../../extensions/zalouser/runtime-api.js";
-import { createDeferred } from "../../test/helpers/promise.js";
-import * as ingressQueue from "../channels/message/ingress-queue.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
-import { loadBundledEntryExportSync } from "../plugin-sdk/channel-entry-contract.js";
-import { observeChannelIngressQueueWrite } from "../plugin-sdk/channel-ingress-test-runtime.js";
+import * as ingressQueue from "../../src/channels/message/ingress-queue.js";
+import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import { startChannelHealthMonitor } from "../../src/gateway/channel-health-monitor.js";
+import { createChannelManager } from "../../src/gateway/server-channels.js";
+import { createSubsystemLogger, runtimeForLogger } from "../../src/logging/subsystem.js";
+import { loadBundledEntryExportSync } from "../../src/plugin-sdk/channel-entry-contract.js";
+import { observeChannelIngressQueueWrite } from "../../src/plugin-sdk/channel-ingress-test-runtime.js";
 import {
   createPluginRecord,
   createPluginRegistry,
   createPluginRuntimeMock,
   disposePluginRegistryInstances,
-} from "../plugin-sdk/plugin-test-runtime.js";
-import { withOpenClawTestState } from "../plugin-sdk/test-state.js";
-import { createJiti } from "../plugins/jiti-factory.js";
-import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import { startChannelHealthMonitor } from "./channel-health-monitor.js";
-import { createChannelManager } from "./server-channels.js";
+} from "../../src/plugin-sdk/plugin-test-runtime.js";
+import { withOpenClawTestState } from "../../src/plugin-sdk/test-state.js";
+import { createJiti } from "../../src/plugins/jiti-factory.js";
+import { resetGatewayWorkAdmission } from "../../src/process/gateway-work-admission.js";
+import { createTestGatewayScheduler } from "../../src/test-utils/gateway-scheduler-clock.js";
+import { createDeferred } from "../helpers/promise.js";
 
 const io = vi.hoisted(() => ({ createZalo: vi.fn(), credentialsPresent: true }));
 // Only provider authentication and credential storage I/O are fixtures. The
 // plugin, watchdog, account supervisor and health monitor make real decisions.
-vi.mock("../../extensions/zalouser/src/zca-client.js", () => ({
+vi.mock("../../extensions/zalouser/src/zca-client.js", async (importOriginal) => ({
+  ...(await importOriginal()),
   createZalo: io.createZalo,
 }));
 vi.mock("../../extensions/zalouser/src/session-state.js", async (importOriginal) => ({
@@ -57,12 +59,24 @@ const createEntryLoader: typeof createJiti = (...loaderArgs) =>
   });
 
 class FixtureListener extends EventEmitter {
+  private context?: AsyncResource;
   started = createDeferred();
   start = vi.fn(() => {
-    this.emit("connected");
+    // Socket callbacks inherit the context in which the transport was started.
+    this.context = new AsyncResource("ZaloFixtureTransport");
+    this.dispatch("connected");
     this.started.resolve();
   });
-  stop = vi.fn(() => this.emit("closed", 1000, "stopped"));
+  stop = vi.fn(() => {
+    this.dispatch("closed", 1000, "stopped");
+    this.context?.emitDestroy();
+    this.context = undefined;
+  });
+  dispatch(event: string, ...args: unknown[]) {
+    return this.context
+      ? this.context.runInAsyncScope(() => this.emit(event, ...args))
+      : this.emit(event, ...args);
+  }
 }
 
 function session(listener: FixtureListener) {
@@ -72,6 +86,9 @@ function session(listener: FixtureListener) {
     getContext: () => ({ imei: "fixture", userAgent: "fixture" }),
     getCookie: () => ({ toJSON: () => ({ cookies: [] }) }),
     fetchAccountInfo: async () => ({ userId: "fixture-owner" }),
+    getGroupInfo: async () => ({ gridInfoMap: { "fixture-group": { name: "Fixture Group" } } }),
+    sendDeliveredEvent: async () => ({}),
+    sendSeenEvent: async () => ({}),
   };
 }
 
@@ -191,7 +208,7 @@ it.each(["recover", "manual stop", "logout"] as const)(
             expect(replacement.listenerCount("message")).toBe(1);
             // A real post-recovery ingress row reaches the configured group-policy
             // decision and completes. No agent/model request is needed for a drop.
-            replacement.emit("message", {
+            replacement.dispatch("message", {
               type: 1,
               threadId: "fixture-group",
               isSelf: false,
@@ -207,6 +224,8 @@ it.each(["recover", "manual stop", "logout"] as const)(
             });
             await expect(incomingCompleted.promise).resolves.toBe(true);
             expect(snapshot()?.lastInboundAt).toBe(Date.now());
+            expect(login).toHaveBeenCalledTimes(3);
+            expect(replacement.stop).not.toHaveBeenCalled();
           } else {
             expect(replacement.start).not.toHaveBeenCalled();
             expect(login).toHaveBeenCalledTimes(2);
