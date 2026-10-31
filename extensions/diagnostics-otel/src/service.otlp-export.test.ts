@@ -4,7 +4,7 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { context, diag, propagation, trace } from "@opentelemetry/api";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
-import { BasicTracerProvider, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { SimpleSpanProcessor, TracerProvider } from "@opentelemetry/sdk-trace";
 import {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContext,
@@ -186,9 +186,11 @@ test.each(["completed", "error"] as const)(
     const endpoint = `http://127.0.0.1:${port}`;
     releasePreloadedOtelGlobals();
 
-    const peerProvider = new BasicTracerProvider({
+    const peerProvider = new TracerProvider({
       spanProcessors: [
-        new SimpleSpanProcessor(new OTLPTraceExporter({ url: `${endpoint}/v1/traces` })),
+        new SimpleSpanProcessor({
+          exporter: new OTLPTraceExporter({ url: `${endpoint}/v1/traces` }),
+        }),
       ],
     });
     const peerTracer = peerProvider.getTracer("openclaw-otel-peer");

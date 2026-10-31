@@ -1,5 +1,4 @@
-import { context, diag, DiagLogLevel, metrics, propagation, trace } from "@opentelemetry/api";
-import { logs } from "@opentelemetry/api-logs";
+import { context, diag, DiagLogLevel, logs, metrics, propagation, trace } from "@opentelemetry/api";
 import {
   AggregationTemporality,
   InMemoryMetricExporter,
@@ -8,10 +7,10 @@ import {
   PeriodicExportingMetricReader,
 } from "@opentelemetry/sdk-metrics";
 import {
-  BasicTracerProvider,
   InMemorySpanExporter,
   SimpleSpanProcessor,
-} from "@opentelemetry/sdk-trace-base";
+  TracerProvider,
+} from "@opentelemetry/sdk-trace";
 import { resetDiagnosticEventsForTest } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { afterEach, beforeEach, expect, onTestFinished } from "vitest";
 import {
@@ -35,7 +34,6 @@ const ENDPOINT_ENV_KEYS = [
   "OTEL_EXPORTER_OTLP_TIMEOUT",
   "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT",
 ] as const;
-const OTEL_GLOBAL_LOGS_KEY = Symbol.for("io.opentelemetry.js.api.logs");
 
 // Real-SDK suites share one owner for global registrations, providers, and environment cleanup.
 export function installRealOtelSdkTestHarness({
@@ -44,10 +42,9 @@ export function installRealOtelSdkTestHarness({
   replaceTraceProvider = false,
 }: { env?: readonly string[]; owned?: boolean; replaceTraceProvider?: boolean } = {}) {
   let exporter: InMemorySpanExporter;
-  let provider: BasicTracerProvider;
+  let provider: TracerProvider;
   let restoreEnv: () => void;
   let originalOtelGlobals: NonNullable<ReturnType<typeof registeredOtelGlobals>>;
-  let originalLogsProvider: ReturnType<typeof logs.getLoggerProvider> | undefined;
 
   beforeEach(() => {
     restoreEnv = snapshotOtelEnv([PRELOAD_ENV, ...ENDPOINT_ENV_KEYS, ...env]);
@@ -55,12 +52,9 @@ export function installRealOtelSdkTestHarness({
       delete process.env[key];
     }
     originalOtelGlobals = { ...registeredOtelGlobals() };
-    originalLogsProvider = Object.hasOwn(globalThis, OTEL_GLOBAL_LOGS_KEY)
-      ? logs.getLoggerProvider()
-      : undefined;
     process.env[PRELOAD_ENV] = "1";
     exporter = new InMemorySpanExporter();
-    provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
+    provider = new TracerProvider({ spanProcessors: [new SimpleSpanProcessor({ exporter })] });
     if (replaceTraceProvider) {
       trace.disable();
     }
@@ -99,10 +93,10 @@ export function installRealOtelSdkTestHarness({
         trace.setGlobalTracerProvider(originalOtelGlobals.trace);
       }
     }
-    if (Object.hasOwn(globalThis, OTEL_GLOBAL_LOGS_KEY) || originalLogsProvider) {
+    if (currentGlobals?.logs !== originalOtelGlobals.logs) {
       logs.disable();
-      if (originalLogsProvider) {
-        logs.setGlobalLoggerProvider(originalLogsProvider);
+      if (originalOtelGlobals.logs) {
+        logs.setGlobalLoggerProvider(originalOtelGlobals.logs);
       }
     }
     exporter.reset();

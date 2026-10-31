@@ -5,12 +5,7 @@ import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
 import * as resources from "@opentelemetry/resources";
 import type { LoggerProvider } from "@opentelemetry/sdk-logs";
 import { MeterProvider, PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
-import {
-  BatchSpanProcessor,
-  BasicTracerProvider,
-  ParentBasedSampler,
-  TraceIdRatioBasedSampler,
-} from "@opentelemetry/sdk-trace-base";
+import { BatchSpanProcessor, TracerProvider } from "@opentelemetry/sdk-trace";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
 import { asFiniteNumberInRange } from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
@@ -44,6 +39,7 @@ import { createModelRecorders } from "./service-recorders-model.js";
 import { createOperationsRecorders } from "./service-recorders-operations.js";
 import { createToolAndSystemRecorders } from "./service-recorders-tools.js";
 import { createUsageRecorders } from "./service-recorders-usage.js";
+import { readSpanLimitsFromEnv, resolveTraceSampler } from "./service-trace-config.js";
 import { createDiagnosticsTraceRuntime } from "./service-traces.js";
 import type { OtelLogsExporter, TelemetryExporterDiagnosticEvent } from "./service-types.js";
 
@@ -138,7 +134,7 @@ function publicExporterEventForHealth(event: PublicExporterHealthUpdate): Public
 }
 
 type DiagnosticsOtelState = {
-  traceProvider?: BasicTracerProvider;
+  traceProvider?: TracerProvider;
   meterProvider?: MeterProvider;
   logProvider?: LoggerProvider | null;
   unsubscribe?: (() => void) | null;
@@ -438,7 +434,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             : undefined;
           if (traceExporter) {
             const maxQueueSize = readPositiveOtelNumber("OTEL_BSP_MAX_QUEUE_SIZE", 2048);
-            const spanProcessor = new BatchSpanProcessor(traceExporter, {
+            const spanProcessor = new BatchSpanProcessor({
+              exporter: traceExporter,
               maxQueueSize,
               maxExportBatchSize: Math.min(
                 readPositiveOtelNumber("OTEL_BSP_MAX_EXPORT_BATCH_SIZE", 512),
@@ -453,16 +450,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
                 ? { selfObsMeterProvider: active.meterProvider }
                 : {}),
             });
-            active.traceProvider = new BasicTracerProvider({
+            const sampler = resolveTraceSampler(sampleRate);
+            active.traceProvider = new TracerProvider({
               resource: detectedResource,
               spanProcessors: [spanProcessor],
-              ...(sampleRate !== undefined
-                ? {
-                    sampler: new ParentBasedSampler({
-                      root: new TraceIdRatioBasedSampler(sampleRate),
-                    }),
-                  }
-                : {}),
+              spanLimits: readSpanLimitsFromEnv(),
+              ...(sampler ? { sampler } : {}),
               ...(sdkMetricsEnabled && active.meterProvider
                 ? { meterProvider: active.meterProvider }
                 : {}),

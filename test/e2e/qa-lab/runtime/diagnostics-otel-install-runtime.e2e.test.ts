@@ -469,9 +469,9 @@ describe("managed diagnostics-otel install runtime", () => {
       dependencies?: Record<string, string>;
       devDependencies?: Record<string, string>;
     };
-    expect(rootPackage.devDependencies?.["@opentelemetry/sdk-node"]).toBe("0.223.0");
+    expect(rootPackage.devDependencies?.["@opentelemetry/sdk-node"]).toBeUndefined();
     expect(sourcePluginPackage.dependencies?.["@opentelemetry/sdk-node"]).toBeUndefined();
-    expect(sourcePluginPackage.devDependencies?.["@opentelemetry/sdk-node"]).toBeUndefined();
+    expect(sourcePluginPackage.devDependencies?.["@opentelemetry/sdk-node"]).toBe("0.300.0");
     const scratch = await mkdtemp(path.join(tmpdir(), "openclaw-otel-preloaded-"));
     const receiver = await startReceiver();
     const ignoredConfig = await startReceiver();
@@ -487,15 +487,16 @@ describe("managed diagnostics-otel install runtime", () => {
       const preloadModules = path.join(preloadRoot, "node_modules", "@opentelemetry");
       await mkdir(preloadModules, { recursive: true });
       const requireFromSdk = createRequire(
-        createRequire(path.join(repoRoot, "package.json")).resolve(
-          "@opentelemetry/sdk-node/package.json",
+        createRequire(path.join(repoRoot, "extensions/diagnostics-otel/package.json")).resolve(
+          "@opentelemetry/sdk-node",
         ),
       );
-      // Resolve through the root-owned SDK without relying on dependency hoisting.
-      // The installed plugin remains independently packed without sdk-node.
+      // Resolve through the plugin test dependency without relying on hoisting.
+      // The published plugin excludes this development-only SDK dependency.
       for (const packageName of ["sdk-node", "exporter-trace-otlp-proto"]) {
+        // OpenTelemetry 3 exports only entry points; dist/index.cjs sits below the package root.
         await symlink(
-          path.dirname(requireFromSdk.resolve(`@opentelemetry/${packageName}/package.json`)),
+          path.dirname(path.dirname(requireFromSdk.resolve(`@opentelemetry/${packageName}`))),
           path.join(preloadModules, packageName),
           process.platform === "win32" ? "junction" : "dir",
         );

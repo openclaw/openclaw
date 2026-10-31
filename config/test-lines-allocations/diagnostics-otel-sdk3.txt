@@ -1,0 +1,2 @@
+# Preserve Jaeger uber-trace-id and baggage wire compatibility while replacing the removed upstream propagator.
+100

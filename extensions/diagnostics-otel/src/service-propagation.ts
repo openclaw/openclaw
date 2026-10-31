@@ -7,7 +7,7 @@ import {
   W3CTraceContextPropagator,
 } from "@opentelemetry/core";
 import { B3InjectEncoding, B3Propagator } from "@opentelemetry/propagator-b3";
-import { JaegerPropagator } from "@opentelemetry/propagator-jaeger";
+import { JaegerPropagator } from "./service-jaeger-propagator.js";
 
 const DEFAULT_PROPAGATORS = ["tracecontext", "baggage"];
 

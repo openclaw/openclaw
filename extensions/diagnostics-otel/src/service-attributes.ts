@@ -1,4 +1,4 @@
-import type { LogRecord } from "@opentelemetry/api-logs";
+import type { LogRecord } from "@opentelemetry/api";
 import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type {
   DiagnosticEventPayload,

@@ -160,6 +160,7 @@
   },
   "devDependencies": {
     "@mistralai/mistralai": "2.7.0",
+    "@opentelemetry/api": "1.9.1",
     "@openclaw/model-catalog-core": "workspace:*",
     "@openclaw/normalization-core": "workspace:*"
   },

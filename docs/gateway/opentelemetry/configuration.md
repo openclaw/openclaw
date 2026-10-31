@@ -96,6 +96,13 @@ dashboards, alerts, and recording rules that query the old names.
 | `OTEL_SEMCONV_STABILITY_OPT_IN`                                                                                                                                                                                                        | Set to `gen_ai_latest_experimental` to emit the latest GenAI inference span shape: `{gen_ai.operation.name} {gen_ai.request.model}` span names, `CLIENT` span kind, and `gen_ai.provider.name` instead of the legacy `gen_ai.system`. GenAI metrics always use bounded, low-cardinality attributes regardless.                                                                   |
 | `OPENCLAW_OTEL_PRELOADED`                                                                                                                                                                                                              | Set to `1` when another preload or host process already registered global OpenTelemetry providers. The plugin consumes external trace, metric, context, propagation, and logger ownership without registering, replacing, disabling, unregistering, or shutting it down. With `OTEL_SDK_DISABLED=true`, external ownership remains active while plugin-owned logs stay disabled. |
 
+The plugin uses OpenTelemetry JS SDK 3. Although upstream removed the Jaeger
+propagator, `OTEL_PROPAGATORS=jaeger` still reads and writes `uber-trace-id`
+and percent-encoded `uberctx-*` baggage headers through a plugin-owned propagator.
+The deprecation warning remains: migrate all participating services to
+`tracecontext` together, or run both formats during the transition, to avoid
+splitting distributed traces.
+
 Without `OPENCLAW_OTEL_PRELOADED=1`, trace, metric, and log providers are
 generation-private. The plugin publishes only its async context manager and
 propagator through the public OpenTelemetry APIs, and removes registrations it

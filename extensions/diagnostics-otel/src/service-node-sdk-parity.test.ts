@@ -3,12 +3,13 @@ import { type Tracer, trace, TraceFlags } from "@opentelemetry/api";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import { NodeSDK } from "@opentelemetry/sdk-node";
 import {
-  BasicTracerProvider,
   InMemorySpanExporter,
   type ReadableSpan,
   SimpleSpanProcessor,
-} from "@opentelemetry/sdk-trace-base";
+  TracerProvider,
+} from "@opentelemetry/sdk-trace";
 import { beforeEach, expect, test } from "vitest";
+import { readSpanLimitsFromEnv, resolveTraceSampler } from "./service-trace-config.js";
 import { installRealOtelSdkTestHarness } from "./service.real-sdk.test-support.js";
 import { clearOtelGlobals } from "./service.test-helpers.js";
 
@@ -30,9 +31,12 @@ beforeEach(() => clearOtelGlobals());
 
 async function capturePrivateProviderSpans(emit: (tracer: Tracer) => void) {
   const exporter = new InMemorySpanExporter();
-  const provider = new BasicTracerProvider({
+  const sampler = resolveTraceSampler(undefined);
+  const provider = new TracerProvider({
     resource: resourceFromAttributes({}),
-    spanProcessors: [new SimpleSpanProcessor(exporter)],
+    spanProcessors: [new SimpleSpanProcessor({ exporter })],
+    spanLimits: readSpanLimitsFromEnv(),
+    ...(sampler ? { sampler } : {}),
   });
   emit(provider.getTracer("openclaw-private-provider-parity"));
   await provider.forceFlush();
@@ -46,7 +50,7 @@ async function captureNodeSdkSpans(emit: (tracer: Tracer) => void) {
   const sdk = new NodeSDK({
     autoDetectResources: false,
     resource: resourceFromAttributes({}),
-    spanProcessor: new SimpleSpanProcessor(exporter),
+    spanProcessors: [new SimpleSpanProcessor({ exporter })],
   });
   sdk.start();
   emit(trace.getTracer("openclaw-node-sdk-parity"));
