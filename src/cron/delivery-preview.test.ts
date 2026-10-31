@@ -7,6 +7,7 @@ import {
   replaceSessionEntrySync,
   resetSessionEntryLifecycle,
 } from "../config/sessions/session-accessor.js";
+import * as sessionReads from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { recordAgentDatabaseAdmissions } from "../state/agent-database-admission.js";
@@ -345,6 +346,38 @@ it("uses the creating conversation route without a public session key", () =>
       expect(await preview()).toEqual(externalPreview("recipient"));
     },
   ));
+
+it("batches creating-conversation reads while preserving each generation and refreshing next list", () =>
+  withCurrentOrigin({ sessionTarget: "isolated" }, async ({ cfg, job }) => {
+    const jobs = Array.from({ length: 12 }, (_, index) => {
+      const sessionKey = `agent:main:dashboard:source-${index}`;
+      const sessionId = `source-${index}`;
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey, storePath: cfg.session!.store! },
+        sessionEntry(undefined, sessionId),
+      );
+      return { ...job, id: sessionId, sessionKey, sourceConversation: { sessionKey, sessionId } };
+    });
+    const reads = vi.spyOn(sessionReads, "withSessionEntriesFromStoresInWorker");
+    try {
+      expect(await resolveCronDeliveryPreviews({ cfg, jobs })).toEqual(
+        Object.fromEntries(
+          jobs.map((entry) => [entry.id, conversationPreview("creating conversation")]),
+        ),
+      );
+      expect(
+        reads.mock.calls.filter(([inputs]) =>
+          inputs.some((input) => input.projection === "sharing"),
+        ),
+      ).toHaveLength(1);
+      jobs[0]!.sourceConversation.sessionId = "superseded-session";
+      const next = await resolveCronDeliveryPreviews({ cfg, jobs });
+      expect(next[jobs[0]!.id]).toMatchObject(blockedPreview("original session generation"));
+      expect(next[jobs[1]!.id]).toEqual(conversationPreview("creating conversation"));
+    } finally {
+      reads.mockRestore();
+    }
+  }));
 
 it("does not rebind implicit delivery when the public session key changes", () =>
   withCurrentOrigin({ sessionTarget: "isolated" }, async ({ cfg, job, preview }) => {
