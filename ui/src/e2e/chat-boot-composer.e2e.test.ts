@@ -130,6 +130,13 @@ suite.define(() => {
           });
         // Module startup moves the editor out of the static frame first.
         await page.locator("#openclaw-boot-shell").waitFor({ state: "detached" });
+        // A font swap scrolls the native caret independently of the handoff.
+        // Keep early typing above, then measure both frames with the selected face.
+        await page.waitForFunction(() =>
+          [...document.fonts].some(
+            (font) => font.family === "Instrument Sans" && font.status === "loaded",
+          ),
+        );
         const before = await geometry(".loading-skeleton__composer:has(#openclaw-boot-composer)");
         // Every frame keeps one stationary composer, its visible draft and scroll position.
         await page.evaluate(() => {
