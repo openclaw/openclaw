@@ -1,4 +1,6 @@
 import { i18n } from "../../i18n/index.ts";
+import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
+import type { ChatDetailsProps } from "./components/chat-details-types.ts";
 import type { ChatDetailsSnapshot } from "./session-details-snapshot-schema.ts";
 import {
   cacheChatSessionSnapshot,
@@ -12,6 +14,16 @@ export type DetailsSubagents = NonNullable<ChatDetailsSnapshot["subagents"]>;
 export type DetailsSubagent = DetailsSubagents["rows"][number];
 export type DetailsAutomation = NonNullable<ChatDetailsSnapshot["automations"]>["rows"][number];
 export type DetailsSnapshotPatch = Partial<Omit<ChatDetailsSnapshot, "locale">>;
+
+/** A child query can be hydrated before it observes its own parent. */
+export function hasLoadedDetailsSubagents(details: ChatDetailsProps) {
+  return (
+    details.subagentSessionsHydrated &&
+    details.subagentSessions?.some((row) =>
+      areUiSessionKeysEquivalent(row.key, details.selectedSession?.key),
+    )
+  );
+}
 
 export function isDetailsSubagentWorking(row: Pick<DetailsSubagent, "status">) {
   return row.status === "running" || row.status === "waiting";

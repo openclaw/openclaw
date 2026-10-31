@@ -12,6 +12,7 @@ import {
 import { preloadSessionMessageSubscriptions } from "../../lib/sessions/session-scoped-operations.ts";
 import { PendingSessionCreate } from "./pending-session-create-lazy.ts";
 import { sessionRouteHints } from "./route-draft.ts";
+import { peekPrewarmedChatSnapshot } from "./session-snapshot-prewarm.ts";
 
 function sessionPage(face: BoardFace) {
   return definePage({
@@ -82,7 +83,20 @@ function sessionPage(face: BoardFace) {
         module.loadSessionPage(context, face, options),
       );
     },
-    component: () => import("./route-entry.ts"),
+    component: async () => {
+      const entry = await import("./route-entry.ts");
+      const warm = peekPrewarmedChatSnapshot();
+      if (warm) {
+        const { readPrewarmedChatSnapshot } = await import("./session-snapshot-store.ts");
+        const snapshot = await readPrewarmedChatSnapshot(warm.cacheKey);
+        if (snapshot?.details) {
+          // Cached Details belongs to the first pane; cold panes retain their lazy boundary.
+          const { ChatDetailsDesktopComposition } = await import("./components/chat-details.tsx");
+          await ChatDetailsDesktopComposition.preload().catch(() => undefined);
+        }
+      }
+      return entry;
+    },
   });
 }
 
