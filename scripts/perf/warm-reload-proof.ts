@@ -15,6 +15,7 @@ import {
   DEVICE_AUTH_STORAGE_KEY_PREFIX,
 } from "../../src/shared/control-ui-storage.ts";
 import { createControlUiE2eArtifactDir } from "../../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../../ui/src/test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../../ui/src/test-helpers/control-ui-e2e-readiness.ts";
 import { stopChild } from "../lib/gateway-bench-child.ts";
 import { freeProofPort, startWarmReloadAdmission } from "./warm-reload-admission.ts";
@@ -37,6 +38,7 @@ const { values } = parseArgs({
     sessions: { type: "string", default: "3000" },
     "rtt-ms": { type: "string", default: "80" },
     "capture-ms": { type: "string", default: "8000" },
+    "text-fidelity": { type: "boolean", default: false },
     route: { type: "string", default: "both" },
     "audit-report": { type: "string" },
     "paint-audit": { type: "string" },
@@ -621,6 +623,7 @@ try {
     port,
     uiRoot: servedUiRoot,
     sessions,
+    textFidelity: values["text-fidelity"],
     ...(admission
       ? {
           admission: {
@@ -759,7 +762,7 @@ try {
           diagnosticPage = page;
           page.setDefaultTimeout(60000);
           await page.addInitScript({
-            content: `globalThis.__name = (fn) => fn; (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)});`,
+            content: `globalThis.__name = (fn) => fn; (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)}, ${values["text-fidelity"]});`,
           });
           const cdp = await context.newCDPSession(page);
           await cdp.send("Page.enable");
@@ -788,6 +791,12 @@ try {
             await page.goto(handoffUrl.href);
           }
           await waitForControlUiGatewayReady(page, 60000);
+          const operator = values["text-fidelity"]
+            ? await evaluateControlUiContext(page, (context) => ({
+                gatewayUrl: context.gateway.connection.gatewayUrl.replace(/\/$/u, ""),
+                userId: context.gateway.snapshot.selfUser?.id,
+              }))
+            : null;
           await page.waitForFunction(() => navigator.serviceWorker.controller !== null, undefined, {
             timeout: 60000,
           });
@@ -818,6 +827,28 @@ try {
             storageTypes: "indexeddb,cache_storage",
           });
           await cdp.send("Network.clearBrowserCache");
+          if (operator) {
+            if (!operator.userId) throw new Error("Text fidelity requires an identified operator");
+            await page.evaluate(({ gatewayUrl, userId }) => {
+              localStorage.setItem("openclaw:sidebar:sessions:grouping", "category");
+              localStorage.setItem("openclaw:sidebar:sessions:sort-mode", "created");
+              localStorage.setItem("openclaw:sidebar:sessions:show-preview", "false");
+              localStorage.setItem(
+                "openclaw:sidebar:sessions:collapsed-sections",
+                JSON.stringify(
+                  Array.from({ length: 5 }, (_, index) => `category:Fixture category ${index + 1}`),
+                ),
+              );
+              localStorage.setItem(
+                `openclaw.control.sidebarSessionOwnerFilter.v1:${gatewayUrl}:${encodeURIComponent(userId!)}`,
+                "involving-me",
+              );
+              localStorage.setItem(
+                `openclaw.control.sidebarEmptyGroups.v1:${gatewayUrl}:user:${encodeURIComponent(userId!)}`,
+                "always",
+              );
+            }, operator);
+          }
           const url = `${baseUrl}${routePath}`;
           results.push({
             arm: arm.name,

@@ -1,0 +1,82 @@
+import path from "node:path";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { expect, it } from "vitest";
+import { projectChatDisplayMessages } from "../../../src/gateway/chat-display-projection.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+
+const suite = createControlUiE2eSuite({ name: "Cached transcript text fidelity" });
+const markdown = Array.from(
+  { length: 24 },
+  (_, index) => `- **Verification ${index + 1}** ${"Synthetic evidence. ".repeat(30)}`,
+).join("\n\n");
+const message = {
+  role: "assistant",
+  content: markdown,
+  __openclaw: { id: "long-answer", seq: 1 },
+};
+
+suite.define(() => {
+  it("keeps the complete displayed Markdown while reloading offline and reconnecting", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const sessionKey = "agent:main:chat:long-answer";
+      const row = createControlUiSessionRow(sessionKey, "Synthetic long answer", 1);
+      const gateway = await installMockGateway(
+        page,
+        {
+          sessionKey,
+          sessions: [row],
+          authMethod: "trusted-proxy",
+          authMode: "trusted-proxy",
+          subscriptionInitialHistory: false,
+          deferredMethods: ["connect"],
+          methodResponses: { "chat.message.get": { ok: true, message } },
+        },
+        {
+          requestHandlers: {
+            "chat.startup": (params) => {
+              const maxChars = asOptionalRecord(params)?.maxChars;
+              return {
+                messages: projectChatDisplayMessages([message], {
+                  maxChars: typeof maxChars === "number" ? maxChars : undefined,
+                }),
+                sessionId: row.sessionId,
+                sessionInfo: row,
+                hasMore: false,
+              };
+            },
+          },
+        },
+      );
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await gateway.waitForRequest("connect");
+      await gateway.resolveDeferred("connect");
+      const body = page.locator(".chat-group.assistant .chat-text");
+      await body.getByText("Verification 24", { exact: true }).waitFor();
+      const liveText = await body.textContent();
+      await page.evaluate(async () => {
+        const pane = document.querySelector(".chat-pane-cache__pane--active");
+        await Reflect.get(pane!, "sessionSnapshotStore").flush();
+      });
+      await page.reload();
+      await gateway.waitForRequest("connect");
+      await body.waitFor();
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        await page.screenshot({ path: path.join(suite.artifactDir, "cached.png") });
+      }
+      // Connect is still held: every character must come from the disk snapshot.
+      expect(await body.textContent()).toBe(liveText);
+      expect(await body.textContent()).not.toContain("...(truncated)...");
+      const cachedHeight = await body.evaluate((element) => element.getBoundingClientRect().height);
+      await gateway.resolveDeferred("connect");
+      await gateway.waitForRequest("chat.startup");
+      await expect.poll(() => body.textContent()).toBe(liveText);
+      expect(
+        Math.abs(
+          (await body.evaluate((element) => element.getBoundingClientRect().height)) - cachedHeight,
+        ),
+      ).toBeLessThanOrEqual(0.5);
+    });
+  });
+});

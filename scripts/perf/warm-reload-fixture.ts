@@ -16,13 +16,19 @@ export type WarmReloadFixtureOptions = {
   port: number;
   uiRoot?: string;
   sessions?: number;
+  textFidelity?: boolean;
   admission?: Pick<
     Awaited<ReturnType<typeof startWarmReloadAdmission>>,
     "origin" | "gatewayAuth" | "viewerEmail" | "peerSessions"
   >;
 };
 
-function transcript(session: number, now: number, imageBlocks: readonly unknown[]) {
+function transcript(
+  session: number,
+  now: number,
+  imageBlocks: readonly unknown[],
+  longMarkdown = false,
+) {
   const events: unknown[] = [];
   let parentId: string | null = null;
   let sequence = 0;
@@ -133,6 +139,13 @@ function transcript(session: number, now: number, imageBlocks: readonly unknown[
               "This is synthetic reload-proof data. The checks below exercise tall rows, tables, code, and retained layout while live authority reconnects.",
               table,
               code,
+              ...(longMarkdown
+                ? Array.from(
+                    { length: 24 },
+                    (_, index) =>
+                      `- **Verification ${index + 1}** retains the complete synthetic result.\n  - The nested item links to [fixture evidence](https://example.invalid/verification/${index + 1}) and preserves its layout on reload.`,
+                  )
+                : []),
               "[Related fixture session](/chat/main/team-shape-session-2) · [Synthetic pull request](https://github.com/openclaw-fixture/reload-proof/pull/248)",
             ].join("\n\n"),
           },
@@ -175,8 +188,22 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
     throw new Error("Fixture state must be a new directory inside this worktree's .local/");
   }
   const now = Date.now();
+  const groups = Array.from(
+    { length: options.textFidelity ? 97 : 0 },
+    (_, index) => `Fixture category ${index + 1}`,
+  );
+  const sectionOrder = [
+    "work",
+    "groups",
+    "ungrouped",
+    "catalog:fixture-a",
+    "catalog:fixture-b",
+    ...groups.map((name) => `category:${name}`),
+  ];
   const sessionKeys = [
-    "agent:main:24800000-0000-4000-8000-000000000001",
+    options.textFidelity
+      ? "agent:main:dashboard:24800000-0000-4000-8000-000000000001"
+      : "agent:main:24800000-0000-4000-8000-000000000001",
     "agent:main:dashboard:24800001-0000-4000-8000-000000000001",
   ];
   const baseOptions = parseTeamShapeOptions([
@@ -375,7 +402,7 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
               ...old.entry,
               label: target.label,
               displayName: target.label,
-              archivedAt: undefined,
+              archivedAt: options.textFidelity ? now - 1000 : undefined,
               pinnedAt: now - index,
               updatedAt: now - index,
               lastActivityAt: now - index,
@@ -406,7 +433,7 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
               sessionKey: target.key,
               sessionId: target.id,
             },
-            transcript(index, now, imageBlocks),
+            transcript(index, now, imageBlocks, options.textFidelity),
           );
           reactions.setSessionReactionInDatabase(owner, target.key, {
             expectedSessionId: target.id,
@@ -491,6 +518,9 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       })!,
       fixtureSummary,
       async prepareGateway(request: RequestGateway) {
+        if (options.textFidelity) {
+          await request("sessions.groups.put", { names: groups, sectionOrder });
+        }
         await request("board.widget.put", {
           sessionKey: targets[1]!.key,
           name: "warm-reload-verification",

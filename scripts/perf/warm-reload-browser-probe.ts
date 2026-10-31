@@ -11,7 +11,7 @@ export const proofRegions = {
 };
 
 /** Serialized into the top document before its application modules execute. */
-export function installWarmReloadBrowserProbe(route: string) {
+export function installWarmReloadBrowserProbe(route: string, textFidelity = false) {
   if (window !== window.top) {
     return undefined;
   }
@@ -29,6 +29,14 @@ export function installWarmReloadBrowserProbe(route: string) {
     loaf: [] as Array<{ atMs: number; durationMs: number; blockingMs: number }>,
     shifts: [] as Array<{ atMs: number; value: number }>,
     domStates: [] as Array<{ atMs: number; rows: number; sidebarRows: number; board: boolean }>,
+    textStates: [] as Array<{
+      atMs: number;
+      hash: string;
+      characters: number;
+      truncated: boolean;
+      height: number;
+      width: number;
+    }>,
     animationSamples: [] as ReloadAnimationSample[],
     animationProbeMs: 0,
     animationPolicy:
@@ -332,6 +340,31 @@ export function installWarmReloadBrowserProbe(route: string) {
       return;
     }
     sampleAnimations();
+    const answer = textFidelity
+      ? [...document.querySelectorAll(".chat-group.assistant .chat-text")].at(-1)
+      : undefined;
+    if (answer) {
+      const text = answer.textContent ?? "";
+      const box = answer.getBoundingClientRect();
+      const textHash = hash(text);
+      const previous = data.textStates.at(-1);
+      if (
+        box.width > 0 &&
+        box.height > 0 &&
+        (previous?.hash !== textHash ||
+          previous.height !== box.height ||
+          previous.width !== box.width)
+      ) {
+        data.textStates.push({
+          atMs: performance.now(),
+          hash: textHash,
+          characters: text.length,
+          truncated: text.includes("...(truncated)..."),
+          height: box.height,
+          width: box.width,
+        });
+      }
+    }
     const rowElements = [...document.querySelectorAll(".chat-virtual-row")];
     const rows = rowElements.length;
     const sidebarRows = document.querySelectorAll("openclaw-app-sidebar [data-session-key]").length;

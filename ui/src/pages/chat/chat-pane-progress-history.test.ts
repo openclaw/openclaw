@@ -136,6 +136,7 @@ it("hides the history owner's card only in this pane without rekeying the compos
       knownState: {},
       limit: 80,
       maxBytes: 256 * 1024,
+      maxChars: 500_000,
       toolResultMaxChars: 2_000,
     },
     { signal: expect.any(AbortSignal), timeoutMs: 30_000 },

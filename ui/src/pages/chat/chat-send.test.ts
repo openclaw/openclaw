@@ -54,6 +54,7 @@ import {
   expectNoRpc,
   expectRpc,
   findRequestPayload,
+  historyBudget,
   makeChatHost,
   makeRequestMock,
   requestCalls,
@@ -117,7 +118,6 @@ type ExecuteSlashCommand = typeof executeSlashCommand;
 type TestChatHost = ReturnType<typeof makeChatHost>;
 
 const startupOptions = { startup: true, awaitHistory: true, deferBranches: true };
-const historyBudget = { limit: 80, maxBytes: 256 * 1024, toolResultMaxChars: 2_000 };
 const storageError =
   "Could not store this message for reconnect. Free browser storage or reconnect before sending.";
 

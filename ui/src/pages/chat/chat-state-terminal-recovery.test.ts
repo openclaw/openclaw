@@ -7,6 +7,7 @@ import {
 } from "../../test-helpers/gateway-client.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { historyBudget } from "./chat-host.test-support.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
@@ -15,8 +16,6 @@ import {
   renderedTranscript,
 } from "./chat-state.test-support.ts";
 import { reduceChatSessionProjection } from "./history-merge.ts";
-
-const historyBudget = { limit: 80, maxBytes: 256 * 1024, toolResultMaxChars: 2_000 };
 
 // Keep history ordering/count assertions independent of auxiliary post-run auth reads.
 function withAuthStatus(request: GatewayRequestHandler): GatewayRequestHandler {

@@ -20,6 +20,13 @@ import type { ChatMessageCache } from "./session-message-cache.ts";
 
 type RequestHandlers = Record<string, unknown>;
 
+export const historyBudget = {
+  limit: 80,
+  maxBytes: 256 * 1024,
+  maxChars: 500_000,
+  toolResultMaxChars: 2_000,
+};
+
 export function makeRequestMock(handlers: RequestHandlers = {}): GatewayRequestMock {
   return createGatewayRequestMock((method: string, params?: unknown) => {
     if (!Object.hasOwn(handlers, method)) {

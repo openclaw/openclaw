@@ -37,6 +37,8 @@ child directory and retains failed attempts. Output must therefore be under
 For a small smoke run, use `--route chat --reloads 1`. `--route dashboard` selects
 the other route. Default coverage is **one cold navigation and eleven warm
 reloads per route**, each route in an independent initially empty browser context.
+`--text-fidelity` uses archived sessions with long Markdown from the transcript
+late-paint fixture and records changes to the final assistant text hash and body dimensions.
 The default `--admission signed-in` installs a random HttpOnly session cookie in
 Chromium for the owned loopback proxy. The proxy checks that cookie for HTTP and
 WebSocket requests, strips client-supplied identity/forwarding/scope headers, and
