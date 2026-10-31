@@ -109,8 +109,16 @@ final class TalkRealtimeConsultCancellationTests: XCTestCase {
     }
 
     func testVoiceReplacementPreservesTheLateAcknowledgedRun() async throws {
+        try await self.checkPreservesLateAcknowledgedRun(endTalk: false)
+    }
+
+    func testEndTalkPreservesTheLateAcknowledgedRun() async throws {
+        try await self.checkPreservesLateAcknowledgedRun(endTalk: true)
+    }
+
+    private func checkPreservesLateAcknowledgedRun(endTalk: Bool) async throws {
         let held = XCTestExpectation(description: "consult reached Gateway")
-        let aborted = XCTestExpectation(description: "replacement must not abort accepted work")
+        let aborted = XCTestExpectation(description: "transport cleanup must not abort accepted work")
         aborted.isInverted = true
         let requests = ConsultRequestCapture()
         let socket = GatewayTestWebSocketTask(sendHook: { _, message, _ in
@@ -135,7 +143,16 @@ final class TalkRealtimeConsultCancellationTests: XCTestCase {
             XCTAssertEqual(sent, .completed)
             let capturedID = await requests.requestID(method: "talk.client.toolCall")
             let requestID = try XCTUnwrap(capturedID)
-            talk.stop(preserveRuns: true)
+            if endTalk {
+                let manager = TalkModeManager(allowSimulatorCapture: true)
+                manager._test_prepareEnabledRealtimeSessionForClose(direct: talk)
+                manager.setEnabled(false)
+                XCTAssertFalse(manager.isEnabled)
+                XCTAssertFalse(manager.isListening)
+                XCTAssertFalse(manager.isSpeaking)
+            } else {
+                talk.stop(preserveRuns: true)
+            }
             let ack = try JSONSerialization.data(withJSONObject: [
                 "type": "res", "id": requestID, "ok": true,
                 "payload": ["runId": "run-1", "agentId": "voice", "agentSessionKey": "global"],
