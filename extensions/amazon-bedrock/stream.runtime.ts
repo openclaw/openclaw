@@ -401,7 +401,8 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
     let client: BedrockRuntimeClient | undefined;
     try {
       options.signal?.throwIfAborted();
-      client = new BedrockRuntimeClient(config);
+      // The failover controller owns retries; SDK retries hide physical attempts from its budget.
+      client = new BedrockRuntimeClient({ ...config, maxAttempts: 1 });
       const cachePolicy = resolveBedrockPromptCachePolicy(model);
       const cacheRetention = resolveBedrockCacheRetention(cachePolicy, options.cacheRetention);
       const cachePoint = resolveBedrockCachePoint(cachePolicy, cacheRetention);

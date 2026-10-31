@@ -1,0 +1,2 @@
+39
+# Real Bedrock SDK loopback request counts on retryable errors and a nonretryable control.
