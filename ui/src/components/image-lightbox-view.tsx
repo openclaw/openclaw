@@ -41,6 +41,50 @@ export function LightboxAction(props: {
   );
 }
 
+export function LightboxZoomControls(props: {
+  focusableRef: FocusableRef;
+  canZoom: boolean;
+  scale: number;
+  maxScale: number;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
+  onResetZoom: () => void;
+  children: JSX.Element;
+}) {
+  return (
+    <div class="zoom-controls">
+      {props.children}
+      <LightboxAction
+        focusableRef={props.focusableRef}
+        class="zoom-control"
+        label="chat.imageLightbox.zoomOut"
+        disabled={!props.canZoom || props.scale <= 1}
+        action={() => props.onZoomOut()}
+      >
+        −
+      </LightboxAction>
+      <LightboxAction
+        focusableRef={props.focusableRef}
+        class="zoom-control zoom-level"
+        label="chat.imageLightbox.resetZoom"
+        disabled={!props.canZoom || props.scale === 1}
+        action={() => props.onResetZoom()}
+      >
+        {Math.round(props.scale * 100)}%
+      </LightboxAction>
+      <LightboxAction
+        focusableRef={props.focusableRef}
+        class="zoom-control"
+        label="chat.imageLightbox.zoomIn"
+        disabled={!props.canZoom || props.scale >= props.maxScale}
+        action={() => props.onZoomIn()}
+      >
+        +
+      </LightboxAction>
+    </div>
+  );
+}
+
 export function LightboxChrome(props: {
   focusableRef: FocusableRef;
   title: string;

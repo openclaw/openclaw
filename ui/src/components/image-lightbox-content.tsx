@@ -5,6 +5,7 @@ import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t, registerEnglishCatalog } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
+import { ImageComparisonAction } from "./image-comparison-action.tsx";
 import { ImageLightboxHost } from "./image-lightbox-context.ts";
 import {
   downloadLightboxImage,
@@ -23,6 +24,7 @@ import {
   LightboxAction,
   LightboxChrome,
   LightboxImage,
+  LightboxZoomControls,
   lightboxImageStyle,
 } from "./image-lightbox-view.tsx";
 import type { ImageLightboxProps } from "./image-lightbox.types.ts";
@@ -691,35 +693,22 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
             </p>
           </Show>
           <Show when={props.mediaKind === "image"}>
-            <div class="zoom-controls">
-              <LightboxAction
+            <LightboxZoomControls
+              focusableRef={focusableRef}
+              canZoom={canZoom()}
+              scale={scale()}
+              maxScale={MAX_SCALE}
+              onZoomIn={zoomIn}
+              onZoomOut={zoomOut}
+              onResetZoom={resetZoom}
+            >
+              <ImageComparisonAction
                 focusableRef={focusableRef}
-                class="zoom-control"
-                label="chat.imageLightbox.zoomOut"
-                disabled={!canZoom() || scale() <= 1}
-                action={zoomOut}
-              >
-                −
-              </LightboxAction>
-              <LightboxAction
-                focusableRef={focusableRef}
-                class="zoom-control zoom-level"
-                label="chat.imageLightbox.resetZoom"
-                disabled={!canZoom() || scale() === 1}
-                action={resetZoom}
-              >
-                {Math.round(scale() * 100)}%
-              </LightboxAction>
-              <LightboxAction
-                focusableRef={focusableRef}
-                class="zoom-control"
-                label="chat.imageLightbox.zoomIn"
-                disabled={!canZoom() || scale() >= MAX_SCALE}
-                action={zoomIn}
-              >
-                +
-              </LightboxAction>
-            </div>
+                image={currentImage() ?? props}
+                title={title()}
+                disabled={galleryState().busy}
+              />
+            </LightboxZoomControls>
           </Show>
         </LightboxChrome>
       </openclaw-modal-dialog>

@@ -45,6 +45,7 @@ import { registerDreamingEnglish } from "../../ui/src/i18n/locales/en-dreaming.t
 import { registerFilePreviewEnglish } from "../../ui/src/i18n/locales/en-file-preview.ts";
 import { registerGitHubConnectionsEnglish } from "../../ui/src/i18n/locales/en-github-connections.ts";
 import { registerGitHubEnglish } from "../../ui/src/i18n/locales/en-github.ts";
+import { registerImageComparisonEnglish } from "../../ui/src/i18n/locales/en-image-comparison.ts";
 import { registerLabsEnglish } from "../../ui/src/i18n/locales/en-labs.ts";
 import { registerLinkReaderEnglish } from "../../ui/src/i18n/locales/en-link-reader.ts";
 import { registerLogbookEnglish } from "../../ui/src/i18n/locales/en-logbook.ts";
@@ -142,6 +143,7 @@ const sourceFiles = [
   "en-chat-goals.ts",
   "en-chat-message-metadata.ts",
   "en-chat-media.ts",
+  "en-image-comparison.ts",
   "en-chat-provider-review.ts",
   "en-chat-questions.ts",
   "en-chat-session.ts",
@@ -617,6 +619,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         permissions: registerChatPermissionsEnglish.catalog.chat.permissions,
       },
     },
+    registerImageComparisonEnglish.catalog,
     registerChatGoalsEnglish.catalog,
     registerChatProviderReviewEnglish.catalog,
     registerCodeBlocksEnglish.catalog,
