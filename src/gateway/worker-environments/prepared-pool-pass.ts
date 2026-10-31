@@ -20,7 +20,6 @@ function reconcileAll(ctx: PassContext, eligible: Generations, records: Environm
       signal.throwIfAborted();
       const key = pool.groupKey(record);
       const generation = key ? eligible.get(key) : undefined;
-      const limits = pool.poolPolicy(options, record.profileId, record.providerId);
       const before = () => {
         signal.throwIfAborted();
         if (record.destroyRequestedAtMs === null && generation) {
@@ -31,7 +30,7 @@ function reconcileAll(ctx: PassContext, eligible: Generations, records: Environm
           if (
             !store.isPreparedIntentWithinCapacity({
               environmentId: record.environmentId,
-              ...limits,
+              ...pool.poolPolicy(options, record.profileId, record.providerId),
             })
           ) {
             throw new Error("Prepared worker no longer satisfies its maintenance policy");
@@ -91,11 +90,13 @@ async function retain(
     const expired =
       record.preparation.expiresAtMs <= now() ||
       (generation !== undefined && generation.expiresAtMs <= now());
+    const reconstructing = ctx.preserveReconstructing?.(record) === true;
     const valid =
-      !isSupersededPresenceReserve(record, ctx.activeDemand) &&
       !expired &&
-      generation?.preparation.key === record.preparation.key &&
-      (!requireRetention || generation.retention !== undefined || generation.deferred) &&
+      (reconstructing ||
+        (!isSupersededPresenceReserve(record, ctx.activeDemand) &&
+          generation?.preparation.key === record.preparation.key &&
+          (!requireRetention || generation.retention !== undefined || generation.deferred))) &&
       ((record.preparation.purpose === "build" && record.state !== "ready") ||
         count < limits.target) &&
       totalKept < limits.maxTotal;
@@ -112,6 +113,7 @@ async function retain(
         cleanup.push(latest);
       }
     } else if (
+      !reconstructing &&
       !generation?.deferred &&
       (!generation?.presenceOwned || generation.activationEligible || ctx.presence.isDemandActive())
     ) {
@@ -282,6 +284,7 @@ export async function runPreparedPoolPass(
     isAdmitted,
     activeDemand,
     presenceDeferred,
+    preserveReconstructing: presence.captureReconstruction(),
     inventory,
     oldestFirst: inventory.toSorted((a, b) => a.createdAtMs - b.createdAtMs),
     reportRefill,

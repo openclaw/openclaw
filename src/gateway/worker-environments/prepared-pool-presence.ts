@@ -103,6 +103,7 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
         demand: StandingImageDemand;
       }
     | undefined;
+  let reconstructing: ((record: WorkerEnvironmentRecord) => boolean) | undefined;
   const current = () => signal.throwIfAborted();
   const policy = () => {
     const source = options.resolveHumanPresenceDemand?.();
@@ -227,29 +228,48 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
       }
     };
     assertSourceCurrent();
-    const preparedAtMs = now();
-    const intent = await options.prepareIntent(source.profileId, {
-      imageReserve: true,
-      executionMode: source.executionMode,
-      assertCurrent: assertSourceCurrent,
-      signal,
-    });
-    assertSourceCurrent();
-    options.assertIntentCurrent(source.profileId, intent);
-    const preparation = readWorkerPreparation(intent.profileSnapshot);
-    if (workerPreparationSourceKey(intent.profileSnapshot) !== "image" || !preparation) {
-      throw new Error("Standing demand requires an admitted runtime preparation");
+    if (!standing) {
+      reconstructing = (record) => {
+        try {
+          assertSourceCurrent();
+          return (
+            record.profileId === source.profileId &&
+            record.profileSnapshot.executionMode === source.executionMode &&
+            workerPreparationSourceKey(record.profileSnapshot) === "image" &&
+            record.preparation?.purpose === "reserve"
+          );
+        } catch {
+          return false;
+        }
+      };
     }
-    const active: StandingImageDemand = {
-      sourceKey: "image",
-      profileId: source.profileId,
-      preparationKey: preparation.key,
-      lastPresentAtMs: preparedAtMs,
-      retireAtMs: null,
-    };
-    standing = { intent, demand: active };
-    await admitReserves(intent, active, limits, assertSourceCurrent);
-    return active;
+    try {
+      const preparedAtMs = now();
+      const intent = await options.prepareIntent(source.profileId, {
+        imageReserve: true,
+        executionMode: source.executionMode,
+        assertCurrent: assertSourceCurrent,
+        signal,
+      });
+      assertSourceCurrent();
+      options.assertIntentCurrent(source.profileId, intent);
+      const preparation = readWorkerPreparation(intent.profileSnapshot);
+      if (workerPreparationSourceKey(intent.profileSnapshot) !== "image" || !preparation) {
+        throw new Error("Standing demand requires an admitted runtime preparation");
+      }
+      const active: StandingImageDemand = {
+        sourceKey: "image",
+        profileId: source.profileId,
+        preparationKey: preparation.key,
+        lastPresentAtMs: preparedAtMs,
+        retireAtMs: null,
+      };
+      standing = { intent, demand: active };
+      await admitReserves(intent, active, limits, assertSourceCurrent);
+      return active;
+    } finally {
+      reconstructing = undefined;
+    }
   };
   const maintain = async () => {
     let state = await read();
@@ -365,6 +385,9 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
     ready: read,
     current: currentDemand,
     captureImagePolicy,
+    // A pass keeps its reconstruction observation until it finishes, even if admission
+    // settles meanwhile. This preserves inventory only, never authorizes provider I/O.
+    captureReconstruction: () => reconstructing,
     set: (present: boolean) => {
       humanPresenceObserved = true;
       if (humanPresent !== present) {

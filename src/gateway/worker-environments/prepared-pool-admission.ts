@@ -99,6 +99,7 @@ export type PassContext = Readonly<{
   isAdmitted: () => boolean;
   activeDemand: ReturnType<PassContext["presence"]["current"]>;
   presenceDeferred: boolean;
+  preserveReconstructing: ReturnType<PassContext["presence"]["captureReconstruction"]>;
   inventory: readonly Environment[];
   oldestFirst: readonly Environment[];
   reportRefill: (message: string) => void;
@@ -202,9 +203,11 @@ export function admitSources(ctx: PassContext): Generations {
       const presenceExpiresAtMs = demand?.retireAtMs ?? Number.MAX_SAFE_INTEGER;
       // A newer spare may supply the snapshot, but only this exact generation's
       // real activation can supply its independent foreground demand deadline.
-      const activationDemandAtMs = presenceOwned
-        ? activationByGeneration.get(JSON.stringify([key, preparationKey]))
-        : demandAtMs;
+      // An image reserve's creation timestamp is not independent session demand.
+      const activationDemandAtMs =
+        presenceOwned || workerPreparationSourceKey(record.profileSnapshot) === "image"
+          ? activationByGeneration.get(JSON.stringify([key, preparationKey]))
+          : demandAtMs;
       const activationExpiresAtMs =
         activationDemandAtMs !== undefined &&
         Number.isSafeInteger(timeout) &&
