@@ -820,6 +820,38 @@ describe("worker turn execution", () => {
     });
   });
 
+  it("carries the Code Mode turn contract into the worker assignment runtime context", async () => {
+    await seedActivePlacement();
+    let descriptor: WorkerLaunchPlan | undefined;
+    const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async ({ plan }) => {
+      descriptor = roundTripWorkerLaunchDescriptor({
+        ...plan,
+        connectionEndpoint: { kind: "unix", socketPath: "/tmp/worker-code-mode.sock" },
+      });
+      throw new WorkerRunnerCapacityError();
+    });
+    const provider = credentialedProvider(
+      unusedTunnel({ launchTurn, stop: vi.fn(async () => {}) }),
+    );
+    const input = turn("run-code-mode");
+    await expect(
+      execute(provider, {
+        ...input,
+        config: { ...input.config, tools: { codeMode: true } },
+      }),
+    ).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
+    expect(descriptor?.assignment.systemPrompt).toContain(
+      "Code Mode: every name in the index below",
+    );
+    expect(descriptor?.assignment.runtimeContext).toContainEqual({
+      kind: "runtime-instruction",
+      text: expect.stringContaining(
+        "Code Mode is on for this turn: only tools in your provider tool list",
+      ),
+    });
+    input.preparedRunAdmission.close();
+  });
+
   registerWorkerTurnInferenceTests();
 
   it("fences a stale worker receipt while a current receipt proceeds to execution", async () => {
