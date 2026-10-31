@@ -184,8 +184,8 @@ function schedule() {
 
 async function sample() {
   sampling = true;
-  // The 200-process crossover wins from four watches; enter at eight for headroom.
-  shared = watches.size >= (shared ? 4 : 8);
+  // The 200-process crossover wins from twelve watches; enter at twenty for headroom.
+  shared = watches.size >= (shared ? 12 : 20);
   // Align near-due watches early, never extend their one/five-second deadline.
   const due = Array.from(watches).filter((watch) => watch.due <= performance.now() + 999);
   try {

@@ -182,36 +182,36 @@ it("retries a failed quiet-tree sample after one second and cancels an awaited r
   expect(procfs.readFile).toHaveBeenCalledTimes(3);
 });
 
-it("enters a census at eight watches, keeps it at four, and resets after the last stop", async () => {
-  const pids = [100, 200, 300, 400, 500, 600, 700, 800];
+it("enters a census at twenty watches, keeps it at twelve, and resets after the last stop", async () => {
+  const pids = Array.from({ length: 20 }, (_, index) => (index + 1) * 100);
   mockFiles(
     Object.fromEntries(pids.map((pid) => [`/proc/${pid}/status`, "PPid:\t1\nVmRSS:\t64 kB\n"])),
   );
   procfs.readdir.mockImplementation(async (dir) => (dir === "/proc" ? pids.map(String) : []));
-  const active = pids.slice(0, 7).map((pid) => watch(pid));
+  const active = pids.slice(0, 19).map((pid) => watch(pid));
   const tick = async (censuses: number) => {
     procfs.readdir.mockClear();
     await vi.advanceTimersByTimeAsync(1000);
     expect(procfs.readdir.mock.calls.filter(([dir]) => dir === "/proc")).toHaveLength(censuses);
   };
   await tick(0);
-  active.push(watch(800));
+  active.push(watch(2000));
   await tick(1);
-  while (active.length > 4) {
+  while (active.length > 12) {
     active.pop()!.stop();
     await tick(1);
   }
   active.pop()!.stop();
   await tick(0);
-  active.push(...pids.slice(3).map((pid) => watch(pid)));
+  active.push(...pids.slice(11).map((pid) => watch(pid)));
   await tick(1);
   active.forEach(({ stop }) => stop());
-  pids.slice(0, 4).forEach((pid) => watch(pid));
+  pids.slice(0, 12).forEach((pid) => watch(pid));
   await tick(0);
 });
 
 it("charges a shared descendant's RSS and swap to both watched ancestors with one read", async () => {
-  const peers = [400, 500, 600, 700, 800, 900];
+  const peers = Array.from({ length: 18 }, (_, index) => (index + 4) * 100);
   const files = {
     "/proc/100/status": "PPid:\t1\nVmRSS:\t16 kB\n",
     "/proc/200/status": "PPid:\t100\nVmRSS:\t16 kB\n",
@@ -227,7 +227,7 @@ it("charges a shared descendant's RSS and swap to both watched ancestors with on
   mockFiles(files);
   procfs.readdir.mockImplementation(async (dir) =>
     dir === "/proc"
-      ? ["self", "100", "200", "300", ...peers.map(String), "1000"]
+      ? ["self", "100", "200", "300", ...peers.map(String), "9999"]
       : dir === "/proc/100/task"
         ? ["100", "101"]
         : [dir.slice("/proc/".length, -"/task".length)],
@@ -254,7 +254,7 @@ it("charges a shared descendant's RSS and swap to both watched ancestors with on
   );
 });
 
-it.each([2, 8])(
+it.each([2, 20])(
   "keeps peer limits independent of a pending read with %i watches",
   async (count) => {
     const blocked = createDeferred<string>();
@@ -264,7 +264,7 @@ it.each([2, 8])(
         ? blocked.promise
         : `PPid:\t1\nVmRSS:\t${file === "/proc/200/status" ? peerRss : 64} kB\n`,
     );
-    const pids = [100, 200, 300, 400, 500, 600, 700, 800].slice(0, count);
+    const pids = Array.from({ length: count }, (_, index) => (index + 1) * 100);
     procfs.readdir.mockImplementation(async (dir) => (dir === "/proc" ? pids.map(String) : []));
     const cancelled = watch();
     const peer = watch(200);
@@ -278,7 +278,7 @@ it.each([2, 8])(
         expect.stringContaining("Command killed"),
       );
       expect(procfs.readdir.mock.calls.filter(([dir]) => dir === "/proc")).toHaveLength(
-        count === 8 ? 1 : 0,
+        count === 20 ? 1 : 0,
       );
     } finally {
       cancelled.stop();
@@ -291,7 +291,7 @@ it.each([2, 8])(
 );
 
 it("falls back to owned trees when an unrelated process cannot be read", async () => {
-  const pids = [100, 200, 300, 400, 500, 600, 700, 800];
+  const pids = Array.from({ length: 20 }, (_, index) => (index + 1) * 100);
   mockFiles(
     Object.fromEntries(pids.map((pid) => [`/proc/${pid}/status`, "PPid:\t1\nVmRSS:\t256 kB\n"])),
     undefined,
