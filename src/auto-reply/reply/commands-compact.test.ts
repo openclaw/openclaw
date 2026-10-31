@@ -132,6 +132,28 @@ describe("handleCompactCommand", () => {
     expect(params.command.ownerList).toEqual(ownerIds);
   });
 
+  it("preserves mention-like text in group compact instructions", async () => {
+    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: false,
+    });
+    const cfg: OpenClawConfig = {
+      ...compactCommandConfig,
+      messages: { groupChat: { mentionPatterns: ["@norma", "@Norma", "Norma"] } },
+    };
+    const params = buildCompactParams(
+      "/compact keep the decisions from the norma-release thread",
+      cfg,
+    );
+    params.sessionEntry = { sessionId: "session-1", updatedAt: Date.now() };
+
+    await handleCompactCommand(params, true);
+
+    expect(requireCompactEmbeddedAgentSessionCall().customInstructions).toBe(
+      "keep the decisions from the norma-release thread",
+    );
+  });
+
   it.each([
     ["already under target", "skipped: context is already under the compaction target", true],
     ["no real conversation messages", "failed: nothing compactable in this session yet", false],

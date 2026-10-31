@@ -128,6 +128,23 @@ describe("handleBashChatCommand", () => {
     expect(JSON.stringify(log.mock.calls)).not.toContain("PRIVATE_COMMAND_123");
   });
 
+  it("preserves mention-like text in group command arguments", async () => {
+    const execute = vi.fn().mockResolvedValue(backgroundExecResult("path-job"));
+    createExecToolMock.mockReturnValue({ execute });
+    const params = buildParams("/bash ls /Users/me/norma/projects/linkauto-app");
+    params.isGroup = true;
+    params.cfg.messages = {
+      groupChat: { mentionPatterns: ["@norma", "@Norma", "Norma"] },
+    };
+
+    await handleBashChatCommand(params);
+
+    expect(execute).toHaveBeenCalledWith(
+      "chat-bash",
+      expect.objectContaining({ command: "ls /Users/me/norma/projects/linkauto-app" }),
+    );
+  });
+
   it.each([
     { status: "completed", exitCode: 1, exitSignal: null, label: "code 1" },
     { status: "failed", exitCode: null, exitSignal: "SIGTERM", label: "signal SIGTERM" },

@@ -356,13 +356,195 @@ export function stripStructuralPrefixes(text: string): string {
   return stripped.replace(stripped.startsWith("/") ? /[ \t]+/g : /\s+/g, " ");
 }
 
-export function stripMentions(
+type CommandMentionBounds = {
+  commandStart: number;
+  commandEnd: number;
+  suffixEnd: number;
+};
+
+function isStandaloneCommandArgumentMatch(
+  sourceText: string,
+  offset: number,
+  matchLength: number,
+): boolean {
+  const matchEnd = offset + matchLength;
+  return (
+    (offset === 0 ||
+      /\s/u.test(sourceText[offset - 1] ?? "") ||
+      /\s/u.test(sourceText[offset] ?? "")) &&
+    (matchEnd === sourceText.length ||
+      /\s/u.test(sourceText[matchEnd] ?? "") ||
+      /\s/u.test(sourceText[matchEnd - 1] ?? ""))
+  );
+}
+
+function shouldStripCommandMentionMatch(
+  sourceText: string,
+  bounds: CommandMentionBounds,
+  offset: number,
+  matchLength: number,
+): boolean {
+  const matchEnd = offset + matchLength;
+  if (matchEnd <= bounds.commandStart) {
+    return true;
+  }
+  if (offset < bounds.commandEnd && matchEnd > bounds.commandStart) {
+    return false;
+  }
+  if (offset < bounds.suffixEnd && matchEnd > bounds.commandEnd) {
+    return (
+      offset === bounds.commandEnd &&
+      matchEnd >= bounds.suffixEnd &&
+      /^\s*$/u.test(sourceText.slice(bounds.suffixEnd, matchEnd))
+    );
+  }
+  return (
+    offset >= bounds.suffixEnd && isStandaloneCommandArgumentMatch(sourceText, offset, matchLength)
+  );
+}
+
+function replaceMentionMatches(
+  text: string,
+  re: RegExp,
+  sourceText: string,
+  commandBounds?: CommandMentionBounds,
+  removedCommandCharacters?: Uint8Array,
+): string {
+  if (!commandBounds) {
+    return text.replace(re, " ");
+  }
+  return text.replace(re, (match: string, ...args: unknown[]) => {
+    const offsetCandidate = args.at(-2);
+    const offsetWithNamedGroupsCandidate = args.at(-3);
+    const offset =
+      typeof offsetCandidate === "number"
+        ? offsetCandidate
+        : typeof offsetWithNamedGroupsCandidate === "number"
+          ? offsetWithNamedGroupsCandidate
+          : undefined;
+    if (
+      match.length === 0 ||
+      offset === undefined ||
+      !shouldStripCommandMentionMatch(sourceText, commandBounds, offset, match.length)
+    ) {
+      return match;
+    }
+    if (offset >= commandBounds.commandEnd) {
+      let removalStart = offset;
+      let removalEnd = offset + match.length;
+      while (removalStart < removalEnd && /\s/u.test(sourceText[removalStart] ?? "")) {
+        removalStart += 1;
+      }
+      while (removalEnd > removalStart && /\s/u.test(sourceText[removalEnd - 1] ?? "")) {
+        removalEnd -= 1;
+      }
+      removedCommandCharacters?.fill(1, removalStart, removalEnd);
+    }
+    return " ".repeat(match.length);
+  });
+}
+
+function removeCommandArgumentMentionCharacters(
+  text: string,
+  removedCommandCharacters: Uint8Array,
+  argumentStart: number,
+): string {
+  for (let index = argumentStart; index < text.length; index += 1) {
+    if (!removedCommandCharacters[index] || removedCommandCharacters[index - 1]) {
+      continue;
+    }
+    const separator = text[index - 1];
+    if (separator && /\s/u.test(separator)) {
+      removedCommandCharacters[index - 1] = 1;
+      if (separator === "\n" && text[index - 2] === "\r") {
+        removedCommandCharacters[index - 2] = 1;
+      }
+    }
+  }
+  const chunks: string[] = [];
+  let retainedStart = argumentStart;
+  for (let index = argumentStart; index < text.length; index += 1) {
+    if (!removedCommandCharacters[index]) {
+      continue;
+    }
+    if (retainedStart < index) {
+      chunks.push(text.slice(retainedStart, index));
+    }
+    retainedStart = index + 1;
+  }
+  if (retainedStart < text.length) {
+    chunks.push(text.slice(retainedStart));
+  }
+  return chunks.join("");
+}
+
+function isCommandSuffixFullyRemoved(
+  removedCommandCharacters: Uint8Array,
+  bounds: CommandMentionBounds,
+): boolean {
+  if (bounds.suffixEnd === bounds.commandEnd) {
+    return false;
+  }
+  for (let index = bounds.commandEnd; index < bounds.suffixEnd; index += 1) {
+    if (!removedCommandCharacters[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function markStandaloneProviderMentions(
+  text: string,
+  argumentStart: number,
+  removedCommandCharacters: Uint8Array,
+  stripText: (text: string) => string,
+): void {
+  const source = text.slice(argumentStart);
+  let start = 0;
+  while (start < source.length) {
+    while (start < source.length && /\s/u.test(source[start] ?? "")) {
+      start += 1;
+    }
+    if (start === source.length) {
+      break;
+    }
+    let end = start;
+    const closing = source[start] === "<" ? ">" : source[start] === "[" ? "]" : undefined;
+    if (closing) {
+      end += 1;
+      while (end < source.length && source[end] !== closing && !/[\r\n]/u.test(source[end] ?? "")) {
+        end += 1;
+      }
+      if (source[end] === closing) {
+        end += 1;
+        while (end < source.length && !/\s/u.test(source[end] ?? "")) {
+          end += 1;
+        }
+      }
+    } else {
+      while (end < source.length && !/\s/u.test(source[end] ?? "")) {
+        end += 1;
+      }
+    }
+    const candidate = source.slice(start, end);
+    if (stripText(candidate).trim()) {
+      start = end;
+      continue;
+    }
+    removedCommandCharacters.fill(1, argumentStart + start, argumentStart + end);
+    start = end;
+  }
+}
+
+function stripMentionsInternal(
   text: string,
   ctx: MsgContext,
   cfg: OpenClawConfig | undefined,
   agentId?: string,
+  commandBounds?: CommandMentionBounds,
 ): string {
   let result = text;
+  const removedCommandCharacters = new Uint8Array(commandBounds ? text.length : 0);
   const providerId =
     (ctx.Provider ? normalizeAnyChannelId(ctx.Provider) : null) ??
     (normalizeOptionalLowercaseString(ctx.Provider) as ChannelId | undefined) ??
@@ -386,19 +568,118 @@ export function stripMentions(
       warnRejected: false,
     });
   for (const re of [...configRegexes, ...providerRegexes]) {
-    result = result.replace(re, " ");
+    result = replaceMentionMatches(result, re, text, commandBounds, removedCommandCharacters);
   }
-  if (providerMentions?.stripMentions) {
-    result = providerMentions.stripMentions({
-      text: result,
+  const numericMentionPattern = /@[0-9+]{5,}/g;
+  const stripProviderMentions = providerMentions?.stripMentions;
+  if (!commandBounds) {
+    if (stripProviderMentions) {
+      result = stripProviderMentions({ text: result, ctx, cfg, agentId });
+    }
+    result = result.replace(numericMentionPattern, " ");
+    // Slash commands may carry multiline arguments. Preserve their spacing as
+    // in direct messages, while keeping ordinary mention stripping normalized.
+    const stripped = result.trim();
+    return stripped.startsWith("/") ? stripped : stripped.replace(/\s+/g, " ");
+  }
+
+  let providerLeading: string | undefined;
+  let providerSuffix: string | undefined;
+  if (stripProviderMentions) {
+    providerLeading = stripProviderMentions({
+      text: result.slice(0, commandBounds.commandStart),
       ctx,
       cfg,
       agentId,
     });
+    providerSuffix = stripProviderMentions({
+      text: result.slice(commandBounds.commandEnd, commandBounds.suffixEnd),
+      ctx,
+      cfg,
+      agentId,
+    });
+    markStandaloneProviderMentions(
+      result,
+      commandBounds.suffixEnd,
+      removedCommandCharacters,
+      (commandArguments) => stripProviderMentions({ text: commandArguments, ctx, cfg, agentId }),
+    );
   }
-  result = result.replace(/@[0-9+]{5,}/g, " ");
-  // A slash command keeps its text as in a direct message: /btw, /loop and other commands take
-  // multiline arguments, and collapsing whitespace would join their lines and drop indentation.
-  const stripped = result.trim();
-  return stripped.startsWith("/") ? stripped : stripped.replace(/\s+/g, " ");
+  result = replaceMentionMatches(
+    result,
+    numericMentionPattern,
+    text,
+    commandBounds,
+    removedCommandCharacters,
+  );
+
+  if (providerLeading !== undefined && providerSuffix !== undefined) {
+    const leadingClean = providerLeading
+      .replace(numericMentionPattern, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const commandName = result.slice(commandBounds.commandStart, commandBounds.commandEnd);
+    const suffixRemovedByRegex = isCommandSuffixFullyRemoved(
+      removedCommandCharacters,
+      commandBounds,
+    );
+    const suffixRemovedByProvider = providerSuffix.trim().length === 0;
+    const commandSuffix =
+      suffixRemovedByRegex || suffixRemovedByProvider
+        ? ""
+        : text.slice(commandBounds.commandEnd, commandBounds.suffixEnd);
+    const argumentsText = removeCommandArgumentMentionCharacters(
+      text,
+      removedCommandCharacters,
+      commandBounds.suffixEnd,
+    );
+    const normalizedCommand = `${commandName}${commandSuffix}${argumentsText}`;
+    return leadingClean ? `${leadingClean} ${normalizedCommand}` : normalizedCommand;
+  }
+  const leading = result.slice(0, commandBounds.commandStart).replace(/\s+/g, " ").trim();
+  const commandName = result.slice(commandBounds.commandStart, commandBounds.commandEnd);
+  const suffixRemoved = isCommandSuffixFullyRemoved(removedCommandCharacters, commandBounds);
+  const commandSuffix = suffixRemoved
+    ? ""
+    : text.slice(commandBounds.commandEnd, commandBounds.suffixEnd);
+  const argumentsText = removeCommandArgumentMentionCharacters(
+    text,
+    removedCommandCharacters,
+    commandBounds.suffixEnd,
+  );
+  const normalizedCommand = `${commandName}${commandSuffix}${argumentsText}`;
+  return leading ? `${leading} ${normalizedCommand}` : normalizedCommand;
+}
+
+export function stripMentions(
+  text: string,
+  ctx: MsgContext,
+  cfg: OpenClawConfig | undefined,
+  agentId?: string,
+): string {
+  return stripMentionsInternal(text, ctx, cfg, agentId);
+}
+
+export function stripCommandAddressingMentions(
+  text: string,
+  ctx: MsgContext,
+  cfg: OpenClawConfig | undefined,
+  agentId?: string,
+): string {
+  const commandName = /\/[^\s@:]+/u.exec(text);
+  if (!commandName) {
+    return stripMentions(text, ctx, cfg, agentId);
+  }
+
+  const commandEnd = commandName.index + commandName[0].length;
+  const suffix = /^@[^\s:]+/u.exec(text.slice(commandEnd));
+  const strippedHead = stripMentionsInternal(text, ctx, cfg, agentId, {
+    commandStart: commandName.index,
+    commandEnd,
+    suffixEnd: commandEnd + (suffix?.[0].length ?? 0),
+  });
+  if (!strippedHead.startsWith("/")) {
+    return stripMentions(text, ctx, cfg, agentId);
+  }
+  return strippedHead;
 }
