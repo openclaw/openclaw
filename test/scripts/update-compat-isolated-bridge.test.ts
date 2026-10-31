@@ -31,9 +31,11 @@ const fence = new (class { assertCurrent() { if (!current) throw revoked; } })()
 const steps = [];
 const result = { steps: ["started"] };
 const recover = shim.isolatedUpdateCompatExport(import.meta.url, "./current.mjs", "recover");
-const same = (await recover({ onStep: (step) => steps.push(step), fence, result })) === result;
+// Released updaters freeze requester records; write-back must leave them alone.
+const requester = Object.freeze({ isCurrent: () => true });
+const same = (await recover({ onStep: (step) => steps.push(step), fence, requester, result })) === result;
 current = false;
-const refused = await recover({ onStep() {}, fence, result: { steps: [] } }).catch((e) => e === revoked);
+const refused = await recover({ onStep() {}, fence, requester, result: { steps: [] } }).catch((e) => e === revoked);
 const run = await shim.isolatedUpdateCompatExport(import.meta.url, "./current.mjs", "prepare")();
 console.log(JSON.stringify({ linked, same, steps, result, refused, doubled: await run(21) }));
 `;
@@ -51,6 +53,7 @@ it("runs bridged recovery code against the replaced dependency tree, not the cac
       "export async function recover(params) {",
       "  params.onStep({ b });",
       "  params.fence.assertCurrent();",
+      "  if (!params.requester.isCurrent()) throw new Error('revoked');",
       "  params.result.steps.push(`recovered ${b}`);",
       "  return params.result;",
       "}",

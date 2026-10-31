@@ -180,25 +180,27 @@ function createCodec(side) {
     if (value.remote) {
       // The other side returned one of our own live values; refresh mutable containers.
       const original = local.get(value.ref);
-      if (Array.isArray(original) || isPlainObject(original)) {
+      // Frozen requester records and getter-only state stay as the caller left them.
+      if ((Array.isArray(original) || isPlainObject(original)) && !Object.isFrozen(original)) {
         seen.set(value, original);
         const contents = Object.entries(value.value).map(([key, item]) => [
           key,
           decode(item, call, seen),
         ]);
         if (Array.isArray(original)) {
-          original.length = 0;
-          for (const [, item] of contents) {
-            original.push(item);
+          if (Object.isExtensible(original)) {
+            original.splice(0, original.length, ...contents.map(([, item]) => item));
           }
         } else {
           for (const key of Object.keys(original)) {
             if (!Object.hasOwn(value.value, key)) {
-              delete original[key];
+              Reflect.deleteProperty(original, key);
             }
           }
           for (const [key, item] of contents) {
-            original[key] = item;
+            if (original[key] !== item) {
+              Reflect.set(original, key, item);
+            }
           }
         }
       }
