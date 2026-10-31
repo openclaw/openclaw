@@ -8,18 +8,6 @@
   background: var(--popover);
 }
 
-.people-menu__search input {
-  box-sizing: border-box;
-  width: 100%;
-  min-width: 0;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--menu-item-radius);
-  background: var(--bg);
-  color: var(--text);
-  font: inherit;
-}
-
 .people-menu__status {
   padding: 6px 8px;
   color: var(--muted);
@@ -667,7 +655,6 @@
 .session-menu__color-choice {
   display: grid;
   place-items: center;
-  box-sizing: border-box;
   width: 28px;
   height: 28px;
   padding: 2px;
@@ -732,7 +719,6 @@
 }
 
 .session-menu__icon-choice {
-  box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1272,7 +1258,6 @@
 }
 
 .sidebar-session-sort-menu.oc-menu {
-  box-sizing: border-box;
   width: min(220px, calc(100dvw - 16px));
 }
 
@@ -1368,7 +1353,6 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  box-sizing: border-box;
   min-height: var(--sidebar-filter-row-height);
   padding: 0 var(--sidebar-filter-row-inset);
 }
@@ -1385,7 +1369,6 @@
 .sidebar-session-menu-switch,
 .sidebar-session-filter-footer,
 .sidebar-session-filter-panel .picker-select--submenu .picker-select__trigger {
-  box-sizing: border-box;
   min-height: var(--sidebar-filter-row-height);
   padding: 0 var(--sidebar-filter-row-inset);
   border-radius: var(--menu-item-radius);

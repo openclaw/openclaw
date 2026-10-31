@@ -1,0 +1,2 @@
+# Real WebSocket regression: a failure returned before the agent run starts stays in chat history (direct and queued paths).
+134

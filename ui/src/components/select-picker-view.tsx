@@ -17,8 +17,10 @@ import { nativeListener } from "../lib/solid-native-listener.ts";
 import type { OverlayPlacement } from "./overlay-anchor.ts";
 import { createOverlay } from "./overlay-lifecycle.ts";
 import type { OverlayNativeAdapter } from "./overlay-types.ts";
+import { pickerSearchInputProps } from "./select-picker-search.ts";
 import type { PickerOption, PickerParams, PickerGroup } from "./select-picker-types.ts";
 import type { PickerWindowRow } from "./select-picker-window.tsx";
+import { HeaderSearch } from "./solid/header-search.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { useMenuMachine } from "./solid/menu-machine.ts";
 import { MenuNavigationError } from "./solid/menu-navigation-error.tsx";
@@ -82,6 +84,7 @@ export function PickerContent<Option extends PickerOption>(props: {
   const markPointerHighlight = () => (pointerHighlight = true);
   const pointerHighlightRef = nativeListener("pointermove", markPointerHighlight, true);
   const [searching, setSearching] = createSignal(false);
+  const [searchAvailable, setSearchAvailable] = createSignal(false);
   const [query, setQuery] = createSignal("");
   const [keyboard, setKeyboard] = createSignal(false);
   const [collapsed, setCollapsed] = createStore<string[]>([]);
@@ -180,13 +183,6 @@ export function PickerContent<Option extends PickerOption>(props: {
       }
       target?.focus({ preventScroll: true });
     },
-    onEscape() {
-      if (query() && props.params.searchable === "always") {
-        setQuery("");
-        return true;
-      }
-      return false;
-    },
   });
   const opened = projectOwner(overlay, (owner) => owner.open, Object.is).read;
   const renderWindowSizer = createMemo(() => props.params.windowed);
@@ -255,10 +251,11 @@ export function PickerContent<Option extends PickerOption>(props: {
     if (props.params.disabled || overlay.open) {
       return;
     }
-    setSearching(
+    const available =
       props.params.searchable === "always" ||
-        Boolean(props.params.searchable && (props.params.groupBy || options().length > 8)),
-    );
+      Boolean(props.params.searchable && (props.params.groupBy || options().length > 8));
+    setSearchAvailable(available);
+    setSearching(available && Boolean(initialKey));
     queueMicrotask(() => {
       if (!props.host.isConnected) {
         return;
@@ -339,7 +336,10 @@ export function PickerContent<Option extends PickerOption>(props: {
     }
     if (
       event.target instanceof Element &&
-      event.target.closest(".picker-select__back, .picker-select__group-toggle")
+      event.target.closest(
+        ".picker-select__back, .picker-select__group-toggle, .header-search__toggle",
+      ) &&
+      !event.key.startsWith("Arrow")
     ) {
       return;
     }
@@ -397,6 +397,7 @@ export function PickerContent<Option extends PickerOption>(props: {
     } else {
       setQuery("");
       setSearching(false);
+      setSearchAvailable(false);
       setCollapsed(() => []);
       hoverOpened = false;
       if (sheetScroll) {
@@ -414,6 +415,17 @@ export function PickerContent<Option extends PickerOption>(props: {
       disconnectAnchor();
     };
   });
+  const SheetBack = () => (
+    <button
+      type="button"
+      ref={(element) => (back = element)}
+      class="picker-select__back"
+      aria-label={t("common.back")}
+      onClick={() => overlay.request(false, "return")}
+    >
+      <Icon name="chevronLeft" />
+    </button>
+  );
   const Leading = (row: { option?: Option }) => {
     const content = createMemo(() => row.option && props.params.renderLeading?.(row.option));
     return (
@@ -566,41 +578,30 @@ export function PickerContent<Option extends PickerOption>(props: {
         hidden={props.params.sheet ? true : undefined}
       >
         <MenuNavigationError binding={menu} />
-        <Show when={props.params.sheet}>
+        <Show when={props.params.sheet && !searchAvailable()}>
           <div class="picker-select__page-header">
-            <button
-              type="button"
-              ref={(element) => (back = element)}
-              class="picker-select__back"
-              aria-label={t("common.back")}
-              onClick={() => overlay.request(false, "return")}
-            >
-              <Icon name="chevronLeft" />
-            </button>
+            <SheetBack />
             <span>{props.params.label}</span>
           </div>
         </Show>
-        <Show when={searching()}>
-          <input
-            ref={(element) => (input = element)}
-            class="picker-select__search settings-input"
-            type="search"
-            role="combobox"
-            data-picker-focus
-            data-search
-            tabindex="0"
-            autocomplete="off"
-            spellcheck="false"
-            aria-label={t("common.search")}
+        <Show when={searchAvailable()}>
+          <HeaderSearch
+            leading={props.params.sheet ? <SheetBack /> : undefined}
+            title={props.params.label}
+            label={t("common.search")}
             placeholder={props.params.searchPlaceholder ?? t("common.search")}
-            aria-autocomplete="list"
-            aria-expanded="true"
-            aria-controls={controls()}
-            aria-invalid={props.params.invalid ? "true" : undefined}
-            aria-describedby={props.params.describedBy}
-            aria-activedescendant={active() !== null ? optionId(active()!) : undefined}
-            value={query()}
-            onInput={(event) => setQuery(event.currentTarget.value)}
+            inputClass="picker-select__search"
+            inputProps={pickerSearchInputProps({
+              controls: controls(),
+              invalid: props.params.invalid,
+              describedBy: props.params.describedBy,
+              active: active() !== null ? optionId(active()!) : undefined,
+            })}
+            query={query()}
+            open={searching()}
+            inputRef={(element) => (input = element)}
+            onOpenChange={setSearching}
+            onQueryChange={setQuery}
           />
         </Show>
         {windowSizer()}

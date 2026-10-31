@@ -120,10 +120,12 @@ export async function commitBackgroundResultToSession(params: {
           };
           // A retry owns the original committed payload, including its managed-media IDs.
           // Restaging media would conflict with the transcript's exact replay contract.
-          const prior = await findTranscriptEvent(scope, {
-            kind: "idempotency",
-            key: idempotencyKey,
-          });
+          const prior = await findTranscriptEvent(
+            scope,
+            { kind: "idempotency", key: idempotencyKey },
+            undefined,
+            "background-result",
+          );
           const priorMessage = prior && readTranscriptEventMessage(prior.event);
           const priorId = prior && readTranscriptEventId(prior.event);
           if (prior && (!priorMessage || !priorId)) {

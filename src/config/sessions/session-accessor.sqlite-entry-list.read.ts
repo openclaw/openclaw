@@ -206,9 +206,9 @@ export function listSqliteSessionEntriesFromDatabase(
     projection,
     deferParticipants,
   });
-  return Array.from(
-    iterateSessionEntriesForListing(snapshot, projection === "list" && scope.clone !== false),
-  );
+  // Deferred participant views are never cached and already own their decoded metadata.
+  const cloneEntries = projection === "list" && scope.clone !== false && !deferParticipants;
+  return Array.from(iterateSessionEntriesForListing(snapshot, cloneEntries));
 }
 
 /** Applies the listing visibility and canonical-key contract to an owned snapshot. */

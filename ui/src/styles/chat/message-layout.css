@@ -683,7 +683,6 @@
 
   width: 100%;
   max-width: 100%;
-  box-sizing: border-box;
   overflow: hidden;
   border: 1px solid var(--chat-attachment-border);
   border-radius: var(--radius-md);

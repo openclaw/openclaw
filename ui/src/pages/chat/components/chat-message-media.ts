@@ -45,7 +45,11 @@ export type ArtifactDownloadResolver = (
 ) => Promise<{ url: string; expiresAt?: string; blob?: Blob } | null>;
 
 export type ImageRenderOptions = {
-  galleryImages?: readonly ImageBlock[];
+  /** Navigation membership for an opened tile; sibling message ids keep their media scope. */
+  galleryImages?: (image: ImageBlock) => {
+    index: number;
+    items: readonly { image: ImageBlock; messageId: string | undefined }[];
+  };
   galleryVideos?: (item: AttachmentItem) => {
     index: number;
     items: readonly (AttachmentItem & { messageId?: string })[];

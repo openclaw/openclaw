@@ -1,4 +1,9 @@
 // Run on an approved benchmark host with --expose-gc --import ./scripts/tsx.mjs.
+// Fast owner comparison (Node 26.12+; no inspector, forced GC, or phase waits):
+// node --import ./scripts/tsx.mjs extensions/diagnostics-prometheus/src/metric-store.benchmark.test-support.ts \
+//   --record-only --iterations 20000 --output /path/to/result.json
+// Uses the recorded 4,628-series shape by default. Reports warm record CPU/allocation
+// and dirty-scrape CPU/allocation separately; compare both .prom files between arms.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -15,6 +20,7 @@ import {
 import { setImmediate as immediate, setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { writeHeapSnapshot } from "node:v8";
+import { measureRecords } from "./metric-store-record-measure.test-support.js";
 import {
   MAX_PROMETHEUS_FAMILY_SERIES,
   PROMETHEUS_FAMILY_RESERVES,
@@ -33,6 +39,7 @@ const { values } = parseArgs({
     "pool-churn": { type: "boolean", default: false },
     "heap-snapshot": { type: "string" },
     iterations: { type: "string", default: "100000" },
+    "record-only": { type: "boolean", default: false },
     "render-only": { type: "boolean", default: false },
     http: { type: "boolean", default: false },
     "http-only": { type: "boolean", default: false },
@@ -47,7 +54,7 @@ const { values } = parseArgs({
   },
 });
 assert(values.output, "--output is required");
-assert(globalThis.gc, "Run with --expose-gc");
+assert(values["record-only"] || globalThis.gc, "Run with --expose-gc");
 function integerOption(value: string, name: string, min: number, max: number) {
   const parsed = Number(value);
   assert(
@@ -77,8 +84,10 @@ const capacity =
 const results: Record<string, unknown> = {};
 let phaseIndex = 0;
 const session = new Session();
-session.connect();
-await session.post("HeapProfiler.enable");
+if (!values["record-only"]) {
+  session.connect();
+  await session.post("HeapProfiler.enable");
+}
 
 async function phaseStart(name: string) {
   const remaining = startAt + phaseIndex++ * phaseMs - Date.now();
@@ -302,9 +311,13 @@ function populateShape(store: PrometheusMetricStore, shape: Shape) {
   };
 }
 
-function shapeUpdater(store: PrometheusMetricStore, shape: Shape | undefined) {
+function shapeUpdater(
+  store: PrometheusMetricStore,
+  shape: Shape | undefined,
+  count = updatesPerRender,
+) {
   const updates: ((round: number) => void)[] = [];
-  if (shape && updatesPerRender) {
+  if (shape && count) {
     for (const { name, labelSets, finiteBuckets } of shape.histograms) {
       for (let index = 0; index < labelSets; index++) {
         const labels = { kind: `kind-${index % 8}`, worker_slot: String(index) };
@@ -319,11 +332,11 @@ function shapeUpdater(store: PrometheusMetricStore, shape: Shape | undefined) {
         updates.push((round) => store[type](name, "Synthetic scalar", labels, round + 1));
       }
     }
-    assert(updatesPerRender <= updates.length, "Cannot update more series than the shape contains");
+    assert(count <= updates.length, "Cannot update more series than the shape contains");
   }
   let cursor = 0;
   return () => {
-    for (let index = 0; index < updatesPerRender; index++) {
+    for (let index = 0; index < count; index++) {
       updates[cursor % updates.length]!(cursor++);
     }
   };
@@ -499,7 +512,9 @@ async function measureHttp(
     const reply = receive();
     client.send(count);
     const result = await reply;
-    assert(!result.error, result.error);
+    if (result.error) {
+      throw new Error(result.error);
+    }
     assert.equal(result.durations.length, count);
     if (expectedBytes) {
       assert.equal(result.totalBytes, count * expectedBytes);
@@ -532,6 +547,25 @@ async function measureHttp(
       });
     }
   }
+}
+
+if (values["record-only"]) {
+  const shapePath = values.shape ?? new URL("../benchmarks/render-shape.json", import.meta.url);
+  const shape = parseShape(JSON.parse(await readFile(shapePath, "utf8")));
+  const store = createPrometheusMetricStore();
+  const fixture = populateShape(store, shape);
+  await measureRecords({
+    output: values.output,
+    iterations,
+    renderSamples,
+    store,
+    fixture,
+    update: shapeUpdater(store, shape, 1),
+    updateAll: shapeUpdater(store, shape, fixture.histogramSeries + fixture.scalarSeries),
+    scrapeInfo,
+    releaseScrape,
+  });
+  process.exit(0);
 }
 
 try {

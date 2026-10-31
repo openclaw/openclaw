@@ -136,11 +136,17 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         config: OpenClawConfig,
         isAdmissible: () => boolean,
       ) => Promise<Evaluation>,
-      complete: (runtime: typeof import("../decisions/runtime.js"), result: Evaluation) => Outcome,
+      complete: (
+        completion: typeof import("../decisions/completion.js"),
+        result: Evaluation,
+      ) => Outcome,
     ): Promise<Outcome> => {
       assertRuntimeCurrent();
       const capturedRegistry = currentDecisionRegistry();
-      const decisions = await import("../decisions/runtime.js");
+      const [decisions, completion] = await Promise.all([
+        import("../decisions/runtime.js"),
+        import("../decisions/completion.js"),
+      ]);
       assertRuntimeCurrent();
       const selectedRegistry = currentDecisionRegistry(capturedRegistry);
       const config = readRuntimeConfig();
@@ -152,7 +158,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       );
       assertRuntimeCurrent();
       options.signal.throwIfAborted();
-      return complete(decisions, result);
+      return complete(completion, result);
     };
     const assertNativeRuntimeCurrent = () => {
       assertRuntimeCurrent();
@@ -347,7 +353,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                     record.id,
                     isAdmissible,
                   ),
-                (decisions, evaluation) => decisions.completeDecisionEvaluation(evaluation),
+                (completion, evaluation) => completion.completeDecisionEvaluation(evaluation),
               ),
             evaluateV2: (batch, options) =>
               evaluateDecision(
@@ -361,7 +367,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                     record.id,
                     isAdmissible,
                   ),
-                (decisions, evaluation) => decisions.completeDecisionEvaluation(evaluation),
+                (completion, evaluation) => completion.completeDecisionEvaluation(evaluation),
               ),
           } satisfies PluginRuntime["decisions"];
         }

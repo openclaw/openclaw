@@ -726,7 +726,6 @@ openclaw-pending-session-create {
 
 /* Included in the transcript virtualizer's header margin; keep this height exact. */
 .chat-pending-inputs--history {
-  box-sizing: border-box;
   overflow: hidden;
   height: 44px;
   flex-wrap: nowrap;

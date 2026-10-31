@@ -25,6 +25,7 @@ export interface ControlUiMockGatewayScenario
   awaitInitialRoster?: boolean;
   nativePlugins?: readonly NativeControlUiPluginFixture[];
   pluginAssetsRequireAuth?: boolean;
+  pluginSurfaceUrls?: Record<string, string>;
   attachmentMaxBytes?: number;
   agentModel?: string | null;
   assistantAgentId?: string;
@@ -133,13 +134,21 @@ export interface ControlUiMockGatewayScenario
   workspaceGit?: boolean;
 }
 
+type ControlUiPluginHello = Required<
+  Pick<
+    ControlUiMockGatewayScenario,
+    "controlUiTabs" | "controlUiWidgetKinds" | "controlUiLinkReaders" | "pluginSurfaceUrls"
+  >
+>;
+
 export type NormalizedControlUiMockGatewayScenario = Required<
   Omit<
     ControlUiMockGatewayScenario,
-    "nativePlugins" | "awaitInitialRoster" | "bootstrapPreferences"
+    "nativePlugins" | "awaitInitialRoster" | "bootstrapPreferences" | keyof ControlUiPluginHello
   >
 > &
   Pick<ControlUiMockGatewayScenario, "bootstrapPreferences"> & {
+    controlUiPluginHello: ControlUiPluginHello;
     /** Running-Gateway identity in hello; unset commit and build time are omitted. */
     serverRelease: { version: string; commit?: string; builtAt?: string };
   };
@@ -182,9 +191,12 @@ export function normalizeScenario(
     assistantAgentId: scenario.assistantAgentId?.trim() || defaultAgentId,
     assistantName: scenario.assistantName?.trim() || "OpenClaw",
     basePath,
-    controlUiTabs: scenario.controlUiTabs ?? [],
-    controlUiWidgetKinds: scenario.controlUiWidgetKinds ?? [],
-    controlUiLinkReaders: scenario.controlUiLinkReaders ?? [],
+    controlUiPluginHello: {
+      controlUiTabs: scenario.controlUiTabs ?? [],
+      controlUiWidgetKinds: scenario.controlUiWidgetKinds ?? [],
+      controlUiLinkReaders: scenario.controlUiLinkReaders ?? [],
+      pluginSurfaceUrls: scenario.pluginSurfaceUrls ?? {},
+    },
     allowedSessionVisibilities: scenario.allowedSessionVisibilities ?? [
       "shared",
       "read-only",

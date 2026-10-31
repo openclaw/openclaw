@@ -30,7 +30,6 @@ openclaw-session-progress-hovercard-provider {
   /* Generic lazy views retain their shimmer; the critical connection frame is static. */
   --skeleton-highlight: color-mix(in srgb, var(--text) 18%, transparent);
   --skeleton-duration: 2s;
-  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   gap: 32px;
@@ -348,7 +347,6 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 .session-glyph__ring {
   position: absolute;
   inset: -2px;
-  box-sizing: border-box;
   border: 1.5px solid color-mix(in srgb, var(--accent) 20%, transparent);
   border-top-color: var(--accent);
   border-radius: var(--radius-full);
@@ -1639,7 +1637,6 @@ select.settings-select:not([multiple]) {
 
 .code-block-wrapper {
   position: relative;
-  box-sizing: border-box;
   width: 100%;
   margin-block: 1em;
   overflow: hidden;
@@ -2181,7 +2178,6 @@ select.settings-select:not([multiple]) {
   width: var(--data-table-checkbox-col-width);
   min-width: var(--data-table-checkbox-col-width);
   max-width: var(--data-table-checkbox-col-width);
-  box-sizing: border-box;
   padding-left: 12px !important;
   padding-right: 4px !important;
   text-align: center;
@@ -2649,7 +2645,6 @@ td.data-table-key-col {
 
 .cmd-palette__input {
   display: block;
-  box-sizing: border-box;
   width: 100%;
   min-width: 0;
   height: 24px;
@@ -2959,7 +2954,7 @@ td.data-table-key-col {
   flex: 0 0 auto;
 }
 
-/* Counts (PRs, outbox) sit beside the 12px glyph as compact metadata,
+/* Counts (outbox) sit beside the 12px glyph as compact metadata,
    not at the row's title size. */
 .session-row-badge {
   display: inline-flex;
@@ -2970,9 +2965,8 @@ td.data-table-key-col {
   font-variant-numeric: tabular-nums;
 }
 
-/* Trailing signals stay quieter than secondary text; only action or live state adds color. */
+/* Trailing signals stay quieter than secondary text unless their state adds color. */
 .session-row-trail,
-.session-row-badge,
 .session-row-badges,
 .sidebar-child-session-toggle {
   color: color-mix(in srgb, var(--muted) 82%, var(--sidebar-bg, var(--bg)));
@@ -2983,14 +2977,27 @@ td.data-table-key-col {
   color: var(--warn);
 }
 
-/* A pull request's icon already carries its state; color is reserved for what needs action. */
-.session-row-badge--cloud[data-placement-state="failed"],
-.session-row-badge--cloud[data-disk-space-status="critical"] {
+/* Later rules win: a placement's failure or warning overrides its healthy color. */
+[data-pull-request-state="open"] {
+  color: var(--ok);
+}
+
+[data-pull-request-state="merged"] {
+  color: var(--pr-merged);
+}
+
+[data-placement-state] {
+  color: var(--accent);
+}
+
+[data-pull-request-state="closed"],
+[data-placement-state="failed"],
+[data-disk-space-status="critical"] {
   color: var(--danger);
 }
 
-.session-row-badge--cloud[data-workspace-conflicts],
-.session-row-badge--cloud[data-disk-space-status="warning"] {
+[data-workspace-conflicts],
+[data-disk-space-status="warning"] {
   color: var(--warn);
 }
 
@@ -3096,7 +3103,6 @@ td.data-table-key-col {
 }
 
 .session-run-spinner {
-  box-sizing: border-box;
   display: inline-block;
   width: 12px;
   height: 12px;

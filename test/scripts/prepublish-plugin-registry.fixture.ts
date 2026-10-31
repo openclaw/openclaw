@@ -1,7 +1,7 @@
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { create } from "tar";
 
 export const SOURCE_SHA = "a".repeat(40);
 export const VERSION = "2026.8.1-beta.1";
@@ -28,7 +28,9 @@ export function writeTarball(
   const staging = join(root, "staging", basename(tarball));
   mkdirSync(join(staging, "package"), { recursive: true });
   writeJson(join(staging, "package/package.json"), { ...extra, name, version });
-  execFileSync("tar", ["-czf", tarball, "-C", staging, "package"]);
+  // Native tar adds Darwin AppleDouble files, changing package entry counts.
+  // Keep cached fixture bytes limited to the package contents on every host.
+  create({ cwd: staging, file: tarball, gzip: true, sync: true }, ["package"]);
   // Cache original bytes only; every caller receives its own mutable file.
   archives.set(key, readFileSync(tarball));
   return tarball;

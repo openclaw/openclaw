@@ -109,6 +109,7 @@ packages/model-catalog-core/package.json
 packages/model-catalog-core/src/canonical-model-key.ts
 packages/model-catalog-core/src/configured-model-refs.ts
 packages/model-catalog-core/src/decision-answer-capabilities.ts
+packages/model-catalog-core/src/decision-route-capabilities.ts
 packages/model-catalog-core/src/index.ts
 packages/model-catalog-core/src/model-catalog-normalize.ts
 packages/model-catalog-core/src/model-catalog-pricing.ts
@@ -434,6 +435,7 @@ src/infra/database-engine/sqlite-vector-types.ts
 src/infra/database-engine/sqlite-vector.ts
 src/infra/database-engine/text-bytes.ts
 src/infra/database-engine/vector-contract.ts
+src/infra/gateway-shutdown-budget.ts
 src/infra/postgres-sync/bridge-prestart.ts
 src/infra/postgres-sync/connection.ts
 src/infra/postgres-sync/idle-bridges.ts
@@ -443,6 +445,7 @@ src/infra/postgres-sync/protocol.ts
 src/infra/postgres-sync/transaction.ts
 src/infra/sql-connection.ts
 src/infra/sql-query-compiler.ts
+src/process/supervisor/cleanup-budget.ts
 src/sessions/communication-admission.ts
 src/sessions/communication-policy.ts
 src/config/sessions/session-actor-command.ts
@@ -1645,8 +1648,10 @@ src/plugins/plugin-control-plane-context.ts
 src/plugins/plugin-generation-artifact.ts
 src/plugins/plugin-generation-capture.ts
 src/plugins/plugin-generation-file-capture.ts
+src/plugins/plugin-generation-frozen-source.ts
 src/plugins/plugin-generation-metrics.ts
 src/plugins/plugin-generation-receipt.ts
+src/plugins/plugin-generation-reference-capture.ts
 src/plugins/plugin-generation-source-lookup.ts
 src/plugins/plugin-install-default-choice.ts
 src/plugins/plugin-instance-background.ts
@@ -1659,6 +1664,8 @@ src/plugins/plugin-instance-error.ts
 src/plugins/plugin-instance-invocation.ts
 src/plugins/plugin-instance-iterator.ts
 src/plugins/plugin-instance-module-loader.ts
+src/plugins/plugin-lifecycle-lease-identity.ts
+src/plugins/plugin-lifecycle-lease.ts
 src/plugins/plugin-instance-module-resolver.ts
 src/plugins/plugin-state-operation-module-loader.ts
 src/plugins/plugin-state-operation-source.ts
@@ -1715,6 +1722,7 @@ src/plugins/plugin-sdk-native-resolver.ts
 src/plugins/plugin-setup-module.ts
 src/plugins/plugin-shared-module-loader.ts
 src/plugins/plugin-shared-state-admission.ts
+src/plugins/plugin-snapshot-dependency-error.ts
 src/plugins/plugin-source-admission-store.ts
 src/plugins/plugin-source-admission-context.ts
 src/plugins/plugin-source-admission.types.ts
@@ -1725,6 +1733,8 @@ src/plugins/plugin-source-capture-native-loads.ts
 src/plugins/plugin-source-capture-path.ts
 src/plugins/plugin-source-file.ts
 src/plugins/plugin-source-references.ts
+src/plugins/plugin-source-snapshot.types.ts
+src/plugins/plugin-source-snapshot-payload.ts
 src/plugins/plugin-source-verification.ts
 src/plugins/portable-icon-paths.ts
 src/plugins/prepared-message-tool-catalog.ts
@@ -2839,3 +2849,7 @@ src/shared/widget-media.ts
 src/gateway/worker-environments/local-workspace-cas.ts
 src/gateway/worker-environments/local-workspace-cas.kernel.ts
 src/gateway/worker-environments/local-workspace-gc.ts
+src/plugins/installed-plugin-snapshot-candidates.ts
+src/plugins/installed-plugin-snapshot-candidates.kernel.ts
+src/plugins/installed-plugin-snapshot-candidates.types.ts
+src/plugins/plugin-source-snapshot-publication.ts

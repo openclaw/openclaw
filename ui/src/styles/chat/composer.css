@@ -561,19 +561,6 @@
   height: 24px;
   color: var(--muted);
 }
-.agent-chat__capability-menu-search {
-  width: 100%;
-  min-width: 0;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  padding: 0;
-}
-.agent-chat__capability-menu-search::-webkit-search-cancel-button {
-  display: none;
-}
 .agent-chat__capability-menu-emoji {
   font-size: 17px;
   line-height: 20px;
@@ -1691,7 +1678,6 @@
   flex: 0 0 auto;
   width: 56px;
   height: 56px;
-  box-sizing: border-box;
   border: 1px solid var(--border);
   border-radius: var(--chat-attachment-radius);
   corner-shape: superellipse(1.5);
@@ -2095,7 +2081,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   margin: 0;
   padding: 0;
   border: 0;
-  box-sizing: border-box;
   opacity: 0;
   pointer-events: none;
 }
