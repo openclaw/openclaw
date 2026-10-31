@@ -200,6 +200,7 @@ export type SlackQaScenarioContext = {
   driverClient: WebClient;
   gateway: QaGatewayChild;
   sentTs: string;
+  sutAccountId: string;
   sutIdentity: SlackAuthIdentity;
   sutReadClient: WebClient;
 };

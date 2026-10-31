@@ -58,6 +58,68 @@ export const slackQaMentionGatingScenario = createSlackMarkerScenario("NOMENTION
   mention: false,
 });
 
+export const slackQaThreadParticipationWorkspaceScenario: SlackQaScenarioImplementation = {
+  buildRun: (sutUserId) => {
+    const suffix = randomUUID().slice(0, 8).toUpperCase();
+    const seedMarker = `SLACK_QA_THREAD_SEED_${suffix}`;
+    const followUpMarker = `SLACK_QA_THREAD_FOLLOWUP_${suffix}`;
+    return {
+      expectReply: true,
+      input: `<@${sutUserId}> reply with only this exact marker: ${seedMarker}`,
+      matchText: seedMarker,
+      afterReply: async (_message, context) => {
+        const sutTeamId = context.sutIdentity.teamId?.trim();
+        if (!sutTeamId) {
+          throw new Error("Slack QA SUT identity has no team id for the workspace record");
+        }
+        const participationKey = `${context.sutAccountId}:${sutTeamId}:${context.channelId}:${context.sentTs}`;
+        if (typeof context.gateway.restartAfterStateMutation !== "function") {
+          throw new Error("Slack QA gateway child cannot restart after a state mutation");
+        }
+        // Send records participation under delivery.teamId; a relay/non-enterprise
+        // follow-up arrives without an event scope. Seed the same store row the
+        // workspace-scoped send writes, then restart so the monitor re-reads
+        // persistence instead of its in-memory cache.
+        await context.gateway.restartAfterStateMutation(async ({ stateDir }) => {
+          const { createPluginStateSyncKeyedStore } =
+            await import("openclaw/plugin-sdk/plugin-state-store-runtime");
+          const store = createPluginStateSyncKeyedStore("slack", {
+            namespace: "slack.thread-participation",
+            maxEntries: 1000,
+            env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+          });
+          store.register(participationKey, { repliedAt: Date.now() });
+        });
+        const followUp = await sendSlackChannelMessage({
+          channelId: context.channelId,
+          client: context.driverClient,
+          text: `unmentioned follow-up: reply with only this exact marker: ${followUpMarker}`,
+          threadTs: context.sentTs,
+        });
+        const reply = await waitForSlackScenarioReply({
+          channelId: context.channelId,
+          client: context.sutReadClient,
+          matchText: followUpMarker,
+          observedMessages: [],
+          observationScenarioId: "slack-thread-participation-workspace",
+          sentTs: followUp.ts,
+          sutIdentity: context.sutIdentity,
+          threadTs: context.sentTs,
+          timeoutMs: 60_000,
+        });
+        if (reply.message.thread_ts !== context.sentTs) {
+          throw new Error("thread-participation follow-up reply escaped the native Slack thread");
+        }
+        return [
+          "seeded workspace-scoped participation record and restarted the gateway",
+          "unmentioned thread follow-up admitted via bot_thread_participant",
+          `replyObserved=${followUpMarker}`,
+        ].join("; ");
+      },
+    };
+  },
+};
+
 export const slackQaMpimAppMentionDedupeScenario: SlackQaScenarioImplementation = {
   // Keep the event-dedupe assertion independent from Slack's separate
   // streaming preview/final message lifecycle.

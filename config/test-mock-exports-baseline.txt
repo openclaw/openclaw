@@ -816,7 +816,6 @@
 ["extensions/slack/src/monitor/message-handler/dispatch.preview-fallback.test.ts","../../format.js","35c482f8e412bdce9f2c4928c005d622edff1e7872f09b56884f922a8c2f9827",1]
 ["extensions/slack/src/monitor/message-handler/dispatch.preview-fallback.test.ts","../../message-sent-hook.js","4dcb322af857175141c4e943c4259c70962975c6591f20e9a20944cae553110c",1]
 ["extensions/slack/src/monitor/message-handler/dispatch.preview-fallback.test.ts","../../send.js","f5b64884b9eddbf74ed47f7218db97015991056c02067fb68ea5c88cfc6e82cb",1]
-["extensions/slack/src/monitor/message-handler/dispatch.preview-fallback.test.ts","../../sent-thread-cache.js","3a143227096cb3de1293dd916fbeaac8f83cae18369f24021fa05688408a3789",1]
 ["extensions/slack/src/monitor/message-handler/dispatch.preview-fallback.test.ts","../../stream-mode.js","d2bfa7dd5982857a4b0b651f3597a36750f5cf02de146c42beed078fb315df74",1]
 ["extensions/slack/src/monitor/message-handler/dispatch.preview-fallback.test.ts","../../streaming.js","ad395f5bc49b22b76c229e51ce0f271ec1f224021084963de7405a14910ec1df",1]
 ["extensions/slack/src/monitor/message-handler/dispatch.preview-fallback.test.ts","../../threading.js","684ac571009eed827f05c64ee0a778eaa08c94e28752881686eb669bd2dd90af",1]

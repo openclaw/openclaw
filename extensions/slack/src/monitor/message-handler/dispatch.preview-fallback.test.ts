@@ -527,11 +527,15 @@ vi.mock("../../format.js", () => ({
 // mock-isolation: Fixed limits keep split and rotation scenarios independent of runtime config.
 vi.mock("../../limits.js", () => ({ SLACK_TEXT_LIMIT: 4000, SLACK_EDIT_TEXT_MAX_BYTES: 4000 }));
 
+// mock-isolation: Thread participation is fully stubbed per scenario; real cache state must stay isolated.
 vi.mock("../../sent-thread-cache.js", () => ({
   clearSlackThreadFailureNotice: () => {},
+  hasInboundSlackThreadParticipation: () => false,
   hasSlackThreadParticipation: () => false,
   recordSlackThreadFailureNotice: () => true,
   recordSlackThreadParticipation: recordSlackThreadParticipationMock,
+  resolveSlackParticipationTeamId: (params: { eventTeamId?: string; workspaceTeamId?: string }) =>
+    params.eventTeamId || params.workspaceTeamId || undefined,
 }));
 
 vi.mock("../../stream-mode.js", () => ({
