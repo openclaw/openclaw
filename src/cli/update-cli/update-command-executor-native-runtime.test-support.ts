@@ -40,6 +40,8 @@ export const updateExecutorNativeEntrypoints = {
   commandTarget: entry("update-command-target"),
   retainedRecovery: entry("../../infra/update-retained-recovery.test-support"),
   executor: entry("update-command-executor"),
+  runLedger: entry("../../infra/update-run-ledger"),
+  runDriver: entry("../../infra/update-run-driver"),
   migratedFinalize: entry("../../infra/update-migrated-finalize.worker"),
   doctorResult: entry("../../infra/update-doctor-result"),
   doctorCustody: entry("../../infra/update-doctor-process-custody"),

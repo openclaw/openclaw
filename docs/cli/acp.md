@@ -2,6 +2,7 @@
 summary: "Run the ACP bridge for IDE integrations"
 read_when:
   - Setting up ACP-based IDE integrations
+  - Checking T3 Code ACP compatibility
   - Debugging ACP session routing to the Gateway
 title: "ACP"
 ---
@@ -237,6 +238,31 @@ env OPENCLAW_HIDE_BANNER=1 OPENCLAW_SUPPRESS_NOTES=1 node openclaw.mjs acp ...
 ```
 
 This is the easiest way to let Codex, Claude Code, or another ACP-aware client pull contextual information from an OpenClaw agent without scraping a terminal.
+
+## T3 Code compatibility
+
+[T3 Code](https://github.com/pingdotgg/t3code) is an ACP client, but ordinary T3
+threads cannot currently use the OpenClaw bridge. T3
+[injects a `t3-code` MCP server](https://github.com/pingdotgg/t3code/blob/6d46336476941257d774be7c7733e9caf201fec2/packages/provider-acp/src/server/adapter.ts#L649-L684)
+into session setup; OpenClaw
+[rejects nonempty per-session MCP lists](https://github.com/openclaw/openclaw/blob/96e05f7ca44513a65c7ae5f5a9e49c187cd77b75/src/acp/translator.ts#L572-L580)
+with this diagnostic:
+
+```text
+ACP bridge mode does not support per-session MCP servers. Configure MCP on the OpenClaw gateway or agent instead.
+```
+
+A successful provider probe does not establish that an ordinary thread can
+start. Configuring MCP on the Gateway does not remove the server T3 injects.
+**Upstream unblock:** T3 must provide a supported way to omit its per-session
+MCP injection and send `mcpServers: []` during session creation, loading, and
+resuming. Then verify a real thread, follow-up, and reopen before claiming
+compatibility.
+
+Once that prerequisite is met, the [T3 local-command provider](https://github.com/pingdotgg/t3code/blob/6d46336476941257d774be7c7733e9caf201fec2/docs/user/providers-acp.md#add-a-local-command)
+uses executable `openclaw` with one literal argument, `acp`, on the T3 server
+environment. No OpenClaw `acpx` plugin or acpx `t3` built-in is needed; this is
+T3 driving OpenClaw, rather than OpenClaw launching T3.
 
 ## Zed editor setup
 
