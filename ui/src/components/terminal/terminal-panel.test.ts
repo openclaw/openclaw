@@ -317,7 +317,7 @@ describe("OpenClawTerminalPanel", () => {
     input.value = "echo census";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     await panel.updateComplete;
-    expect(controller.fit).toHaveBeenCalled();
+    expect(controller.fit).not.toHaveBeenCalled();
     expect(controller.terminal.renderer.render).not.toHaveBeenCalled();
 
     panel
