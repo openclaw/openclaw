@@ -6,7 +6,6 @@ import * as descriptions from "../../media-understanding/image-runtime.js";
 import * as registry from "../../media-understanding/provider-registry.js";
 import { encodePngRgba, fillPixel } from "../../media/png-encode.js";
 import * as media from "../../media/web-media.js";
-import type { WebMediaResult } from "../../media/web-media.js";
 import type {
   ImageDescriptionRequest,
   MediaUnderstandingProvider,
@@ -68,16 +67,6 @@ export async function executeImplicitImageTool(
 
 type ResolveModelAsync = (typeof import("../embedded-agent-runner/model.js"))["resolveModelAsync"];
 
-type ImageToolLoadWebMediaOptions = Exclude<
-  Parameters<typeof media.loadWebMedia>[1],
-  number | undefined
->;
-
-type ImageWebMediaRuntime = {
-  loadWebMedia(mediaUrl: string, options?: ImageToolLoadWebMediaOptions): Promise<WebMediaResult>;
-  optimizeImageBufferForWebMedia: typeof media.optimizeImageBufferForWebMedia;
-};
-
 type ImageToolProviderDeps = {
   buildProviderRegistry: typeof registry.buildMediaUnderstandingRegistry;
   getMediaUnderstandingProvider: typeof registry.getMediaUnderstandingProvider;
@@ -91,7 +80,8 @@ type ImageToolProviderDeps = {
     cfg?: OpenClawConfig;
   }): MediaUnderstandingProvider | undefined;
   resolveImageCompressionPolicy: typeof execution.prepareImageCompressionPolicy;
-  loadImageWebMediaRuntime: () => Promise<ImageWebMediaRuntime>;
+  loadWebMedia: typeof media.loadWebMedia;
+  optimizeImageBufferForWebMedia: typeof media.optimizeImageBufferForWebMedia;
 };
 
 const restoreSpies: Array<{ mockRestore(): void }> = [];
@@ -148,21 +138,12 @@ function setProviderDepsForTest(overrides?: Partial<ImageToolProviderDeps>): voi
       );
     restoreSpies.push(spy);
   }
-  if (overrides.loadImageWebMediaRuntime) {
-    const load = overrides.loadImageWebMediaRuntime;
-    const loadSpy = vi.spyOn(media, "loadWebMedia").mockImplementation(async (url, options) => {
-      if (typeof options === "number") {
-        throw new Error("Image fixture expects structured media options");
-      }
-      return (await load()).loadWebMedia(url, options);
-    });
-    const optimizeSpy = vi
-      .spyOn(media, "optimizeImageBufferForWebMedia")
-      .mockImplementation(async (...args) =>
-        (await load()).optimizeImageBufferForWebMedia(...args),
-      );
-    restoreSpies.push(loadSpy, optimizeSpy);
-  }
+  installOverride(overrides.loadWebMedia, (impl) =>
+    vi.spyOn(media, "loadWebMedia").mockImplementation(impl),
+  );
+  installOverride(overrides.optimizeImageBufferForWebMedia, (impl) =>
+    vi.spyOn(media, "optimizeImageBufferForWebMedia").mockImplementation(impl),
+  );
 }
 
 export const testing = {

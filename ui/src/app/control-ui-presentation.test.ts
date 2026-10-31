@@ -110,14 +110,14 @@ describe("Control UI accent presentation", () => {
         meta.remove();
       }
       palette.remove();
-      root.classList.remove("control-ui-chat-shell");
+      root.classList.remove("control-ui-content-canvas");
       delete root.dataset.theme;
       delete root.dataset.themeMode;
       vi.unstubAllGlobals();
     }
   });
 
-  it("uses the shell's committed chat layout across palette changes, routes, and removal", () => {
+  it("uses the shell's committed content canvas across palette changes, routes, and removal", () => {
     const root = document.documentElement;
     const shell = document.body.appendChild(document.createElement("div"));
     root.style.setProperty("--bg", "rgb(10, 20, 30)");
@@ -129,29 +129,29 @@ describe("Control UI accent presentation", () => {
     try {
       shell.className = "shell shell--chat";
       syncControlUiSystemChrome(false, true);
-      expect(root.classList.contains("control-ui-chat-shell")).toBe(true);
+      expect(root.classList.contains("control-ui-content-canvas")).toBe(true);
       expect(root.style.getPropertyValue("--control-ui-system-chrome-background")).toBe(
         "rgb(20, 30, 40)",
       );
 
       shell.className = "shell";
       syncControlUiSystemChrome();
-      expect(root.classList.contains("control-ui-chat-shell")).toBe(true);
+      expect(root.classList.contains("control-ui-content-canvas")).toBe(true);
       syncControlUiSystemChrome(false, false);
-      expect(root.classList.contains("control-ui-chat-shell")).toBe(false);
+      expect(root.classList.contains("control-ui-content-canvas")).toBe(false);
       expect(root.style.getPropertyValue("--control-ui-system-chrome-background")).toBe(
         "rgb(10, 20, 30)",
       );
 
       shell.className = "shell shell--chat";
       syncControlUiSystemChrome();
-      expect(root.classList.contains("control-ui-chat-shell")).toBe(false);
+      expect(root.classList.contains("control-ui-content-canvas")).toBe(false);
       syncControlUiSystemChrome(false, true);
       shell.remove();
       syncControlUiSystemChrome(false, false);
-      expect(root.classList.contains("control-ui-chat-shell")).toBe(false);
+      expect(root.classList.contains("control-ui-content-canvas")).toBe(false);
     } finally {
-      root.classList.remove("control-ui-chat-shell");
+      root.classList.remove("control-ui-content-canvas");
       vi.unstubAllGlobals();
     }
   });

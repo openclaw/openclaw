@@ -1,9 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID, createHash } from "node:crypto";
+import fs from "node:fs";
 import { writeFile, readFile, rm, symlink, link } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { Check } from "typebox/value";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { ATTACHMENT_CHUNK_BYTES, ATTACHMENT_DOWNLOAD_CHUNK_BYTES } from "./attachment-contract.js";
 import { contract } from "./contract.js";
 import { SqliteIdentityStore } from "./identity-store.js";
@@ -255,7 +258,48 @@ it("source files are independent of the catalog scan byte budget; legacy large t
   expect(original.equals(Buffer.from(source.text)), "legacy original bytes").toBe(true);
 });
 
-for (const stage of ["attachment-after-link", "attachment-before-receipt"]) {
+it("attachment filesystem work and live authority checks leave the SQLite writer unlocked", async () => {
+  const f = await fixture(),
+    store = new SqliteIdentityStore(f.config.statePath),
+    storage = new KnowledgeStorage(f.config, store, () => assertUnlocked()),
+    access = accessFor(f.owner, true);
+  await storage.initialize(access);
+  const contender = new DatabaseSync(f.config.statePath, { timeout: 0 });
+  const assertUnlocked = () => contender.exec("BEGIN IMMEDIATE; COMMIT");
+  const sync = fs.fsyncSync;
+  const spy = vi.spyOn(fs, "fsyncSync").mockImplementation((fd) => {
+    assertUnlocked();
+    sync(fd);
+  });
+  syncBuiltinESMExports();
+  try {
+    const receipt = await storage.attach(
+      uploadInput({ data: Buffer.from("Original bytes").toString("base64") }),
+      {
+        ...access,
+        assertCurrent: () => {
+          access.assertCurrent();
+          assertUnlocked();
+        },
+      },
+    );
+    expect(receipt.state).toBe("complete");
+    expect(spy).toHaveBeenCalled();
+  } finally {
+    spy.mockRestore();
+    syncBuiltinESMExports();
+    contender.close();
+  }
+});
+
+for (const stage of [
+  "attachment-after-chunk",
+  "attachment-after-stage",
+  "attachment-after-link",
+  "attachment-descriptor-after-link",
+  "attachment-before-receipt",
+  "attachment-after-receipt",
+]) {
   it(`file installation interruption at ${stage} recovers without overwriting the original`, async () => {
     const f = await fixture(),
       input = uploadInput({ data: Buffer.from("Original bytes").toString("base64") });
@@ -269,6 +313,15 @@ for (const stage of ["attachment-after-link", "attachment-before-receipt"]) {
       },
     );
     await expect(storage.attach(input, accessFor(f.owner, true))).rejects.toThrow(/interrupted/);
+    if (stage === "attachment-after-chunk") {
+      const retry = new KnowledgeStorage(f.config);
+      await expect(
+        retry.attach(
+          { ...input, offset: 14, data: Buffer.from("extra").toString("base64") },
+          accessFor(f.owner, true),
+        ),
+      ).rejects.toThrow(/offset/);
+    }
     const resumed = await createKnowledgeService(f.api).attach(input, f.owner);
     expect(resumed.state).toBe("complete");
     expect(await readFile(path.join(f.root, "private", resumed.evidence!.path))).toStrictEqual(

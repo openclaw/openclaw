@@ -70,7 +70,7 @@ describe("cron view list pane", () => {
     const container = await renderView({ jobs: [job, paused, failed], onSelectJob });
     const rows = Array.from(container.querySelectorAll(".cron-table__row"));
     expect(rows).toHaveLength(3);
-    expect(rows[0]?.getAttribute("role")).toBeNull();
+    expect(rows[0]?.getAttribute("role")).toBe("listitem");
     expect(attribute(rows[0]!, ".cron-table__state--error", "aria-label")).toBe("Error");
     expect(rows[0]?.querySelector(".cron-last-glyph--error")).not.toBeNull();
     expect(attribute(rows[0]!, ".cron-table__last-run", "aria-label")).toBe("Error");

@@ -4,10 +4,12 @@ import { afterEach, expect, it, vi } from "vitest";
 import * as retention from "../infra/doctor-capture-retention.js";
 import * as ancestry from "../infra/restart-stale-pids.js";
 import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
+import * as databaseBackup from "../infra/update-database-backup.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import * as baselineCapture from "../infra/update-recovery-baseline-capture.js";
 import { readUpdateRunDriver } from "../infra/update-run-driver.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
+import * as registry from "../plugins/doctor-contract-registry.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { preserveDoctorOriginalState } from "./doctor-original-capture.js";
 
@@ -33,6 +35,35 @@ const captureDefaults = () => ({
   assertCurrent() {},
 });
 
+it("removes its failed unsealed capture after the backup work settles", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const originalConfig = fs.readFileSync(state.configPath);
+    vi.spyOn(registry, "preparePluginDoctorMigrationBackupResources").mockResolvedValue({
+      resources: [],
+      deferredPluginIds: new Set(),
+      notices: [],
+      assertCurrent() {},
+    });
+    let attempt = "";
+    vi.spyOn(databaseBackup, "createUpdateDatabaseBackup").mockImplementationOnce(
+      async ({ backupRoot }) => {
+        attempt = path.dirname(backupRoot);
+        fs.writeFileSync(path.join(attempt, "payload", "unfinished"), "private original bytes");
+        throw new Error("capture interrupted");
+      },
+    );
+
+    const result = await preserveDoctorOriginalState({ ...captureDefaults(), env: state.env });
+
+    expect(attempt).not.toBe("");
+    expect(fs.existsSync(attempt)).toBe(false);
+    expect(result.findings).toContainEqual(
+      expect.objectContaining({ checkId: "core/doctor/recovery-capture", severity: "warning" }),
+    );
+    expect(fs.readFileSync(state.configPath)).toEqual(originalConfig);
+  });
+});
+
 it.each(["admission", "worker"] as const)(
   "bounds %s capture work and reports recovery advice",
   async (work) => {
@@ -52,12 +83,10 @@ it.each(["admission", "worker"] as const)(
           return captured(state.stateDir);
         },
       );
-      await expect(
-        preserveDoctorOriginalState({ ...captureDefaults(), env: state.env }),
-      ).rejects.toMatchObject({
-        message: expect.stringContaining("timed out after 600 s"),
-        refusal: { kind: "data-at-risk", reason: "unreadable-state" },
-      });
+      const result = await preserveDoctorOriginalState({ ...captureDefaults(), env: state.env });
+      expect(result.warnings.join("\n")).toContain("timed out after 600 s");
+      expect(result.warnings.join("\n")).toContain("verified backup");
+      expect(result.warnings.join("\n")).toContain("openclaw doctor --fix");
     });
   },
 );
@@ -121,9 +150,16 @@ it("keeps one sealed container capture, skips repeats, and still retires old cap
         runtime: { log, error: vi.fn(), exit: vi.fn() },
       });
 
-    // A failed capture cannot authorize repair or mark activation as backed up.
-    await expect(captureOriginal(null)).rejects.toThrow("State repair has not started");
+    // A nonfatal capture failure leaves the next start free to capture.
+    const unavailable = await captureOriginal(null);
     expect(fs.existsSync(marker)).toBe(false);
+    expect(unavailable.findings).toContainEqual(
+      expect.objectContaining({
+        category: "fix-now",
+        message: expect.stringContaining("Pre-repair recovery copy was unavailable"),
+        fixHint: expect.stringContaining("Check installation access and disk space"),
+      }),
+    );
 
     const capture = vi
       .spyOn(baselineCapture, "captureUpdateRecoveryBaseline")

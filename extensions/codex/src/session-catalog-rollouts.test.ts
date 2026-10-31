@@ -1,27 +1,20 @@
-import { EventEmitter } from "node:events";
-import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { zstdCompressSync } from "node:zlib";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { reconcileCodexCatalogFiles } from "./session-catalog-index-files.js";
-import { catalogRow } from "./session-catalog-index.test-support.js";
+import {
+  catalogRow,
+  freezeCatalogDirectoryClocks,
+  watchWithControlledEvents,
+} from "./session-catalog-index.test-support.js";
 import { CODEX_CATALOG_MAX_ROWS } from "./session-catalog-limits.js";
 import { CodexCatalogRolloutScanner } from "./session-catalog-rollout-scanner.js";
 import { readCodexCatalogRollout } from "./session-catalog-rollouts.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scanners = new Set<CodexCatalogRolloutScanner>();
-class ControlledWatcher extends EventEmitter {
-  close = vi.fn();
-  ref() {
-    return this;
-  }
-  unref() {
-    return this;
-  }
-}
 afterEach(() => {
   for (const scanner of scanners) {
     scanner.close();
@@ -37,16 +30,6 @@ function makeScanner(root: string) {
 const emptyScan = { files: new Map(), present: new Set() };
 const denied = (message = "permission denied", code = "EACCES") =>
   Object.assign(new Error(message), { code });
-function watchWithControlledEvents(platform: NodeJS.Platform) {
-  vi.spyOn(process, "platform", "get").mockReturnValue(platform);
-  const watchers: ControlledWatcher[] = [];
-  const watch = vi.spyOn(nodeFs, "watch").mockImplementation(() => {
-    const watcher = new ControlledWatcher();
-    watchers.push(watcher);
-    return watcher;
-  });
-  return { watchers, watch };
-}
 function expectNoReads(...methods: Array<"readFile" | "open" | "readdir">) {
   const spies = methods.map((method) => vi.spyOn(fs, method));
   return () => spies.forEach((spy) => expect(spy).not.toHaveBeenCalled());
@@ -165,23 +148,8 @@ describe("resident catalog rollout currency", () => {
   });
 
   it("scans new day folders without content reads and prefers plain rollout siblings", async () => {
-    const { watch, watchers } = watchWithControlledEvents("linux");
-    const notifyRename = (file: string) => {
-      const index = watch.mock.calls.findLastIndex(
-        ([directory]) => directory === path.dirname(file),
-      );
-      watchers[index]!.emit("change", "rename", path.basename(file));
-    };
-    const lstat = fs.lstat;
-    vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-      const stat = await lstat(...args);
-      // Delivered events must invalidate healthy caches even on coarse directory clocks.
-      if (stat.isDirectory()) {
-        stat.ctimeMs = 0;
-        stat.mtimeMs = 0;
-      }
-      return stat;
-    });
+    const { notifyRename } = watchWithControlledEvents("linux");
+    freezeCatalogDirectoryClocks();
     const f = await fixture();
     const noReads = expectNoReads("readFile", "open");
     const tracked = [f.file];

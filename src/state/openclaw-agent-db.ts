@@ -369,9 +369,7 @@ function* openOpenClawAgentDatabaseSteps(
     let isValidatedReopen = Boolean(getOpenClawAgentDatabaseValidation(validationDatabase));
     // Lease history governs first admission; it cannot expire this process's checked file.
     const reuseAdmittedIntegrity =
-      isValidatedReopen ||
-      reuseIntegrity ||
-      (pending?.workerPrepared === true && !integrityRevoked);
+      reuseIntegrity || (pending?.workerPrepared === true && !integrityRevoked);
     let reusedSchema = false;
     let walMaintenance: SqliteWalMaintenance;
     try {
@@ -574,8 +572,12 @@ function* openOpenClawAgentDatabaseSteps(
           agentId,
           path: pathname,
           env: options.env,
-          // A temporary QUICK repair handle must not publish FULL runtime admission.
-          admittedDb: integrityCheck === "quick" ? undefined : selected,
+          // Bounded admission retains process proof without minting a FULL receipt or seal.
+          // Temporary QUICK repair handles still cannot publish runtime admission.
+          admittedDb:
+            integrityCheck === "quick" && diagnostics.integrityGateOutcome !== "pending"
+              ? undefined
+              : selected,
         },
         registrationObserver,
       );

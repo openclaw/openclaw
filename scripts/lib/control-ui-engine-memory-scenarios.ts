@@ -11,7 +11,7 @@ import type { EngineScenario } from "./control-ui-engine-boot-scenarios.ts";
 import { frames } from "./control-ui-interaction-navigation.ts";
 
 /** A working day's churn in one document, sampled at the same parked route. */
-function workingDayScenario(): EngineScenario {
+function workingDayScenario(rounds: number): EngineScenario {
   const keys = Array.from({ length: 200 }, (_, index) =>
     index === 0 ? parityBaseScenario.sessionKey! : `agent:main:soak-${index}`,
   );
@@ -70,8 +70,7 @@ function workingDayScenario(): EngineScenario {
   return {
     id: "memory-working-day",
     route: "/new",
-    expected:
-      "One document: 200 session switches, 50 streamed turns, route/settings churn, refreshes, dialogs and 10 reconnects.",
+    expected: `One document: ${rounds * 20} session switches, ${rounds * 5} streamed turns, route/settings churn, refreshes, dialogs and ${rounds} reconnects.`,
     memory: true,
     explicitOnly: true,
     fixtureOverrides: () => ({
@@ -124,7 +123,7 @@ function workingDayScenario(): EngineScenario {
       if (!checkpoint) {
         throw new Error("Working-day soak requires memory collection");
       }
-      for (let round = 1; round <= 10; round++) {
+      for (let round = 1; round <= rounds; round++) {
         for (const [index, key] of keys.slice((round - 1) * 20, round * 20).entries()) {
           await navigateToControlUiSession(page, key);
           const pane = page.locator(".chat-pane-cache__pane--active");
@@ -213,13 +212,13 @@ function workingDayScenario(): EngineScenario {
         );
       }
       return {
-        sessionSwitches: 200,
-        streamedTurns: 50,
-        streamDeltas: 2_500,
-        reconnects: 10,
-        routeVisits: (routes.length + settings.length) * 10,
-        pickerCycles: 10,
-        dialogCycles: 10,
+        sessionSwitches: rounds * 20,
+        streamedTurns: rounds * 5,
+        streamDeltas: rounds * 250,
+        reconnects: rounds,
+        routeVisits: (routes.length + settings.length) * rounds,
+        pickerCycles: rounds,
+        dialogCycles: rounds,
       };
     },
   };
@@ -272,7 +271,7 @@ const routes: Array<{ id: RouteId; ready?: string }> = [
   { id: "cron" },
 ];
 
-export function createEngineMemoryScenarios(): EngineScenario[] {
+export function createEngineMemoryScenarios(soakRounds: number): EngineScenario[] {
   const templatesConfig = { gateway: { controlUi: { experimental: { templates: true } } } };
   const routeScenarios: EngineScenario[] = routes.map(({ id, ready }) => ({
     id: `memory-route-${id}`,
@@ -365,7 +364,7 @@ export function createEngineMemoryScenarios(): EngineScenario[] {
     ]),
   );
   return [
-    workingDayScenario(),
+    workingDayScenario(soakRounds),
     ...routeScenarios,
     {
       id: "memory-long-session",

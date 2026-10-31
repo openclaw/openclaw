@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { hashCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
-import type { CliSessionReseedReceipt, SessionEntry } from "../config/sessions.js";
+import type { CliSessionReseedReceipt } from "../config/sessions.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import type { CliHistoryIndex } from "./cli-session-history-index-policy.js";
@@ -64,14 +64,6 @@ export function answer(
 ) {
   const meta = externalId === undefined ? undefined : cliMeta(externalId, cliSessionId);
   return { ...user("Repeated answer", timestamp, meta), role: "assistant" };
-}
-
-export function boundEntry(sessionId: string): SessionEntry {
-  return {
-    sessionId: "openclaw-session",
-    updatedAt: 1,
-    cliSessionBindings: { "claude-cli": { sessionId } },
-  };
 }
 
 export function receipt(prompt: string, sessionId = "openclaw-session"): CliSessionReseedReceipt {

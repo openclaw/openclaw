@@ -104,6 +104,7 @@ export function createGatewayReloadHandlers(
         mrReload.refreshModelRuntimeAfterHotReload({
           config,
           agentIds: modelRuntime.agentIds,
+          preservePluginGenerations: modelRuntime.scope.preservePluginGenerations,
           pluginMetadataSnapshot: params.getPluginMetadataSnapshot?.(),
           ...(isPublicationCurrent ? { isPublicationCurrent } : {}),
         }),

@@ -1,4 +1,10 @@
+import {
+  type AuthProfileStore,
+  isProfileInCooldown,
+  resolveProfilesUnavailableReason,
+} from "../../auth-profiles.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles/types.js";
+import { shouldUseTransientCooldownProbeSlot } from "../../failover-policy.js";
 import type { FailoverReason } from "../../failover/signal.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 
@@ -35,4 +41,45 @@ export function resolveAuthProfileFailureReason(params: {
     return null;
   }
   return params.failoverReason;
+}
+
+/** Decides whether one automatic profile may bypass its current cooldown. */
+export function resolveEmbeddedAuthCooldownProbePolicy(params: {
+  authStore: AuthProfileStore;
+  profileCandidates: Array<string | undefined>;
+  lockedProfileId?: string;
+  modelId: string;
+  allowTransientCooldownProbe: boolean;
+}): { probeProfileIds: ReadonlySet<string>; unavailableReason: FailoverReason | null } {
+  const autoProfileCandidates = params.profileCandidates.filter(
+    (candidate): candidate is string =>
+      typeof candidate === "string" && candidate.length > 0 && candidate !== params.lockedProfileId,
+  );
+  const allAutoProfilesInCooldown =
+    autoProfileCandidates.length > 0 &&
+    autoProfileCandidates.every((candidate) =>
+      isProfileInCooldown(params.authStore, candidate, undefined, params.modelId),
+    );
+  const unavailableReason = allAutoProfilesInCooldown
+    ? (resolveProfilesUnavailableReason({
+        store: params.authStore,
+        profileIds: autoProfileCandidates,
+      }) ?? "unknown")
+    : null;
+  const probeProfileIds = new Set<string>();
+  if (
+    params.allowTransientCooldownProbe &&
+    allAutoProfilesInCooldown &&
+    shouldUseTransientCooldownProbeSlot(unavailableReason)
+  ) {
+    for (const candidate of autoProfileCandidates) {
+      const candidateReason =
+        resolveProfilesUnavailableReason({ store: params.authStore, profileIds: [candidate] }) ??
+        "unknown";
+      if (shouldUseTransientCooldownProbeSlot(candidateReason)) {
+        probeProfileIds.add(candidate);
+      }
+    }
+  }
+  return { probeProfileIds, unavailableReason };
 }

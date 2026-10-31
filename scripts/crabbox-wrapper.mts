@@ -3926,17 +3926,19 @@ if (canonicalProvider === "blacksmith-testbox") {
 let testboxLeaseFreshness: ReturnType<typeof prepareTestboxLeaseFreshness>;
 try {
   testboxLeaseFreshness = prepareTestboxLeaseFreshness({
-    // Reuse the native-help parser's boundary; payload flags are never lease
-    // options. Equals form preserves option-looking values and Go's last value.
-    args: [
-      normalizedArgs[0] ?? "",
-      ...parseCommandInvocation(help.text, normalizedArgs).optionEntries.map(
-        ({ name, value, index }) =>
+    operation: normalizedArgs[0] ?? "",
+    // Preserve the native-help parser's payload boundary and Go's last value.
+    // The invocation's lookup map is first-wins; fold its ordered entries here.
+    options: new Map(
+      parseCommandInvocation(help.text, normalizedArgs).optionEntries.map(
+        ({ name, value, index }) => [
+          name,
           normalizedArgs[index]?.includes("=") || commandValueOptionsFromHelp.has(name)
-            ? `--${name}=${value}`
-            : `--${name}`,
+            ? value
+            : "true",
+        ],
       ),
-    ],
+    ),
     command: normalizedArgs,
     env: { ...process.env, CI: process.env.CI || "true" },
     provider: canonicalProvider,

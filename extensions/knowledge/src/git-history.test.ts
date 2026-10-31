@@ -9,6 +9,7 @@ import { expect, it, vi } from "vitest";
 import { GitHistory } from "./git-history.js";
 import { SqliteIdentityStore } from "./identity-store.js";
 import { Receipt, GitStatus } from "./mutation-contract.js";
+import { PublicationFiles } from "./publication-files.js";
 import { KnowledgeStorage } from "./storage.js";
 import {
   afterTest,
@@ -65,10 +66,24 @@ it("default repository, exact grouped content, clean index, actor, and one commi
       checkedWriter = true;
     }
   });
-  const saved = await service.save(input, f.access, "operator");
+  let checkedAuthority = false;
+  const saved = await service.save(
+    input,
+    {
+      ...f.access,
+      assertCurrent() {
+        if (checkedWriter) {
+          f.store.withDatabase((db) => db.exec("PRAGMA busy_timeout=0; BEGIN IMMEDIATE; ROLLBACK"));
+          checkedAuthority = true;
+        }
+      },
+    },
+    "operator",
+  );
   expect(Check(Receipt, saved)).toBeTruthy();
   expect(saved.git!.state, JSON.stringify(saved)).toBe("committed");
   expect(checkedWriter).toBe(true);
+  expect(checkedAuthority).toBe(true);
   expect(git(f.root, "rev-list", "--count", "HEAD")).toBe("1");
   const sourceId = (await f.read(saved.id))!.metadata.evidence![0]!.source;
   expect(sourceId).toMatch(/^[a-f0-9]{64}$/);
@@ -240,7 +255,16 @@ it("external edits are one observed batch; rename and deletion keep per-file his
     const p = path.join(f.root, "private", r.path);
     await writeFile(p, (await readFile(p, "utf8")).replace("First bytes.", "External bytes."));
   }
+  const snapshot = PublicationFiles.prototype.snapshot.bind(new PublicationFiles(f.root));
+  const snapshots = vi
+    .spyOn(PublicationFiles.prototype, "snapshot")
+    .mockImplementation((...args) => {
+      f.store.withDatabase((db) => db.exec("PRAGMA busy_timeout=0; BEGIN IMMEDIATE; ROLLBACK"));
+      return snapshot(...args);
+    });
+  afterTest(() => snapshots.mockRestore());
   await f.read(a.id);
+  expect(snapshots).toHaveBeenCalled();
   expect(git(f.root, "rev-list", "--count", "HEAD")).toBe("3");
   expect(
     git(f.root, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").split("\n").length,

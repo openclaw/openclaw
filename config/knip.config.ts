@@ -142,7 +142,9 @@ const repositoryScriptEntries = [
   "scripts/bench-channel-turn.mts!",
   "scripts/perf/session-actor-retention-seed.ts!",
   "scripts/perf/session-cold-selection.ts!",
+  "scripts/perf/session-delete-diagnostics-measure.ts!",
   "scripts/perf/session-entry-projection-measure.ts!",
+  "scripts/perf/session-lifecycle-delete-sql-measure.ts!",
   // docs/reference/test/performance.md invokes the Decision transport comparison driver.
   "scripts/bench-decision-transport.mts!",
   // docs/reference/test/performance.md invokes the frozen-revision benchmark builder.
@@ -287,6 +289,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/openai-chat-tools/write-config.mjs!",
   "scripts/e2e/lib/package-git-fixture.mjs!",
   "scripts/e2e/lib/plugin-lifecycle-matrix/measure.mjs!",
+  // Manual container proof executes the registered updater through this exact entrypoint.
+  "scripts/e2e/lib/plugin-update/cohort-rollback-scenario.mjs!",
   "scripts/e2e/lib/plugin-update/registry-server.mjs!",
   "scripts/e2e/lib/plugins/npm-registry-server.mjs!",
   "scripts/e2e/lib/release-plugin-marketplace/lifecycle-assertions.mjs!",
@@ -314,7 +318,8 @@ const repositoryScriptEntries = [
   // run.sh invokes this CLI and preloads it into updater/Doctor children.
   "scripts/e2e/lib/upgrade-survivor/dreaming-cron.mjs!",
   "scripts/e2e/lib/upgrade-survivor/formerly-bundled-plugin-doctor.mjs!",
-  // Installed recovery launches its driver and preloads its fault observer by path.
+  // Installed recovery launches its driver/access probe and preloads its fault observer by path.
+  "scripts/e2e/lib/upgrade-survivor/installed-recovery-access.mjs!",
   "scripts/e2e/lib/upgrade-survivor/installed-recovery-fault.mjs!",
   "scripts/e2e/lib/upgrade-survivor/installed-recovery.mjs!",
   "scripts/e2e/lib/upgrade-survivor/older-runtime-recovery-observer.mjs!",

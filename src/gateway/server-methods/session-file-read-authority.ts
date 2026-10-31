@@ -51,6 +51,8 @@ export function assertSessionFileReadPolicy(
     cfg: options.context.getRuntimeConfig(),
     client: options.client,
     target: { agentId: target.agentId, canonicalKey: target.canonicalKey, entry: target.entry },
+    sandboxRequiredMessage:
+      "Your operator role requires a sandboxed session. You cannot read this session's host workspace files. Ask the owner to download and share the file, then attach it to your own session.",
   });
   if (error) {
     throw new SessionMutationAuthorizationChangedError(error);

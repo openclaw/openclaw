@@ -254,6 +254,9 @@ CREATE INDEX IF NOT EXISTS idx_agent_conversation_deliveries_reply
 CREATE INDEX IF NOT EXISTS idx_agent_conversation_deliveries_updated
   ON conversation_deliveries(updated_at DESC, operation_id);
 
+CREATE INDEX IF NOT EXISTS idx_agent_conversation_deliveries_source_session
+  ON conversation_deliveries(source_session_key, operation_id);
+
 CREATE TABLE IF NOT EXISTS session_conversations (
   session_id TEXT NOT NULL,
   conversation_id TEXT NOT NULL,
@@ -902,3 +905,6 @@ CREATE TABLE IF NOT EXISTS session_input_completions (
   FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE,
   FOREIGN KEY (session_id) REFERENCES session_windows(session_id) ON DELETE CASCADE
 ) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_input_completions_session_key
+  ON session_input_completions(session_key);

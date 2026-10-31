@@ -26,7 +26,7 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { inflateRawSync, constants as zlibConstants } from "node:zlib";
-import { chromium, type Response } from "playwright";
+import { chromium, type Page, type Response } from "playwright";
 import {
   gatewayCredentialScope,
   gatewayOriginScope,
@@ -34,7 +34,9 @@ import {
 import type { TranscriptEvent } from "../src/config/sessions/session-accessor.sqlite-contract.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { CONTROL_UI_TOKEN_SESSION_KEY_PREFIX } from "../src/shared/control-ui-storage.ts";
+import { getControlUiContextHandle } from "../ui/src/test-helpers/control-ui-e2e-context.ts";
 import { resolvePlaywrightChromiumExecutablePath } from "../ui/src/test-helpers/playwright-chromium.ts";
+import { launchTalkObservationBrowser } from "./lib/control-ui-talk-fixture.ts";
 import { createControlUiWireLink } from "./lib/control-ui-wire-link.ts";
 import { stopChild } from "./lib/gateway-bench-child.ts";
 
@@ -52,6 +54,7 @@ const { values } = parseArgs({
     "controlled-worker": { type: "boolean", default: false },
     screenshots: { type: "boolean", default: false },
     "extended-flows": { type: "boolean", default: false },
+    "reconnect-trigger": { type: "string", default: "silent" },
     timeline: { type: "boolean", default: false },
     "proxy-nagle": { type: "boolean", default: false },
   },
@@ -60,10 +63,11 @@ if (
   !values["bundle-dir"] ||
   !values.output ||
   !["local", "remote", "mobile"].includes(values.profile) ||
-  !["none", "token"].includes(values.auth)
+  !["none", "token"].includes(values.auth) ||
+  !["silent", "online", "visible"].includes(values["reconnect-trigger"])
 ) {
   throw new Error(
-    "Required: --bundle-dir <built UI> --output <directory> [--profile local|remote|mobile] [--auth none|token] [--pairs N] [--extended-flows] [--compare-source-dir <checkout>] [--compare-bundle-dir <base UI>]",
+    "Required: --bundle-dir <built UI> --output <directory> [--profile local|remote|mobile] [--auth none|token] [--pairs N] [--extended-flows] [--reconnect-trigger silent|online|visible] [--compare-source-dir <checkout>] [--compare-bundle-dir <base UI>]",
   );
 }
 if (values["compare-bundle-dir"] && !values["compare-source-dir"]) {
@@ -384,6 +388,100 @@ async function startProxy(upstreamPort: number, listenPort: number) {
 }
 
 type ReadinessKind = "chat" | "new-session" | "board" | "usage" | "settings" | "reconnect";
+
+async function observeReconnect(page: Page) {
+  await page.evaluate("globalThis.__name = (fn) => fn");
+  const context = await getControlUiContextHandle(page);
+  try {
+    return await context.evaluateHandle(({ gateway }) => {
+      type EventName =
+        | "snapshot"
+        | "outage-start"
+        | "before-restore"
+        | "link-restored"
+        | "offline"
+        | "online"
+        | "visibilitychange";
+      const entries: Array<{
+        event: EventName;
+        browserAtMs: number;
+        epochMs: number;
+        phase: string;
+        reconnectAt: number | null;
+        reconnectInMs: number | null;
+        errorCode: string | null;
+        online: boolean;
+        visibility: DocumentVisibilityState;
+        isTrusted?: boolean;
+      }> = [];
+      let droppedEvents = 0;
+      const record = (event: EventName, isTrusted?: boolean) => {
+        const { phase, reconnectAt, lastErrorCode } = gateway.snapshot;
+        const epochMs = Date.now();
+        if (entries.length >= 128) {
+          droppedEvents++;
+          return;
+        }
+        entries.push({
+          event,
+          browserAtMs: performance.now(),
+          epochMs,
+          phase,
+          reconnectAt: reconnectAt ?? null,
+          reconnectInMs: reconnectAt === undefined ? null : reconnectAt - epochMs,
+          errorCode: lastErrorCode,
+          online: navigator.onLine,
+          visibility: document.visibilityState,
+          isTrusted,
+        });
+      };
+      let previous = gateway.snapshot;
+      record("snapshot");
+      const unsubscribe = gateway.subscribe((snapshot) => {
+        if (
+          snapshot.phase !== previous.phase ||
+          snapshot.reconnectAt !== previous.reconnectAt ||
+          snapshot.lastErrorCode !== previous.lastErrorCode
+        ) {
+          record("snapshot");
+        }
+        previous = snapshot;
+      });
+      const onOnline = (event: Event) => record("online", event.isTrusted);
+      const onOffline = (event: Event) => record("offline", event.isTrusted);
+      const onVisibility = (event: Event) => record("visibilitychange", event.isTrusted);
+      window.addEventListener("online", onOnline);
+      window.addEventListener("offline", onOffline);
+      document.addEventListener("visibilitychange", onVisibility);
+      return {
+        mark: (event: "outage-start" | "before-restore" | "link-restored") => record(event),
+        read: (startMs: number) => ({
+          droppedEvents,
+          events: entries.map((entry) => ({
+            event: entry.event,
+            browserAtMs: entry.browserAtMs - startMs,
+            epochMs: entry.epochMs,
+            phase: entry.phase,
+            reconnectAt: entry.reconnectAt,
+            reconnectInMs: entry.reconnectInMs,
+            errorCode: entry.errorCode,
+            online: entry.online,
+            visibility: entry.visibility,
+            isTrusted: entry.isTrusted,
+          })),
+        }),
+        dispose() {
+          unsubscribe();
+          window.removeEventListener("online", onOnline);
+          window.removeEventListener("offline", onOffline);
+          document.removeEventListener("visibilitychange", onVisibility);
+        },
+      };
+    });
+  } finally {
+    await context.dispose();
+  }
+}
 
 function installReadiness() {
   type Readiness = {
@@ -746,10 +844,13 @@ async function runWorker() {
       if (approval?.status !== "approved") {
         throw new Error("Synthetic browser pairing was not approved");
       }
-      const browser = await chromium.launch({
-        executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
-        headless: true,
-      });
+      const browser =
+        values["reconnect-trigger"] === "visible"
+          ? undefined
+          : await chromium.launch({
+              executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
+              headless: true,
+            });
       const commands = values["controlled-worker"]
         ? createInterface({ input: process.stdin, crlfDelay: Infinity })
         : undefined;
@@ -782,16 +883,19 @@ async function runWorker() {
           gatewayTimeline.length = 0;
           const sampleOutput = path.join(output, String(pair + 1).padStart(2, "0"));
           await mkdir(sampleOutput, { recursive: true });
-          const context = await browser.newContext({
-            viewport: { width: 1440, height: 1000 },
-            ...(remote
-              ? {
-                  extraHTTPHeaders: {
-                    "x-forwarded-for": "198.51.100.10",
-                  },
-                }
-              : {}),
-          });
+          // Native visibility requires a default context without Playwright's focus override.
+          const observation = browser
+            ? undefined
+            : await launchTalkObservationBrowser(sampleOutput, false);
+          const context = browser
+            ? await browser.newContext({
+                viewport: { width: 1440, height: 1000 },
+                ...(remote ? { extraHTTPHeaders: { "x-forwarded-for": "198.51.100.10" } } : {}),
+              })
+            : observation!.context;
+          if (observation && remote) {
+            await context.setExtraHTTPHeaders({ "x-forwarded-for": "198.51.100.10" });
+          }
           await context.addInitScript(
             ({ deviceIdentity, tokenKey, token }) => {
               localStorage.setItem("openclaw-device-identity-v1", JSON.stringify(deviceIdentity));
@@ -806,6 +910,9 @@ async function runWorker() {
             },
           );
           const page = await context.newPage();
+          if (observation) {
+            await page.setViewportSize({ width: 1440, height: 1000 });
+          }
           await page.addInitScript({
             content: `const __name = (fn) => fn; (${installReadiness.toString()})();`,
           });
@@ -1116,7 +1223,7 @@ async function runWorker() {
             name: string,
             action: () => Promise<Response | null | void>,
             kind: ReadinessKind = "chat",
-            details?: Record<string, unknown>,
+            readDetails?: () => Promise<Record<string, unknown>>,
           ) {
             // A fresh inspector agent owns counters for this action even when Chrome
             // keeps the renderer for a navigation; a retained agent accumulates them.
@@ -1332,6 +1439,7 @@ async function runWorker() {
                         : record.browserFinishedAtMs - actionBrowserStartMs,
                   }),
                 );
+              const details = await readDetails?.();
               samples.push({
                 name,
                 ...details,
@@ -1663,32 +1771,115 @@ async function runWorker() {
               });
               const reconnectLayout = await reconnectLayoutHandle.jsonValue();
               await reconnectLayoutHandle.dispose();
+              const reconnectObserver = await observeReconnect(page);
+              let reconnectWindowId: number | undefined;
+              await reconnectObserver.evaluate((observer) => observer.mark("outage-start"));
               const outageStartedAtMs = performance.now();
+              const outageStartedEpochMs = Date.now();
               proxy.setOffline(true);
               try {
+                if (values["reconnect-trigger"] === "online") {
+                  await context.setOffline(true);
+                } else if (values["reconnect-trigger"] === "visible") {
+                  // Disable Playwright's focus override; require an actual hidden document.
+                  await cdp.send("Emulation.setFocusEmulationEnabled", { enabled: false });
+                  const { windowId } = await cdp.send("Browser.getWindowForTarget");
+                  reconnectWindowId = windowId;
+                  await cdp.send("Browser.setWindowBounds", {
+                    windowId,
+                    bounds: { windowState: "minimized" },
+                  });
+                  await page.waitForFunction(
+                    () => document.visibilityState === "hidden",
+                    undefined,
+                    { timeout: 2_000, polling: 50 },
+                  );
+                }
                 await page.waitForFunction(
                   () => window.openclawControlUi?.snapshot().gatewayPhase === "reconnecting",
                   undefined,
-                  { timeout: 30_000 },
+                  {
+                    timeout: 30_000,
+                    ...(values["reconnect-trigger"] === "visible" ? { polling: 50 } : {}),
+                  },
                 );
                 await page.waitForTimeout(
                   Math.max(0, 5_000 - (performance.now() - outageStartedAtMs)),
                 );
-                const reconnectDetails = { outageMs: 0, layout: reconnectLayout };
+                let outageMs = 0;
+                let restoredEpochMs = 0;
                 await capture(
                   "reconnect",
                   async () => {
                     await page.evaluate((key) => {
                       Reflect.get(window, "__wireReadiness").reset(key, "reconnect");
                     }, sessionKeys[1]!);
-                    reconnectDetails.outageMs = performance.now() - outageStartedAtMs;
+                    await reconnectObserver.evaluate((observer) => observer.mark("before-restore"));
+                    outageMs = performance.now() - outageStartedAtMs;
+                    restoredEpochMs = Date.now();
                     proxy.setOffline(false);
+                    await reconnectObserver.evaluate((observer) => observer.mark("link-restored"));
+                    if (values["reconnect-trigger"] === "online") {
+                      await context.setOffline(false);
+                    } else if (reconnectWindowId !== undefined) {
+                      await cdp.send("Browser.setWindowBounds", {
+                        windowId: reconnectWindowId,
+                        bounds: { windowState: "normal" },
+                      });
+                      await page.waitForFunction(
+                        () => document.visibilityState === "visible",
+                        undefined,
+                        { timeout: 2_000, polling: 50 },
+                      );
+                    }
                   },
                   "reconnect",
-                  reconnectDetails,
+                  async () => {
+                    const retrySchedule = await reconnectObserver.evaluate((observer) => {
+                      return observer.read(Reflect.get(window, "__wireReadiness").state.startMs);
+                    });
+                    const saw = (event: string, state: boolean | string) =>
+                      retrySchedule.events.some(
+                        (entry) =>
+                          entry.event === event &&
+                          entry.isTrusted === true &&
+                          (typeof state === "boolean"
+                            ? entry.online === state
+                            : entry.visibility === state),
+                      );
+                    if (
+                      (values["reconnect-trigger"] === "online" &&
+                        (!saw("offline", false) || !saw("online", true))) ||
+                      (values["reconnect-trigger"] === "visible" &&
+                        (!saw("visibilitychange", "hidden") || !saw("visibilitychange", "visible")))
+                    ) {
+                      throw new Error(
+                        "Reconnect trigger did not produce the expected browser events",
+                      );
+                    }
+                    return {
+                      outageMs,
+                      outageStartedEpochMs,
+                      restoredEpochMs,
+                      layout: reconnectLayout,
+                      reconnectTrigger: values["reconnect-trigger"],
+                      retrySchedule,
+                    };
+                  },
                 );
               } finally {
                 proxy.setOffline(false);
+                if (values["reconnect-trigger"] === "online") {
+                  await context.setOffline(false);
+                } else if (reconnectWindowId !== undefined) {
+                  await cdp.send("Browser.setWindowBounds", {
+                    windowId: reconnectWindowId,
+                    bounds: { windowState: "normal" },
+                  });
+                  await cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+                }
+                await reconnectObserver.evaluate((observer) => observer.dispose());
+                await reconnectObserver.dispose();
               }
             }
             await writeFile(
@@ -1701,6 +1892,7 @@ async function runWorker() {
                   proxyNagle: values["proxy-nagle"],
                   timeline: values.timeline,
                   extendedFlows: values["extended-flows"],
+                  reconnectTrigger: values["reconnect-trigger"],
                   revision,
                   dirty,
                   bundle,
@@ -1738,7 +1930,11 @@ async function runWorker() {
             );
             throw error;
           } finally {
-            await context.close();
+            if (observation) {
+              await observation.close();
+            } else {
+              await context.close();
+            }
           }
           if (commandIterator) {
             console.log(
@@ -1752,7 +1948,7 @@ async function runWorker() {
         }
       } finally {
         commands?.close();
-        await browser.close();
+        await browser?.close();
       }
     } finally {
       await proxy.close();
@@ -1876,6 +2072,8 @@ if (values.worker) {
       values.profile,
       "--auth",
       values.auth,
+      "--reconnect-trigger",
+      values["reconnect-trigger"],
       "--output",
       workerOutput,
     ];

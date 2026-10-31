@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
 import { zstdCompressSync } from "node:zlib";
 import { expect, it, vi } from "vitest";
@@ -15,6 +16,7 @@ import { migrateSessionColdNavigation } from "./state-migrations.cold-navigation
 import { mediaRowsNeedMigration } from "./state-migrations.media-persistence-database.js";
 import { MASKED_TRANSCRIPT_PROVIDER } from "./state-migrations.transcript-directives-transform.js";
 import { migrateHistoricalTranscriptDirectives } from "./state-migrations.transcript-directives.js";
+import { resolveZstdCodec } from "./zstd-codec.js";
 
 function seedArchive(database: DatabaseSync, sessionId: string, withoutIndex = false) {
   const event = JSON.stringify({
@@ -24,7 +26,9 @@ function seedArchive(database: DatabaseSync, sessionId: string, withoutIndex = f
     message: {
       role: "assistant",
       provider: MASKED_TRANSCRIPT_PROVIDER,
-      content: [{ type: "text", text: "[[reply_to_current]] synthetic retained payload" }],
+      content: [
+        { type: "text", text: "[[reply_to_current]] synthetic retained payload".repeat(256) },
+      ],
     },
   });
   const records = [
@@ -85,6 +89,66 @@ function seedArchive(database: DatabaseSync, sessionId: string, withoutIndex = f
   return event;
 }
 
+it("stops between complete archives after ten minutes and resumes the pending archives", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    openOpenClawStateDatabase({ env: state.env });
+    const pathname = path.join(state.agentDir(), "openclaw-agent.sqlite");
+    fs.mkdirSync(path.dirname(pathname), { recursive: true });
+    {
+      using database = new DatabaseSync(pathname);
+      seedAgentV38Schema(database);
+      database.exec(`INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+        VALUES ('agent:main:retained', 'archive-a', '{"sessionId":"archive-a","updatedAt":1}', 1);`);
+      for (const id of ["archive-a", "archive-b", "archive-c"]) {
+        seedArchive(database, id);
+      }
+      await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
+        ensureOpenClawAgentSchema(database, "main", pathname);
+      });
+    }
+    let elapsed = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+    const backfill = navigation.backfillSessionColdNavigationInTransaction;
+    const observed = vi
+      .spyOn(navigation, "backfillSessionColdNavigationInTransaction")
+      .mockImplementation((database, archive) => {
+        backfill(database, archive);
+        elapsed += 300_001;
+      });
+    try {
+      const result = await migrateSessionColdNavigation({ env: state.env });
+      expect(result.warningDisposition).toBe("recoverable");
+      expect(result.warnings).toContainEqual(
+        expect.stringContaining("migrated 2, pending 1; resumes on the next doctor run"),
+      );
+      using database = new DatabaseSync(pathname, { readOnly: true });
+      for (const table of [
+        "transcript_events",
+        "transcript_event_identities",
+        "session_transcript_active_events",
+        "session_transcript_index_state",
+      ]) {
+        expect(
+          database.prepare(`SELECT session_id FROM ${table} ORDER BY session_id`).all(),
+        ).toEqual([{ session_id: "archive-a" }, { session_id: "archive-b" }]);
+      }
+    } finally {
+      observed.mockRestore();
+      clock.mockRestore();
+    }
+    const resumed = await migrateSessionColdNavigation({ env: state.env });
+    expect(resumed.warnings).toEqual([]);
+    expect(resumed.changes).toContainEqual(
+      expect.stringContaining("Retained navigation for 1 cold transcript(s)"),
+    );
+    using database = new DatabaseSync(pathname, { readOnly: true });
+    expect(database.prepare("SELECT count(*) AS count FROM transcript_events").get()).toEqual({
+      count: 3,
+    });
+    expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  });
+});
+
 it("resumes a backed-up pre-change archive migration after interruption without restoring payloads", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     openOpenClawStateDatabase({ env: state.env });
@@ -131,6 +195,7 @@ it("resumes a backed-up pre-change archive migration after interruption without 
     const controller = new AbortController();
     const interruption = new Error("synthetic Doctor interruption");
     const backfill = navigation.backfillSessionColdNavigationInTransaction;
+    const compress = vi.spyOn(resolveZstdCodec(), "compress");
     const observed = vi
       .spyOn(navigation, "backfillSessionColdNavigationInTransaction")
       .mockImplementation((database, archive) => {
@@ -147,8 +212,10 @@ it("resumes a backed-up pre-change archive migration after interruption without 
           deadlineOwnedByCaller: true,
         }),
       ).rejects.toBe(interruption);
+      expect(compress).not.toHaveBeenCalled();
     } finally {
       observed.mockRestore();
+      compress.mockRestore();
     }
     const interrupted = inspect();
     expect(interrupted.events.map((event) => event.session_id)).toEqual(["archive-a"]);

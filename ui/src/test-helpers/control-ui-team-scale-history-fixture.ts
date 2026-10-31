@@ -6,6 +6,14 @@ import type { createTeamScaleDuplicateReadFixture } from "./control-ui-duplicate
 import type { ControlUiMockPresenceUser } from "./control-ui-mock-presence.ts";
 import type { ControlUiSessionFixture } from "./control-ui-session-fixtures.ts";
 
+type TeamScaleHistoryContent =
+  | { type: "text"; text: string }
+  | ({ type: "image"; mimeType: string; fileName: string } & (
+      | { artifactId: string }
+      | { url: string }
+    ))
+  | ReturnType<typeof createTeamScaleDuplicateReadFixture>["attachments"][number];
+
 export type TeamScaleFixtureAsset = {
   body: string | Buffer;
   contentType: string;
@@ -132,7 +140,7 @@ export function createTeamScaleHistoryFixture(options: {
     content: [
       ...(options.attachments && index === options.messageCount - 1 ? options.attachments : []),
       ...(lateRowFacts && index === options.messageCount - 1
-        ? [
+        ? ([
             {
               type: "image",
               artifactId: lateRowFacts.artifactId,
@@ -145,7 +153,7 @@ export function createTeamScaleHistoryFixture(options: {
               mimeType: "image/png",
               fileName: "Synthetic cacheable thumbnail.png",
             },
-          ]
+          ] satisfies TeamScaleHistoryContent[])
         : []),
       {
         type: "text",
@@ -169,7 +177,7 @@ export function createTeamScaleHistoryFixture(options: {
             : []),
         ].join("\n\n"),
       },
-    ],
+    ] satisfies TeamScaleHistoryContent[],
   }));
   if (options.rowFacts) {
     const tail = historyMessages.slice(-3);

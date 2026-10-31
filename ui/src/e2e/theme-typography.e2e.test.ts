@@ -282,11 +282,12 @@ suite.define(() => {
     };
     const palette = await page.evaluate(resolveRenderedColors, {
       page: "#f4f4f4",
-      chat: "#f8f8f8",
+      canvas: "#f8f8f8",
     });
     const pageColor = palette.page!;
-    const chatColor = palette.chat!;
-    await expectChrome(chatColor);
+    const canvasColor = palette.canvas!;
+    // The session workbench paints the page surface over the shell canvas.
+    await expectChrome(pageColor);
 
     // Use the shell's actual shortcut and browser history without rebuilding the runtime.
     await page.locator('.shell-skip-link[href="#control-ui-main"]').focus();
@@ -295,17 +296,17 @@ suite.define(() => {
     await expectChrome(pageColor);
     await page.goBack();
     await page.locator(".agent-chat__composer-combobox textarea").waitFor();
-    await expectChrome(chatColor);
+    await expectChrome(pageColor);
     await navigationDrawerToggle(page).click();
     await page.locator("openclaw-app-sidebar .sidebar-rail .sidebar-new-session").click();
     await page.locator(".new-session-page__message").waitFor();
-    await expectChrome(chatColor);
+    await expectChrome(canvasColor);
 
     for (const [width, height, color] of [
       [1280, 900, pageColor],
-      [900, 450, chatColor],
+      [900, 450, canvasColor],
       [900, 900, pageColor],
-      [720, 900, chatColor],
+      [720, 900, canvasColor],
     ] as const) {
       await page.setViewportSize({ width, height });
       await expectChrome(color);
@@ -338,18 +339,18 @@ suite.define(() => {
       reconnected: reconnect.reconnected,
     });
     expect({ ...reconnectedColors, sameShell: reconnect.sameShell }).toEqual({
-      removed: chatColor,
-      reconnected: chatColor,
+      removed: canvasColor,
+      reconnected: canvasColor,
       sameShell: true,
     });
-    await expectChrome(chatColor);
+    await expectChrome(canvasColor);
     await page.locator('.shell-skip-link[href="#control-ui-main"]').focus();
     await page.keyboard.press("ControlOrMeta+Shift+,");
     await waitForControlUiRoute(page, { pathname: "/settings/appearance", routeId: "appearance" });
     await expectChrome(pageColor);
     await page.goBack();
     await page.locator(".new-session-page__message").waitFor();
-    await expectChrome(chatColor);
+    await expectChrome(canvasColor);
   });
 
   it("publishes a runtime palette only when its colors are ready and ignores superseded loads", async () => {
@@ -380,7 +381,6 @@ suite.define(() => {
     const palette = await page.evaluate(resolveRenderedColors, {
       knot: "#f0f0f3",
       tide: "#edeff1",
-      tideContent: "#f1f3f5",
     });
     try {
       const request = page.waitForRequest(tidePaletteUrl);
@@ -411,7 +411,7 @@ suite.define(() => {
         chrome:
           (await page.locator('meta[name="theme-color"]').first().getAttribute("content")) ?? "",
       });
-      expect(chromeColors.chrome).toEqual(palette.tideContent);
+      expect(chromeColors.chrome).toEqual(palette.tide);
       await changeTheme("claw");
       await expectTheme(page, "light");
     } finally {

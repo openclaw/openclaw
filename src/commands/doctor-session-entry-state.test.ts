@@ -4,6 +4,8 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { readSessionEntryCount } from "../config/sessions/session-accessor.sqlite-entry-inventory.js";
 import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.sqlite-exact-read.js";
+import { runSessionStartupMigration } from "../config/sessions/startup-migration-runtime.js";
+import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { createSessionSqliteMigrationRun } from "../infra/session-sqlite-migration-manifest.js";
 import type { SqlConnection } from "../infra/sql-connection.js";
@@ -148,6 +150,130 @@ function snapshotReplacement(legacy: ReturnType<typeof seedEntry>) {
     })
     .then(() => targetPath);
 }
+
+it("backs up and retires terminal unmatched restart custody only in Doctor", async () => {
+  const custody = {
+    mainRestartRecovery: {
+      cycleId: "old-cycle",
+      revision: 1,
+      chargedAttempts: 3,
+      executionIdentity: { runId: "tombstone-run" },
+      tombstone: { reason: "exhausted" },
+    },
+    restartRecoveryRuns: [{ runId: "different-run", lifecycleGeneration: "old-generation" }],
+    restartRecoveryTerminalRunIds: ["different-terminal-run"],
+    restartRecoveryForceSafeTools: true,
+    activeWriterRunId: "different-writer",
+    lifecycleRunId: "different-lifecycle",
+  };
+  const archived = seedEntry("terminal-unmatched", {
+    ...custody,
+    status: "failed",
+    archivedAt: 1,
+    archiveReason: "restart-recovery",
+    archivedBy: { type: "human", id: "archiver" },
+    pendingFinalDelivery: {
+      kind: "replayable",
+      createdAt: 1,
+      text: "old final",
+      context: { channel: "telegram", to: "synthetic-recipient" },
+    },
+  });
+  const live = seedEntry("live-unmatched", {
+    ...custody,
+    status: "failed",
+    activeWriterRunId: "live-writer",
+  });
+  const nonterminal = seedEntry("nonterminal-unmatched", { ...custody, status: "interrupted" });
+  const notice = {
+    createdAt: 1,
+    context: { channel: "telegram", to: "synthetic-recipient" },
+    intentId: "retained",
+    state: "acknowledged",
+  };
+  const terminal = seedEntry("done-unmatched", {
+    ...custody,
+    status: "done",
+    pendingDeliveryNotice: notice,
+  });
+  const matched = seedEntry("matched", {
+    mainRestartRecovery: {
+      cycleId: "matched-cycle",
+      executionIdentity: { runId: "matched-run" },
+      tombstone: { reason: "exhausted" },
+    },
+    restartRecoveryRuns: [{ runId: "matched-run" }],
+    status: "failed",
+  });
+  const claim = claimAgentRunContext(
+    "live-writer",
+    { sessionKey: live.sessionKey },
+    { trackOwner: true, ownsContext: true },
+  );
+  try {
+    expect(await applyRepair()).toMatchObject({ found: 3, repaired: 3 });
+    expect(live.readRaw()).toBe(live.raw);
+  } finally {
+    releaseAgentRunContext("live-writer", claim);
+  }
+  expect(matched.read()).toMatchObject({
+    status: "interrupted",
+    resumeAfterRestart: { queuedInputIds: [] },
+  });
+  expect(archived.read()).toEqual({
+    sessionId: "session-terminal-unmatched",
+    updatedAt: 42,
+    delivery: { kind: "none" },
+    status: "failed",
+    archivedAt: 1,
+    archiveReason: "restart-recovery",
+    archivedBy: { type: "human", id: "archiver" },
+    activeWriterRunId: "different-writer",
+    lifecycleRunId: "different-lifecycle",
+    lastRunError: expect.stringContaining("unknown outcome"),
+  });
+  expect(terminal.read()).toEqual({
+    sessionId: "session-done-unmatched",
+    updatedAt: 42,
+    delivery: { kind: "none" },
+    status: "done",
+    pendingDeliveryNotice: notice,
+    activeWriterRunId: "different-writer",
+    lifecycleRunId: "different-lifecycle",
+  });
+  expect(nonterminal.readRaw()).toBe(nonterminal.raw);
+  using backup = readBackup(archived.databasePath);
+  expect(archived.readStored(backup)).toBe(archived.raw);
+});
+
+it("aggregates startup guidance for terminal unmatched custody without retiring it", async () => {
+  const fields = {
+    status: "failed",
+    mainRestartRecovery: { cycleId: "old", tombstone: { reason: "exhausted" } },
+    restartRecoveryTerminalRunIds: ["unmatched"],
+  };
+  const first = seedEntry("startup-first", {
+    ...fields,
+    pendingFinalDelivery: true,
+    pendingFinalDeliveryText: "Unsent final",
+  });
+  const second = seedEntry("startup-second", fields);
+  const warnings: string[] = [];
+  await runSessionStartupMigration({
+    cfg: {},
+    env: state.env,
+    log: { info: () => {}, warn: (message) => warnings.push(message) },
+  });
+  expect(warnings).toEqual([expect.stringMatching(/main.*2.*openclaw doctor --fix/)]);
+  expect(first.read()).toEqual({
+    ...fields,
+    sessionId: "session-startup-first",
+    updatedAt: 42,
+    delivery: { kind: "none" },
+    pendingFinalDelivery: { kind: "replayable", text: "Unsent final", createdAt: 42 },
+  });
+  expect(second.readRaw()).toBe(second.raw);
+});
 
 it("closes a captured session inspection reader before removing its private snapshot", async () => {
   const legacy = seedEntry("captured-inspection", { pendingFinalDelivery: true });

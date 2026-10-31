@@ -1,5 +1,6 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveProviderAuthScope } from "../plugins/provider-auth-scope.js";
 import {
   prepareProviderSyntheticAuthWithPlugin,
   resolveProviderSyntheticAuthWithPlugin,
@@ -21,7 +22,7 @@ import {
   resolveProviderEnvAuthLookupMaps,
 } from "./model-auth-env-vars.js";
 import { resolveEnvApiKey } from "./model-auth-env.js";
-import { isProviderAuthError } from "./model-auth-runtime-shared.js";
+import { runProviderIsolated, runProviderIsolatedSync } from "./provider-failure-isolation.js";
 
 type AgentDiscoveryAuthLookupOptions = {
   config?: OpenClawConfig;
@@ -137,11 +138,19 @@ function syntheticAuthParams(options: AgentDiscoveryAuthLookupOptions, provider:
 }
 
 /**
- * A plugin-owned provider without a live credential is unavailable for discovery;
- * catalog availability reports it per model, so it must not fail the other providers.
+ * Plugin-owned credentials are instance-bound: they resolve only inside the owning plugin's
+ * request scope and must never become transferable discovery facts. Catalog availability
+ * resolves them per model in that scope.
  */
-function isUnavailablePluginOwnedAuth(error: unknown, provider: string): boolean {
-  return isProviderAuthError(error, "missing-provider-auth") && error.provider === provider;
+function isPluginOwnedProvider(options: AgentDiscoveryAuthLookupOptions, provider: string) {
+  return (
+    resolveProviderAuthScope({
+      provider,
+      config: options.config,
+      env: options.env,
+      workspaceDir: options.workspaceDir,
+    }) === "plugin"
+  );
 }
 
 function addSyntheticCredential(
@@ -165,17 +174,15 @@ export function resolveAmbientAgentCredentialsForDiscovery(
 ): AgentCredentialMap {
   const { credentials, providers } = resolveAmbientCredentialInputs(options);
   for (const provider of providers) {
-    let resolved: SyntheticAuth;
-    try {
-      resolved = options.resolveSyntheticAuth
-        ? options.resolveSyntheticAuth(provider)
-        : resolveProviderSyntheticAuthWithPlugin(syntheticAuthParams(options, provider));
-    } catch (error) {
-      if (isUnavailablePluginOwnedAuth(error, provider)) {
-        continue;
-      }
-      throw error;
-    }
+    const resolved = runProviderIsolatedSync(
+      { providerIds: [provider], stage: "synthetic auth" },
+      () =>
+        isPluginOwnedProvider(options, provider)
+          ? undefined
+          : options.resolveSyntheticAuth
+            ? options.resolveSyntheticAuth(provider)
+            : resolveProviderSyntheticAuthWithPlugin(syntheticAuthParams(options, provider)),
+    );
     addSyntheticCredential(credentials, provider, resolved);
   }
   return credentials;
@@ -192,21 +199,19 @@ export async function prepareAmbientAgentCredentialsForDiscovery(
   const { credentials, providers } = resolveAmbientCredentialInputs(options);
   for (const provider of providers) {
     options.signal?.throwIfAborted();
-    let resolved: SyntheticAuth;
-    try {
-      resolved = options.resolveSyntheticAuth
-        ? await options.resolveSyntheticAuth(provider)
-        : await prepareProviderSyntheticAuthWithPlugin({
-            ...syntheticAuthParams(options, provider),
-            signal: options.signal,
-            preparationOwner: options.preparationOwner,
-          });
-    } catch (error) {
-      if (isUnavailablePluginOwnedAuth(error, provider)) {
-        continue;
-      }
-      throw error;
-    }
+    const resolved = await runProviderIsolated(
+      { providerIds: [provider], stage: "synthetic auth", signal: options.signal },
+      async () =>
+        isPluginOwnedProvider(options, provider)
+          ? undefined
+          : options.resolveSyntheticAuth
+            ? await options.resolveSyntheticAuth(provider)
+            : await prepareProviderSyntheticAuthWithPlugin({
+                ...syntheticAuthParams(options, provider),
+                signal: options.signal,
+                preparationOwner: options.preparationOwner,
+              }),
+    );
     options.signal?.throwIfAborted();
     addSyntheticCredential(credentials, provider, resolved);
   }

@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { i18n } from "../../i18n/index.ts";
 import type { PluginsInspectResult } from "../../lib/plugins/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
@@ -15,6 +16,11 @@ import {
   resetPluginsPageTestState,
 } from "./plugins-page.test-support.ts";
 
+vi.mock("../../components/confirm-dialog.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../components/confirm-dialog.ts")>()),
+  showConfirmDialog: vi.fn(),
+}));
+
 beforeEach(async () => {
   await i18n.setLocale("en");
   vi.spyOn(window, "open").mockReturnValue(null);
@@ -27,6 +33,10 @@ const accountButton = (page: ParentNode) =>
   page.querySelector<HTMLButtonElement>(
     '.plugin-capabilities [aria-label="Sign in to workboard-mcp"]',
   );
+const signOutButton = (page: ParentNode) =>
+  page.querySelector<HTMLButtonElement>(
+    '.plugin-capabilities [aria-label="Sign out of workboard-mcp"]',
+  );
 const heroSignIn = (page: ParentNode) =>
   page.querySelector<HTMLButtonElement>(".plugin-catalog-detail__sign-in");
 async function setup(handlers: Record<string, () => unknown>, advertiseMcpLogin = true) {
@@ -37,6 +47,7 @@ async function setup(handlers: Record<string, () => unknown>, advertiseMcpLogin 
       hello: gatewayHelloForMethods([
         ...(gateway.snapshot.hello?.features?.methods ?? []),
         "mcp.authLogin",
+        "mcp.authLogout",
       ]),
     });
   }
@@ -78,7 +89,7 @@ it("shows configured credentials and opens existing Settings", async () => {
 it("starts the server's existing OAuth flow and waits for authoritative status after completion", async () => {
   const refreshed = createDeferred<PluginsInspectResult>();
   let completed = false;
-  const { page, context, calls, waitForCall } = await setup({
+  const { page, calls, waitForCall } = await setup({
     "plugins.inspect": () =>
       completed ? refreshed.promise : inspectionWithAuth("requires-authorization"),
     "mcp.authLogin": () => {
@@ -102,8 +113,69 @@ it("starts the server's existing OAuth flow and waits for authoritative status a
   await waitForSolid(() => expect(accountButton(page)).toBeNull());
   expect(heroSignIn(page)).toBeNull();
   expect(page.querySelector(".plugin-capabilities")?.textContent).toContain("Connected");
-  page.querySelector<HTMLButtonElement>('[aria-label="Edit workboard-mcp connection"]')!.click();
-  expect(context.navigate).toHaveBeenCalledWith("mcp");
+  expect(signOutButton(page)?.textContent?.trim()).toBe("Sign out");
+});
+
+it("signs out after confirmation and shows the account as signed out again", async () => {
+  let signedOut = false;
+  const confirmation = createDeferred<boolean>();
+  vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
+  const { page, calls, waitForCall } = await setup({
+    "plugins.inspect": () => inspectionWithAuth(signedOut ? "unauthenticated" : "authorized"),
+    "mcp.authLogout": () => {
+      signedOut = true;
+      return { serverName: "workboard-mcp" };
+    },
+  });
+  signOutButton(page)!.click();
+  await waitForSolid(() => expect(showConfirmDialog).toHaveBeenCalledTimes(1));
+  expect(vi.mocked(showConfirmDialog).mock.calls[0]?.[0]).toMatchObject({
+    title: "Sign out of Workboard?",
+    danger: true,
+  });
+  // The account stays connected until the operator confirms.
+  expect(calls("mcp.authLogout")).toHaveLength(0);
+  confirmation.resolve(true);
+  await waitForCall("mcp.authLogout");
+  expect(calls("mcp.authLogout")[0]?.[1]).toEqual({ serverName: "workboard-mcp" });
+  await waitForSolid(() => expect(accountButton(page)?.textContent?.trim()).toBe("Sign in"));
+  expect(signOutButton(page)).toBeNull();
+  expect(heroSignIn(page)).not.toBeNull();
+});
+
+it("reports a confirmation that cannot open and keeps the account connected", async () => {
+  vi.mocked(showConfirmDialog).mockRejectedValueOnce(new Error("chunk failed to load"));
+  const { page, calls } = await setup({
+    "plugins.inspect": () => inspectionWithAuth("authorized"),
+    "mcp.authLogout": () => ({ serverName: "workboard-mcp" }),
+  });
+  signOutButton(page)!.click();
+  await waitForSolid(() =>
+    expect(page.querySelector('[role="alert"]')?.textContent).toContain(
+      "Sign-out could not open. Your account is still connected; try again.",
+    ),
+  );
+  expect(calls("mcp.authLogout")).toHaveLength(0);
+  expect(signOutButton(page)?.disabled).toBe(false);
+});
+
+it("keeps the account connected and shows the error when sign-out fails", async () => {
+  vi.mocked(showConfirmDialog).mockResolvedValueOnce(true);
+  const { page, calls, waitForCall } = await setup({
+    "plugins.inspect": () => inspectionWithAuth("authorized"),
+    "mcp.authLogout": () => {
+      throw new Error("Credential store is unavailable.");
+    },
+  });
+  signOutButton(page)!.click();
+  await waitForCall("mcp.authLogout");
+  await waitForSolid(() =>
+    expect(page.querySelector('[role="alert"]')?.textContent).toContain(
+      "Credential store is unavailable.",
+    ),
+  );
+  await waitForSolid(() => expect(calls("plugins.inspect")).toHaveLength(2));
+  expect(signOutButton(page)?.disabled).toBe(false);
 });
 
 it("disables Sign in and refuses sign-in when the gateway does not advertise MCP OAuth", async () => {
