@@ -17,12 +17,12 @@ import {
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sleep } from "openclaw/plugin-sdk/text-utility-runtime";
-import { snapshotApiCredentials, type ZaloCredentialPayload } from "./credential-persistence.js";
+import type { ZaloCredentialPayload } from "./credential-persistence.js";
 import { buildZaloNameIndex } from "./directory-index.js";
 import { normalizeZaloReactionIcon } from "./reaction.js";
 import { sendZaloTextWithApi } from "./send-api.js";
-import { withZaloSendContext } from "./send-context.js";
 import { createZalouserSendReceipt } from "./send-receipt.js";
+import { withZaloApi, type CredentialPersistenceOptions } from "./session-api.js";
 import {
   getZaloSessionState,
   invalidateApi,
@@ -30,10 +30,8 @@ import {
   type ActiveZaloQrLogin,
 } from "./session-runtime.js";
 import {
-  captureZalouserCredentialsEnv,
   loadStoredZaloCredentials,
   normalizeZalouserCredentialProfile as normalizeProfile,
-  refreshStoredZaloCredentials,
 } from "./session-state.js";
 import type {
   ZaloAuthStatus,
@@ -43,7 +41,6 @@ import type {
   ZaloGroupMember,
   ZaloInboundMessage,
   ZaloSendOptions,
-  ZaloSendHandoff,
   ZcaFriend,
   ZcaUserInfo,
 } from "./types.js";
@@ -57,7 +54,6 @@ import {
 } from "./zca-client.js";
 import { LoginQRCallbackEventType, ThreadType } from "./zca-constants.js";
 
-const API_LOGIN_TIMEOUT_MS = 20_000;
 const QR_LOGIN_TTL_MS = 3 * 60_000;
 const DEFAULT_QR_START_TIMEOUT_MS = 30_000;
 const DEFAULT_QR_WAIT_TIMEOUT_MS = 120_000;
@@ -67,9 +63,6 @@ const LISTENER_WATCHDOG_MAX_GAP_MS = 35_000;
 const LISTENER_HANDSHAKE_TIMEOUT_MS = 30_000;
 const ZALO_TIMESTAMP_MS_THRESHOLD = 1_000_000_000_000;
 const MAX_SAFE_ZALO_TIMESTAMP_SECONDS = Number.MAX_SAFE_INTEGER / 1000;
-
-type CredentialPersistenceMode = "persist" | "read-only";
-type CredentialPersistenceOptions = { credentialPersistence?: CredentialPersistenceMode };
 
 type AccountInfoResponse = Awaited<ReturnType<API["fetchAccountInfo"]>>;
 
@@ -334,96 +327,6 @@ function mapGroup(groupId: string, group: GroupInfo): ZaloGroup {
   };
 }
 
-async function ensureApi(
-  profile: string,
-  timeoutMs = API_LOGIN_TIMEOUT_MS,
-  credentialPersistence: CredentialPersistenceMode = "persist",
-): Promise<API> {
-  const { apiByProfile, apiInitByProfile, credentials } = getZaloSessionState();
-  const env = captureZalouserCredentialsEnv();
-  const pendingRevocation = credentials.pendingRevocation(profile);
-  if (pendingRevocation) {
-    await pendingRevocation;
-  }
-  const cached = apiByProfile.get(profile);
-  if (cached) {
-    return cached;
-  }
-
-  const pending = apiInitByProfile.get(profile);
-  if (pending) {
-    return await pending;
-  }
-
-  const initPromise: Promise<API> = (async () => {
-    const isCurrent = () => apiInitByProfile.get(profile) === initPromise;
-    const stored = await loadStoredZaloCredentials(profile, env).catch(() => null);
-    if (!stored || !isCurrent()) {
-      throw new Error(`No saved Zalo session for profile "${profile}"`);
-    }
-    const zalo = await createZalo();
-    const api = await withTimeout(
-      zalo.login({
-        imei: stored.imei,
-        cookie: stored.cookie,
-        userAgent: stored.userAgent,
-        language: stored.language,
-      }),
-      timeoutMs,
-      { message: `Timed out restoring Zalo session for profile "${profile}"` },
-    );
-    const persisted =
-      credentialPersistence === "persist"
-        ? await refreshStoredZaloCredentials(
-            profile,
-            snapshotApiCredentials(api, stored),
-            isCurrent,
-            env,
-          )
-        : stored;
-    if (!isCurrent() || !persisted) {
-      throw new Error(`Zalo session restore was superseded for profile "${profile}"`);
-    }
-    credentials.rememberCredentials(profile, persisted);
-    apiByProfile.set(profile, api);
-    return api;
-  })();
-
-  apiInitByProfile.set(profile, initPromise);
-  try {
-    return await initPromise;
-  } finally {
-    if (apiInitByProfile.get(profile) === initPromise) {
-      apiInitByProfile.delete(profile);
-    }
-  }
-}
-
-async function withZaloApi<T>(
-  profileInput: string | null | undefined,
-  operation: (api: API) => Promise<T>,
-  options: {
-    timeoutMs?: number;
-    credentialPersistence?: CredentialPersistenceMode;
-    handoff?: ZaloSendHandoff;
-  } = {},
-): Promise<T> {
-  const { credentials } = getZaloSessionState();
-  const profile = normalizeProfile(profileInput);
-  const credentialPersistence = options.credentialPersistence ?? "persist";
-  options.handoff?.signal?.throwIfAborted();
-  options.handoff?.assertDirectAdapterHandoff?.();
-  const api = await ensureApi(profile, options.timeoutMs, credentialPersistence);
-  // Shared profile restoration must not inherit one waiting sender's lifetime.
-  const result = options.handoff
-    ? await withZaloSendContext(options.handoff, () => operation(api))
-    : await operation(api);
-  if (credentialPersistence === "persist") {
-    await credentials.persistApiCredentialsIfChanged(profile, api);
-  }
-  return result;
-}
-
 function isQrLoginFresh(login: ActiveZaloQrLogin): boolean {
   return Date.now() - login.startedAt < QR_LOGIN_TTL_MS;
 }
@@ -522,12 +425,19 @@ export async function checkZaloAuthenticated(
   profileInput?: string | null,
   options?: CredentialPersistenceOptions,
 ): Promise<boolean> {
+  return (await checkZaloLinkState(profileInput, options)) === "linked";
+}
+
+export async function checkZaloLinkState(
+  profileInput?: string | null,
+  options?: CredentialPersistenceOptions,
+): Promise<"linked" | "not-linked" | "unknown"> {
   const { apiByProfile } = getZaloSessionState();
   const profile = normalizeProfile(profileInput);
-  if (!(await loadStoredZaloCredentials(profile).catch(() => null))) {
-    return false;
-  }
   try {
+    if (!(await loadStoredZaloCredentials(profile))) {
+      return "not-linked";
+    }
     await withZaloApi(
       profile,
       async (api) => {
@@ -547,9 +457,11 @@ export async function checkZaloAuthenticated(
         credentialPersistence: options?.credentialPersistence ?? "persist",
       },
     );
-    return true;
+    return "linked";
   } catch {
-    return false;
+    // A failed session probe does not establish logout. Keep the account
+    // eligible for health-monitor recovery after a transient provider failure.
+    return "unknown";
   }
 }
 
