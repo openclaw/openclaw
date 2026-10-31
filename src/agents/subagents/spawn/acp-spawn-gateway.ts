@@ -13,6 +13,8 @@ export async function launchAcpChildThroughGateway(params: {
   attachments?: unknown[];
   childIdem: string;
   deliveryPlan: AcpSpawnBootstrapDeliveryPlan;
+  expectedExistingSessionId?: string;
+  expectedExistingSessionLifecycleRevision?: string | null;
   label?: string;
   lineage: Parameters<typeof buildSubagentExecutionSessionSpawnContext>[0];
   parentExecutionIdentityToken?: ExecutionIdentityAdmissionToken;
@@ -41,6 +43,10 @@ export async function launchAcpChildThroughGateway(params: {
           timeout: params.runTimeoutSeconds,
           label: params.label || undefined,
           ...(params.attachments ? { attachments: params.attachments } : {}),
+          // Bind the delayed dispatch to the child incarnation this spawn
+          // provisioned so an operator reset or recreate rejects stale work.
+          expectedExistingSessionId: params.expectedExistingSessionId,
+          expectedExistingSessionLifecycleRevision: params.expectedExistingSessionLifecycleRevision,
         },
         timeoutMs: 10_000,
       },

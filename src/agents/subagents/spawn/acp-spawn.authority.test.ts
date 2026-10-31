@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../../test/helpers/promise.js";
 import * as acpManager from "../../../acp/control-plane/manager.js";
 import { disposeAcpSessionManagerInstance } from "../../../acp/control-plane/manager.lifecycle.js";
 import { SessionActorQueue } from "../../../acp/control-plane/session-actor-queue.js";
@@ -33,8 +37,11 @@ import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cl
 import * as admissionContext from "../../admitted-run-context.js";
 import { copyAgentToolMetadata } from "../../agent-tool-metadata.js";
 import { finalizeAgentTools } from "../../agent-tools.finalize.js";
+import { refreshPreparedModelRuntimeSnapshots } from "../../prepared-model-runtime.js";
+import { resetPreparedModelRuntimeSnapshotsForTest } from "../../prepared-model-runtime.test-support.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import * as gatewayCaller from "../../tools/gateway-caller-context.js";
+import { callInProcessGatewayTool } from "../../tools/in-process-gateway.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import * as registryPersistence from "../registry/subagent-registry.persistence.test-support.js";
@@ -567,3 +574,352 @@ it.each(["disabled", "disabled at the initial write"])(
     expect(sessionAccessor.loadSessionEntry(parentScope)).toEqual(before);
   },
 );
+type ExpectedSessionDispatchFixture = Awaited<
+  ReturnType<typeof createExpectedSessionDispatchFixture>
+>;
+
+async function createExpectedSessionDispatchFixture() {
+  const cfg = configRuntime.getRuntimeConfig();
+  const storePath = await registryPersistence.writeSubagentSessionEntry({
+    stateDir,
+    ...parentScope,
+    defaultSessionId: "parent-session",
+  });
+  const context = await withLocalGatewayRequestScope(
+    { deps: {} as CliDeps, getRuntimeConfig: () => cfg },
+    () => gatewayScope.getPluginRuntimeGatewayRequestScope()!.context!,
+  );
+  const requestScope = {
+    context,
+    resolveGatewayContext: context.resolveGatewayContext,
+    isWebchatConnect: () => false,
+  };
+  const work = new AsyncWorkScope();
+  const trackExecution = context.trackExecution;
+  context.trackExecution = (run) => work.track(() => trackExecution(run));
+  const admission = admissionContext.prepareSystemAgentRunAdmission(
+    cfg,
+    parentRunId,
+    "main",
+    "acp-expected-session-test",
+  );
+  const parent = gatewayScope.withPluginRuntimeGatewayRequestScope(requestScope, () =>
+    registerChatAbortController({
+      target: captureSessionTarget({
+        storeScope: storePath,
+        sessionKey: parentSessionKey,
+        incarnation: "parent-session",
+        agentId: "main",
+      }),
+      runId: parentRunId,
+      ...parentScope,
+      sessionId: "parent-session",
+      ownerConnId: "owner-connection",
+      timeoutMs: 60_000,
+      operationalRunInstance: admission.operationalRunInstance,
+    }),
+  );
+  const admitted = await admission.admit("embedded");
+  gatewayScope.bindGatewayContextResolver(admitted, context.resolveGatewayContext);
+  parent.bindAgentRunDelegatedAuthority(
+    admissionContext.getAdmittedRunDelegatedAuthority(admitted)!,
+  );
+  const caller = gatewayCaller.createAdmittedGatewayToolCallerIdentity({
+    ...parentScope,
+    admittedRunContext: admitted,
+    requesterOrigin: {
+      sessionKey: parentSessionKey,
+      operatorProfileId: "selected-user",
+      delegatedCreatorProfileId: "causal-human",
+    },
+  });
+  if (!caller) {
+    throw new Error("Expected an admitted Gateway tool caller identity");
+  }
+  // Lifecycle mutations run under the same admitted caller that owns the spawn.
+  const runInCallerScope = <T>(run: () => T) =>
+    gatewayScope.withPluginRuntimeGatewayRequestScope(requestScope, () =>
+      gatewayCaller.withGatewayToolCallerIdentity(caller, run),
+    );
+  return { cfg, storePath, context, parent, admission, admitted, work, runInCallerScope };
+}
+
+function readExpectedSessionChild(sessionKey: string) {
+  return sessionAccessor.loadSessionEntry({ sessionKey, agentId: "fixture" });
+}
+
+function createExpectedSessionSpawnTool(cfg: ExpectedSessionDispatchFixture["cfg"]) {
+  return createSessionsSpawnTool({
+    config: cfg,
+    agentSessionKey: parentSessionKey,
+    senderIsOwner: true,
+    gitContributorProfileId: "human-contributor",
+    expectedParentSessionId: "parent-session",
+    requesterRunId: parentRunId,
+    requesterTurnRunId: parentRunId,
+  });
+}
+
+it.each(["reset", "delete and recreate"] as const)(
+  "rejects a held ACP spawn dispatch after the child lifecycle owner applies %s",
+  async (mutation) => {
+    const fixture = await createExpectedSessionDispatchFixture();
+    const { cfg, context, parent, admission, work, runInCallerScope } = fixture;
+    let childSessionKey: string | undefined;
+    const ensureSession = vi.fn<AcpRuntime["ensureSession"]>(async (input) => {
+      childSessionKey ??= input.sessionKey;
+      return {
+        sessionKey: input.sessionKey,
+        agentId: input.agentId,
+        backend: backendId,
+        runtimeSessionName: input.sessionKey,
+        backendSessionId: `fixture:${input.sessionKey}`,
+      };
+    });
+    const runTurn = vi.fn<AcpRuntime["runTurn"]>(async function* () {
+      yield { type: "done" as const, status: "completed" as const, stopReason: "end_turn" };
+    });
+    const closeRuntime = vi.fn<AcpRuntime["close"]>(async () => {});
+    const runtime: AcpRuntime = {
+      ownerAwareSessions: 1,
+      ensureSession,
+      runTurn,
+      async cancel() {},
+      close: closeRuntime,
+    };
+    runtimeRegistry.registerAcpRuntimeBackend({ id: backendId, runtime });
+    const dispatchEntered = createDeferred<{
+      expectedExistingSessionId?: string;
+      expectedExistingSessionLifecycleRevision?: string | null;
+    }>();
+    const mutationApplied = createDeferred();
+    let gateHeld = false;
+    let dispatchError: unknown;
+    const createFacade = context.createAgentTurnFacade!;
+    context.createAgentTurnFacade = async (principal) => {
+      const facade = await createFacade(principal);
+      const gatedDispatch = async <T = unknown>(
+        request: Parameters<typeof facade.dispatch>[0],
+        options?: Parameters<typeof facade.dispatch>[1],
+      ): Promise<T> => {
+        if (!gateHeld && request.acpTurnSource === "manual_spawn") {
+          gateHeld = true;
+          dispatchEntered.resolve({
+            expectedExistingSessionId: request.expectedExistingSessionId,
+            expectedExistingSessionLifecycleRevision:
+              request.expectedExistingSessionLifecycleRevision,
+          });
+          // Operator lifecycle work runs while the real dispatch waits for entry.
+          await mutationApplied.promise;
+        }
+        try {
+          return await facade.dispatch<T>(request, options);
+        } catch (error) {
+          dispatchError ??= error;
+          throw error;
+        }
+      };
+      return { ...facade, dispatch: gatedDispatch };
+    };
+    const tool = createExpectedSessionSpawnTool(cfg);
+    const forwarded = runInCallerScope(() =>
+      tool.execute!("expected-session-dispatch", {
+        task: "held child task",
+        runtime: "acp",
+        agentId: "fixture",
+        mode: "run",
+        expectsCompletionMessage: false,
+      }),
+    ).catch((error: unknown) => error);
+    let mutationReleased = false;
+    try {
+      const request = await awaitGateBeforeSettlement(
+        dispatchEntered.promise,
+        forwarded,
+        "ACP spawn settled before its dispatch reached the hold",
+      );
+      if (!childSessionKey) {
+        throw new Error("ACP spawn initialized a runtime without a child session key");
+      }
+      const childKey = childSessionKey;
+      const initialEntry = readExpectedSessionChild(childKey);
+      if (!initialEntry) {
+        throw new Error("ACP spawn committed no child session entry before dispatch");
+      }
+      // The dispatched work is bound to the exact child incarnation the spawn created.
+      expect(request.expectedExistingSessionId).toBe(initialEntry.sessionId);
+      expect(request.expectedExistingSessionLifecycleRevision).toBe(
+        initialEntry.lifecycleRevision ?? null,
+      );
+      let successorEntry: typeof initialEntry;
+      let successorHandle:
+        | Awaited<
+            ReturnType<ReturnType<typeof acpManager.getAcpSessionManager>["initializeSession"]>
+          >["handle"]
+        | undefined;
+      if (mutation === "reset") {
+        const reset = await runInCallerScope(() =>
+          callInProcessGatewayTool("sessions.reset", { key: childKey, agentId: "fixture" }),
+        );
+        expect(reset).toMatchObject({ ok: true });
+        const resetEntry = readExpectedSessionChild(childKey);
+        if (!resetEntry) {
+          throw new Error("Lifecycle reset left no successor session");
+        }
+        expect(resetEntry.sessionId).toBe(initialEntry.sessionId);
+        expect(resetEntry.lifecycleRevision).not.toBe(initialEntry.lifecycleRevision);
+        successorEntry = resetEntry;
+      } else {
+        const deleted = await runInCallerScope(() =>
+          callInProcessGatewayTool("sessions.delete", { key: childKey, agentId: "fixture" }),
+        );
+        expect(deleted).toMatchObject({ ok: true });
+        expect(readExpectedSessionChild(childKey)).toBeUndefined();
+        const successor = await runInCallerScope(() =>
+          acpManager.getAcpSessionManager().initializeSession({
+            cfg,
+            sessionKey: childKey,
+            agentId: "fixture",
+            agent: "fixture",
+            mode: "oneshot",
+            backendId,
+          }),
+        );
+        const recreated = readExpectedSessionChild(childKey);
+        if (!recreated) {
+          throw new Error("Lifecycle recreation left no successor session");
+        }
+        expect(recreated.sessionId).toBe(successor.sessionEntry.sessionId);
+        expect(recreated.sessionId).not.toBe(initialEntry.sessionId);
+        successorEntry = recreated;
+        successorHandle = successor.handle;
+      }
+      // Only effects after the successor committed belong to the stale dispatch's cleanup.
+      closeRuntime.mockClear();
+      ensureSession.mockClear();
+      mutationReleased = true;
+      mutationApplied.resolve();
+      const result = await forwarded;
+      await work.drain();
+      // The stale dispatch never reaches the backend for the successor session.
+      expect(runTurn).not.toHaveBeenCalled();
+      expect(ensureSession).not.toHaveBeenCalled();
+      expect(closeRuntime).not.toHaveBeenCalled();
+      expect(String(dispatchError)).toContain("changed");
+      expect(result).toMatchObject({ details: { status: "error" } });
+      // Failure cleanup cannot replace or clear the operator's successor.
+      expect(readExpectedSessionChild(childKey)).toMatchObject({
+        sessionId: successorEntry.sessionId,
+        lifecycleRevision: successorEntry.lifecycleRevision,
+      });
+      if (successorHandle) {
+        expect(successorHandle.sessionKey).toBe(childKey);
+        expect(
+          acpManager.getAcpSessionManager().getObservabilitySnapshot().runtimeCache,
+        ).toMatchObject({ activeSessions: 1 });
+      }
+    } finally {
+      if (!mutationReleased) {
+        mutationApplied.resolve();
+      }
+      await forwarded;
+      admission.close();
+      parent.cleanup();
+      await work.drain();
+      const projection = getSessionRowProjection(context);
+      projection?.dispose();
+      await projection?.ensureMaterialized();
+    }
+  },
+);
+
+it("accepts the unchanged ACP child and executes its synthetic runtime turn", async ({
+  signal,
+}) => {
+  const fixture = await createExpectedSessionDispatchFixture();
+  const { cfg, context, parent, admission, work, runInCallerScope } = fixture;
+  let childSessionKey: string | undefined;
+  const ensureSession = vi.fn<AcpRuntime["ensureSession"]>(async (input) => {
+    childSessionKey ??= input.sessionKey;
+    return {
+      sessionKey: input.sessionKey,
+      agentId: input.agentId,
+      backend: backendId,
+      runtimeSessionName: input.sessionKey,
+      backendSessionId: `fixture:${input.sessionKey}`,
+    };
+  });
+  const turnStarted = createDeferred();
+  const runTurnInput = vi.fn<(input: Parameters<AcpRuntime["runTurn"]>[0]) => void>();
+  const runTurn = vi.fn<AcpRuntime["runTurn"]>(async function* (input) {
+    runTurnInput(input);
+    turnStarted.resolve();
+    yield { type: "done" as const, status: "completed" as const, stopReason: "end_turn" };
+  });
+  const closeRuntime = vi.fn<AcpRuntime["close"]>(async () => {});
+  const runtime: AcpRuntime = {
+    ownerAwareSessions: 1,
+    ensureSession,
+    runTurn,
+    async cancel() {},
+    close: closeRuntime,
+  };
+  runtimeRegistry.registerAcpRuntimeBackend({ id: backendId, runtime });
+  // The real agent handler admits through the Gateway-published model runtime owner.
+  await refreshPreparedModelRuntimeSnapshots(cfg, {
+    gatewayLifecycle: true,
+    catalogMode: "static",
+    allowGatewaySubagentBinding: true,
+    defaultWorkspaceDir: stateDir,
+  });
+  const tool = createExpectedSessionSpawnTool(cfg);
+  const forwarded = runInCallerScope(() =>
+    tool.execute!("expected-session-unchanged", {
+      task: "held child task",
+      runtime: "acp",
+      agentId: "fixture",
+      mode: "run",
+      expectsCompletionMessage: false,
+    }),
+  ).catch((error: unknown) => error);
+  try {
+    const result = await forwarded;
+    if (!childSessionKey) {
+      throw new Error(
+        `ACP spawn returned no child session key: ${result instanceof Error ? result.message : JSON.stringify(result)}`,
+      );
+    }
+    const childKey = childSessionKey;
+    if ((result as { details?: { status?: unknown } }).details?.status !== "accepted") {
+      throw new Error(`ACP spawn was not accepted: ${JSON.stringify(result)}`);
+    }
+    expect(result).toMatchObject({
+      details: { status: "accepted", childSessionKey: childKey, runId: expect.any(String) },
+    });
+    // Acceptance precedes execution; the synthetic backend turn must still run.
+    await withinTest(turnStarted.promise, signal);
+    // An unchanged child executes on the synthetic ACP backend that owns its handle.
+    expect(runTurn).toHaveBeenCalledOnce();
+    expect(runTurnInput.mock.calls[0]?.[0]).toMatchObject({
+      text: "held child task",
+      mode: "prompt",
+      handle: { sessionKey: childKey },
+    });
+    const childEntry = readExpectedSessionChild(childKey);
+    if (!childEntry) {
+      throw new Error("Accepted ACP child lost its session entry");
+    }
+    await work.drain();
+    // Ordinary execution may advance mutable fields; the child incarnation must stay.
+    expect(readExpectedSessionChild(childKey)?.sessionId).toBe(childEntry.sessionId);
+  } finally {
+    await forwarded;
+    admission.close();
+    parent.cleanup();
+    await work.drain();
+    const projection = getSessionRowProjection(context);
+    projection?.dispose();
+    await projection?.ensureMaterialized();
+    await resetPreparedModelRuntimeSnapshotsForTest();
+  }
+});
