@@ -256,7 +256,7 @@ function listRecentSuccessfulCiRuns(limit) {
 function loadRunJobs(runId, runAttempt = null) {
   const repository = process.env.GITHUB_REPOSITORY || DEFAULT_GITHUB_REPOSITORY;
   const runPath = runAttempt === null ? `runs/${runId}` : `runs/${runId}/attempts/${runAttempt}`;
-  const pages = [];
+  const jobs = [];
   let totalCount = null;
   let requestCount = 0;
   for (let page = 1; page <= RUN_JOBS_MAX_PAGES; page += 1) {
@@ -271,17 +271,14 @@ function loadRunJobs(runId, runAttempt = null) {
         requestCount += 1;
       },
     );
-    pages.push(payload);
-    const jobs = Array.isArray(payload.jobs) ? payload.jobs : [];
+    const pageJobs = collectRunJobsFromPages([payload]);
+    jobs.push(...pageJobs);
     totalCount = typeof payload.total_count === "number" ? payload.total_count : totalCount;
-    if (
-      jobs.length === 0 ||
-      (totalCount !== null && collectRunJobsFromPages(pages).length >= totalCount)
-    ) {
+    if (pageJobs.length === 0 || (totalCount !== null && jobs.length >= totalCount)) {
       break;
     }
   }
-  return { jobs: collectRunJobsFromPages(pages), requestCount };
+  return { jobs, requestCount };
 }
 
 function loadRun(runId) {

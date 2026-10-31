@@ -207,7 +207,9 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
   const updated = createMemo(() =>
     row().updatedAt ? formatRelativeTimestamp(row().updatedAt) : t("common.na"),
   );
-  const isExpanded = () => props.expandedSessionKey === row().key;
+  const isExpanded = createMemo(() => props.expandedSessionKey === row().key);
+  const selectLabel = createMemo(() => t("sessionsView.selectSession"));
+  const menuLabel = createMemo(() => t("chat.sidebar.openSessionMenu"));
   const detailsId = () => `session-details-${encodeURIComponent(row().key)}`;
   const displayName = () => normalizeOptionalString(row().displayName) ?? null;
   const trimmedLabel = () => normalizeOptionalString(row().label) ?? "";
@@ -248,10 +250,11 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
     },
   ];
   // The {count} placeholder predates the drawer redesign; it carries the session title.
-  const detailsToggleLabel = () =>
+  const detailsToggleLabel = createMemo(() =>
     isExpanded()
       ? t("sessionsView.hideSessionDetails", { count: keyCellTitle() })
-      : t("sessionsView.showSessionDetails", { count: keyCellTitle() });
+      : t("sessionsView.showSessionDetails", { count: keyCellTitle() }),
+  );
   const categoryMode = () => props.groupBy === "category";
   // Dropping on a row targets that row's group so the whole section area accepts drops.
   const rowDrop = createMemo(() =>
@@ -311,7 +314,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
             type="checkbox"
             checked={props.selectedKeys.has(row().key)}
             onChange={() => props.onToggleSelect(row().key)}
-            aria-label={`${t("sessionsView.selectSession")}: ${row().key}`}
+            aria-label={`${selectLabel()}: ${row().key}`}
           />
         </td>
         <td class="data-table-key-col">
@@ -385,8 +388,8 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
               ref={(element) => (menuTrigger = element)}
               class="icon-btn"
               type="button"
-              title={t("chat.sidebar.openSessionMenu")}
-              aria-label={`${t("chat.sidebar.openSessionMenu")}: ${row().key}`}
+              title={menuLabel()}
+              aria-label={`${menuLabel()}: ${row().key}`}
               aria-haspopup="menu"
               aria-expanded={props.sessionMenu?.key === row().key ? "true" : "false"}
               onClick={(event) => {

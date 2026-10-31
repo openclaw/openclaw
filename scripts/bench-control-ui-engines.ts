@@ -97,9 +97,14 @@ const { values } = parseArgs({
     "observer-origins": { type: "boolean", default: false },
     "cpu-only": { type: "boolean", default: false },
     "cpu-throttle": { type: "string", default: "1" },
+    "memory-soak-rounds": { type: "string", default: "10" },
   },
 });
 const pairs = Number(values.pairs);
+const memorySoakRounds = Number(values["memory-soak-rounds"]);
+if (!Number.isInteger(memorySoakRounds) || memorySoakRounds < 1 || memorySoakRounds > 10) {
+  throw new Error("memory-soak-rounds must be an integer from 1 to 10");
+}
 const pageBenchmark = values.pages || values.steps?.split(",").some((id) => id.startsWith("page-"));
 const pagePhases = values["page-phases"].split(",");
 if (pagePhases.some((phase) => !["visit", "action", "leave"].includes(phase))) {
@@ -306,7 +311,7 @@ try {
       Object.assign(scenario, { explicitOnly: true }),
     ),
     ...createEngineStyleScenarios(),
-    ...createEngineMemoryScenarios(),
+    ...createEngineMemoryScenarios(memorySoakRounds),
     ...createEnginePluginMemoryScenarios(),
     ...createEngineStreamingScenarios(),
     ...createEnginePageScenarios(),
@@ -402,6 +407,7 @@ try {
     observerOrigins: values["observer-origins"],
     cpuOnly: values["cpu-only"],
     cpuThrottle,
+    memorySoakRounds,
     collection: values.trace
       ? "Playwright tracing and engine Inspector/Profiler; overhead included"
       : values["cpu-only"]

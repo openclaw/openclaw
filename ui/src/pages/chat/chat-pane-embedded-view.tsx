@@ -359,7 +359,12 @@ function DetailPanel(props: SidebarPanelData) {
 }
 
 function DashboardPanel(props: SidebarPanelData) {
-  return <ChatBoardPanel {...buildChatBoardPanel(props.dashboard!)} />;
+  const provider = createMemo(() => props.dashboard!.board.provider);
+  const widgetFrameUrl = createMemo(() => {
+    const current = provider();
+    return current.widgetFrameUrl.bind(current);
+  });
+  return <ChatBoardPanel {...buildChatBoardPanel(props.dashboard!, widgetFrameUrl())} />;
 }
 
 const embeddedPanels: Partial<

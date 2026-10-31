@@ -921,7 +921,11 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
   },
   cron: {
     ready: ".cron-table__row",
-    rows: { selector: ".cron-table__row", minimum: 50 },
+    rows: {
+      selector: ".cron-table__row",
+      minimum: 50,
+      totalSelector: ".cron-table__row[aria-setsize]",
+    },
     source: requiredScenario(interactionScenarios, "cron-search"),
     action: {
       label: "Filter 500 automations to one match",

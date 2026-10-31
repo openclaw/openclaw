@@ -273,9 +273,10 @@ function SortHeader(
 function SessionsTable(props: SessionsProps & { readRoster: () => RosterOutcome }) {
   const rawRows = createMemo(() => props.result?.sessions ?? []);
   const pageSizeValue = createMemo(() => String(props.pageSize));
+  const sortColumn = createMemo(() => props.sortColumn);
   const direction = createMemo(() => (props.sortDir === "asc" ? 1 : -1));
   const sorted = createMemo(() => {
-    const column = props.sortColumn;
+    const column = sortColumn();
     const sortDirection = direction();
     return rawRows().toSorted((a, b) => {
       const pinnedDiff = (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0);

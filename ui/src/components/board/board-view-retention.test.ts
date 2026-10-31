@@ -94,6 +94,9 @@ describe("openclaw-board-view retention", () => {
       (cell) => cell.widget?.name === "alpha",
     );
     const frame = before?.querySelector("iframe");
+    const card = before!.querySelector<HTMLElement>(".board-widget")!;
+    expect(card.style.gridColumn).toBe("1 / span 6");
+    expect(card.style.gridRow).toBe("1 / span 4");
     const removedNodes: Node[] = [];
     const observer = new MutationObserver((records) => {
       for (const record of records) {
@@ -109,6 +112,8 @@ describe("openclaw-board-view retention", () => {
     const after = cells.find((cell) => cell.widget?.name === "alpha");
     expect(after).toBe(before);
     expect(after?.querySelector("iframe")).toBe(frame);
+    expect(card.style.gridColumn).toBe("7 / span 6");
+    expect(card.style.gridRow).toBe("1 / span 4");
     expect(removedNodes).not.toContain(before);
     expect(after?.querySelector(".board-widget")?.getAttribute("aria-posinset")).toBe("2");
     expect(
@@ -118,6 +123,21 @@ describe("openclaw-board-view retention", () => {
         ?.getAttribute("aria-posinset"),
     ).toBe("1");
     observer.disconnect();
+
+    view.snapshot = applyBoardFixtureOps(view.snapshot!, [
+      { kind: "widget_resize", name: "alpha", sizeW: 12, sizeH: 6, heightMode: "fixed" },
+    ]);
+    await settleCells(view);
+    expect(card.style.gridColumn).toBe("1 / span 12");
+    expect(card.style.gridRow).toBe("5 / span 6");
+    view.activeTabId = "ops";
+    await settleCells(view);
+    view.activeTabId = "main";
+    await settleCells(view);
+    expect(card.style.gridColumn).toBe("1 / span 12");
+    expect(card.style.gridRow).toBe("5 / span 6");
+    expect(before!.hidden).toBe(false);
+    expect(before!.querySelector("iframe")).toBe(frame);
 
     view.snapshot = { ...snapshot(), sessionKey: "agent:main:other-session" };
     const sessionCells = await settleCells(view);

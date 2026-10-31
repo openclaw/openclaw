@@ -51,14 +51,17 @@ async function assertPrepublishRequests(
   const requests = await readRequests(baseUrl);
   const packagePath = `/api/v1/packages/${encodeURIComponent(requestedPackage)}`;
   const versionPath = `${packagePath}/versions/${encodeURIComponent(version)}`;
+  // Installation concludes with a best-effort package detail read. This fixture
+  // intentionally returns 404 for that endpoint but still fences the exact request.
   const expected = [
     `GET ${packagePath}`,
     `GET ${versionPath}/artifact`,
     ...(securityMode === "required" ? [`GET ${versionPath}/security`] : []),
     `GET ${versionPath}/artifact/download`,
+    `GET ${packagePath}/detail`,
   ];
   // Multi-command upgrade recovery can stage an artifact in several convergence
-  // phases. Every request must still belong to a complete authorized audit sequence.
+  // phases. Every request must still belong to a complete authorized install sequence.
   const count = attempts === "complete" ? requests.length / expected.length : Number(attempts);
   if (!Number.isInteger(count) || count < minimumCount || count > 16) {
     throw new Error(`expected ${minimumCount}-16 complete ClawHub artifact audit sequences`);

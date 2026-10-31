@@ -36,6 +36,7 @@ packages/gateway-protocol/src/compiled/protocol.generated/schema-worker-exec-app
 packages/gateway-protocol/src/compiled/protocol.generated/schema-worker-gateway-tool.js
 packages/gateway-protocol/src/compiled/sender-identity.js
 packages/gateway-protocol/src/failover-reasons.ts
+packages/gateway-protocol/src/payload-limits.ts
 packages/gateway-protocol/src/plugin-ui-capabilities.ts
 packages/gateway-protocol/src/protocol-validator.ts
 packages/gateway-protocol/src/protocol-value-normalization.ts
