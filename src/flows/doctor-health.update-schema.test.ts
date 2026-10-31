@@ -187,7 +187,7 @@ it.each([
       expect(readRows(saved)).toEqual(original);
     }
     const captureRoot = resolveUpdateCaptureRoot(state.stateDir);
-    const [capture] = fs.readdirSync(captureRoot).filter((name) => name.startsWith("doctor-"));
+    const capture = fs.readdirSync(captureRoot).find((name) => name.startsWith("doctor-"));
     const directory = path.join(captureRoot, capture!);
     const manifest = parseUpdateRecoveryBackupManifest(
       fs.readFileSync(path.join(directory, "manifest.json"), "utf8"),
