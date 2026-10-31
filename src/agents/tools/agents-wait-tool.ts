@@ -12,6 +12,7 @@ import { createAbortError } from "../../infra/abort-signal.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { markCollectedSessionSpawnsForRun } from "../accepted-session-spawn.js";
 import { resolveSubagentCompletionResultText } from "../subagents/completion/subagent-completion-result.js";
 import { capFrozenResultText } from "../subagents/registry/subagent-registry-helpers.js";
 import { subscribeSubagentRunChanges } from "../subagents/registry/subagent-registry-publication.js";
@@ -471,22 +472,30 @@ export function createAgentsWaitTool(opts: {
         throw new ToolInputError("agents_wait ids must be an array of run id strings.");
       }
       const scope = nativeCollectorOwner.getStore();
-      return jsonResult(
-        await collectNativeSubagentResults({
-          ...params,
-          currentSessionKeys: new Set(
-            [opts.runSessionKey, opts.agentSessionKey].filter((key): key is string =>
-              Boolean(key?.trim()),
-            ),
+      const result = await collectNativeSubagentResults({
+        ...params,
+        currentSessionKeys: new Set(
+          [opts.runSessionKey, opts.agentSessionKey].filter((key): key is string =>
+            Boolean(key?.trim()),
           ),
-          currentAgentId: opts.agentId,
-          config: opts.config,
-          ...(scope?.identity === identity && scope.toolCallId === toolCallId
-            ? scope.owner
-            : undefined),
-          signal,
-        }),
-      );
+        ),
+        currentAgentId: opts.agentId,
+        config: opts.config,
+        ...(scope?.identity === identity && scope.toolCallId === toolCallId
+          ? scope.owner
+          : undefined),
+        signal,
+      });
+      // Every harness executes this tool under its admitted run, so collection is
+      // recorded once on the run's spawn receipts rather than per tool-event adapter.
+      const run = getGatewayToolCallerIdentity()?.operationalRunInstance;
+      if (run) {
+        markCollectedSessionSpawnsForRun(
+          run,
+          result.completed.flatMap((entry) => (entry.status === "done" ? [entry.runId] : [])),
+        );
+      }
+      return jsonResult(result);
     },
   });
 }

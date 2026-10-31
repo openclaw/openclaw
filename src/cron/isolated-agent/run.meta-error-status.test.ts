@@ -136,6 +136,30 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     },
   );
 
+  it("finishes silently after the run collected its only collector child", async () => {
+    const silentPayload = { text: "NO_REPLY" };
+    mockAgentRun({
+      payloads: [silentPayload],
+      meta: { terminalReply: { disposition: "silent" } },
+      acceptedSessionSpawns: [
+        {
+          runId: "run-child",
+          childSessionKey: "agent:default:child",
+          expectsCompletionMessage: false,
+          collected: true,
+        },
+      ],
+    });
+    mockAnnounceOutcome([silentPayload], silentPayload.text, {
+      deliveryDisposition: { kind: "silent" },
+    });
+    const result = await runTurn();
+    expect(harness.dispatchCronDeliveryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ spawnOnlyHandoff: false, skipDelivery: "silent" }),
+    );
+    expectObjectFields(result, { status: "ok", error: undefined });
+  });
+
   it("preserves an empty accepted child handoff failure as a cron error", async () => {
     await useRealOutcome();
     const error = "cron child-session handoff timed out before producing a final assistant payload";
