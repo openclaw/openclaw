@@ -197,7 +197,8 @@ export class SystemAgentChatEngine {
   }
 
   async dispose(): Promise<void> {
-    this.wizard.dispose();
+    // Retirement can outlive a locked commit; fence queued turns after it settles.
+    await this.wizard.dispose().then(() => this.turnQueue);
     await cleanupSystemAgentSession(this.agentSession);
   }
 
@@ -327,7 +328,9 @@ export class SystemAgentChatEngine {
     this.wizard.clearHandoff();
     delete this.agentSession.cliSession;
     if (cancelWizard) {
-      this.wizard.dispose();
+      // This path runs inside a route callback that must throw synchronously; the
+      // caller's own retirement (or the next turn) awaits the settlement.
+      void this.wizard.dispose();
     }
     this.history.splice(0);
     throw new SystemAgentInferenceUnavailableError("conversation", failures, "route-changed");

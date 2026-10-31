@@ -132,7 +132,7 @@ describe("SystemAgentChatEngine runtime", () => {
         assert(assertCurrent, "Hosted channel setup did not retain its live owner assertion");
         expect(assertCurrent).not.toThrow();
         if (ending === "disposed") {
-          host.dispose();
+          void host.dispose();
         } else {
           expect((await host.resolveReply("continue")).configWritten).toBe(true);
         }
@@ -141,10 +141,85 @@ describe("SystemAgentChatEngine runtime", () => {
         await expect(retainedOptions?.beforePersistentEffect?.()).rejects.toThrow();
         expect(prepare).toHaveBeenCalledTimes(preparationCount);
       } finally {
-        host.dispose();
+        void host.dispose();
       }
     },
   );
+
+  it("waits for a locked commit to settle before disposal returns", async () => {
+    const writeStarted = createDeferred();
+    const writeGate = createDeferred();
+    const prepare = vi.fn(async () => {});
+    useSetupConfig({}, "locked-commit-hash");
+    mocks.writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) => {
+      writeStarted.resolve();
+      await writeGate.promise;
+      return hostedConfigFiles.write(config);
+    });
+    useChannelSetup(async (config, prompter) => {
+      await prompter.text({ message: "Waiting for channel login" });
+      return config;
+    });
+    installAudit();
+    const host = new ChatWizardHost({
+      surface: "gateway",
+      beforePersistentApply: prepare,
+    });
+    try {
+      expect((await host.startChannel("zalouser")).text).toContain("Waiting for channel login");
+      const reply = host.resolveReply("continue");
+      // The durable write is in flight: cancellation is locked, so retirement can
+      // only report after that write and the run's own settlement finish.
+      await writeStarted.promise;
+      const disposing = Promise.resolve(host.dispose());
+      // Retirement must still be pending a macrotask later, while the locked write is in flight.
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 25);
+      });
+      expect(host.active).toBe(true);
+      const raced = await Promise.race([
+        disposing.then(() => "settled" as const),
+        Promise.resolve().then(() => "pending" as const),
+      ]);
+      expect(raced).toBe("pending");
+      writeGate.resolve();
+      await disposing;
+      expect(host.active).toBe(false);
+      expect((await reply).configWritten).toBe(true);
+      expect(mocks.writeWizardConfigFile).toHaveBeenCalledTimes(1);
+    } finally {
+      writeGate.resolve();
+      void host.dispose();
+    }
+  });
+
+  it("cancels a run before its commit boundary and writes nothing", async () => {
+    const authorizeEntered = createDeferred();
+    const authorizeGate = createDeferred();
+    useSetupConfig({}, "cancel-before-gate-hash");
+    useConfigWriter();
+    useChannelSetup(async (config, prompter) => {
+      await prompter.text({ message: "Waiting for channel login" });
+      return config;
+    });
+    installAudit();
+    const host = new ChatWizardHost({
+      surface: "gateway",
+      beforePersistentApply: async () => {
+        authorizeEntered.resolve();
+        await authorizeGate.promise;
+      },
+    });
+    expect((await host.startChannel("zalouser")).text).toContain("Waiting for channel login");
+    const reply = host.resolveReply("continue");
+    // Cancel while the last authority check is still awaiting, before the commit lock.
+    await authorizeEntered.promise;
+    const disposing = host.dispose();
+    authorizeGate.resolve();
+    await disposing;
+    expect((await reply).configWritten).toBe(false);
+    expect(mocks.writeWizardConfigFile).not.toHaveBeenCalled();
+  });
 
   it("hosts the real skills setup flow and guards installs plus the final config write", async () => {
     const baseConfig: OpenClawConfig = {
@@ -565,7 +640,7 @@ describe("hosted channel post-write hooks", () => {
       finishHook.resolve();
       await running;
       await setupInstance.dispose();
-      host.dispose();
+      void host.dispose();
     }
   });
 

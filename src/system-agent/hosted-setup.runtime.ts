@@ -47,6 +47,7 @@ export async function runHostedSetup(params: {
   label: string;
   runtime?: RuntimeEnv;
   beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>;
+  lockCancellation?: () => void;
   afterWrite?: import("../config/runtime-snapshot.js").ConfigWriteAfterWrite;
   run: (context: { baseConfig: OpenClawConfig; runtime: RuntimeEnv }) => Promise<
     | {
@@ -74,6 +75,8 @@ export async function runHostedSetup(params: {
         return "kept-current";
       }
       await params.beforePersistentApply(runtime);
+      // Irreversible commit starts here: cancellation cannot win after this point.
+      params.lockCancellation?.();
       const committed = await writeWizardConfigFile(result.nextConfig, {
         allowConfigSizeDrop: false,
         baseHash: snapshot.hash,
@@ -91,12 +94,14 @@ export async function runHostedChannelSetup(
   beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
   runtime?: RuntimeEnv,
   assertPersistentEffectCurrent?: () => void,
+  lockCancellation?: () => void,
 ): Promise<HostedSetupCompletion> {
   const { createChannelSetupHooks, setupChannels } = await import("../flows/channel-setup.js");
   return await runHostedSetup({
     label: "Channel setup",
     runtime,
     beforePersistentApply,
+    lockCancellation,
     run: async ({ baseConfig, runtime: setupRuntime }) => {
       const channelSetup = createChannelSetupHooks({
         runtime: setupRuntime,
@@ -126,6 +131,7 @@ export async function runHostedSkillsSetup(
   prompter: WizardPrompter,
   beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
   runtime?: RuntimeEnv,
+  lockCancellation?: () => void,
 ): Promise<HostedSetupCompletion> {
   const [{ setupSkills }, { resolveSystemAgentOnboardingTarget }] = await Promise.all([
     import("../commands/onboard-skills.js"),
@@ -135,6 +141,7 @@ export async function runHostedSkillsSetup(
     label: "Skills setup",
     runtime,
     beforePersistentApply,
+    lockCancellation,
     run: async ({ baseConfig, runtime: setupRuntime }) => ({
       nextConfig: await setupSkills(
         baseConfig,
@@ -151,12 +158,14 @@ export async function runHostedSearchSetup(
   prompter: WizardPrompter,
   beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
   runtime?: RuntimeEnv,
+  lockCancellation?: () => void,
 ): Promise<HostedSetupCompletion> {
   const { runSearchSetupFlow } = await import("../flows/search-setup.js");
   return await runHostedSetup({
     label: "Web search setup",
     runtime,
     beforePersistentApply,
+    lockCancellation,
     run: async ({ baseConfig, runtime: setupRuntime }) => {
       const result = await runSearchSetupFlow(baseConfig, setupRuntime, prompter, {
         preserveDisabledSearchState: false,
@@ -185,6 +194,7 @@ export async function runHostedGatewaySetup(
   prompter: WizardPrompter,
   beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
   runtime?: RuntimeEnv,
+  lockCancellation?: () => void,
 ): Promise<HostedSetupCompletion> {
   const [{ configureGatewayForSetup }, { resolveQuickstartGatewayDefaults }] = await Promise.all([
     import("../wizard/setup.gateway-config.js"),
@@ -194,6 +204,7 @@ export async function runHostedGatewaySetup(
     label: "Gateway setup",
     runtime,
     beforePersistentApply,
+    lockCancellation,
     afterWrite: GATEWAY_WRITE_POLICY,
     run: async ({ baseConfig }) => {
       requireLocalGateway(baseConfig);
@@ -213,6 +224,7 @@ export async function runHostedMemoryImport(
   prompter: WizardPrompter,
   beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
   onProviderOutcome: (outcome: MemoryImportProviderOutcome) => void,
+  lockCancellation?: () => void,
 ): Promise<HostedMemoryImportOutcome> {
   const [{ readSetupConfigFileSnapshot }, { resolveSystemAgentOnboardingTarget }] =
     await Promise.all([
@@ -246,7 +258,10 @@ export async function runHostedMemoryImport(
     agentId,
     prompter,
     runtime,
-    beforeApply: async () => await beforePersistentApply(runtime),
+    beforeApply: async () => {
+      await beforePersistentApply(runtime);
+      lockCancellation?.();
+    },
     onProviderOutcome,
   });
 }

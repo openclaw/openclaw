@@ -21,6 +21,12 @@ type HostedSetupCompletion = import("./hosted-setup.runtime.js").HostedSetupComp
 type HostedMemoryImportOutcome = import("./hosted-setup.runtime.js").HostedMemoryImportOutcome;
 type HostedWizardRunResult = void | HostedSetupCompletion | HostedMemoryImportOutcome;
 
+type HostedWizardRunHooks = {
+  assertPersistentEffectCurrent: () => void;
+  beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>;
+  lockCancellation: () => void;
+};
+
 type SystemAgentChatReplyAction = "none" | "exit" | "open-tui" | "open-setup";
 
 export type SystemAgentChatReply = {
@@ -271,9 +277,24 @@ export class ChatWizardHost {
     return this.bridge?.step?.sensitive === true;
   }
 
-  dispose(): void {
-    this.bridge?.session.cancel();
-    this.bridge = null;
+  /**
+   * Retire this bridge generation. Cancelling is not a fence by itself: a hosted
+   * run already past its last checkpoint keeps committing, so retirement also
+   * waits for that run to stop mutating setup state.
+   */
+  async dispose(): Promise<void> {
+    const session = this.bridge?.session;
+    if (!session) {
+      return;
+    }
+    // A locked commit keeps running; the bridge must stay authoritative until it
+    // settles, or the in-flight run loses its own pre-effect checks.
+    session.cancel();
+    await session.whenSettled();
+    // Retire only the generation being disposed; a replacement bridge keeps its session.
+    if (this.bridge?.session === session) {
+      this.bridge = null;
+    }
   }
 
   clearHandoff(): void {
@@ -420,22 +441,17 @@ export class ChatWizardHost {
       kind: "channel",
       label: channel,
       autoSelectChannel: channel,
-      run: async (prompter, assertPersistentEffectCurrent) => {
-        const beforePersistentApply = async (runtime: RuntimeEnv) => {
-          assertPersistentEffectCurrent();
-          await this.options.beforePersistentApply(runtime);
-          assertPersistentEffectCurrent();
-        };
-        return await (
+      run: async (prompter, hooks) =>
+        await (
           await import("./hosted-setup.runtime.js")
         ).runHostedChannelSetup(
           channel,
           prompter,
-          beforePersistentApply,
+          hooks.beforePersistentApply,
           undefined,
-          assertPersistentEffectCurrent,
-        );
-      },
+          hooks.assertPersistentEffectCurrent,
+          hooks.lockCancellation,
+        ),
     });
   }
 
@@ -444,10 +460,10 @@ export class ChatWizardHost {
     const result = await this.start({
       kind,
       label: setup.label,
-      run: async (prompter) =>
+      run: async (prompter, hooks) =>
         await (
           await import("./hosted-setup.runtime.js")
-        )[setup.runtime](prompter, this.options.beforePersistentApply),
+        )[setup.runtime](prompter, hooks.beforePersistentApply, undefined, hooks.lockCancellation),
     });
     if (kind !== "gateway" || this.options.surface !== "gateway" || !this.bridge) {
       return result;
@@ -465,11 +481,14 @@ export class ChatWizardHost {
       kind: "memory-import",
       label: "memory import",
       memoryImportProviders: providers,
-      run: async (prompter) =>
+      run: async (prompter, hooks) =>
         await (
           await import("./hosted-setup.runtime.js")
-        ).runHostedMemoryImport(prompter, this.options.beforePersistentApply, (value) =>
-          providers.push(value),
+        ).runHostedMemoryImport(
+          prompter,
+          hooks.beforePersistentApply,
+          (value) => providers.push(value),
+          hooks.lockCancellation,
         ),
     });
   }
@@ -479,10 +498,7 @@ export class ChatWizardHost {
     label: string;
     autoSelectChannel?: string;
     memoryImportProviders?: MemoryImportProviderOutcome[];
-    run: (
-      prompter: WizardPrompter,
-      assertPersistentEffectCurrent: () => void,
-    ) => Promise<HostedWizardRunResult>;
+    run: (prompter: WizardPrompter, hooks: HostedWizardRunHooks) => Promise<HostedWizardRunResult>;
   }): Promise<ChatWizardResult> {
     // A masked channel handoff belongs only to the immediately preceding wizard.
     this.lastSensitiveChannel = undefined;
@@ -501,7 +517,17 @@ export class ChatWizardHost {
           throw new Error("Setup session is no longer active");
         }
       };
-      const result = await params.run(prompter, assertPersistentEffectCurrent);
+      const result = await params.run(prompter, {
+        assertPersistentEffectCurrent,
+        // Revalidate after awaited setup work and again after the engine's own check.
+        beforePersistentApply: async (runtime: RuntimeEnv) => {
+          assertPersistentEffectCurrent();
+          await this.options.beforePersistentApply(runtime);
+          assertPersistentEffectCurrent();
+        },
+        // Locked by the owner only at the durable commit, after those checks.
+        lockCancellation: () => owner.lockCancellation(),
+      });
       if (typeof result === "string") {
         completion.status = result;
       } else if (result) {
