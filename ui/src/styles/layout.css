@@ -2108,7 +2108,9 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   padding-right: var(--session-row-actions-reserve);
 }
 
-.sidebar-recent-session--child:is(:hover, :focus-within) .session-row-badge--pull-request {
+.shell:not(.shell--mobile-nav)
+  .sidebar-recent-session--child:is(:hover, :focus-within)
+  .session-row-badge--pull-request {
   display: none;
 }
 
@@ -2134,7 +2136,8 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 }
 
 /* Hover actions replace trailing PR badges; leading state and second-line metadata stay visible. */
-.sidebar-recent-session--single-line:not(.sidebar-recent-session--child):is(:hover, :focus-within)
+.shell:not(.shell--mobile-nav)
+  .sidebar-recent-session--single-line:not(.sidebar-recent-session--child):is(:hover, :focus-within)
   :is(
     .session-row-badge--pull-request,
     .session-row-badges:has(> .session-row-badge--pull-request:only-child)

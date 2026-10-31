@@ -384,9 +384,9 @@ suite.define(() => {
           await plainTitle.evaluate((element) => ({
             clipped: element.scrollWidth > element.clientWidth,
             overflow: getComputedStyle(element).textOverflow,
-            mask: getComputedStyle(element).maskImage,
+            fades: getComputedStyle(element).maskImage.includes("linear-gradient"),
           })),
-        ).toEqual({ clipped: true, overflow: "ellipsis", mask: "none" });
+        ).toEqual({ clipped: true, overflow: "clip", fades: true });
         await (pointer === "coarse" ? menuButton.tap() : menuButton.click());
 
         const menu = page.getByRole("menu", { name: "Actions for Mobile sidebar menu" });
