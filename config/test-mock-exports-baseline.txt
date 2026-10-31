@@ -8935,7 +8935,6 @@
 ["src/proxy-capture/ca.test.ts","../infra/resolve-system-bin.js","72e76747c28a1a9ec02ec102ae88c72534c9915c9cee0302aff184f4bd33d4bb",1]
 ["src/proxy-capture/proxy-server.managed-proxy.test.ts","./ca.js","b34ca81edafff73599ab21063a587b4c118aedca156f238e010ad916c1756fd4",1]
 ["src/proxy-capture/proxy-server.test.ts","./ca.js","b34ca81edafff73599ab21063a587b4c118aedca156f238e010ad916c1756fd4",1]
-["src/proxy-capture/runtime.retirement.test.ts","../state/openclaw-state-db-async-lifecycle.js","91f5d03448d3c4341856f6ff310c9b40f7494f8a443b804a661e0207afd6c79e",1]
 ["src/proxy-capture/runtime.retirement.test.ts","../state/openclaw-state-worker-context.js","836f863ba19426b5d1097c675e20bf53b0a2a39258098facd5983974ef997138",1]
 ["src/proxy-capture/runtime.retirement.test.ts","./runtime-response-body.js","4145f097ab07917637fc730416b882224a4535542f856d5869a9da21d63274b6",1]
 ["src/proxy-capture/runtime.retirement.test.ts","./store.async.js","4621fcae12823f2c0bbd8163c8725c8e56a3cd5ef2dce700dca070bf4ffe3a22",1]
