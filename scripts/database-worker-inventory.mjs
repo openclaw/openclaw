@@ -2237,7 +2237,7 @@ const reviewedOperations = new Map([
         tier: "T2",
         operations: ["isCanonicalSqliteSessionMainKeyCurrent"],
         evidence:
-          "Only startup-migration.ts:287 calls it, through gateway/server-startup-session-migration.ts:201 and server-startup-plugins.ts:99 or deferred boot admission at server-agent-database-startup.ts:112.",
+          "Only startup-migration-runtime.ts calls it, through gateway/server-startup-session-migration.ts:201 and server-startup-plugins.ts:99 or deferred boot admission at server-agent-database-startup.ts:112.",
       },
     ],
   ],
@@ -2248,7 +2248,7 @@ const reviewedOperations = new Map([
         tier: "T2",
         operations: ["setCanonicalSqliteSessionMainKey", "markCanonicalSessionValidationPending"],
         evidence:
-          "The setter serves startup-migration.ts boot admission and commands/doctor-session-canonical-keys.ts repair. Pending validation is written only by that setter or explicit allowStoredAlias(s)/allowCanonicalRepair imports and repairs: legacy-main-session-migration-operations.ts, session-accessor.sqlite-import.ts, and Doctor projection/rewrite. Import's retained recovery path is Doctor-only via doctor-session-sqlite-retained.ts -> rebuildDeferredPluginSessionSourceIndex.",
+          "The setter serves startup-migration-runtime.ts boot admission and commands/doctor-session-canonical-keys.ts repair. Pending validation is written only by that setter or explicit allowStoredAlias(s)/allowCanonicalRepair imports and repairs: legacy-main-session-migration-operations.ts, session-accessor.sqlite-import.ts, and Doctor projection/rewrite. Import's retained recovery path is Doctor-only via doctor-session-sqlite-retained.ts -> rebuildDeferredPluginSessionSourceIndex.",
       },
     ],
   ],

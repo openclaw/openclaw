@@ -87,11 +87,12 @@ export async function initializeGatewayExecCgroup(stateDir: string): Promise<str
     // Keep the subtree undiscoverable until every controller policy succeeds.
     fs.writeFileSync(path.join(directory, "memory.high"), "max");
     fs.writeFileSync(path.join(directory, "cpu.weight"), "10");
-    // A shared memory-sized IO backlog per five minutes, divided between reads
-    // and writes and across backing devices. This is a pressure budget, not an
-    // estimate of disk speed. Tighter inherited ceilings retain half for peers.
-    const bytesPerSecond = Math.max(1, Math.floor(memoryHigh / 600 / devices.length));
     const limits = devices.map((device) => {
+      // Use the logical queue's media class, including md/dm, without double-charging slaves.
+      const bytesPerSecond =
+        readOptional(`/sys/dev/block/${device}/queue/rotational`) === "0"
+          ? 160 * 1024 ** 2
+          : Math.max(1, Math.floor(memoryHigh / 600 / devices.length));
       const budget = ioBudget(root, device, bytesPerSecond);
       const line = `${device} ${budgetKeys.map((key) => `${key}=${budget[key]}`).join(" ")}`;
       fs.writeFileSync(path.join(directory!, "io.max"), line);

@@ -255,16 +255,19 @@ export async function collectProviderCatalogProjectionFindings(
   workspaceDir?: string,
 ): Promise<readonly HealthFinding[]> {
   const { runProviderStaticCatalog } = await import("../plugins/provider-discovery.js");
-  const { resolvePluginProvidersCore } = await import("../plugins/providers.runtime.js");
-  const env = process.env;
-  let providers: Awaited<ReturnType<typeof resolvePluginProvidersCore>>;
+  const { withPluginProviders } = await import("../plugins/providers.runtime.js");
   try {
-    providers = resolvePluginProvidersCore({
-      config: cfg,
-      workspaceDir,
-      env,
-      includeUntrustedWorkspacePlugins: false,
-    });
+    return await withPluginProviders(
+      {
+        config: cfg,
+        workspaceDir,
+        env: process.env,
+        includeUntrustedWorkspacePlugins: false,
+        mode: "runtime",
+      },
+      async (providers) =>
+        collectProviderCatalogProjectionFindingsFromProviders(providers, runProviderStaticCatalog),
+    );
   } catch (error) {
     return [
       {
@@ -276,7 +279,12 @@ export async function collectProviderCatalogProjectionFindings(
       },
     ];
   }
+}
 
+async function collectProviderCatalogProjectionFindingsFromProviders(
+  providers: ProviderPlugin[],
+  runProviderStaticCatalog: typeof import("../plugins/provider-discovery.js").runProviderStaticCatalog,
+): Promise<readonly HealthFinding[]> {
   const findings: HealthFinding[] = [];
   const grouped = groupProviderCatalogsForDoctor(providers);
   findings.push(...grouped.findings);

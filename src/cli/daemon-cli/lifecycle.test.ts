@@ -348,7 +348,11 @@ describe("runDaemonRestart health checks", () => {
     );
   });
 
-  it("re-reads the installed service environment after restart repair", async () => {
+  it("refreshes distinct caller and service config after restart repair", async () => {
+    loadConfig.mockReturnValue({ gateway: { auth: { token: "caller-before" } } });
+    createConfigIO.mockImplementation(({ env }: { env?: NodeJS.ProcessEnv } = {}) => ({
+      readBestEffortConfig: async () => ({ gateway: { auth: { token: env?.OPENCLAW_STATE_DIR } } }),
+    }));
     process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-caller-state";
     process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway-maintenance.service";
     service.readCommand
@@ -367,11 +371,16 @@ describe("runDaemonRestart health checks", () => {
       loaded: true,
     });
     runServiceRestart.mockImplementation(async (params: RestartParams) => {
+      loadConfig.mockReturnValue({ gateway: { auth: { token: "caller-after" } } });
       await params.repairLoadedService?.({
         json: true,
         stdout: process.stdout,
         state: {},
-        issues: [{ message: "service port is stale" }],
+        issues: [],
+      });
+      expect(params.readDriftContext?.()).toMatchObject({
+        config: { gateway: { auth: { token: "caller-after" } } },
+        command: { environment: { OPENCLAW_STATE_DIR: "/tmp/openclaw-repaired-state" } },
       });
       await runRestartPostCheck(params, false);
       return true;
@@ -382,6 +391,7 @@ describe("runDaemonRestart health checks", () => {
     expect(requireMockCallArg(runServiceRestart, "runServiceRestart").expectedPort).toBeUndefined();
     expectPartialCall(waitForGatewayHealthyRestart, {
       port: 19_001,
+      config: { gateway: { auth: { token: "/tmp/openclaw-repaired-state" } } },
       env: expect.objectContaining({
         OPENCLAW_STATE_DIR: "/tmp/openclaw-repaired-state",
         OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-maintenance.service",
@@ -766,32 +776,28 @@ describe("runDaemonRestart health checks", () => {
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
   }
 
-  it("delegates system-scope restart to systemctl without unmanaged signaling when root (openclaw#87577)", async () => {
-    mockSystemdScope("openclaw.service");
-    restartSystemdService.mockResolvedValue({ outcome: "completed" });
-    mockUnmanagedRestart();
-
-    await expect(runDaemonRestart({ json: true })).resolves.toBe(true);
-
-    expect(restartSystemdService).toHaveBeenCalled();
-    expectNoCalls(signalVerifiedGatewayPidSync, probeGateway);
-  });
-
-  it("surfaces systemd sudo guidance and never signals when restarting a system-scope unit as non-root (openclaw#87577)", async () => {
-    mockSystemdScope("openclaw.service");
-    restartSystemdService.mockRejectedValue(
-      new Error(
-        "openclaw.service is a system-scope unit (/etc/systemd/system/openclaw.service); run `sudo systemctl restart openclaw.service` to restart it",
-      ),
-    );
-    mockUnmanagedRestart();
-
-    await expect(runDaemonRestart({ json: true })).rejects.toThrow(
-      /sudo systemctl restart openclaw\.service/,
-    );
-
-    expectNoCalls(signalVerifiedGatewayPidSync, probeGateway);
-  });
+  it.each([true, false])(
+    "handles system-scope restart with root=%s (openclaw#87577)",
+    async (root) => {
+      mockSystemdScope("openclaw.service");
+      if (root) {
+        restartSystemdService.mockResolvedValue({ outcome: "completed" });
+      } else {
+        restartSystemdService.mockRejectedValue(
+          new Error("run `sudo systemctl restart openclaw.service`"),
+        );
+      }
+      mockUnmanagedRestart();
+      const result = expect(runDaemonRestart({ json: true }));
+      if (root) {
+        await result.resolves.toBe(true);
+      } else {
+        await result.rejects.toThrow(/sudo systemctl restart openclaw\.service/);
+      }
+      expect(restartSystemdService).toHaveBeenCalled();
+      expectNoCalls(signalVerifiedGatewayPidSync, probeGateway);
+    },
+  );
 
   it("delegates system-scope stop to systemctl without unmanaged signaling when root (openclaw#87577)", async () => {
     mockSystemdScope("openclaw-gateway.service");

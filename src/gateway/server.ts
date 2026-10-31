@@ -217,6 +217,10 @@ async function startGatewayServerWithRuntime(
     return await start();
   }
   const closeBroker = async () => {
+    // Core can retain connection work before reaching its process join. Keep the
+    // broker alive until command results, output, and service-child cleanup settle.
+    const { shutdownProcessSupervisor } = await import("../process/supervisor/index.js");
+    await measureGatewayCloseStep("shutdown.process-supervisor", shutdownProcessSupervisor);
     // A failed required core join can stop before the admission sidecar runs.
     await measureGatewayCloseStep("shutdown.database-admission", () => stopDatabaseAdmission?.());
     try {

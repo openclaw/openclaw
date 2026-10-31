@@ -56,6 +56,7 @@ export class PluginInstance {
   readonly lifecycle: PluginInstanceLifecycle;
   toolRegistrationComplete = false;
   controlPlaneInitialized = false;
+  setupPreparationFailure?: Error;
   sourceDigest?: string;
   private moduleLoader?: (source: string) => unknown;
   private setupCache?: PluginCache;

@@ -49,6 +49,7 @@ const repositoryScriptEntries = [
   "scripts/perf/backup-verify-fixture.mjs!",
   "scripts/perf/backup-verify-measure.mjs!",
   "scripts/perf/board-read-admission-measure.ts!",
+  "scripts/perf/spawn-broker-shutdown-measure.ts!",
   // catalog-compare-released.mts copies and spawns this sandboxed reader by path.
   "scripts/lib/catalog-compare-released-worker.mts!",
   // The prepublish registry executes this shared build-and-pack lifetime by path.

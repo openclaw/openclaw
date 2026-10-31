@@ -28,7 +28,7 @@ import {
 import { loadSessionEntry, replaceSessionEntry } from "./session-accessor.js";
 import * as retirement from "./session-retirement-read.js";
 import type { SessionRetirementReadOperation } from "./session-retirement-read.types.js";
-import { runSessionStartupMigration } from "./startup-migration.js";
+import { runSessionStartupMigration } from "./startup-migration-runtime.js";
 import * as sessionTargets from "./targets.js";
 
 const { tempDirs, createFixture } = setupLegacyMainSessionMigrationTests();

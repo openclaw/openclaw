@@ -469,7 +469,7 @@ export async function scrubConfigAuditLog(params: {
       filePath: path.join(directory, path.basename(auditPath)),
       content: outLines.join("\n"),
       mode: 0o600 & ~process.umask(),
-      dirMode: (await fs.stat(directory)).mode & 0o7777,
+      dirMode: "preserve",
       beforeRename: async ({ filePath }) => {
         // Replacing a log must not discard entries appended after the read.
         const size = await fs.stat(filePath).then(
