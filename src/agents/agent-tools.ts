@@ -94,7 +94,7 @@ import {
 import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
 import type { ToolPolicyFilterEvent } from "./tool-policy-pipeline.js";
-import { expandToolGroups, normalizeToolPolicyName } from "./tool-policy.js";
+import { resolveRuntimeMessageProfileAllowlist } from "./tool-policy.js";
 import {
   createToolSearchTools,
   resolveToolSearchConfig,
@@ -152,12 +152,6 @@ function* assembleOpenClawCodingTools(
   const toolSearchControlAllowlist = toolSearchControlsEnabled
     ? [TOOL_SEARCH_RAW_TOOL_NAME, TOOL_DESCRIBE_RAW_TOOL_NAME, TOOL_CALL_RAW_TOOL_NAME]
     : [];
-  const runtimeToolAllowlistIncludesMessage = expandToolGroups(
-    options?.runtimeToolAllowlist ?? [],
-  ).some((toolName) => {
-    const normalized = normalizeToolPolicyName(toolName);
-    return normalized === "*" || normalized === "message";
-  });
   // The verified requester profile owns completion authority; its delivery grant
   // stays source-bound even when parent tools remain available to the turn.
   const sourceReplyOnly =
@@ -170,7 +164,7 @@ function* assembleOpenClawCodingTools(
   });
   const runtimeProfileAlsoAllow = [
     ...(options && messageToolOwnsVisibleReply(options) ? ["message"] : []),
-    ...(runtimeToolAllowlistIncludesMessage ? ["message"] : []),
+    ...resolveRuntimeMessageProfileAllowlist(options?.runtimeToolAllowlist),
     ...toolSearchControlAllowlist,
   ];
   const sandboxWorkspaceMediaReadAllowed = isConversationToolAllowed(capabilityProfile, "read");

@@ -17,7 +17,11 @@ import {
   isCoreCodingSurfaceToolName,
   listCoreToolFactoryDescriptors,
 } from "../agents/tool-catalog.js";
-import { normalizeToolPolicyName, toolPolicyRestrictsTools } from "../agents/tool-policy.js";
+import {
+  normalizeToolPolicyName,
+  resolveRuntimeMessageProfileAllowlist,
+  toolPolicyRestrictsTools,
+} from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { getInProcessGatewayToolContext } from "../agents/tools/in-process-gateway.js";
 import { hasSessionControlAuthority } from "../agents/tools/sessions-operator-authority.js";
@@ -341,6 +345,7 @@ async function constructMcpLoopbackTools(
     : undefined;
   const scopeOptions: Parameters<typeof resolveGatewayScopedTools>[0] = {
     ...context,
+    gatewayRequestedTools: resolveRuntimeMessageProfileAllowlist(toolsAllow),
     messageActionTurnCapability: params.messageActionTurnCapability,
     memoryAudience: params.memoryAudience,
     toolsAllow,

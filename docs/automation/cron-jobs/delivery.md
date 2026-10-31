@@ -96,6 +96,8 @@ For isolated jobs, chat delivery is shared: if a chat route is available, the ag
 
 A send to the delivery target does not end the job's turn unless it sets `final: true`, so steps after the send, such as updating a state file, still run.
 
+Explicitly including `message` in the run's tool cap keeps it available through restrictive tool profiles on both embedded and CLI runtimes. Other tool policies, the final tool cap, and message invocation authority still apply.
+
 Scheduled `message` actions use the Gateway that owns the live run. Keep the
 job's account, channel, target, and configured delivery route, but do not supply
 per-call `gatewayUrl` or `gatewayToken` fields. Ordinary and standalone message
