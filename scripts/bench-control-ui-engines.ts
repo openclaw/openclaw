@@ -578,7 +578,11 @@ try {
                 tracingStarted = true;
               }
               if (scenario.id.startsWith("chat-actions-")) {
-                await installChatActionObservation(page, values.trace);
+                await installChatActionObservation(
+                  page,
+                  values.trace,
+                  scenario.id === "chat-actions-fork",
+                );
               }
               const actionTiming =
                 !scenario.navigation && !scenario.memory
