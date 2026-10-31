@@ -700,8 +700,10 @@ installation root, with URLs such as `openclaw:src/...`, `openclaw:dist/...`, an
 `openclaw:packages/<name>/src/...` or `openclaw:packages/<name>/dist/...` for
 workspace packages. Paths outside the installation root are not OpenClaw code.
 Profiles label dependency frames as `[dep:<pkg>]` with URL
-`node_modules/<pkg>`, including scoped packages and pnpm layouts; symbols,
-versions, filenames, and absolute paths stay hidden. URLs with query or fragment
+`node_modules/<pkg>`, including scoped packages and pnpm layouts. First-party
+`@openclaw/*` packages retain safe function symbols, including private method
+names such as `#prepare`; third-party symbols stay hidden. Versions, filenames,
+and absolute paths stay hidden for all dependencies. URLs with query or fragment
 markers remain redacted. Frames with script ID `0`,
 an empty URL, and a negative line number use `[native]`, except for known V8
 engine labels such as `(root)`, `(V8 API)`, `(GC)`, and `(PARSER)`. Preserving those
