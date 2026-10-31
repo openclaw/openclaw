@@ -23,6 +23,16 @@ export function schemaAnnotationsOnly(schema: unknown): Record<string, unknown> 
   );
 }
 
+/** Drops the keys that only document a property, keeping every constraint. */
+export function schemaConstraintsOnly(schema: unknown): Record<string, unknown> {
+  if (!isRecord(schema)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(schema).filter(([key]) => !SCHEMA_ANNOTATION_KEYS.has(key)),
+  );
+}
+
 /** Const and enum constrain the same value, so retain their intersection. */
 export function readLiteralSchemaValues(schema: Record<string, unknown>): unknown[] | undefined {
   const enumValues = Array.isArray(schema.enum) ? schema.enum : undefined;
