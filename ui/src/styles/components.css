@@ -2874,9 +2874,8 @@ td.data-table-key-col {
   font-variant-numeric: tabular-nums;
 }
 
-/* Trailing signals stay quieter than secondary text; only action or live state adds color. */
+/* Trailing signals stay quieter than secondary text unless their state adds color. */
 .session-row-trail,
-.session-row-badge,
 .session-row-badges,
 .sidebar-child-session-toggle {
   color: color-mix(in srgb, var(--muted) 82%, var(--sidebar-bg, var(--bg)));
@@ -2887,14 +2886,27 @@ td.data-table-key-col {
   color: var(--warn);
 }
 
-/* A pull request's icon already carries its state; color is reserved for what needs action. */
-.session-row-badge--cloud[data-placement-state="failed"],
-.session-row-badge--cloud[data-disk-space-status="critical"] {
+/* Later rules win: a placement's failure or warning overrides its healthy color. */
+[data-pull-request-state="open"] {
+  color: var(--ok);
+}
+
+[data-pull-request-state="merged"] {
+  color: var(--pr-merged);
+}
+
+[data-placement-state] {
+  color: var(--accent);
+}
+
+[data-pull-request-state="closed"],
+[data-placement-state="failed"],
+[data-disk-space-status="critical"] {
   color: var(--danger);
 }
 
-.session-row-badge--cloud[data-workspace-conflicts],
-.session-row-badge--cloud[data-disk-space-status="warning"] {
+[data-workspace-conflicts],
+[data-disk-space-status="warning"] {
   color: var(--warn);
 }
 
