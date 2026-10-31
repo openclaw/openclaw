@@ -38,7 +38,7 @@ it("windows operator-shaped categories without mounting overscan in offscreen se
     sectionOrder: groups.map((name) => `category:${name}`),
   });
   const { sidebar } = await mountSidebar(
-    createGateway(createTestGatewayClient()),
+    createGateway(createTestGatewayClient(async () => ({}))),
     harness.sessions,
   );
   const owner = getAppSidebarOwner(sidebar.hostElement)!;
