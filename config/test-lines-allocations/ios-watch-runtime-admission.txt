@@ -1,2 +1,2 @@
-62
-# Fastlane regressions: retire only unmounted stale registrations and preserve missing-runtime repair.
+149
+# Fastlane regressions: runtime replacement, scoped admission, namespace logging, and one-time repair.

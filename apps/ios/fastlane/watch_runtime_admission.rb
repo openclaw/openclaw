@@ -13,8 +13,8 @@ module WatchRuntimeAdmission
     loop do
       output, error, status = Open3.capture3("xcrun", "simctl", "runtime", "list", "-j")
       raise "Cannot inspect Watch runtime cleanup: #{error.strip}" unless status.success?
-      images = JSON.parse(output).values.select { |image| image["platformIdentifier"] == "com.apple.platform.watchsimulator" }
-      return if images.empty?
+      images = JSON.parse(output).values.select { |image| image["runtimeIdentifier"] == runtime }
+      return images if images.empty?
 
       mounts, error, status = Open3.capture3("/sbin/mount")
       raise "Cannot inspect Watch runtime mounts: #{error.strip}" unless status.success?
@@ -26,10 +26,10 @@ module WatchRuntimeAdmission
       end
       ready = facts.all? { |image| image["state"] == "Ready" && image["mounted"] && image["bundleExists"] } &&
         facts.group_by { |image| image["runtime"] }.values.all? { |entries| entries.length == 1 }
-      return if ready
+      return images if ready
 
       if facts != previous
-        UI.important("Waiting for Watch runtime cleanup: #{JSON.generate(facts)}")
+        FastlaneCore::UI.important("Waiting for Watch runtime cleanup: #{JSON.generate(facts)}")
         previous = facts
       end
       # CoreSimulator can retain unmounted unusable registrations after replacing
@@ -41,7 +41,7 @@ module WatchRuntimeAdmission
       unless stale.empty?
         stale.each do |image, _|
           identifier = image.fetch("identifier")
-          UI.important("Retiring unmounted unusable Watch registration #{identifier}")
+          FastlaneCore::UI.important("Retiring unmounted unusable Watch registration #{identifier}")
           _, error, status = Open3.capture3("xcrun", "simctl", "runtime", "delete", identifier, "--keep-asset")
           raise "Cannot retire stale Watch registration: #{error.strip}" unless status.success?
           removed << identifier
