@@ -203,6 +203,20 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/solid/settings-select.tsx":
       // Only page chrome belongs here; shared controls also serve lazy Chat panels.
       return "route-chrome";
+    case "ui/src/components/config-form.analyze.ts":
+    case "ui/src/components/config-form.shared.ts":
+    case "src/config/sensitive-paths.ts":
+      // Analysis stays independent of the optional editor's value validator.
+      return "config-form-analysis-runtime";
+    case "ui/src/lib/config-form-utils.ts":
+    case "ui/src/i18n/lib/config-hint-translation.ts":
+    case "ui/src/components/config-form.array-items.ts":
+      // Lightweight shape readers must not acquire analysis, validation, or Settings copy.
+      return "config-form-utils-runtime";
+    case "ui/src/components/solid/settings-ui.tsx":
+    case "ui/src/pages/config/settings-section-header.tsx":
+      // Shared controls stay independent of route chrome and optional settings editors.
+      return "settings-controls-runtime";
     case "node_modules/typebox/build/guard/guard.mjs":
     case "node_modules/typebox/build/guard/globals.mjs":
     case "node_modules/typebox/build/guard/index.mjs":

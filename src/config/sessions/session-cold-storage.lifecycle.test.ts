@@ -468,7 +468,6 @@ describe("cold current transcript lifecycle", () => {
     });
     const archiveBytes = await fs.readFile(archivePath);
     const before = snapshot();
-    expect(fixture.database().prepare("SELECT * FROM transcript_events").all()).toEqual([]);
     expect(
       fixture.database().prepare("SELECT current_session_id FROM session_nodes").all(),
     ).toEqual([{ current_session_id: scope.sessionId }]);

@@ -27,7 +27,7 @@ export function createContext(
     trackExecution: trackAsyncWork,
     dedupe: new Map(),
     getRuntimeConfig,
-    logGateway: createMockSubsystemLogger("gateway/test"),
+    logGateway: createMockSubsystemLogger("gateway"),
   } as unknown as GatewayRequestContext;
   if (methods.length) {
     const registry = createGatewayMethodRegistry(
