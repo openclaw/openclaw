@@ -84,17 +84,22 @@ function sessionPage(face: BoardFace) {
       );
     },
     component: async () => {
-      const entry = await import("./route-entry.ts");
-      const warm = peekPrewarmedChatSnapshot();
-      if (warm) {
-        const { readPrewarmedChatSnapshot } = await import("./session-snapshot-store.ts");
-        const snapshot = await readPrewarmedChatSnapshot(warm.cacheKey);
-        if (snapshot?.details) {
-          // Cached Details belongs to the first pane; cold panes retain their lazy boundary.
-          const { ChatDetailsDesktopComposition } = await import("./components/chat-details.tsx");
-          await ChatDetailsDesktopComposition.preload().catch(() => undefined);
-        }
-      }
+      const [entry] = await Promise.all([
+        import("./route-entry.ts"),
+        (async () => {
+          const warm = peekPrewarmedChatSnapshot();
+          if (warm) {
+            const { readPrewarmedChatSnapshot } = await import("./session-snapshot-store.ts");
+            const snapshot = await readPrewarmedChatSnapshot(warm.cacheKey);
+            if (snapshot?.details) {
+              // Cached Details belongs to the first pane; cold panes retain their lazy boundary.
+              const { ChatDetailsDesktopComposition } =
+                await import("./components/chat-details.tsx");
+              await ChatDetailsDesktopComposition.preload().catch(() => undefined);
+            }
+          }
+        })(),
+      ]);
       return entry;
     },
   });
