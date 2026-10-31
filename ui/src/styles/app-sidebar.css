@@ -1,6 +1,6 @@
 .shell--mobile-nav .sidebar-shell {
   --sidebar-session-row-floor: 44px;
-  --sidebar-session-menu-size: 44px;
+  --sidebar-session-menu-size: 36px;
 }
 
 /* Keep metadata, but do not charge a title for an empty endcap or a hidden draft badge. */
@@ -16,7 +16,8 @@
   }
 }
 
-/* The mobile drawer keeps management actions in its always-reachable menu. */
+/* The mobile drawer keeps management actions in its always-reachable menu, with the
+   dots ending on the same edge as the filter control above the list. */
 .shell--mobile-nav .sidebar-recent-session {
   &.session-row-host {
     --session-row-actions-reserve: var(--sidebar-session-menu-size);
@@ -28,8 +29,10 @@
 
   .session-action--touch-menu {
     display: inline-flex;
+    justify-content: flex-end;
     width: var(--sidebar-session-menu-size);
-    height: var(--sidebar-session-menu-size);
+    height: var(--sidebar-session-row-floor);
+    padding-inline-end: 6px;
     opacity: 1;
     pointer-events: auto;
   }
@@ -125,6 +128,5 @@
 }
 
 .shell--mobile-nav .sidebar-recent-sessions__head {
-  padding-inline: calc(var(--sidebar-inset) + var(--sidebar-session-row-inset))
-    calc((var(--sidebar-session-menu-size) - var(--sidebar-session-group-action-size)) / 2);
+  padding-inline: calc(var(--sidebar-inset) + var(--sidebar-session-row-inset)) 1.5px;
 }

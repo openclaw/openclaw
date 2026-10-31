@@ -73,13 +73,13 @@ async function expectSessionGeometry(row: Locator, multiline = false) {
   expect(title.x + title.width).toBeLessThanOrEqual(button.x);
   expectVerticalOverlap(button, title);
   if (multiline) {
-    expect(button.width).toBeCloseTo(44, 4);
+    expect(button.width).toBeCloseTo(36, 4);
     expect(button.height).toBeCloseTo(44, 4);
     expect(title.x).toBeGreaterThanOrEqual(bounds.x);
     expectVerticalBounds(button, bounds);
   } else {
     expectHorizontalBounds(button, bounds);
-    expect(button.width).toBe(44);
+    expect(button.width).toBe(36);
     expect(bounds.height).toBeCloseTo(44, 1);
   }
 }
@@ -356,7 +356,7 @@ suite.define(() => {
         const drawerBox = await page.locator(".shell-nav").boundingBox();
         expect(drawerBox?.width).toBeGreaterThanOrEqual(330);
         expect(drawerBox?.width).toBeLessThanOrEqual(336);
-        // Reserve one 44px menu target without starving the title beside the rail.
+        // Reserve one 36px menu target without starving the title beside the rail.
         expect(restingWidth).toBeGreaterThanOrEqual(180);
         const plainRow = page.locator(`[data-session-key="${plainKey}"]`);
         const plainTitle = part(plainRow, "name");
