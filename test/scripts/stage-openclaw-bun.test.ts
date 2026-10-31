@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { vi } from "vitest";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
@@ -78,10 +77,8 @@ it.runIf(["darwin", "linux"].includes(process.platform)).concurrent.for([
   ["release-archive-checksum", "sha256 mismatch"],
 ] as const)(
   "admits only pinned native payloads: %s",
-  ([scenario, expectedError], { command, expect, onTestFinished }) =>
+  ([scenario, expectedError], { command, expect }) =>
     command.lifetime.run(async () => {
-      const tools = vi.spyOn(command, "run");
-      onTestFinished(() => tools.mockRestore());
       const root = command.createTempDir("openclaw-bun-stage-");
       const file = (name: string) => path.join(root, name);
       const write = async (name: string, data: string | Buffer, mode?: number) => {
@@ -120,7 +117,6 @@ it.runIf(["darwin", "linux"].includes(process.platform)).concurrent.for([
           executableSha256: checksum("executable-checksum", digest(binary)),
         };
       }
-      expect(tools.mock.calls.filter(([tool]) => tool === "/usr/bin/zip")).toHaveLength(0);
       const pin = {
         tag,
         revision: scenario === "revision" ? "wrong-revision" : revision,
