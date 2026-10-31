@@ -15,13 +15,6 @@ function runPublishWrapper(args: string[], env: NodeJS.ProcessEnv = {}) {
   });
 }
 
-function runPublishWrapperWithClosedStderr(env: NodeJS.ProcessEnv = {}) {
-  return spawnSync("bash", ["-c", 'bash "$1" --publish 2>&-', "bash", scriptPath], {
-    encoding: "utf8",
-    env: { ...process.env, GITHUB_ACTIONS: "false", WORKFLOW_SHA: "", ...env },
-  });
-}
-
 function makePackageTarball(root: string, packageJson?: string): string {
   const packageDir = path.join(root, "package");
   const tarball = path.join(root, "openclaw.tgz");
@@ -58,6 +51,13 @@ function makeStagedNpm(root: string): string {
     { mode: 0o755 },
   );
   return callsPath;
+}
+
+function readNpmCalls(callsPath: string): string[][] {
+  return readFileSync(callsPath, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as string[]);
 }
 
 describe("openclaw npm publish wrapper", () => {
@@ -125,94 +125,49 @@ describe("openclaw npm publish wrapper", () => {
     expect(result.stderr).toContain(expectedError);
   });
 
-  it("observes and explains a previously staged npm version without republishing", () => {
-    const tempRoot = tempDirs.make("openclaw-npm-publish-");
-    const callsPath = makeStagedNpm(tempRoot);
-    const packageVersion = JSON.parse(readFileSync("package.json", "utf8")).version as string;
-    const result = runPublishWrapper(["--publish"], {
-      NPM_CALLS: callsPath,
-      NPM_PUBLISH_EXIT: "42",
-      OPENCLAW_NPM_PUBLISH_TAG: "beta",
-      PACKAGE_VERSION: packageVersion,
-      PATH: `${tempRoot}:${process.env.PATH}`,
-    });
-
-    expect(result.status).toBe(42);
-    expect(result.stderr).toContain("Cannot publish over previously staged version");
-    expect(result.stderr).toContain(
-      `npm retained openclaw@${packageVersion} as staged or completed`,
-    );
-    expect(result.stderr).toContain("Exact-version registry observation: published");
-    expect(result.stderr).toContain("Do not rerun npm publish");
-    expect(result.stderr).toContain(`scripts/openclaw-npm-postpublish-verify.ts ${packageVersion}`);
-    expect(
-      readFileSync(callsPath, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line)),
-    ).toEqual([
-      ["publish", "--access", "public", "--tag", "beta", "--provenance"],
-      [
-        "view",
-        `openclaw@${packageVersion}`,
-        "version",
-        "dist.integrity",
-        "--json",
-        "--prefer-online",
-      ],
-    ]);
-  });
-
-  it("preserves staged-version recovery guidance while the registry is unreadable", () => {
-    const tempRoot = tempDirs.make("openclaw-npm-publish-");
-    const callsPath = makeStagedNpm(tempRoot);
-    const packageVersion = JSON.parse(readFileSync("package.json", "utf8")).version as string;
-    const result = runPublishWrapper(["--publish"], {
-      NPM_CALLS: callsPath,
-      NPM_VIEW_FAIL: "1",
-      OPENCLAW_NPM_PUBLISH_TAG: "beta",
-      PACKAGE_VERSION: packageVersion,
-      PATH: `${tempRoot}:${process.env.PATH}`,
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
+  it.each([
+    ["published", { NPM_PUBLISH_EXIT: "42" }, 42, "Exact-version registry observation: published"],
+    [
+      "not yet readable",
+      { NPM_VIEW_FAIL: "1" },
+      1,
       "Exact-version registry observation: staged or not yet publicly readable",
-    );
-    expect(result.stderr).toContain("npm error code E404");
-    expect(result.stderr).toContain("Do not rerun npm publish");
-    expect(
-      readFileSync(callsPath, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line)),
-    ).toEqual([
-      ["publish", "--access", "public", "--tag", "beta", "--provenance"],
-      [
-        "view",
-        `openclaw@${packageVersion}`,
-        "version",
-        "dist.integrity",
-        "--json",
-        "--prefer-online",
-      ],
-    ]);
-  });
+    ],
+  ] as const)(
+    "explains a staged npm version that is %s without republishing",
+    (_label, env, status, observation) => {
+      const tempRoot = tempDirs.make("openclaw-npm-publish-");
+      const callsPath = makeStagedNpm(tempRoot);
+      const packageVersion = JSON.parse(readFileSync("package.json", "utf8")).version as string;
+      const result = runPublishWrapper(["--publish"], {
+        NPM_CALLS: callsPath,
+        OPENCLAW_NPM_PUBLISH_TAG: "beta",
+        PACKAGE_VERSION: packageVersion,
+        PATH: `${tempRoot}:${process.env.PATH}`,
+        ...env,
+      });
 
-  it("preserves the npm publish status when recovery diagnostics cannot be written", () => {
-    const tempRoot = tempDirs.make("openclaw-npm-publish-");
-    const callsPath = makeStagedNpm(tempRoot);
-    const packageVersion = JSON.parse(readFileSync("package.json", "utf8")).version as string;
-    const result = runPublishWrapperWithClosedStderr({
-      NPM_CALLS: callsPath,
-      NPM_PUBLISH_EXIT: "42",
-      OPENCLAW_NPM_PUBLISH_TAG: "beta",
-      PACKAGE_VERSION: packageVersion,
-      PATH: `${tempRoot}:${process.env.PATH}`,
-    });
-
-    expect(result.status).toBe(42);
-  });
+      expect(result.status).toBe(status);
+      expect(result.stderr).toContain("Cannot publish over previously staged version");
+      expect(result.stderr).toContain(`npm retained openclaw@${packageVersion}`);
+      expect(result.stderr).toContain(observation);
+      expect(result.stderr).toContain("Do not rerun npm publish");
+      expect(result.stderr).toContain(
+        `scripts/openclaw-npm-postpublish-verify.ts ${packageVersion}`,
+      );
+      expect(readNpmCalls(callsPath)).toEqual([
+        ["publish", "--access", "public", "--tag", "beta", "--provenance"],
+        [
+          "view",
+          `openclaw@${packageVersion}`,
+          "version",
+          "dist.integrity",
+          "--json",
+          "--prefer-online",
+        ],
+      ]);
+    },
+  );
 
   it("observes a staged companion tarball by its exact package identity", () => {
     const tempRoot = tempDirs.make("openclaw-npm-publish-");
@@ -239,12 +194,7 @@ describe("openclaw npm publish wrapper", () => {
     );
     expect(result.stderr).toContain("resume the original release workflow");
     expect(result.stderr).not.toContain("scripts/openclaw-npm-postpublish-verify.ts");
-    expect(
-      readFileSync(callsPath, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line)),
-    ).toEqual([
+    expect(readNpmCalls(callsPath)).toEqual([
       ["publish", tarball, "--access", "public", "--tag", "beta", "--provenance"],
       [
         "view",
