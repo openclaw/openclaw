@@ -1,25 +1,14 @@
-import { randomUUID } from "node:crypto";
-import {
-  decisionBatchV1ToV2,
-  decisionBatchV2ToV1,
-  decodeSystemOneResponse,
-  validateDecisionBatchV2,
-  validateDecisionResultV2,
-} from "openclaw/plugin-sdk/decisions";
-import type {
-  DecisionBatch,
-  DecisionBatchV2,
-  DecisionProviderV2,
-  DecisionProviderContextV2,
-} from "openclaw/plugin-sdk/decisions";
+import { encodeSystemOneQuestions } from "openclaw/plugin-sdk/decisions";
+import type { DecisionProviderV2, DecisionProviderContextV2 } from "openclaw/plugin-sdk/decisions";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveProviderRequestHeaders } from "openclaw/plugin-sdk/provider-http";
 import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import { resolveSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import manifest from "../openclaw.plugin.json" with { type: "json" };
 import { hasCredentials, providerBaseUrl, type RuntimeConfig } from "./config.js";
+import { decodeTypeSafeDecisionResult, translateTypeSafeDecisionBatch } from "./decision-codec.js";
 import { decisionFailure } from "./errors.js";
-import type { Evaluation, ImageAssets } from "./schema.js";
+import type { Evaluation } from "./schema.js";
 
 const loadClient = createLazyRuntimeModule(() => import("./client.js"));
 const models = manifest.modelCatalog.providers.typesafe.models;
@@ -118,56 +107,6 @@ function bindHostedFacts(inference: Inference, id: string, config: RuntimeConfig
   };
 }
 
-/** Preserve the text input bridge; only tagged image state adds separate assets. */
-function translateBatch(
-  batch: DecisionBatchV2,
-): { batch: DecisionBatch; assets?: ImageAssets } | undefined {
-  // Admit the full envelope before removing image bytes for the existing text translation.
-  if (!validateDecisionBatchV2(batch)) {
-    return undefined;
-  }
-  if (batch.state.type !== "image") {
-    const text = decisionBatchV2ToV1(batch);
-    return text ? { batch: text } : undefined;
-  }
-  const match = /^data:image\/(png|jpeg);base64,/.exec(batch.state.dataUri);
-  if (
-    !match ||
-    Object.values(batch.questions).some(
-      (question) =>
-        question.type !== "boolean" && question.type !== "choice" && question.type !== "score",
-    )
-  ) {
-    return undefined;
-  }
-  // TypeSafe replaces references inside strings; a UUID must not occur in caller text.
-  const callerText = JSON.stringify([batch.state.text, batch.questions]);
-  let ref = randomUUID();
-  while (callerText.includes(ref)) {
-    ref = randomUUID();
-  }
-  const translated = decisionBatchV2ToV1({
-    state:
-      batch.state.text === undefined
-        ? { type: "text", text: ref }
-        : { type: "json", value: [batch.state.text, ref] },
-    questions: batch.questions,
-  });
-  if (!translated) {
-    return undefined;
-  }
-  return {
-    batch: translated,
-    assets: {
-      [ref]: {
-        type: "image",
-        format: match[1] === "png" ? "png" : "jpg",
-        data_base64: batch.state.dataUri.slice(match[0].length),
-      },
-    },
-  };
-}
-
 /** The shared provider owns the same credential and full configured route as V1. */
 export function createPreparedDecisionProvider(getConfig: () => RuntimeConfig): DecisionProviderV2 {
   const common = models[0]!.inference.decision;
@@ -234,11 +173,11 @@ export function createPreparedDecisionProvider(getConfig: () => RuntimeConfig): 
           ),
     },
     async evaluate(batch, context) {
-      const request = translateBatch(batch);
+      const request = translateTypeSafeDecisionBatch(batch);
       if (!request || (context.reasoning !== undefined && context.reasoning !== "auto")) {
         return { status: "unavailable", reason: "unsupported-input" };
       }
-      const v1 = request.batch;
+      const nativeBatch = request.batch;
       if (
         request.assets &&
         !models.some(
@@ -292,16 +231,16 @@ export function createPreparedDecisionProvider(getConfig: () => RuntimeConfig): 
       if (remaining <= 0) {
         return { status: "unavailable", reason: "transport" };
       }
-      const questions = Object.fromEntries(
-        Object.entries(v1.questions).map(([id, q]) => [
-          id,
-          q.type === "boolean" ? { ...q, type: "noul" } : q,
-        ]),
-      );
+      const questions = encodeSystemOneQuestions(nativeBatch);
       let evaluation: Evaluation;
       try {
         const response = await evaluateTypeSafe(
-          { state: v1.state, questions, model },
+          {
+            state:
+              nativeBatch.state.type === "text" ? nativeBatch.state.text : nativeBatch.state.value,
+            questions,
+            model,
+          },
           { ...config, timeoutMs: Math.min(config.timeoutMs, remaining) },
           signal,
           deadlineMonotonicMs,
@@ -326,21 +265,8 @@ export function createPreparedDecisionProvider(getConfig: () => RuntimeConfig): 
         signal.throwIfAborted();
         return decisionFailure(error);
       }
-      // Validate against the bounded text/UUID batch, not the separately admitted image bytes.
-      const offered = decisionBatchV1ToV2(v1);
-      if (!offered) {
-        return { status: "unavailable", reason: "invalid-response" };
-      }
-      // Native metadata is not part of the decision accounting contract.
-      const result = decodeSystemOneResponse(offered, {
-        model: evaluation.model,
-        answers: evaluation.answers,
-        usage: {
-          input_tokens: evaluation.usage.input_tokens,
-          output_tokens: evaluation.usage.output_tokens,
-        },
-      });
-      return validateDecisionResultV2(offered, result)
+      const result = decodeTypeSafeDecisionResult(nativeBatch, evaluation);
+      return result
         ? { status: "ok", result }
         : { status: "unavailable", reason: "invalid-response" };
     },

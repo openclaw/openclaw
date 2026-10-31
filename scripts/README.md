@@ -345,7 +345,14 @@ and `cron-held-typing-cycles` steps repeat eight fixed actions for longer CPU
 intervals, retaining their selection, focus, and held-request contracts. Use
 separate untraced runs for timing. Compare automation wall time
 across engines; do not divide their script or CPU measurements as though they
-were the same metric. Mock routing
+were the same metric. `scenarioMs` includes input delivery and scenario assertions;
+`settleWaitMs` isolates the final two-frame wait, and their sum is `wallMs`.
+The consecutive-frame timestamp intervals report cadence, not the full wait.
+Traced actions that retain their document also write `*.user-timing.json` with
+native input and run-boundary marks; marker collection adds overhead and does not
+measure input-to-paint latency. Navigating/reloading scenarios retain their existing
+boot probes instead, since navigation discards the original document's marks.
+Mock routing
 disables HTTP caching; warm reload measures persisted state in the same context.
 Boot observations include browser-local transcript/composer readiness, navigation
 and optional paint milestones, completed-by-ready JavaScript/CSS/font requests,

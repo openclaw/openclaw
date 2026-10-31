@@ -348,10 +348,3 @@ export function prepareDecisionProviderReload(
     },
   };
 }
-
-export function inspectDecisionProviders(
-  config: OpenClawConfig,
-  registry = getPluginRegistryForContext(),
-) {
-  return registry?.decisionProviders.map((entry) => entry.host.inspect(config)) ?? [];
-}
