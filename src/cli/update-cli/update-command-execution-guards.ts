@@ -3,6 +3,7 @@ import { acquireWithWait } from "../../infra/acquire-with-wait.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isStateDatabaseMaintenanceContention } from "../../infra/gateway-state-owner-record.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
+import type { PluginCohortRecoveryPair } from "../../infra/update-plugin-cohort-schema.js";
 import { UpdatePreMutationError } from "../../infra/update-pre-mutation-error.js";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import type { UpdateRunPhasePatch } from "../../infra/update-run-mutation.types.js";
@@ -23,7 +24,10 @@ import {
   recordMutableUpdateSignalPhase,
   retainMutableUpdateSignalWrite,
 } from "./update-command-mutable-signals.js";
-import { assertUpdateCommandRecoveryState } from "./update-command-recovery.js";
+import {
+  assertUpdateCommandRecoveryObservation,
+  assertUpdateCommandRecoveryState,
+} from "./update-command-recovery.js";
 
 type PhaseOwner = Readonly<{
   kind: "current-core-finalization" | "package-compensation";
@@ -47,16 +51,33 @@ export function createUpdateCommandExecutionGuards(
   owner?: PhaseOwner,
 ) {
   const run = opts.run;
+  const runId = run?.runId;
   let executor = run?.executorFence;
   const requester = run?.requesterAuthority;
+  let admittedInstallKey: string | undefined;
+  let originalCohortPair: PluginCohortRecoveryPair | undefined;
+  const retainInstallKey = (installKey: string) => {
+    if (admittedInstallKey !== undefined && admittedInstallKey !== installKey) {
+      throw new UpdateRequesterRevokedError();
+    }
+    admittedInstallKey = installKey;
+  };
   let stateHandedOff = false;
-  const assertInvocation = (phase?: "restore") => {
+  const assertInvocation = (phase?: "restore", observation = false) => {
     const readStatePolicy = !stateHandedOff && phase !== "restore";
     if (readStatePolicy && requester?.isCurrent() === false) {
       throw new UpdateRequesterRevokedError();
     }
     if (opts.recovery || readStatePolicy) {
-      assertUpdateCommandRecoveryState(opts);
+      if (observation) {
+        assertUpdateCommandRecoveryObservation(opts, admittedInstallKey, originalCohortPair);
+      } else {
+        const observed = assertUpdateCommandRecoveryState(opts);
+        if (observed !== undefined) {
+          retainInstallKey(observed.installKey);
+          originalCohortPair ??= observed.pair;
+        }
+      }
     }
   };
   const assertForwardCurrent = () => {
@@ -137,6 +158,9 @@ export function createUpdateCommandExecutionGuards(
       assertAccepting,
       retainSettlement: (completion: Promise<void>) =>
         retainMutableUpdateSignalWrite(run, completion),
+      ...((owner || !stateHandedOff) && run && executor
+        ? { pluginCohort: { runId: run.runId, fence: executor } }
+        : {}),
       ...(owner || !stateHandedOff ? { requireNoRecovery: true as const } : {}),
     } satisfies UpdateRunWriteOptions;
   };
@@ -175,6 +199,7 @@ export function createUpdateCommandExecutionGuards(
       if (authority.installKey !== resolveUpdateInstallRoot(root)) {
         throw new UpdateRequesterRevokedError();
       }
+      retainInstallKey(authority.installKey);
       run.executorFence = acquired;
       executor = acquired;
     },
@@ -186,7 +211,17 @@ export function createUpdateCommandExecutionGuards(
     // through the real executor, which checks both retained and candidate owners.
     assertBoundChildCurrent: () => {
       assertForwardCurrent();
-      assertInvocation();
+      if (
+        opts.run !== run ||
+        run?.runId !== runId ||
+        run?.executorFence !== executor ||
+        run?.requesterAuthority !== requester
+      ) {
+        throw new UpdateRequesterRevokedError();
+      }
+      // Child binding owns native authority. Reuse only the installation fact
+      // captured while idle; calling the parent's effect fence here would refuse.
+      assertInvocation(undefined, true);
     },
   };
 }

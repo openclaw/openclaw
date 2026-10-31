@@ -287,6 +287,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/openai-chat-tools/write-config.mjs!",
   "scripts/e2e/lib/package-git-fixture.mjs!",
   "scripts/e2e/lib/plugin-lifecycle-matrix/measure.mjs!",
+  // Manual container proof executes the registered updater through this exact entrypoint.
+  "scripts/e2e/lib/plugin-update/cohort-rollback-scenario.mjs!",
   "scripts/e2e/lib/plugin-update/registry-server.mjs!",
   "scripts/e2e/lib/plugins/npm-registry-server.mjs!",
   "scripts/e2e/lib/release-plugin-marketplace/lifecycle-assertions.mjs!",

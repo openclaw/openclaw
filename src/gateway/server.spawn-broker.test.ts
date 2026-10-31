@@ -9,9 +9,9 @@ import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.
 import { runSqliteReadOnlyWorker } from "../infra/sqlite-readonly-worker.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import type { BrokerChild } from "../process/spawn-broker/child.js";
-import { getSpawnBroker } from "../process/spawn-broker/context.js";
+import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { runWithProcessCleanupBudget } from "../process/supervisor/cleanup-budget.js";
-import { getProcessSupervisor, shutdownProcessSupervisor } from "../process/supervisor/index.js";
+import * as processSupervisor from "../process/supervisor/index.js";
 import type { ManagedRun } from "../process/supervisor/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -60,9 +60,10 @@ vi.mock("./server-start.js", () => ({
     const admissionOwner = admission.adopt();
     observed.afterAdopt?.(admission);
     const parent = async () => {
-      const result = await runExec(process.execPath, ["-e", "console.log(process.ppid)"], {
-        logOutput: false,
-      });
+      const result = await runWithSpawnBroker(
+        process.versions.bun ? undefined : getSpawnBroker(),
+        () => runExec(process.execPath, ["-e", "console.log(process.ppid)"], { logOutput: false }),
+      );
       return Number(result.stdout);
     };
     // Runtime callbacks inherit the server's execution scope across async boundaries.
@@ -293,6 +294,37 @@ describe.skipIf(process.platform === "win32")("Gateway spawn broker lifetime", (
     },
   );
 
+  it("retires the broker and admission after the supervisor join rejects", async () => {
+    const bun = Object.getOwnPropertyDescriptor(process.versions, "bun");
+    // Select the broker lifetime on Bun too; the core still uses native command transport.
+    if (bun) {
+      Reflect.deleteProperty(process.versions, "bun");
+      observed.startupWork = async () => {
+        Object.defineProperty(process.versions, "bun", bun);
+      };
+    }
+    const failure = new Error("supervisor cleanup failed");
+    const shutdown = vi
+      .spyOn(processSupervisor, "shutdownProcessSupervisor")
+      .mockRejectedValue(failure);
+    try {
+      const server = await startGatewayServer();
+      const close = vi.spyOn(observed.broker!, "close");
+      const [outcome] = await Promise.allSettled([server.close()]);
+      expect(close).toHaveBeenCalledOnce();
+      expect(observed.admission?.isStopped).toBe(true);
+      expect(() => process.kill(observed.broker!.pid!, 0)).toThrow();
+      expect(outcome).toHaveProperty("reason", failure);
+    } finally {
+      shutdown.mockRestore();
+      await observed.admission?.stop();
+      await observed.broker?.close();
+      if (bun) {
+        Object.defineProperty(process.versions, "bun", bun);
+      }
+    }
+  });
+
   it("settles an active command before retiring runtime transports after core close fails", async ({
     signal,
   }) => {
@@ -302,7 +334,7 @@ describe.skipIf(process.platform === "win32")("Gateway spawn broker lifetime", (
     observed.startupWork = async () => {
       // Only Gateway transport selection is Linux-specific; children use the real host platform.
       Object.defineProperty(process, "platform", platform);
-      const supervisor = getProcessSupervisor();
+      const supervisor = processSupervisor.getProcessSupervisor();
       release = supervisor.acquireScopeCleanup("shutdown-command", { processTree: "required-all" });
       run = await supervisor.spawn({
         mode: "child",
@@ -337,7 +369,7 @@ describe.skipIf(process.platform === "win32")("Gateway spawn broker lifetime", (
         ),
       ).rejects.toBe(failure);
       // The CLI also joins here after a failed core close, including native Bun transport.
-      await shutdownProcessSupervisor();
+      await processSupervisor.shutdownProcessSupervisor();
       expect(run!.activity.resultSettled).toBe(true);
       expect(await outcome).toMatchObject([
         {
@@ -347,7 +379,7 @@ describe.skipIf(process.platform === "win32")("Gateway spawn broker lifetime", (
       ]);
       await expect(run!.waitForExtinction!()).resolves.toBeUndefined();
     } finally {
-      await Promise.allSettled([release?.(), shutdownProcessSupervisor()]);
+      await Promise.allSettled([release?.(), processSupervisor.shutdownProcessSupervisor()]);
       Object.defineProperty(process, "platform", { ...platform, value: "linux" });
     }
   });

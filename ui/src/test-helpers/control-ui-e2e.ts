@@ -667,11 +667,9 @@ function installControlUiMockGateway(
 ) {
   const NativeWebSocket = window.WebSocket;
   type DeferredResponse = {
-    preferenceScope: ControlUiMockPreferenceScope | null;
-    id: string;
     method: string;
     params?: unknown;
-    socket: MockWebSocket;
+    respond: (response: unknown, defaultResponse?: boolean) => void;
   };
   type MockTerminalSession = {
     sessionId: string;
@@ -1880,13 +1878,11 @@ function installControlUiMockGateway(
       case "sessions.subscribe":
         return { subscribed: true };
       case "sessions.messages.subscribe":
-        return subscriptionRouting.subscribeResponse(params, (historyParams) =>
-          commitFixtureResponse(
-            "chat.startup",
-            historyParams,
-            buildResponse("chat.startup", historyParams),
+        return {
+          key: subscriptionRouting.canonicalKey(
+            isRecord(params) && typeof params.key === "string" ? params.key : "",
           ),
-        );
+        };
       case "sessions.messages.unsubscribe":
         return { ok: true };
       case "terminal.open": {
@@ -1982,6 +1978,53 @@ function installControlUiMockGateway(
       seq: ++seq,
       type: "event",
     });
+  }
+
+  function prepareResponse(
+    method: string,
+    params: unknown,
+    socket: MockWebSocket,
+    respond: (response: unknown, deferred?: boolean) => void,
+  ): (() => void) | undefined {
+    const complete = (response: unknown, deferred = false, defaultResponse = false) => {
+      if (
+        defaultResponse &&
+        method === "sessions.messages.subscribe" &&
+        !hasOwn(scenario.methodResponses, method) &&
+        subscriptionRouting.completeInitialHistory(
+          params,
+          response,
+          (historyParams, reply) =>
+            prepareResponse("chat.startup", historyParams, socket, (history, historyDeferred) =>
+              reply(commitFixtureResponse("chat.startup", historyParams, history), historyDeferred),
+            )?.(),
+          (payload, historyDeferred) => respond(payload, deferred || historyDeferred),
+        )
+      ) {
+        return;
+      }
+      respond(response, deferred);
+    };
+    if (deferredRequests.shouldDefer(method, params)) {
+      deferredRequests.responses.push({
+        method,
+        params,
+        respond: (response, defaultResponse) => complete(response, true, defaultResponse),
+      });
+      return undefined;
+    }
+    return () => {
+      const handler = requestHandlers.get(method);
+      if (handler) {
+        handler({
+          params,
+          respond: complete,
+          emit: (event, payload) => emitGatewayEvent(socket, event, payload),
+        });
+      } else {
+        complete(buildResponse(method, params), false, true);
+      }
+    };
   }
 
   class MockWebSocket extends EventTarget {
@@ -2080,17 +2123,7 @@ function installControlUiMockGateway(
       }
       requests.push({ id, method, params: frame.params });
       const preferenceScope = this.preferenceScope;
-      if (deferredRequests.shouldDefer(method, frame.params)) {
-        deferredRequests.responses.push({
-          id,
-          method,
-          params: frame.params,
-          socket: this,
-          preferenceScope,
-        });
-        return;
-      }
-      const respond = (response: unknown) => {
+      const respond = (response: unknown, deferred = false) => {
         const payload = commitFixtureResponse(
           method,
           frame.params,
@@ -2111,6 +2144,10 @@ function installControlUiMockGateway(
         if (!mockError) {
           emitTerminalOutput(this, method, frame.params, payload);
           preferenceFixtures.publish(this, method, frame.params, payload);
+        }
+        // A held reply acknowledges the RPC; its test owns later lifecycle events.
+        if (deferred) {
+          return;
         }
         if (!mockError && method === "connect" && this.readyState === MockWebSocket.OPEN) {
           this.tickTimer = window.setInterval(() => {
@@ -2140,20 +2177,10 @@ function installControlUiMockGateway(
           });
         }
       };
-      window.setTimeout(() => {
-        const handler = requestHandlers.get(method);
-        if (handler) {
-          // Delayed fixtures retain this request and socket, even when another
-          // request for the same method finishes first.
-          handler({
-            params: frame.params,
-            respond,
-            emit: (event, payload) => emitGatewayEvent(this, event, payload),
-          });
-        } else {
-          respond(buildResponse(method, frame.params));
-        }
-      }, 0);
+      const dispatch = prepareResponse(method, frame.params, this, respond);
+      if (dispatch) {
+        window.setTimeout(dispatch, 0);
+      }
     }
 
     suspend(): void {
@@ -2198,55 +2225,24 @@ function installControlUiMockGateway(
       ),
     rejectDeferred(method, error, options) {
       for (const response of deferredRequests.take(method, options)) {
-        response.socket.deliver({
-          error: {
+        response.respond({
+          __mockError: {
             code: error?.code ?? "INVALID_REQUEST",
             message: error?.message ?? "mock Gateway rejected request",
             ...(error?.details ? { details: error.details } : {}),
             ...(error?.retryable ? { retryable: true } : {}),
           },
-          id: response.id,
-          ok: false,
-          type: "res",
         });
       }
     },
     requests,
     resolveDeferred(method, payload, options) {
       for (const response of deferredRequests.take(method, options)) {
-        const resolvedPayload = commitFixtureResponse(
-          response.method,
-          response.params,
-          responseFixtures.applyAgentModel(
-            response.method,
-            payload ?? buildResponse(response.method, response.params),
-          ),
-          response.socket,
-          response.preferenceScope,
+        const responsePayload = payload ?? buildResponse(response.method, response.params);
+        response.respond(
+          responseFixtures.applyAgentModel(response.method, responsePayload),
+          payload == null && !requestHandlers.has(method),
         );
-        const mockError = isRecord(resolvedPayload) ? resolvedPayload["__mockError"] : undefined;
-        if (!mockError) {
-          response.socket.sessionMessageSubscriptions.recordRequest(
-            response.method,
-            response.params,
-            resolvedPayload,
-          );
-        }
-        response.socket.deliver({
-          id: response.id,
-          ok: !mockError,
-          ...(mockError ? { error: mockError } : { payload: resolvedPayload }),
-          type: "res",
-        });
-        if (!mockError) {
-          emitTerminalOutput(response.socket, response.method, response.params, resolvedPayload);
-          preferenceFixtures.publish(
-            response.socket,
-            response.method,
-            response.params,
-            resolvedPayload,
-          );
-        }
       }
     },
     suspendLatest() {
@@ -2341,9 +2337,13 @@ function installControlUiMockGateway(
     setHistoryMessages(messages) {
       historyMessagesOverridden = true;
       scenario.historyMessages = Array.isArray(messages) ? messages : [];
-      const configuredHistory = scenario.methodResponses["chat.history"];
-      if (isRecord(configuredHistory) && !responseFixtures.cases(configuredHistory)) {
-        configuredHistory.messages = scenario.historyMessages;
+      // Static startup and history responses describe the same overridden transcript.
+      // Case tables remain intentional query-specific fixtures.
+      for (const method of ["chat.startup", "chat.history"]) {
+        const configuredHistory = scenario.methodResponses[method];
+        if (isRecord(configuredHistory) && !responseFixtures.cases(configuredHistory)) {
+          configuredHistory.messages = scenario.historyMessages;
+        }
       }
     },
     socketCount() {

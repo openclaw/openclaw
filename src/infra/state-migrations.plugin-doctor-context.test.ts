@@ -137,6 +137,78 @@ it(
 
 describe("plugin doctor session identity evidence", () => {
   it(
+    "reads each legacy session index once for a Codex detection page",
+    inDoctorState(async ({ env, stateDir }) => {
+      setRuntimeConfigSnapshot({});
+      await putSession(env, "agent:main:retained", "retained-session");
+      const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+      fs.mkdirSync(path.dirname(storePath), { recursive: true });
+      fs.writeFileSync(storePath, JSON.stringify({ retained: { sessionId: "legacy-session" } }));
+      const context = doctorContext(env);
+      const rows = Array.from({ length: 512 }, (_, index) => {
+        const sessionId = `absent-${index}`;
+        const value = {
+          version: 1,
+          state: "active",
+          sessionId,
+          binding: {
+            threadId: "parent",
+            cwd: "/synthetic",
+            appServerRuntimeFingerprint: "fixture",
+          },
+          nativeSubagentAssignments: {
+            version: 1,
+            assignments: [
+              {
+                runId: `codex-thread:child-${index}:turn:first-turn`,
+                childThreadId: `child-${index}`,
+                nativeTurnId: "first-turn",
+                nativeParentThreadId: "parent",
+                owner: {
+                  parentThreadId: "parent",
+                  sessionId,
+                  lifecycleRevision: "lifecycle",
+                  connectionFingerprint: "a".repeat(64),
+                },
+              },
+            ],
+          },
+        };
+        return {
+          key: `session:main:${sessionId}`,
+          value,
+          valueJson: JSON.stringify(value),
+          createdAt: 1,
+          expiresAt: null,
+        };
+      });
+      context.readPluginStateEntriesInKeyRange = (_namespace, range) => (range.after ? [] : rows);
+      const contract = await loadBundledPluginFacade<{
+        stateMigrations: PluginDoctorStateMigration[];
+      }>({
+        pluginId: "codex",
+        artifactBasename: "doctor-contract-api.js",
+      });
+      const migration = contract.stateMigrations.find(
+        ({ id }) => id === "codex-native-assignment-repair",
+      );
+      if (!migration) {
+        throw new Error("Missing registered Codex native assignment repair");
+      }
+      const reads = vi.spyOn(fs, "readFileSync");
+      expect(
+        await migration.detectLegacyState({
+          config: {},
+          env,
+          stateDir,
+          oauthDir: path.join(stateDir, "credentials"),
+          context,
+        }),
+      ).not.toBeNull();
+      expect(reads.mock.calls.filter(([file]) => file === storePath)).toHaveLength(1);
+    }),
+  );
+  it(
     "preserves ambiguity for two current keys",
     inDoctorState(async ({ env }) => {
       setRuntimeConfigSnapshot({});

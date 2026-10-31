@@ -119,6 +119,21 @@ the local archives before installing them and returns no forwarded credentials.
 It does not allocate a machine, enroll a node, create a logical lease, or grant
 execution authority. Node and archive extraction tools must already be present.
 
+For a retained cache, `createCrabboxRuntimeCacheVerification` takes the same
+artifact identity without local archive paths and returns a credential-free
+command. It rejects missing or corrupt caches without installing, pruning
+archives, binding runtime Node, or creating enrollment state. It checks the
+package/build/manifest identity, CLI version, and retained worker archive digest;
+it does not hash every installed runtime file or grant live execution authority.
+
+After a successful bundle install or verification command, pass its stdout and expected
+identity to `readCrabboxRuntimeInstallation`. It accepts exactly one
+`openclaw.runtime-installed:` result line of at most 16 KiB and rejects mismatched
+artifacts. This stdout protocol marker is not an environment variable.
+`parseCrabboxRuntimeInstallation` validates an already decoded result against
+that identity. The receipt records `installed` or `existing-verified`; it is
+evidence of the completed check, not permission to skip future verification.
+
 ## Code Mode executor runtime
 
 Use `openclaw/plugin-sdk/code-mode-executor-runtime` to implement the `quickjs`

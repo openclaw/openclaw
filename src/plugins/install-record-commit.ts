@@ -25,6 +25,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { composeConfigWriteAssertions } from "../config/write-authority.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { pluginCohortPublicationContext } from "../infra/update-plugin-cohort-context.js";
 import { resolveDefaultPluginNpmDir, resolvePluginNpmProjectsDir } from "./install-paths.js";
 import { resolveInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import {
@@ -41,7 +42,7 @@ import {
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { RETAINED_MANAGED_NPM_KEEP_FILES_REASON } from "./managed-npm-retention-contract.js";
 import {
-  clearRetainedManagedNpmInstallMarker,
+  clearActiveRetainedManagedNpmInstallMarkers,
   markRetainedManagedNpmInstall,
   restoreRetainedManagedNpmInstallMarkers,
   resolveRetainedManagedNpmInstallPackageInfo,
@@ -249,6 +250,8 @@ async function markRetiredManagedNpmInstallRecords(params: {
   createdMarkerPaths: string[];
   prepareEffect: () => Promise<void>;
 }): Promise<void> {
+  const cohort = pluginCohortPublicationContext.getStore();
+  const retainReplacedFiles = Boolean(cohort);
   const activeInstallPaths = Object.values(params.nextInstallRecords).flatMap((record) => {
     const installPath = record.installPath?.trim();
     return installPath ? [installPath] : [];
@@ -277,16 +280,30 @@ async function markRetiredManagedNpmInstallRecords(params: {
     }
     const markerPath = resolveRetainedManagedNpmInstallMarkerPath(packageDir);
     const markerAlreadyExisted = fs.existsSync(markerPath);
+    // The outer update recorded this protection before candidate effects. Its
+    // activation verifier owns retirement, including the exact marker preimage.
+    if (retainReplacedFiles && markerAlreadyExisted) {
+      return;
+    }
     const marked = await markRetainedManagedNpmInstall({
       packageDir,
       pluginId,
       assertCurrent: params.prepareEffect,
-      reason:
-        nextRecord?.source === "npm"
+      reason: retainReplacedFiles
+        ? RETAINED_MANAGED_NPM_KEEP_FILES_REASON
+        : nextRecord?.source === "npm"
           ? "replaced-by-managed-npm-generation-update"
           : nextRecord
             ? "replaced-by-plugin-source-change"
             : RETAINED_MANAGED_NPM_KEEP_FILES_REASON,
+      beforeWrite: cohort
+        ? async (contents) => {
+            const { recordPluginCohortRetentionMarker } =
+              await import("./update-cohort-recovery.js");
+            await params.prepareEffect();
+            recordPluginCohortRetentionMarker(cohort, packageDir, contents);
+          }
+        : undefined,
     });
     if (marked && !markerAlreadyExisted) {
       // Record each marker immediately so a later filesystem failure can roll it back.
@@ -313,36 +330,6 @@ async function markRetiredManagedNpmInstallRecords(params: {
         nextInstallRecords: params.nextInstallRecords,
       }) ?? undefined,
     );
-  }
-}
-
-async function clearActiveRetainedManagedNpmInstallMarkers(
-  nextInstallRecords: Record<string, PluginInstallRecord>,
-  clearedMarkers: Array<{ markerPath: string; contents: string }>,
-  prepareEffect: () => Promise<void>,
-): Promise<void> {
-  for (const record of Object.values(nextInstallRecords)) {
-    if (record.source !== "npm" || !record.installPath?.trim()) {
-      continue;
-    }
-    let markerPath: string;
-    try {
-      markerPath = resolveRetainedManagedNpmInstallMarkerPath(record.installPath);
-    } catch {
-      continue;
-    }
-    let contents: string;
-    try {
-      contents = await fs.promises.readFile(markerPath, "utf8");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        continue;
-      }
-      throw error;
-    }
-    // Journal before removal: the helper can refuse after deleting the marker.
-    clearedMarkers.push({ markerPath, contents });
-    await clearRetainedManagedNpmInstallMarker(record.installPath, prepareEffect);
   }
 }
 

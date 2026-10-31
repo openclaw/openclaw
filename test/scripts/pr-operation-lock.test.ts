@@ -44,6 +44,7 @@ import { createMainRefreshFixture } from "./pr-main-refresh.test-support.js";
 import { createProcessGroupTimingPreload } from "./pr-operation-lock.test-support.js";
 import {
   copyPrWrapperSources,
+  copyPrRoutingWrapperSources,
   createSettledPrCacheEntry,
   readPrCacheState,
   createIndependentPrFixtureEnv,
@@ -396,7 +397,8 @@ async function runSupervisedFixture(
     ? realpathSync(tempDirs.make("openclaw-pr-anchor-v3."))
     : undefined;
   if (anchorDir) {
-    copyPrWrapperSources(anchorDir);
+    copyPrRoutingWrapperSources(anchorDir);
+    expect(existsSync(join(anchorDir, "src"))).toBe(false);
   }
   const cacheBootstrap =
     options.dependencyEntry && anchorDir

@@ -247,7 +247,7 @@ export async function repairLegacySessionEntryStates(params: {
   ) => void;
 }): Promise<SessionDeliveryStateRepairReport> {
   try {
-    const recoveredTombstones = new Set<string>();
+    const recoveredTombstones = new Map<string, string>();
     const retainedWarnings = new Map<string, string>();
     const reportRetained = () => {
       for (const [sessionKey, warning] of retainedWarnings) {
@@ -272,7 +272,12 @@ export async function repairLegacySessionEntryStates(params: {
         const tombstone = inspectLegacyRestartTombstone(entry);
         retainedWarnings.delete(sessionKey);
         if (tombstone?.retire) {
-          recoveredTombstones.add(sessionKey);
+          recoveredTombstones.set(
+            sessionKey,
+            tombstone.doctorOnly
+              ? `${sessionKey}: ${tombstone.warning}`
+              : `Recovered legacy restart tombstone for ${sessionKey}; obsolete claims and pending delivery retired (original state backed up).`,
+          );
         } else if (tombstone) {
           retainedWarnings.set(sessionKey, tombstone.warning);
         }
@@ -316,11 +321,8 @@ export async function repairLegacySessionEntryStates(params: {
       note(backup.changes.map((change) => `- ${change}`).join("\n"), "Session SQLite backups");
       report.repaired = plan.apply(assertTargetCurrent);
       reportRetained();
-      for (const sessionKey of recoveredTombstones) {
-        note(
-          `Recovered legacy restart tombstone for ${sessionKey}; obsolete claims and pending delivery retired (original state backed up).`,
-          "Session recovery warning",
-        );
+      for (const warning of recoveredTombstones.values()) {
+        note(warning, "Session recovery warning");
       }
       params.onInspectedTargets?.(plan.inspectedTargets);
       note(

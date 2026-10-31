@@ -1,6 +1,12 @@
 import { afterEach, expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  acceptGatewayDeviceSourceAuthority,
+  captureGatewayDeviceRevocation,
+} from "../gateway/device-revocation.js";
 import { resolveRepositoryConnectionIdentity } from "../gateway/github-user-identity.js";
+import { repositoryDispatchCredentialReader } from "../gateway/repository-dispatch.js";
+import type { GatewayClient } from "../gateway/server-methods/client-types.js";
 import { createPluginRecord } from "./loader-records.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
@@ -162,6 +168,64 @@ it.each([false, true])(
         accountId: 42,
         credentialSource: { id: "synthetic-lease", expiresAtMs: 123456 },
       });
+    }
+  },
+);
+
+it.each([false, true])(
+  "keeps only a natively accepted repository source across socket replacement (%s)",
+  (accepted) => {
+    const f = fixture();
+    f.api.registerRepositoryIntegration(policy);
+    const connection = new AbortController();
+    let connected = true;
+    let sourceCurrent = true;
+    const source = captureGatewayDeviceRevocation({}, {}, () => connected, connection.signal, {
+      isCurrent: () => sourceCurrent,
+      subscribe: () => () => {},
+    });
+    const client: GatewayClient = {
+      connId: "original-connection",
+      connectionSignal: connection.signal,
+      authenticatedUserProfile: {
+        profileId: "original-profile",
+        displayName: null,
+        hasAvatar: false,
+        updatedAt: 1,
+      },
+      connect: {
+        minProtocol: 1,
+        maxProtocol: 1,
+        client: { id: "cli", mode: "cli", version: "test", platform: "test" },
+        role: "operator",
+        scopes: ["operator.write"],
+      },
+      internal: { authenticatedOperator: true },
+    };
+    try {
+      const reader = repositoryDispatchCredentialReader({
+        client,
+        hasCurrentClientAuthority: source.isCurrent,
+        assertCurrent: () => {},
+        agentId: "main",
+        sessionKey: "agent:main:original",
+        sessionId: "original-physical-session",
+        requestDigest: "original-dispatch",
+      });
+      expect(reader?.assertCurrent).toBeTypeOf("function");
+      if (accepted) {
+        expect(acceptGatewayDeviceSourceAuthority(source.isCurrent)).toBe(true);
+      }
+      connected = false;
+      client.invalidated = true;
+      connection.abort();
+      if (accepted) {
+        expect(() => reader!.assertCurrent!()).not.toThrow();
+        sourceCurrent = false;
+      }
+      expect(() => reader!.assertCurrent!()).toThrow("Repository caller authority changed");
+    } finally {
+      source.release();
     }
   },
 );

@@ -25,13 +25,17 @@ import {
 } from "../../infra/package-update-publication.test-support.js";
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
+import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import {
   createUpdateRun,
   getUpdateRun,
   recordUpdateRunPhase,
 } from "../../infra/update-run-ledger.js";
+import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
+import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import { defaultRuntime } from "../../runtime.js";
+import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import {
@@ -167,6 +171,54 @@ function readArchivedSettlement(anchor: string, operationId: string) {
 async function repair() {
   await updateRepairCommand({ json: true, yes: true });
 }
+
+it("settles the named plugin pair under native custody before repair finalization", async () => {
+  await writePackageRoot(fixtureRoot, "2026.10.9");
+  mocks.root.mockResolvedValue(fixtureRoot);
+  const driver = readUpdateRunDriver();
+  expect(driver).toBeDefined();
+  const run = createUpdateRun({
+    trigger: "cli",
+    // A schema-valid different start identity represents an exited instance of this PID.
+    origin: { driver: { ...driver!, startIdentity: String(BigInt(driver!.startIdentity) + 1n) } },
+  });
+  recordUpdateRunPhase(run.runId, "verifying");
+  const runtime = {
+    root: fixtureRoot,
+    nodePath: process.execPath,
+    version: "2026.10.9",
+    buildId: null,
+  };
+  // A synthetic empty cohort isolates public repair admission and native settlement.
+  const reservation = createRetainedUpdateRecovery({
+    runId: run.runId,
+    from: runtime,
+    to: runtime,
+  });
+  writeConfigMachineState("update.pluginCohort." + run.runId, {
+    runId: run.runId,
+    transactionId: reservation.transactionId,
+    revision: 0,
+    disposition: "pending",
+    installKey: fixtureRoot,
+    priorArtifacts: [],
+    artifacts: [],
+    publications: [],
+    settledPublications: 0,
+  });
+  mocks.finalize.mockImplementation(async () => {
+    expect(loadPluginCohortRecovery(run.runId)).toBeUndefined();
+    expect(loadUpdateRecovery(run.runId)).toBeUndefined();
+    assertNoPendingPackageActivation(fixtureRoot);
+  });
+  await runRegisteredCli({
+    register: registerUpdateCli,
+    argv: ["update", "repair", "--json", "--yes"],
+  });
+  expect(mocks.finalize).toHaveBeenCalledOnce();
+  expect(loadPluginCohortRecovery(run.runId)).toBeUndefined();
+  expect(loadUpdateRecovery(run.runId)).toBeUndefined();
+});
 
 async function prepareNextPackage(
   f: Awaited<ReturnType<typeof createPackageSwapFixture>>,

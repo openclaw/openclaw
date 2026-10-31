@@ -19,6 +19,7 @@ import type {
 } from "@openclaw/gateway-client/scope-upgrade";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
+import { trackForegroundActivity } from "../app/foreground-activity.ts";
 import { NativeGatewayAuthUnavailableError } from "../app/native-gateway-auth.ts";
 import { isRemoteControlUiIngress } from "../app/remote-ingress.ts";
 import { formatUiError } from "../lib/format-error.ts";
@@ -92,7 +93,6 @@ export class GatewayBrowserClient {
   private connectDispatch = Promise.withResolvers<boolean>();
   private readonly initialConnectDispatch = this.connectDispatch.promise.then(() => undefined);
   private readonly chatEvents = new GatewayChatEvents((reason) => this.forceReconnect(reason));
-  private maxPayloadBytes: number | undefined;
   private scopeUpgradeRuntime: Promise<GatewayScopeUpgrade> | null = null;
   private connectionHello: GatewayHelloOk | null = null;
   private lastInboundActivityAtMs: number | null = null;
@@ -144,8 +144,7 @@ export class GatewayBrowserClient {
         this.reachabilityProbe?.abort();
         this.reachabilityProbe = null;
         this.chatEvents.clear();
-        this.maxPayloadBytes = undefined;
-        return createBrowserGatewaySocket(this.opts.url, handlers, () => this.maxPayloadBytes);
+        return createBrowserGatewaySocket(this.opts.url, handlers);
       },
       createRequestId: generateUUID,
       createRequestError: (error) =>
@@ -419,7 +418,6 @@ export class GatewayBrowserClient {
     // Replace retained identity before consumers can act on a different account.
     this.opts.offlineRecoveryScope = hello.auth?.recoveryScope;
     this.offlineStorageRetired = false;
-    this.maxPayloadBytes = hello.policy?.maxPayload;
     this.initializeInboundActivity(hello);
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
@@ -693,13 +691,15 @@ export class GatewayBrowserClient {
         options?.onSent?.(requestId);
       },
     };
-    return method === "talk.catalog"
-      ? requestTalkCatalog<T>(
-          (retryOptions) => this.chatEvents.request<T>(this.client, method, params, retryOptions),
-          this.catalogRetryAbort.signal,
-          requestOptions,
-        )
-      : this.chatEvents.request<T>(this.client, method, params, requestOptions);
+    const request =
+      method === "talk.catalog"
+        ? requestTalkCatalog<T>(
+            (retryOptions) => this.chatEvents.request<T>(this.client, method, params, retryOptions),
+            this.catalogRetryAbort.signal,
+            requestOptions,
+          )
+        : this.chatEvents.request<T>(this.client, method, params, requestOptions);
+    return trackForegroundActivity(request);
   }
 
   async requestScopeUpgrade(options: { onPending?: (requestId: string) => void } = {}) {

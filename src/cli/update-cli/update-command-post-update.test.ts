@@ -5,6 +5,7 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import {
@@ -31,6 +32,7 @@ import {
   registerManagedInstallEnvironmentTest,
   recordVerifiedGatewayRun,
   successfulPluginUpdate,
+  runFinalizationFailureWithNativeExecutor,
   taskRecovery,
   validConfigSnapshot,
 } from "./update-command-post-update.test-support.js";
@@ -161,8 +163,11 @@ afterEach(() => {
 });
 
 describe("successful update finalization ordering", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    const control = tempDirs.make("post-update-native-control-");
+    await fs.chmod(control, 0o700);
+    vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
     // These roots are package fixtures; separate process tests cover Git discovery.
     vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
     mocks.readServiceState.mockReset();
@@ -396,22 +401,34 @@ describe("successful update finalization ordering", () => {
       throw restoreError;
     });
 
-    await expectUpdateFailure(
-      finishSuccessfulPackageSwitch({
-        restartEnvironment: process.env,
-        json: true,
-        windowsTaskAutoStartRecovery: {
-          ...taskRecovery(),
-          restore,
-        },
-      }),
-      "windows-task-autostart-restore-failed",
-      { cause: restoreError, detail: expect.stringContaining(restoreError.message) },
-    );
+    const root = tempDirs.make("post-update-task-recovery-");
+    const env = { ...process.env };
+    const run: NonNullable<FinishUpdateParams["opts"]["run"]> = {
+      runId: createUpdateRun({ trigger: "cli" }, { env }).runId,
+      env,
+    };
+    const ownerFailure = await runFinalizationFailureWithNativeExecutor(root, run, async () => {
+      await expectUpdateFailure(
+        finishSuccessfulPackageSwitch({
+          packageRoot: root,
+          run,
+          restartEnvironment: process.env,
+          json: true,
+          windowsTaskAutoStartRecovery: {
+            ...taskRecovery(),
+            restore,
+          },
+        }),
+        "windows-task-autostart-restore-failed",
+        { cause: restoreError, detail: expect.stringContaining(restoreError.message) },
+      );
 
-    expect(restore).toHaveBeenCalledOnce();
-    expect(mocks.restartService).not.toHaveBeenCalled();
-    expectReportedFailure("windows-task-autostart-restore-failed");
+      expect(restore).toHaveBeenCalledOnce();
+      expect(mocks.restartService).not.toHaveBeenCalled();
+      expectReportedFailure("windows-task-autostart-restore-failed");
+      return restoreError;
+    });
+    expect(ownerFailure).toBe(restoreError);
   });
 
   it.each([

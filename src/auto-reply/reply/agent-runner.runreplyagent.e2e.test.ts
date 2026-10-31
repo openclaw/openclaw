@@ -2834,6 +2834,94 @@ describe("runReplyAgent typing", () => {
     requireScheduledFollowupRunner,
   });
 
+  it("hands a completed source reply to prequeued successors without replaying it", async () => {
+    const started = createDeferred();
+    const release = createDeferred();
+    const requests: Array<{ prompt: string; context: string }> = [];
+    const sent: string[] = [];
+    state.runEmbeddedAgentMock.mockImplementation(async (params) => {
+      const label = ["A", "B", "C"][requests.length];
+      requests.push({ prompt: params.prompt, context: params.currentInboundContext?.text ?? "" });
+      if (label === "A") {
+        started.resolve();
+        await release.promise;
+      }
+      const text = `${label}_REPLY_ONCE`;
+      sent.push(text);
+      return {
+        payloads: [],
+        meta: { durationMs: 0 },
+        sourceReplyDeliveryState: "delivered",
+        didDeliverSourceReplyViaMessageTool: true,
+        messagingToolSentTargets: [
+          { tool: "message", provider: "telegram", to: "123", text, sourceReplyFinal: true },
+        ],
+      } satisfies EmbeddedAgentRunResult;
+    });
+    const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
+    const shared = {
+      opts: { sourceReplyDeliveryMode: "message_tool_only", onBlockReply },
+      currentInboundEventKind: "user_request",
+      sessionCtx: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "123",
+        ChatType: "group",
+      },
+      runOverrides: {
+        messageProvider: "telegram",
+        chatType: "group",
+        sourceReplyDeliveryMode: "message_tool_only",
+        config: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+      },
+    } satisfies NonNullable<Parameters<typeof createMinimalRun>[0]>;
+    const first = createMinimalRun(shared).run();
+    await started.promise;
+    const successors = ["Fresh B question", "Repeat or discuss the prior reply"].map(
+      (prompt, index) => {
+        const queued = createMinimalRun({
+          ...shared,
+          sessionCtx: { ...shared.sessionCtx, MessageSid: `queued-${index}` },
+          isActive: true,
+          bindActiveAuthority: false,
+          isRunActive: () => true,
+          shouldFollowup: true,
+          resolvedQueueMode: "followup",
+        });
+        queued.followupRun.prompt = prompt;
+        queued.followupRun.currentInboundContext = { text: `Context for ${prompt}` };
+        return queued;
+      },
+    );
+    try {
+      for (const queued of successors) {
+        await expect(queued.run()).resolves.toBeUndefined();
+      }
+      expect(enqueueFollowupRun).toHaveBeenCalledTimes(2);
+      expect(requests).toHaveLength(1);
+      release.resolve();
+      await first;
+      await requireScheduledFollowupRunner()(successors[0]!.followupRun);
+      await successors[1]!.followupRun.controllerInput!.settlement.promise;
+
+      expect(sent).toEqual(["A_REPLY_ONCE", "B_REPLY_ONCE", "C_REPLY_ONCE"]);
+      expect(onBlockReply).not.toHaveBeenCalled();
+      expect(requests.map(({ prompt }) => prompt)).toEqual([
+        "hello",
+        "Fresh B question",
+        "Repeat or discuss the prior reply",
+      ]);
+      expect(requests[0]!.context).not.toContain("preceding turn already delivered");
+      for (const request of requests.slice(1)) {
+        expect(request.context).toContain(`Context for ${request.prompt}`);
+        expect(request.context.match(/preceding turn already delivered/g)).toHaveLength(1);
+      }
+    } finally {
+      release.resolve();
+      await first;
+    }
+  });
+
   it("delivers a queued provider error after a private settled-tool completion", async () => {
     const helperStarted = createDeferred();
     const finishHelper = createDeferred();

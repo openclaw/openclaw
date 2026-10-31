@@ -10,10 +10,9 @@ import type {
 import { readAcceptedGatewayDeviceSourceAuthority } from "./device-revocation.js";
 import { withRepositoryIdentity } from "./repository-integration-identity.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
-export type { RepositoryOperation } from "../plugins/repository-integration.types.js";
 
 /** Capture host-authenticated operator authority; no wire metadata can create this handle. */
-export function captureRepositoryClientActor(input: {
+function captureRepositoryClientActor(input: {
   client: GatewayClient | null | undefined;
   claim: RepositoryOperation;
   assertCurrent: () => void;
