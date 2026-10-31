@@ -453,6 +453,48 @@ describe("normalizeVoiceCallConfig", () => {
   });
 });
 
+describe("Telnyx noise suppression config", () => {
+  const telnyx = { apiKey: "KEY123", connectionId: "CONN456", publicKey: "public-key" };
+  const normalize = (noiseSuppression?: unknown) =>
+    normalizeVoiceCallConfig({
+      provider: "telnyx",
+      telnyx: { ...telnyx, ...(noiseSuppression ? { noiseSuppression } : {}) },
+    });
+
+  it("is off unless configured and keeps a valid block through runtime resolution", () => {
+    expect(normalize().telnyx?.noiseSuppression).toBeUndefined();
+    const noiseSuppression = {
+      direction: "outbound",
+      engine: "Krisp",
+      engineConfig: { model: "krisp-viva-tel-lite-v1.kef", suppressionLevel: 80 },
+    } as const;
+    expect(resolveVoiceCallConfig(normalize(noiseSuppression)).telnyx).toEqual({
+      ...telnyx,
+      noiseSuppression,
+    });
+  });
+
+  it.each([
+    ["a missing direction", { engine: "Krisp" }],
+    ["an unknown direction", { direction: "caller" }],
+    ["an unknown engine", { direction: "inbound", engine: "RNNoise" }],
+    [
+      "engine config without an engine",
+      { direction: "outbound", engineConfig: { model: "x.kef" } },
+    ],
+    [
+      "an unknown engine config key",
+      { direction: "outbound", engine: "Krisp", engineConfig: { strength: 1 } },
+    ],
+    [
+      "an out-of-range engine setting",
+      { direction: "outbound", engine: "Krisp", engineConfig: { suppressionLevel: 101 } },
+    ],
+  ])("rejects %s", (_name, noiseSuppression) => {
+    expect(() => normalize(noiseSuppression)).toThrow();
+  });
+});
+
 describe("resolveVoiceCallStreamExposurePaths", () => {
   const enabledPath = (streamPath: string) => ({ enabled: true, streamPath });
   const exposed = (localPath: string, publicPath = localPath) => ({ localPath, publicPath });

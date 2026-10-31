@@ -532,6 +532,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/voice-call/src/manager/outbound.persistence.test.ts",
   "extensions/voice-call/src/manager/store.test.ts",
   "extensions/voice-call/src/runtime.realtime-routing.test.ts",
+  "extensions/voice-call/src/runtime.telnyx-answer.test.ts",
   "extensions/voice-call/src/webhook.auto-response.lifecycle.test.ts",
   "extensions/voice-call/src/webhook.hangup-once.lifecycle.test.ts",
   "extensions/whatsapp/src/auto-reply/monitor/process-message.batched-reply.test.ts",
