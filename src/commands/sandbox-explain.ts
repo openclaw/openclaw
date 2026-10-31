@@ -19,7 +19,7 @@ import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js
 import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js";
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../agents/spawned-context.js";
-import { normalizeAnyChannelId } from "../channels/registry.js";
+import { normalizeAnyChannelId, normalizeChatChannelId } from "../channels/registry.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { resolveAgentMainSessionKey, resolveSessionStorePathCore } from "../config/sessions.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -41,6 +41,12 @@ type SandboxExplainOptions = {
 };
 
 const SANDBOX_DOCS_URL = "https://docs.openclaw.ai/sandbox";
+
+// `sandbox explain` runs in CLI processes whose plugin registry is scoped to
+// sandbox backends and is often empty, so bundled channels must resolve without
+// runtime channel plugin registration.
+const resolveExplainChannelId = (candidate?: string | null): string | undefined =>
+  normalizeAnyChannelId(candidate) ?? normalizeChatChannelId(candidate) ?? undefined;
 
 export async function sandboxExplainCommand(
   opts: SandboxExplainOptions,
@@ -164,7 +170,7 @@ export async function sandboxExplainCommand(
   let channel: string | undefined =
     normalizedCandidate === INTERNAL_MESSAGE_CHANNEL
       ? INTERNAL_MESSAGE_CHANNEL
-      : (normalizeAnyChannelId(normalizedCandidate) ?? undefined);
+      : resolveExplainChannelId(normalizedCandidate);
   if (channel === undefined) {
     const parsed = parseAgentSessionKey(sessionKey);
     if (parsed) {
@@ -178,7 +184,7 @@ export async function sandboxExplainCommand(
           channel =
             candidate === INTERNAL_MESSAGE_CHANNEL
               ? INTERNAL_MESSAGE_CHANNEL
-              : (normalizeAnyChannelId(candidate) ?? undefined);
+              : resolveExplainChannelId(candidate);
         }
       }
     }
