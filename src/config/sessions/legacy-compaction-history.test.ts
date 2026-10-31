@@ -90,4 +90,3 @@ it.each([
   expect(() => readLegacyCompactionSnapshotPaths(entry)).toThrow(TypeError);
   expect(readLegacyCompactionMetrics(entry)).toEqual([]);
 });
-
