@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   existsSync,
@@ -15,11 +15,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 
 const helperPath = ".github/actions/setup-node-env/seed-bun-from-image.mjs";
 const pins = {
-  "linux-x64": "3e730528d89775f03f87f05c06787c4df4099d0a37f3f252e7b829cb23816e18",
-  "linux-x64-baseline": "1fc2edac843102909e3a1be1d8d9802cc6071cf074e67e88231f4ffe0f8b397b",
+  "linux-x64": "bf8ccbfb2b0b80159e0f9a6d15c55317add8077534dbc6130a3edb52fccb395c",
+  "linux-x64-baseline": "e0446eb55995772eb9894bebae9a6be368d985a8b9271ee124486f9946eedd76",
 };
 type Variant = keyof typeof pins;
 type Step = { name: string; run?: string; if?: string };
@@ -63,7 +64,7 @@ fi`,
   echo fixture-npm
 else
   printf '%s\\n' "$*" >> "$FIXTURE_NPM_LOG"
-  [[ "$*" == "install -g bun@1.4.3" ]]
+  [[ "$*" == "install -g bun@1.4.4" ]]
   cp "$FIXTURE_FALLBACK" "$FIXTURE_NODE_BIN/bun"
 fi`,
   );
@@ -72,23 +73,22 @@ fi`,
   symlinkSync("bun", join(nodeBin, "bunx"));
   shell(join(root, "fallback-bun"), "echo npm-fallback-bun");
   const hashes = new Map<Variant, string>();
-  function archive(variant: Variant, version = "1.4.3", member = `bun-${variant}/bun`) {
-    const stage = join(root, `stage-${variant}`);
-    rmSync(stage, { recursive: true, force: true });
-    mkdirSync(join(stage, member, ".."), { recursive: true });
-    shell(
-      join(stage, member),
-      `echo ${variant} >> "$FIXTURE_BUN_LOG"
+  function archive(variant: Variant, version = "1.4.4", member = `bun-${variant}/bun`) {
+    // The consumer extracts authenticated bytes and assigns executable permissions.
+    const bytes = makeStoredZip({
+      [member]: `#!/bin/bash
+set -euo pipefail
+echo ${variant} >> "$FIXTURE_BUN_LOG"
 if [[ "\${1:-}" == "--version" || "\${1:-}" == "-v" ]]; then
   echo ${version}
 else
   echo ${variant}
-fi`,
-    );
-    const path = join(image, `bun-v1.4.3-${variant}.zip`);
-    rmSync(path, { force: true });
-    execFileSync("zip", ["-q", path, member], { cwd: stage });
-    hashes.set(variant, createHash("sha256").update(readFileSync(path)).digest("hex"));
+fi
+`,
+    });
+    const path = join(image, `bun-v1.4.4-${variant}.zip`);
+    writeFileSync(path, bytes);
+    hashes.set(variant, createHash("sha256").update(bytes).digest("hex"));
     return path;
   }
   for (const variant of Object.keys(pins) as Variant[]) {
@@ -235,15 +235,15 @@ describe("Bun image archive consumer", () => {
     (kind) => {
       const f = fixture();
       const baseline: Variant = "linux-x64-baseline";
-      const archive = join(f.image, `bun-v1.4.3-${baseline}.zip`);
+      const archive = join(f.image, `bun-v1.4.4-${baseline}.zip`);
       if (kind === "layout") {
-        f.archive(baseline, "1.4.3", "unexpected/bun");
+        f.archive(baseline, "1.4.4", "unexpected/bun");
       } else if (kind === "directory" || kind === "symlink") {
         rmSync(archive);
         if (kind === "directory") {
           mkdirSync(archive);
         } else {
-          symlinkSync(join(f.image, "bun-v1.4.3-linux-x64.zip"), archive);
+          symlinkSync(join(f.image, "bun-v1.4.4-linux-x64.zip"), archive);
         }
       } else {
         writeFileSync(archive, "not an original Bun archive");
@@ -260,10 +260,10 @@ describe("Bun image archive consumer", () => {
 
   it("uses the unchanged pinned npm fallback only when the matching archive is missing", () => {
     const f = fixture();
-    rmSync(join(f.image, "bun-v1.4.3-linux-x64-baseline.zip"));
+    rmSync(join(f.image, "bun-v1.4.4-linux-x64-baseline.zip"));
     const { result } = f.runAction();
     expect(result.status, result.stderr).toBe(0);
-    expect(f.log(f.npmLog)).toBe("install -g bun@1.4.3");
+    expect(f.log(f.npmLog)).toBe("install -g bun@1.4.4");
     expect(result.stdout).toContain("npm-fallback-bun");
     expect(readdirSync(f.runnerTemp)).toEqual([]);
   });

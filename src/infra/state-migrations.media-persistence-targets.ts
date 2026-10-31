@@ -302,7 +302,7 @@ export function discoverAgentDatabaseMigrationTargets(params: {
           unverifiedTargets.push({ ...candidate, realPath });
         } else {
           const target = { ...candidate, agentId: deletion.agentId, realPath };
-          if (!deletion.cleanupCompleted && !deletion.manualClawRemoval) {
+          if (!deletion.cleanupCompleted && !deletion.manualTemplateRemoval) {
             pendingDeletionTargets.push(target);
           } else {
             retainedTargets.push(target);
@@ -311,7 +311,7 @@ export function discoverAgentDatabaseMigrationTargets(params: {
         if (
           typeof deletion === "string" ||
           deletion.cleanupCompleted ||
-          deletion.manualClawRemoval
+          deletion.manualTemplateRemoval
         ) {
           warnings.push(
             `Held agent ${sanitizeForLog(typeof deletion === "string" ? candidate.agentId : deletion.agentId)} database ${sanitizeForLog(pathname)} (${typeof deletion === "string" ? (deletion === "held" ? "deletion journal reconstructed" : "deletion journal unavailable") : "retained-by-deletion"}); run ${formatCliCommand("openclaw doctor --fix", params.env)} to inspect restoration.`,

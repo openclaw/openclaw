@@ -76,6 +76,7 @@ export type ResolveOutboundSessionRouteParams = {
   resolvedTarget?: ResolvedMessagingTarget;
   replyToId?: string | null;
   threadId?: string | number | null;
+  assertDirectAdapterHandoff?: () => void;
 };
 
 const FALLBACK_TARGET_KIND_PREFIXES: Array<{ kind: ChatType; pattern: RegExp }> = [

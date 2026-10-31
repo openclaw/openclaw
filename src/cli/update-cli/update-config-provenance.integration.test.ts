@@ -10,6 +10,7 @@ import type { runPostCorePluginConvergence as Converge } from "../../commands/do
 import * as configIO from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV } from "../../infra/update-post-core-context.js";
+import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { createPluginManifestRecordFixture } from "../../plugins/plugin-metadata.test-support.js";
 import * as pluginModuleLoader from "../../plugins/plugin-module-loader-cache.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -91,6 +92,7 @@ import {
   repairLegacyConfigForUpdateChannel,
 } from "../../commands/doctor/legacy-config-repair.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
+import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
@@ -245,24 +247,29 @@ it.each([
         });
         expect(result.repaired).toBe(true);
       } else if (flow === "converge") {
-        await convergeUpdatePlugins({
-          candidateRuntime: true,
-          result: resultFixture(home, {
-            mode: "git",
-            before: { sha: "same", version: "2026.9.2" },
-            after: { sha: "same", version: "2026.9.2" },
+        const env = { ...process.env };
+        const { runId } = createUpdateRun({ trigger: "cli" }, { env });
+        await withUpdateCommandExecutor(runId, async (executor) =>
+          convergeUpdatePlugins({
+            coreAlreadyCurrent: true,
+            candidateRuntime: true,
+            result: resultFixture(home, {
+              mode: "git",
+              before: { sha: "same", version: "2026.9.2" },
+              after: { sha: "same", version: "2026.9.2" },
+            }),
+            ...updateInput,
+            configSnapshot,
+            installKindChanged: false,
+            requestedChannel: requestedChannel ?? null,
+            storedChannel: null,
+            downgradeRisk: false,
+            opts: { json: true, run: { runId, env, executorFence: await executor.enter(home) } },
+            preUpdatePluginInstallRecords: {},
+            startedAt: Date.now(),
+            updateStepTimeoutMs: 1000,
           }),
-          ...updateInput,
-          configSnapshot,
-          installKindChanged: false,
-          requestedChannel: requestedChannel ?? null,
-          storedChannel: null,
-          downgradeRisk: false,
-          opts: { json: true },
-          preUpdatePluginInstallRecords: {},
-          startedAt: Date.now(),
-          updateStepTimeoutMs: 1000,
-        });
+        );
       } else if (flow === "resume") {
         // The real exit is a process boundary, not part of config persistence.
         vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);

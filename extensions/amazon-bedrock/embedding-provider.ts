@@ -150,22 +150,6 @@ function buildBody(family: Family, text: string, dims?: number): string {
   }
 }
 
-function buildCohereBody(
-  family: Family,
-  texts: string[],
-  inputType: "search_query" | "search_document",
-  dims?: number,
-): string {
-  const body: Record<string, unknown> = { texts, input_type: inputType, truncate: "END" };
-  if (family === "cohere-v4") {
-    body.embedding_types = ["float"];
-    if (dims != null) {
-      body.output_dimension = dims;
-    }
-  }
-  return JSON.stringify(body);
-}
-
 type BedrockEmbeddingResponseJson = {
   embedding?: unknown;
   embeddings?: unknown;
@@ -200,13 +184,6 @@ function asNumberArray(value: unknown): number[] {
   return value;
 }
 
-function asNumberArrayBatch(value: unknown): number[][] {
-  if (!Array.isArray(value)) {
-    throw malformedBedrockEmbeddingResponse();
-  }
-  return value.map(asNumberArray);
-}
-
 function parseSingle(family: Family, raw: Uint8Array | undefined): number[] {
   const data = parseEmbeddingResponseJson(raw);
   switch (family) {
@@ -229,15 +206,14 @@ function parseSingle(family: Family, raw: Uint8Array | undefined): number[] {
 
 function parseCohereBatch(family: Family, raw: Uint8Array | undefined): number[][] {
   const data = parseEmbeddingResponseJson(raw);
-  const embeddings = data.embeddings;
-  if (family === "cohere-v4" && !Array.isArray(embeddings)) {
-    const embeddingRecord = asOptionalRecord(embeddings);
-    if (!embeddingRecord) {
-      throw malformedBedrockEmbeddingResponse();
-    }
-    return asNumberArrayBatch(embeddingRecord.float);
+  const embeddings =
+    family === "cohere-v4" && !Array.isArray(data.embeddings)
+      ? asOptionalRecord(data.embeddings)?.float
+      : data.embeddings;
+  if (!Array.isArray(embeddings)) {
+    throw malformedBedrockEmbeddingResponse();
   }
-  return asNumberArrayBatch(embeddings);
+  return embeddings.map((embedding) => sanitizeAndNormalizeEmbedding(asNumberArray(embedding)));
 }
 
 export async function createBedrockEmbeddingProvider(
@@ -305,8 +281,16 @@ export async function createBedrockEmbeddingProvider(
     inputType: "search_query" | "search_document",
     signal?: AbortSignal,
   ): Promise<number[][]> => {
-    const raw = await invoke(buildCohereBody(family, texts, inputType, client.dimensions), signal);
-    return parseCohereBatch(family, raw).map(sanitizeAndNormalizeEmbedding);
+    const dims = client.dimensions;
+    const body: Record<string, unknown> = { texts, input_type: inputType, truncate: "END" };
+    if (family === "cohere-v4") {
+      body.embedding_types = ["float"];
+      if (dims != null) {
+        body.output_dimension = dims;
+      }
+    }
+    const raw = await invoke(JSON.stringify(body), signal);
+    return parseCohereBatch(family, raw);
   };
 
   const embedQuery = async (text: string, signal?: AbortSignal): Promise<number[]> => {

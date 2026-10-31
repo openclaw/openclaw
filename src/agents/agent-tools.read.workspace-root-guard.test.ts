@@ -16,7 +16,7 @@ vi.mock("./sandbox-paths.js", async (importOriginal) => ({
   assertSandboxPath: mocks.assertSandboxPath,
 }));
 const root = path.resolve("/tmp/root");
-const execute = vi.fn(async () => ({
+const execute = vi.fn<AnyAgentTool<ReadToolDetails>["execute"]>(async () => ({
   content: [{ type: "text" as const, text: "ok" }],
   details: { kind: "text" as const, content: "ok" },
 }));
@@ -53,7 +53,7 @@ it.each([
 ])("guards normalized path %s", async (input, expected) => {
   await guard(input, { containerWorkdir: "/workspace", normalizeGuardedPathParams: true });
   expectGuard(expected);
-  expect(execute).toHaveBeenCalledWith("path", { path: expected }, undefined, undefined);
+  expect(execute.mock.calls[0]?.[1]).toEqual({ path: expected });
 });
 
 it("adds a workspace-safe hint without executing a rejected path", async () => {
@@ -110,7 +110,7 @@ it.each(["legacy", "miss", "mapped"] as const)(
     await running;
     expectGuard(mode === "legacy" ? "note.txt" : hostPath);
     const forwardedPath = mode === "legacy" ? hostPath : containerPath;
-    expect(execute).toHaveBeenCalledWith("path", { path: forwardedPath }, undefined, undefined);
+    expect(execute.mock.calls[0]?.[1]).toEqual({ path: forwardedPath });
   },
 );
 
@@ -131,9 +131,5 @@ it("repairs Office paths and strips XML suffixes before reading", async () => {
   await createOpenClawReadTool(tool).execute("read", {
     path: "reports/final.docodex</arg_value>>",
   });
-  expect(execute).toHaveBeenCalledWith(
-    "read",
-    { path: "reports/final.docx", offset: 1 },
-    undefined,
-  );
+  expect(execute.mock.calls[0]?.[1]).toEqual({ path: "reports/final.docx", offset: 1 });
 });

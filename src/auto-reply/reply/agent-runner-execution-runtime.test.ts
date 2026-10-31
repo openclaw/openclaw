@@ -48,7 +48,7 @@ it("forwards turn context and tool policy for the concrete Codex runtime", async
 
   const result = await runTurn({
     followupRun,
-    opts: { forceRestartSafeTools: true, forceCodeModeTools: true, toolsAllow: ["message"] },
+    opts: { toolsAllow: ["message"] },
     getActiveSessionEntry: () => ({
       sessionId: "session",
       updatedAt: 1,
@@ -58,8 +58,6 @@ it("forwards turn context and tool policy for the concrete Codex runtime", async
 
   expect(result.kind).toBe("success");
   expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded thinking params", {
-    forceRestartSafeTools: true,
-    forceCodeModeTools: true,
     toolsAllow: ["message"],
     extraSystemPrompt: "Current conversation.\n\nPersistent policy.",
     extraSystemPromptTurnContext: turnContext,
@@ -91,6 +89,29 @@ it.each([
       sessionKey,
       chatType: expected,
     });
+  },
+);
+
+it.each(["standard", "daybreak_blue", "daybreak_red"] as const)(
+  "allows only Standard Access for a chat CLI turn (%s)",
+  async (cyberAccessProgram) => {
+    state.isCliProviderMock.mockReturnValue(true);
+    selectFallback("codex-cli", "gpt-5.4");
+    state.runCliAgentMock.mockResolvedValueOnce(createRunResult("final"));
+    const result = await runTurn({
+      followupRun: createFollowupRun({
+        provider: "codex-cli",
+        model: "gpt-5.4",
+        cyberAccessProgram,
+      }),
+    });
+    if (cyberAccessProgram === "standard") {
+      expect(result.kind).toBe("success");
+      expect(state.runCliAgentMock).toHaveBeenCalledOnce();
+    } else {
+      expect(result.kind).toBe("final");
+      expect(state.runCliAgentMock).not.toHaveBeenCalled();
+    }
   },
 );
 

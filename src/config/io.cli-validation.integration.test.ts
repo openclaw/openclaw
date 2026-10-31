@@ -1,12 +1,15 @@
 import fs from "node:fs";
+import nodePath from "node:path";
 import { Command } from "commander";
 import { afterEach, expect, it, vi } from "vitest";
+import { setConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
 import { registerConfigCli } from "../cli/config-cli.js";
+import { persistRequestedUpdateChannel } from "../cli/update-cli/update-command-config.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import * as schemas from "../plugins/schema-validator.js";
 import { defaultRuntime } from "../runtime.js";
 import * as stateDb from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createConfigIO } from "./io.js";
 import * as metadata from "./io.plugin-metadata.js";
 import { REDACTED_SENTINEL } from "./redact-sentinel.js";
 import type { OpenClawConfig } from "./types.js";
@@ -78,9 +81,7 @@ async function validateThroughCli(
   });
   vi.spyOn(metadata, "resolveConfigWidePluginMetadataSnapshot").mockReturnValue(snapshot);
   vi.spyOn(metadata, "resolveConfigWidePluginMetadataSnapshotAsync").mockResolvedValue(snapshot);
-  const schemaValidation = vi.spyOn(schemas, "validatePluginSchemaValue");
-  const output = await runCli(config);
-  return { output, schemaValidation };
+  return runCli(config);
 }
 
 it("validates existing state through a private read-only snapshot", async () => {
@@ -104,15 +105,109 @@ const issue = (path: string, details = {}) => ({
   issues: [expect.objectContaining({ path, ...details })],
 });
 
+it.each(["mcp", "nodeHost"] as const)(
+  "rejects mixed %s MCP transports through the CLI",
+  async (owner) => {
+    const mcp = { servers: { docs: { command: "node", url: "https://example.com/mcp" } } };
+    const output = await runCli(owner === "mcp" ? { mcp } : { nodeHost: { mcp } });
+    expect(output).toMatchObject(
+      issue(`${owner === "mcp" ? "mcp" : "nodeHost.mcp"}.servers.docs`, {
+        message: expect.stringMatching(/command.*url/),
+      }),
+    );
+  },
+);
+
+it("warns for saved mixed config, rejects edits, and lets updates persist their channel", async () => {
+  await withOpenClawTestState({ prefix: "mixed-mcp-upgrade-" }, async (state) => {
+    await state.writeConfig({
+      mcp: {
+        servers: {
+          docs: { command: "node", url: "https://example.com/mcp", env: { DATA_DIR: "~/data" } },
+        },
+      },
+    });
+    const raw = fs.readFileSync(state.configPath, "utf8");
+    const logger = { warn: vi.fn(), error: vi.fn() };
+    const io = createConfigIO({
+      env: state.env,
+      configPath: state.configPath,
+      observe: false,
+      pluginValidation: "core-only",
+      logger,
+    });
+    expect(io.loadConfig().mcp?.servers?.docs).toEqual({
+      command: "node",
+      url: "https://example.com/mcp",
+      env: { DATA_DIR: nodePath.join(state.home, "data") },
+    });
+    expect(logger.warn.mock.calls.flat().join("\n")).toMatch(/mcp.servers.docs.*command.*url/s);
+    const explicit = await io.readConfigFileSnapshotWithPluginMetadata({
+      prepareValidation: "strict",
+      completePluginMetadata: false,
+    });
+    expect(explicit.strictIssues).toEqual([
+      expect.objectContaining({
+        path: "mcp.servers.docs",
+        message: expect.stringMatching(/command.*url/),
+      }),
+    ]);
+    await expect(
+      io.writeConfigFile({
+        mcp: {
+          servers: {
+            docs: { command: "node", args: ["changed.js"], url: "https://example.com/mcp" },
+          },
+        },
+      }),
+    ).rejects.toThrow(/docs.*command.*url/s);
+    expect(fs.readFileSync(state.configPath, "utf8")).toBe(raw);
+    await persistRequestedUpdateChannel({
+      configSnapshot: await io.readConfigFileSnapshot(),
+      requestedChannel: "beta",
+    });
+    expect(JSON.parse(fs.readFileSync(state.configPath, "utf8"))).toMatchObject({
+      update: { channel: "beta" },
+      mcp: {
+        servers: {
+          docs: { command: "node", url: "https://example.com/mcp", env: { DATA_DIR: "~/data" } },
+        },
+      },
+    });
+  });
+});
+
+it("repairs one mixed server without blocking on another and rejects new or edited ambiguity", async () => {
+  await withOpenClawTestState({ prefix: "mixed-mcp-mutation-" }, async (state) => {
+    const mixed = {
+      command: "old-server",
+      url: "https://example.com/mcp",
+      env: { DATA_DIR: "~/data" },
+    };
+    await state.writeConfig({ mcp: { servers: { first: mixed, second: mixed } } });
+    expect(
+      await setConfiguredMcpServer({ name: "first", server: { command: "first-server" } }),
+    ).toMatchObject({ ok: true });
+    expect(JSON.parse(fs.readFileSync(state.configPath, "utf8"))).toMatchObject({
+      mcp: { servers: { first: { command: "first-server" }, second: mixed } },
+    });
+    for (const name of ["second", "new"]) {
+      expect(
+        await setConfiguredMcpServer({ name, server: { ...mixed, command: "changed-server" } }),
+      ).toMatchObject({ ok: false, error: expect.stringMatching(/command.*url/) });
+    }
+  });
+});
+
 it.each([
-  { channel: true, rootPath: "/synthetic", valid: true, calls: 1 },
-  { channel: true, rootPath: "~/synthetic", valid: false, calls: 2 },
-  { channel: false, rootPath: "~/synthetic", valid: false, calls: 2 },
+  { channel: true, rootPath: "/synthetic", valid: true },
+  { channel: true, rootPath: "~/synthetic", valid: false },
+  { channel: false, rootPath: "~/synthetic", valid: false },
 ])(
   "validates raw paths (channel=$channel, path=$rootPath)",
-  async ({ channel, rootPath, valid, calls }) => {
+  async ({ channel, rootPath, valid }) => {
     const schema = objectSchema({ rootPath: { type: "string", pattern: "^/" } });
-    const { output, schemaValidation } = await validateThroughCli(
+    const output = await validateThroughCli(
       channel ? { channels: { channel: { rootPath } } } : pluginConfig(true, { rootPath }),
       channel ? objectSchema() : schema,
       channel
@@ -121,12 +216,11 @@ it.each([
     );
     const path = channel ? "channels.channel.rootPath" : "plugins.entries.plugin.config.rootPath";
     expect(output).toMatchObject(valid ? { valid } : issue(path));
-    expect(schemaValidation).toHaveBeenCalledTimes(calls);
   },
 );
 
 it.each([true, false])("preserves strict default ownership (enabled=%s)", async (enabled) => {
-  const { output } = await validateThroughCli(
+  const output = await validateThroughCli(
     {
       ...pluginConfig(enabled, enabled ? undefined : {}),
       secrets: {

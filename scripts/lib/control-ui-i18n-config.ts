@@ -24,6 +24,7 @@ const LANGUAGE_LABELS = new Map([
   ["fa", "Persian"],
   ["ru", "Russian"],
   ["sv", "Swedish"],
+  ["ca", "Catalan"],
   ["de", "German"],
   ["es", "Spanish"],
 ]);

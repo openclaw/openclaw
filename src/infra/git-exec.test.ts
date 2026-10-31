@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import { requireGitBuffer } from "../agents/worktrees/git.js";
+import { readCommandProcessFailure } from "../process/exec-result.js";
+import * as processRunner from "../process/exec-runner.js";
 import * as processExec from "../process/exec.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
@@ -20,6 +22,8 @@ import {
   createGitCommandError,
   enqueueGitRefMutation,
   executeGitCommand,
+  executeGitCommandBuffered,
+  executeGitCommandBytes,
   GitCommandTimeoutError,
   gitNullConfigPath,
   normalizeGitPathForFilesystem,
@@ -281,7 +285,83 @@ it("reports the applied 120-second Git timeout", async () => {
   ).toEqual([seconds * 1000, seconds * 1000]);
 });
 
+it("honors explicit Git execution placement while defaulting to Gateway work", async () => {
+  const text = vi
+    .spyOn(processExec, "runCommandWithTimeout")
+    .mockResolvedValue(createCommandResult());
+  const bytes = vi.spyOn(processRunner, "runCommandBuffersWithTimeout").mockResolvedValue({
+    ...createCommandResult(),
+    stdout: Buffer.alloc(0),
+    stderr: Buffer.alloc(0),
+    windowsEncoding: null,
+  });
+  const buffered = vi.spyOn(processExec, "runCommandBuffered").mockResolvedValue({
+    ...createCommandResult(),
+    stdout: Buffer.alloc(0),
+    stderr: Buffer.alloc(0),
+  });
+  for (const executionIntent of [undefined, "agent-tool"] as const) {
+    const options = { executionIntent, timeoutMs: 1_000 };
+    for (const waitForExit of [false, true]) {
+      await executeGitCommand("/repo", ["maintenance", "run"], { ...options, waitForExit });
+      await executeGitCommandBytes("/repo", ["maintenance", "run"], { ...options, waitForExit });
+    }
+    await executeGitCommandBuffered("/repo", ["maintenance", "run"], options);
+  }
+  const intents = (
+    calls: ReadonlyArray<readonly [string[], (number | processExec.CommandOptions)?]>,
+  ) =>
+    calls.map(([, options]) => (typeof options === "object" ? options.executionIntent : undefined));
+  expect(intents(text.mock.calls)).toEqual([
+    "gateway-internal",
+    "gateway-internal",
+    "agent-tool",
+    "agent-tool",
+  ]);
+  expect(intents(bytes.mock.calls)).toEqual([
+    "gateway-internal",
+    "gateway-internal",
+    "agent-tool",
+    "agent-tool",
+  ]);
+  expect(intents(buffered.mock.calls)).toEqual(["gateway-internal", "agent-tool"]);
+});
+
 describe("required Git output", () => {
+  it.each(["cooperative", "uncertain"] as const)(
+    "retains private native cancellation facts with %s cleanup",
+    async (cleanup) => {
+      const result = {
+        ...createCommandResult({
+          pid: 123,
+          code: null,
+          signal: null,
+          termination: "signal",
+          cleanup,
+          killIssuedByAbort: true,
+          outputLimitExceeded: false,
+          stderr: "cancelled fixture",
+        }),
+        timeoutMs: 30_000,
+      };
+      const failure = await Promise.resolve()
+        .then(() => requireGitCommandOutput("git remote", result))
+        .catch((error: unknown) => error);
+      expect(failure).toMatchObject({
+        name: "CommandExecutionError",
+        message: "git remote failed (terminated):\ncancelled fixture",
+      });
+      expect(readCommandProcessFailure(failure)).toStrictEqual({
+        pid: 123,
+        code: null,
+        termination: "signal",
+        cleanup,
+        killIssuedByAbort: true,
+        outputLimitExceeded: false,
+      });
+    },
+  );
+
   async function withGitBlob(
     input: string | Buffer,
     run: (root: string, args: string[]) => Promise<void>,

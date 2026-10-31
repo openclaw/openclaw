@@ -79,6 +79,8 @@ export function bindHarnessMedia(params: {
       agentWorkspaceDir: attempt.workspaceDir,
       modelInput: attempt.model.input,
       agentId: attempt.agentId,
+      sessionKey: attempt.sessionKey,
+      sessionId: attempt.sessionId,
       channelId: attempt.messageChannel ?? attempt.messageProvider,
       accountId: attempt.agentAccountId,
       ...(attempt.sandbox?.enabled && attempt.sandbox.fsBridge
@@ -102,6 +104,7 @@ export function bindHarnessMedia(params: {
         ...request,
         ...contextMedia,
         assertCurrent,
+        signal: attemptSignal,
       });
       assertCurrent();
       return result;

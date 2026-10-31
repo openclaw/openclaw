@@ -18,6 +18,10 @@ import {
   WorktreeCapacityContentionError,
   WORKTREE_CAPACITY_RESERVATION_SCOPE,
 } from "./capacity.js";
+import {
+  createWorktreeCapacityStatfs,
+  useInProcessWorktreeCapacityTransport,
+} from "./capacity.test-support.js";
 import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
 
 const roots = useWorktreeStateRoots();
@@ -159,6 +163,32 @@ it("preserves typed capacity contention across the worker result boundary", asyn
       reservationKey: held?.lease_key,
     });
     expect(f.debts()).toEqual([held]);
+  });
+  expect(f.debts()).toEqual([]);
+});
+
+it("settles completed byte debt on refusal without reserving refused increases", async () => {
+  const f = fixture();
+  useInProcessWorktreeCapacityTransport();
+  const GiB = 1024 ** 3;
+  const stats = fs.statfsSync(f.root);
+  let available = 100 * GiB;
+  vi.spyOn(fs, "statfsSync").mockImplementation(() =>
+    createWorktreeCapacityStatfs(stats, available),
+  );
+  await withWorktreeMutationLease({ env: f.env, id: "first" }, async (first) => {
+    await withWorktreeMutationLease({ env: f.env, id: "second" }, async (second) => {
+      await reserve(first, f.root, 1024 ** 2, false);
+      await reserve(second, f.root, 1024 ** 2, false);
+      available = 4 * GiB;
+      await expect(reserve(first, f.root, 0, false)).rejects.toBeInstanceOf(
+        WorktreeCapacityContentionError,
+      );
+      await expect(reserve(second, f.root, 0, false)).resolves.toBeUndefined();
+      await expect(reserve(first, f.root, 1, false)).rejects.toThrow(/disk space/i);
+      await expect(reserve(second, f.root, 0, false)).resolves.toBeUndefined();
+      expect(f.debts()).toHaveLength(2);
+    });
   });
   expect(f.debts()).toEqual([]);
 });

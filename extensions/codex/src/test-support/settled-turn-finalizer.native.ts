@@ -29,7 +29,16 @@ const liveProvider = LIVE
 
 export type NativeFixture = Awaited<ReturnType<typeof createNativeFixture>>;
 export type Cleanup = () => Promise<void>;
-type NativePhase = "probe" | "action" | "side" | "hold" | "overload" | "summary" | "health";
+type NativePhase =
+  | "probe"
+  | "action"
+  | "action-reasoning"
+  | "side"
+  | "hold"
+  | "overload"
+  | "summary"
+  | "health"
+  | "patch";
 
 function event(type: string, fields: JsonObject) {
   return `event: ${type}\ndata: ${JSON.stringify({ type, ...fields })}\n\n`;
@@ -87,7 +96,7 @@ async function createNativeFixture(
         response.writeHead(400).end();
         return;
       }
-      const actionPhase = phase === "action" || phase === "side";
+      const actionPhase = phase === "action" || phase === "action-reasoning" || phase === "side";
       if (actionPhase) {
         actionRequests += 1;
       }
@@ -136,7 +145,14 @@ async function createNativeFixture(
       }
       let item: JsonObject | undefined;
       if (!live && phase !== "hold" && phase !== "overload") {
-        if (actionRequests === 1 && actionPhase) {
+        if (phase === "patch" && requests.length === 1) {
+          item = {
+            type: "custom_tool_call",
+            call_id: "denied-patch",
+            name: "apply_patch",
+            input: `*** Begin Patch\n*** Update File: ${marker}\n@@\n-completed-once\n+repeated-action\n*** End Patch`,
+          };
+        } else if (actionRequests === 1 && actionPhase) {
           item = {
             type: "function_call",
             call_id: "completed-action",
@@ -147,6 +163,12 @@ async function createNativeFixture(
               login: false,
               max_output_tokens: 1000,
             }),
+          };
+        } else if (phase === "action-reasoning") {
+          item = {
+            type: "reasoning",
+            id: "terminal-reasoning",
+            summary: [{ type: "summary_text", text: "The command completed once." }],
           };
         } else if (phase !== "action") {
           const output = phase === "summary" || phase === "side" ? SUMMARY : "Ready.";

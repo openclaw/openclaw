@@ -98,16 +98,27 @@ describe("setOcPath", () => {
     ],
     [
       '{"plugins":{}}',
-      "plugins/+gitlab",
+      "plugins.+gitlab",
       '{"token":"xyz","enabled":true}',
       '{"plugins":{"gitlab":{"token":"xyz","enabled":true}}}',
       false,
     ],
-    ['{"items":[1,2]}', "items/+", "3", '{"items":[1,2,3]}', false],
-    ['{"items":[1,3]}', "items/+1", "2", '{"items":[1,2,3]}', false],
+    ['{"items":[1,2]}', "items.+", "3", '{"items":[1,2,3]}', false],
+    ['{"items":[1,3]}', "items.+1", "2", '{"items":[1,2,3]}', false],
   ])("edits JSONC %s at %s", (raw, path, value, expected, valueJson) => {
     const result = edit(parseJsonc(raw), "oc://openclaw.json/" + path, value, { valueJson });
     expect(JSON.parse(result.raw)).toEqual(JSON.parse(expected));
+  });
+
+  it.each([
+    { value: "0", expected: 0 },
+    { value: "1e2", expected: 100 },
+    { value: "0x10", expected: 16 },
+    { value: "1.", expected: 1 },
+    { value: " 2 ", expected: 2 },
+  ])("coerces nonblank numeric input $value", ({ value, expected }) => {
+    const ast = parseJsonc('{"k":3}');
+    expect(JSON.parse(edit(ast, "oc://config/k", value).raw)).toEqual({ k: expected });
   });
 
   it.each([

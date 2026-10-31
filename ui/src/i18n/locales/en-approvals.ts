@@ -33,6 +33,7 @@ const enApprovals = {
     details: "Details",
     requestDetails: "Request details",
     agentRunCommand: "{agent} wants to run a command",
+    inSession: "in “{session}”",
     agentStartWatcher: "{agent} wants to start “{name}”",
     agentChangeWatcher: "{agent} wants to change “{name}”",
     labels: {

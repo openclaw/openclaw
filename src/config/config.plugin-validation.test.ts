@@ -217,6 +217,29 @@ describe("config plugin validation", () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
+  it("identifies both copies in duplicate plugin config warnings without loading either runtime", async () => {
+    const id = "duplicate-path-fixture";
+    const selected = path.join(fixtureRoot, "selected");
+    const ignored = path.join(fixtureRoot, "ignored");
+    const copies = [selected, ignored];
+    for (const dir of copies) {
+      await writePluginFixture({ dir, id });
+      await fs.writeFile(path.join(dir, "index.js"), 'throw new Error("runtime must not load");');
+    }
+    const result = validatePluginRefs({
+      enabled: true,
+      load: { paths: copies },
+      allow: [id],
+      entries: { [id]: { enabled: true } },
+    });
+    expectValid(result);
+    const warning = result.warnings.find(({ message }) => message.includes("duplicate plugin id"));
+    expect(warning?.message).toContain(`ignored plugin source: ${path.join(ignored, "index.js")}`);
+    expect(warning?.message).toContain(
+      `overridden by config plugin (${path.join(selected, "index.js")})`,
+    );
+  });
+
   it("reports a malformed plugin configSchema as an issue instead of throwing", () => {
     const res = validatePluginRefs(
       loadedPlugin("malformed-schema-plugin", malformedSchemaPluginDir),

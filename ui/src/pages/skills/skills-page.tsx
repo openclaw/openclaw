@@ -28,6 +28,7 @@ import { observeState } from "../../lib/reactive/observe-state.ts";
 import { searchClawHub } from "../../lib/skills/clawhub-search.ts";
 import {
   closeClawHubDetail,
+  createSkillsChangeReloader,
   installFromClawHub,
   installSkill,
   loadClawHubDetail,
@@ -330,8 +331,14 @@ export function SkillsPage(props: SkillsPageProps) {
         ],
       );
     };
+    const changes = createSkillsChangeReloader(data);
+    const stopChanges = context.gateway.subscribeEvents(changes.onEvent);
     // Icon reconciliation waits for result/detail publication to settle.
-    const stopSkills = skills.subscribe(() => onSettled(syncIcons));
+    const stopState = skills.subscribe(() => {
+      onSettled(syncIcons);
+      changes.onStateChange();
+    });
+    const stopSkills = () => [stopChanges, stopState].forEach((stop) => stop());
     syncSelection();
     syncIcons();
     return () => {

@@ -8,6 +8,7 @@ import {
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
+import { chatEvent } from "./chat-flow-fixtures.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { sessionsListResponse } from "./session-management.test-support.ts";
@@ -15,7 +16,7 @@ import { sessionsListResponse } from "./session-management.test-support.ts";
 const suite = createControlUiE2eSuite({ name: "Chat header and delegated work" });
 
 suite.define(() => {
-  it("keeps new batches in Details and opens Subagents manually without duplicate wait status", async () => {
+  it("keeps new batches in Details and shows one named handoff status after opening Subagents", async () => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -196,24 +197,20 @@ suite.define(() => {
           session: runningParent,
         });
         await page.clock.setFixedTime(now + 65_000);
-        await gateway.emitGatewayEvent("chat", {
-          sessionKey: parent.key,
-          runId,
-          state: "final",
-          yielded: true,
-        });
+        await gateway.emitGatewayEvent(
+          "chat",
+          chatEvent(runId, parent.key, "final", { yielded: true }),
+        );
         await activePane
           .locator(".chat-thread p")
           .getByText("Waiting for the backend review.", { exact: true })
           .waitFor();
         const pendingStatus = activePane.locator(".chat-working-indicator");
-        await pendingStatus
-          .getByRole("button", { name: "1 subagent running", exact: true })
-          .waitFor();
+        await pendingStatus.getByRole("link", { name: "Backend review", exact: true }).waitFor();
         expect(await pendingStatus.count()).toBe(1);
         await expect.poll(() => pendingStatus.locator(".chat-reading-indicator").count()).toBe(0);
         expect(await pendingStatus.locator("openclaw-working-phrase").count()).toBe(0);
-        expect(await pendingStatus.textContent()).not.toContain("Backend review");
+        expect(await pendingStatus.textContent()).toContain("Waiting on Backend review");
         expect(
           await activePane.locator(".chat-thread openclaw-chat-subagent-activity").count(),
         ).toBe(0);

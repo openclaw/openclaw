@@ -76,17 +76,26 @@ export function hasSessionWriteAuthority(prepared?: AdmittedRunOperatorAuthority
 export function prepareSandboxSessionTools(params: {
   policy?: SandboxToolPolicy;
   senderIsOwner?: boolean;
-  authority?: AdmittedRunOperatorAuthority;
+  /** Captured policy owner; null explicitly projects a run without an operator. */
+  authority?: AdmittedRunOperatorAuthority | null;
 }): { policy?: SandboxToolPolicy; renameOnly: boolean } {
   const policy = params.policy;
   const defaultAllow = policy?.[SANDBOX_DEFAULT_TOOL_ALLOW];
-  if (
-    params.senderIsOwner !== false ||
-    !policy ||
-    !defaultAllow ||
-    defaultAllow !== policy.allow ||
-    !hasSessionWriteAuthority(params.authority)
-  ) {
+  if (params.senderIsOwner !== false || !policy || !defaultAllow || defaultAllow !== policy.allow) {
+    return { policy, renameOnly: false };
+  }
+  // Catalog projection belongs to the captured run, not the request asking to
+  // compare it. Tool execution still intersects current caller authority.
+  const authority = params.authority;
+  if (authority) {
+    assertAdmittedRunOperatorAuthority(authority);
+    authority.assertCurrent();
+  }
+  const canWrite =
+    authority === undefined
+      ? hasSessionWriteAuthority()
+      : authority !== null && operatorScopeSatisfied("operator.sessions.write", authority.scopes);
+  if (!canWrite) {
     return { policy, renameOnly: false };
   }
   const added = ["sessions", "sessions_create"].filter((name) => {

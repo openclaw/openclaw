@@ -2,7 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import photon from "@silvia-odwyer/photon-node";
 import type { BrowserContextOptions, Locator, Page } from "playwright";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -212,11 +212,14 @@ suite.define(() => {
       expect(await label.textContent()).toBe("Loading…");
       const png = await takeControlUiElementScreenshot(page, skeleton, [skeleton, label]);
       await writeFile(path.join(artifactDir, `${phase}.png`), png);
+      // The live composer remains part of the frame without placeholder decoration.
       const geometry = await skeleton.evaluate((element) =>
-        [element, ...element.querySelectorAll(".skeleton")].map((node) => {
-          const { x, y, width, height } = node.getBoundingClientRect();
-          return { x, y, width, height };
-        }),
+        [element, ...element.querySelectorAll(".skeleton, .loading-skeleton__composer")].map(
+          (node) => {
+            const { x, y, width, height } = node.getBoundingClientRect();
+            return { x, y, width, height };
+          },
+        ),
       );
       return { png: decodeProofPng(png), geometry, label: await label.boundingBox() };
     };
@@ -591,7 +594,9 @@ suite.define(() => {
     await page.waitForTimeout(300);
     const recording = page.video()!;
     await suite.closeBrowserContext(context);
-    const videoBytes = await readFile(await recording.path());
+    const recordingPath = path.join(proofDir, "finalized-recording.webm");
+    await recording.saveAs(recordingPath);
+    const videoBytes = await readFile(recordingPath);
     // Decode the finalized WebM in a separate, non-recording context. Seeking twice
     // per 25fps recorder frame catches short corruption without depending on host ffmpeg.
     const decoder = await createPageWithoutRecording();
@@ -792,12 +797,18 @@ suite.define(() => {
     }
 
     await regions[1]!.evaluate((element) => element.setAttribute("style", "visibility: hidden"));
-    await expect(
-      takeControlUiScreenshotFrame(page, page.locator("body"), [regions[0]!], {
-        elements: [regions[1]!],
-        animations: "disabled",
-      }),
-    ).rejects.toThrow("Proof frame did not reach visible, settled targets");
+    // This target stays hidden; only the rejection needs a short readiness window.
+    vi.setConfig({ expect: { poll: { interval: 100, timeout: 1_000 } } });
+    try {
+      await expect(
+        takeControlUiScreenshotFrame(page, page.locator("body"), [regions[0]!], {
+          elements: [regions[1]!],
+          animations: "disabled",
+        }),
+      ).rejects.toThrow("Proof frame did not reach visible, settled targets");
+    } finally {
+      vi.resetConfig();
+    }
 
     await pauseVirtualClock(page);
     const captureTime = await page.evaluate(() => Date.now());

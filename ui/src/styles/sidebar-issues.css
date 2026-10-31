@@ -30,7 +30,7 @@
   border-width: 1px 0 0;
   border-radius: var(--radius-xl) var(--radius-xl) 0 0;
   background: var(--popover);
-  animation: sidebar-sheet-in 240ms cubic-bezier(0.32, 0.72, 0, 1);
+  animation: sidebar-sheet-in var(--motion-sheet);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -118,7 +118,6 @@
   flex: none;
   overflow-x: auto;
   background: transparent;
-  box-sizing: border-box;
   flex-shrink: 0;
   width: 100%;
   padding-inline: 8px;
@@ -161,7 +160,6 @@
 }
 
 .sidebar-issues-panel__list > [data-attention-kind] {
-  box-sizing: border-box;
   margin-inline: -6px;
 }
 
@@ -292,10 +290,20 @@ footer.sidebar-issues-panel__mentions-note {
   display: none;
 }
 
-.sidebar-issues-panel__summary:hover,
-.sidebar-issues-panel__details[open] > .sidebar-issues-panel__summary,
+.sidebar-issues-panel__summary:is(:hover, :focus-visible) {
+  background: var(--surface-hover);
+}
+
 .sidebar-issues-panel__details[open] {
-  background: var(--bg-hover);
+  background: var(--surface-selected);
+}
+
+.sidebar-issues-panel__details[open]:is(:hover, :focus-within) {
+  background: var(--surface-selected-hover);
+}
+
+.sidebar-issues-panel__details[open] > .sidebar-issues-panel__summary {
+  background: transparent;
 }
 
 .sidebar-issues-panel__summary:focus-visible,
@@ -498,7 +506,6 @@ footer.sidebar-issues-panel__mentions-note {
 }
 
 .sidebar-update-issue__body .sidebar-update-card {
-  box-sizing: border-box;
   margin: 0;
 }
 
@@ -588,7 +595,7 @@ footer.sidebar-issues-panel__mentions-note {
 
 .sidebar-approval-row:hover,
 .sidebar-approval-row:focus-within {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 .sidebar-approval-row__content {
@@ -625,7 +632,6 @@ footer.sidebar-issues-panel__mentions-note {
 }
 
 .sidebar-approval-row__command {
-  box-sizing: border-box;
   width: 100%;
   max-width: 100%;
   align-self: flex-start;

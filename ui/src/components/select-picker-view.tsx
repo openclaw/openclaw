@@ -1,13 +1,26 @@
-import { For, Show, createMemo, createSignal, createStore, onSettled, untrack } from "solid-js";
+import {
+  For,
+  Show,
+  createMemo,
+  createSignal,
+  createStore,
+  lazy,
+  onSettled,
+  untrack,
+} from "solid-js";
 import { acquireNativeOverlaySurface } from "../lib/native-overlay-occlusion.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { createAnchoredOverlay } from "../lib/reactive/overlay-anchor.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { createScrollPosition, createScrollStateRef } from "../lib/reactive/scroll-state.ts";
+import { nativeListener } from "../lib/solid-native-listener.ts";
 import type { OverlayPlacement } from "./overlay-anchor.ts";
 import { createOverlay } from "./overlay-lifecycle.ts";
 import type { OverlayNativeAdapter } from "./overlay-types.ts";
+import { pickerSearchInputProps } from "./select-picker-search.ts";
 import type { PickerOption, PickerParams, PickerGroup } from "./select-picker-types.ts";
+import type { PickerWindowRow } from "./select-picker-window.tsx";
+import { HeaderSearch } from "./solid/header-search.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { useMenuMachine } from "./solid/menu-machine.ts";
 import { MenuNavigationError } from "./solid/menu-navigation-error.tsx";
@@ -15,6 +28,7 @@ import { useOverlayControl } from "./solid/overlay-control.ts";
 import "./solid/overlay.css";
 
 type Section<Option> = { group?: PickerGroup; options: Option[]; expanded: boolean };
+const PickerWindow = lazy(() => import("./select-picker-window.tsx"));
 let nextId = 0;
 const sheetAdapter: OverlayNativeAdapter = {
   isOpen: (surface) => !surface.hidden,
@@ -25,6 +39,7 @@ const sheetAdapter: OverlayNativeAdapter = {
     surface.hidden = true;
   },
 };
+const normalizeSearch = (value: string) => value.toLocaleLowerCase().normalize("NFC");
 
 export function PickerContent<Option extends PickerOption>(props: {
   params: PickerParams<Option>;
@@ -65,7 +80,11 @@ export function PickerContent<Option extends PickerOption>(props: {
   // A row the pointer highlights is already where the user is looking. Revealing
   // it would scroll a clipped edge row against an in-progress wheel or trackpad scroll.
   let pointerHighlight = false;
+  // The menu's pointer handler can publish selection before the following mouse event.
+  const markPointerHighlight = () => (pointerHighlight = true);
+  const pointerHighlightRef = nativeListener("pointermove", markPointerHighlight, true);
   const [searching, setSearching] = createSignal(false);
+  const [searchAvailable, setSearchAvailable] = createSignal(false);
   const [query, setQuery] = createSignal("");
   const [keyboard, setKeyboard] = createSignal(false);
   const [collapsed, setCollapsed] = createStore<string[]>([]);
@@ -98,15 +117,13 @@ export function PickerContent<Option extends PickerOption>(props: {
   const searchText = createMemo(
     () =>
       catalog().map(({ option, group }) =>
-        [option.label, option.value, option.description, group?.label]
-          .join(" ")
-          .toLocaleLowerCase(),
+        normalizeSearch([option.label, option.value, option.description, group?.label].join(" ")),
       ),
     { lazy: true },
   );
   const sections = createMemo(
     () => {
-      const search = query().trim().toLocaleLowerCase();
+      const search = normalizeSearch(query().trim());
       const terms = search ? search.split(/\s+/u) : [];
       const text = search ? searchText() : undefined;
       const ungrouped: Section<Option> = { options: [], expanded: true };
@@ -138,12 +155,16 @@ export function PickerContent<Option extends PickerOption>(props: {
   );
   const rows = createMemo(
     () => sections().flatMap((section) => (section.expanded ? section.options : [])),
-    { lazy: true },
+    {
+      lazy: true,
+      // A search edit that keeps the same choices must not restart row measurement.
+      // A revived lazy memo can have no previous value after reconnect.
+      equals: (a, b) => a?.length === b.length && a.every((option, index) => option === b[index]),
+    },
   );
   const selected = createMemo(() =>
     options().find((option) => option.value === props.params.value),
   );
-  const visible = createMemo(() => new Set(rows().map((option) => option.value)), { lazy: true });
   const optionId = (value: string) => `${id}:${value}`;
   // Native presentation mode belongs to this mounted overlay lifetime.
   const initialSheet = untrack(() => props.params.sheet);
@@ -162,15 +183,21 @@ export function PickerContent<Option extends PickerOption>(props: {
       }
       target?.focus({ preventScroll: true });
     },
-    onEscape() {
-      if (query() && props.params.searchable === "always") {
-        setQuery("");
-        return true;
-      }
-      return false;
-    },
   });
   const opened = projectOwner(overlay, (owner) => owner.open, Object.is).read;
+  const renderWindowSizer = createMemo(() => props.params.windowed);
+  const canWindow = createMemo(
+    () =>
+      Boolean(renderWindowSizer()) &&
+      !props.params.groupBy &&
+      Boolean(props.params.searchable) &&
+      options().length > 100,
+  );
+  const windowSizer = createMemo(
+    () => (opened() && canWindow() ? renderWindowSizer()?.(rows()) : undefined),
+    { lazy: true },
+  );
+  const windowed = () => windowSizer() !== undefined;
   const control = useOverlayControl(overlay, undefined, {
     get disabled() {
       return props.params.disabled;
@@ -192,6 +219,8 @@ export function PickerContent<Option extends PickerOption>(props: {
     ids: { content: contentId, trigger: triggerId },
     surface: "listbox",
     focus: "retain",
+    reveal: "caller",
+    virtualized: canWindow,
     items: () => {
       opened();
       // Native opening asks for its initial highlight before Solid publishes open.
@@ -222,10 +251,11 @@ export function PickerContent<Option extends PickerOption>(props: {
     if (props.params.disabled || overlay.open) {
       return;
     }
-    setSearching(
+    const available =
       props.params.searchable === "always" ||
-        Boolean(props.params.searchable && (props.params.groupBy || options().length > 8)),
-    );
+      Boolean(props.params.searchable && (props.params.groupBy || options().length > 8));
+    setSearchAvailable(available);
+    setSearching(available && Boolean(initialKey));
     queueMicrotask(() => {
       if (!props.host.isConnected) {
         return;
@@ -306,7 +336,10 @@ export function PickerContent<Option extends PickerOption>(props: {
     }
     if (
       event.target instanceof Element &&
-      event.target.closest(".picker-select__back, .picker-select__group-toggle")
+      event.target.closest(
+        ".picker-select__back, .picker-select__group-toggle, .header-search__toggle",
+      ) &&
+      !event.key.startsWith("Arrow")
     ) {
       return;
     }
@@ -334,20 +367,21 @@ export function PickerContent<Option extends PickerOption>(props: {
           overlay.request(false, overlay.containsFocus() ? "return" : "none");
         }
       },
-      enter ? 120 : 150,
+      enter ? 200 : 100,
     );
   }
   createScrollPosition(
     () => ({
-      reveal: opened()
-        ? {
-            identity: [opened(), active(), query(), rows()],
-            target: () =>
-              overlay.open && !pointerHighlight
-                ? optionElements.get(menu.highlightedValueNow() ?? "")
-                : undefined,
-          }
-        : undefined,
+      reveal:
+        opened() && !windowed()
+          ? {
+              identity: [opened(), active(), query(), rows()],
+              target: () =>
+                overlay.open && !pointerHighlight
+                  ? optionElements.get(menu.highlightedValueNow() ?? "")
+                  : undefined,
+            }
+          : undefined,
     }),
     { region: () => list, revealTiming: "animation-frame" },
   );
@@ -363,9 +397,8 @@ export function PickerContent<Option extends PickerOption>(props: {
     } else {
       setQuery("");
       setSearching(false);
-      setCollapsed((draft) => {
-        draft.length = 0;
-      });
+      setSearchAvailable(false);
+      setCollapsed(() => []);
       hoverOpened = false;
       if (sheetScroll) {
         sheetScroll.root.scrollTop = sheetScroll.top;
@@ -382,6 +415,17 @@ export function PickerContent<Option extends PickerOption>(props: {
       disconnectAnchor();
     };
   });
+  const SheetBack = () => (
+    <button
+      type="button"
+      ref={(element) => (back = element)}
+      class="picker-select__back"
+      aria-label={t("common.back")}
+      onClick={() => overlay.request(false, "return")}
+    >
+      <Icon name="chevronLeft" />
+    </button>
+  );
   const Leading = (row: { option?: Option }) => {
     const content = createMemo(() => row.option && props.params.renderLeading?.(row.option));
     return (
@@ -390,14 +434,21 @@ export function PickerContent<Option extends PickerOption>(props: {
       </Show>
     );
   };
-  const OptionRow = (row: { option: () => Option; grouped: boolean }) => {
+  const OptionRow = (row: {
+    option: () => Option;
+    grouped: boolean;
+    virtual?: PickerWindowRow<Option>;
+    measure?: (element: HTMLDivElement | null) => void;
+  }) => {
     const itemRef = menu.itemRef();
     let element: HTMLDivElement;
     onSettled(() => {
       // The parent For keeps this registration's value for the row's lifetime.
       const value = row.option().value;
       optionElements.set(value, element);
+      row.measure?.(element);
       return () => {
+        row.measure?.(null);
         if (optionElements.get(value) === element) {
           optionElements.delete(value);
         }
@@ -408,16 +459,22 @@ export function PickerContent<Option extends PickerOption>(props: {
         ref={[itemRef, (node) => (element = node)]}
         {...menu.item(
           row.option().value,
-          row.option().disabled || !visible().has(row.option().value),
+          row.option().disabled,
           undefined,
           false,
           row.option().label,
         )}
-        class="picker-select__option"
+        class={[
+          "picker-select__option",
+          { "picker-select__option--windowed": Boolean(row.virtual) },
+        ]}
+        data-index={row.virtual?.index}
+        style={row.virtual ? { transform: `translateY(${row.virtual.start}px)` } : undefined}
+        aria-posinset={row.virtual ? row.virtual.index + 1 : undefined}
+        aria-setsize={row.virtual?.count}
         role="option"
         id={optionId(row.option().value)}
         data-value={row.option().value}
-        hidden={!visible().has(row.option().value)}
         title={props.params.showOptionTooltips === false ? undefined : row.option().value}
         aria-selected={row.option().value === props.params.value ? "true" : "false"}
         aria-disabled={row.option().disabled ? "true" : "false"}
@@ -425,7 +482,7 @@ export function PickerContent<Option extends PickerOption>(props: {
         onMouseDown={(event) => event.preventDefault()}
         onMouseMove={() => {
           setKeyboard(false);
-          pointerHighlight = true;
+          markPointerHighlight();
           if (!row.option().disabled) {
             menu.setHighlightedValue(row.option().value);
           }
@@ -497,7 +554,7 @@ export function PickerContent<Option extends PickerOption>(props: {
             name={
               props.params.variant === "submenu" || props.params.sheet
                 ? "chevronRight"
-                : "chevronDown"
+                : (props.params.triggerIcon ?? "chevronDown")
             }
           />
         </span>
@@ -521,45 +578,35 @@ export function PickerContent<Option extends PickerOption>(props: {
         hidden={props.params.sheet ? true : undefined}
       >
         <MenuNavigationError binding={menu} />
-        <Show when={props.params.sheet}>
+        <Show when={props.params.sheet && !searchAvailable()}>
           <div class="picker-select__page-header">
-            <button
-              type="button"
-              ref={(element) => (back = element)}
-              class="picker-select__back"
-              aria-label={t("common.back")}
-              onClick={() => overlay.request(false, "return")}
-            >
-              <Icon name="chevronLeft" />
-            </button>
+            <SheetBack />
             <span>{props.params.label}</span>
           </div>
         </Show>
-        <Show when={searching()}>
-          <input
-            ref={(element) => (input = element)}
-            class="picker-select__search settings-input"
-            type="search"
-            role="combobox"
-            data-picker-focus
-            data-search
-            tabindex="0"
-            autocomplete="off"
-            spellcheck="false"
-            aria-label={t("common.search")}
+        <Show when={searchAvailable()}>
+          <HeaderSearch
+            leading={props.params.sheet ? <SheetBack /> : undefined}
+            title={props.params.label}
+            label={t("common.search")}
             placeholder={props.params.searchPlaceholder ?? t("common.search")}
-            aria-autocomplete="list"
-            aria-expanded="true"
-            aria-controls={controls()}
-            aria-invalid={props.params.invalid ? "true" : undefined}
-            aria-describedby={props.params.describedBy}
-            aria-activedescendant={active() !== null ? optionId(active()!) : undefined}
-            value={query()}
-            onInput={(event) => setQuery(event.currentTarget.value)}
+            inputClass="picker-select__search"
+            inputProps={pickerSearchInputProps({
+              controls: controls(),
+              invalid: props.params.invalid,
+              describedBy: props.params.describedBy,
+              active: active() !== null ? optionId(active()!) : undefined,
+            })}
+            query={query()}
+            open={searching()}
+            inputRef={(element) => (input = element)}
+            onOpenChange={setSearching}
+            onQueryChange={setQuery}
           />
         </Show>
+        {windowSizer()}
         <div
-          ref={[(element) => (list = element), scrollRef]}
+          ref={[(element) => (list = element), scrollRef, pointerHighlightRef]}
           class="picker-select__options"
           role={props.params.groupBy ? undefined : "listbox"}
           id={props.params.groupBy ? undefined : id}
@@ -570,70 +617,88 @@ export function PickerContent<Option extends PickerOption>(props: {
             opened() && !searching() && active() !== null ? optionId(active()!) : undefined
           }
         >
-          <For each={opened() ? sections() : []} keyed={(section) => section.position}>
-            {(section, index) => (
-              <Show
-                when={section().group}
-                fallback={
-                  <div
-                    id={props.params.groupBy ? `${id}-group-${index()}` : undefined}
-                    role={props.params.groupBy ? "listbox" : undefined}
-                    aria-label={props.params.groupBy ? props.params.label : undefined}
-                  >
-                    <For
-                      each={props.params.groupBy ? section().options : options()}
-                      keyed={(option) => option.value}
-                    >
-                      {(option) => <OptionRow option={option} grouped={false} />}
-                    </For>
-                  </div>
-                }
-              >
-                {(group) => (
-                  <div class="picker-select__group" role="group" aria-label={group().label}>
-                    <button
-                      ref={groupButtonRef()}
-                      class="picker-select__group-toggle"
-                      type="button"
-                      tabindex={opened() ? 0 : -1}
-                      aria-expanded={section().expanded ? "true" : "false"}
-                      aria-controls={`${id}-group-${index()}`}
-                      disabled={Boolean(query().trim())}
-                      onClick={() =>
-                        setCollapsed((draft) => {
-                          const collapsedIndex = draft.indexOf(group().id);
-                          if (collapsedIndex !== -1) {
-                            draft.splice(collapsedIndex, 1);
-                          } else {
-                            draft.push(group().id);
-                          }
-                        })
-                      }
-                    >
-                      {group().leading}
-                      <span class="picker-select__group-label">{group().label}</span>
-                      <span>{section().options.length}</span>
-                      <span class="picker-select__chevron" aria-hidden="true">
-                        <Icon name="chevronDown" />
-                      </span>
-                    </button>
-                    <div
-                      id={`${id}-group-${index()}`}
-                      class="picker-select__group-options"
-                      role="listbox"
-                      aria-label={group().label}
-                    >
-                      <Show when={section().expanded}>
+          <Show
+            when={opened() && windowed()}
+            fallback={
+              <For each={opened() ? sections() : []} keyed={(section) => section.position}>
+                {(section, index) => (
+                  <Show
+                    when={section().group}
+                    fallback={
+                      <div
+                        id={props.params.groupBy ? `${id}-group-${index()}` : undefined}
+                        role={props.params.groupBy ? "listbox" : undefined}
+                        aria-label={props.params.groupBy ? props.params.label : undefined}
+                      >
                         <For each={section().options} keyed={(option) => option.value}>
-                          {(option) => <OptionRow option={option} grouped />}
+                          {(option) => <OptionRow option={option} grouped={false} />}
                         </For>
-                      </Show>
-                    </div>
-                  </div>
+                      </div>
+                    }
+                  >
+                    {(group) => (
+                      <div class="picker-select__group" role="group" aria-label={group().label}>
+                        <button
+                          ref={groupButtonRef()}
+                          class="picker-select__group-toggle"
+                          type="button"
+                          tabindex={opened() ? 0 : -1}
+                          aria-expanded={section().expanded ? "true" : "false"}
+                          aria-controls={`${id}-group-${index()}`}
+                          disabled={Boolean(query().trim())}
+                          onClick={() =>
+                            setCollapsed((draft) => {
+                              const collapsedIndex = draft.indexOf(group().id);
+                              if (collapsedIndex !== -1) {
+                                draft.splice(collapsedIndex, 1);
+                              } else {
+                                draft.push(group().id);
+                              }
+                            })
+                          }
+                        >
+                          {group().leading}
+                          <span class="picker-select__group-label">{group().label}</span>
+                          <span>{section().options.length}</span>
+                          <span class="picker-select__chevron" aria-hidden="true">
+                            <Icon name="chevronDown" />
+                          </span>
+                        </button>
+                        <div
+                          id={`${id}-group-${index()}`}
+                          class="picker-select__group-options"
+                          role="listbox"
+                          aria-label={group().label}
+                        >
+                          <Show when={section().expanded}>
+                            <For each={section().options} keyed={(option) => option.value}>
+                              {(option) => <OptionRow option={option} grouped />}
+                            </For>
+                          </Show>
+                        </div>
+                      </div>
+                    )}
+                  </Show>
                 )}
-              </Show>
-            )}
-          </For>
+              </For>
+            }
+          >
+            <PickerWindow
+              options={rows()}
+              active={active()}
+              viewport={() => list}
+              target={() => optionElements.get(menu.highlightedValueNow() ?? "")}
+              pointerHighlight={() => pointerHighlight}
+              renderRow={(entry, measure) => (
+                <OptionRow
+                  option={() => entry().option}
+                  grouped={false}
+                  virtual={entry()}
+                  measure={measure}
+                />
+              )}
+            />
+          </Show>
         </div>
         <div
           class="picker-select__empty"

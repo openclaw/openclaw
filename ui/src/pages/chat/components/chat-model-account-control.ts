@@ -6,13 +6,13 @@ import type {
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ModelAuthStatusResult } from "../../../api/types.ts";
 import { t } from "../../../i18n/index.ts";
-import { registerModelAccountsEnglish } from "../../../i18n/locales/en-model-accounts.ts";
+import { registerModelAccountListEnglish } from "../../../i18n/locales/en-model-account-list.ts";
 import { normalizeChatModelProviderId } from "../../../lib/chat/model-ref.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { canonicalModelAuthProviderId } from "../../../lib/model-auth.ts";
 import { projectChatFields } from "../chat-field-projection.ts";
 
-registerModelAccountsEnglish();
+registerModelAccountListEnglish();
 
 type AccountInventory = {
   model: string;

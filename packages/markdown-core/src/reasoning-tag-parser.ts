@@ -321,7 +321,7 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
       hasInlineCode &&
       blockStart !== undefined &&
       blockEnd !== undefined &&
-      hasUnresolvedImageCode(text, blockStart, blockEnd, regions, regionStart)
+      scanBracketOwnership(text, blockStart, blockEnd, regions, regionStart).hasImageCode
     ) {
       unresolvedImageCodeStart = blockStart;
       retainStart = Math.min(retainStart, blockStart);
@@ -331,11 +331,13 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
     findReferenceDefinitionRetention(text, definitions);
   retainStart = findListItemRetentionStart(text, blocks, Math.min(retainStart, referenceStart));
   regions.sort((left, right) => left.start - right.start);
+  const continuation = findContainerContinuation(text, blocks.at(-1), retainStart);
   return {
     regions,
     codeSpans: regions.map(({ start, end }): [number, number] => [start, end]),
     textSpans,
     retainStart,
+    ...(continuation ? { continuation } : {}),
     ...(unresolvedImageCodeStart === undefined ? {} : { unresolvedImageCodeStart }),
     completedParagraphs,
     definitions,
@@ -352,15 +354,16 @@ export function findMarkdownCodeRegions(
   return /[`~\t]| {4}/u.test(text) ? parseMarkdownOwnership(text, options).regions : [];
 }
 
-function hasUnresolvedImageCode(
+function scanBracketOwnership(
   text: string,
   start: number,
   end: number,
   regions: readonly { start: number; end: number; block: boolean }[],
   regionStart: number,
-): boolean {
+) {
   let regionIndex = regionStart;
   const brackets: Array<{ image: boolean; code: boolean }> = [];
+  let hasImageCode = false;
   for (let cursor = start; cursor < end; cursor += 1) {
     const region = regions[regionIndex];
     if (region?.start === cursor) {
@@ -379,10 +382,52 @@ function hasUnresolvedImageCode(
     } else if (text[cursor] === "[") {
       brackets.push({ image: false, code: false });
     } else if (text[cursor] === "]" && brackets.pop()?.code) {
-      return true;
+      hasImageCode = true;
     }
   }
-  return brackets.some((bracket) => bracket.image && bracket.code);
+  return {
+    hasImageCode: hasImageCode || brackets.some((bracket) => bracket.image && bracket.code),
+    hasOpenLabel: brackets.length > 0,
+  };
+}
+
+/** Preserve an open container without retaining its already-stable literal lines. */
+function findContainerContinuation(
+  text: string,
+  block: PositionedNode | undefined,
+  retainStart: number,
+) {
+  const start = block?.position?.start?.offset;
+  const end = block?.position?.end?.offset;
+  if (start === undefined || end === undefined || retainStart < start || /\r(?!\n)/u.test(text)) {
+    return undefined;
+  }
+  // Keep the last content line and trailing blanks: the next line may terminate the container.
+  const offset = text.lastIndexOf("\n", end - 1) + 1;
+  if (offset <= start) {
+    return undefined;
+  }
+  if (block?.type === "code" && /^(?: {4}| {0,3}\t)/u.test(text.slice(start))) {
+    return { offset, context: "    x\n" };
+  }
+  const paragraph = block?.children?.length === 1 ? block.children[0] : undefined;
+  const paragraphStart = paragraph?.position?.start?.offset;
+  if (
+    block?.type !== "blockquote" ||
+    paragraph?.type !== "paragraph" ||
+    paragraphStart === undefined
+  ) {
+    return undefined;
+  }
+  const prefix = text.slice(paragraphStart, offset);
+  // Labels, link or reference titles, and code delimiters can gain ownership after an append.
+  if (
+    /[`|]|\][(:]/u.test(prefix) ||
+    scanBracketOwnership(text, paragraphStart, offset, [], 0).hasOpenLabel
+  ) {
+    return undefined;
+  }
+  return { offset, context: text.slice(start, paragraphStart) + "x\n" };
 }
 
 /** Retain the current item, including any container framing an earlier reference needs. */

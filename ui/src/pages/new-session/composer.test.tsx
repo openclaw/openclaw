@@ -13,6 +13,7 @@ import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { adjustTextareaHeight } from "../chat/components/chat-composer-dom.ts";
+import { prepareComposerWidthEdge } from "../chat/components/chat-composer-width-ref.tsx";
 import { createNewSessionComposerTextarea } from "./composer-textarea.ts";
 import {
   composerContext,
@@ -64,11 +65,37 @@ const skill = (name: string) => ({
   skillModelVisible: true,
 });
 
+const skillEntry = (name: string) => ({
+  acceptsArgs: true,
+  description: name,
+  name,
+  scope: "both" as const,
+  source: "skill" as const,
+  skillModelVisible: true,
+  textAliases: [`/${name}`],
+});
+
 afterEach(() => {
   resetComposerTestFixtures();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   replaceSlashCommands(buildFallbackSlashCommands());
+});
+
+// First in this file, before any composer key intent has loaded the edge owner.
+describe("new-session composer width edge", () => {
+  it("leaves the edge owner out of first render and loads it on composer key intent", async () => {
+    const { composer, container } = renderComposer({
+      chatMessageMaxWidth: "600px",
+      onComposerWidthChange: () => undefined,
+    });
+    document.body.append(container);
+    flush();
+    expect(composer.querySelector('[role="separator"]')).toBeNull();
+    composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    await waitForSolid(() => expect(composer.querySelector('[role="separator"]')).not.toBeNull());
+    container.remove();
+  });
 });
 
 describe("new-session placeholder animation", () => {
@@ -201,45 +228,34 @@ describe("new-session composer keyboard submission", () => {
     },
   );
 
-  it.each(["agent", "client"] as const)(
+  it.each(["agent", "client", "project"] as const)(
     "drops pending skill completion after %s replacement",
     async (owner) => {
       const response = createDeferred<CommandsListResult>();
       const request = vi.fn(() => response.promise);
       const snapshot = { client: { request } as unknown as GatewayBrowserClient };
       const context = composerContext(snapshot);
-      const { composer, rerender, rerenderForAgent, composerTextarea } = renderComposer({
-        agentId: "writer",
-        context,
-        message: "$",
-      });
+      const commandProjectId = owner === "project" ? "project-alpha" : undefined;
+      const view = renderComposer({ agentId: "writer", commandProjectId, context, message: "$" });
+      const { composer, composerTextarea } = view;
       const textarea = getComposerTextarea(composer);
       textarea.setSelectionRange(1, 1);
       textarea.dispatchEvent(new Event("select", { bubbles: true }));
       expect(request).toHaveBeenCalledWith("commands.list", {
         agentId: "writer",
+        ...(commandProjectId ? { projectId: commandProjectId } : {}),
         includeArgs: true,
         scope: "text",
       });
       if (owner === "agent") {
-        rerenderForAgent("reviewer");
+        view.rerenderForAgent("reviewer");
+      } else if (owner === "project") {
+        view.rerenderForProject("project-beta");
       } else {
         snapshot.client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-        rerender();
+        view.rerender();
       }
-      response.resolve({
-        commands: [
-          {
-            acceptsArgs: true,
-            description: "Previous owner only",
-            name: "previous_owner_only",
-            scope: "both",
-            source: "skill",
-            skillModelVisible: true,
-            textAliases: ["/previous_owner_only"],
-          },
-        ],
-      });
+      response.resolve({ commands: [skillEntry("previous_owner_only")] });
       await waitForFast(() =>
         expect(composerTextarea.skillMenu.state.skillCommandRefreshPending).toBe(false),
       );
@@ -249,6 +265,40 @@ describe("new-session composer keyboard submission", () => {
       expect(getSkillCommandCompletions("previous_owner_only")).toEqual([]);
     },
   );
+
+  it("requests the new project's slash catalog while the previous project's is pending", async () => {
+    const first = createDeferred<CommandsListResult>();
+    const second = createDeferred<CommandsListResult>();
+    const request = vi
+      .fn()
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+    const context = composerContext({ client: { request } as unknown as GatewayBrowserClient });
+    const { composer, rerenderForProject } = renderComposer({
+      agentId: "writer",
+      commandProjectId: "project-alpha",
+      context,
+    });
+    const textarea = getComposerTextarea(composer);
+    typeDraft(textarea, "/");
+    expect(request).toHaveBeenLastCalledWith(
+      "commands.list",
+      expect.objectContaining({ projectId: "project-alpha" }),
+    );
+    rerenderForProject("project-beta");
+    typeDraft(textarea, "/");
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenLastCalledWith(
+      "commands.list",
+      expect.objectContaining({ projectId: "project-beta" }),
+    );
+    first.resolve({ commands: [skillEntry("alpha_only")] });
+    second.resolve({ commands: [skillEntry("beta_only")] });
+    await waitForFast(() =>
+      expect(composer.querySelector(".slash-menu")?.textContent ?? "").toContain("/beta_only"),
+    );
+    expect(composer.querySelector(".slash-menu")?.textContent ?? "").not.toContain("/alpha_only");
+  });
 
   it("opens skill mentions and inserts the selected skill with Enter", () => {
     replaceSlashCommands([skill("release_notes")]);
@@ -494,21 +544,42 @@ describe("new-session composer sizing lifecycle", () => {
     expect(textarea.style.height).toBe("150px");
   });
 
-  it("keeps one observer across controlled updates and remeasures programmatic drafts", async () => {
-    const observe = vi.fn();
-    const disconnect = vi.fn();
-    const resizeObserverConstructed = vi.fn();
-    class TestResizeObserver {
+  it("keeps its sizing observers across controlled updates and remeasures programmatic drafts", async () => {
+    await prepareComposerWidthEdge();
+    const observers = new Set<TestResizeObserver>();
+    class TestResizeObserver implements ResizeObserver {
+      readonly targets = new Set<Element>();
       constructor() {
-        resizeObserverConstructed();
+        observers.add(this);
       }
-      observe = observe;
-      disconnect = disconnect;
+      observe = (target: Element) => this.targets.add(target);
+      unobserve = (target: Element) => this.targets.delete(target);
+      disconnect = () => this.targets.clear();
     }
+    const observedTargets = () => {
+      const targets = new Set<Element>();
+      for (const observer of observers) {
+        for (const target of observer.targets) {
+          targets.add(target);
+        }
+      }
+      return targets;
+    };
     vi.stubGlobal("ResizeObserver", TestResizeObserver);
     const composerTextarea = createNewSessionComposerTextarea();
     const onInput = vi.fn();
-    const first = renderComposer({ composerTextarea, onInput });
+    let savedWidth: string | undefined = "600px";
+    const first = renderComposer({
+      composerTextarea,
+      onInput,
+      get chatMessageMaxWidth() {
+        return savedWidth;
+      },
+      onComposerWidthChange: (value) => {
+        savedWidth = value;
+        first.rerender();
+      },
+    });
     document.body.append(first.container);
     const textarea = getComposerTextarea(first.composer);
     let scrollHeightReads = 0;
@@ -519,8 +590,18 @@ describe("new-session composer sizing lifecycle", () => {
         return 42;
       },
     });
-    await Promise.resolve();
+    // JSX exists before geometry settles. Capture the baseline only after both
+    // owners have bound all their targets, not merely after the edge renders.
+    const expectedTargets = new Set([
+      textarea,
+      first.composer,
+      first.composer.querySelector<HTMLElement>(".agent-chat__input")!,
+      first.container,
+    ]);
+    await waitForFast(() => expect(observedTargets()).toEqual(expectedTargets));
     const readsAfterAttach = scrollHeightReads;
+    const targetsAfterAttach = observedTargets();
+    expect(targetsAfterAttach.has(textarea)).toBe(true);
 
     textarea.value = "typed";
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
@@ -530,8 +611,7 @@ describe("new-session composer sizing lifecycle", () => {
     await Promise.resolve();
 
     expect(first.container.querySelector("textarea")).toBe(textarea);
-    expect(resizeObserverConstructed).toHaveBeenCalledOnce();
-    expect(disconnect).not.toHaveBeenCalled();
+    expect(observedTargets()).toEqual(targetsAfterAttach);
     expect(scrollHeightReads).toBe(readsAfterInput);
 
     first.rerenderWithMessage("restored programmatically");
@@ -539,10 +619,16 @@ describe("new-session composer sizing lifecycle", () => {
 
     expect(scrollHeightReads).toBeGreaterThan(readsAfterInput);
     expect(readsAfterAttach).toBeGreaterThan(0);
-    expect(resizeObserverConstructed).toHaveBeenCalledOnce();
-    expect(disconnect).not.toHaveBeenCalled();
+    expect(observedTargets()).toEqual(targetsAfterAttach);
     composerTextarea.disconnect();
-    expect(disconnect).toHaveBeenCalledOnce();
+    expect(composerTextarea.getTextarea()).toBeNull();
+    first.unmount();
+    expect(observedTargets().size).toBe(0);
+    expect(first.container.querySelector('[role="separator"]')).toBeNull();
+    const readsAfterUnmount = scrollHeightReads;
+    composerTextarea.syncDraft("late restore");
+    await Promise.resolve();
+    expect(scrollHeightReads).toBe(readsAfterUnmount);
     first.container.remove();
   });
 });

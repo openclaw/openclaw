@@ -22,6 +22,7 @@ import {
   expectDefined,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
+import { observe } from "./desktop-panel.test-support.ts";
 import { createRfbRawFrame, installScriptedRfbServer } from "./desktop-rfb-test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -55,12 +56,7 @@ suite.define(() => {
               status: "starting",
               desktop: false,
             },
-            "desktop.observe": {
-              transport: "rfb",
-              wsPath: "/desktop/observe?token=synthetic",
-              expiresAtMs: 60_000,
-              control: false,
-            },
+            "desktop.observe": observe("synthetic"),
             "portal.list": {
               portals: [
                 {
@@ -98,7 +94,7 @@ suite.define(() => {
               platform: "web",
               mode: "ui",
             },
-            caps: [GATEWAY_CLIENT_CAPS.UI_COMMANDS],
+            caps: [GATEWAY_CLIENT_CAPS.UI_COMMANDS, GATEWAY_CLIENT_CAPS.UI_AGENT_GITHUB_SETTINGS],
           },
         } as GatewayClient;
         return { page, gateway, client, connId };
@@ -174,6 +170,8 @@ suite.define(() => {
     })(
       createScreenTool({
         agentSessionKey: source,
+        agentId: "main",
+        githubIdentitySettingsAvailable: true,
       }),
     );
 
@@ -194,6 +192,26 @@ suite.define(() => {
 
     const requester = expectDefined(browsers[0], "requester");
     const other = expectDefined(browsers[1], "other user");
+    await captureUiProof(suite, requester.page, "github-reconnect", "before.png");
+    await screen.execute("reconnect-github", { action: "github_identity_settings" });
+    await Promise.all(deliveries);
+    await expect
+      .poll(() => new URL(requester.page.url()).pathname)
+      .toBe("/settings/agents/main/tools");
+    await requester.gateway.waitForRequest("tools.github.status", {
+      match: { agentId: "main", selectedScope: "agent" },
+    });
+    const identity = requester.page.locator("openclaw-github-identity");
+    await identity.waitFor();
+    await identity.scrollIntoViewIfNeeded();
+    await captureUiProof(suite, requester.page, "github-reconnect", "after.png");
+    expect(new URL(other.page.url()).pathname).toBe(controlUiSessionPath(source));
+    expect(await other.gateway.getRequests("tools.github.status")).toHaveLength(0);
+    await screen.execute("return-to-chat", { action: "navigate", sessionKey: destination });
+    await Promise.all(deliveries);
+    await expect
+      .poll(() => new URL(requester.page.url()).pathname)
+      .toBe(controlUiSessionPath(destination));
     const rfb = await installScriptedRfbServer(requester.page);
     await screen.execute("show-native", {
       action: "desktop_show",
@@ -221,12 +239,10 @@ suite.define(() => {
     await rfb.send([createRfbRawFrame()]);
     expect(await other.gateway.getRequests("desktop.observe")).toHaveLength(0);
 
-    await requester.gateway.setMethodResponse("desktop.observe", {
-      transport: "rfb",
-      wsPath: "/desktop/observe?token=synthetic-control",
-      expiresAtMs: 60_000,
-      control: true,
-    });
+    await requester.gateway.setMethodResponse(
+      "desktop.observe",
+      observe("synthetic-control", true),
+    );
     const desktopControls = desktop.locator(".desktop-connection-rail");
     await desktopControls.getByRole("button", { name: "Take control", exact: true }).click();
     await expect.poll(rfb.events).toContain("authenticated:2");
@@ -276,12 +292,7 @@ suite.define(() => {
       "screen-requester-routing",
       "human-control-preserved.png",
     );
-    await requester.gateway.setMethodResponse("desktop.observe", {
-      transport: "rfb",
-      wsPath: "/desktop/observe?token=synthetic",
-      expiresAtMs: 60_000,
-      control: false,
-    });
+    await requester.gateway.setMethodResponse("desktop.observe", observe("synthetic"));
     // The Gateway revokes the human controller when the agent explicitly takes over.
     await rfb.disconnect("control-taken:Agent", 4000);
     await desktop.getByText("Agent took control", { exact: true }).waitFor();

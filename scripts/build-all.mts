@@ -61,6 +61,7 @@ type BuildAllStepParams = {
   env?: NodeJS.ProcessEnv;
   nodeExecPath?: string;
   deferIsolatedAssets?: boolean;
+  controlUiAssetsPrepared?: boolean;
 };
 const RUN_NODE_SKIP_DTS_BUILD_ENV = "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD";
 const TSDOWN_AI_OUTPUT_ROOT = tsdownPackageOutputRoot("ai");
@@ -188,21 +189,22 @@ const FINAL_BUILD_ARTIFACTS_STEP_LABELS = [
   "ui:build",
   ...BUILD_METADATA_STEP_LABELS,
 ] as const;
-const CI_ARTIFACT_STEP_LABELS = [
-  "native-protocol",
-  ...ASSET_RUNTIME_STEP_LABELS,
-  "write-plugin-sdk-entry-dts",
-  ...FINAL_BUILD_ARTIFACTS_STEP_LABELS,
-];
 // The final runtime pass rewrites package JS without declaration modules, whose
 // shared helpers otherwise change chunk boundaries between full/runtime builds.
 // Isolated plugin assets finish before declarations capture their inputs.
-const FULL_RUNTIME_STEP_LABELS = ASSET_RUNTIME_STEP_LABELS.flatMap((step) =>
-  step === "tsdown"
-    ? ["tsdown-ai", "tsdown-packages", "tsdown"]
-    : step === "external-plugins:local-dist"
-      ? [step, "write-unified-entry-dts"]
-      : [step],
+const PACKAGE_DECLARATION_RUNTIME_STEP_LABELS = ASSET_RUNTIME_STEP_LABELS.flatMap((step) =>
+  step === "tsdown" ? ["tsdown-ai", "tsdown-packages", "tsdown"] : [step],
+);
+// Each package declaration program sees only its own `/// <reference lib>`
+// directives; the shared core typecheck admits every directive in the repo.
+const CI_ARTIFACT_STEP_LABELS = [
+  "native-protocol",
+  ...PACKAGE_DECLARATION_RUNTIME_STEP_LABELS,
+  "write-plugin-sdk-entry-dts",
+  ...FINAL_BUILD_ARTIFACTS_STEP_LABELS,
+];
+const FULL_RUNTIME_STEP_LABELS = PACKAGE_DECLARATION_RUNTIME_STEP_LABELS.flatMap((step) =>
+  step === "external-plugins:local-dist" ? [step, "write-unified-entry-dts"] : [step],
 );
 const FULL_BUILD_STEP_LABELS = [
   "native-protocol",
@@ -247,6 +249,9 @@ const BUILD_ALL_PROFILE_STEP_ENV: Record<string, Record<string, NodeJS.ProcessEn
   full: FULL_BUILD_PROFILE_STEP_ENV,
   package: FULL_BUILD_PROFILE_STEP_ENV,
   ciArtifacts: {
+    // PR CI's only package declaration check; an ambient skip must not disable it.
+    "tsdown-ai": { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0" },
+    "tsdown-packages": { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0" },
     tsdown: {
       // Global declaration emission is ~95% of the tsdown wall clock and PR
       // CI's dist consumers are runtime JS only; the plugin-sdk gate below
@@ -419,6 +424,9 @@ export function resolveBuildAllStep(step: BuildAllStep, params: BuildAllStepPara
     args: [
       ...step.args,
       ...assetArgs,
+      ...(params.controlUiAssetsPrepared && step.label === "external-plugins:local-dist"
+        ? ["--control-ui-assets-prepared"]
+        : []),
       // Native allocations are outside the JS heap. Keep small build hosts serial.
       ...(step.label === "tsdown"
         ? ["--concurrency", Number(env[TSDOWN_MAX_OLD_SPACE_MB_ENV]) >= 12288 ? "2" : "1"]
@@ -599,6 +607,7 @@ export async function runBuildAllSteps(
       };
     });
   const timings: BuildAllTiming[] = [];
+  let controlUiAssetsPrepared = false;
   if (heapShortfall) {
     if (heapShortfall.fatal) {
       logger.error(heapShortfall.message);
@@ -635,7 +644,11 @@ export async function runBuildAllSteps(
         stepToRun = cacheHitStep;
       }
       logger.error(`[build-all] ${step.label}${reusedCache ? " (cache restored)" : ""}`);
-      const invocation = resolveBuildAllStep(stepToRun, { env: buildEnv, deferIsolatedAssets });
+      const invocation = resolveBuildAllStep(stepToRun, {
+        env: buildEnv,
+        deferIsolatedAssets,
+        controlUiAssetsPrepared,
+      });
       invalidateInputStamps();
       const result = await runStep(invocation);
       params.signal?.throwIfAborted();
@@ -647,12 +660,15 @@ export async function runBuildAllSteps(
         );
         return typeof result.status === "number" ? result.status : 1;
       }
-      if (step.label === "plugins:assets:build" && !params.runStep) {
-        buildInputSignature = resolveRunNodeInputSignature(inputDeps, "build");
-        runtimeInputSignature = resolveRunNodeInputSignature(
-          { ...inputDeps, env: runtimeEnv },
-          "runtime",
-        );
+      if (step.label === "plugins:assets:build") {
+        controlUiAssetsPrepared = true;
+        if (!params.runStep) {
+          buildInputSignature = resolveRunNodeInputSignature(inputDeps, "build");
+          runtimeInputSignature = resolveRunNodeInputSignature(
+            { ...inputDeps, env: runtimeEnv },
+            "runtime",
+          );
+        }
       }
       // Runtime-only tsdown cleans its output roots. Cache hits restore
       // declarations again after that pass so the full build stays complete.

@@ -2,21 +2,18 @@ import { setImmediate } from "node:timers/promises";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
-import { SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE } from "../../config/sessions/lifecycle.js";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
-import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
 import {
   createReplyOperation,
   getSessionControllerOperation,
 } from "../../sessions/session-controller.js";
 import {
-  getTerminalSessionWorkAdmissionRelease,
   interruptSessionControllerEffects,
   runSessionMutation,
 } from "../../sessions/session-controller.lifecycle.js";
@@ -29,33 +26,6 @@ import {
 import { testing } from "../../sessions/session-controller.test-support.js";
 import { runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
 import { admitTestReplyTurn, createSessionStore } from "./reply-turn-admission.test-support.js";
-
-const releaseMocks = vi.hoisted(() => ({
-  beforeRelease: vi.fn(async () => {}),
-  schedule: vi.fn(),
-}));
-vi.mock(
-  import("../../agents/main-session-recovery/main-session-recovery-store.js"),
-  async (importOriginal) => {
-    const actual = await importOriginal();
-    return {
-      ...actual,
-      releaseMainSessionRecoveryOwner: async (
-        lease: Parameters<typeof actual.releaseMainSessionRecoveryOwner>[0],
-      ) => {
-        await releaseMocks.beforeRelease();
-        return await actual.releaseMainSessionRecoveryOwner(lease);
-      },
-    };
-  },
-);
-vi.mock(
-  import("../../agents/main-session-recovery/main-session-recovery-owner-release.js"),
-  async (importOriginal) => ({
-    ...(await importOriginal()),
-    scheduleMainSessionRecoveryPendingTarget: releaseMocks.schedule,
-  }),
-);
 
 const sessionKey = "agent:main:telegram:topic:admission";
 const sessionId = "original-session";
@@ -109,23 +79,6 @@ function store(state: Partial<SessionEntry> = {}) {
 function entry(storePath: string, key = sessionKey) {
   return loadSessionEntry({ storePath, sessionKey: key });
 }
-const interruptedEntry = {
-  status: "interrupted",
-  abortedLastRun: true,
-  mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
-} satisfies Partial<SessionEntry>;
-const tombstoneEntry = {
-  mainRestartRecovery: {
-    cycleId: "cycle-1",
-    revision: 4,
-    chargedAttempts: 3,
-    tombstone: {
-      reason: "automatic recovery exhausted",
-      recoveredSessionId: "dashboard-successor",
-      recoveredSessionKey: "agent:main:dashboard:successor",
-    },
-  },
-} satisfies Partial<SessionEntry>;
 async function holdMutation(storePath: string, run: () => Promise<unknown> = async () => {}) {
   const started = createDeferred();
   const release = createDeferred();
@@ -143,20 +96,6 @@ async function holdMutation(storePath: string, run: () => Promise<unknown> = asy
     release.resolve();
     await mutation;
   };
-}
-function holdRecoveryRelease() {
-  const started = createDeferred();
-  const release = createDeferred();
-  releaseMocks.beforeRelease.mockImplementationOnce(async () => {
-    started.resolve();
-    await release.promise;
-  });
-  return { started: started.promise, release: release.resolve };
-}
-async function expectRecoveryReleased(storePath: string, key = sessionKey) {
-  await vi.waitFor(() =>
-    expect(entry(storePath, key)?.mainRestartRecovery?.foregroundClaims).toBeUndefined(),
-  );
 }
 function interrupt(
   storePath: string,
@@ -179,8 +118,6 @@ afterEach(async () => {
   }
   testing.resetSessionControllerForTest();
   resetDiagnosticRunActivityForTest();
-  releaseMocks.beforeRelease.mockClear();
-  releaseMocks.schedule.mockClear();
 });
 
 it("rejects a reply when an archive commits before admission", async () => {
@@ -209,111 +146,6 @@ it("rejects a reply when deletion commits before admission", async () => {
   const admission = admitStored(storePath);
   await release();
   await expect(admission).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
-});
-it.each(["visible", "queued_followup"] as const)(
-  "retains source recovery until %s admission after adoption",
-  async (kind) => {
-    const storePath = createSessionStore({
-      [sourceKey]: { sessionId, updatedAt: 100, ...interruptedEntry },
-      [sessionKey]: { sessionId: "target-session", updatedAt: 100 },
-    });
-    const source = owned(
-      await admitStored(storePath, {
-        sessionKey: sourceKey,
-        originatingLeafEntryId: "leaf-before-run",
-      }),
-    );
-    const adopted = owned(await adopt(storePath, source, { expectedSessionId: "target-session" }));
-    adopted.updateSessionId("target-session");
-    expect(adopted).toBe(source);
-    expect(adopted.originatingLeafEntryId).toBe("leaf-before-run");
-    expect(adopted).toMatchObject({ key: sessionKey, sessionId: "target-session" });
-    const targets = [sourceKey, sessionKey].map((key) => ({ scope: storePath, identities: [key] }));
-    expect(targets.map(getTerminalSessionWorkAdmissionRelease)).toEqual([false, false]);
-    adopted.freezeAbort();
-    const terminalReleases = targets.map((target) => {
-      const released = getTerminalSessionWorkAdmissionRelease(target);
-      if (released === false) {
-        throw new Error("Committed reply admission is still classified as live");
-      }
-      return released;
-    });
-    const release = holdRecoveryRelease();
-    adopted.complete();
-    await release.started;
-    const successor = observe(admitStored(storePath, { sessionKey: sourceKey, kind }));
-    await Promise.resolve();
-    expect(successor.settled).toBe(false);
-    release.release();
-    await Promise.all(terminalReleases);
-    const next = owned(await successor.promise);
-    expect(next.sessionId).toBe(sessionId);
-    next.complete();
-    await expectRecoveryReleased(storePath, sourceKey);
-  },
-);
-it("admits an explicit reset without reopening its restart tombstone", async () => {
-  const archivedAt = Date.now() - 1000;
-  const storePath = store({ ...tombstoneEntry, archivedAt, status: "failed" });
-  const admitted = owned(
-    await admitStored(storePath, { resetTriggered: true, allowRestartTombstoneReset: true }),
-  );
-  expect(entry(storePath)).toMatchObject({
-    sessionId,
-    archivedAt,
-    mainRestartRecovery: { tombstone: { recoveredSessionId: "dashboard-successor" } },
-  });
-  admitted.complete();
-});
-it("does not treat resetTriggered alone as restart-tombstone authority", async () => {
-  await expect(admitStored(store(tombstoneEntry), { resetTriggered: true })).rejects.toMatchObject({
-    code: SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE,
-    message: expect.stringMatching(/ended during restart recovery/i),
-  });
-});
-it.each([true, false])(
-  "requires terminal evidence to retire recovery fences: %s",
-  async (terminal) => {
-    const storePath = store({
-      abortedLastRun: false,
-      restartRecoveryRuns: [{ runId: "stale-run", lifecycleGeneration: "stale-generation" }],
-      ...(terminal ? { restartRecoveryTerminalRunIds: ["stale-run"] } : {}),
-    });
-    const before = entry(storePath);
-    expect(before?.status).toBeUndefined();
-    if (!terminal) {
-      await expect(admitStored(storePath)).rejects.toMatchObject({
-        code: "SESSION_WORK_START_CHANGED",
-      });
-      expect(entry(storePath)).toEqual(before);
-      return;
-    }
-    const admitted = owned(await admitStored(storePath));
-    expect(admitted.sessionId).toBe(sessionId);
-    const current = entry(storePath);
-    expect(current?.restartRecoveryRuns).toBeUndefined();
-    expect(current?.mainRestartRecovery).toBeUndefined();
-    admitted.complete();
-  },
-);
-it("schedules released recovery only after retained admission exits", async () => {
-  const storePath = store(interruptedEntry);
-  const blocker = operation();
-  const reservation = operation({ sessionKey: sourceKey, sessionId: "source-session" });
-  const result = await adopt(storePath, reservation, {
-    retainLifecycleAdmissionOnActive: true,
-  });
-  expect(result).toMatchObject(activeRunSkipped);
-  expect(releaseMocks.schedule).not.toHaveBeenCalled();
-  expect(entry(storePath)).not.toHaveProperty("mainRestartRecovery.foregroundClaims");
-  if (result.status === "skipped") {
-    result.lifecycleAdmission?.release();
-  }
-  await vi.waitFor(() =>
-    expect(releaseMocks.schedule).toHaveBeenCalledWith({ ...scope, storePath }),
-  );
-  blocker.complete();
-  reservation.complete();
 });
 it("excludes the initiating reply admission from an in-band lifecycle mutation", async () => {
   const storePath = store();
@@ -369,11 +201,7 @@ it.for([false, true])(
 it("skips adoption without waiting when the target run slot is owned", async () => {
   const blocker = operation();
   blocker.setPhase("running");
-  const storePath = store({
-    restartRecoveryRuns: [
-      { runId: "active-run", lifecycleGeneration: getAgentEventLifecycleGeneration() },
-    ],
-  });
+  const storePath = store();
   const before = entry(storePath);
   const reservation = operation({ sessionKey: sourceKey, sessionId: "source-session" });
   const result = await adopt(storePath, reservation);

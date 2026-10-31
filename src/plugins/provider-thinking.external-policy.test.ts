@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
+import { externalProviderPolicyRegistry } from "./provider-external-policy.test-support.js";
 
 const fixtureState = vi.hoisted(() => ({ pluginRoot: "" }));
 const envSnapshot = captureEnv([
@@ -33,18 +34,7 @@ process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
 vi.mock("./current-plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: () => ({
-    manifestRegistry: {
-      plugins: [
-        {
-          id: "fixture-provider",
-          origin: "external",
-          trustedOfficialInstall: true,
-          rootDir: fixtureState.pluginRoot,
-          providers: ["fixture-provider"],
-          cliBackends: [],
-        },
-      ],
-    },
+    manifestRegistry: externalProviderPolicyRegistry(fixtureState.pluginRoot),
   }),
 }));
 

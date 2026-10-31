@@ -31,6 +31,7 @@ import {
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { forbidMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
 import {
   connectChatMetadataAccount,
   createChatMetadataHarness,
@@ -38,7 +39,6 @@ import {
   createDraftChatMetadataScope,
   createPersonalChatMetadataFixture,
 } from "./chat-metadata-runtime.test-support.js";
-import { WITHOUT_OPENAI_ENV_AUTH } from "./models-list-result.openai-routes.test-support.js";
 
 describe("gateway chat metadata personal accounts", () => {
   test("stops serving a retained shared list once the requester connects a personal account", async () => {
@@ -455,6 +455,7 @@ describe("gateway chat metadata auth deadlines", () => {
     });
     harness.setOwner(owner);
     harness.getAuthStoreRevision.mockRestore();
+    harness.getAuthCatalogRevision.mockRestore();
     try {
       await harness.runtime.refresh();
       await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
@@ -471,7 +472,9 @@ describe("gateway chat metadata auth deadlines", () => {
       );
       await harness.runtime.read({ agentId: "main" });
       expect(onChanged).toHaveBeenCalledOnce();
-      for (const cooldownUntil of [undefined, 30_000]) {
+      onChanged.mockClear();
+      for (let index = 0; index < 100; index++) {
+        const cooldownUntil = index % 2 === 0 ? undefined : 30_000;
         setRuntimeAuthProfileStoreSnapshot(
           {
             ...original,
@@ -486,7 +489,25 @@ describe("gateway chat metadata auth deadlines", () => {
           models: [{ id: "model", provider: "acme", available: cooldownUntil === undefined }],
         });
       }
-      expect(onChanged).toHaveBeenCalledTimes(3);
+      expect(onChanged).toHaveBeenCalledTimes(100);
+      expect(onChanged.mock.calls.every(([change]) => change.modelCatalogChanged === false)).toBe(
+        true,
+      );
+      expect(onChanged.mock.calls.every(([change]) => change.authChanged === true)).toBe(true);
+      const credentialChanges: AuthProfileStore["profiles"][] = [
+        { "acme:primary": { type: "api_key", provider: "acme", key: "replacement-key" } },
+        {},
+      ];
+      for (const profiles of credentialChanges) {
+        onChanged.mockClear();
+        setRuntimeAuthProfileStoreSnapshot({ ...original, profiles }, prepared.agentDir);
+        await harness.runtime.refresh();
+        expect(onChanged).toHaveBeenCalledExactlyOnceWith({
+          modelCatalogChanged: true,
+          authChanged: true,
+          commandsChanged: false,
+        });
+      }
       expect(harness.getPreparedAuthStore).not.toHaveBeenCalled();
       expect(original.usageStats).toEqual({ "acme:primary": { cooldownUntil: 20_000 } });
     } finally {

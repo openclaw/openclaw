@@ -288,7 +288,7 @@ export async function runPreparedTsgoCommand(args, options) {
         const selected = indices.map((index) => TSGO_ROOT_TEST_SHARDS[index]!);
         const failureIndex = selected.findIndex((graph) => graph.name === "test-root-scripts");
         const fails = exitCode !== 0 && failureIndex >= 0;
-        expect(result.status, result.stderr).toBe(_label === "mixed CI" ? 2 : fails ? exitCode : 0);
+        expect(result.status, result.stderr).toBe(fails ? exitCode : _label === "mixed CI" ? 2 : 0);
         const calls = read("calls.jsonl")
           .trim()
           .split("\n")

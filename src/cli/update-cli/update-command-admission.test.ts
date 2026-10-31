@@ -1,6 +1,7 @@
 import "./update-command-execution.test-support.js";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import * as physicalStore from "../../infra/database-engine/physical-store.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { prepareGitMutation } from "../../infra/update-runner-git-target.js";
 import * as databaseBackup from "../../snapshot/database-backup.js";
@@ -39,14 +40,17 @@ function admissionFixture(target: Parameters<typeof createUpdateRun>[0]["target"
     params,
     execute,
     engineReads: vi.spyOn(databaseBackup, "readBackupEngine"),
+    physicalEngineReads: vi.spyOn(physicalStore, "readBackupEngine"),
   };
 }
 
 it("admits compatible Git targets without copying stores", async () => {
-  const { dir, env, context, params, execute, engineReads } = admissionFixture({
-    kind: "git",
-    channel: "dev",
-  });
+  const { dir, env, context, params, execute, engineReads, physicalEngineReads } = admissionFixture(
+    {
+      kind: "git",
+      channel: "dev",
+    },
+  );
   params.shouldRestart = false;
   params.opts.restart = false;
   mocks.captureManagedPreflight.mockResolvedValue(context);
@@ -79,12 +83,13 @@ it("admits compatible Git targets without copying stores", async () => {
   expect(result).toMatchObject({ result: { status: "ok" }, mutationStarted: true });
   expect(events).toEqual(["inspected", "activated"]);
   expect(engineReads).not.toHaveBeenCalled();
+  expect(physicalEngineReads).not.toHaveBeenCalled();
 });
 
 it.each(["package", "staged", "git"] as const)(
   "refuses an unsupported native receiver before activation: %s",
   async (route) => {
-    const { dir, env, runId, params, execute, engineReads } = admissionFixture(
+    const { dir, env, runId, params, execute, engineReads, physicalEngineReads } = admissionFixture(
       route === "git" ? { kind: "git", channel: "dev", tag: "latest" } : {},
     );
     params.updateStepTimeoutMs = 600_000;
@@ -156,6 +161,7 @@ it.each(["package", "staged", "git"] as const)(
     expect(mocks.validateCanary).not.toHaveBeenCalled();
     // Known target support must not copy live stores merely to rediscover their engines.
     expect(engineReads).not.toHaveBeenCalled();
+    expect(physicalEngineReads).not.toHaveBeenCalled();
     if (route === "git") {
       expect(getUpdateRun(runId, { env })?.target).toEqual({
         kind: "git",

@@ -40,43 +40,45 @@ export function listBoundClaudeSessions(
     return cached;
   }
   const bound = new Map<string, BoundClaudeSession>();
-  for (const { sessionKey, entry } of listSessionCatalogEntries({
+  const pluginId = api.id;
+  const entries = listSessionCatalogEntries({
     agentId,
     config,
     runtime: api.runtime,
     sessionEntries,
-  })) {
+  });
+  // oxlint-disable-next-line typescript/prefer-for-of -- Frozen-array iterators allocate per row.
+  for (let index = 0; index < entries.length; index++) {
+    const { sessionKey, entry } = entries[index]!;
+    // A CLI resume binding is distinct from catalog ownership; ordinary routed
+    // sessions remain bound, never adopted.
+    const adopted = entry.pluginOwnerId === pluginId;
+    const bindings = isRecord(entry.cliSessionBindings) ? entry.cliSessionBindings : undefined;
+    const binding = bindings?.[CLAUDE_CLI_BACKEND_ID];
+    let threadId =
+      isRecord(binding) && typeof binding.sessionId === "string" && binding.sessionId
+        ? binding.sessionId
+        : undefined;
+    // Most rows have neither binding. Avoid their catalog and host metadata reads.
+    if (!threadId && (!adopted || entry.modelSelectionLocked !== true)) {
+      continue;
+    }
     const anthropic = isRecord(entry.pluginExtensions)
       ? entry.pluginExtensions.anthropic
       : undefined;
     const marker = isRecord(anthropic) ? anthropic.sessionCatalog : undefined;
+    if (threadId === undefined) {
+      if (!isRecord(marker) || typeof marker.sourceThreadId !== "string") {
+        continue;
+      }
+      threadId = marker.sourceThreadId;
+    }
     const hostId =
       isRecord(marker) && typeof marker.sourceHostId === "string"
         ? marker.sourceHostId
         : entry.execHost === "node" && entry.execNode?.trim()
           ? `node:${entry.execNode.trim()}`
           : CLAUDE_LOCAL_SESSION_HOST_ID;
-    // A CLI resume binding only records which Claude thread this session last
-    // drove. Catalog ownership is what makes the session a Claude Code
-    // conversation, so the two are reported separately: an ordinary OpenClaw
-    // session routed to the Claude CLI is bound, never adopted.
-    const adopted = entry.pluginOwnerId === api.id;
-    const bindings = isRecord(entry.cliSessionBindings) ? entry.cliSessionBindings : undefined;
-    const binding = bindings?.[CLAUDE_CLI_BACKEND_ID];
-    let threadId: string;
-    if (isRecord(binding) && typeof binding.sessionId === "string" && binding.sessionId) {
-      threadId = binding.sessionId;
-    } else {
-      if (
-        !adopted ||
-        entry.modelSelectionLocked !== true ||
-        !isRecord(marker) ||
-        typeof marker.sourceThreadId !== "string"
-      ) {
-        continue;
-      }
-      threadId = marker.sourceThreadId;
-    }
     const sourceKey = adoptedSourceKey(hostId, threadId);
     // Sessions from several agents can hold a binding to one Claude thread, and
     // this key does not carry the agent. Adoption is the fact the catalog reads

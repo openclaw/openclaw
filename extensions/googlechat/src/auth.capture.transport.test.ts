@@ -1,10 +1,8 @@
-import { createServer } from "node:http";
-import type { Socket } from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { captureHttpExchange, type CaptureEventRecord } from "openclaw/plugin-sdk/proxy-capture";
 import { fetchWithRuntimeDispatcher } from "openclaw/plugin-sdk/runtime-fetch";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeEach, expect, it, vi } from "vitest";
-import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 
 const fixture = vi.hoisted(() => ({
   url: "",
@@ -80,10 +78,9 @@ it.each(["auth-overflow", "cert-error", "auth-complete"] as const)(
   async (kind) => {
     const closed = createDeferred<void>();
     const captured = createDeferred<CaptureEventRecord>();
-    const sockets = new Map<Socket, Promise<void>>();
     const completeBody = '{"access_token":"fixture"}';
     fixture.captured = captured.resolve;
-    const server = createServer((request, response) => {
+    const handler: Parameters<typeof withServer>[0] = (request, response) => {
       request.resume();
       request.socket.once("close", () => closed.resolve());
       response.writeHead(kind === "cert-error" ? 503 : 200, {
@@ -95,66 +92,54 @@ it.each(["auth-overflow", "cert-error", "auth-complete"] as const)(
       } else {
         response.write(kind === "auth-overflow" ? Buffer.alloc(1024 * 1024 + 1) : "unavailable");
       }
-    });
-    server.on("connection", (socket) => {
-      const settled = createDeferred<void>();
-      socket.once("close", settled.resolve);
-      sockets.set(socket, settled.promise);
-    });
+    };
     let operation: Promise<unknown> | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const { OAuth2Client } = await loadGoogleAuthRuntime();
     const verifyJwt = vi.spyOn(OAuth2Client.prototype, "verifySignedJwtWithCertsAsync");
     try {
-      const port = await listenOnLoopback(server);
-      fixture.url = `http://127.0.0.1:${port}/response`;
-      const transport = await getGoogleAuthTransport();
-      const deadline = new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error("Google Chat cleanup did not settle")), 1_000);
-      });
-      operation =
-        kind === "cert-error"
-          ? verifyGoogleChatRequest({
-              bearer: "fixture",
-              audienceType: "project-number",
-              audience: "123",
-            })
-          : transport.request({ url: "https://oauth2.googleapis.com/token", retry: false });
-      const observed = operation.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
-      const outcome = await Promise.race([observed, deadline]);
-      if (kind === "auth-overflow") {
-        expect(outcome).toHaveProperty(
-          "error.message",
-          "Google auth response exceeds 1048576 bytes.",
-        );
-      } else if (kind === "cert-error") {
-        expect(outcome).toEqual({
-          value: { ok: false, reason: "Failed to fetch Chat certs (503)" },
+      await withServer(handler, async (baseUrl) => {
+        fixture.url = `${baseUrl}/response`;
+        const transport = await getGoogleAuthTransport();
+        const deadline = new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error("Google Chat cleanup did not settle")), 1_000);
         });
-        expect(verifyJwt).not.toHaveBeenCalled();
-      } else {
-        expect(outcome).toMatchObject({ value: { data: { access_token: "fixture" } } });
-      }
-      await Promise.race([closed.promise, deadline]);
-      expect(fixture.response?.body?.locked).toBe(false);
-      const event = await Promise.race([captured.promise, deadline]);
-      expect(event.kind).toBe(kind === "auth-complete" ? "response" : "error");
-      if (kind === "auth-complete") {
-        expect(event.dataText).toBe(completeBody);
-      }
+        operation =
+          kind === "cert-error"
+            ? verifyGoogleChatRequest({
+                bearer: "fixture",
+                audienceType: "project-number",
+                audience: "123",
+              })
+            : transport.request({ url: "https://oauth2.googleapis.com/token", retry: false });
+        const observed = operation.then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+        const outcome = await Promise.race([observed, deadline]);
+        if (kind === "auth-overflow") {
+          expect(outcome).toHaveProperty(
+            "error.message",
+            "Google auth response exceeds 1048576 bytes.",
+          );
+        } else if (kind === "cert-error") {
+          expect(outcome).toEqual({
+            value: { ok: false, reason: "Failed to fetch Chat certs (503)" },
+          });
+          expect(verifyJwt).not.toHaveBeenCalled();
+        } else {
+          expect(outcome).toMatchObject({ value: { data: { access_token: "fixture" } } });
+        }
+        await Promise.race([closed.promise, deadline]);
+        expect(fixture.response?.body?.locked).toBe(false);
+        const event = await Promise.race([captured.promise, deadline]);
+        expect(event.kind).toBe(kind === "auth-complete" ? "response" : "error");
+        if (kind === "auth-complete") {
+          expect(event.dataText).toBe(completeBody);
+        }
+      });
     } finally {
       clearTimeout(timer);
-      const stopped = new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-      for (const socket of sockets.keys()) {
-        socket.destroy();
-      }
-      await stopped;
-      await Promise.all(sockets.values());
       await operation?.catch(() => undefined);
       await fixture.release();
       if (fixture.response) {

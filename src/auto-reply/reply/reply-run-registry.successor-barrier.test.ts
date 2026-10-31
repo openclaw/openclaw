@@ -7,6 +7,7 @@ import {
   ReplyRunSuccessorAdmissionBlockedError,
 } from "../../sessions/session-controller.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import { waitForReplyBarrierSettlement } from "../../sessions/session-controller.settlement.js";
 import { testing } from "../../sessions/session-controller.test-support.js";
 import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
 import { createTestReplyOperation } from "./reply-run-registry.test-helpers.js";
@@ -142,6 +143,31 @@ describe("reply run successor barriers", () => {
         release.resolve();
         await Promise.allSettled([release.promise]);
         await wait;
+      }
+    },
+  );
+
+  it.each([-60_000, 60_000])(
+    "keeps the extendable barrier deadline after a %s ms wall-clock step",
+    async (wallClockStepMs) => {
+      vi.useFakeTimers();
+      const pending = createDeferred();
+      let settled = false;
+      const settlement = waitForReplyBarrierSettlement(pending.promise, {
+        maxTimeoutMs: 30_000,
+        shouldExtend: () => true,
+      }).then(() => {
+        settled = true;
+      });
+      try {
+        vi.setSystemTime(Date.now() + wallClockStepMs);
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(settled).toBe(true);
+      } finally {
+        pending.resolve();
+        await settlement;
       }
     },
   );

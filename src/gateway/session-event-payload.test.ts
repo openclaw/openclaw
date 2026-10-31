@@ -20,6 +20,27 @@ function wire(value: unknown): unknown {
   return JSON.parse(JSON.stringify(value));
 }
 
+it.each([false, true])(
+  "keeps the ordered wire envelope separate from its row (lifecycle=%s)",
+  (lifecycle) => {
+    const sessionRow = Object.freeze({ ...row, model: "synthetic", hasActiveSubagentRun: false });
+    const result = buildGatewaySessionSnapshot({ sessionRow, lifecycle });
+    expect(Object.keys(result)[0]).toBe("session");
+    expect(Object.keys(result).slice(-2)).toEqual(["subagentRunState", "hasActiveSubagentRun"]);
+    expect(result.session).not.toBe(sessionRow);
+    expect(result.session).not.toHaveProperty("session");
+    expect(wire(result)).toMatchObject({
+      session: { key: row.key, updatedAt: 1, hasActiveSubagentRun: false },
+      hasActiveSubagentRun: false,
+    });
+    expect(sessionRow.model).toBe("synthetic");
+    if (lifecycle) {
+      expect(result).not.toHaveProperty("model");
+      expect(result.session).not.toHaveProperty("model");
+    }
+  },
+);
+
 it.each([
   ["titlePending", true, false],
   ["lastAssistantMessage", { text: "Previous answer", timestamp: 100 }, null],

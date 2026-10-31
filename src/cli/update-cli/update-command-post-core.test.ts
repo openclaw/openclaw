@@ -28,20 +28,30 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const pluginUpdate = createPostCorePluginUpdateResult({ status: "ok", changed: true });
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 const withTempDir = () => tempDirs.make("openclaw-post-core-records-");
 
 describe("continuePostCoreUpdateInFreshProcess", () => {
   it.each([false, true])(
     "releases artifact ownership only for a target without the prepared-fact consumer (modern=%s)",
     async (modern) => {
+      vi.stubEnv("OPENCLAW_COMPATIBILITY_HOST_VERSION", "stale-version");
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL", "beta");
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH", "/tmp/stale-config.json");
+      vi.stubEnv("OPENCLAW_TEST_POST_CORE_UNRELATED", "preserved");
       const root = withTempDir();
       const control = path.join(root, "control");
       await fs.mkdir(control, { mode: 0o700 });
       installPrivateUpdateHandoffStore(control);
       const observation = path.join(root, "ownership.txt");
       await fs.mkdir(path.join(root, "dist"));
-      await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: "9999.0.0" }));
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify(modern ? { version: "9999.0.0" } : {}),
+      );
       if (modern) {
         await fs.mkdir(path.join(root, "scripts", "lib"), { recursive: true });
         await fs.writeFile(
@@ -64,7 +74,13 @@ try {
   if (!String(error).includes(${JSON.stringify(`retained by PID ${process.pid}`)})) throw error;
   observed = "parent-held";
 }
-await fs.writeFile(${JSON.stringify(observation)}, observed);
+await fs.writeFile(${JSON.stringify(observation)}, JSON.stringify({
+  ownership: observed,
+  compatHostVersion: process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION,
+  requestedChannel: process.env.OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL,
+  sourceConfigPath: process.env.OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH,
+  unrelated: process.env.OPENCLAW_TEST_POST_CORE_UNRELATED,
+}));
 await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.stringify(JSON.stringify(pluginUpdate))});
 `,
       );
@@ -89,8 +105,15 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
           });
         });
         expect(result).toEqual({ resumed: true, pluginUpdate });
-        expect(await fs.readFile(observation, "utf8")).toBe(
-          modern ? "parent-held" : "child-acquired",
+        expect(JSON.parse(await fs.readFile(observation, "utf8"))).toEqual({
+          ownership: modern ? "parent-held" : "child-acquired",
+          ...(modern ? { compatHostVersion: "9999.0.0" } : {}),
+          unrelated: "preserved",
+        });
+        expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("stale-version");
+        expect(process.env.OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL).toBe("beta");
+        expect(process.env.OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH).toBe(
+          "/tmp/stale-config.json",
         );
         expect(await sourceArtifactLock.verifyStillHeld()).toBe(modern);
       } finally {
@@ -102,6 +125,10 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
   it.runIf(process.platform !== "win32").each([true, false])(
     "waits for a committed child's shutdown before returning its result (cooperative=%s)",
     async (cooperative) => {
+      vi.stubEnv("OPENCLAW_COMPATIBILITY_HOST_VERSION", "stale-version");
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL", "beta");
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH", "/tmp/stale-config.json");
+      vi.stubEnv("OPENCLAW_TEST_POST_CORE_UNRELATED", "preserved");
       const root = withTempDir();
       const settledPath = path.join(root, "settled");
       const pidPath = path.join(root, "writer.pid");
@@ -138,6 +165,8 @@ await fs.writeFile(${JSON.stringify(handoffPath)}, JSON.stringify({
   marker: JSON.parse(await fs.readFile(path.join(resultDir, "handoff.json"), "utf8")),
   installRecords: await fs.readFile(process.env.OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH, "utf8"),
   sourceConfig: await fs.readFile(process.env.OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH, "utf8"),
+  compatHostVersion: process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION,
+  requestedChannel: process.env.OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL ?? null,
 }));
 await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.stringify(JSON.stringify(pluginUpdate))});
 `,
@@ -151,7 +180,7 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
           root,
           sourceRuntimePrepared: true,
           channel: "stable",
-          requestedChannel: null,
+          requestedChannel: cooperative ? "dev" : null,
           opts: { json: true, yes: true, timeout: cooperative ? undefined : "3600" },
           pluginInstallRecords,
           preUpdateConfig,
@@ -197,6 +226,8 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
         },
         installRecords: `${JSON.stringify(pluginInstallRecords)}\n`,
         sourceConfig: `${JSON.stringify(preUpdateConfig)}\n`,
+        compatHostVersion: "9999.0.0",
+        requestedChannel: cooperative ? "dev" : null,
       });
       await expect(fs.stat(handoff.resultDir)).rejects.toMatchObject({ code: "ENOENT" });
     },

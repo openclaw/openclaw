@@ -2,9 +2,12 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
-import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import {
+  CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+} from "../../../src/gateway/control-ui-contract.js";
 import { reconnectMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { sessionRow } from "./chat-flow-fixtures.test-support.ts";
 import {
   captureUiProof,
   chatSessionListResponse,
@@ -121,12 +124,7 @@ suite.define(() => {
           methodResponses: {
             "progressCard.get": { card: null },
             "sessions.list": chatSessionListResponse([
-              {
-                key: selectedSessionKey,
-                kind: "direct",
-                label: "Selected session",
-                updatedAt: 2,
-              },
+              sessionRow(selectedSessionKey, "Selected session", 2),
               {
                 key: sessionKey,
                 kind: "direct",
@@ -239,12 +237,7 @@ suite.define(() => {
               ],
             },
             "sessions.list": chatSessionListResponse([
-              {
-                key: selectedSessionKey,
-                kind: "direct",
-                label: "Selected session",
-                updatedAt: now - 5 * 60_000,
-              },
+              sessionRow(selectedSessionKey, "Selected session", now - 5 * 60_000),
               {
                 createdActor: sessionPerson("profile-ada", "Ada King"),
                 createdAt: now - 89 * 24 * 60 * 60_000,
@@ -302,7 +295,7 @@ suite.define(() => {
             clamp: getComputedStyle(node).webkitLineClamp,
             whiteSpace: getComputedStyle(node).whiteSpace,
           })),
-        ).toEqual({ clamp: "2", whiteSpace: "normal" });
+        ).toEqual({ clamp: "none", whiteSpace: "nowrap" });
         // The row is an anchor: a dropped text-decoration reset is invisible to jsdom.
         await expect
           .poll(() => prRow.evaluate((node) => getComputedStyle(node).textDecorationLine))
@@ -356,8 +349,7 @@ suite.define(() => {
           "You",
         );
         expect(await card.locator(".session-hovercard__context-text").allTextContents()).toEqual([
-          "openclaw",
-          "feature/session-hovercards",
+          "openclaw / feature/session-hovercards",
         ]);
         expect(await card.textContent()).not.toContain("/work/openclaw");
         await expect
@@ -377,16 +369,11 @@ suite.define(() => {
           await pullRequest.locator(".session-hovercard__pr-state-icon").getAttribute("title"),
         ).toBe("Open · CI checks passing");
         expect(await pullRequest.locator(".session-hovercard__pr-number").textContent()).toBe(
-          "openclaw/openclaw#417",
+          "#417",
         );
         expect(await pullRequest.locator(".session-hovercard__pr-author").count()).toBe(0);
         expect(await pullRequest.locator(".session-hovercard__files").count()).toBe(0);
-        expect(await pullRequest.locator(".session-hovercard__additions").textContent()).toBe(
-          "+128",
-        );
-        expect(await pullRequest.locator(".session-hovercard__deletions").textContent()).toBe(
-          "−34",
-        );
+        expect(await pullRequest.locator(".session-hovercard__additions").count()).toBe(0);
         await expect.poll(() => card.locator("strong").textContent()).toContain("Building");
 
         const notepad = card.locator(".session-hovercard__notepad");
@@ -394,16 +381,7 @@ suite.define(() => {
           "Task progress",
         );
         const markdown = notepad.locator(".session-progress-card__markdown");
-        expect(await markdown.locator(":scope > :first-child").getAttribute("class")).toContain(
-          "session-progress-card__progress",
-        );
-        expect(await markdown.locator(".session-progress-card__progress-label").textContent()).toBe(
-          "Progress · 3/7",
-        );
-        const progress = markdown.locator("progress");
-        await expect.poll(() => progress.getAttribute("value")).toBe("3");
-        expect(await progress.getAttribute("max")).toBe("7");
-        expect(await progress.getAttribute("aria-label")).toBe("Progress · 3/7");
+        expect(await markdown.locator("progress").count()).toBe(0);
         expect(await card.locator("table").count()).toBe(1);
         expect(await card.getByRole("cell", { name: "tests" }).count()).toBe(1);
         expect(await card.getByRole("cell", { name: "green" }).count()).toBe(1);
@@ -483,7 +461,7 @@ suite.define(() => {
           retryable: true,
         });
         await expect.poll(() => card.locator("strong").textContent()).toContain("Building");
-        await expect.poll(() => card.locator("progress").getAttribute("value")).toBe("3");
+        await expect.poll(() => card.locator("strong").first().textContent()).toContain("Building");
 
         await gateway.setMethodResponse("progressCard.get", {
           cases: [
@@ -509,7 +487,9 @@ suite.define(() => {
         await gateway.emitGatewayEvent("progressCard.changed", { revision: 2, sessionKey });
 
         await expect.poll(() => card.textContent()).toContain("Packaging");
-        await expect.poll(() => card.locator("progress").getAttribute("value")).toBe("6");
+        await expect
+          .poll(() => card.locator("strong").first().textContent())
+          .toContain("Packaging");
         await expect
           .poll(() => card.locator(".session-hovercard__plan-step").textContent())
           .toBe("Publish");
@@ -698,12 +678,7 @@ suite.define(() => {
               ],
             },
             "sessions.list": chatSessionListResponse([
-              {
-                key: selectedSessionKey,
-                kind: "direct",
-                label: "Selected session",
-                updatedAt: 2,
-              },
+              sessionRow(selectedSessionKey, "Selected session", 2),
               {
                 key: sessionKey,
                 kind: "direct",
@@ -967,8 +942,8 @@ suite.define(() => {
         expect(
           await card
             .locator(".session-hovercard__excerpt")
-            .evaluate((element) => getComputedStyle(element).webkitLineClamp),
-        ).toBe("2");
+            .evaluate((element) => getComputedStyle(element).maxHeight),
+        ).toBe("54px");
 
         const avatarRow = page.locator(
           `.sidebar-recent-session[data-session-key="${avatarSessionKey}"]`,

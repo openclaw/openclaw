@@ -3,6 +3,8 @@
 // Tail-RPC proof: --method agents.list.capabilities --method sessions.branches.list
 // --method talk.config --method progressCard.get --samples 1000 --no-counters.
 // Use --entry dist/entry.js; add --profile --allocations for a separate allocation pass.
+// Cold PR watchers: --method controlUi.sessionPullRequests.subscribe.burst
+// --pr-subscribe-clients 65 --samples 16 --warmup 0 --no-counters (1,040 measured replies).
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
@@ -38,6 +40,32 @@ import {
 } from "../lib/gateway-bench-runtime.ts";
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
 
+// Match non-native Control UI in ui/src/api/gateway-connect-plan.ts, without a hello modelCatalog request.
+const controlUiCapabilities = [
+  "agent-kind",
+  "approvals",
+  "task-suggestions",
+  "terminal-offset-seq",
+  "terminal-session-metadata",
+  "terminal-upload-path-style",
+  "tool-events",
+  "chat-only-assistant-text",
+  "hello-health-on-demand",
+  "health-summary",
+  "hello-presence-self",
+  "session-scoped-events",
+  "presence-deltas",
+  "session-row-deltas",
+  "session-event-field-refs",
+  "roster-message-bodies-optional",
+  "inline-widgets",
+  "model-selection-policy",
+  "model-wait-status",
+  "ui-commands",
+  "ultrafast",
+  "usage-refreshing",
+];
+
 const { values } = parseArgs({
   options: {
     sync: { type: "string" },
@@ -53,11 +81,14 @@ const { values } = parseArgs({
     "remote-ingress": { type: "boolean", default: false },
     "no-counters": { type: "boolean", default: false },
     "cron-pages": { type: "boolean", default: false },
+    "cron-publication": { type: "boolean", default: false },
     providers: { type: "string", default: "10" },
     models: { type: "string", default: "100" },
     "history-key": { type: "string", default: "agent:main:team-shape-session-0" },
     "history-limit": { type: "string", default: "80" },
     method: { type: "string", multiple: true },
+    "pr-subscribe-clients": { type: "string", default: "65" },
+    "pr-subscribe-passive-keys": { type: "string" },
     profile: { type: "boolean", default: false },
     allocations: { type: "boolean", default: false },
     "profile-samples": { type: "string", default: "5" },
@@ -73,9 +104,12 @@ if (values.help) {
   --remote-ingress                 Paired token auth through trusted loopback proxy attribution; asserts compression.
   --no-counters                    Count JSON/socket operations only in separate first/counts samples.
   --cron-pages                     Measure 50-job Cron pages across 1,000 seeded jobs; defaults to and requires >=20 samples.
+  --cron-publication               Four publication cases; requires 1,000 --cron-announce-last jobs, 20 samples and --no-counters.
   --providers 10 --models 100       Synthetic config catalog: models per provider; no credentials.
   --history-key <key> --history-limit 80  Existing 2,000-message fixture; protocol pagination retained.
   --method <case>                  Repeatable case filter (case names appear in result JSON).
+  --pr-subscribe-clients 65        Fresh concurrent sockets for each PR subscribe burst; waits for every snapshot.
+  --pr-subscribe-passive-keys <file> JSON array of existing sidebar session keys, in addition to --history-key.
   --profile                       Main-isolate CPU profile per selected RPC case, outside timing samples.
   --allocations                   With --profile, sample allocations instead of CPU (separate diagnostic pass).
   --profile-samples 5              Requests per profile; synchronized profiles start after every timed cell.
@@ -101,8 +135,16 @@ assert(
 );
 const port = parsePositiveInt(values.port, 41731, "--port");
 assert(port >= 40000 && port < 65535, "isolated ports must be 40000..65534");
-const samples = parsePositiveInt(values.samples, values["cron-pages"] ? 20 : 10, "--samples");
+const samples = parsePositiveInt(
+  values.samples,
+  values["cron-pages"] || values["cron-publication"] ? 20 : 10,
+  "--samples",
+);
 assert(!values["cron-pages"] || samples >= 20, "--cron-pages requires at least 20 samples");
+assert(
+  !values["cron-publication"] || (samples === 20 && values["no-counters"] && !values["cron-pages"]),
+  "--cron-publication requires 20 samples, --no-counters and no --cron-pages",
+);
 const warmup = parseNonNegativeInt(values.warmup, 2, "--warmup");
 const rttMs = parseNonNegativeInt(values["rtt-ms"], 0, "--rtt-ms");
 const remoteIngress = values["remote-ingress"];
@@ -110,6 +152,22 @@ const profileSamples = parsePositiveInt(values["profile-samples"], 5, "--profile
 const providerCount = parseNonNegativeInt(values.providers, 10, "--providers");
 const modelsPerProvider = parsePositiveInt(values.models, 100, "--models");
 const historyLimit = parsePositiveInt(values["history-limit"], 80, "--history-limit");
+const prSubscribeClients = parsePositiveInt(
+  values["pr-subscribe-clients"],
+  65,
+  "--pr-subscribe-clients",
+);
+assert(prSubscribeClients <= 100, "--pr-subscribe-clients must not exceed 100");
+const prPassiveKeys: string[] = [];
+if (values["pr-subscribe-passive-keys"]) {
+  const keys: unknown = JSON.parse(readFileSync(values["pr-subscribe-passive-keys"], "utf8"));
+  assert(Array.isArray(keys), "--pr-subscribe-passive-keys must contain a JSON array");
+  for (const key of keys) {
+    assert(typeof key === "string" && key.trim(), "passive session keys must be nonempty strings");
+    prPassiveKeys.push(key);
+  }
+}
+const prSubscriptionKeys = new Set([values["history-key"], ...prPassiveKeys]);
 assert(
   samples <= 1000 &&
     warmup <= 100 &&
@@ -118,6 +176,12 @@ assert(
     providerCount <= 100 &&
     modelsPerProvider <= 1000,
 );
+const expectedSyntheticModels = new Set<string>();
+for (let provider = 0; provider < providerCount; provider++) {
+  for (let model = 0; model < modelsPerProvider; model++) {
+    expectedSyntheticModels.add(`rpc-bench-${provider}/synthetic-${model}`);
+  }
+}
 const rawFixture: unknown = JSON.parse(
   readFileSync(path.join(root, "team-shape-summary.json"), "utf8"),
 );
@@ -128,6 +192,11 @@ assert(
 const fixture = rawFixture;
 const cronJobCount = Number(fixture.cronJobs);
 assert(!values["cron-pages"] || cronJobCount >= 1000, "--cron-pages requires at least 1,000 jobs");
+assert(
+  !values["cron-publication"] ||
+    (cronJobCount === 1000 && fixture.cronAnnounceLast === true && entry.endsWith("/src/entry.ts")),
+  "--cron-publication requires source mode and 1,000 --cron-announce-last jobs",
+);
 assert(existsSync(entry), `Gateway CLI entry missing: ${entry}`);
 mkdirSync(output, { recursive: false });
 const token = "synthetic-gateway-rpc-benchmark-token";
@@ -199,6 +268,9 @@ type Metrics = {
   socketWriteBytes?: number;
   processCpuMs: number;
   mainThreadCpuMs: number;
+  rpcReceivedCount?: number;
+  rpcProcessCpuMs?: number;
+  rpcMainThreadCpuMs?: number;
   windowMs: number;
 };
 type Sample = {
@@ -209,11 +281,28 @@ type Sample = {
   payloadBytes: number;
   payloadSha256?: string;
   arrayCounts?: Record<string, number>;
+  syntheticModelCount?: number;
   requestParams?: unknown;
   error?: unknown;
+  clientRoundTripsMs?: number[];
+  snapshotLatenciesMs?: number[];
+  snapshotSha256?: string;
+  snapshot?: Record<string, unknown>;
+  snapshotsPerClient?: number;
   server: Metrics;
 };
 type Peer = ReturnType<typeof createGatewayWsClient>;
+type CronPublicationFixture = {
+  jobIds: string[];
+  sortedJobIds: string[];
+  sharedKey: string;
+  earlyKey: string;
+  lateKey: string;
+  contentSha256: string;
+};
+let cronPublicationFixture: CronPublicationFixture | undefined;
+const cronRequestLastEnd = new Map<string, number>();
+const cronPublicationPacing: Array<{ case: string; phase: string; gapMs: number }> = [];
 let child: ChildProcess | undefined;
 const peers = new Set<Peer>();
 const negotiatedExtensions = new Set<string>();
@@ -231,6 +320,11 @@ const device = {
 const buildId = readBuildIdFromBuildInfoForModuleUrl(pathToFileURL(entry).href) ?? "dev";
 const rpcCases = [
   { id: "connect", method: "connect" },
+  {
+    id: "controlUi.sessionPullRequests.subscribe.burst",
+    method: "controlUi.sessionPullRequests.subscribe",
+    params: { sessionKeys: [values["history-key"]] },
+  },
   {
     id: "sessions.subscribe",
     method: "sessions.subscribe",
@@ -290,10 +384,21 @@ const rpcCases = [
     method: "models.list",
     params: { agentId: "main", view: "provider-config" },
   },
+  {
+    id: "models.list.configured.refresh",
+    method: "models.list",
+    params: { agentId: "main", view: "configured", refresh: true },
+  },
+  {
+    id: "models.list.provider-config.refresh",
+    method: "models.list",
+    params: { agentId: "main", view: "provider-config", refresh: true },
+  },
   { id: "config.get", method: "config.get", params: {} },
   { id: "config.schema", method: "config.schema", params: {} },
   { id: "models.authStatus", method: "models.authStatus", params: { agentId: "main" } },
   { id: "system.info", method: "system.info", params: {} },
+  { id: "update.status", method: "update.status", params: {} },
   { id: "talk.config", method: "talk.config", params: {} },
   {
     id: "sessions.branches.list",
@@ -325,9 +430,25 @@ const rpcCases = [
     method: "cron.list",
     params: { includeDisabled: true, compact: true, limit: 50, sortBy: "name", sortDir: "desc" },
   },
+  ...(values["cron-publication"]
+    ? ["dense", "early", "late", "unscoped"].map((name) => ({
+        id: `cron.publication.${name}`,
+        method: "cron.list",
+        params: { includeDisabled: true, compact: true, includeDeliveryPreviews: false, limit: 50 },
+      }))
+    : []),
 ];
-const selected = rpcCases.filter(
-  (candidate) => !values.method?.length || values.method.includes(candidate.id),
+const selected = rpcCases.filter((candidate) =>
+  values.method?.length
+    ? values.method.includes(candidate.id)
+    : values["cron-publication"]
+      ? candidate.id.startsWith("cron.publication.")
+      : candidate.id !== "controlUi.sessionPullRequests.subscribe.burst",
+);
+assert(
+  !values["cron-publication"] ||
+    selected.every((candidate) => candidate.id.startsWith("cron.publication.")),
+  "--cron-publication accepts only its four publication cases",
 );
 assert(
   selected.length &&
@@ -360,10 +481,13 @@ if (values.sync) {
             remoteIngress,
             noCounters: values["no-counters"],
             cronPages: values["cron-pages"],
+            cronPublication: values["cron-publication"],
             profile: values.profile,
             profileSamples,
             providerCount,
             modelsPerProvider,
+            prSubscribeClients,
+            prPassiveKeys,
           }),
         )
         .digest("hex"),
@@ -392,6 +516,26 @@ async function waitMarker(side: string, name: string) {
   }
 }
 function requestParams(candidate: (typeof rpcCases)[number], phase: string, round: number) {
+  if (candidate.id.startsWith("cron.publication.")) {
+    assert(cronPublicationFixture, "Cron publication fixture was not prepared");
+    const { sharedKey, earlyKey, lateKey } = cronPublicationFixture;
+    const sparse =
+      candidate.id === "cron.publication.early" || candidate.id === "cron.publication.late";
+    const sessionKey =
+      candidate.id === "cron.publication.dense"
+        ? sharedKey
+        : candidate.id === "cron.publication.early"
+          ? earlyKey
+          : candidate.id === "cron.publication.late"
+            ? lateKey
+            : undefined;
+    return {
+      ...candidate.params,
+      limit: !sparse && phase === "warmup" ? 1 : 50,
+      offset: sparse ? 0 : phase === "first" ? 1 : phase === "warmup" ? 2 : 50 * (round % 20),
+      ...(sessionKey ? { sessionKey, sessionAgentId: "main" } : {}),
+    };
+  }
   if (
     !values["cron-pages"] ||
     candidate.method !== "cron.list" ||
@@ -412,7 +556,9 @@ async function measureCase(
   peer: Peer,
   round = 0,
 ) {
-  if (candidate.method === "connect") {
+  if (candidate.id === "controlUi.sessionPullRequests.subscribe.burst") {
+    await measurePrSubscribeBurst(candidate.id, phase);
+  } else if (candidate.method === "connect") {
     const pending = await connectPeer();
     try {
       await measure(candidate.id, candidate.method, pending.params, pending.peer, phase);
@@ -420,16 +566,159 @@ async function measureCase(
       await closePeer(pending.peer);
     }
   } else {
-    await measure(
-      candidate.id,
-      candidate.method,
-      requestParams(candidate, phase, round),
-      peer,
-      phase,
-    );
+    const params = requestParams(candidate, phase, round);
+    await paceCronPublication(candidate.id, phase, params);
+    await measure(candidate.id, candidate.method, params, peer, phase);
   }
 }
-async function control(action: string, extra: Record<string, unknown> = {}): Promise<Metrics> {
+async function paceCronPublication(id: string, phase: string, params: unknown) {
+  if (!id.startsWith("cron.publication.")) {
+    return;
+  }
+  const previous = cronRequestLastEnd.get(JSON.stringify(params));
+  if (previous === undefined) {
+    return;
+  }
+  let gapMs = performance.now() - previous;
+  while (gapMs < 1100) {
+    await delay(Math.ceil(1100 - gapMs));
+    gapMs = performance.now() - previous;
+  }
+  assert(gapMs >= 1100, "Repeated Cron request must outlive the shared-response TTL");
+  cronPublicationPacing.push({ case: id, phase, gapMs });
+}
+async function measurePrSubscribeBurst(id: string, phase: string) {
+  const method = "controlUi.sessionPullRequests.subscribe";
+  const connected = await Promise.all(
+    Array.from({ length: prSubscribeClients }, async () => {
+      const snapshot = Promise.withResolvers<{
+        at: number;
+        hash: string;
+        value: Record<string, unknown>;
+        ready: boolean;
+      }>();
+      const received = new Map<string, Record<string, unknown>>();
+      const connection = await connectPeer(false, (event) => {
+        if (event.event !== "controlUi.sessionPullRequests.changed" || !isRecord(event.payload)) {
+          return;
+        }
+        const sessions = event.payload.sessions;
+        if (!isRecord(sessions)) {
+          return;
+        }
+        for (const [key, value] of Object.entries(sessions)) {
+          if (prSubscriptionKeys.has(key) && isRecord(value)) {
+            received.set(key, value);
+          }
+        }
+        const active = received.get(values["history-key"]);
+        if (received.size === prSubscriptionKeys.size && active) {
+          snapshot.resolve({
+            at: performance.now(),
+            hash: createHash("sha256")
+              .update(JSON.stringify([...received].toSorted(([a], [b]) => a.localeCompare(b))))
+              .digest("hex"),
+            value: active,
+            ready: [...received.values()].every((value) => value.status === "ready"),
+          });
+        }
+      });
+      const hello = await connection.peer.request("connect", connection.params, timeoutMs);
+      assert(hello.ok, `burst connect failed: ${JSON.stringify(hello.error)}`);
+      return { ...connection, snapshot };
+    }),
+  );
+  try {
+    await control("begin", { method, countOps: false });
+    const started = performance.now();
+    let payloadBytes = 0;
+    const replies = await Promise.all(
+      connected.map(async ({ peer }) => {
+        const begin = performance.now();
+        const response = await peer.request(
+          method,
+          { sessionKeys: [values["history-key"]], passiveSessionKeys: prPassiveKeys },
+          timeoutMs,
+        );
+        assert(
+          response.ok && isRecord(response.payload) && response.payload.subscribed === true,
+          `subscribe failed: ${JSON.stringify(response.error)}`,
+        );
+        payloadBytes += Buffer.byteLength(JSON.stringify(response.payload));
+        return performance.now() - begin;
+      }),
+    );
+    const roundTripMs = performance.now() - started;
+    const timer = setTimeout(() => {
+      for (const { snapshot } of connected) {
+        snapshot.reject(new Error("PR subscription acknowledged without an eventual snapshot"));
+      }
+    }, timeoutMs);
+    let delivered: { at: number; hash: string; value: Record<string, unknown>; ready: boolean }[];
+    try {
+      delivered = await Promise.all(connected.map(({ snapshot }) => snapshot.promise));
+    } finally {
+      clearTimeout(timer);
+    }
+    assert(
+      delivered.every((snapshot) => snapshot.hash === delivered[0]?.hash),
+      "PR burst snapshots differ across viewers",
+    );
+    assert(
+      delivered.every((snapshot) => snapshot.ready),
+      "PR fixture must deliver ready snapshots",
+    );
+    const server = await control("end");
+    records.push({
+      case: id,
+      phase,
+      roundTripMs,
+      ok: true,
+      payloadBytes,
+      clientRoundTripsMs: replies,
+      snapshotLatenciesMs: delivered.map((snapshot) => snapshot.at - started),
+      snapshotSha256: delivered[0]?.hash,
+      snapshot: delivered[0]?.value,
+      snapshotsPerClient: prSubscriptionKeys.size,
+      server,
+    });
+  } finally {
+    await Promise.all(connected.map(({ peer }) => closePeer(peer)));
+  }
+}
+function finishCronPublication(id: string, params: unknown) {
+  if (id.startsWith("cron.publication.")) {
+    cronRequestLastEnd.set(JSON.stringify(params), performance.now());
+  }
+}
+function assertCronPublicationResponse(id: string, params: unknown, payload: unknown) {
+  if (!id.startsWith("cron.publication.")) {
+    return;
+  }
+  assert(cronPublicationFixture && isRecord(payload) && isRecord(params));
+  const { jobIds, sortedJobIds } = cronPublicationFixture;
+  const sparse = id === "cron.publication.early" || id === "cron.publication.late";
+  const expectedIds = sparse
+    ? [id === "cron.publication.early" ? jobIds[0] : jobIds.at(-1)]
+    : sortedJobIds.slice(Number(params.offset), Number(params.offset) + Number(params.limit));
+  assert.equal(payload.total, sparse ? 1 : 1000, `${id}: filtered total`);
+  assert.equal(payload.offset, params.offset, `${id}: page offset`);
+  assert.equal(payload.limit, params.limit, `${id}: page limit`);
+  const nextOffset = Number(params.offset) + expectedIds.length;
+  const hasMore = nextOffset < (sparse ? 1 : 1000);
+  assert.equal(payload.hasMore, hasMore, `${id}: hasMore`);
+  assert.equal(payload.nextOffset, hasMore ? nextOffset : null, `${id}: nextOffset`);
+  assert(Array.isArray(payload.jobs), `${id}: job array missing`);
+  assert.deepEqual(
+    payload.jobs.map((job: unknown) => (isRecord(job) ? job.id : undefined)),
+    expectedIds,
+    `${id}: exact returned job IDs/count`,
+  );
+}
+async function control<T = Metrics>(
+  action: string,
+  extra: Record<string, unknown> = {},
+): Promise<T> {
   assert(child?.connected, "Gateway IPC unavailable");
   const target = child;
   const id = randomUUID();
@@ -451,7 +740,7 @@ async function control(action: string, extra: Record<string, unknown> = {}): Pro
       if (typeof raw.error === "string") {
         reject(new Error(raw.error));
       } else {
-        resolve(raw.result as Metrics);
+        resolve(raw.result as T);
       }
     };
     const timer = setTimeout(() => {
@@ -470,6 +759,7 @@ async function control(action: string, extra: Record<string, unknown> = {}): Pro
 }
 async function connectPeer(
   directPairing = false,
+  onEvent?: (event: { event: string; payload?: unknown }) => void,
 ): Promise<{ peer: Peer; params: Record<string, unknown> }> {
   const challenge = Promise.withResolvers<{ nonce: string; ts: number }>();
   const clientPort = proxy && !directPairing ? port + 1 : port;
@@ -480,6 +770,7 @@ async function connectPeer(
     openTimeoutMs: timeoutMs,
     handshakeTimeoutMs: timeoutMs,
     onEvent(event) {
+      onEvent?.(event);
       if (
         event.event === "connect.challenge" &&
         isRecord(event.payload) &&
@@ -547,15 +838,7 @@ async function connectPeer(
       role: "operator",
       scopes,
       auth: { token },
-      caps: [
-        "hello-health-on-demand",
-        "health-summary",
-        "hello-presence-self",
-        "session-scoped-events",
-        "presence-deltas",
-        "session-row-deltas",
-        "roster-message-bodies-optional",
-      ],
+      caps: controlUiCapabilities,
       device: {
         id: device.id,
         publicKey,
@@ -568,6 +851,7 @@ async function connectPeer(
 }
 async function measure(id: string, method: string, params: unknown, peer: Peer, phase: string) {
   await control("begin", {
+    method,
     countOps: !values["no-counters"] || phase === "first" || phase === "counts",
   });
   const started = performance.now();
@@ -589,15 +873,31 @@ async function measure(id: string, method: string, params: unknown, peer: Peer, 
   }
   const roundTripMs = performance.now() - started;
   const server = await control("end");
+  finishCronPublication(id, params);
+  const serializedPayload = JSON.stringify(response.payload ?? null);
+  const syntheticModels =
+    method === "models.list" && providerCount > 0 ? new Set<string>() : undefined;
+  let syntheticModelCount = 0;
+  if (syntheticModels && isRecord(response.payload) && Array.isArray(response.payload.models)) {
+    for (const model of response.payload.models) {
+      if (!isRecord(model) || typeof model.provider !== "string" || typeof model.id !== "string") {
+        continue;
+      }
+      const key = `${model.provider}/${model.id}`;
+      if (expectedSyntheticModels.has(key)) {
+        syntheticModelCount++;
+        syntheticModels.add(key);
+      }
+    }
+  }
   records.push({
     case: id,
     phase,
     roundTripMs,
     ok: response.ok,
-    payloadBytes: Buffer.byteLength(JSON.stringify(response.payload ?? null)),
-    payloadSha256: createHash("sha256")
-      .update(JSON.stringify(response.payload ?? null))
-      .digest("hex"),
+    payloadBytes: Buffer.byteLength(serializedPayload),
+    ...(syntheticModels ? { syntheticModelCount } : {}),
+    payloadSha256: createHash("sha256").update(serializedPayload).digest("hex"),
     requestParams: method === "cron.list" ? params : undefined,
     arrayCounts: isRecord(response.payload)
       ? Object.fromEntries(
@@ -610,6 +910,7 @@ async function measure(id: string, method: string, params: unknown, peer: Peer, 
     server,
   });
   assert(response.ok, `${id}: ${JSON.stringify(response.error)}`);
+  assertCronPublicationResponse(id, params, response.payload);
   if (method === "sessions.subscribe") {
     const list = isRecord(response.payload) ? response.payload.list : undefined;
     assert(
@@ -621,11 +922,12 @@ async function measure(id: string, method: string, params: unknown, peer: Peer, 
     assert(
       isRecord(response.payload) &&
         Array.isArray(response.payload.models) &&
-        response.payload.models.length >= providerCount * modelsPerProvider,
-      `${id}: synthetic catalog was not loaded`,
+        syntheticModelCount === expectedSyntheticModels.size &&
+        syntheticModels?.size === expectedSyntheticModels.size,
+      `${id}: every synthetic provider/model pair must appear exactly once`,
     );
   }
-  if (method === "cron.list" && id !== "cron.list.enabled") {
+  if (method === "cron.list" && id !== "cron.list.enabled" && !id.startsWith("cron.publication.")) {
     const jobs = isRecord(response.payload) ? response.payload.jobs : undefined;
     const total = isRecord(response.payload) ? response.payload.total : undefined;
     const expectedLimit = isRecord(params) && typeof params.limit === "number" ? params.limit : 50;
@@ -738,6 +1040,16 @@ function summaries() {
   return Object.fromEntries(
     selected.map(({ id, method }) => {
       const rows = records.filter((row) => row.case === id && row.phase === "measured");
+      const distribution = (observations: number[]) =>
+        observations.length
+          ? {
+              observations: observations.length,
+              ...summarizeNumbers(observations),
+              p99: observations.toSorted((a, b) => a - b)[
+                Math.ceil(observations.length * 0.99) - 1
+              ],
+            }
+          : undefined;
       const metric = (read: (sample: Sample) => number | undefined) => {
         const observations = rows
           .map(read)
@@ -766,6 +1078,28 @@ function summaries() {
         id,
         {
           samples: rows.length,
+          ...(id === "controlUi.sessionPullRequests.subscribe.burst"
+            ? {
+                clientsPerBurst: prSubscribeClients,
+                clientRoundTripMs: distribution(
+                  rows.flatMap((row) => row.clientRoundTripsMs ?? []),
+                ),
+                eventualSnapshotMs: distribution(
+                  rows.flatMap((row) => row.snapshotLatenciesMs ?? []),
+                ),
+                allHandlersMs: distribution(
+                  rows.flatMap((row) =>
+                    row.server.events.flatMap((event) =>
+                      event.method === method &&
+                      event.phase === "handler" &&
+                      typeof event.durationMs === "number"
+                        ? [event.durationMs]
+                        : [],
+                    ),
+                  ),
+                ),
+              }
+            : {}),
           failures: rows.filter((row) => !row.ok).length,
           roundTripMs: metric((s) => s.roundTripMs),
           receiveToResponseMs: rpcMetric("response", "durationMs"),
@@ -801,6 +1135,9 @@ function summaries() {
             [
               "processCpuMs",
               "mainThreadCpuMs",
+              "rpcReceivedCount",
+              "rpcProcessCpuMs",
+              "rpcMainThreadCpuMs",
               "jsonStringifyMs",
               "jsonStringifyCount",
               "socketWriteMs",
@@ -827,8 +1164,11 @@ function assertWatcherHealthy() {
 let failure: Error | undefined;
 let shutdown: Record<string, unknown> | undefined;
 try {
-  if (syncRoot && sideIndex > 0) {
-    await waitMarker(sides[sideIndex - 1]!, "setup");
+  if (syncRoot) {
+    // Give each ordered cold start its own setup timeout.
+    for (const predecessor of sides.slice(0, sideIndex)) {
+      await waitMarker(predecessor, "setup");
+    }
   }
   const stopPreload = new URL("../lib/gateway-bench-stop-preload.mjs", import.meta.url);
   stopPreload.searchParams.set("parentPid", String(process.pid));
@@ -847,6 +1187,7 @@ try {
         OPENCLAW_STATE_DIR: root,
         TMPDIR: path.join(root, "tmp"),
         OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_HANDSHAKE_TIMEOUT_MS: String(timeoutMs),
         NODE_DISABLE_COMPILE_CACHE: "1",
         TSX_TSCONFIG_PATH: path.join(checkout, "tsconfig.json"),
         OPENCLAW_PROFILE: `rpc-bench-${port}`,
@@ -884,6 +1225,18 @@ try {
   const connected = await connectPeer();
   const hello = await connected.peer.request("connect", connected.params, timeoutMs);
   assert(hello.ok, `connect setup failed: ${JSON.stringify(hello.error)}`);
+  if (values["cron-publication"]) {
+    cronPublicationFixture = await control<CronPublicationFixture>("cron-publication-setup", {
+      storePath: path.join(root, "cron", "jobs.json"),
+    });
+    if (syncRoot) {
+      writeFileSync(
+        path.join(syncRoot, `${values.side}.cron-publication.json`),
+        JSON.stringify(cronPublicationFixture),
+        { flag: "wx" },
+      );
+    }
+  }
   for (let index = 0; index <= warmup; index++) {
     for (const candidate of selected) {
       await measureCase(candidate, index === 0 ? "first" : "warmup", connected.peer);
@@ -899,7 +1252,9 @@ try {
   assertWatcherHealthy();
   marker("setup");
   if (syncRoot) {
-    await waitMarker("head", "setup");
+    for (const successor of sides.slice(sideIndex + 1)) {
+      await waitMarker(successor, "setup");
+    }
     const fingerprints = sides.map(
       (side) => JSON.parse(readFileSync(path.join(syncRoot!, `${side}.claim`), "utf8")).fingerprint,
     );
@@ -907,6 +1262,15 @@ try {
       fingerprints.every((fingerprint) => fingerprint === fingerprints[0]),
       "Cohort workloads differ",
     );
+    if (cronPublicationFixture) {
+      for (const side of sides) {
+        assert.deepEqual(
+          JSON.parse(readFileSync(path.join(syncRoot, `${side}.cron-publication.json`), "utf8")),
+          cronPublicationFixture,
+          "Cron publication fixture contents/order differ across sides",
+        );
+      }
+    }
   }
   let cell = 0;
   for (let index = 0; index < samples; index++) {
@@ -928,12 +1292,24 @@ try {
     await waitMarker("head", `cell-${cell - 1}`);
   }
   assertWatcherHealthy();
+  if (cronPublicationFixture) {
+    assert.deepEqual(
+      await control<CronPublicationFixture>("cron-publication-setup", {
+        storePath: path.join(root, "cron", "jobs.json"),
+      }),
+      cronPublicationFixture,
+      "Cron fixture changed during measurements",
+    );
+  }
   for (const candidate of selected) {
     if (values.profile) {
+      const cronResponses: Array<{ params: unknown; payload: unknown }> = [];
       await control("profile-start", { allocations: values.allocations });
       try {
         for (let index = 0; index < profileSamples; index++) {
-          if (candidate.method === "connect") {
+          if (candidate.id === "controlUi.sessionPullRequests.subscribe.burst") {
+            await measurePrSubscribeBurst(candidate.id, "profile");
+          } else if (candidate.method === "connect") {
             const pending = await connectPeer();
             try {
               assert((await pending.peer.request("connect", pending.params, timeoutMs)).ok);
@@ -941,15 +1317,14 @@ try {
               await closePeer(pending.peer);
             }
           } else {
-            assert(
-              (
-                await connected.peer.request(
-                  candidate.method,
-                  requestParams(candidate, "profile", index),
-                  timeoutMs,
-                )
-              ).ok,
-            );
+            const params = requestParams(candidate, "profile", index);
+            await paceCronPublication(candidate.id, "profile", params);
+            const response = await connected.peer.request(candidate.method, params, timeoutMs);
+            finishCronPublication(candidate.id, params);
+            assert(response.ok);
+            if (candidate.id.startsWith("cron.publication.")) {
+              cronResponses.push({ params, payload: response.payload });
+            }
           }
         }
       } finally {
@@ -960,6 +1335,9 @@ try {
             `${candidate.id}.${values.allocations ? "heapprofile" : "cpuprofile"}`,
           ),
         });
+      }
+      for (const { params, payload } of cronResponses) {
+        assertCronPublicationResponse(candidate.id, params, payload);
       }
     }
     console.log(`${candidate.id}: ${samples} warm samples complete`);
@@ -1000,6 +1378,8 @@ try {
       rttMs,
       remoteIngress,
       cronPages: values["cron-pages"],
+      cronPublication: cronPublicationFixture,
+      cronPublicationPacing,
       operationCounters: values["no-counters"]
         ? values["cron-pages"]
           ? "first-and-counts-only"
@@ -1010,16 +1390,23 @@ try {
       modelsPerProvider,
       historyKey: values["history-key"],
       historyLimit,
+      prSubscribeClients,
+      prPassiveKeyCount: prPassiveKeys.length,
     },
     measurement: {
       transport: "real Gateway CLI and WebSocket",
+      clientCapabilities: controlUiCapabilities,
       ingress: remoteIngress ? "synthetic trusted loopback proxy" : "direct-local",
       negotiatedExtensions: [...negotiatedExtensions],
-      serialTimedRequests: true,
+      serialTimedRequests: !selected.some(
+        (candidate) => candidate.id === "controlUi.sessionPullRequests.subscribe.burst",
+      ),
       receiveToResponse:
         "existing gateway.rpc response duration: admitted frame receipt through socket acceptance; no TCP delivery wait",
       cpuScope:
         "whole per-request IPC window, including event-loop work and worker CPU; not only the handler",
+      rpcCpuScope:
+        "diagnostic received through first-response callbacks for one matching method; omitted if receipt is ambiguous; excludes parse and IPC tails but may include overlapping work",
       jsonScope: values["no-counters"]
         ? "first/counts samples only; native JSON/socket methods in warmup and measured samples"
         : "all synchronous main-isolate JSON.stringify calls in each request window, including shaping",

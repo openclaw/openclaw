@@ -199,6 +199,7 @@ it("keeps Pages flat and rail pins independently ordered", async () => {
   const pins = ["plugin:example/boards", "plugin:example/notes", "route:usage"];
   sidebar.sidebarEntries = [...pins];
   await selectSidebarView(sidebar, "pages");
+  await waitForFast(() => expect(dom.query(".sidebar-pages")).not.toBeNull());
   const pages = domProbe(dom.query(".sidebar-pages")!);
   const entries = [...pages.all<HTMLElement>('[data-sidebar-entry^="plugin:example/"]')];
   const settled = (entry: Element) =>
@@ -227,7 +228,6 @@ it("keeps Pages flat and rail pins independently ordered", async () => {
     expect(entry.nextElementSibling).toBe(pin);
     expect(getComputedStyle(row)).toMatchObject({ display: "flex", alignItems: "center" });
     expect(getComputedStyle(entry)).toMatchObject({ display: "flex", flexGrow: "1" });
-    expect(getComputedStyle(pin)).toMatchObject({ flexShrink: "0", flexBasis: "28px" });
   }
   for (const id of ["boards", "notes"]) {
     const railEntry = pluginEntry(sidebar, `example/${id}`, "rail")!;

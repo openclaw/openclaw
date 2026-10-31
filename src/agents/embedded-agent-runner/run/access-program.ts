@@ -1,17 +1,71 @@
 import { isDeepStrictEqual } from "node:util";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ProviderPlugin } from "../../../plugins/types.js";
+import {
+  assertOperatorAccessProgramAllowed,
+  readRunOperatorAuthority,
+} from "../../admitted-run-context.js";
+import type { AuthProfileCredential } from "../../auth-profiles/types.js";
 import { FailoverError } from "../../failover-error.js";
 import { resolveSelectedModelCredential } from "../../model-auth-selected-credential.js";
 import { resolveModelCatalogAccessPrograms } from "../../model-catalog-access-programs.js";
 import { getPreparedModelFullCatalogAuth } from "../../prepared-model-runtime-auth.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-/** Session overrides need current account evidence; model configuration remains explicit policy. */
+// OAuth refresh rotates tokens without changing the account that discovery observed.
+// The provider owns account-and-user identity; workspace ids or optional emails are not enough.
+function isSameDiscoveredAccount(
+  discovered: AuthProfileCredential | undefined,
+  credential: AuthProfileCredential,
+  provider: ProviderPlugin | undefined,
+): boolean {
+  if (isDeepStrictEqual(discovered, credential)) {
+    return true;
+  }
+  if (discovered?.type !== "oauth" || credential.type !== "oauth") {
+    return false;
+  }
+  return (
+    discovered.provider === credential.provider &&
+    discovered.enterpriseUrl === credential.enterpriseUrl &&
+    discovered.issuer === credential.issuer &&
+    discovered.clientId === credential.clientId &&
+    discovered.authFlow === credential.authFlow &&
+    provider?.auth.some((method) => method.matchesPersonalAccount?.(credential, discovered)) ===
+      true
+  );
+}
+
+/** Effective Access, including configured defaults, requires current role and account authority. */
 export async function prepareEmbeddedAccessProgramGuard(
-  attempt: EmbeddedRunAttemptParams,
+  attempt: Pick<
+    EmbeddedRunAttemptParams,
+    | "cyberAccessProgram"
+    | "preparedModelRuntime"
+    | "authProfileId"
+    | "authProfileStore"
+    | "provider"
+    | "modelId"
+    | "runtimePlan"
+    | "admittedRunContext"
+  >,
+  extraParams?: Record<string, unknown>,
 ): Promise<(() => void) | undefined> {
-  const program = attempt.cyberAccessProgram;
+  const program =
+    attempt.cyberAccessProgram ?? asOptionalRecord(extraParams?.accessPrograms)?.cyber;
+  if (
+    program !== undefined &&
+    program !== "standard" &&
+    program !== "daybreak_blue" &&
+    program !== "daybreak_red"
+  ) {
+    throw new Error("Invalid OpenAI cyber access program.");
+  }
+  const assertRole = () =>
+    assertOperatorAccessProgramAllowed(readRunOperatorAuthority(attempt), program);
+  assertRole();
   if (program === undefined || program === "standard") {
-    return undefined;
+    return assertRole;
   }
   const runtime = attempt.preparedModelRuntime;
   const profileId = attempt.authProfileId;
@@ -31,20 +85,28 @@ export async function prepareEmbeddedAccessProgramGuard(
         })
       : undefined;
   const check = () => {
+    assertRole();
     const snapshot = runtime?.readFullModelCatalog?.() ?? runtime?.modelCatalog;
-    // A cold private catalog can reuse shared discovery only for the same credential.
+    // Direct discovery belongs to the current prepared runtime generation.
+    // A cold private catalog can reuse shared discovery only for the same account.
     // A published empty private catalog is authoritative and must not fall back.
-    const providerOutcomes = account?.hasPublishedCatalog
-      ? account.outcomes
-      : snapshot &&
-          profileId &&
-          credential &&
-          isDeepStrictEqual(
-            getPreparedModelFullCatalogAuth(snapshot)?.authStore.profiles[profileId],
-            credential,
-          )
-        ? snapshot.providerOutcomes
-        : [];
+    const providerOutcomes =
+      selectedCredential?.source === "direct"
+        ? (snapshot?.providerOutcomes ?? [])
+        : account?.hasPublishedCatalog
+          ? account.outcomes
+          : snapshot &&
+              profileId &&
+              credential &&
+              isSameDiscoveredAccount(
+                getPreparedModelFullCatalogAuth(snapshot)?.authStore.profiles[profileId],
+                credential,
+                runtime?.pluginRegistry?.providers.find(
+                  ({ provider }) => provider.id === attempt.provider,
+                )?.provider,
+              )
+            ? snapshot.providerOutcomes
+            : [];
     const programs =
       snapshot &&
       resolveModelCatalogAccessPrograms({
@@ -61,7 +123,7 @@ export async function prepareEmbeddedAccessProgramGuard(
       });
     if (!programs?.includes(program)) {
       throw new FailoverError(
-        "This Daybreak program is not advertised for the current account, model, and runtime. Reset Access to the model default or refresh account capabilities.",
+        "This Daybreak program is not advertised for the current account, model, and runtime. Select Standard or refresh account capabilities.",
         {
           // A stale session choice says nothing about shared credential health.
           reason: "format",

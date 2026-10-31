@@ -274,9 +274,11 @@ function bindingRefFromId(bindingId: string, scope?: SessionBindingScope): Conve
   if (!bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX)) {
     return null;
   }
-  const [channel, accountId, parentConversationId, conversationId] = bindingId
+  const [channel, accountId, parentConversationId, ...conversationParts] = bindingId
     .slice(CURRENT_BINDINGS_ID_PREFIX.length)
     .split("\u241f");
+  // Conversation ids may contain the separator; they are the key's final field.
+  const conversationId = conversationParts.join("\u241f");
   if (!channel || !accountId || !conversationId) {
     return null;
   }

@@ -6,31 +6,19 @@ import { resolveGoogleMeetConfig } from "../config.js";
 import type { GoogleMeetRuntime } from "../runtime.js";
 import { captureStdout, meetApiFixtures } from "./fixtures.test-helpers.js";
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
-
-const fetchGuardMocks = vi.hoisted(() => ({
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   fetchWithSsrFGuard: vi.fn(async (params: { url: string; init?: RequestInit }) => ({
     response: await fetch(params.url, params.init),
     release: vi.fn(async () => {}),
   })),
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
-  return {
-    ...actual,
-    fetchWithSsrFGuard: fetchGuardMocks.fetchWithSsrFGuard,
-  };
-});
-
 export function useCli() {
   let stdout: ReturnType<typeof captureStdout>;
-  beforeEach(() => {
-    stdout = captureStdout();
-  });
+  beforeEach(() => (stdout = captureStdout()));
   afterEach(() => {
+    vi.restoreAllMocks();
     stdout.restore();
     vi.unstubAllGlobals();
     process.exitCode = undefined;
@@ -50,58 +38,43 @@ export function useCli() {
   };
 }
 
-export function jsonResponse(value: unknown): Response {
-  return Response.json(value);
-}
+export const jsonResponse = (value: unknown): Response => Response.json(value);
 
-function requestUrl(input: RequestInfo | URL): URL {
-  return new URL(typeof input === "string" || input instanceof URL ? input : input.url);
-}
-
-export function expectText(text: string, ...parts: string[]) {
-  for (const part of parts) {
-    expect(text).toContain(part);
-  }
-}
-
-export function stubJsonRoutes(routes: Record<string, unknown>) {
+function stubFetch(respond: (url: URL) => Response | undefined) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
-    const response = routes[requestUrl(input).href];
-    return response ? jsonResponse(response) : new Response("not found", { status: 404 });
+    const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
+    return respond(url) ?? new Response("not found", { status: 404 });
   });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
 
+export const expectText = (text: string, ...parts: string[]) =>
+  parts.forEach((part) => expect(text).toContain(part));
+
+export const stubJsonRoutes = (routes: Record<string, unknown>) =>
+  stubFetch(({ href }) => (routes[href] ? jsonResponse(routes[href]) : undefined));
+
 export function stubMeetArtifactsApi(
   options: { failSmartNoteDocumentBody?: boolean; participantDisplayName?: string } = {},
 ) {
   const fixtures: Record<string, unknown> = meetApiFixtures(options);
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: RequestInfo | URL) => {
-      const url = requestUrl(input);
-      if (fixtures[url.pathname]) {
-        return jsonResponse(fixtures[url.pathname]);
-      }
-      if (url.pathname === "/drive/v3/files/doc-1/export") {
-        return new Response("Transcript document body.", {
-          status: 200,
-          headers: { "Content-Type": "text/plain" },
-        });
-      }
-      if (url.pathname === "/drive/v3/files/notes-1/export") {
-        if (options.failSmartNoteDocumentBody) {
-          return new Response("insufficientPermissions", { status: 403 });
-        }
-        return new Response("Smart note document body.", {
-          status: 200,
-          headers: { "Content-Type": "text/plain" },
-        });
-      }
-      return new Response("not found", { status: 404 });
-    }),
-  );
+  const documents: Record<string, string> = {
+    "/drive/v3/files/doc-1/export": "Transcript document body.",
+    "/drive/v3/files/notes-1/export": "Smart note document body.",
+  };
+  stubFetch(({ pathname }) => {
+    if (fixtures[pathname]) {
+      return jsonResponse(fixtures[pathname]);
+    }
+    if (pathname === "/drive/v3/files/notes-1/export" && options.failSmartNoteDocumentBody) {
+      return new Response("insufficientPermissions", { status: 403 });
+    }
+    const document = documents[pathname];
+    return document
+      ? new Response(document, { headers: { "Content-Type": "text/plain" } })
+      : undefined;
+  });
 }
 
 export function setupCli(params: {

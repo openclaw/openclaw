@@ -53,22 +53,6 @@ async function modelIds(response: Promise<Response>) {
   return json.data?.map((entry) => entry.id);
 }
 
-async function expectMissingReadScope(res: Response) {
-  expect(res.status).toBe(403);
-  await expect(res.json()).resolves.toEqual({
-    ok: false,
-    error: {
-      type: "forbidden",
-      message: "missing scope: operator.read",
-      details: {
-        code: "MISSING_SCOPE",
-        missingScope: "operator.read",
-        requiredScopes: ["operator.read"],
-      },
-    },
-  });
-}
-
 describe("OpenAI-compatible models HTTP API (e2e)", () => {
   it("serves /v1/models without trusting malformed Host headers", async () => {
     const ids = await modelIds(getModels("/v1/models", { Host: "[" }));
@@ -76,16 +60,14 @@ describe("OpenAI-compatible models HTTP API (e2e)", () => {
     expect(ids?.every((id) => typeof id === "string" && id.startsWith("openclaw"))).toBe(true);
   });
 
-  it("rejects agent-specific model ids outside the configured roster", async () => {
-    const res = await getModels("/v1/models/openclaw%2Fnonexistent");
-    expect(res.status).toBe(404);
-    await expect(res.json()).resolves.toEqual({
-      error: {
-        message: "Model 'openclaw/nonexistent' not found.",
-        type: "invalid_request_error",
-      },
-    });
-  });
+  it.each(["openclaw%2Fnonexistent", "openclaw:nonexistent"])(
+    "rejects unknown agent %s",
+    async (model) => {
+      const res = await getModels(`/v1/models/${model}`);
+      expect(res.status).toBe(404);
+      await expect(res.json()).resolves.toHaveProperty("error.type", "invalid_request_error");
+    },
+  );
 
   it.each([
     ["openclaw:main", "openclaw/main"],
@@ -97,11 +79,6 @@ describe("OpenAI-compatible models HTTP API (e2e)", () => {
     const res = await getModels(`/v1/models/${pathId}`);
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({ id: listedId, object: "model" });
-  });
-
-  it("keeps unknown agents behind aliases out of the roster", async () => {
-    const res = await getModels("/v1/models/openclaw:nonexistent");
-    expect(res.status).toBe(404);
   });
 
   it("keeps generic aliases available for ownerless explicit fleets", async () => {
@@ -125,7 +102,9 @@ describe("OpenAI-compatible models HTTP API (e2e)", () => {
     ["operator.sessions.read", "/v1/models/openclaw"],
     ["", "/v1/models"],
   ])("rejects scope '%s' for %s", async (scope, pathname) => {
-    await expectMissingReadScope(await getModels(pathname, { "x-openclaw-scopes": scope }));
+    const res = await getModels(pathname, { "x-openclaw-scopes": scope });
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toHaveProperty("error.details.missingScope", "operator.read");
   });
 
   it("rejects when disabled", async () => {

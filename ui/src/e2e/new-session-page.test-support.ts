@@ -331,12 +331,21 @@ export async function waitForCommittedNewSessionDraft(
   page: Page,
   expectedText: string | null,
   expectedAttachments: number | readonly string[],
+  permissionMode?: string,
 ): Promise<void> {
   const params = new URL(page.url()).searchParams;
   const scopeKey = JSON.stringify(
     ["agent", "catalog", "group"].map((key) => params.get(key)?.trim() ?? ""),
   );
-  await waitForCommittedComposerDraft(page, scopeKey, expectedText, expectedAttachments);
+  await waitForCommittedComposerDraft(
+    page,
+    scopeKey,
+    expectedText,
+    expectedAttachments,
+    undefined,
+    undefined,
+    permissionMode,
+  );
 }
 
 export async function waitForGatewayRecoveryScope(page: Page, ready = true) {

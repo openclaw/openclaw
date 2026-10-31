@@ -1,34 +1,28 @@
-// Coverage for promoting standalone text tool calls into structured events.
-
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  collectStreamEvents,
-  createFakeStream,
-  type FakeWrappedStream,
-} from "./attempt-stream.test-helpers.js";
-import { wrapStreamFnPromoteStandaloneTextToolCalls } from "./attempt-tool-call-text-promotion.js";
-
-const requireRecord = createRequireRecord("object", "expected-label");
+  assistantMessage,
+  collectPromotionEvents,
+  createPromotionStream,
+  record as requireRecord,
+} from "./attempt-tool-call-text-promotion.test-support.js";
 
 async function promote(
   resultMessage: { role: string; content: unknown[]; stopReason: string },
   events: unknown[],
   toolName: string,
 ) {
-  const baseFn = vi.fn(() =>
-    createFakeStream({
+  const stream = await createPromotionStream(
+    {
       events: [
         ...events,
         { type: "done", reason: resultMessage.stopReason, message: resultMessage },
       ],
       resultMessage,
-    }),
+    },
+    toolName,
   );
-  const wrapped = wrapStreamFnPromoteStandaloneTextToolCalls(baseFn as never, new Set([toolName]));
-  const stream = (await wrapped({} as never, {} as never, {} as never)) as FakeWrappedStream;
   return {
-    events: await collectStreamEvents(stream),
+    events: await collectPromotionEvents(stream),
     result: requireRecord(await stream.result(), "result message"),
   };
 }
@@ -47,26 +41,13 @@ function expectToolEvents(events: unknown[], thinking = false) {
 const parameter = (name: string, value: string) =>
   `<parameter=${name}>\n${value}\n</parameter>\n</function>`;
 
-function promoteText(text: string, toolName: string, prefix = text, stopReason = "stop") {
-  const deltas = prefix === text ? [text] : [prefix, text.slice(prefix.length)];
-  return promote(
-    { role: "assistant", content: [{ type: "text", text }], stopReason },
-    deltas.map((delta) => ({ type: "text_delta", contentIndex: 0, delta })),
-    toolName,
-  );
-}
-
 describe("wrapStreamFnPromoteStandaloneTextToolCalls", () => {
   it("promotes serialized tool calls split across adjacent text blocks", async () => {
-    const resultMessage = {
-      role: "assistant",
-      content: [
-        { type: "text", text: "[tool:exec]\n<parameter=command>\n" },
-        { type: "text", text: "pwd\n</parameter>\n</function>" },
-        { type: "thinking", thinking: "Checking location." },
-      ],
-      stopReason: "stop",
-    };
+    const resultMessage = assistantMessage([
+      { type: "text", text: "[tool:exec]\n<parameter=command>\n" },
+      { type: "text", text: "pwd\n</parameter>\n</function>" },
+      { type: "thinking", thinking: "Checking location." },
+    ]);
     const { events, result } = await promote(
       resultMessage,
       [
@@ -95,70 +76,27 @@ describe("wrapStreamFnPromoteStandaloneTextToolCalls", () => {
     });
   });
 
-  it("buffers case-insensitive tool-name prefixes until final promotion", async () => {
-    const rawToolText = `[tool:read]\n${parameter("path", "src/index.ts")}`;
-    const { events, result } = await promoteText(rawToolText, "Read", "[tool:rea");
-
-    expectToolEvents(events);
-    expect(result.stopReason).toBe("toolUse");
-    expect(requireRecord((result.content as unknown[])[0], "tool call")).toMatchObject({
-      type: "toolCall",
-      name: "Read",
-      arguments: { path: "src/index.ts" },
-    });
-  });
-
-  it("buffers normalized alias tool-name prefixes until final promotion", async () => {
-    const rawToolText = `[tool:bash]\n${parameter("command", "pwd")}`;
-    const { events, result } = await promoteText(rawToolText, "exec", "[tool:ba");
-
-    expectToolEvents(events);
-    expect(requireRecord((result.content as unknown[])[0], "tool call")).toMatchObject({
-      type: "toolCall",
-      name: "exec",
-      arguments: { command: "pwd" },
-    });
-  });
-
   it.each([
-    {
-      label: "case-insensitive name",
-      allowedToolName: "Read",
-      emittedToolName: "READ",
-      expectedToolName: "Read",
-      parameterName: "path",
-      parameterValue: "src/index.ts",
-    },
-    {
-      label: "normalized alias",
-      allowedToolName: "exec",
-      emittedToolName: "bash",
-      expectedToolName: "exec",
-      parameterName: "command",
-      parameterValue: "pwd",
-    },
+    ["case-insensitive prefix", "Read", "[tool:read]", "path", "src/index.ts", "[tool:rea", "stop"],
+    ["alias prefix", "exec", "[tool:bash]", "command", "pwd", "[tool:ba", "stop"],
+    ["case-insensitive toolUse", "Read", "<function=READ>", "path", "src/index.ts", "", "toolUse"],
+    ["alias toolUse", "exec", "<function=bash>", "command", "pwd", "", "toolUse"],
   ])(
-    "promotes $label XML consistently when the terminal reason is toolUse",
-    async ({
-      allowedToolName,
-      emittedToolName,
-      expectedToolName,
-      parameterName,
-      parameterValue,
-    }) => {
-      const rawToolText = `<function=${emittedToolName}>\n${parameter(parameterName, parameterValue)}`;
-      const { events, result } = await promoteText(
-        rawToolText,
+    "promotes %s consistently across stream and terminal output",
+    async (_label, allowedToolName, marker, parameterName, parameterValue, prefix, stopReason) => {
+      const rawToolText = `${marker}\n${parameter(parameterName, parameterValue)}`;
+      const deltas = prefix ? [prefix, rawToolText.slice(prefix.length)] : [rawToolText];
+      const { events, result } = await promote(
+        { role: "assistant", content: [{ type: "text", text: rawToolText }], stopReason },
+        deltas.map((delta) => ({ type: "text_delta", contentIndex: 0, delta })),
         allowedToolName,
-        rawToolText,
-        "toolUse",
       );
       const expectedArguments = { [parameterName]: parameterValue };
       const expectedContent = [
         {
           type: "toolCall",
           id: expect.stringMatching(/^call_[a-f0-9]{24}$/),
-          name: expectedToolName,
+          name: allowedToolName,
           arguments: expectedArguments,
         },
       ];

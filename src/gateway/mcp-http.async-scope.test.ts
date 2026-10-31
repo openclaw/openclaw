@@ -4,6 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { PreparedAgentRunAdmission } from "../agents/admitted-run-context.js";
 import {
+  bindCronManagementToolConstruction,
+  captureCronRequesterGrantIssuer,
+  createCronCreatorAuthorityCapability,
+  runWithCronCreatorAuthorityCapability,
+} from "../agents/cron-creator-authority-context.js";
+import {
   getGatewayToolCallerIdentity as getToolCaller,
   withGatewayToolCallerIdentity as withToolCaller,
 } from "../agents/tools/gateway-caller-context.js";
@@ -21,8 +27,8 @@ import {
   isGatewaySubordinateWorkAdmissionClosed,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import type { UserTurnTranscriptAdmissionReceipt } from "../sessions/user-turn-transcript.types.js";
 import { AsyncWorkScope, getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
+import { createFirstTurnContextFixture } from "./mcp-http.context-fixture.test-support.js";
 
 const { execute, resolveTools } = vi.hoisted(() => ({ execute: vi.fn(), resolveTools: vi.fn() }));
 vi.mock("../config/io.js", () => {
@@ -34,6 +40,7 @@ vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
 }));
 vi.mock("./tool-resolution.js", () => ({ resolveGatewayScopedTools: resolveTools }));
 
+import { consumeCronCreatorAuthorityGrant } from "./cron-creator-authority-grant.js";
 import { revokeMcpLoopbackClientGrant } from "./mcp-grant-store.js";
 import * as mcp from "./mcp-http-request.test-support.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
@@ -156,19 +163,7 @@ it("serves fresh request scopes after its replacement creator closes", async () 
 });
 
 it("keeps Gateway readers while shedding the starting turn's async stores", async () => {
-  const session = { agentId: "main", sessionId: "first-turn-session" };
-  const receipt: UserTurnTranscriptAdmissionReceipt = {
-    ...session,
-    sessionKey: "agent:main:first-turn",
-    storePath: "first-turn-store",
-    generation: "first-turn-generation",
-    entryId: "first-turn-user",
-    rawSeq: 1,
-    effectiveParentId: null,
-    activeMessagePosition: 0,
-    logicalTurnId: "first-turn",
-    role: "user",
-  };
+  const { session, receipt } = createFirstTurnContextFixture();
   // Stands in for turn-local stores this listener does not name explicitly.
   const turnLocal = new AsyncLocalStorage<string>();
   const readers = createSqliteReadOnlyWorkerScope();
@@ -455,5 +450,53 @@ describe("MCP HTTP keepalive", () => {
       await reader.cancel();
       reader.releaseLock();
     }
+  });
+});
+
+it("keeps requester grant minting at execution when management needs a construction identity", async () => {
+  await ensureMcpLoopbackServer();
+  const runId = "mcp-management-and-requester";
+  const admission = mcp.prepareAdmission(runId, "mcp-management-requester-proof");
+  admissions.push(admission);
+  const admittedRunContext = await admission.admit("gateway", runId);
+  const scope = expectDefined(
+    createCronCreatorAuthorityCapability(runId, { kind: "local" }, { source: "control-ui-admin" }),
+    "Cron run scope",
+  );
+  const constructionIssuers: boolean[] = [];
+  resolveTools.mockImplementation(() => {
+    expect(getToolCaller()?.approvalAuthority).toBeDefined();
+    constructionIssuers.push(getToolCaller()?.mintCronRequesterGrant !== undefined);
+    return mcp.probeTools("scope_probe", execute);
+  });
+  execute.mockImplementation(() => {
+    const mint = expectDefined(getToolCaller()?.mintCronRequesterGrant, "execution issuer");
+    const grant = mint();
+    const redeemed = consumeCronCreatorAuthorityGrant(grant);
+    expect(redeemed.authority).toBeUndefined();
+    redeemed.assertCurrent();
+    expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow(/no longer active/);
+    return completed;
+  });
+  await runWithCronCreatorAuthorityCapability(scope, async () => {
+    const grant = mcp.captureGrant(
+      {
+        context: { sessionKey: "agent:main:scope-proof", runId, senderIsOwner: true },
+        runtimeOwnerToken: mcp.runtime().ownerToken,
+        admittedRunContext,
+        toolPolicyConfig: {},
+        cronRequesterGrantIssuer: captureCronRequesterGrantIssuer(runId),
+        withCronManagementToolConstruction: bindCronManagementToolConstruction(runId),
+      },
+      "management-and-requester-capture",
+    );
+    await mcp.json(
+      await mcp.request(mcp.runtime(), { jsonrpc: "2.0", id: 1, method: "tools/list" }, grant),
+    );
+    expect(scope.grantTokens.size).toBe(0);
+    expect(await callTool(grant)).toMatchObject({ result: { ...completed, isError: false } });
+    expect(execute).toHaveBeenCalledOnce();
+    expect(constructionIssuers).toEqual([false]);
+    expect(scope.grantTokens.size).toBe(0);
   });
 });

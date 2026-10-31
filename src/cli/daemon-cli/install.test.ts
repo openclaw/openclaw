@@ -1,7 +1,7 @@
 import "./install.test-support.js";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { ServiceStartRefusalError } from "../../daemon/service-inspection-error.js";
 import { withGatewayServiceUpdateAuthority } from "../../daemon/service-update-authority.js";
@@ -204,7 +204,7 @@ describe("runDaemonInstall", () => {
           const probe = nodeProbeOutput("26.12.1");
           runExecMock.mockResolvedValue({
             ...probe,
-            stdout: JSON.stringify({ ...JSON.parse(probe.stdout), bunVersion: "1.4.3" }),
+            stdout: JSON.stringify({ ...JSON.parse(probe.stdout), bunVersion: "1.4.4" }),
           });
         }
         performServiceInstall();
@@ -481,6 +481,36 @@ describe("runDaemonInstall", () => {
     await expectReinstall();
     expect(resolveNodeStartupTlsEnvironmentMock.mock.calls[0]?.[0]).toMatchObject({
       execPath: serviceNode,
+    });
+  });
+
+  describe("legacy macOS CA bundle drift check", () => {
+    const staleBundleWarning =
+      "Gateway service trusts the outdated macOS CA bundle; refreshing the install.";
+
+    async function useRealDarwinResolver() {
+      const actual = await vi.importActual<typeof import("../../bootstrap/node-startup-env.js")>(
+        "../../bootstrap/node-startup-env.js",
+      );
+      resolveNodeStartupTlsEnvironmentMock.mockImplementation((params) =>
+        actual.resolveNodeStartupTlsEnvironment({ ...params, platform: "darwin" }),
+      );
+    }
+
+    it("reinstalls a macOS service that still trusts the legacy /etc/ssl/cert.pem bundle", async () => {
+      await useRealDarwinResolver();
+      loadedService({ environment: { NODE_EXTRA_CA_CERTS: "/etc/ssl/cert.pem" } });
+
+      await expectReinstall();
+      expect(actionState.warnings).toContain(staleBundleWarning);
+    });
+
+    it("does not flag an operator-chosen macOS CA bundle", async () => {
+      await useRealDarwinResolver();
+      loadedService({ environment: { NODE_EXTRA_CA_CERTS: "/opt/corporate-ca.pem" } });
+
+      await runDaemonInstall({ json: true });
+      expect(actionState.warnings).not.toContain(staleBundleWarning);
     });
   });
 

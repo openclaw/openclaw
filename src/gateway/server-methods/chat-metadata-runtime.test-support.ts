@@ -188,6 +188,9 @@ export function createChatMetadataHarness(
     getAuthStoreRevision: vi
       .spyOn(authRevisionRuntime, "getRuntimeAuthProfileStoreMetadataRevision")
       .mockImplementation(() => authStoreRevision),
+    getAuthCatalogRevision: vi
+      .spyOn(authRevisionRuntime, "getRuntimeAuthProfileStoreCatalogRevision")
+      .mockImplementation(() => authStoreRevision),
     buildCommands: vi.spyOn(commands, "buildCommandsListResult").mockImplementation(async () => ({
       commands: [{ ...chatMetadataCommandFields, name: `command-${skillsVersion}-1` }],
     })),

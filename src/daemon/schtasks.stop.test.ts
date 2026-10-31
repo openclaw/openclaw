@@ -387,7 +387,12 @@ describe("Scheduled Task stop/restart cleanup", () => {
 
       await expect(terminateScheduledTaskGatewayListeners(env)).resolves.toEqual([4242]);
 
-      expect(readWindowsProcessStartTimeSync).toHaveBeenCalledWith(4242, 5_000, env);
+      // The installed launcher declares its port, not the inspecting CLI's profile.
+      expect(readWindowsProcessStartTimeSync).toHaveBeenCalledWith(4242, 5_000, {
+        USERPROFILE: env.USERPROFILE,
+        APPDATA: env.APPDATA,
+        OPENCLAW_GATEWAY_PORT: String(GATEWAY_PORT),
+      });
 
       expectForcedTermination();
       expect(taskkillCalls().flat()).not.toContain("9999");

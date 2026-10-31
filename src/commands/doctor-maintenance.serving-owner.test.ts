@@ -227,7 +227,7 @@ it.each([
           expect(leaseQueries()).toEqual([]);
           expect(fs.existsSync(databasePath)).toBe(before !== undefined);
           if (before) {
-            expect(fs.readFileSync(databasePath)).toEqual(before);
+            expect(fs.readFileSync(databasePath).equals(before), databasePath).toBe(true);
           }
           expect(sourceFiles()).toEqual(beforeFiles);
         } finally {

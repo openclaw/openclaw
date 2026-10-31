@@ -493,9 +493,6 @@ describe("delivery-queue recovery", () => {
     async (transportBoundary) => {
       const deliveryId = `pending-final-stale-recovery-${transportBoundary}`;
       const { completion } = await pendingFinal(deliveryId, true);
-      if (transportBoundary !== "afterHandoff") {
-        await replaceWriter(completion);
-      }
       const platformSend = vi.fn();
       deliver = vi.fn(async (params: SendParams) => {
         if (transportBoundary === "afterHandoff") {
@@ -503,6 +500,7 @@ describe("delivery-queue recovery", () => {
           await replaceWriter(completion);
           params.assertDirectAdapterHandoff?.();
         } else {
+          await replaceWriter(completion);
           await params[transportBoundary]?.();
         }
         await platformSend();
@@ -1214,17 +1212,6 @@ describe("delivery-queue recovery", () => {
       gifPlayback: true,
       silent: true,
       gatewayClientScopes: ["operator.write"],
-      mirror: {
-        sessionKey: "agent:main:main",
-        expectedSessionId: "session-main",
-        text: "a",
-        mediaUrls: ["https://example.com/a.png"],
-        idempotencyKey: "channel-final:message-1",
-        deliveryMirror: {
-          kind: "channel-final",
-          sourceMessageId: "message-1",
-        },
-      },
       session: {
         key: "agent:main:main",
         agentId: "agent-main",
@@ -1239,6 +1226,8 @@ describe("delivery-queue recovery", () => {
     await recover({ deliver });
     const deliverInput = mockCallRecord(deliver);
     expect(deliverInput).toEqual(expect.objectContaining(storedOptions));
+    // Retained legacy mirror metadata never selects destination history on replay.
+    expect(deliverInput).not.toHaveProperty("mirror");
   });
   it("continues past high-backoff entries and recovers ready entries behind them", async () => {
     const now = Date.now();

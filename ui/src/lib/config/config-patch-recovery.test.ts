@@ -2,7 +2,8 @@
 import { isGatewayProtocolResponseError } from "@openclaw/gateway-client/browser";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { configRawForDisplay } from "./config-draft-model.ts";
 import {
   expectFeedback,

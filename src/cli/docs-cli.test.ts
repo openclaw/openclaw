@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { isRich } from "../../packages/terminal-core/src/theme.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { registerDocsCli } from "./docs-cli.js";
 
 const runtime = vi.hoisted(() => ({
@@ -177,49 +178,44 @@ it("rejects oversized docs search responses", async () => {
   );
   expect(cancel).toHaveBeenCalledOnce();
 });
-it("settles a known HTTP error before a retained clone reaches EOF", async () => {
+it.each([503, 200])("settles a retained HTTP %i body on error or interruption", async (status) => {
+  const scope = new AsyncWorkScope();
   let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
   let requestSignal: AbortSignal | null | undefined;
   const source = new ReadableStream<Uint8Array>({
     start(controller) {
       streamController = controller;
-      controller.enqueue(new TextEncoder().encode("held response"));
     },
   });
-  const response = new Response(source, { status: 503 });
+  const response = new Response(source, { status });
   const capture = response.clone();
   fetchMock.mockImplementation(async (_url, init) => {
     requestSignal = init?.signal;
     requestSignal?.addEventListener(
       "abort",
-      () => {
-        streamController?.error(new DOMException("fixture aborted", "AbortError"));
-      },
+      () => streamController?.error(new DOMException("fixture aborted", "AbortError")),
       { once: true },
     );
+    if (status === 200) {
+      scope.beginClose();
+    }
     return response;
   });
-  const pending = search(["held-error"], { json: true }).then(
-    () => ({ ok: true as const }),
-    (error: unknown) => ({ ok: false as const, error }),
-  );
-  let deadline: ReturnType<typeof setTimeout> | undefined;
+  vi.useFakeTimers();
+  const settled = vi.fn();
+  const pending = scope
+    .run(() => search(["held-error"], { json: true }))
+    .then(() => settled(), settled);
   try {
-    const result = await Promise.race([
-      pending,
-      new Promise<null>((resolve) => {
-        deadline = setTimeout(() => resolve(null), 500);
-      }),
-    ]);
-    expect(result).toMatchObject({ ok: false, error: { message: "Docs search failed: HTTP 503" } });
+    await vi.advanceTimersByTimeAsync(0);
+    const message = status === 503 ? "Docs search failed: HTTP 503" : undefined;
+    expect(settled.mock.calls).toEqual(message ? [[expect.objectContaining({ message })]] : [[]]);
     expect(requestSignal?.aborted).toBe(true);
+    expect(runtime.log).not.toHaveBeenCalled();
   } finally {
-    if (deadline) {
-      clearTimeout(deadline);
-    }
     streamController?.error(new DOMException("fixture cleanup", "AbortError"));
     await capture.body?.cancel().catch(() => undefined);
     await pending;
-    vi.unstubAllGlobals();
+    vi.useRealTimers();
   }
 });

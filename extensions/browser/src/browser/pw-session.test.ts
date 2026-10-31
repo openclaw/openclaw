@@ -282,24 +282,26 @@ describe("pw-session ensurePageState", () => {
     capture.dispose();
   });
 
-  it("detaches ownership before waiting for slow file saves", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  it("keeps the sibling quiet window across clock steps and detaches before slow saves", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const { capture: begin, send } = observedPage();
     const firstSaveGate = Promise.withResolvers<void>();
     const beforeSave = vi.fn(async () => {});
     const capture = begin({ beforeSave });
     const firstSave = saveContents("first", firstSaveGate.promise);
     send("first.txt", firstSave);
+    vi.setSystemTime(Date.now() + 10_000);
 
     const drain = capture.drain();
-    await vi.advanceTimersByTimeAsync(250);
+    setTimeout(() => send("sibling.txt", saveContents("sibling")), 50);
+    await vi.advanceTimersByTimeAsync(300);
     const lateSave = saveContents("late");
     const lateDownload = send("late.txt", lateSave);
     firstSaveGate.resolve();
 
-    await expect(drain).resolves.toEqual(captured("first.txt"));
+    await expect(drain).resolves.toEqual([...captured("first.txt"), ...captured("sibling.txt")]);
     await expect(lateDownload.path?.()).resolves.toMatch(/-late\.txt$/);
-    expect(beforeSave).toHaveBeenCalledOnce();
+    expect(beforeSave).toHaveBeenCalledTimes(2);
     expect(lateSave).toHaveBeenCalledOnce();
     capture.dispose();
   });
@@ -569,7 +571,7 @@ describe("observed browser dialogs", () => {
   });
 
   it("uses the default arm-next-dialog timeout for non-finite timeoutMs", async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     vi.setSystemTime(0);
     const { arm, observe, emitAll: emit, dialogs } = observedPage();
     const dialog = createDialog({ type: "alert", message: "Still armed" });
@@ -590,6 +592,7 @@ describe("observed browser dialogs", () => {
   });
 
   it("does not arm next-dialog responses when the expiry would overflow Date bounds", () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     vi.spyOn(Date, "now").mockReturnValue(MAX_DATE_TIMESTAMP_MS);
     const { arm, emitAll: emit, dialogs } = observedPage();
     const dialog = createDialog({ type: "alert", message: "Still pending" });

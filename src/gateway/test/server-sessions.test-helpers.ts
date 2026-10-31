@@ -508,6 +508,7 @@ export async function directSessionReq<TPayload = unknown>(
     sessionMutationAuthorization?: SessionsHandlerOptions["sessionMutationAuthorization"];
     hasCurrentClientAuthority?: SessionsHandlerOptions["hasCurrentClientAuthority"];
     coercePayload?: (payload: unknown) => TPayload;
+    onResponse?: (response: SessionResponse<TPayload>) => void;
   },
 ): Promise<SessionResponse<TPayload>> {
   const sessionsHandlers = await getSessionsHandlers();
@@ -564,6 +565,7 @@ export async function directSessionReq<TPayload = unknown>(
               : (payload as TPayload),
         error,
       };
+      opts?.onResponse?.(result);
     },
     context,
     client: opts?.client ?? null,

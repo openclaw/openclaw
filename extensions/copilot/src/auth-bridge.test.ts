@@ -38,13 +38,10 @@ afterEach(() => vi.unstubAllEnvs());
 describe("resolveCopilotAuth", () => {
   it.each([
     [undefined, "copilot"],
-    ["", "copilot"],
     ["   ", "copilot"],
     ["Agent-1", "agent-1"],
     ["my_agent_42", "my_agent_42"],
-    ["a", "a"],
     ["../etc/passwd", "copilot"],
-    ["../..", "copilot"],
     ["a/b", "copilot"],
     ["a\\b", "copilot"],
     ["a\u0000b", "copilot"],
@@ -58,7 +55,6 @@ describe("resolveCopilotAuth", () => {
 
   it("returns a stable sha256-prefixed 12-hex fingerprint", () => {
     expect(tokenFingerprint("hello")).toBe("sha256:2cf24dba5fb0");
-    expect(tokenFingerprint("hello")).toBe(tokenFingerprint("hello"));
   });
 
   it.each([

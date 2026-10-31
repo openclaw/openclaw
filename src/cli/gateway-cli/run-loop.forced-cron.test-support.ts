@@ -45,16 +45,10 @@ const cron = new CronService({
       abortSignal.addEventListener("abort", () => cancelled.resolve(), { once: true });
       onExecutionStarted?.();
       coreStarted.resolve();
-      if (!force) {
-        await cancelled.promise;
-        assert(isAgentRunRestartAbortReason(abortSignal.reason));
-        trace("cron-cancelled:restart");
-      }
+      await cancelled.promise;
+      assert(isAgentRunRestartAbortReason(abortSignal.reason));
+      trace("cron-cancelled:restart");
       await cleanupMayFinish.promise;
-      assert(
-        !force || !abortSignal.aborted,
-        "force restart cancelled admitted work before its budget",
-      );
       await fs.writeFile(path.join(root, "cleanup.txt"), "settled\n");
       trace("cron-cleanup-settled");
       return { status: "ok" as const, summary: "settled" };

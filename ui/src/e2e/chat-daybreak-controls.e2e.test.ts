@@ -1,5 +1,4 @@
 import { writeFile } from "node:fs/promises";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import type { CyberAccessProgram } from "../api/types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -93,49 +92,40 @@ suite.define(() => {
           await picker.locator("summary").click();
           const menu = picker.locator(".chat-controls__effort-menu");
           await expect.poll(() => menu.isVisible()).toBe(true);
-          await expect
-            .poll(() => menu.evaluate((element) => element.scrollHeight <= element.clientHeight))
-            .toBe(true);
-          expect(await menu.textContent()).toContain("Ultra");
+          const toggle = menu.getByRole("switch", { name: "Daybreak", exact: true });
           const select = picker.locator("[data-chat-access-program]");
           const entitled = programs?.some((program) => program !== "standard") === true;
-          await expect.poll(() => select.count()).toBe(entitled ? 1 : 0);
-          await expect.poll(() => menu.locator("p, [data-chat-access-reported]").count()).toBe(0);
+          await expect.poll(() => toggle.count()).toBe(entitled ? 1 : 0);
+          expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
           let options: string[] = [];
           if (entitled) {
+            await toggle.check();
+            await gateway.waitForRequest("sessions.patch", {
+              match: { cyberAccessProgram: "daybreak_blue" },
+            });
+            const requested = programs?.includes("daybreak_red") ? "daybreak_red" : "daybreak_blue";
+            if (requested === "daybreak_red") {
+              await select.locator('[data-chat-access-option="daybreak_red"]').click();
+              await gateway.waitForRequest("sessions.patch", {
+                match: { cyberAccessProgram: requested },
+              });
+            } else {
+              expect(await select.locator('[data-chat-access-option="daybreak_red"]').count()).toBe(
+                0,
+              );
+            }
+            await expect
+              .poll(() =>
+                select
+                  .locator(`[data-chat-access-option="${requested}"]`)
+                  .getAttribute("aria-pressed"),
+              )
+              .toBe("true");
             options = await select
               .locator("[data-chat-access-option]")
               .evaluateAll((elements) =>
                 elements.map((element) => element.getAttribute("data-chat-access-option") ?? ""),
               );
-            expect(options).toEqual(programs ?? []);
-            expect(await select.locator("button:disabled").count()).toBe(0);
-            expect(await menu.locator(".chat-controls__effort-heading").allTextContents()).toEqual([
-              "Access",
-              "Effort",
-              "Speed",
-            ]);
-            const requested = programs?.includes("daybreak_red") ? "daybreak_red" : "daybreak_blue";
-            await select.locator(`[data-chat-access-option="${requested}"]`).click();
-            await expect
-              .poll(async () =>
-                (await gateway.getRequests("sessions.patch")).some(
-                  (request) => asOptionalRecord(request.params)?.cyberAccessProgram === requested,
-                ),
-              )
-              .toBe(true);
-            await expect
-              .poll(() =>
-                select
-                  .locator(`[data-chat-access-option="${requested}"]`)
-                  .getAttribute("aria-checked"),
-              )
-              .toBe("true");
-          } else {
-            expect(await menu.locator(".chat-controls__effort-heading").allTextContents()).toEqual([
-              "Effort",
-              "Speed",
-            ]);
           }
           const frame = await takeControlUiScreenshotFrame(page, menu, [], {
             animations: "disabled",
@@ -163,43 +153,30 @@ suite.define(() => {
               agentId: "main",
               modelCatalogChanged: true,
             });
-            await expect.poll(() => select.count()).toBe(0);
+            const unavailable = menu.getByText("Blue (unavailable)", { exact: true });
+            await unavailable.waitFor();
             expect((await gateway.getSessionRow("agent:main:main")).cyberAccessProgram).toBe(
               "daybreak_blue",
             );
-            await picker.locator("summary").click();
-            const modelPicker = composer.locator(".chat-controls__model-picker");
-            await modelPicker.locator("summary").click();
-            const modelMenu = modelPicker.locator(".chat-controls__model-menu");
-            await expect.poll(() => modelMenu.isVisible()).toBe(true);
-            const recovery = modelMenu.getByRole("button", { name: "Clear saved Access" });
-            const staleFrame = await takeControlUiScreenshotFrame(page, modelMenu, [], {
+            expect(await select.locator("[data-chat-access-option]").count()).toBe(0);
+            const staleFrame = await takeControlUiScreenshotFrame(page, menu, [], {
               animations: "disabled",
             });
             await writeFile(dir + "/stale-selection.png", staleFrame.png);
-            await expect.poll(() => recovery.count()).toBe(1);
-            await recovery.click();
-            await expect
-              .poll(
-                async () =>
-                  asOptionalRecord((await gateway.getRequests("sessions.patch")).at(-1)?.params)
-                    ?.cyberAccessProgram,
-              )
-              .toBeNull();
-            await expect.poll(() => recovery.count()).toBe(0);
+          }
+          if (entitled) {
+            // The control disappears once a revoked selection is turned off.
+            await toggle.click();
+            await gateway.waitForRequest("sessions.patch", {
+              match: { cyberAccessProgram: "standard" },
+            });
             await expect
               .poll(async () => (await gateway.getSessionRow("agent:main:main")).cyberAccessProgram)
-              .toBeUndefined();
-          } else if (entitled) {
-            await picker.locator("[data-chat-access-default]").click();
-            await expect
-              .poll(
-                async () =>
-                  asOptionalRecord((await gateway.getRequests("sessions.patch")).at(-1)?.params)
-                    ?.cyberAccessProgram,
-              )
-              .toBeNull();
-            await expect.poll(() => select.locator('[aria-checked="true"]').count()).toBe(0);
+              .toBe("standard");
+            await expect.poll(() => select.locator('[aria-pressed="true"]').count()).toBe(0);
+            if (name.startsWith("blue-only")) {
+              await toggle.waitFor({ state: "detached" });
+            }
           }
         },
       );

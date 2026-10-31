@@ -1,4 +1,3 @@
-/* @vitest-environment jsdom */
 import { IDBFactory, IDBObjectStore } from "fake-indexeddb";
 import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { z } from "zod";
@@ -9,7 +8,6 @@ import { requestResult, transactionComplete } from "../../lib/chat/control-ui-da
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   openSessionSnapshotDatabase,
-  CHAT_SNAPSHOT_DB_NAME as DB_NAME,
   CHAT_SNAPSHOT_STORE_NAME as CHAT,
   CHAT_SNAPSHOT_METADATA_STORE_NAME as METADATA,
   SIDEBAR_SNAPSHOT_STORE_NAME as SIDEBAR,
@@ -19,7 +17,10 @@ import {
   deleteStoredChatSnapshot,
 } from "./session-snapshot-invalidation.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
+/* @vitest-environment jsdom */
+import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
 
+const DB_NAME = "openclaw-chat-snapshots";
 const scope = {
   gatewayScope: "wss://sidebar.example",
   recoveryScope: "account-a",
@@ -59,7 +60,7 @@ async function seededStore() {
   return store;
 }
 
-async function putSidebar(value: unknown, savedAt: number, projectionVersion = 1) {
+async function putSidebar(value: unknown, savedAt: number, projectionVersion = 3) {
   const database = await openSessionSnapshotDatabase();
   assert(database, "expected snapshot database");
   const transaction = database.transaction(SIDEBAR, "readwrite");
@@ -122,35 +123,46 @@ it("restores the settled row order before a connection and isolates gateway, acc
   }
 });
 
-it("retires a legacy hierarchy without evicting valid sidebars or transcripts", async () => {
-  vi.spyOn(Date, "now").mockReturnValue(1000);
-  const store = createStore();
-  const profiles = Array.from({ length: 8 }, (_, index) => profile(`retained-${index}`));
-  for (const current of profiles) {
-    await store.writeSidebar(key(current), sidebarSnapshot, parseSidebarSnapshot);
-  }
-  const transcript = {
-    messages: ["Retained conversation"],
-    pagination: { hasMore: false as const },
-    sessionId: "cedar",
-  };
-  store.write(sessionKey, transcript);
-  await store.flush();
-  const [parent, child] = snapshotSessions(
-    ["parent", "child"].map((name) =>
-      projectSidebarSession({ key: `agent:main:${name}`, label: name }),
-    ),
-  );
-  const legacy = { ...sidebarSnapshot, sessions: [{ ...parent!, children: [child!] }] };
-  expect(parseSidebarSnapshot(legacy)).toBeNull();
-  await putSidebar(legacy, 2000);
-
-  expect(await store.readSidebar(key(scope), parseSidebarSnapshot)).toBeNull();
-  for (const current of profiles) {
-    expect(await store.readSidebar(key(current), parseSidebarSnapshot)).toEqual(sidebarSnapshot);
-  }
-  expect(await store.read(sessionKey)).toMatchObject(transcript);
+it("decodes only the requested profile while bounding all retained envelopes", async () => {
+  const store = await seededStore();
+  const selected = vi.fn(validate);
+  expect(await store.readSidebar(key(scope), selected)).toEqual(model);
+  expect(selected).toHaveBeenCalledExactlyOnceWith(model);
+  expect(await read(store, otherProfile)).toEqual(model);
 });
+
+it.each([1, 2, 3])(
+  "retires an incompatible sidebar version %i without evicting valid caches",
+  async (projectionVersion) => {
+    vi.spyOn(Date, "now").mockReturnValue(1000);
+    const store = createStore();
+    const profiles = Array.from({ length: 8 }, (_, index) => profile(`retained-${index}`));
+    for (const current of profiles) {
+      await store.writeSidebar(key(current), sidebarSnapshot, parseSidebarSnapshot);
+    }
+    const transcript = {
+      messages: ["Retained conversation"],
+      pagination: { hasMore: false as const },
+      sessionId: "cedar",
+    };
+    writeSnapshotFixture(store, sessionKey, transcript);
+    await store.flush();
+    const [parent, child] = snapshotSessions(
+      ["parent", "child"].map((name) =>
+        projectSidebarSession({ key: `agent:main:${name}`, label: name }),
+      ),
+    );
+    const legacy = { ...sidebarSnapshot, pinnedSessions: [{ ...parent!, children: [child!] }] };
+    expect(parseSidebarSnapshot(legacy)).toBeNull();
+    await putSidebar(legacy, 2000, projectionVersion);
+
+    expect(await store.readSidebar(key(scope), parseSidebarSnapshot)).toBeNull();
+    for (const current of profiles) {
+      expect(await store.readSidebar(key(current), parseSidebarSnapshot)).toEqual(sidebarSnapshot);
+    }
+    expect(await store.read(sessionKey)).toMatchObject(transcript);
+  },
+);
 
 it("prunes oldest records by count, UTF-8 bytes, and age", async () => {
   let now = 1;
@@ -181,8 +193,8 @@ it("removes only the evicted transcript", async () => {
     sessionId: "cedar",
   };
   const retained = `${sessionKey}-retained`;
-  transcripts.write(sessionKey, snapshot);
-  transcripts.write(retained, snapshot);
+  writeSnapshotFixture(transcripts, sessionKey, snapshot);
+  writeSnapshotFixture(transcripts, retained, snapshot);
   await transcripts.flush();
   await deleteStoredChatSnapshot(sessionKey, "cache-eviction");
   expect(await transcripts.read(sessionKey)).toBeNull();

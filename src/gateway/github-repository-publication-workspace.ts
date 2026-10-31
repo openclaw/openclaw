@@ -3,11 +3,11 @@ import type { RepositoryGitHubPublicationRow } from "../state/github-publication
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import {
   prepareGitHubPublicationWorkspaceOwner,
-  type PublicationSessionIdentity,
   prepareGitHubPublicationSession,
 } from "./github-publication-availability.js";
 import { GitHubPublicationSessionChangedError } from "./github-publication-failure.js";
 import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
+import type { PublicationSessionIdentity } from "./github-publication-session.types.js";
 import {
   failRepositoryGitHubPublicationPreparationAsync,
   type GitHubPublicationTransitionAuthority,

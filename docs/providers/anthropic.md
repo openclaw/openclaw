@@ -165,8 +165,9 @@ OpenClaw release:
         native login tokens. Claude owns the login and token refresh lifecycle.
         Gateway startup shares the native login check across agent workspaces using
         the same config and environment. Checks use `claude auth status --json`;
-        an explicit logged-out response blocks the native route, while a timeout
-        or unreadable response allows Claude to try the request. Captures expire
+        an explicit logged-out response or a `claude` executable missing from
+        `PATH` blocks the native route, while a timeout or unreadable response
+        allows Claude to try the request. Captures expire
         after one minute. If a selected native login is unavailable, spawn admission
         rechecks it immediately, so signing in does not require a Gateway restart.
 
@@ -927,7 +928,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     - For other direct Anthropic models, `/fast` retains the existing Priority Tier mapping: on uses `service_tier: "auto"` and off uses `service_tier: "standard_only"`.
     - Explicit `serviceTier` or `service_tier` params override `/fast` when both are set.
     - Claude Sonnet 5.5 and Sonnet 5 support neither native fast mode nor Priority Tier, so OpenClaw omits both fields.
-    - The Control UI disables confirmed no-op Fast choices, including Sonnet 5.5, Sonnet 5, and requests governed by an explicit service tier. Saved Fast preferences remain clearable; unknown route or auth facts preserve existing controls.
+    - The Control UI disables confirmed no-op Fast choices, including Claude CLI, Sonnet 5.5, Sonnet 5, and requests governed by an explicit service tier. Saved Fast preferences remain clearable; unknown route or auth facts preserve existing controls.
 
     </Note>
 

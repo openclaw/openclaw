@@ -1,6 +1,8 @@
 /**
  * Compare fresh-run skill searches over 64 bundled skill bodies, 2,000 operations.
- * Save the baseline catalog beside its original so relative imports stay intact:
+ * --source files exercises freshly admitted local files; inline is the default.
+ * Save baseline catalog/index modules beside originals, and point the saved
+ * catalog at the saved index so relative imports stay intact:
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/skill-search-copies-measure.ts
  *   --catalog-owner src/agents/installed-skill-catalog.baseline.ts
  * Run five paired repetitions, swapping placement/order. Repeat with --allocations
@@ -26,9 +28,11 @@ const { values } = parseArgs({
     "catalog-owner": { type: "string", default: "src/agents/installed-skill-catalog.ts" },
     iterations: { type: "string", default: "2000" },
     allocations: { type: "boolean", default: false },
+    source: { type: "string", default: "inline" },
   },
 });
 assert(global.gc, "Run with --expose-gc");
+assert(["files", "inline"].includes(values.source));
 const iterations = Number(values.iterations);
 assert(Number.isInteger(iterations) && iterations > 0);
 const { searchInstalledSkills } = (await import(
@@ -40,7 +44,7 @@ const bodies = readdirSync("skills", { withFileTypes: true })
   .toSorted()
   .flatMap((file) => {
     try {
-      return [readFileSync(file, "utf8")];
+      return [{ filePath: path.resolve(file), content: readFileSync(file, "utf8") }];
     } catch {
       return [];
     }
@@ -51,8 +55,8 @@ const templates: InstalledSkill[] = Array.from({ length: 64 }, (_, index) => ({
   description: `Synthetic guide ${index} for file search, messages and scheduled tasks`,
   location: `/synthetic/skills/${index}/SKILL.md`,
   source: {
-    filePath: `/synthetic/skills/${index}/SKILL.md`,
-    readContent: bodies[index % bodies.length]!,
+    filePath: bodies[index % bodies.length]!.filePath,
+    readContent: values.source === "inline" ? bodies[index % bodies.length]!.content : undefined,
   },
 }));
 const queries = ["file search", "scheduled tasks", "message", "guide-3", "no_such_capability"];
@@ -126,10 +130,14 @@ console.log(
   JSON.stringify({
     catalogOwner: values["catalog-owner"],
     sampled: values.allocations,
+    source: values.source,
     iterations,
     digest: digest.digest("hex"),
     skillBodies: templates.length,
-    textChars: templates.reduce((total, skill) => total + skill.source.readContent!.length, 0),
+    textChars: templates.reduce(
+      (total, _skill, index) => total + bodies[index % bodies.length]!.content.length,
+      0,
+    ),
     cpu,
     elapsedMs,
     allocatedBytes,

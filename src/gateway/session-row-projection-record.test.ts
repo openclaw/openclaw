@@ -1,9 +1,10 @@
-import { isDeepStrictEqual } from "node:util";
 import { expect, it, vi } from "vitest";
 import { projectGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { filterSessionEntries } from "./session-list-filters.js";
+import { indexSessionRow } from "./session-row-projection-identities.js";
+import { createSessionRowLookup } from "./session-row-projection-materialize.js";
 import * as records from "./session-row-projection-record.js";
 import { createSessionRowProjectionRevisions } from "./session-row-projection-revisions.js";
 import * as display from "./session-utils-display.js";
@@ -25,6 +26,67 @@ const target = {
   agentId: "main",
   storeTarget: { agentId: "main", storePath: "/synthetic/sessions.sqlite" },
 };
+
+it("shares singleton index buckets without coupling alias collisions or removals", () => {
+  const indexes = {
+    byStore: new Map<string, Set<string>>(),
+    byAgent: new Map<string, Set<string>>(),
+    byKey: new Map<string, Set<string>>(),
+    byParent: new Map<string, Set<string>>(),
+  };
+  const first = { ...records.create(target, original), entry: original };
+  first.parents.add("logical:main\0agent:main:parent");
+  indexSessionRow(first, indexes);
+  const buckets = Object.values(indexes).flatMap((index) => Array.from(index.values()));
+  // One retained bucket per row, not one copy per lookup alias.
+  expect(new Set(buckets).size).toBe(1);
+  const singleton = buckets[0]!;
+  const second = { ...first, key: "agent:main:other" };
+  const firstId = records.identity(first);
+  const secondId = records.identity(second);
+  indexSessionRow(second, indexes);
+  indexSessionRow(second, indexes);
+  expect([...indexes.byKey.get("id:session")!]).toEqual([firstId, secondId]);
+  expect([...indexes.byKey.get(`key:${first.key}`)!]).toEqual([firstId]);
+  expect([...singleton]).toEqual([firstId]);
+  indexSessionRow(first, indexes, true);
+  expect(indexes.byKey.has(`key:${first.key}`)).toBe(false);
+  expect([...indexes.byKey.get("id:session")!]).toEqual([secondId]);
+  expect([...singleton]).toEqual([firstId]);
+  indexSessionRow(first, indexes);
+  expect([...indexes.byKey.get("id:session")!]).toEqual([secondId, firstId]);
+  expect([...indexes.byKey.get(`key:${second.key}`)!]).toEqual([secondId]);
+  for (const row of [second, first]) {
+    indexSessionRow(row, indexes, true);
+  }
+  expect(Object.values(indexes).map((index) => index.size)).toEqual([0, 0, 0, 0]);
+});
+
+it("captures current published entries without preparing acquisition state", () => {
+  let current: records.Row | undefined = { ...records.create(target, original), entry: original };
+  const state = vi.fn(() => {
+    throw new Error("Published entries do not need acquisition state");
+  });
+  const lookup = createSessionRowLookup({
+    state,
+    lookup: () => current,
+    assertCurrent: noop,
+    matching: () => [],
+    acquireEntry: () => {
+      throw new Error("Published entries do not need acquisition");
+    },
+    env: {},
+    runInOwner: (consume) => consume(),
+  });
+  expect(lookup.capture(target)).toBe(current);
+  const previous = current;
+  current = { ...previous, entry: { ...original, visibility: "draft" } };
+  expect(lookup.capture(target)).toBe(current);
+  expect(lookup.capture(target)?.entry?.visibility).toBe("draft");
+  current = undefined;
+  expect(lookup.capture(target)).toBeUndefined();
+  expect(state).not.toHaveBeenCalled();
+});
 
 it("reuses search fields across equal reads and refreshes replaced entries", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -131,58 +193,33 @@ it("keeps accepted facts and sharing revisions when database reads return equal 
     expect(rows.get(records.identity(row))).toBe(accepted);
     expect(put).toHaveBeenCalledOnce();
     expect(revisions.sharing()).not.toBe(sharing);
-  });
-});
 
-it("preserves deep change detection for entry metadata and unordered parent membership", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const context = buildSessionListRowMetadataContext({ now: 1 });
-    const acquisition = { cfg, context, remove: noop, put: noop, archive };
-    const variants: SessionEntry[] = [
-      original,
-      structuredClone(original),
-      ...[original.updatedAt + 1, Number.NaN, 0, -0].map((updatedAt) =>
-        Object.assign({}, original, { updatedAt }),
-      ),
-      { ...original, sessionId: "replacement" },
-      { ...original, lifecycleRevision: "generation-2" },
-      {
-        ...original,
-        createdActor: { type: "human", source: "profile", id: "profile", label: "changed" },
-      },
-      { ...original, label: undefined },
-      { ...original, parentSessionKey: "agent:main:parent", spawnedBy: "agent:main:requester" },
-    ];
-    for (const previous of [undefined, ...variants]) {
-      for (const storedEntry of variants) {
-        const row = { ...records.create(target, previous), entry: previous };
-        const parents = records.readSessionRowParents(row, storedEntry, cfg, context);
-        for (const oldParents of [
-          new Set<string>(),
-          new Set(parents),
-          new Set([...parents].toReversed()),
-          new Set(["logical:main\0agent:main:other"]),
-          new Set([...parents, "logical:main\0agent:main:other"]),
-        ]) {
-          row.parents = oldParents;
-          const changed = !isDeepStrictEqual([storedEntry, parents], [previous, oldParents]);
-          const marked: records.Row[] = [];
-          const next = records.acquireSessionRowEntry({
-            ...acquisition,
-            row,
-            rows: new Map([[records.identity(row), row]]),
-            storedEntry,
-            markRelated: (related) => marked.push(related),
-          });
-          expect(marked).toEqual(changed ? [row, next] : []);
-          expect(next?.storedEntry).toBe(changed ? storedEntry : previous);
-          expect(next?.entry).toBe(
-            isDeepStrictEqual(previous, storedEntry) ? previous : storedEntry,
-          );
-          expect(next?.parents).toEqual(parents);
-        }
-      }
-    }
+    const committed = {
+      ...original,
+      createdActor: { type: "human", source: "profile", id: "profile", label: "Changed user" },
+    } satisfies SessionEntry;
+    const deferred = acquire(
+      { ...row, storedEntry: committed, sharingEntry: committed, entryAcquisitionPending: true },
+      committed,
+    );
+    expect(deferred?.entry).toBe(committed);
+    expect(deferred?.entryAcquisitionPending).toBeUndefined();
+
+    const lineage = {
+      ...original,
+      parentSessionKey: "agent:main:parent",
+      spawnedBy: "agent:main:requester",
+    };
+    const parented = acquire(row, lineage)!;
+    const parents = new Set([
+      "logical:main\0agent:main:requester",
+      "logical:main\0agent:main:parent",
+    ]);
+    parented.parents = parents;
+    expect(acquire(parented, structuredClone(lineage))).toBe(parented);
+    expect(parented.parents).toBe(parents);
+    const reparented = acquire(parented, { ...lineage, spawnedBy: undefined })!;
+    expect([...reparented.parents]).toEqual(["logical:main\0agent:main:parent"]);
   });
 });
 

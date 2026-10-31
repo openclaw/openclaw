@@ -10,6 +10,7 @@ import { beginGatewayBootLifecycle } from "../infra/gateway-boot-lifecycle.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -65,12 +66,16 @@ async function fixture(
     doctorContract: { configRepair: true },
   });
   const manifestRegistry = { plugins: [owner], diagnostics: [] };
-  const migrate = (config: OpenClawConfig, migrationEnv: NodeJS.ProcessEnv = env) =>
+  const migrate = (
+    config: OpenClawConfig,
+    migrationEnv: NodeJS.ProcessEnv = env,
+    historicalWebhookListeners: boolean | "preserve-configured" = true,
+  ) =>
     applyPluginDoctorCompatibilityMigrations(config, {
       env: migrationEnv,
       pluginIds: [channelId],
       manifestRegistry,
-      historicalWebhookListeners: true,
+      historicalWebhookListeners,
     });
   return {
     configPath,
@@ -294,6 +299,20 @@ it.each(["previous boot", "channel ingress", "update ledger", "published updater
   },
 );
 
+it("preserves configured listeners without claiming an active update", async () => {
+  const { env, migrate, update } = await fixture();
+  const config = channelConfig();
+  const initialized = migrate(config, env, "preserve-configured");
+  expect(initialized).toEqual(update(config));
+  expect(initialized.config.channels?.["nextcloud-talk"]).toEqual(workChannel(endpoint));
+  expect(initialized.config.meta?.migrations?.webhookListeners).toEqual({
+    "nextcloud-talk": [["channels", "nextcloud-talk", "accounts", "work", "legacyWebhook"]],
+  });
+  const fresh = migrate(config);
+  expect(fresh.config.channels).toEqual(config.channels);
+  expect(fresh.config.meta?.migrations?.webhookListeners).toBe(true);
+});
+
 it.each(["no database", "empty database"])(
   "completes a fresh install with %s without pins even after its first Gateway boot",
   async (state) => {
@@ -411,4 +430,18 @@ it("does not turn an environment-only Teams pin into authored activation on a la
   const first = update({});
   expect(first.config.channels?.msteams).toEqual({ legacyWebhook: { port: 3978 } });
   expectUnchanged(update(first.config), first.config);
+});
+
+it("keeps a Teams decision startup recorded after Doctor left it pending", async () => {
+  const { configPath, env, update } = await fixture([undefined], { channelId: "msteams" });
+  const doctorRecord = { telegram: [], feishu: [], "nextcloud-talk": [] };
+  // A startup without Teams credentials completes Teams in machine state only.
+  writeConfigMachineState(
+    `webhookListeners:${configPath}`,
+    { ...doctorRecord, msteams: [] },
+    { env },
+  );
+  const config: OpenClawConfig = { meta: { migrations: { webhookListeners: doctorRecord } } };
+  // Adding Teams later must not reopen its historical port.
+  expectUnchanged(update(config), config);
 });

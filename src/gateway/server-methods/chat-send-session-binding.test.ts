@@ -541,14 +541,19 @@ it.each(
         let token: string | undefined;
         let queuedReaction: ReturnType<typeof createQueueTestRun> | undefined;
         let probe: ReturnType<typeof sqliteWorkerOwnerProbe.admission> | undefined;
-        async function sendPrompt(runId: string, message: string) {
+        async function sendPrompt(runId: string, message: string, queueMode?: "steer") {
           const source: Source = {
             entered: createDeferred<DispatchOptions>(),
             release: createDeferred(),
             finished: createDeferred(),
           };
           sources.set(runId, source);
-          const params = { sessionKey, message, idempotencyKey: runId };
+          const params = {
+            sessionKey,
+            message,
+            idempotencyKey: runId,
+            ...(queueMode ? { queueMode } : {}),
+          };
           const request = await prepareBindingRequest(params, client, context);
           source.releaseAuthorization = request.sessionMutationAuthorization?.release;
           const { respond } = request;
@@ -656,7 +661,7 @@ it.each(
             );
           let prompt = initialRecorder;
           if (mode === "steered") {
-            const steering = await sendPrompt("reaction-steered-source", "Steered prompt");
+            const steering = await sendPrompt("reaction-steered-source", "Steered prompt", "steer");
             prompt = steering.owned.userTurn.recorder;
             expect(prompt.getAdmissionReceipt()).toBeUndefined();
             expect((await react({ dryRun: true })).details).toMatchObject({

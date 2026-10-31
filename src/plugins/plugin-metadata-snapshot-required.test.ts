@@ -5,6 +5,7 @@ import {
   listKnownProviderAuthEnvVarNamesRuntime,
   listOpenClawPluginManifestMetadataRuntime,
   loadPluginMetadataSnapshotRuntime,
+  resolvePluginMetadataSnapshotRequiredRuntime,
 } from "./plugin-metadata-snapshot-required.js";
 
 const { loadNative } = vi.hoisted(() => ({ loadNative: vi.fn() }));
@@ -16,6 +17,7 @@ vi.mock("./native-module-require.js", async (importOriginal) => ({
 const reads = {
   getCurrentPluginMetadataSnapshot: () => getCurrentPluginMetadataSnapshotRequiredRuntime({}),
   loadPluginMetadataSnapshot: () => loadPluginMetadataSnapshotRuntime({ config: {} }),
+  resolvePluginMetadataSnapshot: () => resolvePluginMetadataSnapshotRequiredRuntime({ config: {} }),
   listOpenClawPluginManifestMetadata: () => listOpenClawPluginManifestMetadataRuntime(),
   listKnownProviderAuthEnvVarNamesCore: () => listKnownProviderAuthEnvVarNamesRuntime(),
 };

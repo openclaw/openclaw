@@ -32,6 +32,7 @@ import { modelSettingPrimary, readModelSetting } from "../../lib/model-setting.t
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
+import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { createAppearanceCatalogs } from "./appearance-catalogs.ts";
 import { createConfigPageModels } from "./config-page-models.ts";
@@ -155,7 +156,7 @@ export function createConfigPage(
   let previousClient: GatewayBrowserClient | null = null;
   let previousHello: unknown;
   let previousPhase: string | null = null;
-  let countdown: ReturnType<typeof setInterval> | undefined;
+  const countdown = useVisiblePoll(1_000, invalidate);
   let routeInitialized = false;
   let normalizedMemoryLocation = "";
   let targetBlockId: string | null = null;
@@ -304,12 +305,10 @@ export function createConfigPage(
     const ticking =
       pageId === "updates" &&
       (campaign?.state === "countdown" || campaign?.state === "waiting-for-idle");
-    if (ticking && !countdown) {
-      countdown = setInterval(invalidate, 1_000);
-    }
-    if (!ticking) {
-      clearInterval(countdown);
-      countdown = undefined;
+    if (ticking) {
+      countdown.start();
+    } else {
+      countdown.stop();
     }
     if (pageId === "appearance") {
       mediaDeviceOwner.load();
@@ -691,7 +690,7 @@ export function createConfigPage(
       connected = false;
       customThemeImportOwner.retireImport();
       mediaDeviceOwner.retire();
-      clearInterval(countdown);
+      countdown.stop();
       abortRequests();
       if (scrollFrame !== null) {
         cancelAnimationFrame(scrollFrame);

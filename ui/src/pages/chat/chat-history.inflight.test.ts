@@ -1,5 +1,9 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import {
+  projectAgentHistoryActivity,
+  projectAgentToolActivity,
+} from "../../../../src/infra/agent-activity-events.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import type { ChatHistoryResponse, ChatHistoryResult } from "./chat-history-snapshot.ts";
@@ -155,6 +159,73 @@ it("restores cleared activity alongside an owned run's current text", async () =
     runId: "run-live",
     toolCallId: "call-reconnected",
   });
+});
+
+it("keeps live tool authority until history records its outcome, not just its call", async () => {
+  const runId = "run-live";
+  const toolCallId = "build";
+  const args = { title: "Run build and compatibility gates", code: "await build()" };
+  const call = {
+    role: "assistant",
+    __openclaw: { id: "build-call", runId, seq: 1 },
+    content: [{ type: "toolCall", id: toolCallId, name: "exec", arguments: args }],
+  };
+  const history = activeHistory(runId);
+  history.messages = [call];
+  const entries = [{ messageId: "build-call", message: call }];
+  history.activity = projectAgentHistoryActivity(entries);
+  const state = createState(history);
+  adoptStartedChatRun(state, runId, 1_000);
+  vi.stubGlobal("window", globalThis);
+  try {
+    handleAgentEvent(state, event(1, "tool", { phase: "start", toolCallId, name: "exec", args }));
+    handleAgentEvent(
+      state,
+      event(
+        2,
+        "item",
+        projectAgentToolActivity({
+          toolCallId,
+          name: "exec",
+          args,
+          phase: "start",
+        }),
+      ),
+    );
+    expect(state.toolStreamOrder).toHaveLength(1);
+    await vi.waitFor(() => expect(state.chatToolMessages).toHaveLength(1));
+    await loadChatHistory(state);
+    expect(state.chatToolMessages).toMatchObject([
+      {
+        toolCallId,
+        activity: [{ status: "running" }],
+      },
+    ]);
+    const result = {
+      role: "toolResult",
+      toolCallId,
+      toolName: "exec",
+      isError: false,
+      __openclaw: { id: "build-result", runId, seq: 2 },
+      content: [{ type: "text", text: "Build passed" }],
+    };
+    history.messages = [call, result];
+    history.activity = projectAgentHistoryActivity([
+      ...entries,
+      { messageId: "build-result", message: result },
+    ]);
+    await loadChatHistory(state);
+    expect(state.chatToolMessages).toEqual([]);
+    expect(state.chatMessages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          activity: [expect.objectContaining({ status: "completed" })],
+        }),
+      ]),
+    );
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });
 
 it("keeps an identical new reply after the Gateway retires its persisted predecessor", () => {

@@ -32,7 +32,10 @@ import {
 } from "../../gateway/server-plugin-in-process-dispatch.js";
 import type { TrustedSessionCreation } from "../../gateway/session-creation-provenance.js";
 import { bindSessionSendDeliveryContext } from "../../gateway/session-send-delivery.js";
-import { isGatewayWorkerApprovalMethod } from "../../infra/approval-gateway-runtime-methods.js";
+import {
+  isGatewayWorkerApprovalMethod,
+  isHostPluginApprovalMethod,
+} from "../../infra/approval-gateway-runtime-methods.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
@@ -358,7 +361,7 @@ async function callAgentToolGatewayRequestBound<T>(
     ...(request.replyExpectation ? { replyExpectation: request.replyExpectation } : {}),
     forceSyntheticClient: true,
     operatorRoleActor: { kind: "system" as const },
-    ...(method === "plugin.approval.request" && runtimeIdentity?.approvalOwnerPluginId
+    ...(isHostPluginApprovalMethod(method) && runtimeIdentity?.approvalOwnerPluginId
       ? { allowHostPluginApprovalRequest: true }
       : {}),
     ...(request.agentRunTracking ? { agentRunTracking: request.agentRunTracking } : {}),

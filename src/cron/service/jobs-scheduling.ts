@@ -25,7 +25,7 @@ import {
   resolveForcePreservedOneShotAtMs,
 } from "./one-shot-schedule.js";
 import type { CronJobPolicyContext, CronServiceState, DeferredCronNotifications } from "./state.js";
-import { MIN_REFIRE_GAP_MS } from "./timer-execution-timeout.js";
+import { MIN_REFIRE_GAP_MS } from "./timer-constants.js";
 import { hasPendingCronTriggerInterval } from "./trigger-interval.js";
 
 /** A new timer receipt owns continuation; never reopen the interrupted occurrence. */

@@ -11,18 +11,74 @@ import {
   makeAgentUserMessage,
 } from "../agents/test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
+import {
+  withGuardedFetchBeforeRequest,
+  withGuardedFetchRequestAuthority,
+} from "../infra/net/fetch-request-authority.js";
+import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
+import { loggingState } from "../logging/state.js";
 import {
   createSolidPngBuffer,
   createTinyJpegBuffer,
 } from "../plugin-sdk/test-helpers/image-fixtures.js";
 import "./ai-transport-host.js";
+import { withModelTransportContext } from "./model-transport-context.js";
 
 afterEach(() => {
   resetSecretRedactionRegistryForTest();
+  resetLogger();
+  loggingState.rawConsole = null;
   vi.restoreAllMocks();
 });
+
+it.each(["logInfo", "logWarn"] as const)(
+  "formats transport context for %s only while its sink is enabled",
+  (method) => {
+    const requestId = vi.fn(() => "fixture-request:1");
+    const sink = vi.fn();
+    loggingState.rawConsole = { log: sink, info: sink, warn: sink, error: sink };
+    const host = getAiTransportHost();
+    withModelTransportContext(
+      {
+        sessionKey: "fixture-session",
+        runId: "fixture-run",
+        get requestId() {
+          return requestId();
+        },
+      },
+      () => {
+        for (const consoleLevel of ["silent", "info", "silent"] as const) {
+          setLoggerOverride({ level: "silent", consoleLevel, consoleStyle: "compact" });
+          requestId.mockClear();
+          sink.mockClear();
+          host[method](
+            "fixture-transport",
+            "attempt failed",
+            method === "logWarn" ? { requestId: "provider-request" } : undefined,
+          );
+          if (consoleLevel === "silent") {
+            expect(requestId).not.toHaveBeenCalled();
+            expect(sink).not.toHaveBeenCalled();
+          } else {
+            expect(requestId).toHaveBeenCalled();
+            expect(sink).toHaveBeenCalledExactlyOnceWith(
+              expect.stringContaining(
+                `attempt failed sessionKey="fixture-session" runId="fixture-run" ${method === "logWarn" ? "clientRequestId" : "requestId"}="fixture-request:1" requestNumber=1`,
+              ),
+            );
+            if (method === "logWarn") {
+              expect(sink).toHaveBeenCalledWith(
+                expect.stringContaining(" requestId=provider-request"),
+              );
+            }
+          }
+        }
+      },
+    );
+  },
+);
 
 const anthropicModel = makeProviderModelFixture<"anthropic-messages">({
   id: "claude-test",
@@ -155,4 +211,67 @@ it("carries original tool results into Anthropic and OpenAI-compatible payloads"
   ]) {
     expect(JSON.stringify(payload)).toContain(JSON.stringify(source).slice(1, -1));
   }
+});
+
+it.each(
+  ["EAI_AGAIN", "CERT_REVOKED"].flatMap((code) =>
+    [false, true].map((registered) => ({ code, registered })),
+  ),
+)("redacts nested fetch $code only when registered ($registered)", ({ code, registered }) => {
+  if (registered) {
+    registerSecretValueForRedaction(code);
+  }
+  const cause = new TypeError("fetch failed", {
+    cause: Object.assign(new Error("fixture transport failure"), {
+      code,
+      authorization: "Bearer fixture-sensitive-authorization",
+    }),
+  });
+  const projected = projectProviderError(new Error("Connection error.", { cause }));
+  expect(projected).toEqual(
+    registered
+      ? expect.not.objectContaining({ errorCode: code })
+      : {
+          stopReason: "error",
+          errorMessage: "Connection error.",
+          errorCode: code,
+        },
+  );
+  expect(JSON.stringify(projected)).not.toContain("fixture-sensitive-authorization");
+});
+
+it("requires managed fetch only inside a request-owned egress guard", async () => {
+  const host = getAiTransportHost();
+  const model = makeProviderModelFixture<"openai-chatgpt-responses">({
+    id: "gpt-test",
+    api: "openai-chatgpt-responses",
+    provider: "openai",
+    baseUrl: "https://chatgpt.com/backend-api/codex",
+  });
+  const guard = vi.fn();
+  expect(host.requiresManagedTransport(model, "fetch")).toBe(false);
+  const guarded = withGuardedFetchBeforeRequest(guard, async () => {
+    expect(host.requiresManagedTransport(model, "fetch")).toBe(true);
+    await Promise.resolve();
+    expect(host.requiresManagedTransport(model, "fetch")).toBe(true);
+  });
+  // The concurrent unguarded caller keeps its ordinary transport selection.
+  expect(host.requiresManagedTransport(model, "fetch")).toBe(false);
+  await guarded;
+  expect(host.requiresManagedTransport(model, "fetch")).toBe(false);
+  // Native session forks already carry a send-time lifecycle assertion; that
+  // lifetime-only scope must not disable their independent WebSocket transport.
+  await withGuardedFetchRequestAuthority(guard, async () => {
+    expect(host.requiresManagedTransport(model, "fetch")).toBe(false);
+    await withGuardedFetchBeforeRequest(guard, async () => {
+      expect(host.requiresManagedTransport(model, "fetch")).toBe(true);
+      await withGuardedFetchRequestAuthority(undefined, async () => {
+        expect(host.requiresManagedTransport(model, "fetch")).toBe(true);
+      });
+    });
+    expect(host.requiresManagedTransport(model, "fetch")).toBe(false);
+  });
+  // Selecting a transport is not itself a physical submission.
+  // The two lifetime entries assert; no transport-selection call does.
+  expect(guard).toHaveBeenCalledTimes(2);
 });

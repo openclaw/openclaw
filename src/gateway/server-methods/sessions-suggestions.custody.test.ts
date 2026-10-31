@@ -166,7 +166,7 @@ it.each([
       );
       expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
         total: 1,
-        items: [{ id: pending.items[0]?.id, state: "interrupted", message: { content: text } }],
+        items: [{ id: pending.items[0]?.id, state: "cancelled", message: { content: text } }],
       });
       expect(fixture.context.dedupe.get(`chat:${runId}`)).toMatchObject({
         ok: false,

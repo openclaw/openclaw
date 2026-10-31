@@ -7,6 +7,11 @@ export type RealtimeTalkConversationEntry = {
   isStreaming: boolean;
   order?: number;
   transcriptId?: string;
+  /**
+   * Newest saved chat message when the caption started, or null when the chat was
+   * empty. Places unsaved captions among typed messages; undefined renders last.
+   */
+  afterMessageId?: string | null;
 };
 
 export type RealtimeTalkConversationState = {

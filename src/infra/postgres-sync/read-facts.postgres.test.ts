@@ -13,6 +13,7 @@ import {
   bindAcpSessionMeta,
 } from "../../acp/runtime/session-meta-write.kernel.js";
 import { getExactSessionEntryQueries } from "../../config/sessions/session-accessor.sqlite-entry-query.js";
+import { readModelContextNavigationPages } from "../../config/sessions/session-model-context-pages.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import { agentEngineSchema } from "../../state/openclaw-agent-db-engine.js";
 import { stateEngineSchema } from "../../state/openclaw-state-db-engine.js";
@@ -24,7 +25,7 @@ import { executeSqliteQuerySync } from "../kysely-sync.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { isPostgresSqlConnection, type PostgresSqlConnection } from "../sql-connection.js";
 import { readSqliteDatabaseWriteRevision } from "../sqlite-database-admission.js";
-import { admitSqliteSchema } from "../sqlite-schema-facts.js";
+import { admitSqliteSchema, hasUncommittedSqliteWrites } from "../sqlite-schema-facts.js";
 import { runSqliteReadSnapshotSync } from "../sqlite-transaction.js";
 import { usePostgresTestHarness } from "./postgres.test-support.js";
 import { failAfterStatement } from "./sql.test-support.js";
@@ -177,6 +178,49 @@ describe.skipIf(!connection)("PostgreSQL admitted read facts", () => {
       writeAcp(state.writer, "published", null);
       expectRows(snapshot(), null, "created");
       expect(metadataReads()).toHaveLength(0);
+    });
+  });
+
+  it("reuses model-context navigation facts across PostgreSQL read-only snapshots", () => {
+    withEngineStoreAdmission(() => {
+      const agent = openStore(agentEngineSchema);
+      const entry = {
+        seq: 0,
+        id: "entry",
+        parentId: null,
+        timestamp: "2026-01-01T00:00:00.000Z",
+        type: "message" as const,
+        message: { role: "user" as const, content: "hello", timestamp: 0 },
+      };
+      let rowReads = 0;
+      const read = () =>
+        readModelContextNavigationPages({
+          database: agent.writer,
+          sessionId: "cache-session",
+          generation: "generation",
+          through: 0,
+          maxEvents: 1,
+          readRows: () => {
+            rowReads += 1;
+            return [{ entry, bytes: 10, withoutCheckpointBytes: 10 }];
+          },
+        });
+
+      runSqliteReadSnapshotSync(agent.writer, () => {
+        expect(hasUncommittedSqliteWrites(agent.writer)).toBe(false);
+        expect(read().prepared).toBeUndefined();
+      });
+      runSqliteReadSnapshotSync(agent.writer, () => {
+        expect(hasUncommittedSqliteWrites(agent.writer)).toBe(false);
+        expect(read().prepared).toBeDefined();
+      });
+      expect(rowReads).toBe(1);
+
+      agent.writer.runTransaction(() => {
+        expect(hasUncommittedSqliteWrites(agent.writer)).toBe(true);
+        expect(read().prepared).toBeUndefined();
+      });
+      expect(rowReads).toBe(2);
     });
   });
 

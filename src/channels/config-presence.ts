@@ -185,6 +185,7 @@ export async function listPotentialConfiguredChannelPresenceSignalsAsync(
   const persistedChannelIds = new Set<string>();
   if (
     options.includePersistedAuthState === false ||
+    options.persistedAuthChannelIds?.size === 0 ||
     !fs.existsSync(resolveStateDir(env, os.homedir))
   ) {
     return signals;

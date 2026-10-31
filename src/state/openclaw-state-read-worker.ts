@@ -1,11 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { stat } from "node:fs/promises";
+import { getDatabaseProcessRole } from "../infra/database-engine/admission-scope.js";
 import { getPostgresPool } from "../infra/postgres-sync/pool.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { acquireSqliteDatabaseAdmissionTurn } from "../infra/sqlite-database-admission-turn.js";
 import { resolveSqliteDatabaseFilePath } from "../infra/sqlite-database-admission.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
-import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
+import { assertDatabaseFileIdentity } from "../infra/sqlite-worker-identity.js";
 import {
   captureRetainedNativeWorkerSource,
   type RetainedNativeWorkerSource,
@@ -165,8 +167,9 @@ function readPool(state: ReadRuntime, admitted: boolean, awaitedOnly: boolean) {
   if ((state.sealed && !admitted) || state.closing) {
     throw new WorkerTaskError("Shared-state readers are closing", "unavailable");
   }
-  // Reuse an existing serviceable worker; cold promise-only reads need no native supervisor.
-  const retained = !awaitedOnly || state.pool !== undefined;
+  // Long-lived hosts reuse their boot readers; one-shot inspection avoids a native supervisor.
+  const retained =
+    !awaitedOnly || state.pool !== undefined || getDatabaseProcessRole() === "gateway";
   const key = retained ? "pool" : "awaitedPool";
   if (!state[key]) {
     state[key] = createStateReadPool(state.workerUrl, retained ? state.nativeSource : undefined);
@@ -325,30 +328,27 @@ class StateReadTransport {
       const retireAfterRead =
         !pool.retained && !context.maintenanceScope && readCommand.type !== "admit";
       const task = pool.pool.runTask(
-        () => {
+        async () => {
           const physicalLocation = resolveSqliteDatabaseFilePath(location);
-          const requestForDispatch = () => {
+          const turn = acquireSqliteDatabaseAdmissionTurn(physicalLocation);
+          if (turn) {
+            releaseAdmission = await turn;
+          }
+          try {
             authority.assertCurrent();
             // Queue admission can outlive the captured file at this pathname.
             if (expectedIdentity !== undefined) {
-              assertExistingDatabaseIdentity(physicalLocation, expectedIdentity);
+              assertDatabaseFileIdentity(await stat(physicalLocation, { bigint: true }), {
+                key: expectedIdentity,
+              });
+              authority.assertCurrent();
             }
             return request;
-          };
-          const turn = acquireSqliteDatabaseAdmissionTurn(physicalLocation);
-          if (!turn) {
-            return requestForDispatch();
+          } catch (error) {
+            releaseAdmission?.();
+            releaseAdmission = undefined;
+            throw error;
           }
-          return turn.then((release) => {
-            releaseAdmission = release;
-            try {
-              return requestForDispatch();
-            } catch (error) {
-              releaseAdmission();
-              releaseAdmission = undefined;
-              throw error;
-            }
-          });
         },
         {
           signal: authority.signal,

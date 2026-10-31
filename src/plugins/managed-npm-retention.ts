@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { ignoreMissingPath } from "../infra/errno.js";
 import { safePathSegmentHashed } from "../infra/install-safe-path.js";
 import { statIfExists } from "../infra/path-existence.js";
@@ -116,7 +117,9 @@ export async function markRetainedManagedNpmInstall(params: {
   packageDir: string;
   pluginId: string;
   reason: string;
-  assertCurrent?: () => void;
+  assertCurrent?: () => void | Promise<void>;
+  /** The update recovery owner records its exact marker before publication. */
+  beforeWrite?: (contents: string) => void | Promise<void>;
 }): Promise<boolean> {
   const info = resolveRetainedManagedNpmInstallPackageInfo(params.packageDir);
   if (!info) {
@@ -126,23 +129,21 @@ export async function markRetainedManagedNpmInstall(params: {
   if (!stat?.isDirectory()) {
     return false;
   }
-  params.assertCurrent?.();
+  await params.assertCurrent?.();
   await fs.promises.mkdir(path.dirname(info.markerPath), { recursive: true });
-  params.assertCurrent?.();
-  await fs.promises.writeFile(
-    info.markerPath,
-    `${JSON.stringify(
-      {
-        version: 1,
-        pluginId: params.pluginId,
-        retainedAt: new Date().toISOString(),
-        reason: params.reason,
-      },
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  );
+  const contents = `${JSON.stringify(
+    {
+      version: 1,
+      pluginId: params.pluginId,
+      retainedAt: new Date().toISOString(),
+      reason: params.reason,
+    },
+    null,
+    2,
+  )}\n`;
+  await params.beforeWrite?.(contents);
+  await params.assertCurrent?.();
+  await fs.promises.writeFile(info.markerPath, contents, "utf8");
   return true;
 }
 
@@ -150,17 +151,46 @@ export async function markRetainedManagedNpmInstall(params: {
 export async function restoreRetainedManagedNpmInstallMarkers(params: {
   clearedMarkerSnapshots: Array<{ markerPath: string; contents: string }>;
   createdMarkerPaths: string[];
-  assertCurrent: () => void;
+  assertCurrent: () => void | Promise<void>;
 }): Promise<void> {
   for (const snapshot of params.clearedMarkerSnapshots) {
-    params.assertCurrent();
+    await params.assertCurrent();
     await fs.promises.mkdir(path.dirname(snapshot.markerPath), { recursive: true });
-    params.assertCurrent();
+    await params.assertCurrent();
     await fs.promises.writeFile(snapshot.markerPath, snapshot.contents, "utf8");
   }
   for (const markerPath of params.createdMarkerPaths) {
-    params.assertCurrent();
+    await params.assertCurrent();
     await fs.promises.rm(markerPath, { force: true });
+  }
+}
+
+/** Active records own clearing their retention markers, with exact compensation receipts. */
+export async function clearActiveRetainedManagedNpmInstallMarkers(
+  nextInstallRecords: Record<string, PluginInstallRecord>,
+  clearedMarkers: Array<{ markerPath: string; contents: string }>,
+  prepareEffect: () => Promise<void>,
+): Promise<void> {
+  for (const record of Object.values(nextInstallRecords)) {
+    if (record.source !== "npm" || !record.installPath?.trim()) {
+      continue;
+    }
+    let markerPath: string;
+    try {
+      markerPath = resolveRetainedManagedNpmInstallMarkerPath(record.installPath);
+    } catch {
+      continue;
+    }
+    let contents: string;
+    try {
+      contents = await fs.promises.readFile(markerPath, "utf8");
+    } catch (error) {
+      ignoreMissingPath(error);
+      continue;
+    }
+    // Journal before removal: the helper can refuse after deleting the marker.
+    clearedMarkers.push({ markerPath, contents });
+    await clearRetainedManagedNpmInstallMarker(record.installPath, prepareEffect);
   }
 }
 

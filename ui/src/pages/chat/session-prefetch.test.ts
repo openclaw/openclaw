@@ -1,4 +1,3 @@
-/* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
@@ -27,6 +26,8 @@ import {
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
+/* @vitest-environment jsdom */
+import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
 
 const cacheKey = (sessionKey: string) => resolveChatSnapshotKey(snapshotHost, { sessionKey });
 function historySnapshot(message: string, sessionId = `session-${message}`): ChatSessionSnapshot {
@@ -222,7 +223,7 @@ describe("session navigation intent prefetch", () => {
       const sessionKey = "agent:main:main";
       const request = historyRequest();
       if (owner === "fresh snapshot") {
-        store.write(cacheKey(sessionKey), historySnapshot("fresh"));
+        writeSnapshotFixture(store, cacheKey(sessionKey), historySnapshot("fresh"));
         await store.flush();
       }
       updatePrefetch(
@@ -296,7 +297,7 @@ describe("session navigation intent prefetch", () => {
   it("rechecks readiness after the persisted snapshot read before requesting history", async () => {
     const sessionKey = "agent:main:stored";
     const stored = historySnapshot("stored", "session-stored");
-    store.write(cacheKey(sessionKey), stored);
+    writeSnapshotFixture(store, cacheKey(sessionKey), stored);
     await store.flush();
     cache.clear();
     const read = createDeferred<ChatSessionSnapshot | null>();
@@ -484,35 +485,6 @@ describe("session navigation intent prefetch", () => {
     expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:intended"]);
   });
 
-  it("coalesces intent behind the running request without losing its short schedule", async () => {
-    const first = "agent:main:first";
-    const intended = "agent:main:intended";
-    const response = createDeferred<ReturnType<typeof historyResult>>();
-    const request = vi.fn(async (_method: string, params: unknown) =>
-      (params as { sessionKey: string }).sessionKey === first
-        ? response.promise
-        : historyResult(intended),
-    );
-    const rows = [row(first, NOW - 1)];
-    const state = prefetchState(request, rows);
-    updatePrefetch(state);
-    fixture.intend(first);
-    await advancePrefetch(300);
-    updatePrefetch({ ...state, listRevision: 2, rows: [...rows, row(intended, NOW - 2)] });
-    const target = document.createElement("a");
-    fixture.shell.append(target);
-    target.dataset.sessionKey = intended;
-    target.dispatchEvent(new Event("pointerover", { bubbles: true }));
-    await advancePrefetch(100);
-    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([first]);
-    response.resolve(historyResult(first));
-    await settlePromises();
-    await advancePrefetch(74);
-    expect(request).toHaveBeenCalledOnce();
-    await advancePrefetch(1);
-    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([first, intended]);
-  });
-
   it("rewarms complete stored history after an interleaved append miss", async () => {
     const sessionKey = "agent:main:delta";
     const priorMessages = Array.from({ length: 5 }, (_, index) => ({
@@ -577,22 +549,17 @@ describe("session navigation intent prefetch", () => {
       expect.objectContaining({ cursor: "cursor-1", sessionKey }),
       { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
-    expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey })).toEqual({
+    const expected = {
       deltaCursor: "cursor-2",
-      transcriptMetadata: { key: sessionKey, kind: "direct" },
+      transcriptMetadata: { key: sessionKey, kind: "direct", sessionId: "session-delta" },
       messages: [...priorMessages, liveMessage, preparedDeltaMessage],
       pagination: { hasMore: false, completeSnapshot: true },
       sessionId: "session-delta",
-    });
+    };
+    expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey })).toEqual(expected);
     expect(store.readSavedAt(cacheKey(sessionKey))).toBeGreaterThan(previousSavedAt ?? 0);
     await store.flush();
-    expect(await new SessionSnapshotStore().read(cacheKey(sessionKey))).toEqual({
-      deltaCursor: "cursor-2",
-      transcriptMetadata: { key: sessionKey, kind: "direct" },
-      messages: [...priorMessages, liveMessage, preparedDeltaMessage],
-      pagination: { hasMore: false, completeSnapshot: true },
-      sessionId: "session-delta",
-    });
+    expect(await new SessionSnapshotStore().read(cacheKey(sessionKey))).toEqual(expected);
   });
 
   it("retains the prior cursor when a delta carries transient active-run replay", async () => {

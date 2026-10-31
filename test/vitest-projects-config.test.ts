@@ -79,7 +79,7 @@ afterEach(() => patternFiles.cleanup());
 
 function runConfigScript(source: string) {
   const result = spawnNodeEvalSync(source, {
-    imports: ["tsx"],
+    imports: ["./scripts/tsx.mjs"],
     env: { ...process.env, GITHUB_ACTIONS: "true", OPENCLAW_VITEST_INCLUDE_FILE: undefined },
     timeout: DEFAULT_VITEST_TEST_TIMEOUT_MS,
   });
@@ -105,6 +105,8 @@ describe("projects vitest config", () => {
         import { resolveConfig } from "vitest/node";
         import rootConfig from "./vitest.config.ts";
         import { sharedVitestConfig } from "./test/vitest/vitest.shared.config.ts";
+        // File ownership is audited separately; resolve every project with bounded discovery.
+        process.argv = [process.execPath, "vitest", "test/vitest-projects-config.test.ts"];
         const resolved = await resolveConfig({ config: false }, rootConfig);
         const generated = await resolveConfig({ config: false }, {
           plugins: sharedVitestConfig.plugins,
@@ -119,12 +121,10 @@ describe("projects vitest config", () => {
             })),
           },
         });
-        const projects = [
-          resolved.test,
-          ...resolved.test.resolvedProjects.map(({ projectConfig }) => projectConfig),
-          generated.test,
-          ...generated.test.resolvedProjects.map(({ projectConfig }) => projectConfig),
-        ];
+        const projects = [resolved.test, generated.test].flatMap(test => [
+          test,
+          ...test.resolvedProjects.map(({ projectConfig }) => projectConfig),
+        ]);
         for (const project of projects) {
           if (!/^ui(?:-|$)/u.test(project.name ?? "")) {
             assert.equal(project.environment, "node", project.name || "root");

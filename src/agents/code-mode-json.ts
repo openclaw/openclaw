@@ -120,13 +120,22 @@ function createTruncationMarker(
     guidance,
     prefix: "",
   };
-  const fixedBytes = jsonUtf8Bytes(marker) - 2 - String(originalBytes).length;
+  const originalDigits = String(originalBytes).length;
+  const digitBoundary = 10 ** (originalDigits - 1);
+  const fixedBytes = jsonUtf8Bytes(marker) - 2 - originalDigits;
   let fixedBudget: ReturnType<typeof jsonBudget> | undefined;
-  const fit = createJsonPrefixFitter(
-    source.json,
-    maxBytes,
-    (prefixBytes) => fixedBytes + String(originalBytes - prefixBytes).length,
-  );
+  const fit = createJsonPrefixFitter(source.json, maxBytes, (prefixBytes) => {
+    // Prefix probes need only the width, not a decimal string for every byte.
+    let digits = originalDigits;
+    for (
+      let boundary = digitBoundary;
+      boundary > 1 && originalBytes - prefixBytes < boundary;
+      boundary /= 10
+    ) {
+      digits--;
+    }
+    return fixedBytes + digits;
+  });
   return (limit: number) => {
     const prefix = fit(limit);
     const omittedBytes = originalBytes - prefix.bytes;
@@ -264,8 +273,21 @@ export class CodeModeOutputState {
         );
         return !rendered.truncated && toolResultFitsBudget(rendered.text, this.modelBudget);
       };
-      const projection = project(this.maxBytes);
-      if ((this.modelBudget || networkContent) && !fits(projection)) {
+      // Small results need their decoded channels anyway; reject large sources before decoding.
+      const projection =
+        !networkContent &&
+        this.modelBudget &&
+        Math.max(
+          this.source.source.json.length,
+          channels.value?.json.length ?? 0,
+          channels.error?.length ?? 0,
+        ) > this.modelBudget.maxChars
+          ? undefined
+          : project(this.maxBytes);
+      if (
+        (this.modelBudget || networkContent) &&
+        !(projection ? fits(projection) : fitsTrial(this.maxBytes))
+      ) {
         let low = 0;
         let high = this.maxBytes - 1;
         let best: number | undefined;
@@ -280,7 +302,7 @@ export class CodeModeOutputState {
         }
         return best === undefined ? undefined : project(best);
       }
-      return projection;
+      return projection ?? project(this.maxBytes);
     };
     const original = fit(params);
     if (!original) {

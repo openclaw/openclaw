@@ -1,3 +1,4 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -106,7 +107,7 @@ describe("channel ingress monitor admission", () => {
   );
 
   it.each(["outcome-unknown", "retryable"] as const)(
-    "settles %s append failure without duplicate acknowledgment",
+    "settles %s append failure after a failed prune without duplicate acknowledgment",
     async (kind) => {
       const queue = createQueue();
       const failure =
@@ -116,21 +117,21 @@ describe("channel ingress monitor admission", () => {
             })
           : new Error("transient append failure");
       const append = queue.enqueue.bind(queue);
-      const enqueue = vi
-        .spyOn(queue, "enqueue")
-        .mockImplementationOnce(async (...args) => {
-          if (kind === "outcome-unknown") {
-            await append(...args);
-          }
-          throw failure;
-        })
-        .mockImplementation(append);
+      const enqueue = vi.spyOn(queue, "enqueue").mockImplementationOnce(async (...args) => {
+        if (kind === "outcome-unknown") {
+          await append(...args);
+        }
+        throw failure;
+      });
+      const pruneFailure = new Error("database is locked");
+      vi.spyOn(queue, "prune").mockRejectedValueOnce(pruneFailure);
       const admissions: boolean[] = [];
+      const errors: unknown[] = [];
       const monitor = createMonitor(queue, {
         appendRetryDelaysMs: kind === "outcome-unknown" ? [0, 0, 0] : [0, 0],
-        onDurableAdmission: (_raw, { isNew }) => {
-          admissions.push(isNew);
-        },
+        retention: { pruneIntervalMs: 0 },
+        onError: (error) => errors.push(error),
+        onDurableAdmission: (_raw, { isNew }) => void admissions.push(isNew),
       });
       const event = { id: "event", text: "one" };
       try {
@@ -143,6 +144,7 @@ describe("channel ingress monitor admission", () => {
           expect(enqueue).toHaveBeenCalledTimes(3);
         }
         expect(admissions).toEqual(kind === "outcome-unknown" ? [] : [true, false]);
+        expect(errors[0]).toBe(pruneFailure);
         expect((await queue.listPending()).map((row) => row.id)).toEqual(["event"]);
       } finally {
         await monitor.stop();
@@ -236,9 +238,7 @@ describe("channel ingress monitor asynchronous inspection", () => {
     });
     try {
       await monitor.waitForPumpIdle();
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextTurn();
       expect(settled).toBe(false);
       expect(deliver).not.toHaveBeenCalled();
       if (mode === "deliver") {

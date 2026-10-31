@@ -72,7 +72,7 @@ it.each(fixtures)(
           new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } }),
       );
     vi.stubGlobal("fetch", fetchAvatar);
-    setAvatarGatewayOrigin(globalThis.location.origin);
+    setAvatarGatewayOrigin(globalThis.location.origin, ["avatar-test-token"]);
 
     const { element, setIdentity } = create();
     setIdentity({ agentId: "alpha", name: "Alpha", avatar: "/avatar/alpha?rev=first" });
@@ -152,6 +152,10 @@ it("shares one reset observer while preserving synchronous credential retirement
     }),
   );
   const images = () => mounted.flatMap((element) => [...element.querySelectorAll("img")]);
+  for (const element of mounted) {
+    await element.updateComplete;
+    element.querySelector<HTMLButtonElement>(".agent-select__trigger")?.click();
+  }
   // Each select renders its trigger and option avatar; standalone avatars render one each.
   const expectedImages = 12;
   try {

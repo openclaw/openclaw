@@ -1,6 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
   waitForControlUiRoute,
@@ -8,6 +9,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiChatHistoryMessage as historyMessage } from "../test-helpers/control-ui-session-fixtures.ts";
+import { resolveRenderedColors, type RenderedColor } from "../test-helpers/rendered-colors.ts";
 import { openPicker, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { selectFileAction } from "./chat-file-actions.test-support.ts";
 import { twoFrames } from "./chat-presentation.test-support.ts";
@@ -113,6 +115,8 @@ suite.define(() => {
       expect(await textarea.inputValue()).toBe(COMPOSER_LIGATURE_SEQUENCE);
       // Blur removes the caret without hiding the corruption.
       await textarea.evaluate((element) => (element as HTMLTextAreaElement).blur());
+      // Blur animates the ancestor border visible through this transparent field.
+      await waitForControlUiProofSurface(textarea, []);
       const typedPixels = await textarea.screenshot();
 
       await textarea.evaluate((element, sequence) => {
@@ -124,6 +128,7 @@ suite.define(() => {
         field.blur();
       }, COMPOSER_LIGATURE_SEQUENCE);
       await expect.poll(() => textarea.inputValue()).toBe(COMPOSER_LIGATURE_SEQUENCE);
+      await waitForControlUiProofSurface(textarea, []);
       const valuePixels = await textarea.screenshot();
 
       expect(Buffer.compare(typedPixels, valuePixels)).toBe(0);
@@ -196,7 +201,7 @@ suite.define(() => {
     ]).toEqual(["no-contextual", "no-contextual", "normal", "normal"]);
   });
 
-  it.each([["knot", "openknot", "#080808", "#f9f9fb"]])(
+  it.each([["knot", "openknot", "#0c0c0c", "#f0f0f3"]])(
     "loads %s before paint in both modes without the app bundle",
     async (theme, resolved, dark, light) => {
       // Resource timing proves the palette blocks paint before app upgrade.
@@ -220,9 +225,13 @@ suite.define(() => {
                 .renderBlockingStatus,
             })),
         }));
+        const colors = await page.evaluate(resolveRenderedColors, {
+          actual: report.background,
+          expected: mode === "dark" ? dark : light,
+        });
+        expect(colors.actual).toEqual(colors.expected);
         expect(report).toMatchObject({
           resolvedTheme: mode === "dark" ? resolved : `${resolved}-light`,
-          background: mode === "dark" ? dark : light,
           palette: [
             { pathname: `/themes/${theme}.css`, version: report.buildId, blocking: "blocking" },
           ],
@@ -237,47 +246,86 @@ suite.define(() => {
     await page.goto(`${suite.server.baseUrl}chat`);
     await page.locator(".agent-chat__composer-combobox textarea").waitFor();
 
-    const readChrome = () =>
-      page.evaluate(() => ({
+    const readChrome = async () => {
+      const chrome = await page.evaluate(() => ({
         color: document.documentElement.style.getPropertyValue(
           "--control-ui-system-chrome-background",
         ),
+        // Safari shows the document canvas in the safe areas around its bars.
+        html: getComputedStyle(document.documentElement).backgroundColor,
+        body: getComputedStyle(document.body).backgroundColor,
         metas: Array.from(
           document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]'),
           (meta) => ({ color: meta.content, media: meta.getAttribute("media") }),
         ),
       }));
-    const expectChrome = async (color: string) => {
+      const colors = await page.evaluate(
+        resolveRenderedColors,
+        Object.fromEntries([
+          ["chrome", chrome.color],
+          ["html", chrome.html],
+          ["body", chrome.body],
+          ...chrome.metas.map((meta, index) => [`meta-${index}`, meta.color]),
+        ]),
+      );
+      return {
+        color: colors.chrome,
+        html: colors.html,
+        body: colors.body,
+        metas: chrome.metas.map((meta, index) => ({
+          color: colors[`meta-${index}`],
+          media: meta.media,
+        })),
+      };
+    };
+    const expectChrome = async (color: RenderedColor) => {
       await expect.poll(readChrome).toEqual({
         color,
+        html: color,
+        body: color,
         metas: [
           { color, media: null },
           { color, media: null },
         ],
       });
     };
-    const pageColor = "#faf9f7";
-    const chatColor = "#f4f1ec";
-    await expectChrome(chatColor);
+    const palette = await page.evaluate(resolveRenderedColors, {
+      page: "#f4f4f4",
+      canvas: "#f8f8f8",
+    });
+    const pageColor = palette.page!;
+    const canvasColor = palette.canvas!;
+    // The session workbench paints the page surface over the shell canvas.
+    await expectChrome(pageColor);
 
     // Use the shell's actual shortcut and browser history without rebuilding the runtime.
-    await page.locator(".shell-skip-link").focus();
+    await page.locator('.shell-skip-link[href="#control-ui-main"]').focus();
     await page.keyboard.press("ControlOrMeta+Shift+,");
     await waitForControlUiRoute(page, { pathname: "/settings/appearance", routeId: "appearance" });
     await expectChrome(pageColor);
     await page.goBack();
     await page.locator(".agent-chat__composer-combobox textarea").waitFor();
-    await expectChrome(chatColor);
+    await expectChrome(pageColor);
+    // The drawer's 44% black backdrop dims the page; the system chrome dims with it.
+    const dimmed = { ...pageColor };
+    for (const channel of ["red", "green", "blue"] as const) {
+      dimmed[channel] = Math.round(pageColor[channel] * 0.56);
+    }
     await navigationDrawerToggle(page).click();
+    await expectChrome(dimmed);
+    await page.locator(".shell-nav-backdrop").click({ position: { x: 700, y: 450 } });
+    await expectChrome(pageColor);
+    await navigationDrawerToggle(page).click();
+    await expectChrome(dimmed);
     await page.locator("openclaw-app-sidebar .sidebar-rail .sidebar-new-session").click();
     await page.locator(".new-session-page__message").waitFor();
-    await expectChrome(chatColor);
+    await expectChrome(canvasColor);
 
     for (const [width, height, color] of [
       [1280, 900, pageColor],
-      [900, 450, chatColor],
+      [900, 450, canvasColor],
       [900, 900, pageColor],
-      [720, 900, chatColor],
+      [720, 900, canvasColor],
     ] as const) {
       await page.setViewportSize({ width, height });
       await expectChrome(color);
@@ -305,15 +353,23 @@ suite.define(() => {
         }
       }
     });
-    expect(reconnect).toEqual({ removed: chatColor, reconnected: chatColor, sameShell: true });
-    await expectChrome(chatColor);
-    await page.locator(".shell-skip-link").focus();
+    const reconnectedColors = await page.evaluate(resolveRenderedColors, {
+      removed: reconnect.removed,
+      reconnected: reconnect.reconnected,
+    });
+    expect({ ...reconnectedColors, sameShell: reconnect.sameShell }).toEqual({
+      removed: canvasColor,
+      reconnected: canvasColor,
+      sameShell: true,
+    });
+    await expectChrome(canvasColor);
+    await page.locator('.shell-skip-link[href="#control-ui-main"]').focus();
     await page.keyboard.press("ControlOrMeta+Shift+,");
     await waitForControlUiRoute(page, { pathname: "/settings/appearance", routeId: "appearance" });
     await expectChrome(pageColor);
     await page.goBack();
     await page.locator(".new-session-page__message").waitFor();
-    await expectChrome(chatColor);
+    await expectChrome(canvasColor);
   });
 
   it("publishes a runtime palette only when its colors are ready and ignores superseded loads", async () => {
@@ -341,14 +397,19 @@ suite.define(() => {
       await gateway.setMethodResponse("config.get", themeConfigResponse(theme, "light"));
       await gateway.emitGatewayEvent("config.changed", { hash: `theme-${theme}`, ts: Date.now() });
     };
+    const palette = await page.evaluate(resolveRenderedColors, {
+      knot: "#f0f0f3",
+      tide: "#edeff1",
+    });
     try {
       const request = page.waitForRequest(tidePaletteUrl);
       await changeTheme("tide");
       await request;
-      expect([await attribute(page, "data-theme"), await cssToken(page, "--bg")]).toEqual([
-        "openknot-light",
-        "#f9f9fb",
-      ]);
+      expect(await attribute(page, "data-theme")).toBe("openknot-light");
+      const pendingColors = await page.evaluate(resolveRenderedColors, {
+        background: await cssToken(page, "--bg"),
+      });
+      expect(pendingColors.background).toEqual(palette.knot);
       await changeTheme("beacon");
       await expectTheme(page, "beacon-light");
       const response = page.waitForResponse(tidePaletteUrl);
@@ -357,10 +418,19 @@ suite.define(() => {
       await twoFrames(page);
       expect(await attribute(page, "data-theme")).toBe("beacon-light");
       await changeTheme("tide");
-      await expect.poll(() => attribute(page, "data-observed-theme-background")).toBe("#f7f9fb");
-      expect(await page.locator('meta[name="theme-color"]').first().getAttribute("content")).toBe(
-        "#eef2f7",
-      );
+      await expect
+        .poll(async () => {
+          const observed = await attribute(page, "data-observed-theme-background");
+          return observed
+            ? (await page.evaluate(resolveRenderedColors, { background: observed })).background
+            : undefined;
+        })
+        .toEqual(palette.tide);
+      const chromeColors = await page.evaluate(resolveRenderedColors, {
+        chrome:
+          (await page.locator('meta[name="theme-color"]').first().getAttribute("content")) ?? "",
+      });
+      expect(chromeColors.chrome).toEqual(palette.tide);
       await changeTheme("claw");
       await expectTheme(page, "light");
     } finally {

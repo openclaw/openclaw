@@ -60,10 +60,12 @@ export function createSqliteWorkerLifecycle({
     inputAdmission,
     operations,
     waiters,
+    beforeSharedStateClose,
   }: {
     inputAdmission: Pick<SqliteWorkerInputAdmission, "joinOpens" | "joinPreparations">;
     operations: Iterable<Promise<void>>;
     waiters: Iterable<Iterable<(error?: unknown) => void>>;
+    beforeSharedStateClose?: () => Promise<void>;
   }): Promise<void> {
     // Seal clients and pending dispatch before the first await; accepted scopes still settle.
     for (const waiting of waiters) {
@@ -71,6 +73,13 @@ export function createSqliteWorkerLifecycle({
         resume(new SqliteWorkerError("SQLite worker host is closing", "overloaded"));
       }
     }
+    for (const client of stores.values()) {
+      // Retained state leases keep their binding until canonical resources finish.
+      if (!beforeSharedStateClose || !client.actor.stateContext) {
+        client.sealed = true;
+      }
+    }
+    await beforeSharedStateClose?.();
     for (const client of stores.values()) {
       client.sealed = true;
     }
@@ -101,9 +110,9 @@ export function createSqliteWorkerLifecycle({
     options.assertCurrent?.();
     options.signal?.throwIfAborted();
     const shareWorkers = explicitSqliteCloseReleasesNativeResources;
-    // Agent integrity scans are synchronous; keep durable channel intake on its own carrier.
-    const pool = [...slots].filter((slot) => slot.sharedState === options.sharedState);
-    const maxWorkers = options.sharedState ? 1 : limits.maxWorkers;
+    // Agent integrity scans are synchronous; shared state and plugins need independent carriers.
+    const pool = [...slots].filter((slot) => slot.carrierClass === options.carrierClass);
+    const maxWorkers = options.carrierClass === "shared-state" ? 1 : limits.maxWorkers;
     const available = pool.filter(
       (slot) =>
         !slot.failed && !slot.retiring && slot.runtimeGeneration === options.runtimeGeneration,
@@ -182,7 +191,7 @@ export function createSqliteWorkerLifecycle({
   function createSlot(
     options: Pick<
       PreparedSqliteWorkerOpen,
-      "carrierUrl" | "runtimeGeneration" | "assertCurrent" | "signal" | "sharedState"
+      "carrierUrl" | "runtimeGeneration" | "assertCurrent" | "signal" | "carrierClass"
     >,
     borrowedGenerationSlot: boolean,
     createReplyOwner: (slot: Slot) => SqliteWorkerReplyOwner,
@@ -198,19 +207,23 @@ export function createSqliteWorkerLifecycle({
     captureSqliteDatabaseAdmissions(databaseAdmissionCursor);
     const postgresPool = createPostgresPoolEndpoints();
     const { worker, exited } = runInDetachedAsyncContext(() => ({
-      worker: createCpuTrackedWorker(carrierUrl, {
-        // V8's default young generation lets each carrier keep ~60 MiB of idle nursery.
-        resourceLimits: { maxOldGenerationSizeMb: 512, maxYoungGenerationSizeMb: 32 },
-        env: resolveNodeCompileCacheEnv(),
-        execArgv: resolveRuntimeWorkerThreadExecArgv(carrierUrl),
-        workerData: { postgresPool },
-        transferList: postgresPoolTransferList(postgresPool),
-      }),
+      worker: createCpuTrackedWorker(
+        carrierUrl,
+        {
+          // V8's default young generation lets each carrier keep ~60 MiB of idle nursery.
+          resourceLimits: { maxOldGenerationSizeMb: 512, maxYoungGenerationSizeMb: 32 },
+          env: resolveNodeCompileCacheEnv(),
+          execArgv: resolveRuntimeWorkerThreadExecArgv(carrierUrl),
+          workerData: { postgresPool },
+          transferList: postgresPoolTransferList(postgresPool),
+        },
+        () => slot.current?.observation.requestClass,
+      ),
       exited: createDeferredCore(),
     }));
     trackSqliteDatabaseAdmissionWorker(worker);
     const slot: Slot = {
-      ...(options.sharedState ? { sharedState: true as const } : {}),
+      carrierClass: options.carrierClass,
       postgresPoolSent: postgresPool !== undefined,
       custody: new SqliteWorkerSlotCustody(),
       databaseAdmissionCursor,

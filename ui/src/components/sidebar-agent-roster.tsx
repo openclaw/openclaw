@@ -14,8 +14,8 @@ import { projectOwner } from "../lib/reactive/projection.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { showToast } from "../lib/toast.ts";
-import { clawCreatorAction } from "../pages/claws/creator-flow.ts";
-import { canCreateClawDraft } from "../pages/claws/draft-navigation.ts";
+import { templateCreatorAction } from "../pages/templates/creator-owner.ts";
+import { canCreateTemplateDraft } from "../pages/templates/draft-navigation.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { renderSessionListFrame } from "./app-sidebar-session-list-render.tsx";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
@@ -39,11 +39,6 @@ import "../styles/sidebar-agent-roster.css";
 
 registerEnglishCatalog(registerAgentsHomeEnglish);
 type RosterHost = AppSidebarRenderHost & SessionListHost;
-type RosterProps = {
-  host: RosterHost;
-  active: boolean;
-  sections: SidebarVisibleSections["sections"];
-};
 type AgentMenuCard = { id: string; name: string };
 type AgentContextMenu = { id: string; x: number; y: number; anchor: HTMLElement | null };
 
@@ -65,7 +60,11 @@ function cachedRosterCards(host: RosterHost) {
   }));
 }
 
-export function SidebarAgentRoster(props: RosterProps) {
+export function SidebarAgentRoster(props: {
+  host: RosterHost;
+  active: boolean;
+  sections: SidebarVisibleSections["sections"];
+}) {
   const context = useApplication();
   const hostProjection = createMemo(() => projectOwner(props.host, (host) => host));
   const presented = () => props.active;
@@ -201,11 +200,11 @@ export function SidebarAgentRoster(props: RosterProps) {
         class: "sidebar-customize-menu__item",
         icon: <Icon name="listTree" />,
       },
-      ...(canCreateClawDraft(context)
+      ...(canCreateTemplateDraft(context)
         ? [
             {
-              id: "create-claw",
-              label: t("clawsDraft.title"),
+              id: "create-template",
+              label: t("templatesDraft.title"),
               class: "sidebar-customize-menu__item",
               icon: <Icon name="share" />,
             },
@@ -239,8 +238,8 @@ export function SidebarAgentRoster(props: RosterProps) {
         context.agentSelection.setScope(card.id);
         host().onNavigate?.("sessions");
         break;
-      case "create-claw":
-        clawCreatorAction(context, card.id)?.();
+      case "create-template":
+        templateCreatorAction(context, card.id)?.();
         break;
       case "settings":
         context.navigate("agents", {
@@ -488,6 +487,7 @@ export function SidebarAgentRoster(props: RosterProps) {
             )}
           </Show>
         </div>,
+        true,
       )}
     </openclaw-sidebar-agent-roster>
   );

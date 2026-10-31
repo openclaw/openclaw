@@ -94,37 +94,33 @@ function expectOwnership(exists: boolean) {
   expect([fs.existsSync(directory), database.isOpen]).toEqual([exists, true]);
 }
 
-it.each(["sync", "async"] as const)(
-  "joins %s cleanup before releasing private bytes",
-  async (mode) => {
-    const { entered, resume, hold } = createReadBarrier();
-    if (mode === "async") {
-      mocks.retire.mockImplementation(() => hold(undefined));
-    }
-    if (mode === "sync") {
-      const prepared = await prepareSqliteReadOnlyLocationFromOwnedDatabase(database, () => {});
-      expect(mocks.backup.mock.calls[0]?.[0]).toBe(database);
-      expect(prepared.cleanup()).toBe(true);
-      expect(mocks.retireSync).toHaveBeenCalledOnce();
-      expect(mocks.retire).not.toHaveBeenCalled();
-    } else {
-      const prepared = await prepare();
-      const closing = prepared.cleanupAsync();
-      const observation = observeSettlement(closing);
-      try {
-        await Promise.race([entered.promise, closing]);
-        expect(mocks.retire).toHaveBeenCalledOnce();
-        expect(observation.settled).toBe(false);
-        expect([fs.existsSync(prepared.location), database.isOpen]).toEqual([true, true]);
-      } finally {
-        resume.resolve();
-        await closing;
-      }
-      expect(mocks.retireSync).not.toHaveBeenCalled();
-    }
-    expectOwnership(false);
-  },
-);
+it("joins sync cleanup before releasing private bytes", async () => {
+  const prepared = await prepareSqliteReadOnlyLocationFromOwnedDatabase(database, () => {});
+  expect(mocks.backup.mock.calls[0]?.[0]).toBe(database);
+  expect(prepared.cleanup()).toBe(true);
+  expect(mocks.retireSync).toHaveBeenCalledOnce();
+  expect(mocks.retire).not.toHaveBeenCalled();
+  expectOwnership(false);
+});
+
+it("joins async cleanup before releasing private bytes", async () => {
+  const { entered, resume, hold } = createReadBarrier();
+  mocks.retire.mockImplementation(() => hold(undefined));
+  const prepared = await prepare();
+  const closing = prepared.cleanupAsync();
+  const observation = observeSettlement(closing);
+  try {
+    await Promise.race([entered.promise, closing]);
+    expect(mocks.retire).toHaveBeenCalledOnce();
+    expect(observation.settled).toBe(false);
+    expect([fs.existsSync(prepared.location), database.isOpen]).toEqual([true, true]);
+  } finally {
+    resume.resolve();
+    await closing;
+  }
+  expect(mocks.retireSync).not.toHaveBeenCalled();
+  expectOwnership(false);
+});
 
 it("retains original and unpublished cleanup failures until the snapshot registry retries", async () => {
   const original = new Error("native backup failed");

@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   command: vi.fn(),
   note: vi.fn(),
   migrateState: vi.fn(),
+  root: vi.fn(async () => "/synthetic/openclaw"),
 }));
 // mock-isolation: isolate startup from operator paths, config, tools, terminal and databases.
 vi.mock("../config/paths.js", () => ({
@@ -22,7 +23,7 @@ vi.mock("../process/exec.js", () => ({ runUtf8CommandWithTimeout: mocks.command 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
 // mock-isolation: startup resolves a synthetic installation root, not the live checkout.
 vi.mock("../infra/openclaw-root.js", () => ({
-  resolveOpenClawPackageRoot: vi.fn(async () => "/synthetic/openclaw"),
+  resolveOpenClawPackageRoot: mocks.root,
 }));
 // mock-isolation: startup selection must not migrate real operator databases.
 vi.mock("../infra/state-migrations.doctor.js", () => ({
@@ -35,9 +36,32 @@ beforeEach(() => {
   mocks.command.mockReset();
   mocks.note.mockReset();
   mocks.migrateState.mockReset().mockResolvedValue({ outcome: "completed" });
+  mocks.root.mockReset().mockResolvedValue("/synthetic/openclaw");
 });
 
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.useRealTimers();
+});
+
+it.each([
+  ["package root", () => mocks.root],
+  ["source config", () => mocks.config],
+  ["Tailscale prerequisite", () => mocks.command],
+] as const)("bounds a stalled %s before maintenance starts", async (phase, dependency) => {
+  mocks.command.mockResolvedValue({ code: 0, stdout: '{"BackendState":"Running"}' });
+  await prepareDoctorHealthFlow(createNonExitingRuntime(), {}, vi.fn());
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  dependency().mockImplementationOnce(() => new Promise<never>(() => {}));
+  let failure: unknown;
+  void prepareDoctorHealthFlow(createNonExitingRuntime(), {}, vi.fn()).catch((error: unknown) => {
+    failure = error;
+  });
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(String(failure)).toMatch(
+    new RegExp(`Doctor startup timed out.*${phase}.*OPENCLAW_DEBUG=1`),
+  );
+});
 
 it.each(["quick", "full"] as const)(
   "preserves %s integrity selection for early shared-state migration",

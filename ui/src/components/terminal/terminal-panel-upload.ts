@@ -26,21 +26,6 @@ type TerminalUploadTab = {
   controller: GhosttyTerminalController;
 };
 
-type TerminalPanelUploadHost = {
-  config?: () => ApplicationConfigCapability | undefined;
-  activeTab: () => TerminalUploadTab | undefined;
-  client: () => TerminalGatewayClient | null;
-  isCurrent: (tab: TerminalUploadTab) => boolean;
-  fileInput: () => HTMLInputElement | null;
-  setError: (message: string | null) => void;
-  /** An embedded composer may retain editable arguments; never submit them here. */
-  stagePaths?: (
-    tab: TerminalUploadTab,
-    paths: readonly string[],
-    files: readonly File[],
-  ) => boolean;
-};
-
 type TerminalUploadBatch = {
   tab: TerminalUploadTab;
   files: File[];
@@ -64,7 +49,20 @@ function isRetryableUploadError(error: unknown): boolean {
   return true;
 }
 
-export function createTerminalPanelUpload(host: TerminalPanelUploadHost) {
+export function createTerminalPanelUpload(host: {
+  config?: () => ApplicationConfigCapability | undefined;
+  activeTab: () => TerminalUploadTab | undefined;
+  client: () => TerminalGatewayClient | null;
+  isCurrent: (tab: TerminalUploadTab) => boolean;
+  fileInput: () => HTMLInputElement | null;
+  setError: (message: string | null) => void;
+  /** An embedded composer may retain editable arguments; never submit them here. */
+  stagePaths?: (
+    tab: TerminalUploadTab,
+    paths: readonly string[],
+    files: readonly File[],
+  ) => boolean;
+}) {
   const [dragActive, setDragActive] = createSignal(false);
   let activeBatch: TerminalUploadBatch | null = null;
   let dragDepth = 0;

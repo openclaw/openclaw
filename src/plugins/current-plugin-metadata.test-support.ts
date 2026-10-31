@@ -55,18 +55,3 @@ export function makePluginMetadataManifestRegistry(pluginId = "demo"): PluginMan
   };
   return { plugins: [plugin], diagnostics: [] };
 }
-
-export function makeEmptyPluginMetadataOwners(): PluginMetadataSnapshot["owners"] {
-  return {
-    channels: new Map(),
-    channelConfigs: new Map(),
-    providers: new Map(),
-    modelCatalogProviders: new Map(),
-    cliBackends: new Map(),
-    setupProviders: new Map(),
-    commandAliases: new Map(),
-    contracts: new Map(),
-    providerAuthContributions: [],
-    modelIdNormalizationPolicies: new Map(),
-  };
-}

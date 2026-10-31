@@ -40,14 +40,15 @@ import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
 import {
   getTranscriptState,
   handleTranscriptContextMenu,
+  handleTranscriptSelectionMouseDown,
   handleTranscriptPointerUp,
   registerTranscriptElement,
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
 import type { ChatTranscript } from "./chat-transcript-controller.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
+import type { TranscriptHeader } from "./chat-transcript-session.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
-import { ChatWelcome } from "./chat-welcome.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -63,13 +64,25 @@ function navigateCronRunLink(event: Event, props: ChatThreadProps): boolean {
   return true;
 }
 
+function openManagedArtifactLink(event: Event, props: ChatThreadProps): boolean {
+  const anchor = anchorFromNavigationEvent(event);
+  // Attachment-card Download keeps its already-authorized native link action.
+  if (!anchor || anchor.hasAttribute("download") || !props.onOpenManagedArtifact?.(anchor.href)) {
+    return false;
+  }
+  event.preventDefault();
+  return true;
+}
+
 export function ChatThread(input: {
   props: ChatThreadProps;
   transcript: ChatTranscript;
   bindViewport?: (element: HTMLDivElement) => () => void;
+  historySupplement?: TranscriptHeader;
 }) {
   const mobile = useContext(ChatConversationMobile);
   let root: HTMLDivElement | undefined;
+  let stopSelectionGesture: (() => void) | undefined;
   const historyIntent = (event: Event) => input.props.onHistoryIntent?.(event);
   const paneId = createMemo(() => input.props.paneId);
   onSettled(() => root && registerTranscriptElement(paneId(), root));
@@ -137,13 +150,19 @@ export function ChatThread(input: {
     Boolean(input.props.gatewayClient?.connected),
   ]);
   const markdownRef = createMarkdownBlocksRef(() => input.props.transcriptVisible ?? true);
-  const historyHeader = () =>
-    input.props.historyPagination
-      ? {
-          props: input.props.historyPagination,
-          height: CHAT_HISTORY_BOUNDARY_HEIGHT_PX,
-        }
-      : null;
+  // The supplement takes the header only once the transcript has no earlier page,
+  // so its controls never stack under the history boundary.
+  const headerContent = (
+    <Show when={input.props.historyPagination} fallback={input.historySupplement?.content}>
+      {(pagination) => <ChatHistoryBoundary {...pagination()} />}
+    </Show>
+  );
+  const historyHeader = (): TranscriptHeader | null => {
+    const height = input.props.historyPagination
+      ? CHAT_HISTORY_BOUNDARY_HEIGHT_PX
+      : input.historySupplement?.height;
+    return height === undefined ? null : { content: headerContent, height };
+  };
   const historySentinel = (
     <div class="chat-history-sentinel" ref={[elementRef(input.props.onHistorySentinelRef)]} />
   );
@@ -158,9 +177,7 @@ export function ChatThread(input: {
       return (
         <div class="chat-thread-inner">
           {sentinel()}
-          {isEmpty() && !showLoadingSkeleton() && input.props.historyPagination ? (
-            <ChatHistoryBoundary {...input.props.historyPagination} />
-          ) : undefined}
+          {isEmpty() && !showLoadingSkeleton() ? historyHeader()?.content : undefined}
           {showLoadingSkeleton() ? (
             mobile() ? (
               <ChatConversationLoading route={false} />
@@ -171,7 +188,7 @@ export function ChatThread(input: {
             )
           ) : undefined}
           {isEmpty() && !showLoadingSkeleton() && !searchOpen() ? (
-            <ChatWelcome {...input.props} onModelSetup={undefined} />
+            <div class="agent-chat__empty">{t("chat.thread.noMessages")}</div>
           ) : undefined}
           {isEmpty() && searchOpen() ? (
             <div class="agent-chat__empty">{t("chat.thread.noMatches")}</div>
@@ -204,6 +221,7 @@ export function ChatThread(input: {
               listen(element, type, historyIntent, { passive: true }),
             );
             return () => {
+              stopSelectionGesture?.();
               stopHistory.forEach((stop) => stop());
               releaseViewport?.();
             };
@@ -218,6 +236,7 @@ export function ChatThread(input: {
             "chat-thread--direct": current().projection.isDirectThread,
             "chat-thread--route-loading": mobile() && routeLoading(),
             "chat-thread--comment-pins": commentPins(),
+            "chat-thread--annotations": input.props.commentAttachments !== undefined,
           },
         ]}
         role="log"
@@ -229,6 +248,18 @@ export function ChatThread(input: {
         onFocusOut={(event) => current().session.handleFocusOut(event)}
         onScroll={(event) => input.props.onChatScroll?.(event)}
         onKeyDown={(event) => {
+          if (
+            !event.defaultPrevented &&
+            !event.isComposing &&
+            !event.altKey &&
+            !event.ctrlKey &&
+            !event.metaKey &&
+            !event.shiftKey &&
+            (event.key === "Enter" || event.key === " ") &&
+            openManagedArtifactLink(event, input.props)
+          ) {
+            return;
+          }
           if (
             !event.defaultPrevented &&
             !event.isComposing &&
@@ -254,6 +285,9 @@ export function ChatThread(input: {
         onClick={(event) => {
           handleMarkdownCodeBlockClick(event);
           handleMarkdownTableInteraction(event);
+          if (shouldHandleNavigationClick(event) && openManagedArtifactLink(event, input.props)) {
+            return;
+          }
           if (shouldHandleNavigationClick(event) && navigateCronRunLink(event, input.props)) {
             return;
           }
@@ -266,6 +300,16 @@ export function ChatThread(input: {
           if (sessionTarget && shouldHandleNavigationClick(event)) {
             event.preventDefault();
             input.props.onOpenSessionLink?.(sessionTarget);
+          }
+        }}
+        onMouseDown={(event) => {
+          stopSelectionGesture?.();
+          stopSelectionGesture = handleTranscriptSelectionMouseDown(event);
+        }}
+        onPointerDown={(event) => {
+          // Keep late floating controls from stealing the pressed content's context menu.
+          if (event.button === 2 && event.target instanceof Element) {
+            event.target.setPointerCapture(event.pointerId);
           }
         }}
         onContextMenu={(event) =>

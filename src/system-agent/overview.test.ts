@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
+import { makeProviderModelsConfigFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSnapshot } from "../config/mutate.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -92,21 +92,12 @@ it.each([false, true])(
         },
         entries: { main: {}, ops: { utilityModel: "helper@local:ops" } },
       },
-      models: {
-        providers: {
-          "local-utility": {
-            baseUrl: "http://127.0.0.1:9/v1",
-            models: [
-              makeProviderModelFixture({
-                id: "small",
-                provider: "local-utility",
-                api: "openai-completions",
-                baseUrl: "http://127.0.0.1:9/v1",
-              }),
-            ],
-          },
-        },
-      },
+      models: makeProviderModelsConfigFixture({
+        id: "small",
+        provider: "local-utility",
+        api: "openai-completions",
+        baseUrl: "http://127.0.0.1:9/v1",
+      }),
     };
     const original = structuredClone(runtimeConfig);
     const overview = await withSystemAgentOverviewSources(

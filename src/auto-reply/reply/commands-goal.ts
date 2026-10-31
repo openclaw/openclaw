@@ -99,12 +99,6 @@ export function isFormattedGoalContinuationPrompt(message: string): boolean {
 
 type ParsedGoalCommand = NonNullable<ReturnType<typeof parseGoalCommand>>;
 
-type SessionGoalCommandResult = {
-  text: string;
-  continuationPrompt?: string;
-  changed: boolean;
-};
-
 /** Execute goal storage policy once for auto-reply, Gateway, and embedded callers. */
 export async function executeSessionGoalCommand(params: {
   parsed: ParsedGoalCommand;
@@ -113,7 +107,11 @@ export async function executeSessionGoalCommand(params: {
   fallbackEntry?: SessionEntry;
   agentId?: string;
   readOnlyStatus?: boolean;
-}): Promise<SessionGoalCommandResult> {
+}): Promise<{
+  text: string;
+  continuationPrompt?: string;
+  changed: boolean;
+}> {
   const common = {
     sessionKey: params.sessionKey,
     storePath: params.storePath,

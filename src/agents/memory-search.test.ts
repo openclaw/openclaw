@@ -166,10 +166,22 @@ describe("memory search config", () => {
       { sources: ["sessions"], searchSources: ["sessions"] },
     ],
     [
-      "legacy auto provider",
-      { provider: "auto" },
+      "mixed-case auto provider",
+      { provider: "Auto" },
       undefined,
       { provider: "openai", model: "text-embedding-3-small" },
+    ],
+    [
+      "mixed-case none provider and fallback",
+      { provider: "None", fallback: "NoNe" },
+      undefined,
+      { provider: "none", fallback: "none" },
+    ],
+    [
+      "agent mixed-case none override",
+      { provider: "openai" },
+      { provider: "NoNe" },
+      { provider: "none" },
     ],
     [
       "input type overrides",
@@ -196,6 +208,24 @@ describe("memory search config", () => {
       { queryInstruction: undefined },
     ],
     [
+      "literal input format inheritance",
+      { inputFormat: { query: "query: ", document: "passage: " } },
+      undefined,
+      { inputFormat: { query: "query: ", document: "passage: " } },
+    ],
+    [
+      "complete input format override",
+      { inputFormat: { query: "query: ", document: "passage: " } },
+      { inputFormat: { query: "Instruct: Retrieve notes\nQuery: ", document: "" } },
+      { inputFormat: { query: "Instruct: Retrieve notes\nQuery: ", document: "" } },
+    ],
+    [
+      "empty prefixes override inherited format",
+      { inputFormat: { query: "query: ", document: "passage: " } },
+      { inputFormat: { query: "", document: "" } },
+      { inputFormat: { query: "", document: "" } },
+    ],
+    [
       "session source exclusion",
       { provider: "openai", sources: ["memory", "sessions"] },
       { rememberAcrossConversations: false },
@@ -207,14 +237,15 @@ describe("memory search config", () => {
 
   it("resolves providers from the generic embedding provider registry", () => {
     registerEmbeddingProvider({
-      id: "generic-local",
+      id: "Tenant",
       defaultModel: "local-gguf-default",
       transport: "local",
       create: async () => ({ provider: null }),
     });
 
-    expect(resolve({ provider: "generic-local" })).toMatchObject({
-      provider: "generic-local",
+    expect(resolve({ provider: "Tenant", fallback: "FallbackTenant" })).toMatchObject({
+      provider: "Tenant",
+      fallback: "FallbackTenant",
       model: "local-gguf-default",
       remote: undefined,
     });
@@ -365,6 +396,62 @@ describe("memory search config", () => {
         timeoutMinutes: 60,
       },
     });
+  });
+
+  it.each([
+    { sharedProvider: "openai", provider: "gemini", baseUrl: undefined },
+    { sharedProvider: "openai", provider: "gemini", baseUrl: "https://other.example/v1" },
+    { sharedProvider: "tenant-a", provider: "tenant-b", baseUrl: undefined },
+  ])(
+    "does not inherit another destination's credentials: $sharedProvider -> $provider",
+    ({ sharedProvider, provider, baseUrl }) => {
+      const resolved = resolve(
+        {
+          provider: sharedProvider,
+          remote: {
+            apiKey: "shared-owner-key",
+            headers: { Authorization: "Bearer shared-owner" },
+            batch: { enabled: true },
+          },
+        },
+        { provider, remote: { baseUrl } },
+      );
+      expect(resolved?.remote).toMatchObject({ batch: { enabled: true } });
+      expect(resolved?.remote?.apiKey).toBeUndefined();
+      expect(resolved?.remote?.headers).toBeUndefined();
+      expect(resolved?.remote?.baseUrl).toBe(baseUrl);
+    },
+  );
+
+  it.each([
+    { sharedProvider: "gemini", provider: "google" },
+    { sharedProvider: "google", provider: "gemini" },
+    { sharedProvider: "auto", provider: "openai" },
+    { sharedProvider: undefined, provider: "openai" },
+    { sharedProvider: "OpenAI", provider: "openai" },
+  ])(
+    "retains credentials for the same canonical provider: $sharedProvider -> $provider",
+    ({ sharedProvider, provider }) => {
+      expect(
+        resolve({ provider: sharedProvider, remote: { apiKey: "same-owner-key" } }, { provider })
+          ?.remote?.apiKey,
+      ).toBe("same-owner-key");
+    },
+  );
+
+  it("inherits a shared router and its credentials together across adapters", () => {
+    const remote = {
+      baseUrl: "https://router.example/v1",
+      apiKey: "router-owned-key",
+      headers: { "X-Router": "owner" },
+    };
+    expect(resolve({ provider: "openai", remote }, { provider: "gemini" })?.remote).toMatchObject(
+      remote,
+    );
+    expect(
+      resolve({ provider: "openai", remote }, { provider: "gemini", remote: { baseUrl: "" } })
+        ?.remote?.apiKey,
+    ).toBeUndefined();
   });
 
   it.each([

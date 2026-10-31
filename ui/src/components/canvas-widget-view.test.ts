@@ -5,14 +5,10 @@ import {
 } from "@openclaw/gateway-client/browser";
 import type { CanvasDocumentViewResult } from "@openclaw/gateway-protocol";
 import { createComponent, createSignal } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { GatewayEventListener } from "../api/gateway.ts";
-import {
-  applicationContext,
-  type ApplicationContext,
-  type ApplicationContextRequest,
-} from "../app/context.ts";
+import type { ApplicationContext } from "../app/context.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import {
   bumpCanvasWidgetFrameConnectionGeneration,
@@ -25,199 +21,33 @@ import {
   createSolidApplicationContextProvider,
 } from "../test-helpers/solid-application-context.tsx";
 import { flush } from "../test-helpers/solid-settle.ts";
+import {
+  repeat,
+  elementName,
+  documentView,
+  client,
+  gateways,
+  alert,
+  notice,
+  settle,
+  connection,
+  transition,
+  mount,
+  frameFor,
+  message,
+  loaded,
+  proxyReady,
+  expectRead,
+  expectRecovering,
+  commitWidget,
+  setupCanvasWidgetTests,
+} from "./canvas-widget-view.test-support.ts";
 import { CanvasWidgetView, type OpenClawCanvasWidgetView } from "./canvas-widget-view.tsx";
 import { WIDGET_PROMPT_EVENT } from "./mcp-app-security.ts";
 
-const repeat = (length: number) => "x".repeat(length);
-const elementName = "openclaw-canvas-widget-view";
-const documentView: CanvasDocumentViewResult = {
-  html: "<p>Widget ready</p>",
-  sandboxUrl: "/mcp-app-sandbox?frames=none",
-  sandboxPort: 8444,
-};
-type WidgetClient = { request: ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<unknown>>> };
-let client: WidgetClient;
-
-type WidgetGatewaySnapshot = Omit<Partial<ApplicationGatewaySnapshot>, "client"> & {
-  client: WidgetClient;
-};
-
-const gateways = new WeakMap<
-  OpenClawCanvasWidgetView,
-  {
-    snapshot: WidgetGatewaySnapshot;
-    connectionRevision: number;
-    notify: () => void;
-    emit: GatewayEventListener;
-    eventListeners: Set<GatewayEventListener>;
-  }
->();
-
-async function settle(view: OpenClawCanvasWidgetView) {
-  for (let i = 0; i < 4; i += 1) {
-    await view.updateComplete;
-    await Promise.resolve();
-    flush();
-  }
-}
-
-function connection(
-  view: OpenClawCanvasWidgetView,
-  phase: ApplicationGatewaySnapshot["phase"],
-  patch: Partial<ApplicationGatewaySnapshot> = {},
-) {
-  const gateway = gateways.get(view)!;
-  bumpCanvasWidgetFrameConnectionGeneration();
-  view.connectionGeneration = getCanvasWidgetFrameConnectionGeneration();
-  Object.assign(gateway.snapshot, { phase }, patch);
-  gateway.notify();
-}
-
-async function transition(
-  view: OpenClawCanvasWidgetView,
-  phase: ApplicationGatewaySnapshot["phase"],
-  patch?: Partial<ApplicationGatewaySnapshot>,
-) {
-  connection(view, phase, patch);
-  await settle(view);
-}
-
-function mount(
-  widgetClient: WidgetClient = client,
-  docId = "cv_inline",
-  parent: Element | ShadowRoot = document.body,
-  operatorScopes?: string[],
-) {
-  const view = document.createElement(elementName) as OpenClawCanvasWidgetView;
-  const listeners = new Set<GatewayEventListener>();
-  const gateway = {
-    snapshot: {
-      client: widgetClient,
-      phase: "connected",
-      ...(operatorScopes
-        ? { hello: gatewayHelloForMethods(["canvas.document.view"], operatorScopes) }
-        : {}),
-    } as WidgetGatewaySnapshot,
-    connection: { gatewayUrl: "ws://gateway.example:8443" },
-    connectionRevision: 0,
-    notify: () => {},
-    eventListeners: listeners,
-    emit: ((event) => {
-      // The Gateway snapshots its event subscribers before delivery.
-      const delivery = [...listeners];
-      for (const listener of delivery) {
-        listener(event);
-      }
-    }) as GatewayEventListener,
-    subscribeEvents: (listener: GatewayEventListener) => {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
-    subscribe: (notify: () => void) => {
-      gateway.notify = notify;
-      return () => {};
-    },
-  };
-  gateways.set(view, gateway);
-  view.addEventListener("context-request", (event) => {
-    // SAFETY: This listener handles the native application context protocol.
-    const contextRequest = event as ApplicationContextRequest;
-    if (contextRequest.context === applicationContext) {
-      event.stopPropagation();
-      contextRequest.callback({
-        gateway,
-        sessions: {
-          subscribeMessages: async (key: string) => ({ key }),
-          unsubscribeMessages: async () => {},
-        },
-      } as unknown as ApplicationContext);
-    }
-  });
-  view.docId = docId;
-  view.sessionKey = "agent:main:widget-test";
-  view.messageTimestamp = Date.now();
-  view.connectionGeneration = getCanvasWidgetFrameConnectionGeneration();
-  const container = document.createElement("div");
-  parent.append(container);
-  mountSolid(() => view, { container });
-  return view;
-}
-
-async function frameFor(view: OpenClawCanvasWidgetView) {
-  await expect
-    .poll(() => {
-      flush();
-      return view.querySelector("iframe");
-    })
-    .not.toBeNull();
-  return view.querySelector("iframe")!;
-}
-
-function message(
-  frame: HTMLIFrameElement,
-  data: unknown,
-  ports: MessagePort[] = [],
-  origin?: string,
-  source: MessageEventSource | null = frame.contentWindow,
-) {
-  window.dispatchEvent(
-    new MessageEvent("message", {
-      source,
-      origin: origin ?? new URL(frame.src).origin,
-      data,
-      ports,
-    }),
-  );
-}
-
-async function loaded(docId = "cv_inline", parent: Element | ShadowRoot = document.body) {
-  const view = mount(client, docId, parent);
-  return { view, frame: await frameFor(view) };
-}
-
-function proxyReady(frame: HTMLIFrameElement) {
-  message(frame, {
-    method: "ui/notifications/sandbox-proxy-ready",
-    params: { sandboxUrl: frame.src },
-  });
-}
-
-function expectRead(widgetClient: WidgetClient, docId: string) {
-  expect(widgetClient.request).toHaveBeenLastCalledWith(
-    "canvas.document.view",
-    { docId },
-    { timeoutMs: 30_000 },
-  );
-}
-
-function expectRecovering(view: OpenClawCanvasWidgetView) {
-  expect(alert(view)).toBeNull();
-  expect(notice(view)).toContain("recover automatically");
-}
-
-const alert = (view: Element) => view.querySelector('[role="alert"]');
-const notice = (view: Element) => view.querySelector('[role="status"]')?.textContent;
-function commitWidget(view: OpenClawCanvasWidgetView, sessionKey = view.sessionKey) {
-  gateways.get(view)!.emit({
-    type: "event",
-    event: "session.message",
-    payload: { sessionKey, message: { role: "toolResult", toolName: "show_widget" } },
-  });
-}
+setupCanvasWidgetTests();
 
 describe("Canvas widget view", () => {
-  beforeEach(() => {
-    client = { request: vi.fn().mockResolvedValue(documentView) };
-  });
-  afterEach(() => {
-    document.body.replaceChildren();
-    delete (document as unknown as Record<string, unknown>).activeElement;
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-  });
-
   it("loads authenticated HTML once for concurrent views and waits for the exact isolated proxy", async () => {
     const add = vi.spyOn(window, "addEventListener");
     const pending = createDeferred<CanvasDocumentViewResult>();
@@ -886,7 +716,7 @@ describe("Canvas widget view", () => {
     const { view, frame } = await loaded(`cv_prompt_${change}`);
     const post = vi.spyOn(frame.contentWindow!, "postMessage");
     proxyReady(frame);
-    await Promise.resolve();
+    await settle(view);
     let onMessage!: (event: MessageEvent) => void;
     const postMessage = vi.fn();
     const close = vi.fn();

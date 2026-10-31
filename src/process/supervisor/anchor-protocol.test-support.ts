@@ -16,7 +16,8 @@ import type {
 export function createAnchorFixture({
   preload,
   legacy = false,
-}: { preload?: string; legacy?: boolean } = {}) {
+  env,
+}: { preload?: string; legacy?: boolean; env?: NodeJS.ProcessEnv } = {}) {
   const generation = randomUUID();
   const argv = resolveRuntimeWorkerArgv(
     resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.serviceChildGroupAnchor),
@@ -26,6 +27,7 @@ export function createAnchorFixture({
     preload ? [...argv.slice(0, -1), "--import", preload, argv.at(-1)!] : argv,
     {
       detached: true,
+      env: env ? { ...process.env, ...env } : undefined,
       stdio: preload
         ? ["pipe", "pipe", "pipe", "pipe", "pipe", "ipc", "pipe"]
         : ["ignore", "pipe", "pipe", "pipe", "pipe", "ipc"],

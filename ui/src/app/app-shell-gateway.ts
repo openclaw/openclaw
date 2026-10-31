@@ -1,7 +1,7 @@
 import type { UiCommandParams } from "@openclaw/gateway-protocol";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../api/gateway.ts";
-import { isSessionRouteId } from "../app-route-paths.ts";
+import { isSessionRouteId, pathForAgentPanel } from "../app-route-paths.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
@@ -29,6 +29,7 @@ import { retireSessionPaneHandoffs } from "../pages/chat/chat-pane-handoff-lifec
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { ShellNavigationCapability } from "./app-shell-navigation.ts";
 import type { ApplicationContext } from "./context.ts";
+import { isNativeMobileHost } from "./native-web-chrome.ts";
 import { hasOperatorWriteAccess } from "./operator-access.ts";
 import { profilePreferencesState } from "./server-prefs-profile.ts";
 import { flushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
@@ -59,7 +60,7 @@ export interface ShellGatewayHost {
   readonly outboxStoreImport: { load: () => Promise<unknown> };
   readonly shellNavigation: Pick<
     ShellNavigationCapability,
-    "recoverDeletedActiveSession" | "selectChatSession"
+    "recoverDeletedActiveSession" | "selectChatSession" | "synchronizeSessionUrl"
   >;
   invalidate(): void;
 }
@@ -99,6 +100,7 @@ export class ShellGatewayOwner {
       }
       this.observeDeletedSessions(sessions.state);
       this.host.shellNavigation.recoverDeletedActiveSession();
+      this.host.shellNavigation.synchronizeSessionUrl();
       synchronizeTitle();
     };
     synchronize();
@@ -316,7 +318,7 @@ export class ShellGatewayOwner {
       }
       return;
     }
-    if (event.event !== "ui.command" || !event.payload) {
+    if (event.event !== "ui.command" || !event.payload || isNativeMobileHost()) {
       return;
     }
     const context = this.host.context;
@@ -326,6 +328,15 @@ export class ShellGatewayOwner {
     const commandParams = event.payload as UiCommandParams;
     const { command } = commandParams;
     if (!command) {
+      return;
+    }
+    if (command.kind === "agent-github-settings") {
+      const agentId = commandParams.agentId?.trim();
+      if (agentId) {
+        context.navigate("agents", {
+          pathname: pathForAgentPanel(agentId, "tools", context.basePath),
+        });
+      }
       return;
     }
     if (command.kind === "sidebar") {

@@ -40,7 +40,7 @@ export function resolveProjectChip(params: {
 }> {
   const folder = params.folder.trim();
   const selectedProject = params.projects.find((project) => project.id === params.projectId);
-  const normalizedQuery = params.projectQuery.trim().toLowerCase();
+  const normalizedQuery = params.projectQuery.trim().toLowerCase().normalize("NFC");
   return {
     label: params.freshWorkspace
       ? t("newSession.newWorkspace")
@@ -53,6 +53,7 @@ export function resolveProjectChip(params: {
             : pathDisplayName(params.workspace) || t("newSession.folderPlaceholder"),
     recents: normalizedQuery ? [] : params.recents.filter((recent) => recent.kind !== "project"),
     showWorkspace:
-      !normalizedQuery || pathDisplayName(params.workspace).toLowerCase().includes(normalizedQuery),
+      !normalizedQuery ||
+      pathDisplayName(params.workspace).toLowerCase().normalize("NFC").includes(normalizedQuery),
   };
 }

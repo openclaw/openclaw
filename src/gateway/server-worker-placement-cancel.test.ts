@@ -257,14 +257,12 @@ it.each(["success", "setup-failed-write"] as const)(
         payload: { runId: "during-terminal-write", status: "timeout", summary: "aborted" },
       });
       if (outcome === "setup-failed-write") {
-        expect(owned.restartSafeAdmission).toBeUndefined();
         await handleChatSendSetupError({
           admission: owned,
           context,
           error: new Error("pre-ACK reply context failed"),
           respond: vi.fn(),
           session: { agentId: "main", clientRunId: runId, sessionKey: target.sessionKey },
-          terminalizeRestartSafeAdmission: vi.fn(async () => false),
         });
         expect(rpcSourceTesting.has(runId)).toBe(false);
         expect(reclaimEffectStarted).toBe(false);

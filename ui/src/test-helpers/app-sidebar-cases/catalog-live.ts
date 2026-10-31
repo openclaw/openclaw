@@ -38,9 +38,8 @@ function storedSession(
 }
 
 function expectPullRequest(row: Element | null | undefined, content: string) {
-  const badge = row?.querySelector(".session-row-badge--pull-request");
-  expect(badge?.hasAttribute("title")).toBe(false);
-  expect(badge?.closest("openclaw-tooltip")).toMatchObject({ content });
+  const badge = row?.querySelector<HTMLElement>(".session-row-badge--pull-request");
+  expect(badge?.title).toBe(content);
 }
 
 function catalogHost(
@@ -58,9 +57,7 @@ function expectRunIndicators(section: Element | null, rowSelector: string, activ
   expect(dom.all(`${rowSelector} .sidebar-session-indicator .session-glyph__ring`)).toHaveLength(
     active ? 1 : 0,
   );
-  expect(dom.all(".sidebar-recent-sessions__head .session-run-spinner")).toHaveLength(
-    active ? 1 : 0,
-  );
+  expect(dom.all(".sidebar-recent-sessions__head .session-run-spinner")).toHaveLength(0);
 }
 
 describe("AppSidebar session catalog pagination", () => {

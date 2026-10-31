@@ -104,17 +104,7 @@ function extractRawText(message: unknown): string | null {
   );
 }
 
-export function readTranscriptMediaEntries(message: unknown): Array<{
-  factIndex: number;
-  path: string;
-  mediaType: string | undefined;
-  fileName: string | undefined;
-  origin?: "paste" | "file";
-  sizeBytes?: number;
-  durationMs?: number;
-  width?: number;
-  height?: number;
-}> {
+export function readTranscriptMediaEntries(message: unknown) {
   if (!message || typeof message !== "object") {
     return [];
   }

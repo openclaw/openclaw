@@ -272,7 +272,7 @@ describe("Codex native configuration", () => {
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       const run = runCodexAppServerAttempt(params);
       try {
-        if (outcome === "allowed") {
+        if (outcome === "allowed" || outcome === "api-key-account") {
           await run.waitForTurnAccepted();
           transport.send(
             completedTurn("thread-access", {
@@ -283,8 +283,8 @@ describe("Codex native configuration", () => {
           await expect(run).resolves.toMatchObject({ terminal: { kind: "ok" } });
         } else {
           await expect(run).rejects.toThrow(
-            outcome === "missing-account" || outcome === "api-key-account"
-              ? "requires ChatGPT subscription authentication"
+            outcome === "missing-account"
+              ? "requires an authenticated OpenAI account"
               : outcome === "missing-capability"
                 ? "not advertised for the current account and model"
                 : "Codex account changed while preparing the access program",
@@ -295,7 +295,7 @@ describe("Codex native configuration", () => {
         const turns = transport.writes
           .map((line) => JSON.parse(line) as { method: string; params: unknown })
           .filter(({ method }) => method === "turn/start");
-        if (outcome === "allowed") {
+        if (outcome === "allowed" || outcome === "api-key-account") {
           expect(turns).toEqual([
             {
               id: expect.any(Number),
@@ -315,7 +315,9 @@ describe("Codex native configuration", () => {
           outcome === "revoked-account" ||
           outcome === "replaced-account" ||
           outcome === "replaced-catalog";
-        expect(revisionBeforeEffect !== undefined).toBe(outcome === "allowed" || lateChange);
+        expect(revisionBeforeEffect !== undefined).toBe(
+          outcome === "allowed" || outcome === "api-key-account" || lateChange,
+        );
         if (lateChange) {
           expect(transport.client.getModelCatalogRevision()).toBeGreaterThan(revisionBeforeEffect!);
         }
@@ -646,7 +648,7 @@ describe("Codex native configuration", () => {
       const bindModelExecution = vi.fn<
         NonNullable<typeof params.hostCapabilities.bindModelExecution>
       >((model) => {
-        expect(model).toEqual(runtimeSelection);
+        expect(model).toEqual({ ...runtimeSelection, cyberAccessProgram: "standard" });
         if (modelPolicyAction === "deny") {
           throw new Error("operator role cannot use this model");
         }

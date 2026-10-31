@@ -93,7 +93,9 @@ describe("PaletteSessionDraft", () => {
       new File(["cold attachment"], "cold.txt", { type: "text/plain" }),
     ]);
     await waitForSolid(() => {
-      expect(host.querySelector('.chat-attachment-loading[data-state="ready"]')).not.toBeNull();
+      expect(
+        host.querySelector('.chat-attachment-thumb[aria-busy="false"]')?.textContent,
+      ).toContain("cold.txt");
     });
     host.observeColdSubmission = true;
     host.draft.submitCold();
@@ -784,6 +786,11 @@ describe("palette-only remembered settings", () => {
       const { host } = await mountPreferences();
       setting(host, "trigger")!.click();
       expectDefined(setting(host, "workspace"), "workspace picker").click();
+      await host.updateComplete;
+      expectDefined(
+        host.querySelector<HTMLButtonElement>(".header-search__toggle"),
+        "workspace search toggle",
+      ).click();
       await host.updateComplete;
       const search = expectDefined(
         host.querySelector<HTMLInputElement>(".palette-session-settings__search"),

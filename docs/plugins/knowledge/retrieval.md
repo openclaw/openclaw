@@ -97,8 +97,8 @@ record, and cannot be rebuilt from Markdown or Git.
 
 Knowledge projects validated structured dates and entity associations into
 scoped SQLite tables. Each date query reconciles its authorized snapshot first.
-Dates written only in page prose, such as Timeline bullets, do not create
-structured records.
+Dates written only in page prose, such as older written Timeline bullets, do
+not create structured records.
 
 | Date field    | Meaning                                                                 |
 | ------------- | ----------------------------------------------------------------------- |
@@ -123,6 +123,13 @@ ranges without claiming an exact instant.
 - To find recently recorded or updated records, query `knowledge_timeline` with
   `timeField: "recorded_at"` or `"updated_at"`. This is a current-record query,
   not a change cursor; use history for audit.
+- `group: "source"` with an `entity` returns that entity's Timeline: one row per
+  dated source connected to it by a relationship or a sourced claim, dated by
+  the source. The row's `summary` is the body of the relationship between them
+  (`noteRecord`), else the source's event claim, and `claims` counts the
+  entity's claims from that source, and `links` lists the summary's links
+  that resolve to a record in the same scope. Claims with no dated source, or dated
+  outside their source's date, keep their own rows. It takes occurrence time only and no `kind` filter.
 - A shared event claim with `source_event: true` represents its source meeting.
   On occurrence timelines it replaces the meeting page row; a `kind: "meeting"`
   query still returns the page.

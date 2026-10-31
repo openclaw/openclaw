@@ -1,6 +1,6 @@
 import { normalizeResolvedPricing } from "@openclaw/llm-core";
 import { normalizeModelFamily } from "@openclaw/model-catalog-core/model-catalog-types";
-import { ModelInferenceCapabilitiesSchema } from "../../../packages/model-catalog-core/src/model-inference-capabilities.js";
+import { ModelInferenceCapabilitiesSchema } from "@openclaw/model-catalog-core/model-inference-capabilities";
 import type { Api, Model } from "../../llm/types.js";
 import type { ProviderModelCatalog } from "../models-config.merge.js";
 

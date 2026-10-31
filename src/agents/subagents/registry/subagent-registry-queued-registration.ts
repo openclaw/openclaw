@@ -37,12 +37,11 @@ import {
   isSameSubagentRunOwner,
 } from "./subagent-run-generation.js";
 
-/** Owns the committed queued intent through descriptor publication and launch settlement. */
+/** Owns a live queued launch through current claim checks and failure settlement. */
 export function registerRequiredQueuedSubagent(params: {
   entry: SubagentRunRecord;
   context: OpenClawStateWorkerContext;
   manager: Pick<SubagentManagerOptions, "runs" | "getRunsForChildSession" | "getRuntimeConfig">;
-  queuedLaunch: SubagentRunRecord["queuedLaunch"];
   activate: () => void;
   assertCurrent?: () => void;
   retainOwnership?: (scope: SubagentRegistrationScope) => void;
@@ -53,13 +52,11 @@ export function registerRequiredQueuedSubagent(params: {
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   const resolver = getGatewayContextResolver(entry);
   const runId = entry.runId;
-  const queuedLaunch = params.queuedLaunch;
   let persistenceUncertain = false;
   let recoveryPending:
     | { kind: "restore" | "retry-terminal"; error: unknown }
     | { kind: "retired" }
     | undefined;
-  let descriptorCommitted = false;
   let failureFact: { error: unknown; endedAt: number; message: string } | undefined;
   let settlementPending = false;
   let registrationAcknowledged = false;
@@ -170,7 +167,7 @@ export function registerRequiredQueuedSubagent(params: {
     current.swarmLaunchPending === true &&
     !current.collectorCompletion;
   const publish = async (
-    stage: "recovery intent" | "terminal" | "cancelled launch",
+    stage: "terminal" | "cancelled launch",
     prepare: (current: SubagentRunRecord, ownedSession: boolean) => SubagentRunRecord,
   ): Promise<boolean> => {
     for (;;) {
@@ -364,23 +361,6 @@ export function registerRequiredQueuedSubagent(params: {
     }
     return true;
   };
-  const clearDurableLaunchDescriptor = async (): Promise<boolean> => {
-    if (!descriptorCommitted && ownsSession()) {
-      return true;
-    }
-    const published = await publish("recovery intent", (current, ownedSession) => ({
-      ...current,
-      queuedLaunch: undefined,
-      execution: {
-        ...current.execution,
-        ...(!ownedSession ? { suppressSessionEffects: true as const } : {}),
-      },
-    }));
-    if (published) {
-      descriptorCommitted = false;
-    }
-    return published;
-  };
   const failIncompleteRegistration = async (error: unknown): Promise<void> => {
     if (
       !registryCurrent() ||
@@ -399,9 +379,6 @@ export function registerRequiredQueuedSubagent(params: {
     };
     const { endedAt, message, error: cause } = failureFact;
     try {
-      if (!(await clearDurableLaunchDescriptor())) {
-        return;
-      }
       const prepared = await prepareSwarmCollectorCompletion(
         currentEntry() ?? entry,
         manager.getRuntimeConfig(),
@@ -447,43 +424,7 @@ export function registerRequiredQueuedSubagent(params: {
       }
       try {
         assertRegistrationCurrent();
-        const published = await mutateSubagentRuns(
-          [runId],
-          (rows) => {
-            const current = rows.get(runId);
-            if (!current || !isSameSubagentRunOwner(current, entry) || !ownsSession()) {
-              return { value: "retired" as const };
-            }
-            if (current.killIntent) {
-              return { value: "claim" as const };
-            }
-            if (current.killReconciliation || current.execution.status !== "queued") {
-              return { value: "retired" as const };
-            }
-            return {
-              value: "published" as const,
-              postimages: new Map([[runId, { ...current, queuedLaunch }]]),
-            };
-          },
-          {
-            runs: manager.runs,
-            context,
-            assertCurrent: () => {
-              params.assertCurrent?.();
-              assertRegistryCurrent();
-              if (!gatewayCurrent()) {
-                throw new Error("Queued registration lost its original Gateway owner");
-              }
-            },
-            onPublished: () => {
-              descriptorCommitted = true;
-              registrationAcknowledged = true;
-            },
-          },
-        );
-        if (published !== "published") {
-          continue;
-        }
+        registrationAcknowledged = true;
         params.activate();
         return;
       } catch (error) {

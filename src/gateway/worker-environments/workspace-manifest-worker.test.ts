@@ -10,6 +10,7 @@ import {
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withWorkspaceHashMemo } from "./workspace-hash-memo.js";
+import { useAgedWorkspaceHashClock } from "./workspace-hash-memo.test-support.js";
 import { sha256 as digest, workspaceFile } from "./workspace-manifest-fixtures.test-support.js";
 import {
   captureWorkspaceManifest,
@@ -27,6 +28,7 @@ import { workspaceProcessTestEntrypoints } from "./workspace-process-runtime.tes
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const adapterUrl = resolveRuntimeWorkerUrl(workspaceProcessTestEntrypoints.manifestWorker);
 const limitsUrl = resolveRuntimeWorkerUrl(workspaceProcessTestEntrypoints.inventoryLimits).href;
+useAgedWorkspaceHashClock();
 afterEach(() => vi.restoreAllMocks());
 
 const encode = (entries: WorkerWorkspaceManifestEntry[], baseCommit: string | null = null) => {

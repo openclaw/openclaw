@@ -18,6 +18,14 @@ When an agent schema needs an upgrade, Doctor defers legacy session-entry
 inspection until its stopped-writer schema repair finishes. This applies to
 PostgreSQL as well as SQLite.
 
+Before rewriting stored auth profiles, Doctor saves a verified backup of the
+owning database. SQLite stores keep a single-file backup; PostgreSQL stores keep
+an exact export directory with its matching anchor and original credential rows.
+Doctor checks the captured credentials and rotation state against its migration
+plan before rewriting either store. Keep the reported backup for recovery.
+This repair runs in the candidate Doctor during an update; the installed updater
+needs no change.
+
 Legacy text imports require valid UTF-8. If a source contains malformed bytes,
 Doctor warns and skips that source instead of storing replacement characters.
 Independent migrations continue. The original bytes remain in the source or its
@@ -32,6 +40,11 @@ headers. Already imported events succeed without duplication; a verified missing
 suffix can be appended. Matching stores finish archival with the original bytes
 preserved. Genuine content conflicts retain the affected store and its originals;
 Doctor displays the blocking finding and records archive validation as failed.
+
+Retained session recovery prepares archive mappings once per verification phase,
+including when the legacy index is already archived. Source files are still
+rechecked after asynchronous verification. Interrupted-run manifests remain
+available as recovery evidence; you do not need to delete them before retrying.
 
 Session-key repair treats paths that resolve to the same physical database as one
 store, including case variants on case-insensitive filesystems. For example, an
@@ -228,11 +241,15 @@ records remain read-only inventory. After the candidate is installed, the real
 Doctor runs the normal import and archival against the operator's state.
 
 Skill Workshop proposals were removed. Doctor exports each pending or
-quarantined proposal draft, with its support files, to
-`<state-dir>/agents/<agentId>/agent/workshop-skills/.archive/.retired-proposals/<proposal-id>/`,
-then drops the proposal tables. Exported drafts are not live skills; to keep
-one, ask the agent to save it with `/learn` so it goes through the normal
-validated, versioned Workshop write.
+quarantined proposal draft, with its support files, to the Workshop
+[drafts](/tools/skill-workshop#drafts) directory
+`<state-dir>/agents/<agentId>/agent/workshop-skills/.drafts/<proposal-id>/`,
+then drops the proposal tables. Drafts are not live skills; review them with
+`/learn drafts`, which saves the ones worth keeping through the normal
+validated, versioned Workshop write. Drafts that an earlier Doctor exported to
+`workshop-skills/.archive/.retired-proposals/` move to `.drafts/` on the next
+run. An existing draft with the same id is never overwritten: Doctor keeps that
+export where it is and warns, so you can compare the two and delete one.
 
 Doctor keeps the proposal tables and files, with a recoverable warning, when no
 configured agent owns a proposal, it cannot export a draft, or it finds a
@@ -406,6 +423,19 @@ Stop OpenClaw processes and back up both databases named in the warning before r
 
 For the retired QMD memory backend, including config rewrites and derived
 workspace cleanup, see [Migrating from QMD](/concepts/memory-builtin#migrating-from-qmd).
+
+Doctor also reclaims legacy memory reindex shadows named `<database>.tmp-<uuid>`
+and their SQLite companions once the primary has been archived as `.migrated`
+and no primary or primary companion remains. Every file in the shadow family
+must be a regular file at least 24 hours old. Doctor previews eligible files and
+declares them for migration backups. Every cleanup path also reports each file
+to standard error before removing it, including automatic Doctor migrations
+without a backup capture. Failed removals produce recoverable warnings.
+Live indexes, current `.memory-reindex-<uuid>` shadows,
+configured import sources (including aliases), and unresolved legacy recovery
+files remain untouched. Newly archived indexes
+become eligible on the next Doctor run. This repair runs in candidate Doctor;
+the installed updater needs no new protocol.
 
 This includes retired MCP OAuth files under `<state-dir>/mcp-oauth/*.json`. Stop the Gateway before repair. Doctor imports valid credentials into `<state-dir>/state/openclaw.sqlite`, preserves an existing SQLite session when both stores exist, drops the obsolete persisted OAuth `state` value, and uses its receipt to prevent a recreated stale file from resurrecting logged-out credentials. Retired `.lock` sidecars block the import: if Doctor reports a stale owner, verify that no older OpenClaw process is running, remove that sidecar, and rerun Doctor.
 

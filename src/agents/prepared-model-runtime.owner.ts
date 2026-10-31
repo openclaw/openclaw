@@ -27,6 +27,7 @@ import {
 } from "./prepared-model-runtime.build.js";
 import {
   assertPreparedModelRuntimeInputCurrent,
+  capturePreparedModelRuntimeRefreshError,
   isPreparedModelRuntimePluginLifecycleFailure,
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePublicationSupersededError,
@@ -631,17 +632,17 @@ export async function publishPreparedModelRuntimeOwnerBatch(
         continue;
       }
       candidate.owner.needsRefresh = true;
-      candidate.owner.refreshError = refreshError;
+      candidate.owner.refreshError = capturePreparedModelRuntimeRefreshError(refreshError);
       if (
         candidate.owner.provenance === "configured" &&
         !(refreshError instanceof PreparedModelRuntimePublicationSupersededError)
       ) {
         candidate.owner.catalogRecovery ??= {
-          error: refreshError,
+          error: candidate.owner.refreshError,
           scheduledAttempted: false,
           retryAfter: 0,
         };
-        candidate.owner.catalogRecovery.error = refreshError;
+        candidate.owner.catalogRecovery.error = candidate.owner.refreshError;
       }
     }
     settleSingleOwner?.failed(refreshError, candidates[0]!.isCurrent);

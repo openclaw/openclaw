@@ -3,7 +3,6 @@ import type {
   SqliteWorkerCommand,
   SqliteWorkerOperations,
 } from "../infra/sqlite-worker-contract.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 
 export type WorkerOperationContext = {
@@ -86,11 +85,12 @@ export function createWorkerOperationRegistry<
     {
       load: () => Promise<WorkerOperationHandlers<Context>>;
       handlers?: WorkerOperationHandlers<Context>;
+      pending?: Promise<void>;
     }
   >(
     Object.entries<() => Promise<WorkerOperationHandlers<Context>>>(loaders).map(([name, load]) => [
       name,
-      { load: createLazyRuntimeModule(load) },
+      { load },
     ]),
   );
   const domainFor = (type: PropertyKey) =>
@@ -105,9 +105,11 @@ export function createWorkerOperationRegistry<
     prepare(type: PropertyKey): Promise<void> | undefined {
       const domain = domainFor(type);
       if (domain && !domain.handlers) {
-        return domain.load().then((handlers) => {
-          domain.handlers = handlers;
-        });
+        return (domain.pending ??= Promise.resolve()
+          .then(domain.load)
+          .then((handlers) => {
+            domain.handlers = handlers;
+          }));
       }
       return undefined;
     },

@@ -1,11 +1,26 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isHostPluginApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
+import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { matchesOperatorApprovalReviewerBinding } from "./operator-approval-reviewer-binding.js";
-import { ADMIN_SCOPE, APPROVALS_SCOPE } from "./operator-scopes.js";
+import { ADMIN_SCOPE, APPROVALS_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
 import type { GatewayClient } from "./server-methods/types.js";
 
-type OperatorApprovalAccessBinding = {
-  reviewerDeviceIds?: readonly string[] | null;
-};
+/** Host-bridged plugin approval calls need only write scope; the bridge never resolves. */
+export function isHostPluginApprovalCall(
+  method: string,
+  client: GatewayClient | null | undefined,
+): boolean {
+  return (
+    isHostPluginApprovalMethod(method) &&
+    client?.internal?.syntheticClient === true &&
+    Boolean(client.internal.pluginApprovalRequestOwnerId?.trim()) &&
+    roleScopesAllow({
+      role: "operator",
+      requestedScopes: [WRITE_SCOPE],
+      allowedScopes: client.connect.scopes ?? [],
+    })
+  );
+}
 
 /** Whether a client may inspect safe approval projections. */
 export function canReviewOperatorApproval(client: GatewayClient | null): boolean {
@@ -32,7 +47,9 @@ export function canResolveOperatorApproval(client: GatewayClient | null): boolea
 /** Whether a broadly authorized client may access one bound approval record. */
 export function canAccessOperatorApproval(params: {
   client: GatewayClient | null;
-  binding: OperatorApprovalAccessBinding;
+  binding: {
+    reviewerDeviceIds?: readonly string[] | null;
+  };
   allowApprovalRuntime?: boolean;
 }): boolean {
   const broadlyAuthorized = params.allowApprovalRuntime

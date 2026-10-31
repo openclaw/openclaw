@@ -39,6 +39,7 @@ export function resolveSimpleCompletionSelectionRequest(
           cfg: params.cfg,
           agentId: params.agentId,
           primaryProvider: fallbackRef.provider,
+          primaryModelId: fallbackRef.model,
           ...(params.manifestPlugins
             ? {
                 metadataSnapshot:

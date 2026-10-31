@@ -121,21 +121,18 @@ it.for(["default", "split", "profile"] as const)(
       if (selection !== "default") {
         expect(process.env.OPENCLAW_STATE_DIR).toBeUndefined();
       }
-      const resolve = vi.spyOn(path, "resolve");
-      const join = vi.spyOn(path, "join");
-      try {
+      {
+        using resolve = vi.spyOn(path, "resolve");
+        using join = vi.spyOn(path, "join");
         for (let index = 0; index < 10; index++) {
           expect(readAgentDatabaseAdmissionRefusal("main")).toBeUndefined();
         }
-        if (selection === "default" && process.platform !== "win32") {
-          expect(resolve).not.toHaveBeenCalled();
-        }
         if (selection === "default") {
+          if (process.platform !== "win32") {
+            expect(resolve).not.toHaveBeenCalled();
+          }
           expect(join).not.toHaveBeenCalled();
         }
-      } finally {
-        resolve.mockRestore();
-        join.mockRestore();
       }
       expect(
         sql.queries.filter((query) => /\bfrom\s+"?gateway_restart_handoff\b/iu.test(query)),
@@ -180,17 +177,18 @@ it(
     let snapshotVersion = getSkillsSnapshotVersion();
     for (const startup of [1, 2]) {
       await fs.writeFile(timelinePath, "");
-      const server = await startGatewayServer(port, bootOptions);
+      const server = await startGatewayServer(port, { ...bootOptions, sidecarStartup: "start" });
       try {
         const nextVersion = getSkillsSnapshotVersion();
         expect(nextVersion, `startup ${startup} must invalidate restored skills`).toBeGreaterThan(
           snapshotVersion,
         );
         snapshotVersion = nextVersion;
-        const startupMeasures = (await fs.readFile(timelinePath, "utf8"))
+        const startupEvents = (await fs.readFile(timelinePath, "utf8"))
           .trim()
           .split("\n")
-          .map((line) => JSON.parse(line) as Record<string, unknown>)
+          .map((line) => JSON.parse(line) as Record<string, unknown>);
+        const startupMeasures = startupEvents
           .filter((event) => event.type === "span.start" && event.phase === "startup")
           .map((event) => {
             const attributes = event.attributes as { traceName?: string } | undefined;
@@ -200,6 +198,18 @@ it(
         expect(startupMeasures.indexOf("runtime.early")).toBeGreaterThan(
           startupMeasures.indexOf("http.listen"),
         );
+        const postAttachEnd = startupEvents.findIndex(
+          (event) =>
+            event.type === "span.end" &&
+            (event.attributes as { traceName?: string } | undefined)?.traceName ===
+              "runtime.post-attach",
+        );
+        const readyMark = startupEvents.findIndex(
+          (event) =>
+            event.type === "mark" && event.phase === "startup" && event.name === "gateway.ready",
+        );
+        expect(postAttachEnd).toBeGreaterThan(-1);
+        expect(readyMark).toBeGreaterThan(postAttachEnd);
       } finally {
         await server.close({ reason: "minimal boot smoke complete" });
       }

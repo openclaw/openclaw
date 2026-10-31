@@ -73,20 +73,18 @@ it.skipIf(process.platform !== "win32")(
         const terminal = await withinTest(finished.promise, signal);
 
         signal.throwIfAborted();
-        const receipt = (() => {
-          using database = new DatabaseSync(
-            path.join(instance.stateDir, "state", "openclaw.sqlite"),
-            { readOnly: true },
-          );
-          return database
-            .prepare(
-              `SELECT status, owner_pid AS ownerPid, owner_start_time AS ownerStartTime,
+        using database = new DatabaseSync(
+          path.join(instance.stateDir, "state", "openclaw.sqlite"),
+          { readOnly: true },
+        );
+        const receipt = database
+          .prepare(
+            `SELECT status, owner_pid AS ownerPid, owner_start_time AS ownerStartTime,
                     finished_at_ms AS finishedAtMs
                FROM cron_run_receipts WHERE job_id = ?
                ORDER BY started_at_ms DESC LIMIT 1`,
-            )
-            .get(job.id);
-        })();
+          )
+          .get(job.id);
 
         expect(terminal).toMatchObject({ status: "ok", completionStatus: "succeeded" });
         expect(receipt).toMatchObject({

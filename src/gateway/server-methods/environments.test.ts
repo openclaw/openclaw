@@ -230,6 +230,7 @@ it("discovers profile catalogs independently of inventories and preserves provid
   expect(ok).toBe(true);
   expect(payload).toEqual({
     environments: [],
+    dispatchableProfileIds: ["aws", "zeta"],
     profiles: [
       {
         id: "aws",

@@ -11,7 +11,7 @@ internal data class TabletopPaneBounds(
 )
 
 internal data class FoldContentBounds(
-  val book: BookPaneBounds?,
+  val sidebar: SidebarPaneBounds?,
   val tabletop: TabletopPaneBounds?,
   val sidebarBand: IntRect?,
 )

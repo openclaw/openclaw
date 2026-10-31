@@ -2,7 +2,7 @@ import fs from "node:fs";
 import Module, { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { isPathInside } from "../infra/path-guards.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { useNodeModuleHooks } from "./native-module-require.js";
@@ -33,6 +33,32 @@ function expectRequiredIdentity(actual: { token: object }, expected: { token: ob
 }
 
 describe("native plugin generation interop", () => {
+  it.skipIf(!useNodeModuleHooks())(
+    "keeps the process resolve chain bounded across live plugins and replacements",
+    async () => {
+      const register = vi.spyOn(Module, "registerHooks");
+      try {
+        const root = fixture({ "entry.cjs": "exports.value = 42;" });
+        const hosts = Array.from({ length: 4 }, () => host(root));
+        for (const managed of hosts) {
+          expect(managed.load("entry.cjs")).toMatchObject({ value: 42 });
+        }
+        const boot = register.mock.calls.filter(([hooks]) => hooks.resolve).length;
+        for (const [i, managed] of hosts.entries()) {
+          await managed.dispose();
+          const replacement = host(root);
+          hosts[i] = replacement;
+          expect(replacement.load("entry.cjs")).toMatchObject({ value: 42 });
+        }
+        // The SDK and capture dispatcher each install at most one process hook.
+        expect(boot).toBeLessThanOrEqual(2);
+        expect(register.mock.calls.filter(([hooks]) => hooks.resolve)).toHaveLength(boot);
+      } finally {
+        register.mockRestore();
+      }
+    },
+  );
+
   it.skipIf(!useNodeModuleHooks())(
     "preserves source import attributes for JSON resolved outside the capture",
     async () => {

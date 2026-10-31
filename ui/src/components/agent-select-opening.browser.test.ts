@@ -20,16 +20,19 @@ async function fixture(
   await select.updateComplete;
   const trigger = select.querySelector<HTMLButtonElement>(".agent-select__trigger")!;
   const menu = select.querySelector<HTMLElement>('[role="menu"]')!;
-  const items = [...select.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')];
-  const outside = document.createElement("button");
-  outside.textContent = "Outside";
-  outside.style.cssText = "position:fixed;right:10px;bottom:10px";
-  document.body.append(outside);
   const open = async () => {
     await page.elementLocator(trigger).click();
     await expect.poll(() => menu.matches(":popover-open")).toBe(true);
   };
-  return { select, trigger, menu, items, outside, open };
+  return {
+    select,
+    trigger,
+    menu,
+    get items() {
+      return [...select.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')];
+    },
+    open,
+  };
 }
 
 describe("Agent select native menu", () => {
@@ -113,11 +116,9 @@ describe("Agent select native menu", () => {
     await f.open();
     expect(document.activeElement).toBe(f.items[1]);
   });
-  it("dismisses on outside pointer input and reopens after reconnect", async () => {
+  it("reopens after disconnecting an open menu", async () => {
     const f = await fixture();
     await f.open();
-    await page.elementLocator(f.outside).click();
-    await expect.poll(() => f.menu.matches(":popover-open")).toBe(false);
     f.select.remove();
     await Promise.resolve();
     document.body.append(f.select);

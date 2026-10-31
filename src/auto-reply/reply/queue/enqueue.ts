@@ -174,6 +174,7 @@ export function enqueueFollowupRun(
         throw new Error("Dedupe source was not submitted to its mailbox");
       }
       const mailbox = recentInput.mailbox;
+      const inputInstance = recentInput.instance;
       for (const [alias, record] of mailbox.recentSources) {
         if (record.expires <= now) {
           mailbox.recentSources.delete(alias);
@@ -183,14 +184,14 @@ export function enqueueFollowupRun(
         mailbox.recentSources.delete(mailbox.recentSources.keys().next().value!);
       }
       mailbox.recentSources.set(recentMessageIdKey, {
-        input: recentInput,
+        inputInstance,
         expires: now + RECENT_MESSAGE_ID_TTL,
       });
       const lifecycle = run.turnAdoptionLifecycle;
       if (lifecycle) {
         const onAbandoned = lifecycle.onAbandoned;
         lifecycle.onAbandoned = () => {
-          if (mailbox.recentSources.get(recentMessageIdKey)?.input === recentInput) {
+          if (mailbox.recentSources.get(recentMessageIdKey)?.inputInstance === inputInstance) {
             mailbox.recentSources.delete(recentMessageIdKey);
           }
           return onAbandoned?.();
@@ -418,12 +419,12 @@ export function reserveSteerCandidate(
     const wasClearing = queue.clearing;
     queue.clearing = true;
     try {
-      if (consume || receipt.accepted === true) {
+      if (consume) {
         input.payload = "unbound";
         delete run.protectFromQueueOverflow;
-        completeFollowupRunLifecycle(run, receipt.accepted === true ? "consumed" : disposition);
+        completeFollowupRunLifecycle(run, disposition);
       }
-      if (!consume && receipt.accepted !== true) {
+      if (!consume) {
         // A settled negative handoff explicitly requests queued execution. Merely
         // remembering the steering callback must leave the mailbox dormant.
         queue.dispatchEnabled = true;

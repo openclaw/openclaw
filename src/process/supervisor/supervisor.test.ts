@@ -1,14 +1,19 @@
-import * as fs from "node:fs/promises";
 import { performance } from "node:perf_hooks";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { createProcessSupervisor } from "./supervisor.js";
 import { createStubChildAdapter, type StubChildAdapter } from "./supervisor.test-support.js";
 import type { SpawnInput } from "./types.js";
 
-const { child, pty } = vi.hoisted(() => ({ child: vi.fn(), pty: vi.fn() }));
+const { child, pty, readMemory } = vi.hoisted(() => ({
+  child: vi.fn(),
+  pty: vi.fn(),
+  readMemory: vi.fn<(path: string, callback: (error: null, text: Buffer) => void) => void>(),
+}));
 vi.mock("./adapters/child.js", () => ({
   createChildAdapter: async (
     ...args: Parameters<typeof import("./adapters/child.js").createChildAdapter>
@@ -18,10 +23,9 @@ vi.mock("./adapters/child.js", () => ({
   }),
 }));
 vi.mock("./adapters/pty.js", () => ({ createPtyAdapter: pty }));
-vi.mock("node:fs/promises", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:fs/promises")>()),
-  readFile: vi.fn(),
-  readdir: vi.fn(),
+vi.mock("node:fs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs")>()),
+  readFile: readMemory,
 }));
 
 let supervisor: ReturnType<typeof createProcessSupervisor>;
@@ -74,8 +78,7 @@ async function expectRejectedReplacement(input: SpawnInput, error: string, cance
 beforeEach(() => {
   child.mockReset();
   pty.mockReset();
-  vi.mocked(fs.readFile).mockReset();
-  vi.mocked(fs.readdir).mockReset();
+  readMemory.mockReset();
   supervisor = createProcessSupervisor();
 });
 afterEach(() => {
@@ -85,13 +88,44 @@ afterEach(() => {
 });
 
 describe("process supervisor", () => {
+  it("keeps the cleanup error identity without retaining its expired caller", async () => {
+    // Neither Vite's formatter nor a spy's recorded CallSite arguments may retain the caller.
+    const formatter = Object.getOwnPropertyDescriptor(Error, "prepareStackTrace");
+    Reflect.deleteProperty(Error, "prepareStackTrace");
+    onTestFinished(() => {
+      if (formatter) {
+        Object.defineProperty(Error, "prepareStackTrace", formatter);
+      }
+    });
+    class ExpiredCaller {
+      fail() {
+        return Object.assign(new Error("cleanup identity lost"), { code: "ECLEANUP" });
+      }
+    }
+    const { adapter, extinction } = owned();
+    const cleanup = supervisor.acquireScopeCleanup("scope", { processTree: "required-all" });
+    const run = await spawn({ scopeKey: "scope" });
+    adapter.settle(0);
+    await run.wait();
+    const failure = new ExpiredCaller().fail();
+    extinction.reject(failure);
+    await run.waitForExtinction!().catch(() => undefined);
+    await nextTurn();
+    expect(queryObjects(ExpiredCaller)).toBe(0);
+    await expect(cleanup()).rejects.toBe(failure);
+    await expect(supervisor.shutdown()).rejects.toBe(failure);
+    expect(failure.code).toBe("ECLEANUP");
+    expect(failure.stack).toContain("cleanup identity lost");
+  });
+
   it.each(["child", "pty", "external"] as const)(
     "enforces host memory ownership for %s",
     async (mode) => {
       vi.useFakeTimers();
       mockProcessPlatform("linux");
-      const read = vi.mocked(fs.readFile).mockResolvedValue("VmRSS:\t256 kB\n");
-      vi.mocked(fs.readdir).mockResolvedValue([]);
+      const read = readMemory.mockImplementation((_path, callback) => {
+        callback(null, Buffer.from("Name:\tfixture\nVmRSS:\t256 kB\n"));
+      });
       const adapter = terminating();
       adapter.memoryRootPid = 4321;
       if (mode === "pty") {
@@ -111,7 +145,7 @@ describe("process supervisor", () => {
         adapter.settle(0);
       } else {
         expect(adapter.killMock).toHaveBeenCalledExactlyOnceWith("SIGKILL");
-        expect(read).toHaveBeenCalledWith("/proc/4321/status", "utf8");
+        expect(read).toHaveBeenCalledWith("/proc/4321/status", expect.any(Function));
         await expect(run.wait()).resolves.toMatchObject({
           reason: "memory-limit",
           timedOut: false,
@@ -243,9 +277,13 @@ describe("process supervisor", () => {
     const replacementAdapter = createStubChildAdapter();
     const later = prepare();
     const firstRuns = [spawn({ scopeKey: "scope" }), spawn({ scopeKey: "scope" })];
-    const replacement = spawn({ scopeKey: "scope", replaceExistingScope: true });
+    let argument = "before-admission";
+    const resolveArgs = vi.fn(() => [argument]);
+    const replacement = spawn({ scopeKey: "scope", replaceExistingScope: true, resolveArgs });
     const laterRun = spawn({ scopeKey: "scope" });
     expect(child).toHaveBeenCalledTimes(2);
+    expect(resolveArgs).not.toHaveBeenCalled();
+    argument = "after-admission";
     starts[1]!.resolve(predecessors[1]!);
     await firstRuns[1];
     expect(child).toHaveBeenCalledTimes(2);
@@ -260,6 +298,8 @@ describe("process supervisor", () => {
     );
     await admitted.promise;
     expect(child).toHaveBeenCalledTimes(3);
+    expect(resolveArgs).toHaveBeenCalledOnce();
+    expect(child.mock.calls[2]?.[0].argv).toEqual(["fixture", "after-admission"]);
     expect(later.killMock).not.toHaveBeenCalled();
     const runs = await Promise.all([...firstRuns, replacement, laterRun]);
     expect(child).toHaveBeenCalledTimes(4);
@@ -345,24 +385,6 @@ describe("process supervisor", () => {
       "exit",
       "exit",
     ]);
-  });
-
-  it("resolves invocation arguments only after queued scope admission", async () => {
-    const startup = deferStartup();
-    const first = terminating();
-    const replacement = prepare();
-    const firstRun = spawn({ scopeKey: "scope" });
-    let argument = "before-admission";
-    const resolveArgs = vi.fn(() => [argument]);
-    const pending = spawn({ scopeKey: "scope", replaceExistingScope: true, resolveArgs });
-    expect(resolveArgs).not.toHaveBeenCalled();
-    argument = "after-admission";
-    startup.resolve(first);
-    const run = await pending;
-    expect(resolveArgs).toHaveBeenCalledOnce();
-    expect(child.mock.calls[1]?.[0].argv).toEqual(["fixture", "after-admission"]);
-    replacement.settle(0);
-    await Promise.all([(await firstRun).wait(), run.wait()]);
   });
 
   it("leaves the active scope intact when replacement arguments fail", async () => {
@@ -703,23 +725,37 @@ describe("process supervisor", () => {
     expect(adapter.disposeMock).toHaveBeenCalledOnce();
   });
 
-  it("retains cancellation ownership after the root result until cleanup fails", async () => {
-    const { adapter, extinction } = owned();
-    const run = await spawn({ scopeKey: "scope" });
-    adapter.emitStdout("root output");
-    adapter.settle(23);
-    const root = await run.wait();
-    expect(root).toMatchObject({ reason: "exit", exitCode: 23, stdout: "root output" });
-    expect(adapter.disposeMock).not.toHaveBeenCalled();
-    supervisor.cancelScope("scope");
-    expect(adapter.killMock).toHaveBeenCalledWith("SIGKILL");
-    extinction.reject(new Error("cleanup identity lost"));
-    await expect(run.waitForExtinction!()).rejects.toThrow("cleanup identity lost");
-    expect(adapter.disposeMock).toHaveBeenCalledOnce();
-    await expect(run.wait()).resolves.toBe(root);
-    supervisor.cancel(run.runId);
-    expect(adapter.killMock).toHaveBeenCalledOnce();
-  });
+  it.each([
+    ["transport-only", "SIGKILL"],
+    ["required-all", "SIGTERM"],
+  ] as const)(
+    "retains %s ownership after the root result until cleanup fails",
+    async (policy, signal) => {
+      const { adapter, extinction } = owned();
+      const cleanup = supervisor.acquireScopeCleanup("scope", { processTree: policy });
+      const run = await spawn({ scopeKey: "scope" });
+      adapter.emitStdout("root output");
+      adapter.settle(23);
+      const root = await run.wait();
+      expect(root).toMatchObject({ reason: "exit", exitCode: 23, stdout: "root output" });
+      expect(adapter.disposeMock).not.toHaveBeenCalled();
+      supervisor.cancelScope("scope");
+      expect(adapter.killMock).toHaveBeenCalledWith(signal);
+      extinction.reject(new Error("cleanup identity lost"));
+      await expect(run.waitForExtinction!()).rejects.toThrow("cleanup identity lost");
+      expect(adapter.disposeMock).toHaveBeenCalledOnce();
+      await expect(run.wait()).resolves.toBe(root);
+      supervisor.cancel(run.runId);
+      expect(adapter.killMock).toHaveBeenCalledOnce();
+      await expect(cleanup()).rejects.toThrow("cleanup identity lost");
+      await expect(cleanup()).rejects.toThrow("cleanup identity lost");
+      await expect(
+        supervisor.acquireScopeCleanup("scope", { processTree: "required-all" })(),
+      ).resolves.toBeUndefined();
+      await expect(supervisor.shutdown()).rejects.toThrow("cleanup identity lost");
+      await expect(spawn()).rejects.toThrow("process supervisor is shut down");
+    },
+  );
 
   it("drains cancelled startups and same-ID siblings before reporting ownership failure", async () => {
     const startup = deferStartup();

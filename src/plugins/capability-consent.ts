@@ -37,7 +37,7 @@ import {
 import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import { ManagedPluginLifecycleError } from "./management-lifecycle-error.js";
 import { isTrustedOfficialPluginInstallRecord } from "./official-external-install-records.js";
-import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import { withPluginLifecycleLeaseAsync } from "./plugin-lifecycle-lease.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import {
   resolvePluginMetadataSnapshot,
@@ -141,7 +141,7 @@ export async function resolvePluginCapabilityConsent(params: {
   metadata?: PluginMetadataSnapshot;
 }): Promise<void> {
   const env = params.env ?? process.env;
-  return await withPluginLifecycleLease({ env }, async (lease) => {
+  return await withPluginLifecycleLeaseAsync({ env }, async (lease) => {
     const workspace = resolvePluginControlPlaneWorkspace({ config: params.config, env });
     const metadata =
       params.metadata ??

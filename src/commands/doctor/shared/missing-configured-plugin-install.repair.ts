@@ -22,6 +22,7 @@ import {
 import {
   attachPluginInstallTransaction,
   copyPluginInstallTransactionRequest,
+  resolvePluginInstallTransactionRequest,
   retainPluginInstallTransaction,
   withPluginInstallTransactions,
 } from "../../../plugins/install-transaction.js";
@@ -29,7 +30,7 @@ import { PLUGIN_INSTALL_ERROR_CODE } from "../../../plugins/install-types.js";
 import { hashStableJson } from "../../../plugins/installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../../../plugins/installed-plugin-index-policy.js";
 import { writePersistedInstalledPluginIndexInstallRecordsWithLease } from "../../../plugins/installed-plugin-index-records.js";
-import { readPersistedInstalledPluginIndexSync } from "../../../plugins/installed-plugin-index-store.js";
+import { readPersistedInstalledPluginIndex } from "../../../plugins/installed-plugin-index-store.js";
 import {
   clearRetainedManagedNpmInstallMarker,
   hasRetainedManagedNpmInstallMarker,
@@ -44,8 +45,8 @@ import {
   retirePluginCache,
 } from "../../../plugins/plugin-cache.js";
 import {
-  withPluginLifecycleLease,
-  type PluginLifecycleLeaseContext,
+  withPluginLifecycleLeaseAsync,
+  type PluginMetadataLeaseContext,
 } from "../../../plugins/plugin-lifecycle-lease.js";
 import {
   isClawHubTrustSkippedOutcome,
@@ -211,61 +212,61 @@ async function repairMissingPluginInstalls(
   // Rebuild the plan under the lease before any effect: pre-lease observations
   // authorize only returning without writes, never package or record publication.
   // Baseline, awaited review, package publication, and the index write share one generation.
-  return await withPluginLifecycleLease({ env: params.env }, (lease) =>
-    withPluginInstallTransactions(
-      params,
-      () => lease.assertOwned(),
-      async (owned, assertCurrent) => {
-        const dependencyRepairMarkers = new Map<string, string>();
-        let result: RepairMissingPluginInstallsResult | undefined;
-        let failure: unknown;
-        try {
-          result = await repairMissingPluginInstallsWithLease(
-            owned,
-            lease,
-            dependencyRepairMarkers,
-            assertCurrent,
-          );
-        } catch (error) {
-          failure = error;
-        }
-        // Markers belong to this repair only; never remove pre-existing retention.
-        const cleanupErrors: unknown[] = [];
-        for (const [pluginId, packageDir] of dependencyRepairMarkers) {
-          if (result?.repairedPluginIds?.includes(pluginId)) {
-            continue;
-          }
-          try {
-            await clearRetainedManagedNpmInstallMarker(packageDir, assertCurrent);
-          } catch (error) {
-            cleanupErrors.push(error);
-          }
-        }
-        if (!result) {
-          if (cleanupErrors.length > 0) {
-            throw new AggregateError(
-              [failure, ...cleanupErrors],
-              "Plugin dependency repair failed and its retention markers could not be cleared.",
-            );
-          }
-          throw failure;
-        }
-        result.warnings.push(
-          ...cleanupErrors.map(
-            (error) => `Failed to clear dependency repair retention marker: ${String(error)}`,
-          ),
+  return await withPluginLifecycleLeaseAsync({ env: params.env }, (lease) =>
+    withPluginInstallTransactions(params, lease, async (owned, assertCurrent, prepareEffect) => {
+      const dependencyRepairMarkers = new Map<string, string>();
+      let result: RepairMissingPluginInstallsResult | undefined;
+      let failure: unknown;
+      try {
+        result = await repairMissingPluginInstallsWithLease(
+          owned,
+          lease,
+          dependencyRepairMarkers,
+          assertCurrent,
+          prepareEffect,
         );
-        return result;
-      },
-    ),
+      } catch (error) {
+        failure = error;
+      }
+      // Markers belong to this repair only; never remove pre-existing retention.
+      const cleanupErrors: unknown[] = [];
+      for (const [pluginId, packageDir] of dependencyRepairMarkers) {
+        if (result?.repairedPluginIds?.includes(pluginId)) {
+          continue;
+        }
+        try {
+          await clearRetainedManagedNpmInstallMarker(packageDir, prepareEffect);
+        } catch (error) {
+          // Revoked authority preserves retention and remains the operation's failure.
+          assertCurrent();
+          cleanupErrors.push(error);
+        }
+      }
+      if (!result) {
+        if (cleanupErrors.length > 0) {
+          throw new AggregateError(
+            [failure, ...cleanupErrors],
+            "Plugin dependency repair failed and its retention markers could not be cleared.",
+          );
+        }
+        throw failure;
+      }
+      result.warnings.push(
+        ...cleanupErrors.map(
+          (error) => `Failed to clear dependency repair retention marker: ${String(error)}`,
+        ),
+      );
+      return result;
+    }),
   );
 }
 
 async function repairMissingPluginInstallsWithLease(
   params: Parameters<typeof repairMissingPluginInstalls>[0],
-  lease: PluginLifecycleLeaseContext,
+  lease: PluginMetadataLeaseContext,
   dependencyRepairMarkers: Map<string, string>,
   assertCurrent: () => void,
+  prepareEffect: () => void | Promise<void>,
 ): Promise<RepairMissingPluginInstallsResult> {
   const env = params.env ?? process.env;
   const installContext = await resolveConfiguredPluginInstallContext({
@@ -390,7 +391,7 @@ async function repairMissingPluginInstallsWithLease(
             packageDir: missingDependencies.rootDir,
             pluginId,
             reason: "doctor-missing-required-dependencies",
-            assertCurrent,
+            assertCurrent: prepareEffect,
           });
         }
       }
@@ -623,12 +624,16 @@ async function repairMissingPluginInstallsWithLease(
     }
   }
 
-  const persistedIndexOptions = { config: params.cfg, env, filePath: lease.databasePath, lease };
   // An explicit baseline may include earlier unpersisted sync/npm changes;
-  // commit it even when this repair made no further changes.
-  if (nextRecords !== persistedRecords || params.baselineRecords) {
+  // ordinary Doctor commits it even when repair made no further changes. An
+  // explicit updater request publishes its matching record/config plan through the outer owner.
+  if (
+    resolvePluginInstallTransactionRequest(params)?.cohort?.deferRecordPublication !== true &&
+    (nextRecords !== persistedRecords || params.baselineRecords)
+  ) {
+    const persistedIndexOptions = { config: params.cfg, env, filePath: lease.databasePath, lease };
     if (params.beforePersistentEffect) {
-      const persistedIndex = readPersistedInstalledPluginIndexSync(persistedIndexOptions);
+      const persistedIndex = await readPersistedInstalledPluginIndex(persistedIndexOptions);
       // Republishing an unchanged baseline preserves the index contract without
       // starting a protected update or stopping a healthy Gateway.
       if (
@@ -639,7 +644,7 @@ async function repairMissingPluginInstallsWithLease(
         await params.beforePersistentEffect();
       }
     }
-    lease.assertOwned();
+    await lease.assertOwned();
     await writePersistedInstalledPluginIndexInstallRecordsWithLease(
       nextRecords,
       persistedIndexOptions,

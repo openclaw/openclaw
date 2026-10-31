@@ -372,7 +372,7 @@ const transcriptEvent = (eventId: string, role: string, blocks: Content, extra =
 const assistant = (eventId: string, blocks: Content, runId = RUN_ID, extra = {}) =>
   transcriptEvent(eventId, "assistant", blocks, {
     stopReason: "stop",
-    __openclaw: { runId },
+    __openclaw: { runId, externalId: eventId },
     ...extra,
   });
 function displayOrder(display: unknown[]) {
@@ -422,6 +422,7 @@ async function seedTranscript(
   };
   const warning = text(warningText);
   const mediaGroup = singleText ? [mediaBlock, warning] : [mediaBlock];
+  const separator = singleText ? "\n" : "\n\n\n";
   const messages = [
     assistant("older-answer", [text("An earlier answer.")], "older-run"),
     transcriptEvent("request", "user", [text("Make an avatar sheet.")]),
@@ -485,13 +486,12 @@ async function seedTranscript(
         scope,
         runId,
         expectedLifecycleRevision: lifecycleRevision,
-        content: [text([caption, choice].join(singleText ? "\n" : "\n\n\n")), ...mediaGroup],
+        content: [text(["Earlier narration.", caption, choice].join(separator)), ...mediaGroup],
         mediaBySource: new Map([[generatedMediaUrl, mediaGroup]]),
         mediaUrls: [generatedMediaUrl],
       }),
   };
 }
-
 describe("generated-media transcript enrichment", () => {
   it.each([
     [null, false],

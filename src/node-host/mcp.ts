@@ -14,7 +14,7 @@ import {
   McpSdkCompatibilityError,
   mcpCallToolResultSchema,
 } from "../agents/mcp-sdk-compatibility.js";
-import { isMcpToolAllowed } from "../agents/mcp-tool-filter.js";
+import { createMcpToolFilter } from "../agents/mcp-tool-filter.js";
 import {
   normalizeMcpToolCatalog,
   type McpToolCatalogMetadata,
@@ -290,10 +290,12 @@ export async function startNodeHostMcpManager(
     signal: AbortSignal,
     resetRetryDelay = false,
   ) => {
+    // Node-host tools use their own descriptor names, so filters stay raw-only here.
+    const isToolAllowed = createMcpToolFilter(state.config.toolFilter);
     const normalized = await listAllMcpTools(session.client, session.requestTimeoutMs, signal).then(
       (tools) =>
         normalizeMcpToolCatalog(tools, createMcpJsonSchemaValidator(), (toolName) =>
-          isMcpToolAllowed(state.config.toolFilter, toolName) ? "include" : "exclude",
+          isToolAllowed(toolName) ? "include" : "exclude",
         ),
     );
     if (closed || state.current !== session) {

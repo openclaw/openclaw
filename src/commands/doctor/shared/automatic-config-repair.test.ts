@@ -255,7 +255,9 @@ describe("automatic config repair", () => {
             await commitAutomaticConfigRepair(plan, snapshot);
             const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
             expect(saved).toHaveProperty(outputPath, authored);
-            expect(saved.messages.queue.allowCollaborativeSteering).toBe(steering);
+            expect(saved.messages?.queue?.allowCollaborativeSteering).toBe(
+              browser ? undefined : steering,
+            );
             const reloaded = await readConfigFileSnapshot();
             expect(reloaded.valid).toBe(true);
             expect(reloaded.sourceConfig).toHaveProperty(outputPath, resolved);

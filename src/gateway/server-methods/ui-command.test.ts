@@ -16,6 +16,7 @@ import {
 import * as gateway from "../../agents/tools/in-process-gateway.js";
 import { createScreenTool } from "../../agents/tools/screen-tool.js";
 import {
+  createPersonalToolParticipant as participant,
   callPersonalToolUiCommand as call,
   withPersonalToolTurn,
 } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
@@ -45,15 +46,6 @@ function client(
       caps,
     },
   } as GatewayClient;
-}
-
-function participant(profileId: string, name: string) {
-  return {
-    profileId,
-    name,
-    senderId: `${profileId}-sender`,
-    gatewayUiCommandTarget: { connId: `${profileId}-tab`, profileId },
-  };
 }
 
 function captureScreenRequests(recipients: GatewayClient[]) {
@@ -105,6 +97,32 @@ describe("ui.command gateway method", () => {
     );
 
     expectRejected(result, undefined, "UNAVAILABLE");
+  });
+
+  it("requires action-level support for GitHub identity settings", async () => {
+    const requester = client("older-ui");
+    const unsupported = await call(
+      { command: { kind: "agent-github-settings" } },
+      [requester],
+      requester,
+    );
+    expectRejected(unsupported, undefined, "UNAVAILABLE");
+
+    const capable = client("current-ui", GATEWAY_CLIENT_IDS.CONTROL_UI, [
+      GATEWAY_CLIENT_CAPS.UI_COMMANDS,
+      GATEWAY_CLIENT_CAPS.UI_AGENT_GITHUB_SETTINGS,
+    ]);
+    const supported = await call(
+      { command: { kind: "agent-github-settings" } },
+      [capable],
+      capable,
+    );
+    expect(supported.respond).toHaveBeenCalledWith(true, { ok: true });
+    expect(supported.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+      "ui.command",
+      { command: { kind: "agent-github-settings" } },
+      new Set(["current-ui"]),
+    );
   });
 
   it("navigates only the requester, even when another user and another tab share the session", async () => {

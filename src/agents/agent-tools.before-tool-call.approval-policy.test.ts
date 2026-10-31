@@ -196,3 +196,27 @@ it("uses the transport channel when tool policy provider differs", async () => {
     approvalReviewerDeviceIds: ["device-tui-reviewer"],
   });
 });
+
+it("passes the run trigger to before_tool_call hooks beside the requester", async () => {
+  hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
+  const requester = { channel: "discord", senderIsOwner: false };
+  const params = { path: "/tmp/MEMORY.md", content: "note" };
+
+  await runBeforeToolCallHook({
+    toolName: "write",
+    params,
+    ctx: { agentId: "main", sessionKey: "main", runId: "flush-1", trigger: "memory", requester },
+  });
+  await runBeforeToolCallHook({
+    toolName: "write",
+    params,
+    ctx: { agentId: "main", sessionKey: "main", runId: "turn-1", requester },
+  });
+
+  expect(hookRunner.runBeforeToolCall.mock.calls[0]?.[1]).toMatchObject({
+    runId: "flush-1",
+    trigger: "memory",
+    requester,
+  });
+  expect(hookRunner.runBeforeToolCall.mock.calls[1]?.[1]).not.toHaveProperty("trigger");
+});

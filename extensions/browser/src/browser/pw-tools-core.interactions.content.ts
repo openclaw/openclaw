@@ -39,7 +39,6 @@ import { normalizeTimeoutMs } from "./pw-tools-core.shared.js";
 import { runPageEmulationTransition } from "./pw-tools-core.state.js";
 import {
   ANNOTATION_MAX_LABELS_DEFAULT,
-  type AnnotationItem,
   buildOverlayClearScript,
   buildOverlayInjectionScript,
   type CoordinateSpace,
@@ -348,15 +347,7 @@ export async function screenshotWithLabelsViaPlaywright(opts: LabeledScreenshotO
   );
 }
 
-async function screenshotWithLabelsOnPage(
-  page: Page,
-  opts: LabeledScreenshotOptions,
-): Promise<{
-  buffer: Buffer;
-  labels: number;
-  skipped: number;
-  annotations: AnnotationItem[];
-}> {
+async function screenshotWithLabelsOnPage(page: Page, opts: LabeledScreenshotOptions) {
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   const refKey = normalizeOptionalString(opts.ref);
   const elementSelector = normalizeOptionalString(opts.element);

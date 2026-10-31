@@ -35,6 +35,8 @@ How it maps:
   When a captured control disappears, its bound ref fails. Take a new snapshot
   before retrying the action.
 - `browser screenshot` captures pixels (full page, element, or labeled refs).
+  Attached-browser workspace artifacts keep the normalized image's extension;
+  a PNG request can produce a `.jpg` artifact when normalization converts it to JPEG.
 - If a screenshot times out while the browser is still capturing or restoring
   page settings, further screenshots, resizing, and device changes on that tab
   return a recovery error. Retry after the capture finishes. If it stays stuck,

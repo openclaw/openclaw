@@ -1,4 +1,5 @@
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
+import type { AcquireConfiguredProviderLocalService } from "openclaw/plugin-sdk/embedding-providers";
 import {
   asToolParamsRecord,
   type AnyAgentTool,
@@ -8,7 +9,6 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { TSchema } from "typebox";
-import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 
 export type MemoryToolOptions = {
@@ -20,7 +20,7 @@ export type MemoryToolOptions = {
   oneShotCliRun?: boolean;
   conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
   activeProjectKeys?: readonly string[];
-  acquireLocalService?: MemoryCoreAcquireLocalService;
+  acquireLocalService?: AcquireConfiguredProviderLocalService;
   runInBackgroundContext?: MemoryCoreRuntimeHost["runInBackgroundContext"];
 };
 

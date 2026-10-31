@@ -1,10 +1,10 @@
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { readSqliteDatabaseWriteTokenForPath } from "../infra/sqlite-database-admission.js";
+import { readSqliteDatabaseWriteTokenForPath as writeToken } from "../infra/sqlite-database-admission.js";
 import { useSqliteSchemaTestFixture } from "../infra/sqlite-schema-facts.test-support.js";
 import {
   createStateLeaseRenewalScheduler,
-  type StateLeaseRenewal,
+  type StateLeaseRenewal as Renewal,
   type StateLeaseRenewalOutcome,
 } from "./openclaw-state-lease-renewal.worker.js";
 
@@ -30,11 +30,7 @@ function fixture(rows: Record<string, number>, filename = ":memory:") {
   return { db, scheduler: createStateLeaseRenewalScheduler(db) };
 }
 
-function renewal(
-  key: string,
-  complete: StateLeaseRenewal["complete"],
-  leaseMs = 300_000,
-): StateLeaseRenewal {
+function renewal(key: string, complete: Renewal["complete"], leaseMs = 300_000): Renewal {
   return {
     identity: { scope: "test", key, owner: "held" },
     leaseMs,
@@ -61,8 +57,7 @@ it("renews owned rows without overwriting payloads or reviving expired owners", 
   db.prepare("UPDATE state_leases SET payload_json = 'updated' WHERE lease_key = 'first'").run();
   db.prepare("UPDATE state_leases SET owner = 'successor' WHERE lease_key = 'replaced'").run();
   db.prepare("UPDATE state_leases SET expires_at = 129999 WHERE lease_key = 'expired'").run();
-  const before = readSqliteDatabaseWriteTokenForPath(filename);
-  expect(before).toBeTypeOf("string");
+  const before = writeToken(filename);
 
   await vi.advanceTimersByTimeAsync(30_000);
 
@@ -78,21 +73,16 @@ it("renews owned rows without overwriting payloads or reviving expired owners", 
       "SELECT lease_key, owner, expires_at, payload_json FROM state_leases ORDER BY lease_key",
     )
     .all();
-  expect(rows).toEqual(
-    expected.map(([lease_key, , owner, expires_at, payload_json]) => ({
-      lease_key,
-      owner,
-      expires_at,
-      payload_json,
-    })),
+  expect(rows.map(Object.values)).toEqual(
+    expected.map((entry) => entry.filter((_, index) => index !== 1)),
   );
-  expect(readSqliteDatabaseWriteTokenForPath(filename)).not.toBe(before);
+  expect([typeof before, writeToken(filename) !== before]).toEqual(["string", true]);
 });
 
 it("joins an existing deadline and keeps the sibling renewing after one lease closes", async () => {
   const { scheduler } = fixture({ first: 400_000, second: 410_000 });
   const renewed = vi.fn();
-  const makeEntry = (key: string): StateLeaseRenewal => {
+  const makeEntry = (key: string): Renewal => {
     const entry = renewal(key, (outcome) => {
       if ("expiresAt" in outcome && outcome.expiresAt !== undefined) {
         renewed(key, outcome.expiresAt);

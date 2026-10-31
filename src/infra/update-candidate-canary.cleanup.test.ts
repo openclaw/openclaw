@@ -9,6 +9,7 @@ import {
   hasCommandProcessCleanupError,
 } from "../process/exec-result.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { toErrorObject } from "./errors.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
 import {
   holdCanaryProgress,
@@ -126,6 +127,38 @@ describe("canary teardown evidence", () => {
     mocks.port.mockResolvedValue(43_123);
     stubHealthyGateway();
   });
+
+  it.each(["local", "parent"])(
+    "cancels a stalled port probe with its %s allowance",
+    async (owner) => {
+      const parent = new AbortController();
+      const failure = new Error("parent update cancelled");
+      let probeSignal: AbortSignal | undefined;
+      mocks.port.mockImplementation(({ signal }: { signal: AbortSignal }) => {
+        probeSignal = signal;
+        if (owner === "parent") {
+          queueMicrotask(() => parent.abort(failure));
+        }
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => reject(toErrorObject(signal.reason, "Port check aborted")),
+            { once: true },
+          );
+        });
+      });
+
+      const result = await runCanary({ signal: parent.signal }, 1);
+
+      expect(result).toMatchObject({ status: "error", phase: "snapshot" });
+      expect(probeSignal?.aborted).toBe(true);
+      expect(parent.signal.aborted).toBe(owner === "parent");
+      if (owner === "parent") {
+        expect(probeSignal?.reason).toBe(failure);
+      }
+      expect(mocks.spawn).not.toHaveBeenCalled();
+    },
+  );
 
   it("preserves a candidate failure when private-copy cleanup reporting throws", async () => {
     const original = new TypeError("synthetic candidate receipt failure");
@@ -299,24 +332,20 @@ describe("canary teardown evidence", () => {
     },
   );
 
-  it.each([false, true])(
-    "retains uncertain warning delivery (aggregate: %s)",
-    async (aggregate) => {
-      const uncertain = new CommandProcessCleanupError();
-      const error = aggregate ? new AggregateError([uncertain], "uncertain cleanup") : uncertain;
-      await expect(
-        cleanupCopy({
-          directory: path.join(root, "owned-cleanup-copy"),
-          onProgress: () => {
-            throw new RangeError("cleanup progress unavailable");
-          },
-          onWarning: () => {
-            throw error;
-          },
-        }),
-      ).rejects.toBe(error);
-    },
-  );
+  it("retains uncertain warning delivery", async () => {
+    const uncertain = new CommandProcessCleanupError();
+    await expect(
+      cleanupCopy({
+        directory: path.join(root, "owned-cleanup-copy"),
+        onProgress: () => {
+          throw new RangeError("cleanup progress unavailable");
+        },
+        onWarning: () => {
+          throw uncertain;
+        },
+      }),
+    ).rejects.toBe(uncertain);
+  });
 
   it("preserves uncertain startup when recording its stop warning also fails", async () => {
     const response = createDeferredCore<Response>();

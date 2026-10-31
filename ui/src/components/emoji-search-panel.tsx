@@ -40,7 +40,7 @@ function labelChoices(emojis: readonly string[]): EmojiChoice[] {
   );
 }
 
-type EmojiSearchPanelProps = {
+export function EmojiSearchPanel(props: {
   query: string;
   /** Receives committed text only; IME candidates wait for compositionend. */
   onQueryChange: (query: string) => void;
@@ -54,9 +54,7 @@ type EmojiSearchPanelProps = {
   inputRef?: (input: HTMLInputElement) => void;
   onInputKeyDown?: (event: KeyboardEvent & { currentTarget: HTMLInputElement }) => void;
   leading?: JSX.Element;
-};
-
-export function EmojiSearchPanel(props: EmojiSearchPanelProps) {
+}) {
   const defaults = createMemo(() => labelChoices(props.defaults));
   const resultsFor = (query: string) => (query.trim() ? searchEmoji(query) : defaults());
   const results = createMemo(() => resultsFor(props.query));

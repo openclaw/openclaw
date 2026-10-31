@@ -57,7 +57,8 @@ function resolveBoardFrameFailureMessage(
   return t("board.widget.frameAuthorizationFailed");
 }
 
-type BoardWidgetFrameOwnerHost = {
+export type BoardWidgetFrameOwner = ReturnType<typeof createBoardWidgetFrame>;
+export function createBoardWidgetFrame(host: {
   active: () => boolean;
   loadingCovered?: () => boolean;
   bridgeEnabled?: () => boolean;
@@ -68,10 +69,7 @@ type BoardWidgetFrameOwnerHost = {
   scrollBy: (deltaY: number) => void;
   resolveFrameUrl: () => BoardWidgetFrameUrl | undefined;
   widget: () => BoardWidget | undefined;
-};
-
-export type BoardWidgetFrameOwner = ReturnType<typeof createBoardWidgetFrame>;
-export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
+}) {
   const changes = new EventStream<void>();
   let initialTheme = document.documentElement.dataset.themeMode === "light" ? "light" : "dark";
   let sandboxRequestUrl = "";

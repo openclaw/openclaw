@@ -1,6 +1,7 @@
 import type { SpawnSyncOptions } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
+import { createCliTtyMock } from "./test-runtime-capture.js";
 
 type SpawnResult = {
   status: number | null;
@@ -16,20 +17,10 @@ beforeEach(() => {
   childProcessMocks.spawnSync.mockReset();
 });
 
-const stdinTty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-const stdoutTty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+const ttyMock = createCliTtyMock();
 afterEach(() => {
   vi.unstubAllEnvs();
-  for (const [stream, descriptor] of [
-    [process.stdin, stdinTty],
-    [process.stdout, stdoutTty],
-  ] as const) {
-    if (descriptor) {
-      Object.defineProperty(stream, "isTTY", descriptor);
-    } else {
-      Reflect.deleteProperty(stream, "isTTY");
-    }
-  }
+  ttyMock.restore();
 });
 
 const hostRoutingEnv = {
@@ -56,9 +47,7 @@ function runTarget(env: NodeJS.ProcessEnv = {}, args = ["status"], tty = false) 
   })) {
     vi.stubEnv(name, value);
   }
-  for (const stream of [process.stdin, process.stdout]) {
-    Object.defineProperty(stream, "isTTY", { configurable: true, value: tty });
-  }
+  ttyMock.set(tty);
   return maybeRunCliInContainer(["node", "openclaw", ...args]);
 }
 

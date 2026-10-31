@@ -430,11 +430,14 @@ export class UrbitSSEClient {
     });
   }
 
-  async scry(path: string) {
-    return await scryUrbitPath(this.channelRequestContext(), {
-      path,
-      auditContext: "tlon-urbit-scry",
-    });
+  async scry(path: string, beforeRequest?: () => void) {
+    return await scryUrbitPath(
+      { ...this.channelRequestContext(), beforeRequest },
+      {
+        path,
+        auditContext: "tlon-urbit-scry",
+      },
+    );
   }
 
   updateCookie(newCookie: string): void {

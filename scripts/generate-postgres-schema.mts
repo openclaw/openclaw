@@ -30,6 +30,7 @@ import {
 import { withLegacyPostgresIndexOrdering } from "../src/infra/database-engine/postgres-index-ordering.ts";
 import { extractSqliteTableSchema } from "../src/infra/sqlite-schema-sql.ts";
 import { AGENT_TRANSCRIPT_SEARCH_POSTGRES_SQL } from "../src/state/openclaw-agent-search-schema.ts";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../src/state/openclaw-schema-versions.ts";
 import { DOCTOR_OWNED_STATE_TABLES } from "../src/state/openclaw-state-db-contract.ts";
 import {
   TASK_RUN_INDEX_RETIREMENT_V24_SQL,
@@ -39,6 +40,10 @@ import {
   STATE_WRITE_INDEX_RETIREMENT_V27_SQL,
   withLegacyStateWriteIndexes,
 } from "../src/state/openclaw-state-db-schema-v27-indexes.ts";
+import {
+  WORKSPACE_CAS_COLUMNS,
+  WORKSPACE_CAS_TABLES,
+} from "../src/state/openclaw-state-db-schema-v35-workspace-cas.ts";
 import { listOpenClawStateFeatureSchemas } from "../src/state/openclaw-state-feature-schema.ts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { formatGeneratedModule } from "./lib/format-generated-module.mts";
@@ -261,6 +266,25 @@ export async function generatePostgresSchemas(
     }
     const data = catalogs[name]!;
     if (name === "agent") {
+      // SQLite permits extra indexes on downgrade; PostgreSQL v39 seals exact catalogs.
+      // Adopt these indexes with the next natural agent migration, preserving v39 DDL.
+      if (OPENCLAW_AGENT_SCHEMA_VERSION === 39) {
+        for (const item of data.objects) {
+          if (
+            item.kind === "index" &&
+            [
+              "idx_agent_session_input_completions_session_key",
+              "idx_agent_conversation_deliveries_source_session",
+            ].includes(item.name)
+          ) {
+            item.sql = null;
+            item.category = "same-version SQLite index";
+            item.reason =
+              "Lead-approved 2026-10-31 SQLite additive index; PostgreSQL adoption waits for the next agent migration so existing v39 catalog seals remain compatible.";
+            data.tables.find((table) => table.name === item.table)!.indexes--;
+          }
+        }
+      }
       translatePostgresTriggers(data);
       const sources = data.tables.find((table) => table.name === "memory_index_sources");
       if (sources) {
@@ -289,6 +313,7 @@ export async function generatePostgresSchemas(
         } else if (
           item.table !== "sqlite_sequence" &&
           !item.pendingCapability &&
+          item.category !== "same-version SQLite index" &&
           [
             "table",
             "column",
@@ -391,6 +416,29 @@ export async function generatePostgresSchemas(
         files["state-v28-v29.postgres.sql"] =
           "-- Generated v28-to-v29 publication after the local credential owner has verified and retired source rows.\n" +
           "UPDATE schema_meta SET schema_version = 29 WHERE meta_key = 'primary' AND schema_version = 28;\n";
+        const additions = WORKSPACE_CAS_COLUMNS.map((column) => {
+          const definition = data.objects.find(
+            (item) =>
+              item.kind === "column" &&
+              item.table === "local_workspace_projections" &&
+              item.name === column,
+          );
+          assert.ok(definition?.sql, `Missing workspace CAS column: ${column}`);
+          return `ALTER TABLE "local_workspace_projections" ADD COLUMN ${definition.sql};`;
+        });
+        files["state-v34-v35.postgres.sql"] = [
+          "-- Generated DDL-only v34-to-v35 transition; reconciliation converts retained rows online.",
+          "DO $workspace_cas$ BEGIN",
+          "IF to_regclass('local_workspace_projections') IS NOT NULL THEN",
+          ...additions,
+          ...tableStatements({
+            ...data,
+            objects: data.objects.filter((item) =>
+              WORKSPACE_CAS_TABLES.some((table) => table === item.table),
+            ),
+          }),
+          "END IF; END $workspace_cas$;\n",
+        ].join("\n");
       }
       if (!options.reportOnly) {
         files["runtime.ts"] = formatGeneratedModule(
@@ -401,6 +449,7 @@ export async function generatePostgresSchemas(
               preWriteIndexesV27Sql,
               writeIndexesV27Sql,
               clientCredentialV29Sql: files["state-v28-v29.postgres.sql"],
+              workspaceCasV35Sql: files["state-v34-v35.postgres.sql"],
               clientCredentialSource: await generateClientCredentialSource(),
               fragments: manifest.map(({ file, ...fragment }) => ({
                 ...fragment,

@@ -14,7 +14,7 @@ import type { CronRunFinalizationOutcome } from "./runtime-worker.types.js";
 /** The persisted terminal fact and the published event describe the same result. */
 export function cronRunResultEvent(
   job: CronJob,
-  result: CronRunFinalizationOutcome,
+  result: Omit<CronRunFinalizationOutcome, "errorReason">,
 ): CronEvent & { action: "finished" } {
   const quiet = result.status === "ok" && result.triggerEval?.fired === false;
   return {
@@ -39,7 +39,7 @@ export function cronRunResultEvent(
     runAtMs: result.startedAt,
     durationMs: Math.max(0, result.endedAt - result.startedAt),
     nextRunAtMs: job.state.nextRunAtMs,
-    ...(result.triggerEval?.fired ? { triggerFired: true } : {}),
+    ...(result.triggerEval ? { triggerFired: result.triggerEval.fired } : {}),
     model: result.model,
     provider: result.provider,
     usage: result.usage,
@@ -56,7 +56,7 @@ export function cronRunResultHistory(
   const entry = cronRunLogEntryFromEvent(
     cronRunResultEvent(job, result),
     result.endedAt,
-    result.errorClassification,
+    result.errorReason,
   );
   return {
     storeKey,

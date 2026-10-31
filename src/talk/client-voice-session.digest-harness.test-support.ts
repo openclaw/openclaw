@@ -118,9 +118,7 @@ export function useClientVoiceDigestHarness() {
       }),
     recoverStale: (params: Partial<Parameters<typeof closeStaleClientVoiceSessions>[0]> = {}) =>
       closeStaleClientVoiceSessions({ agentId: "main", config: {}, ...params }),
-    recordEffect(this: void, runId: string, toolCallId: string) {
-      recordMutationEvents(runId, toolCallId);
-    },
+    recordEffect: recordMutationEvents,
     get stateDir() {
       return stateDir;
     },

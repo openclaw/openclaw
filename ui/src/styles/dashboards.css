@@ -134,6 +134,14 @@
   gap: var(--space-4);
 }
 
+.dashboards-grid__item {
+  min-width: 0;
+}
+
+.dashboards-grid__item > .dashboard-card {
+  height: 100%;
+}
+
 .dashboard-card {
   min-width: 0;
   overflow: hidden;

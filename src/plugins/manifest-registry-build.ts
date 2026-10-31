@@ -516,7 +516,7 @@ export function buildPluginManifestRegistry(
           ? `stale plugin install record: "${effectivePluginId}" is pinned to ${overriddenCandidate.rootDir}, which belongs to a different OpenClaw installation. This installation's bundled plugin is being used instead. No uninstall is needed to use the bundled plugin. Uninstalling, even with \`--keep-files\`, removes plugin configuration; re-enabling does not restore it.`
           : explicitOverride
             ? `duplicate plugin id resolved by explicit config-selected plugin; ${overriddenCandidate.origin} plugin will be overridden by config plugin (${winnerCandidate.source})`
-            : `duplicate plugin id detected; ${overriddenCandidate.origin} plugin will be overridden by ${winnerCandidate.origin} plugin (${winnerCandidate.source})`,
+            : `duplicate plugin id detected; ${overriddenCandidate.origin} plugin will be overridden by ${winnerCandidate.origin} plugin (${winnerCandidate.source}); ignored plugin source: ${overriddenCandidate.source}`,
       });
       continue;
     }

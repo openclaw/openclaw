@@ -1,5 +1,4 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -8,6 +7,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as grants from "./mcp-grant-store.js";
 import { closeMcpLoopbackServer } from "./mcp-http.js";
 import * as mcp from "./mcp-http.test-support.js";
+import { createRequestGate } from "./server-methods.request-gate.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   search: vi.fn(async () => ({ content: [{ type: "text", text: "search result" }] })),
@@ -91,22 +91,20 @@ it("keeps private search denial, callable sibling tools, and live grant revocati
         expect(mocks.search).toHaveBeenCalledOnce();
         for (const change of ["revoke", "replace"] as const) {
           const active = makeGrant(true);
-          const entered = createDeferred();
-          const release = createDeferred();
+          using gate = createRequestGate();
           mocks.beforeTool.mockImplementationOnce(async ({ params }) => {
-            entered.resolve();
-            await release.promise;
+            await gate.pause();
             return { blocked: false, params };
           });
           const previousCalls = mocks.message.mock.calls.length;
           const pending = request(active, "message");
-          await entered.promise;
+          await gate.entered;
           if (change === "revoke") {
             expect(grants.revokeMcpLoopbackClientGrant(active.grant.token)).toBe(true);
           } else {
             expect(grants.activateMcpLoopbackClientGrantCapture(active.capture)).toBeTruthy();
           }
-          release.resolve();
+          gate.release();
           expect((await pending).result?.isError).toBe(true);
           expect(mocks.message).toHaveBeenCalledTimes(previousCalls);
         }

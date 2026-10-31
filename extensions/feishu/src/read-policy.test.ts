@@ -12,9 +12,8 @@ import type { ResolvedFeishuAccount } from "./types.js";
 
 const cfg = createFeishuTestConfig({});
 
-function createAccount(
-  config: Partial<ResolvedFeishuAccount["config"]> = {},
-): ResolvedFeishuAccount {
+type AccountConfig = Partial<ResolvedFeishuAccount["config"]>;
+function createAccount(config: AccountConfig = {}): ResolvedFeishuAccount {
   return {
     accountId: "default",
     enabled: true,
@@ -35,7 +34,7 @@ const currentContext = {
   toolContext: { currentChannelProvider: "feishu", currentChannelId: "oc_current" },
 };
 function read(params: Pick<ReadParams, "account" | "chatId"> & Partial<ReadParams>) {
-  return assertFeishuChatReadAllowed({ cfg, ctx: {}, ...params });
+  return assertFeishuChatReadAllowed({ cfg, ...params, ctx: params.ctx ?? {} });
 }
 function expectDenied(params: Parameters<typeof read>[0]) {
   expect(() => read(params)).toThrow("Feishu read target is not allowed.");
@@ -57,43 +56,38 @@ describe("Feishu read policy", () => {
     expectDenied({ account, chatId: "oc_other", ctx: currentContext });
   });
 
-  it("does not treat public delivery routing as trusted current-chat identity", () => {
-    expectDenied({
-      account: createAccount(),
-      chatId: "oc_unconfigured",
-      chatType: "group",
-      ctx: {
+  it.each([
+    [
+      "untrusted delivery routing",
+      {},
+      "oc_unconfigured",
+      "group",
+      {
         agentAccountId: "default",
         messageChannel: "feishu",
-        deliveryContext: {
-          channel: "feishu",
-          to: "oc_unconfigured",
-          accountId: "default",
-        },
+        deliveryContext: { channel: "feishu", to: "oc_unconfigured", accountId: "default" },
       },
-    });
-  });
-
-  it.each([
-    {
-      name: "wildcard defaults are not admission",
-      account: createAccount({ dmPolicy: "open", groups: { "*": { requireMention: false } } }),
-      chatId: "oc_unconfigured",
-    },
-    {
-      name: "disabled group policy blocks unclassified current targets",
-      account: createAccount({ groupPolicy: "disabled" }),
-      chatId: "oc_current",
-      ctx: currentContext,
-    },
-    {
-      name: "disabled group targets block direct operators",
-      account: createAccount({ groups: { oc_blocked: { enabled: false } } }),
-      chatId: "oc_blocked",
-      chatType: "group",
-      ctx: { conversationReadOrigin: "direct-operator" },
-    },
-  ] satisfies Array<Parameters<typeof read>[0] & { name: string }>)("$name", expectDenied);
+    ],
+    [
+      "wildcard defaults",
+      { dmPolicy: "open", groups: { "*": { requireMention: false } } },
+      "oc_unconfigured",
+      undefined,
+      undefined,
+    ],
+    ["disabled policy", { groupPolicy: "disabled" }, "oc_current", undefined, currentContext],
+    [
+      "disabled group",
+      { groups: { oc_blocked: { enabled: false } } },
+      "oc_blocked",
+      "group",
+      { conversationReadOrigin: "direct-operator" },
+    ],
+  ] satisfies Array<[string, AccountConfig, string, ReadParams["chatType"]?, ReadParams["ctx"]?]>)(
+    "denies %s",
+    (_name, config, chatId, chatType, ctx) =>
+      expectDenied({ account: createAccount(config), chatId, chatType, ctx }),
+  );
 
   it("requires an effective wildcard before open policy allows non-current DMs", () => {
     const mergedCfg = createFeishuTestConfig({

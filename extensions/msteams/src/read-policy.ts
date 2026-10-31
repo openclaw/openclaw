@@ -72,10 +72,6 @@ function normalizeUserTarget(target: string): string {
     .toLowerCase();
 }
 
-function isStableUserId(value: string): boolean {
-  return /^[0-9a-f-]{16,}$/i.test(value);
-}
-
 async function resolveDmTarget(
   cfg: OpenClawConfig,
   accountId: string,
@@ -96,7 +92,7 @@ async function resolveDmTarget(
   );
   const allowAll =
     directOperator || (teams?.dmPolicy ?? "pairing") === "open" || normalizedEntries.includes("*");
-  if (isStableUserId(userId)) {
+  if (/^[0-9a-f-]{16,}$/i.test(userId)) {
     return allowAll || normalizedEntries.some((entry) => entry === userId)
       ? `user:${userId}`
       : undefined;

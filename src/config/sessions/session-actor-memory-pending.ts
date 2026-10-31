@@ -7,10 +7,7 @@ import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js"
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 import type {
-  PendingInputCustodyCandidate,
-  PendingInputHistoryGrant,
   PendingInputHistoryQuery,
-  PendingInputHistoryReceipt,
   PendingInputHistorySnapshot,
 } from "./session-pending-input-history.types.js";
 import type {
@@ -157,7 +154,13 @@ export function createSessionActorMemoryPending(
         (row) =>
           row.session_key === query.sessionKey &&
           row.session_id === query.sessionId &&
-          row.consumed_event_id === null,
+          row.consumed_event_id === null &&
+          (query.queuedInputIds
+            ? row.state === "queued" &&
+              query.queuedInputIds.includes(row.input_id) &&
+              !query.liveInputIds?.includes(row.input_id)
+            : row.state === "cancelled" ||
+              (row.state === "queued" && query.liveInputIds?.includes(row.input_id))),
       );
       const total =
         query.id === undefined && query.includeTotal !== false ? rows.length : undefined;
@@ -202,62 +205,6 @@ export function createSessionActorMemoryPending(
         .toSorted((left, right) => left.seq - right.seq)
         .slice(0, 51);
       return projectPendingInputReceipts(rows);
-    },
-    interruptHistory(
-      input: { sessionKey: string; sessionId: string; ids: string[] },
-      custody: {
-        isProtected(
-          candidate: PendingInputCustodyCandidate,
-          currentSessionId: string | undefined,
-        ): boolean;
-        admit(stage: "transaction" | "commit", grant: PendingInputHistoryGrant): void;
-      },
-    ): PendingInputHistoryReceipt {
-      if (input.ids.length > 20) {
-        throw new Error("Pending input reconciliation exceeds its page bound");
-      }
-      const selected = [...state.pendingInputs.values()].filter(
-        (row) =>
-          row.session_key === input.sessionKey &&
-          row.session_id === input.sessionId &&
-          input.ids.includes(row.input_id) &&
-          (row.state === "queued" || row.state === "interrupted") &&
-          row.consumed_event_id === null,
-      );
-      const candidates = selected.map((row) => ({
-        input_id: row.input_id,
-        session_key: row.session_key,
-        session_id: row.session_id,
-        lifecycle_generation: row.lifecycle_generation,
-      }));
-      const currentSessionId =
-        selected.length && input.sessionKey === state.hot.target.sessionKey
-          ? state.hot.entry?.sessionId
-          : undefined;
-      custody.admit("transaction", {
-        kind: "pending-input-history-custody",
-        candidates,
-        currentSessionId,
-      });
-      // A single synchronous custody check immediately precedes this bookkeeping effect.
-      const interrupted = candidates.filter(
-        (candidate) => !custody.isProtected(candidate, currentSessionId),
-      );
-      const ids = interrupted.map((candidate) => candidate.input_id);
-      for (const row of selected) {
-        if (ids.includes(row.input_id)) {
-          state.pendingInputs.set(row.idempotency_key, { ...row, state: "interrupted" });
-        }
-      }
-      state.hot.pendingInputs = [...state.pendingInputs.values()].map(
-        ({ message_json: _message, ...value }) => value,
-      );
-      custody.admit("commit", {
-        kind: "pending-input-history-custody",
-        candidates: interrupted,
-        currentSessionId,
-      });
-      return { kind: "pending-input-history-interrupted", ids };
     },
     mutate(input: PendingInputMutation): PendingInputMutationReceipt {
       if (

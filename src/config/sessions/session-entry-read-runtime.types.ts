@@ -41,14 +41,16 @@ export type SessionStoreWorkerReadInput = Omit<SessionStoreWorkerReadScope, "age
 };
 
 export type SessionEntrySummaryWorkerRead = Omit<SessionStoreWorkerReadScope, "agentId"> &
-  Pick<
-    SessionEntryListWorkerInput["scope"],
-    "agentId" | "cleanupSession" | "mainSessionRecovery" | "readConsistency"
-  >;
+  Pick<SessionEntryListWorkerInput["scope"], "agentId" | "cleanupSession" | "readConsistency">;
 
 export type PreparedSessionEntryWorkerRead = {
   result: SessionExactEntriesWorkerResult;
-  database: { agentId: string; path: string; env: NodeJS.ProcessEnv };
+  database: {
+    agentId: string;
+    path: string;
+    env: NodeJS.ProcessEnv;
+    readIdentity?: DatabasePathIdentity;
+  };
   assertCurrent: () => void;
 };
 
@@ -56,6 +58,18 @@ export type SessionEntryReadSourcePreparation = (
   database: PreparedSessionEntryWorkerRead["database"],
   identity: DatabasePathIdentity,
 ) => void;
+
+export type SessionEntryCohortReadOptions = {
+  ordered?: boolean;
+  signal?: AbortSignal;
+  onReadAdmitted?: () => void;
+  /** Prepare caller facts while every selected source remains retained. */
+  prepareConsume?: () => Promise<void>;
+  prepareSource?: (
+    input: SessionEntryWorkerRead,
+    ...source: Parameters<SessionEntryReadSourcePreparation>
+  ) => void;
+};
 
 /** One admitted physical owner; each call prepares a fresh synchronous consumption phase. */
 export type SessionEntryCohortReader = {
@@ -65,7 +79,10 @@ export type SessionEntryCohortReader = {
   readonly storePaths: readonly string[];
   assertCurrent(): void;
   /** Return committed data without retaining writer admission for a consumer effect. */
-  readEntry(assertCallerCurrent: () => void): Promise<{
+  readEntry(
+    assertCallerCurrent: () => void,
+    projection?: SessionEntryReadScope["projection"],
+  ): Promise<{
     entry: InternalSessionEntry;
     source: SessionEntryCohortResult["source"];
   }>;

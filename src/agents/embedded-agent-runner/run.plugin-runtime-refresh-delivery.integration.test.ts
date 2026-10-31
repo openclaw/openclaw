@@ -7,11 +7,10 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
-import { createReplyRestartRecoveryClaimController } from "../../auto-reply/reply/restart-recovery-claim.js";
-import { createReplyRecoveryActorFixture } from "../../auto-reply/reply/restart-recovery-claim.test-support.js";
+import { createReplyActorFixture } from "../../auto-reply/reply/reply-actor.test-support.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-read.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -19,7 +18,6 @@ import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
-import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { OutboundHandoffRejectedError } from "../../infra/outbound/deliver-handoff.js";
 import * as messageActionRunner from "../../infra/outbound/message-action-runner.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -217,7 +215,6 @@ beforeEach(async () => {
         ...action,
         gateway: {
           request: transport,
-          terminalSourceReplyReceiptOwner: "caller",
           clientName: "gateway-client",
           mode: "backend",
         },
@@ -245,7 +242,7 @@ afterEach(async () => {
 
 describe("ordinary source reply across deferred plugin refresh", () => {
   it.for(["confirmed", "not-dispatched", "ambiguous"] as const)(
-    "preserves the real %s receipt when the runner rebuilds its message tool",
+    "preserves %s delivery facts when the runner rebuilds its message tool",
     async (outcome, context) => {
       const sourceTurnId = `source-${outcome}`;
       const identity = {
@@ -266,10 +263,10 @@ describe("ordinary source reply across deferred plugin refresh", () => {
         tools: { codeMode: true, allow: ["message", "reload_runtime", "exec", "wait"] },
       };
       setRuntimeConfigSnapshot(config);
-      let entry: InternalSessionEntry = { sessionId: identity.sessionId, updatedAt: 1 };
+      const entry: InternalSessionEntry = { sessionId: identity.sessionId, updatedAt: 1 };
       await replaceSessionEntry(scope, entry);
       const operation = createReplyOperation({ ...identity, resetTriggered: false });
-      await using actor = createReplyRecoveryActorFixture({
+      await using actor = createReplyActorFixture({
         ...scope,
         operation,
         getSessionId: () => identity.sessionId,
@@ -284,41 +281,17 @@ describe("ordinary source reply across deferred plugin refresh", () => {
         target: { ...scope, sessionEntry: entry },
         updateMode: "none",
       });
-      const claim = createReplyRestartRecoveryClaimController({
-        ...scope,
-        sourceTurnId,
-        admissionRunId: identity.runId,
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
-        getEntry: () => entry,
-        getSessionId: () => identity.sessionId,
-        setEntry: (next) => {
-          entry = next;
-        },
-        acquireSessionActor: () => actor.acquireSessionActor(),
-        isRestartAbort: () => false,
-        resolveDeliveryContext: () => ({ channel: "refreshchat", to: "C123" }),
-        sourceReplyDeliveryMode: "message_tool_only",
-      });
-      expect(await claim.admitUserTurn(recorder)).toBe("admitted");
+      await actor.bind();
+      await recorder.persistApproved();
       expect(recorder.hasPersisted()).toBe(true);
-      expect(loadSessionEntry(scope)).toMatchObject({
-        restartRecoveryDeliveryRunId: identity.runId,
-        restartRecoveryDeliverySourceRunId: sourceTurnId,
-      });
 
       const started = createDeferred();
       const release = createDeferred();
       const parked = createDeferred();
       const physicalSend = vi.fn(() => ({ ok: true, messageId: "reply-1", toJid: "C123" }));
-      let firstCallId: string | undefined;
       let refreshOwner: ReturnType<typeof captureAgentPluginRuntimeRefresh> | undefined;
       transport.mockImplementation(async () => {
-        const current = loadSessionEntry(scope);
-        expect(current?.restartRecoveryDeliveryReceiptState).toBe("terminal-pending");
-        expect(current?.restartRecoveryDeliverySourceRunId).toBe(sourceTurnId);
         if (transport.mock.calls.length === 1) {
-          firstCallId = current?.restartRecoveryDeliveryToolCallId;
-          expect(firstCallId).toBeTypeOf("string");
           // Hold the response after the effect; only a definite refusal never sends.
           const reply = outcome !== "not-dispatched" ? physicalSend() : undefined;
           started.resolve();
@@ -357,24 +330,9 @@ describe("ordinary source reply across deferred plugin refresh", () => {
         expect(attemptResults).toHaveLength(1);
         expect(attemptResults[0]?.terminal.kind).toBe("ok");
         expect(testing.activeRuns.size).toBe(0);
-        const current = loadSessionEntry(scope);
-        expect(current?.restartRecoveryDeliverySourceRunId).toBe(sourceTurnId);
-        if (outcome === "confirmed") {
-          expect(current?.restartRecoveryDeliveryReceiptState).toBe("delivered-terminal");
-          expect(current?.restartRecoveryDeliveryToolCallId).toBe(firstCallId);
-          expect(attemptResults[0]?.didSendViaMessagingTool).toBe(true);
-        } else if (outcome === "ambiguous") {
-          expect(current).toMatchObject({
-            restartRecoveryDeliveryRunId: identity.runId,
-            restartRecoveryDeliveryReceiptState: "terminal-pending",
-            restartRecoveryDeliveryToolCallId: firstCallId,
-          });
+        expect(attemptResults[0]?.didSendViaMessagingTool).toBe(outcome === "confirmed");
+        if (outcome === "ambiguous") {
           expect(events).toContain("transport:unknown");
-          expect(attemptResults[0]?.didSendViaMessagingTool).toBe(false);
-        } else {
-          expect(current?.restartRecoveryDeliveryReceiptState).toBeUndefined();
-          expect(current?.restartRecoveryDeliveryToolCallId).toBeUndefined();
-          expect(attemptResults[0]?.didSendViaMessagingTool).toBe(false);
         }
       };
       const sentForGeneration = new Set<number>();
@@ -420,7 +378,10 @@ describe("ordinary source reply across deferred plugin refresh", () => {
             parked.resolve();
           }
           call = { name: "wait", arguments: { runId: details.runId } };
-        } else if (!sentForGeneration.has(generation)) {
+        } else if (
+          !sentForGeneration.has(generation) &&
+          (generation === 1 || outcome === "not-dispatched")
+        ) {
           sentForGeneration.add(generation);
           const send =
             'message({ action: "send", target: "C123", message: "The result.", final: true })';
@@ -579,27 +540,13 @@ describe("ordinary source reply across deferred plugin refresh", () => {
         });
         expect(messageTools, settlementDiagnostics).toHaveLength(2);
         expect(messageTools[1]).not.toBe(messageTools[0]);
-        expect(messageExecutions[1]).toHaveBeenCalledOnce();
-        const successorResult = await messageExecutions[1]?.mock.results[0]?.value;
-        if (outcome === "confirmed") {
-          expect(successorResult).toMatchObject({ details: { status: "already_delivered" } });
-        } else if (outcome === "ambiguous") {
-          expect(successorResult).toMatchObject({
-            details: { status: "delivery_ambiguous", delivered: false },
-          });
-        }
+        expect(messageExecutions[1]).toHaveBeenCalledTimes(outcome === "not-dispatched" ? 1 : 0);
         expect(events.indexOf("message:2:built")).toBeGreaterThan(
           events.indexOf("attempt:1:settled"),
         );
         expect(physicalSend).toHaveBeenCalledOnce();
         expect(transport).toHaveBeenCalledTimes(outcome === "not-dispatched" ? 2 : 1);
         if (outcome === "ambiguous") {
-          expect(loadSessionEntry(scope)).toMatchObject({
-            restartRecoveryDeliveryRunId: identity.runId,
-            restartRecoveryDeliverySourceRunId: sourceTurnId,
-            restartRecoveryDeliveryReceiptState: "terminal-pending",
-            restartRecoveryDeliveryToolCallId: firstCallId,
-          });
           expect(result.didSendViaMessagingTool).toBe(false);
           expect(result.didDeliverSourceReplyViaMessageTool).not.toBe(true);
           expect(result.sourceReplyDelivered).not.toBe(true);
@@ -618,9 +565,6 @@ describe("ordinary source reply across deferred plugin refresh", () => {
             expect(input.settled?.operationSourceReplyDelivered).not.toBe(true);
           }
         } else {
-          expect(loadSessionEntry(scope)?.restartRecoveryDeliveryReceiptState).toBe(
-            "delivered-terminal",
-          );
           expect(result.didSendViaMessagingTool).toBe(true);
         }
         expect(

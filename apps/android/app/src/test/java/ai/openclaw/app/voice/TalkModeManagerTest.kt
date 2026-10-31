@@ -1314,6 +1314,61 @@ class TalkModeManagerTest {
       }
     }
 
+  @Test
+  fun nativeTalkRetriesOnlyMethodBoundStartupRefusals() =
+    runBlocking {
+      val cases =
+        listOf(
+          Triple("chat.send", true, false),
+          Triple("agent", true, false),
+          Triple("chat.send", false, false),
+          Triple("chat.send", true, true),
+        )
+      for ((method, retryable, switchSession) in cases) {
+        val preparing = AtomicBoolean(true)
+        val attempts = ConcurrentLinkedQueue<JsonObject>()
+        withNativeTalk(interceptRequest = { request, socket ->
+          if (request.getValue("method").jsonPrimitive.content != "chat.send") {
+            false
+          } else {
+            val refuse = preparing.get()
+            if (refuse) {
+              val id = request.getValue("id").jsonPrimitive.content
+              socket.send("""{"type":"res","id":"$id","ok":false,"error":{"code":"UNAVAILABLE","message":"Synthetic agent is preparing","retryable":$retryable,"retryAfterMs":500,"details":{"reason":"startup-sidecars","method":"$method"}}}""")
+            }
+            attempts.add(request.getValue("params").jsonObject)
+            refuse
+          }
+        }) { proof, sends ->
+          currentRecognizer().triggerOnResults(recognitionResults("Keep this native voice turn"))
+          advanceTalkSilence(proof)
+          awaitTalkWork(proof) { attempts.isNotEmpty() }
+          if (switchSession) proof.manager.setMainSessionKey("agent:other:main")
+          preparing.set(false)
+          awaitTalkWork(proof, advanceByMs = 100) { sends.isNotEmpty() || proof.manager.isListening.value }
+          val shouldDeliver = method == "chat.send" && retryable && !switchSession
+          assertEquals("Only a live, method-bound startup refusal may resume its original send", if (shouldDeliver) 1 else 0, sends.size)
+          assertEquals(if (shouldDeliver) 2 else 1, attempts.size)
+          assertEquals(1, attempts.toList().distinct().size)
+          assertEquals(
+            "main",
+            attempts
+              .first()
+              .getValue("sessionKey")
+              .jsonPrimitive.content,
+          )
+          assertEquals(
+            "Keep this native voice turn",
+            attempts
+              .first()
+              .getValue("message")
+              .jsonPrimitive.content,
+          )
+          if (switchSession) assertNull(proof.manager.failureNotice.value)
+        }
+      }
+    }
+
   private suspend fun withNativeTalk(
     history: () -> String = { """{"messages":[{"role":"assistant","content":[{"type":"text","text":"Synthetic native reply"}]}]}""" },
     interceptRequest: (JsonObject, WebSocket) -> Boolean = { _, _ -> false },
@@ -1377,11 +1432,13 @@ class TalkModeManagerTest {
 
   private suspend fun awaitTalkWork(
     proof: RealtimePlaybackProof,
+    advanceByMs: Long = 0,
     ready: () -> Boolean,
   ) {
     val deadline = System.nanoTime() + 5_000_000_000L
     while (!ready() && System.nanoTime() < deadline) {
       shadowOf(Looper.getMainLooper()).idle()
+      if (advanceByMs > 0) proof.scheduler.advanceTimeBy(advanceByMs)
       proof.scheduler.runCurrent()
       withContext(Dispatchers.Default) { delay(10) }
     }

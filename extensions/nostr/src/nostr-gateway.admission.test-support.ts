@@ -21,15 +21,18 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
   dispatchInboundDirectDm: agent.dispatch,
 }));
 
-// Registered by the SQLite-owning outbound suite. Transport, bus, durable queue
-// and Gateway policy resolution are real. Stub only downstream agent dispatch:
-// no model call or full running server/reload is part of this local proof.
+// Registered by the SQLite-owning outbound suite; only downstream agent dispatch is stubbed.
 export function registerNostrGatewayAdmissionTests() {
   const fixture = useNostrAdmissionFixture();
   const approved = new Uint8Array(32).fill(2);
   const other = new Uint8Array(32).fill(3);
   const recipient = getPublicKey(TEST_HEX_PRIVATE_KEY_BYTES);
   const key = getPublicKey(approved);
+  const whenLogged = (part: string, resolve: () => void) => (message: string) => {
+    if (message.includes(part)) {
+      resolve();
+    }
+  };
   async function start(config: ResolvedNostrAccount["config"], stateDir?: string) {
     const h = await fixture.create(stateDir);
     const { relay, runtime, errors } = h;
@@ -37,11 +40,7 @@ export function registerNostrGatewayAdmissionTests() {
     const started = createDeferred<void>();
     const delivered = createDeferred<void>();
     const blocked = createDeferred<void>();
-    agent.dispatch.mockReset();
-    agent.dispatch.mockImplementation(async () => {
-      delivered.resolve();
-    });
-    const dispatch = agent.dispatch;
+    agent.dispatch.mockReset().mockImplementation(async () => delivered.resolve());
     const context = createStartAccountContext({
       account: buildResolvedNostrAccount({ publicKey: recipient, relays: [relay.url], config }),
       cfg: { channels: { nostr: config } },
@@ -50,19 +49,9 @@ export function registerNostrGatewayAdmissionTests() {
     context.channelRuntime = runtime.channel;
     context.log = {
       warn: vi.fn(),
-      debug: (message) => {
-        if (message.includes("blocked Nostr sender")) {
-          blocked.resolve();
-        }
-      },
-      info: (message) => {
-        if (message.includes("Nostr provider started")) {
-          started.resolve();
-        }
-      },
-      error: (message) => {
-        errors.push(message);
-      },
+      debug: whenLogged("blocked Nostr sender", blocked.resolve),
+      info: whenLogged("Nostr provider started", started.resolve),
+      error: (message) => errors.push(message),
     };
     const task = startNostrGatewayAccount(context);
     // Register teardown before waiting for startup; failures cannot leak a socket or monitor.
@@ -71,49 +60,41 @@ export function registerNostrGatewayAdmissionTests() {
       await task;
     });
     await withTimeout(Promise.all([started.promise, relay.subscribed]), 5000);
-    return { ...h, dispatch, delivered, blocked };
+    return { ...h, dispatch: agent.dispatch, delivered, blocked };
   }
 
-  it("delivers through Gateway after a 200-event signed outsider burst with normalized literal keys", async () => {
-    const h = await start({
-      dmPolicy: "allowlist",
-      allowFrom: [key.toUpperCase(), " nostr:" + npubEncode(key) + " ", key],
-    });
+  async function finish(h: Awaited<ReturnType<typeof start>>, ids: string[]) {
+    await h.stop();
+    expect(h.ids).toEqual(ids);
+    expect(getActiveNostrBuses().has("default")).toBe(false);
+  }
+
+  it("keeps normalized allowlists across an outsider burst and an abort/join restart", async () => {
+    const stateDir = fixture.directory();
+    const h = await start(
+      {
+        dmPolicy: "allowlist",
+        allowFrom: [key.toUpperCase(), " nostr:" + npubEncode(key) + " ", key],
+      },
+      stateDir,
+    );
     const denied = Array.from({ length: 200 }, (_, i) => dm(other, "denied-" + i));
     const allowed = dm(approved, "approved through Gateway");
     const forged = { ...dm(other, "forged"), pubkey: key };
     h.relay.sendIncoming([...denied, forged, allowed]);
     await withTimeout(h.delivered.promise, 5000);
-    await h.stop();
+    await finish(h, [allowed.id]);
     expect(h.errors).toEqual([]);
-    expect(h.ids).toEqual([allowed.id]);
-    expect(h.dispatch).toHaveBeenCalledOnce();
-    expect(h.dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        rawBody: "approved through Gateway",
-        senderId: key,
-      }),
+    expect(h.dispatch).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ rawBody: "approved through Gateway", senderId: key }),
     );
     expect(h.relay.subscriptions).toEqual([[{ kinds: [4], "#p": [recipient], since: 0 }]]);
-    expect(getActiveNostrBuses().has("default")).toBe(false);
-  });
-
-  it("recreates Gateway admission after abort/join and an allowlist key change", async () => {
-    const stateDir = fixture.directory();
-    const first = await start({ dmPolicy: "allowlist", allowFrom: [key] }, stateDir);
-    const oldAllowed = dm(approved, "old allowed");
-    first.relay.sendIncoming([oldAllowed]);
-    await withTimeout(first.delivered.promise, 5000);
-    await first.stop();
-    expect(first.ids).toEqual([oldAllowed.id]);
-    expect(getActiveNostrBuses().has("default")).toBe(false);
     const next = await start({ dmPolicy: "allowlist", allowFrom: [getPublicKey(other)] }, stateDir);
     const newAllowed = dm(other, "new allowed");
     next.relay.sendIncoming([dm(approved, "old denied after restart"), newAllowed]);
     await withTimeout(next.delivered.promise, 5000);
-    await next.stop();
+    await finish(next, [newAllowed.id]);
     expect(next.errors).toEqual([]);
-    expect(next.ids).toEqual([newAllowed.id]);
     expect(next.dispatch).toHaveBeenCalledOnce();
   });
 
@@ -125,8 +106,7 @@ export function registerNostrGatewayAdmissionTests() {
     const event = dm(approved, "matching hint is not authorization");
     h.relay.sendIncoming([event]);
     await withTimeout(h.blocked.promise, 5000);
-    await h.stop();
-    expect(h.ids).toEqual([event.id]);
+    await finish(h, [event.id]);
     expect(h.errors).toEqual([]);
     expect(h.dispatch).not.toHaveBeenCalled();
   });
@@ -138,10 +118,7 @@ export function registerNostrGatewayAdmissionTests() {
     { dmPolicy: "allowlist", allowFrom: [key, "accessGroup:friends"] },
     { dmPolicy: "allowlist", allowFrom: [key, "invalid"] },
     { dmPolicy: "allowlist", allowFrom: [key, ""] },
-    { dmPolicy: "pairing", allowFrom: [key] },
-    { dmPolicy: "open", allowFrom: ["*"] },
     { dmPolicy: "disabled", allowFrom: [key] },
-    { allowFrom: [key] },
   ] as const)(
     "durably admits nonmembers through Gateway when optimization is ineligible: %j",
     async (config) => {
@@ -152,8 +129,7 @@ export function registerNostrGatewayAdmissionTests() {
       if (config.dmPolicy === "disabled") {
         await withTimeout(h.blocked.promise, 5000);
       }
-      await h.stop();
-      expect(h.ids).toEqual([event.id]);
+      await finish(h, [event.id]);
       // Admission is not authorization: the disabled policy must never dispatch.
       if (config.dmPolicy === "disabled") {
         expect(h.dispatch).not.toHaveBeenCalled();

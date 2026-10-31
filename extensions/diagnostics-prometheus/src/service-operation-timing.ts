@@ -132,6 +132,21 @@ export function recordOperationTimingEvent(
       );
       return;
     case "diagnostic.gc":
+      if (evt.kind === "mark_sweep_compact") {
+        const labels = { thread: evt.thread ?? "main" };
+        store.gauge(
+          "openclaw_heap_used_after_major_gc_bytes",
+          "Native used heap after the latest received major collection by isolate role.",
+          labels,
+          evt.heapUsedAfterMajorGcBytes,
+        );
+        store.gauge(
+          "openclaw_heap_used_after_major_gc_timestamp_seconds",
+          "Unix observation time of the latest received native major-GC heap sample.",
+          labels,
+          evt.heapUsedAfterMajorGcTimestampSeconds,
+        );
+      }
       store.histogram(
         GC_DURATION_NAME,
         GC_DURATION_HELP,

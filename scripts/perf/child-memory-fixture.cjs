@@ -2,7 +2,51 @@
 const { spawn } = require("node:child_process");
 const { Worker, isMainThread, parentPort } = require("node:worker_threads");
 
-if (process.argv[2] === "leaf") {
+if (isMainThread && process.argv[2] === "forest") {
+  // Keep the same background processes across crossover arms. The container owns cleanup.
+  const fs = require("node:fs");
+  const roots = [];
+  const cleanup = () => {
+    for (const child of roots) {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch (error) {
+        if (error.code !== "ESRCH") {
+          throw error;
+        }
+      }
+    }
+    process.exit(process.exitCode ?? 0);
+  };
+  process.on("SIGTERM", cleanup);
+  process.on("SIGINT", cleanup);
+  void (async () => {
+    try {
+      for (let index = 0; index < Number(process.argv[3]); index++) {
+        const child = spawn(process.execPath, [__filename, process.argv[4]], {
+          detached: true,
+          stdio: ["pipe", "pipe", "inherit"],
+        });
+        roots.push(child);
+        await new Promise((resolve, reject) => {
+          child.once("error", reject);
+          child.once("exit", () => reject(new Error("Fixture exited before readiness")));
+          child.stdout.on("data", (chunk) => {
+            if (chunk.toString().includes('"ready"')) {
+              resolve();
+            }
+          });
+        });
+      }
+      fs.writeFileSync(process.argv[5], JSON.stringify(roots.map((child) => child.pid)));
+      console.log("FOREST_READY");
+    } catch (error) {
+      console.error(error);
+      process.exitCode = 1;
+      cleanup();
+    }
+  })();
+} else if (process.argv[2] === "leaf") {
   const retained = [Buffer.alloc(16 * 1024 ** 2, 1)];
   process.stdin.on("data", () => {
     process.stdout.write(`${JSON.stringify({ event: "burst", at: Date.now() })}\n`);

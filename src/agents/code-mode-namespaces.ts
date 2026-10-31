@@ -108,6 +108,7 @@ export type CodeModeNamespaceRuntime = {
     namespaceId: string,
     path: string[],
     args: unknown[],
+    // The bridge owns JSON normalization and detachment of executed MCP results.
     executeTool: (params: {
       toolName: string;
       catalogId: string;
@@ -494,12 +495,10 @@ export function createCodeModeNamespaceRuntime(
       if (!target.tool) {
         return toCodeModeJsonSafe(input);
       }
-      return toCodeModeJsonSafe(
-        await executeTool({
-          ...target.tool,
-          input,
-        }),
-      );
+      return await executeTool({
+        ...target.tool,
+        input,
+      });
     },
   };
 }

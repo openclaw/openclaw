@@ -4,7 +4,7 @@
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 
 type ChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
 

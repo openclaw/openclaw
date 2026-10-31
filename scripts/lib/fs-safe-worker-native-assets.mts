@@ -15,7 +15,7 @@ const nativeLoad =
   "const loaded = runNativeInitialization(() => require(nativePackageForTarget(target)));";
 
 /** Use the dependency's existing exact pins; no package installation or host-native lookup. */
-export async function prepareWorkerDarwinNativeAssets(rootDir: string, manifestPath: string) {
+async function resolveWorkerNativePins(rootDir: string, manifestPath: string) {
   const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as {
     optionalDependencies: Record<string, string>;
   };
@@ -23,7 +23,7 @@ export async function prepareWorkerDarwinNativeAssets(rootDir: string, manifestP
   const lock = parse(pnpmLockfileDocuments(await fs.readFile(lockPath, "utf8")).dependencies) as {
     packages: Record<string, { resolution: { integrity: string } }>;
   };
-  const pins = Object.entries(WORKER_BUNDLE_DARWIN_NATIVE_ARTIFACTS).map(([target, fileName]) => {
+  return Object.entries(WORKER_BUNDLE_DARWIN_NATIVE_ARTIFACTS).map(([target, fileName]) => {
     const name = `@openclaw/fs-safe-${target}`;
     const version = manifest.optionalDependencies[name];
     const integrity = lock.packages[`${name}@${version}`]?.resolution.integrity;
@@ -32,17 +32,72 @@ export async function prepareWorkerDarwinNativeAssets(rootDir: string, manifestP
         `Worker native asset is not pinned in the installed manifest and lock: ${name}`,
       );
     }
-    return { target, fileName, name, version, integrity };
+    const digest = createHash("sha256").update(integrity).digest("hex");
+    return { fileName, name, version, integrity, cachedName: `${target}-${version}-${digest}.tgz` };
   });
+}
+
+function verifyWorkerNativeArchive(bytes: Buffer, integrity: string, name: string) {
+  if (`sha512-${createHash("sha512").update(bytes).digest("base64")}` !== integrity) {
+    throw new Error(`Worker native package archive integrity mismatch: ${name}`);
+  }
+}
+
+/** Admit only lock-pinned public package bytes, never the surrounding host artifact cache. */
+export async function copyWorkerNativeArchiveCache(
+  rootDir: string,
+  snapshot: string,
+  manifestPath: string,
+) {
+  const pins = await resolveWorkerNativePins(snapshot, manifestPath);
+  const archives = await Promise.all(
+    pins.map(async (pin) => {
+      const file = path.join(rootDir, ".artifacts", "worker-native-assets", pin.cachedName);
+      let bytes: Buffer;
+      try {
+        const stat = await fs.lstat(file);
+        if (!stat.isFile() || stat.size > 32 * 1024 * 1024 || (await fs.realpath(file)) !== file) {
+          throw new Error("Expected an ordinary bounded archive without symlinked ancestors");
+        }
+        bytes = await fs.readFile(file);
+      } catch (cause) {
+        throw new Error(
+          `Offline worker native archive unavailable: ${pin.name}@${pin.version}. Prepare the pinned build assets before isolation.`,
+          { cause },
+        );
+      }
+      verifyWorkerNativeArchive(bytes, pin.integrity, pin.name);
+      return { pin, bytes };
+    }),
+  );
+  const cache = path.join(snapshot, ".artifacts", "worker-native-assets");
+  // Source admission excludes .artifacts; never adopt preexisting snapshot state.
+  await fs.mkdir(path.dirname(cache), { mode: 0o700 });
+  await fs.mkdir(cache, { mode: 0o700 });
+  for (const archive of archives) {
+    await fs.writeFile(path.join(cache, archive.pin.cachedName), archive.bytes, {
+      flag: "wx",
+      mode: 0o600,
+    });
+  }
+  return archives.map(({ pin: { name, version, integrity }, bytes }) => ({
+    name,
+    version,
+    integrity,
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+  }));
+}
+
+export async function prepareWorkerDarwinNativeAssets(rootDir: string, manifestPath: string) {
+  const pins = await resolveWorkerNativePins(rootDir, manifestPath);
   const identity = JSON.stringify([path.resolve(rootDir), pins]);
   let pending = assetsByIdentity.get(identity);
   if (!pending) {
     pending = Promise.all(
-      pins.map(async ({ target, fileName, name, version, integrity }) => {
+      pins.map(async ({ cachedName, fileName, name, version, integrity }) => {
         const cache = path.join(rootDir, ".artifacts", "worker-native-assets");
         await fs.mkdir(cache, { recursive: true });
-        const digest = createHash("sha256").update(integrity).digest("hex");
-        const cached = path.join(cache, `${target}-${version}-${digest}.tgz`);
+        const cached = path.join(cache, cachedName);
         let bytes: Buffer | undefined;
         try {
           bytes = await fs.readFile(cached);
@@ -75,9 +130,7 @@ export async function prepareWorkerDarwinNativeAssets(rootDir: string, manifestP
           }
           bytes = Buffer.concat(downloaded);
         }
-        if (`sha512-${createHash("sha512").update(bytes).digest("base64")}` !== integrity) {
-          throw new Error(`Worker native package archive integrity mismatch: ${name}`);
-        }
+        verifyWorkerNativeArchive(bytes, integrity, name);
         if (cacheMiss) {
           const staging = `${cached}.${randomUUID()}`;
           try {

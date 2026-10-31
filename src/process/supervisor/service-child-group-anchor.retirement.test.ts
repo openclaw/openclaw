@@ -2,7 +2,7 @@ import { performance } from "node:perf_hooks";
 import { expect, it } from "vitest";
 import { createAnchorFixture } from "./anchor-protocol.test-support.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
-import type { ServiceChildAnchorMessage } from "./service-child-protocol.js";
+import type { ServiceChildAnchorMessage, ServiceChildStart } from "./service-child-protocol.js";
 
 it
   .skipIf(process.platform === "win32")
@@ -148,6 +148,48 @@ it
           "An unacknowledged closing receipt must not retire gracefully",
         ).not.toBe(0);
       }
+    } finally {
+      child.kill("SIGKILL");
+      await exited;
+      control.destroy();
+      child.stdio[4]?.destroy();
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "keeps /dev/null stdin on fd 0 through retirement",
+  async () => {
+    // Node 26 closes fd 0 when destroying a /dev/null stdin ReadStream; a later
+    // sync spawn then gets fd 0 for a pipe and libuv aborts when closing it.
+    const { child, generation, control, messages, send, exited, onMessage } = createAnchorFixture({
+      env: {
+        NODE_OPTIONS: `--import=data:text/javascript,${encodeURIComponent(
+          'import { spawnSync } from "node:child_process"; process.once("beforeExit", () => spawnSync(process.execPath, ["-e", ""], { env: {} }));',
+        )}`,
+      },
+    });
+    child.stdout?.resume();
+    child.stderr?.resume();
+    onMessage((message) => {
+      if (message.type === "closing") {
+        send({ type: "closing-ack", closingSequence: message.sequence });
+      }
+    });
+    try {
+      child.send({
+        type: "start",
+        generation,
+        command: process.execPath,
+        args: ["-e", ""],
+        env: {},
+        stdinMode: "pipe-closed",
+        controlFd: 3,
+        lineageFd: 4,
+        acknowledgeClosing: true,
+      } satisfies ServiceChildStart);
+      expect(await exited).toEqual({ code: 0, signal: null });
+      expect(messages.map((message) => message.type)).toContain("stdin-closed");
     } finally {
       child.kill("SIGKILL");
       await exited;

@@ -14,33 +14,22 @@ function chatEvent(state: string, fields = {}) {
   return { event: "chat", payload: { runId, sessionKey, state, ...fields } };
 }
 
-it("registers idempotent cleanup before fallible fixture setup", async () => {
+it("registers cleanup synchronously and runs it only once", async () => {
   const order: string[] = [];
   let registeredCleanup: (() => Promise<void>) | undefined;
-  const setupError = new Error("setup failed");
-
-  await expect(
-    (async () => {
-      const cleanup = registerIdempotentCleanup(
-        (registered) => {
-          order.push("registered");
-          registeredCleanup = registered;
-        },
-        async () => {
-          order.push("cleanup");
-        },
-      );
-      try {
-        order.push("setup");
-        throw setupError;
-      } finally {
-        await cleanup();
-      }
-    })(),
-  ).rejects.toBe(setupError);
+  const cleanup = registerIdempotentCleanup(
+    (registered) => {
+      order.push("registered");
+      registeredCleanup = registered;
+    },
+    async () => {
+      order.push("cleanup");
+    },
+  );
+  expect(registeredCleanup).toBe(cleanup);
+  await cleanup();
   await registeredCleanup!();
-
-  expect(order).toEqual(["registered", "setup", "cleanup"]);
+  expect(order).toEqual(["registered", "cleanup"]);
 });
 
 it("waits for the matching successful terminal event before history observation", async () => {

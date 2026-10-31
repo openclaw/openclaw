@@ -52,6 +52,7 @@ function createFixture() {
   const target = sessionActorFileTarget(database, fixture.scope.sessionKey);
   const options = { agentId: "main", path: database.path };
   const commands: string[] = [];
+  const emptyReducerCommands: string[] = [];
   const admissions: SqliteWorkerAdmissionRequest[] = [];
   const fault: Fault = { reply: "normal" };
   let epoch = 0;
@@ -113,6 +114,9 @@ function createFixture() {
           let admittedOutcomeDataFrames = 0;
           let interruptedOutcomeTransferFrame = false;
           commands.push(command.type);
+          if ("reducers" in command.input && command.input.reducers?.length === 0) {
+            emptyReducerCommands.push(command.type);
+          }
           if (fault.beforeAdmissionError) {
             throw fault.beforeAdmissionError;
           }
@@ -225,8 +229,9 @@ function createFixture() {
       actor,
       admissions,
       commands,
+      emptyReducerCommands,
       fault,
-      seedTransferEntry: () => seedSessionActorOutcomeTransferEntry(fixture),
+      seedTransferEntry: (bytes?: number) => seedSessionActorOutcomeTransferEntry(fixture, bytes),
       readEntry: fixture.read,
       retireGeneration(this: void) {
         epoch += 1;

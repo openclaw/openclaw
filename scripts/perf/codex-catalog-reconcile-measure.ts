@@ -1,9 +1,15 @@
 // Real catalog reconciliation and filesystem scanner; synthetic native catalog rows.
+// Prepare once with --state-dir <isolated-dir> --prepare, then measure with
+// --state-dir <isolated-dir> --operations 2000 --output <result.json>.
+// Use --owner <captured-owner.ts> for a baseline, keeping its dependency runtime
+// identical. Alternate baseline/candidate order for five pairs; collect CPU/GC
+// without instrumentation and allocation separately with --allocations.
 import assert from "node:assert/strict";
 import { writeSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
+import { loadavg } from "node:os";
 import path from "node:path";
 import {
   constants,
@@ -174,6 +180,8 @@ try {
     });
   }
   const cpu = process.cpuUsage();
+  const hostLoadStart = loadavg();
+  const memoryStart = process.memoryUsage();
   const latencies: number[] = [];
   loop.reset();
   marker("heap-start");
@@ -232,6 +240,8 @@ try {
     processAgeAtStartMs: measuredStart,
     elapsedMs: measuredEnd - measuredStart,
     cpuMs: (usedCpu.user + usedCpu.system) / 1000,
+    hostLoad: { start: hostLoadStart, end: loadavg() },
+    memory: { start: memoryStart, end: process.memoryUsage() },
     verifiedRows: sessionCount * operations,
     coverageChecks: values["count-path-work"] ? coverageChecks : null,
     latency: distribution(latencies),

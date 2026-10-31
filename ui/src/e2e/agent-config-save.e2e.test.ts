@@ -3,7 +3,11 @@ import { expect, it } from "vitest";
 import { createRequireRecord } from "../../../test/helpers/record.js";
 import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { createSkill } from "../pages/skills/view.test-support.ts";
-import { installMockGateway, reconnectMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+  reconnectMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { pickerValue, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { agentRoster as createAgentRoster } from "./agent-roster.test-support.ts";
 import {
@@ -133,7 +137,7 @@ suite.define(() => {
       });
       await expect.poll(() => pickerValue(primary)).toBe("openai/after-reload");
       expect(await pickerValue(decision)).toBe("__openclaw_inherit_decision__");
-      await expect.poll(() => indicator.textContent()).toContain("Saved");
+      await expect.poll(() => indicator.textContent()).toContain("Apply changes");
     });
   });
 
@@ -145,6 +149,7 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           assistantName: "Main agent",
           defaultAgentId: "main",
+          featureMethods: [...defaultControlUiFeatureMethods, "tools.catalog", "tools.effective"],
           methodResponses: {
             "agents.list": agentRoster,
             "config.get": configResponse(config),

@@ -19,6 +19,7 @@ import { loadavg } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import type { McpApiServerDoc } from "../../src/agents/code-mode-mcp-api.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -146,12 +147,7 @@ const cpuUsage = (previous?: NodeJS.CpuUsage) =>
     ? process.threadCpuUsage(previous)
     : process.cpuUsage(previous);
 if (values.mode === "allocation") {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 32768,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 32768);
 }
 try {
   if (values.mode === "counts") {

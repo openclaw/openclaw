@@ -45,7 +45,8 @@ import { channelPairingHandlers } from "./channel-pairing.js";
 const pairingPlugin = {
   id: "whatsapp",
   meta: { label: "WhatsApp" },
-  pairing: { idLabel: "Phone number", notifyApproval: vi.fn(async () => undefined) },
+  pairing: { idLabel: "Phone number" },
+  outbound: { deliveryMode: "gateway", sendText: vi.fn() },
   config: {
     listAccountIds: () => ["personal", "public", "unconfigured"],
     resolveAccount: (_cfg: unknown, accountId: string) => ({
@@ -241,6 +242,7 @@ it.each(["notification", "command-owner"])(
         cfg: expect.any(Object),
         pairingAdapter: pairingPlugin.pairing,
         meta,
+        gatewayOwnedDelivery: true,
       });
     }
     expectSuccess(respond, {
@@ -251,6 +253,13 @@ it.each(["notification", "command-owner"])(
     });
   },
 );
+
+it("does not notify a sender when the pairing request no longer exists", async () => {
+  mocks.approve.mockResolvedValue(null);
+  const respond = await invoke("channels.pairing.approve", { ...target, notify: true });
+  expectError(respond, { code: "INVALID_REQUEST" });
+  expect(mocks.notify).not.toHaveBeenCalled();
+});
 
 it("dismisses a request without approving the sender", async () => {
   mocks.dismiss.mockResolvedValue(approved());

@@ -18,7 +18,7 @@ describe("memory session delta publication", () => {
   const { createConfig, getFreshManager, seedSessionTranscript } = fixture;
 
   it("yields an interrupted pass and indexes every pending session after the next quiet period", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     onTestFinished(() => {
       vi.useRealTimers();
     });
@@ -78,7 +78,7 @@ describe("memory session delta publication", () => {
   });
 
   it("keeps the published index when a background rebuild is interrupted", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     onTestFinished(() => {
       vi.useRealTimers();
     });
@@ -125,7 +125,7 @@ describe("memory session delta publication", () => {
   });
 
   it("settles ten queued turns incrementally with the same search results as a full reindex", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     onTestFinished(() => {
       vi.useRealTimers();
     });

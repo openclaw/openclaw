@@ -41,6 +41,17 @@ export function createIMessagePluginStateSyncStoreForTest<T>(
   });
 }
 
+export function importIMessageLegacyPluginStateForTest(
+  options: OpenKeyedStoreOptions,
+  entries: Parameters<typeof stateRuntime.importPluginStateEntriesForDoctorForTests>[2],
+): void {
+  stateRuntime.importPluginStateEntriesForDoctorForTests(
+    "imessage",
+    { ...options, env: imessageTestEnv },
+    entries,
+  );
+}
+
 function installRuntime(
   setRuntime: typeof setIMessageRuntime,
   { reuseDatabase = false, failStores = false } = {},

@@ -1,5 +1,8 @@
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
-import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  formatMediaPlaceholderText,
+  isChannelPartialDeliveryError,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import {
@@ -324,6 +327,9 @@ export const dispatchTelegramMessage = async (
   }
   const dispatchWasSuperseded = isDispatchSuperseded();
   if (turnDispatched === false) {
+    // Core dropped the turn before dispatch (for example the bot-pair loop guard). Settle the
+    // thinking reaction and its stall timers instead of leaving them running.
+    finalizeStatusInBackground("cancelled", "skipped finalize");
     return { kind: "completed" };
   }
   if (dispatchWasSuperseded) {
@@ -428,22 +434,19 @@ export const dispatchTelegramMessage = async (
     if (!isDmTopic || !isFirstTurnInSession) {
       return;
     }
+    const { RawBody, BodyForAgent, Body, media } = dispatchContext.ctxPayload;
+    const labelSource = RawBody?.trim() || BodyForAgent?.trim();
     const userMessage = truncateUtf16Safe(
-      dispatchContext.ctxPayload.RawBody ?? dispatchContext.ctxPayload.Body ?? "",
+      labelSource || formatMediaPlaceholderText(media ?? []) || Body || "",
       500,
     );
-    if (!userMessage.trim()) {
-      return;
-    }
-    const directAutoTopicLabel =
+    const autoTopicConfig = resolveAutoTopicLabelConfig(
       dispatchContext.groupConfig && "autoTopicLabel" in dispatchContext.groupConfig
         ? dispatchContext.groupConfig.autoTopicLabel
-        : undefined;
-    const autoTopicConfig = resolveAutoTopicLabelConfig(
-      directAutoTopicLabel,
+        : undefined,
       telegramCfg.autoTopicLabel,
     );
-    if (!autoTopicConfig) {
+    if (!autoTopicConfig || !userMessage.trim()) {
       return;
     }
     const topicThreadId = dispatchContext.threadSpec.id!;

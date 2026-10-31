@@ -21,7 +21,9 @@ npm run plugin:validate
 
 `plugins init` creates a minimal TypeScript tool plugin by default. The first
 argument is the plugin id; `--name` sets the display name. OpenClaw uses the
-id for the default output directory and package naming. Tool scaffolds use
+id for the default output directory and package naming. Scoped tool and provider
+ids keep their npm scope: `@author/tools` creates `@author/openclaw-plugin-tools`.
+Tool scaffolds use
 `defineToolPlugin` and generate `package.json` scripts `plugin:build` and
 `plugin:validate` that build then call `openclaw plugins build`/`validate`.
 
@@ -60,9 +62,9 @@ and composer replacement. Run `npm install`, `npm run build`, and
 `package.json.openclaw.controlUi`; `plugins build` writes immutable bundled
 assets and their manifest declaration.
 
-Plugin APIs are [experimental](/plugins/sdk-overview#api-stability). To load the
-scaffold's native browser UI, enable **Settings → Labs → Custom plugin UI**, then
-restart the Gateway and reload the browser. See
+Plugin APIs are [experimental](/plugins/sdk-overview#api-stability). The
+scaffold’s native browser UI is available by default once the plugin is enabled;
+there is no Labs opt-in. Existing advanced opt-outs remain honored. See
 [Enable custom plugin UI](/plugins/feature-plugins#enable-custom-plugin-ui).
 
 `plugins pack` validates a built project, bundles its backend dependencies, and

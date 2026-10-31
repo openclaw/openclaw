@@ -74,7 +74,7 @@ function fixture(firstProfile?: string) {
   recorders.push(recorder);
   const sampleAt = (
     value: number,
-    stall: { startedAt: number; endedAt: number } | null = {
+    stall: { startedAt: number; endedAt: number; task?: string } | null = {
       startedAt: value - 1_500,
       endedAt: value,
     },
@@ -88,6 +88,78 @@ function capture(json: string) {
   const fixtureState = fixture(json);
   return { ...fixtureState, result: fixtureState.sampleAt(1_500) };
 }
+it("retains the recorded async task when the sampled stack ends in a dependency", () => {
+  const dependencyUrl = new URL(
+    "../../node_modules/@openclaw/fs-safe/dist/write.js",
+    import.meta.url,
+  ).href;
+  const { sampleAt } = fixture(profile(0, "runPinnedWriteNative", dependencyUrl));
+  const result = sampleAt(1_500, {
+    startedAt: 0,
+    endedAt: 1_500,
+    task: "schema-store:write",
+  });
+  expect(result).toContain("[async task:schema-store:write]");
+  expect(result).toContain("runPinnedWriteNative@node_modules/@openclaw/fs-safe");
+  expect(Buffer.byteLength(result!)).toBeLessThanOrEqual(2_048);
+});
+
+it.each([false, true])(
+  "identifies sampled leaves below shared ancestors within the log cap (long=%s)",
+  (long) => {
+    const frame = (id: number, name: string, url: string, children?: number[]) => ({
+      id,
+      callFrame: { functionName: name, url, lineNumber: 9, columnNumber: 0, scriptId: 1 },
+      children,
+    });
+    const appUrl = new URL("../agents/admitted-run-context.ts", import.meta.url).href;
+    const dependencyUrl = new URL(
+      "../../node_modules/@openclaw/fs-safe/dist/write.js",
+      import.meta.url,
+    ).href;
+    const suffix = long ? "x".repeat(200) : "";
+    const depth = long ? 24 : 12;
+    const nodes = Array.from({ length: depth }, (_, i) =>
+      frame(
+        i,
+        `shared${i}${suffix}`,
+        i === 0 ? appUrl : dependencyUrl,
+        i < depth - 1 ? [i + 1] : Array.from({ length: 12 }, (_leaf, j) => j + depth),
+      ),
+    );
+    nodes.push(
+      ...Array.from({ length: 12 }, (_, i) => frame(i + depth, `probe${i}${suffix}`, "node:fs")),
+    );
+    const { result, warn } = capture(
+      JSON.stringify({
+        startTime: 0,
+        endTime: 1_500_000,
+        nodes,
+        samples: Array.from({ length: 12 }, (_, i) => i + depth),
+        timeDeltas: Array.from({ length: 12 }, () => 100_000),
+      }),
+    );
+    expect(warn).not.toHaveBeenCalled();
+    expect(result).toContain("self=");
+    const self = JSON.parse(result!.match(/ self=(.*) deepest=/)![1]!) as Array<
+      [string, number, number, string]
+    >;
+    const deepest = JSON.parse(result!.split(" deepest=")[1]!) as Array<[number, string[]]>;
+    expect(self[0]).toEqual([
+      expect.stringContaining("probe0"),
+      1,
+      100,
+      expect.stringContaining("shared0"),
+    ]);
+    expect(deepest[0]?.[1][0]).toContain("shared0");
+    expect(deepest[0]?.[1].at(-1)).toContain("probe0");
+    expect(Buffer.byteLength(result!)).toBeLessThanOrEqual(2_048);
+    if (long) {
+      expect(result).toContain("reportTruncated=true");
+      expect(deepest[0]?.[1]).toContain("[...]");
+    }
+  },
+);
 it("rotates without a sampling gap and reports only the recent stall's inclusive frames", () => {
   const { recorder, handles, sampleAt } = fixture();
   expect(sampleAt(5_000, null)).toBeUndefined();
@@ -130,6 +202,12 @@ function sampledProfile(start: number, end: number, samples: Array<{ at: number;
   });
 }
 
+function sampleWindow(earlier: number[], block: number[], later: number[]) {
+  return [earlier, block, later].flatMap((times, index) =>
+    times.map((at) => ({ at, name: ["earlierWork", "controlledBlock", "laterWork"][index]! })),
+  );
+}
+
 it.skipIf(typeof getBuiltinModule("v8").startCpuProfile !== "function")(
   "profiles a real 1,200 ms synchronous block without the unrelated work before its report",
   async () => {
@@ -166,16 +244,7 @@ it.each([
     reportAt: 2_500,
     rotationAt: 0,
     serializationMs: 0,
-    chunks: [
-      [
-        { at: 300, name: "earlierWork" },
-        { at: 525, name: "controlledBlock" },
-        { at: 1_000, name: "controlledBlock" },
-        { at: 1_675, name: "controlledBlock" },
-        { at: 1_750, name: "laterWork" },
-        { at: 2_300, name: "laterWork" },
-      ],
-    ],
+    chunks: [sampleWindow([300], [525, 1_000, 1_675], [1_750, 2_300])],
     expectedSamples: 3,
   },
   {
@@ -186,17 +255,8 @@ it.each([
     rotationAt: 5_000,
     serializationMs: 50,
     chunks: [
-      [
-        { at: 4_200, name: "earlierWork" },
-        { at: 4_450, name: "controlledBlock" },
-        { at: 4_900, name: "controlledBlock" },
-      ],
-      [
-        { at: 5_100, name: "controlledBlock" },
-        { at: 5_575, name: "controlledBlock" },
-        { at: 5_625, name: "laterWork" },
-        { at: 6_100, name: "laterWork" },
-      ],
+      sampleWindow([4_200], [4_450, 4_900], []),
+      sampleWindow([], [5_100, 5_575], [5_625, 6_100]),
     ],
     expectedSamples: 4,
   },
@@ -283,23 +343,14 @@ it("caps oversized windows and disables failed capture without failing the sampl
   expect(recorder.sample({ startedAt: 0, endedAt: 1_500 })).toBeUndefined();
 });
 
-it.each([
-  [
-    "runtime",
-    () => {
-      native.versions.node = "24.19.0";
-    },
-  ],
-  ["profiler", () => native.conflict.mockReturnValue(true)],
-  [
-    "worker",
-    () => {
-      native.mainThread = false;
-    },
-  ],
-] as const)("leaves an unsupported or conflicting %s alone", (_kind, disable) => {
-  disable();
-  const { recorder } = fixture();
-  expect(recorder.sample({ startedAt: 0, endedAt: 1_500 })).toBeUndefined();
-  expect(native.start).not.toHaveBeenCalled();
-});
+it.each(["runtime", "profiler", "worker"])(
+  "leaves an unsupported or conflicting %s alone",
+  (kind) => {
+    native.versions.node = kind === "runtime" ? "24.19.0" : "26.6.0";
+    native.conflict.mockReturnValue(kind === "profiler");
+    native.mainThread = kind !== "worker";
+    const { recorder } = fixture();
+    expect(recorder.sample({ startedAt: 0, endedAt: 1_500 })).toBeUndefined();
+    expect(native.start).not.toHaveBeenCalled();
+  },
+);

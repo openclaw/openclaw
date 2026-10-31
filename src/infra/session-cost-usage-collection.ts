@@ -11,7 +11,6 @@ import {
 } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveSessionArtifactDirectory } from "../config/sessions/paths.js";
 import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
-import { SESSION_ARCHIVE_ZSTD_SUFFIX } from "../config/sessions/transcript-file-names.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolveRealpathOrAbsolute } from "./boundary-path.js";
@@ -169,6 +168,11 @@ async function readUsageCostSqliteFiles(
   });
 }
 
+type UsageCostSqliteEntry = Pick<
+  UsageCostSqliteFile,
+  "kind" | "sourcePath" | "sessionId" | "mtimeMs"
+>;
+
 export async function listUsageCountedTranscriptSources(
   agentId: string,
   params: {
@@ -176,7 +180,26 @@ export async function listUsageCountedTranscriptSources(
     sessionsDir?: string;
     storePath: string;
   } & UsageCostCollectionAccess,
-): Promise<UsageCostTranscriptSource[]> {
+): Promise<UsageCostTranscriptSource[]>;
+/** Without statistics, SQLite entries carry only identity and their last mutation time. */
+export async function listUsageCountedTranscriptSources(
+  agentId: string,
+  params: {
+    minMtimeMs?: number;
+    sessionsDir?: string;
+    storePath: string;
+    statistics: false;
+  } & UsageCostCollectionAccess,
+): Promise<Array<UsageCostJsonlSource | UsageCostSqliteEntry>>;
+export async function listUsageCountedTranscriptSources(
+  agentId: string,
+  params: {
+    minMtimeMs?: number;
+    sessionsDir?: string;
+    storePath: string;
+    statistics?: false;
+  } & UsageCostCollectionAccess,
+): Promise<Array<UsageCostJsonlSource | UsageCostSqliteEntry | UsageCostSqliteFile>> {
   const logicalAgentId = normalizeAgentId(agentId);
   const { storePath } = params;
   const sessionsDir = params.sessionsDir ?? resolveSessionArtifactDirectory(storePath);
@@ -185,19 +208,31 @@ export async function listUsageCountedTranscriptSources(
     sessionsDir,
     storePath,
   });
-  const instances = await params.listSqliteInstances(agentId, storePath);
-  const sqliteBacked = (
-    await readUsageCostSqliteFiles(
-      instances
-        .filter(
-          (instance) =>
-            instance.agentId === logicalAgentId &&
-            (params.minMtimeMs === undefined || instance.updatedAtMs >= params.minMtimeMs),
-        )
-        .map((instance) => ({ agentId: logicalAgentId, sessionId: instance.sessionId, storePath })),
-      params,
-    )
-  ).filter((file) => file !== undefined);
+  const instances = (await params.listSqliteInstances(agentId, storePath)).filter(
+    (instance) =>
+      instance.agentId === logicalAgentId &&
+      (params.minMtimeMs === undefined || instance.updatedAtMs >= params.minMtimeMs),
+  );
+  const markers = instances.map((instance) => ({
+    agentId: logicalAgentId,
+    sessionId: instance.sessionId,
+    storePath,
+  }));
+  const sqliteBacked: Array<UsageCostSqliteEntry | UsageCostSqliteFile> =
+    params.statistics === false
+      ? markers.map((marker, index) => {
+          const sourcePath = formatSqliteSessionFileMarker({
+            ...marker,
+            storePath: params.resolveSqliteStorePath(marker.agentId, marker.storePath),
+          });
+          return {
+            kind: "sqlite",
+            sourcePath,
+            sessionId: marker.sessionId,
+            mtimeMs: instances[index]!.updatedAtMs,
+          };
+        })
+      : (await readUsageCostSqliteFiles(markers, params)).filter((file) => file !== undefined);
   const sqliteSessionIds = new Set(sqliteBacked.map((file) => file.sessionId).filter(Boolean));
   const canonicalFileBacked = fileBacked.filter(
     (file) => !file.sessionId || !sqliteSessionIds.has(file.sessionId),
@@ -315,7 +350,6 @@ export async function resolveUsageCostTranscriptFiles(
 export async function resolveUsageCostTranscriptPaths(
   sessionFiles: readonly string[],
   access: UsageCostCollectionAccess,
-  options: { materializeArchives?: boolean } = {},
 ): Promise<Array<string | undefined>> {
   const { results, hasError, firstError } = await runTasksWithConcurrency({
     tasks: sessionFiles.map((sessionFile) => async () => {
@@ -323,12 +357,6 @@ export async function resolveUsageCostTranscriptPaths(
       if (marker) {
         const storePath = access.resolveSqliteStorePath(marker.agentId, marker.storePath);
         return formatSqliteSessionFileMarker({ ...marker, storePath });
-      }
-      if (
-        options.materializeArchives === false &&
-        sessionFile.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)
-      ) {
-        return undefined;
       }
       try {
         return await access.materializeArchive(sessionFile);

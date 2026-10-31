@@ -54,7 +54,8 @@ export function oversizedJsonResponse(params?: {
   // Cap the advertised stream at 64 MiB so a broken bounded reader fails
   // instead of hanging, while still forcing cancellation past the 16 MiB limit.
   const state = { canceled: false, enqueuedBytes: 0 };
-  const chunk = 1024 * 1024;
+  // Consumers only read these zero bytes; share the same immutable fixture chunk.
+  const chunk = new Uint8Array(1024 * 1024);
   const maxChunks = 64;
   let emitted = 0;
   const response = new Response(
@@ -65,8 +66,8 @@ export function oversizedJsonResponse(params?: {
           return;
         }
         emitted += 1;
-        state.enqueuedBytes += chunk;
-        controller.enqueue(new Uint8Array(chunk));
+        state.enqueuedBytes += chunk.byteLength;
+        controller.enqueue(chunk);
       },
       cancel() {
         state.canceled = true;

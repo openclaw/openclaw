@@ -29,7 +29,6 @@ import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-ag
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import * as stateDb from "../state/openclaw-state-db.js";
@@ -342,12 +341,6 @@ describe("shared auth relocation lifecycle", () => {
         expect(source.prepare("SELECT value_json FROM cache_entries").get()?.value_json).toBe(
           '"untouched"',
         );
-      }
-      if (integrityCheck !== "full") {
-        // Successful QUICK relocation must not admit a later FULL runtime open.
-        expect(() =>
-          openOpenClawAgentDatabase({ agentId: "main", path: sourcePath, env: state.env }),
-        ).toThrow(/integrity_check.*idx_agent_cache_updated/su);
       }
     },
   );

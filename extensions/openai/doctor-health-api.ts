@@ -13,35 +13,34 @@ export const daybreakAliasHealthCheck: HealthCheck = {
   kind: "plugin",
   source: "openai",
   description: "Find retiring Daybreak aliases without choosing replacement models.",
-  async detect({ cfg }) {
-    const paths: string[] = [];
-    const visit = (value: unknown, path: string): void => {
-      if (typeof value === "string") {
-        if (isRetiringDaybreakRef(value)) {
-          paths.push(path);
-        }
-      } else if (value && typeof value === "object") {
-        for (const [key, child] of Object.entries(value)) {
-          const childPath = path ? `${path}.${key}` : key;
-          if (isRetiringDaybreakRef(key)) {
-            paths.push(childPath);
-          }
-          visit(child, childPath);
-        }
-      }
-    };
-    visit(cfg, "");
+  async detect({ cfg, env }) {
+    const { inspectDoctorModelReferences } =
+      await import("openclaw/plugin-sdk/doctor-repair-runtime");
+    const inventory = await inspectDoctorModelReferences({
+      cfg,
+      env,
+      matches: isRetiringDaybreakRef,
+    });
+    const paths = inventory.references.map((reference) => reference.path);
 
-    return paths.length
-      ? [
-          {
-            checkId: "openai/daybreak-alias-retirement",
-            severity: "warning",
-            source: "openai",
-            message: `Daybreak Blue/Red aliases retire on October 28, 2026 (${paths.join(", ")}). Replace these references with specific model IDs available under your approved Daybreak access and check your Daybreak settings. No automatic replacement was made: the underlying models remain available, but a successor cannot be inferred from an alias. For Responses API setup follow https://developers.openai.com/api/docs/guides/daybreak; for native Codex use its Daybreak toggle.`,
-          },
-        ]
-      : [];
+    return [
+      ...inventory.warnings.map((message) => ({
+        checkId: "openai/daybreak-alias-retirement",
+        severity: "warning" as const,
+        source: "openai",
+        message,
+      })),
+      ...(paths.length
+        ? [
+            {
+              checkId: "openai/daybreak-alias-retirement",
+              severity: "warning" as const,
+              source: "openai",
+              message: `Daybreak Blue/Red aliases retire on October 28, 2026 (${paths.join(", ")}). Replace these references with specific model IDs available under your approved Daybreak access and check your Daybreak settings. No automatic replacement was made: a successor cannot be inferred from an alias. Run openclaw doctor --fix --replace-model with an explicit JSON {from,to,accessProgram} choice after checking account access. For Responses API setup follow https://developers.openai.com/api/docs/guides/daybreak; for native Codex use its Daybreak toggle.`,
+            },
+          ]
+        : []),
+    ];
   },
 };
 

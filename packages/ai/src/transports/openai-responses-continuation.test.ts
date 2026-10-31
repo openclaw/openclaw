@@ -36,15 +36,7 @@ const assistantOutput = {
     {
       type: "output_text",
       text: "answer",
-      annotations: [
-        {
-          type: "url_citation",
-          url: "https://example.test/source",
-          title: "source",
-          start_index: 0,
-          end_index: 6,
-        },
-      ],
+      annotations: [{ type: "file_citation", file_id: "file_1", filename: "a", index: 0 }],
       logprobs: [{ token: "answer", logprob: -0.1, bytes: [], top_logprobs: [] }],
     },
   ],
@@ -217,6 +209,60 @@ describe("OpenAI Responses continuation", () => {
     expect(
       responsesContinuationPrefixFingerprint([userInput(`${text}changed`)], [assistantOutput]),
     ).not.toBe(prefixHash);
+  });
+
+  it("fingerprints mutable history without serializing the whole prefix", () => {
+    const text = "history payload".repeat(2_000);
+    const content = { type: "input_text", text };
+    const item = { type: "message", role: "user", content: [content] };
+    const input = [item];
+    const encodedText = JSON.stringify(text);
+    const expected = hash(
+      "sha256",
+      `[{"content":[{"text":${encodedText},"type":"input_text"}],"role":"user","type":"message"}]`,
+    );
+    const stringify = vi.spyOn(JSON, "stringify");
+    try {
+      expect(responsesContinuationPrefixFingerprint(input)).toBe(expected);
+      // The canonical writer encodes string leaves; no container needs another JSON encoding.
+      expect(
+        stringify.mock.calls.filter(([value]) => value !== null && typeof value === "object"),
+      ).toHaveLength(0);
+      content.text = `${text} edited`;
+      expect(responsesContinuationPrefixFingerprint(input)).not.toBe(expected);
+    } finally {
+      stringify.mockRestore();
+    }
+  });
+
+  it("compares mutable continuation history without materializing property-entry arrays", () => {
+    const previousMessage = userInput("message 0");
+    const currentMessage = structuredClone(previousMessage);
+    const input = [
+      previousMessage,
+      ...Array.from({ length: 63 }, (_, index) => userInput(`message ${index + 1}`)),
+    ];
+    const state: ResponsesContinuationState = {
+      lastRequest: { input },
+      lastResponseId: "resp_previous",
+      lastResponseItems: [],
+    };
+    const current = [currentMessage, ...structuredClone(input.slice(1))];
+    const request = { input: [...current, secondUser] };
+    const fromEntries = vi.spyOn(Object, "fromEntries");
+    try {
+      expect(resolve(state, request)).toMatchObject({
+        continuationStatus: "continued",
+        request: { previous_response_id: "resp_previous", input: [secondUser] },
+      });
+      expect(fromEntries).not.toHaveBeenCalled();
+      currentMessage.content[0] = { type: "input_text", text: "edited in place" };
+      expectHistoryChanged(state, request);
+      previousMessage.content[0] = { type: "input_text", text: "edited in place" };
+      expect(resolve(state, request).continuationStatus).toBe("continued");
+    } finally {
+      fromEntries.mockRestore();
+    }
   });
 
   it.each([

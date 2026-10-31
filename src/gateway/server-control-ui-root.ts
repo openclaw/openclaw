@@ -97,7 +97,7 @@ export function readControlUiRootAsset(
   owner.controller.signal.throwIfAborted();
   const preferences =
     root.kind === "bundled" &&
-    fileRel.startsWith("assets/") &&
+    (fileRel === "sw.js" || fileRel.startsWith("assets/")) &&
     isControlUiCompressibleAsset(fileRel)
       ? encodings
       : (["identity"] as const);
@@ -116,6 +116,7 @@ export function readControlUiRootAsset(
   const pool = (runtime.pool ??= new WorkerTaskPool({
     workerUrl: resolveRuntimeProcessEntrypointUrl("controlUiFile"),
     workerClass: "file-reader",
+    workerOptions: { resourceLimits: { maxYoungGenerationSizeMb: 16 } },
     // Reuse the bounded reader pool across UI visits several minutes apart.
     idleTimeoutMs: 10 * 60_000,
     maxPendingTasks: 2_048,

@@ -81,7 +81,6 @@ describe("qa-bus client", () => {
       baseUrl,
       accountId: "acct-a",
       cursor: 0,
-      acknowledgedCursor: 0,
       timeoutMs: 0,
       ...overrides,
     });

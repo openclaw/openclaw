@@ -701,6 +701,15 @@ describe("redactSecrets", () => {
       },
       { input: { Cause: { CODE: "EAI_AGAIN" } }, expected: { Cause: { CODE: "EAI_AGAIN" } } },
       { input: { cause: { code: "p4Q6x7J9" } }, expected: { cause: { code: "***" } } },
+      {
+        input: { cause: { code: "CERT_REVOKED-secret" } },
+        expected: { cause: { code: "CERT_R…cret" } },
+      },
+      { input: { cause: { code: "cert_revoked" } }, expected: { cause: { code: "***" } } },
+      {
+        input: { oauth: { cause: { code: "CERT_REVOKED" } } },
+        expected: { oauth: { cause: { code: "***" } } },
+      },
       { input: { cause: { code: 123456 } }, expected: { cause: { code: "***" } } },
       { input: { cause: { code: true } }, expected: { cause: { code: "***" } } },
       { input: { cause: { code: 123456n } }, expected: { cause: { code: "***" } } },

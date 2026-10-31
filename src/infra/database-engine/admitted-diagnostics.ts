@@ -24,7 +24,7 @@ function unknownStore(
   const result = createDatabaseStoreDiagnostic({ family, path: null, configured });
   result.issues.push("Status reports admitted facts; unobserved facts remain unknown.");
   result.nextSteps.push(
-    "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+    "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
   );
   return result;
 }

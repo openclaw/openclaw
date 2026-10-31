@@ -2,7 +2,7 @@ import { toUSVString } from "node:util";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
-import { resolveCronJobsStorePath } from "./paths.js";
+import { resolveCronStoreSelectionAsync } from "./paths.js";
 
 type PreparedNames = {
   context: OpenClawStateWorkerContext;
@@ -77,15 +77,32 @@ export async function prepareCronJobNameResolver(jobIds: string[], storePath?: s
   }
   const prepared: PreparedNames = {
     context: captureOpenClawStateReadWorkerContext(),
-    // Default selection reads machine state in the worker; explicit paths need no SQL.
-    storeKey: storePath?.trim() ? resolveCronJobsStorePath(storePath) : undefined,
     jobIds: ids,
     revision: 0,
   };
   const reference = new WeakRef(prepared);
   preparedNames.add(reference);
   releasedNames.register(prepared, reference);
+  const resolveName = (jobId: string) => {
+    prepared.context.admission.assertCurrent();
+    const id = toUSVString(jobId);
+    if (!prepared.names?.has(id)) {
+      throw new Error("Cron job names need refresh; await prepareCronJobNameResolver");
+    }
+    return prepared.names.get(id);
+  };
   try {
+    const selection = await resolveCronStoreSelectionAsync(
+      storePath,
+      process.env,
+      prepared.context,
+    );
+    if (selection.status === "unresolved") {
+      // Transcript presentation must remain available while cron awaits operator selection.
+      prepared.names = new Map(ids.map((id) => [id, undefined]));
+      return resolveName;
+    }
+    prepared.storeKey = selection.storeKey;
     const reply = await executeExistingOpenClawStateRead(
       { path: prepared.context.admission.databasePath },
       { type: "cron.jobNames", jobIds: ids, storePath: prepared.storeKey },
@@ -99,14 +116,7 @@ export async function prepareCronJobNameResolver(jobIds: string[], storePath?: s
     if (prepared.revision === 0) {
       prepared.names = new Map(ids.map((id) => [id, reply?.names.get(id)]));
     }
-    return (jobId: string) => {
-      prepared.context.admission.assertCurrent();
-      const id = toUSVString(jobId);
-      if (!prepared.names?.has(id)) {
-        throw new Error("Cron job names need refresh; await prepareCronJobNameResolver");
-      }
-      return prepared.names.get(id);
-    };
+    return resolveName;
   } catch (error) {
     preparedNames.delete(reference);
     throw error;

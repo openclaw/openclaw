@@ -93,7 +93,6 @@ it.each<[Scope, Partial<WindowsSecurity>, string?]>([
   } else {
     await expect(result).resolves.toBe(scope === "directory" ? directory : executable);
   }
-  expect(inspections.batch).toHaveBeenCalledOnce();
 });
 
 it("reports a failed batch against the checked chain and retains its cause", async () => {

@@ -1,34 +1,21 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { loadCronJobsStoreWithConfigJobsReadOnly } from "./store.js";
+import { makeCronJob } from "./delivery.test-helpers.js";
+import { withCronStore } from "./store.worker.test-support.js";
 import { cronStoreKey } from "./store/key.js";
 
 it("reads a pre-projection cron table without writable schema repair", async () => {
-  await withOpenClawTestState({ prefix: "openclaw-cron-readonly-upgrade-" }, async (state) => {
-    const storePath = path.join(state.stateDir, "cron", "jobs.json");
-    const databasePath = resolveOpenClawStateSqlitePath(state.env);
-    await fs.mkdir(path.dirname(databasePath), { recursive: true });
-    const now = Date.now();
-    const job = {
+  await withCronStore("cron-readonly-upgrade", async (state) => {
+    const { storePath, databasePath } = state;
+    const job = makeCronJob({
       id: "legacy-reader",
       name: "Legacy reader",
-      enabled: true,
-      createdAtMs: now,
-      updatedAtMs: now,
-      schedule: { kind: "every", everyMs: 60_000 },
       sessionTarget: "main",
       wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "tick" },
-      state: {},
-    } as const;
+    });
     const { state: jobState, updatedAtMs, ...jobDefinition } = job;
-    const database = new DatabaseSync(databasePath);
-    try {
-      database.exec(`
+    await state.createDatabase(`
         CREATE TABLE cron_jobs (
           store_key TEXT NOT NULL,
           job_id TEXT NOT NULL,
@@ -48,6 +35,8 @@ it("reads a pre-projection cron table without writable schema repair", async () 
           PRIMARY KEY (store_key, job_id)
         ) STRICT;
       `);
+    const database = new DatabaseSync(databasePath);
+    try {
       database
         .prepare(
           `INSERT INTO cron_jobs (
@@ -70,7 +59,7 @@ it("reads a pre-projection cron table without writable schema repair", async () 
       database.close();
     }
 
-    const loaded = await loadCronJobsStoreWithConfigJobsReadOnly(storePath, state.env);
+    const loaded = await state.read();
     expect(loaded.store.jobs).toMatchObject([
       { id: job.id, name: job.name, enabled: true, payload: job.payload },
     ]);

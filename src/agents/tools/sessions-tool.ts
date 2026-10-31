@@ -106,14 +106,7 @@ async function resolvePatchTarget(
   opts: SessionsToolOptions,
   sessionKey: string | undefined,
   callGateway: AgentToolGatewayRequestCaller,
-): Promise<{
-  agentId: string;
-  cfg: OpenClawConfig;
-  isRequesterSession: boolean;
-  key: string;
-  requesterAgentId: string;
-  requesterSessionKey: string;
-}> {
+) {
   const context = resolveSessionToolContext(opts);
   const rawKey = sessionKey ?? context.effectiveRequesterKey;
   const requesterAgentId = resolveSessionAgentId({

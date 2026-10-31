@@ -42,12 +42,6 @@ import { formatForLog } from "../ws-log.js";
 import { AgentRequestReservationEndedError } from "./agent-dedupe.js";
 import type { AgentTurnContext } from "./types.js";
 
-type ExplicitRecipientSession = Awaited<
-  ReturnType<
-    typeof import("../../infra/outbound/agent-delivery.js").resolveAgentExplicitRecipientSession
-  >
->;
-
 export async function prepareAgentContentPhase(params: {
   request: AgentRunRequest;
   cfg: OpenClawConfig;
@@ -64,7 +58,11 @@ export async function prepareAgentContentPhase(params: {
   agentId?: string;
   providerOverride?: string;
   modelOverride?: string;
-  explicitRecipientSession?: ExplicitRecipientSession;
+  explicitRecipientSession?: Awaited<
+    ReturnType<
+      typeof import("../../infra/outbound/agent-delivery.js").resolveAgentExplicitRecipientSession
+    >
+  >;
   knownAgents: string[];
   assertAdmissionCurrent?: () => void;
   onTargetResolved?: (target: {

@@ -14,6 +14,14 @@ const params = vi.hoisted(() => [] as unknown[]);
 
 vi.mock("openai", () => ({
   default: class MockOpenAI {
+    chat = {
+      completions: {
+        create: vi.fn((request: unknown) => {
+          params.push(request);
+          throw new Error("captured before sending");
+        }),
+      },
+    };
     responses = {
       create: vi.fn((request: unknown) => {
         params.push(request);
@@ -290,6 +298,49 @@ it.each([
     expect(params.at(-1)).toHaveProperty("access_programs", accessPrograms);
   },
 );
+
+it.each([
+  ["openai-completions", "https://api.openai.com/v1"],
+  ["openai-responses", "https://proxy.example/v1"],
+] as const)("keeps Standard usable on %s at %s without enabling Daybreak", async (api, baseUrl) => {
+  const model: Model<typeof api> = {
+    id: "standard-fixture",
+    name: "Standard fixture",
+    api,
+    provider: "openai",
+    baseUrl,
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 128000,
+    maxTokens: 4096,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  };
+  const context = { messages: [{ role: "user" as const, content: "hello", timestamp: 0 }] };
+  const options = { apiKey: "synthetic-test-key" };
+  for (const cyber of ["standard", "daybreak_blue", "daybreak_red"] as const) {
+    const stream = wrapOpenAIResponsesStream({
+      provider: "openai",
+      modelId: model.id,
+      model,
+      streamFn: streamSimple,
+      nativeWebSearchAllowedByToolPolicy: false,
+      extraParams: { accessPrograms: { cyber } },
+    });
+    const before = params.length;
+    if (cyber === "standard") {
+      const output = await stream(model, context, options);
+      expect((await output.result()).errorMessage).toBe("captured before sending");
+      expect(params).toHaveLength(before + 1);
+      expect(params.at(-1)).toHaveProperty("model", model.id);
+      expect(params.at(-1)).not.toHaveProperty("access_programs");
+    } else {
+      await expect(async () => await stream(model, context, options)).rejects.toThrow(
+        "requires an official OpenAI Platform or ChatGPT Responses endpoint",
+      );
+      expect(params).toHaveLength(before);
+    }
+  }
+});
 
 it.each([null, { cyber: null }, { cyber: "unknown" }, { cyber: "daybreak_blue", extra: true }])(
   "rejects invalid access-program settings before making a request: %j",

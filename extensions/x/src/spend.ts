@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { materializeErrorStack } from "openclaw/plugin-sdk/error-runtime";
 import { resolveGlobalMap, resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { XCostLimits } from "./cost-limits.js";
@@ -101,6 +102,7 @@ function createSpendOwner(runtime: SpendRuntime, accountId: string, getLimits: (
           failure = new Error("X spend accounting unavailable; paid requests paused", {
             cause: error,
           });
+          materializeErrorStack(failure);
           notify();
         }
         throw error;
@@ -326,6 +328,7 @@ function createSpendOwner(runtime: SpendRuntime, accountId: string, getLimits: (
   };
   return {
     api,
+    failed: () => failure !== undefined,
     update(nextRuntime: SpendRuntime, nextLimits: () => XCostLimits) {
       limits = nextLimits;
       logger = nextRuntime.logging.getChildLogger({ channel: "x", accountId });
@@ -336,6 +339,7 @@ function createSpendOwner(runtime: SpendRuntime, accountId: string, getLimits: (
     },
     async close() {
       failure = new Error("X spend owner closed; pending reservations retained for recovery");
+      materializeErrorStack(failure);
       await tail;
     },
   };
@@ -344,7 +348,9 @@ function createSpendOwner(runtime: SpendRuntime, accountId: string, getLimits: (
 export function openXSpend(runtime: SpendRuntime, accountId: string, getLimits: () => XCostLimits) {
   const key = JSON.stringify([runtime.state.resolveStateDir(), accountId]);
   let owner = owners.get(key);
-  if (!owner) {
+  // A failed owner keeps refusing its handles. Reopening recovers from the durable
+  // reservations, as a restart would, so one transient write error cannot pause spend forever.
+  if (!owner || owner.failed()) {
     owner = createSpendOwner(runtime, accountId, getLimits);
     owners.set(key, owner);
   } else {

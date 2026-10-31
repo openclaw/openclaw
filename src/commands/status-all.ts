@@ -501,7 +501,7 @@ export async function statusAllCommand(
       if (updateRestartValue) {
         emitDetail(`Update restart: ${updateRestartValue}`);
       }
-      for (const line of formatUpdateRestartActionLines(diagnosis.sentinel.payload)) {
+      for (const line of formatUpdateRestartActionLines(diagnosis.sentinel.payload, diagnosis)) {
         emitDetail(line);
       }
     } else {

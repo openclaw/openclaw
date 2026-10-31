@@ -31,6 +31,7 @@ export type ChatActivityPillsProps = {
     startedAt?: number;
     endedAt?: number;
     hasActiveRun: boolean;
+    runtime?: import("../../../lib/session-progress-runtime.ts").SessionProgressCardRuntime;
     refresh?: SessionProgressCardRefreshState;
     onOpen: OpenActivity;
   };

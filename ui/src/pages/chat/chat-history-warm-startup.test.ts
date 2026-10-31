@@ -13,6 +13,10 @@ import {
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { createGatewayRequestMock } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import {
+  createGatewayBrowserClientFixture,
+  createInitializationContext,
+} from "./chat-application-context.test-support.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import {
   chatHistoryRequests,
@@ -22,17 +26,17 @@ import {
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
+import { subscribeChatPaneSnapshotInvalidation } from "./chat-pane-startup-subscriptions.ts";
 import {
-  createGatewayBrowserClientFixture,
   createPaneHeaderWorkspaceFixture,
-  createInitializationContext,
   createPaneTestHost,
   getPaneTestRuntime,
   nativeHistoryMessage,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
-import { refreshChatCommands, refreshPageChat } from "./chat-state-refresh.ts";
+import { refreshChatCommands } from "./chat-session-commands.ts";
+import { refreshPageChat } from "./chat-state-refresh.ts";
 import type { ChatHistoryState } from "./chat-transcript-metadata.ts";
 import { PaneHeaderView } from "./components/chat-pane-header.tsx";
 import { resetTranscriptTestDom } from "./components/chat-transcript.test-support.ts";
@@ -45,8 +49,10 @@ import {
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
 import * as snapshotDatabase from "./session-snapshot-database.ts";
+import { publishSnapshotInvalidation } from "./session-snapshot-invalidation-events.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
+import { CHAT_SNAPSHOT_PROJECTION_VERSION } from "./session-snapshot-record.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import "./chat-pane.tsx";
 
@@ -88,6 +94,12 @@ const startupRevision = () => ({
   sessionInfo: "session-1",
   commands: "commands-1",
 });
+
+async function paintCachedSnapshot(): Promise<void> {
+  await vi.advanceTimersByTimeAsync(0);
+  vi.advanceTimersToNextFrame();
+  await vi.advanceTimersByTimeAsync(1);
+}
 
 function mountPane(
   key = sessionKey,
@@ -163,7 +175,7 @@ function mountPane(
     },
     async hydrate(snapshot: ChatSessionSnapshot | null = stored) {
       read.resolve(snapshot);
-      await vi.advanceTimersByTimeAsync(0);
+      await paintCachedSnapshot();
     },
     snapshot: () =>
       readChatSessionSnapshot(state.chatMessagesBySession!, state, { sessionKey: key }),
@@ -197,7 +209,7 @@ function shareConnection(
 
 function snapshotRecord(h: ReturnType<typeof mountPane>, snapshot: ChatSessionSnapshot) {
   return {
-    projectionVersion: 3,
+    projectionVersion: CHAT_SNAPSHOT_PROJECTION_VERSION,
     savedAt: Date.now(),
     sessionKey: resolveChatSnapshotKey(h.state, { sessionKey }),
     sessionId: snapshot.sessionId,
@@ -307,7 +319,7 @@ describe("first chat startup snapshot ordering", () => {
       } else {
         h.read.reject(new Error("Cache unavailable"));
       }
-      await vi.advanceTimersByTimeAsync(0);
+      await paintCachedSnapshot();
       flush();
       expect(title()).toBe(outcome === "hit" ? "Cached conversation" : "New session");
       network.resolve(h.liveResult);
@@ -324,7 +336,7 @@ describe("first chat startup snapshot ordering", () => {
       recoveryScopeReady: false,
     });
     h.read.resolve({ ...stored, progressCard });
-    await vi.advanceTimersByTimeAsync(0);
+    await paintCachedSnapshot();
     expect(h.state.chatMessages).toEqual([]);
     expect(
       sessionProgressCardsForGateway(h.pane.context.gateway).get({ sessionKey }),
@@ -335,7 +347,7 @@ describe("first chat startup snapshot ordering", () => {
     const h = mountPane();
     const progressCard = { sessionKey, revision: 2, updatedAt: 100, markdown: "Checking results" };
     h.read.resolve({ ...stored, progressCard });
-    await vi.advanceTimersByTimeAsync(0);
+    await paintCachedSnapshot();
     expect(h.state.connected).toBe(false);
     expect(h.state.chatMessages).toEqual(stored.messages);
     expect(sessionProgressCardsForGateway(h.pane.context.gateway).get({ sessionKey })).toEqual(
@@ -372,7 +384,7 @@ describe("first chat startup snapshot ordering", () => {
     expect(h.request).toHaveBeenCalledOnce();
     const fresh = { ...h.liveResult, messages: structuredClone(stored.messages) };
     record.resolve(snapshotRecord(h, snapshot));
-    await vi.advanceTimersByTimeAsync(0);
+    await paintCachedSnapshot();
     network.resolve(fresh);
     await loading;
     flush();
@@ -394,6 +406,62 @@ describe("first chat startup snapshot ordering", () => {
     expect(h.state.chatMessages).toEqual([changedMessage]);
     expect(h.state.chatMessages[0]).not.toBe(cachedMessage);
   });
+
+  it.each(["direct", "prewarmed"] as const)(
+    "refetches reasoning omitted by the previous cached projection (%s)",
+    async (mode) => {
+      const cursor = "head-with-hidden-reasoning";
+      const messages = [
+        nativeHistoryMessage(1, "Check the evidence."),
+        ...["reasoning-1", "reasoning-2"].map((id, index) => ({
+          role: "assistant",
+          content: [{ type: "thinking", thinking: "Compare the evidence." }],
+          __openclaw: { id, seq: index + 2 },
+        })),
+        nativeHistoryMessage(4, "The answer is ready."),
+      ];
+      const cacheKey = resolveChatSnapshotKey(
+        { settings: loadSettings(), client: { offlineRecoveryScope: "test-recovery-scope" } },
+        { sessionKey },
+      );
+      vi.spyOn(snapshotDatabase, "readStoredChatSnapshotRecord").mockResolvedValueOnce({
+        // Version 12 filtered out reasoning while retaining the current transcript cursor.
+        projectionVersion: 12,
+        savedAt: 0,
+        sessionKey: cacheKey,
+        sessionId: stored.sessionId,
+        snapshot: {
+          ...stored,
+          deltaCursor: cursor,
+          messages: [messages[0], messages[3]],
+        },
+      });
+      if (mode === "prewarmed") {
+        await prewarmChatSnapshot(cacheKey);
+        await vi.dynamicImportSettled();
+      }
+      const h = mountPane(sessionKey, false, new SessionSnapshotStore());
+      // A late cache read already triggers a full request; settle it before connection
+      // so only projection invalidation can retire the otherwise-current cursor.
+      await paintCachedSnapshot();
+      h.request.mockImplementation(async (_method, params) =>
+        typeof params === "object" &&
+        params !== null &&
+        "cursor" in params &&
+        params.cursor === cursor
+          ? { kind: "delta", messages: [], deltaCursor: cursor, sessionId: stored.sessionId }
+          : { ...h.liveResult, messages, deltaCursor: cursor },
+      );
+      h.connect();
+      await h.start();
+      expect(h.request).toHaveBeenCalledExactlyOnceWith(
+        "chat.startup",
+        expect.not.objectContaining({ cursor: expect.anything() }),
+        { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
+      );
+      expect(h.state.chatMessages).toEqual(messages);
+    },
+  );
 
   it.each([false, true])(
     "requests history without waiting for storage and ignores a late snapshot (subscription=%s)",
@@ -430,6 +498,40 @@ describe("first chat startup snapshot ordering", () => {
       expect(h.state.chatMessages).toEqual(liveMessages);
       h.read.resolve(stored);
       await vi.advanceTimersByTimeAsync(0);
+      expect(h.state.chatMessages).toEqual(liveMessages);
+      expect(h.request).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([false, true])(
+    "keeps the pending full refill when an obsolete snapshot is rejected (subscription=%s)",
+    async (subscribe) => {
+      const record = createDeferred<unknown>();
+      vi.spyOn(snapshotDatabase, "readStoredChatSnapshotRecord").mockReturnValueOnce(
+        record.promise,
+      );
+      const h = mountPane(sessionKey, false, new SessionSnapshotStore());
+      onTestFinished(subscribeChatPaneSnapshotInvalidation(() => h.state));
+      const network = h.pendingResponse();
+      if (subscribe) {
+        connectSessionOwner(h);
+      } else {
+        h.connect();
+      }
+      const subscription = subscribe
+        ? syncSelectedSessionMessageSubscription(h.state, { initialHistory: true })
+        : undefined;
+      const loading = h.start();
+      await vi.waitFor(() => expect(h.request).toHaveBeenCalledOnce());
+      record.resolve({ ...snapshotRecord(h, stored), projectionVersion: 12 });
+      await paintCachedSnapshot();
+      network.resolve(
+        subscribe
+          ? { key: sessionKey, initialHistory: { ok: true, payload: h.liveResult } }
+          : h.liveResult,
+      );
+      await subscription;
+      await loading;
       expect(h.state.chatMessages).toEqual(liveMessages);
       expect(h.request).toHaveBeenCalledOnce();
     },
@@ -658,7 +760,7 @@ describe("first chat startup snapshot ordering", () => {
       const second = mountPane();
       first.read.resolve(snapshot);
       second.read.resolve({ ...snapshot, historyState: secondHistory });
-      await vi.advanceTimersByTimeAsync(0);
+      await paintCachedSnapshot();
       first.connect();
       shareConnection(first, second);
       const omitted = createDeferred<unknown>();
@@ -745,6 +847,112 @@ describe("first chat startup snapshot ordering", () => {
     expect(h.state.chatMessages).toEqual(liveMessages);
   });
 
+  it.each([
+    ...[true, false].flatMap((beforeHello) =>
+      (["current", "scope", "generation"] as const).map((transition) => ({
+        beforeHello,
+        transition,
+        hidden: false,
+      })),
+    ),
+    { beforeHello: false, transition: "current" as const, hidden: true },
+  ])(
+    "displays prepared rows before dispatch with scope-owned live receipts across cache retirement ($transition, beforeHello=$beforeHello, hidden=$hidden)",
+    async ({ beforeHello, transition, hidden }) => {
+      vi.spyOn(document, "hidden", "get").mockReturnValue(hidden);
+      const cacheKey = resolveChatSnapshotKey(
+        { settings: loadSettings(), client: { offlineRecoveryScope: "test-recovery-scope" } },
+        { sessionKey },
+      );
+      const stateRevision = startupRevision();
+      const historyState: ChatHistoryState = {
+        stateRevision,
+        pendingInputs: emptyPendingInputs(),
+        sessionInfo: { key: sessionKey, kind: "direct", sessionId: "warm-session", updatedAt: 1 },
+        commands: startupCommands(),
+      };
+      vi.spyOn(snapshotDatabase, "readStoredChatSnapshotRecord").mockResolvedValueOnce({
+        projectionVersion: CHAT_SNAPSHOT_PROJECTION_VERSION,
+        savedAt: 0,
+        sessionKey: cacheKey,
+        sessionId: stored.sessionId,
+        snapshot: { ...stored, historyState },
+      });
+      await prewarmChatSnapshot(cacheKey);
+      await vi.dynamicImportSettled();
+      const h = mountPane(sessionKey, false, new SessionSnapshotStore());
+      expect(h.state.connected).toBe(false);
+      expect(h.state.chatMessages).toEqual(stored.messages);
+      expect(h.snapshot()).toMatchObject({ ...stored, historyState });
+      expect(chatHistoryRequests(h.state).acceptedHistory).toBeUndefined();
+      const dispatch = createDeferred<boolean>();
+      Object.defineProperty(h.client, "connectSent", {
+        get: () => dispatch.promise,
+      });
+      connectSessionOwner(h);
+      h.state.connected = !beforeHello;
+      let rowsAtDispatch: unknown[] | undefined;
+      let snapshotAtDispatch: ChatSessionSnapshot | null | undefined;
+      h.request.mockImplementationOnce(async () => {
+        rowsAtDispatch = h.state.chatMessages.slice();
+        snapshotAtDispatch = h.snapshot();
+        if (transition === "scope") {
+          Object.defineProperty(h.client, "recoveryScope", { value: "replacement-scope" });
+        } else if (transition === "generation") {
+          await publishSnapshotInvalidation({});
+        }
+        if (beforeHello) {
+          h.connect();
+          void syncSelectedSessionMessageSubscription(h.state);
+        }
+        return {
+          key: sessionKey,
+          initialHistory: {
+            ok: true,
+            payload: {
+              kind: "delta",
+              messages: [],
+              deltaCursor: "current-cursor",
+              sessionInfo: h.liveResult.sessionInfo,
+            },
+          },
+        };
+      });
+      const subscription = syncSelectedSessionMessageSubscription(h.state, {
+        initialHistory: true,
+        beforeHello,
+      });
+      if (beforeHello) {
+        expect(h.request).not.toHaveBeenCalled();
+        expect(h.state.chatMessages).toEqual(stored.messages);
+      }
+      dispatch.resolve(true);
+      await subscription;
+      expect(rowsAtDispatch).toEqual(stored.messages);
+      expect(snapshotAtDispatch).toMatchObject({ ...stored, historyState });
+      expect(chatHistoryRequests(h.state).acceptedHistory).toBeUndefined();
+      expect(h.request).toHaveBeenCalledExactlyOnceWith(
+        "sessions.messages.subscribe",
+        expect.objectContaining({
+          initialHistory: expect.objectContaining({
+            cursor: stored.deltaCursor,
+            knownState: stateRevision,
+          }),
+        }),
+        expect.anything(),
+      );
+      await h.start();
+      const scopeChanged = transition === "scope";
+      expect(h.request).toHaveBeenCalledTimes(scopeChanged ? 2 : 1);
+      expect(h.state.chatMessages).toEqual(scopeChanged ? liveMessages : stored.messages);
+      expect(chatHistoryRequests(h.state).acceptedHistory).toMatchObject({
+        client: h.client,
+        connectionEpoch: h.state.connectionEpoch,
+        sessionKey,
+      });
+    },
+  );
+
   it("sends the retained cursor and receipts once storage has settled", async () => {
     const record = createDeferred<unknown>();
     vi.spyOn(snapshotDatabase, "readStoredChatSnapshotRecord").mockReturnValueOnce(record.promise);
@@ -774,7 +982,9 @@ describe("first chat startup snapshot ordering", () => {
     });
     h.connect();
     record.resolve(snapshotRecord(h, { ...stored, historyState }));
-    await chatHistoryRequests(h.state).initialSnapshotHydration?.promise;
+    const hydration = chatHistoryRequests(h.state).initialSnapshotHydration?.promise;
+    await paintCachedSnapshot();
+    await hydration;
     await h.start();
     h.expectStartup({ cursor: "stored-cursor", knownState: stateRevision });
     expect(h.state.chatMessages).toEqual(stored.messages);

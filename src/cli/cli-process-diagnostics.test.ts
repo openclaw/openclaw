@@ -51,7 +51,7 @@ ${mode === "explicit" ? "process.exit(3);" : "process.exitCode = 3;"}
     }
   });
 
-  it("forwards borrowed receivers, arguments, return values, and thrown errors without exit diagnostics", async () => {
+  it("preserves event dispatch and instruments only process exit, including thrown errors", async () => {
     const result = await runDiagnostic(
       `
 const assert = require('node:assert/strict');
@@ -76,31 +76,16 @@ process.on(event, function (value) {
 });
 assert.equal(process.emit(event, payload), true);
 assert.equal(process.emit('fixture-missing'), false);
-console.log('forwarded');
-`,
-      { code: 0, stdout: "forwarded\n" },
-    );
-    // Only the child's real exit is instrumented, never a borrowed or non-exit dispatch.
-    expect(exitBoundaries(result.stderr), result.failure).toMatchObject([
-      { phase: "exit-listeners-enter", exitCode: 0 },
-      { phase: "exit-listeners-return", exitCode: 0 },
-    ]);
-  });
-
-  it("records throwing process exit listeners without replacing their error", async () => {
-    const result = await runDiagnostic(
-      `
-const assert = require('node:assert/strict');
-const failure = new Error('fixture-exit-failed');
 process.once('exit', function fixtureThrow() {
   assert.equal(this, process);
   throw failure;
 });
 assert.throws(() => process.emit('exit', 9), (error) => error === failure);
-console.log('preserved error');
+console.log('forwarded');
 `,
-      { code: 0, stdout: "preserved error\n" },
+      { code: 0, stdout: "forwarded\n" },
     );
+    // Borrowed and non-exit dispatches must not add diagnostic records.
     expect(exitBoundaries(result.stderr), result.failure).toMatchObject([
       { phase: "exit-listeners-enter", exitCode: 9 },
       { phase: "exit-listeners-throw", exitCode: 9 },

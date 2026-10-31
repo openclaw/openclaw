@@ -1,10 +1,6 @@
 import { cancel } from "@clack/prompts";
 import { expectDefined } from "@openclaw/normalization-core";
-import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
-import {
-  normalizeOptionalString,
-  normalizeStringifiedOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { removeProviderAuthProfilesWithLock } from "../../agents/auth-profiles.js";
 import { upsertAuthProfileWithLockOrThrow } from "../../agents/auth-profiles/profiles.js";
@@ -66,6 +62,7 @@ import {
   normalizeManualAuthProvider,
   readPipedStdin,
   resolveDefaultTokenProfileId,
+  resolveManualTokenExpiryMs,
   validateOpenAICodexApiKeyInput,
 } from "./auth-manual-input.js";
 import {
@@ -79,30 +76,19 @@ import { promotePersistedAuthProfile } from "./auth-profile-promotion.js";
 import {
   refreshProviderAuthAfterLogin,
   refreshRunningGatewayAuthState,
+  refreshSavedAuthAfterSettingsFailure,
   type ModelAuthRefreshOutcome,
 } from "./auth-refresh.js";
 import {
   resolveReloginProfileIdentity,
   snapshotReloginAuthProfiles,
 } from "./auth-relogin-identity.js";
+import { isSharedGatewayForCliLogin, showModelsAuthScopeNote } from "./auth-scope-note.js";
 import {
   loadValidConfigSnapshotOrThrow,
   resolveModelsTargetAgent,
   updateConfig,
 } from "./shared.js";
-
-function resolveManualTokenExpiryMs(expiresIn: string | undefined): number | undefined {
-  const normalizedExpiresIn = normalizeStringifiedOptionalString(expiresIn);
-  if (!normalizedExpiresIn) {
-    return undefined;
-  }
-  const durationMs = parseDurationMs(normalizedExpiresIn, { defaultUnit: "d" });
-  const expires = resolveExpiresAtMsFromDurationMs(durationMs);
-  if (expires === undefined) {
-    throw new Error("Invalid expiry duration: resulting token expiry is outside Date range.");
-  }
-  return expires;
-}
 
 function requireManualAuthProvider(raw: string | undefined): string {
   const provider = normalizeOptionalString(raw);
@@ -452,6 +438,9 @@ async function runProviderAuthMethod(
       await login.prompter.note(login.result.notes.join("\n"), "Provider notes");
     }
   } catch (error) {
+    if (error instanceof ProviderAuthConfigApplyError) {
+      await refreshSavedAuthAfterSettingsFailure(login);
+    }
     if (persistedProfiles.length > 0 && !(error instanceof ProviderCredentialsSavedError)) {
       throw new ProviderCredentialsSavedError(
         error instanceof Error
@@ -763,18 +752,21 @@ export type ModelsAuthLoginFlowOptions = LoginOptions & {
 export async function runModelsAuthLoginFlowCore(
   opts: ModelsAuthLoginFlowOptions,
 ): Promise<ModelsAuthLoginFlowResult> {
-  return runModelsAuthLoginFlow(opts, true);
+  return runModelsAuthLoginFlow(opts, () => true);
 }
 
 export async function runModelsAuthLoginFlowForGateway(
   opts: ModelsAuthLoginFlowOptions,
 ): Promise<ModelsAuthLoginFlowResult> {
-  return runModelsAuthLoginFlow(opts, opts.isRemote === false);
+  return runModelsAuthLoginFlow(
+    opts,
+    (config) => opts.isRemote === false && isSharedGatewayForCliLogin(config),
+  );
 }
 
 async function runModelsAuthLoginFlow(
   opts: ModelsAuthLoginFlowOptions,
-  showScopeNote: boolean,
+  showScopeNote: (config: OpenClawConfig) => boolean | Promise<boolean>,
 ): Promise<ModelsAuthLoginFlowResult> {
   const requestedProviderId = opts.provider
     ? normalizeManualAuthProvider(opts.provider)
@@ -815,16 +807,8 @@ async function runModelsAuthLoginFlow(
   } else if (requestedProviderId && !requestedProvider) {
     requestedProvider = resolveRequestedLoginProviderOrThrow(authProviders, requestedProviderId);
   }
-  if (showScopeNote) {
-    await prompter.note(
-      [
-        "Scope: System / agent",
-        `Agent: ${context.agentId}`,
-        "Location: the machine running OpenClaw",
-        `For personal model accounts on a Gateway, run ${formatCliCommand("openclaw models accounts login --help")}.`,
-      ].join("\n"),
-      "Provider sign-in",
-    );
+  if (await showScopeNote(context.config)) {
+    await showModelsAuthScopeNote(prompter, context.agentId);
   }
   const selectedProvider =
     requestedProvider ??
@@ -979,10 +963,13 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     );
   }
 
-  await runModelsAuthLoginFlowCore({
-    ...opts,
-    runtime,
-    prompter: createClackPrompter(),
-  });
+  await runModelsAuthLoginFlow(
+    {
+      ...opts,
+      runtime,
+      prompter: createClackPrompter(),
+    },
+    isSharedGatewayForCliLogin,
+  );
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

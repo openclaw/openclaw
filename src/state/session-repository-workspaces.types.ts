@@ -20,6 +20,7 @@ export type RepositoryWorkspaceCreate = RepositoryWorkspaceOwner & {
   url: string;
   requestedRef?: string;
   runSetupScript?: boolean;
+  branchPrefix?: string;
   branch?: string;
 };
 export type RepositoryWorkspaceMutation = { workspaceId: string; expectedRevision: number };

@@ -113,6 +113,82 @@ describe("describeImageWithModelCore", () => {
   installImageRuntimeTestHooks({ apiKey: "test-api-key" });
 
   it.each([
+    ["error", "boom", /boom/i],
+    ["aborted", undefined, "Image model failed (openai/gpt-5.4-mini)"],
+  ] as const)(
+    "surfaces %s image-model responses without retrying",
+    async (stopReason, errorMessage, expectedError) => {
+      mockOpenAi();
+      completeMock.mockResolvedValue({
+        ...openAiCompletion(""),
+        stopReason,
+        errorMessage,
+        content: [{ type: "thinking", thinking: "", thinkingSignature: "reasoning_content" }],
+      });
+      await expect(describeImageWithModelCore(request())).rejects.toThrow(expectedError);
+      expect(completeMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("returns trimmed text from image-model responses", async () => {
+    const ref = { provider: "anthropic", model: "claude-opus-4-6" };
+    mockImageModel({ provider: ref.provider, id: ref.model, api: "anthropic-messages" });
+    completeMock.mockResolvedValue(
+      imageCompletion("anthropic-messages", ref.provider, ref.model, "  hello  "),
+    );
+    await expect(describeImageWithModelCore(request(ref))).resolves.toEqual({
+      text: "hello",
+      model: ref.model,
+    });
+  });
+
+  it.each([
+    ["reasoning_content", "reasoning_content", true, 0],
+    ["Responses JSON", JSON.stringify({ id: "rs_123", type: "reasoning" }), true, 0],
+    ["Responses object", { id: "rs_456", type: "reasoning.encrypted" }, true, 0],
+    [
+      "oversized Responses JSON",
+      JSON.stringify({
+        id: "rs_123",
+        summary: [{ text: "x".repeat(2_100) }],
+        type: "reasoning",
+      }),
+      true,
+      0,
+    ],
+    ["signature after bounded block scan", "reasoning_content", false, 50],
+  ] as const)(
+    "retries image reasoning-only responses: %s",
+    async (_name, signature, retry, precedingBlocks) => {
+      mockOpenAi();
+      const completion = openAiCompletion("retry ok");
+      completeMock
+        .mockResolvedValueOnce({
+          ...completion,
+          content: [
+            ...Array.from({ length: precedingBlocks }, () => ({
+              type: "thinking",
+              thinking: "untagged",
+            })),
+            {
+              type: "thinking",
+              thinking: "  <think>private</think> maybe a cat  ",
+              thinkingSignature: signature,
+            },
+          ],
+        })
+        .mockResolvedValueOnce(completion);
+      const result = describeImageWithModelCore(request());
+      if (retry) {
+        await expect(result).resolves.toEqual({ text: "retry ok", model: openai.model });
+      } else {
+        await expect(result).rejects.toThrow(/returned no text/i);
+      }
+      expect(completeMock).toHaveBeenCalledTimes(retry ? 2 : 1);
+    },
+  );
+
+  it.each([
     { modelMaxTokens: undefined, requested: undefined, expected: 4096 },
     { modelMaxTokens: 1024.5, requested: 2048, expected: 1024.5 },
     { modelMaxTokens: Number.NaN, requested: -0, expected: -0 },
@@ -477,6 +553,7 @@ describe("image runtime cancellation and retries", () => {
               metadataSnapshot: createEmptyPluginMetadataSnapshot(),
               createStores: () => ({ authStorage: preparedAuthStorage, modelRegistry: {} }),
             },
+            run: <T>(run: () => T): T => run(),
             [Symbol.asyncDispose]: releasePreparedModelRuntimeMock,
           }),
         );

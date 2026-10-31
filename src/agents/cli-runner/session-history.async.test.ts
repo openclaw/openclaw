@@ -12,7 +12,7 @@ import {
   upsertSessionEntryCore,
   withTranscriptWriteLock,
 } from "../../config/sessions/session-accessor.js";
-import { appendTranscriptMessageSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptMessageSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.kernel.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { targetDiscoveryLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";

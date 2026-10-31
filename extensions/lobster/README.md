@@ -16,6 +16,14 @@ Restart the Gateway after installing or updating the plugin.
 - This plugin integrates Lobster with OpenClaw _without core changes_.
 - Input checkpoints return the question and schema; resume with `responseJson` containing the user's answer as JSON. See [structured input](https://docs.openclaw.ai/tools/lobster#structured-input).
 
+The tool's optional `cwd` is relative to the Gateway working directory. Nonblank
+values preserve leading and trailing whitespace as part of the directory name;
+blank values use the Gateway working directory.
+
+Workflow file paths also preserve their literal spelling, so `" wf.lobster"`
+does not select `wf.lobster`. The embedded runtime still requires a supported
+file extension; a space after `.lobster` is rejected rather than trimmed.
+
 ## Enable
 
 Because this tool can trigger side effects (via workflows), it is registered with `optional: true`.

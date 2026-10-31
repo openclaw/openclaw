@@ -101,6 +101,19 @@ export const terminalFrames = (frames: Parameters<WorkerInferenceSink["send"]>[0
     (frame): frame is WorkerInferenceTerminalFrame => frame.event === "worker.inference.terminal",
   );
 
+export function startInference(
+  instance: Manager,
+  overrides: Partial<Parameters<Manager["start"]>[0]> = {},
+) {
+  return instance.start({
+    identity: IDENTITY,
+    request: REQUEST,
+    sessionTarget: SESSION_TARGET,
+    sink: overrides.sink ?? createSink().sink,
+    ...overrides,
+  });
+}
+
 export async function accept(manager: Manager, overrides: StartOverrides = {}, launch = true) {
   const result = await manager.start({
     sessionTarget: SESSION_TARGET,

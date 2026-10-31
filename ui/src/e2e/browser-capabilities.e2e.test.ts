@@ -33,6 +33,25 @@ async function setUnsupportedBrowser(page: Page): Promise<void> {
 }
 
 enabled.define(() => {
+  it("opens menus without the unused button invoker API", () =>
+    enabled.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      await page.addInitScript(() => {
+        Reflect.deleteProperty(HTMLButtonElement.prototype, "commandForElement");
+      });
+      await installMockGateway(page);
+      await page.goto(`${enabled.server.baseUrl}new`);
+      expect(await page.evaluate(() => "commandForElement" in HTMLButtonElement.prototype)).toBe(
+        false,
+      );
+      await page.locator(".sidebar-identity-card").click();
+      const menu = page.locator(".sidebar-identity-menu");
+      await expect.poll(() => menu.getAttribute("data-phase")).toBe("open");
+      expect(await menu.getByRole("menuitem", { name: "Settings", exact: true }).isVisible()).toBe(
+        true,
+      );
+      expect(await guidance(page).count()).toBe(0);
+    }));
+
   it.each([false, true])("shows a stable fallback (native host: %s)", (native) =>
     enabled.withPage(
       { viewport: { width: native ? 1180 : 390, height: 844 }, serviceWorkers: "block" },

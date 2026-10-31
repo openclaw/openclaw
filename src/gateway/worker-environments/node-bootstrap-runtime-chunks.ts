@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import {
   collectPackageDistImports,
+  preparePackageDistJavaScript,
   type PackageDistImport,
 } from "../../../scripts/lib/package-dist-imports.mjs";
 import { collectRootPackageExcludedExtensionDirs } from "../../../scripts/lib/root-package-bundled-plugin-excludes.mjs";
@@ -40,7 +41,7 @@ export async function resolveNodeBootstrapRuntimeChunks(
         : [];
     }),
   );
-  const sourceFacts = new Map<string, { sha256: string; imports: PackageDistImport[] }>();
+  const sourceFacts = new Map<string, { imports: PackageDistImport[] }>();
   if (privateChunks.size === 0) {
     return { files, sourceFacts };
   }
@@ -49,28 +50,48 @@ export async function resolveNodeBootstrapRuntimeChunks(
     symlinks: "reject",
   });
   const fileSet = new Set(files);
-  const imports = new Map<string, string[]>();
-  // Parsing is synchronous; read one input at a time so buffers cannot multiply the byte bound.
-  for (const file of files.filter((candidate) => /\.[cm]?js$/u.test(candidate))) {
+  const declaredFiles = new Set(packageFiles);
+  const read = async (file: string) => {
     const { buffer } = await root.read(file, {
       hardlinks: "allow",
       symlinks: "reject",
       maxBytes: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS.maxExpandedBytes,
     });
-    const sha256 = createHash("sha256").update(buffer).digest("hex");
     const owner = privateChunks.get(file);
-    if (owner && sha256 !== owner.sha256) {
+    if (owner && createHash("sha256").update(buffer).digest("hex") !== owner.sha256) {
       throw new Error(`Runtime dependency ownership does not match ${file}; rebuild the Gateway`);
     }
-    const source = buffer.toString("utf8");
+    return buffer;
+  };
+  // Current root and shared imports override build ownership, including native require edges.
+  const retained = new Set(files.filter((file) => !privateChunks.has(file)));
+  for (const file of retained) {
+    const includeTypeScript = declaredFiles.has(file) && /\.[cm]?ts$/u.test(file);
+    if (!/\.[cm]?js$/u.test(file) && !includeTypeScript) {
+      continue;
+    }
+    const source = (await read(file)).toString("utf8");
+    const literalCalls = new Set<string>();
+    const staticImports: string[] = [];
     const fileImports = collectPackageDistImports({
       files: [file],
+      includeTypeScript,
       readText: () => source,
+      onLiteralCall: (specifier) => literalCalls.add(specifier),
+      onStaticImport: (specifier) => {
+        staticImports.push(specifier);
+      },
     });
-    sourceFacts.set(file, { sha256, imports: fileImports });
+    sourceFacts.set(file, { imports: fileImports });
     const dependencies = new Set(fileImports.map(({ importedPath }) => importedPath));
     const resolveImport = createRequire(path.join(packageRoot, file)).resolve;
-    for (const specifier of collectPackageRootImports(source)) {
+    // Dist inspection deliberately skips nested dependencies; keep their existing
+    // scope-aware fallback. Root bundles use the bounded statement scan instead.
+    const rootImports = /(?:^|\/)node_modules\//u.test(file)
+      ? collectPackageRootImports(preparePackageDistJavaScript(file, source))
+      : new Set([...staticImports, ...literalCalls]);
+    // False positives only retain extra chunks; required-import validation stays exact.
+    for (const specifier of rootImports) {
       if (!specifier.startsWith(".")) {
         continue;
       }
@@ -87,16 +108,17 @@ export async function resolveNodeBootstrapRuntimeChunks(
         // The archive's closure check owns missing relative imports.
       }
     }
-    imports.set(file, [...dependencies]);
-  }
-  // Current root and shared imports override build ownership, including native require edges.
-  const retained = files.filter((file) => !privateChunks.has(file));
-  for (const file of retained) {
-    for (const dependency of imports.get(file) ?? []) {
-      if (privateChunks.delete(dependency)) {
-        retained.push(dependency);
+    for (const dependency of dependencies) {
+      if (privateChunks.has(dependency)) {
+        retained.add(dependency);
       }
     }
   }
-  return { files: files.filter((file) => !privateChunks.has(file)), sourceFacts };
+  // Omitted bytes must still match their build ownership, but need no import AST.
+  for (const file of privateChunks.keys()) {
+    if (!retained.has(file)) {
+      await read(file);
+    }
+  }
+  return { files: files.filter((file) => retained.has(file)), sourceFacts };
 }

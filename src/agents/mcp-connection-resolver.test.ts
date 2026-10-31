@@ -3,12 +3,14 @@ import http from "node:http";
 import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
 import { McpServer } from "@modelcontextprotocol/server";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import * as httpFixtures from "../../test/helpers/gateway-integration-fixtures.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
 import { createGatewayCronReconciliation } from "../gateway/server-cron-reconciled.js";
 import {
   createDefaultGatewayReloadState,
+  createHotReloadHandlerTestParams,
   createTestCronState,
 } from "../gateway/server-reload-handlers.config.test-support.js";
 import { createGatewayReloadHandlers } from "../gateway/server-reload-hot.js";
@@ -148,16 +150,9 @@ async function startAuthenticatedMcpProofServer() {
     });
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("MCP proof server did not acquire a loopback port");
-  }
+  const origin = await httpFixtures.listenLoopback(server);
   for (const endpoint of endpoints) {
-    endpoint.url = `http://127.0.0.1:${address.port}${endpoint.path}`;
+    endpoint.url = `${origin}${endpoint.path}`;
   }
 
   return {
@@ -165,10 +160,7 @@ async function startAuthenticatedMcpProofServer() {
     activeDrive,
     close: async () => {
       await Promise.all(endpoints.map((endpoint) => endpoint.server.close()));
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await httpFixtures.closeHttpServer(server);
     },
   };
 }
@@ -281,42 +273,40 @@ describe("mcp connection resolver helpers", () => {
         pluginIds: ["active-drive", "startup-mail"],
         sourceDigests: {},
       };
-      const gatewayReload = createGatewayReloadHandlers({
-        scheduler,
-        deps: {},
-        broadcast() {},
-        getState: () => gatewayState,
-        getPluginRegistry: () => attachedRegistry,
-        setState(nextState) {
-          gatewayState = nextState;
-        },
-        async startChannel() {
-          return new Map();
-        },
-        async stopChannel() {},
-        releaseChannelRouteHandoffs() {},
-        pruneInactiveChannelAccountState() {},
-        async reloadPlugins({ commitRuntime }) {
-          await commitRuntime({
-            publish() {
-              attachedRegistry = replacement.registry;
-              setActivePluginRegistry(replacement.registry);
-            },
-          });
-          return { restartChannels: new Set(), activeChannels: new Set(), runtime };
-        },
-        logHooks: reloadLog,
-        logChannels: reloadLog,
-        logCron: reloadLog,
-        logReload: reloadLog,
-        cronReconciliation: createGatewayCronReconciliation({
-          port: 0,
-          workspaceDir: process.cwd(),
-          isClosing: () => false,
-          async runHook() {},
+      const gatewayReload = createGatewayReloadHandlers(
+        createHotReloadHandlerTestParams({
+          scheduler,
+          deps: {},
+          getState: () => gatewayState,
+          getPluginRegistry: () => attachedRegistry,
+          setState(nextState) {
+            gatewayState = nextState;
+          },
+          async reloadPlugins({ commitRuntime }) {
+            await commitRuntime({
+              publish() {
+                attachedRegistry = replacement.registry;
+                setActivePluginRegistry(replacement.registry);
+              },
+            });
+            return { restartChannels: new Set(), activeChannels: new Set(), runtime };
+          },
+          logHooks: reloadLog,
+          logChannels: reloadLog,
+          logCron: reloadLog,
+          logReload: reloadLog,
+          cronReconciliation: createGatewayCronReconciliation({
+            port: 0,
+            workspaceDir: process.cwd(),
+            isClosing: () => false,
+            getConfig: () => nextConfig,
+            getPluginRegistry: () => attachedRegistry,
+            logger: reloadLog,
+            async runHook() {},
+          }),
+          requestRecoveryRestart,
         }),
-        requestRecoveryRestart,
-      });
+      );
 
       await expect(gatewayReload.applyHotReload(reloadPlan, nextConfig)).resolves.toEqual({
         status: "applied",
