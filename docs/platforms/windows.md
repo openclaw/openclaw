@@ -241,7 +241,8 @@ before repair. Custom definitions remain operator-owned.
 
 If you append output redirection to the `gateway.cmd` launch line, quote the
 entire target, for example `>> "%USERPROFILE%\.openclaw\logs\gateway-stdout.log" 2>&1`.
-Complete trailing redirections are excluded from process ownership checks.
+Generated launchers preserve trailing backslashes in quoted directory and command
+arguments. Complete trailing redirections are excluded from process ownership checks.
 Unquoted environment expansions can leave filename fragments in the Gateway's
 arguments; OpenClaw preserves ambiguous launcher commands and refuses to terminate
 a listener whose ownership cannot be verified. Quote the target before retrying.
