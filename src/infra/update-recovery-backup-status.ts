@@ -83,12 +83,17 @@ export async function inspectUpdateRecoveryBackups(readRun = getUpdateRunAsync) 
           cleanup.outcome === "candidate"
             ? "openclaw update cleanup --dry-run"
             : `openclaw update cleanup --dry-run --include-unmanifested "${directory}"`;
-        return {
-          directory,
-          status: "warning" as const,
-          nextAction,
-          message: `Update capture at ${directory}: ${cleanup.reason}. ${cleanup.detail ?? ""} Preview retirement with \`${nextAction}\`; remove --dry-run to retire it after confirmation.`,
-        };
+        return Object.assign(
+          {
+            directory,
+            status: "warning" as const,
+            nextAction,
+            message: `Update capture at ${directory}: ${cleanup.reason}. ${cleanup.detail ?? ""} Preview retirement with \`${nextAction}\`; remove --dry-run to retire it after confirmation.`,
+          },
+          entry.kind === "sealed"
+            ? { runId: entry.manifest.runId, manifestPath: entry.ref.manifestPath }
+            : {},
+        );
       }
       if (entry.kind === "incomplete") {
         return {
