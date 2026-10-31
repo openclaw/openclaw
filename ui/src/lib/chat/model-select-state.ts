@@ -195,14 +195,17 @@ export function resolveChatModelUnavailableReason(
   model: string | null | undefined,
   provider: string | null | undefined,
   catalog: ModelCatalogEntry[],
-): ModelCatalogEntry["unavailableReason"] {
+  agentRuntime?: string | null,
+): ModelRuntimeEntry["unavailableReason"] {
   const value = resolvePreferredServerChatModelValue(model, provider, catalog);
   const key = normalizeChatModelAvailabilityKey(value);
-  let reason: ModelCatalogEntry["unavailableReason"];
-  for (const entry of catalog) {
-    if (catalogModelAvailabilityKey(entry) !== key) {
+  let reason: ModelRuntimeEntry["unavailableReason"];
+  for (const catalogEntry of catalog) {
+    if (catalogModelAvailabilityKey(catalogEntry) !== key) {
       continue;
     }
+    // The session's selected runtime is the route that will serve the turn, not the base route.
+    const entry = resolveModelRuntimeEntry(catalogEntry, agentRuntime) ?? catalogEntry;
     if (entry.available !== false || !entry.unavailableReason) {
       return undefined;
     }
