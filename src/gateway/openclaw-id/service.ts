@@ -631,7 +631,8 @@ export function createOpenClawIdService(params: {
 
     /**
      * What any admitted client may read about the link: whether the claw is linked,
-     * its address and pinned owner key (both public). No people, devices, activity
+     * its address and pinned owner key (both public), and whether conflicting owner-key
+     * changes froze it. No people, devices, activity
      * or publication account; those are owner-only (`linkStatus`).
      */
     async linkSummary() {
@@ -649,6 +650,8 @@ export function createOpenClawIdService(params: {
         hostname: record.hostname ?? undefined,
         rootPub: state.anchor.root_pub,
         rootEpoch: state.anchor.root_epoch,
+        // Conflicting root rotations: the local operator resolves them by regenerating.
+        frozen: state.frozen ?? false,
       };
     },
 

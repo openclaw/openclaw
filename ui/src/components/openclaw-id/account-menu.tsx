@@ -32,6 +32,7 @@ const SIGN_IN = `${VALUE_PREFIX}sign-in`;
 const MAKE_REACHABLE = `${VALUE_PREFIX}make-reachable`;
 const PEOPLE = `${VALUE_PREFIX}people`;
 const DEVICES = `${VALUE_PREFIX}devices`;
+const REGENERATE = `${VALUE_PREFIX}regenerate-owner-key`;
 const SIGN_OUT = `${VALUE_PREFIX}sign-out`;
 const ACCOUNT = `${VALUE_PREFIX}account`;
 
@@ -116,6 +117,19 @@ function accountEntries(status: OpenClawIdStatusResult): MenuEntry[] {
   ];
 }
 
+// Owner-key regeneration, offered only on a direct-loopback Control UI of a linked
+// claw (the Gateway refuses it anywhere else), with the alert for a claw frozen by
+// conflicting owner-key changes, which regeneration resolves.
+function ownerKeyEntries(status: OpenClawIdStatusResult): MenuEntry[] {
+  if (status.channel !== "local_operator" || !status.link.linked) {
+    return [];
+  }
+  return [
+    ...(status.link.frozen ? [infoLine("frozen", t("openclawId.frozenAlert"))] : []),
+    renderSidebarMenuAction(REGENERATE, t("openclawId.regenerateOwnerKey"), "key"),
+  ];
+}
+
 // Reachability lines: the linked address and transport, or the Make reachable command.
 function reachabilityEntries(status: OpenClawIdStatusResult): MenuEntry[] {
   if (status.link.linked && status.link.hostname) {
@@ -132,6 +146,7 @@ function reachabilityEntries(status: OpenClawIdStatusResult): MenuEntry[] {
       ...(status.owner
         ? [renderSidebarMenuAction(DEVICES, t("openclawId.yourDevices"), "key")]
         : []),
+      ...ownerKeyEntries(status),
     ];
   }
   const blocker = makeReachableBlocker(status);
@@ -148,7 +163,8 @@ function reachabilityEntries(status: OpenClawIdStatusResult): MenuEntry[] {
  * Signed out: local operator, Sign in, "conversations stay on this computer".
  * Signed in: the account. Then Make reachable, or once linked the address and
  * transport and Your devices; People (the openclaw-id-access plugin page), both
- * only for an owner (loopback operator or owner device);
+ * only for an owner (loopback operator or owner device); on direct loopback,
+ * Regenerate owner key (after an alert when conflicting changes froze the claw);
  * Sign out. Unlink is not offered yet (OCF-281 needs a Discovery endpoint).
  */
 export function openClawIdMenuEntries(status: OpenClawIdStatusResult | null): MenuEntry[] {
@@ -235,6 +251,13 @@ export function selectOpenClawIdMenuValue(
   } else if (value === DEVICES && client) {
     openDialog(async () =>
       (await import("./owner-devices-dialog.tsx")).showOwnerDevicesDialog({ client }),
+    );
+  } else if (value === REGENERATE && client) {
+    openDialog(async () =>
+      (await import("./regenerate-owner-key-dialog.tsx")).showRegenerateOwnerKeyDialog({
+        client,
+        signedIn: openClawIdAccount(),
+      }),
     );
   } else if (value === SIGN_OUT) {
     signOutOfOpenClawId();

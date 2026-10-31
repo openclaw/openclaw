@@ -9,9 +9,12 @@ import {
   formatEd25519PublicKey,
   generateKitSecret,
   OWNER_CAPABILITIES,
+  signOwnerKeyRegeneration,
   signStatement,
   type Ed25519PublicKey,
   type IrohEndpointKey,
+  type OwnerKeyRegenerationPreparation,
+  type OwnerKeyRegenerationStatements,
   type SignedStatement,
   type StatementSigner,
 } from "../../../../packages/openclaw-id-protocol/src/index.ts";
@@ -107,6 +110,33 @@ export function createOpenClawIdCeremony() {
         root,
       );
       return { rootPub: formatEd25519PublicKey(root.publicKey), ownerDevice, binding };
+    },
+
+    /**
+     * Owner-key regeneration (OCF-319): signs, with the new root R', this browser's
+     * certificate for the new epoch (no expiry unless `expiresAt` is given) and the
+     * new ServerBinding. Only these public statements go to the Gateway.
+     */
+    async signRegeneration(
+      prep: OwnerKeyRegenerationPreparation,
+      device: StatementSigner,
+      deviceLabel: string,
+      expiresAt: number | null,
+    ): Promise<OwnerKeyRegenerationStatements> {
+      if (!root) {
+        throw new Error("create the recovery kit first");
+      }
+      return await signOwnerKeyRegeneration({
+        preparation: prep,
+        root,
+        device: {
+          device_pub: formatEd25519PublicKey(device.publicKey),
+          // This origin reaches the Gateway on loopback; it has no tunnel peer key.
+          peer_keys: [],
+          label: deviceLabel,
+        },
+        expiresAt,
+      });
     },
 
     /** Wipes S and drops R (the non-extractable key can only be dereferenced). */

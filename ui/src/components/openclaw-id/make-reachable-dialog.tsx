@@ -5,13 +5,7 @@ import { registerOpenClawIdDialogsEnglish } from "../../i18n/locales/en-openclaw
 import { formatUiError } from "../../lib/format-error.ts";
 import { requestOpenClawIdLinkCode } from "../../lib/openclaw-id/account.ts";
 import { generateOwnerDeviceKey, saveOwnerDeviceKey } from "../../lib/openclaw-id/device-key.ts";
-import {
-  canStoreRecoveryKit,
-  downloadRecoveryKit,
-  printRecoveryKit,
-  storeRecoveryKit,
-  type RecoveryKitDetails,
-} from "../../lib/openclaw-id/kit-export.ts";
+import type { RecoveryKitDetails } from "../../lib/openclaw-id/kit-export.ts";
 import {
   LINK_STEPS,
   runLinkSteps,
@@ -27,10 +21,10 @@ import type {
 } from "../../lib/openclaw-id/types.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { withPromiseModalHost } from "../promise-modal-host.ts";
-import { CopyButton } from "../solid/copy-button.tsx";
 import { Icon } from "../solid/icon.tsx";
-import { SettingsRow, SettingsToggleRow } from "../solid/settings-ui.tsx";
+import { SettingsRow } from "../solid/settings-ui.tsx";
 import { clawNameFromHostname } from "./claw-name.ts";
+import { RecoveryKitPanel } from "./recovery-kit-panel.tsx";
 
 registerEnglishCatalog(registerOpenClawIdDialogsEnglish);
 
@@ -171,20 +165,6 @@ export function showMakeReachableDialog(params: {
           LinkStepState
         >,
       );
-      const [kitNote, setKitNote] = createSignal<string | null>(null);
-      // Marks the kit saved after a save action, as ticking the box does.
-      const kitAction = async (action: () => boolean | Promise<boolean>) => {
-        setKitNote(null);
-        try {
-          if (await action()) {
-            setSaved(true);
-          } else {
-            setKitNote(t("openclawId.kitActionUnavailable"));
-          }
-        } catch (error) {
-          setKitNote(t("openclawId.kitActionFailed", { error: formatUiError(error) }));
-        }
-      };
       // The four honest linking steps (lib/openclaw-id/link-steps.ts).
       const link = async (preparation: OpenClawIdLinkPreparation) => {
         setStep({ kind: "linking", hostname: preparation.hostname });
@@ -399,80 +379,10 @@ export function showMakeReachableDialog(params: {
                       </p>
                       <p>{t("openclawId.kitBody")}</p>
                     </div>
-                    <div class="stack openclaw-id-kit" aria-label={t("openclawId.kitTitle")}>
-                      <strong>{t("openclawId.kitHeading")}</strong>
-                      <code class="secret-reveal__code openclaw-id-kit__secret">
-                        {kitStep().details.kit.text}
-                      </code>
-                      <div class="list openclaw-id-facts">
-                        <div>
-                          <span class="muted">{t("openclawId.kitOwnerFingerprint")}</span>{" "}
-                          {kitStep().details.kit.rootFingerprint}
-                        </div>
-                        <Show when={kitStep().details.owner}>
-                          {(owner) => (
-                            <>
-                              <div>
-                                <span class="muted">{t("openclawId.kitOwner")}</span> {owner()}
-                              </div>
-                            </>
-                          )}
-                        </Show>
-                        <div>
-                          <span class="muted">{t("openclawId.kitClaw")}</span> https://
-                          {kitStep().details.hostname}
-                        </div>
-                        <div>
-                          <span class="muted">{t("openclawId.kitCreated")}</span>{" "}
-                          {kitStep().details.createdAt.toLocaleDateString()}
-                        </div>
-                      </div>
-                    </div>
-                    <div class="callout info secret-reveal__callout">
-                      {t("openclawId.kitWarning")}
-                    </div>
-                    <div class="chip-row openclaw-id-kit__actions">
-                      <button
-                        type="button"
-                        class="btn btn--sm"
-                        onClick={() =>
-                          void kitAction(() => {
-                            downloadRecoveryKit(kitStep().details);
-                            return true;
-                          })
-                        }
-                      >
-                        {t("openclawId.downloadKit")}
-                      </button>
-                      <button
-                        type="button"
-                        class="btn btn--sm"
-                        onClick={() => void kitAction(() => printRecoveryKit(kitStep().details))}
-                      >
-                        {t("openclawId.printKit")}
-                      </button>
-                      <Show when={canStoreRecoveryKit()}>
-                        <button
-                          type="button"
-                          class="btn btn--sm"
-                          onClick={() => void kitAction(() => storeRecoveryKit(kitStep().details))}
-                        >
-                          {t("openclawId.storeKit")}
-                        </button>
-                      </Show>
-                      <CopyButton text={kitStep().details.kit.text} idleLabel={t("common.copy")} />
-                    </div>
-                    <Show when={kitNote()}>
-                      {(note) => (
-                        <p class="secret-reveal__note" role="status">
-                          {note()}
-                        </p>
-                      )}
-                    </Show>
-                    <SettingsToggleRow
-                      title={t("openclawId.kitSaved")}
-                      checked={saved()}
-                      onChange={(next) => setSaved(next)}
+                    <RecoveryKitPanel
+                      details={kitStep().details}
+                      saved={saved()}
+                      onSaved={setSaved}
                     />
                     <openclaw-modal-actions class="exec-approval-actions">
                       <button type="button" class="btn" onClick={() => finish(false)}>

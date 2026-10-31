@@ -76,6 +76,21 @@ const enOpenClawIdDialogs = {
     doneBody: "This claw is now linked to your recovery kit and reachable at https://{host}.",
     doneNotPublished: "It is not listed in OpenClaw ID yet. Add an enrollment code to publish it.",
     done: "Done",
+    regenTitle: "Regenerate owner key",
+    regenDescription: "Replace this claw's owner key and recovery kit.",
+    regenBody:
+      "This replaces your owner key with a new one and gives you a new recovery kit. This browser becomes the only owner device.",
+    regenConsequences:
+      "Every other owner device and your old recovery kit stop working at once, and their open sessions close. Members keep their access.",
+    regenExpiry: "End this browser's owner access after (days)",
+    regenExpiryHint: "Leave empty for no expiry.",
+    regenConfirm: "Regenerate",
+    regenKitBody:
+      "This is your new recovery kit. It is shown only now and never leaves this page. The old kit stops working when you continue.",
+    regenReplace: "Replace owner key",
+    regenWorking: "Replacing the owner key…",
+    regenDone:
+      "The owner key is replaced. This browser is now the only owner device; keep the new recovery kit.",
   },
 } satisfies TranslationMap;
 

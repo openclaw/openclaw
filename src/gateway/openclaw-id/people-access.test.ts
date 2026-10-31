@@ -88,7 +88,7 @@ async function addExpiringOwner(claw: LinkedClaw, seconds: number) {
   return peerKey;
 }
 
-const SUMMARY_KEYS = ["clawId", "hostname", "linked", "rootEpoch", "rootPub"];
+const SUMMARY_KEYS = ["clawId", "frozen", "hostname", "linked", "rootEpoch", "rootPub"];
 
 afterEach(() => {
   vi.useRealTimers();

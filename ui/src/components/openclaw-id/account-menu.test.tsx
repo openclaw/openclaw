@@ -87,6 +87,28 @@ describe("OpenClaw ID account menu", () => {
     expect(entries.find((row) => row.label === "People")?.disabled).toBeFalsy();
   });
 
+  it("offers Regenerate owner key only on direct loopback of a linked claw", () => {
+    const linked = { linked: true, hostname: "studio-e61zr.crabd.xyz" };
+    expect(labels(menu(status({ link: linked })))).toContain("Regenerate owner key");
+    expect(labels(menu(status({ channel: "tunnel", link: linked })))).not.toContain(
+      "Regenerate owner key",
+    );
+    expect(labels(menu(status({ channel: null, link: linked })))).not.toContain(
+      "Regenerate owner key",
+    );
+    expect(labels(menu(status()))).not.toContain("Regenerate owner key");
+  });
+
+  it("explains a frozen claw next to Regenerate owner key", () => {
+    const frozen = { linked: true, hostname: "studio-e61zr.crabd.xyz", frozen: true };
+    expect(texts(menu(status({ link: frozen }))).join(" ")).toContain(
+      "Conflicting owner-key changes reached this claw",
+    );
+    expect(texts(menu(status({ channel: "tunnel", link: frozen }))).join(" ")).not.toContain(
+      "Conflicting owner-key changes",
+    );
+  });
+
   it("offers People and Your devices only to an owner", () => {
     const linked = { linked: true, hostname: "studio-e61zr.crabd.xyz" };
     const member = labels(menu(status({ channel: "tunnel", owner: false, link: linked })));
@@ -131,6 +153,7 @@ describe("OpenClaw ID account menu", () => {
         "Signed in to OpenClaw ID as owner@example.test",
         "studio is reachable",
         "Your devices",
+        "Regenerate owner key",
         "People",
         "Sign out of OpenClaw ID",
       ]),

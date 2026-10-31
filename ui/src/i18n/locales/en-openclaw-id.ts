@@ -23,6 +23,9 @@ const enOpenClawId = {
       "Set gateway.openclawId.loaderDomain to choose the address this claw is reachable at.",
     actionFailed: "Couldn't open that: {error}",
     makeReachable: "Make reachable",
+    regenerateOwnerKey: "Regenerate owner key",
+    frozenAlert:
+      "Conflicting owner-key changes reached this claw. Regenerate the owner key here to resolve them.",
   },
 } satisfies TranslationMap;
 
