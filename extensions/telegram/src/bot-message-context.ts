@@ -312,7 +312,7 @@ export const buildTelegramMessageContext = async ({
     topicName = topic.topicName;
   }
 
-  route = applyTelegramTargetSession({
+  const { route: targetRoute, modelParentSessionKey } = applyTelegramTargetSession({
     cfg,
     route,
     chatId,
@@ -324,6 +324,7 @@ export const buildTelegramMessageContext = async ({
         (msg.is_topic_message === true || isTelegramForumTopicTitleUpdate(msg))) ||
       resolveTelegramBotHasTopicsEnabled(primaryCtx.me),
   });
+  route = targetRoute;
   const { sessionKey } = route;
   const activationOverride = await resolveGroupActivation({
     sessionKey,
@@ -425,6 +426,7 @@ export const buildTelegramMessageContext = async ({
     isForum,
     dmThreadId,
     route,
+    modelParentSessionKey,
     bodyResult,
     historyLimit,
     dmHistoryLimit,
