@@ -253,8 +253,8 @@ struct GatewayEndpointStoreTests {
         ["gateway": ["auth": [key: value]]]
     }
 
-    private func makeStore(
-        sourceSnapshot: @escaping @Sendable () async -> GatewayEndpointStore.SourceSnapshot,
+    func makeStore(
+        sourceSnapshot: @escaping @Sendable () async throws -> GatewayEndpointStore.SourceSnapshot,
         token: @escaping @Sendable () -> String? = { nil },
         remoteRouteIfRunning: @escaping @Sendable () async -> RemoteTunnelManager.Route? = { nil },
         remoteRouteIsCurrent: @escaping @Sendable (RemoteTunnelManager.Route) async -> Bool = { _ in true },
@@ -1369,7 +1369,7 @@ extension GatewayEndpointStoreTests {
         #expect(host == "192.168.1.10")
     }
 
-    @Test func `local config uses local gateway auth and host resolution`() {
+    @Test func `local config uses local gateway auth and host resolution`() throws {
         let snapshot = self.makeLaunchAgentSnapshot(
             env: [:],
             token: "launchd-token",
@@ -1385,7 +1385,7 @@ extension GatewayEndpointStoreTests {
             ],
         ]
 
-        let config = GatewayEndpointStore._testLocalConfig(
+        let config = try GatewayEndpointStore._testLocalConfig(
             root: root,
             env: [:],
             launchdSnapshot: snapshot,
