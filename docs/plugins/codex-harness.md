@@ -246,6 +246,11 @@ the Gateway was stopped or its app-server connection was unavailable. A full saf
 Unchanged display rows reuse their bounded resident previews before delivery.
 Unchanged rows are not rewritten to SQLite.
 
+When a new Codex terminal on a paired node exits, the next catalog read reconciles
+the terminal's native home before returning its rows. New sessions become visible
+without opening a known thread ID or waiting for the safety scan; other homes keep
+their existing refresh schedule.
+
 Native starts, metadata refreshes, renames, archives, deletions, and changed file
 fingerprints coalesce an incremental native check on the next 30-second tick.
 It reads database-only pages in descending recency order and stops after a whole

@@ -10,7 +10,10 @@ import { inferCodexAppServerConnectionClass } from "./app-server/config-security
 import { buildCodexAppServerConnectionFingerprint } from "./app-server/plugin-app-cache-key.js";
 import type { CodexServerNotification, CodexThread } from "./app-server/protocol.js";
 import { defineCodexBuildState } from "./build-state.js";
-import { codexCatalogHomeIdFromCanonicalPath } from "./session-catalog-home-id.js";
+import {
+  codexCatalogHomeId,
+  codexCatalogHomeIdFromCanonicalPath,
+} from "./session-catalog-home-id.js";
 import { projectCodexCatalogNativeThread } from "./session-catalog-native-projection.js";
 import {
   boundedCatalogString,
@@ -37,6 +40,7 @@ type CodexCatalogSubscription = {
   notify: CodexCatalogEventListener;
 } & CodexCatalogLifecycleCallbacks;
 type CodexCatalogLifecycleCallbacks = {
+  onTerminalExit?: () => void;
   onRemoteReady?: (source: CodexCatalogSource) => void;
   onClose?: (source: CodexCatalogSource) => void;
   onEphemeralThread?: (threadId: string) => void;
@@ -119,6 +123,12 @@ export function subscribeCodexCatalogEvents(
       listeners.delete(homeKey);
     }
   };
+}
+
+export function publishCodexCatalogTerminalExit(codexHome: string): void {
+  for (const listener of getCatalogEvents().listeners.get(codexCatalogHomeId(codexHome)) ?? []) {
+    listener.onTerminalExit?.();
+  }
 }
 
 /** Observes physical clients without extending their lease or native thread lifetime. */
