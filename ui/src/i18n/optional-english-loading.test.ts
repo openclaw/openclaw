@@ -383,6 +383,16 @@ it("loads people-picker copy with session menu details before any sharing menu",
   );
 });
 
+it("loads workspace actions with the session menu before session management", async () => {
+  const { manager } = await loadI18n();
+
+  await import("../components/session-menu-solid.tsx");
+
+  expect(manager.t("sessionsView.openPullRequest")).toBe("Open PR");
+  expect(manager.t("sessionsView.stopCloudWorker")).toBe("Stop cloud worker…");
+  expect(manager.t("sessionsView.groupDefaultsTitle")).toBe("sessionsView.groupDefaultsTitle");
+});
+
 it("loads the new-section title with its dialog before any session menu", async () => {
   const { manager } = await loadI18n();
 

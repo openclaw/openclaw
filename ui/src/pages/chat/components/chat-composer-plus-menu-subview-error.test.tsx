@@ -19,7 +19,9 @@ it("keeps root actions available after a capability chunk fails and retries the 
     const [menu, update] = createSignal(
       makeMenu({
         capabilityMenu: makeCapabilities(),
-        rootToggles: [{ value: "toggle", label: "Root toggle", checked: false, onChange }],
+        rootToggles: [
+          { value: "toggle", label: "Root toggle", checked: false, disabled: false, onChange },
+        ],
         onOpenChange: (open) => update((current) => ({ ...current, open, view: "root" })),
         onViewChange: (next) => update((current) => ({ ...current, view: next })),
       }),

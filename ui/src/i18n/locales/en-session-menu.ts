@@ -92,6 +92,8 @@ const catalog = {
     copyMarkdown: "Conversation as Markdown",
     openNewTab: "New tab",
     openNewWindow: "New window",
+    openPullRequest: "Open PR",
+    stopCloudWorker: sharedSessions.stopCloudWorker,
     splitBelow: "Split below",
     workspaceEditors: "Workspace · editor",
     resetAppearance: "Reset to default",
