@@ -158,14 +158,32 @@ suite.define(() => {
         );
         await installMockGateway(page, {
           methodResponses: {
-            "cron.list": cronList(jobs, "window-query", { total: jobs.length }),
+            "cron.list": cronListResponseFixture(
+              Array.from({ length: 10 }, (_, pageIndex) => {
+                const offset = pageIndex * 50;
+                return {
+                  match: { offset },
+                  response: cronList(jobs.slice(offset, offset + 50), "window-query", {
+                    total: jobs.length,
+                    offset,
+                    hasMore: offset + 50 < jobs.length,
+                    nextOffset: offset + 50 < jobs.length ? offset + 50 : null,
+                  }),
+                };
+              }),
+            ),
             "cron.status": { enabled: true, jobs: jobs.length, nextWakeAtMs: null },
             "cron.runs": { entries: [], total: 0, offset: 0, hasMore: false },
           },
         });
         await page.goto(suite.server.baseUrl + "cron");
         const rows = page.locator(".cron-table__row");
-        await expect.poll(() => rows.first().getAttribute("aria-setsize")).toBe("500");
+        for (let count = 50; count <= jobs.length; count += 50) {
+          await expect.poll(() => rows.first().getAttribute("aria-setsize")).toBe(String(count));
+          if (count < jobs.length) {
+            await page.getByRole("button", { name: "Load more", exact: true }).press("Enter");
+          }
+        }
         expect(await rows.count()).toBeLessThan(40);
         // The last row is pinned as the native reverse-Tab entry from the footer.
         const edge = rows.nth((await rows.count()) - 2);
