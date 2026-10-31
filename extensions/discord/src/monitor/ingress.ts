@@ -101,6 +101,7 @@ function isDiscordAuthenticationFailure(error: unknown): boolean {
 
 export function createDiscordIngressMonitor(params: {
   accountId: string;
+  botUserId?: string;
   client: Client;
   runtime: Pick<RuntimeEnv, "error" | "log">;
   dispatch: DiscordIngressDispatch;
@@ -163,6 +164,18 @@ export function createDiscordIngressMonitor(params: {
     },
     appendRetryDelaysMs: [0],
     drain: {
+      // Native mentions can overtake recovery chatter; canonical preflight still
+      // decides access and retains every ambient message for pending history.
+      prioritizePending: ({ payload }) => {
+        const raw = payload?.rawMessage;
+        return Boolean(
+          params.botUserId &&
+          raw?.guild_id &&
+          Date.parse(raw.timestamp) >= Date.now() - 15 * 60_000 &&
+          Array.isArray(raw.mentions) &&
+          raw.mentions.some((user) => user?.id === params.botUserId),
+        );
+      },
       deferredLaneOccupancy: "release",
       retryPolicy: {
         maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
