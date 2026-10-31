@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -151,6 +152,59 @@ async function installWithSecurityEvents(options: Parameters<typeof installPlugi
 }
 
 describe("parseGitPluginSpec", () => {
+  it.skipIf(process.platform !== "win32").each([
+    [".\\plugin fixtures\\local ü 空", "main"],
+    ["..\\plugin fixtures\\local ü 空", "main"],
+    ["C:\\plugin fixtures\\local ü 空", "main"],
+    ["C:/repos/@acme/plugin.git", "feature/release.git"],
+    [".\\plugin fixtures\\local", "release.git"],
+  ])("resolves a native Windows local repository and its ref: %s", (repository, ref) => {
+    const expectedPath = path.resolve(repository);
+    const parsed = expectParsedGitSpec(`git:${repository}@${ref}`);
+    expect(parsed).toMatchObject({ url: expectedPath, ref });
+    expect(expectParsedGitSpec(parsed.normalizedSpec)).toMatchObject({
+      url: expectedPath,
+      ref,
+    });
+  });
+
+  it
+    .skipIf(process.platform !== "win32")
+    .each([
+      "C:\\repos\\@acme\\plugin.git",
+      "C:/repos/@acme/plugin.git",
+      "C:\\repos/@acme/plugin.git",
+      "C:/repos/team@acme/plugin.git",
+      "C:/repos/@acme/plugin",
+      "C:\\repos\\plugin@release.git",
+    ])("preserves literal @ characters in an absolute repository path: %s", (repository) => {
+    expect(expectParsedGitSpec(`git:${repository}`)).toMatchObject({
+      url: path.resolve(repository),
+      ref: undefined,
+    });
+  });
+
+  it.skipIf(process.platform !== "win32")(
+    "supports an unambiguous .git-ending ref on an absolute repository",
+    () => {
+      const parsed = expectParsedGitSpec("git:C:\\repos\\plugin#release.git");
+      expect(parsed).toMatchObject({ url: path.resolve("C:\\repos\\plugin"), ref: "release.git" });
+      expect(expectParsedGitSpec(parsed.normalizedSpec)).toMatchObject({
+        url: parsed.url,
+        ref: "release.git",
+      });
+    },
+  );
+
+  it.skipIf(process.platform !== "win32")(
+    "preserves a local @ ancestor through file-URL transport",
+    () => {
+      const native = expectParsedGitSpec("git:C:/repos/@acme/plugin");
+      const url = pathToFileURL(native.url).href;
+      expect(expectParsedGitSpec(`git:${url}`)).toMatchObject({ url, ref: undefined });
+    },
+  );
+
   it.each([
     ["git:github.com/acme/demo@v1.2.3", "v1.2.3"],
     ["git:acme/demo@feature/foo", "feature/foo"],
@@ -231,7 +285,7 @@ describe("installPluginFromGitSpec", () => {
         "--",
         "https://github.com/acme/demo.git",
       ]);
-      expect(cloneArgv[5]).toContain("/.openclaw-install-stage-");
+      expect(cloneArgv[5]).toContain(`${path.sep}.openclaw-install-stage-`);
       expect(commandArgvAt(4)).toContain("--ignore-scripts");
       expect(runCommandWithTimeoutMock.mock.calls.map(([, options]) => options.timeoutMs)).toEqual([
         gitWork,
@@ -303,7 +357,7 @@ describe("installPluginFromGitSpec", () => {
             pluginId: "demo",
             requestedSpecifier: demoSpec,
             source: { kind: "git", authority: "third-party", mutable: true, network: true },
-            sourcePath: expect.stringContaining("/.openclaw-install-stage-"),
+            sourcePath: expect.stringContaining(`${path.sep}.openclaw-install-stage-`),
           }),
         );
       }

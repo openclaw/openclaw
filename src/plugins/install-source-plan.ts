@@ -135,9 +135,10 @@ export function resolvePluginInstallSourcePlan(params: {
       ? sourcePlan(
           {
             source: "git",
+            // Literal @ path characters must not become the outer git: ref delimiter.
             spec:
               isLocalGitUrl(git.url) && !git.url.startsWith("file:")
-                ? `git:${pathToFileURL(resolveUserPath(git.url)).href}${git.ref ? `@${git.ref}` : ""}`
+                ? `git:${pathToFileURL(resolveUserPath(git.url)).href.replaceAll("@", "%40")}${git.ref ? `@${git.ref}` : ""}`
                 : params.raw,
             mode: params.mode,
           },

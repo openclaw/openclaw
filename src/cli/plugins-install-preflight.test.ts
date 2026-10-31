@@ -1,5 +1,7 @@
 // Invalid plugin install requests must fail before persistent state or source execution.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { parseGitPluginSpec } from "../plugins/git-install.js";
+import { resolvePluginInstallSourcePlan } from "../plugins/install-source-plan.js";
 import * as fixture from "./plugins-cli-test-helpers.js";
 
 const { withPluginLifecycleLeaseMock } = vi.hoisted(() => ({
@@ -66,6 +68,27 @@ describe("plugin install mutation-free preflight", () => {
     );
     expect(fixture.installPluginFromNpmSpecMock).not.toHaveBeenCalled();
   });
+
+  it.skipIf(process.platform !== "win32")(
+    "keeps literal @ ancestors through local Git transport",
+    () => {
+      const plan = resolvePluginInstallSourcePlan({
+        raw: "git:C:/repos/team@acme/plugin.git",
+        mode: "install",
+      });
+      expect(plan).toMatchObject({
+        ok: true,
+        request: { source: "git", spec: "git:file:///C:/repos/team%40acme/plugin.git" },
+      });
+      if (!plan.ok || plan.request.source !== "git") {
+        throw new Error("Expected a Git source plan");
+      }
+      expect(parseGitPluginSpec(plan.request.spec)).toMatchObject({
+        url: "file:///C:/repos/team%40acme/plugin.git",
+        ref: undefined,
+      });
+    },
+  );
 
   it.each([
     ...[" clawhub:demo@ ", "demo@", "@composio/composio@", "unknown:demo"].map(
