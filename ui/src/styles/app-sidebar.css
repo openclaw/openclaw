@@ -71,7 +71,7 @@
 
   .sidebar-online__row {
     --sidebar-online-menu-size: 44px;
-    --sidebar-online-menu-width: 37px;
+    --sidebar-online-menu-width: 31px;
     grid-template-columns: minmax(0, 1fr) var(--sidebar-online-menu-width);
     padding-inline-end: 0;
   }
