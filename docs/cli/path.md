@@ -318,6 +318,9 @@ openclaw path set 'oc://workflow.yaml/steps/$last/id' 'classify-renamed' --dry-r
 # Address markdown frontmatter
 openclaw path resolve 'oc://AGENTS.md/[frontmatter]/name'
 
+# Find several markdown frontmatter keys
+openclaw path find 'oc://AGENTS.md/[frontmatter]/{name,description}'
+
 # Insert markdown frontmatter
 openclaw path set 'oc://AGENTS.md/[frontmatter]/+description' 'Agent instructions' --dry-run
 

@@ -1,33 +1,26 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { afterEach } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { copyDockerSchedulerHarness } from "./docker-all-harness.test-support.js";
+import {
+  copyDockerSchedulerHarness,
+  writePackageTarball,
+} from "./docker-all-harness.test-support.js";
 import { fixtureFiles } from "./script-fixture-files.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 export const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-const preparedArchives = new Map<string, Buffer>();
 let fixturePnpm: string | undefined;
 const sha256File = (file: string) => createHash("sha256").update(readFileSync(file)).digest("hex");
-
-function writePackageArchive(
-  packageDir: string,
-  tarball: string,
-  manifest: { name: string; version: string },
-) {
-  const key = JSON.stringify(manifest);
-  let archive = preparedArchives.get(key);
-  if (!archive) {
-    fixtureFiles(packageDir).json("package.json", manifest);
-    archive = execFileSync("tar", ["-czf", "-", "-C", path.dirname(packageDir), "package"]);
-    preparedArchives.set(key, archive);
-  }
-  // Share immutable bytes, while each case retains its own writable package artifact.
-  writeFileSync(tarball, archive);
-}
 
 export function setupFixture(
   mode: "split" | "override" | "local",
@@ -56,8 +49,7 @@ export function setupFixture(
   copyDockerSchedulerHarness(harness);
   mkdirSync(selectedHarness, { recursive: true });
   const version = "2026.8.1";
-  const packageDir = path.join(root, "packed", "package");
-  writePackageArchive(packageDir, fixture.tarball, { name: "openclaw", version });
+  writePackageTarball(root, "openclaw", version, path.basename(fixture.tarball));
   const sha256 = sha256File(fixture.tarball);
   const trustedScript = `
 const fs = require('node:fs');
@@ -126,7 +118,8 @@ fs.appendFileSync(${JSON.stringify(fixture.marker)}, JSON.stringify({
   const registryEntries = registryPackages.map((name) => {
     const tarball = `${name.split("/").at(-1)}.tgz`;
     const pluginTarball = path.join(fixture.registry, tarball);
-    writePackageArchive(packageDir, pluginTarball, { name, version });
+    // Keep staging outside the sealed registry, which admits only its declared files.
+    copyFileSync(writePackageTarball(root, name, version, tarball), pluginTarball);
     return { name, version, tarball, sha256: sha256File(pluginTarball) };
   });
   const registryManifest = path.join(fixture.registry, "prepublish-plugin-registry.json");

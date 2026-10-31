@@ -11,11 +11,18 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
 const { values } = parseArgs({
-  options: { owner: { type: "string" }, output: { type: "string" } },
+  options: {
+    owner: { type: "string" },
+    output: { type: "string" },
+    observers: { type: "string", default: "1" },
+  },
 });
 assert.equal(process.platform, "linux");
 assert.ok(values.owner, "--owner is required");
 assert.ok(values.output, "--output is required");
+const observers = Number(values.observers);
+assert.ok(Number.isSafeInteger(observers) && observers >= 1);
+const companions: Array<() => void> = [];
 const owner = path.resolve(values.owner);
 const { watchChildMemory }: typeof import("../../src/process/child-memory.js") = await import(
   pathToFileURL(owner).href
@@ -85,10 +92,10 @@ try {
       15_000,
     );
     child.once("exit", () => reject(new Error("Fixture exited before the slow interval")));
-    // Forward every real timer unchanged; only this watcher can request 5,000 ms here.
+    // Forward real deadlines unchanged; shared scheduling subtracts elapsed sample time.
     globalThis.setTimeout = Object.assign((...args: Parameters<typeof setTimeout>) => {
       const timer = originalSetTimeout(...args);
-      if (args[1] === 5000 && !armAt) {
+      if (args[1] !== undefined && args[1] >= 4990 && args[1] <= 5000 && !armAt) {
         armAt = Date.now();
         resolve();
       }
@@ -107,6 +114,19 @@ try {
       diagnostic += text;
     },
   });
+  // Overlapping high-bound observers select the shared mode without another runaway.
+  for (let index = 1; index < observers; index++) {
+    companions.push(
+      watchChildMemory({
+        pid: child.pid,
+        limitBytes: Number.MAX_SAFE_INTEGER,
+        onLimit: () => assert.fail("High-bound observer unexpectedly fired"),
+        onDiagnostic: (text) => {
+          diagnostic += text;
+        },
+      }),
+    );
+  }
   await slowSample;
   // The pending five-second timer remains real; remove observation before the burst.
   globalThis.setTimeout = originalSetTimeout;
@@ -141,6 +161,7 @@ try {
     owner,
     ownerModuleSha256: createHash("sha256").update(fs.readFileSync(owner)).digest("hex"),
     scheduledIntervalMs: 5000,
+    observers,
     armAt,
     burstAt,
     limitAt,
@@ -161,6 +182,7 @@ try {
   globalThis.setTimeout = originalSetTimeout;
   clearTimeout(phaseTimeout);
   stop?.();
+  companions.forEach((stopObserver) => stopObserver());
   if (child.pid) {
     try {
       process.kill(-child.pid, "SIGKILL");

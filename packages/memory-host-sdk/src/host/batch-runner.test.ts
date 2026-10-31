@@ -1,7 +1,11 @@
 // Memory Host SDK tests cover batch runner behavior.
 import { describe, expect, it, vi } from "vitest";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../../../gateway-client/src/timeouts.js";
-import { buildEmbeddingBatchGroupOptions, runEmbeddingBatchGroups } from "./batch-runner.js";
+import {
+  buildEmbeddingBatchGroupOptions,
+  runEmbeddingBatchGroups,
+  runEmbeddingBatches,
+} from "./batch-runner.js";
 
 const jsonlEncoder = new TextEncoder();
 
@@ -154,4 +158,65 @@ describe("buildEmbeddingBatchGroupOptions", () => {
       }),
     ).rejects.toThrow(uploadTooLarge);
   });
+});
+
+describe("runEmbeddingBatches completion", () => {
+  it.each([
+    ["completed", false, "out", false, null],
+    ["pending", true, "out", true, null],
+    [
+      "pending",
+      false,
+      "out",
+      false,
+      "openai batch b1 submitted; enable remote.batch.wait to await completion",
+    ],
+    ["completed", false, "", false, "openai batch b1 completed without output file"],
+    ["pending", true, "", true, "openai batch b1 completed without output file"],
+  ] as const)(
+    "handles %s, wait=%s, output=%s",
+    async (status, wait, outputFileId, waited, error) => {
+      const batchStatus = {
+        id: "b1",
+        status,
+        ...(status === "completed" ? { output_file_id: outputFileId } : {}),
+      };
+      const waitForBatch = vi.fn(async () => ({ outputFileId }));
+      const readOutput = vi.fn(
+        async (fileId: string, read: (response: Response) => Promise<void>) => {
+          expect(fileId).toBe("out");
+          await read(
+            new Response(
+              '{"custom_id":"0","response":{"status_code":200,"body":{"data":[{"embedding":[1,2]}]}}}\n',
+            ),
+          );
+        },
+      );
+      const result = runEmbeddingBatches({
+        provider: "openai",
+        requests: [{ custom_id: "0" }],
+        maxRequests: 100,
+        wait,
+        pollIntervalMs: 1000,
+        timeoutMs: 60_000,
+        concurrency: 1,
+        debugLabel: "embedding batch submit",
+        submit: async () => batchStatus,
+        waitForBatch,
+        readError: async () => undefined,
+        readOutput,
+      });
+      if (error) {
+        await expect(result).rejects.toThrow(error);
+        expect(readOutput).not.toHaveBeenCalled();
+      } else {
+        expect(await result).toEqual(new Map([["0", [1, 2]]]));
+      }
+      if (waited) {
+        expect(waitForBatch).toHaveBeenCalledExactlyOnceWith(batchStatus, 1000, 60_000);
+      } else {
+        expect(waitForBatch).not.toHaveBeenCalled();
+      }
+    },
+  );
 });

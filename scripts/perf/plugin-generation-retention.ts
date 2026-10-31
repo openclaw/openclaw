@@ -6,9 +6,11 @@
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/plugin-generation-retention.ts retention 25 40 errors
  * Append decisions to retain a decision provider across sibling plugin replacements:
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/plugin-generation-retention.ts retention 20 40 decisions
+ * Append retirement to retain native exports and closed reader scopes across registry disposal:
+ * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/plugin-generation-retention.ts retention 20 40 retirement
  * Uses the real bundled module binder, registry records, invocation views, and physical disposal.
  * Fixtures live under .local and are removed afterward; no Gateway or operator state is accessed.
- * Acceptance: modules retain at most one adopted generation; errors and decisions retain none.
+ * Acceptance: modules retain at most one adopted generation; other scenarios retain no payloads.
  * Timing excludes census GC; allocation samples include collected objects. Compare matched modes.
  */
 import assert from "node:assert/strict";
@@ -25,7 +27,11 @@ const [mode = "retention", rawGenerations = "25", rawPlugins = "40", scenario = 
 const generations = Number(rawGenerations);
 const pluginCount = Number(rawPlugins);
 assert(["retention", "timing", "allocation"].includes(mode));
-assert(["modules", "errors", "decisions"].includes(scenario));
+assert(["modules", "errors", "decisions", "retirement"].includes(scenario));
+if (scenario === "retirement") {
+  // Unbundled disposal has more frames than the production bundle.
+  Reflect.set(Error, "stackTraceLimit", 50);
+}
 assert(Number.isSafeInteger(generations) && generations > 0);
 assert(Number.isSafeInteger(pluginCount) && pluginCount > 0);
 assert(global.gc, "Run with --expose-gc");
@@ -203,12 +209,70 @@ async function createDecisionWorkload() {
     current = builder.registry;
   };
 }
+async function createRetirementWorkload() {
+  const { disposePluginRegistryInstances } = await import("../../src/plugins/runtime.js");
+  const { createSqliteReadOnlyWorkerScope } =
+    await import("../../src/infra/sqlite-readonly-worker-context.js");
+  // Native module values and inherited reader scopes can outlive retired generations.
+  const nativeExports: string[][] = [];
+  const readScopes: ReturnType<typeof createSqliteReadOnlyWorkerScope>[] = [];
+  class GenerationService {
+    readonly entries = Array.from({ length: 32768 }, (_, index) => index);
+    readonly id: string;
+    constructor(id: string) {
+      this.id = id;
+    }
+    start() {}
+  }
+  return async (track: boolean) => {
+    const registry = createEmptyPluginRegistry();
+    const readers = createSqliteReadOnlyWorkerScope();
+    readScopes.push(readers);
+    for (let index = 0; index < pluginCount; index++) {
+      const record = createPluginRecord({
+        id: `retirement-${index}`,
+        source: path.join(root, `retirement-${index}.js`),
+        origin: "bundled",
+        enabled: true,
+        configSchema: false,
+      });
+      registry.plugins.push(record);
+      const instance = new PluginInstance(record.id, { record, registry });
+      const names = ["knowledge_learn"];
+      instance.adopt(names);
+      nativeExports.push(names);
+      const service = new GenerationService(record.id);
+      registry.services.push({
+        id: record.id,
+        pluginId: record.id,
+        source: record.source,
+        origin: "bundled",
+        service,
+      });
+      if (track) {
+        instances.push(new WeakRef(service));
+      }
+    }
+    const beforeDispose = () => {
+      assert.equal(registry.plugins.length, pluginCount);
+      return readers.close();
+    };
+    const result = await disposePluginRegistryInstances(registry, undefined, {
+      cfg: {},
+      beforeDispose,
+    });
+    assert.deepEqual(result.failures, []);
+    assert.equal(nativeExports.length, readScopes.length * pluginCount);
+  };
+}
 const generation =
   scenario === "errors"
     ? await createErrorWorkload()
     : scenario === "decisions"
       ? await createDecisionWorkload()
-      : moduleGeneration;
+      : scenario === "retirement"
+        ? await createRetirementWorkload()
+        : moduleGeneration;
 async function census() {
   await setImmediate();
   // queryObjects performs a full GC, including ephemeron processing.
@@ -223,6 +287,8 @@ const inspector = new Session();
 try {
   await generation(false);
   const initial = await census();
+  const totalStarted = performance.now();
+  const totalCpuStarted = process.threadCpuUsage();
   if (mode === "allocation") {
     inspector.connect();
     await inspector.post("HeapProfiler.startSampling", {
@@ -252,6 +318,7 @@ try {
     sampledBytes = profile.samples.reduce((sum, sample) => sum + sample.size, 0);
   }
   const final = await census();
+  const totalCpu = process.threadCpuUsage(totalCpuStarted);
   console.log(
     JSON.stringify({
       mode,
@@ -262,6 +329,9 @@ try {
       hostLoad,
       wallMs,
       threadCpuMs,
+      totalWallMs: performance.now() - totalStarted,
+      totalThreadCpuMs: (totalCpu.user + totalCpu.system) / 1000,
+      maxRssKiB: process.resourceUsage().maxRSS,
       sampledBytes,
       bytesPerOperation: sampledBytes === undefined ? undefined : sampledBytes / instances.length,
       initial,
@@ -273,10 +343,10 @@ try {
     final.liveTrackedObjects <= (scenario === "modules" ? pluginCount : 0),
     "Retired graphs remain",
   );
-  if (scenario === "decisions" && mode === "retention") {
+  if ((scenario === "decisions" || scenario === "retirement") && mode === "retention") {
     assert(
       final.memory.heapUsed - initial.memory.heapUsed <= 32 * 1024 * 1024,
-      "Post-GC decision reload heap grew beyond the 32 MiB budget",
+      "Post-GC reload heap grew beyond the 32 MiB budget",
     );
   }
 } finally {

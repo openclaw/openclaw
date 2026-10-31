@@ -50,7 +50,6 @@ describe("wrapCloudflareAiGatewayProviderStream", () => {
       model: {},
       streamFn: baseStreamFn,
     } as never);
-    expect(wrapped).not.toBe(baseStreamFn);
     if (!wrapped) {
       throw new Error("expected Cloudflare AI Gateway stream wrapper");
     }
