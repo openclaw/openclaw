@@ -419,6 +419,7 @@ describe("config cli integration", () => {
         } } } } },
       }`,
       async () => {
+        const schemaBuild = vi.spyOn(runtimeSchema, "buildRuntimeConfigSchemaFromRegistry");
         const output = createTestRuntime();
         for (const [field, json] of [
           ["channels.discord.token", true],
@@ -442,6 +443,8 @@ describe("config cli integration", () => {
         for (const secret of schemaOnlySecrets) {
           expect(output.logs.join("\n")).not.toContain(secret);
         }
+        // Found values need only redaction hints, not the form schema.
+        expect(schemaBuild).not.toHaveBeenCalled();
       },
     );
   });
@@ -458,13 +461,15 @@ describe("config cli integration", () => {
       expectedError: "plugin metadata unavailable",
     },
     {
-      name: "schema construction fails",
+      name: "redaction hint construction fails",
       installFailure: async () => {
-        vi.spyOn(runtimeSchema, "buildRuntimeConfigSchemaFromRegistry").mockImplementation(() => {
-          throw new Error("schema construction unavailable");
-        });
+        vi.spyOn(runtimeSchema, "buildRuntimeConfigRedactionHintsFromRegistry").mockImplementation(
+          () => {
+            throw new Error("redaction hints unavailable");
+          },
+        );
       },
-      expectedError: "schema construction unavailable",
+      expectedError: "redaction hints unavailable",
     },
   ])("fails closed before config get emits values when $name", async (testCase) => {
     const raw = JSON.stringify({
