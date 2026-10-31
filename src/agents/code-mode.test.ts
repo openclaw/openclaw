@@ -238,7 +238,7 @@ describe("Code Mode catalog and model-visible surface", () => {
       [
         "- alpha_tool { value?: string } -> Array<{ id: string; score: number }>",
         "- zeta_tool { value?: string } -> ?",
-        "- read { path: string; cursor?: number /* integer, >= 0 */; limit?: number; offset?: number /* integer, >= 1 */; optional?: true } -> ?",
+        "- read { path: string; cursor?: number /* integer, >= 0 */; limit?: number; offset?: number /* integer, >= 1 */; optional?: boolean } -> ?",
         "If an input hint leaves needed arguments unclear (`...` or `unknown`), read `await callableName.describe()`",
         "Call globals directly when their input contract is clear",
       ],
