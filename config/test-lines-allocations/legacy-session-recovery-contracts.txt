@@ -1,0 +1,9 @@
+# Characterization tests for the legacy session-recovery contracts:
+# legacy-compaction-history (fail-closed checkpoint references) and
+# legacy-transcript-repair (parent walk, strip/raw key asymmetry,
+# rewritten-branch classification). Neither module had any coverage.
+#
+# Also covers the shipped entry points that consume them: Doctor's
+# detectSessionTranscriptHealthIssues over a real transcript tree, and cleanup's
+# pruneUnreferencedSessionArtifacts aborting on malformed legacy references.
+278
