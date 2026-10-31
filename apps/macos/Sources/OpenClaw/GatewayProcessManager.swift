@@ -383,16 +383,18 @@ final class GatewayProcessManager {
         if let restoration = request.serviceForRestoration {
             let cli = restoration.retained
             do { try await request.mutationCheck?() } catch { return .failed(error.localizedDescription) }
-            guard self.isCurrentGatewayStart(request.generation), let bun = cli.prefix.first else { return .skipped }
-            let runtime = BundledRuntime(root: URL(fileURLWithPath: bun)
-                .deletingLastPathComponent().deletingLastPathComponent())
+            guard self.isCurrentGatewayStart(request.generation), let bun = cli.prefix.first,
+                  let runtime = cli.prefix.last.flatMap(BundledRuntime.init(serviceEntrypoint:))
+            else { return .skipped }
+            // Restoration keeps the retained executable; only the stable path needs this build's Bun.
             error = await GatewayLaunchAgentManager.runDaemonCommand(
                 GatewayLaunchAgentManager.installArguments(
                     port: request.port,
                     allowUnconfigured: request.allowUnconfigured,
-                    runtime: runtime,
-                    launchAgentExists: false),
+                    runtime: nil,
+                    launchAgentExists: false) + ["--runtime", "bun", "--runtime-path", bun],
                 runtime: restoration.installer,
+                serviceRuntime: bun == runtime.serviceBun.path ? runtime : nil,
                 restoring: cli,
                 expectedServiceAuthority: request.expectedServiceAuthority,
                 checkCurrent: request.mutationCheck)

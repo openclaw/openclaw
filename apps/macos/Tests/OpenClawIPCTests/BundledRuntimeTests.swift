@@ -526,4 +526,111 @@ struct BundledRuntimeTests {
             #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent("gc-3").path))
         }
     }
+
+    private func seedBuilds(_ count: Int, home: URL, profile: AppProfile) async throws -> [BundledRuntime] {
+        var runtimes: [BundledRuntime] = []
+        for index in 0..<count {
+            let app = home.appendingPathComponent("Service-\(index).app")
+            _ = try self.makeBundle(
+                at: app, builtAt: "2026-08-28T00:00:0\(index).000Z", buildID: "svc-\(index)", command: "unused")
+            let runtime = try await BundledRuntime.seed(
+                bundle: #require(Bundle(url: app)), profile: profile, homeDirectory: home)
+            // Fixture builds share one Bun script; give each build its own bytes.
+            let handle = try FileHandle(forWritingTo: runtime.bun)
+            try handle.seekToEnd()
+            try handle.write(contentsOf: Data("# build \(index)\n".utf8))
+            try handle.close()
+            runtimes.append(runtime)
+        }
+        return runtimes
+    }
+
+    @Test func `service Bun keeps one real path and follows the installed service after a failed install`() async throws {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let profile = AppProfile(environment: ["OPENCLAW_PROFILE": "service-bun-fixture"])
+        let builds = try await self.seedBuilds(2, home: home, profile: profile)
+        let (old, new) = (builds[0], builds[1])
+        let service = old.serviceBun
+        #expect(service == new.serviceBun)
+        #expect(service.path == profile.stateDirectoryURL(homeDirectory: home)
+            .appendingPathComponent("runtime/service/bun").path)
+        func serviceMatches(_ runtime: BundledRuntime) -> Bool {
+            FileManager.default.contentsEqual(atPath: service.path, andPath: runtime.bun.path)
+        }
+        func leftovers() throws -> [String] {
+            try FileManager.default.contentsOfDirectory(atPath: service.deletingLastPathComponent().path)
+                .filter { $0 != "bun" }
+        }
+
+        // A first move can fail after the installer published the service; its executable must remain.
+        try await old.stageServiceBun()(false)
+        #expect(serviceMatches(old))
+        // A real file, not a link: macOS records the resolved executable path for privacy grants.
+        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: service.path)) == nil)
+        #expect(FileManager.default.isExecutableFile(atPath: service.path))
+        #expect(serviceMatches(old))
+
+        try await new.stageServiceBun()(false)
+        #expect(serviceMatches(old))
+        #expect(try leftovers().isEmpty)
+
+        try await new.stageServiceBun()(true)
+        #expect(serviceMatches(new))
+        #expect(try leftovers().isEmpty)
+
+        func cli(_ executable: URL, _ runtime: BundledRuntime) -> GatewayLaunchAgentManager.InstalledServiceCLI {
+            .init(
+                prefix: [executable.path, runtime.packageRoot.appendingPathComponent("dist/index.js").path],
+                sqliteLibrary: runtime.sqliteLibrary.path)
+        }
+        #expect(cli(service, new).matchesBundledRuntime(new))
+        #expect(!cli(service, old).matchesBundledRuntime(old))
+        #expect(cli(old.bun, old).matchesBundledRuntime(old))
+        let entry = new.packageRoot.appendingPathComponent("dist/index.js").path
+        #expect(BundledRuntime(serviceEntrypoint: entry)?.root.path == new.root.path)
+        #expect(BundledRuntime(serviceEntrypoint: "/operator/bin/openclaw.mjs") == nil)
+    }
+
+    @Test func `healthy collection retains a build a stable service Bun still runs`() async throws {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let profile = AppProfile(environment: ["OPENCLAW_PROFILE": "service-gc-fixture"])
+        let builds = try await self.seedBuilds(3, home: home, profile: profile)
+        let directory = builds[0].root.deletingLastPathComponent()
+        // The process runs from the stable path and names its older build only through argv.
+        try FileManager.default.createDirectory(
+            at: builds[0].serviceBun.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: URL(fileURLWithPath: "/bin/cat"), to: builds[0].serviceBun)
+        let signed = await ShellExecutor.runDetailed(
+            command: ["/usr/bin/codesign", "--force", "--sign", "-", builds[0].serviceBun.path],
+            cwd: nil,
+            env: [:],
+            timeout: 5)
+        try #require(signed.success, "Fixture signing failed: \(signed.stderr)")
+        let process = Process()
+        let input = Pipe()
+        let output = Pipe()
+        process.executableURL = builds[0].serviceBun
+        process.arguments = ["-", builds[0].packageRoot.appendingPathComponent("dist/build-info.json").path]
+        process.standardInput = input
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        defer {
+            try? input.fileHandleForWriting.close()
+            if process.isRunning { process.terminate() }
+            process.waitUntilExit()
+        }
+        let ready = Data("ready\n".utf8)
+        try input.fileHandleForWriting.write(contentsOf: ready)
+        try #require(try output.fileHandleForReading.read(upToCount: ready.count) == ready)
+        try await BundledRuntime.garbageCollectAfterHealthy(profile: profile, homeDirectory: home)
+        #expect(FileManager.default.fileExists(atPath: builds[0].root.path))
+        try input.fileHandleForWriting.close()
+        process.waitUntilExit()
+        try await BundledRuntime.garbageCollectAfterHealthy(profile: profile, homeDirectory: home)
+        #expect(!FileManager.default.fileExists(atPath: builds[0].root.path))
+        #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent("service/bun").path))
+    }
 }

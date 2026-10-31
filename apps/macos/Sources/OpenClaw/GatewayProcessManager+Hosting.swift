@@ -305,10 +305,8 @@ extension GatewayProcessManager {
         self.appendLog("[gateway] Pin migration pending; runtime preserved. Run openclaw doctor.\n")
         if self.gatewayHosting == .service,
            let cli = GatewayLaunchAgentManager.installedServiceCLI() ?? self.retainedServiceCLI,
-           let executable = cli.prefix.first
+           let runtime = cli.prefix.last.flatMap(BundledRuntime.init(serviceEntrypoint:))
         {
-            let runtime = BundledRuntime(root: URL(fileURLWithPath: executable)
-                .deletingLastPathComponent().deletingLastPathComponent())
             if cli.matchesBundledRuntime(runtime) { return runtime }
         }
         if let runtime = try BundledRuntime.seeded() { return runtime }

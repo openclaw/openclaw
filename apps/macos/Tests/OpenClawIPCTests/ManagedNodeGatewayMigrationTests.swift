@@ -1147,17 +1147,21 @@ struct ManagedNodeGatewayMigrationTests {
     @Test func `missing pin exception still rejects conflicting recorded intent`() {
         let runtime = BundledRuntime(root: URL(fileURLWithPath: "/fixture/runtime/build"))
         #expect(!ManagedNodeGatewayMigration.runtimePinMatchesInstallation(
-            nil, runtime: runtime, allowMissing: false))
+            nil, executable: runtime.serviceBun.path, allowMissing: false))
         #expect(ManagedNodeGatewayMigration.runtimePinMatchesInstallation(
-            nil, runtime: runtime, allowMissing: true))
-        for (path, kind, accepted) in [
-            (runtime.bun.path, "bun", true),
-            ("/operator/bin/bun", "bun", false),
-            (runtime.bun.path, "node", false),
+            nil, executable: runtime.serviceBun.path, allowMissing: true))
+        // New installs pin the stable service Bun; restoration keeps a retained per-build Bun.
+        for (executable, path, kind, accepted) in [
+            (runtime.serviceBun.path, runtime.serviceBun.path, "bun", true),
+            (runtime.bun.path, runtime.bun.path, "bun", true),
+            (runtime.serviceBun.path, runtime.bun.path, "bun", false),
+            (runtime.bun.path, runtime.serviceBun.path, "bun", false),
+            (runtime.serviceBun.path, "/operator/bin/bun", "bun", false),
+            (runtime.serviceBun.path, runtime.serviceBun.path, "node", false),
         ] {
             let record = Self.runtimeIntent(revision: "installed", runtime: kind, path: path)
             #expect(ManagedNodeGatewayMigration.runtimePinMatchesInstallation(
-                record, runtime: runtime, allowMissing: true) == accepted)
+                record, executable: executable, allowMissing: true) == accepted)
         }
     }
 

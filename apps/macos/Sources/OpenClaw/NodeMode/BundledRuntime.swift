@@ -16,6 +16,22 @@ struct BundledRuntime: Sendable {
         [self.bun.path, self.packageRoot.appendingPathComponent("openclaw.mjs").path]
     }
 
+    /// macOS keys a bare executable's Automation grant by its real path, so a per-build Bun loses
+    /// it on every app update. App-managed services run a clone of this build's Bun at one stable
+    /// path; the package and SQLite library stay per build.
+    var serviceBun: URL {
+        self.root.deletingLastPathComponent().appendingPathComponent("service/bun")
+    }
+
+    /// A service command names the stable Bun, so its build comes from the package entrypoint.
+    init?(serviceEntrypoint: String) {
+        let marker = "/lib/node_modules/openclaw/"
+        guard let range = serviceEntrypoint.range(of: marker, options: .backwards),
+              range.lowerBound > serviceEntrypoint.startIndex
+        else { return nil }
+        self.init(root: URL(fileURLWithPath: String(serviceEntrypoint[..<range.lowerBound])))
+    }
+
     var environment: [String: String] {
         [
             "PATH": self.bun.deletingLastPathComponent().path,
