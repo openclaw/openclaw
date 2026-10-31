@@ -24,7 +24,8 @@ import {
 
 const resolvedClient = vi.hoisted(() => ({ current: undefined as MatrixClient | undefined }));
 // Recovery resolves the same account's client without starting an unrelated sync loop.
-vi.mock("../client-bootstrap.js", () => ({
+vi.mock("../client-bootstrap.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../client-bootstrap.js")>()),
   withResolvedRuntimeMatrixClient: async (
     _options: unknown,
     run: (client: MatrixClient) => Promise<unknown>,
