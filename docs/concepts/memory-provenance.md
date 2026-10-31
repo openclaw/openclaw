@@ -260,7 +260,8 @@ or hook source. Keep an admission rule for future matching sessions, within
   not delete a file or identify contributing lines. Supported write/edit/patch
   transcript records supplement the latest file-level observer record, but
   can include unsuccessful attempts. Arbitrary shell writes and external edits
-  are not fully tracked.
+  are not fully tracked. See [Freeform edits and quarantine](#freeform-edits-and-quarantine)
+  for how they affect the file's trust record.
 - **Paraphrases and other copies.** Exact corpus quotations can be removed,
   but untracked paraphrases, exports, external backups, other plugins' stores,
   and independently copied files are outside this cleanup. A reported curated
@@ -271,6 +272,27 @@ or hook source. Keep an admission rule for future matching sessions, within
 
 An empty preview means no more artifacts were found by those selectors and
 matching rules. It is not a certificate that no related information remains.
+
+## Freeform edits and quarantine
+
+Root `MEMORY.md` and `USER.md` keep one trust record per file with the file
+hash, origin class, time, and session of the latest tracked write (`write`,
+`edit`, `apply_patch`). A tracked write records `untrusted` when the turn is
+not an owner turn, when the turn is tainted by network-sourced tool results, or
+when the file no longer matches the recorded hash. A shell or external edit does
+not update the record, so the next tracked write after it compares against a
+stale hash and records `untrusted`. Once a file is `untrusted`, later tracked
+writes keep it `untrusted` and only refresh the time, session, and hash.
+
+Automatic context excludes an `untrusted` root `MEMORY.md` or `USER.md`. To
+detect this:
+
+- The Gateway log contains `excluding MEMORY.md from automatic memory context:
+  memory provenance is untrusted` (or `USER.md`), once per file and process.
+- `openclaw doctor` reports the check `core/doctor/memory-provenance` with the
+  file (including personal `users/<profile-id>/USER.md` files), the origin class, and the time and session of the last recorded
+  tracked write. The record names only the latest tracked write, not
+  necessarily the write that quarantined the file.
 
 ## Purging a person or a source end to end
 
