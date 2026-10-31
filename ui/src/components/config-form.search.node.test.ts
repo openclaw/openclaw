@@ -22,13 +22,13 @@ function matches(query: string, schema: Schema, options: Partial<Search> = {}) {
 }
 
 it.each([
-  ["tag:überwachung", true],
-  ["mode tag:überwachung", false],
+  ["tag:überwachung tag:cafe\u0301", true],
+  ["mode tag:überwachung tag:cafe\u0301", false],
 ] as const)("matches text and tag criteria: %s", (query, expected) => {
   expect(
     matches(query, object({ auth: object({ token: string() }) }), {
       path: ["gateway"],
-      hints: { "gateway.auth.token": { label: "Token", tags: ["u\u0308berwachung", "secret"] } },
+      hints: { "gateway.auth.token": { label: "Token", tags: ["u\u0308berwachung", "café"] } },
     }),
   ).toBe(expected);
 });
