@@ -6134,6 +6134,10 @@ jobs:
       BUNDLE_DEPLOYMENT: "true"
       BUNDLE_GEMFILE: ${{ github.workspace }}/apps/ios/Gemfile
     steps:
+      - name: Reserve host CPU for screenshots
+        timeout-minutes: 2
+        run: sudo -n /usr/bin/mdutil -i off /System/Volumes/Data
+
       - *platform_checkout_step
 
       - name: Setup Ruby
