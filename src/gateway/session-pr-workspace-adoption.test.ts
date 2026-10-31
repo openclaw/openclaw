@@ -549,6 +549,7 @@ function stubPullRequestPreparation(sessionKey: string) {
     async ({ assertCurrent }) => ({
       result: { ...pullRequest, author: { accountId: 9, login: "guest" }, state: "open" },
       assertCurrent,
+      ownPublication: false,
       requirePublicRepositories: false,
     }),
   );

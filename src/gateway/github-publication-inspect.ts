@@ -143,6 +143,7 @@ export async function inspectOwnGitHubPullRequest(params: {
 }): Promise<{
   result: Inspection;
   assertCurrent: () => void;
+  ownPublication: boolean;
   publishedHeadCommit?: string;
   requirePublicRepositories: boolean;
 }> {
@@ -156,8 +157,11 @@ export async function inspectOwnGitHubPullRequest(params: {
   if (!authority.operatorWrite && actor.kind !== "operator") {
     throw new Error("Inspecting your PR requires your verified linked GitHub account.");
   }
-  // This conversation's own publication makes its publisher the PR's accepted author.
-  const published = await readSharedGitHubPublication(params.session, { status: "published" });
+  // Updating an imported PR must not create guest author eligibility.
+  const published = await readSharedGitHubPublication(params.session, {
+    status: "published",
+    authorEligibilityOnly: true,
+  });
   assertRequester();
   const inspected = await readOwnGitHubPullRequest({
     pullRequestUrl: params.pullRequestUrl,
@@ -184,6 +188,7 @@ export async function inspectOwnGitHubPullRequest(params: {
   return {
     result: inspected.result,
     assertCurrent: inspected.assertCurrent,
+    ownPublication: inspected.ownPublication,
     requirePublicRepositories: inspected.requirePublicRepositories,
     ...(inspected.ownPublication && published?.head_commit
       ? { publishedHeadCommit: published.head_commit }

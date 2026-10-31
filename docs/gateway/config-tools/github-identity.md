@@ -154,6 +154,11 @@ For this recorded publication in public base and head repositories, a personal
 GitHub link is not required; the currently selected publisher must still match
 the recorded publisher. Private repositories and imports of other PRs retain
 their linked-account and repository-access requirements for guests.
+An update receipt for an imported PR does not give a guest the author's identity,
+even when its branch name matches the conversation's branch. Preparation records
+whether this conversation had already published the PR before its first binding
+and preserves that fact through refresh and recovery. Existing bindings retain
+their continuation behavior.
 
 To import your own existing PR into a local conversation, use `github_publish` with
 `action: "prepare_pr"` and `pullRequestUrl`. This action is offered only in

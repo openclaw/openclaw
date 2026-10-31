@@ -69,6 +69,8 @@ export type SessionGitHubPullRequestBinding = {
   number: number;
   base: SessionGitHubPullRequestSource;
   head: SessionGitHubPullRequestSource;
+  /** Verified publication before first binding; absent on already-admitted legacy bindings. */
+  origin?: "session-publication" | "external-pr";
   /** Prepared initial PR head; absence means its first import is incomplete. */
   preparedHeadCommit?: string;
 };

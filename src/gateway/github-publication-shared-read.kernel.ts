@@ -112,6 +112,13 @@ export function readSharedGitHubPublicationRequestInDatabase(
     if (!tableExists(db, "github_publication_requests")) {
       return undefined;
     }
+    if (
+      "authorEligibilityOnly" in selector &&
+      selector.authorEligibilityOnly &&
+      entry.worktree?.githubPullRequest?.origin === "external-pr"
+    ) {
+      return undefined;
+    }
     let selection = githubPublicationDatabase(db)
       .selectFrom("github_publication_requests")
       .selectAll("github_publication_requests")

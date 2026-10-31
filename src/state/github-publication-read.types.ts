@@ -64,7 +64,9 @@ export type SharedGitHubPublicationReadInput = {
     sessionId: string;
     lifecycleRevision?: string | null;
   };
-  selector: { requestId: string } | { idempotencyKey?: string; status?: "published" };
+  selector:
+    | { requestId: string }
+    | { idempotencyKey?: string; status?: "published"; authorEligibilityOnly?: true };
   entry: {
     archivedAt?: number;
     repositoryWorkspaceId?: string;

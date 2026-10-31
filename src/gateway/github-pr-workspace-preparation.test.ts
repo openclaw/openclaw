@@ -39,6 +39,7 @@ describe("existing PR preparation through the registered agent action", () => {
       ).resolves.toMatchObject({ status: "prepared", headCommit: f.headCommit });
       expect(f.readSession().createdActor).toEqual(before.createdActor);
       expect(f.readSession().owner).toEqual(before.owner);
+      expect(f.readSession().worktree?.githubPullRequest?.origin).toBe("external-pr");
       expect(await fs.readFile(path.join(f.projection, "pr.txt"), "utf8")).toBe(
         "original PR contents\n",
       );
@@ -64,6 +65,18 @@ describe("existing PR preparation through the registered agent action", () => {
       expect(f.externalWrites).toEqual([]);
     },
   );
+
+  it("records a maintainer's foreign publisher-authored PR as imported", async () => {
+    const f = await fixture({ linked: false });
+    f.pr.user = { id: 42, login: "roboclaw-bot" };
+    await expect(
+      f.invoke({}, f.sandbox, undefined, { requester: "maintainer" }),
+    ).resolves.toMatchObject({ status: "prepared", headCommit: f.headCommit });
+    expect(f.readSession().worktree?.githubPullRequest?.origin).toBe("external-pr");
+    await expect(f.invoke()).rejects.toThrow("Link a verified");
+    expect(f.writes).toEqual([]);
+    expect(f.externalWrites).toEqual([]);
+  });
 
   it.each(["narrowed", "missing", "revoked"] as const)(
     "refuses a maintainer's %s selected authority before changing the guest workspace",
@@ -153,6 +166,7 @@ describe("existing PR preparation through the registered agent action", () => {
               branch: "topic/existing",
               commit: f.headCommit,
             },
+            origin: "external-pr",
             preparedHeadCommit: f.headCommit,
           },
         },

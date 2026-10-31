@@ -339,12 +339,19 @@ export async function performSessionGitHubPreparation(
         review,
       };
     }
+    // Refresh keeps the first association's origin, including legacy absence.
+    const origin = previous
+      ? previous.origin
+      : inspected.ownPublication
+        ? "session-publication"
+        : "external-pr";
     // Finish the accepted source before admitting another head, including after a restart.
     const binding: SessionGitHubPullRequestBinding =
       previous && previous.preparedHeadCommit !== previous.head.commit
         ? { ...previous, base: structuredClone(pullRequest.base) }
         : {
             ...structuredClone(pullRequest),
+            ...(origin ? { origin } : {}),
             ...(preparedHead ? { preparedHeadCommit: preparedHead } : {}),
           };
     const reviewOnly = preparedHead === binding.head.commit;
