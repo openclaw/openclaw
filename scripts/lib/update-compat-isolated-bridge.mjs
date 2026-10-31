@@ -344,6 +344,8 @@ async function runWorker() {
     }
     return codec.decode(reply.value, callParent);
   };
+  // Current code must not claim custody of the older updater's executor.
+  globalThis[Symbol.for("openclaw.updateCompat.olderUpdater")] = true;
   const module = await import(moduleUrl);
   parentPort.on("message", async (message) => {
     if (message.type !== "invoke") {
