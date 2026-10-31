@@ -1,2 +1,2 @@
-# Composed group delivery, final-send scope, and historical hint recognition regressions.
-58
+# Composed direct/group/channel delivery modes, final-send scope, and historical hint recognition regressions.
+91

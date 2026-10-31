@@ -90,7 +90,7 @@ function resolveProviderLabel(rawProvider: string | undefined): string {
 }
 
 const SOURCE_DELIVERY_DEFAULTS_GUIDANCE =
-  "Current-turn delivery instructions override these defaults. Set `final=false` on sends made while work remains, and do not repeat content already delivered.";
+  "Current-turn delivery instructions override these defaults. Set `final=false` on sends to this conversation when more work or another reply must follow, including attachments sent before the final answer. A final send may end the turn; finish the work and include all still-pending answers in that reply. Do not duplicate replies already delivered to this conversation.";
 
 /**
  * Builds trusted group/channel delivery guidance.

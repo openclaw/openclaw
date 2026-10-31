@@ -111,7 +111,12 @@ it.each([
     expect(privateReply).not.toContain("By default, final text is automatically sent");
     for (const context of [automatic, privateReply]) {
       expect(context).toContain("Current-turn delivery instructions override these defaults.");
-      expect(context).toContain("Set `final=false` on sends made while work remains");
+      expect(context).toContain(
+        "Set `final=false` on sends to this conversation when more work or another reply must follow",
+      );
+      expect(context).toContain("including attachments sent before the final answer");
+      expect(context).toContain("A final send may end the turn");
+      expect(context).toContain("Do not duplicate replies already delivered to this conversation");
     }
     if (kind === "direct") {
       expect(automatic).not.toContain("NO_REPLY");

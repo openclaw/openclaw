@@ -111,22 +111,36 @@ it.each([
   },
 );
 
-it.each(["automatic", "message_tool_only"] as const)(
-  "keeps group defaults compatible with %s turn delivery",
-  async (sourceReplyDeliveryMode) => {
+it.each(
+  (["direct", "group", "channel"] as const).flatMap((ChatType) =>
+    (["automatic", "message_tool_only"] as const).flatMap((sessionMode) =>
+      (["automatic", "message_tool_only"] as const).map((turnMode) => ({
+        ChatType,
+        sessionMode,
+        turnMode,
+      })),
+    ),
+  ),
+)(
+  "keeps $ChatType/$sessionMode defaults compatible with $turnMode turn delivery",
+  async ({ ChatType, sessionMode, turnMode }) => {
     const sessionCtx = context("Please report progress, then finish the task.", {
       Provider: "discord",
       Surface: "discord",
-      ChatType: "channel",
+      ChatType,
       InboundEventKind: "user_request",
     });
     const prepared = await prepareReadyReply({
       ctx: sessionCtx,
       sessionCtx,
       cfg: { messages: { groupChat: { visibleReplies: "automatic" } } },
-      opts: { sourceReplyDeliveryMode, sessionPromptSourceReplyDeliveryMode: "automatic" },
+      opts: {
+        sourceReplyDeliveryMode: turnMode,
+        sessionPromptSourceReplyDeliveryMode: sessionMode,
+      },
     });
     const envelope = prepared.buildPromptBodies({ prefixedBody: prepared.prefixedBodyBase });
+    expect(prepared.sourceReplyDeliveryMode).toBe(turnMode);
     const prompt = [
       ...prepared.extraSystemPromptParts,
       currentPrompt(envelope),
@@ -139,11 +153,25 @@ it.each(["automatic", "message_tool_only"] as const)(
     ].join("\n\n");
     expect(prompt).toContain("message(action=send, final=false)");
     expect(prompt).toContain("Current-turn delivery instructions override these defaults.");
-    expect(prompt).toContain("attachments");
+    expect(prompt).toContain(
+      turnMode === "message_tool_only"
+        ? "Visible source replies are not automatically delivered for this run."
+        : "Otherwise, OpenClaw delivers your final response automatically.",
+    );
+    expect(prompt).toContain(
+      sessionMode === "automatic"
+        ? "By default, final text is automatically sent"
+        : "By default, final text stays private",
+    );
+    expect(prompt).toContain("including attachments sent before the final answer");
+    expect(prompt).toContain("Do not duplicate replies already delivered to this conversation");
+    expect(prompt).not.toContain("Do not repeat delivered content.");
     expect(prompt).not.toContain("For ordinary text, do not use the message tool");
     expect(prompt).not.toContain("Use message(action=send) only when");
     expect(prompt).not.toContain("status updates between tool calls are still shown");
-    expect(prompt).toContain("reply only when directly addressed or you can add clear value");
+    expect(prompt.includes("reply only when directly addressed or you can add clear value")).toBe(
+      ChatType !== "direct",
+    );
   },
 );
 
