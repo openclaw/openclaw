@@ -1,10 +1,15 @@
 import { EventEmitter, once } from "node:events";
-import type { AddressInfo } from "node:net";
+import { createServer } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
+import { connect, type AddressInfo, type Socket } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
+import { getCACertificates, setDefaultCACertificates } from "node:tls";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import WebSocket, { WebSocketServer } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { PROXY_FIXTURE_CERTIFICATE, PROXY_FIXTURE_KEY } from "../test-helpers/proxy-tls-fixture.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import {
   createRealtimeTranscriptionWebSocketSession,
   type RealtimeTranscriptionWebSocketSessionOptions as WebSocketOptions,
@@ -134,6 +139,170 @@ function encodeSequence(value: number): Buffer {
   frame.writeUInt16BE(value);
   return frame;
 }
+
+function resetProxyEnv() {
+  for (const key of [
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "NO_PROXY",
+    "no_proxy",
+    "OPENCLAW_PROXY_ACTIVE",
+    "OPENCLAW_DEBUG_PROXY_URL",
+  ]) {
+    vi.stubEnv(key, undefined);
+  }
+  vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "0");
+}
+
+it.each(["ws", "wss", "bypass", "cidr", "debug"] as const)(
+  "routes transcription handshakes through the selected proxy: %s",
+  async (route) => {
+    const targets: string[] = [];
+    const proxies: Array<Awaited<ReturnType<typeof reserveTestPortListener>>> = [];
+    async function proxy(status: number) {
+      const reserved = await reserveTestPortListener({
+        offsets: [0],
+        createListener: () =>
+          createServer().on("connect", (request, socket) => {
+            targets.push(`${status}:${request.url}`);
+            socket.end(`HTTP/1.1 ${status} Fixture proxy refusal\r\nContent-Length: 0\r\n\r\n`);
+          }),
+      });
+      proxies.push(reserved);
+      return `http://127.0.0.1:${reserved.claim.port}`;
+    }
+    try {
+      resetProxyEnv();
+      const { url, session, frames, waitFrames } = await setup(
+        route === "wss" ? { url: "wss://transcription.invalid/audio" } : {},
+      );
+      vi.stubEnv(route === "wss" ? "HTTPS_PROXY" : "HTTP_PROXY", await proxy(502));
+      if (route === "bypass" || route === "cidr") {
+        vi.stubEnv("NO_PROXY", route === "cidr" ? "127.0.0.0/8" : "127.0.0.1");
+        await session.connect();
+        session.sendAudio(Buffer.from("direct audio"));
+        await waitFrames(1);
+        expect(frames).toEqual([Buffer.from("direct audio")]);
+        expect(targets).toEqual([]);
+      } else {
+        if (route === "debug") {
+          vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "1");
+          vi.stubEnv("OPENCLAW_DEBUG_PROXY_URL", await proxy(503));
+        }
+        const status = route === "debug" ? 503 : 502;
+        await expect(session.connect()).rejects.toThrow(String(status));
+        const target = route === "wss" ? "transcription.invalid:443" : new URL(url).host;
+        expect(targets).toEqual([`${status}:${target}`]);
+      }
+    } finally {
+      for (const reserved of proxies) {
+        await reserved.releaseListener();
+        await reserved.claim.release();
+      }
+    }
+  },
+);
+
+it("transcribes over TLS through the selected HTTP proxy", async () => {
+  resetProxyEnv();
+  const previousCertificates = getCACertificates("default");
+  setDefaultCACertificates([...previousCertificates, PROXY_FIXTURE_CERTIFICATE]);
+  const listeners: Array<Awaited<ReturnType<typeof reserveTestPortListener>>> = [];
+  const upstreams: Socket[] = [];
+  const tunnels: string[] = [];
+  const frames: Buffer[] = [];
+  const trace: unknown[] = [];
+  const transcript = createDeferred<string>();
+  const onError = vi.fn();
+  let wss: WebSocketServer | undefined;
+  let session: ReturnType<typeof createSession> | undefined;
+  try {
+    const origin = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () =>
+        createHttpsServer({ key: PROXY_FIXTURE_KEY, cert: PROXY_FIXTURE_CERTIFICATE }),
+    });
+    listeners.push(origin);
+    wss = new WebSocketServer({ server: origin.listener });
+    wss.on("connection", (socket) => {
+      socket.send(JSON.stringify({ type: "session.created" }));
+      socket.on("message", (data, isBinary) => {
+        const frame = Buffer.isBuffer(data)
+          ? data
+          : Array.isArray(data)
+            ? Buffer.concat(data)
+            : Buffer.from(data);
+        if (isBinary) {
+          frames.push(frame);
+          trace.push({ boundary: "tls-origin", receivedAudioBytes: frame.byteLength });
+        }
+        socket.send(JSON.stringify({ text: "complete synthetic transcript" }));
+      });
+    });
+    const proxy = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () =>
+        createServer().on("connect", (request, downstream, head) => {
+          tunnels.push(request.url ?? "");
+          trace.push({ boundary: "http-proxy", method: request.method, target: request.url });
+          const upstream = connect(origin.claim.port, "127.0.0.1", () => {
+            downstream.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+            upstream.write(head);
+            downstream.pipe(upstream).pipe(downstream);
+          });
+          upstreams.push(upstream);
+          downstream.on("error", () => upstream.destroy());
+          upstream.on("error", () => downstream.destroy());
+          downstream.once("close", () => upstream.destroy());
+          upstream.once("close", () => downstream.destroy());
+        }),
+    });
+    listeners.push(proxy);
+    vi.stubEnv("HTTPS_PROXY", `http://127.0.0.1:${proxy.claim.port}`);
+    session = createSession({
+      url: `wss://127.0.0.1:${origin.claim.port}/transcribe`,
+      callbacks: { onTranscript: transcript.resolve, onError },
+      onMessage: (event, transport) => {
+        trace.push({ boundary: "wss-client", received: event });
+        handleProviderEvent(event, transport);
+      },
+      onClose: (transport) => transport.closeNow(),
+    });
+    session.sendAudio(Buffer.from("synthetic PCM"));
+    await session.connect();
+    expect(await transcript.promise).toBe("complete synthetic transcript");
+    expect(frames).toEqual([Buffer.from("synthetic PCM")]);
+    expect(tunnels).toEqual([`127.0.0.1:${origin.claim.port}`]);
+    expect(onError).not.toHaveBeenCalled();
+    console.info(
+      "PROXY_TRANSCRIPTION_BOUNDARY_TRACE",
+      JSON.stringify(trace).replaceAll(`127.0.0.1:${origin.claim.port}`, "<synthetic-origin>"),
+    );
+  } finally {
+    setDefaultCACertificates(previousCertificates);
+    session?.close();
+    for (const socket of wss?.clients ?? []) {
+      socket.terminate();
+    }
+    for (const socket of upstreams) {
+      socket.destroy();
+    }
+    const closingServer = wss;
+    if (closingServer) {
+      await new Promise<void>((resolve) => {
+        closingServer.close(() => resolve());
+      });
+    }
+    for (const listener of listeners.toReversed()) {
+      await listener.releaseListener();
+      await listener.claim.release();
+    }
+  }
+});
 
 it.each(["closed", "reconnect"] as const)("retains the audio tail: %s", async (phase) => {
   const reconnect = phase === "reconnect";
