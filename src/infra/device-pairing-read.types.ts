@@ -35,7 +35,11 @@ export type DevicePairingReadReply = {
       list: { pending: DevicePairingPendingRequest[]; paired: PairedDevice[] };
     }
   | { type: "devicePairing.lookup"; device: PairedDevice | null }
-  | { type: "devicePairing.pending"; pending: DevicePairingPendingRequest | null }
+  | {
+      type: "devicePairing.pending";
+      pending: DevicePairingPendingRequest | null;
+      expired: DevicePairingPendingRequest | null;
+    }
   | { type: "devicePairing.bootstrapContext"; context: BoundDeviceBootstrapContext | null }
 );
 
