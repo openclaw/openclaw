@@ -6,7 +6,7 @@ import { isUnresolvedSecretInputError } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
-import { isPreparedModelRuntimePluginLifecycleFailure } from "./prepared-model-runtime.errors.js";
+import { isPreparedModelRuntimePluginLifecycleFailure } from "./prepared-model-runtime-admission-errors.js";
 
 const log = createSubsystemLogger("models/provider-isolation");
 
