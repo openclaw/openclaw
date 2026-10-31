@@ -419,10 +419,13 @@ workspace cleanup, see [Migrating from QMD](/concepts/memory-builtin#migrating-f
 Doctor also reclaims legacy memory reindex shadows named `<database>.tmp-<uuid>`
 and their SQLite companions once the primary has been archived as `.migrated`
 and no primary or primary companion remains. Every file in the shadow family
-must be a regular file at least 24 hours old. Doctor previews the files and
-includes them in its migration backup before removal; failed removals produce
-recoverable warnings. Live indexes, current `.memory-reindex-<uuid>` shadows,
-and unresolved legacy recovery files remain untouched. Newly archived indexes
+must be a regular file at least 24 hours old. Doctor previews eligible files and
+declares them for migration backups. Every cleanup path also reports each file
+to standard error before removing it, including automatic Doctor migrations
+without a backup capture. Failed removals produce recoverable warnings.
+Live indexes, current `.memory-reindex-<uuid>` shadows,
+configured import sources (including aliases), and unresolved legacy recovery
+files remain untouched. Newly archived indexes
 become eligible on the next Doctor run. This repair runs in candidate Doctor;
 the installed updater needs no new protocol.
 

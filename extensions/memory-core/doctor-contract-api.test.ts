@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,7 +10,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { readMemoryHostEventRecords } from "openclaw/plugin-sdk/memory-host-events";
 import { openOpenClawStateDatabase } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
 import {
   resetDoctorPluginState,
@@ -830,8 +831,20 @@ describe("memory-core doctor dreaming migration", () => {
       expect(await migration.collectBackupResources?.(params)).toEqual(
         expect.arrayContaining(removed.map((file) => ({ path: file, kind: "file" }))),
       );
-      const result = await migration.migrateLegacyState(params);
-      expect(result.warnings).toEqual([]);
+      const reported: string[] = [];
+      const report = vi
+        .spyOn(console, "warn")
+        .mockImplementation((_message: unknown, file: unknown) => {
+          expect(existsSync(String(file))).toBe(true);
+          reported.push(String(file));
+        });
+      try {
+        const result = await migration.migrateLegacyState(params);
+        expect(result.warnings).toEqual([]);
+      } finally {
+        report.mockRestore();
+      }
+      expect(reported.toSorted()).toEqual(removed.toSorted());
       for (const file of removed) {
         await expect(fs.access(file)).rejects.toMatchObject({ code: "ENOENT" });
       }
@@ -845,7 +858,7 @@ describe("memory-core doctor dreaming migration", () => {
     },
   );
 
-  it("preserves unresolved legacy shadows without retirement evidence or after failed import", async () => {
+  it("preserves legacy shadows needed by unresolved or configured recovery", async () => {
     await fs.mkdir(path.dirname(legacyPath), { recursive: true });
     const shadow = `${legacyPath}.tmp-11111111-2222-3333-4444-555555555555`;
     const old = new Date(Date.now() - 48 * 60 * 60_000);
@@ -860,6 +873,13 @@ describe("memory-core doctor dreaming migration", () => {
     expect(result.warnings.length).toBeGreaterThan(0);
     await expect(fs.readFile(shadow, "utf8")).resolves.toBe("only recovery copy");
     await expect(fs.readFile(legacyPath, "utf8")).resolves.toBe("unimportable primary");
+    await fs.rm(legacyPath);
+    const recoveryAlias = path.join(rootDir, "recovery.sqlite");
+    await fs.symlink(shadow, recoveryAlias);
+    await migration.migrateLegacyState(
+      migrationParams(legacyMemorySearchConfig({ store: { path: recoveryAlias } })),
+    );
+    await expect(fs.readFile(shadow, "utf8")).resolves.toBe("only recovery copy");
   });
 
   it("removes an empty legacy memory sidecar placeholder without warning", async () => {

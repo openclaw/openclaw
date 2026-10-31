@@ -573,11 +573,12 @@ export const memorySidecarStateMigration: PluginDoctorStateMigration = {
   async migrateLegacyState(params) {
     const changes: string[] = [];
     const warnings: string[] = [];
-    // Doctor owns exclusive maintenance and captures the declared files before repair.
+    // Doctor owns exclusive maintenance; automatic paths still report before removal.
     // Only already archived sources are eligible; fresh imports wait for the next
     // invocation so their shadows are included in its pre-migration backup.
     for (const file of await collectArchivedLegacyReindexFilesForDoctor(params)) {
       try {
+        console.warn("Removing retired Memory Core legacy reindex shadow:", file);
         await fs.rm(file);
         changes.push(`Removed retired Memory Core legacy reindex shadow: ${file}`);
       } catch (err) {

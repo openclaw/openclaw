@@ -8,10 +8,16 @@ export async function collectArchivedLegacyReindexFiles(params: {
   legacyDir: string;
   configuredPaths: string[];
 }): Promise<string[]> {
-  const stat = async (file: string) =>
-    fs
-      .lstat(file)
-      .catch((err: unknown) => (asOptionalObjectRecord(err)?.code === "ENOENT" ? undefined : null));
+  const stat = async (file: string, followSymlinks = false) =>
+    (followSymlinks ? fs.stat(file) : fs.lstat(file)).catch((err: unknown) =>
+      asOptionalObjectRecord(err)?.code === "ENOENT" ? undefined : null,
+    );
+  const configuredSources = await Promise.all(
+    params.configuredPaths.map((file) => stat(file, true)),
+  );
+  if (configuredSources.includes(null)) {
+    return [];
+  }
   const { legacyDir } = params;
   // Unreadable optional cleanup state is retained, never a reason to fail an update.
   const entries = await fs.readdir(legacyDir).catch(() => []);
@@ -52,7 +58,19 @@ export async function collectArchivedLegacyReindexFiles(params: {
     }
     for (const family of families) {
       const members = LEGACY_MEMORY_SIDECAR_SUFFIXES.map((s) => `${family}${s}`);
-      const stats = await Promise.all(members.map(stat));
+      const stats = await Promise.all(members.map((file) => stat(file)));
+      // A configured import source remains owned, including aliases to a shadow.
+      if (
+        stats.some(
+          (member) =>
+            member &&
+            configuredSources.some(
+              (source) => source && source.dev === member.dev && source.ino === member.ino,
+            ),
+        )
+      ) {
+        continue;
+      }
       // A young or non-regular companion protects the whole family, including symlinks.
       if (
         stats.every(
