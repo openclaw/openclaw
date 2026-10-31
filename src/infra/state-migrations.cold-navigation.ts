@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { performance } from "node:perf_hooks";
 import { backupDoctorPostgresMigration } from "../commands/doctor-postgres-migration.js";
 import { backfillSessionColdNavigationInTransaction } from "../config/sessions/session-cold-storage-navigation.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
@@ -30,6 +31,8 @@ import {
 } from "./state-migrations.media-persistence-targets.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
+const COLD_NAVIGATION_WORK_BUDGET_MS = 10 * 60_000;
+
 /** Doctor adds reconstructible navigation one archive at a time; failures retain the source for retry. */
 export async function migrateSessionColdNavigation(
   params: {
@@ -43,6 +46,7 @@ export async function migrateSessionColdNavigation(
   const signal = resolveSqliteInspectionSignal();
   const changes: string[] = [];
   const warnings: string[] = [];
+  let remainingWorkMs = COLD_NAVIGATION_WORK_BUDGET_MS;
   signal?.throwIfAborted();
   try {
     await withAgentDatabaseMaintenanceLease({ env, processBound: true }, async (maintenance) => {
@@ -113,6 +117,22 @@ export async function migrateSessionColdNavigation(
               if (!next) {
                 break;
               }
+              if (remainingWorkMs <= 0) {
+                const count = withEngineStoreAdmission(() =>
+                  executeSqliteQueryTakeFirstSync(
+                    database.db,
+                    pending
+                      .clearSelect()
+                      .clearOrderBy()
+                      .clearLimit()
+                      .select((eb) => eb.fn.countAll<number>().as("count")),
+                  ),
+                );
+                warnings.push(
+                  `Cold transcript navigation in ${target.path}: migrated ${migrated}, pending ${count?.count ?? 0}; resumes on the next doctor run (openclaw doctor --fix). Pending archives keep the existing cold-restore path.`,
+                );
+                break;
+              }
               cursor = next.session_id;
               if (!backedUp) {
                 const postgres = agentEngineInput();
@@ -128,6 +148,8 @@ export async function migrateSessionColdNavigation(
                 }
                 backedUp = true;
               }
+              // Share one archive-work budget across databases, excluding their backups.
+              const startedAt = performance.now();
               try {
                 const completed = withEngineStoreAdmission(() =>
                   runSqliteImmediateTransactionSync(
@@ -178,6 +200,7 @@ export async function migrateSessionColdNavigation(
               await new Promise<void>((resolve) => {
                 setImmediate(resolve);
               });
+              remainingWorkMs -= performance.now() - startedAt;
             }
             if (migrated) {
               changes.push(

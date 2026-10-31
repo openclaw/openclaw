@@ -192,6 +192,15 @@ the update stays accepted and the pending checks remain retryable with
 `openclaw update finish`; the result reports the next action. Migration admission,
 repairs, backup verification, and recovery fences still complete before startup.
 
+Cold transcript navigation backfill uses about ten minutes of archive work per
+Doctor invocation, finishing the current archive transaction before stopping.
+Doctor and the native update receipt report migrated and pending archive counts;
+pending navigation is a recoverable warning, so it does not fail or roll back the
+update. `openclaw update finish` retains the warning in update history. Every
+later native update runs candidate Doctor again even when database schemas are
+already current, and resumes the remaining archives. Operators can also run
+`openclaw doctor --fix`; pending archives retain their existing cold-restore path.
+
 During a native update, when plugins are unchanged and only deferred model retirement
 remains, a supporting candidate completes the second Doctor pass with the required
 config, auth, session, and cron repairs and final validation. Startup, database admission, and config
