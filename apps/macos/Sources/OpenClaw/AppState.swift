@@ -237,16 +237,20 @@ final class AppState {
         }
     }
 
-    /// Gateway-provided UI accent color (hex). Optional; clients provide a default.
+    /// Gateway-wide UI accent after the saved preference and operator seam color are resolved.
     var seamColorHex: String?
 
     /// Caller's per-profile accent (users.prefs.get). Kept separate from
     /// seamColorHex so Gateway config refreshes cannot clobber it.
-    var profileAccentHex: String?
+    var profileAccent: GatewayUserPreferences.ProfileAccent = .inherited
 
-    /// Accent the UI renders: the profile accent wins over the gateway seam color.
+    /// Accent the UI renders: the profile accent wins over the gateway-wide color.
     var effectiveAccentHex: String? {
-        self.profileAccentHex ?? self.seamColorHex
+        switch self.profileAccent {
+        case .inherited: self.seamColorHex
+        case .theme: nil
+        case let .color(hex): hex
+        }
     }
 
     var iconOverride: IconOverrideSelection {

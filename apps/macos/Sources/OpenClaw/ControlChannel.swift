@@ -181,6 +181,7 @@ final class ControlChannel {
     private var eventServerLease: GatewayConnection.ServerLease?
     private var heartbeat: (event: ControlHeartbeatEvent, lease: GatewayConnection.ServerLease)?
     private var heartbeatReadTask: Task<Void, Never>?
+    private var gatewayAccentReadTask: Task<Void, Never>?
 
     private func synchronizeRouteGeneration() -> UInt64 {
         // Endpoint stream delivery can lag source adoption; fence UI publication directly.
@@ -628,6 +629,7 @@ final class ControlChannel {
     private func retireEventState() {
         self.eventServerLease = nil
         self.heartbeatReadTask?.cancel()
+        self.gatewayAccentReadTask?.cancel()
         // Keep the last known main key until a current hello replaces it.
         // Retired deliveries cannot use that metadata to recreate old work.
         WorkActivityStore.shared.reset()
@@ -674,9 +676,12 @@ final class ControlChannel {
             // caller's own profile; receipt means our profile appearance
             // changed on another device.
             self.refreshProfileAccent(delivery: delivery)
+        case let .event(evt) where evt.event == "config.changed":
+            self.refreshGatewayAccent(delivery: delivery)
         case .snapshot:
             self.reconcileCurrentConnection(generation: self.synchronizeRouteGeneration())
             self.refreshProfileAccent(delivery: delivery)
+            self.refreshGatewayAccent(delivery: delivery)
         default:
             break
         }
@@ -703,30 +708,49 @@ final class ControlChannel {
     private func refreshProfileAccent(delivery: GatewayConnection.PushDelivery) {
         Task {
             guard delivery.isCurrent else { return }
-            let accent = await self.fetchProfileAccentHex(serverLease: delivery.serverLease)
+            let accent = await self.fetchProfileAccent(serverLease: delivery.serverLease)
             // A replaced request can fail as well as succeed; neither outcome
             // may repaint the newly selected Gateway's profile appearance.
             guard delivery.isCurrent else { return }
-            AppStateStore.shared.profileAccentHex = accent
+            AppStateStore.shared.profileAccent = accent
         }
     }
 
-    /// Caller's per-profile accent (users.prefs.get). nil covers profile-less
-    /// connections (no_durable_identity), older gateways without the method,
-    /// and malformed stored values, so the gateway seam color stays the
-    /// fallback. Goes straight through GatewayConnection: routing this through
-    /// ControlChannel.request would mark the channel degraded on the expected
-    /// older-gateway failure.
-    private func fetchProfileAccentHex(serverLease: GatewayConnection.ServerLease) async -> String? {
+    private func refreshGatewayAccent(delivery: GatewayConnection.PushDelivery) {
+        self.gatewayAccentReadTask?.cancel()
+        self.gatewayAccentReadTask = Task { [weak self] in
+            guard let self, delivery.isCurrent else { return }
+            do {
+                let data = try await self.gateway.request(
+                    method: "config.get", params: nil, timeoutMs: 8000,
+                    ifCurrentServerLease: delivery.serverLease)
+                let snapshot = try JSONDecoder().decode(ConfigSnapshot.self, from: data)
+                let ui = snapshot.config?["ui"]?.dictionaryValue
+                let preference = ui?["prefs"]?.dictionaryValue?["accent"]?.stringValue
+                let seamColor = ui?["seamColor"]?.stringValue
+                guard !Task.isCancelled, delivery.isCurrent else { return }
+                AppStateStore.shared.seamColorHex = GatewayUserPreferences.gatewayAccentHex(
+                    preference: preference, seamColor: seamColor)
+            } catch {
+                // Keep the last known accent when this Gateway cannot provide a current config.
+            }
+        }
+    }
+
+    /// Caller's per-profile accent (users.prefs.get). Inherited covers profile-less
+    /// connections, older gateways, and malformed values; explicit theme suppresses
+    /// the Gateway fallback. Request directly so an older Gateway does not degrade
+    /// the control channel when this optional method is unavailable.
+    private func fetchProfileAccent(serverLease: GatewayConnection.ServerLease) async -> GatewayUserPreferences.ProfileAccent {
         do {
             let data = try await self.gateway.request(
                 method: "users.prefs.get",
                 params: ["keys": OpenClawKit.AnyCodable(["ui.accent"])],
                 timeoutMs: 8000,
                 ifCurrentServerLease: serverLease)
-            return try GatewayUserPreferences.decodeProfileAccentHex(data)
+            return try GatewayUserPreferences.decodeProfileAccent(data)
         } catch {
-            return nil
+            return .inherited
         }
     }
 

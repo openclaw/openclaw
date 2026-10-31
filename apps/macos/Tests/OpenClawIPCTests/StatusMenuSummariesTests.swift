@@ -296,11 +296,11 @@ struct StatusMenuSummariesTests {
         try await TestIsolation.withIsolatedState {
             let state = AppStateStore.shared
             let previousMode = state.connectionMode
-            let previousAccent = state.profileAccentHex
+            let previousAccent = state.profileAccent
             state.connectionMode = .unconfigured
             defer {
                 state.connectionMode = previousMode
-                state.profileAccentHex = previousAccent
+                state.profileAccent = previousAccent
             }
             let fixtures = (0..<count).map { _ in UsageGatewayFixture(cronJobCount: cronJobCount) }
             do {
