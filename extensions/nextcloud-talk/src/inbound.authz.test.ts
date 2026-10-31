@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
@@ -172,6 +175,12 @@ describe("nextcloud-talk inbound authz", () => {
   });
 
   async function runRoomAccessGroupCase(groups: { outer: string[]; room: string[] }) {
+    // Access-group expansion reads the isolated state directory; without one the
+    // database-backed shards refuse the message before dispatch.
+    const stateDir = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "nextcloud-authz-")),
+    );
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const core = createPluginRuntimeMock();
     core.channel.pairing.readAllowFromStore = vi.fn(async () => []);
     setNextcloudTalkRuntime(core);
@@ -190,19 +199,24 @@ describe("nextcloud-talk inbound authz", () => {
         roommates: { type: "message.senders", members: { "nextcloud-talk": groups.room } },
       },
     } as never;
-    await handleNextcloudTalkInbound({
-      message: baseMessage({
-        messageId: "m-access-group",
-        roomToken: "room-1",
-        senderId: "users/alice",
-        senderName: "Alice",
-        isGroupChat: true,
-        text: "hello",
-      }),
-      account,
-      config,
-      runtime: createTestRuntimeEnv(),
-    });
+    try {
+      await handleNextcloudTalkInbound({
+        message: baseMessage({
+          messageId: "m-access-group",
+          roomToken: "room-1",
+          senderId: "users/alice",
+          senderName: "Alice",
+          isGroupChat: true,
+          text: "hello",
+        }),
+        account,
+        config,
+        runtime: createTestRuntimeEnv(),
+      });
+    } finally {
+      vi.unstubAllEnvs();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
     return {
       core,
       config: config as unknown as {
