@@ -148,7 +148,9 @@ it.each(["credential resolution", "runtime auth exchange", "AWS runtime auth exc
   "ends a hung %s at the run timeout without installing credentials",
   async (step) => {
     vi.useFakeTimers();
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     let exchangeSignal: AbortSignal | undefined;
     const late = createDeferred<{ apiKey: string }>();
     mocks.getApiKeyForModelCore.mockImplementation(({ signal }) => {
@@ -191,7 +193,9 @@ it.each([false, true])(
   "settles slow runtime auth inside the budget (cancelled: %s)",
   async (cancelled) => {
     vi.useFakeTimers();
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const abort = new AbortController();
     let exchangeSignal: AbortSignal | undefined;
     mocks.getApiKeyForModelCore.mockResolvedValue(apiKeyAuth("synthetic-source"));
@@ -225,7 +229,9 @@ it.each([false, true])(
 
 it("shares the run deadline across credential lookup and token exchange", async () => {
   vi.useFakeTimers();
-  onTestFinished(() => vi.useRealTimers());
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
   mocks.getApiKeyForModelCore.mockImplementation(
     () =>
       new Promise((resolve) => {

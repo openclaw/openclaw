@@ -124,7 +124,9 @@ it.each([
   "exchange-timeout",
 ] as const)("refuses retained request credentials when %s", async (scenario) => {
   vi.useFakeTimers();
-  onTestFinished(() => vi.useRealTimers());
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
   const model: Model = {
     id: "chat",
     name: "Synthetic request",
