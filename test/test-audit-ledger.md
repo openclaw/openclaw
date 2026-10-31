@@ -212,14 +212,14 @@ Final removal checks and landing: [PR #189259](https://github.com/openclaw/openc
 
 Additional source-only closure (runtime remains pending unless stated):
 
-| Owner scope                                    | Completed reading                                | Decision                                                                                                                                                                                             |
-| ---------------------------------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| iOS                                            | 135 Swift/support files, 1,416 declaration sites | Retain 1,370; qualify 39 proof repairs, six consolidations, one obsolete typography-scanner declaration and one shipping migration-test helper. No native removal applied.                           |
-| Android                                        | 10 suites, 50 declaration sites                  | Retain 48; repair two Wear shared framing/Unicode inputs. Discovery and wire adapters retain all contracts. The remaining 314 declaration files are inventory only.                                  |
-| Voice-call, complete plugin                    | 64 suites, 523 declaration sites                 | Retain 522; repair the pending-state oracle separately. All nine local supports remain live. Three fixture-only assertions can go while preserving actual streamed error and signed webhook results. |
-| Nostr                                          | 14 suites, 112 direct/registered declarations    | Retain all declarations and four live supports. Inline the sole used sanitizer fixture row; four other rows and all row labels are obsolete since `07c8b8dda4d`.                                     |
-| Diagnostics Prometheus                         | Seven suites, 55 declarations                    | Retain all declarations, three supports and two documented benchmark workloads; host admission, exporter authorization and store contracts differ.                                                   |
-| Reply admission/payload and memory/readmission | 40 suites, 220 declaration sites                 | Retain 219; qualify one setup-failure declaration absorbed by the existing shared null-context row. Exact cumulative reply coverage: 286 of 429 suites, with 143 unread.                             |
+| Owner scope                                    | Completed reading                                | Decision                                                                                                                                                                                                |
+| ---------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| iOS                                            | 135 Swift/support files, 1,416 declaration sites | Retain 1,370; qualify 39 proof repairs, six consolidations, one obsolete typography-scanner declaration and one shipping migration-test helper. No native removal applied.                              |
+| Android                                        | 47 suites, 370 declaration sites                 | Retain 362; qualify six proof repairs and two consolidations, preserving TLS admission, camera transfer identity and notification burst timing. The remaining 277 declaration files are inventory only. |
+| Voice-call, complete plugin                    | 64 suites, 523 declaration sites                 | Retain 522; repair the pending-state oracle separately. All nine local supports remain live. Three fixture-only assertions can go while preserving actual streamed error and signed webhook results.    |
+| Nostr                                          | 14 suites, 112 direct/registered declarations    | Retain all declarations and four live supports. Inline the sole used sanitizer fixture row; four other rows and all row labels are obsolete since `07c8b8dda4d`.                                        |
+| Diagnostics Prometheus                         | Seven suites, 55 declarations                    | Retain all declarations, three supports and two documented benchmark workloads; host admission, exporter authorization and store contracts differ.                                                      |
+| Reply admission/payload and memory/readmission | 40 suites, 220 declaration sites                 | Retain 219; qualify one setup-failure declaration absorbed by the existing shared null-context row. Exact cumulative reply coverage: 286 of 429 suites, with 143 unread.                                |
 
 IMAP and A2A: all 13 suites retain 103 declarations; protocol fixtures, controlled
 storage and packaged-service/Gateway proof protect different boundaries. All local
@@ -238,7 +238,23 @@ and real signed-request verification assertions. All active declarations and
 production code remain. Untouched baseline `074b6248dd4`: 124 tests passed across
 eight suites, including all six Nostr fixture consumers and the two voice-call
 suites. The patch removes 34 test/support lines and no production code or test
-declarations. Candidate checks, removal scans and independent review are pending.
+declarations. Candidate `dda997e9cd5`: the same 124 tests passed across eight
+suites. Focused extension-test typecheck, typed lint, formatting and ledger lint
+passed. Fresh independent review found no correctness or security findings.
+Every removal-check phase ran on baseline and candidate: unused files and script
+exports were clean; the same four production/two full-tree export findings remain
+in unchanged core source. No suppression or baseline exception was added.
+Final native proof and landing: [PR #189268](https://github.com/openclaw/openclaw/pull/189268).
+
+Additional source-only closure (no new runtime proof):
+
+| Owner scope                                      | Suites / declaration sites | Decision                                                                                                                                                                                                                |
+| ------------------------------------------------ | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Reply ACP, control ownership and inbound context | 49 / 373                   | Retain 367; qualify four proof repairs and two control-owner row consolidations. Exact cumulative reply coverage is 335 of 429 suites; 94 remain unread. Active-goal replacement needs fragment-boundary qualification. |
+| MXC                                              | 13 / 64                    | Retain 61; expose three silent symlink setup refusals. All local support and shipped launcher assets remain live.                                                                                                       |
+| DeepInfra                                        | 17 / 78                    | Retain 77; qualify one mocked request-policy declaration against the existing real POST, CONNECT proxy and blocked-I/O keepers. All local support remains live.                                                         |
+| MiniMax                                          | 13 / 75                    | Retain 74; isolate Token Plan live-test auth state so saved portal credentials cannot hide broken environment fallback. No supported removal.                                                                           |
+| Perplexity, DeepSeek, Mistral, Hugging Face      | 17 / 69                    | Retain all declarations: real transport, cache identity, discovery, onboarding, transcript framing and live-wire contracts differ. Local owners/support and static routes read; transitive frameworks remain bounded.   |
 
 Remaining: declaration-level review across remaining core, plugins, UI, native apps,
 root/script suites and shared fixtures; close owner-reading gaps and land subsequent batches.
