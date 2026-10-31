@@ -52,6 +52,13 @@ function mockSse(body: BodyInit): void {
   );
 }
 
+function requestJson(body: BodyInit | null | undefined): unknown {
+  if (typeof body !== "string") {
+    throw new Error("expected a JSON string request body");
+  }
+  return JSON.parse(body);
+}
+
 describe("google-interactions provider", () => {
   const originalFetch = globalThis.fetch;
 
@@ -90,12 +97,14 @@ describe("google-interactions provider", () => {
     });
     expect((await stream.result()).stopReason).toBe("stop");
     expect(handoff).toHaveBeenCalledOnce();
-    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)).input).toEqual([
-      {
-        type: "user_input",
-        content: [{ type: "video", mime_type: "video/mp4", data: "dmlkZW8=" }],
-      },
-    ]);
+    expect(requestJson(fetchMock.mock.calls[0]?.[1]?.body)).toMatchObject({
+      input: [
+        {
+          type: "user_input",
+          content: [{ type: "video", mime_type: "video/mp4", data: "dmlkZW8=" }],
+        },
+      ],
+    });
   });
 
   it.each(["cachedContent", "cached_content"])(
@@ -137,7 +146,7 @@ describe("google-interactions provider", () => {
       expect(fetchMock.mock.calls[0]?.[0]).toBe(
         "https://generativelanguage.googleapis.com/v1beta/interactions?alt=sse",
       );
-      expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      expect(requestJson(fetchMock.mock.calls[0]?.[1]?.body)).toEqual({
         model: "gemini-3-flash-preview",
         input: [{ type: "user_input", content: [{ type: "text", text: "Hello" }] }],
         system_instruction: "Keep instructions inline.",
