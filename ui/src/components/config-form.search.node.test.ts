@@ -63,6 +63,44 @@ it("searches additional-property schemas before entries exist", () => {
   ).toBe(true);
 });
 
+/** Decomposed diaeresis (M + U+0308 + uchen) forces a real Unicode mismatch without NFC. */
+const NFD_DESCRIPTION = "München credential".normalize("NFD");
+const NFC_DESCRIPTION = "München credential".normalize("NFC");
+const NFC_QUERY = "münchen".normalize("NFC");
+const NFD_QUERY = "münchen".normalize("NFD");
+const NFC_TAG = "überwachung".normalize("NFC");
+const NFD_TAG = "überwachung".normalize("NFD");
+
+it("matches NFC and NFD config search text against NFD field text", () => {
+  expect(
+    matches(NFC_QUERY, object({ token: string(NFD_DESCRIPTION) }), { path: ["gateway"] }),
+  ).toBe(true);
+  expect(
+    matches(NFD_QUERY, object({ token: string(NFC_DESCRIPTION) }), { path: ["gateway"] }),
+  ).toBe(true);
+  expect(
+    matches(NFC_QUERY, object({ token: string(NFC_DESCRIPTION) }), { path: ["gateway"] }),
+  ).toBe(true);
+  expect(
+    matches("secrets", object({ token: string(NFD_DESCRIPTION) }), { path: ["gateway"] }),
+  ).toBe(false);
+});
+
+it("matches NFC and NFD tag: criteria against NFD field tags", () => {
+  expect(
+    matches(`tag:${NFC_TAG}`, object({ token: string() }), {
+      path: ["gateway"],
+      hints: { "gateway.token": { label: "Token", tags: [NFD_TAG] } },
+    }),
+  ).toBe(true);
+  expect(
+    matches(`tag:${NFD_TAG}`, object({ token: string() }), {
+      path: ["gateway"],
+      hints: { "gateway.token": { label: "Token", tags: [NFC_TAG] } },
+    }),
+  ).toBe(true);
+});
+
 const entries = { reserved: "hidden", alpha: "visible" };
 it.each([
   ["", entries, ["alpha"], true],
