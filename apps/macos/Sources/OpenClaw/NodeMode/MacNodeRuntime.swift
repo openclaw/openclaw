@@ -675,16 +675,16 @@ extension MacNodeRuntime {
         struct ScreenPayload: Encodable {
             var format: String
             var base64: String
-            var durationMs: Int?
-            var fps: Double?
+            var durationMs: Int
+            var fps: Double
             var screenIndex: Int?
             var hasAudio: Bool
         }
         let payload = try Self.encodePayload(ScreenPayload(
             format: "mp4",
             base64: data.base64EncodedString(),
-            durationMs: params.durationMs,
-            fps: params.fps,
+            durationMs: res.durationMs,
+            fps: res.fps,
             screenIndex: params.screenIndex,
             hasAudio: res.hasAudio))
         guard try Self.fitsGatewayFrame(payload, for: req) else {

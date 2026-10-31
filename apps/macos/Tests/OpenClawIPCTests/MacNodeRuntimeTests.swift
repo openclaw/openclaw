@@ -250,15 +250,19 @@ struct MacNodeRuntimeTests {
 
         func recordScreen(
             screenIndex _: Int?,
-            durationMs _: Int?,
-            fps _: Double?,
-            includeAudio _: Bool?) async throws -> (path: String, hasAudio: Bool)
+            durationMs: Int?,
+            fps: Double?,
+            includeAudio _: Bool?) async throws -> (path: String, durationMs: Int, fps: Double, hasAudio: Bool)
         {
             let url = FileManager().temporaryDirectory
                 .appendingPathComponent("openclaw-test-screen-record-\(UUID().uuidString).mp4")
             try Data(repeating: 0x41, count: self.recordingBytes).write(to: url)
             self.recordingPaths.append(url.path)
-            return (path: url.path, hasAudio: false)
+            return (
+                path: url.path,
+                durationMs: CaptureRateLimits.clampDurationMs(durationMs),
+                fps: CaptureRateLimits.clampFps(fps, maxFps: 60),
+                hasAudio: false)
         }
 
         func locationAuthorizationStatus() -> CLAuthorizationStatus {
@@ -600,6 +604,33 @@ struct MacNodeRuntimeTests {
         let payload = try JSONDecoder().decode(Payload.self, from: Data(payloadJSON.utf8))
         #expect(payload.format == "mp4")
         #expect(!payload.base64.isEmpty)
+    }
+
+    @Test(arguments: [
+        (OpenClawScreenRecordParams(durationMs: 120_000, fps: 120), 60000, 60.0),
+        (OpenClawScreenRecordParams(), 10000, 10.0),
+    ])
+    func `handle invoke screen record reports the duration and fps the recorder used`(
+        params: OpenClawScreenRecordParams,
+        durationMs: Int,
+        fps: Double) async throws
+    {
+        let services = await MainActor.run { MainActorServicesProbe() }
+        let runtime = await MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services })
+
+        let response = try await invoke(
+            runtime, "req-screen-record-clamped", OpenClawScreenCommand.record.rawValue, params: params)
+        let payloadJSON = try #require(response.payloadJSON)
+
+        struct Payload: Decodable {
+            var durationMs: Int?
+            var fps: Double?
+        }
+        let payload = try JSONDecoder().decode(Payload.self, from: Data(payloadJSON.utf8))
+        #expect(payload.durationMs == durationMs)
+        #expect(payload.fps == fps)
     }
 
     @Test(arguments: [19_660_800, 19_660_801])
