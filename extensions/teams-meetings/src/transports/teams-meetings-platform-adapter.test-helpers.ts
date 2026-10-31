@@ -386,7 +386,14 @@ export function runLeaveScript(params: {
   }
   const run = runInNewContext(
     `(${teamsMeetingPageScripts.leave({ leaveInitiated: params.leaveInitiated ?? false, meetingSessionId: params.meetingSessionId ?? "session-1", meetingUrl: params.meetingUrl ?? URL })})`,
-    { URL: globalThis.URL, URLSearchParams: globalThis.URLSearchParams, atob: globalThis.atob, document, location, window },
+    {
+      URL: globalThis.URL,
+      URLSearchParams: globalThis.URLSearchParams,
+      atob: globalThis.atob,
+      document,
+      location,
+      window,
+    },
   ) as () => string;
   return { result: JSON.parse(run()) as Record<string, unknown>, window };
 }
