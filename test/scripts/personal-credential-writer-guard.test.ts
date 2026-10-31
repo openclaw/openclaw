@@ -932,10 +932,19 @@ it.each([
 it("keeps session membership writes with the worker and canonical entry owners", () => {
   const members = "src/config/sessions/session-sharing-store.native.ts";
   const reject = allowedGraph({
-    [members]: `export function addSessionMember() { db.insertInto('session_members'); }`,
+    [members]: `
+      export function addSessionMember() { addSessionMemberInTransaction(); }
+      export function addSessionMemberInTransaction() { db.insertInto('session_members'); }
+    `,
     "src/config/sessions/session-sharing-store.worker.ts": `
       import { addSessionMember } from './session-sharing-store.native.js';
       function bindSqliteWorkerBackend() { return { execute() { addSessionMember(); } }; }
+    `,
+    "src/config/sessions/session-accessor.sqlite-involvement.worker.ts": `
+      import { addSessionMemberInTransaction } from './session-sharing-store.native.js';
+      export function updateSessionProfileInvolvementInTransaction() {
+        addSessionMemberInTransaction();
+      }
     `,
     "src/config/sessions/session-accessor.sqlite-node-artifacts.ts": `
       export function clearSessionCollaborationForKey() {
@@ -952,14 +961,21 @@ it("keeps session membership writes with the worker and canonical entry owners",
     `,
   });
 
-  reject(
-    "src/new-writer.ts",
-    `
-        import { addSessionMember } from './config/sessions/session-sharing-store.native.js';
-        addSessionMember();
+  for (const writer of ["addSessionMember", "addSessionMemberInTransaction"]) {
+    reject(
+      "src/new-writer.ts",
+      `
+        import { ${writer} } from './config/sessions/session-sharing-store.native.js';
+        ${writer}();
         db.exec('DELETE FROM session_members');
       `,
-    ["unreviewed session membership writer reference", "raw authority-table write"],
+      ["unreviewed session membership writer reference", "raw authority-table write"],
+    );
+  }
+  reject(
+    "src/config/sessions/session-accessor.sqlite-involvement.worker.ts",
+    (source) => source.replace("updateSessionProfileInvolvementInTransaction", "unreviewedWriter"),
+    "unreviewed session membership writer reference",
   );
 });
 

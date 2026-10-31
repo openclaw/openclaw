@@ -22,6 +22,7 @@ import {
 } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import {
   bindPreparedSessionEntryPublication,
+  commitSessionSharingFieldChange,
   invalidateSessionEntryCaches,
 } from "./session-accessor.sqlite-entry-cache-publication.js";
 import {
@@ -322,6 +323,18 @@ export function retainSessionEntryWorkerPublication(params: {
             },
           });
           selected.push(change);
+          // Invitations share the transcript commit; publish their exact member deltas
+          // before observers can reuse a retained sharing snapshot.
+          for (const member of record.value.memberFacts ?? []) {
+            commitSessionSharingFieldChange(params.databaseIdentity, record.sessionKey, member);
+            const memberChange = { ...change, facts: member };
+            bindPreparedSessionEntryPublication(memberChange, {
+              kind: "marker",
+              sharingChange: "changed",
+              databaseIdentity: params.databaseIdentity,
+            });
+            selected.push(memberChange);
+          }
         }
         if (selected.length) {
           invalidateSessionEntryCaches(params.databaseIdentity);
