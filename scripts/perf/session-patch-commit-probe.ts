@@ -4,6 +4,7 @@
  *   --state-dir .local/team-stress/timing-1-base \
  *   --config .local/team-stress/timing-1-base/broadcast-measure-<time>/openclaw.json \
  *   --output .local/unread-base.json --duration-ms 600000 --interval-ms 250
+ * Add --port when the running Gateway CLI overrides the fixture config port.
  * Use the running arm's config, not its original offline fixture config. Only
  * generated fixtures beneath this checkout's .local and unauthenticated loopback
  * ports >=40000 are accepted. The probe creates no fixture/server and sends no
@@ -31,6 +32,7 @@ const { values } = parseArgs({
     "state-dir": { type: "string" },
     config: { type: "string" },
     output: { type: "string" },
+    port: { type: "string" },
     "duration-ms": { type: "string", default: "600000" },
     "interval-ms": { type: "string", default: "250" },
   },
@@ -63,7 +65,15 @@ assert(
   isRecord(gateway.auth) && gateway.auth.mode === "none",
   "Only synthetic unauthenticated fixtures are supported",
 );
-const port = gateway.port;
+const port =
+  values.port === undefined
+    ? gateway.port
+    : parseStrictIntegerOption({
+        raw: values.port,
+        label: "--port",
+        min: 40000,
+        fallback: 40000,
+      });
 assert(typeof port === "number" && Number.isInteger(port) && port >= 40000 && port <= 65535);
 assert(Array.isArray(fixture.stressTargets) && fixture.stressTargets.length > 0);
 const targets = fixture.stressTargets.map((target: unknown) => {
