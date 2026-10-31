@@ -34,6 +34,7 @@ final class DashboardManager {
     @ObservationIgnored private var profileObservations: [DashboardGatewayTarget: ProfileObservation] = [:]
     @ObservationIgnored let authTokenProvider: @Sendable (GatewayConnection.Config) async -> String?
     @ObservationIgnored let connectionProvider: @Sendable (DashboardGatewayTarget) async -> GatewayConnection
+    @ObservationIgnored let connectionFleet: MacGatewayConnectionFleet
     @ObservationIgnored let browserIdentityURLProvider:
         @Sendable (DashboardGatewayTarget, GatewayConnection.Config) async throws -> URL?
     @ObservationIgnored let controlUiBasePathProvider:
@@ -73,6 +74,7 @@ final class DashboardManager {
         connectionProvider: @escaping @Sendable (DashboardGatewayTarget) async -> GatewayConnection = {
             await DashboardManager.gatewayConnection(for: $0)
         },
+        connectionFleet: MacGatewayConnectionFleet = .shared,
         browserIdentityURLProvider: (@Sendable (DashboardGatewayTarget, GatewayConnection.Config) async throws
             -> URL?)? = nil,
         controlUiBasePathProvider: (@Sendable (DashboardGatewayTarget, GatewayConnection.Config) async throws
@@ -105,6 +107,7 @@ final class DashboardManager {
         self.pendingInitialSelection = selection.profileID
         self.authTokenProvider = authTokenProvider
         self.connectionProvider = connectionProvider
+        self.connectionFleet = connectionFleet
         self.browserIdentityURLProvider = browserIdentityURLProvider ?? { target, config in
             let connection = await connectionProvider(target)
             return try await connection.controlUiBrowserIdentityURL(config: config)
@@ -1205,6 +1208,7 @@ extension DashboardManager {
             }
         }
         controller.documentHost.nativeGatewayAuthProvider = configuration.nativeAuthProvider
+        controller.connectionConsumer = configuration.connectionConsumer
         controller.documentHost.legacyNativeCredentials = configuration.legacyNativeCredentials
         controller.onGatewayHealthChanged = { [weak self, weak controller] in
             guard let self, let controller, self.target(for: controller) != nil else { return }
@@ -1244,6 +1248,7 @@ extension DashboardManager {
             } else {
                 // The URL can be unchanged while the document is a failure page.
                 source.documentHost.nativeGatewayAuthProvider = configuration.nativeAuthProvider
+                source.connectionConsumer = configuration.connectionConsumer
                 source.documentHost.legacyNativeCredentials = configuration.legacyNativeCredentials
                 source.show(
                     url: configuration.url,
