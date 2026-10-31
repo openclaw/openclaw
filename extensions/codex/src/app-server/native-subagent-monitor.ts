@@ -64,6 +64,7 @@ import type {
   ChildState,
   KnownChild,
   MonitorOptions,
+  NativeCompletionCatalogRequest,
   NativeDescendantCancellation,
   NativeDescendantCancellationResult,
   NativeModelToolInputRequest,
@@ -868,6 +869,10 @@ class Monitor {
         this.pruneParentIfUnused(state);
       }
     }
+  }
+
+  captureCompletionCatalog(request: NativeCompletionCatalogRequest): (() => void) | undefined {
+    return this.completionDelivery.captureCatalog(request);
   }
 
   async captureModelSource(
