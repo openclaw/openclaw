@@ -37,6 +37,7 @@ import { isProcessAlive, waitForDead as waitForProcessExit } from "../helpers/pr
 import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 import { withinTest } from "../helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
+import { fixtureReadyBeforeSettlement as observeFixtureReadiness } from "./run-process.test-support.js";
 import { childTermination } from "./run-vitest.test-support.js";
 import { toolingProbeRuntimeEntrypoints } from "./tooling-probe-runtime.test-support.mts";
 
@@ -50,30 +51,15 @@ afterAll(async () => {
   await receipts.close().finally(() => cleanupTempDirs(tempDirs));
 });
 
-function fixtureReadyBeforeSettlement(
-  filePath: string,
-  operation: PromiseLike<unknown>,
-  message = `timeout waiting for ${filePath}`,
-) {
-  const recorded = () => fs.existsSync(filePath) && fs.readFileSync(filePath, "utf8").trim();
-  return Promise.race([
-    receipts.waitFor(filePath, "ready"),
-    // Product completion can overtake the socket; the fixture writes before reporting ready.
-    Promise.resolve(operation).then(
-      () => {
-        if (!recorded()) {
-          throw new Error(message);
-        }
-      },
-      (error: unknown) => {
-        if (!recorded()) {
-          throw error;
-        }
-      },
-    ),
-  ]);
+function fixtureReadyBeforeSettlement(filePath: string, operation: PromiseLike<unknown>) {
+  // Empty marker files do not establish that the report process published readiness.
+  return observeFixtureReadiness(
+    receipts,
+    filePath,
+    operation,
+    () => fs.existsSync(filePath) && fs.readFileSync(filePath, "utf8").trim() !== "",
+  );
 }
-
 function runReportCli(args: string[], env = process.env) {
   return spawnSync(
     process.execPath,
@@ -932,7 +918,6 @@ describe("scripts/test-group-report", () => {
         fixtureReadyBeforeSettlement(
           childPidPath,
           expectDefined(completion, "watchdog completion"),
-          `timeout waiting for pid in ${childPidPath}`,
         ),
         signal,
       );
