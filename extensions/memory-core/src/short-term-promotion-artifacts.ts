@@ -139,7 +139,7 @@ export async function auditShortTermPromotionArtifacts(params: {
       issues.push({
         severity: "warn",
         code: "recall-store-over-limit",
-        message: `Short-term recall store contains ${entryCount} entries; only the newest ${SHORT_TERM_RECALL_MAX_ENTRIES} are kept at runtime.`,
+        message: `Short-term recall store contains ${entryCount} entries; at runtime ${SHORT_TERM_RECALL_MAX_ENTRIES} are kept, keeping entries that carry recall evidence ahead of newer staging-only entries and dropping the oldest remaining rows.`,
         fixable: true,
       });
     }

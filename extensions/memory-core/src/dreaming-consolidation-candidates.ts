@@ -7,13 +7,7 @@ export function filterConsolidationCandidates(
   return candidates.filter(isConsolidationCandidateEligible);
 }
 
-/** Explicitly tainted origins must never promote through any durable write path. */
-export function isPromotionOriginBlocked(
-  candidate: Pick<PromotionCandidate, "provenance">,
-): boolean {
-  const originClass = candidate.provenance?.originClass;
-  return originClass === "untrusted" || originClass === "system";
-}
+export { isPromotionOriginBlocked } from "./short-term-promotion-utils.js";
 
 export function isConsolidationCandidateEligible(candidate: PromotionCandidate): boolean {
   const trustedOrigin =
