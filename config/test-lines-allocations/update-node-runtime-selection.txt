@@ -1,2 +1,2 @@
-142
-# Service/updater/PATH runtime selection, refusal diagnostics, and activation handoff regressions.
+230
+# Service/updater/PATH selection, guarded discovery, preview, and activation handoff regressions.

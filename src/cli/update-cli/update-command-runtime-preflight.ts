@@ -5,6 +5,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { validRange, valid } from "semver";
+import { nodeRuntimePathEntries } from "../../../node-runtime-env.mjs";
 import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../../node-sqlite.mjs";
 import { formatNodeSecurityWarning, SUPPORTED_NODE_VERSION_RANGE } from "../../../node-version.mjs";
 import { isBunRuntime } from "../../daemon/runtime-binary.js";
@@ -18,6 +19,7 @@ import { resolveExecutableFromPathEnv } from "../../infra/executable-path.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import { capturePackageActivationRuntime } from "../../infra/package-update-activation-paths.js";
 import type { PackageActivationRuntime } from "../../infra/package-update-activation-runtime.types.js";
+import { resolveEnvironmentValue } from "../../infra/process-env.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import {
@@ -200,52 +202,37 @@ export async function resolvePackageRuntimePreflight(params: {
           : await gatewayServiceCommandUsesRoot({ root: params.root }))
         ? resolveNodeRunner()
         : undefined);
-    // Initialization can prepend Node and dotenv can add selectors. Discovery
-    // uses the CLI's inherited snapshot or the native service's explicit environment.
-    const pathEnv = params.runtimeRecovery?.env ?? params.service?.serviceDefinitionEnv ?? {};
-    const pathNodeRunner = params.engineOnly
-      ? resolveExecutableFromPathEnv("node", pathEnv.PATH ?? "", pathEnv, {
-          useCache: false,
-        })
-      : undefined;
-    let pathRuntime = pathNodeRunner === runtime.nodeRunner ? runtime : undefined;
-    // Early admission may select an existing runtime, but never provisions one.
-    // A pinned service is replaceable only when this update will refresh its definition.
-    const fallbacks = new Set([
-      fallbackNodeRunner,
-      ...(params.engineOnly && params.shouldRestart && (!nodeRunner || canRefreshService)
-        ? [pathNodeRunner]
-        : []),
-    ]);
-    for (const fallback of fallbacks) {
-      if (!fallback || fallback === selected) {
-        continue;
-      }
-      const fallbackActivationRuntime = captureRuntime(fallback);
+    if (nodeRunner && fallbackNodeRunner && fallbackNodeRunner !== selected) {
+      const fallbackActivationRuntime = captureRuntime(fallbackNodeRunner);
       const fallbackRuntime = await resolvePackageRuntimeForPreflight({
-        nodeRunner: fallbackActivationRuntime?.path ?? fallback,
+        nodeRunner: fallbackActivationRuntime?.path ?? fallbackNodeRunner,
         timeoutMs: params.timeoutMs,
       });
-      if (fallback === pathNodeRunner) {
-        pathRuntime = fallbackRuntime;
-      }
       const fallbackSatisfies = fallbackRuntime.failure
         ? false
         : nodeVersionSatisfiesEngine(fallbackRuntime.version, target.nodeEngine);
       if (fallbackSatisfies === true) {
         nodeSecurityWarning = formatNodeSecurityWarning(fallbackRuntime.version);
-        return runtimeResult(fallbackActivationRuntime, fallback, nodeRunner);
+        return runtimeResult(fallbackActivationRuntime, fallbackNodeRunner, nodeRunner);
       }
     }
     if (satisfies !== false) {
       return params.engineOnly ? ok(unchanged()) : runtimeResult(activationRuntime);
     }
-    if (!params.engineOnly && params.runtimeRecovery && target.nodeEngine) {
+    const runtimeRecovery =
+      params.runtimeRecovery ??
+      (params.engineOnly && params.service?.serviceDefinitionEnv
+        ? { env: params.service.serviceDefinitionEnv }
+        : undefined);
+    const canDiscoverRuntime =
+      !params.engineOnly || (params.shouldRestart && (!nodeRunner || canRefreshService));
+    if (canDiscoverRuntime && runtimeRecovery && target.nodeEngine) {
       const { resolveTargetNodeRuntime } =
         await import("./update-command-node-runtime-resolution.js");
       const recovered = await resolveTargetNodeRuntime({
         engine: target.nodeEngine,
-        recovery: params.runtimeRecovery,
+        // Early admission shares guarded discovery, without provisioning authority.
+        recovery: params.engineOnly ? { env: runtimeRecovery.env } : runtimeRecovery,
         timeoutMs: params.timeoutMs,
       });
       if (recovered) {
@@ -331,17 +318,24 @@ export async function resolvePackageRuntimePreflight(params: {
       params.engineOnly && nodeRunner
         ? `Gateway service Node ${runtime.version ?? "unknown"} at ${runtimePath} requires ${target.nodeEngine}. Install ${recommendation ? `Node ${recommendation}` : "a compatible Node runtime"} and update that service definition, then retry; changing the shell's Node alone does not update the service.`
         : undefined;
-    if (pathNodeRunner && !pathRuntime) {
-      pathRuntime = await resolvePackageRuntimeForPreflight({
-        nodeRunner: pathNodeRunner,
-        timeoutMs: params.timeoutMs,
-      });
-    }
+    const pathEnv = runtimeRecovery?.env ?? {};
+    // Diagnostics name PATH's executable without executing it. Only the shared
+    // runtime recovery owner may probe discovered candidates and admit a fallback.
+    const pathNodeRunner = params.engineOnly
+      ? resolveExecutableFromPathEnv(
+          "node",
+          nodeRuntimePathEntries(resolveEnvironmentValue(pathEnv, "PATH")).filter((entry) =>
+            path.isAbsolute(entry),
+          ),
+          pathEnv,
+          { useCache: false },
+        )
+      : undefined;
     const runtimeHints = params.engineOnly
       ? [
           `Updater Node ${process.versions.node} at ${process.execPath}.`,
           pathNodeRunner
-            ? `PATH Node ${pathRuntime?.version ?? "unknown"} at ${pathNodeRunner}.`
+            ? `PATH Node at ${pathNodeRunner} (version unavailable).`
             : "PATH Node: not found.",
         ]
       : [];

@@ -982,8 +982,8 @@ the inspected managed service's Node executable. A compatible service Node is
 retained even when a different Node on `PATH` cannot run the target. If the
 service's runtime has changed (for example, a Homebrew symlink now selects another
 version), an owned, writable service can use a compatible updater or `PATH` Node
-when the update will refresh its definition. Refusals name the service, updater,
-and `PATH` runtimes and the inspected Gateway installation root. A protected
+when the update will refresh its definition. Refusals name the service and updater
+runtimes, the `PATH` executable, and the inspected Gateway installation root. A protected
 definition or `--no-restart` still requires its pinned runtime to be compatible;
 changing the shell's Node alone does not change that service. The updater keeps the
 requested OpenClaw target and does not select another release automatically.
