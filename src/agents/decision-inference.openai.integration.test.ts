@@ -5,8 +5,8 @@ import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
+import { DecisionContractError } from "../decisions/contract-error.js";
 import { evaluateDecisionInRegistry, evaluateDecisionV2InRegistry } from "../decisions/runtime.js";
-import { DecisionContractError } from "../decisions/validation.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import {
   clearSecretsRuntimeSnapshot,

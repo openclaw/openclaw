@@ -341,7 +341,6 @@
     .chat-pr.chat-pr--summary,
     .session-progress-card__step
   ) {
-  box-sizing: border-box;
   width: calc(100% + 2 * var(--details-row-outset));
   min-height: var(--details-row-height);
   margin-inline: calc(-1 * var(--details-row-outset));
@@ -525,7 +524,6 @@
 }
 
 .chat-details .chat-details-desktop-body .chat-environment__action {
-  box-sizing: border-box;
   min-height: var(--details-row-height);
   padding: var(--details-row-padding-block) var(--details-row-padding);
   gap: var(--details-row-gap);

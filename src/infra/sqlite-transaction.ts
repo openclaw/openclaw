@@ -486,6 +486,9 @@ function settleSqliteTransactionSync<T>(
           async: false,
           callbackKind: "application-transaction",
           ...transactionDiagnosticLabels(db, options),
+          ...(timing?.holdContext
+            ? { context: { ...options?.diagnosticContext, ...timing.holdContext } }
+            : {}),
           elapsedMs,
           phases: {
             prepareMs,

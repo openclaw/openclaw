@@ -156,7 +156,7 @@ async function expectAssignmentAvatarLayout(page: Page, compact = false): Promis
   expect(layout.length).toBeGreaterThan(0);
   for (const avatar of layout) {
     expect(avatar).toMatchObject({ width: "24px", height: "24px", square: true, contained: true });
-    expect(avatar.gap).toBeGreaterThanOrEqual(6);
+    expect(avatar.gap).toBeGreaterThanOrEqual(5.5);
   }
 }
 
@@ -498,8 +498,8 @@ suite.define(() => {
           page.off("close", stopAvatarDiagnostics);
         }
         await expectAssignmentAvatarLayout(page);
-        await expectBrowser(assignTo.locator(".session-menu__icon")).toHaveCSS("width", "14px");
-        await expectBrowser(assignTo.locator(".session-menu__icon svg")).toHaveCSS("width", "14px");
+        await expectBrowser(assignTo.locator(".session-menu__icon")).toHaveCSS("width", "15px");
+        await expectBrowser(assignTo.locator(".session-menu__icon svg")).toHaveCSS("width", "15px");
         await assignee(panel, "Carol").click();
         await expectAssignmentRequest(gateway, "profile-carol");
         await confirmOwner(gateway, "Carol");

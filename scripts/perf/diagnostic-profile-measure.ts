@@ -1,3 +1,6 @@
+// Frame normalization: --mode frames --nodes 4096 --iterations 5 (Node 26.12+).
+// Each iteration sanitizes 20 batches; compare interleaved base/candidate runs.
+// CPU and total allocated bytes are untraced; this is owner cost, not Gateway load.
 import { createHook } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { writeFile } from "node:fs/promises";
@@ -11,6 +14,7 @@ import {
 } from "node:perf_hooks";
 import { setImmediate as immediate, setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import { getHeapStatistics } from "node:v8";
 import type { SamplingProfile } from "../../src/logging/diagnostic-heap-profile.js";
 
 const args = process.argv.slice(2);
@@ -27,7 +31,7 @@ const nodes = Number(option("nodes", "65535"));
 const samples = Number(option("samples", "131072"));
 const allocationBytes = Number(option("allocation-bytes", String(4 * 1024 ** 3)));
 if (
-  !["all", "sanitize", "heap", "cpu", "record", "native-parse"].includes(mode) ||
+  !["all", "sanitize", "heap", "cpu", "record", "native-parse", "frames"].includes(mode) ||
   !Number.isSafeInteger(iterations) ||
   iterations < 1 ||
   !Number.isSafeInteger(nodes) ||
@@ -194,6 +198,50 @@ if (startAt) {
     throw new Error("Missed --start-at; do not compare unsynchronized pairs");
   }
   await delay(waitMs);
+}
+if (mode === "frames") {
+  const {
+    sanitizeDiagnosticProfileFrame,
+  }: typeof import("../../src/logging/diagnostic-profile.js") = await import(
+    pathToFileURL(path.join(sourceRoot, "src/logging/diagnostic-profile.ts")).href
+  );
+  const frames = Array.from({ length: nodes }, (_, index) => ({
+    functionName: `work${index}`,
+    scriptId: String(index),
+    lineNumber: index,
+    columnNumber: 0,
+    url: path.join(
+      "/fixture",
+      index % 3 === 0 ? "openclaw/src" : index % 3 === 1 ? "openclaw/dist" : "node_modules/ws/lib",
+      `module${index % 512}.js`,
+    ),
+  }));
+  const packageRoot = path.resolve("/fixture/openclaw");
+  const batch = () => {
+    for (const frame of frames) {
+      sanitizeDiagnosticProfileFrame(frame, packageRoot);
+    }
+  };
+  for (let warm = 0; warm < 5; warm++) {
+    batch();
+  }
+  for (let iteration = 0; iteration < iterations; iteration++) {
+    const allocated = getHeapStatistics().total_allocated_bytes;
+    const cpuBefore = process.threadCpuUsage();
+    const startedAt = performance.now();
+    for (let pass = 0; pass < 20; pass++) {
+      batch();
+    }
+    const wallMs = performance.now() - startedAt;
+    const usedCpu = process.threadCpuUsage(cpuBefore);
+    reports.push({
+      iteration,
+      frames: nodes * 20,
+      cpuMs: (usedCpu.user + usedCpu.system) / 1000,
+      wallMs,
+      allocatedBytes: getHeapStatistics().total_allocated_bytes - allocated,
+    });
+  }
 }
 if (mode === "native-parse") {
   const { parseNativeCpuProfile }: typeof import("../../src/logging/diagnostic-profile.js") =

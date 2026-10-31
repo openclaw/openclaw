@@ -1,3 +1,4 @@
+import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -107,11 +108,14 @@ describe("diagnostic heap profile owner", () => {
     const { sanitizeDiagnosticHeapProfile } = await import("./diagnostic-heap-profile.js");
     // Recorded on Node 26; only the fixture installation path was normalized.
     // Expected bytes came from the synchronous sanitizer before this change.
+    const split = vi.spyOn(String.prototype, "split");
     const result = await sanitizeDiagnosticHeapProfile(
       recordedProfile.raw,
       recordedProfile.packageRoot,
       { ...recordedProfile.metadata, durationLimitReason: "collected-samples" },
     );
+    expect(split).not.toHaveBeenCalledWith(path.sep);
+    split.mockRestore();
     expect(JSON.stringify(result)).toBe(JSON.stringify(recordedProfile.sanitized));
   });
 

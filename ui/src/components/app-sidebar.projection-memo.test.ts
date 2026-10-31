@@ -364,9 +364,9 @@ describe("sidebar projection memo", () => {
     expect(read).toHaveBeenCalledOnce();
   });
 
-  it("keeps one provisional row and invalidates admission without a new list or route", async () => {
+  it("adds no sidebar placeholder for a create; the listed row arrives while naming runs", async () => {
     const old = session("old");
-    const created = session("dashboard:creating");
+    const created = session("dashboard:creating", { label: undefined, titlePending: true });
     const { sidebar, context, gateway, publish, row } = await mount([old]);
     sidebar.activeRouteId = "chat";
     sidebar.sessionKey = created.key;
@@ -381,78 +381,33 @@ describe("sidebar projection memo", () => {
       await settleLitElement(sidebar);
       expect(sidebar.getRouteSessionKey()).toBe(created.key);
       expect(sidebar.findSidebarSessionByKey(old.key)?.visuallyActive).toBe(false);
-      expect(sidebar.querySelectorAll(".sidebar-recent-session--creating")).toHaveLength(1);
-      publish([old, created]);
-      await settleLitElement(sidebar);
+      expect(sidebar.querySelector(".skeleton")).toBeNull();
       expect(row(created.key)).toBeNull();
-      expect(sidebar.querySelectorAll(".sidebar-recent-session--creating")).toHaveLength(1);
-      const result = sidebar.sessionData.sessionsResult;
-      const navigation = sidebar.getSessionNavigationState();
-      expect(result?.sessions.some((value) => value.key === created.key)).toBe(true);
       creation.admitted = true;
-      sidebar.invalidate();
+      context.chatSubmissions.acceptCreate({
+        creation,
+        displayName: "Accepted title",
+        canDisplay: () => true,
+      });
       await settleLitElement(sidebar);
-      expect(sidebar.sessionData.sessionsResult).toBe(result);
-      expect(sidebar.getSessionNavigationState()).not.toBe(navigation);
-      expect(sidebar.getRouteSessionKey()).toBe(created.key);
-      expect(sidebar.findSidebarSessionByKey(created.key)?.visuallyActive).toBe(true);
-      expect(row(created.key)).not.toBeNull();
-      expect(sidebar.querySelectorAll(".sidebar-recent-session--creating")).toHaveLength(0);
+      // The local accepted title never paints a stand-in row.
+      expect(sidebar.textContent).not.toContain("Accepted title");
+      publish([created, old]);
+      await settleLitElement(sidebar);
+      const listed = row(created.key);
+      expect(listed?.classList.contains("sidebar-recent-session--naming")).toBe(true);
+      expect(listed?.querySelector('[aria-busy="true"]')).not.toBeNull();
+      expect(sidebar.querySelector(".skeleton")).toBeNull();
+      expect(context.chatSubmissions.readAcceptedCreate()).toBeUndefined();
+      publish([{ ...created, label: "Release review", titlePending: false }, old]);
+      await settleLitElement(sidebar);
+      expect(row(created.key)).toBe(listed);
+      expect(listed?.classList.contains("sidebar-recent-session--naming")).toBe(false);
+      expect(listed?.querySelector('[aria-busy="true"]')).toBeNull();
+      expect(listed?.textContent).toContain("Release review");
     } finally {
       release();
     }
-  });
-
-  it("keeps accepted create display outside roster membership until canonical takeover", async () => {
-    const old = session("old");
-    const created = session("created");
-    const { sidebar, context, gateway, publish, row } = await mount([old]);
-    await update(sidebar, { activeRouteId: "chat", sessionKey: created.key });
-    gateway.publish({ sessionKey: created.key });
-    let sameIdentity = true;
-    const accept = () =>
-      context.chatSubmissions.acceptCreate({
-        creation: { sessionKey: created.key, admitted: true },
-        displayName: "Accepted title",
-        canDisplay: () => sameIdentity,
-      });
-    accept();
-    await settleLitElement(sidebar);
-    const display = () => sidebar.querySelector(".sidebar-recent-session--creating");
-    expect(display()?.textContent).toContain("Accepted title");
-    expect(display()?.querySelector('[aria-busy="true"]')).toBeNull();
-    expect(context.chatSubmissions.creation).toBeUndefined();
-    expect(sidebar.sessionData.sessionsResult?.sessions).toEqual([old]);
-    sameIdentity = false;
-    sidebar.invalidate();
-    await settleLitElement(sidebar);
-    expect(display()).toBeNull();
-    sameIdentity = true;
-    accept();
-    await update(sidebar, { sessionsStatusFilter: "archived" });
-    expect(display()).toBeNull();
-    await update(sidebar, { sessionsStatusFilter: "active" });
-    expect(display()).not.toBeNull();
-    sidebar.setSessionOwnerFilter("bob");
-    await settleLitElement(sidebar);
-    expect(display()).not.toBeNull();
-    expect(row(created.key)).toBeNull();
-    sidebar.setSessionOwnerFilter(null);
-    publish([old, created]);
-    await settleLitElement(sidebar);
-    expect(display()).toBeNull();
-    expect(row(created.key)).not.toBeNull();
-    expect(context.chatSubmissions.readAcceptedCreate()).toBeUndefined();
-    publish([old]);
-    await settleLitElement(sidebar);
-    expect(display()).toBeNull();
-    accept();
-    gateway.publish({ sessionKey: old.key });
-    await settleLitElement(sidebar);
-    expect(context.chatSubmissions.readAcceptedCreate()).toBeUndefined();
-    gateway.publish({ sessionKey: created.key });
-    await settleLitElement(sidebar);
-    expect(display()).toBeNull();
   });
 
   it("refreshes Home and route selection after accepted row changes", async () => {

@@ -64,7 +64,6 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  box-sizing: border-box;
   width: 100%;
   min-width: 44px;
   min-height: 44px;
@@ -220,7 +219,6 @@
 .chat-details-mobile-root__people-overflow {
   display: inline-grid;
   place-items: center;
-  box-sizing: border-box;
   width: auto;
   min-width: 22px;
   padding-inline: 3px;
@@ -322,7 +320,6 @@
     .chat-details-subagents__row,
     .chat-environment-mobile__row
   ) {
-  box-sizing: border-box;
   min-height: 44px;
   padding: 8px 12px;
   gap: var(--mobile-list-gap);

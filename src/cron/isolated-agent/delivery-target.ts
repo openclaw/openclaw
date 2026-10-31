@@ -116,26 +116,6 @@ function routesSharePeer(left?: OutboundSessionRoute | null, right?: OutboundSes
   );
 }
 
-function shouldCarrySessionThread(params: {
-  resolved: ReturnType<typeof resolveSessionDeliveryTarget>;
-  explicitTo?: string;
-  route?: OutboundSessionRoute | null;
-  lastRoute?: OutboundSessionRoute | null;
-}) {
-  if (!isNonEmptyThreadId(params.resolved.threadId)) {
-    return false;
-  }
-  if (!params.explicitTo) {
-    return (
-      params.resolved.channel === params.resolved.lastChannel &&
-      params.resolved.to === params.resolved.lastTo
-    );
-  }
-  // Explicit targets may reuse a stored thread only when both targets resolve
-  // to the same channel peer; otherwise cron could reply into a stale thread.
-  return routesSharePeer(params.route, params.lastRoute);
-}
-
 function stripSelectedProviderPrefix(params: { channel: string; to?: string }): string | undefined {
   const trimmed = params.to?.trim();
   if (!trimmed) {
@@ -473,25 +453,26 @@ export async function resolveDeliveryTarget(
     }
     toCandidate = routeTo;
   }
-  const lastTo = resolved.lastTo;
-  const lastRoute =
-    lastTo && resolved.lastChannel === channel
-      ? await resolveRoute({
-          accountId: resolved.lastAccountId ?? accountId,
-          target: lastTo,
-          threadId: resolved.lastThreadId,
-        })
-      : null;
-
+  let canUseSessionThread = false;
+  if (options?.inheritSessionThread !== false && isNonEmptyThreadId(resolved.threadId)) {
+    if (explicitTo) {
+      // Only explicit targets need the previous route to prove same-peer thread inheritance.
+      const lastTo = resolved.lastTo;
+      const lastRoute =
+        lastTo && resolved.lastChannel === channel
+          ? await resolveRoute({
+              accountId: resolved.lastAccountId ?? accountId,
+              target: lastTo,
+              threadId: resolved.lastThreadId,
+            })
+          : null;
+      canUseSessionThread = routesSharePeer(route, lastRoute);
+    } else {
+      canUseSessionThread =
+        resolved.channel === resolved.lastChannel && resolved.to === resolved.lastTo;
+    }
+  }
   // Thread precedence is explicit config, route canonicalization, then same-peer session history.
-  const canUseSessionThread =
-    options?.inheritSessionThread !== false &&
-    shouldCarrySessionThread({
-      resolved,
-      explicitTo,
-      route,
-      lastRoute,
-    });
   const threadId =
     explicitThreadId ?? route?.threadId ?? (canUseSessionThread ? resolved.threadId : undefined);
   const sessionRoute =

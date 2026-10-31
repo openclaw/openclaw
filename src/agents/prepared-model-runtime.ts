@@ -1,7 +1,7 @@
 /** Lifecycle-owned auth/model discovery snapshots for agent runs. */
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { throwSettledAggregate } from "../infra/error-graph-internal.js";
+import { materializeErrorStack, throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { readOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { enqueueKeyedTask } from "../plugin-sdk/keyed-async-queue.js";
@@ -447,6 +447,7 @@ export function markPreparedModelRuntimeSnapshotsStale(
   });
   // Fence epochs and admission before cancellation can reenter a plugin callback.
   previousCancellation.abort(new PreparedModelRuntimePublicationSupersededError(reason));
+  materializeErrorStack(previousCancellation.signal.reason);
   const replacement = getBlockingReplacement();
   notifyPreparedModelRuntimePublication({
     phase: "invalidated",

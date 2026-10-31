@@ -103,7 +103,6 @@
 }
 
 .task-progress-details--desktop[data-desktop-details][data-details-moving] {
-  box-sizing: border-box;
   overflow: hidden;
 }
 
