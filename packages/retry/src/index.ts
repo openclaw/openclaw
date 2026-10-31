@@ -337,9 +337,14 @@ export function toRetryError(value: unknown, fallbackMessage = "Non-Error thrown
     return new Error(value);
   }
   const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
+  // Keep native assignment semantics while blocking the prototype setter.
+  Object.assign(
+    new Proxy(error, {
+      set: (target, key, detail: unknown) =>
+        key === "__proto__" || Reflect.set(target, key, detail),
+    }),
+    value,
+  );
   return error;
 }
 
