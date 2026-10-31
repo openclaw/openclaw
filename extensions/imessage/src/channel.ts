@@ -46,6 +46,7 @@ import {
 } from "./monitor/sanitize-outbound.js";
 import { normalizeIMessageMessagingTarget } from "./normalize.js";
 import type { IMessageProbe } from "./probe.js";
+import { registerIMessageSendStatus } from "./send-status.js";
 import { imessageSetupContract } from "./setup-core.js";
 import {
   createIMessagePluginBase,
@@ -399,9 +400,11 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
             cfg: ctx.cfg,
             accountId: ctx.accountId,
           });
+          const sendStatus = registerIMessageSendStatus(ctx);
           try {
             return await (await loadIMessageChannelRuntime()).startIMessageGatewayAccount(ctx);
           } finally {
+            sendStatus?.dispose();
             conversationBindings.stop();
           }
         },
