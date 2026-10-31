@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { appendCurrentInboundContext } from "../../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { compareChannelAdmissionParticipants } from "../../../channels/message-access/admission-evidence.js";
@@ -12,7 +13,9 @@ import {
   runWithGatewayDetachedWorkContinuation,
 } from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
+import type { ReplyOperation } from "../../../sessions/session-controller.contracts.js";
 import { deferSessionControllerClaimBeforeExecution } from "../../../sessions/session-controller.mailbox-claim.js";
+import { isSessionControllerSourceQueued } from "../../../sessions/session-controller.mailbox-source.js";
 import {
   detachSessionControllerSources,
   getExistingSessionControllerMailbox,
@@ -22,7 +25,10 @@ import {
   type SessionControllerMailboxClaim,
 } from "../../../sessions/session-controller.mailbox.js";
 import { runWithSessionControllerCleanup } from "../../../sessions/session-controller.owner-context.js";
-import type { SessionControllerEntry } from "../../../sessions/session-controller.state.js";
+import {
+  getSessionControllerEntryForOperation,
+  type SessionControllerEntry,
+} from "../../../sessions/session-controller.state.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "../../../state/agent-database-admission-error.js";
 import { buildCollectPrompt, previewQueueSummaryPrompt } from "../../../utils/queue-helpers.js";
@@ -31,6 +37,7 @@ import {
   collectCurrentInboundContext,
   collectRuntimeMetadata,
   resolveFollowupReplyAnchor,
+  resolveFollowupReplyDeliveryKey,
 } from "./delivery-context.js";
 import { runOutsideAdmittedGenerationScopes } from "./drain-admission-scope.js";
 import {
@@ -57,6 +64,36 @@ import {
 } from "./types.js";
 
 type AdmissionSessionRebind = { from: string; to: string };
+
+/** The queued input owns this fact through preparation retries and consumes it with its turn. */
+export function handoffCompletedSourceReply(operation: ReplyOperation, source: FollowupRun): void {
+  const mailbox = getSessionControllerEntryForOperation(operation).mailbox;
+  const next = mailbox?.entries.find(
+    (input) =>
+      !input.claim &&
+      isSessionControllerSourceQueued(input) &&
+      !input.retirementRequested &&
+      !input.abortSignal.aborted,
+  )?.source;
+  if (
+    operation.result ||
+    operation.abortSignal.aborted ||
+    !next ||
+    (next.admissionSessionId ?? next.run.sessionId) !== operation.sessionId ||
+    next.currentInboundEventKind === "room_event" ||
+    next.run.sourceReplyDeliveryMode !== "message_tool_only" ||
+    next.originatingChatId !== source.originatingChatId ||
+    resolveFollowupReplyDeliveryKey(next) !== resolveFollowupReplyDeliveryKey(source)
+  ) {
+    return;
+  }
+  next.currentInboundContext = appendCurrentInboundContext(next.currentInboundContext, [
+    {
+      kind: "runtime-instruction",
+      text: "The immediately preceding turn already delivered its final user-visible reply via the message tool. Treat the current queued content as a fresh request; do not replay that answer merely to finish the preceding turn. Answer the new request normally, including explicit requests to repeat or discuss the prior reply.",
+    },
+  ]);
+}
 
 function consumeQueueSummaryDelivery(
   queue: Pick<

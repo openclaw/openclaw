@@ -1,0 +1,5 @@
+51
+# LOCAL 2026.11.8 row 129; source 64daa25640db61cf38ecceb64b2fa7619902f0d5.
+# Successful message-tool-only delivery annotates only the immediate eligible unclaimed queued successor in the same admitted session and exact reply route. It neither reorders the mailbox nor hands context across room events/routes. The runReplyAgent caller regression proves the outcome-to-queue connection.
+# Exact ratchet-counted delta: +51 LF. Existing followup-drain.cases.ts additionally grows +91 LF (not a counted suffix); no assertions removed.
+# Scalar baseline unchanged; focused private proof retained.
