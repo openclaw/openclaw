@@ -53,6 +53,11 @@ export const cliMessageExitEntrypoints = {
   oneShotExit: worker({ currentModuleUrl: import.meta.url, sourceWorkerName: "one-shot-exit" }),
 } as const;
 
+export const logsConsoleEntrypoints = {
+  logs: worker({ currentModuleUrl: import.meta.url, sourceWorkerName: "logs-cli" }),
+  preaction: worker({ currentModuleUrl: import.meta.url, sourceWorkerName: "program/preaction" }),
+} as const;
+
 export const doctorOutputEntrypoints = {
   maintenance: legacy({
     currentModuleUrl: import.meta.url,
