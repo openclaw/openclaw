@@ -488,5 +488,9 @@ try {
 } finally {
   process.off("SIGINT", onSigint);
   process.off("SIGTERM", onSigterm);
-  fs.rmSync(tempRoot, { recursive: true, force: true });
+  // Source-capture SQLite leases may be held until process exit. Register after
+  // loader imports so their cleanup runs before removing this fixture's home.
+  process.once("exit", () => {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  });
 }
