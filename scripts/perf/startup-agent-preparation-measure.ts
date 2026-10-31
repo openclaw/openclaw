@@ -4,7 +4,7 @@
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/startup-agent-preparation-measure.ts \
  *   --state-dir "$PWD/.local/startup-preparation-candidate" --iterations 2000
  * Repeat with --allocations; sampling and timing use separate processes.
- * --owner accepts a historical startup-migration.ts copied beside its original
+ * --owner accepts a historical startup-migration-runtime.ts copied beside its original
  * so relative imports use the same dependencies. Alternate baseline/candidate.
  * Report main-thread CPU, sampled main-thread allocation and wall time per
  * preparation. Fixture writes and the initial global inspection are excluded.
@@ -34,7 +34,7 @@ const stateDir = path.resolve(values["state-dir"]);
 await mkdir(stateDir, { mode: 0o700 });
 const owner = values.owner
   ? pathToFileURL(path.resolve(values.owner))
-  : new URL("../../src/config/sessions/startup-migration.ts", import.meta.url);
+  : new URL("../../src/config/sessions/startup-migration-runtime.ts", import.meta.url);
 const ownerSha256 = createHash("sha256")
   .update(await readFile(owner))
   .digest("hex");
@@ -60,7 +60,7 @@ try {
     await import("../../src/config/sessions/session-accessor.sqlite-entry-store.js");
   const { runSessionStartupMigration } = (await import(
     owner.href
-  )) as typeof import("../../src/config/sessions/startup-migration.js");
+  )) as typeof import("../../src/config/sessions/startup-migration-runtime.js");
   const agentIds = Array.from({ length: 5 }, (_, index) => `fleet-${index}`);
   const cfg = {
     agents: {

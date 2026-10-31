@@ -2646,6 +2646,7 @@ jobs:
           import { resolve } from "node:path";
           const webkitSuites = new Set([
             resolve("ui/src/pages/workboard/workboard-native-bundle.e2e.test.ts"),
+            resolve("ui/src/e2e/chat-composer-picker-layout.e2e.test.ts"),
             resolve("ui/src/e2e/tooltip-first-activation.e2e.test.ts"),
             resolve("ui/src/e2e/logs-scroll.e2e.test.ts"),
             resolve("ui/src/e2e/chat-composer-picker-layout.e2e.test.ts"),
@@ -6135,6 +6136,10 @@ jobs:
       BUNDLE_DEPLOYMENT: "true"
       BUNDLE_GEMFILE: ${{ github.workspace }}/apps/ios/Gemfile
     steps:
+      - name: Reserve host CPU for screenshots
+        timeout-minutes: 2
+        run: sudo -n /usr/bin/mdutil -i off /System/Volumes/Data
+
       - *platform_checkout_step
 
       - name: Setup Ruby

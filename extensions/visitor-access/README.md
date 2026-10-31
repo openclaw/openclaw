@@ -415,6 +415,9 @@ policy. A matching policy whose decision is not `allow` causes a clear refusal.
 Cloudflare requests use app-scoped policy endpoints only: no identity-provider
 calls and no application mutations. Tokens are never logged or echoed, and fetch
 failures use generic diagnostics.
+Cloudflare JSON responses are limited to 16 MiB, including policy discovery and
+mutation confirmations. Larger responses fail with an inspection instruction;
+provider cleanup remains best effort and retries while its durable record remains.
 Non-email include rules, nonempty require/exclude rules, or duplicate matching
 policy names also require operator inspection before the plugin will write.
 

@@ -2,7 +2,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { withTestTimeout } from "../../test/helpers/promise.js";
+import { withinTest, withTestTimeout } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
@@ -11,6 +11,8 @@ import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js
 import type { BrokerChild } from "../process/spawn-broker/child.js";
 import { getSpawnBroker } from "../process/spawn-broker/context.js";
 import { runWithProcessCleanupBudget } from "../process/supervisor/cleanup-budget.js";
+import { getProcessSupervisor, shutdownProcessSupervisor } from "../process/supervisor/index.js";
+import type { ManagedRun } from "../process/supervisor/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   withAgentDatabaseStartupAdmission,
@@ -290,4 +292,63 @@ describe.skipIf(process.platform === "win32")("Gateway spawn broker lifetime", (
       });
     },
   );
+
+  it("settles an active command before retiring runtime transports after core close fails", async ({
+    signal,
+  }) => {
+    const ready = createDeferredCore();
+    let run: ManagedRun | undefined;
+    let release: (() => Promise<void>) | undefined;
+    observed.startupWork = async () => {
+      // Only Gateway transport selection is Linux-specific; children use the real host platform.
+      Object.defineProperty(process, "platform", platform);
+      const supervisor = getProcessSupervisor();
+      release = supervisor.acquireScopeCleanup("shutdown-command", { processTree: "required-all" });
+      run = await supervisor.spawn({
+        mode: "child",
+        scopeKey: "shutdown-command",
+        argv: [
+          process.execPath,
+          "-e",
+          `
+          process.on("SIGTERM", () => {
+            process.stdout.write("settled\\n", () => process.exit(0));
+          });
+          setInterval(() => {}, 1000);
+          process.stdout.write("ready\\n");
+        `,
+        ],
+        onStdout: (chunk) => {
+          if (chunk.includes("ready")) {
+            ready.resolve();
+          }
+        },
+      });
+      await withinTest(ready.promise, signal);
+    };
+    const failure = new Error("core close retained connection work");
+    observed.closeError = failure;
+    try {
+      const server = await startGatewayServer();
+      const outcome = Promise.allSettled([run!.wait()]);
+      await expect(
+        runWithProcessCleanupBudget({ deadline: performance.now() + 5_000, warn: vi.fn() }, () =>
+          server.close({ exitAfterClose: true }),
+        ),
+      ).rejects.toBe(failure);
+      // The CLI also joins here after a failed core close, including native Bun transport.
+      await shutdownProcessSupervisor();
+      expect(run!.activity.resultSettled).toBe(true);
+      expect(await outcome).toMatchObject([
+        {
+          status: "fulfilled",
+          value: { reason: "manual-cancel", exitCode: 0, stdout: "ready\nsettled\n" },
+        },
+      ]);
+      await expect(run!.waitForExtinction!()).resolves.toBeUndefined();
+    } finally {
+      await Promise.allSettled([release?.(), shutdownProcessSupervisor()]);
+      Object.defineProperty(process, "platform", { ...platform, value: "linux" });
+    }
+  });
 });

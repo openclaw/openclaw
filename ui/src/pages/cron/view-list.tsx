@@ -17,7 +17,6 @@ import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { isCronJobActiveFailure, isCronJobRunning } from "../../lib/cron-status.ts";
-import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { CRON_SUGGESTIONS, suggestionFormPatch } from "./suggestions.ts";
 import {
@@ -29,6 +28,7 @@ import {
 } from "./view-controls.tsx";
 import {
   describeJobSchedule,
+  describeJobNextRun,
   JobStateIndicator,
   TriggerIndicator,
   DisabledNote,
@@ -362,8 +362,6 @@ function JobRow(
 ) {
   const displayName = () => props.job.displayName ?? props.job.name;
   const description = () => props.job.description?.trim();
-  const nextRunAtMs = () => props.job.state?.nextRunAtMs;
-  const hasNextRun = () => nextRunAtMs() !== undefined;
   return (
     <div
       class={["cron-table__row", { "cron-table__row--paused": !props.job.enabled }]}
@@ -413,13 +411,9 @@ function JobRow(
         class="cron-table__next"
         label={t("cron.jobs.nextRun")}
         value={
-          isCronJobRunning(props.job) ? (
-            <span class="cron-table__running">{t("cron.runs.runStatusRunning")}</span>
-          ) : hasNextRun() ? (
-            formatRelativeTimestamp(nextRunAtMs())
-          ) : (
-            t("common.na")
-          )
+          <span class={{ "cron-table__running": isCronJobRunning(props.job) }}>
+            {describeJobNextRun(props.job)}
+          </span>
         }
       />
       <JobCell

@@ -419,6 +419,21 @@ export function inspectDatabaseWorkerBoundaries(
     },
   });
   const { checker, program } = session.project;
+  // The snapshot fixes compiler answers, even while graph forwarding is prepared.
+  // Cache raw symbols (including misses); resolveSymbol applies current bindings later.
+  const compilerSymbols = new Map<ts.Node, Symbol | undefined>();
+  const symbolsAt = (nodes: readonly ts.Node[]): (Symbol | undefined)[] => {
+    const missing = [...new Set(nodes.filter((node) => !compilerSymbols.has(node)))];
+    if (missing.length) {
+      const symbols = checker.getSymbolAtLocation(missing);
+      for (const [index, node] of missing.entries()) {
+        compilerSymbols.set(node, symbols[index]);
+      }
+    }
+    return nodes.map((node) => compilerSymbols.get(node));
+  };
+  const symbolAt = (node: ts.Node): Symbol | undefined =>
+    compilerSymbols.has(node) ? compilerSymbols.get(node) : symbolsAt([node])[0];
   const forwarded = new Map<Symbol, Symbol>();
   // Compiler aliases are immutable; prepared binding overrides are applied separately.
   const aliasTargets = new Map<Symbol, Symbol>();
@@ -476,7 +491,7 @@ export function inspectDatabaseWorkerBoundaries(
       return inlineArguments.get(call) === node;
     }
     inlineArguments.set(call, undefined);
-    const symbol = resolveSymbol(checker.getSymbolAtLocation(call.expression));
+    const symbol = resolveSymbol(symbolAt(call.expression));
     const declaration = symbol?.valueDeclaration?.resolve();
     const callable =
       declaration && ts.isVariableDeclaration(declaration) ? declaration.initializer : declaration;
@@ -539,7 +554,7 @@ export function inspectDatabaseWorkerBoundaries(
       if (!node || !nameNode) {
         continue;
       }
-      const symbol = resolveSymbol(checker.getSymbolAtLocation(nameNode));
+      const symbol = resolveSymbol(symbolAt(nameNode));
       if (!symbol) {
         throw new Error(`Compatibility scan could not resolve ${file}:${name}`);
       }
@@ -617,7 +632,7 @@ export function inspectDatabaseWorkerBoundaries(
       if (name) {
         declarationNames.add(name);
       }
-      const symbol = name ? resolveSymbol(checker.getSymbolAtLocation(name)) : undefined;
+      const symbol = name ? resolveSymbol(symbolAt(name)) : undefined;
       if (symbol) {
         registered.set(symbol, member);
         if (name && ts.isIdentifier(name)) {
@@ -748,7 +763,7 @@ export function inspectDatabaseWorkerBoundaries(
     for (const member of pending) {
       expandedMembers.add(member.node);
     }
-    const symbols = references.length ? checker.getSymbolAtLocation(references) : [];
+    const symbols = symbolsAt(references);
     for (const raw of symbols) {
       const symbol = resolveSymbol(raw);
       if (!symbol || examined.has(symbol) || registered.has(symbol)) {
@@ -869,7 +884,7 @@ export function inspectDatabaseWorkerBoundaries(
     }
     return found;
   };
-  const namespaceSymbols = checker.getSymbolAtLocation(namespaces);
+  const namespaceSymbols = symbolsAt(namespaces);
   for (const [index, namespace] of namespaces.entries()) {
     if (targets(namespaceSymbols[index]).size) {
       names.add(namespace.text);
@@ -896,13 +911,13 @@ export function inspectDatabaseWorkerBoundaries(
         ? expression
         : undefined;
     const module = dynamicImport?.arguments[0]
-      ? resolveSymbol(checker.getSymbolAtLocation(dynamicImport.arguments[0]))
+      ? resolveSymbol(symbolAt(dynamicImport.arguments[0]))
       : undefined;
     if (!dynamicImport || !module) {
       continue;
     }
     const record = (name: ts.Identifier, target: Symbol | undefined) => {
-      const local = checker.getSymbolAtLocation(name);
+      const local = symbolAt(name);
       if (local && target) {
         forwarded.set(local, target);
         handledImportBindings.add(name);
@@ -953,13 +968,8 @@ export function inspectDatabaseWorkerBoundaries(
       edges.set(member, memberEdges);
     }
   }
-  const compiledAccesses = new Map<ts.Expression, Symbol | undefined>();
-  const compilerSymbol = (expression: ts.Expression): Symbol | undefined =>
-    compiledAccesses.has(expression)
-      ? compiledAccesses.get(expression)
-      : checker.getSymbolAtLocation(expression);
   const accessSymbol = (expression: ts.Expression): Symbol | undefined => {
-    const known = resolveSymbol(compilerSymbol(expression));
+    const known = resolveSymbol(symbolAt(expression));
     if (known) {
       return known;
     }
@@ -971,7 +981,7 @@ export function inspectDatabaseWorkerBoundaries(
       expression.expression.kind === ts.SyntaxKind.ImportKeyword &&
       expression.arguments[0]
     ) {
-      return resolveSymbol(compilerSymbol(expression.arguments[0]));
+      return resolveSymbol(symbolAt(expression.arguments[0]));
     }
     if (ts.isPropertyAccessExpression(expression)) {
       const base = accessSymbol(expression.expression);
@@ -1036,8 +1046,7 @@ export function inspectDatabaseWorkerBoundaries(
       node.forEachChild(visit);
     };
     source.forEachChild(visit);
-    const symbols = references.length ? checker.getSymbolAtLocation(references) : [];
-    compiledAccesses.clear();
+    const symbols = symbolsAt(references);
     const pendingAccesses = new Set<ts.Expression>();
     for (const [index, node] of references.entries()) {
       if (symbols[index]) {
@@ -1065,12 +1074,7 @@ export function inspectDatabaseWorkerBoundaries(
     }
     // Query the same receiver nodes as the fallback, without a round trip per access.
     const accessLocations = [...pendingAccesses];
-    const accessSymbols = accessLocations.length
-      ? checker.getSymbolAtLocation(accessLocations)
-      : [];
-    for (const [index, expression] of accessLocations.entries()) {
-      compiledAccesses.set(expression, accessSymbols[index]);
-    }
+    symbolsAt(accessLocations);
     for (const [index, node] of references.entries()) {
       const bindingMember =
         ts.isIdentifier(node) &&
@@ -1173,9 +1177,7 @@ export function inspectDatabaseWorkerBoundaries(
                   callee.file === file &&
                   forward.member === callee.name &&
                   consumer.arguments[forward.argument] === expression &&
-                  resolveSymbol(
-                    checker.getSymbolAtLocation(consumer.expression),
-                  )?.valueDeclaration?.resolve();
+                  resolveSymbol(symbolAt(consumer.expression))?.valueDeclaration?.resolve();
                 return (
                   receiver &&
                   ts.isFunctionDeclaration(receiver) &&
@@ -1231,7 +1233,7 @@ export function inspectDatabaseWorkerBoundaries(
     ) {
       continue;
     }
-    for (const operation of targets(checker.getSymbolAtLocation(source))) {
+    for (const operation of targets(symbolAt(source))) {
       if (!compatibilityReachable.has(operation)) {
         operation.nonRuntimeValid = false;
       }

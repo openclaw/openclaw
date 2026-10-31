@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import { loadPluginManifest } from "../plugins/manifest.js";
@@ -8,6 +9,7 @@ import { initializeNativeSessionCatalogPreferences } from "../plugins/native-ses
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   applyPluginAutoEnable,
+  applyPluginAutoEnableAsync,
   materializePluginAutoEnableCandidates,
 } from "./plugin-auto-enable.js";
 import {
@@ -55,6 +57,7 @@ vi.mock("../channels/plugins/package-state-probes.js", async (importOriginal) =>
 });
 
 const setupRegistryMock = vi.hoisted(() => ({
+  resolvePluginSetupRegistryAsync: vi.fn(async (_params: { pluginIds?: readonly string[] }) => {}),
   resolvePluginSetupAutoEnableReasons: vi.fn(
     (params: { config?: OpenClawConfig; pluginIds?: readonly string[] }) => {
       const pluginIds = new Set(params.pluginIds ?? []);
@@ -68,10 +71,30 @@ const setupRegistryMock = vi.hoisted(() => ({
   ),
 }));
 
+// mock-isolation: Auto-enable fixtures control setup probes without executing discovered plugin modules.
 vi.mock("../plugins/setup-registry.js", () => ({
   clearPluginSetupRegistryCache: vi.fn(),
   resolvePluginSetupAutoEnableReasons: setupRegistryMock.resolvePluginSetupAutoEnableReasons,
+  resolvePluginSetupRegistryAsync: setupRegistryMock.resolvePluginSetupRegistryAsync,
 }));
+
+it("prepares the selected setup probes before applying auto-enable policy", async () => {
+  const prepared = createDeferred();
+  setupRegistryMock.resolvePluginSetupRegistryAsync.mockReturnValueOnce(prepared.promise);
+  setupRegistryMock.resolvePluginSetupAutoEnableReasons.mockClear();
+  const operation = applyPluginAutoEnableAsync({
+    config: { plugins: { entries: { browser: { enabled: true } } } },
+    manifestRegistry: makeRegistry([{ id: "browser", channels: [] }]),
+    env: makeIsolatedEnv(),
+  });
+  expect(setupRegistryMock.resolvePluginSetupRegistryAsync).toHaveBeenCalledWith(
+    expect.objectContaining({ pluginIds: ["browser"] }),
+  );
+  expect(setupRegistryMock.resolvePluginSetupAutoEnableReasons).not.toHaveBeenCalled();
+  prepared.resolve();
+  await operation;
+  expect(setupRegistryMock.resolvePluginSetupAutoEnableReasons).toHaveBeenCalled();
+});
 
 const env = makeIsolatedEnv();
 type ManifestPlugin = Parameters<typeof makeRegistry>[0][number];

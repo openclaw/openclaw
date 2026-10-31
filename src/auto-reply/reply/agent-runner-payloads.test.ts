@@ -332,6 +332,25 @@ describe("buildReplyPayloads media filter integration", () => {
     });
   });
 
+  it.each<[string, boolean, boolean]>([
+    ["Done", false, false],
+    ["Done", true, true],
+    ["✅", false, false],
+    ["✅", true, true],
+    ["already delivered", false, true],
+  ])("dedupes %s with routed evidence=%s: %s", async (text, routed, suppressed) => {
+    await expectBuiltPayloads({
+      payloads: [{ text }],
+      messageProvider: "slack",
+      originatingTo: "channel:C1",
+      messagingToolSentTexts: [text],
+      messagingToolSentTargets: routed
+        ? [{ tool: "message", provider: "slack", to: "channel:C1", text }]
+        : undefined,
+      expected: suppressed ? [] : [{ text }],
+    });
+  });
+
   it.each<ReplyRouteDedupeCase>([
     {
       name: "dedupes against final routes when first-reply state is shared",

@@ -19,6 +19,7 @@ import type {
   GenerationWorkerReply,
   GenerationWorkerCallback,
 } from "./plugin-generation-worker-contract.js";
+import { isPluginSourceAcquisitionError } from "./plugin-instance-error.js";
 import {
   nativeAdmissionStateFor,
   settlePluginNativeAdmissions,
@@ -333,7 +334,19 @@ function createPreparationSession(context: CaptureCommand) {
           }
           const exception = failure instanceof Error ? failure : new Error(String(failure));
           return {
-            error: { message: exception.message, name: exception.name, stack: exception.stack },
+            error: {
+              message: exception.message,
+              name: exception.name,
+              stack: exception.stack,
+              ...("code" in exception && typeof exception.code === "string"
+                ? { code: exception.code }
+                : {}),
+            },
+            ...((command.operation === "capture" ||
+              codec.isSourcePreparationCall(command.handle)) &&
+            isPluginSourceAcquisitionError(failure)
+              ? { sourceAcquisitionFailure: true as const }
+              : {}),
             resources: resources.size - orphaned.size,
             released: codec.takeReleasedHandles(),
           };

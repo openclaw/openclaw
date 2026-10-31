@@ -267,7 +267,7 @@ export async function initializeAndRunUpdate(
                   warn(
                     space
                       ? `NO ORIGINAL-STATE SNAPSHOT: insufficient disk space. Needed ${space.requiredBytes} bytes (${formatDiskSpaceBytes(space.requiredBytes)}); available ${space.availableBytes} bytes (${formatDiskSpaceBytes(space.availableBytes)}). The update continues without a complete pre-update recovery copy. Free space before a future update to allow original-state capture.`
-                      : `Original state capture is unavailable; the update continues without it. A running Gateway or another active writer changing state during capture is expected to cause this. Database rollback uses the pre-migration snapshots taken after the Gateway stops. A completed update does not need to be restarted because of this warning. Cause: ${formatErrorMessage(error)}`,
+                      : `NO ORIGINAL-STATE SNAPSHOT: original state capture is unavailable. The update continues without a complete pre-update recovery copy. Database rollback uses the pre-migration snapshots taken after the Gateway stops. A completed update does not need to be restarted because of this warning. Cause: ${formatErrorMessage(error)}`,
                   );
                 }
                 assertCurrent();
