@@ -4,22 +4,14 @@
   gap: 8px;
   width: 100%;
   min-height: var(--settings-control-height);
-  padding-inline: 10px;
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
+  padding-inline: var(--field-padding-inline);
+  border: 1px solid var(--field-border);
+  border-radius: var(--field-radius);
+  background: var(--field-bg);
   color: var(--text);
-  font: inherit;
-  font-size: var(--control-ui-text-sm);
+  font-size: var(--field-font-size);
   text-align: start;
   cursor: var(--cursor-action);
-  transition: border-color var(--duration-fast) var(--ease-out);
-}
-
-.picker-select__trigger:is(:focus-visible, [aria-expanded="true"]) {
-  outline: none;
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border) 45%);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .picker-select__chevron {
@@ -190,11 +182,6 @@
 
 /* System colors replace decorative fills/shadows; keep keyboard focus explicit. */
 @media (forced-colors: active) {
-  .picker-select__trigger:is(:focus-visible, [aria-expanded="true"]) {
-    outline: 2px solid SelectedItem;
-    outline-offset: 2px;
-  }
-
   .picker-select__option[data-active] {
     outline: 2px solid SelectedItem;
     outline-offset: -2px;

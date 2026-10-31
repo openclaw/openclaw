@@ -211,6 +211,12 @@
   min-height: clamp(320px, 56vh, 720px);
 }
 
+/* Without write permission this is how the file gets read, so its text stays at
+   full contrast. An editor with nothing loaded shows its placeholder and stays dimmed. */
+.field textarea.agent-file-textarea:disabled:not(:placeholder-shown) {
+  opacity: 1;
+}
+
 .agent-file-header {
   justify-content: space-between;
 }
