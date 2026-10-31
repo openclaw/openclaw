@@ -135,3 +135,14 @@ it.each([0, 50])("bounds prepend serialization with %i overlapping rows", (overl
   // The budget scales with the shared boundary, not the accumulated transcript.
   expect(serializedCharacters).toBeLessThanOrEqual((overlap * 2 + 4) * text.length * 1.1);
 });
+
+it("keeps an unkeyed outcome after its matched source when merging a newer page", () => {
+  const second = nativeHistoryMessage(2);
+  const third = nativeHistoryMessage(3);
+  const output = { role: "system", content: "Local command result" };
+  const merged = prependUniqueNativeMessages([second, output], [{ ...second }, third]);
+  expect(merged.messages).toEqual([second, output, third]);
+  expect(merged.messages[1]).toBe(output);
+  expect(merged.incomingExpandedSources.size).toBe(0);
+  expect(merged.currentExpandedSources.size).toBe(0);
+});

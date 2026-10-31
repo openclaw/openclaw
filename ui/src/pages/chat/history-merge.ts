@@ -25,10 +25,7 @@ import {
 } from "../../lib/chat/history-message-identity.ts";
 import { chatOutboxDeliveryKey, type ChatComposerScope } from "../../lib/chat/outbox-store.ts";
 import { removePairingQrContent, retainPairingQrEntries } from "../../lib/chat/pairing-qr.ts";
-import {
-  resolveUiSelectedSessionAgentId,
-  resolveUiConversationIdentity,
-} from "../../lib/sessions/session-key.ts";
+import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.ts";
 import {
   type ChatHistoryResidencyOwner,
   invalidateChatHistoryPacketSources,
@@ -37,9 +34,16 @@ import {
 } from "./chat-history-window.ts";
 import { chatLocalOutputMessages } from "./chat-local-outputs.ts";
 import { matchesCompactionOperation } from "./chat-progress.ts";
+import {
+  CHAT_PROJECTION_SCOPE_KEYS,
+  chatProjectionScopeChanged,
+  readChatSessionProjectionScope,
+} from "./chat-projection-scope.ts";
 import { reconcileChatReasoning, type ChatReasoningHost } from "./chat-reasoning.ts";
 import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 import type { CompactionStatus, ProviderPolicyNotice } from "./tool-stream-contract.ts";
+
+export { readChatSessionProjectionScope } from "./chat-projection-scope.ts";
 
 const chatSessionProjections = new WeakMap<
   object,
@@ -49,16 +53,6 @@ const chatSessionProjections = new WeakMap<
     readerSource?: string | null;
   }
 >();
-// Display ownership outlives active-state cleanup. It is not the foreground
-// terminal fence: an unowned final cannot suppress authoritative active rows.
-const CHAT_PROJECTION_SCOPE_KEYS = [
-  "sessionKey",
-  "sessionId",
-  "agentId",
-  "lifecycleRevision",
-  "activeLeafEntryId",
-] as const;
-
 type ChatSessionProjectionOwner = ChatHistoryResidencyOwner &
   ChatComposerScope &
   ChatReasoningHost & {
@@ -79,10 +73,6 @@ function resetCompactionProjection(owner: ChatSessionProjectionOwner): void {
   }
   owner.compactionStatus = null;
 }
-
-type ChatSessionProjectionScopeOptions = Omit<SessionProjectionScope, "sessionId"> & {
-  sessionId?: string | null;
-};
 
 function isInitialSubmissionReceipt(
   submission: RetainedChatSubmission | null | undefined,
@@ -199,44 +189,6 @@ function admitRetainedSteerProjection(
   return next;
 }
 
-/** Every live, pending, terminal, and history path must identify the same pane and branch. */
-export function readChatSessionProjectionScope(
-  owner: ChatSessionProjectionOwner,
-  options: ChatSessionProjectionScopeOptions = {},
-): SessionProjectionScope {
-  const sessionId = Object.hasOwn(options, "sessionId")
-    ? options.sessionId
-    : owner.currentSessionId;
-  return {
-    sessionKey: resolveUiConversationIdentity(owner, options.sessionKey ?? owner.sessionKey)
-      .sessionKey,
-    ...(options.agentId ? { agentId: options.agentId } : {}),
-    ...(sessionId ? { sessionId } : {}),
-    ...(options.lifecycleRevision !== undefined
-      ? { lifecycleRevision: options.lifecycleRevision }
-      : {}),
-    ...(Object.hasOwn(options, "activeLeafEntryId") ||
-    Object.hasOwn(owner, "chatDisplayedLeafEntryId")
-      ? {
-          activeLeafEntryId: Object.hasOwn(options, "activeLeafEntryId")
-            ? (options.activeLeafEntryId ?? null)
-            : (owner.chatDisplayedLeafEntryId ?? null),
-        }
-      : {}),
-  };
-}
-
-function chatProjectionScopeChanged(
-  previous: SessionProjectionScope,
-  scope: SessionProjectionScope,
-  keys: readonly (keyof SessionProjectionScope)[] = CHAT_PROJECTION_SCOPE_KEYS,
-) {
-  return keys.some(
-    (key) =>
-      Object.hasOwn(scope, key) && previous[key] !== undefined && previous[key] !== scope[key],
-  );
-}
-
 /** One pane owns its shared-reducer projection; split panes never share live state. */
 export function getChatSessionProjection(
   owner: ChatSessionProjectionOwner,
@@ -275,6 +227,17 @@ export function getChatSessionProjection(
 
 export function getChatRunProjection(owner: object, runId: string) {
   return chatSessionProjections.get(owner)?.projection?.runs[runId];
+}
+
+/** Compare semantic custody without initializing a projection or retaining its body. */
+export function ownsChatSessionProjectionScope(
+  owner: object,
+  scope: SessionProjectionScope,
+): boolean {
+  const current = chatSessionProjections.get(owner)?.projection;
+  return Boolean(
+    current && CHAT_PROJECTION_SCOPE_KEYS.every((key) => current.scope[key] === scope[key]),
+  );
 }
 
 /** Read existing custody without initializing or publishing during tentative admission. */
@@ -668,10 +631,25 @@ export function reduceChatSessionProjection(
     scope?: SessionProjectionScope;
     runActive?: boolean;
     messageReceipt?: { accepted: boolean };
+    /** Caller proved append continuity using the same read that supplies the new snapshot. */
+    localOutputScope?: SessionProjectionScope;
   } = {},
 ): SessionProjectionState {
   const scope = options.scope ?? readChatSessionProjectionScope(owner);
-  const current = getChatSessionProjection(owner, scope);
+  const previous = chatSessionProjections.get(owner)?.projection;
+  let current = getChatSessionProjection(owner, scope);
+  if (
+    event.type === "snapshotLoaded" &&
+    options.localOutputScope &&
+    previous &&
+    chatProjectionScopeChanged(previous.scope, scope) &&
+    ownsChatSessionProjectionScope(owner, options.localOutputScope)
+  ) {
+    // Transfer only current typed local custody. Old native rows and packets
+    // never cross a leaf change merely because their anchor is still visible.
+    const entries = previous.entries.filter((entry) => entry.localOutput);
+    current = { ...current, entries, messages: entries.map((entry) => entry.message) };
+  }
   const submissions = readChatSubmissionBatch(owner, scope);
   const handoff = submissions?.initial;
   const initialRunId = handoff?.pending ? handoff.pendingRunId : undefined;
@@ -728,6 +706,9 @@ export function reduceChatSessionProjection(
     );
     owner.chatReasoning = null;
     delete owner.chatHistoryCursor;
+    // Reset starts a new transcript epoch. Retained display rows do not carry
+    // the old source membership, packet certificates, or opaque edges into it.
+    owner.chatHistoryPagination = { hasMore: false };
     resetCompactionProjection(owner);
     owner.providerPolicyNotice = null;
   }

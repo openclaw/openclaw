@@ -426,7 +426,7 @@ export function selectChatHistoryResidency(
   const intrinsicSource = intrinsicGroup(groups.get(pagination.intrinsicSource ?? ""))
     ? pagination.intrinsicSource
     : undefined;
-  const readerPacket = segments.find(
+  let readerPacket = segments.find(
     (segment) =>
       protectsReader(segment) && segment.boundedPacket && !groups.get(readerSource!)?.reopenable,
   );
@@ -482,12 +482,22 @@ export function selectChatHistoryResidency(
     const index = fromRight ? segments.length - 1 : 0;
     const segment = segments[index]!;
     if (segments.length > 1 && !protectsReader(segment)) {
+      // Changing only an adjacent boundary preserves the actual reader packet.
+      // Membership cuts below still revoke its original-packet custody.
       if (fromRight) {
         segments.pop();
-        segments[segments.length - 1] = { ...segments.at(-1)!, hasNewer: true };
+        const neighbor = segments.at(-1)!;
+        segments[segments.length - 1] = { ...neighbor, hasNewer: true };
+        if (neighbor === readerPacket) {
+          readerPacket = segments.at(-1);
+        }
       } else {
         segments.shift();
-        segments[0] = { ...segments[0]!, hasOlder: true };
+        const neighbor = segments[0]!;
+        segments[0] = { ...neighbor, hasOlder: true };
+        if (neighbor === readerPacket) {
+          readerPacket = segments[0];
+        }
       }
       return true;
     }

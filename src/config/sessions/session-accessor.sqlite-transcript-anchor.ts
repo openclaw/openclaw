@@ -6,6 +6,7 @@ import {
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
+import type { TranscriptReadContinuity } from "../../sessions/transcript-anchor-page.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import {
   selectActiveTranscriptIdentityRows,
@@ -24,6 +25,10 @@ import {
   type TranscriptAppendPostimage,
 } from "./session-transcript-append-postimage.js";
 import { selectSessionTranscriptIndexStatus } from "./session-transcript-index.js";
+import {
+  createTranscriptRawDeltaCursor,
+  isTranscriptReadContinuous,
+} from "./session-transcript-raw-cursor.js";
 import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence-error.js";
 import {
   sameTranscriptEntryAnchor,
@@ -61,6 +66,38 @@ export function readActivePathEntryRelationFromProjection(
     return projection.state.leafEventId === entryId ? "exact" : "off-path";
   }
   return readActiveTranscriptEntryIdentityInSnapshot(projection, entryId) ? "ancestor" : "off-path";
+}
+
+/** Cursor, ancestry, and replacement metadata belong to this same admitted snapshot. */
+export function readTranscriptContinuityFromProjection(
+  projection: CurrentTranscriptProjection,
+  continuity: TranscriptReadContinuity,
+  latestResetRawSeq: number | null,
+) {
+  return {
+    continuity: {
+      ...continuity,
+      accepted: isTranscriptReadContinuous(continuity.cursor, {
+        agentId: projection.resolved.agentId,
+        sessionId: projection.resolved.sessionId,
+        generation: projection.generation,
+        frontier: projection.state.indexedSeq,
+        latestResetRawSeq,
+        previousLeafActive:
+          readActivePathEntryRelationFromProjection(projection, continuity.activeLeafEntryId) !==
+          "off-path",
+      }),
+    },
+    activeLeafEntryId: projection.state.leafEventId,
+    deltaCursor: projection.generation
+      ? createTranscriptRawDeltaCursor({
+          agentId: projection.resolved.agentId,
+          sessionId: projection.resolved.sessionId,
+          generation: projection.generation,
+          lastSeq: projection.state.indexedSeq,
+        })
+      : undefined,
+  };
 }
 
 /** The caller owns admission; anchor and source authority share the current statement snapshot. */

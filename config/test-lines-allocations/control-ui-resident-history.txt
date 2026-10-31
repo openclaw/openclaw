@@ -1,2 +1,2 @@
-# Bounded history/local-output admission, retirement, cursor, and warm-cache regressions.
-5331
+# Bounded history/local-output admission, Stop continuity, reader custody, and warm-cache regressions.
+6145

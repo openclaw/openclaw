@@ -647,3 +647,69 @@ it("keeps normal unkeyed reader packets charged to the ordinary target", () => {
   expect(admitted.pagination.segments).toHaveLength(5);
   expect(admitted.messages[0]).toBe(messages[80]);
 });
+
+it("preserves local outcome placement when a newer page overlaps its preceding source", () => {
+  const host = makeChatHost();
+  const second = durable(2);
+  const third = durable(3);
+  admitChatHistoryPages(host, [{ messages: [second], newerCursor: "after-2" }], "around");
+  const output = { role: "system", content: "Local command result", timestamp: 1 };
+  reduceChatSessionProjection(host, { type: "localOutput", message: output });
+
+  admitChatHistoryPages(host, [{ messages: [{ ...second }, third] }], "newer");
+
+  expect(host.chatMessages).toEqual([second, output, third]);
+  expect(host.chatMessages[1]).toBe(output);
+  expect(getChatSessionProjection(host).entries.filter((entry) => entry.localOutput)).toHaveLength(
+    1,
+  );
+});
+
+it.each(["older", "newer"] as const)(
+  "preserves original reader-packet custody when %s admission changes only its adjacent edge",
+  (direction) => {
+    const readerRows = Array.from({ length: 401 }, (_, index) => ({
+      role: "assistant",
+      content: `fragment-${index}`,
+      __openclaw: { seq: index < 200 ? 100 : 101 },
+    }));
+    const readerPacket = prepareChatHistoryPacket(
+      readerRows,
+      { hasMore: true, olderCursor: "opaque-before-reader" },
+      "opaque-after-reader",
+    );
+    expect(readerPacket.boundedPacket).toBe(true);
+    const neighbors = Array.from({ length: 7 }, (_, index) => durable(index + 1));
+    const discarded = durable(200);
+    const retained =
+      direction === "older" ? [...neighbors, ...readerRows] : [...readerRows, ...neighbors];
+    const messages = direction === "older" ? [...retained, discarded] : [discarded, ...retained];
+    const neighborPackets = neighbors.map((message) =>
+      prepareChatHistoryPacket([message], { hasMore: true }),
+    );
+    const discardedPacket = prepareChatHistoryPacket([discarded], { hasMore: true });
+    const segments =
+      direction === "older"
+        ? [...neighborPackets, readerPacket, discardedPacket]
+        : [discardedPacket, readerPacket, ...neighborPackets];
+
+    const admitted = selectChatHistoryResidency(
+      messages,
+      { hasMore: true, segments },
+      direction,
+      "seq:101",
+    );
+
+    expect(admitted.withinBudget).toBe(true);
+    expect(admitted.messages).toEqual(retained);
+    expect(admitted.pagination.segments).toHaveLength(8);
+    expect(
+      admitted.pagination.segments?.find((segment) => segment.sources.includes("seq:101")),
+    ).toMatchObject({
+      sources: readerPacket.sources,
+      boundedPacket: true,
+      olderCursor: "opaque-before-reader",
+      newerCursor: "opaque-after-reader",
+    });
+  },
+);

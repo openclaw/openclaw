@@ -148,6 +148,13 @@ export function completeTranscriptLayout(owner: TranscriptLayoutRestoreHost): vo
   if (!owner.isConnected() || owner.virtualizer.scrollElement !== owner.scrollElement) {
     return;
   }
+  // A recorded manual command owns the next frame; an older bookmark must not
+  // reclaim the reader and cancel that command while its history read settles.
+  if (owner.callbacks.hasPendingScrollCommand?.()) {
+    owner.bookmarkState.bookmark = undefined;
+    owner.bookmarkState.pending = false;
+    owner.offsetState.pendingScrollOffset = null;
+  }
   const bookmark = owner.bookmarkState.bookmark;
   if (bookmark) {
     const sessionId = owner.callbacks.getSessionId?.();
@@ -176,7 +183,9 @@ export function completeTranscriptLayout(owner: TranscriptLayoutRestoreHost): vo
         void (
           owner.callbacks.restoreBookmark?.(
             bookmark,
-            () => owner.bookmarkState.bookmark === bookmark,
+            () =>
+              owner.bookmarkState.bookmark === bookmark &&
+              !owner.callbacks.hasPendingScrollCommand?.(),
           ) ?? Promise.resolve(false)
         ).then((restored) => {
           if (owner.bookmarkState.bookmark === bookmark) {

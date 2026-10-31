@@ -1,16 +1,111 @@
+import type { SessionProjectionScope } from "@openclaw/gateway-client/browser";
+import { t } from "../../i18n/index.ts";
+import {
+  nativeHistoryMessageSourceId,
+  nativeHistoryMessageSourceIdentity,
+} from "../../lib/chat/history-message-identity.ts";
 import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import { CHAT_HISTORY_REQUEST_LIMIT } from "./chat-history-request-params.ts";
 import { requestOlderChatHistoryPage } from "./chat-history-request.ts";
 import {
   type ChatHistoryResult,
+  type ObservedChatHistoryResult,
   historySessionId,
   prepareChatHistoryPages,
   resolveChatHistoryPagination,
 } from "./chat-history-snapshot.ts";
 import { MAX_RESIDENT_SEGMENTS, prepareChatHistoryPacket } from "./chat-history-window.ts";
 import type { ChatState } from "./chat-state-contract.ts";
-import { readChatLocalOutputs } from "./history-merge.ts";
+import {
+  getChatSessionProjection,
+  ownsChatSessionProjectionScope,
+  readChatLocalOutputs,
+} from "./history-merge.ts";
+import { hasPendingManualChatScroll } from "./scroll.ts";
+
+type HeldHistoryContinuity = {
+  scope: SessionProjectionScope & { sessionId: string; activeLeafEntryId: string };
+  cursor: string;
+  source: string;
+  messageId: string;
+};
+
+/** Capture only the accepted scope and native reader identity, never held bodies. */
+export function captureHeldHistoryContinuity(
+  state: ChatState,
+  cursor: string,
+): HeldHistoryContinuity | undefined {
+  const source = state.readTranscriptAnchorSource?.();
+  if (!state.chatHistoryPagination.hasNewer || !source || hasPendingManualChatScroll(state)) {
+    return undefined;
+  }
+  const messageId = nativeHistoryMessageSourceId(
+    state.chatMessages.find((message) => nativeHistoryMessageSourceIdentity(message) === source),
+  );
+  const scope = getChatSessionProjection(state).scope;
+  const { sessionId, activeLeafEntryId } = scope;
+  return messageId && sessionId && activeLeafEntryId
+    ? { scope: { ...scope, sessionId, activeLeafEntryId }, cursor, source, messageId }
+    : undefined;
+}
+
+/** Only a fresh selected packet may replace a detached window after Stop. */
+export async function readContinuousHeldHistory(
+  state: ChatState,
+  client: NonNullable<ChatState["client"]>,
+  sessionKey: string,
+  requestAgentId: string | undefined,
+  predecessor: HeldHistoryContinuity,
+  observation: ObservedChatHistoryResult["observation"],
+  isCurrent: () => boolean,
+  signal: AbortSignal,
+) {
+  const ownsReader = () =>
+    isCurrent() &&
+    !hasPendingManualChatScroll(state) &&
+    state.readTranscriptAnchorSource?.() === predecessor.source &&
+    ownsChatSessionProjectionScope(state, predecessor.scope);
+  if (!ownsReader()) {
+    return undefined;
+  }
+  const continuity = {
+    cursor: predecessor.cursor,
+    activeLeafEntryId: predecessor.scope.activeLeafEntryId,
+  };
+  const page = await requestOlderChatHistoryPage(
+    client,
+    sessionKey,
+    requestAgentId,
+    { messageId: predecessor.messageId, sessionId: predecessor.scope.sessionId, continuity },
+    ownsReader,
+    signal,
+  );
+  if (!ownsReader()) {
+    return undefined;
+  }
+  if (
+    page.windowReset ||
+    historySessionId(page) !== predecessor.scope.sessionId ||
+    page.continuity?.cursor !== continuity.cursor ||
+    page.continuity.activeLeafEntryId !== continuity.activeLeafEntryId ||
+    !page.continuity.accepted ||
+    !page.deltaCursor ||
+    !Object.hasOwn(page.sessionInfo ?? {}, "activeLeafEntryId") ||
+    !page.messages?.some(
+      (message) => nativeHistoryMessageSourceIdentity(message) === predecessor.source,
+    )
+  ) {
+    // A later around read cannot validate the earlier tail's bodies. Keep the
+    // failed held view visible; Latest owns an explicit fresh-window recovery.
+    throw new Error(t("chat.messages.originalUnavailable"));
+  }
+  return {
+    result: { ...page, observation },
+    scope: predecessor.scope,
+    ownsReader,
+  };
+}
 
 /** A Stop reset may cut a transcript held from its start. Only fresh server
  * packets can refill it; larger gaps keep their lazy, authoritative boundary. */

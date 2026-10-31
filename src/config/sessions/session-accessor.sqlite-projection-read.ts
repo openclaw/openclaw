@@ -13,6 +13,7 @@ import type { EngineConnection } from "../../infra/sql-connection.js";
 import { captureSqliteReaderOwner } from "../../infra/sqlite-reader-lifecycle.js";
 import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
+import type { TranscriptReadContinuityResult } from "../../sessions/transcript-anchor-page.js";
 import type { TranscriptReadWindow } from "../../sessions/transcript-read-window.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -86,6 +87,7 @@ export type SessionTranscriptMessageEventPage = {
   omittedOversized?: boolean;
   activeLeafEntryId?: string | null;
   deltaCursor?: string;
+  continuity?: TranscriptReadContinuityResult;
   displaySource?: string;
   readWindow?: TranscriptReadWindow;
   windowReset?: boolean;

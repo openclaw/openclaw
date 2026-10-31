@@ -6,6 +6,7 @@ import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coerci
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ChatInputReceipts,
+  ChatHistoryParams,
   ChatPendingInputsPage,
   ChatHistoryActivity,
   ChatHistoryDeltaResult as ProtocolChatHistoryDeltaResult,
@@ -59,6 +60,7 @@ export type ChatHistoryResult = {
   pendingInputs?: ChatPendingInputsPage;
   inputReceipts?: ChatInputReceipts;
   deltaCursor?: string;
+  continuity?: NonNullable<ChatHistoryParams["continuity"]> & { accepted: boolean };
   windowReset?: boolean;
   messages?: Array<unknown>;
   offset?: number;

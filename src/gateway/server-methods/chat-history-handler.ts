@@ -43,7 +43,6 @@ import { readPreparedGatewayModelMetadata } from "../server-model-catalog-view.j
 import { registerDeflatedSegment } from "../server/ws-compression.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import { prepareSessionFastModePresentation } from "../session-fast-mode-presentation.js";
-import { resolveSessionHistoryUnavailableMessage } from "../session-history-error.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
 import { prepareProjectedSessionPresentation } from "../session-row-presentation.js";
@@ -56,6 +55,7 @@ import { readChatHistoryDelta } from "./chat-history-delta.js";
 import { readChatHistoryPage } from "./chat-history-pages.js";
 import {
   resolveEmbeddedAgentRunRecoverySnapshot,
+  respondChatHistoryReadError,
   respondChatHistoryUnavailable,
   type ChatHistoryMethod,
 } from "./chat-history-recovery.js";
@@ -103,6 +103,7 @@ export async function handleChatHistoryRequest({
     maxBytes,
     pendingBefore,
     inputRunIds,
+    continuity,
   } = params;
   const pageCursor = decodeChatHistoryPageCursor(cursor);
   const includePluginSteering = client?.connect.client?.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
@@ -130,17 +131,11 @@ export async function handleChatHistoryRequest({
     agentIdOverride: normalizeOptionalString(params.agentId),
     requestedSessionId,
     retainedSessionId,
+    requireCurrentSession: Boolean(continuity),
   });
   if (!selection) {
     return;
   }
-  const respondReadError = (error: unknown) => {
-    const message = resolveSessionHistoryUnavailableMessage(error);
-    if (message === undefined) {
-      throw error;
-    }
-    respondChatHistoryUnavailable(method, respond, message);
-  };
   try {
     const {
       selectedSession,
@@ -267,6 +262,7 @@ export async function handleChatHistoryRequest({
                     offset,
                     messageId,
                     ...(pageCursor ? { pageCursor } : {}),
+                    ...(continuity ? { continuity } : {}),
                   },
                   signal,
                 ),
@@ -281,7 +277,7 @@ export async function handleChatHistoryRequest({
               },
             );
     } catch (error) {
-      respondReadError(error);
+      respondChatHistoryReadError(method, respond, error);
       return;
     }
     if (historyPage.encodedResponse && historyPage.encodedMessagesDeflate) {
@@ -550,7 +546,7 @@ export async function handleChatHistoryRequest({
               signal,
             );
           } catch (error) {
-            respondReadError(error);
+            respondChatHistoryReadError(method, respond, error);
             return undefined;
           }
           return withReadySessionRows(rowProjection, queries, (publicationRead) => {
@@ -611,6 +607,7 @@ export async function handleChatHistoryRequest({
         pendingInputs,
         ...(inputReceipts ? { inputReceipts, inputConsumptions } : {}),
         ...(historyPage.deltaCursor ? { deltaCursor: historyPage.deltaCursor } : {}),
+        ...(historyPage.continuity ? { continuity: historyPage.continuity } : {}),
         ...(historyPage.windowReset ? { windowReset: true } : {}),
         ...(historyPage.responseOffset !== undefined ? { offset: historyPage.responseOffset } : {}),
         defaults,

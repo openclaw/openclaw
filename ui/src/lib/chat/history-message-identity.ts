@@ -133,7 +133,7 @@ export function prependUniqueNativeMessages(messages: unknown[], current: unknow
     // Live receipts may already occupy an interior source of this server page.
     // Insert disjoint sources after that observed group, keeping current objects
     // and the existing extra-occurrence policy for overlapping projections.
-    const position = source && overlap === undefined ? after : 0;
+    const position = overlap === undefined ? after : 0;
     const queued = insertions.get(position) ?? [];
     queued.push(message);
     insertions.set(position, queued);

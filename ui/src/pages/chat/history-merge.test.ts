@@ -8,6 +8,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import { chatOutboxDeliveryKey } from "../../lib/chat/outbox-store.ts";
+import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
+import { prepareChatHistoryPacket } from "./chat-history-window.ts";
 import {
   admitChatSubmission,
   getChatRunOwner,
@@ -504,3 +506,32 @@ it.each(["page", "receipt", "custody-first"] as const)(
     expect(admitChatSubmission(owner, undefined, delivered)).toBe(false);
   },
 );
+
+it("retires native coverage at the canonical direct session-reset boundary", () => {
+  const row = persistedMessage("assistant", "Old transcript", "old-source", 1);
+  const packet = prepareChatHistoryPacket(
+    [row],
+    { hasMore: true, olderCursor: "old-before" },
+    "old-after",
+  );
+  expect(packet.boundedPacket).toBe(true);
+  const owner = {
+    ...emptyPane(),
+    chatMessages: [row],
+    chatHistoryPagination: {
+      hasMore: true,
+      olderCursor: "old-before",
+      hasNewer: true,
+      newerCursor: "old-after",
+      segments: [packet],
+    } satisfies ChatHistoryPagination,
+  };
+  projectionFor(owner);
+  reduceChat(owner, { type: "localOutput", message: { role: "system", content: "Local result" } });
+
+  reduceChat(owner, { type: "sessionReset" });
+
+  expect(owner.chatMessages).toEqual([]);
+  expect(owner.chatHistoryPagination).toEqual({ hasMore: false });
+  expect(projectionFor(owner).entries).toEqual([]);
+});

@@ -362,7 +362,14 @@ export async function requestChatSessionSnapshot(
 
 type OlderHistorySelector =
   | { cursor: string; limit?: 1 }
-  | { messageId: string; sessionId: string };
+  | {
+      messageId: string;
+      sessionId: string;
+      continuity?: Pick<
+        NonNullable<ChatHistoryResult["continuity"]>,
+        "cursor" | "activeLeafEntryId"
+      >;
+    };
 
 export function chatHistoryPageSelector(
   state: ChatState,
@@ -410,7 +417,7 @@ export async function requestOlderChatHistoryPage(
             sessionKey,
             toolResultMaxChars: CHAT_HISTORY_TOOL_RESULT_MAX_CHARS,
             ...(requestAgentId ? { agentId: requestAgentId } : {}),
-            limit: "messageId" in selector ? 1 : CHAT_HISTORY_REQUEST_LIMIT,
+            limit: "messageId" in selector && !selector.continuity ? 1 : CHAT_HISTORY_REQUEST_LIMIT,
             maxBytes: CHAT_HISTORY_REQUEST_MAX_BYTES,
             ...selector,
           },
