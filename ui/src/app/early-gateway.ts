@@ -49,7 +49,7 @@ export function startEarlyApplicationGateway(
       },
     };
   }
-  if (route?.kind !== "literal" || route.namespace !== "chat") {
+  if (route?.kind !== "literal") {
     return undefined;
   }
   const credentials = createGatewayCredentials(true);
