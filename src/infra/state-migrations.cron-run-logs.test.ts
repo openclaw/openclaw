@@ -117,8 +117,8 @@ it("preserves legacy cron history on runtime refusal, then Doctor imports it onc
         [5, "cron:legacy-history-job:4000:mirrored"],
       ]);
       expect(ledgerEntries.map(publicFields)).toEqual(
-        entries.map((entry, index) =>
-          publicFields({ ...entry, runId: entry.runId ?? receiptBackedRunIds.get(index) }),
+        entries.map((logEntry, index) =>
+          publicFields({ ...logEntry, runId: logEntry.runId ?? receiptBackedRunIds.get(index) }),
         ),
       );
       expect(
