@@ -229,6 +229,8 @@ export async function persistCliSessionBindingResult(
     result: EmbeddedAgentRunResult;
     expectedSession?: InternalSessionEntry;
     preserveBinding?: boolean;
+    /** Native session this turn admitted; settlement must not resurrect a cleared or replaced binding. */
+    admittedBindingSessionId?: string;
     assertSettlementCurrent: SessionSourceAssertion;
     abortSignal?: AbortSignal;
   },
@@ -246,6 +248,22 @@ export async function persistCliSessionBindingResult(
       update: (entry) => {
         const meta = params.result.meta.agentMeta;
         if (!params.preserveBinding) {
+          // Never resurrect continuity another writer cleared or replaced mid-turn. The turn owns
+          // the session it admitted and any fork successor it published before settlement.
+          const resultSessionId = meta?.cliSessionBinding?.sessionId;
+          const expectedSessionId = getCliSessionBinding(
+            expectedSession,
+            params.provider,
+          )?.sessionId;
+          if (
+            meta?.clearCliSessionBinding !== true &&
+            resultSessionId !== undefined &&
+            (resultSessionId === params.admittedBindingSessionId ||
+              (expectedSessionId !== undefined && resultSessionId === expectedSessionId)) &&
+            getCliSessionBinding(entry, params.provider)?.sessionId !== resultSessionId
+          ) {
+            return false;
+          }
           return applyCliSessionBindingResult(entry, params.provider, meta);
         }
         const binding = getCliSessionBinding(entry, params.provider);

@@ -69,10 +69,12 @@ export function withAdmittedCliCandidate(
       ) {
         throw createAgentRunSupersededAbortError();
       }
+      // Settlement owns only the binding this turn admitted; a later clear or replace wins.
+      const admittedBinding = getCliSessionBinding(sessionEntry, params.provider);
       return run({
         // History preparation publishes its writer into this candidate's working row.
         sessionEntry: sessionEntry ? { ...sessionEntry } : undefined,
-        cliSessionBinding: getCliSessionBinding(sessionEntry, params.provider),
+        cliSessionBinding: admittedBinding,
         assertSettlementCurrent,
         settleResult: async ({ result, expectedSession, sessionStore, preserveBinding }) => {
           const classification = params.classifyResult?.(result);
@@ -88,6 +90,7 @@ export function withAdmittedCliCandidate(
             expectedSession,
             sessionStore,
             preserveBinding,
+            admittedBindingSessionId: admittedBinding?.sessionId,
             assertSettlementCurrent,
             abortSignal: params.admission?.abortSignal,
           });

@@ -142,6 +142,59 @@ it.for(["publish", "clear"] as const)(
   },
 );
 
+it("keeps a native binding another writer cleared or replaced mid-turn", async ({ f }) => {
+  const { sessionKey } = f.target;
+  await f.seed(boundEntry("native-session-1"));
+  const admitted = f.sessionStore[sessionKey];
+  const settle = () =>
+    f.publish(nativeResult("native-session-1"), {
+      expectedSession: admitted,
+      admittedBindingSessionId: "native-session-1",
+    });
+
+  await f.clear({ expectedCliSessionId: "native-session-1" });
+  await settle();
+  expect(getCliSessionBinding(f.read(), "claude-cli")).toBeUndefined();
+
+  await f.seed(boundEntry("native-session-2"));
+  await settle();
+  expect(getCliSessionBinding(f.read(), "claude-cli")?.sessionId).toBe("native-session-2");
+});
+
+it.for(["cleared", "replaced"] as const)(
+  "keeps a published fork successor another writer %s mid-turn",
+  async (operation, { f }) => {
+    const { storePath, sessionKey } = f.target;
+    await f.seed(boundEntry("native-session-1"));
+    // The fork callback publishes successor native-session-2 and the working expected entry follows it.
+    await f
+      .fork({ expectedCliSessionId: "native-session-1" })
+      .persistCliSessionForkSuccessor("native-session-2");
+    const working = structuredClone(f.read()!);
+    f.sessionStore[sessionKey] = working;
+
+    // A separate writer clears or replaces that published successor on the durable row.
+    const {
+      cliSessionBindings: _bindings,
+      cliSessionIds: _ids,
+      claudeCliSessionId: _legacyId,
+      ...cleared
+    } = working;
+    await replaceSessionEntry(
+      { storePath, sessionKey },
+      operation === "cleared" ? cleared : boundEntry("native-session-3"),
+    );
+
+    await f.publish(nativeResult("native-session-2"), {
+      expectedSession: working,
+      admittedBindingSessionId: "native-session-1",
+    });
+    expect(getCliSessionBinding(f.read(), "claude-cli")?.sessionId).toBe(
+      operation === "cleared" ? undefined : "native-session-3",
+    );
+  },
+);
+
 it.for([
   ["successful", {}, "failed"],
   [
