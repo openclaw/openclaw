@@ -1,5 +1,14 @@
 import type { NodePermissionDetails } from "../../packages/gateway-protocol/src/node-permissions.js";
+import { EXEC_AUTO_REVIEW_DENIAL_GUIDANCE } from "../infra/exec-auto-review.js";
 import type { ExecEventPayload } from "./invoke-types.js";
+
+export const APPROVAL_SCRIPT_OPERAND_BINDING_DENIED_MESSAGE =
+  "SYSTEM_RUN_DENIED: approval missing script operand binding";
+export const APPROVAL_STATE_WRITE_FAILED_MESSAGE =
+  "SYSTEM_RUN_DENIED: approval state could not be persisted";
+
+const EXEC_SECURITY_POLICY_DENIAL_GUIDANCE =
+  "Execution is disabled by policy. Do not attempt to bypass or work around this restriction. Ask the operator to change the exec security policy if this command is required.";
 
 export type SystemRunInvokeResult = {
   ok: boolean;
@@ -41,6 +50,20 @@ export function normalizeDeniedReason(reason: string | null | undefined): System
     default:
       return "approval-required";
   }
+}
+
+export function appendExecDenialGuidance(
+  message: string,
+  reason: string | null | undefined,
+): string {
+  const normalizedReason = normalizeDeniedReason(reason);
+  const guidance =
+    normalizedReason === "security=deny"
+      ? EXEC_SECURITY_POLICY_DENIAL_GUIDANCE
+      : normalizedReason === "allowlist-miss"
+        ? EXEC_AUTO_REVIEW_DENIAL_GUIDANCE
+        : undefined;
+  return guidance && !message.includes(guidance) ? `${message}\n${guidance}` : message;
 }
 
 export async function sendSystemRunDenied(
