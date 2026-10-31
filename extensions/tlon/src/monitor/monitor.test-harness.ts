@@ -51,9 +51,6 @@ const {
       dmScope: "main",
       sessionKey: "agent:main:main",
     })),
-    resolveEffectiveMessagesConfig: vi.fn((_cfg: OpenClawConfig, _agentId: string) => ({
-      responsePrefix: undefined as string | undefined,
-    })),
     shouldComputeCommandAuthorized: vi.fn(() => false),
   },
   settingsManagerMock: {
@@ -132,9 +129,6 @@ vi.mock("../runtime.js", async (importOriginal) => ({
         },
         buildContext: inboundRuntimeMock.buildContext,
         dispatch: inboundRuntimeMock.dispatch,
-      },
-      reply: {
-        resolveEffectiveMessagesConfig: inboundRuntimeMock.resolveEffectiveMessagesConfig,
       },
       routing: {
         resolveAgentRoute: inboundRuntimeMock.resolveAgentRoute,
@@ -271,9 +265,6 @@ export function useTlonMonitorFixture() {
     formatInboundMediaUnavailableTextMock.mockReturnValue("formatted-inbound-body");
     inboundRuntimeMock.buildContext.mockReset().mockReturnValue(builtInboundContextPayload);
     inboundRuntimeMock.dispatch.mockReset().mockResolvedValue(undefined);
-    inboundRuntimeMock.resolveEffectiveMessagesConfig
-      .mockReset()
-      .mockReturnValue({ responsePrefix: undefined });
     ingressMock.receive.mockReset().mockResolvedValue({ kind: "accepted" });
   });
 
