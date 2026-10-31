@@ -1,4 +1,5 @@
 import type { ResolvedProviderAuth } from "../agents/model-auth-runtime-shared.js";
+import { getModelProviderRequestTransport } from "../agents/provider-request-config.js";
 import type { ModelProviderRequestTransportOverrides } from "../agents/provider-request-config.types.js";
 import type { DecisionExecutionContext, DecisionReasoning } from "../decisions/execution-types.js";
 import {
@@ -9,8 +10,7 @@ import {
 import type { DecisionProviderV2 } from "../decisions/provider-types.js";
 import type { DecisionBatchV2, ProviderDecisionOutcomeV2 } from "../decisions/types-v2.js";
 import type { ModelRequestHeaders } from "../llm/types.js";
-import { getModelProviderRequestTransport } from "./agent-harness-runtime.js";
-import { buildTimeoutAbortSignal } from "./extension-shared.js";
+import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
 import {
   shouldUseEnvHttpProxyForUrl,
   withTrustedEnvProxyGuardedFetchMode,

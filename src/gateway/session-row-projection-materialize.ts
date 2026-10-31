@@ -9,6 +9,7 @@ import {
   getSessionActorStorageBinding,
   runWithSessionActorStorage,
 } from "../config/sessions/session-actor-storage-binding.js";
+import { PluginInstanceUnavailableError } from "../plugins/plugin-instance-error.js";
 import { getProviderRegistryIndex } from "../plugins/provider-registry-index.js";
 import {
   getPluginRegistryForContext,
@@ -26,7 +27,7 @@ import {
   prepareSessionRowModelSearch,
   readSessionRowModelFacts,
 } from "./session-row-model-facts.js";
-import { SessionRowFactsPending } from "./session-row-prepared-read.js";
+import { SessionRowCatalogPending, SessionRowFactsPending } from "./session-row-prepared-read.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
 import { createSessionRowCapabilityReader } from "./session-row-projection-identities.js";
 import * as records from "./session-row-projection-record.js";
@@ -338,43 +339,52 @@ export function readResidentSessionRow(
   if (!databaseFacts) {
     throw new Error("Session rows require prepared database facts");
   }
-  const { inputs, presentation } = readSessionRowInputs({
-    key: row.key,
-    agentId: row.agentId,
-    entry: row.entry,
-    cfg,
-    preparedAcpMeta: databaseFacts.acpMeta,
-    preparedRuntimeOwnership: databaseFacts.runtimeOwnership,
-    runtimeResolution,
-    preparedModelMetadata: readPreparedGatewayModelMetadata(cfg),
-    preparedRepositoryWorkspace: databaseFacts.repositoryWorkspace,
-    configuredAgentIds: params.configuredAgentIds,
-    store: prepared?.entries ?? {},
-    storePath: row.storeTarget.storePath,
-    storeAgentId: row.storeTarget.agentId,
-    // Cache stored fallback facts independently of the live activity chosen at presentation.
-    active: prepared ? undefined : false,
-    activeModel: prepared ? undefined : (row.fallbackModel ?? null),
-    terminalModel: prepared ? (prepared.terminalModel ?? null) : undefined,
-    modelCatalog: params.modelCatalog,
-    modelSource: {
-      entry: row.storedEntry,
-      readSourceEntry: prepared ? (key) => prepared.entries[key] : params.readSourceEntry,
-    },
-    rowContext: context,
-    preparedTitle: {
-      derivedTitle: deriveSessionTitle(
-        row.entry,
-        prepared?.titleFields?.firstUserMessage,
-        resolveGatewaySessionDisplayName(row.key, row.entry),
-      ),
-      lastMessagePreview: prepared?.titleFields?.lastMessagePreview ?? row.lastMessagePreview,
-      lastAssistantMessage: row.lastAssistantMessage,
-    },
-    skipTranscriptUsageFallback: true,
-    includeSwarmChildren: true,
-    childLinks: prepared ? undefined : params.links,
-  });
+  let read: ReturnType<typeof readSessionRowInputs>;
+  try {
+    read = readSessionRowInputs({
+      key: row.key,
+      agentId: row.agentId,
+      entry: row.entry,
+      cfg,
+      preparedAcpMeta: databaseFacts.acpMeta,
+      preparedRuntimeOwnership: databaseFacts.runtimeOwnership,
+      runtimeResolution,
+      preparedModelMetadata: readPreparedGatewayModelMetadata(cfg),
+      preparedRepositoryWorkspace: databaseFacts.repositoryWorkspace,
+      configuredAgentIds: params.configuredAgentIds,
+      store: prepared?.entries ?? {},
+      storePath: row.storeTarget.storePath,
+      storeAgentId: row.storeTarget.agentId,
+      // Cache stored fallback facts independently of the live activity chosen at presentation.
+      active: prepared ? undefined : false,
+      activeModel: prepared ? undefined : (row.fallbackModel ?? null),
+      terminalModel: prepared ? (prepared.terminalModel ?? null) : undefined,
+      modelCatalog: params.modelCatalog,
+      modelSource: {
+        entry: row.storedEntry,
+        readSourceEntry: prepared ? (key) => prepared.entries[key] : params.readSourceEntry,
+      },
+      rowContext: context,
+      preparedTitle: {
+        derivedTitle: deriveSessionTitle(
+          row.entry,
+          prepared?.titleFields?.firstUserMessage,
+          resolveGatewaySessionDisplayName(row.key, row.entry),
+        ),
+        lastMessagePreview: prepared?.titleFields?.lastMessagePreview ?? row.lastMessagePreview,
+        lastAssistantMessage: row.lastAssistantMessage,
+      },
+      skipTranscriptUsageFallback: true,
+      includeSwarmChildren: true,
+      childLinks: prepared ? undefined : params.links,
+    });
+  } catch (error) {
+    if (error instanceof PluginInstanceUnavailableError) {
+      throw new SessionRowCatalogPending();
+    }
+    throw error;
+  }
+  const { inputs, presentation } = read;
   inputs.subagentRunInputs = params.subagentInputs;
   const members = params.membership;
   const membership =

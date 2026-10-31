@@ -159,12 +159,6 @@ export function readPluginCohortRecoveryInDatabase(
     : undefined;
 }
 
-export function inspectPluginCohortRecoveries(
-  options: OpenClawStateDatabaseOptions = {},
-): PluginCohortRecoveryPair[] {
-  return withUpdateRunRead(({ db }) => inspectPluginCohortRecoveryRows(db), options) ?? [];
-}
-
 /** Runtime consumers retain the existing read worker and its selected database admission. */
 export async function inspectPluginCohortRecoveriesAsync(
   options: OpenClawStateDatabaseOptions = {},

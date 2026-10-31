@@ -26,37 +26,9 @@ const ENVIRONMENT_INPUTS = [
   "scripts/testbox-lease-freshness.mts",
 ];
 
-function optionValue(args: readonly string[], name: string, fallback = "") {
-  const shortName = name.replace(/^--/u, "-");
-  let value = fallback;
-  for (const [index, argument = ""] of args.entries()) {
-    if (argument === "--") {
-      break;
-    }
-    if (argument === name || argument === shortName) {
-      value = args[index + 1] ?? fallback;
-    }
-    if (argument.startsWith(`${name}=`) || argument.startsWith(`${shortName}=`)) {
-      value = argument.slice(argument.indexOf("=") + 1);
-    }
-  }
-  return value;
-}
-
-function booleanOption(args: readonly string[], name: string) {
-  let enabled = false;
-  for (const arg of args) {
-    if (arg === "--") {
-      break;
-    }
-    if (arg === `--${name}` || arg === `-${name}`) {
-      enabled = true;
-    } else if (arg.startsWith(`--${name}=`) || arg.startsWith(`-${name}=`)) {
-      // Match Go flag/strconv.ParseBool, including its last-occurrence rule.
-      enabled = ["1", "t", "T", "TRUE", "true", "True"].includes(arg.slice(arg.indexOf("=") + 1));
-    }
-  }
-  return enabled;
+function booleanOption(options: ReadonlyMap<string, string>, name: string) {
+  // Go's native parser owns validation; preserve its accepted true tokens here.
+  return ["1", "t", "T", "TRUE", "true", "True"].includes(options.get(name) ?? "");
 }
 
 function git(repoRoot: string, args: readonly string[]) {
@@ -95,10 +67,10 @@ function digest(value: string) {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function taskIdentity(args: readonly string[], env: NodeJS.ProcessEnv) {
+function taskIdentity(options: ReadonlyMap<string, string>, env: NodeJS.ProcessEnv) {
   // These identify a caller session, not a shell/pane that can outlive a task.
   // An explicit label narrows a long-running session to one named task.
-  const label = optionValue(args, "--label");
+  const label = options.get("label") ?? "";
   const caller = env.CODEX_THREAD_ID
     ? "codex"
     : env.CLAUDE_CODE_SESSION_ID
@@ -120,14 +92,10 @@ function taskIdentity(args: readonly string[], env: NodeJS.ProcessEnv) {
 
 function buildTestboxLeaseFingerprint(
   repoRoot: string,
-  args: readonly string[],
+  options: ReadonlyMap<string, string>,
   env: NodeJS.ProcessEnv,
 ) {
-  const workflow = optionValue(
-    args,
-    "--blacksmith-workflow",
-    ".github/workflows/ci-check-testbox.yml",
-  );
+  const workflow = options.get("blacksmith-workflow") ?? ".github/workflows/ci-check-testbox.yml";
   let baseSha;
   try {
     baseSha = git(repoRoot, ["merge-base", "HEAD", "refs/remotes/origin/main"]);
@@ -136,7 +104,7 @@ function buildTestboxLeaseFingerprint(
   }
   return {
     version: STATE_VERSION,
-    ...taskIdentity(args, env),
+    ...taskIdentity(options, env),
     checkoutKey: digest(realpathSync(repoRoot)),
     baseSha,
     headSha: git(repoRoot, ["rev-parse", "HEAD"]),
@@ -160,8 +128,8 @@ function buildTestboxLeaseFingerprint(
       ...(workflow ? [workflow] : []),
     ]),
     workflow,
-    job: optionValue(args, "--blacksmith-job", "check"),
-    ref: optionValue(args, "--blacksmith-ref", "main"),
+    job: options.get("blacksmith-job") ?? "check",
+    ref: options.get("blacksmith-ref") ?? "main",
   };
 }
 
@@ -209,20 +177,22 @@ function assertAllocationReceipt(stateDir: string, id: string, current: unknown)
 }
 
 export function prepareTestboxLeaseFreshness({
-  args,
-  command = args,
+  operation,
+  options,
+  command,
   env,
   provider,
   repoRoot,
 }: {
-  args: readonly string[];
-  command?: readonly string[];
+  operation: string;
+  options: ReadonlyMap<string, string>;
+  command: readonly string[];
   env: NodeJS.ProcessEnv;
   provider: string;
   repoRoot: string;
 }) {
-  const id = optionValue(args, "--id");
-  if (provider !== "blacksmith-testbox" || !["run", "warmup"].includes(args[0] ?? "")) {
+  const id = options.get("id") ?? "";
+  if (provider !== "blacksmith-testbox" || !["run", "warmup"].includes(operation)) {
     return null;
   }
   const configuredStateDir = env.OPENCLAW_TESTBOX_LEASE_STATE_DIR?.trim();
@@ -230,13 +200,13 @@ export function prepareTestboxLeaseFreshness({
     return null;
   }
   const stateDir = resolve(configuredStateDir || resolve(repoRoot, ".crabbox", "testbox-leases"));
-  const current = buildTestboxLeaseFingerprint(repoRoot, args, env);
+  const current = buildTestboxLeaseFingerprint(repoRoot, options, env);
   if (id && !/^tbx_[a-zA-Z0-9_-]+$/u.test(id)) {
     throw new Error("Testbox reuse requires an exact tbx_ lease id");
   }
-  const keep = booleanOption(args, "keep");
-  const keepOnFailure = booleanOption(args, "keep-on-failure");
-  if (!current.taskKey && (id || args[0] === "warmup" || keep || keepOnFailure)) {
+  const keep = booleanOption(options, "keep");
+  const keepOnFailure = booleanOption(options, "keep-on-failure");
+  if (!current.taskKey && (id || operation === "warmup" || keep || keepOnFailure)) {
     throw new Error(
       "Reusable Testboxes need a caller session or task label. Start with run --keep --label <unique-task-name>, reuse that label on each run, then stop the lease",
     );
@@ -246,7 +216,7 @@ export function prepareTestboxLeaseFreshness({
     current,
     stateDir,
     id,
-    retained: args[0] === "warmup" || keep || Boolean(id),
+    retained: operation === "warmup" || keep || Boolean(id),
     keepOnFailure,
     assertCurrent() {
       assertAllocationReceipt(stateDir, id, current);
@@ -254,10 +224,10 @@ export function prepareTestboxLeaseFreshness({
     attribution: {
       ...current,
       commandKey: digest(JSON.stringify(command)),
-      operation: args[0],
-      requestedIdleTimeout: optionValue(args, "--idle-timeout") || undefined,
+      operation,
+      requestedIdleTimeout: options.get("idle-timeout") || undefined,
       // TTL is a request only: the delegated Blacksmith provider does not enforce it.
-      requestedTtl: optionValue(args, "--ttl") || undefined,
+      requestedTtl: options.get("ttl") || undefined,
     },
   };
 }

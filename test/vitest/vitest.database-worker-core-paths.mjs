@@ -1117,6 +1117,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/system-agent/setup-inference.provider-install-owner.test.ts",
   "src/system-agent/setup-inference.groq-external.integration.test.ts",
   "src/system-agent/setup-inference-activate.test.ts",
+  "src/system-agent/setup-inference-activate.utility.test.ts",
   "src/system-agent/setup-inference-detect.lifecycle.test.ts",
   "src/wizard/setup.inference-recovery.integration.test.ts",
   "src/wizard/setup.test.ts",

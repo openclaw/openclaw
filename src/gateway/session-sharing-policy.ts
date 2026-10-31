@@ -518,6 +518,8 @@ export function authorizeSessionAgentRun(
   params: {
     cfg: OpenClawConfig;
     client: GatewayClient | null;
+    /** File readers reuse the admission policy with read-specific recovery guidance. */
+    sandboxRequiredMessage?: string;
     target: Pick<SessionSharingTarget, "agentId" | "canonicalKey"> & {
       entry?: Pick<SessionEntry, "sandbox">;
     };
@@ -539,7 +541,8 @@ export function authorizeSessionAgentRun(
   ) {
     return errorShape(
       ErrorCodes.FORBIDDEN,
-      `Your operator role requires a sandboxed session; create a new session instead of running in "${params.target.canonicalKey}".`,
+      params.sandboxRequiredMessage ??
+        `Your operator role requires a sandboxed session; create a new session instead of running in "${params.target.canonicalKey}".`,
     );
   }
   return null;

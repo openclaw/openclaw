@@ -18,6 +18,8 @@ import { handleCompactCommand } from "./commands-compact.js";
 import { buildPluginCommandContext } from "./commands-context.js";
 import type { CommandHandler } from "./commands-types.js";
 
+const CONSUMED_PLUGIN_COMMAND = Object.freeze({ kind: "non-plugin" as const });
+
 /**
  * Handle plugin-registered commands.
  * Returns a result if a plugin command was matched and executed,
@@ -32,6 +34,10 @@ export const handlePluginCommand: CommandHandler = async (params, allowTextComma
   const planned = (params.opts as PluginCommandExecutionReplyOptions | undefined)?.[
     PLUGIN_COMMAND_DISPATCH
   ];
+  if (planned === CONSUMED_PLUGIN_COMMAND) {
+    // The turn's plugin command already ran and continued; it still owns this command body.
+    return { shouldContinue: true };
+  }
   if (planned?.kind === "non-plugin") {
     return null;
   }
@@ -139,6 +145,10 @@ export const handlePluginCommand: CommandHandler = async (params, allowTextComma
         )
       : await execute();
   const { continueAgent, ...reply } = result;
+  if (continueAgent === true && params.opts) {
+    // This turn's plugin command already ran; later command passes of the turn must not run it again.
+    Object.assign(params.opts, { [PLUGIN_COMMAND_DISPATCH]: CONSUMED_PLUGIN_COMMAND });
+  }
 
   return {
     shouldContinue: continueAgent === true,

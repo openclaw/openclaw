@@ -25,6 +25,11 @@ export function validateDecisionBatch(batch: unknown): batch is DecisionBatch {
   if (shape === "oversized") {
     return false;
   }
+  return validateDecisionBatchShape(batch);
+}
+
+/** Internal V1 shape checks after finite JSON admission; callers retain their JSON policy. */
+export function validateDecisionBatchShape(batch: unknown): batch is DecisionBatch {
   if (
     !isPlainDecisionRecord(batch) ||
     !decisionEntry(batch.state) ||

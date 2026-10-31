@@ -395,7 +395,6 @@ function runCiChangedScopeFixture(
   writeGitHubOutput(
     detectChangedScope(changedPaths),
     outputPath,
-    undefined,
     detectNodeFastScope(changedPaths),
     shouldRunNativeI18n(changedPaths),
     changedPaths,

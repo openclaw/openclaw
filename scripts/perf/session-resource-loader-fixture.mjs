@@ -79,7 +79,7 @@ if (values["complete-gib"]) {
       originalSelectedSession: selected,
       originalPopulatedSessions: sessions.filter((session) => session.populated).length,
       fillerSessionIds: sessions
-        .filter((session) => !session.populated)
+        .filter((session) => session.session_id !== selected.session_id)
         .map((session) => session.session_id),
       startedAt: new Date().toISOString(),
       completed: false,
