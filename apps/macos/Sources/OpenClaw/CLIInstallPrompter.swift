@@ -323,6 +323,28 @@ final class CLIInstallPrompter {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
     }
 
+    /// Why the app must leave a local Gateway's version and service to another owner.
+    enum ManagedRepairExclusion: Equatable {
+        case independentlyManaged
+        case installPolicy(String)
+        case extendedStable
+    }
+
+    nonisolated static func managedRepairExclusion(
+        launchAgentUsesManagedCLI: Bool,
+        gatewayUpdateChannel: String?,
+        installPolicy: String?,
+        launchAgentWriteDisabled: Bool) -> ManagedRepairExclusion?
+    {
+        guard !launchAgentWriteDisabled, launchAgentUsesManagedCLI else { return .independentlyManaged }
+        // Exact pins make the app the Gateway version owner; channel policies
+        // leave updates to gateway update.run instead of Sparkle repair.
+        if let installPolicy, installPolicy != "exact" { return .installPolicy(installPolicy) }
+        // Extended-stable pins an intentionally older gateway; moving it to the
+        // app's newer stable version without consent keeps the prompt instead.
+        return gatewayUpdateChannel == "extended-stable" ? .extendedStable : nil
+    }
+
     /// Shared gate for auto-repair and the dashboard's native update bridge.
     /// If these drift apart, the card can route to Sparkle while the
     /// post-relaunch gateway repair refuses, stranding an old gateway.
@@ -332,14 +354,11 @@ final class CLIInstallPrompter {
         installPolicy: String?,
         launchAgentWriteDisabled: Bool) -> Bool
     {
-        guard !launchAgentWriteDisabled else { return false }
-        guard launchAgentUsesManagedCLI else { return false }
-        // Exact pins make the app the Gateway version owner; channel policies
-        // leave updates to gateway update.run instead of Sparkle repair.
-        guard installPolicy == nil || installPolicy == "exact" else { return false }
-        // Extended-stable pins an intentionally older gateway; moving it to the
-        // app's newer stable version without consent keeps the prompt instead.
-        return gatewayUpdateChannel != "extended-stable"
+        self.managedRepairExclusion(
+            launchAgentUsesManagedCLI: launchAgentUsesManagedCLI,
+            gatewayUpdateChannel: gatewayUpdateChannel,
+            installPolicy: installPolicy,
+            launchAgentWriteDisabled: launchAgentWriteDisabled) == nil
     }
 
     static func shouldAutomaticallyRepair(

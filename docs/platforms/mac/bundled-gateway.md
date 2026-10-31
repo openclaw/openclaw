@@ -95,7 +95,18 @@ credential preparation before native admission. Gateway and node startup use
 the same migration owner. When an in-place app update leaves the previous
 build's app-managed Gateway service running, that Gateway still owns the state,
 so the app stops it, prepares credentials, and then installs the service on its
-own runtime. Ordinary pending migrations and validated remounts
+own runtime. The app leaves a local Gateway on the extended-stable channel, a
+channel install policy, or an independently managed service at its selected
+version. When credential migration is required but that running Gateway still
+holds the shared state, the app leaves the Gateway running and does not
+migrate: migrating would retire the credential layout that version reads. The
+app explains which owner keeps the Gateway and offers **Retry**. Other
+credential preparation failures keep the generic recovery alert.
+Update that Gateway to the app's version or newer through its owner (for
+example `openclaw update`, or `openclaw update --channel stable` to leave
+extended-stable), then choose **Retry**. To keep the Gateway's version, install
+the matching OpenClaw app release instead. Background launches print the same
+guidance and quit. Ordinary pending migrations and validated remounts
 complete automatically without a manual Doctor command or a recovery prompt.
 A recognized credential-only native version-zero database can be
 extracted under exclusive custody before PostgreSQL bootstrap. Unknown data or
