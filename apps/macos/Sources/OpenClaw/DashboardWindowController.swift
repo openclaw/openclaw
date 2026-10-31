@@ -824,7 +824,10 @@ extension DashboardWindowController {
         let task = Task { @MainActor [weak self] in
             do {
                 try await GatewayBrowserSignInCoordinator.reconnectGateway(id: id, progress: progress)
-                // The profile-store notification replaces this document in its existing window.
+                // The profile-store notification replaces this document in its existing window. A finished
+                // attempt no longer holds focus, so the Gateways menu can reload a page the refresh skipped.
+                guard let self, self.reconnectTask?.id == attempt else { return }
+                self.reconnectTask = nil
             } catch {
                 guard let self, self.reconnectTask?.id == attempt, self.isWindowOpen else { return }
                 self.reconnectTask = nil
