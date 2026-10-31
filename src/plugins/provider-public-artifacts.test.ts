@@ -201,6 +201,41 @@ describe("provider public artifacts", () => {
     });
   });
 
+  it("loads Meta Muse thinking policy before runtime registration", () => {
+    const surface = resolveBundledProviderPolicySurface("meta");
+
+    expect(
+      surface?.resolveThinkingProfile?.({
+        provider: "meta",
+        modelId: "muse-spark-1.3",
+      }),
+    ).toEqual({
+      levels: [
+        { id: "off" },
+        { id: "minimal" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        { id: "xhigh" },
+        { id: "max" },
+      ],
+      defaultLevel: "high",
+    });
+    expect(
+      surface?.resolveThinkingProfile?.({
+        provider: "meta",
+        modelId: "muse-spark-1.3",
+        reasoning: false,
+      }),
+    ).toBeUndefined();
+    expect(
+      surface?.resolveThinkingProfile?.({
+        provider: "meta",
+        modelId: "unknown-model",
+      }),
+    ).toBeUndefined();
+  });
+
   it.each(["opencode", "opencode-go"])(
     "preserves %s effort metadata before runtime registration",
     (provider) => {
