@@ -310,6 +310,7 @@ val generateNativeI18n =
       fileTree(repositoryRoot.resolve("apps/android")) {
         include(
           "app/src/main/res/values/strings.xml",
+          "app/src/main/res/values-*/strings.xml",
           "app/src/main/res/values/assistant.xml",
           "app/src/thirdParty/res/values/accessibility_strings.xml",
           "wear/src/main/res/values/strings.xml",
