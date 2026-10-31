@@ -45,10 +45,8 @@ export function createSidebarSnapshot(host: {
   let stopGateway: (() => void) | undefined;
   let retiredHello: ApplicationGateway["snapshot"]["hello"] | undefined;
   let cancelCapture: (() => void) | undefined;
-  let handoffTimer: ReturnType<typeof setTimeout> | undefined;
   let handoffIdle: number | undefined;
   let handoffReady = false;
-  let handoffExpired = false;
 
   function subscribe(listener: () => void): () => void {
     publish = listener;
@@ -196,11 +194,7 @@ export function createSidebarSnapshot(host: {
     if (snapshot.phase !== "connected") {
       cancelHandoff();
     } else if (host.sidebarSnapshot) {
-      handoffTimer ??= setTimeout(() => {
-        handoffExpired = true;
-        releaseWhenReady();
-      }, 3000);
-      if (!handoffExpired && !host.sidebarSnapshotSettled()) {
+      if (!host.sidebarSnapshotSettled()) {
         return;
       }
       if (!handoffReady) {
@@ -228,13 +222,11 @@ export function createSidebarSnapshot(host: {
   }
 
   function cancelHandoff(): void {
-    clearTimeout(handoffTimer);
     if (handoffIdle !== undefined) {
       cancelIdleCallback(handoffIdle);
     }
-    handoffTimer = handoffIdle = undefined;
+    handoffIdle = undefined;
     handoffReady = false;
-    handoffExpired = false;
   }
 
   function capture(): void {
