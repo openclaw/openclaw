@@ -78,11 +78,11 @@ export function RelativeTime(props: { timestamp: number; now: number; automation
   const timestamp = createMemo(() => props.timestamp);
   const [now, setNow] = createSignal(untrack(() => props.now));
   const update = () => setNow(Date.now());
-  createEffect(timestamp, (timestamp) => {
+  createEffect(timestamp, (value) => {
     if (!subscribers.size) {
       stopVisibility = listen(document, "visibilitychange", onVisibilityChange);
     }
-    subscribers.set(update, timestamp);
+    subscribers.set(update, value);
     update();
     schedule();
     return () => {
