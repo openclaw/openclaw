@@ -1,0 +1,3 @@
+# Regression: managed recovery waits for its foreground state owner; preserve other supervisors/PIDs.
+# Reports distinguish unverified readiness from a responding Gateway.
+106

@@ -1,5 +1,6 @@
 // Native transport is simulated; update-command-service-custody.test.ts covers receiver custody.
 import fs from "node:fs/promises";
+import { hostname } from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { afterAll, afterEach, aroundEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,12 +14,15 @@ import {
 } from "../../daemon/launchd-service-files.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
+import * as gatewayOwner from "../../infra/gateway-owner-lease.js";
 import { createSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import * as processIdentity from "../../shared/pid-alive.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { createCommandResult as commandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as runtimeUtils from "../../utils.js";
+import * as recoveryWait from "../../utils/sleep.js";
 import { VERSION } from "../../version.js";
 import { runDaemonRestart } from "../daemon-cli/lifecycle.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
@@ -134,7 +138,7 @@ vi.mock("../../daemon/systemd.js", async (importOriginal) => ({
     ...(mocks.running ? { pid: 4242 } : {}),
   }),
   isSystemdServiceEnabled: async () => mocks.loaded,
-  findInstalledSystemdGatewayScope: async () => null,
+  findInstalledSystemdGatewayScope: async () => fixtureSystemdTarget(),
   isSystemdUserServiceAvailable: async () => true,
   stopSystemdService: async () => {
     mocks.stopAllowances.push(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS);
@@ -144,6 +148,12 @@ vi.mock("../../daemon/systemd.js", async (importOriginal) => ({
   restartSystemdService: mocks.restart,
   startSystemdService: mocks.start,
   installSystemdService: mocks.install,
+}));
+vi.mock("../../daemon/systemd-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/systemd-scope.js")>()),
+  // The fixture writes this user unit; discovery must not inspect the host's system manager.
+  findSystemdGatewayInstallation: async () => ({ kind: "user", user: fixtureSystemdTarget() }),
+  isSystemdServiceAbsent: async () => false,
 }));
 vi.mock("../../daemon/systemd-user-transport.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/systemd-user-transport.js")>()),
@@ -247,6 +257,13 @@ let configPath: string;
 let run: NonNullable<UpdateCommandOptions["run"]>;
 let envSnapshot: Awaited<ReturnType<typeof createServiceActivationFixture>>["envSnapshot"];
 let servingOwner: Awaited<ReturnType<typeof createServiceActivationFixture>>["servingOwner"];
+function fixtureSystemdTarget() {
+  return {
+    scope: "user" as const,
+    unitName: "openclaw-gateway.service",
+    unitPath: path.join(root, ".config/systemd/user/openclaw-gateway.service"),
+  };
+}
 const writeConfig = (version: string) => writeRecoveryConfig(configPath, version);
 const gatewayArgs = (port = "19305") => [
   process.execPath,
@@ -356,6 +373,70 @@ afterEach(async () => {
 });
 
 describe("preserved update activation with real version guards", () => {
+  it.each(["foreground", "another supervisor", "reused pid", "newer config"] as const)(
+    "recovers the installed unit with %s state ownership",
+    async (ownership) => {
+      const orphanPid = 54321;
+      let orphanAlive = true;
+      mocks.running = false;
+      if (ownership === "newer config") {
+        await writeConfig("9999.1.1");
+      }
+      const orphan = {
+        pid: orphanPid,
+        host: hostname(),
+        startedAt: 10,
+        owner: "orphan-owner",
+        port: 19305,
+        mode:
+          ownership === "another supervisor" ? ("supervised" as const) : ("foreground" as const),
+        supervisor:
+          ownership === "another supervisor"
+            ? { kind: "external" as const, name: "operator" }
+            : null,
+        state: "live" as const,
+        expired: false,
+      };
+      vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockImplementation(() =>
+        orphanAlive ? orphan : undefined,
+      );
+      const startTime = vi
+        .mocked(processIdentity.getFileLockProcessStartTime)
+        .getMockImplementation()!;
+      vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockImplementation((pid, env) =>
+        pid === orphanPid ? (ownership === "reused pid" ? 11 : 10) : startTime(pid, env),
+      );
+      const alive = processIdentity.isPidAlive;
+      vi.spyOn(processIdentity, "isPidAlive").mockImplementation((pid) =>
+        pid === orphanPid ? orphanAlive : alive(pid),
+      );
+      const nativeKill = process.kill.bind(process);
+      let stopRequested = false;
+      const kill = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+        if (pid === orphanPid && signal === "SIGTERM") {
+          stopRequested = true;
+          return true;
+        }
+        return nativeKill(pid, signal);
+      });
+      vi.spyOn(recoveryWait, "sleep").mockImplementation(async () => {
+        expect(stopRequested).toBe(true);
+        orphanAlive = false;
+      });
+      expect(await runDaemonRestart({ preserveDefinition: true, json: true })).toBe(
+        ownership === "foreground",
+      );
+      if (ownership === "foreground") {
+        expect(kill).toHaveBeenCalledWith(orphanPid, "SIGTERM");
+        expect(mocks.restart).toHaveBeenCalledOnce();
+      } else {
+        expect(
+          kill.mock.calls.some(([pid, signal]) => pid === orphanPid && signal === "SIGTERM"),
+        ).toBe(false);
+      }
+    },
+  );
+
   registerRestartOutcomeTests(() => ({ root, run, mocks, servingOwner }));
 
   it.each(preservedActivationCases)(
