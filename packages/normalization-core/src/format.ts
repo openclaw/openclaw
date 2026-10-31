@@ -19,23 +19,40 @@ const BYTE_SIZE_STYLES = {
 
 export type RelativeTimeUnit = "second" | "minute" | "hour" | "day";
 
-/** Buckets an absolute duration while preserving nested display rounding at unit boundaries. */
+const SECOND_MS = 1_000;
+const MINUTE_MS = 60 * SECOND_MS;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
+
+/**
+ * Buckets an absolute duration into the display unit that keeps the rounding at
+ * the unit boundary meaningful.
+ *
+ * Each rung promotes on its own rounded value rather than on a threshold taken
+ * from the raw duration, so a value never rounds up to a full unit and then
+ * stays in the smaller unit. Chaining `Math.round` through every rung instead
+ * also accumulated error across four steps: 23h29m30s rounded up to 24 hours,
+ * and 47.5h rounded up to `2` days nearly half a day early. Because the day rung
+ * additionally required `hours >= 48`, `{ value: 1, unit: "day" }` was
+ * unreachable and anything between 24h and 48h had to render as "24h".."47h".
+ */
 export function bucketRelativeTimeMs(durationMs: number): {
   value: number;
   unit: RelativeTimeUnit;
 } {
-  const seconds = Math.round(durationMs / 1000);
+  const seconds = Math.round(durationMs / SECOND_MS);
   if (seconds < 60) {
     return { value: seconds, unit: "second" };
   }
-  const minutes = Math.round(seconds / 60);
+  const minutes = Math.round(durationMs / MINUTE_MS);
   if (minutes < 60) {
     return { value: minutes, unit: "minute" };
   }
-  const hours = Math.round(minutes / 60);
-  return hours < 48
-    ? { value: hours, unit: "hour" }
-    : { value: Math.round(hours / 24), unit: "day" };
+  const hours = Math.round(durationMs / HOUR_MS);
+  if (durationMs < DAY_MS) {
+    return { value: hours, unit: "hour" };
+  }
+  return { value: Math.floor(durationMs / DAY_MS), unit: "day" };
 }
 
 /** Formats a byte count with caller-explicit scale, labels, precision, and unit cap. */
