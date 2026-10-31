@@ -6,7 +6,6 @@
   gap: var(--space-2);
   min-width: 0;
   min-height: 40px;
-  box-sizing: border-box;
   padding-inline: 8px;
   border-bottom: var(--rail-divider-size) solid var(--rail-divider-color);
   background: var(--rail-header-background);

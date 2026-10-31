@@ -88,7 +88,6 @@
 .cron-toolbar .btn {
   height: var(--settings-control-height);
   padding-block: 0;
-  box-sizing: border-box;
 }
 
 .cron-search-box {
@@ -943,7 +942,6 @@
   align-items: baseline;
   gap: var(--space-2);
   width: 100%;
-  box-sizing: border-box;
 }
 
 @media (min-width: 1400px) {
@@ -985,7 +983,6 @@
   line-height: 1.45;
   min-width: 0;
   width: 100%;
-  box-sizing: border-box;
 }
 
 .cron-run-entry__body pre,
@@ -1002,7 +999,6 @@
 .cron-run-entry__body.chat-text :is(pre, blockquote) {
   width: 100%;
   max-width: 100%;
-  box-sizing: border-box;
 }
 
 .cron-run-entry__body.chat-text :is(pre, blockquote, table) + p,

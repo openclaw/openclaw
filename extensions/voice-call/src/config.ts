@@ -50,6 +50,8 @@ const TwilioConfigSchema = z
     authToken: SecretInputSchema.optional(),
     /** Twilio processing Region (for example, ie1) */
     region: z.enum(TWILIO_REGIONS).optional(),
+    /** Record outbound calls in Twilio storage; requires prior participant consent. */
+    record: z.boolean().optional(),
   })
   .strict();
 

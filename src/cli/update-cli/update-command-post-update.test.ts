@@ -294,7 +294,8 @@ describe("successful update finalization ordering", () => {
         },
       );
       const recovery = taskRecovery((phase) => events.push(phase));
-      mocks.restartService.mockImplementationOnce(async () => {
+      mocks.restartService.mockImplementationOnce(async ({ onGatewayStartAttempted }) => {
+        onGatewayStartAttempted?.();
         events.push("start");
         return "ok";
       });
@@ -325,8 +326,8 @@ describe("successful update finalization ordering", () => {
       } finally {
         identity.restore();
       }
-      expect(events.indexOf("doctor")).toBeLessThan(events.indexOf("activation-attempt"));
-      expect(events.indexOf("activation-attempt")).toBeLessThan(events.indexOf("restore"));
+      expect(events.indexOf("doctor")).toBeLessThan(events.indexOf("restore"));
+      expect(events.indexOf("restore")).toBeLessThan(events.indexOf("activation-attempt"));
       expect(events.indexOf("activation-attempt")).toBeLessThan(events.indexOf("start"));
       expect(mocks.restartService).toHaveBeenCalledOnce();
       expect(mocks.stopService).not.toHaveBeenCalled();

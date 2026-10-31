@@ -55,7 +55,6 @@
     var(--chat-composer-surface)
   );
   --session-hovercard-surface: color-mix(in srgb, var(--card) 94%, black 6%);
-  --session-hovercard-attribution-surface: color-mix(in srgb, var(--text) 6%, transparent);
 
   --panel: #0e1015;
   --panel-strong: #191c24;
@@ -276,6 +275,9 @@
   --grid-line: rgba(255, 255, 255, 0.03);
 
   /* GitHub syntax palette shared by highlighted code and file previews. */
+  --hljs-comment: var(--muted);
+  --hljs-link: color-mix(in srgb, var(--accent-2) 70%, var(--text));
+  --user-code-bg: color-mix(in srgb, var(--bg) 80%, transparent);
   --hljs-keyword: #ff8a80;
   --hljs-number: #79c0ff;
   --hljs-string: #a5d6ff;
@@ -630,7 +632,6 @@
   --popover: #ffffff;
   --popover-foreground: #211e1a;
   --session-hovercard-surface: var(--card);
-  --session-hovercard-attribution-surface: color-mix(in srgb, var(--text) 4%, transparent);
 
   --panel: #faf9f7;
   --panel-strong: #f4f1ec;
@@ -724,10 +725,12 @@
 
   --grid-line: rgba(60, 42, 24, 0.05);
 
-  --hljs-keyword: #cf222e;
+  --hljs-comment: var(--muted-strong);
+  --user-code-bg: color-mix(in srgb, var(--bg) 50%, transparent);
+  --hljs-keyword: #b81b27;
   --hljs-number: #0550ae;
   --hljs-string: #0a3069;
-  --hljs-title: #8250df;
+  --hljs-title: #7040d0;
   --hljs-type: #953800;
   --hljs-attribute: #116329;
   --hljs-meta: #57606a;
@@ -958,13 +961,14 @@ summary,
   :root {
     --shell-popup-inline-gutter: var(--chat-mobile-edge-inset);
   }
+}
 
-  html.control-ui-content-canvas,
-  .control-ui-content-canvas body {
-    /* iOS Safari exposes the document canvas around its browser chrome; keep
-       that canvas on the same surface as the exposed narrow route canvas. */
-    background: var(--control-ui-system-chrome-background, var(--bg-content, var(--bg)));
-  }
+/* iOS Safari shows the document canvas around its browser chrome. The system
+   chrome owner selects it where the exposed narrow route canvas or the open
+   navigation drawer's backdrop differs from the page surface. */
+html.control-ui-system-chrome-canvas,
+.control-ui-system-chrome-canvas body {
+  background: var(--control-ui-system-chrome-background, var(--bg));
 }
 
 /* iOS Safari zooms the viewport when a focused text control is under 16px;

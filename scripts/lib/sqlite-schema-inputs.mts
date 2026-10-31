@@ -33,6 +33,7 @@ import { withLegacyStateWriteIndexes } from "../../src/state/openclaw-state-db-s
 import { withLegacyLocalWorkspaceManifests } from "../../src/state/openclaw-state-db-schema-v31-workspace-manifests.js";
 import { withLegacyLocalWorkspaceCas } from "../../src/state/openclaw-state-db-schema-v35-workspace-cas.js";
 import { withLegacyTemplateStateSchema } from "../../src/state/openclaw-state-db-schema-v36-template-names.js";
+import { withLegacyWorkerResourceReceipts } from "../../src/state/openclaw-state-db-schema-v37-resource-receipts.js";
 import {
   getOpenClawStateFeatureSchemaSql,
   listOpenClawStateFeatureSchemas,
@@ -59,7 +60,9 @@ export function listSqliteSchemaInputs(): SqliteSchemaInput[] {
     inputs.push({ id, store, sql });
   };
   add("state", "state", OPENCLAW_STATE_SCHEMA_SQL);
-  const stateBeforeV36 = withLegacyTemplateStateSchema(OPENCLAW_STATE_SCHEMA_SQL);
+  const stateBeforeV37 = withLegacyWorkerResourceReceipts(OPENCLAW_STATE_SCHEMA_SQL);
+  add("state-before-v37", "state", stateBeforeV37);
+  const stateBeforeV36 = withLegacyTemplateStateSchema(stateBeforeV37);
   add("state-before-v36", "state", stateBeforeV36);
   const stateBeforeV35 = withLegacyLocalWorkspaceCas(stateBeforeV36);
   add("state-before-v35", "state", stateBeforeV35);

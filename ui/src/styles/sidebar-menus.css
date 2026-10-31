@@ -8,18 +8,6 @@
   background: var(--popover);
 }
 
-.people-menu__search input {
-  box-sizing: border-box;
-  width: 100%;
-  min-width: 0;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--menu-item-radius);
-  background: var(--bg);
-  color: var(--text);
-  font: inherit;
-}
-
 .people-menu__status {
   padding: 6px 8px;
   color: var(--muted);
@@ -667,7 +655,6 @@
 .session-menu__color-choice {
   display: grid;
   place-items: center;
-  box-sizing: border-box;
   width: 28px;
   height: 28px;
   padding: 2px;
@@ -732,7 +719,6 @@
 }
 
 .session-menu__icon-choice {
-  box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1143,14 +1129,13 @@
 
 .oc-menu.sidebar-identity-menu {
   min-width: max(220px, var(--sidebar-identity-menu-min-width, 220px));
+  max-height: calc(100dvh - 16px);
 }
 
 .sidebar-identity-menu__avatar {
   display: inline-grid;
-  width: 20px;
   height: 26px;
   place-items: center;
-  overflow: visible;
 }
 
 .sidebar-identity-menu__avatar .viewer-avatar--footer {
@@ -1184,15 +1169,15 @@
   font-size: calc(13px * var(--control-ui-text-scale));
 }
 
-.sidebar-identity-menu .nav-item__icon,
-.sidebar-identity-menu .sidebar-gateway-health-slot {
-  width: 16px;
-  height: 16px;
+/* One leading column: every label starts on one x, and the avatar fills it. */
+.sidebar-identity-menu
+  :is(.nav-item__icon, .sidebar-gateway-health-slot, .sidebar-identity-menu__avatar) {
+  flex: 0 0 26px;
+  width: 26px;
 }
 
 .sidebar-gateway-health-slot {
   display: flex;
-  flex: none;
   align-items: center;
   justify-content: center;
 }
@@ -1272,7 +1257,6 @@
 }
 
 .sidebar-session-sort-menu.oc-menu {
-  box-sizing: border-box;
   width: min(220px, calc(100dvw - 16px));
 }
 
@@ -1368,7 +1352,6 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  box-sizing: border-box;
   min-height: var(--sidebar-filter-row-height);
   padding: 0 var(--sidebar-filter-row-inset);
 }
@@ -1385,7 +1368,6 @@
 .sidebar-session-menu-switch,
 .sidebar-session-filter-footer,
 .sidebar-session-filter-panel .picker-select--submenu .picker-select__trigger {
-  box-sizing: border-box;
   min-height: var(--sidebar-filter-row-height);
   padding: 0 var(--sidebar-filter-row-inset);
   border-radius: var(--menu-item-radius);
@@ -1637,10 +1619,4 @@
 
 .sidebar-identity-menu [data-value^="gateway:"] > .oc-menu-item__check {
   display: none;
-}
-
-.sidebar-customize-menu__trigger {
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }

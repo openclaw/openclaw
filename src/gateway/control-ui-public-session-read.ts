@@ -407,6 +407,8 @@ export async function readPublicSessionWidget(
       sessionEntry: initial.target.entry,
     },
     { kind: "canvas-widget", docId: options.docId },
+    undefined,
+    "public-session-widget",
   );
   return withReadySessionRows(projection, queries, () => {
     const current = readAuthorizedTarget(cfg, locator, projection);

@@ -984,6 +984,23 @@ the SHA-256 hash of normalized SQL, matching the statement channel's normalizati
 SQL text and bindings are omitted. Collection is scoped to this deletion callback,
 and serialization occurs only above the existing 1,000 ms slow-hold threshold.
 
+Slow or failed SQLite `BEGIN IMMEDIATE` warnings also include `holderAtWaitStart`
+when the admitted database has a known in-process writer. It contains the writer's
+bounded `operation` label, `threadId`, and `heldMs` observed before the native wait.
+The existing admission snapshot shares one 500-byte diagnostic slot per database;
+the transaction owner records it at begin and clears it after commit or rollback.
+It is best-effort attribution, never admission authority. External-process writers,
+unadmitted handles, and a writer changing during observation can remain unknown.
+
+Agent database reservation and session-write warnings include `holderAtEnqueue`
+from the existing queue owner, including the active worker operation and thread
+when known. Slow WebSocket connect responses include `pairingLockWait` for the
+longest observed pairing-lock wait, with the same enqueue-time holder fields.
+These snapshots name the holder observed at entry, not every intervening writer;
+`heldMs` is its age at that observation, not the waiter's total wait duration.
+Existing warning thresholds and transaction phase/statement fields are unchanged.
+No SQL, bindings, message content, or tool content is added to these records.
+
 See [Database schemas](/reference/database-schemas) for store ownership and schema
 contracts, and [Configuration reference](/gateway/configuration-reference) for
 the rest of the Gateway configuration.
