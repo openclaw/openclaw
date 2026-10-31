@@ -98,20 +98,22 @@ const ACCENT_PRESETS = [
    mirrored from the base.css theme blocks). The custom card only has real
    colors while active — its chips read the live CSS variables — so it falls
    back to the download icon otherwise. */
-function renderThemeCardVisual(id: ThemeName, activeTheme: ThemeName) {
-  if ((id === "custom" || id.includes("/")) && activeTheme !== id) {
-    return (
-      <span class="settings-theme-card__icon" aria-hidden="true">
-        <Icon name="download" />
-      </span>
-    );
-  }
+function ThemeCardVisual(props: { id: ThemeName; activeTheme: ThemeName }) {
   return (
-    <span class="settings-theme-card__palette" aria-hidden="true">
-      <span class="settings-theme-card__chip settings-theme-card__chip--accent" />
-      <span class="settings-theme-card__chip settings-theme-card__chip--accent-2" />
-      <span class="settings-theme-card__chip settings-theme-card__chip--bg" />
-    </span>
+    <Show
+      when={(props.id !== "custom" && !props.id.includes("/")) || props.activeTheme === props.id}
+      fallback={
+        <span class="settings-theme-card__icon" aria-hidden="true">
+          <Icon name="download" />
+        </span>
+      }
+    >
+      <span class="settings-theme-card__palette" aria-hidden="true">
+        <span class="settings-theme-card__chip settings-theme-card__chip--accent" />
+        <span class="settings-theme-card__chip settings-theme-card__chip--accent-2" />
+        <span class="settings-theme-card__chip settings-theme-card__chip--bg" />
+      </span>
+    </Show>
   );
 }
 export function AppearanceSection(props: ConfigProps) {
@@ -348,7 +350,7 @@ export function AppearanceSection(props: ConfigProps) {
                       }
                     }}
                   >
-                    {renderThemeCardVisual(opt().id, presentedTheme().id)}
+                    <ThemeCardVisual id={opt().id} activeTheme={presentedTheme().id} />
                     <span class="settings-theme-card__label">{opt().label}</span>
                   </button>
                 )}

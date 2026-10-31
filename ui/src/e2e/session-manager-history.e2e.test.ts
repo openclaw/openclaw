@@ -60,13 +60,16 @@ suite.define(() =>
       await researchRow.waitFor({ state: "visible", timeout: 10_000 });
 
       await ui.button(page, "Filters").click();
-      const rosterFilter = page.locator('.sessions-filter-popover:popover-open input[type="text"]');
+      const filters = page.locator(".sessions-filter-popover:popover-open");
+      await filters.locator(".header-search__toggle").click();
+      const rosterFilter = filters.getByRole("searchbox");
       await rosterFilter.fill("Research");
       await expect.poll(() => mainRow.count()).toBe(0);
       await researchRow.waitFor({ state: "visible" });
       await captureUiProof(page, "01-session-filter.png");
       await rosterFilter.fill("");
       await mainRow.waitFor({ state: "visible" });
+      await page.keyboard.press("Escape");
       await page.keyboard.press("Escape");
 
       const transcriptSearch = page.getByRole("search", { name: "Search transcripts" });

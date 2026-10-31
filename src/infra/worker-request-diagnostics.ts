@@ -30,9 +30,11 @@ export function captureWorkerStartObserver(url: URL): (() => void) | undefined {
 
 export type WorkerRequestObservation = {
   requestClass?: string;
+  threadId?: number;
+  startedAt?: number;
   timing?: DiagnosticWorkerRequestFields["timing"];
   recordTransactions?(count: number): void;
-  started(this: void): void;
+  started(this: void, workerThreadId?: number): void;
   completed(this: void): void;
 };
 
@@ -62,6 +64,7 @@ export function onWorkerRequestMetrics(listener: WorkerRequestMetricsListener): 
 export type SqliteWorkerReservationObservation = {
   operations: Set<string>;
   transactionCount?: number;
+  active?: WorkerRequestObservation;
 };
 
 const reservations = resolveGlobalSingleton(
@@ -145,12 +148,15 @@ export function trackWorkerRequest(
           },
         }
       : {}),
-    started: () => {
+    started: (workerThreadId) => {
       if (completed || startedAt !== undefined) {
         return;
       }
       startedAt = performance.now();
       if (reservation) {
+        observation.startedAt = startedAt;
+        observation.threadId = workerThreadId;
+        reservation.active = observation;
         reservation.operations.add(
           reservation.operations.has(label) || reservation.operations.size < 8 ? label : "other",
         );
@@ -167,6 +173,9 @@ export function trackWorkerRequest(
         return;
       }
       completed = true;
+      if (reservation?.active === observation) {
+        reservation.active = undefined;
+      }
       queuedSignal?.removeEventListener("abort", observation.completed);
       if (startedAt === undefined) {
         dequeue();

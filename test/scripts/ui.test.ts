@@ -10,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { brotliCompressSync, gzipSync } from "node:zlib";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import {
   isDirectScriptExecution,
   resolveUiBuildEnvironment,
@@ -31,7 +32,6 @@ import {
 import { withinTest } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { installDistArtifactScripts } from "./dist-artifact-fixture.js";
 
 const testNodeExecPath = resolveTestNodeExecPath();
 const procSafeRoot = fs.realpathSync(
@@ -60,30 +60,29 @@ function writeFiles(root: string, files: Record<string, string>): void {
   }
 }
 
+let uiFixtureSources: string[] | undefined;
 function copyUiFixture(root: string, extra: string[] = []): void {
-  for (const file of [
-    "scripts/ui.js",
-    "scripts/ui.mts",
-    "scripts/pnpm-runner.mts",
-    "scripts/run-node-package-bin.mts",
-    "scripts/windows-cmd-helpers.mjs",
-    "scripts/lib/build-identity.mts",
-    "scripts/lib/control-ui-build-inputs.mts",
-    "scripts/lib/output-root-guard.mjs",
-    "scripts/lib/record-shared.mjs",
-    "scripts/lib/prepare-control-ui-settings.mts",
-    "src/infra/process-env.ts",
-    "src/infra/windows-process-start.ts",
-    "src/shared/freebsd-process-identity.ts",
-    "src/shared/freebsd-process-identity-native.ts",
-    "src/shared/pid-alive.ts",
+  // Runtime imports plus URL launchers and cache-only inputs own this fixture.
+  // Compiler fixtures retain their separate declaration/source-signature inventory.
+  uiFixtureSources ??= [
+    ...collectRuntimeImportClosure(
+      process.cwd(),
+      [
+        "scripts/ui.js",
+        "scripts/tsx.mjs",
+        "scripts/lib/managed-memory-launcher.mts",
+        "scripts/lib/managed-windows-job-launcher.mts",
+      ],
+      { includeDynamicImports: true },
+    ),
     "ui/package.json",
-    "ui/src/build-info-normalizers.ts",
-    "packages/normalization-core/src/record-coerce.ts",
-    "packages/normalization-core/src/string-coerce.ts",
-    "packages/normalization-core/src/utf16-slice.ts",
-    ...extra,
-  ]) {
+    "packages/normalization-core/package.json",
+    ...fs
+      .readdirSync("scripts/lib")
+      .filter((file) => file.startsWith("control-ui-i18n"))
+      .map((file) => "scripts/lib/" + file),
+  ];
+  for (const file of [...uiFixtureSources, ...extra]) {
     const destination = path.join(root, file);
     fs.mkdirSync(path.dirname(destination), { recursive: true });
     fs.copyFileSync(file, destination);
@@ -98,7 +97,13 @@ function copyUiFixture(root: string, extra: string[] = []): void {
       'if (process.argv.at(-1) !== "--check") throw new Error("expected validator freshness check");\n',
   });
   fs.mkdirSync(path.join(root, ".git"));
-  installDistArtifactScripts(root, [], { compiler: false });
+  for (const name of ["tsx", "@openclaw/fs-safe"]) {
+    fs.symlinkSync(
+      path.resolve("node_modules", name),
+      path.join(root, "node_modules", name),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+  }
 }
 
 function writeUiPackageBin(modules: string, name: string, source: string): string {

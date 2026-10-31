@@ -2182,5 +2182,109 @@
         }
       }
     }
+  },
+  "ca": {
+    "common": {
+      "loading": "S'està carregant…",
+      "enabled": "Activat",
+      "disabled": "Desactivat",
+      "na": "n/d",
+      "unknown": "Desconegut"
+    },
+    "memoryPage": {
+      "memories": {
+        "searchLabel": "Cerca de records",
+        "searchPlaceholder": "Cerca als records d'aquest agent",
+        "searchButton": "Cerca",
+        "idle": "Cerca una persona, un projecte, una decisió o qualsevol altra cosa que aquest agent recordi.",
+        "searching": "S'estan cercant records…",
+        "results": "{count} resultats",
+        "empty": "No s'ha trobat cap record que coincideixi amb «{query}».",
+        "error": "La cerca a la memòria ha fallat: {message}",
+        "retry": "Torna-ho a provar",
+        "gatewayUpdateRequired": "Actualitza la Passarel·la per cercar records des de la Control UI.",
+        "hybridSearch": "cerca híbrida",
+        "keywordSearch": "cerca per paraules clau",
+        "lineRange": "línies {start}–{end}",
+        "score": "puntuació {score}",
+        "sourceMemory": "memòria",
+        "sourceSessions": "sessions",
+        "fileLoading": "S'està carregant el fitxer de memòria complet…",
+        "fileError": "No s'ha pogut carregar aquest fitxer de memòria: {message}",
+        "fileUnsupported": "Aquest fitxer de memòria no es pot mostrar com a text."
+      },
+      "overview": {
+        "hero": {
+          "awake": "La memòria està desperta",
+          "waking": "S'està despertant la memòria…",
+          "hibernating": "La memòria està hibernant",
+          "needsAttention": "La memòria necessita atenció",
+          "noSearchRuntime": "La cerca a la memòria de l'amfitrió no està disponible",
+          "noSearchRuntimeDescription": "{engine} no proporciona un entorn d'execució de cerca a la memòria de l'amfitrió. Altres integracions de memòria poden funcionar de manera independent.",
+          "activeDescription": "{engine} · {mode}",
+          "loadingDescription": "S'estan comprovant el motor de memòria i el cicle de somnis d'aquest agent.",
+          "offDescription": "Trieu un motor de memòria a Configuració per despertar-la.",
+          "disabledDescription": "El motor de memòria seleccionat està desactivat. Torneu-lo a activar a Configuració.",
+          "gatewayOffline": "La passarel·la està fora de línia, de manera que l'estat de la memòria no està disponible.",
+          "hybridSearch": "cerca híbrida",
+          "keywordSearch": "cerca per paraules clau (sense incrustacions vectorials)",
+          "openSettings": "Obre Configuració",
+          "retry": "Torna-ho a provar",
+          "refresh": "Actualitza l'estat"
+        },
+        "schedule": {
+          "title": "Programació del son",
+          "lightDescription": "Ordena les notes recents a curt termini i prepara les candidates prometedores sense modificar la memòria a llarg termini.",
+          "remDescription": "Reflexiona sobre temes i idees recurrents de l'activitat recent per millorar-ne la classificació sense modificar la memòria a llarg termini.",
+          "deepDescription": "Puntua les candidates preparades, incorpora les seleccionades a la memòria a llarg termini (MEMORY.md) i escriu el diari de somnis.",
+          "nextRun": "propera {time}",
+          "lastRun": "última {time}",
+          "notScheduled": "Sense programar",
+          "learnMore": "Com funciona el procés de somni",
+          "openDocs": "Obre la guia del procés de somni"
+        },
+        "activity": {
+          "title": "Activitat",
+          "promotedToday": "Incorporades avui",
+          "promotedTotal": "Total d'incorporades",
+          "shortTermCount": "Entrades a curt termini pendents",
+          "phaseHitCount": "Senyals de fase",
+          "lightPhaseHitCount": "Coincidències de la fase lleugera",
+          "remPhaseHitCount": "Coincidències de la fase REM"
+        },
+        "health": {
+          "title": "Estat del motor",
+          "provider": "Proveïdor",
+          "embeddings": "Representacions vectorials",
+          "runtime": "Entorn d'execució de representacions vectorials",
+          "healthy": "A punt",
+          "unavailable": "No disponible",
+          "notChecked": "Cap comprovació recent",
+          "notCheckedDescription": "Els resultats caduquen al cap de 30 segons. Feu clic a Prova per comprovar si està a punt.",
+          "checking": "S'està comprovant…",
+          "test": "Prova",
+          "testing": "S'està provant…"
+        },
+        "shortcuts": {
+          "title": "Explora la memòria",
+          "memories": "Cerca records",
+          "diary": "Llegeix el diari de somnis",
+          "settings": "Configura la memòria"
+        }
+      },
+      "dreaming": {
+        "phases": {
+          "light": {
+            "title": "Fase lleugera"
+          },
+          "deep": {
+            "title": "Fase profunda"
+          },
+          "rem": {
+            "title": "Fase REM"
+          }
+        }
+      }
+    }
   }
 }

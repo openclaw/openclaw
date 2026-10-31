@@ -164,7 +164,6 @@ export function resolveSessionRowBadges(
         : "gitPullRequest",
       modifier: "pull-request",
       pullRequestState,
-      count: count > 1 ? count : undefined,
     });
   }
   if (params.hasApproval) {

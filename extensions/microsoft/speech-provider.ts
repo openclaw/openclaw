@@ -204,80 +204,79 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
     synthesize: async (req) => {
       const config = readMicrosoftProviderConfig(req.providerConfig);
       const { isVoiceMessageCompatibleAudio } = await import("openclaw/plugin-sdk/media-runtime");
-      const { tempWorkspace, resolvePreferredOpenClawTmpDir } =
+      const { withTempWorkspace, resolvePreferredOpenClawTmpDir } =
         await import("openclaw/plugin-sdk/temp-path");
-      const temp = await tempWorkspace({
-        rootDir: resolvePreferredOpenClawTmpDir(),
-        prefix: "tts-microsoft-",
-      });
-      const tempDir = temp.dir;
-      const overrideVoice = trimToUndefined(req.providerOverrides?.voice);
-      let voice = overrideVoice ?? config.voice;
-      let lang = config.lang;
-      const outputFormat =
-        trimToUndefined(req.providerOverrides?.outputFormat) ?? config.outputFormat;
-      const fallbackOutputFormat =
-        outputFormat !== DEFAULT_EDGE_OUTPUT_FORMAT ? DEFAULT_EDGE_OUTPUT_FORMAT : undefined;
+      return await withTempWorkspace(
+        {
+          rootDir: resolvePreferredOpenClawTmpDir(),
+          prefix: "tts-microsoft-",
+        },
+        async ({ dir: tempDir }) => {
+          const overrideVoice = trimToUndefined(req.providerOverrides?.voice);
+          let voice = overrideVoice ?? config.voice;
+          let lang = config.lang;
+          const outputFormat =
+            trimToUndefined(req.providerOverrides?.outputFormat) ?? config.outputFormat;
+          const fallbackOutputFormat =
+            outputFormat !== DEFAULT_EDGE_OUTPUT_FORMAT ? DEFAULT_EDGE_OUTPUT_FORMAT : undefined;
 
-      if (!overrideVoice && voice === DEFAULT_EDGE_VOICE && isCjkDominant(req.text)) {
-        voice = DEFAULT_CHINESE_EDGE_VOICE;
-        lang = DEFAULT_CHINESE_EDGE_LANG;
-      }
-
-      try {
-        const runEdge = async (format: string) => {
-          const fileExtension = inferEdgeExtension(format);
-          const outputPath = path.join(tempDir, `speech${fileExtension}`);
-          if (req.text.trim().length === 0) {
-            throw new Error("Microsoft TTS text cannot be empty");
+          if (!overrideVoice && voice === DEFAULT_EDGE_VOICE && isCjkDominant(req.text)) {
+            voice = DEFAULT_CHINESE_EDGE_VOICE;
+            lang = DEFAULT_CHINESE_EDGE_LANG;
           }
-          const { writeExternalFileWithinRoot } =
-            await import("openclaw/plugin-sdk/security-runtime");
-          const tts = new (await import("node-edge-tts")).EdgeTTS({
-            voice,
-            lang,
-            outputFormat: format,
-            saveSubtitles: config.saveSubtitles,
-            proxy: config.proxy,
-            rate: config.rate,
-            pitch: config.pitch,
-            volume: config.volume,
-            timeout: config.timeoutMs ?? req.timeoutMs,
-          });
-          for (let attempt = 0; attempt < 2; attempt += 1) {
-            let outputSize = 0;
-            await writeExternalFileWithinRoot({
-              rootDir: path.dirname(outputPath),
-              path: path.basename(outputPath),
-              write: async (tempPath) => {
-                writeFileSync(tempPath, "");
-                await tts.ttsPromise(req.text, tempPath);
-                outputSize = statSync(tempPath).size;
-              },
-            });
-            if (outputSize > 0) {
-              return {
-                audioBuffer: readFileSync(outputPath),
-                outputFormat: format,
-                fileExtension,
-                voiceCompatible: isVoiceMessageCompatibleAudio({ fileName: outputPath }),
-              };
+
+          const runEdge = async (format: string) => {
+            const fileExtension = inferEdgeExtension(format);
+            const outputPath = path.join(tempDir, `speech${fileExtension}`);
+            if (req.text.trim().length === 0) {
+              throw new Error("Microsoft TTS text cannot be empty");
             }
-          }
-          throw new Error("Edge TTS produced empty audio file after retry");
-        };
+            const { writeExternalFileWithinRoot } =
+              await import("openclaw/plugin-sdk/security-runtime");
+            const tts = new (await import("node-edge-tts")).EdgeTTS({
+              voice,
+              lang,
+              outputFormat: format,
+              saveSubtitles: config.saveSubtitles,
+              proxy: config.proxy,
+              rate: config.rate,
+              pitch: config.pitch,
+              volume: config.volume,
+              timeout: config.timeoutMs ?? req.timeoutMs,
+            });
+            for (let attempt = 0; attempt < 2; attempt += 1) {
+              let outputSize = 0;
+              await writeExternalFileWithinRoot({
+                rootDir: path.dirname(outputPath),
+                path: path.basename(outputPath),
+                write: async (tempPath) => {
+                  writeFileSync(tempPath, "");
+                  await tts.ttsPromise(req.text, tempPath);
+                  outputSize = statSync(tempPath).size;
+                },
+              });
+              if (outputSize > 0) {
+                return {
+                  audioBuffer: readFileSync(outputPath),
+                  outputFormat: format,
+                  fileExtension,
+                  voiceCompatible: isVoiceMessageCompatibleAudio({ fileName: outputPath }),
+                };
+              }
+            }
+            throw new Error("Edge TTS produced empty audio file after retry");
+          };
 
-        try {
-          return await runEdge(outputFormat);
-        } catch (error) {
-          if (!fallbackOutputFormat) {
-            throw error;
+          try {
+            return await runEdge(outputFormat);
+          } catch (error) {
+            if (!fallbackOutputFormat) {
+              throw error;
+            }
+            return await runEdge(fallbackOutputFormat);
           }
-          return await runEdge(fallbackOutputFormat);
-        }
-      } finally {
-        await temp.cleanup();
-      }
+        },
+      );
     },
   };
 }

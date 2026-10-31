@@ -182,7 +182,6 @@
 }
 
 .connection-details {
-  border-top: 1px solid var(--border);
   padding: var(--space-3) var(--space-4);
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
