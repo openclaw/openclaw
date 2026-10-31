@@ -28,7 +28,11 @@ function configFor(
   entries: NonNullable<OpenClawConfig["agents"]>["entries"],
   skills?: OpenClawConfig["skills"],
 ): OpenClawConfig {
-  return { plugins: { enabled: false }, agents: { entries }, ...(skills ? { skills } : {}) };
+  return {
+    plugins: { allow: ["skill-workshop"] },
+    agents: { entries },
+    ...(skills ? { skills } : {}),
+  };
 }
 
 const bridge = () => ({ readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() });

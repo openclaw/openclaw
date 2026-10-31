@@ -27,7 +27,7 @@ import { syncWorkspaceSkills } from "./workspace-skill-sync.runtime.js";
 
 // These tests publish resource revisions explicitly; passive scans would race reuse assertions.
 const isolatedConfig = {
-  plugins: { enabled: false },
+  plugins: { allow: ["skill-workshop"] },
   skills: { load: { watch: false } },
 } satisfies OpenClawConfig;
 
@@ -351,7 +351,7 @@ describe("syncWorkspaceSkills", () => {
       const target = await newDir("target");
       const skillName = "shared-skill";
       const config = {
-        plugins: { enabled: false },
+        plugins: { allow: ["skill-workshop"] },
         agents: {
           entries: {
             alpha: { agentDir: path.join(firstWorkspace, "agent"), workspace: agentWorkspace },

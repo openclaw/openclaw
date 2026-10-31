@@ -142,7 +142,7 @@ it("keeps Gateway and workspace rewrites separate when their source paths collid
 
 it("delivers Gateway Workshop files without a live workspace binding", async () => {
   const config = {
-    plugins: { enabled: false },
+    plugins: { allow: ["skill-workshop"] },
     agents: { entries: { main: { agentDir: path.join(f.gateway, "agent") } } },
   };
   const workshop = resolveWorkshopSkillsDir(config, "main");

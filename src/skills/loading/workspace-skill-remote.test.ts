@@ -77,7 +77,7 @@ async function fixture() {
     stat: vi.fn(async () => null),
   };
   const options = {
-    config: { plugins: { enabled: false } },
+    config: { plugins: { allow: ["skill-workshop"] } },
     executionWorkspaceDir: execution,
     bundledSkillsDir: path.join(root, "bundled"),
     managedSkillsDir: path.join(root, "managed"),
