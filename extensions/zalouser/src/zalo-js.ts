@@ -12,13 +12,12 @@ import {
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sleep } from "openclaw/plugin-sdk/text-utility-runtime";
 import { snapshotApiCredentials, type ZaloCredentialPayload } from "./credential-persistence.js";
-import { buildZaloNameIndex } from "./directory-index.js";
+import { buildZaloNameIndex, normalizeZaloNameKey } from "./directory-index.js";
 import { normalizeZaloReactionIcon } from "./reaction.js";
 import { sendZaloTextWithApi } from "./send-api.js";
 import { withZaloSendContext } from "./send-context.js";
@@ -587,14 +586,14 @@ export async function listZaloFriendsMatching(
   query?: string | null,
 ): Promise<ZcaFriend[]> {
   const friends = await listZaloFriends(profileInput);
-  const q = normalizeOptionalLowercaseString(query);
+  const q = normalizeZaloNameKey(query);
   if (!q) {
     return friends;
   }
   const scored = friends
     .map((friend) => {
       const id = normalizeLowercaseStringOrEmpty(friend.userId);
-      const name = normalizeLowercaseStringOrEmpty(friend.displayName);
+      const name = normalizeZaloNameKey(friend.displayName);
       const exact = id === q || name === q;
       const includes = id.includes(q) || name.includes(q);
       return { friend, exact, includes };
@@ -631,13 +630,13 @@ export async function listZaloGroupsMatching(
   query?: string | null,
 ): Promise<ZaloGroup[]> {
   const groups = await listZaloGroups(profileInput);
-  const q = normalizeOptionalLowercaseString(query);
+  const q = normalizeZaloNameKey(query);
   if (!q) {
     return groups;
   }
   return groups.filter((group) => {
     const id = normalizeLowercaseStringOrEmpty(group.groupId);
-    const name = normalizeLowercaseStringOrEmpty(group.name);
+    const name = normalizeZaloNameKey(group.name);
     return id.includes(q) || name.includes(q);
   });
 }
@@ -1232,7 +1231,7 @@ function resolveZaloEntries<T>(
     if (/^\d+$/.test(trimmed)) {
       return { input, resolved: true, id: trimmed };
     }
-    const matches = byName.get(normalizeLowercaseStringOrEmpty(trimmed)) ?? [];
+    const matches = byName.get(normalizeZaloNameKey(trimmed)) ?? [];
     const match = matches[0];
     return match
       ? { input, resolved: true, ...resolveMatch(match, matches) }

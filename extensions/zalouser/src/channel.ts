@@ -35,7 +35,6 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   chunkTextForOutbound,
   sanitizeAssistantVisibleText,
@@ -48,6 +47,7 @@ import {
   resolveZalouserAccountSync,
   type ResolvedZalouserAccount,
 } from "./accounts.js";
+import { normalizeZaloNameKey } from "./directory-index.js";
 import { buildZalouserGroupCandidates, resolveZalouserGroupScope } from "./group-policy.js";
 import { resolveZalouserReactionMessageIds } from "./message-sid.js";
 import type { ZalouserProbeResult } from "./probe.js";
@@ -386,9 +386,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
                 const groups = await runtimeModule.listZaloGroupsMatching(account.profile, trimmed);
                 const best =
                   groups.find(
-                    (group) =>
-                      normalizeLowercaseStringOrEmpty(group.name) ===
-                      normalizeLowercaseStringOrEmpty(trimmed),
+                    (group) => normalizeZaloNameKey(group.name) === normalizeZaloNameKey(trimmed),
                   ) ?? groups[0];
                 results.push({
                   input,
