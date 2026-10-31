@@ -264,6 +264,7 @@
 }
 
 .oc-menu {
+  --oc-menu-shortcut-rail: 0px;
   padding: var(--menu-padding);
   font-size: calc(13px * var(--control-ui-text-scale));
   user-select: none;
@@ -424,10 +425,6 @@ a.oc-menu-item[href] {
 
 /* Shortcuts reserve the indicator rail only when a row of this same menu shows an
    indicator; nested flyouts decide for themselves, so the column stays aligned. */
-.oc-menu {
-  --oc-menu-shortcut-rail: 0px;
-}
-
 .oc-menu:has(
   > .oc-menu-item > .oc-menu-item__check,
   > :not(.oc-overlay) > .oc-menu-item > .oc-menu-item__check,
