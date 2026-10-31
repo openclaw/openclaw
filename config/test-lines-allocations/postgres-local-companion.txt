@@ -1,0 +1,2 @@
+328
+# Companion archive capture/verify/restore, profile and identity rejection, remote opt-in refusal, and credential survival after promotion.

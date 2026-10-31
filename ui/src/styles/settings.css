@@ -484,11 +484,17 @@ openclaw-appearance-background .settings-background-preview .session-background_
 }
 
 .settings-group {
+  --btn-bg: var(--surface-hover);
+  --btn-bg-hover: var(--surface-selected);
   background: var(--card);
   border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
   border-radius: var(--radius-lg);
   overflow: hidden;
   min-width: 0;
+}
+
+.settings-group:empty {
+  display: none;
 }
 
 .settings-group--danger {
@@ -549,6 +555,10 @@ openclaw-appearance-background .settings-background-preview .session-background_
   color: var(--muted);
   line-height: 1.45;
   overflow-wrap: anywhere;
+}
+
+.settings-row__control > .settings-row__desc[aria-hidden="true"] {
+  overflow-wrap: normal;
 }
 
 .settings-row__control {

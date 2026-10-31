@@ -7,7 +7,7 @@
   margin-top: 0;
   padding: 4px 6px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: transparent;
 }
 
@@ -313,7 +313,7 @@
 .chat-pr-mobile__group {
   min-width: 0;
   overflow: hidden;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: var(--mobile-list-surface, color-mix(in srgb, var(--popover) 95%, var(--text) 5%));
 }
 
@@ -405,7 +405,7 @@
   gap: 5px;
   flex-shrink: 0;
   padding: 3px 10px;
-  border-radius: 20px;
+  border-radius: var(--radius-xl);
   background: var(--bg);
   font-size: 12px;
 }
@@ -528,7 +528,7 @@
   align-items: center;
   gap: 12px;
   padding: 14px;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: var(--warn-subtle);
 }
 .chat-pr-mobile__recovery-copy {

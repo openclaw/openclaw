@@ -14,6 +14,7 @@ import {
   type BackupResourceInventory,
   type BackupResourcePlan,
 } from "../commands/backup-resource-inventory.js";
+import type { BackupManifestPostgresAnchor } from "../commands/backup-verify-manifest.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import { embedSessionColdArchivesInSnapshot } from "../config/sessions/session-cold-storage-backup.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -24,6 +25,7 @@ import { capturePostgresBackup, readBackupEngineImage } from "../snapshot/databa
 import { listDefaultAgentDatabasePaths } from "../state/agent-database-path-discovery.js";
 import type { OpenClawRegisteredAgentDatabase } from "../state/openclaw-agent-db-contract.js";
 import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
+import { inspectOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry-listing.js";
 import { readOpenClawAgentDatabaseRegistryRows } from "../state/openclaw-agent-db-registry.read.js";
 import { assertOpenClawStateDatabaseOwner } from "../state/openclaw-state-db-maintenance.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
@@ -39,8 +41,9 @@ import {
 import {
   assertBackupSqliteSourceGroup,
   captureBackupSqliteSourceGroup,
-  planBackupSqliteSourceGroups,
+  planBackupSqliteSources,
   type BackupSqliteSourceGroup,
+  type CanonicalSqliteSource,
 } from "./backup-sqlite-source-groups.js";
 import { isTransientSqliteBackupPath } from "./backup-volatile-filter.js";
 import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
@@ -88,12 +91,6 @@ function findLegacyAuditBackupStateChange(
       candidate instanceof LegacyAuditBackupStateChangedError,
   );
 }
-
-type CanonicalSqliteSource = {
-  archiveSourcePath: string;
-  identity: BigIntStats;
-  sourcePath: string;
-} & ({ role: "global" | "quarantine" | "client" } | { role: "agent"; agentId: string });
 
 // The sealed inventory also bounds header answers to one backup capture.
 const sqliteHeaderAnswers = new WeakMap<BackupResourceInventory, Map<string, boolean>>();
@@ -301,45 +298,6 @@ export async function discoverBackupDatabasePaths(params: {
   return [...new Set(existing)].toSorted();
 }
 
-async function planBackupSqliteSources(
-  inventory: BackupResourceInventory,
-  snapshotPaths: readonly string[],
-) {
-  const sources: Array<{
-    archiveSourcePath: string;
-    path: string;
-    identity: BigIntStats;
-    canonicalSource: CanonicalSqliteSource | undefined;
-  }> = [];
-  for (const archiveSourcePath of snapshotPaths) {
-    const identity = await fs.stat(archiveSourcePath, { bigint: true });
-    const owner = inventory.resolveSqliteSource(archiveSourcePath, identity);
-    if (!owner || owner.role === "unresolvable-link") {
-      throw new Error(`SQLite ownership changed after discovery: ${archiveSourcePath}`);
-    }
-    let canonicalSource: CanonicalSqliteSource | undefined;
-    if (owner.role !== "plugin") {
-      if (!owner.identity || !sameFileIdentity(owner.identity, identity)) {
-        throw new Error(`Canonical SQLite path changed after discovery: ${archiveSourcePath}`);
-      }
-      canonicalSource = {
-        ...owner,
-        archiveSourcePath: owner.sourcePath,
-        sourcePath: await fs.realpath(owner.sourcePath),
-        identity: owner.identity,
-      };
-      assertNotUpdateCapturePath(canonicalSource.sourcePath, inventory.stateDir);
-    }
-    sources.push({
-      archiveSourcePath,
-      path: canonicalSource ? await fs.realpath(archiveSourcePath) : archiveSourcePath,
-      identity,
-      canonicalSource,
-    });
-  }
-  return { sources, groups: await planBackupSqliteSourceGroups(sources) };
-}
-
 export async function createBackupSqliteSnapshotPlan(params: {
   resources: BackupResourcePlan;
   tempDir: string;
@@ -347,16 +305,19 @@ export async function createBackupSqliteSnapshotPlan(params: {
   legacyAuditDatabaseWitness?: string;
   /** Only in an isolated backup process; preserves source artifacts and snapshot row IDs. */
   preserveSourceArtifacts?: boolean;
+  localCompanion?: boolean;
 }): Promise<{
   inventory: BackupResourceInventory;
   snapshots: SqliteBackupAsset[];
   postgresSnapshots: Array<{ sourcePath: string; manifestSha256: string }>;
+  postgresAnchors: BackupManifestPostgresAnchor[];
   discoveredSourcePaths: Set<string>;
   sharedDatabaseSourcePath?: string;
 }> {
   const capturedSnapshots = new Map<BackupSqliteSourceGroup, string>();
   const snapshots: SqliteBackupAsset[] = [];
   const postgresSnapshots: Array<{ sourcePath: string; manifestSha256: string }> = [];
+  const postgresAnchors: BackupManifestPostgresAnchor[] = [];
   let sharedDatabaseSourcePath: string | undefined;
   let capturedAgents: Array<{ role: "agent"; agentId: string; sourcePath: string }> = [];
   function captureAgentRegistry(database: DatabaseSync, archiveSourcePath: string) {
@@ -428,6 +389,9 @@ export async function createBackupSqliteSnapshotPlan(params: {
             if (hasPostgresAnchor) {
               return;
             }
+            if (params.localCompanion && canonicalSource?.role === "client") {
+              return;
+            }
             if (canonicalSource?.role === "global") {
               captureAgentRegistry(database, canonicalSource.archiveSourcePath);
               if (
@@ -478,7 +442,26 @@ export async function createBackupSqliteSnapshotPlan(params: {
         { cause: error },
       );
     }
-    if (readBackupEngineImage(sourcePath, sourceDatabasePath).engine === "postgres") {
+    const engine = readBackupEngineImage(sourcePath, sourceDatabasePath);
+    if (engine.engine === "postgres" && params.localCompanion) {
+      postgresAnchors.push({
+        sourcePath: archiveSourcePath,
+        storeId: engine.storeId,
+        namespace: engine.namespace,
+      });
+      if (canonicalSource?.role === "global") {
+        capturedAgents = (
+          await inspectOpenClawRegisteredAgentDatabases({
+            env: { ...process.env, OPENCLAW_STATE_DIR: params.resources.stateDir },
+            includeIncompatibleSchemaVersions: true,
+          })
+        ).map(({ agentId, path: registeredPath }) => ({
+          role: "agent" as const,
+          agentId,
+          sourcePath: registeredPath,
+        }));
+      }
+    } else if (engine.engine === "postgres") {
       const directory = path.join(
         `${sourcePath}.postgres`,
         path.basename(`${archiveSourcePath}.postgres`),
@@ -656,6 +639,7 @@ export async function createBackupSqliteSnapshotPlan(params: {
     inventory,
     snapshots,
     postgresSnapshots,
+    postgresAnchors,
     discoveredSourcePaths: discovery.discoveredSourcePaths,
     sharedDatabaseSourcePath,
   };

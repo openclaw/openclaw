@@ -90,6 +90,120 @@ async function writeSmallArchive(
 }
 
 describe("standalone backup database completeness", () => {
+  it("refuses an ordinary backup in explicit local-companion restore mode before extraction", async () => {
+    const fixture = await writeSmallArchive([], []);
+    const target = path.join(fixture.root, "refused");
+    await expect(
+      backupRestoreCommand(createTestRuntime(), {
+        archive: fixture.archivePath,
+        target,
+        localCompanion: true,
+      }),
+    ).rejects.toThrow("requires a local-companion checkpoint");
+    await expect(fs.stat(target)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each([
+    "valid",
+    "identity",
+    "namespace",
+    "sidecar",
+    "undeclared",
+    "export",
+    "unlisted export",
+    "unknown profile",
+    "duplicate anchor",
+    "missing inventory",
+  ])("verifies offline local-companion anchors and preserves namespaces (%s)", async (damage) => {
+    const sourcePath = "/synthetic/state/state/openclaw.sqlite";
+    const fixture = await writeSmallArchive([{ sourcePath, role: "global" }], []);
+    const archivePath = buildBackupArchivePath(fixture.archiveRoot, sourcePath);
+    const anchorPath = path.join(fixture.root, archivePath);
+    await fs.mkdir(path.dirname(anchorPath), { recursive: true });
+    {
+      using database = new DatabaseSync(anchorPath);
+      database.exec(
+        "CREATE TABLE openclaw_engine_anchor (store_id TEXT, engine TEXT, schema TEXT)",
+      );
+      database.exec(
+        "INSERT INTO openclaw_engine_anchor VALUES ('original-store', 'postgres', 'original_namespace')",
+      );
+    }
+    const manifestPath = path.join(fixture.root, fixture.archiveRoot, "manifest.json");
+    const manifest: BackupManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+    manifest.profile = "local-companion";
+    manifest.postgresAnchors =
+      damage === "undeclared"
+        ? []
+        : [
+            {
+              sourcePath,
+              storeId: damage === "identity" ? "other-store" : "original-store",
+              namespace: damage === "namespace" ? "other_namespace" : "original_namespace",
+            },
+          ];
+    if (damage === "sidecar") {
+      await fs.writeFile(`${anchorPath}-wal`, "uncheckpointed");
+    }
+    if (damage === "export") {
+      manifest.postgresSnapshots = [
+        { archivePath: `${archivePath}.postgres`, manifestSha256: "a".repeat(64) },
+      ];
+    }
+    if (damage === "unknown profile") {
+      Object.assign(manifest, { profile: "unsupported" });
+    } else if (damage === "duplicate anchor") {
+      manifest.postgresAnchors!.push({ ...manifest.postgresAnchors![0]! });
+    } else if (damage === "missing inventory") {
+      delete manifest.postgresAnchors;
+    }
+    if (damage === "unlisted export") {
+      await fs.mkdir(`${anchorPath}.postgres`);
+      await fs.writeFile(path.join(`${anchorPath}.postgres`, "database.sqlite"), "undeclared rows");
+    }
+    await fs.writeFile(manifestPath, JSON.stringify(manifest));
+    const archive = await repack(fixture.root, fixture.archiveRoot, "companion");
+    if (damage !== "valid") {
+      await expect(verifyBackupArchive(archive)).rejects.toThrow(
+        damage === "identity" || damage === "namespace"
+          ? /identity mismatch/
+          : damage === "sidecar"
+            ? /sidecars/
+            : damage === "undeclared"
+              ? /no owned matched capsule/
+              : damage === "unlisted export"
+                ? /undeclared PostgreSQL export/
+                : damage === "unknown profile"
+                  ? /unsupported profile/
+                  : damage === "duplicate anchor"
+                    ? /duplicate PostgreSQL anchor/
+                    : damage === "missing inventory"
+                      ? /requires PostgreSQL anchor inventory/
+                      : /no PostgreSQL exports/,
+      );
+      return;
+    }
+    const verified = await verifyBackupArchive(archive);
+    expect(verified).toMatchObject({
+      ok: true,
+      profile: "local-companion",
+      sqliteInventoryVerified: true,
+    });
+    expect(verified.warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("not disaster recovery")]),
+    );
+    const target = path.join(fixture.root, "restored");
+    await backupRestoreCommand(createTestRuntime(), { archive, target, localCompanion: true });
+    using restored = new DatabaseSync(path.join(target, archivePath), { readOnly: true });
+    expect(
+      restored.prepare("SELECT store_id, schema FROM openclaw_engine_anchor").get(),
+    ).toMatchObject({
+      store_id: "original-store",
+      schema: "original_namespace",
+    });
+    await expect(fs.stat(path.join(target, `${archivePath}.postgres`))).rejects.toThrow();
+  });
+
   it("restores configured, registered, and discovered WAL databases without workspaces and rejects each omission", async () => {
     await withIsolatedBackupState(
       { layout: "home", prefix: "backup-inventory-wal-", scenario: "minimal" },

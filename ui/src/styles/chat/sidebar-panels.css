@@ -1778,7 +1778,7 @@ openclaw-session-diff:has(> .session-diff--desktop) {
   min-width: 0;
   padding: 5px 4px;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   color: var(--text);
   background: transparent;
   font: inherit;

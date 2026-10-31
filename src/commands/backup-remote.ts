@@ -298,10 +298,15 @@ export async function backupRemoteVerifyCommand(
 
 export async function backupRemoteRestoreCommand(
   runtime: RuntimeEnv,
-  opts: RemoteBackupOptions & { archive: string; target?: string },
+  opts: RemoteBackupOptions & { archive: string; target?: string; localCompanion?: boolean },
 ) {
   return await withDownloadedBackup(runtime, opts, async (archive) => {
     const { backupRestoreCommand } = await import("./backup-restore.js");
-    return await backupRestoreCommand(runtime, { archive, target: opts.target, json: opts.json });
+    return await backupRestoreCommand(runtime, {
+      archive,
+      target: opts.target,
+      json: opts.json,
+      localCompanion: opts.localCompanion,
+    });
   });
 }

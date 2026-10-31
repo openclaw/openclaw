@@ -52,7 +52,7 @@ function runAttempt({
     tempPaths,
     sessionKey,
     createSession,
-    attemptOverrides: { disableTools: false, ...attemptOverrides },
+    attemptOverrides: { contextTokenBudget: 8192, disableTools: false, ...attemptOverrides },
   });
 }
 function registerCleanup(tools = [createStubTool("read")]) {

@@ -30,10 +30,9 @@ sourceSuite.define(() => {
       await waitForControlUiRoute(page, { routeId: "memory" });
       const overview = page.locator(".memory-overview");
       await expect(overview.getByRole("heading", { name: "Memory is awake" })).toBeVisible();
-      await expect(overview.locator(".settings-row", { hasText: "Embeddings" })).toHaveCSS(
-        "border-top-width",
-        "1px",
-      );
+      const row = overview.locator(".settings-row", { hasText: "Embeddings" });
+      await expect(row).toHaveCSS("min-height", "48px");
+      await expect(row).toHaveCSS("padding", "12px 16px");
       await expect(page.locator('link[href*="/assets/plugins/memory-core/"]')).toHaveCount(1);
       expect(await gateway.getRequests("doctor.memory.status")).toHaveLength(1);
       expect(await gateway.getRequests("plugins.controlUi.report")).toHaveLength(0);

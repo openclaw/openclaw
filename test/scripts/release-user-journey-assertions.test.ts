@@ -13,6 +13,7 @@ import {
 import { withEnvAsync } from "../../src/test-utils/env.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { writeJsonFile as writeJson } from "../helpers/temp-repo.js";
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/release-user-journey/assertions.mjs";
 const CLICKCLACK_FIXTURE_SCRIPT = "scripts/e2e/lib/release-user-journey/clickclack-fixture.mjs";
@@ -47,11 +48,6 @@ function runAssertion(home: string, args: string[]) {
     },
     killSignal: "SIGKILL",
   });
-}
-
-function writeJson(filePath: string, value: unknown) {
-  mkdirSync(path.dirname(filePath), { recursive: true });
-  writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
 async function waitUntil(matches: () => boolean | Promise<boolean>, label: string): Promise<void> {

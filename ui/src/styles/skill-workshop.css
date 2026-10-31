@@ -79,7 +79,7 @@
 }
 
 .sw-row--selected {
-  background: var(--surface-selected);
+  background: var(--surface-selected-hover);
 }
 
 .sw-row__main {
@@ -142,8 +142,7 @@
   margin: 0 var(--space-4) var(--space-3);
   border-radius: var(--radius-sm);
   padding: 6px var(--space-2) 6px var(--space-3);
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  background: color-mix(in srgb, var(--bg) 35%, transparent);
+  background: var(--surface-hover);
   font-size: var(--control-ui-text-xs);
 }
 
@@ -152,8 +151,9 @@
   flex: 1;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 0 6px;
+  gap: 0 var(--space-3);
   min-width: 0;
+  overflow: hidden;
   color: var(--muted);
 }
 
@@ -161,11 +161,19 @@
   color: var(--text);
 }
 
+.sw-row__change-why,
+.sw-row__change-when {
+  position: relative;
+}
+
+/* Sits in the gap, so the row's clip drops it when an item starts a wrapped line. */
 .sw-row__change-why::before,
 .sw-row__change-when::before {
   content: "·";
-  margin-inline-end: 6px;
-  color: var(--muted);
+  position: absolute;
+  inset-inline-start: calc(-1 * var(--space-3));
+  inline-size: var(--space-3);
+  text-align: center;
 }
 
 .sw-badge {
