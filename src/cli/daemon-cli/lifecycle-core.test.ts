@@ -261,6 +261,41 @@ it("rejects unsupported-platform start before not-loaded recovery", async () => 
   });
 });
 
+it.each([
+  ["start", 125, "Could not print domain: 125: Domain does not support specified action"],
+  ["stop", 13, "Permission denied"],
+  ["restart", 1, "Operation not permitted"],
+] as const)(
+  "explains launchctl inspection failure during %s without requiring local management",
+  async (action, code, stderr) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    const { isLaunchAgentLoaded } = await import("../../daemon/launchd-runtime.js");
+    const native = vi.spyOn(await import("../../daemon/exec-file.js"), "execFileUtf8");
+    native.mockResolvedValue({ code, termination: "exit", stdout: "", stderr });
+    service.isLoaded.mockImplementation(isLaunchAgentLoaded);
+    const args = { ...createServiceRunArgs(), opts: { json: false } };
+    const run = { start: runServiceStart, stop: runServiceStop, restart: runServiceRestart }[
+      action
+    ];
+
+    await expect(run(args)).rejects.toThrow("__exit__:1");
+
+    const output = String(lifecycleTestRuntime.error.mock.calls.at(-1)?.[0]);
+    expect(output).toContain("could not inspect the macOS launchd GUI domain");
+    expect(output).toContain("does not mean SSH management is disabled");
+    expect(output).toContain("id -un");
+    expect(output).toContain("launchctl print gui/$(id -u)");
+    expect(output).toContain("If the domain is missing");
+    expect(output).toContain("access errors");
+    expect(output).not.toContain("Manage its LaunchAgent from");
+    expect(output).toContain("If an external supervisor owns this Gateway");
+    expect(output).toContain("https://docs.openclaw.ai/gateway#existing-system-launchdaemons");
+    expect(output).not.toContain("OPENCLAW_SERVICE_REPAIR_POLICY=external");
+    expectNoCalls(service.start, service.stop, service.restart);
+    expect(native.mock.calls.every(([, argv]) => argv[0] === "print")).toBe(true);
+  },
+);
+
 it("fails restart with the container hint when no service is installed", async () => {
   missingService();
   const hasInstalledDefinition = vi.fn(async () => false);
