@@ -64,7 +64,7 @@ internal fun projectToolActivity(
   live.sortedBy { it.startedAtMs }.forEach { call ->
     val scope = call.runId?.let(toolScopesByRun::get) ?: toolScope
     val matches =
-      durable.filter { it.disclosureKey == scope }.flatMap { group ->
+      durable.filter { it.toolScope == scope }.flatMap { group ->
         group.tools.mapIndexedNotNull { index, tool ->
           group.toolKeys[index].takeIf {
             tool.toolCallId == call.toolCallId &&
@@ -74,16 +74,16 @@ internal fun projectToolActivity(
       }
     val key = matches.singleOrNull() ?: call.presentationKey()
     // A row folded under Worked belongs there, not in a duplicate live disclosure.
-    val visible = groups[scope]
+    val visible = groups.values.firstOrNull { it.toolScope == scope && key in it.toolKeys }
     val folded = matches.size == 1 && visible?.toolKeys?.contains(key) != true
     val alert = if (call.activity != null) call.activity.status in setOf("blocked", "failed") else call.isError == true
     if (folded && !alert) return@forEach
-    val hiddenOwner = if (folded) durable.singleOrNull { it.disclosureKey == scope && key in it.toolKeys } else null
+    val hiddenOwner = if (folded) durable.singleOrNull { it.toolScope == scope && key in it.toolKeys } else null
     val group =
       visible ?: hiddenOwner?.let { owner ->
         val index = owner.toolKeys.indexOf(key)
-        owner.copy(tools = listOf(owner.tools[index]), toolKeys = listOf(key))
-      } ?: ChatTimelineItem.ToolActivity(scope, emptyList(), disclosureKey = scope)
+        groups[owner.disclosureKey] ?: owner.copy(tools = listOf(owner.tools[index]), toolKeys = listOf(key))
+      } ?: groups[scope] ?: ChatTimelineItem.ToolActivity(scope, emptyList(), disclosureKey = scope)
     var index = group.toolKeys.indexOf(key)
     val tools = group.tools.toMutableList()
     val toolKeys = group.toolKeys.toMutableList()
@@ -107,7 +107,7 @@ internal fun projectToolActivity(
             call.activity ?: tool.activity
           },
       )
-    groups[scope] = group.copy(tools = tools, toolKeys = toolKeys, liveTools = group.liveTools + (key to if (key in group.settledToolKeys) call.copy(isComplete = true) else call))
+    groups[group.disclosureKey] = group.copy(tools = tools, toolKeys = toolKeys, liveTools = group.liveTools + (key to if (key in group.settledToolKeys) call.copy(isComplete = true) else call))
   }
   groups.replaceAll { _, group ->
     val order = group.tools.indices.toMutableList()
@@ -118,8 +118,9 @@ internal fun projectToolActivity(
   }
   val emitted = mutableSetOf<String>()
   val visibleScopes = items.filterIsInstance<ChatTimelineItem.ToolActivity>().map { it.disclosureKey }.toSet()
+  val hiddenGroupsByScope = groups.values.filter { it.disclosureKey !in visibleScopes }.groupBy { it.toolScope }
   val anchors = items.filterIsInstance<ChatTimelineItem.Message>().map { it.message.toolScopeKey() }.toSet()
-  val edgeScopes = groups.keys.filter { it !in visibleScopes && (it == toolScope || it !in anchors) }
+  val edgeScopes = groups.keys.filter { it !in visibleScopes && (groups.getValue(it).toolScope == toolScope || groups.getValue(it).toolScope !in anchors) }
   val prefix = items.takeWhile { it is ChatTimelineItem.StreamingAssistant || it is ChatTimelineItem.QuestionPrompt || it is ChatTimelineItem.OutboxCommand || it is ChatTimelineItem.RecoveryOutboxCommand || it is ChatTimelineItem.OutboxRecoveryHeader }
   return buildList {
     addAll(prefix)
@@ -130,7 +131,9 @@ internal fun projectToolActivity(
     items.drop(prefix.size).forEach { item ->
       if (item is ChatTimelineItem.Message) {
         val scope = item.message.toolScopeKey()
-        if (scope in groups && scope !in visibleScopes && emitted.add(scope)) add(groups.getValue(scope))
+        hiddenGroupsByScope[scope]?.forEach { group ->
+          if (emitted.add(group.disclosureKey)) add(group)
+        }
       }
       if (item is ChatTimelineItem.ToolActivity) {
         if (emitted.add(item.disclosureKey)) add(groups.getValue(item.disclosureKey))
