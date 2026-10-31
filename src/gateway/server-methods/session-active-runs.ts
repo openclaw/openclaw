@@ -28,7 +28,6 @@ import {
 } from "../../sessions/session-controller.rpc-sources.js";
 import {
   getSessionControllerEntryForOperation,
-  hasReplyOperationExecutionStarted,
   resolveReplyRunForCurrentSessionId,
 } from "../../sessions/session-controller.state.js";
 import { chatRunBelongsToAgent, resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
@@ -313,11 +312,7 @@ export function resolveVisibleActiveSessionRunState(
   const embeddedRunState =
     localOperations.length === 0 || representedLocally
       ? undefined
-      : localOperations.every(
-            (operation) =>
-              operation.phase === "waiting_for_global_lane" ||
-              !hasReplyOperationExecutionStarted(operation),
-          )
+      : localOperations.every((operation) => operation.phase === "waiting_for_global_lane")
         ? "queued"
         : "running";
   // Remote lifecycle/subagent facts remain separately attributed projections.

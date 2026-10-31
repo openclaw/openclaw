@@ -129,6 +129,7 @@ it("bounds live projection over idle history through admission, progress, drain,
     );
     const releaseReply = await claimRpcSourceForTest(replySource, { executionStarted: false });
     const reply = expectDefined(replySource.input.claim?.operation, "admitted reply turn");
+    reply.markWaitingForGlobalLane();
     const queued = createRpcSourceForTest(
       {},
       {
@@ -191,6 +192,7 @@ it("bounds live projection over idle history through admission, progress, drain,
       const liveWork = { agentRuns: 1, chatRuns: 1, queuedTurns: 1 };
       await read(1, 1, liveWork);
       releaseWait?.();
+      reply.markGlobalLaneWaitEnded();
       markReplyOperationExecutionStarted(reply);
       await read(2, 0, liveWork);
       requestRpcSourceCancellation(queued, new Error("queued turn stopped"));

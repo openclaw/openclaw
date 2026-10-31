@@ -231,21 +231,27 @@ it("checks each source's Gateway scope once while preparing a page projector", (
         sessionId: run.sessionId,
         agentId: "main",
       }),
-    ).toEqual({ active: true, runIds: [run.runId], status: "queued" });
+    ).toEqual({ active: true, runIds: [run.runId] });
   }
 });
 
-it("projects an accepted source before its exact controller claim starts", async () => {
-  const { sessionKey, sessionId, runId } = makeRun("queued");
+it("animates accepted startup before execution and pauses only for an exact lane wait", async () => {
+  const { sessionKey, sessionId, runId } = makeRun("startup");
   rpcSourceTesting.clear();
   const registration = registerChatRun(sessionKey, sessionId, runId, "main");
   const { state } = registration;
 
-  expect(state()).toEqual({ active: true, runIds: [runId], status: "queued" });
+  expect(state()).toEqual({ active: true, runIds: [runId] });
   if (!registration.entry) {
     throw new Error("Missing RPC source");
   }
-  cleanups.push(await claimRpcSourceForTest(registration.entry));
+  cleanups.push(await claimRpcSourceForTest(registration.entry, { executionStarted: false }));
+  const operation = registration.entry.input.claim!.operation!;
+  expect(state()).toEqual({ active: true, runIds: [runId] });
+  operation.markWaitingForGlobalLane();
+  expect(state()).toEqual({ active: true, runIds: [runId], status: "queued" });
+  operation.markGlobalLaneWaitEnded();
+  expect(state()).toEqual({ active: true, runIds: [runId] });
   expect(registration.markExecutionStarted()).toBe(true);
   expect(state()).toEqual({ active: true, runIds: [runId] });
   expect(registration.markExecutionStarted()).toBe(false);
@@ -524,7 +530,7 @@ it("projects native lifecycle snapshots and admits the next backend after produc
     expectSnapshot("queued");
     operation.markGlobalLaneWaitEnded();
   };
-  expectSnapshot("queued");
+  expectSnapshot("running");
 
   expectLaneWaitVisible();
 
@@ -549,6 +555,7 @@ it("preserves an independent running worker over a queued native snapshot", asyn
   const sessionKey = "agent:main:worker-overlap";
   const sessionId = "worker-overlap-session";
   const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+  operation.markWaitingForGlobalLane();
   const snapshot = () =>
     buildGatewaySessionSnapshot({
       sessionRow: { key: sessionKey, sessionId, kind: "direct", updatedAt: 1, status: "done" },

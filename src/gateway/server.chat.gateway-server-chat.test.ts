@@ -246,7 +246,7 @@ describe("gateway server chat", () => {
               key: "agent:main:main",
               hasActiveRun: true,
               activeRunIds: [runId],
-              status: "queued",
+              status: "running",
             }),
           ]),
         );
