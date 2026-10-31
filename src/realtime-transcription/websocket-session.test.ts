@@ -387,9 +387,18 @@ it.each([
       socket.send(JSON.stringify(event));
     }
   });
-  await expect(session.connect()).rejects.toThrow(message);
+  const connecting = session.connect();
+  await expect(connecting).rejects.toThrow(message);
   expect(session.isConnected()).toBe(false);
-  expectError(onError, phase === "socket construction" ? /not a valid websocket URL/ : message);
+  const error = expectError(
+    onError,
+    phase === "socket construction" ? /not a valid websocket URL/ : message,
+  );
+  if (phase === "pre-ready close") {
+    await expect(connecting).rejects.toBe(error);
+    expect(error).toHaveProperty("closeCode", 1011);
+    expect(JSON.stringify(error)).not.toContain("setup failed");
+  }
 });
 
 it("preserves connect failures when the error callback throws", async () => {

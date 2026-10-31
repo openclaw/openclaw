@@ -115,8 +115,9 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
     async (preReady) => {
       const message = "rate limit exceeded; retry after account reset";
       const event = preReady
-        ? { message_type: "rate_limited", error: message }
+        ? { message_type: "error", code: "rate_limited", error: message }
         : { message_type: "input_error", message };
+      const errorCode = preReady ? "rate_limited" : "input_error";
       const onError = vi.fn();
       const { session } = await createSession(
         [preReady ? [] : [event]],
@@ -124,12 +125,16 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
         preReady ? event : undefined,
       );
       if (preReady) {
-        await expect(session.connect()).rejects.toThrow(message);
+        const connecting = session.connect();
+        await expect(connecting).rejects.toThrow(message);
+        await expect(connecting).rejects.toMatchObject({ message, errorCode });
       } else {
         await session.connect();
       }
       await vi.waitFor(() =>
-        expect(onError).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ message })),
+        expect(onError).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ message, errorCode }),
+        ),
       );
     },
   );

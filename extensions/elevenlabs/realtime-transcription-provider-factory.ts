@@ -87,13 +87,15 @@ function normalizeProviderConfig(config: RealtimeTranscriptionProviderConfig) {
   };
 }
 
-function readErrorDetail(event: ElevenLabsRealtimeTranscriptionEvent): string {
-  return (
+function createProviderError(event: ElevenLabsRealtimeTranscriptionEvent): Error {
+  const message =
     normalizeOptionalString(event.error) ??
     normalizeOptionalString(event.message) ??
     normalizeOptionalString(event.code) ??
-    "ElevenLabs realtime transcription error"
-  );
+    "ElevenLabs realtime transcription error";
+  return Object.assign(new Error(message), {
+    errorCode: normalizeOptionalString(event.code) ?? normalizeOptionalString(event.message_type),
+  });
 }
 
 function resolveElevenLabsRealtimeApiKey(
@@ -196,7 +198,7 @@ export function buildElevenLabsRealtimeTranscriptionProvider({
           }
           const isError = typeof event.error === "string" || event.message_type?.includes("error");
           if (!transport.isReady() && isError) {
-            transport.failConnect(new Error(readErrorDetail(event)));
+            transport.failConnect(createProviderError(event));
             return;
           }
           switch (event.message_type) {
@@ -219,7 +221,7 @@ export function buildElevenLabsRealtimeTranscriptionProvider({
               return;
             default:
               if (isError) {
-                req.onError?.(new Error(readErrorDetail(event)));
+                req.onError?.(createProviderError(event));
               }
           }
         },
