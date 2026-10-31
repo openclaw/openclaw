@@ -19,9 +19,19 @@ const STATE_PAYLOAD_MAX_BYTES = 8 * 1024;
 const STATE_COALESCE_WINDOW_MS = 5_000;
 const STATE_RATE_WINDOW_MS = 60_000;
 const STATE_RATE_MAX_ATTEMPTS = 12;
-const NATIVE_LINK_INTERVAL_MS = 1_000;
-// One budget per dashboard document, so N widgets cannot open N links a second.
-const lastNativeLinkAt = new WeakMap<Document, number>();
+
+// Spends the page's transient activation the way an opened popup does. WebKit's
+// consume-user-activation clears it in every frame, so the widget frame needs
+// new input before the next open. A detached text input has no picker to show,
+// and showPicker() throws when no activation is left to spend.
+function consumeUserActivation(): boolean {
+  try {
+    document.createElement("input").showPicker();
+  } catch {
+    return false;
+  }
+  return !navigator.userActivation.isActive;
+}
 
 export function isBoardWidgetBridgeRequest(value: unknown): value is BoardWidgetBridgeRequest {
   if (!value || typeof value !== "object") {
@@ -72,25 +82,21 @@ export class BoardWidgetBridgeOwner {
   }
 
   // The native route skips WebKit's popup blocker, so it keeps that blocker's
-  // per-frame rule: the dashboard and this widget's own sandbox frame must both
-  // hold live user activation. Activation reaches that frame only from input
-  // inside this widget, so code that took the wrapper's port cannot open links
-  // on a click or keystroke elsewhere in the dashboard. It also opens at most
-  // once a second per dashboard, like a blocker that spends the gesture.
-  private async openNativeLink(url: string): Promise<boolean> {
-    const dashboard = this.options.frame.ownerDocument;
-    const allowed = () =>
-      navigator.userActivation?.isActive &&
-      performance.now() - (lastNativeLinkAt.get(dashboard) ?? Number.NEGATIVE_INFINITY) >=
-        NATIVE_LINK_INTERVAL_MS;
-    if (!hasNativeExternalLink() || !allowed() || !(await this.options.widgetActivated())) {
+  // rules: the dashboard and this widget's own sandbox frame must both hold
+  // live user activation, and each open spends it. Activation reaches that
+  // frame only from input inside this widget, so code that took the wrapper's
+  // port cannot open links on input elsewhere, and one gesture opens one link.
+  private async openNativeLink(url: string, isCurrent?: () => boolean): Promise<boolean> {
+    if (!hasNativeExternalLink() || !navigator.userActivation?.isActive) {
       return false;
     }
-    if (!allowed() || !postNativeExternalLink(url)) {
-      return false;
+    const widgetActivated = await this.options.widgetActivated();
+    // Widget retirement or a Gateway reconnect during the query revokes the
+    // request. The native receiver cannot tell, so neither opener may run.
+    if (isCurrent?.() === false) {
+      throw new Error("widget link request is no longer current");
     }
-    lastNativeLinkAt.set(dashboard, performance.now());
-    return true;
+    return widgetActivated && consumeUserActivation() && postNativeExternalLink(url);
   }
 
   private async emitState(payload: unknown): Promise<unknown> {
@@ -164,7 +170,7 @@ export class BoardWidgetBridgeOwner {
         }
         // A request the native route refuses falls through to window.open,
         // which WebKit's popup blocker refuses as it does on main.
-        if (!(await this.openNativeLink(url)) && !openExternalUrlSafe(url)) {
+        if (!(await this.openNativeLink(url, options.isCurrent)) && !openExternalUrlSafe(url)) {
           throw new Error("widget link could not be opened");
         }
         return { ok: true };

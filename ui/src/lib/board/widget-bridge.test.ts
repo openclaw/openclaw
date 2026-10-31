@@ -24,11 +24,9 @@ const client = {
 };
 const confirmPrompt = () => true;
 const widgetActivated = vi.fn<() => Promise<boolean>>();
-// Native link budgets belong to a dashboard document; a fresh one per test
-// keeps an earlier test's open from spending this test's budget.
-const owner = (dashboard = document.implementation.createHTMLDocument()) =>
+const owner = () =>
   new BoardWidgetBridgeOwner({
-    frame: dashboard.createElement("iframe"),
+    frame: document.createElement("iframe"),
     ticket: "ticket",
     client,
     rateKey: "widget",
@@ -43,11 +41,26 @@ const handle = (
   context?: Parameters<BoardWidgetBridgeOwner["handle"]>[1],
 ) => controller.handle({ ...envelope, id: crypto.randomUUID(), method, params }, context);
 const emit = (payload: unknown) => handle("state.emit", { payload });
+// Stands in for WebKit: showPicker() consumes the page's transient activation
+// and throws NotAllowedError without it. Setting isActive models a new gesture.
 const stubUserActivation = (isActive: boolean) => {
-  Object.defineProperty(navigator, "userActivation", { configurable: true, value: { isActive } });
+  const activation = { isActive };
+  Object.defineProperty(navigator, "userActivation", { configurable: true, value: activation });
+  const showPicker = vi.fn(() => {
+    if (!activation.isActive) {
+      throw new DOMException("showPicker() requires a user gesture", "NotAllowedError");
+    }
+    activation.isActive = false;
+  });
+  Object.defineProperty(HTMLInputElement.prototype, "showPicker", {
+    configurable: true,
+    value: showPicker,
+  });
   onTestFinished(() => {
     Reflect.deleteProperty(navigator, "userActivation");
+    Reflect.deleteProperty(HTMLInputElement.prototype, "showPicker");
   });
+  return Object.assign(activation, { showPicker });
 };
 it.each([
   ["https://example.com/path", false, null],
@@ -94,21 +107,66 @@ it("keeps widget links without user activation away from the native link owner",
   expect(postMessage).not.toHaveBeenCalled();
   expect(open.mock.calls).toEqual([["https://example.com/path", "_blank", "noopener,noreferrer"]]);
 });
-it("opens at most one native widget link per second of user activation", async () => {
+it("spends the gesture on every native widget link open", async () => {
   const postMessage = vi.fn();
   vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
-  stubUserActivation(true);
+  const activation = stubUserActivation(true);
   const open = vi.spyOn(window, "open").mockReturnValue(null);
   const link = (path: string) => handle("host.open", { url: `https://example.com/${path}` });
   await expect(link("first")).resolves.toEqual({ ok: true });
-  await expect(link("burst")).rejects.toThrow("widget link could not be opened");
-  vi.advanceTimersByTime(1_000);
-  await expect(link("later")).resolves.toEqual({ ok: true });
+  expect(activation.isActive).toBe(false);
+  // A repeat on the same gesture finds it spent, however soon it comes.
+  await expect(link("reuse")).rejects.toThrow("widget link could not be opened");
+  // A second real click needs no wait: no time passes before it opens.
+  activation.isActive = true;
+  await expect(link("second-click")).resolves.toEqual({ ok: true });
   expect(postMessage.mock.calls).toEqual([
     [{ type: "open-link", url: "https://example.com/first", target: "external" }],
-    [{ type: "open-link", url: "https://example.com/later", target: "external" }],
+    [{ type: "open-link", url: "https://example.com/second-click", target: "external" }],
   ]);
-  expect(open.mock.calls).toEqual([["https://example.com/burst", "_blank", "noopener,noreferrer"]]);
+  expect(activation.showPicker).toHaveBeenCalledTimes(2);
+  expect(open.mock.calls).toEqual([["https://example.com/reuse", "_blank", "noopener,noreferrer"]]);
+});
+it("keeps widget links away from the native link owner when the gesture cannot be spent", async () => {
+  const postMessage = vi.fn();
+  vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
+  const activation = stubUserActivation(true);
+  vi.spyOn(window, "open").mockReturnValue(null);
+  // An engine whose showPicker() leaves activation live, or throws, fails closed.
+  activation.showPicker.mockImplementationOnce(() => {});
+  activation.showPicker.mockImplementationOnce(() => {
+    throw new TypeError("showPicker is not supported");
+  });
+  for (const path of ["not-spent", "unsupported"]) {
+    await expect(handle("host.open", { url: `https://example.com/${path}` })).rejects.toThrow(
+      "widget link could not be opened",
+    );
+  }
+  expect(postMessage).not.toHaveBeenCalled();
+});
+it("drops a widget link retired while its activation query is pending", async () => {
+  const postMessage = vi.fn();
+  vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
+  const activation = stubUserActivation(true);
+  const open = vi.spyOn(window, "open").mockReturnValue({} as Window);
+  for (const answer of [true, false]) {
+    const query = createDeferred<boolean>();
+    widgetActivated.mockReturnValueOnce(query.promise);
+    let current = true;
+    const link = handle(
+      "host.open",
+      { url: "https://example.com/retired" },
+      { isCurrent: () => current },
+    );
+    // Retirement or a reconnect lands while the proxy has not answered yet.
+    current = false;
+    query.resolve(answer);
+    await expect(link).rejects.toThrow("widget link request is no longer current");
+  }
+  expect(postMessage).not.toHaveBeenCalled();
+  expect(open).not.toHaveBeenCalled();
+  expect(activation.showPicker).not.toHaveBeenCalled();
+  expect(activation.isActive).toBe(true);
 });
 it("opens native widget links only while that widget's own frame holds user activation", async () => {
   const postMessage = vi.fn();
@@ -133,13 +191,11 @@ it("opens native widget links only while that widget's own frame holds user acti
     [{ type: "open-link", url: "https://example.com/inside", target: "external" }],
   ]);
 });
-it("shares one native link budget across the widgets of a dashboard", async () => {
+it("spends one gesture across the widgets of a dashboard", async () => {
   const postMessage = vi.fn();
   vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
   stubUserActivation(true);
   vi.spyOn(window, "open").mockReturnValue(null);
-  const dashboard = document.implementation.createHTMLDocument();
-  const [first, second] = [owner(dashboard), owner(dashboard)];
   const link = (target: BoardWidgetBridgeOwner, path: string) =>
     target.handle({
       ...envelope,
@@ -147,36 +203,10 @@ it("shares one native link budget across the widgets of a dashboard", async () =
       method: "host.open",
       params: { url: `https://example.com/${path}` },
     });
-  await expect(link(first, "first")).resolves.toEqual({ ok: true });
-  await expect(link(second, "second")).rejects.toThrow("widget link could not be opened");
-  await expect(link(owner(), "other-dashboard")).resolves.toEqual({ ok: true });
+  await expect(link(owner(), "first")).resolves.toEqual({ ok: true });
+  await expect(link(owner(), "second")).rejects.toThrow("widget link could not be opened");
   expect(postMessage.mock.calls.map(([message]) => message.url)).toEqual([
     "https://example.com/first",
-    "https://example.com/other-dashboard",
-  ]);
-});
-it("spaces native widget links on the monotonic clock", async () => {
-  const postMessage = vi.fn();
-  vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
-  stubUserActivation(true);
-  vi.spyOn(window, "open").mockReturnValue(null);
-  let monotonic = 50_000;
-  vi.spyOn(performance, "now").mockImplementation(() => monotonic);
-  await expect(handle("host.open", { url: "https://example.com/first" })).resolves.toEqual({
-    ok: true,
-  });
-  // A wall-clock jump is not elapsed time.
-  vi.setSystemTime(Date.now() + 60_000);
-  await expect(handle("host.open", { url: "https://example.com/jump" })).rejects.toThrow(
-    "widget link could not be opened",
-  );
-  monotonic += 1_000;
-  await expect(handle("host.open", { url: "https://example.com/later" })).resolves.toEqual({
-    ok: true,
-  });
-  expect(postMessage.mock.calls.map(([message]) => message.url)).toEqual([
-    "https://example.com/first",
-    "https://example.com/later",
   ]);
 });
 it("opens one native widget link when requests race the activation check", async () => {

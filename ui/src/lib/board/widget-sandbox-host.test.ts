@@ -164,6 +164,25 @@ function answerActivation(
     }
   }) as Window["postMessage"]);
 }
+// Dashboard activation as WebKit keeps it: showPicker() spends it page-wide.
+function stubDashboardActivation() {
+  const activation = { isActive: true };
+  Object.defineProperty(navigator, "userActivation", { configurable: true, value: activation });
+  Object.defineProperty(HTMLInputElement.prototype, "showPicker", {
+    configurable: true,
+    value: () => {
+      if (!activation.isActive) {
+        throw new DOMException("showPicker() requires a user gesture", "NotAllowedError");
+      }
+      activation.isActive = false;
+    },
+  });
+  onTestFinished(() => {
+    Reflect.deleteProperty(navigator, "userActivation");
+    Reflect.deleteProperty(HTMLInputElement.prototype, "showPicker");
+  });
+  return activation;
+}
 afterEach(() => {
   vi.useRealTimers();
   document.body.replaceChildren();
@@ -283,13 +302,7 @@ describe("BoardWidgetSandboxHost", () => {
   it("opens widget links only from the adopted wrapper port and ticket", async () => {
     const postMessage = vi.fn();
     vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
-    Object.defineProperty(navigator, "userActivation", {
-      configurable: true,
-      value: { isActive: true },
-    });
-    onTestFinished(() => {
-      Reflect.deleteProperty(navigator, "userActivation");
-    });
+    stubDashboardActivation();
     const open = vi.spyOn(window, "open").mockReturnValue({} as Window);
     const f = await readyHost({ client: client() });
     answerActivation(f, true);
@@ -306,7 +319,11 @@ describe("BoardWidgetSandboxHost", () => {
     const forged = channel();
     const forgedReplies: unknown[] = [];
     forged.port2.addEventListener("message", (event) => forgedReplies.push(event.data));
+    const closeForged = vi.spyOn(forged.port1, "close");
     f.send({ type: "openclaw:widget-bridge-port-offer" }, [forged.port1]);
+    // The host settles the forged port while handling its offer: it closes the
+    // port without listening, so nothing posted on it can reach the host.
+    expect(closeForged).toHaveBeenCalledOnce();
     forged.port2.postMessage(link("forged-port"), []);
     await rejectRequest(
       port,
@@ -314,9 +331,6 @@ describe("BoardWidgetSandboxHost", () => {
       "widget view ticket does not match the active frame",
     );
     await reply(port, link("wrapper"));
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 50);
-    });
     expect(postMessage.mock.calls).toEqual([
       [{ type: "open-link", url: "https://example.com/wrapper", target: "external" }],
     ]);
@@ -327,16 +341,7 @@ describe("BoardWidgetSandboxHost", () => {
     const postMessage = vi.fn();
     vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
     // The dashboard holds activation, as after a click anywhere in it.
-    Object.defineProperty(navigator, "userActivation", {
-      configurable: true,
-      value: { isActive: true },
-    });
-    onTestFinished(() => {
-      Reflect.deleteProperty(navigator, "userActivation");
-    });
-    // Earlier native opens in this file share the dashboard's one-second budget.
-    const now = vi.spyOn(performance, "now").mockReturnValue(Number.MAX_SAFE_INTEGER);
-    onTestFinished(() => now.mockRestore());
+    stubDashboardActivation();
     const open = vi.spyOn(window, "open").mockReturnValue(null);
     const f = await readyHost({ client: client() });
     const port = await f.port();
@@ -380,6 +385,48 @@ describe("BoardWidgetSandboxHost", () => {
       "https://example.com/guessed-id",
     ]);
   });
+  it.each([
+    ["retired", (f: ReturnType<typeof createHost>) => f.host.setActive(false)],
+    ["reconnected", (f: ReturnType<typeof createHost>) => f.update({ client: client() })],
+    ["disconnected", (f: ReturnType<typeof createHost>) => f.update({ connected: false })],
+  ] as const)(
+    "opens nothing for a widget link %s while its activation query is pending",
+    async (_, retire) => {
+      const postMessage = vi.fn();
+      vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
+      const activation = stubDashboardActivation();
+      // Earlier tests in this file leave window.open spied with their calls.
+      const open = vi
+        .spyOn(window, "open")
+        .mockClear()
+        .mockReturnValue({} as Window);
+      const f = await readyHost({ client: client() });
+      const port = await f.port();
+      const queries: string[] = [];
+      f.post.mockImplementation(((data: { method?: string; params?: { id?: string } }) => {
+        if (data?.method === "ui/notifications/sandbox-activation-query") {
+          queries.push(data.params?.id ?? "");
+        }
+      }) as Window["postMessage"]);
+      // Fake timers expose the query's refusal timeout as the only live timer.
+      vi.useFakeTimers();
+      const response = sendRequest(
+        port,
+        request("pending-query", "host.open", { url: "https://example.com/pending" }),
+      );
+      await vi.waitFor(() => expect(queries).toHaveLength(1));
+      expect(vi.getTimerCount()).toBe(1);
+      retire(f);
+      // Retirement settles the pending query at once instead of leaving it live.
+      expect(vi.getTimerCount()).toBe(0);
+      // The proxy's positive answer arrives after the request was revoked.
+      f.notify("activation", { id: queries[0], active: true });
+      await expect(response).resolves.toMatchObject({ ok: false });
+      expect(postMessage).not.toHaveBeenCalled();
+      expect(open).not.toHaveBeenCalled();
+      expect(activation.isActive).toBe(true);
+    },
+  );
   it("keeps the adopted ticket valid until renewal is acknowledged", async () => {
     const pending = Promise.withResolvers<unknown>();
     const c = {

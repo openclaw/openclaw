@@ -85,6 +85,7 @@ export class BoardWidgetSandboxHost {
     if (!active) {
       this.cancelPendingRequests("Widget inactive");
       this.requestGeneration += 1;
+      this.cancelActivationQueries();
       return;
     }
     this.postHostInit();
@@ -112,6 +113,7 @@ export class BoardWidgetSandboxHost {
       this.retiredTicket = this.adoptedTicket || options.widget.viewTicket || "";
       this.cancelPendingRequests("Gateway connection changed");
       this.requestGeneration += 1;
+      this.cancelActivationQueries();
       this.bridgeOwner = null;
       this.bridgeClient = undefined;
       // A pending HTTP response also belongs to its initiating connection.
@@ -141,6 +143,7 @@ export class BoardWidgetSandboxHost {
     this.documentHost.reset();
     this.requestGeneration += 1;
     this.pendingRequests.clear();
+    this.cancelActivationQueries();
     this.bridgePort?.close();
     this.bridgePort = null;
     this.adoptedTicket = "";
@@ -315,6 +318,14 @@ export class BoardWidgetSandboxHost {
     // the wrapper document so no previously adopted bridge port crosses modes.
     const bridgeMode = this.options.bridgeEnabled === false ? "passive" : "interactive";
     return `${sourceIdentity}\0${this.options.widget.revision}\0${generation}\0${bridgeMode}`;
+  }
+
+  // Retired requests answer their pending queries as inactive, after the
+  // generation bump, and drop the ids so a late proxy answer finds nothing.
+  private cancelActivationQueries(): void {
+    for (const settle of this.activationQueries.values()) {
+      settle(false);
+    }
   }
 
   // Asks the trusted outer proxy whether it holds live user activation. Only
