@@ -24,7 +24,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { readJsonIfExists, writeJsonAtomic, writeTextAtomic } from "../../infra/json-files.js";
 import { removePackageUpdatePath } from "../../infra/package-update-filesystem.js";
-import { readExistingStateRootMode } from "../../infra/private-dir-mode.js";
+import { stateRootDirectoryMode } from "../../infra/private-dir-mode.js";
 import {
   createUpdateDatabaseBackup,
   UpdateDatabaseBackupSchema,
@@ -399,7 +399,7 @@ export async function updateRestoreCommand(backupRoot: string): Promise<void> {
             try {
               await writeTextAtomic(staged, current.raw, {
                 mode: 0o600,
-                dirMode: readExistingStateRootMode(path.dirname(staged), receipt.stateDir),
+                dirMode: stateRootDirectoryMode(path.dirname(staged), receipt.stateDir),
                 durable: true,
               });
               const identity = await fs.lstat(staged);
@@ -426,7 +426,7 @@ export async function updateRestoreCommand(backupRoot: string): Promise<void> {
           if (config.raw !== null) {
             await writeTextAtomic(configPath, config.raw, {
               mode: 0o600,
-              dirMode: readExistingStateRootMode(path.dirname(configPath), receipt.stateDir),
+              dirMode: stateRootDirectoryMode(path.dirname(configPath), receipt.stateDir),
               durable: true,
               beforeRename: async () => assertCurrent(),
             });

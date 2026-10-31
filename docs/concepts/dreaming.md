@@ -36,6 +36,10 @@ its stable declaration key in the active cron store.
 - **Rewrite preimages** in SQLite-backed plugin state before an accepted `MEMORY.md` rewrite.
 - **Human-readable output** in `DREAMS.md` (or an existing `dreams.md`) and optional phase report files under `memory/dreaming/<phase>/YYYY-MM-DD.md`.
 
+Dreaming preserves existing workspace directory permissions without attempting
+to change their modes. Missing output directories are created with mode `0700`;
+existing output files retain their permissions.
+
 The built-in SQLite store reads only the selected workspace's state for lookups
 and cleanup. Corrupt JSON in another workspace does not block these operations;
 corrupt JSON in a live record in the selected workspace still reports a storage error.
