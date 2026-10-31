@@ -14,15 +14,9 @@ import {
 } from "../../scripts/lib/local-check-runtime.mts";
 import { resolveTsxImport } from "../../scripts/lib/tsx-cli-shim.mjs";
 import { createScriptTestHarness } from "./test-helpers.js";
+import { writeFixtureFiles as writeFiles } from "./z0632-fixtures.test-support.js";
 
 const { createTempDir } = createScriptTestHarness();
-function writeFiles(root: string, files: Record<string, string>) {
-  for (const [relative, contents] of Object.entries(files)) {
-    const file = path.join(root, relative);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, contents);
-  }
-}
 const GIB = 1024 ** 3;
 const ROOMY_HOST = { totalMemoryBytes: 128 * GIB, logicalCpuCount: 16 };
 const throttledGoEnv = { GOMAXPROCS: "2", GOGC: "30", GOMEMLIMIT: "3GiB" };
