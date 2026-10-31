@@ -1,4 +1,5 @@
 // Normalizes MCP config records into canonical runtime shape.
+import { isDeepStrictEqual } from "node:util";
 import {
   readNonBlankString,
   normalizeLowercaseStringOrEmpty as normalizeMcpString,
@@ -21,15 +22,18 @@ export function hasMixedMcpServerTransports(server: Record<string, unknown>): bo
 }
 
 /** Strict writes reject ambiguity; runtime reads retain legacy behavior with a warning. */
-export function collectMcpTransportIssues(config: OpenClawConfig): ConfigValidationIssue[] {
+export function collectMcpTransportIssues(
+  config: OpenClawConfig,
+  baseline?: OpenClawConfig,
+): ConfigValidationIssue[] {
   return (
     [
-      ["mcp.servers", config.mcp?.servers],
-      ["nodeHost.mcp.servers", config.nodeHost?.mcp?.servers],
+      ["mcp.servers", config.mcp?.servers, baseline?.mcp?.servers],
+      ["nodeHost.mcp.servers", config.nodeHost?.mcp?.servers, baseline?.nodeHost?.mcp?.servers],
     ] as const
-  ).flatMap(([path, servers]) =>
+  ).flatMap(([path, servers, previous]) =>
     Object.entries(servers ?? {}).flatMap(([name, server]) =>
-      hasMixedMcpServerTransports(server)
+      hasMixedMcpServerTransports(server) && !isDeepStrictEqual(server, previous?.[name])
         ? [
             {
               path: `${path}.${name}`,

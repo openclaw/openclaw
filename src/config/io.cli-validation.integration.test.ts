@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { Command } from "commander";
 import { afterEach, expect, it, vi } from "vitest";
 import { registerConfigCli } from "../cli/config-cli.js";
+import { persistRequestedUpdateChannel } from "../cli/update-cli/update-command-config.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { defaultRuntime } from "../runtime.js";
 import * as stateDb from "../state/openclaw-state-db.js";
@@ -115,7 +116,7 @@ it.each(["mcp", "nodeHost"] as const)(
   },
 );
 
-it("warns while loading existing mixed config and rejects writes without changing the file", async () => {
+it("warns for saved mixed config, rejects edits, and lets updates persist their channel", async () => {
   await withOpenClawTestState({ prefix: "mixed-mcp-upgrade-" }, async (state) => {
     await state.writeConfig({
       mcp: { servers: { docs: { command: "node", url: "https://example.com/mcp" } } },
@@ -136,10 +137,22 @@ it("warns while loading existing mixed config and rejects writes without changin
     expect(logger.warn.mock.calls.flat().join("\n")).toMatch(/mcp.servers.docs.*command.*url/s);
     await expect(
       io.writeConfigFile({
-        mcp: { servers: { docs: { command: "node", url: "https://example.com/mcp" } } },
+        mcp: {
+          servers: {
+            docs: { command: "node", args: ["changed.js"], url: "https://example.com/mcp" },
+          },
+        },
       }),
     ).rejects.toThrow(/docs.*command.*url/s);
     expect(fs.readFileSync(state.configPath, "utf8")).toBe(raw);
+    await persistRequestedUpdateChannel({
+      configSnapshot: await io.readConfigFileSnapshot(),
+      requestedChannel: "beta",
+    });
+    expect(JSON.parse(fs.readFileSync(state.configPath, "utf8"))).toMatchObject({
+      update: { channel: "beta" },
+      mcp: { servers: { docs: { command: "node", url: "https://example.com/mcp" } } },
+    });
   });
 });
 
