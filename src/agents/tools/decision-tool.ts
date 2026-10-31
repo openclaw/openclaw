@@ -8,12 +8,11 @@ import type { OpenClawToolsOptions } from "../openclaw-tools.types.js";
 import type { AnyAgentTool } from "./common.js";
 import {
   capabilityGuidance,
-  DecisionEvaluateInput,
-  DecisionEvaluateOutput,
   decisionToolResult,
   parseDecisionEvaluateInput,
   rubricVersion,
 } from "./decision-tool-contract.js";
+import { DecisionEvaluateInput, DecisionEvaluateOutput } from "./decision-tool-schema.js";
 
 /** Bind a conditional core tool to its trusted agent; provider health never changes eligibility. */
 export function createDecisionTool(

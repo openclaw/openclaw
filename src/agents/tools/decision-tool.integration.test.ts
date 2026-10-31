@@ -14,7 +14,7 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { resolveAgentDir } from "../agent-scope.js";
 import * as harness from "../decision-inference.test-support.js";
 import { acquireReadOnlyPreparedModelRuntime } from "../prepared-model-runtime.js";
-import { DecisionEvaluateInput, DecisionEvaluateOutput } from "./decision-tool-contract.js";
+import { DecisionEvaluateInput, DecisionEvaluateOutput } from "./decision-tool-schema.js";
 import { createDecisionTool } from "./decision-tool.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
