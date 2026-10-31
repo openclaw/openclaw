@@ -5,7 +5,6 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Control UI boot composer" });
 const sessionKey = "agent:main:boot-composer";
 const viewport = { width: 1280, height: 800 };
-const phoneViewport = { width: 390, height: 844 };
 const landscapeViewport = { width: 932, height: 430 };
 const phoneOptions = {
   isMobile: true,
@@ -83,11 +82,12 @@ suite.define(() => {
 
   it.each([
     { name: "desktop", options: { viewport, isMobile: false } },
-    { name: "phone", options: { ...phoneOptions, viewport: phoneViewport } },
+    { name: "phone", options: { ...phoneOptions, viewport: { width: 390, height: 844 } } },
     { name: "phone landscape", options: { ...phoneOptions, viewport: landscapeViewport } },
+    { name: "small phone", options: { ...phoneOptions, viewport: { width: 568, height: 320 } } },
   ])(
     "keeps an unsent draft, its focus and its frame still when the session opens ($name)",
-    async ({ name, options }) => {
+    async ({ options }) => {
       await suite.withPage(options, async ({ page }) => {
         const gateway = await bootGateway(page, ["connect"]);
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey), {
@@ -103,7 +103,7 @@ suite.define(() => {
           await boot.click();
         }
         const text =
-          name === "phone landscape"
+          options.isMobile && options.viewport.width > options.viewport.height
             ? "First line\nSecond line\nThird line\nFourth line"
             : "Draft, not yet sent, long enough to wrap onto another line of the composer";
         await page.keyboard.type(text);
