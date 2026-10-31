@@ -79,6 +79,44 @@ it("rejects generated music downloads that exceed the configured media cap", asy
   ).rejects.toThrow("fal generated music download exceeds 1 bytes");
 });
 
+it.each([
+  ["application/json", '{"error":"quota exceeded"}'],
+  ["text/html", "<html>Sign in</html>"],
+  ["image/png", "wrong media family"],
+  ["audio/mpeg", ""],
+])("rejects invalid generated music downloads (%s, %j)", async (contentType, body) => {
+  mockAudio({ audio: { url: audioUrl, content_type: "audio/mpeg" } }, body, contentType);
+
+  await expect(generateMusic({})).rejects.toThrow(
+    "fal generated music download: malformed audio response",
+  );
+});
+
+it("allows valid audio to pause beyond the binary reader's default idle timeout", async () => {
+  vi.useFakeTimers();
+  try {
+    mockAudio(
+      { audio: { url: audioUrl } },
+      new ReadableStream({
+        async start(controller) {
+          controller.enqueue(new TextEncoder().encode("mp3-bytes"));
+          await new Promise((resolve) => {
+            setTimeout(resolve, 31_000);
+          });
+          controller.close();
+        },
+      }),
+    );
+    const result = expect(generateMusic({})).resolves.toMatchObject({
+      tracks: [{ buffer: Buffer.from("mp3-bytes") }],
+    });
+    await vi.advanceTimersByTimeAsync(31_000);
+    await result;
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it("rejects MiniMax lyrics requests that also ask for instrumental output", async () => {
   await expect(generateMusic({ lyrics: "[Verse]\nNeon rain", instrumental: true })).rejects.toThrow(
     "fal MiniMax music generation cannot use lyrics when instrumental=true.",

@@ -598,6 +598,7 @@ export function SessionHovercard(props: SessionHovercardInput) {
                 <ProgressCardMarkdown
                   markdown={props.progressCard?.markdown}
                   omitProgress
+                  previewLines={3}
                   registerControls={controls?.registerSource}
                 />
               </div>

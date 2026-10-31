@@ -37,7 +37,7 @@ openclaw-board-view {
 .board-view__error {
   background: color-mix(in srgb, var(--danger) 8%, var(--panel));
   border: 1px solid color-mix(in srgb, var(--danger) 42%, transparent);
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   color: var(--danger);
   font-size: 12px;
   padding: 9px 12px;
@@ -112,7 +112,7 @@ openclaw-board-view {
   align-items: center;
   background: transparent;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   color: var(--muted);
   cursor: var(--cursor-action);
   display: inline-flex;
@@ -186,7 +186,7 @@ openclaw-board-widget-cell {
 .board-widget {
   background: var(--board-surface);
   border: 1px solid var(--board-line);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   box-shadow: 0 1px 1px rgb(0 0 0 / 12%);
   display: grid;
   grid-template-rows: 38px minmax(0, 1fr);
@@ -237,7 +237,7 @@ openclaw-board-widget-cell {
 
 .board-widget__drag-handle {
   align-items: center;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   cursor: grab;
   display: inline-flex;
   font-size: 17px;
@@ -645,7 +645,7 @@ openclaw-board-widget-cell {
   }
 
   .board-widget__body {
-    border-radius: 11px;
+    border-radius: var(--radius-md);
   }
 }
 
@@ -854,7 +854,7 @@ openclaw-board-widget-cell {
 .board-empty {
   align-items: center;
   border: 1px dashed color-mix(in srgb, var(--muted) 38%, transparent);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   color: var(--muted);
   display: flex;
   flex-direction: column;

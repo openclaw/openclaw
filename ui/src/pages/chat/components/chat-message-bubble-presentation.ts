@@ -3,6 +3,10 @@ import type { Accessor } from "solid-js";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { parseMarkdownJson } from "../../../components/markdown-json.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
+import {
+  type ChatMessageRenderPreparation,
+  prepareChatMessageRender,
+} from "../../../lib/chat/message-display.ts";
 import { extractThinkingCached } from "../../../lib/chat/message-extract.ts";
 import {
   isStandaloneToolMessageForDisplay,
@@ -15,10 +19,6 @@ import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts"
 import { readAsyncQuestions } from "./chat-async-question-content.ts";
 import { hasUserFileAttachments } from "./chat-message-attachments.ts";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
-import {
-  type ChatMessageRenderPreparation,
-  prepareChatMessageRender,
-} from "./chat-message-markdown-view.tsx";
 import { type AttachmentItem, type ImageBlock, projectMessageMedia } from "./chat-message-media.ts";
 import { isSentPastedTextAttachment } from "./chat-pasted-text.ts";
 import { isSentCommentAttachment } from "./chat-sent-comments.ts";

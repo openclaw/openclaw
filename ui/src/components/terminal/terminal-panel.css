@@ -159,7 +159,7 @@ openclaw-terminal-panel {
   }
   .tp-session-menu--inline .tp-session-refresh:where(:not(.session-panel-rail__button)),
   .tp-rail__icon {
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
   }
   .tp-rail:where(:not(.session-panel-rail)) svg,
   .tp-session-refresh:where(:not(.session-panel-rail__button)) svg {
@@ -219,7 +219,7 @@ openclaw-terminal-panel {
     min-height: 55px;
     padding: 15px 8px;
     border: 0;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     background: transparent;
     color: var(--text);
     text-align: left;
@@ -368,7 +368,7 @@ openclaw-terminal-panel {
     margin: 8px 14px 14px;
     padding: 0 0 0 8px;
     border: 1px solid var(--border);
-    border-radius: 10px;
+    border-radius: var(--radius-md);
     background: var(--bg-elevated);
   }
   .tp-composer__prompt {
@@ -393,7 +393,7 @@ openclaw-terminal-panel {
   .tp-composer__submit {
     width: 44px;
     height: 44px;
-    border-radius: 9px;
+    border-radius: var(--radius-md);
     color: var(--text);
   }
   .tp-composer svg {
@@ -416,7 +416,7 @@ openclaw-terminal-panel {
     max-width: 100%;
     padding: 3px 4px 3px 8px;
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     font-size: 12px;
   }
   .tp-attachment > svg {
@@ -469,13 +469,13 @@ openclaw-terminal-panel {
     margin: 0 12px 6px;
   }
   .tp--mobile .tp-session-rows {
-    border-radius: 14px;
+    border-radius: var(--radius-lg);
     background: color-mix(in srgb, var(--popover) 95%, var(--text) 5%);
   }
   .tp--mobile .tp-session {
     padding: 8px 12px;
     min-height: 56px;
-    border-radius: 14px;
+    border-radius: var(--radius-lg);
   }
   .tp--mobile .tp-session + .tp-session::before {
     left: 49px;
@@ -498,13 +498,13 @@ openclaw-terminal-panel {
     bottom: 14px;
     width: auto;
     font-size: 13px;
-    border-radius: 14px;
+    border-radius: var(--radius-lg);
     padding: 12px;
   }
   .tp--mobile .tp-upload-card__action {
     min-height: 44px;
     padding: 8px 12px;
-    border-radius: 12px;
+    border-radius: var(--radius-md);
   }
   @media (hover: hover) and (pointer: fine) {
     .tp:not(.tp--mobile) .tp-session:hover {
@@ -591,7 +591,7 @@ openclaw-terminal-panel {
     box-sizing: border-box;
     padding: 9px 10px 10px;
     border: 1px solid var(--border);
-    border-radius: 7px;
+    border-radius: var(--radius-sm);
     background: color-mix(in srgb, var(--bg) 94%, var(--text));
     box-shadow: var(--overlay-shadow);
     color: var(--text);
@@ -641,7 +641,7 @@ openclaw-terminal-panel {
     margin: -3px 0;
     padding: 3px 5px;
     border: 0;
-    border-radius: 4px;
+    border-radius: var(--radius-md);
     background: transparent;
     color: var(--muted);
     font: inherit;

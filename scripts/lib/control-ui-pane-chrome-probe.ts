@@ -2,6 +2,7 @@
 export function installPaneChromeProbe() {
   const selectors = {
     headerTrailing: ".chat-pane__header-trailing",
+    headerIdentity: ".chat-pane__identity-actions",
     composerControls: ".chat-controls__session, .chat-controls__permission-picker",
     workspace: ".chat-pane__workspace-chip",
     details: ".chat-details",
@@ -12,6 +13,7 @@ export function installPaneChromeProbe() {
   type Signature = { nodes: number; hash: number; truncated: boolean };
   type Frame = { at: number; regions: Record<Region, Signature>; composerHeight: number };
   const frames: Frame[] = [];
+  let connectionIndicatorFrames = 0;
   const detailsFrames: Array<{ at: number; sections: unknown[] }> = [];
   let detailsSignature = "";
   const sampleDetails = (at: number) => {
@@ -157,6 +159,13 @@ export function installPaneChromeProbe() {
   shiftObserver.observe({ type: "layout-shift", buffered: true });
   return {
     sample(at: number) {
+      if (
+        document
+          .querySelector(".chat-pane-cache__pane--active .chat-pane__connection-state")
+          ?.checkVisibility()
+      ) {
+        connectionIndicatorFrames++;
+      }
       sampleDetails(at);
       if (!dirty) {
         return;
@@ -202,6 +211,7 @@ export function installPaneChromeProbe() {
         (shift) => firstTranscriptPaint !== null && shift.at > firstTranscriptPaint,
       );
       return {
+        connectionIndicatorFrames,
         firstTranscriptPaint,
         changesAfterContent: firstTranscriptPaint === null ? null : changes.length,
         changes,

@@ -977,7 +977,7 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
       },
 
       sessionMessages,
-      attemptOverrides: { contextTokenBudget: 128_000 },
+      attemptOverrides: { contextTokenBudget: 192_000 },
       createSession: () => {
         const session = createDefaultEmbeddedSession({ initialMessages: sessionMessages });
         session.agent.streamFn = async (_model, context) => {

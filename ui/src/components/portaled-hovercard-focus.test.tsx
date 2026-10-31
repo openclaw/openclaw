@@ -9,6 +9,7 @@ import {
   HovercardControlsContext,
 } from "./portaled-hovercard-focus.ts";
 import { SessionHovercard } from "./session-hovercard-solid.tsx";
+import { ProgressCardMarkdown } from "./session-progress-card-view.tsx";
 import { CopyButton } from "./solid/copy-button.tsx";
 import { settleTooltip } from "./tooltip.test-support.ts";
 
@@ -119,13 +120,9 @@ it.each(["copy", "markdown"] as const)("retires replaced %s controls and their o
       {kind === "copy" ? (
         <CopyButton ref={createHovercardControlRef()} text={value()} idleLabel="Copy value" />
       ) : (
-        <SessionHovercard
-          progressCard={{
-            sessionKey: "agent:main:hovercard-test",
-            revision: 1,
-            updatedAt: 1,
-            markdown: value() ? `[${value()}](#link)` : "",
-          }}
+        <ProgressCardMarkdown
+          markdown={value() ? `[${value()}](#link)` : ""}
+          registerControls={controls.registerSource}
         />
       )}
     </>

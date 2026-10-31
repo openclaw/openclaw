@@ -2,12 +2,9 @@
   --openclaw-modal-width: 400px;
 }
 .session-worker-stop {
-  padding: 20px 20px 14px;
-  border: 1px solid var(--border-strong);
-  border-radius: 14px;
-  background: var(--bg-elevated);
+  padding: var(--overlay-modal-padding);
   color: var(--text);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 18px;
 }
 .session-worker-stop__heading {
@@ -19,7 +16,7 @@
 }
 .session-worker-stop__heading h2 {
   margin: 0;
-  font-size: 16px;
+  font-size: var(--overlay-modal-title-size);
   line-height: 22px;
   font-weight: 600;
   letter-spacing: -0.2px;
@@ -28,17 +25,17 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 3px;
+  width: var(--overlay-modal-close-size);
+  height: var(--overlay-modal-close-size);
+  padding: 0;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--menu-item-radius);
   background: transparent;
   color: var(--muted);
 }
 .session-worker-stop__close svg {
-  width: 18px;
-  height: 18px;
+  width: 14px;
+  height: 14px;
 }
 .session-worker-stop__close:hover {
   background: var(--bg-hover);
@@ -57,14 +54,6 @@
   padding: 0;
   border: 0;
   gap: 8px;
-}
-.session-worker-stop__actions .btn {
-  height: 32px;
-  padding: 0 13px;
-  border-radius: 7px;
-  font-size: 12px;
-  line-height: 1.45;
-  font-weight: 500;
 }
 .session-worker-stop__actions .session-worker-stop__submit {
   display: grid;

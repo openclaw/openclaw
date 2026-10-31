@@ -6,7 +6,7 @@
   height: 30px;
   padding: 6px;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
 }
@@ -20,7 +20,7 @@
 .oc-popover.palette-session-settings {
   padding: 5px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--menu-radius);
   background: var(--popover);
   color: var(--popover-foreground);
   box-shadow: var(--shadow-lg);
@@ -57,7 +57,7 @@
   min-height: 38px;
   padding: 6px 10px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: inherit;
   font: inherit;

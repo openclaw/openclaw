@@ -522,10 +522,10 @@ extensions/nostr/src/nostr-cursor.ts	2
 extensions/nostr/src/nostr-ingress.ts	4
 extensions/nostr/src/nostr-profile-http.ts	1
 extensions/nostr/src/nostr-profile-import.ts	1
-extensions/oc-path/src/oc-path/find.ts	9
+extensions/oc-path/src/oc-path/find.ts	3
 extensions/oc-path/src/oc-path/universal.ts	2
 extensions/oc-path/src/oc-path/yaml/edit.ts	2
-extensions/oc-path/src/oc-path/yaml/resolve.ts	2
+extensions/oc-path/src/oc-path/yaml/resolve.ts	1
 extensions/ollama/index.ts	5
 extensions/ollama/src/discovery-shared.ts	1
 extensions/ollama/src/provider-base-url.ts	1
@@ -1822,7 +1822,6 @@ src/infra/approval-handler-runtime.ts	9
 src/infra/approval-presentation.ts	3
 src/infra/backup-archive-publication.ts	4
 src/infra/backup-create-stream.ts	3
-src/infra/backup-create.ts	1
 src/infra/backup-tar-retry.ts	2
 src/infra/bonjour-discovery.ts	5
 src/infra/boundary-file-read.ts	1

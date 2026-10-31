@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
+import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import {
   normalizeRoleForGrouping,
   resolveMessageRole,
@@ -23,7 +24,6 @@ import type { RenderMessageGroupOptions } from "./chat-message-group-options.ts"
 import {
   FULL_MESSAGE_RETRY_REVISION_LIMIT,
   hasMessageActionButtons,
-  prepareChatMessageRender,
   resolveMessageActionDetails,
 } from "./chat-message-markdown-view.tsx";
 import {

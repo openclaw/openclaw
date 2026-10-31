@@ -96,6 +96,78 @@ export function registerDatabaseCommand(program: Command): void {
     .description("Inspect database compatibility, manage ownership, and port database stores")
     .addHelpText("after", `\nDocs: ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}\n`);
 
+  const migrationCapture = database
+    .command("migration-capture")
+    .description("Preserve exact offline SQLite state with a filesystem archive for migration");
+  migrationCapture
+    .command("capabilities")
+    .option("--json", "emit machine-readable JSON", false)
+    .action(() =>
+      writeRuntimeJson(defaultRuntime, {
+        schema: "openclaw.database-migration-capture.capabilities.v1",
+        protocol: 1,
+        sourceEngine: "sqlite",
+        profile: "exact-sqlite-migration",
+        restoreTarget: "empty-staging-only",
+        logicalPaths: "same-state-and-config-roots",
+      }),
+    );
+  migrationCapture
+    .command("create")
+    .requiredOption(
+      "--base-archive <archive>",
+      "fresh verified filesystem archive for the same stopped source",
+    )
+    .requiredOption(
+      "--output <directory>",
+      "new private capture directory outside the source roots",
+    )
+    .option("--json", "emit machine-readable JSON", false)
+    .action(async (options) => {
+      try {
+        const { createDatabaseMigrationCapture } =
+          await import("../../commands/database-migration-capture.js");
+        const result = await createDatabaseMigrationCapture(options);
+        if (options.json) {
+          writeRuntimeJson(defaultRuntime, result);
+        } else {
+          writeRuntimeStdout(defaultRuntime, `Exact migration capture: ${result.manifestPath}\n`);
+        }
+      } catch (error) {
+        writeDatabaseError(error, options.json === true);
+      }
+    });
+  migrationCapture
+    .command("restore")
+    .argument("<capture>", "completed exact migration capture directory")
+    .requiredOption("--target <directory>", "empty private staging directory outside live state")
+    .requiredOption(
+      "--manifest-sha256 <digest>",
+      "manifest digest returned by the exact capture producer",
+    )
+    .option("--json", "emit machine-readable JSON", false)
+    .action(async (capture, options) => {
+      try {
+        const { restoreDatabaseMigrationCapture } =
+          await import("../../commands/database-migration-capture.js");
+        const result = await restoreDatabaseMigrationCapture(defaultRuntime, {
+          capture,
+          target: options.target,
+          manifestSha256: options.manifestSha256,
+        });
+        if (options.json) {
+          writeRuntimeJson(defaultRuntime, result);
+        } else {
+          writeRuntimeStdout(
+            defaultRuntime,
+            `Exact migration restored to staging: ${result.targetPath}\n`,
+          );
+        }
+      } catch (error) {
+        writeDatabaseError(error, options.json === true);
+      }
+    });
+
   database
     .command("port")
     .description("Port existing database stores offline between SQLite and PostgreSQL")

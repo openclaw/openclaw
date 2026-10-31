@@ -1284,7 +1284,7 @@ openclaw-chat-tool-output {
   margin: 8px 0;
   padding: 16px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--bg-elevated);
 }
 

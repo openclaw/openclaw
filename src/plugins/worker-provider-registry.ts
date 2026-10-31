@@ -36,6 +36,15 @@ export function validateWorkerProviderContract(
       message: "worker provider registration provisionBeforeInstallation must be a boolean",
     };
   }
+  if (
+    provider.supportsResourceReceipts !== undefined &&
+    (typeof provider.supportsResourceReceipts !== "boolean" || !provider.supportsResourceReceipts)
+  ) {
+    return {
+      ok: false,
+      message: "worker provider registration supportsResourceReceipts must be true",
+    };
+  }
   const executionModes = provider.supportedExecutionModes;
   const validExecutionModes =
     Array.isArray(executionModes) &&

@@ -101,7 +101,7 @@
   height: var(--session-rail-control, 33px);
   box-sizing: border-box;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   padding: 0;
   color: var(--text);
   background: transparent;
@@ -139,7 +139,7 @@
   height: 32px;
   min-width: 32px;
   padding: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   color: var(--muted);
 }
 .lr-toolbar--mobile .bp-icon svg {
@@ -163,7 +163,7 @@
   height: 32px;
   padding: 0;
   gap: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
 }
 .lr-initial {
@@ -183,7 +183,7 @@
   box-sizing: border-box;
   padding: 4px 8px 4px 12px;
   border: 1px solid var(--border-strong);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--bg);
 }
 .lr-initial-form:focus-within {
@@ -199,7 +199,7 @@
   height: 36px;
   padding: 0 10px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
   font: inherit;
@@ -258,7 +258,7 @@ a {
 }
 .lr-state {
   padding: 2px 9px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, currentColor 12%, transparent);
   font-weight: 600;
 }
@@ -285,7 +285,7 @@ a {
 }
 .lr-comment {
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   padding: 16px;
   margin-bottom: 12px;
 }
@@ -299,7 +299,7 @@ a {
 }
 .lr-file {
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   margin-bottom: 8px;
   overflow: hidden;
 }
@@ -369,7 +369,7 @@ a {
   color: var(--text);
   background: transparent;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   padding: 4px 12px;
   cursor: default;
 }
@@ -383,7 +383,7 @@ a {
   white-space: pre;
   overflow: auto;
   padding: 10px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--text) 5%, transparent);
 }
 .lr-markdown code {
@@ -486,7 +486,7 @@ a {
   max-width: 100%;
   padding: 6px 10px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   color: var(--muted);
   background: var(--bg);
   box-shadow: 0 2px 8px color-mix(in srgb, var(--text) 8%, transparent);

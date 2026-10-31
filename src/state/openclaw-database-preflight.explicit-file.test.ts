@@ -305,6 +305,7 @@ it.each([false, true])(
       { kind: "local-workspace-manifests-v31", path: pathname },
       { kind: "local-workspace-cas-v35", path: pathname },
       { kind: "template-names-v36", path: pathname },
+      { kind: "worker-resource-receipts-v37", path: pathname },
     ]);
     await withStateMigrationBackupForTest(options, async () => {
       using witness = openRawDatabase(pathname);
@@ -558,6 +559,7 @@ it.each([33, 34])(
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
       { kind: "local-workspace-cas-v35", path: pathname },
       { kind: "template-names-v36", path: pathname },
+      { kind: "worker-resource-receipts-v37", path: pathname },
     ]);
     await withStateMigrationBackupForTest(options, async () => {
       using witness = openRawDatabase(pathname);

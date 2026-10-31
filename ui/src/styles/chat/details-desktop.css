@@ -432,7 +432,7 @@
 
 .chat-details .chat-details-desktop-body .chat-details-people__row {
   grid-template-columns: var(--details-row-icon-slot) minmax(0, 1fr) auto;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 
 .chat-details .chat-details-desktop-body a.chat-details-people__row:hover {

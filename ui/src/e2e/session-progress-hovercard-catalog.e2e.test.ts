@@ -63,7 +63,6 @@ suite.define(() => {
         const part = (name: string) => card.locator(`.session-hovercard__${name}`);
         expect(await part("title").textContent()).toBe("Catalog release review");
         expect(await part("created-age").textContent()).toBe("2h");
-        // Folder and branch share one context row, separated by a muted slash.
         expect(await part("context-text").allTextContents()).toEqual([
           "openclaw / catalog-hovercard",
         ]);

@@ -451,6 +451,12 @@ parser, so ordinary parse/emit round-trips preserve comments and authoring
 shape while resolved paths use the same map-key / sequence-index model as
 JSONC. The same adapter handles `.yaml`, `.yml`, and `.lobster` files.
 
+`resolve` and `find` follow aliases to their anchored values, including
+predicate fields. Reported lines refer to the anchor. `set` can replace an alias
+slot without changing its anchor, but writes through an alias remain refused.
+Recursive searches stop at cyclic alias edges while retaining distinct logical
+paths. YAML merge keys (`<<`) are not expanded.
+
 ## Subcommand reference
 
 ### `resolve <oc-path>`
