@@ -6,6 +6,7 @@ const sendMessageSlackMock = vi.hoisted(() => vi.fn());
 vi.mock("./send.js", () => ({ sendMessageSlack: sendMessageSlackMock }));
 
 const { slackApprovalNativeRuntime } = await import("./approval-handler.runtime.js");
+const { getSlackListenerWriteClient } = await import("./client.js");
 const transport = slackApprovalNativeRuntime.transport;
 
 function pending(context: object, to = "channel:C123", teamId = "T123", surface = "origin") {
@@ -152,5 +153,26 @@ describe("Slack approval delivery", () => {
       } as never),
     ).rejects.toThrow("Slack approval workspace does not match the authenticated installation");
     expect(open).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses the streaming writer for a workspace approval after a streamed reply", async () => {
+    const open = vi.fn().mockResolvedValue({ channel: { id: "D123" } });
+    const client = { token: "xoxb-test", chat: { update: vi.fn() }, conversations: { open } };
+    // Workspace streaming asks for the listener writer without a team scope.
+    const streamWriter = getSlackListenerWriteClient({ listenerClient: client as never });
+    expect(streamWriter).toBeDefined();
+
+    await transport.deliverPending({
+      ...pending({ app: { client }, config: {}, workspaceTeamId: "T123" }, "user:U123"),
+      approvalKind: "exec",
+    } as never);
+
+    expect(sendMessageSlackMock).toHaveBeenCalledWith(
+      "channel:D123",
+      "approve",
+      expect.objectContaining({
+        eventScope: { teamId: "T123", client, writeClient: streamWriter },
+      }),
+    );
   });
 });
