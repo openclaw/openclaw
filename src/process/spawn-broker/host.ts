@@ -156,6 +156,8 @@ export class SpawnBrokerHost {
     return this.fileReads.read(filePath, signal);
   }
 
+  readonly readFilePage = this.fileReads.readPage.bind(this.fileReads);
+
   captureNativeResource(
     input: BrokerNativeResourceInput,
     callbacks: BrokerNativeResourceCallbacks,

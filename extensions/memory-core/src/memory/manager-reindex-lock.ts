@@ -1,12 +1,15 @@
 // Memory Core serializes builds and reset within the owning Gateway.
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import { resolveUserPath } from "openclaw/plugin-sdk/memory-core-host-engine-fs";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 
 export type MemoryReindexLockHandle = { release: () => Promise<void> };
 
-const builds = new Map<string, Promise<void>>();
+const builds = resolveGlobalMap<string, Promise<void>>(
+  Symbol.for("openclaw.memoryCore.reindexBuilds"),
+);
 const REINDEX_LOCK_WAIT_TIMEOUT_MS = 2_000;
 function createMemoryReindexBusyError(lockPath: string): Error & { code: string } {
   return Object.assign(

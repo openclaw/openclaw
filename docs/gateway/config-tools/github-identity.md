@@ -180,8 +180,11 @@ adoption uses the PR workspace.
 Initial preparation of an already managed workspace requires a clean workspace without dirty, untracked, or
 unpublished work, except for a PR this conversation published, described above. Otherwise it preserves that work and asks you to keep or finish
 it separately before continuing. A clean workspace receives exactly the verified
-PR head's files, even when the selected project's base is newer. Preparation
-keeps an already managed directory and sandbox scope, and records the original PR
+PR head's files, even when the selected project's published base is newer than
+the base recorded by the PR or comes from a different project branch. Preparation
+verifies that newer history against the project's recorded source branch in its
+original repository; a clean checkout with unpublished commits remains
+protected. Preparation keeps an already managed directory and sandbox scope, and records the original PR
 association. The sandbox's current branch and HEAD remain intact; the source
 files are staged for work on the PR.
 

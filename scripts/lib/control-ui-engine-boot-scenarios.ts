@@ -4,12 +4,12 @@ import type { ColdLoadRpcRecord } from "../../ui/src/test-helpers/control-ui-col
 import { createColdLoadProbeInitScript } from "../../ui/src/test-helpers/control-ui-cold-load-probes.ts";
 import type { MockGatewayControls } from "../../ui/src/test-helpers/control-ui-e2e.ts";
 import { controlUiSessionPath } from "../../ui/src/test-helpers/control-ui-e2e.ts";
-import { createStreamingReplyProbeInitScript } from "../../ui/src/test-helpers/control-ui-streaming-reply.ts";
 import { frames } from "./control-ui-interaction-navigation.ts";
 import type {
   InteractionEvidence,
   InteractionScenario,
 } from "./control-ui-interaction-scenarios.ts";
+import { createStreamingReplyProbeInitScript } from "./control-ui-streaming-reply.ts";
 
 const sessionKey = "agent:main:interaction-a";
 const activePane = ".chat-pane-cache__pane--active";

@@ -137,6 +137,7 @@ export async function noteSessionTranscriptHeaderHealth(params: {
       env,
       title: NOTE_TITLE,
       failureLabel: "Failed to inspect transcript headers",
+      selectSessionIds: (reader, reportError) => reader.headerlessSessionIds(reportError),
     },
     ({ reader, target, databaseOptions, reportError, sessionId }) => {
       const sqlitePath = target.sqlitePath;

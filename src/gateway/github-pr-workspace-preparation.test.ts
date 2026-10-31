@@ -24,15 +24,21 @@ describe("existing PR preparation through the registered agent action", () => {
     realWorktree: true,
   });
 
-  it.each([false, true])(
-    "installs the exact PR head from a clean newer project base and preserves later work (fork=%s)",
-    async (fork) => {
-      const f = await fixture({ fork });
+  it.each([
+    { fork: false, baseBranch: "main", projectFork: false },
+    { fork: true, baseBranch: "main", projectFork: false },
+    { fork: true, baseBranch: "release", projectFork: false },
+    { fork: true, baseBranch: "release", projectFork: true },
+  ])(
+    "installs the exact PR head from a clean newer project base and preserves later work (fork=$fork, base=$baseBranch, projectFork=$projectFork)",
+    async ({ fork, baseBranch, projectFork }) => {
+      const f = await fixture({ fork, baseBranch, projectFork, newerProjectBase: true });
       const before = f.readSession();
       const originalHead = await f.git("rev-parse", "HEAD");
       const originalGuestHead = await f.guestGit("rev-parse", "HEAD");
       const guestBranch = await f.guestGit("symbolic-ref", "HEAD");
-      expect(originalHead).toBe(f.pr.base.sha);
+      expect(await f.git("rev-list", "--count", `${f.pr.base.sha}..HEAD`)).toBe("5");
+      expect(await f.git("merge-base", originalHead, f.pr.base.sha)).toBe(f.pr.base.sha);
       expect(await f.git("status", "--porcelain")).toBe("");
       expect(await fs.readFile(path.join(f.projection, "newer-base.txt"), "utf8")).toBe(
         "base advanced after PR\n",
@@ -60,7 +66,7 @@ describe("existing PR preparation through the registered agent action", () => {
             base: {
               repository: "openclaw/openclaw",
               repositoryId: 10,
-              branch: "main",
+              branch: baseBranch,
               commit: f.pr.base.sha,
             },
             head: {
@@ -457,6 +463,39 @@ describe("existing PR preparation through the registered agent action", () => {
     expect(await f.git("write-tree")).toBe(tree);
     expect(await fs.readFile(path.join(f.projection, "artifact.txt"), "utf8")).toBe("accepted\n");
     expect(f.publishedTitles).toEqual(["earlier-pr"]);
+    expect(f.writes).toEqual([]);
+    expect(f.externalWrites).toEqual([]);
+  });
+
+  it("preserves a clean initial projection containing unpublished project history", async () => {
+    const f = await fixture({
+      fork: true,
+      projectFork: true,
+      baseBranch: "release",
+      newerProjectBase: true,
+      unpublishedProjectWork: true,
+    });
+    const before = f.readSession().worktree;
+    const head = await f.git("rev-parse", "HEAD");
+    const tree = await f.git("write-tree");
+    expect(await f.guestGit("rev-parse", "HEAD")).toBe(head);
+    expect(await f.git("status", "--porcelain")).toBe("");
+    expect(await f.guestGit("status", "--porcelain")).toBe("");
+    await expect(f.invoke()).rejects.toThrow("existing dirty, untracked, or unpublished work");
+    expect(f.readSession().worktree).toEqual(before);
+    for (const git of [f.git, f.guestGit]) {
+      expect(await git("rev-parse", "HEAD")).toBe(head);
+      expect(await git("write-tree")).toBe(tree);
+      expect(await git("status", "--porcelain")).toBe("");
+    }
+    for (const directory of [f.cwd, f.projection]) {
+      expect(await fs.readFile(path.join(directory, "notes.txt"), "utf8")).toBe(
+        "unpublished project work\n",
+      );
+      await expect(fs.stat(path.join(directory, "pr.txt"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    }
     expect(f.writes).toEqual([]);
     expect(f.externalWrites).toEqual([]);
   });

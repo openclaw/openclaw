@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { constants, type BigIntStats } from "node:fs";
+import { constants, realpathSync, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
@@ -334,7 +334,8 @@ export async function scanActualWorkspaceManifest(
       if (sha256) {
         // Included paths can cross a replaced parent directory even when the
         // leaf inode still matches a prior content hash.
-        if ((await fs.realpath(absolute)) !== absolute) {
+        // This scan runs in the computation worker; avoid a per-file pool round trip.
+        if (realpathSync.native(absolute) !== absolute) {
           throw new Error("Gateway workspace file changed while it was being read");
         }
         addEntry(

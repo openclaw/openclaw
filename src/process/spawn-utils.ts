@@ -2,6 +2,7 @@ import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core";
+import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import { assertAppContainerSpawnSupported } from "../infra/windows-appcontainer-spawn.js";
 import { getAgentExecCgroup } from "./linux-exec-cgroup.js";
 import { prepareOomScoreAdjustedSpawn } from "./linux-oom-score.js";
@@ -31,8 +32,10 @@ export function spawnProcess(
           gatewayWorker ? undefined : getAgentExecCgroup(),
         )
       : initiateSpawn
-        ? initiateSpawn(() => spawn(command, args, options))
-        : spawn(command, args, options);
+        ? initiateSpawn(() =>
+            runWithMainThreadTask("process:spawn", () => spawn(command, args, options), "native"),
+          )
+        : runWithMainThreadTask("process:spawn", () => spawn(command, args, options), "native");
   if (!options.shell && options.argv0 !== undefined) {
     prepareOomScoreAdjustedSpawn(command, args, options).afterSpawn?.(child.pid);
   }

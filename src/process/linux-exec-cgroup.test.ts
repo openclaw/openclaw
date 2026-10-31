@@ -75,7 +75,9 @@ afterEach(async () => {
   }
 });
 
-it("divides the aggregate memory IO budget across disks and preserves half of inherited ceilings", async () => {
+it("preserves half of inherited ceilings on both solid-state and rotational disks", async () => {
+  fixture.files["/sys/dev/block/9:127/queue/rotational"] = "0\n";
+  fixture.files["/sys/dev/block/8:0/queue/rotational"] = "1\n";
   fixture.files[`${root}/io.max`] =
     "9:127 rbps=1048576 wbps=max riops=200 wiops=max\n8:0 rbps=max wbps=131072 riops=max wiops=max";
   fixture.files["/sys/fs/cgroup/system.slice/io.max"] =
@@ -100,6 +102,21 @@ it("divides the aggregate memory IO budget across disks and preserves half of in
     ),
   ).toBe(true);
 });
+
+it.each([2400 * MiB, 201828433920])(
+  "gives each non-rotational disk its own IO ceiling independent of host RAM (%s bytes)",
+  async (memory) => {
+    vi.mocked(os.totalmem).mockReturnValue(memory);
+    for (const device of fixture.devices) {
+      fixture.files[`/sys/dev/block/${device}/queue/rotational`] = "0\n";
+    }
+    expect(await initializeGatewayExecCgroup("/state")).toContain("isolation active");
+    expect(fixture.write.mock.calls.filter(([file]) => file.endsWith("/io.max"))).toEqual([
+      [`${exec}/io.max`, "9:127 rbps=167772160 wbps=167772160 riops=40960 wiops=40960"],
+      [`${exec}/io.max`, "8:0 rbps=167772160 wbps=167772160 riops=40960 wiops=40960"],
+    ]);
+  },
+);
 
 it.each(["missing controllers", "populated root", "denied IO policy"])(
   "keeps isolation inactive after %s without failing startup",
