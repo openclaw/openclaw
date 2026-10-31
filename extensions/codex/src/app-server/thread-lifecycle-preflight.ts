@@ -439,6 +439,19 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     }),
   );
   const webSearchThreadConfigFingerprint = fingerprintJsonObject(webSearchPlan.threadConfig);
+  // A cold app-server can answer the capability probe before its model metadata
+  // loads, so an "unknown"/"unsupported" verdict may carry no provider fact at
+  // all. The uninformed plan is what such a verdict produces under the current
+  // config; the lifecycle uses it to tell a support fact from support silence.
+  const webSearchUninformedThreadConfigFingerprint = fingerprintJsonObject(
+    resolveCodexWebSearchPlan({
+      config: params.params.config,
+      disableTools: params.params.disableTools,
+      nativeToolSurfaceEnabled: params.nativeCodeModeEnabled,
+      nativeProviderWebSearchSupport: "unknown",
+      webSearchAllowed: params.webSearchAllowed,
+    }).threadConfig,
+  );
   const networkProxyConfigFingerprint = params.appServer.networkProxy?.configFingerprint;
   const contextEngineBinding = lifecycleTiming.measureSync("context-engine-binding", () =>
     buildContextEngineBinding(params.params, params.contextEngineProjection),
@@ -593,6 +606,7 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     userMcpServersConfigPatch,
     userMcpServersFingerprint,
     webSearchThreadConfigFingerprint,
+    webSearchUninformedThreadConfigFingerprint,
   };
 }
 
