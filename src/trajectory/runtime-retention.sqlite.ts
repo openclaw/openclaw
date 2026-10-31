@@ -39,7 +39,7 @@ type Sweep = {
   nativeChanges: boolean;
   changes: number | undefined;
   plan?: TrajectoryRuntimeRetentionPlan;
-  receipts: Map<string, Run[]>;
+  receipts: Set<string>;
   sessions: Map<string, Map<string | null, Run>>;
   queue: Run[];
   cursor: number;
@@ -164,7 +164,7 @@ export function beginTrajectoryRuntimeRetention(
     version: readSqliteDatabaseSiblingWriteRevision(database),
     nativeChanges,
     changes: changes(database, nativeChanges),
-    receipts: new Map(),
+    receipts: new Set(),
     sessions: new Map(),
     queue: [],
     cursor: 0,
@@ -193,16 +193,12 @@ function currentSweep(database: EngineConnection): Sweep | undefined {
   return sweep;
 }
 
-function stageRetentionMutation(
-  database: EngineConnection,
-  sweep: Sweep,
-  receipt?: { sessionId: string; runs: Run[] },
-) {
+function stageRetentionMutation(database: EngineConnection, sweep: Sweep, sessionId?: string) {
   const committedChanges = changes(database, sweep.nativeChanges);
   deferSqlitePostCommitPublication(database, () => {
     if (sweeps.get(database) === sweep && Atomics.load(sweep.lease, 0) === 1) {
-      if (receipt) {
-        sweep.receipts.set(receipt.sessionId, receipt.runs);
+      if (sessionId !== undefined) {
+        sweep.receipts.add(sessionId);
       }
       sweep.changes = committedChanges;
     }
@@ -216,8 +212,7 @@ export function captureTrajectoryRuntimeRetentionMutation(database: EngineConnec
     return undefined;
   }
   return (sessionId: string) => {
-    // Session trimming has already bounded this summary to the retained session window.
-    stageRetentionMutation(database, sweep, { sessionId, runs: readRuns(database, sessionId) });
+    stageRetentionMutation(database, sweep, sessionId);
   };
 }
 
@@ -270,13 +265,18 @@ export function selectTrajectoryRuntimeRetentionBatch(
   if (!sweep || sweep.id !== input.sweepId) {
     return { sweepId: input.sweepId, runs, refresh: true as const };
   }
+  // The writer reservation keeps these committed summaries current through selection.
+  // Coalesce appends before reading each changed session, outside the transaction.
+  const receipts = new Map(
+    [...sweep.receipts].map((sessionId) => [sessionId, readRuns(database, sessionId)]),
+  );
   if (input.snapshot && !sweep.plan) {
     sweep.plan = { ...input.snapshot, runs: [] };
     const sessions = groupRecords(input.snapshot.runs, (run) => run.sessionId);
     for (const [sessionId, rows] of sessions) {
-      replaceSession(sweep, sessionId, sweep.receipts.get(sessionId) ?? rows);
+      replaceSession(sweep, sessionId, receipts.get(sessionId) ?? rows);
     }
-    for (const [sessionId, rows] of sweep.receipts) {
+    for (const [sessionId, rows] of receipts) {
       if (!sessions.has(sessionId)) {
         replaceSession(sweep, sessionId, rows);
       }
@@ -284,7 +284,7 @@ export function selectTrajectoryRuntimeRetentionBatch(
     sweep.queue = sweep.additions.toSorted(compareRuns);
     sweep.additions = [];
   } else if (sweep.plan) {
-    for (const [sessionId, rows] of sweep.receipts) {
+    for (const [sessionId, rows] of receipts) {
       replaceSession(sweep, sessionId, rows);
     }
   }
