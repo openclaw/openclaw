@@ -42,34 +42,46 @@ defineSolidBridge<AgentSelectProps>(
     const label = () => triggerOption()?.label ?? (props.placeholder || t("agents.noAgents"));
     const accessibleLabel = () => [label(), selected()?.badge].filter(Boolean).join(", ");
     const gateway = useAvatarGatewayContext();
-    const loader = createIdentityAvatars();
-    onSettled(() => loader.connect());
-    const avatarSource = projectOwner(loader, (owner) => owner);
-    const avatars = createMemo(() => {
-      gateway();
-      const fallback = fallbackOption();
-      const candidates = fallback ? [...props.options, fallback] : props.options;
-      const identities = props.identityById;
-      return avatarSource.read().withActiveRoutes(
-        () =>
-          new Map(
-            candidates.map((option) => {
-              const identity = option.agent ? (identities[option.agent.id] ?? null) : null;
-              const url = option.agent ? resolveAgentAvatarUrl(option.agent, identity) : null;
-              return [
-                option.value,
-                {
-                  textAvatar: option.agent ? resolveAgentTextAvatar(option.agent, identity) : null,
-                  image: url ? loader.resolve(url) : null,
-                  onError: url ? loader.imageErrorHandler(url) : undefined,
-                },
-              ] as const;
-            }),
-          ),
+    function createAvatars(candidates: () => readonly AgentSelectOption[]) {
+      const loader = createIdentityAvatars();
+      onSettled(() => loader.connect());
+      const avatarSource = projectOwner(loader, (owner) => owner);
+      return createMemo(
+        () => {
+          gateway();
+          const identities = props.identityById;
+          return avatarSource.read().withActiveRoutes(
+            () =>
+              new Map(
+                candidates().map((option) => {
+                  const identity = option.agent ? (identities[option.agent.id] ?? null) : null;
+                  const url = option.agent ? resolveAgentAvatarUrl(option.agent, identity) : null;
+                  return [
+                    option.value,
+                    {
+                      textAvatar: option.agent
+                        ? resolveAgentTextAvatar(option.agent, identity)
+                        : null,
+                      image: url ? loader.resolve(url) : null,
+                      onError: url ? loader.imageErrorHandler(url) : undefined,
+                    },
+                  ] as const;
+                }),
+              ),
+          );
+        },
+        { lazy: true },
       );
+    }
+    // Each visible region owns its leases; the lazy menu never warms the closed roster.
+    const triggerAvatars = createAvatars(() => {
+      const option = triggerOption();
+      return option ? [option] : [];
     });
-    function Avatar(avatarProps: { option: AgentSelectOption }) {
-      const resolved = () => avatars().get(avatarProps.option.value);
+    const optionAvatars = createAvatars(() => props.options);
+    function Avatar(avatarProps: { option: AgentSelectOption; fromMenu?: boolean }) {
+      const resolved = () =>
+        (avatarProps.fromMenu ? optionAvatars() : triggerAvatars()).get(avatarProps.option.value);
       return <AgentOptionAvatar option={avatarProps.option} avatar={resolved()} />;
     }
     // Menu retains a custom renderer per key; retain that key's live option fields too.
@@ -93,7 +105,7 @@ defineSolidBridge<AgentSelectProps>(
             {isSelected() ? "✓" : ""}
           </span>
           <span class="oc-menu-item__icon">
-            <Avatar option={row.option} />
+            <Avatar option={row.option} fromMenu />
           </span>
           <span class="oc-menu-item__label">
             <span class="agent-select__option-copy">
@@ -136,6 +148,7 @@ defineSolidBridge<AgentSelectProps>(
     return (
       <Menu
         id={id}
+        lazy
         ref={(handle) => {
           menu = handle;
           props.focusTargetsRef?.(() => {
