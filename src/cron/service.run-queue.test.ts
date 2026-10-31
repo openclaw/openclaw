@@ -30,6 +30,46 @@ import { createCronScheduledRunId } from "./store/run-request-id.js";
 import { cronStreamScheduleKey } from "./stream-schedule.js";
 import type { CronJob } from "./types.js";
 
+it("observes a rejected detached resume drain and preserves queued state", async () => {
+  const { storePath } = await makeStorePath();
+  const job = commandJob("resume-storage-failure");
+  job.state.queuedAtMs = NOW;
+  await saveCronStore(storePath, { version: 1, jobs: [job] });
+  const { cron, state } = createCronServiceWithStateForTest({
+    scheduler: createTestGatewayScheduler(),
+    storePath,
+    cronEnabled: false,
+    defaultAgentId: "main",
+    log: logger,
+    nowMs: () => NOW,
+    enqueueSystemEvent() {},
+    requestHeartbeat() {},
+    runIsolatedAgentJob: async () => ({ status: "ok" }),
+  });
+  state.store = { version: 1, jobs: [job] };
+  state.schedulerStarted = true;
+  cron.pauseScheduling();
+  const failure = new Error("synthetic resume storage failure");
+  const injected = vi
+    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+    .mockRejectedValue(failure);
+  try {
+    cron.resumeScheduling();
+    await expect
+      .poll(() => logger.warn.mock.calls.some((call) => call[1] === "cron: queue drain delayed"), {
+        timeout: 1000,
+      })
+      .toBe(true);
+    expect(injected).toHaveBeenCalled();
+    expect(job.state.queuedAtMs).toBe(NOW);
+    await expect(drainCronRunQueue(state)).rejects.toBe(failure);
+  } finally {
+    injected.mockRestore();
+    cron.stop();
+    await cron.waitForIdle();
+  }
+});
+
 const NOW = Date.parse("2026-10-01T12:00:00.000Z");
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-run-queue-",
