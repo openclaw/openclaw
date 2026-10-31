@@ -16,6 +16,7 @@ import {
   readActiveTranscriptEntryAnchorFromProjection,
   readActiveTranscriptEntryAnchorInTransaction,
 } from "./session-accessor.sqlite-transcript-anchor.js";
+import { readIdempotencyKeyOwner } from "./session-accessor.sqlite-transcript-identity.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import type { SessionTranscriptEventMatchRequest } from "./session-transcript-worker-read.types.js";
 
@@ -25,6 +26,16 @@ export function findTranscriptEventMatchingInDatabase(
   request: SessionTranscriptEventMatchRequest,
 ): { event: TranscriptEvent } | undefined {
   const { target, match } = request;
+  // Hot append/suffix owners retain one identity for each nonempty trimmed key.
+  // A present owner need not be the newest historical match, so retain that scan.
+  if (
+    match.kind === "idempotency" &&
+    match.key.length > 0 &&
+    match.key === match.key.trim() &&
+    !readIdempotencyKeyOwner(database, target.sessionId, match.key)
+  ) {
+    return undefined;
+  }
   const matchesVisibleFinal =
     match.kind === "visible-final"
       ? createVisibleAssistantResultEventMatcher(match.runId)
@@ -55,6 +66,7 @@ export function findTranscriptEventMatchingInDatabase(
       match.kind === "latest"
         ? undefined
         : (event) => matchesTranscriptEvent(event, match, "navigation"),
+      { diagnostics: request.diagnostics },
     );
   };
   if (match.kind !== "canvas-widget") {
