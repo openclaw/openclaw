@@ -23,6 +23,7 @@ import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
 import type { ClawdbotConfig, OutboundIdentity, ReplyPayload, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
+import { isFeishuMessageAuditRejection } from "./api-response.js";
 import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
 import { createFeishuClient } from "./client.js";
 import { resolveCardHeader, resolveCardNote } from "./identity-header.js";
@@ -82,6 +83,8 @@ const MS_EPOCH_MIN = 1_000_000_000_000;
 const STREAMING_START_FAILURE_BACKOFF_MS = 60_000;
 const NO_VISIBLE_REPLY_FALLBACK_TEXT =
   "⚠️ This reply completed without visible content. The turn may have been interrupted; please retry or ask me to recover from recent context.";
+const MESSAGE_AUDIT_REJECTION_NOTICE =
+  "⚠️ Feishu couldn't deliver this reply because it didn't pass a content policy check.";
 
 function isStreamingStartBackedOff(accountId: string): boolean {
   const backoffUntil = streamingStartBackoffUntilByAccount.get(accountId);
@@ -279,6 +282,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let inFlightStreamingClose: Promise<StreamingCloseOutcome> | undefined;
   let closingStreamingText: string | undefined;
   let visibleReplySent = false;
+  let messageAuditNoticeQueued = false;
   type ReplyOutcome =
     | { kind: "skipped"; reason: string; assistantMessageIndex?: number }
     | { kind: "suppressed"; reason: string }
@@ -1016,6 +1020,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     },
   };
   const handleDeliveryError = async (error: unknown, info: { kind: string }) => {
+    const shouldSendAuditNotice = !messageAuditNoticeQueued && isFeishuMessageAuditRejection(error);
+    if (shouldSendAuditNotice) {
+      messageAuditNoticeQueued = true;
+    }
     if (info.kind === "final") {
       // Later suppression cannot erase a failed final; accepted visibility still
       // prevents recovery from duplicating any native reply.
@@ -1029,11 +1037,30 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     params.runtime.error(
       `feishu[${account.accountId}] ${info.kind} reply failed: ${String(error)}`,
     );
-    await queueIdleSideEffects().catch((cleanupError: unknown) =>
+    const cleanup = queueIdleSideEffects().catch((cleanupError: unknown) =>
       params.runtime.error(
         `feishu[${account.accountId}] reply error cleanup failed: ${String(cleanupError)}`,
       ),
     );
+    if (shouldSendAuditNotice) {
+      // Fallback evaluation waits for the notice as well as streaming cleanup.
+      idleSideEffectsPromise = idleSideEffectsPromise.then(async () => {
+        try {
+          await sendMessageFeishu({
+            ...replyTarget,
+            text: MESSAGE_AUDIT_REJECTION_NOTICE,
+            ...(requiredMentionTargets?.length ? { mentions: requiredMentionTargets } : {}),
+          });
+          visibleReplySent = true;
+        } catch {
+          params.runtime.error(
+            `feishu[${account.accountId}]: failed to send content-policy rejection notice`,
+          );
+        }
+      });
+      await idleSideEffectsPromise;
+    }
+    await cleanup;
   };
   const delivery: ChannelInboundTurnPlan["delivery"] = {
     observeMessageSent: true,
