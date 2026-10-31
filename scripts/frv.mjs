@@ -76,7 +76,7 @@ const DEFAULT_CHILD_MAX_ATTEMPTS = 2;
 const PLAN_ARTIFACT_PROPAGATION_MS = 2 * 60_000;
 const PLAN_FILENAME = "full-release-execution-plan.json";
 const USAGE =
-  "usage: pnpm frv <status|watch|cancel|continue|rerun|verify> --run <id> [--failed [--wait-for-seal] | --job <child>:<name> | --child <key|run-id> [--max-attempts <n>]] | pnpm frv prioritize --restore <record>";
+  "usage: pnpm frv <status|watch|cancel|continue|rerun|verify> --run <id> [--failed [--wait-for-seal] | --job <child>:<name> [--no-follow] | --child <key|run-id> [--max-attempts <n>]] | pnpm frv logs --job <job-id> [--grep <text>] | pnpm frv prioritize --restore <record>";
 const PACIFIC_TIME_FORMAT = new Intl.DateTimeFormat("en-US", {
   timeZone: "America/Los_Angeles",
   year: "numeric",
@@ -164,6 +164,8 @@ function parseArgs(argv) {
       options.job = requiredValue(argv[++index], "--job");
     } else if (argument === "--child") {
       options.child = requiredValue(argv[++index], "--child");
+    } else if (argument === "--grep") {
+      options.grep = requiredValue(argv[++index], "--grep");
     } else if (argument === "--max-attempts") {
       options.maxAttempts = positiveInteger(argv[++index], "--max-attempts");
     } else if (argument === "--state") {
@@ -189,7 +191,9 @@ function parseArgs(argv) {
     }
   }
   if (
-    !["cancel", "continue", "prioritize", "rerun", "status", "verify", "watch"].includes(command)
+    !["cancel", "continue", "logs", "prioritize", "rerun", "status", "verify", "watch"].includes(
+      command,
+    )
   ) {
     throw new Error(USAGE);
   }
@@ -197,14 +201,17 @@ function parseArgs(argv) {
     throw new Error("--force is valid only with cancel");
   }
   const restoring = command === "prioritize";
+  const readingLogs = command === "logs";
   if (restoring && options.restore === undefined) {
     // Release validation no longer pauses PR CI; only historical records remain.
     throw new Error("prioritize --run is retired; use prioritize --restore <record>");
   }
-  if (restoring ? options.runId !== "" : !/^[1-9][0-9]*$/u.test(options.runId)) {
-    throw new Error(
-      restoring ? "--restore does not take --run" : "--run must be a positive decimal",
-    );
+  if (restoring || readingLogs) {
+    if (options.runId !== "") {
+      throw new Error(`${command} does not take --run`);
+    }
+  } else if (!/^[1-9][0-9]*$/u.test(options.runId)) {
+    throw new Error("--run must be a positive decimal");
   }
   if (options.restore !== undefined && !restoring) {
     throw new Error("--restore is valid only with prioritize");
@@ -228,8 +235,16 @@ function parseArgs(argv) {
     if (options.job !== undefined) {
       parseJobSelector(options.job);
     }
+  } else if (readingLogs) {
+    positiveInteger(options.job, "--job");
+    if (options.child !== undefined) {
+      throw new Error("--child is valid only with rerun");
+    }
   } else if (options.job !== undefined || options.child !== undefined) {
-    throw new Error("--job and --child are valid only with rerun");
+    throw new Error("--job and --child are valid only with rerun or logs");
+  }
+  if (options.grep !== undefined && !readingLogs) {
+    throw new Error("--grep is valid only with logs");
   }
   if (options.maxAttempts !== undefined && options.child === undefined) {
     throw new Error("--max-attempts is valid only with rerun --child");
@@ -716,20 +731,16 @@ async function artifactRecoveryProducers(plan, parentJobs, client, repository, w
       throw new Error(`Original ${stage} dispatch identity is unavailable or ambiguous`);
     }
     let preparation;
-    if (stage === "npm" && recoveryContract === "2") {
+    if (stage === "npm" && recoveryContract === "2" && plan.candidate) {
       const identities = [
         ...log.matchAll(
           /(?:^|\n)(?:\d{4}-\d\d-\d\dT\S+ )?Artifact preparation npm identity: job ([1-9][0-9]*) \(attempt ([1-9][0-9]*)\)\r?(?=\n|$)/gu,
         ),
       ];
-      // Failed preparation may never emit its identity. Only consumed candidate
-      // bytes require that witness; ambiguous identities are never safe to adopt.
-      if (identities.length > 1 || (plan.candidate && identities.length === 0)) {
+      if (identities.length !== 1) {
         throw new Error("Original npm preparation identity is unavailable or ambiguous");
       }
-      if (identities.length === 1) {
-        preparation = { jobId: identities[0][1], runAttempt: Number(identities[0][2]) };
-      }
+      preparation = { jobId: identities[0][1], runAttempt: Number(identities[0][2]) };
     }
     producers.push({
       request: {
@@ -1836,42 +1847,13 @@ async function planChildRerun(child, target, client, operationDeadline) {
   return { ...plan, failedJobs, job, runnerBackend };
 }
 
-function payloadRerunMessage(child, rerun) {
-  return rerun.mode === "producer"
-    ? `[frv] ${child.key} run ${child.runId} attempt ${child.effectiveRunAttempt}: rerunning green producer "${rerun.producer}" and its dependents; its consumers bind the producer's run attempt`
-    : `[frv] ${child.key} run ${child.runId} attempt ${child.effectiveRunAttempt}: rerunning all jobs; payload consumers bind the producer's run attempt and failures outside its dependents need the whole run`;
-}
-
-// continue --failed applies the same policy as rerun --child, without its attempt budget,
-// so a failed-jobs rerun never re-executes a payload consumer without its producer.
-function failedChildRerunPlan(child) {
-  if (!Array.isArray(child.jobs)) {
-    return { mode: "failed-jobs" };
-  }
-  let plan;
-  try {
-    plan = planReleaseChildRerun({ childKey: child.key, jobs: child.jobs });
-  } catch {
-    // A failed child without a blocking job (for example a cancelled run) reruns its failed jobs.
-    return { mode: "failed-jobs" };
-  }
-  return plan.mode === "producer" || plan.mode === "all-jobs" ? plan : { mode: "failed-jobs" };
-}
-
-function sendChildRerun(client, { child, job, mode }) {
-  if (job) {
-    return client.rerunJob(job.id);
-  }
-  return mode === "all-jobs" ? client.rerunRun(child.runId) : client.rerunFailed(child.runId);
-}
-
 function reportChildRerun(child, rerun, log) {
   log(
     rerun.mode === "receipt"
       ? `[frv] ${child.key} run ${child.runId} attempt ${child.effectiveRunAttempt}: rerunning only failed receipt "${rerun.producer}"; passing workloads are retained`
-      : rerun.mode === "failed-jobs"
-        ? `[frv] ${child.key} run ${child.runId} attempt ${child.effectiveRunAttempt}: rerunning failed jobs`
-        : payloadRerunMessage(child, rerun),
+      : rerun.mode === "producer"
+        ? `[frv] ${child.key} run ${child.runId} attempt ${child.effectiveRunAttempt}: rerunning green producer "${rerun.producer}" and its dependents; its consumers bind the producer's run attempt`
+        : `[frv] ${child.key} run ${child.runId} attempt ${child.effectiveRunAttempt}: rerunning failed jobs`,
   );
   for (const job of rerun.failedJobs) {
     log(
@@ -2024,45 +2006,23 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
         target && target.name === undefined
           ? await planChildRerun(ready[0], target, client, operationDeadline)
           : undefined;
-      const failedPlans = target ? [] : ready.map(failedChildRerunPlan);
-      const payloadReruns = failedPlans.flatMap((failedPlan, index) =>
-        failedPlan.mode === "failed-jobs" ? [] : [{ child: ready[index].key, ...failedPlan }],
-      );
       if (options.dryRun) {
         if (target?.name !== undefined) {
           await selectedRerunJob(ready[0], target, client, operationDeadline);
         }
-        return {
-          action: "would-rerun",
-          ...(childRerun ? { childRerun } : {}),
-          ...(payloadReruns.length > 0 ? { payloadReruns } : {}),
-          status,
-        };
+        return { action: "would-rerun", ...(childRerun ? { childRerun } : {}), status };
       }
       if (childRerun) {
         reportChildRerun(ready[0], childRerun, options.log ?? console.error);
       }
       const requests = await Promise.all(
-        ready.map(async (child, index) => {
-          if (childRerun) {
-            return { child, job: childRerun.job, mode: childRerun.mode };
-          }
-          if (target) {
-            return { child, job: await selectedRerunJob(child, target, client, operationDeadline) };
-          }
-          const failedPlan = failedPlans[index];
-          if (failedPlan.mode !== "failed-jobs") {
-            log(payloadRerunMessage(child, failedPlan));
-          }
-          const job = failedPlan.producer
-            ? await selectedRerunJob(
-                child,
-                { childKey: child.key, name: failedPlan.producer },
-                client,
-                operationDeadline,
-              )
-            : undefined;
-          return { child, job, mode: failedPlan.mode };
+        ready.map(async (child) => {
+          const job = childRerun
+            ? childRerun.job
+            : target
+              ? await selectedRerunJob(child, target, client, operationDeadline)
+              : undefined;
+          return { child, job };
         }),
       );
       const priorRuns = new Map(
@@ -2123,10 +2083,10 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
       remainingOperationTime(operationDeadline);
       const sentRunIds = new Set();
       const mutationResults = await Promise.allSettled(
-        requests.map(async (request) => {
+        requests.map(async ({ child, job }) => {
           remainingOperationTime(operationDeadline);
-          sentRunIds.add(request.child.runId);
-          await sendChildRerun(client, request);
+          sentRunIds.add(child.runId);
+          await (job ? client.rerunJob(job.id) : client.rerunFailed(child.runId));
         }),
       );
       if (sentRunIds.size > 0) {
@@ -2139,6 +2099,9 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
           operationDeadline,
           (run) => report(run, true),
           async (runId) => {
+            await recheckArtifactProducers(artifactProducers, status, client, true, {
+              operationDeadline,
+            });
             const source = exactTerminalRunState(priorRuns.get(runId), runId);
             assertRootRunIdentity(
               await client.getRun(rootRunId, { operationDeadline }),
@@ -2152,8 +2115,9 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
             if (JSON.stringify(current) !== JSON.stringify(source)) {
               throw new Error(`child ${runId} changed before mutation retry`);
             }
+            const { child, job } = requestsByRunId.get(runId);
             remainingOperationTime(operationDeadline);
-            await sendChildRerun(client, requestsByRunId.get(runId));
+            await (job ? client.rerunJob(job.id) : client.rerunFailed(child.runId));
           },
         );
       }
@@ -2164,7 +2128,7 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
       if (admissionFailure) {
         throw admissionFailure.reason;
       }
-      for (const { child, job, mode } of requests) {
+      for (const { child, job } of requests) {
         if (!sentRunIds.has(child.runId)) {
           continue;
         }
@@ -2188,9 +2152,7 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
                 mode: childRerun.mode,
                 runnerBackend: childRerun.runnerBackend,
               }
-            : mode && mode !== "failed-jobs"
-              ? { mode }
-              : {}),
+            : {}),
         };
         reruns.push(record);
         options.audit?.({ parentRunId: String(rootRunId), ...record });
@@ -2287,6 +2249,9 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
       operationDeadline,
       (run) => report(run, true),
       async () => {
+        await recheckArtifactProducers(artifactProducers, status, client, false, {
+          operationDeadline,
+        });
         const retryParent = exactTerminalRunState(
           await client.getRun(rootRunId, { operationDeadline }),
           rootRunId,
@@ -3235,39 +3200,20 @@ function formatRunProgress(owner, run, state) {
   return `${owner}${owner === "parent" ? "" : " run"} ${run.id} attempt ${run.run_attempt} ${state ?? (run.status === "completed" ? `completed ${run.conclusion}` : run.status)}`;
 }
 
-function formatFrvTimestamp(value = new Date()) {
-  const timestamp = value instanceof Date ? value : new Date(value);
-  if (!Number.isFinite(timestamp.getTime())) {
-    throw new Error(`invalid FRV timestamp: ${String(value)}`);
-  }
-  const parts = Object.fromEntries(
-    PACIFIC_TIME_FORMAT.formatToParts(timestamp).map(({ type, value: part }) => [type, part]),
-  );
-  const pacific = `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} ${parts.timeZoneName}`;
-  return `${timestamp.toISOString()} / ${pacific}`;
-}
-
 function formatProgressEvent(command, event) {
-  return `[frv ${command}] ${formatFrvTimestamp()} ${event.message}${event.url ? ` ${event.url}` : ""}`;
+  return `[frv ${command}] ${new Date().toISOString().slice(11, 19)}Z ${event.message}${event.url ? ` ${event.url}` : ""}`;
 }
 
-function failedJobEvent(owner, job, attempt, runId) {
+function failedJobEvent(owner, job, attempt) {
   if (job.status !== "completed" || !FAILED_JOB_CONCLUSIONS.has(String(job.conclusion))) {
     return undefined;
   }
-  const reportedAttempt = Number(job.run_attempt ?? attempt);
-  const jobAttempt =
-    Number.isSafeInteger(reportedAttempt) && reportedAttempt > 0 ? reportedAttempt : attempt;
-  const attemptLabel =
-    jobAttempt < attempt
-      ? `effective attempt ${attempt}; carried forward from attempt ${jobAttempt}`
-      : `attempt ${jobAttempt}`;
   const labels = Array.isArray(job.labels) && job.labels.length > 0 ? job.labels.join(",") : "none";
   const runner = job.runner_name ? ` / ${job.runner_name}` : "";
   const blocker = owner.startsWith("artifact:") ? " blocker:" : "";
   return [
-    `job:${runId ?? job.run_id ?? owner}:${jobAttempt}:${job.name}`,
-    `${owner}${blocker} job "${job.name}" ${job.conclusion} (${attemptLabel}; runner ${labels}${runner})`,
+    `job:${job.id}:${job.name}`,
+    `${owner}${blocker} job "${job.name}" ${job.conclusion} (attempt ${job.run_attempt ?? attempt}; runner ${labels}${runner})`,
     job.html_url,
   ];
 }
@@ -3343,7 +3289,7 @@ async function pollRelease(state, client, pending, observation, readOptions) {
     !parentJobs?.some((job) => Number(job.run_attempt) === Number(parent.run_attempt)) ||
     parentJobs.some((job) => job.status !== "completed");
   for (const job of parentJobs ?? []) {
-    const failure = failedJobEvent("parent", job, parent.run_attempt, parentRunId);
+    const failure = failedJobEvent("parent", job, parent.run_attempt);
     if (failure) {
       report(...failure);
     }
@@ -3409,7 +3355,7 @@ async function pollRelease(state, client, pending, observation, readOptions) {
           jobs.every((job) => job.status === "completed");
         scansComplete &&= final;
         for (const job of jobs) {
-          const failure = failedJobEvent(child.key, job, current, runId);
+          const failure = failedJobEvent(child.key, job, attempt);
           if (failure) {
             report(...failure);
           }
@@ -3520,7 +3466,7 @@ export async function watchRelease(parentRunId, client, options = {}) {
         events.push({
           message:
             state.nextCheckAt > Date.now()
-              ? `GitHub rate limited (${failedReads.join(", ")}); next check at ${formatFrvTimestamp(state.nextCheckAt)}`
+              ? `GitHub rate limited (${failedReads.join(", ")}); next check at ${new Date(state.nextCheckAt).toISOString()}`
               : `GitHub reads failed (${failedReads.join(", ")}); retrying next poll`,
         });
         state.failedReadFingerprint = fingerprint;
@@ -3618,9 +3564,6 @@ function print(value, json) {
       `plan: ${value.childRerun.mode} ${value.childRerun.producer ?? value.childRerun.failed.join(", ")}`,
     );
   }
-  for (const rerun of value.payloadReruns ?? []) {
-    console.log(`plan: ${rerun.child} ${rerun.mode} ${rerun.producer ?? rerun.failed.join(", ")}`);
-  }
   if (value.action) {
     console.log(`action: ${value.action}`);
   }
@@ -3664,6 +3607,19 @@ async function main() {
     return;
   }
   const client = createClient(options.repository);
+  if (options.command === "logs") {
+    const log = stripVTControlCharacters(
+      await client.getJobLog(positiveInteger(options.job, "--job")),
+    );
+    const output = options.grep
+      ? log
+          .split("\n")
+          .filter((line) => line.includes(options.grep))
+          .join("\n")
+      : log;
+    process.stdout.write(`${output}${output.endsWith("\n") ? "" : "\n"}`);
+    return;
+  }
   if (options.command === "cancel") {
     const { cancelReleaseTree } = await import("./frv-cancellation.mjs");
     const result = await cancelReleaseTree(options.runId, client, options);
