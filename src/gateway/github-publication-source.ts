@@ -17,7 +17,10 @@ import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerAdmissionFactory,
 } from "../infra/sqlite-worker-operation-admission.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
+import {
+  sessionChangeScopeAffectsStoredRows,
+  sessionChanges,
+} from "../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import { projectGitHubPublicationSessionFacts } from "../state/github-publication-session-facts.js";
@@ -277,7 +280,12 @@ export async function prepareGitHubPublicationSource(params: {
       }
     }),
     sessionChanges.subscribeFacts((change) => {
-      if ("all" in change || change.sessionKey === params.selector.sessionKey) {
+      // Display notifications (subagent progress, placements, catalog) leave source rows
+      // unchanged; the worker rechecks every source fact under its reservation.
+      if (
+        sessionChangeScopeAffectsStoredRows(change) &&
+        ("all" in change || change.sessionKey === params.selector.sessionKey)
+      ) {
         revoke();
       }
     }),

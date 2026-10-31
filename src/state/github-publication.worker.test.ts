@@ -12,6 +12,7 @@ import {
 } from "vitest";
 import { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { publishSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -43,6 +44,7 @@ import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js"
 import { sqliteWorkerOwnerProbe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { isSecretValueRegisteredForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { preparePersonalGitHubSessionReceiptDeletion } from "./github-personal-publication-lifecycle.js";
 import {
@@ -530,6 +532,21 @@ it("runs policy writes before source reservation and refuses the changed source"
     "source authority changed",
   );
   expectRows(row, []);
+});
+
+it("keeps a prepared source across display notifications and revokes it on stored changes", async () => {
+  const { row, source } = await sourceFixture("source-display-notifications");
+  // Subagent progress and placement/catalog refreshes notify without changing source rows.
+  publishSubagentRunChanges([row.session_key]);
+  publishSubagentRunChanges();
+  sessionChanges.emit({ all: true, scope: "worker-placements" });
+  expect(() => bindGitHubPublicationSource(source)).not.toThrow();
+  await insertRepositoryGitHubPublicationAsync(row, source);
+  expectRows(row, [{ request_id: row.request_id }]);
+
+  const stored = await sourceFixture("source-stored-notification");
+  sessionChanges.emit({ sessionKey: stored.row.session_key, scope: "session-entry" });
+  expect(() => bindGitHubPublicationSource(stored.source)).toThrow("source authority changed");
 });
 
 it("rejects a requested branch that does not belong to the captured source", async () => {

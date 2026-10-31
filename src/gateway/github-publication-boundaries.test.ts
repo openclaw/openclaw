@@ -1,6 +1,9 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
+import { publishSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.worker.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -256,6 +259,27 @@ describe("Gateway GitHub publication boundaries", () => {
       publish(createTestGitHubPublicationCoordinator({ placements }), "durable-local-reread"),
     ).resolves.toMatchObject({ status: "published" });
     expect(raced).toBe(true);
+  });
+
+  it("publishes while subagent progress and placement refreshes keep notifying", async () => {
+    // A busy Gateway: child-run progress for this session and global placement refreshes
+    // arrive while each publication step prepares and reserves its source.
+    const stop = new AbortController();
+    const notifications = (async () => {
+      while (!stop.signal.aborted) {
+        publishSubagentRunChanges([SESSION_KEY]);
+        sessionChanges.emit({ all: true, scope: "worker-placements" });
+        await nextTurn();
+      }
+    })();
+    try {
+      await expect(
+        publish(createLocalCoordinator(), "display-notifications"),
+      ).resolves.toMatchObject({ status: "published" });
+    } finally {
+      stop.abort();
+      await notifications;
+    }
   });
 
   it("requeues a publication when execution loses live session authority", async () => {
