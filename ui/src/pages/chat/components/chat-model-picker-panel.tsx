@@ -70,9 +70,15 @@ function prepareChatModelPickerPanel(
     providerGroups.set(provider, group);
   }
   // Unranked catalogs can contain hundreds of models; browse the rest through All models.
+  // A lone leftover does not deserve its own fold: the extra "All models (1)" click was
+  // the whole cost of collapsing it, so it stays inline.
   for (const [provider, group] of providerGroups) {
     if (!recommendingProviders.has(provider)) {
       group.more = group.lead.splice(9);
+    }
+    if (group.more.length === 1) {
+      group.lead.push(...group.more);
+      group.more = [];
     }
   }
   const orderedProviderGroups = [...providerGroups];
