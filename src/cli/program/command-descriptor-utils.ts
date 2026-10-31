@@ -1,15 +1,16 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { Command } from "commander";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
-import type {
-  OpenClawPluginCliRegistrationOptions,
-  OpenClawPluginCliRootCommandDescriptor,
-} from "../../plugins/plugin-registration.types.js";
 import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 
 /** Minimal descriptor shape used before a command is fully registered. */
 type CommandDescriptorLike = Pick<NamedCommandDescriptor, "name" | "description" | "hidden">;
+
+type PluginCliRegistrationDescriptor = Pick<
+  NamedCommandDescriptor,
+  "name" | "description" | "hasSubcommands" | "machineOutput"
+>;
 
 const SAFE_COMMAND_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
@@ -34,13 +35,19 @@ export function sanitizeCommandDescriptorDescription(description: string): strin
 
 /** Normalize CLI registration metadata before native registration or fixture capture. */
 export function normalizePluginCliRegistrationMetadata(
-  opts: OpenClawPluginCliRegistrationOptions | undefined,
+  opts:
+    | {
+        parentPath?: readonly string[];
+        commands?: readonly string[];
+        descriptors?: readonly PluginCliRegistrationDescriptor[];
+      }
+    | undefined,
   reportError: (message: string) => void,
 ):
   | {
       parentPath: string[];
       commands: string[];
-      descriptors: OpenClawPluginCliRootCommandDescriptor[];
+      descriptors: PluginCliRegistrationDescriptor[];
     }
   | undefined {
   const normalizeCommandRoot = (raw: string, source: "command" | "descriptor") => {
@@ -57,8 +64,7 @@ export function normalizePluginCliRegistrationMetadata(
     return undefined;
   }
   const rootRegistration = parentPath.length === 0;
-  const inputDescriptors: readonly OpenClawPluginCliRootCommandDescriptor[] =
-    opts?.descriptors ?? [];
+  const inputDescriptors = opts?.descriptors ?? [];
   const descriptors = inputDescriptors
     .map((descriptor) => {
       const name = normalizeCommandRoot(descriptor.name, "descriptor");
@@ -67,7 +73,7 @@ export function normalizePluginCliRegistrationMetadata(
       if (!name || !description) {
         return null;
       }
-      const normalized: OpenClawPluginCliRootCommandDescriptor = {
+      const normalized: PluginCliRegistrationDescriptor = {
         name,
         description,
         hasSubcommands: descriptor.hasSubcommands,
@@ -77,9 +83,7 @@ export function normalizePluginCliRegistrationMetadata(
       }
       return normalized;
     })
-    .filter(
-      (descriptor): descriptor is OpenClawPluginCliRootCommandDescriptor => descriptor !== null,
-    );
+    .filter((descriptor): descriptor is PluginCliRegistrationDescriptor => descriptor !== null);
   const commands = uniqueStrings(
     [...(opts?.commands ?? []), ...descriptors.map((descriptor) => descriptor.name)]
       .map((command) => normalizeCommandRoot(command, "command"))
