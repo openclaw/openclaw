@@ -120,14 +120,9 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
     transition-duration: 0.01ms, 100ms;
   }
 
-  .shell--mobile-nav .shell-nav-backdrop,
-  .shell--mobile-nav.shell--nav-drawer-open .shell-nav-backdrop {
+  .shell--mobile-nav .shell-nav-backdrop {
     transition-duration: 100ms, 0s;
     transition-delay: 0s, 100ms;
-  }
-
-  .shell--mobile-nav.shell--nav-drawer-open .shell-nav-backdrop {
-    transition-delay: 0s;
   }
 }
 
