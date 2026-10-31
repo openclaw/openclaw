@@ -270,6 +270,26 @@ it("resets state for new chat session", () => {
 describe("programmatic scroll ownership", () => {
   beforeEach(immediateFrames);
 
+  it("keeps resize-anchor motion out of reader policy until explicit takeover", () => {
+    const { host: base, container } = createScrollHost({ scrollTop: 1500, clientHeight: 400 });
+    const host = Object.assign(base, { chatIsMaintenanceScroll: () => true });
+    host.chatLastScrollTop = 1490;
+    scroll(host, 1510);
+    expect(host).toMatchObject({
+      chatFollowLocked: false,
+      chatUserNearBottom: true,
+      chatNewMessagesBelow: false,
+    });
+
+    container.scrollTop = 1510;
+    handleChatScrollTakeover(host);
+    expect(host).toMatchObject({
+      chatFollowLocked: true,
+      chatUserNearBottom: false,
+      chatNewMessagesBelow: true,
+    });
+  });
+
   it("leaves restoration policy unchanged when automatic follow is declined", () => {
     const { host, container } = createScrollHost({ scrollTop: 420 });
     host.chatScrollToEnd = vi.fn(() => false);

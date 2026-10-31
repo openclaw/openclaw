@@ -621,8 +621,8 @@ openclaw-pending-session-create {
 }
 
 .chat-virtual-block {
-  /* The outer extent owns scroll height. This positioned row window must not
-     contribute a second changing box when saved rows become live rows. */
+  /* Keep the row window in local coordinates, even near a long transcript's
+     tail. The outer extent owns scroll height; parked rows have no layout. */
   contain: size;
   position: absolute;
   top: 0;
@@ -661,7 +661,7 @@ openclaw-pending-session-create {
 }
 
 /* Message jumps need real mounted-row sizes before their target settles. */
-.chat-thread-inner[data-measuring-rows] .chat-virtual-row {
+.chat-thread-inner[data-measuring-rows] .chat-virtual-row:not([data-prepared-row]) {
   content-visibility: visible;
   contain: none;
 }

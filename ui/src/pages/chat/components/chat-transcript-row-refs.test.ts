@@ -5,6 +5,7 @@ import { Virtualizer } from "@tanstack/virtual-core";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { measureTranscriptRow } from "./chat-transcript-geometry.ts";
 import { TranscriptRowRefs } from "./chat-transcript-row-refs.ts";
+import { createTranscriptPresentation } from "./chat-transcript-session.ts";
 import {
   installTranscriptDomMocks,
   observedElements,
@@ -94,17 +95,25 @@ it.each([
     observeElementRect: (_, callback) => callback({ width: 800, height: 300 }),
     observeElementOffset: (_, callback) => callback(0, scrolling),
     scrollToFn: vi.fn(),
-    measureElement: measureTranscriptRow,
+    measureElement: (element, entry) => presentation.measureElement(element, entry),
   });
+  const presentation = createTranscriptPresentation(
+    () => viewport,
+    virtualizer,
+    () => rows,
+    () => void viewport.scrollTop,
+  );
   const { _didMount: mountVirtualizer, _willUpdate: updateVirtualizer } = virtualizer;
   onTestFinished(mountVirtualizer());
   updateVirtualizer();
   virtualizer.getVirtualItems();
   const readViewport = vi.fn(() => 300);
+  const readOffset = vi.fn(() => 0);
   Object.defineProperty(viewport, "clientHeight", { configurable: true, get: readViewport });
+  Object.defineProperty(viewport, "scrollTop", { configurable: true, get: readOffset });
   const refs = new TranscriptRowRefs(virtualizer, {
     isCurrentRow: (row) => viewport.contains(row),
-    beforeMeasure: () => {},
+    beforeMeasure: () => void viewport.scrollTop,
     onMount: () => {},
   });
   const mounted = indexes.map((index) => expectDefined(rows[index], "mounted row"));
@@ -133,13 +142,24 @@ it.each([
   await Promise.resolve();
   await Promise.resolve();
   await Promise.resolve();
-  expect([readHeight.mock.calls, readViewport.mock.calls]).toEqual([[], []]);
+  expect([readHeight.mock.calls, readViewport.mock.calls, readOffset.mock.calls]).toEqual([
+    [],
+    [],
+    [],
+  ]);
   expect(mounted.every((row) => observedElements.has(row))).toBe(true);
   for (const observer of resizeObservers) {
-    for (const row of mounted) {
-      observer.emitTarget(row, 800, height);
-    }
+    observer.emit(800, height);
   }
   expect([...virtualizer.itemSizeCache.values()]).toEqual(indexes.map(() => 80));
   expect(readHeight).not.toHaveBeenCalled();
+  expect(readOffset).toHaveBeenCalledTimes(1);
+
+  await Promise.resolve();
+  readOffset.mockReturnValue(10);
+  for (const observer of resizeObservers) {
+    observer.emit(800, 90);
+  }
+  expect([...virtualizer.itemSizeCache.values()]).toEqual(indexes.map(() => 90));
+  expect(readOffset).toHaveBeenCalledTimes(2);
 });

@@ -588,12 +588,11 @@ function controlUiPrecompressedAssetsPlugin(): Plugin {
       if (!buildOutDir) {
         this.error("Control UI build requires an output directory");
       }
-      const startupAssets = new Set(
-        extractControlUiStartupAssetPaths(
-          selectControlUiRoutePreloads(
-            fs.readFileSync(path.join(buildOutDir, "index.html"), "utf8"),
-            null,
-          ),
+      const html = fs.readFileSync(path.join(buildOutDir, "index.html"), "utf8");
+      // Small route boot modules need sidecars too; their URLs and lazy admission stay unchanged.
+      const bootAssets = new Set(
+        ([null, "chat", "new"] as const).flatMap((route) =>
+          extractControlUiStartupAssetPaths(selectControlUiRoutePreloads(html, route)),
         ),
       );
       const logger = this.environment.logger;
@@ -609,7 +608,7 @@ function controlUiPrecompressedAssetsPlugin(): Plugin {
         const variants = await createControlUiPrecompressedAssetVariants(
           output.fileName,
           source,
-          startupAssets,
+          bootAssets,
         );
         if (variants.length === 0) {
           return;

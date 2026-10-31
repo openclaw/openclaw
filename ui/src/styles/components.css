@@ -370,7 +370,9 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   left: -6px;
   width: 32px;
   height: 22px;
-  overflow: visible;
+  overflow: hidden;
+  /* Keep its animated stroke from rerasterizing the entire sidebar tile. */
+  transform: translateZ(0);
   pointer-events: none;
 }
 
@@ -383,13 +385,13 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   stroke: color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
-/* The arc covers the same share of its outline as the ring's quarter turn and
-   moves at the ring's linear speed (~45px/s). */
+/* Keep the small arc at 30 painted positions per second without limiting
+   transcript frames. Its average speed still matches the ring (~45px/s). */
 .session-glyph__trace-run {
   stroke: var(--accent);
   stroke-linecap: round;
   stroke-dasharray: 25 75;
-  animation: session-run-trace 2s linear infinite;
+  animation: session-run-trace 2s steps(60, end) infinite;
 }
 
 .session-glyph__badge {

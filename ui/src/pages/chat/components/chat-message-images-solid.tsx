@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo, onCleanup, refresh, useContext } from "solid-js";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
+import { isInlineImageSource } from "../../../lib/chat/message-extract.ts";
 import { chatImageDisplayKey, isChatThumbnail } from "../../../lib/chat/row-display-facts.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
@@ -53,9 +54,6 @@ type RetainedInlineImage = {
   previewUrl: string;
   timeout?: ReturnType<typeof setTimeout>;
 };
-
-const isInlineImageSource = (source: string | undefined): source is string =>
-  source?.startsWith("data:image/") === true || source?.startsWith("blob:") === true;
 
 function createMessageImagePresentation(props: MessageImageProps) {
   const display = useContext(ChatRowDisplayContext);
@@ -301,7 +299,7 @@ function createMessageImagePresentation(props: MessageImageProps) {
     // A pane owns cancellation; this image alone owns its presentation updates.
     const subscriptionOptions = subscribedOptions(options);
     const observed = subscriptionOptions !== options;
-    if (observed) {
+    if (observed && !isInlineImageSource(image.url)) {
       pendingPreview = undefined;
       observeChatMediaResourceSubscriber(options?.mediaOwner, refreshImage);
     } else {
@@ -692,9 +690,9 @@ export function MessageImages(props: MessageImagesProps): JSX.Element {
 
 function MessageImage(props: MessageImageProps): JSX.Element {
   const presented = useContext(ContentPresentation);
-  // Parked content releases active image subscriptions.
+  // Inline bytes have no remote resource custody and can retain decoded pixels while parked.
   return (
-    <Show when={presented()}>
+    <Show when={presented() || isInlineImageSource(props.image.url)}>
       {(_presented) => {
         const view = createMessageImagePresentation(props);
         return (

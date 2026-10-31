@@ -50,6 +50,7 @@ export function createPositionRail(props: PositionRailParams) {
   let scrollElement: HTMLElement | undefined;
   let resizeObserver: ResizeObserver | undefined;
   let observationPending = false;
+  let offsetPending = false;
   let refreshingWindow = false;
   let layoutFrame: number | undefined;
   let currentActiveId: string | undefined;
@@ -69,6 +70,7 @@ export function createPositionRail(props: PositionRailParams) {
   let pendingProjectionChange = false;
   let markerIdsByMessageId: ReadonlyMap<string, string> = new Map();
   let positionMessageIds: string[] = [];
+  let positionMessageIndexes = new Map<string, number>();
   let markersChanged = true;
   const markerElements = new Map<string, HTMLElement>();
   let transcriptElement: HTMLElement | undefined;
@@ -93,7 +95,10 @@ export function createPositionRail(props: PositionRailParams) {
     layoutFrame = requestAnimationFrame(() => {
       if (observationPending) {
         observeLayout();
+      } else if (offsetPending && scrollElement) {
+        viewportOffset = scrollElement.scrollTop;
       }
+      offsetPending = false;
       layoutFrame = undefined;
       syncLayout();
     });
@@ -131,7 +136,11 @@ export function createPositionRail(props: PositionRailParams) {
         visibleMessageIds.add(message.messageId);
       }
     }
-    const visibleOrder = positionMessageIds.filter((id) => visibleMessageIds.has(id));
+    const visibleOrder = [...visibleMessageIds]
+      .filter((id) => positionMessageIndexes.has(id))
+      .toSorted(
+        (left, right) => positionMessageIndexes.get(left)! - positionMessageIndexes.get(right)!,
+      );
     const activeMessageId = session?.activeMessageId(
       visibleOrder.length ? visibleOrder : positionMessageIds,
     );
@@ -478,6 +487,7 @@ export function createPositionRail(props: PositionRailParams) {
   const bindScroller = (element?: Element) => {
     resizeObserver?.disconnect();
     observationPending = false;
+    offsetPending = false;
     disconnectVisibility();
     markersChanged = true;
     layoutVisible = false;
@@ -556,6 +566,7 @@ export function createPositionRail(props: PositionRailParams) {
       targetsChanged = true;
       markerIdsByMessageId = positions.markerIdsByMessageId;
       positionMessageIds = [...positions.markerIdsByMessageId.keys()];
+      positionMessageIndexes = new Map(positionMessageIds.map((id, index) => [id, index]));
     }
     const count = markers.length;
     if (count === 0) {
@@ -630,7 +641,12 @@ export function createPositionRail(props: PositionRailParams) {
       bindMarker,
       bindScroller,
       bindPreview,
-      onScroll: observeLayout,
+      onScroll: () => {
+        // Read once in the owned frame, after transcript mutations have settled.
+        // Rail-only movement does not need dimensions or a reader observation.
+        offsetPending = true;
+        scheduleLayout();
+      },
       stopScrollInput,
       onPointerLeave: () => {
         interaction.hoveredId = null;

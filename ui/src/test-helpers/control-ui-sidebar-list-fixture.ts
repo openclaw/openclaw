@@ -285,6 +285,27 @@ export function prepareTeamScaleSessionOwnership(
   }
 }
 
+export function createTeamScaleSessionChanged(
+  row: GatewaySessionRow & { updatedAt: number; sessionId: string },
+  ts: number,
+  reason: string,
+  patch: Partial<typeof row>,
+) {
+  return {
+    sessionKey: row.key,
+    agentId: "main",
+    reason,
+    ts,
+    updatedAt: row.updatedAt,
+    sessionId: row.sessionId,
+    ...(patch.lastMessagePreview === undefined
+      ? {}
+      : { lastMessagePreview: patch.lastMessagePreview }),
+    session: { ...row, snapshotAt: ts, ...patch },
+    ancestorSessions: [],
+  };
+}
+
 export function createTeamScaleSessionEvents(
   sessions: readonly GatewaySessionRow[],
   now: number,

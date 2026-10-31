@@ -202,6 +202,7 @@ function draw(
             },
             options: {
               streamOptions: {},
+              workPreviews: new Map(),
               renderGroupOptions: () => options,
               isWorkExpanded: () => false,
               onToggleWork: () => undefined,

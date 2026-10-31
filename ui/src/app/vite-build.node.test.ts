@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { build, createLogger, type InlineConfig, type Plugin } from "vite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { selectControlUiRoutePreloads } from "../../../src/gateway/control-ui-route-preloads.ts";
 import {
   listDirectoryTreeStrict,
   listDirectoryTreeStrictSync,
@@ -281,6 +282,40 @@ it("keeps page styles separate from measured JavaScript boot groups", async () =
   const scripts = (await readAssets(names, ".js")).map(({ source }) => source).join("\n");
   expect(scripts).toContain(firstStyle.name);
   expect(scripts).toContain(secondStyle.name);
+});
+
+it("compresses small route boot modules while leaving deferred modules lazy", async () => {
+  const entry = uiPath("pages/chat/route-entry.ts");
+  const source = 'export const message = "Route content loaded".repeat(20);';
+  const config = createConfig();
+  await writeRoot(
+    "main.js",
+    `globalThis.load = () => import(${JSON.stringify(entry)}); globalThis.loadLazy = () => import("./lazy.js");`,
+  );
+  addModules(config, new Map([[entry, source]]));
+  const built = await buildOutput(config);
+  const chunk = built.output.find(
+    (item) => item.type === "chunk" && Object.hasOwn(item.modules, entry),
+  );
+  assert.ok(chunk?.type === "chunk");
+  expect(Buffer.byteLength(chunk.code)).toBeLessThan(4096);
+  expect(built.html).toContain(chunk.fileName);
+  expect(selectControlUiRoutePreloads(built.html, null)).not.toContain(chunk.fileName);
+  for (const [extension, decode] of [
+    ["gz", gunzipSync],
+    ["br", brotliDecompressSync],
+  ] as const) {
+    expect(decode(await fs.readFile(path.join(outDir, `${chunk.fileName}.${extension}`)))).toEqual(
+      Buffer.from(chunk.code),
+    );
+  }
+  const lazy = built.output.find(
+    (item) => item.type === "chunk" && item.facadeModuleId === path.join(root, "lazy.js"),
+  );
+  assert.ok(lazy?.type === "chunk");
+  expect(built.html).not.toContain(lazy.fileName);
+  await missingOutput(`${lazy.fileName}.gz`);
+  await missingOutput(`${lazy.fileName}.br`);
 });
 
 it.each(["login", "attachment"] as const)(

@@ -1,5 +1,4 @@
-import type { Locator, Page } from "playwright";
-import { expect } from "vitest";
+import type { Page } from "playwright";
 
 /** Mobile exposes Home through the navigation drawer, not an offscreen click. */
 export async function openProgressHomeDock(
@@ -27,19 +26,4 @@ export async function openProgressHomeDock(
   if (options.waitForSession !== false) {
     await page.locator("openclaw-home-session").waitFor();
   }
-}
-
-export async function waitForProgressScrollIdle(thread: Locator) {
-  await expect
-    .poll(() =>
-      thread.evaluate(async (element) => {
-        const before = [element.scrollTop, element.scrollHeight, element.clientHeight];
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-        });
-        const after = [element.scrollTop, element.scrollHeight, element.clientHeight];
-        return before.every((value, index) => value === after[index]);
-      }),
-    )
-    .toBe(true);
 }

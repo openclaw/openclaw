@@ -2,6 +2,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
+import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -56,6 +57,7 @@ async function captureDetailsMotion(
   page: Page,
   input: "pointer" | "reversed" | "keyboard" = "pointer",
 ) {
+  await waitForChatScrollIdle(page);
   await page.evaluate(() => {
     const thread = document.querySelector<HTMLElement>(".chat-thread")!;
     const frame = document.querySelector<HTMLElement>(".chat-main__conversation-frame")!;
@@ -140,7 +142,7 @@ function expectSteadyDetailsMotion(frames: DetailsMotionFrame[]) {
   expect(painted.length).toBeGreaterThan(0);
   for (const key of ["detailsWidth", "detailsHeight"] as const) {
     const values = painted.map((frame) => frame[key]);
-    expect(Math.max(...values) - Math.min(...values)).toBeLessThan(1);
+    expect(Math.max(...values) - Math.min(...values), key).toBeLessThan(1);
   }
   for (const frame of painted) {
     expect(frame.detailsPadding).toBe(painted[0]!.detailsPadding);
@@ -148,10 +150,12 @@ function expectSteadyDetailsMotion(frames: DetailsMotionFrame[]) {
   }
   const last = frames.at(-1)!;
   expect(last.detailsDisplay === "none").toBe(!last.open);
-  for (const key of ["threadWidth", "anchorTop", "scrollTop"] as const) {
-    const values = frames.map((frame) => frame[key]);
-    expect(Math.max(...values) - Math.min(...values)).toBeLessThan(1);
-  }
+  const widths = frames.map((frame) => frame.threadWidth);
+  expect(Math.max(...widths) - Math.min(...widths), "threadWidth").toBeLessThan(1);
+  // Offscreen measurements may compensate scrollTop while preserving this visible anchor.
+  // Match the anchor owner's inclusive one-pixel settling tolerance.
+  const anchors = frames.map((frame) => frame.anchorTop);
+  expect(Math.max(...anchors) - Math.min(...anchors), "anchorTop").toBeLessThanOrEqual(1);
   for (const [left, right] of [
     ["threadRight", "frameRight"],
     ["columnCenter", "composerCenter"],

@@ -56,9 +56,10 @@ describe.runIf(browserMode)("skill reader shell", () => {
       { container: container! },
     );
     await settledDialog();
-    const readChrome = (panel: HTMLElement) => {
-      const style = getComputedStyle(panel);
+    const readChrome = async (panel: HTMLElement) => {
       const close = panel.querySelector<HTMLButtonElement>("button")!;
+      await Promise.all(close.getAnimations().map((animation) => animation.finished));
+      const style = getComputedStyle(panel);
       const button = getComputedStyle(close);
       const icon = getComputedStyle(close.querySelector("svg")!);
       const colors = resolveRenderedColors({
@@ -74,7 +75,7 @@ describe.runIf(browserMode)("skill reader shell", () => {
         icon: [icon.width, icon.height, icon.strokeWidth],
       };
     };
-    const canonicalChrome = readChrome(query(".exec-approval-card"));
+    const canonicalChrome = await readChrome(query(".exec-approval-card"));
     canonicalView.unmount();
     createContainer();
     const showContent = (content: string) =>
@@ -90,7 +91,7 @@ describe.runIf(browserMode)("skill reader shell", () => {
     const panel = query(".skill-reader-dialog");
     const title = query(":scope > :first-child > :first-child", panel);
     const close = query(":scope > :first-child button", panel);
-    expect(readChrome(panel)).toEqual(canonicalChrome);
+    expect(await readChrome(panel)).toEqual(canonicalChrome);
     const titleRect = title.getBoundingClientRect();
     const closeRect = close.getBoundingClientRect();
     expect(closeRect.top).toBeLessThan(titleRect.bottom);

@@ -45,11 +45,14 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           sessionKey,
           operatorScopes: ["operator.sessions.read"],
-          featureMethods: [...defaultControlUiFeatureMethods, ...operatorMethods],
+          featureMethods: [...defaultControlUiFeatureMethods, "board.get", ...operatorMethods],
           historyMessages: [
             { role: "assistant", content: [{ type: "text", text: "Shared discussion" }] },
           ],
-          methodResponses: Object.fromEntries(operatorMethods.map((method) => [method, forbidden])),
+          methodResponses: {
+            ...Object.fromEntries(operatorMethods.map((method) => [method, forbidden])),
+            "board.get": { sessionKey, revision: 0, tabs: [], widgets: [] },
+          },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await page.getByText("Shared discussion", { exact: true }).waitFor();
@@ -60,6 +63,9 @@ suite.define(() => {
         }
         const requests = await gateway.getRequests();
         expect(requests.filter((request) => operatorMethods.includes(request.method))).toEqual([]);
+        expect(requests.filter((request) => request.method === "board.get")).toEqual([
+          expect.objectContaining({ params: { agentId: "main", sessionKey } }),
+        ]);
         expect(requests.some((request) => request.method === "sessions.messages.subscribe")).toBe(
           true,
         );

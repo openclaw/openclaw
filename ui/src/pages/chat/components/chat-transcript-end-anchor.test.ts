@@ -21,7 +21,7 @@ function fixture(offset = 600) {
   });
   element.scrollTop = offset;
   const anchor = new TranscriptEndAnchor(() => {});
-  anchor.reconcile(element, false, false, vi.fn());
+  anchor.recordViewport(element);
   readHeight.mockClear();
   readContent.mockClear();
   return {
@@ -34,6 +34,22 @@ function fixture(offset = 600) {
     resize: (next: number) => (height = next),
   };
 }
+
+it.each(["reader", "uncaptured", "suspended"] as const)(
+  "records the new end without following when end anchoring cannot act: %s",
+  (reason) => {
+    const { element, anchor, resize } = fixture();
+    if (reason !== "uncaptured") {
+      anchor.capture(element);
+    }
+    resize(300);
+    const follow = vi.fn();
+    anchor.reconcile(element, reason !== "reader", reason === "suspended", follow);
+    expect(anchor.isRecordedEnd(700)).toBe(true);
+    expect(element.scrollTop).toBe(600);
+    expect(follow).not.toHaveBeenCalled();
+  },
+);
 
 it.each([
   ["unchanged viewport", 600, 600, 400, true, 600, false],

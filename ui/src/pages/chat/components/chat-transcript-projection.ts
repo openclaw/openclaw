@@ -34,6 +34,7 @@ import {
   resolveTranscriptAvatarPlacement,
   resolveTranscriptParticipants,
 } from "./chat-transcript-identity.ts";
+import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import { createTranscriptMemo } from "./chat-transcript-memo.ts";
 import {
   expandReplyTargetWork,
@@ -453,8 +454,6 @@ export function projectChatTranscript(
     getExpansionStateVersion(expandedUserMessages),
     expandedAssistantMessages,
     recovery.revision,
-    // The host minute poll requests an update; this key crosses row guard() memoization.
-    Math.floor(Date.now() / 60_000),
     props.latestBrowserTabs,
     props.sessionKey,
     // Invalidate settled rows when spawn metadata arrives, not on activity/title patches.
@@ -592,10 +591,11 @@ export function projectChatTranscript(
             basePath: props.basePath,
             sessionPublicOrigin: props.sessionPublicOrigin,
             streamOptions: streamGroupOptions,
+            workPreviews,
             renderGroupOptions,
             isWorkExpanded: (key) => expandedToolCards.get(key) ?? false,
             onToggleWork: toggleToolCardExpanded,
-            turnRecap: recapForGroup(item.key),
+            turnRecap: recapForGroup(item.fragment?.source.key ?? item.key),
           },
         };
       }
@@ -694,6 +694,12 @@ export function projectChatTranscript(
     }
     props.replyMessageAccess?.open(replyToId);
   };
+  // Range-only renders reuse this projection; a new projection refreshes the
+  // renderer for changed permissions, locale, content, or other presentation.
+  const renderRow = (row: TranscriptRow<SystemEventRenderItem>) =>
+    row.kind === "item"
+      ? renderItem(row.key === liveItem?.key ? liveItem : row.item)
+      : (contentRows.find((content) => content.key === row.key)?.content ?? row.content);
   return {
     isDirectThread,
     positionIndex: showLoadingSkeleton
@@ -711,10 +717,7 @@ export function projectChatTranscript(
     renderRows: (overlay: JSX.Element = null, header: TranscriptHeader | null = null) =>
       transcript.render(
         transcriptRows,
-        (row) =>
-          row.kind === "item"
-            ? renderItem(row.key === liveItem?.key ? liveItem : row.item)
-            : (contentRows.find((content) => content.key === row.key)?.content ?? row.content),
+        renderRow,
         latestTranscriptAnnouncement(collapsedItems, liveItem),
         props.announceTranscript !== false && !search.open && !props.loading,
         overlay,

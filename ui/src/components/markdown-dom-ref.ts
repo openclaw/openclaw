@@ -38,7 +38,9 @@ export function createMarkdownRef(
   let timer: ReturnType<typeof setTimeout> | undefined;
   let pendingPreview = false;
   const cancel = () => {
-    clearTimeout(timer);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
     timer = undefined;
     pendingPreview = false;
   };

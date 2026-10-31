@@ -181,7 +181,6 @@ export type ChatThreadProps = Omit<
     onOpenManagedArtifact?: (href: string) => boolean;
     onOpenSessionLink?: (target: SessionLinkTarget) => void;
     onNavigate?: (routeId: "cron", options: { search: string }) => void;
-    onChatScroll?: (event: Event) => void;
     onHistoryIntent?: (event: Event) => void;
     onHistorySentinelRef?: (element: HTMLElement) => void | (() => void);
     onTranscriptAnnouncementRef?: (element: HTMLElement) => void | (() => void);

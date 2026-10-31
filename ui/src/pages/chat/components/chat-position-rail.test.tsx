@@ -328,6 +328,9 @@ describe("conversation position rail", () => {
       });
       root.scrollTop = startsAtTop ? 0 : 8315;
       const flushRailFrames = () => {
+        // Native layout observation publishes dimensions and the reader; a
+        // scroll on the rail itself only publishes its own offset.
+        emitTranscriptResize(marks, 44, marksHeight);
         marks.dispatchEvent(new Event("scroll"));
         flushFrame();
         flushFrame();

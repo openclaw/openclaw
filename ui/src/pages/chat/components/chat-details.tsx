@@ -505,7 +505,8 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     {
       lazy: true,
       equals: (before, after) =>
-        before.length === after.length && before.every((el, i) => el === after[i]),
+        before.length === after.length &&
+        before.every((element, index) => element === after[index]),
     },
   );
   createResizeObserver(resizeTargets, reposition);

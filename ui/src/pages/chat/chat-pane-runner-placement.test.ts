@@ -73,6 +73,8 @@ describe("mounted runner placement freshness", () => {
       };
       try {
         await vi.dynamicImportSettled();
+        // The initial child publication must not become the retry trigger under test.
+        await vi.waitFor(() => expect(pane.swarm.hydrator?.hydrated).toBe(true));
         expect(getChatHistoryLoadState(pane.state).phase).toBe("in-flight");
         expect(runnerStatus()).toBe("available");
         holding = true;

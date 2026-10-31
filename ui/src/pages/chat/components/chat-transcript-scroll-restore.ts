@@ -18,6 +18,15 @@ export type TranscriptScrollRestoreHost = {
   onReaderScroll(): void;
 };
 
+export function cancelPendingScrollRetry(
+  owner: Pick<TranscriptScrollRestoreHost, "pendingScrollFrame">,
+): void {
+  if (owner.pendingScrollFrame !== null) {
+    cancelAnimationFrame(owner.pendingScrollFrame);
+    owner.pendingScrollFrame = null;
+  }
+}
+
 export function applyPendingScrollOffset(owner: TranscriptScrollRestoreHost): void {
   const pending = owner.offsetState.pendingScrollOffset;
   if (!pending || !owner.isConnected()) {

@@ -6,12 +6,34 @@ import type { createTeamScaleDuplicateReadFixture } from "./control-ui-duplicate
 import type { ControlUiMockPresenceUser } from "./control-ui-mock-presence.ts";
 import type { ControlUiSessionFixture } from "./control-ui-session-fixtures.ts";
 
+export const LONG_SESSION_SCENARIOS = ["mixed", "paging", "single-run", "direct-run"] as const;
+export type LongSessionScenario = (typeof LONG_SESSION_SCENARIOS)[number];
+export type LongSessionWorkload =
+  | { scenario: "mixed" }
+  | {
+      scenario: "paging";
+      messageCount: number;
+      initialMessageCount: number;
+      firstEntryId: string;
+      deltaCursor: string;
+      pages: Array<{ cursor: string; loadedMessages: number; anchorEntryId: string }>;
+    }
+  | {
+      scenario: "single-run" | "direct-run";
+      messageCount: number;
+      firstEntryId: string;
+      firstOutputEntryId: string;
+      lastEntryId: string;
+    };
+
 type TeamScaleHistoryContent =
   | { type: "text"; text: string }
   | ({ type: "image"; mimeType: string; fileName: string } & (
       | { artifactId: string }
       | { url: string }
     ))
+  | { type: "toolCall"; id: string; name: string; arguments: { path: string } }
+  | { type: "image"; url: string; alt: string; width: number; height: number }
   | ReturnType<typeof createTeamScaleDuplicateReadFixture>["attachments"][number];
 
 export type TeamScaleFixtureAsset = {
@@ -46,9 +68,12 @@ export function createTeamScaleHistoryFixture(options: {
   inlineWidgets: number;
   now: number;
   largeSnapshot?: boolean;
+  richTranscript?: boolean;
+  longSessionScenario?: LongSessionScenario;
   duplicateBootReads?: boolean;
   sessionInfo: ControlUiSessionFixture;
   sender?: ControlUiMockPresenceUser;
+  historyStateReceipt?: boolean;
   rowFacts?: boolean;
   lateRowFacts?: boolean;
   assets: Map<string, TeamScaleFixtureAsset>;
@@ -56,6 +81,161 @@ export function createTeamScaleHistoryFixture(options: {
   inFlightRun?: ChatHistoryResult["inFlightRun"];
   attachments?: ReturnType<typeof createTeamScaleDuplicateReadFixture>["attachments"];
 }) {
+  const session = options.sessionInfo;
+  const olderCursor = (loadedMessages: number) =>
+    JSON.stringify([
+      "team-scale-older-v1",
+      session.key,
+      options.now,
+      options.messageCount,
+      loadedMessages,
+    ]);
+  const deltaCursor = JSON.stringify([
+    "team-scale-history-v1",
+    session.key,
+    options.now,
+    options.messageCount,
+    options.largeSnapshot === true,
+    options.duplicateBootReads === true,
+    options.historyStateReceipt === true,
+    options.richTranscript === true,
+    options.longSessionScenario ?? null,
+  ]);
+  const selectHistory = <T>(
+    messages: T[],
+    pages: Array<{ cursor: string; loadedMessages: number; messages: T[] }> = Array.from(
+      { length: Math.max(0, Math.ceil((messages.length - 80) / 1000)) },
+      (_, index) => {
+        const loaded = 80 + index * 1000;
+        const loadedMessages = Math.min(loaded + 1000, messages.length);
+        return {
+          cursor: olderCursor(loaded),
+          loadedMessages,
+          messages: messages.slice(messages.length - loadedMessages, messages.length - loaded),
+        };
+      },
+    ),
+  ) => {
+    const configuredHistory = {
+      messages,
+      sessionId: session.sessionId,
+      sessionInfo: session,
+      deltaCursor,
+      pendingInputs: { items: [], total: 0, queuedCount: 0 },
+      stateRevision: {
+        sessionInfo: "fixture-session-v1",
+        commands: "fixture-commands-v1",
+        pendingInputs: "fixture-pending-inputs-v1",
+      },
+      ...(options.largeSnapshot || options.historyStateReceipt
+        ? {
+            hasMore: false,
+            totalMessages: messages.length,
+            metadata: { commands: [], models: [] },
+          }
+        : {
+            thinkingLevel: null,
+            metadata: { commands: [], models: options.models },
+            ...(options.inFlightRun ? { inFlightRun: options.inFlightRun } : {}),
+          }),
+    };
+    const windowedHistory = (count: number) => ({
+      ...configuredHistory,
+      messages: messages.slice(-count),
+      hasMore: messages.length > count,
+      ...(messages.length > count ? { olderCursor: olderCursor(count) } : {}),
+      totalMessages: messages.length,
+    });
+    // Explicit long-session comparisons measure all rows; the normal fixture models boot's window.
+    const fullInitialWindow =
+      options.longSessionScenario !== "paging" &&
+      (options.historyStateReceipt || options.longSessionScenario !== undefined);
+    const limitedHistory = windowedHistory(fullInitialWindow ? messages.length : 80);
+    const selectedHistory = {
+      cases: [
+        {
+          match: { sessionKey: session.key, cursor: deltaCursor },
+          response: {
+            kind: "delta",
+            messages: [],
+            deltaCursor,
+            sessionInfo: configuredHistory.sessionInfo,
+            metadata: configuredHistory.metadata,
+            pendingInputs: configuredHistory.pendingInputs,
+            stateRevision: configuredHistory.stateRevision,
+            ...(options.inFlightRun ? { inFlightRun: options.inFlightRun } : {}),
+          },
+        },
+        ...pages.map(({ cursor, loadedMessages, messages: pageMessages }) => ({
+          match: { sessionKey: session.key, cursor },
+          response: {
+            messages: pageMessages,
+            hasMore: loadedMessages < messages.length,
+            ...(loadedMessages < messages.length
+              ? { olderCursor: olderCursor(loadedMessages) }
+              : {}),
+            totalMessages: messages.length,
+            sessionId: session.sessionId,
+          },
+        })),
+        {
+          match: { sessionKey: session.key, limit: 80, knownState: {} },
+          response: limitedHistory,
+        },
+        {
+          match: { sessionKey: session.key },
+          response: options.longSessionScenario === "paging" ? limitedHistory : configuredHistory,
+        },
+      ],
+    };
+    return {
+      lateRowFacts,
+      methodResponses: {
+        "chat.startup": selectedHistory,
+        "chat.history": selectedHistory,
+        ...(lateRowFacts
+          ? {
+              "controlUi.sessionPreview": {
+                cases: [
+                  {
+                    match: { sessionKey },
+                    response: {
+                      status: "ok",
+                      sessionKey,
+                      agentId: "main",
+                      title: lateRowFacts.sessionTitle,
+                    },
+                  },
+                ],
+              },
+              "forge.preview": {
+                url: lateRowFacts.prUrl,
+                title: "Synthetic thumbnail restoration",
+                badge: { label: "Open", tone: "positive" },
+              },
+              "artifacts.download": {
+                cases: [
+                  {
+                    match: { artifactId: lateRowFacts.artifactId },
+                    response: {
+                      artifact: {
+                        id: lateRowFacts.artifactId,
+                        title: "Synthetic ticketed thumbnail",
+                        type: "image",
+                        mimeType: "image/png",
+                        download: { mode: "url" },
+                      },
+                      url: downloadPath,
+                      expiresAt,
+                    },
+                  },
+                ],
+              },
+            }
+          : {}),
+      },
+    };
+  };
   const sessionKey = "agent:main:synthetic-late-row-reference";
   const downloadPath = "/api/artifacts/download/fixture-client/fixture-thumbnail";
   const expiresAt = new Date(options.now + 20 * 60_000).toISOString();
@@ -113,14 +293,93 @@ export function createTeamScaleHistoryFixture(options: {
     { length: options.messageCount },
     (_, index) => `team-message-${index + 1}`,
   );
+  if (
+    options.longSessionScenario === "single-run" ||
+    options.longSessionScenario === "direct-run"
+  ) {
+    const singleRunId = "long-session-single-run";
+    const historyMessages = messageIds.map((id, index) => {
+      const first = index === 0;
+      const last = index === messageIds.length - 1;
+      const tool = !first && !last && index % 2 === 0;
+      const toolCallId = `long-session-tool-${Math.floor((index - 1) / 2)}`;
+      const hasToolCall = !first && !last && !tool && index + 1 < messageIds.length - 1;
+      return {
+        role: first ? "user" : tool ? "toolResult" : "assistant",
+        __openclaw: {
+          id,
+          seq: index + 1,
+          ...(first ? { idempotencyKey: `${singleRunId}:user` } : { runId: singleRunId }),
+          ...(first && options.sender
+            ? {
+                senderIdentity: options.sender.identity,
+                senderName: options.sender.name,
+                senderProfileAvatarUrl: options.sender.avatarUrl,
+              }
+            : {}),
+        },
+        timestamp: options.now - (options.messageCount - index) * 1_000,
+        ...(tool ? { toolCallId, toolName: "read" } : {}),
+        ...(!first && !tool
+          ? {
+              phase: last ? "final_answer" : "commentary",
+              ...(hasToolCall ? { stopReason: "toolUse" } : last ? { stopReason: "stop" } : {}),
+            }
+          : {}),
+        content: [
+          {
+            type: "text",
+            text: first
+              ? "Inspect these synthetic checkpoints in one run."
+              : last
+                ? "All synthetic checkpoints are ready."
+                : tool
+                  ? `Checkpoint ${index} contains synthetic material.`
+                  : `### Project checkpoint ${index + 1}\n\nInspecting synthetic checkpoint.\n\n${index % 5 === 1 ? "```typescript\nconst ready = true;\n```" : "| Item | State |\n| --- | --- |\n| Fixture | Ready |"}`,
+          },
+          ...(hasToolCall
+            ? [
+                {
+                  type: "toolCall",
+                  id: toolCallId,
+                  name: "read",
+                  arguments: { path: `checkpoint-${index}.md` },
+                },
+              ]
+            : []),
+        ],
+      };
+    });
+    const workload: LongSessionWorkload = {
+      scenario: options.longSessionScenario,
+      messageCount: historyMessages.length,
+      firstEntryId: messageIds[0]!,
+      firstOutputEntryId: messageIds[1]!,
+      lastEntryId: messageIds.at(-1)!,
+    };
+    return {
+      messageIds,
+      historyMessages,
+      workload,
+      pagination: undefined,
+      ...selectHistory(historyMessages),
+    };
+  }
   const messagesPerWidget = Math.ceil(options.messageCount / options.inlineWidgets);
   const historyMessages = messageIds.map((id, index) => ({
     role:
-      options.largeSnapshot && index % 4 === 2 ? "toolResult" : index % 2 ? "assistant" : "user",
+      (options.largeSnapshot && index % 4 === 2) || (options.richTranscript && index % 8 === 6)
+        ? "toolResult"
+        : index % 2
+          ? "assistant"
+          : "user",
     __openclaw: {
       id,
       seq: index + 1,
-      ...(options.sender && index % 2 === 0 && !(options.largeSnapshot && index % 4 === 2)
+      ...(options.sender &&
+      index % 2 === 0 &&
+      !(options.largeSnapshot && index % 4 === 2) &&
+      !(options.richTranscript && index % 8 === 6)
         ? {
             senderIdentity: options.sender.identity,
             senderName: options.sender.name,
@@ -128,6 +387,9 @@ export function createTeamScaleHistoryFixture(options: {
           }
         : {}),
     },
+    ...(options.richTranscript && index % 8 === 6
+      ? { toolCallId: `long-session-tool-${index - 1}`, toolName: "read" }
+      : {}),
     ...(options.largeSnapshot
       ? {
           idempotencyKey: `synthetic-message-${index}`,
@@ -169,14 +431,46 @@ export function createTeamScaleHistoryFixture(options: {
           ...(options.largeSnapshot
             ? ["Synthetic transcript detail and tool output. ".repeat(40)]
             : []),
-          ...(index % messagesPerWidget === messagesPerWidget - 1 ||
-          index === options.messageCount - 1
+          ...(options.richTranscript
+            ? [
+                index === Math.floor(options.messageCount / 2) ? "long-session-search-needle" : "",
+                index % 8 === 1
+                  ? "```typescript\nconst checkpoints = [1, 2, 3];\nfor (const checkpoint of checkpoints) {\n  console.log({ checkpoint, ready: true });\n}\n```"
+                  : index % 8 === 3
+                    ? "| Check | Owner | Result |\n| --- | --- | --- |\n| Compile | Harbor | Passed |\n| Review | Scout | Ready |\n| Publish | Cedar | Pending |"
+                    : "",
+              ]
+            : []),
+          ...(options.inlineWidgets > 0 &&
+          (index % messagesPerWidget === messagesPerWidget - 1 ||
+            index === options.messageCount - 1)
             ? [
                 `[embed ref="team-scale-chart-${Math.floor(index / messagesPerWidget) + 1}" title="Team metric ${Math.floor(index / messagesPerWidget) + 1}" height="220" /]`,
               ]
             : []),
         ].join("\n\n"),
       },
+      ...(options.richTranscript && index % 8 === 5
+        ? ([
+            {
+              type: "toolCall",
+              id: `long-session-tool-${index}`,
+              name: "read",
+              arguments: { path: "synthetic-checkpoint.md" },
+            },
+          ] satisfies TeamScaleHistoryContent[])
+        : []),
+      ...(options.richTranscript && index % 16 === 7
+        ? ([
+            {
+              type: "image",
+              url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a34sAAAAASUVORK5CYII=",
+              alt: `Synthetic checkpoint image ${index + 1}`,
+              width: 320,
+              height: 180,
+            },
+          ] satisfies TeamScaleHistoryContent[])
+        : []),
     ] satisfies TeamScaleHistoryContent[],
   }));
   if (options.rowFacts) {
@@ -221,112 +515,56 @@ export function createTeamScaleHistoryFixture(options: {
       }),
     );
   }
-  const deltaCursor = JSON.stringify([
-    "team-scale-history-v1",
-    options.sessionInfo.key,
-    options.now,
-    options.messageCount,
-    options.largeSnapshot === true,
-    options.duplicateBootReads === true,
-  ]);
-  const configuredHistory = {
-    messages: historyMessages,
-    sessionId: options.sessionInfo.sessionId,
-    sessionInfo: options.sessionInfo,
-    deltaCursor,
-    pendingInputs: { items: [], total: 0, queuedCount: 0 },
-    stateRevision: {
-      sessionInfo: "fixture-session-v1",
-      commands: "fixture-commands-v1",
-      pendingInputs: "fixture-pending-inputs-v1",
+  if (options.longSessionScenario !== "paging") {
+    const workload: LongSessionWorkload = { scenario: "mixed" };
+    return {
+      messageIds,
+      historyMessages,
+      workload,
+      pagination: undefined,
+      ...selectHistory(historyMessages),
+    };
+  }
+  const initialMessageCount = Math.min(80, historyMessages.length);
+  const pages = Array.from(
+    { length: Math.ceil((historyMessages.length - initialMessageCount) / 1000) },
+    (_, index) => {
+      const offset = initialMessageCount + index * 1000;
+      const loadedMessages = Math.min(offset + 1000, historyMessages.length);
+      return {
+        cursor: olderCursor(offset),
+        loadedMessages,
+        anchorEntryId: messageIds[historyMessages.length - offset]!,
+        messages: historyMessages.slice(
+          historyMessages.length - loadedMessages,
+          historyMessages.length - offset,
+        ),
+      };
     },
-    ...(options.largeSnapshot
-      ? {
-          hasMore: false,
-          totalMessages: historyMessages.length,
-          metadata: { commands: [], models: [] },
-        }
-      : {
-          thinkingLevel: null,
-          metadata: { commands: [], models: options.models },
-          ...(options.inFlightRun ? { inFlightRun: options.inFlightRun } : {}),
-        }),
+  );
+  const workload: LongSessionWorkload = {
+    scenario: "paging",
+    messageCount: historyMessages.length,
+    initialMessageCount,
+    firstEntryId: messageIds[0]!,
+    deltaCursor,
+    pages: pages.map(({ cursor, loadedMessages, anchorEntryId }) => ({
+      cursor,
+      loadedMessages,
+      anchorEntryId,
+    })),
   };
-  const selectedHistory = {
-    cases: [
-      {
-        match: { sessionKey: options.sessionInfo.key, cursor: deltaCursor },
-        response: {
-          kind: "delta",
-          messages: [],
-          deltaCursor,
-          sessionInfo: configuredHistory.sessionInfo,
-          metadata: configuredHistory.metadata,
-          pendingInputs: configuredHistory.pendingInputs,
-          stateRevision: configuredHistory.stateRevision,
-          ...(options.inFlightRun ? { inFlightRun: options.inFlightRun } : {}),
-        },
-      },
-      {
-        match: { sessionKey: options.sessionInfo.key, limit: 80, knownState: {} },
-        response: {
-          ...configuredHistory,
-          messages: historyMessages.slice(-80),
-          hasMore: historyMessages.length > 80,
-          ...(historyMessages.length > 80 ? { nextOffset: 80 } : {}),
-          totalMessages: historyMessages.length,
-        },
-      },
-      { match: { sessionKey: options.sessionInfo.key }, response: configuredHistory },
-    ],
+  const pagination = {
+    deferredRequests: pages.map(({ cursor }) => ({
+      method: "chat.history",
+      match: { sessionKey: session.key, cursor },
+    })),
   };
   return {
     messageIds,
     historyMessages,
-    lateRowFacts,
-    methodResponses: {
-      "chat.startup": selectedHistory,
-      "chat.history": selectedHistory,
-      ...(lateRowFacts
-        ? {
-            "controlUi.sessionPreview": {
-              cases: [
-                {
-                  match: { sessionKey },
-                  response: {
-                    status: "ok",
-                    sessionKey,
-                    agentId: "main",
-                    title: lateRowFacts.sessionTitle,
-                  },
-                },
-              ],
-            },
-            "forge.preview": {
-              url: lateRowFacts.prUrl,
-              title: "Synthetic thumbnail restoration",
-              badge: { label: "Open", tone: "positive" },
-            },
-            "artifacts.download": {
-              cases: [
-                {
-                  match: { artifactId: lateRowFacts.artifactId },
-                  response: {
-                    artifact: {
-                      id: lateRowFacts.artifactId,
-                      title: "Synthetic ticketed thumbnail",
-                      type: "image",
-                      mimeType: "image/png",
-                      download: { mode: "url" },
-                    },
-                    url: downloadPath,
-                    expiresAt,
-                  },
-                },
-              ],
-            },
-          }
-        : {}),
-    },
+    workload,
+    pagination,
+    ...selectHistory(historyMessages, pages),
   };
 }

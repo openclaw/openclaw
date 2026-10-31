@@ -55,7 +55,9 @@ it.each([
     transcript,
   );
   try {
-    setTranscriptViewport(container, interruption === "idle at end" ? 600 : 2000);
+    if (!projected) {
+      setTranscriptViewport(container, interruption === "idle at end" ? 600 : 2000);
+    }
     session.syncMessageRows(
       rowMap("first", "second"),
       projected ? new Map() : rowMap("first", "second"),
@@ -63,6 +65,7 @@ it.each([
     if (!projected) {
       renderRows(rows);
     }
+    const scrollTo = vi.spyOn(container, "scrollTo");
     let bubbles = [...container.querySelectorAll(".chat-bubble")];
     if (interruption === "idle at end") {
       vi.useFakeTimers({ toNotFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
@@ -77,9 +80,15 @@ it.each([
       await commitLayout();
       expect(container.querySelector('[data-entry-id="first"]')).toBeNull();
       renderRows(rows);
+      await commitLayout();
       bubbles = [...container.querySelectorAll(".chat-bubble")];
     } else if (interruption === "wheel") {
+      scrollTo.mockClear();
       container.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
+      expect(scrollTo).toHaveBeenCalledExactlyOnceWith({
+        top: container.scrollTop,
+        behavior: "instant",
+      });
     } else if (interruption === "idle at end") {
       container.dispatchEvent(new Event("scroll"));
       vi.advanceTimersByTime(150);
@@ -98,5 +107,45 @@ it.each([
   } finally {
     transcript.dispose();
     vi.useRealTimers();
+  }
+});
+
+it("waits for a parked reply row to enter the active range before reading its geometry", async () => {
+  const transcript = createChatTranscript(() => "parked-reply");
+  const refs = transcript.renderSession(
+    "agent:main:parked-reply",
+    (session) => session.messageElements,
+  );
+  const row = (key: string): TestContentRow => ({
+    kind: "content",
+    key,
+    content: <div ref={refs.forKey(key)} class="chat-bubble" data-entry-id={key} />,
+  });
+  const rows = [row("first"), row("second")];
+  const { container, session, renderRows } = await mountTestTranscript(
+    "parked-reply",
+    rows,
+    transcript,
+  );
+  try {
+    setTranscriptViewport(container, 2000);
+    session.syncMessageRows(rowMap("first", "second"), rowMap("first", "second"));
+    const target = container.querySelector<HTMLElement>('[data-entry-id="first"]')!;
+    const virtualRow = target.closest<HTMLElement>(".chat-virtual-row")!;
+    const measure = vi.fn(() => new DOMRect(0, 0, 800, 600));
+    target.getBoundingClientRect = measure;
+    virtualRow.dataset.preparedRow = "true";
+    expect(transcript.revealMessage("first")).toBe(true);
+    await commitLayout();
+    expect(measure).not.toHaveBeenCalled();
+    expect(target.classList.contains("chat-bubble--reply-target")).toBe(false);
+
+    delete virtualRow.dataset.preparedRow;
+    renderRows(rows);
+    await commitLayout();
+    expect(measure).toHaveBeenCalled();
+    expect(target.classList.contains("chat-bubble--reply-target")).toBe(true);
+  } finally {
+    transcript.dispose();
   }
 });

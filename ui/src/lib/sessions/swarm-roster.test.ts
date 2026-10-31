@@ -152,7 +152,7 @@ function fixture(
     emit,
     async start(changes: Partial<Params> = {}) {
       update(changes);
-      await tick(250);
+      await tick();
     },
     async boot() {
       await fetchDescriptor();

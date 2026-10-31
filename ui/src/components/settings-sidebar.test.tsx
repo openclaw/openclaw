@@ -373,6 +373,35 @@ describe("settings sidebar search", () => {
     expect(onExit).toHaveBeenCalledOnce();
   });
 
+  it("clears native search text while asynchronous results hold the previous query", async () => {
+    const prepared = Promise.withResolvers<void>();
+    const prepareLocale = vi.spyOn(i18n, "prepareLocale").mockReturnValue(prepared.promise);
+    const onExit = vi.fn();
+    const search = searchHarness("", {
+      onExit,
+      searchParams: { query: "appearance", schema: null, value: null, uiHints: {} },
+    });
+    search.input.focus();
+    try {
+      search.enter("appearance");
+      await vi.waitFor(() => expect(prepareLocale).toHaveBeenCalled());
+      expect(search.input.value).toBe("appearance");
+      search.input.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      );
+      expect(onExit).not.toHaveBeenCalled();
+      expect(search.value).toBe("");
+      expect(document.activeElement).toBe(search.input);
+    } finally {
+      prepared.resolve();
+      prepareLocale.mockRestore();
+      await prepared.promise;
+      flush();
+    }
+    await waitForSolid(() => expect(search.input.value).toBe(""));
+    expect(container.querySelector(".settings-sidebar__search-input")).toBe(search.input);
+  });
+
   it("clears the visible search before its projected query commits", () => {
     const onExit = vi.fn();
     const onSearchQueryChange = vi.fn((searchQuery: string) => {

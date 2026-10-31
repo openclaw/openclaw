@@ -82,6 +82,8 @@ const progressSanitizeOptions = {
   ALLOWED_TAGS: [...allowedTags, "progress"],
   ALLOWED_ATTR: [...allowedAttrs, "value", "max"],
 };
+const fragmentSanitizeOptions = { ...sanitizeOptions, RETURN_DOM_FRAGMENT: true };
+const progressFragmentSanitizeOptions = { ...progressSanitizeOptions, RETURN_DOM_FRAGMENT: true };
 
 const sanitizers = new Map<typeof sanitizeOptions, ReturnType<typeof DOMPurify>>();
 
@@ -412,14 +414,24 @@ export function normalizeDocsRootHref(href: string): string {
   }
 }
 
-export function markdownSanitizer(decorate: (node: Element) => void, progressBars = false) {
-  const options = progressBars ? progressSanitizeOptions : sanitizeOptions;
+export function markdownSanitizer(
+  decorate: (node: Element) => void,
+  progressBars = false,
+  returnFragment = false,
+) {
+  const options = returnFragment
+    ? progressBars
+      ? progressFragmentSanitizeOptions
+      : fragmentSanitizeOptions
+    : progressBars
+      ? progressSanitizeOptions
+      : sanitizeOptions;
   const cached = sanitizers.get(options);
   if (cached) {
     return cached;
   }
-  // Persistent configs ignore per-call options; each allowlist owns its instance
-  // so progress markup cannot widen ordinary Markdown or other sanitizer users.
+  // Persistent configs ignore per-call options; each policy and return shape
+  // owns its instance so one caller cannot change another's sanitizer contract.
   const sanitizer = DOMPurify(window);
   sanitizer.setConfig(options);
 

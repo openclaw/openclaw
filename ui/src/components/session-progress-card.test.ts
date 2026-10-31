@@ -2,6 +2,7 @@
 
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import { publishTranscriptScroll } from "../pages/chat/components/chat-transcript-scroll-events.ts";
 import {
   observeTranscript,
   cardPart,
@@ -447,6 +448,21 @@ describe("renderSessionProgressCard", () => {
     previousTouches = [];
     expectOpen(card, true, 300);
     drag(0, 25);
+    expectOpen(card, false, 300);
+    replaceCard();
+    touch("touchstart", 0);
+    // Geometry settling under a held finger must preserve its upcoming native movement.
+    publishTranscriptScroll(transcript.thread, {
+      type: "offset",
+      delta: 0,
+      scrolling: false,
+      touching: true,
+      programmatic: true,
+    });
+    touch("touchmove", 160);
+    touch("touchend", 160);
+    expectOpen(card, true, 300);
+    drag(0, 160);
     expectOpen(card, false, 300);
     replaceCard();
     drag(0, 200);

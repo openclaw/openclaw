@@ -20,7 +20,10 @@ import type { MarkdownRenderOptions } from "../../../components/markdown-render-
 import { partitionMarkdownHtml, toSanitizedJsonHtml } from "../../../components/markdown.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
-import type { MarkdownContent as PreparedMarkdownContent } from "../../../lib/markdown-content.ts";
+import {
+  markdownContentHtml,
+  type MarkdownContent as PreparedMarkdownContent,
+} from "../../../lib/markdown-content.ts";
 import type { MarkdownDomMedia, MarkdownMediaRoot } from "../../../lib/markdown-dom-reconciler.ts";
 import { elementRef as registerElementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -212,8 +215,8 @@ function DisclosureContent(props: {
     }),
     {
       equals: (before, next) =>
-        before.parts[0] === next.parts[0] &&
-        before.parts[1] === next.parts[1] &&
+        markdownContentHtml(before.parts[0]) === markdownContentHtml(next.parts[0]) &&
+        markdownContentHtml(before.parts[1]) === markdownContentHtml(next.parts[1]) &&
         before.expanded === next.expanded &&
         before.forwarded === next.forwarded &&
         before.connected === next.connected,

@@ -2,11 +2,13 @@ import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { nativeHistoryMessageIdentity } from "../../../lib/chat/history-message-identity.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
+import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import {
   agentRunFrameActiveStatusParts,
   chatItemGroups,
   coalesceAgentRunFrames,
+  type AgentRunFrameRenderItem,
 } from "../chat-agent-run-grouping.ts";
 import { assistantGroupCanOwnActiveRunStatus } from "../chat-assistant-reply.ts";
 import { isHandoffBoundaryItem } from "../chat-sessions-yield.ts";
@@ -41,9 +43,11 @@ import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import { createTranscriptMemo } from "./chat-transcript-memo.ts";
 import { GuardedTranscriptItem } from "./chat-transcript-render-guard.ts";
 import type { NativeTranscriptView } from "./chat-transcript-rows.ts";
+import { CHAT_TRANSCRIPT_ESTIMATED_ROW_PX } from "./chat-transcript-session.ts";
 import type { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.ts";
 
 type ChatRenderItem = SystemEventRenderItem;
+const COMPLETED_FRAME_ROW_MESSAGE_LIMIT = 1;
 
 type TranscriptChain = Readonly<{
   searchActive: boolean;
@@ -86,6 +90,7 @@ type ChainEntry = {
 // invalidate the chain and its immutable indexes.
 const chains = new WeakMap<object, ChainEntry>();
 const indexes = createTranscriptMemo<TranscriptIndex>();
+const rowRevisions = createTranscriptMemo<string>();
 const presentationRows = createTranscriptMemo<readonly TranscriptRow<ChatRenderItem>[]>();
 
 // Fold only the final presentation, after causal run/turn ownership is settled.
@@ -241,13 +246,58 @@ export function projectTranscriptChain(
   const value: TranscriptChain = {
     collapsedItems,
     transcriptItems,
-    workGroups: transcriptItems.filter((candidate) => candidate.kind === "work-group"),
+    workGroups: transcriptItems.flatMap((candidate) =>
+      candidate.kind === "agent-run-frame"
+        ? candidate.parts.filter((part) => part.kind === "work-group")
+        : candidate.kind === "work-group"
+          ? [candidate]
+          : [],
+    ),
     continuations,
     searchActive: options.searchActive,
     live: liveOwner,
   };
   chains.set(chatItems, { key, value });
   return value;
+}
+
+// Approximate the visible blocks without parsing offscreen Markdown. Actual
+// border-box measurements replace these hints in the virtualizer's size cache.
+function estimateMessageGroupSize(group: MessageGroup): number | undefined {
+  if (group.role !== "user" && group.role !== "assistant") {
+    return undefined;
+  }
+  let size = 72;
+  for (const source of group.messages) {
+    for (const part of normalizeMessage(source.message).content) {
+      if (part.type === "image") {
+        size += 180;
+      } else if (part.type === "text" && part.text) {
+        let fenced = false;
+        let blank = false;
+        for (const line of part.text.split("\n")) {
+          if (/^\s*(```|~~~)/u.test(line)) {
+            fenced = !fenced;
+            size += 18;
+          } else if (!line.trim()) {
+            if (!blank) {
+              size += 16;
+            }
+            blank = true;
+            continue;
+          } else {
+            size += fenced
+              ? 18
+              : /^\s*(#{1,6} |\|)/u.test(line)
+                ? 32
+                : Math.max(1, Math.ceil(line.length / 85)) * 22;
+          }
+          blank = false;
+        }
+      }
+    }
+  }
+  return Math.max(CHAT_TRANSCRIPT_ESTIMATED_ROW_PX, size);
 }
 
 export function projectTranscriptIndex(
@@ -264,15 +314,29 @@ export function projectTranscriptIndex(
     props.messageReactions,
   ];
   return indexes(chain, cacheKey, (): TranscriptIndex => {
+    // Smaller transcripts scroll more cheaply without repeatedly mounting fragments.
+    let sourceCount = 0;
+    const windowCompletedFrames = chain.transcriptItems.some((item) => {
+      for (const group of chatItemGroups(item)) {
+        sourceCount += group.messages.length;
+        if (sourceCount > 256) {
+          return true;
+        }
+      }
+      return false;
+    });
     const loadedReplySources = new Map<string, LoadedReplySource>();
     const messageRowKeysById = new Map<string, string>();
     const transcriptMessageKeys = new Map<string, string>();
     const rows: TranscriptRow<ChatRenderItem>[] = [];
     const row = (item: ChatRenderItem, key = item.key): TranscriptRow<ChatRenderItem> => {
+      if (item.kind === "agent-run-frame" && (item.fragment?.first || item.fragment?.last)) {
+        // Edge chrome depends on the whole frame; fragment content alone cannot key its footprint.
+        return { kind: "item", key, item };
+      }
       const groups = chatItemGroups(item);
       const parts = item.kind === "agent-run-frame" ? item.parts : [item];
-      if (
-        chain.continuations.has(item.key) ||
+      const streaming =
         (item.kind === "agent-run-frame" && item.outcome.kind === "active") ||
         groups.some((group) => group.isStreaming) ||
         parts.some(
@@ -280,27 +344,55 @@ export function projectTranscriptIndex(
             part.kind === "stream-run" ||
             part.kind === "stream" ||
             part.kind === "reading-indicator",
-        )
-      ) {
-        return { kind: "item", key, item };
+        );
+      if (chain.continuations.has(item.key) || streaming) {
+        return { kind: "item", key, item, streaming };
       }
-      const messages = groups.flatMap((group) =>
-        group.messages.map(({ message }) => [
-          nativeHistoryMessageIdentity(message) ?? message,
-          props.messageReactions?.get(persistedMessageEntryId(message) ?? "") ?? [],
-        ]),
-      );
-      const content = JSON.stringify(
-        item.kind === "agent-run-frame"
-          ? [item.outcome.kind, messages]
-          : messages.length
-            ? messages
-            : item,
-      );
-      return { kind: "item", key, item, revision: `${content.length}:${fnv1aUtf16(content)}` };
+      // Settled items keep their identity across unrelated live-tail changes.
+      // Reactions replace their map; active and continuation rows never enter this memo.
+      const revision = rowRevisions(item, [key, props.messageReactions], () => {
+        const messages = groups.flatMap((group) =>
+          group.messages.map(({ message }) => [
+            nativeHistoryMessageIdentity(message) ?? message,
+            props.messageReactions?.get(persistedMessageEntryId(message) ?? "") ?? [],
+          ]),
+        );
+        const content = JSON.stringify(
+          item.kind === "agent-run-frame"
+            ? [item.outcome.kind, messages]
+            : messages.length
+              ? messages
+              : item,
+        );
+        return `${content.length}:${fnv1aUtf16(content)}`;
+      });
+      return { kind: "item", key, item, revision };
     };
     for (const item of chain.transcriptItems) {
-      rows.push(row(item));
+      const rendered =
+        windowCompletedFrames && item.kind === "agent-run-frame"
+          ? completedFrameRows(item, expandedToolCards)
+          : [item];
+      for (const rowItem of rendered) {
+        // Rich work sources include their Markdown and paired tool output.
+        // Only split runs need advance materialization. Ordinary rows already
+        // fit the virtual window; retaining them duplicates mixed-session DOM.
+        const retainDom = rowItem.kind === "agent-run-frame" && Boolean(rowItem.fragment);
+        const estimatedSize =
+          rowItem.kind === "agent-run-frame" && rowItem.fragment
+            ? rowItem.parts.reduce(
+                (size, part) =>
+                  size +
+                  (part.kind === "group" && part.role === "assistant" ? part.messages.length : 1),
+                0,
+              ) *
+              CHAT_TRANSCRIPT_ESTIMATED_ROW_PX *
+              2
+            : rowItem.kind === "group"
+              ? estimateMessageGroupSize(rowItem)
+              : undefined;
+        rows.push({ ...row(rowItem), estimatedSize, retainDom });
+      }
       if (item.kind === "work-group" && expandedToolCards.get(item.key)) {
         for (const group of item.groups) {
           rows.push(row(group, `${item.key}:${group.key}`));
@@ -309,6 +401,16 @@ export function projectTranscriptIndex(
       const parts = item.kind === "agent-run-frame" ? item.parts : [item];
       const groups = chatItemGroups(item);
       const firstGroup = groups.find((group) => group.role === "assistant") ?? groups[0];
+      const fragmentKeys = new Map<string, string>();
+      if (rendered.length > 1) {
+        for (const rowItem of rendered) {
+          for (const group of chatItemGroups(rowItem)) {
+            for (const source of group.messages) {
+              fragmentKeys.set(source.key, rowItem.key);
+            }
+          }
+        }
+      }
       // The anchor owner uses the first key, so keep stream and persisted keys
       // in their actual presentation order, including within a mixed run frame.
       for (const part of parts) {
@@ -328,10 +430,11 @@ export function projectTranscriptIndex(
               ? item.key + ":" + group.key
               : item.key;
           for (const source of group.messages) {
-            transcriptMessageKeys.set(source.key, rowKey);
+            const sourceRowKey = fragmentKeys.get(source.key) ?? rowKey;
+            transcriptMessageKeys.set(source.key, sourceRowKey);
             const sourceMessageId = persistedMessageEntryId(source.message);
             if (sourceMessageId) {
-              messageRowKeysById.set(sourceMessageId, rowKey);
+              messageRowKeysById.set(sourceMessageId, sourceRowKey);
               loadedReplySources.set(sourceMessageId, {
                 message: source.message,
                 messageId: source.key,
@@ -357,6 +460,132 @@ export function projectTranscriptIndex(
       liveItem: chain.live?.item,
     };
   });
+}
+
+function completedFrameRows(
+  frame: AgentRunFrameRenderItem,
+  expanded: ReadonlyMap<string, boolean>,
+): AgentRunFrameRenderItem[] {
+  // Without an answer, the summary keeps the original row through disclosure changes.
+  if (frame.outcome.kind !== "completed" || !frame.outcome.actionOwner) {
+    return [frame];
+  }
+  // Late tool output can follow the final answer; retain that answer's row identity.
+  const finalPart = frame.parts.at(-1);
+  const actionOwner = frame.outcome.actionOwner;
+  if (
+    !finalPart ||
+    !chatItemGroups(finalPart).some((group) => group.messages.includes(actionOwner))
+  ) {
+    return [frame];
+  }
+  const groups = chatItemGroups(frame);
+  if (groups.reduce((count, group) => count + group.messages.length, 0) <= 32) {
+    return [frame];
+  }
+  // Retained widgets move inside FrameBody at completion. Keep that one DOM owner
+  // until cross-row widget handoff has its own lifecycle contract.
+  if (
+    groups.some((group) =>
+      group.messages.some(
+        ({ message }) =>
+          normalizeMessage(message).content.some((part) => part.type === "canvas") ||
+          extractToolCardsCached(message).some((card) => card.preview?.kind === "canvas"),
+      ),
+    )
+  ) {
+    return [frame];
+  }
+  const chunks: AgentRunFrameRenderItem["parts"][] = [];
+  let pending: AgentRunFrameRenderItem["parts"] = [];
+  let count = 0;
+  const finishChunk = () => {
+    if (pending.length) {
+      chunks.push(pending);
+      pending = [];
+      count = 0;
+    }
+  };
+  const append = (part: AgentRunFrameRenderItem["parts"][number]): void => {
+    // Paired tool results can leave an entire run in one assistant group.
+    if (
+      part.kind === "group" &&
+      part.role === "assistant" &&
+      part.messages.length > COMPLETED_FRAME_ROW_MESSAGE_LIMIT
+    ) {
+      for (
+        let offset = 0;
+        offset < part.messages.length;
+        offset += COMPLETED_FRAME_ROW_MESSAGE_LIMIT
+      ) {
+        const messages = part.messages.slice(offset, offset + COMPLETED_FRAME_ROW_MESSAGE_LIMIT);
+        append(
+          Object.assign({}, part, {
+            key: offset === 0 ? part.key : `group:${part.role}:${messages[0]!.key}`,
+            messages,
+          }),
+        );
+      }
+      return;
+    }
+    const weight = chatItemGroups(part).reduce((total, group) => total + group.messages.length, 0);
+    if (count + weight > COMPLETED_FRAME_ROW_MESSAGE_LIMIT) {
+      finishChunk();
+    }
+    pending.push(part);
+    count += weight;
+  };
+  for (const [index, part] of frame.parts.entries()) {
+    // The final answer retains the original frame key across completion and disclosure.
+    if (index === frame.parts.length - 1) {
+      finishChunk();
+    }
+    if (part.kind === "work-group") {
+      finishChunk();
+      chunks.push([part]);
+      if (expanded.get(part.key)) {
+        for (const group of part.groups) {
+          append(group);
+        }
+        finishChunk();
+      }
+    } else {
+      // A single activity disclosure remains atomic; never duplicate its summary/ARIA identity.
+      append(part);
+    }
+  }
+  finishChunk();
+  if (chunks.length < 2) {
+    return [frame];
+  }
+  const firstAssistant = groups.find((group) => group.role === "assistant");
+  const work = frame.parts.find(
+    (part) => part.kind === "work-group" && part.replyRunId === frame.runId,
+  );
+  const firstBubbleKey =
+    frame.parts.flatMap((part) =>
+      part.kind === "group" && part.role !== "tool"
+        ? part.messages.filter((message) => message.hasVisibleContent).map((message) => message.key)
+        : [],
+    )[0] ?? null;
+  return chunks.map((parts, index) =>
+    Object.assign({}, frame, {
+      key:
+        index === chunks.length - 1
+          ? frame.key
+          : `${frame.key}:part:${parts[0]!.kind}:${parts[0]!.key}`,
+      parts,
+      fragment: {
+        source: frame,
+        first: index === 0,
+        last: index === chunks.length - 1,
+        firstAssistant,
+        representative: firstAssistant ?? groups[0],
+        firstBubbleKey,
+        work: work?.kind === "work-group" ? work : undefined,
+      },
+    }),
+  );
 }
 
 export function expandReplyTargetWork(

@@ -13,6 +13,12 @@ export function prepareMarkdownMedia(
   content: readonly ProjectedMessageContent[],
   render: MarkdownMedia["render"],
 ): { markdown: string; media: MarkdownMedia } {
+  const { markdown, ...media } = prepareMarkdownMediaSource(content);
+  return { markdown, media: { ...media, render } };
+}
+
+/** Slot preparation is pure; offscreen warming must not mount media resources. */
+export function prepareMarkdownMediaSource(content: readonly ProjectedMessageContent[]) {
   const text = content.flatMap((item) => (item.type === "text" ? [item.text] : [])).join("\n");
   let prefix = "OPENCLAWMEDIASLOT";
   while (text.includes(prefix)) {
@@ -28,5 +34,5 @@ export function prepareMarkdownMedia(
       return `${prefix}${items.length - 1}END`;
     })
     .join("\n");
-  return { markdown, media: { prefix, text, items, render } };
+  return { markdown, prefix, text, items };
 }

@@ -246,11 +246,6 @@ div.chat-thread:where(.chat-thread--annotations) {
 @media (hover: none),
   (max-width: 768px),
   (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  /* Touch targets grow up over their own group, never into the turn gap. */
-  .chat-group {
-    --chat-touch-target: 44px;
-  }
-
   .chat-group,
   .chat-notice {
     --chat-turn-gap: 12px;
@@ -270,7 +265,6 @@ div.chat-thread:where(.chat-thread--annotations) {
 
 .chat-group-messages {
   --chat-message-gap: 2px;
-  --chat-message-type-boundary-gap: var(--space-1);
   position: relative; /* anchors message-local popovers */
   display: flex;
   flex-direction: column;
@@ -766,8 +760,6 @@ div.chat-thread:where(.chat-thread--annotations) {
 /* One settings button: avatar and name, with the settings glyph revealed on
    hover so the pill itself grows. */
 .chat-pane__agent-identity {
-  /* Settings width minus the trailing padding it replaces. */
-  --chat-agent-settings-reveal: 20px;
   display: inline-flex;
   align-items: center;
   min-width: 0;
@@ -824,8 +816,8 @@ div.chat-thread:where(.chat-thread--annotations) {
    recentering and shifting the avatar and name. */
 @media (hover: hover) {
   .chat-pane__agent-identity:is(:hover, :focus-visible) {
-    max-width: calc(100% + var(--chat-agent-settings-reveal));
-    margin-inline-end: calc(0px - var(--chat-agent-settings-reveal));
+    max-width: calc(100% + 20px);
+    margin-inline-end: -20px;
     padding-right: 4px;
   }
 
@@ -1291,7 +1283,6 @@ openclaw-chat-sidebar-region,
   --desktop-panel-height: calc(100% - var(--desktop-header-height));
   --desktop-panel-start: 100%;
   --desktop-panel-top: 0px;
-  --desktop-frame-motion: var(--chat-details-motion);
   grid-template-columns: minmax(0, 1fr) var(--desktop-divider-reserve) minmax(
       0,
       var(--desktop-side-reserve)
@@ -1299,8 +1290,8 @@ openclaw-chat-sidebar-region,
   grid-template-rows: auto minmax(0, 1fr);
   grid-template-areas: "main-header divider side-header" "main divider side";
   transition:
-    grid-template-columns var(--desktop-frame-motion),
-    grid-template-rows var(--desktop-frame-motion);
+    grid-template-columns var(--chat-details-motion),
+    grid-template-rows var(--chat-details-motion);
 }
 
 /* Animate the shared gutter once: the conversation, scrollport, and reading
@@ -1489,12 +1480,12 @@ openclaw-chat-sidebar-region,
   height: var(--desktop-panel-height);
   opacity: 1;
   transition:
-    top var(--desktop-frame-motion),
-    inset-inline-start var(--desktop-frame-motion),
-    width var(--desktop-frame-motion),
-    height var(--desktop-frame-motion),
-    opacity var(--desktop-frame-motion),
-    display var(--desktop-frame-motion) allow-discrete;
+    top var(--chat-details-motion),
+    inset-inline-start var(--chat-details-motion),
+    width var(--chat-details-motion),
+    height var(--chat-details-motion),
+    opacity var(--chat-details-motion),
+    display var(--chat-details-motion) allow-discrete;
 
   @starting-style {
     opacity: 0;

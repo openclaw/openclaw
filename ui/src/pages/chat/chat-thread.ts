@@ -343,7 +343,8 @@ function sameChatItemsStructuralInput(
     previous.subagentWait?.runId === next.subagentWait?.runId &&
     (previous.subagentWait === undefined) === (next.subagentWait === undefined) &&
     previous.questionPrompts === next.questionPrompts &&
-    previous.loading === next.loading &&
+    // Loading only suppresses progress indicators on an initially empty thread.
+    (previous.loading === next.loading || (!next.runWorking && !next.subagentWait)) &&
     sameEntries(previous.replyPeople, next.replyPeople) &&
     previous.replyLocalPerson === next.replyLocalPerson &&
     previous.searchOpen === next.searchOpen &&

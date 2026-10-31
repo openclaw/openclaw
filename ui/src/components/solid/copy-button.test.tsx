@@ -68,6 +68,8 @@ it("keeps focus and pending copy across an idle-label update, then resets to the
   const [label, setLabel] = createSignal("Copy value");
   const view = render(() => <CopyButton text="same" idleLabel={label()} />);
   const button = view.getByRole<HTMLButtonElement>("button", { name: "Copy value" });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(button.getAttribute("aria-describedby")).toBeNull();
   button.focus();
   fireEvent.click(button);
   setLabel("Copier la valeur");

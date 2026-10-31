@@ -157,7 +157,9 @@ export class SwarmRosterHydrator {
     if (this.children || this.timer !== null) {
       return;
     }
-    this.timer = setTimeout(() => this.connect(), 250);
+    // Start the optional roster read after this publication, alongside rendering.
+    // A fixed dwell lets the read interrupt the first interaction in fast panes.
+    this.timer = setTimeout(() => this.connect(), 0);
   }
 
   dispose(): void {

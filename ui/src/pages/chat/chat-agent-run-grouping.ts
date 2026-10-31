@@ -39,6 +39,16 @@ export type AgentRunFrameRenderItem = {
     | { kind: "interrupted" }
     | { kind: "failed" };
   parts: AgentRunFramePart[];
+  /** Completed runs share one identity/footer across independently virtualized rows. */
+  fragment?: {
+    source: AgentRunFrameRenderItem;
+    first: boolean;
+    last: boolean;
+    firstAssistant: MessageGroup | undefined;
+    representative: MessageGroup | undefined;
+    firstBubbleKey: string | null;
+    work: WorkGroupRenderItem | undefined;
+  };
 };
 
 type AgentRunFrameInput = CompletedTurnRenderItem | ActivityRunRenderItem;

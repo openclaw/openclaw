@@ -128,7 +128,11 @@ function captureTranscriptPrependAnchor(
   // viewport and messages removed by the new projection are not candidates.
   // Prepended refs register after retained ones; choose by DOM order, not insertion order.
   const bubbles = [...messageElements]
-    .filter((bubble) => scrollElement.contains(bubble))
+    .filter(
+      (bubble) =>
+        scrollElement.contains(bubble) &&
+        !bubble.closest('.chat-virtual-row[data-prepared-row="true"]'),
+    )
     .toSorted((left, right) => {
       const position = left.compareDocumentPosition(right);
       if (position & Node.DOCUMENT_POSITION_FOLLOWING) {

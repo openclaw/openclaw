@@ -70,7 +70,7 @@ export function Popover(props: {
       positionAnchor: props.positionAnchor,
       placement: props.placement,
     }),
-    { sameRoot: initialIdentity.sameRoot },
+    { sameRoot: initialIdentity.sameRoot, lazy: Boolean(initialIdentity.lazy) },
   );
   onSettled(() => {
     overlay.bindSurface(surface);

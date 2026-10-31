@@ -153,6 +153,11 @@ describe("chat transcript entry lifecycle", () => {
     const first = { ...pendingSend("First input"), createdAt: 10, queueMode: "steer" as const };
     const second = { ...pendingSend("Second input"), createdAt: 20, queueMode: "steer" as const };
     view.set({ queue: [first] });
+    // Join the first row's commit before delivering the mocked native end offset.
+    await flushDeferredRowPrune();
+    const thread = required(view.container, ".chat-thread");
+    thread.dispatchEvent(new Event("scroll"));
+    flush();
     const firstBubble = expectDefined(bubbles(view.container)[0], "first prompt");
     view.set({ queue: [first, second] });
     const pendingBubbles = bubbles(view.container).filter((bubble) => bubble.dataset.messageText);

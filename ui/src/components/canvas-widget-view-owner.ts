@@ -24,6 +24,7 @@ import {
 } from "../lib/widget-sandbox-host.ts";
 import { registerWidgetThemeFrame, postWidgetTheme } from "../lib/widget-theme.ts";
 import { forwardChatWheelToTranscript } from "../pages/chat/chat-scroll-input.ts";
+import type { CanvasWidgetViewProps } from "./canvas-widget-view.types.ts";
 import { allowWidgetPrompt, dispatchWidgetPrompt } from "./mcp-app-security.ts";
 
 type WidgetClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
@@ -122,18 +123,6 @@ const reportedRuntimeErrors = new Set<string>();
 // Fresh renders ping the agent; old restored history only shows the notice.
 const WIDGET_RUNTIME_ERROR_REPORT_WINDOW_MS = 10 * 60_000;
 
-export type CanvasWidgetViewProps = {
-  docId: string;
-  sessionKey: string;
-  messageTimestamp?: number;
-  title: string;
-  preferredHeight?: number;
-  onHeightChange?: (height: number | null, settled?: boolean) => number | undefined;
-  connectionGeneration: number;
-  presentationActive: boolean;
-  allowScripts: boolean;
-};
-
 export function createCanvasWidget(
   props: CanvasWidgetViewProps,
   element: HTMLElement,
@@ -200,6 +189,7 @@ export function createCanvasWidget(
     resourceError: boolean;
     contentHeight?: number;
     sandboxGeneration: number;
+    scriptFrameAdmitted: boolean;
     pending: boolean;
   } = {
     error: "",
@@ -208,6 +198,7 @@ export function createCanvasWidget(
     runtimeError: "",
     resourceError: false,
     sandboxGeneration: 0,
+    scriptFrameAdmitted: false,
     pending: false,
   };
   let reportedHeight: number | undefined;
@@ -226,6 +217,7 @@ export function createCanvasWidget(
   let retryTimer: number | undefined;
   let slowTimer: number | undefined;
   let retryDelayMs = 1_000;
+  let cancelFrameAdmission: (() => void) | undefined;
   Object.defineProperties(element, {
     documentHtml: {
       configurable: true,
@@ -310,6 +302,9 @@ export function createCanvasWidget(
   }
 
   function clearSandbox(): void {
+    cancelFrameAdmission?.();
+    cancelFrameAdmission = undefined;
+    state.scriptFrameAdmitted = false;
     scrollNonce = "";
     sandboxHost?.dispose();
     sandboxHost = undefined;
@@ -497,6 +492,14 @@ export function createCanvasWidget(
   function syncSandbox(): void {
     const active = props.presentationActive && isCurrent(validatedBinding);
     sandboxHost?.setActive(active);
+    if (!active) {
+      cancelFrameAdmission?.();
+      cancelFrameAdmission = undefined;
+    }
+    if (active && props.allowScripts && state.view && !state.error && !state.scriptFrameAdmitted) {
+      scheduleFrameAdmission();
+      return;
+    }
     const frame = frameElement;
     const view = state.view;
     const binding = activeBinding;
@@ -506,7 +509,7 @@ export function createCanvasWidget(
     sandboxOrigin = new URL(frame.src).origin;
     releaseTheme = registerWidgetThemeFrame(frame, sandboxOrigin);
     scrollNonce = generateUUID();
-    releaseMessages = observeWindowMessage(window, frame.contentWindow!, handleMessage);
+    releaseMessages = observeWindowMessage(window, frame, handleMessage);
     sandboxHost = new WidgetSandboxHost({
       frame,
       sandboxOrigin,
@@ -535,6 +538,50 @@ export function createCanvasWidget(
       },
     });
     sandboxHost.setActive(active);
+  }
+
+  function scheduleFrameAdmission(): void {
+    if (cancelFrameAdmission) {
+      return;
+    }
+    if (typeof requestIdleCallback !== "function") {
+      // Preserve eager admission where the browser has no idle scheduler.
+      state.scriptFrameAdmitted = true;
+      notify();
+      return;
+    }
+    const binding = validatedBinding;
+    let idleHandle = 0;
+    let quietTimer: number;
+    const admit = () => {
+      cancelFrameAdmission?.();
+      cancelFrameAdmission = undefined;
+      if (!isCurrent(binding) || !props.allowScripts || !props.presentationActive) {
+        return;
+      }
+      state.scriptFrameAdmitted = true;
+      notify();
+    };
+    // Browsing-context creation takes ~30 ms. Wait for the transcript to stop
+    // scrolling, then mount with its ready listener in one task. Idle deadlines
+    // can stay short indefinitely, so bound the wait after scrolling settles.
+    const cancelScheduled = () => {
+      window.clearTimeout(quietTimer);
+      cancelIdleCallback(idleHandle);
+    };
+    const waitForQuiet = () => {
+      cancelScheduled();
+      quietTimer = window.setTimeout(() => {
+        idleHandle = requestIdleCallback(admit, { timeout: 250 });
+      }, 120);
+    };
+    const roots = new Set([element.ownerDocument, element.getRootNode()]);
+    const releaseScroll = [...roots].map((root) => listen(root, "scroll", waitForQuiet, true));
+    cancelFrameAdmission = () => {
+      releaseScroll.forEach((release) => release());
+      cancelScheduled();
+    };
+    waitForQuiet();
   }
 
   function syncFrameError(): void {
@@ -696,8 +743,6 @@ export function createCanvasWidget(
     clearView,
     syncSandbox,
     syncFrameError,
-    setFrame: (frame: HTMLIFrameElement) => {
-      frameElement = frame;
-    },
+    setFrame: (frame: HTMLIFrameElement) => (frameElement = frame),
   };
 }

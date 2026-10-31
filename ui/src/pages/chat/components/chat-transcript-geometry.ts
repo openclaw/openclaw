@@ -129,7 +129,11 @@ export function isTranscriptRangeCommitted(
     return (
       node !== undefined &&
       inner?.contains(node) === true &&
-      Number.parseFloat(node.style.getPropertyValue("contain-intrinsic-block-size")) === row.size
+      // CSSOM rounds fractional lengths; a subpixel serialization difference is committed.
+      (node.dataset.streamingRow === "true" ||
+        Math.abs(
+          Number.parseFloat(node.style.getPropertyValue("contain-intrinsic-block-size")) - row.size,
+        ) < 1)
     );
   });
 }
@@ -153,7 +157,7 @@ export function readConnectedTranscriptRows(
   const measurements: Array<{ index: number; height: number }> = [];
   // Refs can arrive out of order during prepends; preserve DOM-order corrections.
   const rows = [...rowElements]
-    .filter((row) => scrollElement.contains(row))
+    .filter((row) => scrollElement.contains(row) && row.dataset.preparedRow !== "true")
     .toSorted(
       (left, right) => virtualizer.indexFromElement(left) - virtualizer.indexFromElement(right),
     );
@@ -181,16 +185,23 @@ export function measureTranscriptRow(
   entry: ResizeObserverEntry | undefined,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
 ): number {
-  if (entry || !virtualizer.targetWindow?.ResizeObserver) {
+  const parked =
+    element.dataset.preparedRow === "true" && !element.hasAttribute("data-preparing-row");
+  if (!parked && (entry || !virtualizer.targetWindow?.ResizeObserver)) {
     // Rounded row heights accumulate when skipped overscan uses those measurements.
     const size =
       entry?.borderBoxSize?.[0]?.blockSize ?? measureElement(element, entry, virtualizer);
-    if (size !== 0 || virtualizer.scrollElement?.clientHeight !== 0) {
+    // A frame-deferred zero can describe an earlier parked state. Keep its
+    // cached geometry if the row has already returned to layout.
+    if (
+      size !== 0 ||
+      (virtualizer.scrollElement?.clientHeight !== 0 && (!entry || element.offsetHeight === 0))
+    ) {
       return size;
     }
   }
-  // Row registration waits for the observer's first layout; hidden panels retain
-  // their last measurement instead of replacing it with zero and moving the viewport.
+  // Parked rows have no layout box. Retain their geometry until preparation or
+  // presentation resumes, also while a whole pane is hidden or awaiting layout.
   const index = virtualizer.indexFromElement(element);
   return (
     virtualizer.itemSizeCache.get(virtualizer.options.getItemKey(index)) ??

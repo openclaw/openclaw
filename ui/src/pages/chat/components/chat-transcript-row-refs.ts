@@ -28,7 +28,9 @@ export class TranscriptRowRefs {
         this.callbacks.isCurrentRow(row, key) &&
         this.virtualizer.elementsCache.get(key) !== row
       ) {
-        if (!prepared) {
+        // Observer registration uses cached sizes. Synchronize with its actual
+        // measurement batch instead of forcing layout after the DOM commit.
+        if (!prepared && !this.virtualizer.targetWindow?.ResizeObserver) {
           this.callbacks.beforeMeasure();
           prepared = true;
         }

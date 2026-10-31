@@ -22,7 +22,7 @@ export function CopyButton(props: {
       {(text) => {
         let feedback!: HTMLSpanElement;
         return (
-          <openclaw-tooltip prop:content={label()}>
+          <openclaw-tooltip prop:content={label()} prop:describe={false}>
             <button
               {...props.buttonAttributes}
               class={props.bare ? "chat-copy-btn" : "btn btn--xs chat-copy-btn"}

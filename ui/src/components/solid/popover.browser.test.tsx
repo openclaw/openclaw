@@ -154,9 +154,13 @@ describe("Solid native popover", () => {
     expect(surface.matches(":popover-open")).toBe(true);
     expect(document.activeElement).toBe(input);
     expect(input.value).toBe("Unsaved draft");
-    await userEvent.click(view.getByRole("button", { name: "Outside" }));
+    const outside = view.getByRole("button", { name: "Outside" });
+    // WebKit does not focus buttons on pointer clicks; exercise outside focus explicitly.
+    outside.focus();
+    expect(document.activeElement).toBe(outside);
+    await userEvent.click(outside);
     expect(surface.matches(":popover-open")).toBe(true);
-    expect(document.activeElement).toBe(view.getByRole("button", { name: "Outside" }));
+    expect(surface.contains(document.activeElement)).toBe(false);
     rejectHide = false;
     input.focus();
     await userEvent.keyboard("{Escape}");
@@ -180,6 +184,7 @@ describe("Solid native popover", () => {
       <Popover
         id="anchored"
         label="Anchored details"
+        lazy="while-open"
         anchor={anchor()}
         open={opened()}
         ref={(value) => (handle = value)}
@@ -190,26 +195,58 @@ describe("Solid native popover", () => {
     flush();
     try {
       expect(view.queryByRole("button")).toBeNull();
+      expect(handle.overlay.surface.style.getPropertyValue("position-anchor")).toBe("");
+      expect(first.style.getPropertyValue("anchor-name")).toBe("--existing-anchor");
+      setAnchor(second);
+      flush();
+      expect(handle.overlay.trigger).toBe(second);
+      expect(second.style.getPropertyValue("anchor-name")).toBe("");
       setOpened(true);
       flush();
       await phase(handle.overlay.surface, "open");
       const anchorName = handle.overlay.surface.style.getPropertyValue("position-anchor");
-      expect(first.style.getPropertyValue("anchor-name")).toContain(anchorName);
-      setAnchor(second);
+      expect(anchorName).not.toBe("");
+      expect(second.style.getPropertyValue("anchor-name")).toContain(anchorName);
+      setAnchor(first);
       flush();
-      expect(first.style.getPropertyValue("anchor-name")).toBe("--existing-anchor");
-      expect(second.style.getPropertyValue("anchor-name")).toContain(
+      expect(second.style.getPropertyValue("anchor-name")).toBe("");
+      expect(first.style.getPropertyValue("anchor-name")).toContain(
         handle.overlay.surface.style.getPropertyValue("position-anchor"),
       );
       setOpened(false);
       flush();
       await phase(handle.overlay.surface, "hidden");
       view.unmount();
-      expect(second.style.getPropertyValue("anchor-name")).toBe("");
+      expect(first.style.getPropertyValue("anchor-name")).toBe("--existing-anchor");
     } finally {
       first.remove();
       second.remove();
     }
+  });
+
+  it("positions initially open lazy content before admitting it", () => {
+    let handle!: PopoverHandle;
+    let admitted = false;
+    const view = render(() => (
+      <Popover
+        id="initial-lazy"
+        label="Initially open"
+        lazy="while-open"
+        open={true}
+        ref={(next) => (handle = next)}
+        onBeforeShow={() => {
+          expect(handle.overlay.trigger).toBeDefined();
+          expect(handle.overlay.surface.style.getPropertyValue("position-anchor")).not.toBe("");
+          admitted = true;
+        }}
+      >
+        <input autofocus aria-label="Initial value" />
+      </Popover>
+    ));
+    flush();
+    expect(admitted).toBe(true);
+    expect(handle.overlay.surface.matches(":popover-open")).toBe(true);
+    expect(document.activeElement).toBe(view.getByRole("textbox"));
   });
 
   it("positions above a larger element while its button retains activation and return focus", async () => {

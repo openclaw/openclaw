@@ -85,7 +85,7 @@ describe("Team-scale Gateway fixture", () => {
       expect(tail).toMatchObject({
         deltaCursor: cursor,
         hasMore: true,
-        nextOffset: 80,
+        olderCursor: expect.any(String),
         totalMessages: messageCount,
         metadata: { commands: [] },
         pendingInputs: { items: [], total: 0, queuedCount: 0 },
@@ -105,9 +105,31 @@ describe("Team-scale Gateway fixture", () => {
         seq: messageCount,
       });
       expect(Buffer.byteLength(JSON.stringify(windowed))).toBeLessThanOrEqual(256 * 1024);
-      const older = await request("chat.history", { sessionKey: key, limit: 80, offset: 80 });
-      expect(older.payload.messages).toHaveLength(messageCount);
-      expect(older.payload).not.toHaveProperty("nextOffset", 80);
+      const older = await request("chat.history", {
+        sessionKey: key,
+        limit: 1000,
+        maxBytes: 3 * 1024 * 1024,
+        cursor: tail?.olderCursor,
+      });
+      expect(older.payload.messages).toHaveLength(Math.min(messageCount - 80, 1000));
+      expect(older.payload).toHaveProperty(
+        "messages.0.__openclaw.id",
+        `team-message-${Math.max(1, messageCount - 1079)}`,
+      );
+      let exhausted = older;
+      if (mode === "large") {
+        expect(older.payload).toMatchObject({ hasMore: true, olderCursor: expect.any(String) });
+        exhausted = await request("chat.history", {
+          sessionKey: key,
+          limit: 1000,
+          maxBytes: 3 * 1024 * 1024,
+          cursor: older.payload.olderCursor,
+        });
+        expect(exhausted.payload.messages).toHaveLength(20);
+        expect(exhausted.payload).toHaveProperty("messages.0.__openclaw.id", "team-message-1");
+      }
+      expect(exhausted.payload).toMatchObject({ hasMore: false });
+      expect(exhausted.payload).not.toHaveProperty("olderCursor");
       const warm = await request("sessions.messages.subscribe", {
         key,
         initialHistory: { cursor, limit: 80, maxBytes: 256 * 1024, knownState: {} },

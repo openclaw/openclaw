@@ -89,6 +89,16 @@ function nativeScroll(container: HTMLElement, offset: number) {
   container.scrollTop = offset;
   container.dispatchEvent(new Event("scroll"));
 }
+function measuredRowBeforeReader(container: HTMLElement): HTMLElement {
+  const row = expectDefined(
+    [...container.querySelectorAll<HTMLElement>(".chat-virtual-row:not([data-prepared-row])")].find(
+      (element) => Number(element.dataset.index) * 120 < container.scrollTop,
+    ),
+    "measured row beginning above the reader offset",
+  );
+  expect(row.offsetHeight).toBe(120);
+  return row;
+}
 function connectPolicy(
   policy: ReturnType<typeof makeChatHost>,
   transcript: ReturnType<typeof createTranscript>,
@@ -308,10 +318,7 @@ it("grows the native range before compensating fractional row growth above a rea
   vi.advanceTimersByTime(150);
   renderRows(rows);
   await vi.advanceTimersByTimeAsync(0);
-  const row = expectDefined(
-    container.querySelector<HTMLElement>('[data-index="6"]'),
-    "row above the viewport",
-  );
+  const row = measuredRowBeforeReader(container);
   const before = container.scrollTop;
   Object.defineProperty(row, "offsetHeight", { configurable: true, value: 160.375 });
   resize(row, 160.375);
@@ -353,10 +360,7 @@ it("preserves reader policy when row measurement clamps a positive adjustment to
   vi.advanceTimersByTime(150);
   renderRows(rows);
   await vi.advanceTimersByTimeAsync(0);
-  const row = expectDefined(
-    container.querySelector<HTMLElement>('[data-index="6"]'),
-    "row above the viewport",
-  );
+  const row = measuredRowBeforeReader(container);
   Object.defineProperty(row, "offsetHeight", { configurable: true, value: 160 });
   resize(row, 160);
   flushFrames();

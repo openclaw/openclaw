@@ -144,6 +144,7 @@ const webkitTestFiles = [
   "src/components/image-lightbox.browser.test.ts",
   "src/components/markdown-mermaid-expansion.browser.test.ts",
   "src/components/modal-dialog.browser.test.ts",
+  "src/components/solid/popover.browser.test.tsx",
   "src/components/sessions-hub-header.browser.test.ts",
   "src/components/transient-container.browser.test.ts",
 ].map((file) => resolveUiTypeScriptPath(file, here));

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
+import { ToolCardRow } from "./chat-tool-card-row.solid.tsx";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 
 describe("plugin activity icons", () => {
@@ -64,6 +65,35 @@ describe("plugin activity icons", () => {
       expect(container.querySelector(".chat-tool-activity-icon")).toBeNull();
       expect(container.querySelector(".chat-tool-msg-summary__icon img")).toBeNull();
       expect(container.querySelector(".chat-tool-msg-summary__icon svg")).not.toBeNull();
+    },
+  );
+
+  it.each(["tool_call", "dispatch_action"])(
+    "unwraps %s in materialized tool rows",
+    async (name) => {
+      const { container } = mountSolid(ToolCardRow, {
+        card: {
+          id: "wrapped-tool",
+          name,
+          args: { id: "mcp:fixture:meeting_status", args: {} },
+          completed: true,
+        },
+        options: {
+          messageKey: "wrapped-tool",
+          expanded: false,
+          onToggleExpanded: vi.fn(),
+          pluginToolIcons: new Map([
+            ["meeting_status", { url: "blob:activity-icon", onError: vi.fn() }],
+          ]),
+        },
+      });
+      await settleToolBridges(container);
+      const identity = container.querySelector(".chat-tool-msg-summary__icon");
+      expect(identity?.getAttribute("aria-label")).toBe("meeting_status");
+      expect(identity?.getAttribute("title")).toBe("meeting_status");
+      expect(
+        container.querySelector<HTMLElement>(".chat-tool-activity-icon")?.style.maskImage,
+      ).toBe('url("blob:activity-icon")');
     },
   );
 });

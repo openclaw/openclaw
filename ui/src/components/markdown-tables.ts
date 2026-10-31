@@ -6,6 +6,7 @@ import { cancelLayout, scheduleLayout } from "../lib/layout-frame.ts";
 import { anchorFromNavigationEvent } from "../lib/navigation-click.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { showToast } from "../lib/toast.ts";
+import { isMarkdownBlockParked } from "./markdown-block-presentation.ts";
 import { copyMarkdownText } from "./markdown-copy.ts";
 import { createIconElement } from "./markdown-icon.ts";
 import { registerSessionTitleTarget } from "./markdown-link-display.ts";
@@ -16,11 +17,15 @@ const tableViewportSelector = ".markdown-table__viewport";
 const enhancedTableShells = new WeakSet<HTMLElement>();
 const tableCopyStatuses = new WeakMap<HTMLElement, HTMLElement>();
 const tableOwnerStates = new WeakMap<HTMLElement, TableOwnerState>();
+// The DOM survives enhancer replacement and may have nested enhancement owners.
+const tableBounds = new WeakMap<HTMLElement, TableBounds>();
 
 type TableOwnerState = {
   release: () => void;
   closeDialog?: () => void;
 };
+
+type TableBounds = { viewport?: number; table?: number; offset: number };
 
 function tableInteractionsEnabled(env: unknown): boolean {
   return (
@@ -54,18 +59,20 @@ export function markdownTableCopyText(table: HTMLTableElement): string {
     .join("\n");
 }
 
-function measureTableOverflow(shell: HTMLElement): (() => void) | undefined {
-  const viewport = shell.querySelector<HTMLElement>(tableViewportSelector);
-  if (!viewport) {
+function measureTableOverflow(shell: HTMLElement, bounds: TableBounds): (() => void) | undefined {
+  if (isMarkdownBlockParked(shell)) {
     return undefined;
   }
-  const { scrollWidth, clientWidth, scrollLeft } = viewport;
-  const overflows = scrollWidth - clientWidth > 1;
+  if (bounds.viewport === undefined || bounds.table === undefined) {
+    return undefined;
+  }
+  const { viewport, table, offset } = bounds;
+  const overflows = table - viewport > 1;
   return () => {
-    shell.classList.toggle("markdown-table--can-scroll-left", overflows && scrollLeft > 1);
+    shell.classList.toggle("markdown-table--can-scroll-left", overflows && offset > 1);
     shell.classList.toggle(
       "markdown-table--can-scroll-right",
-      overflows && scrollLeft + clientWidth < scrollWidth - 1,
+      overflows && offset + viewport < table - 1,
     );
   };
 }
@@ -95,21 +102,30 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
   let state = tableOwnerStates.get(owner);
   if (!state) {
     const observedNodes = new Set<HTMLElement>();
-    const pendingOverflow = new Set<HTMLElement>();
+    const pendingOverflow = new Map<HTMLElement, TableBounds>();
     const resizeObserver = new ResizeObserver((entries) => {
-      const shells = new Set(
-        entries.map((entry) => entry.target.closest<HTMLElement>(tableShellSelector)),
-      );
-      for (const shell of shells) {
-        if (shell) {
-          pendingOverflow.add(shell);
+      // Earlier resize subscribers may have dirtied layout. Consume the delivered
+      // boxes instead of forcing another layout for scrollWidth/clientWidth.
+      for (const entry of entries) {
+        const shell = entry.target.closest<HTMLElement>(tableShellSelector);
+        if (!shell || isMarkdownBlockParked(shell)) {
+          continue;
         }
+        const viewport = entry.target.closest<HTMLElement>(tableViewportSelector)!;
+        const bounds = tableBounds.get(viewport) ?? { offset: 0 };
+        if (entry.target.matches(tableViewportSelector)) {
+          bounds.viewport = entry.contentRect.width;
+        } else {
+          bounds.table = entry.borderBoxSize[0]!.inlineSize;
+        }
+        tableBounds.set(viewport, bounds);
+        pendingOverflow.set(shell, bounds);
       }
       if (pendingOverflow.size) {
-        // Even reading a masked scrollport can force WebKit layout mid-delivery.
+        // Overflow chrome can affect layout; publish it after resize delivery.
         scheduleLayout(pendingOverflow, () => {
-          const updates = [...pendingOverflow].map((shell) =>
-            owner.contains(shell) ? measureTableOverflow(shell) : undefined,
+          const updates = [...pendingOverflow].map(([shell, bounds]) =>
+            owner.contains(shell) ? measureTableOverflow(shell, bounds) : undefined,
           );
           pendingOverflow.clear();
           return () => updates.forEach((update) => update?.());
@@ -119,6 +135,15 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
     const syncTables = (shells: Iterable<HTMLElement>) => {
       for (const shell of shells) {
         if (!owner.contains(shell)) {
+          continue;
+        }
+        if (isMarkdownBlockParked(shell)) {
+          for (const node of observedNodes) {
+            if (shell.contains(node)) {
+              observedNodes.delete(node);
+              resizeObserver.unobserve(node);
+            }
+          }
           continue;
         }
         enhanceTableShell(shell);
@@ -134,10 +159,24 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
     };
     const mutationObserver = new MutationObserver((records) => {
       const shells = new Set<HTMLElement>();
+      const collectShells = (node: HTMLElement) => {
+        if (node.matches(tableShellSelector)) {
+          shells.add(node);
+        }
+        // Syntax highlighting inserts many leaf spans, which cannot contain tables.
+        if (node.firstElementChild) {
+          for (const shell of node.querySelectorAll<HTMLElement>(tableShellSelector)) {
+            shells.add(shell);
+          }
+        }
+      };
       for (const record of records) {
         const target =
           record.target instanceof Element ? record.target : record.target.parentElement;
         const shell = target?.closest<HTMLElement>(tableShellSelector);
+        if (record.type === "attributes" && target instanceof HTMLElement) {
+          collectShells(target);
+        }
         // Icon/copy feedback belongs to the controls and cannot change the table's width.
         if (shell && (target === shell || target?.closest(tableViewportSelector))) {
           shells.add(shell);
@@ -146,16 +185,7 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
           if (!(node instanceof HTMLElement)) {
             continue;
           }
-          if (node.matches(tableShellSelector)) {
-            shells.add(node);
-          }
-          // Syntax highlighting inserts many leaf spans, which cannot contain tables.
-          if (!node.firstElementChild) {
-            continue;
-          }
-          for (const added of node.querySelectorAll<HTMLElement>(tableShellSelector)) {
-            shells.add(added);
-          }
+          collectShells(node);
         }
         for (const node of record.removedNodes) {
           if (!(node instanceof HTMLElement) || owner.contains(node)) {
@@ -192,9 +222,11 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
           return;
         }
         const shell = viewport.closest<HTMLElement>(tableShellSelector);
-        if (shell) {
+        const bounds = tableBounds.get(viewport);
+        if (shell && bounds) {
           pendingOverflow.delete(shell);
-          measureTableOverflow(shell)?.();
+          bounds.offset = viewport.scrollLeft;
+          measureTableOverflow(shell, bounds)?.();
         }
       },
       { capture: true, passive: true },
@@ -210,7 +242,13 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
     };
     tableOwnerStates.set(owner, state);
     syncTables(owner.querySelectorAll<HTMLElement>(tableShellSelector));
-    mutationObserver.observe(owner, { childList: true, subtree: true, characterData: true });
+    mutationObserver.observe(owner, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: ["data-prepared-row", "data-preparing-row"],
+    });
   }
   return state;
 }

@@ -86,6 +86,17 @@ it("preserves a partially visible retained message rather than overscan across m
   overscan.getBoundingClientRect = () => rect(-200, 100);
   row.prepend(overscan);
   messageElements.set("above", overscan);
+  const prepared = document.createElement("div");
+  prepared.className = "chat-virtual-row";
+  prepared.dataset.preparedRow = "true";
+  const cached = document.createElement("div");
+  cached.dataset.messageId = "cached";
+  cached.getBoundingClientRect = () => {
+    throw new Error("Prepend must not force layout of a prepared offscreen row");
+  };
+  prepared.append(cached);
+  scroller.prepend(prepared);
+  messageElements.set("cached", cached);
   anchor.messageKeys = messages("above", "visible");
   anchor.capture(scroller, false);
   anchor.messageKeys = messages("older", "above", "visible");

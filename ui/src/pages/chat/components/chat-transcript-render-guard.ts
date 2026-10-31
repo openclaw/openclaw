@@ -36,6 +36,11 @@ function itemDependencies(item: ChatRenderItem): readonly unknown[] {
       item.key,
       outcome.kind,
       outcome.kind === "completed" ? outcome.actionOwner : null,
+      item.fragment?.first,
+      item.fragment?.last,
+      item.fragment?.firstBubbleKey,
+      item.fragment?.representative,
+      item.fragment?.source.parts,
       ...item.parts.flatMap(itemDependencies),
     ];
   }
@@ -55,7 +60,10 @@ export function transcriptContextDependencies(
     ];
   }
   const dependencies: unknown[] = [];
-  for (const group of chatItemGroups(item)) {
+  // The first fragment presents the final answer's reply attribution above the run.
+  const replySource =
+    item.kind === "agent-run-frame" && item.fragment?.first ? item.fragment.source : item;
+  for (const group of chatItemGroups(replySource)) {
     for (const source of group.messages) {
       if (source.replyTarget?.kind === "id") {
         const loaded = loadedSources.get(source.replyTarget.id);

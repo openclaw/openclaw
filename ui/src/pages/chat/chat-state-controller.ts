@@ -330,8 +330,7 @@ export function createChatState<TState extends ChatPageHost>(
     publishPendingRunState() {
       const state = stateValue;
       if (state?.chatStreamRenderFrame != null) {
-        chatRunPresentation(state).cancelFrame();
-        chatRunPresentation(state).publish();
+        chatRunPresentation(state).publish("immediate", false);
       }
     },
 

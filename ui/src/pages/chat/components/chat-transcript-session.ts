@@ -9,7 +9,7 @@ import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts
 import type { ChatSessionScrollPosition } from "../scroll.ts";
 import type { ChatMessageEntryAnimations } from "./chat-message-entry.ts";
 import type { TranscriptAnnouncement } from "./chat-transcript-announcement.ts";
-import { readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
+import { measureTranscriptRow, readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
 import type {
   ComposerActivityLayout,
   TranscriptLayoutOwner,
@@ -33,6 +33,7 @@ export type TranscriptCallbacks = {
   getComposerActivityLayout?: () => ComposerActivityLayout | null;
   onViewportResize?: () => void;
   onReaderScroll?: (towardEnd?: boolean) => void;
+  onNativeScroll?: (event: Event) => void;
   /** The pane owns reader intent; geometry-only follow must honor that policy. */
   canFollowEnd?: () => boolean;
   /** A queued send/latest command supersedes reader anchoring before its first frame. */
@@ -40,7 +41,9 @@ export type TranscriptCallbacks = {
 };
 
 export const CHAT_TRANSCRIPT_ESTIMATED_ROW_PX = 120;
-export const CHAT_TRANSCRIPT_OVERSCAN = 2;
+// Keep one measured neighbor on either side; farther rows are prepared
+// separately by TranscriptInitialRange.
+export const CHAT_TRANSCRIPT_OVERSCAN = 1;
 // Initial virtual rows can correct their estimates for several frames. Observe
 // the range for ~200ms before accepting a saved offset that remains unreachable.
 export const CHAT_TRANSCRIPT_SCROLL_RESTORE_STABLE_FRAMES = 12;
@@ -104,7 +107,10 @@ export function createTranscriptPresentation(
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
   rowElements: () => Iterable<HTMLElement>,
   beforeMeasure: () => void,
+  measureRow = measureTranscriptRow,
 ) {
+  const redraw = {};
+  let resizeOffsetSynced = false;
   const readConnectedRows = (): (() => boolean) | null => {
     const apply = readConnectedTranscriptRows(scrollElement(), virtualizer, rowElements());
     return apply
@@ -116,6 +122,31 @@ export function createTranscriptPresentation(
   };
 
   const presentation = {
+    commitChange(commit: () => void, defer: boolean) {
+      if (defer) {
+        scheduleLayout(redraw, () => commit);
+      } else {
+        cancelLayout(redraw);
+        commit();
+      }
+    },
+    cancelChange() {
+      cancelLayout(redraw);
+    },
+    measureElement(element: HTMLElement, entry: ResizeObserverEntry | undefined) {
+      if (entry && !resizeOffsetSynced) {
+        // Observer entries share one native reader position. Keep the virtualizer's
+        // accumulated correction between entries, including clamped scroll writes.
+        resizeOffsetSynced = true;
+        queueMicrotask(() => {
+          resizeOffsetSynced = false;
+        });
+        beforeMeasure();
+      } else if (!entry && !virtualizer.targetWindow?.ResizeObserver) {
+        beforeMeasure();
+      }
+      return measureRow(element, entry, virtualizer);
+    },
     measureRows: () => readConnectedRows()?.() ?? false,
     measureRowsWithoutScrollAdjustment() {
       const adjustScroll = virtualizer.shouldAdjustScrollPositionOnItemSizeChange;
@@ -132,7 +163,10 @@ export function createTranscriptPresentation(
         element === scrollElement() ? (readConnectedRows() ?? undefined) : undefined,
       );
     },
-    disconnect: () => cancelLayout(presentation),
+    disconnect() {
+      cancelLayout(presentation);
+      presentation.cancelChange();
+    },
   };
   return presentation;
 }

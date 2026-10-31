@@ -1,5 +1,5 @@
 import type { Page } from "playwright";
-import { assert, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createDarkDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -130,7 +130,6 @@ suite.define(() => {
       await page.setViewportSize({ width: 390, height: 844 });
       const composer = page.locator(".agent-chat__composer-shell");
       const title = notice.locator(".chat-composer-neighbor-card__copy strong");
-      const summary = notice.locator(".chat-composer-neighbor-card__copy > span");
       const dismiss = notice.getByRole("button", { name: "Dismiss workspace conflict notice" });
       await expect
         .poll(async () => {
@@ -148,9 +147,22 @@ suite.define(() => {
           ),
         )
         .toEqual(["nowrap", "nowrap"]);
-      for (const item of [title, summary, dismiss]) {
-        const [itemBox, noticeBox] = await Promise.all([item.boundingBox(), notice.boundingBox()]);
-        assert(itemBox && noticeBox, "expected mobile conflict notice layout boxes");
+      // Read the card and its children in one frame while the resized composer settles.
+      const { noticeBox, itemBoxes } = await notice.evaluate((node) => {
+        const bounds = (element: Element) => {
+          const { x, y, width, height } = element.getBoundingClientRect();
+          return { x, y, width, height };
+        };
+        return {
+          noticeBox: bounds(node),
+          itemBoxes: [
+            ".chat-composer-neighbor-card__copy strong",
+            ".chat-composer-neighbor-card__copy > span",
+            ".chat-error__dismiss",
+          ].map((selector) => bounds(node.querySelector(selector)!)),
+        };
+      });
+      for (const itemBox of itemBoxes) {
         expect(itemBox.x).toBeGreaterThanOrEqual(noticeBox.x);
         expect(itemBox.x + itemBox.width).toBeLessThanOrEqual(noticeBox.x + noticeBox.width);
         expect(itemBox.y).toBeGreaterThanOrEqual(noticeBox.y);

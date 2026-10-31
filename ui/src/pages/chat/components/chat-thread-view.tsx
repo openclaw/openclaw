@@ -85,7 +85,23 @@ export function ChatThread(input: {
   let stopSelectionGesture: (() => void) | undefined;
   const historyIntent = (event: Event) => input.props.onHistoryIntent?.(event);
   const paneId = createMemo(() => input.props.paneId);
-  onSettled(() => root && registerTranscriptElement(paneId(), root));
+  onSettled(() => {
+    const unregister = root && registerTranscriptElement(paneId(), root);
+    const searchState = getTranscriptState(paneId()).search;
+    let query = searchState.snapshot.query.trim();
+    const stopSearch = searchState.subscribe(() => {
+      const nextQuery = searchState.snapshot.query.trim();
+      if (nextQuery && nextQuery !== query) {
+        // A live reply remains below the matches; end-follow must not hide them.
+        input.transcript.scrollToOffset(0);
+      }
+      query = nextQuery;
+    });
+    return () => {
+      stopSearch();
+      unregister?.();
+    };
+  });
   const search = createMemo(() =>
     projectOwner(getTranscriptState(paneId()).search, (owner) => owner.snapshot, Object.is),
   );
@@ -246,7 +262,6 @@ export function ChatThread(input: {
         tabindex={0}
         onFocusIn={(event) => current().session.handleFocusIn(event)}
         onFocusOut={(event) => current().session.handleFocusOut(event)}
-        onScroll={(event) => input.props.onChatScroll?.(event)}
         onKeyDown={(event) => {
           if (
             !event.defaultPrevented &&

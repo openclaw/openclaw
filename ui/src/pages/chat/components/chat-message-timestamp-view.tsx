@@ -1,15 +1,56 @@
 import { asNullableRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, For, Show, useContext } from "solid-js";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { formatCompactTokenCount, formatCost, formatTimeAgo } from "../../../lib/format.ts";
 import { getLocale, registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { readVisibleTime } from "../../../lib/reactive/visible-clock.ts";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
 
 const CHAT_RELATIVE_TIMESTAMP_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const CHAT_RELATIVE_TIMESTAMP_FUTURE_SKEW_MS = 2 * 60 * 1000;
+const timestampFormats = {
+  calendar: {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  },
+  day: { month: "short", day: "numeric" },
+  year: { month: "short", day: "numeric", year: "numeric" },
+  context: {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    timeZoneName: "short",
+  },
+} satisfies Record<string, Intl.DateTimeFormatOptions>;
+const timestampFormatters = new Map<keyof typeof timestampFormats, Intl.DateTimeFormat>();
+let timestampFormatterMinute: number | undefined;
+
+function formatTimestamp(date: Date, format: keyof typeof timestampFormats, nowMs = Date.now()) {
+  const minute = Math.floor(nowMs / 60_000);
+  if (timestampFormatterMinute !== minute) {
+    timestampFormatters.clear();
+    // Newly mounted rows observe system locale/timezone changes in the next minute.
+    timestampFormatterMinute = minute;
+  }
+  let formatter = timestampFormatters.get(format);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat([], timestampFormats[format]);
+    timestampFormatters.set(format, formatter);
+  }
+  return formatter.format(date);
+}
 
 // Shared relative-time copy is lowercase for mid-sentence use ("Updated just now");
 // the chat footer shows it alone, so it starts with a capital ("Just now").
@@ -20,16 +61,12 @@ function capitalizeStandaloneLabel(value: string): string {
 function prepareTimestamp(timestamp: number) {
   const date = new Date(timestamp);
   const valid = Number.isFinite(date.getTime());
-  const label = valid
-    ? date.toLocaleString([], {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
-        timeZoneName: "short",
-      })
-    : t("chat.messages.unknownDate");
+  let label: string;
+  if (valid) {
+    label = formatTimestamp(date, "calendar");
+  } else {
+    label = t("chat.messages.unknownDate");
+  }
   return { dateTime: valid ? date.toISOString() : "", label };
 }
 
@@ -43,11 +80,11 @@ function relativeTimestampLabel(timestamp: number, label: string) {
     ? label
     : ageMs >= -CHAT_RELATIVE_TIMESTAMP_FUTURE_SKEW_MS && ageMs < CHAT_RELATIVE_TIMESTAMP_MAX_AGE_MS
       ? capitalizeStandaloneLabel(formatTimeAgo(Math.max(0, ageMs)))
-      : date.toLocaleDateString([], {
-          month: "short",
-          day: "numeric",
-          ...(date.getFullYear() === new Date(nowMs).getFullYear() ? {} : { year: "numeric" }),
-        });
+      : formatTimestamp(
+          date,
+          date.getFullYear() === new Date(nowMs).getFullYear() ? "day" : "year",
+          nowMs,
+        );
 }
 
 function TimestampTime(props: { view: { dateTime: string; relativeLabel: string } }) {
@@ -61,27 +98,23 @@ function TimestampTime(props: { view: { dateTime: string; relativeLabel: string 
 }
 
 export function ChatTimestamp(props: { timestamp: number; metadata?: JSX.Element[] }) {
+  const presented = useContext(ContentPresentation);
   const timestamp = createMemo(() => props.timestamp);
   const calendar = createMemo(() => prepareTimestamp(timestamp()));
-  const view = createMemo(() => ({
-    ...calendar(),
-    // Parent clock refreshes still advance relative copy without reformatting calendar labels.
-    relativeLabel: relativeTimestampLabel(props.timestamp, calendar().label),
-  }));
+  const view = createMemo(() => {
+    // Refresh relative copy without invalidating the surrounding message or Markdown.
+    if (presented()) {
+      readVisibleTime(60_000);
+    }
+    return {
+      ...calendar(),
+      relativeLabel: relativeTimestampLabel(timestamp(), calendar().label),
+    };
+  });
   const contextLabel = createMemo(
     () => {
-      const date = new Date(timestamp());
-      const title = Number.isFinite(date.getTime())
-        ? date.toLocaleString([], {
-            weekday: "long",
-            month: "long",
-            day: "numeric",
-            year: "numeric",
-            hour: "numeric",
-            minute: "2-digit",
-            second: "2-digit",
-            timeZoneName: "short",
-          })
+      const title = calendar().dateTime
+        ? formatTimestamp(new Date(timestamp()), "context")
         : calendar().label;
       return t("chat.messages.contextFor", { timestamp: title });
     },
@@ -263,7 +296,6 @@ function MessageMetadata(props: { meta: GroupMeta | null }) {
 }
 
 export function MessageMeta(props: { timestamp: number; meta: GroupMeta | null }) {
-  const metadata = [<MessageMetadata meta={props.meta} />];
   const hasMetadata = () =>
     props.meta &&
     Boolean(
@@ -276,7 +308,8 @@ export function MessageMeta(props: { timestamp: number; meta: GroupMeta | null }
       props.meta.contextPercent !== null ||
       props.meta.model,
     );
-  return (
-    <ChatTimestamp timestamp={props.timestamp} metadata={hasMetadata() ? metadata : undefined} />
+  const metadata = createMemo(() =>
+    hasMetadata() ? [<MessageMetadata meta={props.meta} />] : undefined,
   );
+  return <ChatTimestamp timestamp={props.timestamp} metadata={metadata()} />;
 }

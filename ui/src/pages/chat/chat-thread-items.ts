@@ -518,6 +518,21 @@ export function insertionIndexesForBounds(
   };
 }
 
+export function appendActiveRunItem(
+  items: ChatItem[],
+  bounds: TurnInsertionBounds | undefined,
+  item: Extract<ChatItem, { kind: "stream" | "reading-indicator" }>,
+): void {
+  // Queued custody is a ceiling for the whole live response, not just its text.
+  // Moving its working indicator past that ceiling splits and remeasures the run.
+  if (bounds) {
+    const { maximum } = insertionIndexesForBounds(items, bounds);
+    items.splice(maximum, 0, item);
+  } else {
+    items.push(item);
+  }
+}
+
 export function insertChatItemsByTimestamp(items: ChatItem[], inserts: ChatProjection[]): void {
   const timestampsByKey = new Map<string, number>();
   const placementsByKey = new Map<string, Pick<ChatProjection, "bounds" | "predecessorKey">>();

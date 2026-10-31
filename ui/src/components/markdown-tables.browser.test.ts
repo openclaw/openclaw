@@ -6,7 +6,12 @@ import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import "../styles/base.css";
 import "../styles/chat/text.css";
-import { handleMarkdownTableInteraction, releaseMarkdownTables } from "./markdown-tables.ts";
+import {
+  enhanceMarkdownTables,
+  handleMarkdownTableInteraction,
+  releaseMarkdownTables,
+} from "./markdown-tables.ts";
+import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
 const originalDirection = document.documentElement.getAttribute("dir");
 let owner: HTMLElement | undefined;
@@ -28,6 +33,30 @@ afterEach(() => {
 });
 
 describe("expanded Markdown table direction", () => {
+  it("updates overflow masks after horizontal scrolling and viewport resizing", async () => {
+    owner = document.body.appendChild(document.createElement("section"));
+    owner.className = "chat-text";
+    owner.style.width = "180px";
+    owner.innerHTML = toSanitizedMarkdownHtml("| Name | Value |\n| --- | --- |\n| Alpha | One |", {
+      tableInteractions: "enabled",
+    });
+    owner.querySelector("table")!.style.width = "800px";
+    enhanceMarkdownTables(owner);
+    const shell = owner.querySelector<HTMLElement>(".markdown-table")!;
+    const viewport = owner.querySelector<HTMLElement>(".markdown-table__viewport")!;
+    const masks = () => [
+      shell.classList.contains("markdown-table--can-scroll-left"),
+      shell.classList.contains("markdown-table--can-scroll-right"),
+    ];
+    await expect.poll(masks).toEqual([false, true]);
+    viewport.scrollLeft = viewport.scrollWidth - viewport.clientWidth;
+    await expect.poll(masks).toEqual([true, false]);
+    owner.style.width = "1000px";
+    await expect.poll(masks).toEqual([false, false]);
+    owner.style.width = "180px";
+    await expect.poll(masks).toEqual([false, true]);
+  });
+
   it.each([
     { pageDirection: "ltr", message: "مرحبا", firstColumnOnRight: true },
     { pageDirection: "rtl", message: "Hello", firstColumnOnRight: false },

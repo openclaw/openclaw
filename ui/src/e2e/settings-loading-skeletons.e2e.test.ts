@@ -148,6 +148,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         featureMethods: [...defaultControlUiFeatureMethods, "tools.catalog", "tools.effective"],
         heldMethods: ["tools.catalog", "tools.effective"],
+        operatorScopes: ["operator.read"],
         methodResponses: {
           "agents.list": createAgentRoster({ main: "Main agent" }, "main", "agent"),
           "config.get": {

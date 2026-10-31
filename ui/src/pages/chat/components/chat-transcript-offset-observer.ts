@@ -4,7 +4,10 @@ import { isTranscriptScrollKey } from "../chat-scroll-input.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX, type ChatScrollToEndOptions } from "../scroll.ts";
 import type { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
 import { maxTranscriptScrollOffset } from "./chat-transcript-geometry.ts";
-import type { ChatTranscriptInteractionAnchor } from "./chat-transcript-interaction-anchor.ts";
+import {
+  reconcileChatTranscriptInteractionResize,
+  type ChatTranscriptInteractionAnchor,
+} from "./chat-transcript-interaction-anchor.ts";
 import type { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import type { TranscriptPrependAnchor } from "./chat-transcript-prepend-anchor.ts";
 import {
@@ -27,7 +30,8 @@ export class TranscriptOffsetState {
   renderedTouchActive = false;
   maintenanceScrollOffset: number | null = null;
   pendingInteractionAnchor: ChatTranscriptInteractionAnchor | null = null;
-  syncNativeOffset: (() => void) | null = null;
+  syncNativeOffset: ((measurement?: boolean) => void) | null = null;
+  measuringOffset = false;
   recordProgrammaticScroll: ((before: number, after: number, maintenance: boolean) => void) | null =
     null;
 
@@ -37,6 +41,27 @@ export class TranscriptOffsetState {
 
   get touchActive(): boolean {
     return this.touching || this.touchScrolling;
+  }
+
+  get hasPendingAnchor(): boolean {
+    return Boolean(this.pendingScrollOffset || this.scrollCommand || this.pendingInteractionAnchor);
+  }
+
+  reconcileInteractionResize(
+    scrollElement: HTMLDivElement | null,
+    virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+    target?: EventTarget | null,
+  ): void {
+    if (
+      reconcileChatTranscriptInteractionResize(
+        this.pendingInteractionAnchor,
+        target,
+        scrollElement,
+        virtualizer,
+      )
+    ) {
+      this.pendingInteractionAnchor = null;
+    }
   }
 }
 
@@ -69,8 +94,10 @@ export function scrollTranscriptToEnd(
   state: TranscriptOffsetState,
   instance: Virtualizer<HTMLDivElement, HTMLElement>,
   { source, behavior }: Required<ChatScrollToEndOptions>,
-  cancelScroll: () => void,
+  cancelScroll: (preserveEnd?: boolean) => void,
   measureSkippedRows: () => void,
+  endAnchor: TranscriptEndAnchor,
+  prepareEnd: (ready: () => void, isCurrent: () => boolean) => void,
 ): void {
   // Retargeting automatic follow must not insert an instant stop.
   if (source !== "auto" || state.scrollCommand?.target !== "end") {
@@ -80,17 +107,31 @@ export function scrollTranscriptToEnd(
     // TanStack suppressed outside the outgoing smooth command’s target buffer.
     measureSkippedRows();
   }
-  state.scrollCommand = {
+  const command = (state.scrollCommand = {
     behavior,
     target: "end",
+  });
+  const scroll = () => {
+    instance.scrollToEnd({ behavior });
+    // Instant commands and smooth no-ops can reach their target before any
+    // native offset event. Do not let delayed idle reclaim a departed reader.
+    const element = instance.scrollElement;
+    const max = maxTranscriptScrollOffset(element);
+    if (element && max !== null && Math.abs(max - element.scrollTop) <= 1) {
+      cancelScroll(true);
+    }
+    // A smooth no-op emits no native idle event to capture the end. Preserve
+    // that actual resting edge before a later row measurement grows the range.
+    if (behavior !== "smooth" || endAnchor.recordViewport(element)) {
+      endAnchor.capture(element);
+    }
   };
-  instance.scrollToEnd({ behavior });
-  // Instant commands and smooth no-ops can reach their target before any
-  // native offset event. Do not let delayed idle reclaim a departed reader.
-  const element = instance.scrollElement;
-  const max = maxTranscriptScrollOffset(element);
-  if (element && max !== null && Math.abs(max - element.scrollTop) <= 1) {
-    cancelScroll();
+  if (source !== "auto" && behavior === "smooth") {
+    // Measure the bounded destination before native motion. A late estimate
+    // contraction otherwise clamps the journey backward.
+    prepareEnd(scroll, () => state.scrollCommand === command);
+  } else {
+    scroll();
   }
 }
 
@@ -138,11 +179,12 @@ type OffsetOwner = {
   readonly endAnchor: TranscriptEndAnchor;
   canFollowEnd(): boolean;
   isProgrammaticScroll(): boolean;
-  cancelScroll(): void;
+  cancelScroll(preserveEnd?: boolean): void;
   onLayoutCorrection(before: number, after: number): void;
   invalidate(): void;
-  onOffset(readerMoved: boolean): void;
+  onOffset(readerDelta: number): void;
   onReaderScroll(towardEnd?: boolean): void;
+  onNativeScroll?(event: Event): void;
   onComposerLayout(changed: boolean): void;
 };
 
@@ -156,6 +198,7 @@ export function observeTranscriptOffset(
   let nativeOffset = element?.scrollTop ?? 0;
   let maintenanceRevision = 0;
   let maintenanceFrame: number | null = null;
+  let nativeScrollEvent: Event | undefined;
   let touchY: number | undefined;
   const contactIds = new Set<number>();
   const localTouchY = (event: TouchEvent) =>
@@ -192,6 +235,10 @@ export function observeTranscriptOffset(
       owner.onLayoutCorrection(before, after);
     }
     recordProgrammaticScroll(before, after);
+    // A native no-op has no scroll event to acknowledge an explicit command.
+    if (!maintenance && before === after && after !== instance.scrollOffset) {
+      publishOffset(after, instance.isScrolling);
+    }
   };
   owner.state.recordProgrammaticScroll = recordVirtualizerScroll;
   const stopCorrections = element
@@ -224,14 +271,22 @@ export function observeTranscriptOffset(
       owner.state.maintenanceScrollOffset = actualOffset === target ? actualOffset : null;
     }
     const programmatic = owner.isProgrammaticScroll();
-    if (scrolling && delta !== 0 && !programmatic) {
+    // The follow threshold releases pane policy before a command's last pixels settle.
+    const readerDelta = programmatic || owner.state.scrollCommand !== null ? 0 : delta;
+    if (delta !== 0 && !programmatic) {
+      // Measurement can observe arrival before the native event unlocks pane following.
+      if (delta > 0 && !owner.canFollowEnd() && owner.endAnchor.isRecordedEnd(offset)) {
+        owner.onReaderScroll(true);
+      }
       if (delta > 0 && owner.canFollowEnd()) {
         owner.endAnchor.capture(element);
       } else {
         owner.endAnchor.clear();
       }
       // Input can precede projection capture; carry its later native movement.
-      owner.prependAnchor.moveWithReader(delta);
+      if (scrolling) {
+        owner.prependAnchor.moveWithReader(delta);
+      }
     }
     publish({
       type: "offset",
@@ -240,21 +295,46 @@ export function observeTranscriptOffset(
       touching: owner.state.touching,
       programmatic,
     });
+    // Record the arriving viewport before row rendering dirties native layout.
+    owner.endAnchor.recordViewport(element);
+    // Range selection uses this movement to budget offscreen preparation.
+    owner.onOffset(readerDelta);
     callback(offset, scrolling);
-    owner.onOffset(delta !== 0 && !programmatic);
     // Range/isScrolling and pane follow policy already invalidate themselves.
     // The rail observes offsets directly; only touch-held history needs a geometry commit.
     if (owner.state.touchActive !== owner.state.renderedTouchActive) {
       owner.invalidate();
     }
   };
-  const syncOffset = () => {
+  const syncOffset = (measurement = false) => {
     if (!element || element !== owner.getScrollElement() || instance.scrollElement !== element) {
       return;
     }
     const offset = element.scrollTop;
-    if (offset !== instance.scrollOffset) {
+    const logicalOffset = instance.scrollOffset;
+    if (offset === logicalOffset) {
+      return;
+    }
+    // Preserve reachable compensation at an end clamp until the sizer commits.
+    if (
+      offset === nativeOffset &&
+      logicalOffset !== null &&
+      logicalOffset > offset &&
+      offset === maxTranscriptScrollOffset(element)
+    ) {
+      const modeledHeight =
+        instance.getTotalSize() +
+        instance.options.scrollMargin +
+        (Number.parseFloat(element.style.paddingBottom) || 0);
+      if (logicalOffset <= modeledHeight - element.clientHeight) {
+        return;
+      }
+    }
+    owner.state.measuringOffset = measurement;
+    try {
       publishOffset(offset, instance.isScrolling);
+    } finally {
+      owner.state.measuringOffset = false;
     }
   };
   owner.state.syncNativeOffset = syncOffset;
@@ -296,7 +376,12 @@ export function observeTranscriptOffset(
     }
   };
   const interrupt = (event: Event) => {
-    if (!element || element !== owner.getScrollElement() || instance.scrollElement !== element) {
+    if (
+      event.defaultPrevented ||
+      !element ||
+      element !== owner.getScrollElement() ||
+      instance.scrollElement !== element
+    ) {
       return;
     }
     if (event instanceof KeyboardEvent && !isTranscriptScrollKey(event)) {
@@ -349,13 +434,18 @@ export function observeTranscriptOffset(
     touchY = nextY;
     publishInput(event);
   };
-  // Commit editor-induced geometry before the pane's bubble listener classifies
-  // the native offset. Only the actual correction carries maintenance provenance.
-  const commitComposerResize = () => owner.onComposerLayout(true);
+  // Composer geometry precedes native offset handling. Deliver pane policy in
+  // the virtualizer listener so Solid batches both before its next DOM commit.
+  const captureScroll = (event: Event) => {
+    owner.onComposerLayout(true);
+    if (event.target === element) {
+      nativeScrollEvent = event;
+    }
+  };
   const listeners = new AbortController();
   const passive = { passive: true, signal: listeners.signal };
   if (element) {
-    listen(element, "scroll", commitComposerResize, { ...passive, capture: true });
+    listen(element, "scroll", captureScroll, { ...passive, capture: true });
     listen(element, "touchmove", moveTouch, passive);
     for (const type of ["wheel", "touchstart", "keydown", "pointerdown"]) {
       listen(element, type, interrupt, passive);
@@ -365,10 +455,16 @@ export function observeTranscriptOffset(
     listen(element, "touchcancel", finishTouch, passive);
   }
   const cleanup = observeElementOffset(instance, (offset, scrolling) => {
+    const event = nativeScrollEvent;
+    nativeScrollEvent = undefined;
     if (element !== owner.getScrollElement()) {
       return;
     }
     publishOffset(offset, scrolling);
+    // Pane policy consumes the reconciled maintenance and end-position state.
+    if (event?.currentTarget === element) {
+      owner.onNativeScroll?.(event);
+    }
     if (scrolling && owner.state.maintenanceScrollOffset !== null) {
       const revision = maintenanceRevision;
       if (maintenanceFrame !== null) {
@@ -402,15 +498,15 @@ export function observeTranscriptOffset(
       Math.abs((maxTranscriptScrollOffset(element) ?? 0) - element.scrollTop) <= (scrolling ? 0 : 1)
     ) {
       if (owner.state.scrollCommand.behavior === "smooth") {
-        owner.cancelScroll();
+        owner.cancelScroll(true);
       } else {
         owner.state.scrollCommand = null;
         // Arrival can precede the queued reconciliation frame. Retire its
         // index target too, without cancelling the reader’s end-follow intent.
         // The notification can lag a newer native write; hold the current viewport.
         instance.scrollToOffset(element.scrollTop, { behavior: "instant" });
+        owner.endAnchor.capture(element);
       }
-      owner.endAnchor.capture(element);
     }
   });
   return () => {

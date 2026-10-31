@@ -1,6 +1,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { dynamic } from "@solidjs/web";
 import { createMemo, Match, Show, Switch } from "solid-js";
+import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
 import { stripShellPreamble } from "../../../../../src/agents/tool-display-exec-shell.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
@@ -13,6 +14,7 @@ import {
   resolveCollapsedToolArgumentPreview as toolArgumentPreview,
   resolveToolCardOutcome,
 } from "../../../lib/chat/tool-cards.ts";
+import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
@@ -122,7 +124,7 @@ function ToolRowContent(props: {
       : props.outcome === "running" && (props.view.kind === "edit" || props.view.kind === "write")
         ? props.card.liveDiffStat
         : undefined;
-  const summary = createMemo(() => resolveCollapsedToolSummaryParts(props.card));
+  const summary = createMemo(() => resolveCollapsedToolSummaryParts(props.card), { lazy: true });
   const displayLabel = () => formatCollapsedToolSummaryText(summary().label) ?? summary().label;
   const displayName = () => distinctSummaryText(summary().name, displayLabel());
   return (
@@ -217,7 +219,7 @@ export function ToolCardRow(props: ToolCardProps) {
     resolveToolCallView({ name: card().name, args: card().args, details: card().details }),
   );
   const display = createMemo(() =>
-    resolveToolDisplay({ name: card().name, args: card().args, detailMode: "explain" }),
+    resolveToolDisplayIdentity(unwrapToolCallForDisplay(card()).name),
   );
   const activityCards = () => props.options.activityCards ?? [card()];
   const running = () =>
