@@ -302,13 +302,13 @@ export function createMemoryWikiCompiledCacheStore(
     overflowPolicy: "evict-oldest",
   });
   return {
-    async read(this: void, config: ResolvedMemoryWikiConfig) {
+    async read(this: void, config: ResolvedMemoryWikiConfig, readOptions?: { reload?: boolean }) {
       const ownerId = resolveMemoryWikiCompiledCacheOwnerId(config);
       const activeVault = resolveActiveVault(config);
       if (!activeVault?.compiledCachePublicationId) {
         return null;
       }
-      if (activeVault.snapshot) {
+      if (activeVault.snapshot && !readOptions?.reload) {
         return activeVault.snapshot;
       }
       const key = publicationKey(ownerId, activeVault.compiledCachePublicationId);
@@ -462,6 +462,31 @@ export async function invalidateMemoryWikiCompiledCache(
   await requireConfiguredStore().delete(config);
   activeVaults.delete(resolveMemoryWikiCompiledCacheOwnerId(config));
   dashboardStates.delete(dashboardStateKey(config));
+}
+
+export async function reuseMemoryWikiCompiledCache(
+  config: ResolvedMemoryWikiConfig,
+  snapshot: MemoryWikiCompiledCacheSnapshot,
+  parentPublicationId: string | null,
+): Promise<boolean> {
+  const activeVault = resolveActiveVault(config);
+  if (
+    !parentPublicationId ||
+    !activeVault ||
+    activeVault.compiledCachePublicationId !== parentPublicationId
+  ) {
+    return false;
+  }
+  // Explicit compile checks persisted bytes; ordinary reads keep their lifecycle cache.
+  const persisted = await requireConfiguredStore().read(config, { reload: true });
+  if (resolveActiveVault(config) !== activeVault) {
+    throw new Error("Memory Wiki cache owner retired before publication reuse.");
+  }
+  if (!persisted || JSON.stringify(persisted) !== JSON.stringify(snapshot)) {
+    return false;
+  }
+  dashboardStates.delete(dashboardStateKey(config));
+  return true;
 }
 
 export async function writeMemoryWikiCompiledCache(
