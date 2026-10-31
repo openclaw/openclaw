@@ -378,9 +378,14 @@ Resource Timing entries to CDP records uses URL and nearest start time. The HTML
 includes no RPC parameters, message contents, or HTTP headers; the existing
 critical-path JSON keeps its original shape.
 
-For code-splitting evidence, add `--coverage` to capture executed and unused raw
-source bytes. `javaScriptResources` separately counts completed JavaScript
-fetches from Resource Timing: decoded body bytes, encoded body bytes, and transfer
+For code-splitting evidence, use a separate `--coverage --untraced` run without
+`--cpu-profile` or `--cpu-profile-compare`. Coverage and CPU sampling use different
+CDP sessions, while Chromium coverage state is isolate-global. `--thread-cpu-time`
+is allowed because it reads Performance metrics without starting the sampler.
+Coverage captures observed executed and unobserved raw source bytes; these are
+not measurements of data reads, compile cost, or removable code.
+`javaScriptResources` separately counts completed JavaScript fetches from Resource
+Timing: decoded body bytes, encoded body bytes, and transfer
 bytes including headers. Its `outsideCoverage` subset includes fetch-only
 preloads, so V8 coverage alone must not be reported as all downloaded code.
 Module preloads can parse/compile without evaluation, and dormant function bodies
@@ -545,7 +550,9 @@ session-switch phases retain the same selected time domain. Default runs keep
 CDP's `timeTicks` domain.
 
 Use a separate `--coverage --runs 1 --first-load --cold-http-cache --untraced`
-capture to inspect JavaScript exercised by cold boot. Each `run-N.coverage.json`
+capture to inspect JavaScript exercised by cold boot. Do not combine it with
+CPU sampling; the default traced run also starts the CPU sampler. Run a separate
+`--cpu-profile` capture for source-mapped CPU attribution. Each `run-N.coverage.json`
 records V8 function/block ranges and loaded, executed, and unused UTF-8 bytes per
 asset through settlement; nested block counts override enclosing function counts.
 Keep coverage captures separate from timing comparisons because instrumentation

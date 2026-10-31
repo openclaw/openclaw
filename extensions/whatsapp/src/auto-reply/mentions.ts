@@ -28,40 +28,37 @@ export function isBotMentioned(
   mentionCfg: MentionConfig,
   authDir?: string,
 ): boolean {
-  const targets = {
-    normalizedMentions: getMentionIdentities(msg, authDir),
-    self: getSelfIdentity(msg, authDir),
-  };
+  const normalizedMentions = getMentionIdentities(msg, authDir);
+  const self = getSelfIdentity(msg, authDir);
   // Having our own number in allowFrom suppresses native self-mentions only in DMs.
   // Explicit caller overrides also apply to groups.
   const admission = msg.admission;
   const isGroupConversation = admission.conversation.kind === "group";
   const isSelfChat =
     mentionCfg.isSelfChat ??
-    (isSelfChatMode(targets.self.e164, mentionCfg.allowFrom) && !isGroupConversation);
+    (isSelfChatMode(self.e164, mentionCfg.allowFrom) && !isGroupConversation);
 
-  const hasMentions = targets.normalizedMentions.length > 0;
-  const hasNativeMentionsOutsideSelfChat = hasMentions && !isSelfChat;
-  if (hasNativeMentionsOutsideSelfChat) {
-    for (const mention of targets.normalizedMentions) {
-      if (identitiesOverlap(targets.self, mention)) {
-        return true;
-      }
-    }
+  const hasNativeMentionsOutsideSelfChat = normalizedMentions.length > 0 && !isSelfChat;
+  if (!isSelfChat && normalizedMentions.some((mention) => identitiesOverlap(self, mention))) {
+    return true;
   }
   const bodyClean = normalizeMentionText(msg.payload.body);
   if (mentionCfg.mentionRegexes.some((re) => re.test(bodyClean))) {
     return true;
   }
 
-  // Native mentions for other participants inject their identities into the
-  // body, so they must not activate the loose self-number fallback below.
+  // Mentions of other participants must not activate the self-number fallback.
   if (hasNativeMentionsOutsideSelfChat) {
     return false;
   }
 
-  const selfDigits = targets.self.e164?.replace(/\D/g, "");
-  return Boolean(selfDigits && bodyClean.replace(/\D/g, "").includes(selfDigits));
+  const selfDigits = self.e164?.replace(/\D/g, "");
+  return Boolean(
+    selfDigits &&
+    new RegExp(`(?<![\\p{L}\\p{N}\\p{M}_@])@\\+?${selfDigits}(?![\\p{L}\\p{N}\\p{M}_@])`, "u").test(
+      msg.payload.body,
+    ),
+  );
 }
 
 export function resolveOwnerList(mentionCfg: MentionConfig, selfE164?: string | null) {
