@@ -178,6 +178,54 @@ describe("Windows process start identity", () => {
         ...budgets.slice(1).map(() => "D:\\Native\\System32\\wbem\\wmic.exe"),
       ]);
     });
+
+    it.each([-10_000, 10_000])(
+      "keeps the WMIC fallback deadline on the monotonic clock across a %d ms wall-clock shift",
+      (wallShift) => {
+        const dateSpy = vi.spyOn(Date, "now");
+        const perfSpy = vi.spyOn(performance, "now");
+        const basePerf = performance.now();
+        const baseDate = Date.now();
+        // PowerShell reports no parseable start time; the wall clock shifts while
+        // the monotonic clock advances only slightly between the deadline seed and
+        // the remaining read.
+        spawn.mockImplementationOnce(() => {
+          dateSpy.mockReturnValue(baseDate + wallShift);
+          perfSpy.mockReturnValue(basePerf + 10);
+          return { status: 1, stdout: "" };
+        });
+        spawn.mockReturnValueOnce({ status: 0, stdout: creationDate.stdout });
+        expect(readWindowsProcessStartTimeSync(456, 1000)).toBe(expectedTime);
+        const wmicTimeout = Number(spawn.mock.calls[1]?.[2]?.timeout);
+        expect(wmicTimeout).toBeGreaterThanOrEqual(980);
+        expect(wmicTimeout).toBeLessThanOrEqual(1000);
+        dateSpy.mockRestore();
+        perfSpy.mockRestore();
+      },
+    );
+
+    it.each([0.4, 0.8])(
+      "rounds the remaining budget to an integer before spawnSync with fractional elapsed %.1f ms",
+      (elapsed) => {
+        const perfSpy = vi.spyOn(performance, "now");
+        const basePerf = performance.now();
+        // PowerShell reports no parseable start time; the monotonic clock advances by
+        // a fractional amount, so the raw remaining budget is fractional and must be
+        // rounded up before Node's spawnSync validates it.
+        spawn.mockImplementationOnce(() => {
+          perfSpy.mockReturnValue(basePerf + elapsed);
+          return { status: 1, stdout: "" };
+        });
+        spawn.mockReturnValueOnce({ status: 0, stdout: creationDate.stdout });
+        expect(readWindowsProcessStartTimeSync(456, 1000)).toBe(expectedTime);
+        for (const call of spawn.mock.calls) {
+          expect(Number.isInteger(call[2].timeout)).toBe(true);
+          expect(call[2].timeout).toBeGreaterThanOrEqual(980);
+          expect(call[2].timeout).toBeLessThanOrEqual(1000);
+        }
+        perfSpy.mockRestore();
+      },
+    );
   });
 
   describe("native Windows process start identity", () => {

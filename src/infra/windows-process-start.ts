@@ -105,12 +105,12 @@ export function readWindowsProcessStartTimeSync(
   }
   // Preserve both former 5s attempts inside one deadline. Explicit callers
   // still keep their smaller end-to-end budget.
-  const deadline = Date.now() + timeoutMs;
+  const deadline = performance.now() + timeoutMs;
   const nativeStartTime = readNativeProcessStartTime(pid);
   if (nativeStartTime !== undefined) {
     return nativeStartTime;
   }
-  const powershellBudgetMs = deadline - Date.now();
+  const powershellBudgetMs = Math.ceil(deadline - performance.now());
   if (powershellBudgetMs <= 0) {
     return null;
   }
@@ -137,7 +137,7 @@ export function readWindowsProcessStartTimeSync(
       return startTime;
     }
   }
-  const remainingMs = deadline - Date.now();
+  const remainingMs = Math.ceil(deadline - performance.now());
   if (remainingMs <= 0) {
     return null;
   }
