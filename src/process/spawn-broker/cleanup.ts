@@ -200,6 +200,37 @@ export async function drainCurrentBrokerProcessGroup(): Promise<void> {
   }
 }
 
+/**
+ * Zombies still answer kill(-pgid, 0). After the broker exits, a subreaper ancestor
+ * that reaps only its own children may never reap the members it adopted. Their
+ * reaping is not ours, and they pin the PGID so it cannot be reused meanwhile.
+ */
+function brokerGroupHasLiveMembers(pgid: number): boolean {
+  if (groupGone(pgid)) {
+    return false;
+  }
+  if (process.platform !== "linux") {
+    return true;
+  }
+  let observedMember = false;
+  try {
+    for (const member of readProcessGroupMembers(1000)) {
+      if (member.pgid !== pgid) {
+        continue;
+      }
+      observedMember = true;
+      if (!isPidDefinitelyDead(member.pid)) {
+        return true;
+      }
+    }
+  } catch {
+    // An unreadable census must not cancel the kernel-visible TERM/KILL backstop.
+    return !groupGone(pgid);
+  }
+  // An empty census is not proof of death while the kernel still sees the group.
+  return !observedMember && !groupGone(pgid);
+}
+
 /** A broker's private group retains non-detached children before PID publication. */
 export function terminateBrokerProcessGroup(pgid: number) {
   let retired = false;
@@ -230,7 +261,7 @@ export function terminateBrokerProcessGroup(pgid: number) {
     signal("SIGKILL");
   };
   const settled = (async () => {
-    if (groupGone(pgid)) {
+    if (!brokerGroupHasLiveMembers(pgid)) {
       retire();
       return;
     }
@@ -238,7 +269,7 @@ export function terminateBrokerProcessGroup(pgid: number) {
     forceTimer = setTimeout(force, GRACEFUL_CANCEL_TIMEOUT_MS);
     const deadline = performance.now() + GRACEFUL_CANCEL_TIMEOUT_MS + 2000;
     try {
-      while (!groupGone(pgid)) {
+      while (brokerGroupHasLiveMembers(pgid)) {
         if (performance.now() >= deadline) {
           throw new SpawnBrokerError(
             `Spawn broker group cleanup could not be confirmed for pgid=${pgid}`,
