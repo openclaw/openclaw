@@ -10,10 +10,6 @@ import {
   withPluginGenerationMetrics,
 } from "./plugin-generation-metrics.js";
 import {
-  inspectPluginGenerationSources,
-  inspectPluginSourceDependencies,
-} from "./plugin-generation-source-inspection.js";
-import {
   markPluginSourceCaptureOperation,
   type PluginRecoverySource,
 } from "./plugin-generation-source-lookup.js";
@@ -259,6 +255,9 @@ function createPreparationSession(context: CaptureCommand) {
               sentReceipts.set(key, receipt);
             }
             if (command.inspection) {
+              // Inspection's host capture wrapper must stay outside worker bootstrap.
+              const { inspectPluginGenerationSources, inspectPluginSourceDependencies } =
+                await import("./plugin-generation-source-inspection.js");
               const inspection = command.inspection;
               const unresolvedAncestors: Array<{ name: string; importer: string }> = [];
               result = {

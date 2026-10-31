@@ -4,6 +4,7 @@ import { localWorkspaceProjectionPath } from "../../gateway/worker-environments/
 import {
   checkpointLocalWorkspace,
   resolveLocalWorkspaceOwner,
+  reuseLocalWorkspaceProjection,
   withLocalWorkspaceProjection,
 } from "../../gateway/worker-environments/local-workspace-projection.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
@@ -91,18 +92,7 @@ export async function prepareLocalSandboxWorkspace(params: {
     markManagedWorktreePreparation();
     assertLocalSandboxWorkspaceBackend(params.sandbox.backend);
     phases.mark("attempt.setup.sandbox.workspace_selection.reuse.acquire");
-    const existing = await withLocalWorkspaceProjection(
-      executionOwner,
-      async (state) => {
-        phases.mark("attempt.setup.sandbox.workspace_selection.reuse.reconcile");
-        try {
-          return await state.reuse();
-        } finally {
-          phases.mark("attempt.setup.sandbox.workspace_selection.reuse.release");
-        }
-      },
-      { signal: params.signal },
-    );
+    const existing = await reuseLocalWorkspaceProjection(executionOwner, params.signal);
     let workspaceDir: string;
     if (existing) {
       setWorktreePreparationTemplate("reused");

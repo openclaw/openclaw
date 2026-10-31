@@ -193,9 +193,9 @@ function CostColumns(props: {
       aria-label={props.label}
       onPointerLeave={() => setHover(null)}
     >
-      <For each={props.days}>
+      <For each={props.days} keyed={(day) => day.date}>
         {(day, index) => {
-          const share = () => (max() > 0 ? day.cost / max() : 0);
+          const share = () => (max() > 0 ? day().cost / max() : 0);
           return (
             <span
               class={[
@@ -206,7 +206,7 @@ function CostColumns(props: {
                 },
               ]}
               style={{
-                height: `${day.cost > 0 ? Math.max(6, share() * 100) : 0}%`,
+                height: `${day().cost > 0 ? Math.max(6, share() * 100) : 0}%`,
                 "--usage-bar-tint": `${Math.round(35 + share() * 50)}%`,
               }}
               onPointerEnter={() => setHover(index())}
@@ -225,65 +225,82 @@ function CostColumns(props: {
   );
 }
 
-function renderCostWindowComparison(
-  daily: CostDailyEntry[],
-  rangeStartDate: string,
-  rangeEndDate: string,
-  timeZone: "local" | "utc",
-) {
-  const windows = buildUsageCostWindows(daily, rangeStartDate, rangeEndDate);
-  if (windows.length === 0 || daily.length === 0) {
-    return undefined;
-  }
-
-  const today = formatIsoDate(new Date(), timeZone);
-  const costs = new Map(daily.map((day) => [day.date, day]));
-  const comparisons = windows.map((summary, index) => ({
-    index,
-    summary,
-    columns: windowDailyCosts(costs, summary.endDate, summary.days),
-  }));
-
+export function CostWindowComparison(props: {
+  daily: CostDailyEntry[];
+  rangeStartDate: string;
+  rangeEndDate: string;
+  timeZone: "local" | "utc";
+}) {
+  const state = createMemo(() => {
+    const daily = props.daily;
+    const windows = buildUsageCostWindows(daily, props.rangeStartDate, props.rangeEndDate);
+    if (windows.length === 0 || daily.length === 0) {
+      return undefined;
+    }
+    const costs = new Map(daily.map((day) => [day.date, day]));
+    return {
+      today: formatIsoDate(new Date(), props.timeZone),
+      comparisons: windows.map((summary, index) => ({
+        index,
+        summary,
+        columns: windowDailyCosts(costs, summary.endDate, summary.days),
+      })),
+    };
+  });
   return (
-    <SettingsSection
-      title={t("usage.costWindows.title")}
-      description={t("usage.costWindows.subtitle", { date: formatFullDate(rangeEndDate) })}
-      actions={
-        <span class="usage-section-meta cost-window-range">
-          {formatDayLabel(rangeStartDate)} – {formatDayLabel(rangeEndDate)}
-        </span>
-      }
-    >
-      <div class="usage-summary-strip usage-summary-strip--windows">
-        <For each={comparisons}>
-          {({ index, summary, columns }) => {
-            const label = createMemo(() =>
-              index === 0
-                ? t("usage.costWindows.selectedRange")
-                : summary.days === 1
-                  ? summary.endDate === today
-                    ? t("usage.presets.today")
-                    : formatDayLabel(summary.endDate)
-                  : t("usage.costWindows.lastDays", { count: String(summary.days) }),
-            );
-            return (
-              <div class={["cost-window", { "cost-window--range": index === 0 }]}>
-                <div class="cost-window__label">{label()}</div>
-                <div class="cost-window__value">{formatAnalysisCost(summary.totals.totalCost)}</div>
-                <div class="cost-window__meta">
-                  {formatUsageTokens(summary.totals.totalTokens)}{" "}
-                  {normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}
-                  {summary.days > 1
-                    ? ` · ${formatAnalysisCost(summary.totals.totalCost / summary.days)} ${t("usage.costWindows.perDay")}`
-                    : undefined}
-                </div>
-                {columns ? <CostColumns days={columns} label={label()} /> : undefined}
-              </div>
-            );
-          }}
-        </For>
-      </div>
-    </SettingsSection>
+    <Show when={state()}>
+      {(current) => (
+        <SettingsSection
+          title={t("usage.costWindows.title")}
+          description={t("usage.costWindows.subtitle", {
+            date: formatFullDate(props.rangeEndDate),
+          })}
+          actions={
+            <span class="usage-section-meta cost-window-range">
+              {formatDayLabel(props.rangeStartDate)} – {formatDayLabel(props.rangeEndDate)}
+            </span>
+          }
+        >
+          <div class="usage-summary-strip usage-summary-strip--windows">
+            <For
+              each={current().comparisons}
+              keyed={(entry) => (entry.index === 0 ? "range" : entry.summary.days)}
+            >
+              {(entry) => {
+                const label = createMemo(() => {
+                  const { index, summary } = entry();
+                  return index === 0
+                    ? t("usage.costWindows.selectedRange")
+                    : summary.days === 1
+                      ? summary.endDate === current().today
+                        ? t("usage.presets.today")
+                        : formatDayLabel(summary.endDate)
+                      : t("usage.costWindows.lastDays", { count: String(summary.days) });
+                });
+                return (
+                  <div class={["cost-window", { "cost-window--range": entry().index === 0 }]}>
+                    <div class="cost-window__label">{label()}</div>
+                    <div class="cost-window__value">
+                      {formatAnalysisCost(entry().summary.totals.totalCost)}
+                    </div>
+                    <div class="cost-window__meta">
+                      {formatUsageTokens(entry().summary.totals.totalTokens)}{" "}
+                      {normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}
+                      {entry().summary.days > 1
+                        ? ` · ${formatAnalysisCost(entry().summary.totals.totalCost / entry().summary.days)} ${t("usage.costWindows.perDay")}`
+                        : undefined}
+                    </div>
+                    <Show when={entry().columns}>
+                      {(columns) => <CostColumns days={columns()} label={label()} />}
+                    </Show>
+                  </div>
+                );
+              }}
+            </For>
+          </div>
+        </SettingsSection>
+      )}
+    </Show>
   );
 }
 
@@ -603,7 +620,7 @@ export function UsageInsights(props: {
   );
 }
 
-export { renderCostWindowComparison, renderFilterChips, renderInsightList };
+export { renderFilterChips, renderInsightList };
 
 export function renderProviderUsage(
   providers: ProviderUsageSummary["providers"][number][],

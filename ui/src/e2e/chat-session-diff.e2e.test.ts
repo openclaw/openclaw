@@ -493,14 +493,14 @@ suite.define(() => {
     await firstRowText(".chat-diff__row--skip").toContain("29 unmodified lines");
     await firstRowText(".chat-diff__row--add").toContain("replacement line");
     await text(modified, ".chat-diff__row--add .tok-keyword").toBe("const");
+    // Highlighting can replace spans between Playwright's lookup and evaluation.
     await expect
       .poll(() =>
-        modified.evaluate((file) => {
-          const token = file.querySelector(".chat-diff__row--add .tok-keyword");
-          return (
-            token !== null &&
-            getComputedStyle(token).color !== getComputedStyle(token.parentElement!).color
-          );
+        modified.locator(".chat-diff__row--add .tok-keyword").evaluateAll(([token]) => {
+          const parent = token?.parentElement;
+          return token?.isConnected && parent
+            ? getComputedStyle(token).color !== getComputedStyle(parent).color
+            : false;
         }),
       )
       .toBe(true);
