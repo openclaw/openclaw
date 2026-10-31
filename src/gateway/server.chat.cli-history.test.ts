@@ -56,7 +56,9 @@ async function withGatewayChatHarness(
         createSessionDir: async (options) => sessionStoreFixture.open(options).sessionDir,
         filePath,
         cliSessionId,
-      }).finally(disposeSessionReadContexts),
+      }).finally(async () => {
+        await disposeSessionReadContexts();
+      }),
     );
   } finally {
     await sessionStoreFixture.reset();
