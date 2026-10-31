@@ -1,6 +1,11 @@
 import { HTTPFetchError } from "@line/bot-sdk";
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { collectErrorGraphCandidates, extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import {
+  collectErrorGraphCandidates,
+  extractErrorCode,
+  readErrorName,
+} from "openclaw/plugin-sdk/error-runtime";
 import {
   classifyTransientNetworkErrorCode,
   createChannelApiRetryRunner,
@@ -11,6 +16,49 @@ import { readLineAccountMessageQuota } from "./probe.js";
 export function findLineHttpError(error: unknown): HTTPFetchError | undefined {
   return collectErrorGraphCandidates(error, (candidate) => [candidate.cause, candidate.error]).find(
     (candidate): candidate is HTTPFetchError => candidate instanceof HTTPFetchError,
+  );
+}
+
+/**
+ * A push may stand in for a failed reply only when LINE refused the reply or the
+ * request never reached LINE. Reply tokens are single-use and a push cannot
+ * deduplicate a reply LINE may have accepted, so a partial delivery, a timeout or
+ * a dropped connection never falls back.
+ */
+export function canFallbackAfterLineReplyFailure(error: unknown): boolean {
+  if (isChannelPartialDeliveryError(error)) {
+    return false;
+  }
+  const httpError = findLineHttpError(error);
+  if (httpError) {
+    return httpError.status >= 400 && httpError.status < 500 && httpError.status !== 408;
+  }
+
+  const candidates = collectErrorGraphCandidates(error, (candidate) => [
+    candidate.cause,
+    candidate.error,
+  ]);
+  if (
+    candidates.some(
+      (candidate) =>
+        readErrorName(candidate) === "AbortError" ||
+        classifyTransientNetworkErrorCode(extractErrorCode(candidate)) === "ambiguous",
+    )
+  ) {
+    return false;
+  }
+  if (
+    candidates.some(
+      (candidate) =>
+        classifyTransientNetworkErrorCode(extractErrorCode(candidate)) === "pre-connect",
+    )
+  ) {
+    return true;
+  }
+
+  // Undici rejects an unknown network outcome with this exact TypeError shape.
+  return !candidates.some(
+    (candidate) => candidate instanceof TypeError && candidate.message === "fetch failed",
   );
 }
 
