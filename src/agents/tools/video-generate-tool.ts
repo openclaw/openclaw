@@ -40,7 +40,7 @@ import {
 import {
   buildMediaGenerateToolExecutionResult,
   buildMediaGenerationDurationDetails,
-  buildMediaGenerationGeometryDetails,
+  buildVideoGenerationGeometryDetails,
   buildSavedMediaAttachment,
 } from "./media-generate-result-shared.js";
 import { createMediaGenerateExecute } from "./media-generate-tool-actions-shared.js";
@@ -577,8 +577,7 @@ export function createVideoGenerateTool(
                             typeof entry === "number" && Number.isFinite(entry),
                         )
                       : undefined);
-                  const geometryDetails = buildMediaGenerationGeometryDetails(
-                    "video",
+                  const geometryDetails = buildVideoGenerationGeometryDetails(
                     result,
                     { size, aspectRatio, resolution },
                     ignoredOverrideKeys,

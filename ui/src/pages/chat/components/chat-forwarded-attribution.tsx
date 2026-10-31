@@ -3,6 +3,7 @@ import "./chat-attribution.css";
 import { pathForRoute } from "../../../app-route-paths.ts";
 import { registerSessionTitleTarget } from "../../../components/markdown-link-display.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { SessionLink } from "../../../components/solid/session-link.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import type { ChatDisplayFacts } from "../../../lib/chat/row-display-facts.ts";
@@ -94,29 +95,6 @@ function sessionTitleRefs(source: () => ForwardedSource) {
   };
 }
 
-function ForwardedSessionLink(props: { source: ForwardedSource; label: string }) {
-  const refs = sessionTitleRefs(() => props.source);
-  return (
-    <a
-      ref={refs.target}
-      class={[
-        "markdown-session-link",
-        {
-          "markdown-session-link--titled": Boolean(props.source.sourceLabel),
-          "markdown-session-link--agent": Boolean(
-            props.source.sourceIsOtherAgent && props.source.sourceIsMainSession,
-          ),
-        },
-      ]}
-      role="link"
-      tabindex="0"
-      data-session-key={props.source.linkableSourceKey}
-    >
-      <span ref={refs.label} class="session-label" textContent={props.label} />
-    </a>
-  );
-}
-
 function ForwardedSourceLabel(props: { source: ForwardedSource; label: string }) {
   const refs = sessionTitleRefs(() => props.source);
   return (
@@ -147,7 +125,15 @@ function ForwardedLink(props: { source: ForwardedSource; basePath?: string }) {
       when={props.source.cronJobId && props.source.cronRunSessionId}
       fallback={
         <Show when={props.source.linkableSourceKey} keyed>
-          {(_sessionKey) => <ForwardedSessionLink source={props.source} label={initialLabel()} />}
+          {(_sessionKey) => (
+            <SessionLink
+              sessionKey={props.source.linkableSourceKey}
+              label={initialLabel()}
+              titled={Boolean(props.source.sourceLabel)}
+              agent={Boolean(props.source.sourceIsOtherAgent && props.source.sourceIsMainSession)}
+              display={props.source.display}
+            />
+          )}
         </Show>
       }
     >

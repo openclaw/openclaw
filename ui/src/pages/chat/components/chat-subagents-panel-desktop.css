@@ -62,7 +62,7 @@
   min-width: 0;
   margin: 0 -8px;
   padding: 0 8px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 
 .subagents-desktop__row:not(:last-child)::after {
@@ -111,7 +111,7 @@
   flex: 0 0 25px;
   width: 25px;
   height: 25px;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: hsl(var(--subagent-hue) 22% 30% / 0.35);
   color: hsl(var(--subagent-hue) 32% 65%);
 }
