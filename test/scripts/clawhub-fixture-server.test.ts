@@ -472,11 +472,13 @@ ${runner.slice(boundary)}
     const download = await fetch(`${baseUrl}${whatsappPath}/versions/${version}/artifact/download`);
     expect(download.headers.get("x-clawhub-artifact-sha256")).toBe(sha256);
     expect(Buffer.from(await download.arrayBuffer())).toEqual(archive);
+    expect((await fetch(`${baseUrl}${whatsappPath}/detail`)).status).toBe(404);
     expect((await fetchJson(baseUrl, "/__fixture__/requests")).requests).toEqual([
       `GET ${whatsappPath}`,
       `GET ${whatsappPath}/versions/${version}/artifact`,
       `GET ${whatsappPath}/versions/${version}/security`,
       `GET ${whatsappPath}/versions/${version}/artifact/download`,
+      `GET ${whatsappPath}/detail`,
     ]);
     expect(
       runPrepublishAssertion(baseUrl, "@openclaw/whatsapp", version, undefined, isolatedCwd).status,
