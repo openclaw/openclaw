@@ -551,25 +551,19 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expect(result.runCommand).not.toHaveBeenCalled();
   });
 
-  it("classifies a companion response deadline as a timeout", async () => {
+  it.each([
+    ["TIMEOUT", "timeout", "macOS app exec host response timed out; execution outcome is unknown"],
+    ["INVALID_REQUEST", "too-large", "macOS app exec host request is 260386 bytes (limit 256000)"],
+  ] as const)("reports companion %s failures without a local run", async (code, reason, text) => {
+    const message = `${code}: ${text}`;
     const result = await runMac({
-      runViaResponse: {
-        ok: false,
-        error: {
-          code: "TIMEOUT",
-          reason: "timeout",
-          message: "TIMEOUT: macOS app exec host response timed out; execution outcome is unknown",
-        },
-      },
+      runViaResponse: { ok: false, error: { code, reason, message } },
     });
 
-    expectExecDeniedEvent(result.sendNodeEvent, "timeout");
+    expectExecDeniedEvent(result.sendNodeEvent, reason);
     expect(invokeResult(result.sendInvokeResult)).toMatchObject({
       ok: false,
-      error: {
-        code: "TIMEOUT",
-        message: "TIMEOUT: macOS app exec host response timed out; execution outcome is unknown",
-      },
+      error: { code, message },
     });
     expect(result.runCommand).not.toHaveBeenCalled();
   });

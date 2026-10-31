@@ -26,4 +26,23 @@ describe("requestExecHostViaSocket", () => {
       connect.mockRestore();
     }
   });
+
+  it("refuses a request the macOS app cannot read before opening a socket", async () => {
+    const connect = vi.spyOn(net.Socket.prototype, "connect");
+    try {
+      // 130k two-byte characters stay under the limit in UTF-16 units but not in UTF-8 bytes.
+      const response = await requestExecHostViaSocket({
+        socketPath: "/tmp/socket",
+        token: "secret",
+        request: { command: ["/bin/sh", "-c", `echo ${"é".repeat(130_000)}`] },
+      });
+      expect(response).toMatchObject({
+        ok: false,
+        error: { code: "INVALID_REQUEST", reason: "too-large" },
+      });
+      expect(connect).not.toHaveBeenCalled();
+    } finally {
+      connect.mockRestore();
+    }
+  });
 });
