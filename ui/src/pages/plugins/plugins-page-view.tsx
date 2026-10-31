@@ -104,7 +104,8 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     return staticAsk ? () => void staticAsk() : undefined;
   });
   const configState = () => page().context.runtimeConfig.state;
-  const configAnalysis = createMemo(() => analyzeConfigSchema(configState().configSchema));
+  const rawConfigSchema = createMemo(() => configState().configSchema);
+  const configAnalysis = createMemo(() => analyzeConfigSchema(rawConfigSchema()));
   const detailPluginId = () => page().state.detail?.pluginId;
   const catalogId = () => page().state.catalogDetail?.id ?? "";
   const catalogInstallable = createMemo(() => {
@@ -211,7 +212,12 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
           "operator.admin",
         )}
         onMcpLogin={(serverName) => void page().mcpLogin.start(serverName)}
-        onEditMcp={() => page().context.navigate("mcp")}
+        canMcpLogout={canCallGatewayMethod(
+          page().gateway.snapshot,
+          "mcp.authLogout",
+          "operator.admin",
+        )}
+        onMcpLogout={(serverName) => void page().mcpLogin.signOut(serverName)}
         catalog={page().state.detail?.catalog}
         inspectionRead={page().inspectionRead}
         catalogLoading={page().state.detail?.catalogLoading}

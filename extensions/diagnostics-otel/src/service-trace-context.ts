@@ -4,36 +4,7 @@ import type {
   DiagnosticEventPayload,
   DiagnosticTraceContext,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import {
-  isValidDiagnosticSpanId,
-  isValidDiagnosticTraceFlags,
-  isValidDiagnosticTraceId,
-} from "openclaw/plugin-sdk/diagnostic-runtime";
-
-export function normalizeTraceContext(value: unknown): DiagnosticTraceContext | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const candidate = value as Partial<DiagnosticTraceContext>;
-  if (!isValidDiagnosticTraceId(candidate.traceId)) {
-    return undefined;
-  }
-  if (candidate.spanId !== undefined && !isValidDiagnosticSpanId(candidate.spanId)) {
-    return undefined;
-  }
-  if (candidate.parentSpanId !== undefined && !isValidDiagnosticSpanId(candidate.parentSpanId)) {
-    return undefined;
-  }
-  if (candidate.traceFlags !== undefined && !isValidDiagnosticTraceFlags(candidate.traceFlags)) {
-    return undefined;
-  }
-  return {
-    traceId: candidate.traceId,
-    ...(candidate.spanId ? { spanId: candidate.spanId } : {}),
-    ...(candidate.parentSpanId ? { parentSpanId: candidate.parentSpanId } : {}),
-    ...(candidate.traceFlags ? { traceFlags: candidate.traceFlags } : {}),
-  };
-}
+import { normalizeDiagnosticTraceContext } from "openclaw/plugin-sdk/diagnostic-runtime";
 
 function traceFlagsToOtel(traceFlags: string | undefined): TraceFlags {
   const parsed = Number.parseInt(traceFlags ?? "00", 16);
@@ -57,6 +28,6 @@ export function normalizedTrustedTraceContext(
   metadata: DiagnosticEventMetadata,
 ): DiagnosticTraceContext | undefined {
   return metadata.trusted || metadata.trustedTraceContext === true
-    ? normalizeTraceContext(evt.trace)
+    ? normalizeDiagnosticTraceContext(evt.trace)
     : undefined;
 }

@@ -96,10 +96,7 @@ export function resolveFollowupAuthorizationKey(run: FollowupRun): string {
   ]);
 }
 
-/** Storage grouping is policy-independent; drain prepares current screen/theme authority. */
-export function resolveFollowupDeliveryStorageKey(run: FollowupRun): string {
-  const execution = run.run;
-  const provenance = execution.inputProvenance;
+export function resolveFollowupReplyDeliveryKey(run: FollowupRun): string {
   return JSON.stringify([
     channelRouteDedupeKey({
       channel: run.originatingChannel,
@@ -107,13 +104,22 @@ export function resolveFollowupDeliveryStorageKey(run: FollowupRun): string {
       accountId: run.originatingAccountId,
       threadId: run.originatingThreadId,
     }),
+    resolveFollowupReplyAnchor(run) ?? "",
+    run.originatingReplyToMode ?? "",
+    normalizeChatType(run.originatingChatType) ?? "",
+  ]);
+}
+
+/** Storage grouping is policy-independent; drain prepares current screen/theme authority. */
+export function resolveFollowupDeliveryStorageKey(run: FollowupRun): string {
+  const execution = run.run;
+  const provenance = execution.inputProvenance;
+  return JSON.stringify([
+    resolveFollowupReplyDeliveryKey(run),
     hasPreparedCurrentTurnImages(run),
     // Approved sources skip the write hook; never carry unstaged input past it.
     Boolean(run.userTurnTranscriptRecorder?.getPendingInputMessage?.()),
     run.originatingChatId ?? "",
-    resolveFollowupReplyAnchor(run) ?? "",
-    run.originatingReplyToMode ?? "",
-    normalizeChatType(run.originatingChatType) ?? "",
     resolveFollowupAuthorizationKey(run),
     run.turnAdoptionLifecycle?.ownerKey ?? "",
     normalizeOptionalString(execution.runtimePolicySessionKey ?? execution.sessionKey) ?? "",

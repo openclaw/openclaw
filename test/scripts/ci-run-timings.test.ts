@@ -10,6 +10,7 @@ import {
   parseRunTimingArgs,
   selectLatestMainPushCiRun,
   summarizeRunTimings,
+  summarizeTrendTimings,
 } from "../../scripts/ci-run-timings.mjs";
 
 const timestamp = (time: string) => `2026-04-22T${time}Z`;
@@ -65,6 +66,42 @@ describe("scripts/ci-run-timings.mjs", () => {
       ["queued", 50],
       ["slow", 20],
     ]);
+  });
+
+  it.each([
+    {
+      values: [20, ...Array.from({ length: 19 }, (_, index) => index + 1)],
+      ranks: [10, 18, 19, 20],
+    },
+    { values: [0], ranks: [0, 0, 0, 0] },
+    { values: [], ranks: [null, null, null, null] },
+  ])("summarizes unsorted timing samples without changing inputs: $values", ({ values, ranks }) => {
+    const jobs = values.map((seconds) => ({
+      ...timingJob("checks", "10:00:00", "10:00:00"),
+      completedAt: new Date(Date.parse(timestamp("10:00:00")) + seconds * 1000).toISOString(),
+    }));
+    const runs = [{ ...completedRun, runAttempt: 1, jobs: [...jobs, { name: "no timestamps" }] }];
+    const before = structuredClone(runs);
+    const report = summarizeTrendTimings(runs, {
+      generatedAtMs: Date.parse(timestamp("11:00:00")),
+      compareDurationMs: 60 * 60 * 1000,
+      trendDurationMs: 24 * 60 * 60 * 1000,
+    });
+    expect(report.cohorts.baseline.jobMetrics.executionSeconds).toEqual({
+      count: values.length,
+      p50: ranks[0],
+      p90: ranks[1],
+      p95: ranks[2],
+      max: ranks[3],
+    });
+    expect(report.cohorts.prior.jobMetrics.executionSeconds).toEqual({
+      count: 0,
+      p50: null,
+      p90: null,
+      p95: null,
+      max: null,
+    });
+    expect(runs).toEqual(before);
   });
 
   it("rejects empty CI job payloads instead of printing empty timing evidence", () => {
@@ -199,6 +236,9 @@ if (args[0] === "run" && args[1] === "list") {
       });
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout.match(/CI run \d+/gu)).toEqual(["CI run 204", "CI run 205"]);
+      expect(
+        result.stdout.match(/jobs=1 {2}avg=30s {2}p90=30s {2}p95=30s {2}max=30s/gu),
+      ).toHaveLength(2);
       const calls: string[][] = readFileSync(callsPath, "utf8")
         .trim()
         .split("\n")

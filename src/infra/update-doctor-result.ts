@@ -184,6 +184,7 @@ export type DoctorConfigCapture = {
   configChanges: UpdateDoctorConfigChange[];
   configWriteRefusal?: UpdateDoctorConfigWriteRefusal;
   deferredInspectionCheckIds?: string[];
+  warnings?: string[];
 };
 /** Runs a policy check under Doctor's held maintenance owner and its open scope. */
 type DoctorPolicyCustodyOwner = { assertCurrent(policy: () => void): void };
@@ -362,6 +363,10 @@ const doctorConfigWrites = new AsyncLocalStorage<{
   capture: DoctorConfigCapture;
   authority?: UpdateDoctorWriteAuthority;
 }>();
+
+export function getUpdateDoctorConfigCapture(): DoctorConfigCapture | undefined {
+  return doctorConfigWrites.getStore()?.capture;
+}
 
 /** Deferral requires an owned result channel, not just an inherited marker. */
 export function recordUpdateDoctorDeferredInspectionChecks(

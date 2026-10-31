@@ -1512,11 +1512,14 @@ async function inventoryReady(
       .locator(".cron-table__row")
       .getByText("Warm automation 0000", { exact: true })
       .waitFor();
-    await page.waitForFunction(
-      () =>
-        document.querySelectorAll(".cron-table__row").length === 50 &&
-        document.querySelector(".cron-table")?.getAttribute("aria-busy") !== "true",
-    );
+    await page.waitForFunction(() => {
+      const row = document.querySelector(".cron-table__row");
+      const size = row?.getAttribute("aria-setsize");
+      return (
+        (size ? Number(size) : document.querySelectorAll(".cron-table__row").length) === 50 &&
+        document.querySelector(".cron-table")?.getAttribute("aria-busy") !== "true"
+      );
+    });
   }
 }
 
@@ -1565,15 +1568,28 @@ async function refreshSessions(page: Page, gateway: MockGatewayControls) {
   await frames(page);
 }
 
+// Inventory cardinality is independent of the number of materialized rows.
+// The fallback lets the same harness compare production bundles before windowing.
+export async function cronLoadedJobCount(page: Page) {
+  return page.evaluate(() => {
+    const size = document.querySelector(".cron-table__row")?.getAttribute("aria-setsize");
+    return size ? Number(size) : document.querySelectorAll(".cron-table__row").length;
+  });
+}
+
 async function prepareCron(page: Page) {
   await page.locator(".cron-table__row").first().waitFor();
   const more = page.getByRole("button", { name: "Load more", exact: true });
   for (let count = 100; count <= 500; count += 50) {
-    await more.click();
-    await page.waitForFunction(
-      (expected) => document.querySelectorAll(".cron-table__row").length === expected,
-      count,
-    );
+    // Measured rows can move the footer between pointer down and pointer up.
+    await more.press("Enter");
+    await page.waitForFunction((expected) => {
+      const row = document.querySelector(".cron-table__row");
+      const size = row?.getAttribute("aria-setsize");
+      return (
+        (size ? Number(size) : document.querySelectorAll(".cron-table__row").length) === expected
+      );
+    }, count);
   }
 }
 
@@ -2931,7 +2947,7 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       await frames(page);
       if (
         (await search.inputValue()) !== cronQuery ||
-        (await page.locator(".cron-table__row").count()) !== 500 ||
+        (await cronLoadedJobCount(page)) !== 500 ||
         (await page.locator(".cron-table").getAttribute("aria-busy")) !== "true" ||
         (await gateway.getRequests("cron.list")).length - before !== 1
       ) {
