@@ -65,7 +65,10 @@ const runtimeMocks = vi.hoisted(() => ({
   registerApnsRegistration: vi.fn(),
   updatePairedDevicePresence: vi.fn().mockResolvedValue(true),
   resolveSystemMainSessionTarget: vi.fn(() => ({ agentId: "ops", sessionKey: "agent:ops:main" })),
-  resolveChatAttachmentMaxBytes: vi.fn(() => 20 * 1024 * 1024),
+  resolveChatAttachmentLimits: vi.fn(() => ({
+    maxBytes: 20 * 1024 * 1024,
+    maxTotalBytes: 20 * 1024 * 1024,
+  })),
   resolveGatewayModelSupportsImages: vi.fn(
     async ({ loadGatewayModelCatalog, provider, model }: ImageSupportParams) => {
       if (!model) {
@@ -163,7 +166,7 @@ vi.mock("../media/store.js", async (importOriginal) => ({
 
 vi.mock("./chat-attachment-policy.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./chat-attachment-policy.js")>()),
-  resolveChatAttachmentMaxBytes: runtimeMocks.resolveChatAttachmentMaxBytes,
+  resolveChatAttachmentLimits: runtimeMocks.resolveChatAttachmentLimits,
 }));
 
 vi.mock("./chat-attachments.js", async (importOriginal) => ({

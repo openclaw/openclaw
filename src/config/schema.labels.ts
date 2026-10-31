@@ -298,6 +298,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.nodes.commands.deny": "Gateway Node Denylist",
   ...NODE_HOST_FIELD_LABELS,
   attachments: "Attachments",
+  "attachments.maxFileMb": "Maximum attachment size",
+  "attachments.maxTotalMb": "Maximum total attachment size per message",
   "attachments.ttlHours": "Attachment Retention TTL (hours)",
   bindings: "Bindings",
   "bindings[].type": "Binding Type",

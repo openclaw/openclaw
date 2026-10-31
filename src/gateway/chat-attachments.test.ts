@@ -48,7 +48,10 @@ import {
   buildPersistedUserTurnMediaInputsFromFields,
   buildPersistedUserTurnMessage,
 } from "../sessions/user-turn-transcript.message.js";
-import { resolveChatAttachmentPolicy } from "./chat-attachment-policy.js";
+import {
+  resolveChatAttachmentLimits,
+  resolveChatAttachmentPolicy,
+} from "./chat-attachment-policy.js";
 import {
   type ChatAttachment,
   discardPreparedInboundMedia,
@@ -514,6 +517,80 @@ describe("parseMessageWithAttachments validation errors", () => {
 });
 
 describe("attachment validation", () => {
+  it.each([
+    ["image", PNG_1x1],
+    ["image with noncanonical padding", PNG_1x1.slice(0, -2) + "J="],
+    [
+      "worker image",
+      Buffer.concat([Buffer.from(PNG_1x1, "base64"), Buffer.alloc(200_000)]).toString("base64"),
+    ],
+    ["audio", Buffer.from([0xff, 0xfb, 0x90, 0x00]).toString("base64")],
+    ["video", GENERIC_MP4],
+  ])(
+    "retains mediaMaxMb for sniffed %s alongside the attachment limits",
+    async (_kind, content) => {
+      const bytes = Buffer.from(content, "base64").length;
+      const attachment = { type: "file", mimeType: "text/plain", fileName: "notes.txt", content };
+      const limits = (maxMediaBytes: number) =>
+        resolveChatAttachmentLimits({
+          agents: { defaults: { mediaMaxMb: maxMediaBytes / 1048576 } },
+          attachments: { maxFileMb: 1, maxTotalMb: 2 },
+        });
+      await expect(
+        parseMessageWithAttachments("inspect", [attachment], limits(bytes - 1)),
+      ).rejects.toThrow(/media exceeds size limit/i);
+      expect(saveMediaBufferMock).not.toHaveBeenCalled();
+      const parsed = await parseMessageWithAttachments("inspect", [attachment], limits(bytes));
+      expect(parsed.images.length + parsed.offloadedRefs.length).toBe(1);
+    },
+  );
+
+  it("admits a document above the media cap while keeping the independent file cap", async () => {
+    const options = resolveChatAttachmentLimits({
+      agents: { defaults: { mediaMaxMb: 1 / 1048576 } },
+      attachments: { maxFileMb: 1, maxTotalMb: 2 },
+    });
+    const parsed = await parseMessageWithAttachments("read", [pdfAttachment()], options);
+    expect(parsed.offloadedRefs).toHaveLength(1);
+    await expect(
+      parseMessageWithAttachments("read", [pdfAttachment()], { ...options, maxBytes: 1 }),
+    ).rejects.toThrow(/exceeds size limit/i);
+  });
+
+  it("rejects a mixed batch over its decoded total before preparing or storing files", async () => {
+    const imageBytes = Buffer.from(PNG_1x1, "base64").length;
+    const documentBytes = Buffer.from("%PDF-1.4\n").length;
+    const supportsImages = vi.fn(async () => true);
+    await expect(
+      parseMessageWithAttachments("compare", [pdfAttachment(), pngAttachment()], {
+        maxBytes: 1024,
+        maxTotalBytes: imageBytes + documentBytes - 1,
+        supportsImages,
+      }),
+    ).rejects.toThrow(/total attachment size exceeds.*bytes/i);
+    expect(supportsImages).not.toHaveBeenCalled();
+    expect(saveMediaBufferMock).not.toHaveBeenCalled();
+  });
+
+  it("admits the exact total and counts repeated data-URL attachments separately", async () => {
+    const content = "data:application/pdf;base64," + Buffer.from("%PDF-1.4\n").toString("base64");
+    const attachment = pdfAttachment({ content });
+    const bytes = Buffer.from("%PDF-1.4\n").length;
+    const parsed = await parseMessageWithAttachments("read", [attachment, attachment], {
+      maxBytes: bytes,
+      maxTotalBytes: bytes * 2,
+    });
+    expect(parsed.offloadedRefs).toHaveLength(2);
+    saveMediaBufferMock.mockClear();
+    await expect(
+      parseMessageWithAttachments("read", [attachment, attachment], {
+        maxBytes: bytes,
+        maxTotalBytes: bytes * 2 - 1,
+      }),
+    ).rejects.toThrow(/total attachment size exceeds/i);
+    expect(saveMediaBufferMock).not.toHaveBeenCalled();
+  });
+
   it("reports compute saturation as retryable without writing media", async () => {
     const capacity = getWorkerComputeCapacity();
     expect(capacity.admit(DEFAULT_WORKER_PENDING_BYTES)).toBe(true);

@@ -1356,3 +1356,13 @@ against the current SQLite owners before the import can rename profiles.
 
   </Accordion>
 </AccordionGroup>
+
+## Separate chat attachment limits
+
+Doctor preserves an explicit `agents.defaults.mediaMaxMb` inherited file cap in
+`attachments.maxFileMb` when the latter is absent, retaining the media setting,
+explicit attachment settings, and `ttlHours`. It preserves the old whole-byte
+clamp for sub-byte or very large legacy values. Run `openclaw doctor --fix` when
+upgrading; runtime document admission reads only the canonical attachment keys.
+When authoring independent media settings, also set the intended attachment
+file limit so a later Doctor run does not infer the old shared policy.

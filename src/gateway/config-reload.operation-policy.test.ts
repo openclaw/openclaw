@@ -64,6 +64,8 @@ describe("Gateway operation policy reload", () => {
     "diagnostics.cacheTrace.enabled",
     "acp.runtime.installCommand",
     "attachments.ttlHours",
+    "attachments.maxFileMb",
+    "attachments.maxTotalMb",
     "update.checkOnStart",
     "update.channel",
     "update.auto.enabled",

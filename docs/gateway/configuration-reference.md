@@ -238,3 +238,16 @@ Moved to [Configuration — environment, secrets, and includes](/gateway/config-
 - [Doctor](/gateway/doctor)
 - [Cloud Workers](/gateway/cloud-workers) — the feature these worker settings configure
 - [`openclaw configure`](/cli/configure) — interactive prompts that edit these settings without hand-editing the file
+
+## Incoming chat attachment sizes
+
+`attachments.maxFileMb` limits each decoded file (default: 20 MiB).
+`attachments.maxTotalMb` limits the combined decoded file bytes per message
+(default: the larger of 20 MiB and the file limit). Media and documents both
+count; encoded transport and model limits still apply. These settings do not
+change channel uploads, outgoing files, terminal transfers, or retention.
+The existing `agents.defaults.mediaMaxMb` remains an additional limit for
+incoming images, audio, and video only; PDFs and other documents use the
+attachment limits instead.
+See [Chat attachment limits](/specs/chat-attachment-limits) for migration, scope,
+and the separate WebSocket ceiling.

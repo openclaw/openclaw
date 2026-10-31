@@ -1,3 +1,4 @@
+import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { MAX_IMAGE_BYTES, type MediaKind } from "@openclaw/media-core/constants";
 import { extensionForMime, kindFromMime, normalizeMimeType } from "@openclaw/media-core/mime";
 import type { Static } from "typebox";
@@ -289,6 +290,8 @@ export async function parseMessageWithAttachments(
   attachments: ChatAttachment[] | undefined,
   opts?: {
     maxBytes?: number;
+    maxTotalBytes?: number;
+    maxMediaBytes?: number;
     log?: AttachmentLog;
     supportsImages?: boolean | (() => Promise<boolean>);
     supportsInlineImages?: boolean;
@@ -306,6 +309,8 @@ export async function parseMessageWithAttachments(
   offloadedRefs: OffloadedRef[];
 }> {
   const maxBytes = opts?.maxBytes ?? DEFAULT_CHAT_ATTACHMENT_MAX_BYTES;
+  const maxTotalBytes =
+    opts?.maxTotalBytes ?? Math.max(DEFAULT_CHAT_ATTACHMENT_MAX_BYTES, maxBytes);
   const log = opts?.log;
   const supportsInlineImages = opts?.supportsInlineImages !== false;
   const acceptNonImage = opts?.acceptNonImage !== false;
@@ -340,18 +345,33 @@ export async function parseMessageWithAttachments(
 
   try {
     opts?.assertCurrent?.();
-    for (const [idx, att] of attachments.entries()) {
-      if (!att) {
-        continue;
+    const normalized = attachments.flatMap((att, idx) =>
+      att ? [{ att, idx, ...normalizeAttachment(att, idx) }] : [],
+    );
+    // Count the whole submitted batch before decoding, probing or persisting.
+    // Files omitted later by a model/count policy still consumed ingress.
+    let remainingBytes = maxTotalBytes;
+    for (const { base64, label } of normalized) {
+      const size = estimateBase64DecodedBytes(base64);
+      if (size > remainingBytes) {
+        throw new Error(
+          `attachment ${label}: total attachment size exceeds message limit (${maxTotalBytes} bytes); remove files or raise attachments.maxTotalMb`,
+        );
       }
-
-      const { base64: b64, label, mime } = normalizeAttachment(att, idx);
-
+      remainingBytes -= size;
+    }
+    for (const { att, idx, base64: b64, label, mime } of normalized) {
       if (b64.length === 0) {
         throw new UnsupportedAttachmentError("empty-payload", `attachment ${label}: empty payload`);
       }
       const prepared = await prepareMediaAttachment(
-        { base64: b64, label, mime, imageStorage: opts?.imageStorage },
+        {
+          base64: b64,
+          label,
+          mime,
+          imageStorage: opts?.imageStorage,
+          maxMediaBytes: opts?.maxMediaBytes,
+        },
         maxBytes,
         opts?.signal,
       );

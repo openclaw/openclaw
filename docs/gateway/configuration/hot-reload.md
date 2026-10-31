@@ -523,3 +523,9 @@ That keeps hot-reload decisions (hot-apply vs restart) predictable even when a
 single top-level section lives in its own included file such as
 `plugins: { $include: "./plugins.json5" }`. Reload planning stops if the
 source layout is ambiguous.
+
+Changes to `attachments.maxFileMb` and `attachments.maxTotalMb` apply to subsequent
+Gateway chat requests without restarting channel runtimes or the Gateway.
+Connected clients still need a reconnect to refresh the advertised attachment
+policy. The existing `agents.defaults.mediaMaxMb` channel-restart behavior remains
+for its media consumers.

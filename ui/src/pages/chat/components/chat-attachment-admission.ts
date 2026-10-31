@@ -16,6 +16,7 @@ registerChatComposerEnglish();
 export type ChatAttachmentLimits = {
   maxBytes: number;
   maxImageBytes: number;
+  maxMediaBytes?: number;
   maxBatchBytes: number;
 };
 
@@ -33,7 +34,10 @@ export function resolveChatAttachmentLimits(
   if (!limits) {
     limits = {
       ...policy.attachments,
-      maxBatchBytes: resolveChatAttachmentFrameBudgetBytes(policy.maxPayload ?? Infinity),
+      maxBatchBytes: Math.min(
+        policy.attachments.maxTotalBytes ?? Infinity,
+        resolveChatAttachmentFrameBudgetBytes(policy.maxPayload ?? Infinity),
+      ),
     };
     limitsByPolicy.set(policy, limits);
   }
@@ -96,8 +100,16 @@ export function attachmentReservationBytes(
   limits: ChatAttachmentLimits | undefined,
   availableBytes = Infinity,
 ): number {
-  const ceiling = mimeType.startsWith("image/") ? limits?.maxImageBytes : limits?.maxBytes;
+  const ceiling = attachmentFileCeiling(mimeType, limits);
   return Math.max(0, Math.min(sizeBytes, ceiling ?? Infinity, availableBytes));
+}
+
+function attachmentFileCeiling(mimeType: string, limits: ChatAttachmentLimits | undefined) {
+  const ceiling = mimeType.startsWith("image/") ? limits?.maxImageBytes : limits?.maxBytes;
+  const kind = mimeType.split("/", 1)[0]?.toLowerCase();
+  return kind === "image" || kind === "audio" || kind === "video"
+    ? Math.min(ceiling ?? Infinity, limits?.maxMediaBytes ?? Infinity)
+    : ceiling;
 }
 
 function attachmentBytes(attachment: ChatAttachment): number {
@@ -127,9 +139,7 @@ export function attachmentBatchRejection(
   let total = 0;
   const oversized = attachments.filter((attachment) => {
     const size = attachmentBytes(attachment);
-    const ceiling = attachment.mimeType.startsWith("image/")
-      ? limits.maxImageBytes
-      : limits.maxBytes;
+    const ceiling = attachmentFileCeiling(attachment.mimeType, limits) ?? limits.maxBytes;
     if (size > ceiling || total + size > limits.maxBatchBytes) {
       return true;
     }

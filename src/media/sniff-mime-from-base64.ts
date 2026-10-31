@@ -12,7 +12,10 @@ export async function sniffMimeFromBase64(
   > = {},
 ): Promise<string | undefined> {
   const facts = typeof base64 === "string" ? inspectBase64(base64, "canonical") : base64;
-  if (!facts?.canonicalPadBits) {
+  // Prepared attachment facts have already passed their dialect's validation.
+  // Nonzero unused pad bits do not change decoded bytes or their media type.
+  // Raw-string callers still require the canonical dialect.
+  if (!facts || (typeof base64 === "string" && !facts.canonicalPadBits)) {
     return undefined;
   }
 

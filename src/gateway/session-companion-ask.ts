@@ -19,7 +19,7 @@ import type { Message, ImageContent } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { resolveChatAttachmentMaxBytes } from "./chat-attachment-policy.js";
+import { resolveChatAttachmentLimits } from "./chat-attachment-policy.js";
 import { parseMessageWithAttachments, type ChatAttachment } from "./chat-attachments.js";
 import type { SessionCompanionContextReader } from "./session-companion-context.js";
 import { SessionCompanionAskError } from "./session-companion-errors.js";
@@ -543,7 +543,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
         now: admittedAt,
       });
       const input = await parseMessageWithAttachments(question, request.attachments, {
-        maxBytes: resolveChatAttachmentMaxBytes(cfg),
+        ...resolveChatAttachmentLimits(cfg),
         acceptNonImage: false,
         imageStorage: "inline",
         signal: controller.signal,

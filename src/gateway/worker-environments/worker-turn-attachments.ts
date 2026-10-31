@@ -8,7 +8,7 @@ import { readPersistedMediaFacts } from "../../media/media-facts.js";
 import { resolveInboundMediaReference } from "../../media/media-reference.js";
 import { readMediaBuffer } from "../../media/store.js";
 import { NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES } from "../../worker/node-workspace-protocol.js";
-import { resolveChatAttachmentMaxBytes } from "../chat-attachment-policy.js";
+import { resolveChatAttachmentLimits } from "../chat-attachment-policy.js";
 import { MAX_PAYLOAD_BYTES } from "../payload-limits.js";
 import type { WorkerWorkspaceTunnelHandle } from "./tunnel-contract.js";
 import {
@@ -112,8 +112,8 @@ export async function prepareWorkerTurnAttachments(params: {
     heldFacts ?? (message ? readPersistedMediaFacts(message) : undefined) ?? turn.media ?? [];
   const files: Array<{ name: string; buffer: Buffer }> = [];
   const seen = new Set<string>();
-  let remainingBytes = MAX_PAYLOAD_BYTES;
-  const maxBytes = resolveChatAttachmentMaxBytes(turn.config ?? {});
+  const { maxBytes, maxTotalBytes } = resolveChatAttachmentLimits(turn.config ?? {});
+  let remainingBytes = Math.min(MAX_PAYLOAD_BYTES, maxTotalBytes);
   for (const fact of facts) {
     const sources = [fact.url, fact.path];
     let reference: Awaited<ReturnType<typeof resolveInboundMediaReference>> = null;

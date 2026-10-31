@@ -22,8 +22,15 @@ export function attachmentConfig(
     mode = "all",
     sandboxRoot = "sandboxes",
     mediaMaxMb,
+    maxFileMb,
     global = false,
-  }: { mode?: "off" | "all"; sandboxRoot?: string; mediaMaxMb?: number; global?: boolean } = {},
+  }: {
+    mode?: "off" | "all";
+    sandboxRoot?: string;
+    mediaMaxMb?: number;
+    maxFileMb?: number;
+    global?: boolean;
+  } = {},
 ): OpenClawConfig {
   return {
     agents: {
@@ -43,6 +50,7 @@ export function attachmentConfig(
       },
     },
     ...(global ? { session: { scope: "global" } } : {}),
+    ...(maxFileMb === undefined ? {} : { attachments: { maxFileMb } }),
   };
 }
 

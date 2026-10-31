@@ -41,6 +41,7 @@ import {
   prepareAttachmentFixture,
 } from "./chat-send-attachments.test-support.js";
 import { prepareAndAdmitChatSend } from "./chat-send-setup.js";
+import { expectRpcError } from "./rpc-response.test-support.js";
 import type { RespondFn } from "./types.js";
 
 const it = test.extend<{ state: OpenClawTestState }>({
@@ -90,8 +91,25 @@ async function unexpectedWorkspaceAccess(): Promise<never> {
   throw new Error("unexpected workspace access");
 }
 
-it("stages a non-PDF upload above 50 MiB when mediaMaxMb admits it", async ({ state }) => {
-  const cfg = attachmentConfig(state, { mediaMaxMb: 51 });
+it("rejects a configured total before chat upload acceptance", async ({ state }) => {
+  const cfg = attachmentConfig(state, { mode: "off" });
+  cfg.attachments = { maxFileMb: 9 / 1048576, maxTotalMb: 17 / 1048576 };
+  const params = attachmentParams("total-rejection", "first.pdf", "%PDF-1.4\n");
+  params.attachments.push({ ...params.attachments[0]!, fileName: "second.pdf" });
+  const upload = await createUpload(state, cfg, params);
+  try {
+    expect(await upload.prepare()).toEqual({ ok: false });
+    expectRpcError(upload.respond, {
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("total attachment size exceeds message limit"),
+    });
+  } finally {
+    await upload.cleanup();
+  }
+});
+
+it("stages a document above 50 MiB independently of a small media budget", async ({ state }) => {
+  const cfg = attachmentConfig(state, { maxFileMb: 51, mediaMaxMb: 1 });
   const size = 50 * 1024 * 1024 + 1;
   const { result, respond } = await prepareAttachmentFixture({
     params: attachmentParams("large-upload", "large.txt", Buffer.alloc(size, "x")),

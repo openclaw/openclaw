@@ -6,7 +6,7 @@ import { readPersistedMediaFacts, type MediaFact } from "../../media/media-facts
 import { retainsUserTurnTranscriptMedia } from "../../sessions/user-turn-transcript-media.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { DEVICE_FOLDER_ATTACHMENTS_UNSUPPORTED } from "../../worker/node-workspace-protocol.js";
-import { resolveChatAttachmentMaxBytes } from "../chat-attachment-policy.js";
+import { resolveChatAttachmentLimits } from "../chat-attachment-policy.js";
 import {
   discardPreparedInboundMedia,
   MediaOffloadError,
@@ -92,7 +92,7 @@ export async function prepareChatSendAttachments(params: {
             return imageSupport.value;
           };
           const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
-            maxBytes: resolveChatAttachmentMaxBytes(cfg),
+            ...resolveChatAttachmentLimits(cfg),
             log: context.logGateway,
             supportsImages: imageSupport.value ?? resolveSupportsImages,
             acceptNonImage: true,

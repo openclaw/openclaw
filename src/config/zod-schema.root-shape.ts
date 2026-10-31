@@ -374,6 +374,16 @@ export const OpenClawSchemaShape = {
   broadcast: BroadcastSchema,
   attachments: z
     .strictObject({
+      maxFileMb: z
+        .number()
+        .min(1 / (1024 * 1024))
+        .max(Number.MAX_SAFE_INTEGER / (1024 * 1024))
+        .optional(),
+      maxTotalMb: z
+        .number()
+        .min(1 / (1024 * 1024))
+        .max(Number.MAX_SAFE_INTEGER / (1024 * 1024))
+        .optional(),
       ttlHours: z
         .number()
         .int()

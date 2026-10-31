@@ -151,17 +151,22 @@ or the Control UI is disabled. It contains no credentials and grants no access.
 the decoded-size ceilings chat attachments face on `chat.send`, `sessions.send`,
 and session-creation initial turns:
 
-| Field           | Meaning                                                                                             |
-| --------------- | --------------------------------------------------------------------------------------------------- |
-| `maxBytes`      | Largest decoded size accepted for a single attachment (`agents.defaults.mediaMaxMb`, default 20 MB) |
-| `maxImageBytes` | Largest decoded size accepted for a single image: `min(maxBytes, 6 MB agent-hydration cap)`         |
+| Field           | Meaning                                                                                                                                              |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `maxBytes`      | Largest decoded size accepted for a single attachment (`attachments.maxFileMb`, default 20 MiB), also bounded by the message-total and frame budgets |
+| `maxImageBytes` | Largest decoded size accepted for a single image: `min(maxBytes, 6 MB agent-hydration cap)`                                                          |
+
+`maxTotalBytes`, when present, is the largest combined decoded attachment size for one message. It comes from `attachments.maxTotalMb` (default: the larger of 20 MiB and the configured file limit), clamped to the frame budget. All file types and repeated entries count.
 
 Validating before send:
 
 1. Check each file's decoded size against `maxImageBytes` for images and
-   `maxBytes` for everything else.
-2. Serialize the whole request and check its encoded size against
-   `policy.maxPayload`. `policy.attachments` is a per-attachment ceiling, never a
+   `maxBytes` for everything else. When `maxMediaBytes` is advertised, images,
+   audio, and video also respect that media-only ceiling from
+   `agents.defaults.mediaMaxMb`. Documents do not. `maxImageBytes` already
+   includes the media cap and the image-hydration cap.
+2. Sum decoded file sizes and check `maxTotalBytes` when advertised. Serialize the whole request and check its encoded size against
+   `policy.maxPayload`. Attachment ceilings are never a
    promise the frame fits: attachments travel as base64, so a 20 MB file is about
    26.7 MB on the wire and exceeds the default 25 MiB frame limit on its own.
 3. Treat the server as authoritative for everything else. Accepted MIME types and
@@ -170,7 +175,7 @@ Validating before send:
    return a typed rejection, while text-only model runs can omit additional
    images after their offload cap and still complete the request.
 4. Re-read the values on every reconnect. They are a connection-time snapshot, so
-   a live `mediaMaxMb` edit reaches existing connections only after they reconnect.
+   a live attachment-size edit reaches existing connections only after they reconnect.
 
 `pluginSurfaceUrls` is optional and maps plugin surface names (e.g.
 `canvas`) to scoped hosted URLs; it may expire, so nodes call
