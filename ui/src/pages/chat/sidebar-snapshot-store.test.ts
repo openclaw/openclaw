@@ -131,6 +131,24 @@ it("decodes only the requested profile while bounding all retained envelopes", a
   expect(await read(store, otherProfile)).toEqual(model);
 });
 
+it("writes each changed presentation once across independent tab stores", async () => {
+  let now = 1000;
+  vi.spyOn(Date, "now").mockImplementation(() => now);
+  const first = createStore();
+  const peer = createStore();
+  const put = vi.spyOn(IDBObjectStore.prototype, "put");
+  await Promise.all([write(first), write(peer)]);
+  const changed = { rows: ["Retained conversation"] };
+  await Promise.all([write(peer, changed), write(first, changed)]);
+  expect(
+    put.mock.calls.filter((_, index) => put.mock.instances[index]?.name === SIDEBAR),
+  ).toHaveLength(2);
+  expect(await read(peer)).toEqual(changed);
+  now += 31 * 24 * 60 * 60 * 1000;
+  expect(await write(first, changed)).toBe(true);
+  expect(await read(peer)).toEqual(changed);
+});
+
 it.each([1, 2, 3])(
   "retires an incompatible sidebar version %i without evicting valid caches",
   async (projectionVersion) => {
@@ -291,8 +309,8 @@ it("keeps the sidebar and unrelated chats when a deleted session is pruned from 
   await deleteStoredChatSnapshot(sessionKey);
   const restored = await store.readSidebar(key(scope), parseSidebarSnapshot);
   assert(restored, "deleting one session must retain the sidebar");
-  expect(restored.pages.map(({ key }) => key)).toEqual([retained.key]);
-  expect(restored.pinnedSessions.map(({ key }) => key)).toEqual([retained.key]);
+  expect(restored.pages.map((row) => row.key)).toEqual([retained.key]);
+  expect(restored.pinnedSessions.map((row) => row.key)).toEqual([retained.key]);
   expect(restored.pinnedSessions[0]?.children).toEqual([]);
   expect(restored.entries).toEqual([`session:${retained.key}`, "route:usage"]);
   expect(await store.readSidebar(key(otherAccount), parseSidebarSnapshot)).toEqual(saved);

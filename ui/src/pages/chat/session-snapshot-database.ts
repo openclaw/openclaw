@@ -1,8 +1,14 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
+import {
+  parseSidebarSnapshot,
+  removeSidebarSnapshotSession,
+} from "../../components/sidebar-snapshot-data.ts";
 import { requestResult, transactionComplete } from "../../lib/chat/control-ui-database.runtime.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import {
   sidebarSnapshotInvalidationMatches,
+  sidebarSnapshotDeletedSessionKey,
   type SessionSnapshotInvalidationReason,
   type SnapshotInvalidation,
 } from "./session-snapshot-invalidation-events.ts";
@@ -191,8 +197,44 @@ export async function deleteSessionSnapshotEntries(
       void transactionComplete(transaction).then(resolve, reject);
       for (const name of names) {
         const store = transaction.objectStore(name);
+        if (name === SIDEBAR_SNAPSHOT_STORE_NAME && reason === "cache-eviction") {
+          continue;
+        }
         if (!byPrefix && name !== SIDEBAR_SNAPSHOT_STORE_NAME) {
           store.delete(key);
+          continue;
+        }
+        if (!byPrefix) {
+          const request = store.openCursor();
+          request.onsuccess = () => {
+            const cursor = request.result;
+            if (!cursor) {
+              return;
+            }
+            const deletedSession =
+              typeof cursor.primaryKey === "string"
+                ? sidebarSnapshotDeletedSessionKey(cursor.primaryKey, invalidation)
+                : undefined;
+            if (deletedSession) {
+              const record = asOptionalRecord(cursor.value);
+              const model = parseSidebarSnapshot(record?.model);
+              if (!model) {
+                cursor.delete();
+              } else {
+                const next = removeSidebarSnapshotSession(model, deletedSession);
+                if (next !== model) {
+                  cursor.update({ ...record, model: next });
+                }
+              }
+            }
+            if (
+              typeof cursor.primaryKey === "string" &&
+              sidebarSnapshotInvalidationMatches(cursor.primaryKey, invalidation)
+            ) {
+              cursor.delete();
+            }
+            cursor.continue();
+          };
           continue;
         }
         const request = store.openKeyCursor();
@@ -201,12 +243,7 @@ export async function deleteSessionSnapshotEntries(
           if (!cursor) {
             return;
           }
-          if (
-            typeof cursor.primaryKey === "string" &&
-            (name === SIDEBAR_SNAPSHOT_STORE_NAME
-              ? sidebarSnapshotInvalidationMatches(cursor.primaryKey, invalidation)
-              : cursor.primaryKey.startsWith(key))
-          ) {
+          if (typeof cursor.primaryKey === "string" && cursor.primaryKey.startsWith(key)) {
             store.delete(cursor.primaryKey);
           }
           cursor.continue();

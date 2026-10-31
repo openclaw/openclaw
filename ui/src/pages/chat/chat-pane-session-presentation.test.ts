@@ -101,7 +101,9 @@ describe("chat pane session presentation", () => {
     observeChatCache(f.state.chatMessagesBySession, store);
     const invalidations: string[] = [];
     const stop = subscribeSnapshotInvalidation(({ sessionKey }) => {
-      if (sessionKey) invalidations.push(sessionKey);
+      if (sessionKey) {
+        invalidations.push(sessionKey);
+      }
     });
     onTestFinished(async () => {
       stop();
@@ -112,7 +114,9 @@ describe("chat pane session presentation", () => {
       ...f.publication,
       deletedSessions: [{ key: f.foreign.key, retireBeforeRevision: 1 }],
     };
-    for (let index = 0; index < 20; index += 1) f.publish({ ...next });
+    for (let index = 0; index < 20; index += 1) {
+      f.publish({ ...next });
+    }
     expect(invalidations).toEqual([]);
   });
   it("uses create metadata only until the title owner has a session row", () => {

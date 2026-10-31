@@ -131,7 +131,8 @@ export function captureSidebarSnapshotModel(
       mainKey: agents.mainKey,
       scope: agents.scope,
     },
-    roster: bootRoster,
+    // The read receipt is not a display change.
+    roster: { ...bootRoster, result: { ...bootRoster.result, ts: 0 } },
     mode: host.sidebarAgentsMode,
     grouping: host.effectiveSessionsGrouping(),
     navigationView: host.navigationView,
@@ -152,7 +153,10 @@ export function captureSidebarSnapshotModel(
     ),
     entries: zone.sidebarEntries.filter((value) => {
       const entry = parseSidebarEntry(value);
-      return entry?.type !== "session" || !isIncognitoSessionKey(entry.key);
+      return (
+        entry?.type !== "session" ||
+        (!isIncognitoSessionKey(entry.key) && !context.sessions.deletionState(entry.key))
+      );
     }),
     issuesCount: snapshotIssuesCount(context.sidebarAttention.entries),
     ...snapshotSections(sections, host.collapsedSessionSections, presentation),
