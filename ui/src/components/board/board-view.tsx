@@ -242,39 +242,27 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
             hidden={view().empty}
           >
             <For each={view().cells} keyed={(entry) => entry.key}>
-              {(entry) => (
-                <BoardWidgetCell
-                  widget={entry().options.widget}
-                  rect={entry().options.rect}
-                  contentHeightPx={entry().options.contentHeightPx}
-                  fitAutoContent={entry().options.fitAutoContent}
-                  pageChrome={entry().options.pageChrome}
-                  boardRevision={entry().options.boardRevision}
-                  tabs={entry().options.tabs}
-                  session={entry().options.session}
-                  sessionKey={entry().options.sessionKey}
-                  widgetFrameUrl={entry().options.widgetFrameUrl}
-                  callbacks={entry().options.callbacks}
-                  active={entry().options.active}
-                  bridgeEnabled={entry().options.bridgeEnabled}
-                  dragging={entry().options.dragging}
-                  focusTabIndex={entry().options.focusTabIndex}
-                  positionInSet={entry().options.positionInSet}
-                  setSize={entry().options.setSize}
-                  busy={entry().options.busy}
-                  canMutate={entry().options.canMutate}
-                  canGrant={entry().options.canGrant}
-                  loadingCovered={entry().options.loadingCovered}
-                  ref={(element) => {
-                    const current = entries.get(entry().key);
-                    if (current) {
-                      current.element = element;
-                    }
-                  }}
-                  hidden={!entry().present || !view().activeNames.has(entry().options.widget!.name)}
-                  inert={!entry().present || !view().activeNames.has(entry().options.widget!.name)}
-                />
-              )}
+              {(entry) => {
+                const cellRef = (element: NonNullable<CellEntry["element"]>) => {
+                  const current = entries.get(entry().key);
+                  if (current) {
+                    current.element = element;
+                  }
+                };
+                // One reactive object avoids retaining a getter for every field on every card.
+                return (
+                  <BoardWidgetCell
+                    {...{
+                      ...entry().options,
+                      ref: cellRef,
+                      hidden:
+                        !entry().present || !view().activeNames.has(entry().options.widget!.name),
+                      inert:
+                        !entry().present || !view().activeNames.has(entry().options.widget!.name),
+                    }}
+                  />
+                );
+              }}
             </For>
             <Show when={view().state.gesture.mode === "move"}>
               <div class="board-grid__append-zone" aria-hidden="true" />
