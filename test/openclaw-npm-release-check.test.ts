@@ -89,6 +89,7 @@ it("rejects private QA and local build artifacts while allowing runtime files", 
 
 it.each([
   ["dist/entry.js", "//#region extensions/qa-lab/src/cli.ts\n", "//#region extensions/qa-lab/"],
+  ["dist/entry.js", "// extensions/qa-lab/src/cli.ts\n", "// extensions/qa-lab/src/cli.ts"],
   [
     PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
     JSON.stringify(["dist/extensions/qa-lab/runtime-api.js"]),

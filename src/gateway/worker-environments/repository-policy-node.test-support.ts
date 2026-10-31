@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { onTestFinished } from "vitest";
+import { writeManagedGitHubProfileFiles } from "../../agents/github-tool-profile-files.js";
+import { resolveManagedGitHubProfileDir } from "../../agents/github-tool-profile-path.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -10,6 +12,25 @@ import type { WorkerEnvironmentStore } from "./store.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { requireWorkspaceResultGit } from "./workspace-result-git.js";
+
+/** Synthetic credentials in the native managed-profile file contract, shared by source and image proof. */
+export async function createManagedRepositoryProfile(params: {
+  agentId: string;
+  profileId: string;
+  stateDir: string;
+  token: string;
+}) {
+  const profileDir = resolveManagedGitHubProfileDir({
+    agentId: params.agentId,
+    scope: "system",
+    profileId: params.profileId,
+    env: { OPENCLAW_STATE_DIR: params.stateDir },
+  });
+  await writeManagedGitHubProfileFiles(profileDir, {
+    login: "managed-fixture",
+    token: params.token,
+  });
+}
 
 /** Unprepared node runtime and real HTTP transfer, with the durable environment owner. */
 export async function createRepositoryNodeFixture({

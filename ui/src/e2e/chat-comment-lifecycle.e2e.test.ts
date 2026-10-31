@@ -169,6 +169,7 @@ suite.define(() => {
           message: canonical,
         });
         await page.locator(`[data-entry-id="${canonicalId}"]`).waitFor();
+        await quote.scrollIntoViewIfNeeded();
         expect(await quote.isVisible()).toBe(true);
         expect(await inline.textContent()).toContain(comment);
         expect((await inline.boundingBox())?.height).toBe(before!.height);

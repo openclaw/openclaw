@@ -373,18 +373,22 @@ suite.define(() => {
         await expect
           .poll(async () => (await panel.boundingBox())!.width)
           .toBeLessThan(initialWidth);
-        const geometry = await thread.evaluate((element) => {
-          const outer = element.closest("openclaw-chat-subagents-panel")!.getBoundingClientRect();
-          const inner = element.getBoundingClientRect();
-          return {
-            left: inner.left - outer.left,
-            right: inner.right - outer.right,
-            overflow: element.scrollWidth - element.clientWidth,
-          };
-        });
-        expect(geometry.left).toBeGreaterThanOrEqual(-1);
-        expect(geometry.right).toBeLessThanOrEqual(1);
-        expect(geometry.overflow).toBeLessThanOrEqual(1);
+        // The transcript receives its narrowed width through ResizeObserver.
+        await expect
+          .poll(() =>
+            thread.evaluate((element) => {
+              const outer = element
+                .closest("openclaw-chat-subagents-panel")!
+                .getBoundingClientRect();
+              const inner = element.getBoundingClientRect();
+              return Math.max(
+                outer.left - inner.left,
+                inner.right - outer.right,
+                element.scrollWidth - element.clientWidth,
+              );
+            }),
+          )
+          .toBeLessThanOrEqual(1);
         const bounds = (await panel.boundingBox())!;
         await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
         await page.mouse.wheel(0, -2000);

@@ -26,7 +26,7 @@ export async function imageReserveEffectsFixture() {
       keyVersion: "fixture-v1",
     },
   };
-  const counts = { issued: 0, revoked: 0 };
+  const counts = { issued: 0, revoked: 0, verified: 0 };
   const hooks: { afterMetadata?: () => void } = {};
   const failures: string[] = [];
   const serve = async (request: http.IncomingMessage, response: http.ServerResponse) => {
@@ -59,7 +59,10 @@ export async function imageReserveEffectsFixture() {
       expect(authorization).toBe("Bearer " + TOKEN);
     }
     let value: unknown;
-    if (endpoint === "/app") {
+    if (endpoint === "/user") {
+      counts.verified++;
+      value = { id: 42, login: "managed-fixture" };
+    } else if (endpoint === "/app") {
       value = { id: 101, slug: "image-proof", permissions };
     } else if (endpoint === "/app/installations/202") {
       value = { id: 202, app_id: 101, account: { id: 303 }, suspended_at: null, permissions };

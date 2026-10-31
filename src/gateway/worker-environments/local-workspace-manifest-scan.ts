@@ -58,7 +58,7 @@ export type LocalWorkspaceBaselineDocument = {
 };
 
 export type LocalWorkspaceManifestAction =
-  | { kind: "scan"; target: "canonical" | "projection"; canonicalRoot: string }
+  | { kind: "scan" | "probe"; target: "canonical" | "projection"; canonicalRoot: string }
   | { kind: "materialize" }
   | { kind: "convert" }
   | { kind: "repair"; canonicalRoot: string }
@@ -552,26 +552,40 @@ export async function executeLocalWorkspaceManifestRead(
     previousTreeRoot ? previousFingerprints : null,
     scanStartedAtMs,
   );
-  await scanActualWorkspaceManifest({
-    root: action.target === "canonical" ? row.projection_path : action.canonicalRoot,
-    baseCommit: row.base_commit,
-    includePaths: action.target === "projection" ? canonicalPaths : undefined,
-    preserveDirectories,
-    buildCacheInputs: new Set(retained),
-    reuseFile: fingerprintScan.reuseFile,
-    onEntry(node, identity) {
-      seen.add(node.path);
-      const previous = records.get(node.path);
-      if (!sameEntry(previous?.node, node)) {
-        changes.push({ path: node.path, node });
-      }
-      if (identity !== undefined) {
-        fingerprintScan.observe(node.path, identity);
-      }
-    },
-  });
+  const changedDuringProbe = new Error("Workspace changed during reuse probe");
+  try {
+    await scanActualWorkspaceManifest({
+      root: action.target === "canonical" ? row.projection_path : action.canonicalRoot,
+      baseCommit: row.base_commit,
+      includePaths: action.target === "projection" ? canonicalPaths : undefined,
+      preserveDirectories,
+      buildCacheInputs: new Set(retained),
+      reuseFile: fingerprintScan.reuseFile,
+      onEntry(node, identity) {
+        seen.add(node.path);
+        const previous = records.get(node.path);
+        if (!sameEntry(previous?.node, node)) {
+          if (action.kind === "probe") {
+            throw changedDuringProbe;
+          }
+          changes.push({ path: node.path, node });
+        }
+        if (identity !== undefined) {
+          fingerprintScan.observe(node.path, identity);
+        }
+      },
+    });
+  } catch (error) {
+    if (error === changedDuringProbe) {
+      return { kind: "rescan" };
+    }
+    throw error;
+  }
   for (const entryPath of records.keys()) {
     if (entryPath !== "" && !seen.has(entryPath)) {
+      if (action.kind === "probe") {
+        return { kind: "rescan" };
+      }
       changes.push({ path: entryPath });
     }
   }
