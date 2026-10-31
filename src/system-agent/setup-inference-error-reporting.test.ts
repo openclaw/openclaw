@@ -153,7 +153,8 @@ async function observeScenario(scenario: FailurePhase, json: boolean) {
         status: scenario === "capture" ? "unavailable" : "auth",
       });
       expect(payload).not.toHaveProperty("binding");
-      message = payload.error;
+      expect(payload.error.type).toBe("cli_error");
+      message = payload.error.message;
     } else {
       message = text;
     }
