@@ -149,3 +149,10 @@ export function validDecisionCriteria(type: unknown, criteria: unknown): boolean
         )))
   );
 }
+
+export function exactKeys(left: object, right: object): boolean {
+  const keys = Object.keys(left);
+  return (
+    keys.length === Object.keys(right).length && keys.every((key) => Object.hasOwn(right, key))
+  );
+}

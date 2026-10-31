@@ -21,6 +21,7 @@ import {
 } from "../plugins/runtime/runtime-model-policy.js";
 import { finalizePluginModelUsage } from "../plugins/runtime/runtime-model-usage.js";
 import { modelKey } from "../shared/model-key.js";
+import { DecisionContractError } from "./contract-error.js";
 import { logDecisionEvaluation } from "./diagnostics.js";
 import type { DecisionEvaluateOptions, DecisionEvaluateOptionsV2 } from "./execution-types.js";
 import type { DecisionOutcome, DecisionOutcomeV2 } from "./host-outcomes.js";
@@ -28,7 +29,7 @@ import type { PreparedDecisionBilling } from "./provider-host.js";
 import type { DecisionBatchV2 } from "./types-v2.js";
 import type { DecisionBatch } from "./types.js";
 import { validateDecisionBatchV2 } from "./validation-v2.js";
-import { DecisionContractError, validateDecisionBatch } from "./validation.js";
+import { validateDecisionBatch } from "./validation.js";
 
 /** Core calls carry their owner's abort signal; plugin callers additionally bind their exact instance. */
 export async function evaluateDecision(

@@ -4,9 +4,9 @@ import type {
 } from "@openclaw/model-catalog-core/model-catalog-types";
 import { describe, expect, it, vi } from "vitest";
 import { normalizeCapabilities } from "./catalog.test-support.js";
+import { DecisionContractError } from "./contract-error.js";
 import type { DecisionAnswerV2, DecisionBatchV2 } from "./types-v2.js";
 import { validateDecisionBatchV2, validateDecisionResultV2 } from "./validation-v2.js";
-import { DecisionContractError } from "./validation.js";
 
 const batch: DecisionBatchV2 = {
   state: { type: "text", text: "synthetic evidence" },
