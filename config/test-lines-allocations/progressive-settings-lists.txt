@@ -1,2 +1,2 @@
-# Preserve ConfigForm drafts during appends, stop disposed work, and keep tile registration local.
-138
+# Preserve drafts during appends, cancel disposed work, and keep lazy preview focus and dismissal.
+219

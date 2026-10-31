@@ -1,21 +1,16 @@
 import type { JSX } from "@solidjs/web";
 import { Errored, Loading, Show, createMemo } from "solid-js";
 import { resolveConfigObjectFields } from "../../components/config-form.node.collection.ts";
-import { ConfigNode } from "../../components/config-form.node.tsx";
-import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
   SettingsEmpty,
   SettingsLoadingSkeleton,
   SettingsPage,
-  SettingsPageHeader,
-  SettingsSection,
 } from "../../components/solid/settings-ui.tsx";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import type { PluginDiscoveryDetailResult, PluginsInspectResult } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { PluginManager } from "../../plugins/control-ui-manager.solid.tsx";
 import { renderPluginReadme } from "./catalog-detail.tsx";
 import { PluginArtTile } from "./consent-dialog.tsx";
 import { renderPluginDetailShell as PluginDetailShell } from "./detail-shell.tsx";
@@ -45,10 +40,9 @@ import {
   type PluginSettingsEditorProps,
   type PluginSettingsField,
 } from "./settings-editor.tsx";
-import { InstalledInventory, PluginRetryError } from "./settings-inventory.tsx";
+import { PluginRetryError } from "./settings-inventory.tsx";
 import { PluginLifecycle } from "./settings-lifecycle.tsx";
 import { pluginEntryValue, type PluginSettingsEditorModel } from "./settings-model.ts";
-import { PluginSettingsReadStatus } from "./settings-read-status.tsx";
 import type { PluginToolPreview } from "./tool-preview.tsx";
 export type PluginSettingsTab = "installed" | "advanced";
 type SharedProps = Omit<
@@ -138,135 +132,6 @@ function PluginConnectionAction(props: {
         </span>
       ) : null}
     </>
-  );
-}
-function AdvancedSettings(options: InventoryProps): JSX.Element {
-  const config = createMemo(() => {
-    const schema = options.advancedSchema;
-    const value = options.configValue;
-    return schema && value ? { schema, value } : null;
-  });
-  return (
-    <Show
-      when={options.connected || Boolean(config())}
-      fallback={<SettingsEmpty message={t("pluginsPage.connectToManage")} carapace />}
-    >
-      <Show
-        when={config()}
-        fallback={
-          !options.configError && !options.configSchemaLoading && options.configValue ? (
-            <SettingsEmpty message={t("pluginsPage.schemaUnavailable")} carapace />
-          ) : null
-        }
-      >
-        {(current) => (
-          <>
-            <ConfigNode
-              params={{
-                rawAvailable: false,
-                maskSensitive: true,
-                schema: current().schema,
-                value: current().value.plugins ?? {},
-                path: ["plugins"],
-                hints: options.configHints,
-                unsupported: new Set(options.configUnsupportedPaths),
-                disabled: !options.canEditConfig || options.configBusy,
-                showLabel: false,
-                onPatch: options.onConfigPatch,
-                onRemove: options.onConfigRemove,
-              }}
-            />
-          </>
-        )}
-      </Show>
-      <PluginSettingsReadStatus
-        model={{ ...options, configSchema: options.advancedSchema }}
-        loading={
-          !options.configError && !config() && (options.configSchemaLoading || !options.configValue)
-        }
-        rows={4}
-        renderError={(error, onRetry) => <PluginRetryError error={error} onRetry={onRetry} />}
-      />
-    </Show>
-  );
-}
-export function renderPluginSettingsInventory(props: InventoryProps): JSX.Element {
-  const body = (
-    <>
-      {props.tab === "installed" ? (
-        <>
-          <label class="plugins-settings-search">
-            <span class="settings-control__sr-label">{t("pluginsPage.searchInstalled")}</span>
-            <span aria-hidden="true">
-              <Icon name="search" />
-            </span>
-            <input
-              class="settings-input oc-input"
-              type="search"
-              aria-label={t("pluginsPage.searchInstalled")}
-              placeholder={t("pluginsPage.searchInstalled")}
-              value={props.query}
-              onInput={(event) => props.onQueryChange(event.currentTarget.value)}
-            />
-          </label>
-          <InstalledInventory {...props} />
-        </>
-      ) : (
-        <div id="plugin-settings-advanced" class="settings-stack">
-          <PluginManager />
-          <SettingsSection
-            title={t("pluginsPage.advanced")}
-            description={t("pluginsPage.advancedDescription")}
-            actions={
-              <button
-                type="button"
-                class="btn btn--xs btn--icon oc-action oc-action-icon oc-action-secondary"
-                aria-label={t("common.reload")}
-                disabled={props.configBusy || props.configSchemaLoading}
-                onClick={() => props.onConfigReload()}
-              >
-                <Icon name="refresh" />
-              </button>
-            }
-            carapace
-          >
-            <AdvancedSettings {...props} />
-          </SettingsSection>
-        </div>
-      )}
-    </>
-  );
-  return (
-    <SettingsPage carapace={true}>
-      <SettingsPageHeader
-        registerHeading={props.registerRemovalHeading}
-        title={t("tabs.plugins")}
-        subtitle={t("pluginsPage.settingsDescription")}
-      />
-      <div class="plugins-settings-content">
-        <HubTabs
-          id="plugin-settings"
-          active={props.tab}
-          tabs={[
-            { value: "installed", label: t("pluginsPage.settingsInstalled") },
-            { value: "advanced", label: t("pluginsPage.advanced") },
-          ]}
-          ariaLabel={t("pluginsPage.settingsTabs")}
-          panelId="plugin-settings-panel"
-          variant="sub"
-          class="plugins-settings-tabs"
-          carapace
-          onSelect={props.onTabChange}
-        />
-        <div
-          id="plugin-settings-panel"
-          role="tabpanel"
-          aria-labelledby={`plugin-settings-tab-${props.tab}`}
-        >
-          {body}
-        </div>
-      </div>
-    </SettingsPage>
   );
 }
 function permissionSettings(options: DetailProps): PluginSettingsEditorProps["permissions"] {

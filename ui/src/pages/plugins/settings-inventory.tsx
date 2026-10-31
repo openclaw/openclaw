@@ -1,7 +1,14 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show, createMemo } from "solid-js";
-import { sessionIconMask } from "../../components/solid/icon.tsx";
-import { SettingsEmpty, SettingsLoadingSkeleton } from "../../components/solid/settings-ui.tsx";
+import { Errored, For, Loading, Show, createMemo, lazy } from "solid-js";
+import { HubTabs } from "../../components/solid/hub-tabs.tsx";
+import { Icon, sessionIconMask } from "../../components/solid/icon.tsx";
+import {
+  SettingsEmpty,
+  SettingsLoadingSkeleton,
+  SettingsPage,
+  SettingsPageHeader,
+} from "../../components/solid/settings-ui.tsx";
+import { formatUiError } from "../../lib/format-error.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createProgressiveList } from "../../lib/reactive/progressive-list.ts";
@@ -10,6 +17,10 @@ import { renderPluginCompatibilityNotices } from "./overview.tsx";
 import { renderPluginStateStatus } from "./plugin-card.tsx";
 import { pluginRowKey, renderPluginRowMessage } from "./plugin-row-message.tsx";
 import type { InventoryProps } from "./settings-view.tsx";
+
+const AdvancedSettings = lazy(() => import("./settings-advanced.tsx"), {
+  export: "AdvancedSettings",
+});
 
 export function PluginRetryError(props: { error: string; onRetry: () => void }): JSX.Element {
   return (
@@ -141,5 +152,73 @@ function InstalledRows(
         </For>
       </Show>
     </div>
+  );
+}
+
+export function renderPluginSettingsInventory(props: InventoryProps): JSX.Element {
+  const body = (
+    <>
+      {props.tab === "installed" ? (
+        <>
+          <label class="plugins-settings-search">
+            <span class="settings-control__sr-label">{t("pluginsPage.searchInstalled")}</span>
+            <span aria-hidden="true">
+              <Icon name="search" />
+            </span>
+            <input
+              class="settings-input oc-input"
+              type="search"
+              aria-label={t("pluginsPage.searchInstalled")}
+              placeholder={t("pluginsPage.searchInstalled")}
+              value={props.query}
+              onInput={(event) => props.onQueryChange(event.currentTarget.value)}
+            />
+          </label>
+          <InstalledInventory {...props} />
+        </>
+      ) : (
+        <Errored
+          fallback={(error, reset) => (
+            <PluginRetryError error={formatUiError(error())} onRetry={reset} />
+          )}
+        >
+          <Loading fallback={<SettingsLoadingSkeleton rows={4} carapace />}>
+            <AdvancedSettings {...props} />
+          </Loading>
+        </Errored>
+      )}
+    </>
+  );
+  return (
+    <SettingsPage carapace={true}>
+      <SettingsPageHeader
+        registerHeading={props.registerRemovalHeading}
+        title={t("tabs.plugins")}
+        subtitle={t("pluginsPage.settingsDescription")}
+      />
+      <div class="plugins-settings-content">
+        <HubTabs
+          id="plugin-settings"
+          active={props.tab}
+          tabs={[
+            { value: "installed", label: t("pluginsPage.settingsInstalled") },
+            { value: "advanced", label: t("pluginsPage.advanced") },
+          ]}
+          ariaLabel={t("pluginsPage.settingsTabs")}
+          panelId="plugin-settings-panel"
+          variant="sub"
+          class="plugins-settings-tabs"
+          carapace
+          onSelect={props.onTabChange}
+        />
+        <div
+          id="plugin-settings-panel"
+          role="tabpanel"
+          aria-labelledby={`plugin-settings-tab-${props.tab}`}
+        >
+          {body}
+        </div>
+      </div>
+    </SettingsPage>
   );
 }
