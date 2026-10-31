@@ -81,7 +81,7 @@ it("logs one warning per deploy failure at default verbosity", async () => {
 it.each(["GET", "PATCH", "POST", "PUT", "DELETE"] as const)(
   "logs the failed %s deployment request's diagnostic context without replacing its error",
   async (method) => {
-    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const clock = vi.spyOn(performance, "now").mockReturnValue(1_000);
     const failure = Object.assign(new Error("This operation was aborted"), {
       name: "AbortError",
     });

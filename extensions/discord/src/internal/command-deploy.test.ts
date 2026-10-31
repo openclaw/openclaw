@@ -1,5 +1,5 @@
 /* oxlint-disable typescript/unbound-method -- vitest mocks of RequestClient methods (createRest) intentionally expose vi.fn refs via `restA.get`/`.post`; not unbound class methods. */
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
 import type { RequestClient } from "./rest.js";
 import {
@@ -8,6 +8,8 @@ import {
   createTestCommand,
   createTestHashStore,
 } from "./test-builders.test-support.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 // #77359: identical command sets must not suppress another application’s deploy.
 describe("Client.deployCommands cache", () => {
@@ -71,4 +73,28 @@ describe("Client.deployCommands cache", () => {
       expect(store.register).toHaveBeenCalledOnce();
     },
   );
+});
+
+describe("Client.deployCommands failure annotation", () => {
+  test("annotates aborted requests with monotonic duration across wall-clock steps", async () => {
+    const { store } = createTestHashStore();
+    const client = createInternalTestClient(
+      [createTestCommand("ping", undefined, { description: "ping the bot" })],
+      { clientId: "app-clock", commandDeployHashStore: store },
+    );
+    const abort = new Error("operation was aborted");
+    abort.name = "AbortError";
+    attachRestMock(client, {
+      get: vi.fn(async () => {
+        throw abort;
+      }),
+    });
+    vi.spyOn(performance, "now").mockReturnValueOnce(1_000).mockReturnValue(1_045);
+    vi.spyOn(Date, "now")
+      .mockReturnValueOnce(1_700_000_000_000)
+      .mockReturnValue(1_700_000_000_000 - 3_600_000);
+
+    await expect(client.deployCommands()).rejects.toBe(abort);
+    expect((abort as Error & { deployRequestMs?: unknown }).deployRequestMs).toBe(45);
+  });
 });
