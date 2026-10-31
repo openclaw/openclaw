@@ -51,6 +51,8 @@ function expectDatabase(file: string, queries: Record<string, unknown>) {
 const repairOptions = { repair: true, nonInteractive: true };
 const orphan = { task_id: "orphan-preserved", requester_origin_json: "preserve orphan payload" };
 async function seedState(state: OpenClawTestState) {
+  fs.writeFileSync(state.path("package.json"), '{"name":"openclaw"}');
+  mocks.packageRoot.mockReturnValue(state.root);
   await writeConfig(state);
   return openOpenClawStateDatabase({ env: state.env });
 }

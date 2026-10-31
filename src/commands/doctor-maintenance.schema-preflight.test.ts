@@ -29,7 +29,11 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 
 const withState = (run: (state: OpenClawTestState) => Promise<void>) =>
-  withOpenClawTestState({ scenario: "minimal" }, run);
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    fs.writeFileSync(state.path("package.json"), '{"name":"openclaw"}');
+    mocks.packageRoot.mockReturnValue(state.root);
+    await run(state);
+  });
 const { mocks } = await import("../flows/doctor-health.test-support.js");
 beforeEach(() => {
   mocks.config.mockReturnValue({});
@@ -253,6 +257,8 @@ it("Doctor refuses to rebuild an index that hides the external state owner", asy
   await withOpenClawTestState(
     { scenario: "minimal", env: { OPENCLAW_SUPERVISOR_MODE: undefined } },
     async (state) => {
+      fs.writeFileSync(state.path("package.json"), '{"name":"openclaw"}');
+      mocks.packageRoot.mockReturnValue(state.root);
       const externalEnv = { ...state.env, OPENCLAW_SUPERVISOR_MODE: "external" };
       const ownership = claimOpenClawStateOwnership("fixture-supervisor", { env: externalEnv });
       const databasePath = openOpenClawStateDatabase({ env: externalEnv }).path;
