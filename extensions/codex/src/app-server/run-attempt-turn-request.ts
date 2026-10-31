@@ -336,6 +336,10 @@ export async function prepareCodexAttemptTurnRequest(
       developerInstructions: joinPresentSections(
         buildRenderedCodexDeveloperInstructions(),
         attemptTools.configuredMcp?.diagnosticNotice,
+        buildCodexConversationTurnInstructions(
+          runtimeParams,
+          attemptTools.toolBridge.availableSpecs,
+        ),
       ),
       prompt: turnState.codexTurnPromptText,
       tools: toolBridge.availableSpecs,
