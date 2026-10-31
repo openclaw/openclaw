@@ -60,6 +60,7 @@ it("forgets disclosure for removed providers", async () => {
       option("selected", "current"),
       option("other", "lead", { recommended: true }),
       option("other", "rest"),
+      option("other", "rest-2"),
     ],
     selectedModelValue: "selected/current",
   });
@@ -133,6 +134,19 @@ it.each([
   },
 );
 
+it("keeps a lone unranked model inline instead of folding it behind All models", async () => {
+  const { container } = mountPicker({
+    modelOptions: [option("fixture", "lead", { recommended: true }), option("fixture", "solo")],
+    selectedModelValue: "fixture/lead",
+    triggerModelLabel: "lead",
+    open: true,
+  });
+  await waitForMenu(container);
+
+  expect(control(container, "option", "fixture/solo")).not.toBeNull();
+  expect(control(container, "more-toggle")).toBeNull();
+});
+
 it.each([false, true])(
   "drops the All models row once expanded so the rest continue the group (rest disabled=%s)",
   async (restDisabled) => {
@@ -140,6 +154,7 @@ it.each([false, true])(
       modelOptions: [
         option("fixture", "lead", { recommended: true }),
         option("fixture", "rest", { disabled: restDisabled }),
+        option("fixture", "rest-2", { disabled: restDisabled }),
       ],
       selectedModelValue: "fixture/lead",
       triggerModelLabel: "lead",
