@@ -1,3 +1,4 @@
+import { registerAgentHarnessCompletionHandoff } from "openclaw/plugin-sdk/agent-harness-completion";
 import type { AgentHarnessRuntimeArtifactBinding } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
@@ -335,13 +336,19 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
           claimDirectChild: (childThreadId) => nativeHookRelay?.claimDirectChild(childThreadId),
           rejectPendingDirectChild: (childThreadId, reason) =>
             nativeHookRelay?.rejectPendingDirectChild(childThreadId, reason),
-          ...(params.sessionKey && params.agentHarnessCompletionScope
-            ? {
-                onDirectChildAccepted: () => {
+          onDirectChildAccepted:
+            params.sessionKey && params.agentHarnessCompletionScope
+              ? (handoff) => {
+                  if (handoff?.completionCustody) {
+                    registerAgentHarnessCompletionHandoff({
+                      scope: params.agentHarnessCompletionScope!,
+                      completionCustody: handoff.completionCustody,
+                      runId: handoff.runId,
+                    });
+                  }
                   state.runtimeContinuationStarted = true;
-                },
-              }
-            : {}),
+                }
+              : undefined,
         });
         parentTransferred = submissionStore !== undefined;
         try {
@@ -651,14 +658,10 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       assertCurrent: connection.assertLegacyCurrent,
       assertCurrentAsync: runtime.nativeExecutionPolicy.assertCurrent,
       retainExecutionPolicy: runtime.nativeExecutionPolicy.retain,
-      onPreToolUseFailure: (failure) => {
-        const projector = projectorRef.current;
-        if (projector) {
-          projector.recordNativeToolPreToolUseFailure(failure);
-        } else {
-          nativePreToolUseFailures.record(failure);
-        }
-      },
+      onPreToolUseFailure: (failure) =>
+        projectorRef.current
+          ? projectorRef.current.recordNativeToolPreToolUseFailure(failure)
+          : nativePreToolUseFailures.record(failure),
       onNativeSubagentSubmission: runtime.nativeToolSurfaceEnabled
         ? async (receipt, assertCurrent) => {
             const monitor = state.nativeSubagentMonitor;

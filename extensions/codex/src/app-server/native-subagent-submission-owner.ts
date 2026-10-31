@@ -608,7 +608,7 @@ export class CodexNativeSubagentSubmissionOwner {
       pending.completionCustody ??= completionCustody?.retain();
       if (owner && pending.admittedOwner !== owner && [...state.owners.values()].includes(owner)) {
         pending.admittedOwner = owner;
-        owner.onDirectChildAccepted?.();
+        owner.onDirectChildAccepted?.({ runId, completionCustody: pending.completionCustody });
       }
       this.dependencies.admitFollowup(known);
     }

@@ -2128,7 +2128,10 @@ class Monitor {
         child.releaseDirectChild = claimOwner.claimDirectChild?.(child.childThreadId);
       }
       if (!transitioned) {
-        claimOwner.onDirectChildAccepted?.();
+        claimOwner.onDirectChildAccepted?.({
+          runId: child.runId,
+          completionCustody: child.completionCustody,
+        });
       }
     }
     this.observeActiveChild(child);

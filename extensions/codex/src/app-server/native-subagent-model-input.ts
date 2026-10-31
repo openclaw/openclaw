@@ -1,5 +1,9 @@
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { readThreadParentThreadId, readThreadSpawnSource } from "./native-subagent-assignment.js";
+import {
+  codexNativeSubagentRunId,
+  readThreadParentThreadId,
+  readThreadSpawnSource,
+} from "./native-subagent-assignment.js";
 import { resolveNativeModelParentOwner } from "./native-subagent-model-lookup.js";
 import {
   createNativeModelSourceOwner,
@@ -467,7 +471,10 @@ export function drainNativeChildModelAdmissions(
             nativeTurn.admittedOwner = ownerIsCurrent ? owner : evidence.admittedOwner;
             nativeTurn.completionCustody ??= evidence.completionCustody?.retain();
             if (ownerIsCurrent) {
-              owner.onDirectChildAccepted?.();
+              owner.onDirectChildAccepted?.({
+                runId: codexNativeSubagentRunId(evidence.childThreadId, evidence.nativeTurnId),
+                completionCustody: nativeTurn.completionCustody,
+              });
             }
           }
         } else if (

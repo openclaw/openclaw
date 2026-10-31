@@ -5,12 +5,15 @@ import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-s
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
 
 // Host-issued scopes prevent plugins from fabricating requester ownership for completions.
 const scopeRegistry = resolveGlobalSingleton(
   Symbol.for("openclaw.agentHarnessCompletionScope.registry"),
   () => ({
     hostIssuedScopes: new WeakSet<object>(),
+    runs: new WeakMap<object, { instance: OperationalRunInstanceRef; assertCurrent: () => void }>(),
+    handoffs: new WeakMap<OperationalRunInstanceRef, Map<string, () => boolean>>(),
   }),
 );
 
@@ -25,6 +28,7 @@ export function createAgentHarnessCompletionScope(params: {
   requesterSessionKey: string;
   requesterAgentId?: string;
   gatewayContextResolver?: GatewayContextResolver;
+  run?: { instance: OperationalRunInstanceRef; assertCurrent: () => void };
 }): AgentHarnessCompletionScope {
   const requesterSessionKey = params.requesterSessionKey.trim();
   if (!requesterSessionKey) {
@@ -40,6 +44,9 @@ export function createAgentHarnessCompletionScope(params: {
     requesterAgentId,
   };
   scopeRegistry.hostIssuedScopes.add(scope);
+  if (params.run) {
+    scopeRegistry.runs.set(scope, params.run);
+  }
   bindGatewayContextResolver(scope, params.gatewayContextResolver);
   return scope;
 }
@@ -113,4 +120,34 @@ export function assertHarnessCompletionSourceAdmission(params: {
   }
   admission.assertCurrent();
   return admission.assertCurrent;
+}
+
+/** Called only after the completion owner validates retained custody. */
+export function recordAgentHarnessCompletionHandoff(
+  scope: AgentHarnessCompletionScope,
+  runId: string,
+  isCurrent: () => boolean,
+): void {
+  assertAgentHarnessCompletionScope(scope);
+  const run = scopeRegistry.runs.get(scope);
+  if (!run) {
+    return;
+  }
+  run.assertCurrent();
+  const handoffs = scopeRegistry.handoffs.get(run.instance) ?? new Map<string, () => boolean>();
+  handoffs.set(runId, () => {
+    try {
+      run.assertCurrent();
+      return isCurrent();
+    } catch {
+      return false;
+    }
+  });
+  scopeRegistry.handoffs.set(run.instance, handoffs);
+}
+
+export function hasAgentHarnessCompletionHandoff(instance: OperationalRunInstanceRef): boolean {
+  return [...(scopeRegistry.handoffs.get(instance)?.values() ?? [])].some((isCurrent) =>
+    isCurrent(),
+  );
 }

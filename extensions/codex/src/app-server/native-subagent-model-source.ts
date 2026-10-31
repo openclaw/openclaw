@@ -245,7 +245,7 @@ export function admitNativeChildModelExecution(
     child.childThreadId,
     child.completionCustody,
   );
-  owner.onDirectChildAccepted?.();
+  owner.onDirectChildAccepted?.({ runId: child.runId, completionCustody: child.completionCustody });
 }
 
 export function consumeNativeChildModelAdmission(

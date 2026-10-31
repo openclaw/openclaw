@@ -515,18 +515,18 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
         }
       : {}),
     ...(captureRuntimeArtifact ? { captureRuntimeArtifact: true } : {}),
-    ...(expectedHarnessArtifact?.artifact
-      ? { expectedRuntimeArtifact: expectedHarnessArtifact?.artifact }
-      : {}),
-    ...(params.sessionKey
-      ? {
-          agentHarnessCompletionScope: createAgentHarnessCompletionScope({
-            requesterSessionKey: params.sessionKey,
-            requesterAgentId: workspaceResolution.agentId,
-            gatewayContextResolver: getGatewayContextResolver(params.admittedRunContext),
-          }),
-        }
-      : {}),
+    expectedRuntimeArtifact: expectedHarnessArtifact?.artifact,
+    agentHarnessCompletionScope: params.sessionKey
+      ? createAgentHarnessCompletionScope({
+          run: {
+            instance: params.admittedRunContext.operationalRunInstance,
+            assertCurrent: assertActiveRun,
+          },
+          requesterSessionKey: params.sessionKey,
+          requesterAgentId: workspaceResolution.agentId,
+          gatewayContextResolver: getGatewayContextResolver(params.admittedRunContext),
+        })
+      : undefined,
     runtimePlan,
     observeToolTerminal: createToolTerminalObserver(params.runId),
     model: applyAuthHeaderOverride(
