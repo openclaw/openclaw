@@ -36,7 +36,7 @@ async function main() {
   setupStage = "runtime-import";
   const [{ calculateMulawRms }, { openAIRealtimeHost }, { OpenAIQuicksilverGatewayBridge }] =
     await Promise.all([
-      import("openclaw/plugin-sdk/realtime-voice"),
+      import("../../src/talk/audio-energy.ts"),
       import("../../extensions/openai/realtime-host.ts"),
       import("../../extensions/openai/realtime-quicksilver-gateway-bridge.ts"),
     ]);
