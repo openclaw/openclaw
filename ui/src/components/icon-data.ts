@@ -200,15 +200,19 @@ export const iconData = {
     ...strokeIconData([
       [
         "path",
-        { d: ZAP_DOUBLE_REAR_PATH, fill: "var(--icon-secondary, currentColor)", stroke: "none" },
+        {
+          d: ZAP_DOUBLE_REAR_PATH,
+          fill: "var(--icon-secondary, color-mix(in srgb, var(--accent) 60%, var(--muted)))",
+          stroke: "none",
+        },
       ],
       [
         "polygon",
         {
           points: ZAP_POINTS,
           transform: "translate(3.43 6.86)",
-          fill: "var(--icon-primary, currentColor)",
-          stroke: "var(--icon-primary, currentColor)",
+          fill: "var(--icon-primary, color-mix(in srgb, var(--accent) 75%, var(--text-strong)))",
+          stroke: "var(--icon-primary, color-mix(in srgb, var(--accent) 75%, var(--text-strong)))",
         },
       ],
     ]),
