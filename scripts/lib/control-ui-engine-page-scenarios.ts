@@ -254,6 +254,20 @@ const configPage = (): PageDefinition => ({
   },
 });
 
+const workboardCardMenu: PageAction = {
+  label: "Hover a Workboard card and open its action menu",
+  run: async (page) => {
+    const menu = page.locator(".workboard-card__action-menu-panel:popover-open");
+    assert.equal(await menu.count(), 0);
+    const card = page.locator(".workboard-card").first();
+    await card.hover();
+    await card.locator(".workboard-card__menu-trigger").click();
+    await menu.waitFor({ state: "visible" });
+    await frames(page);
+    return { opened: true };
+  },
+};
+
 const definitions: Partial<Record<RouteId, PageDefinition>> = {
   settings: {
     ready: "openclaw-chat-page",
@@ -726,29 +740,24 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
   },
   workboard: {
     ready: ".workboard-card",
-    action: click(
-      ".workboard-card__menu-trigger",
-      ".workboard-card__action-menu-panel:popover-open",
-    ),
+    action: workboardCardMenu,
   },
   plugin: {
     ready: ".workboard-card",
     search: "?plugin=workboard&id=workboard",
-    action: click(
-      ".workboard-card__menu-trigger",
-      ".workboard-card__action-menu-panel:popover-open",
-    ),
+    action: workboardCardMenu,
   },
   templates: {
     ready: "[data-templates-entry]",
     action: {
       label: "Search templates and present the single matching card",
       run: async (page, gateway) => {
-        const before = (await gateway.getRequests("templates.catalog.search")).length;
-        await page.locator("[data-templates-search]").fill("Census template 19");
+        const match = { query: "Census template 19" };
+        const before = (await gateway.getRequests("templates.catalog.search", match)).length;
+        await page.locator("[data-templates-search]").fill(match.query);
         await gateway.waitForRequest("templates.catalog.search", {
           after: before,
-          match: { query: "Census template 19" },
+          match,
         });
         const results = page.locator('[data-catalog-section="results"]').filter({ visible: true });
         await results.getByRole("heading", { name: "Census template 19", exact: true }).waitFor();
