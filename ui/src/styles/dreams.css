@@ -911,10 +911,6 @@
   width: min(1120px, 100%);
   height: min(840px, var(--openclaw-modal-height-limit));
   min-height: 0;
-  border-radius: 18px;
-  border: 1px solid color-mix(in oklab, var(--border) 72%, transparent);
-  background: color-mix(in oklab, var(--panel) 96%, transparent);
-  box-shadow: var(--shadow-xl);
   overflow: hidden;
 }
 

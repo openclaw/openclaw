@@ -725,11 +725,9 @@
   max-height: min(85vh, 860px);
   gap: var(--space-4);
   overflow-y: auto;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-xl);
-  padding: var(--space-5);
-  background: var(--popover);
-  box-shadow: var(--shadow-xl);
+  border: 0;
+  padding: var(--overlay-modal-padding);
+  background: var(--overlay-modal-surface);
 }
 
 .plugins-consent__header {
@@ -1286,10 +1284,7 @@ openclaw-plugins-page
   grid-template-rows: auto minmax(0, 1fr);
   width: 100%;
   max-height: var(--openclaw-modal-height-limit, calc(100dvh - 48px));
-  padding: 24px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--bg);
+  padding: var(--overlay-modal-padding);
 }
 .plugin-tool-preview header {
   display: flex;

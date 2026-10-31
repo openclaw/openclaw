@@ -6,10 +6,6 @@
   display: grid;
   max-height: min(720px, calc(100dvh - 48px));
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 18px;
-  background: var(--bg);
-  box-shadow: var(--shadow-xl);
 }
 
 .onboarding-memory-import > header,

@@ -317,7 +317,7 @@ export async function buildBrowserGatewayConnectPlan({
           "inline-widgets",
           "model-selection-policy",
           "model-wait-status",
-          ...(!isNativeMobileHost() ? ["ui-commands"] : []),
+          ...(!isNativeMobileHost() ? ["ui-agent-github-settings", "ui-commands"] : []),
           "ultrafast",
           "usage-refreshing",
         ],

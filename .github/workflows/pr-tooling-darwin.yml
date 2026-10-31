@@ -35,6 +35,7 @@ on:
       - "!test/scripts/pr-ci-sweeper*"
       - "test/scripts/exited-descendant-reaper.test-support.ts"
       - "test/helpers/**"
+      - "!test/helpers/**/*.test.ts"
       - "test/vitest/**"
       - "test/setup*.ts"
       - "test/test-home-policy.mts"

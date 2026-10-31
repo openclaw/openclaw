@@ -954,9 +954,8 @@
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: baseline;
   gap: 5px var(--space-3);
-  padding: 10px 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
-  font-size: 13px;
+  padding: var(--space-3) 0;
+  font-size: var(--control-ui-text-md);
 }
 
 .usage-list-bar {

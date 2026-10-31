@@ -4,11 +4,13 @@
 }
 
 /* Account identity remains recognizable while a cold profile photo resolves. */
-.sidebar-identity-card .viewer-avatar.is-pending > img {
+:is(.sidebar-identity-card, .sidebar-identity-menu__avatar) .viewer-avatar.is-pending > img {
   display: none;
 }
 
-.sidebar-identity-card .viewer-avatar.is-pending > .viewer-avatar__fallback {
+:is(.sidebar-identity-card, .sidebar-identity-menu__avatar)
+  .viewer-avatar.is-pending
+  > .viewer-avatar__fallback {
   display: grid;
   visibility: visible;
 }
