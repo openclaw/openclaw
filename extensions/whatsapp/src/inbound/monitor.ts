@@ -99,6 +99,7 @@ export async function attachWebInboxToSocket(
     sendMessage: sendApi.sendMessage,
     sendPoll: sendApi.sendPoll,
     sendReaction: sendApi.sendReaction,
+    editMessage: sendApi.editMessage,
   } as const;
 }
 

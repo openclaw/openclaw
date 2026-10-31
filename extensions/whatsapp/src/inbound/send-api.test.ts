@@ -44,11 +44,15 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
   ...imageOps,
 }));
 
+function createSocketSend() {
+  return vi.fn<Parameters<typeof createWebSendApi>[0]["sock"]["sendMessage"]>(
+    async () => ({ key: { id: "msg-1" } }) as WAMessage,
+  );
+}
+
 function createSocket() {
   return {
-    sendMessage: vi.fn<Parameters<typeof createWebSendApi>[0]["sock"]["sendMessage"]>(
-      async () => ({ key: { id: "msg-1" } }) as WAMessage,
-    ),
+    sendMessage: createSocketSend(),
     sendPresenceUpdate: vi.fn(async () => {}),
   };
 }
@@ -278,6 +282,66 @@ describe("createWebSendApi", () => {
     expectAccepted(res, "reaction", "msg-1");
   });
 
+  describe("editMessage", () => {
+    const key = (remoteJid = DM_JID) => ({ remoteJid, id: "target-1", fromMe: true }) as const;
+    const edit = (remoteJid = DM_JID, text = "updated") =>
+      api.editMessage(remoteJid, "target-1", text);
+
+    it.each([
+      ["DM", DM_JID],
+      ["group", GROUP_JID],
+      ["LID", LID_JID],
+    ])("edits a %s message through its own key", async (_name, remoteJid) => {
+      await expect(edit(remoteJid)).resolves.toBeUndefined();
+      expect(sendMessage).toHaveBeenCalledExactlyOnceWith(
+        remoteJid,
+        {
+          text: "updated",
+          edit: key(remoteJid),
+        },
+        undefined,
+        undefined,
+      );
+      expect(sock.sendPresenceUpdate).not.toHaveBeenCalled();
+      expectOutboundActivityOnce();
+    });
+
+    it("resolves native mentions without passing contextInfo", async () => {
+      api = withMentions(mapped);
+      await edit(GROUP_JID, `ping ${source}`);
+      expect(sendMessage).toHaveBeenCalledExactlyOnceWith(
+        GROUP_JID,
+        {
+          text: `ping ${target}`,
+          edit: key(GROUP_JID),
+          mentions: [LID_JID],
+        },
+        undefined,
+        undefined,
+      );
+    });
+
+    it("omits mentions when none resolve", async () => {
+      api = withMentions(phone);
+      await edit(GROUP_JID, "no mention here");
+      expect(sendMessage).toHaveBeenCalledExactlyOnceWith(
+        GROUP_JID,
+        {
+          text: "no mention here",
+          edit: key(GROUP_JID),
+        },
+        undefined,
+        undefined,
+      );
+    });
+
+    it("rejects an edit Baileys returns no key for", async () => {
+      sendMessage.mockResolvedValueOnce(undefined);
+      await expect(edit()).rejects.toBeInstanceOf(PlatformMessageNotDispatchedError);
+      expect(recordChannelActivity).not.toHaveBeenCalled();
+    });
+  });
+
   it("rejects an unaccepted Baileys voice send without recording outbound activity", async () => {
     sendMessage.mockResolvedValueOnce(undefined);
     await expect(
@@ -341,6 +405,24 @@ describe("createWebSendApi", () => {
     it("resolves PN to LID for sendComposingTo presence", async () => {
       await api.sendComposingTo("+15555550000");
       expect(sendPresenceUpdate).toHaveBeenCalledWith("composing", "987654@lid");
+    });
+
+    it("keeps a stored phone-number key instead of resolving it to LID for edits", async () => {
+      const key = {
+        remoteJid: "15555550000@s.whatsapp.net",
+        id: "target-1",
+        fromMe: true,
+      } as const;
+      await api.editMessage(key.remoteJid, key.id, "updated");
+      expect(sendMessage).toHaveBeenCalledExactlyOnceWith(
+        key.remoteJid,
+        {
+          text: "updated",
+          edit: key,
+        },
+        undefined,
+        undefined,
+      );
     });
 
     it("skips newsletter composing presence when authDir is provided", async () => {
