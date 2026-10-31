@@ -507,21 +507,21 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
     public var activity: [OpenClawAgentActivityItem]?
     public internal(set) var transcriptRunID: String?
     public var isTruncated = false
-    public let role: String
+    public internal(set) var role: String
     public let phase: String?
-    public let turnBoundary: Bool?
+    public internal(set) var turnBoundary: Bool?
     public let steerTargetRunID: String?
     public let streamFallback: OpenClawChatStreamFallback?
     public internal(set) var content: [OpenClawChatMessageContent]
     public internal(set) var timestamp: Double?
     public internal(set) var idempotencyKey: String?
-    public let toolCallId: String?
-    public let toolName: String?
+    public internal(set) var toolCallId: String?
+    public internal(set) var toolName: String?
     public let usage: OpenClawChatUsage?
     public let stopReason: String?
     public let errorMessage: String?
     public internal(set) var details: AnyCodable?
-    public let isError: Bool?
+    public internal(set) var isError: Bool?
     public internal(set) var provenance: OpenClawChatInputProvenance?
     public internal(set) var historyMarker: OpenClawChatHistoryMarker?
 
