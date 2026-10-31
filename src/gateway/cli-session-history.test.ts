@@ -613,22 +613,22 @@ it("keeps lone surrogates distinct from replacement characters in SQLite match k
 });
 
 it.each([
-  ["covered", []],
-  ["nested", []],
-  ["uuidless", []],
-  ["undated", []],
-  ["partial", ["covered"]],
-  ["audio", ["covered"]],
-  ["ambiguous", ["earlier", "covered"]],
-  ["identified", ["earlier"]],
-  ["separate-window", ["earlier"]],
-  ["resume", []],
-  ["image", []],
-  ["retry", ["retry"]],
-  ["tool-result", []],
-  ["thinking", []],
-  ["other-backend", ["covered"]],
-] as const)("reconciles native aggregate coverage: %s", (mode, retained) => {
+  ["covered", [], 1],
+  ["nested", [], 1],
+  ["uuidless", [], 1],
+  ["undated", [], 1],
+  ["partial", ["covered"], 1],
+  ["audio", ["covered"], 1],
+  ["ambiguous", ["earlier", "covered"], 2],
+  ["identified", ["earlier"], 2],
+  ["separate-window", ["earlier"], 2],
+  ["resume", [], 1],
+  ["image", [], 1],
+  ["retry", ["retry"], 1],
+  ["tool-result", [], 2],
+  ["thinking", [], 1],
+  ["other-backend", ["covered"], 1],
+] as const)("reconciles native aggregate coverage: %s", (mode, retained, userCount) => {
   const at = mode === "undated" ? undefined : mode === "separate-window" ? 600_001 : 1_000;
   const timestamp = (offset: number) => (at === undefined ? undefined : at + offset);
   const meta = (externalId: string) => ({
@@ -646,7 +646,7 @@ it.each([
     idempotencyKey: "cli-assistant:covered",
   };
   if (mode === "nested") {
-    aggregate.__openclaw = { idempotencyKey: aggregate.idempotencyKey };
+    aggregate["__openclaw"] = { idempotencyKey: aggregate.idempotencyKey };
     delete aggregate.idempotencyKey;
   }
   if (mode === "audio") {
@@ -677,7 +677,8 @@ it.each([
   const imported: unknown[] = [
     user(nativePrompt, at, meta("native-user")),
     ...["Checking.", "Done."].map((content, index) => ({
-      ...answer(timestamp(index + 1)),
+      role: "assistant",
+      timestamp: timestamp(index + 1),
       content:
         mode === "tool-result" && index === 0
           ? [
@@ -706,9 +707,11 @@ it.each([
   const keys = merged
     .map(readRecord)
     .map(
-      (message) => message.idempotencyKey ?? asOptionalRecord(message.__openclaw)?.idempotencyKey,
+      (message) =>
+        message.idempotencyKey ?? asOptionalRecord(message["__openclaw"])?.idempotencyKey,
     )
     .filter((key) => typeof key === "string" && key.startsWith("cli-assistant:"));
   expect(keys).toEqual(retained.map((key) => `cli-assistant:${key}`));
   expect(merged).toEqual(expect.arrayContaining(imported.slice(1)));
+  expect(merged.filter((message) => readRecord(message).role === "user")).toHaveLength(userCount);
 });
