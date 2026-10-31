@@ -864,7 +864,7 @@ export class WindowsGuest extends ParallelsGuest<GuestExecOptions> {
     return ["exec", this.vmName, "--current-user", ...args];
   }
 
-  powershell(script: string, options: GuestExecOptions = {}): string {
+  powershell(script: string, options: GuestExecOptions & { readOnly?: boolean } = {}): string {
     const scriptName = guestScriptName("ps1");
     const writeScript = `$scriptPath = Join-Path $env:TEMP ${JSON.stringify(scriptName)}
 [System.IO.File]::WriteAllText($scriptPath, [Console]::In.ReadToEnd(), [System.Text.UTF8Encoding]::new($false))`;
@@ -876,16 +876,26 @@ export class WindowsGuest extends ParallelsGuest<GuestExecOptions> {
     this.phases.append(write.stderr);
     const scriptPath = `%TEMP%\\${scriptName}`;
     try {
-      return this.exec(
-        [
-          "cmd.exe",
-          "/d",
-          "/s",
-          "/c",
-          `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${scriptPath}"`,
-        ],
-        options,
-      );
+      const args = [
+        "cmd.exe",
+        "/d",
+        "/s",
+        "/c",
+        `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${scriptPath}"`,
+      ];
+      let result = this.run(args, { ...options, check: false });
+      // Parallels can lose the result after execution. Replay only reads, once,
+      // and only for its known SDK error; guest failures remain terminal.
+      if (
+        options.readOnly &&
+        result.status === 255 &&
+        /PrlJob_Get(?:Result|RetCode): Invalid argument/u.test(`${result.stdout}\n${result.stderr}`)
+      ) {
+        this.phases.append("Retry read-only Windows command after Parallels transport failure\n");
+        result = this.run(args, { ...options, check: false });
+      }
+      throwIfFailed(this.label, result, options.check);
+      return result.stdout.trim();
     } finally {
       this.exec(["cmd.exe", "/d", "/s", "/c", `del /F /Q "${scriptPath}"`], {
         check: false,

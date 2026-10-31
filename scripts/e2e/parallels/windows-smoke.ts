@@ -250,7 +250,9 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
       installSmokeRuntimeCompanions({
         provider: this.options.provider,
         readCli: (args) =>
-          this.guestPowerShell(`Invoke-OpenClaw ${args.map(psSingleQuote).join(" ")}`),
+          this.guestPowerShell(`Invoke-OpenClaw ${args.map(psSingleQuote).join(" ")}`, {
+            readOnly: true,
+          }),
         installCli: (args) =>
           this.guestPowerShellBackground(
             "install-companion",
@@ -324,7 +326,7 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
 
   private guestPowerShell(
     script: string,
-    options: { check?: boolean; timeoutMs?: number } = {},
+    options: { check?: boolean; timeoutMs?: number; readOnly?: boolean } = {},
   ): string {
     return this.guest.powershell(`${windowsOpenClawResolver}\n${script}`, options);
   }
@@ -461,7 +463,7 @@ Invoke-OpenClaw --version
   }
 
   private verifyVersionContains(needle: string): void {
-    const version = this.guestPowerShell("Invoke-OpenClaw --version");
+    const version = this.guestPowerShell("Invoke-OpenClaw --version", { readOnly: true });
     if (!version.includes(needle)) {
       throw new Error(`version mismatch: expected substring ${needle}`);
     }
@@ -553,11 +555,15 @@ Invoke-OpenClaw update status --json`,
     const status = this.guestPowerShell(
       `${windowsPortableGitPathScript}
 Invoke-OpenClaw update status --json`,
+      { readOnly: true },
     );
     assertDevChannelUpdate(status, this.devTargetCommit, () =>
-      this.guestPowerShell(`${windowsPortableGitPathScript}
+      this.guestPowerShell(
+        `${windowsPortableGitPathScript}
 $checkoutPath = Join-Path $env:USERPROFILE 'openclaw'
-git.exe -C $checkoutPath rev-parse HEAD`),
+git.exe -C $checkoutPath rev-parse HEAD`,
+        { readOnly: true },
+      ),
     );
   }
 
@@ -589,7 +595,7 @@ if ($LASTEXITCODE -ne 0) { throw "gateway ${action} failed with exit code $LASTE
     while (Date.now() < deadline) {
       const probe = this.guestPowerShell(
         "Invoke-OpenClaw gateway status --deep --require-rpc --timeout 30000 --json",
-        { check: false, timeoutMs: 60_000 },
+        { check: false, timeoutMs: 60_000, readOnly: true },
       );
       const status = JSON.parse(probe || "{}") as { rpc?: { ok?: boolean } };
       if (status.rpc?.ok === true) {
@@ -615,9 +621,10 @@ if ($LASTEXITCODE -ne 0) { throw "gateway ${action} failed with exit code $LASTE
   private showGatewayStatusCompat(): void {
     const help = this.guestPowerShell("Invoke-OpenClaw gateway status --help", {
       check: false,
+      readOnly: true,
     });
     const suffix = help.includes("--require-rpc") ? "--deep --require-rpc" : "--deep";
-    this.guestPowerShell(`Invoke-OpenClaw gateway status ${suffix}`);
+    this.guestPowerShell(`Invoke-OpenClaw gateway status ${suffix}`, { readOnly: true });
   }
 
   private verifyTurn(): Promise<void> {

@@ -1817,6 +1817,41 @@ if (commandArgs[0] === "list") {
     }
   });
 
+  it.each([
+    { readOnly: true, status: 255, transport: true, persistent: false, attempts: 2, ok: true },
+    { readOnly: true, status: 255, transport: true, persistent: true, attempts: 2, ok: false },
+    { readOnly: false, status: 255, transport: true, persistent: false, attempts: 1, ok: false },
+    { readOnly: true, status: 7, transport: false, persistent: false, attempts: 1, ok: false },
+    { readOnly: true, status: 255, transport: false, persistent: false, attempts: 1, ok: false },
+  ])("retries only Windows read transport failures: %j", (scenario) => {
+    const tempDir = makeTempDir(tempDirs, "openclaw-parallels-windows-read-");
+    const callsPath = join(tempDir, "calls");
+    writeNodeFakePrlctl(
+      tempDir,
+      `if (args.at(-1)?.startsWith("powershell.exe ")) {
+        const fs = process.getBuiltinModule("node:fs");
+        const callsPath = ${JSON.stringify(callsPath)};
+        const count = fs.existsSync(callsPath) ? Number(fs.readFileSync(callsPath, "utf8")) + 1 : 1;
+        fs.writeFileSync(callsPath, String(count));
+        if (count === 1 || ${scenario.persistent}) {
+          console.error(${JSON.stringify(scenario.transport ? "PrlJob_GetResult: Invalid argument. An invalid argument was passed." : "guest command failed")});
+          process.exit(${scenario.status});
+        }
+        console.log("ready");
+      }`,
+    );
+    withEnv(fakePrlctlEnv(tempDir), () => {
+      const guest = new WindowsGuest("Windows VM", new PhaseRunner(tempDir));
+      const invoke = () => guest.powershell("Write-Output ready", { readOnly: scenario.readOnly });
+      if (scenario.ok) {
+        expect(invoke()).toBe("ready");
+      } else {
+        expect(invoke).toThrow(`Windows guest command failed with exit code ${scenario.status}`);
+      }
+    });
+    expect(Number(readFileSync(callsPath, "utf8"))).toBe(scenario.attempts);
+  });
+
   it("carries refreshed Windows guest environment into every PowerShell script", () => {
     const tempDir = makeTempDir(tempDirs, "openclaw-parallels-windows-env-");
     const scriptsPath = join(tempDir, "scripts.jsonl");
