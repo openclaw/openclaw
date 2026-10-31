@@ -79,6 +79,8 @@ const { values } = parseArgs({
     "cpu-throttle": { type: "string", default: "1" },
     "low-memory": { type: "boolean", default: false },
     trace: { type: "boolean", default: false },
+    "profile-interval-us": { type: "string", default: "1000" },
+    "no-opt": { type: "boolean", default: false },
     "selector-stats": { type: "boolean", default: false },
     theme: { type: "string", default: "light" },
     "thread-cpu-time": { type: "boolean", default: false },
@@ -119,6 +121,10 @@ if (values.theme !== "light" && values.theme !== "dark") {
 const theme = values.theme;
 const pairs = Number(values.pairs);
 const cpuThrottle = Number(values["cpu-throttle"]);
+const profileIntervalUs = Number(values["profile-interval-us"]);
+if (!Number.isInteger(profileIntervalUs) || profileIntervalUs < 50) {
+  throw new Error("profile-interval-us must be an integer of at least 50");
+}
 const assetLatencyMs = Number(values["asset-latency-ms"]);
 if (!Number.isFinite(assetLatencyMs) || assetLatencyMs < 0) {
   throw new Error("asset-latency-ms must be nonnegative");
@@ -403,9 +409,14 @@ if (values["process-wakeups"]) {
   }
 }
 const browserExecutable = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const memoryArgs = values["low-memory"]
-  ? ["--enable-low-end-device-mode", "--js-flags=--max-old-space-size=128"]
-  : [];
+const memoryArgs = values["low-memory"] ? ["--enable-low-end-device-mode"] : [];
+const v8Flags = [
+  ...(values["low-memory"] ? ["--max-old-space-size=128"] : []),
+  ...(values["no-opt"] ? ["--no-opt"] : []),
+];
+if (v8Flags.length) {
+  memoryArgs.push(`--js-flags=${v8Flags.join(" ")}`);
+}
 const browser = await chromium.launch({
   executablePath: browserExecutable,
   args: memoryArgs,
@@ -583,8 +594,9 @@ try {
           load: os.loadavg(),
         },
         collection: trace
-          ? "CDP trace + 1ms CPU profiler (overhead included)"
+          ? `CDP trace + ${profileIntervalUs}µs CPU profiler (overhead included)`
           : "untraced CDP metrics",
+        v8Optimization: values["no-opt"] ? "disabled for diagnostics" : "default",
         metricTimeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
         functionCounts: values["function-counts"]
           ? "Precise coverage starts before navigation and resets after preparation; diagnostic overhead, not timing evidence."
@@ -979,7 +991,7 @@ try {
               });
               tracing = true;
               await cdp.send("Profiler.enable");
-              await cdp.send("Profiler.setSamplingInterval", { interval: 1000 });
+              await cdp.send("Profiler.setSamplingInterval", { interval: profileIntervalUs });
               await cdp.send("Profiler.start");
               profiling = true;
             }

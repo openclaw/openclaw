@@ -193,15 +193,8 @@ function BoardWidgetCellContent(
   const [reportEntered, setReportEntered] = createSignal(false);
   const needsGrantNotice = () =>
     props.widget?.grantState === "pending" || props.widget?.grantState === "rejected";
-  // Keep an admitted body for the cell lifetime, including kind and tab changes.
-  const bodyAdmitted = createMemo(
-    (previous = false) =>
-      previous ||
-      (Boolean(props.widget) &&
-        (!fixedReport() || needsResources() || needsGrantNotice() || reportEntered())),
-  );
-  // Fixed reports already reserve their full height. Build nearby bodies once,
-  // then let the existing core-widget latch retain them across tab switches.
+  // Fixed reports reserve their full height. Keep their shells ready for scroll,
+  // but admit heavy report content only nearby and retain it across tab switches.
   // Observe the card because the display:contents host has no intersection box.
   createIntersectionObserver(
     () => (fixedReport() && !reportEntered() && widgetRoot() ? [widgetRoot()!] : []),
@@ -656,10 +649,8 @@ function BoardWidgetCellContent(
             },
           ]}
         >
-          <Show when={bodyAdmitted()}>
-            <Show when={bodyError()} fallback={<>{bodyBoundary()}</>}>
-              {(failure) => <BoardWidgetError error={failure().error} />}
-            </Show>
+          <Show when={bodyError()} fallback={<>{bodyBoundary()}</>}>
+            {(failure) => <BoardWidgetError error={failure().error} />}
           </Show>
           <Show when={actionFailed() && props.widget!.grantState !== "pending"}>
             <div class="board-widget__error-overlay">
