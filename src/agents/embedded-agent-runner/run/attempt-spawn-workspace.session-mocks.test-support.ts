@@ -9,7 +9,8 @@ vi.mock("../../system-prompt-params.js", () => ({
 }));
 
 // mock-isolation: Session fixtures keep compaction policy deterministic without loading runtime settings.
-vi.mock("../../agent-settings.js", () => ({
+vi.mock("../../agent-settings.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agent-settings.js")>()),
   applyAgentAutoCompactionGuard: () => {},
   applyAgentCompactionSettingsFromConfig: () => ({
     didOverride: false,
