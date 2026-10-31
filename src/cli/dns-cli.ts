@@ -136,6 +136,27 @@ function publishConfigFile(filePath: string, content: string): void {
   });
 }
 
+/**
+ * Flush a path's data as root before it is published.
+ *
+ * macOS `sync` ignores pathname operands and only schedules a global sync that
+ * may return before the flush completes, so the descriptor has to be
+ * synchronized explicitly. The repository's atomic writer does the same for
+ * unprivileged publication.
+ */
+function flushPrivileged(targetPath: string): void {
+  const script = [
+    'const fs = require("node:fs");',
+    'const fd = fs.openSync(process.argv[1], "r");',
+    "try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }",
+  ].join("");
+  const flushed = spawnSync("sudo", [process.execPath, "-e", script, targetPath], {
+    encoding: "utf-8",
+    stdio: ["ignore", "ignore", "inherit"],
+  });
+  assertSpawnSucceeded(`privileged flush ${targetPath}`, flushed);
+}
+
 /** Publish through a privileged staging file when the operator's path is not writable. */
 function publishConfigFileWithSudo(filePath: string, content: string): void {
   const target = resolvePublicationTarget(filePath);
@@ -166,14 +187,14 @@ function publishConfigFileWithSudo(filePath: string, content: string): void {
     // Flush the staged bytes before the rename, matching the ordinary
     // publisher's durability: a crash after the rename must not leave the
     // published name pointing at missing or incomplete content.
-    run("sudo", ["sync", tempPath]);
+    flushPrivileged(tempPath);
     const published = spawnSync("sudo", ["mv", "-f", tempPath, target], {
       encoding: "utf-8",
       stdio: "inherit",
     });
     assertSpawnSucceeded(`sudo mv ${tempPath} ${target}`, published);
     // Flush the directory entry so the rename itself survives a crash.
-    run("sudo", ["sync", path.dirname(target)]);
+    flushPrivileged(path.dirname(target));
   } catch (error) {
     // The staged file is inert and the operator's file was never touched.
     spawnSync("sudo", ["rm", "-f", tempPath], {

@@ -335,10 +335,19 @@ describe("dns-cli probe bounds", () => {
       expect(installIndex).toBeGreaterThanOrEqual(0);
       expect(teeIndex).toBeGreaterThan(installIndex);
       // The privileged publisher flushed the staged bytes before publishing.
-      const syncIndex = sudoCalls.findIndex((call) => (call[1] as string[])[0] === "sync");
+      // macOS `sync` ignores path operands, so the flush runs a descriptor
+      // synchronization through the same runtime that owns the command.
+      const flushIndexes = sudoCalls
+        .map((call, index) => ({ call, index }))
+        .filter(
+          ({ call }) =>
+            (call[1] as string[])[0] === "-e" && (call[1] as string[])[1] === process.execPath,
+        )
+        .map(({ index }) => index);
       const moveIndex = sudoCalls.findIndex((call) => (call[1] as string[])[0] === "mv");
-      expect(syncIndex).toBeGreaterThanOrEqual(0);
-      expect(syncIndex).toBeLessThan(moveIndex);
+      expect(flushIndexes.length).toBeGreaterThanOrEqual(2);
+      expect(flushIndexes[0]!).toBeLessThan(moveIndex);
+      expect(flushIndexes[1]!).toBeGreaterThan(moveIndex);
       // No staging sibling survived publication.
       expect(fs.readdirSync(etcDir).filter((entry) => entry.startsWith(".Corefile"))).toEqual([]);
     },
