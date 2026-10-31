@@ -172,6 +172,16 @@ describe("resident catalog rollout currency", () => {
       );
       watchers[index]!.emit("change", "rename", path.basename(file));
     };
+    const lstat = fs.lstat;
+    vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      const stat = await lstat(...args);
+      // Delivered events must invalidate healthy caches even on coarse directory clocks.
+      if (stat.isDirectory()) {
+        stat.ctimeMs = 0;
+        stat.mtimeMs = 0;
+      }
+      return stat;
+    });
     const f = await fixture();
     const noReads = expectNoReads("readFile", "open");
     const tracked = [f.file];
@@ -190,12 +200,18 @@ describe("resident catalog rollout currency", () => {
     expect(next.has(added)).toBe(true);
     expect(present).toEqual(new Set([f.file]));
     noReads();
+    const directories = vi.spyOn(fs, "opendir");
+    await f.scan(tracked);
+    expect(directories.mock.calls.map(([directory]) => directory)).not.toContain(f.day);
+    expect(directories.mock.calls.map(([directory]) => directory)).not.toContain(newDay);
+    directories.mockRestore();
 
     const renamed = path.join(newDay, "rollout-renamed.jsonl.zst");
     await fs.rename(added, renamed);
     notifyRename(added);
     notifyRename(renamed);
     await fs.unlink(f.file);
+    // Filesystem completion is not a watcher receipt; assert convergence after delivery.
     notifyRename(f.file);
     const final = await f.scan([f.file, added.slice(0, -4), renamed.slice(0, -4)]);
     expect(new Set(final.files.keys())).toEqual(new Set([compressedSibling, renamed]));
@@ -253,7 +269,7 @@ describe("resident catalog rollout currency", () => {
 
   it("falls back to file stats after watcher loss and releases watches when retired", async () => {
     const f = await fixture();
-    const watch = vi.spyOn(nodeFs, "watch");
+    const { watch } = watchWithControlledEvents("linux");
     await f.scan();
     const watcher = watch.mock.results[0]!.value;
     const close = vi.spyOn(watcher, "close");
@@ -268,7 +284,7 @@ describe("resident catalog rollout currency", () => {
     await fs.unlink(f.file);
     expect((await f.scan([f.file])).present.size).toBe(0);
     watch.mockRestore();
-    const restoredWatch = vi.spyOn(nodeFs, "watch");
+    const { watch: restoredWatch } = watchWithControlledEvents("linux");
     await f.scan();
     const restoredClose = vi.spyOn(restoredWatch.mock.results[0]!.value, "close");
     f.scanner.close();
