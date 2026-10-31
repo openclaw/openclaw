@@ -35,7 +35,7 @@ const delivery = vi.hoisted(() => ({
   settlement: undefined as Promise<SqliteWorkerOperationSettlement> | undefined,
   hideCommit: false,
   appendCalls: 0,
-  coldWindows: 0,
+  appendInputs: new Array<unknown>(),
 }));
 vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../state/openclaw-agent-execution.js")>();
@@ -73,7 +73,7 @@ vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => {
                 execute: async (command, commandOptions) => {
                   if (command.type === "trajectory.events.append") {
                     delivery.appendCalls += 1;
-                    delivery.coldWindows += Number(command.input.windowFacts === undefined);
+                    delivery.appendInputs.push(command.input);
                     const before = delivery.beforeAppend;
                     delivery.beforeAppend = undefined;
                     await before?.();
@@ -151,7 +151,7 @@ afterEach(() => {
   delivery.settlement = undefined;
   delivery.hideCommit = false;
   delivery.appendCalls = 0;
-  delivery.coldWindows = 0;
+  delivery.appendInputs = [];
   vi.restoreAllMocks();
 });
 
@@ -342,10 +342,13 @@ it("keeps interleaved session append windows warm in one database", async () => 
       }
       if (round === 1) {
         // Initial retention invalidates window facts; measure only the warmed writes.
-        delivery.coldWindows = 0;
+        delivery.appendInputs = [];
       }
     }
-    expect(delivery.coldWindows).toBe(0);
+    expect(delivery.appendInputs).toHaveLength(4);
+    for (const input of delivery.appendInputs) {
+      expect(input).toHaveProperty("windowFacts", expect.any(Object));
+    }
     for (const entry of targets) {
       expect(await eventTypes(entry)).toEqual(["round-0", "round-1", "round-2", "round-3"]);
     }
