@@ -6,6 +6,7 @@ import {
   mutateConfigFile,
   readConfigFileSnapshotForWrite,
 } from "openclaw/plugin-sdk/config-mutation";
+import { readRegularFile } from "openclaw/plugin-sdk/file-access-runtime";
 import { runUtf8CommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { z } from "zod";
 import { buildOpenShellBaseArgv } from "./cli.js";
@@ -48,22 +49,22 @@ async function readPairingTarget(file: string | undefined): Promise<string | und
   if (!file) {
     return undefined;
   }
-  const handle = await fs.open(file, "r");
+  let buffer: Buffer;
   try {
-    const stat = await handle.stat();
-    if (!stat.isFile() || stat.size > 65536) {
-      throw new Error("Pairing target must be a regular file of at most 64 KiB.");
-    }
-    const target = (await handle.readFile("utf8")).trim();
-    if (!target || Buffer.byteLength(target) > 65536) {
-      throw new Error(
-        "Pairing target file must contain a nonempty join URL or setup code of at most 64 KiB.",
-      );
-    }
-    return target;
-  } finally {
-    await handle.close();
+    // Follow selected links, but refuse special files before a blocking open.
+    ({ buffer } = await readRegularFile({ filePath: await fs.realpath(file), maxBytes: 65536 }));
+  } catch (cause) {
+    throw new Error("Pairing target must be a readable regular file of at most 64 KiB.", {
+      cause,
+    });
   }
+  const target = buffer.toString("utf8").trim();
+  if (!target) {
+    throw new Error(
+      "Pairing target file must contain a nonempty join URL or setup code of at most 64 KiB.",
+    );
+  }
+  return target;
 }
 
 async function runOpenShellWorker(config: OpenClawConfig, sandbox: string, options: WorkerOptions) {

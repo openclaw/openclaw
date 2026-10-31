@@ -168,6 +168,17 @@ describe("OpenShell standalone worker CLI", () => {
   it("withholds node launch on failed broker readiness, then sends pairing only through stdin", async () => {
     await withTempHome(async (home) => {
       const target = path.join(home, "pairing");
+      for (const contents of ["", " ".repeat(65537)]) {
+        await fs.writeFile(target, contents, { mode: 0o600 });
+        await expect(
+          invoke(config(), "run", "native-worker", "--target-file", target),
+        ).rejects.toThrow(/Pairing target.*64 KiB/);
+        expect(run).not.toHaveBeenCalled();
+      }
+      await expect(invoke(config(), "run", "native-worker", "--target-file", home)).rejects.toThrow(
+        /regular file/,
+      );
+      expect(run).not.toHaveBeenCalled();
       await fs.writeFile(target, "synthetic-single-use-target", { mode: 0o600 });
       run.mockResolvedValueOnce({ code: 1 });
       await expect(
