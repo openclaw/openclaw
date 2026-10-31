@@ -658,6 +658,6 @@ it("records the interaction time for a voice-only session", async () => {
     timestamp,
   });
 
-  const entry = await loadSessionEntryReadOnly({ agentId: "main", sessionKey: target.sessionKey });
+  const entry = loadSessionEntryReadOnly({ agentId: "main", sessionKey: target.sessionKey });
   expect(entry?.lastInteractionAt).toBe(timestamp);
 });
