@@ -560,7 +560,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   justify-content: center;
   gap: 6px;
   border: 1px solid var(--border);
-  background: var(--bg-elevated);
+  background: var(--btn-bg, var(--bg-elevated));
   padding: 8px 14px;
   border-radius: var(--radius-md);
   font-size: 13px;
@@ -576,7 +576,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 }
 
 .btn:hover:where(:not(:disabled, [aria-disabled="true"])) {
-  background: var(--bg-hover);
+  background: var(--btn-bg-hover, var(--bg-hover));
   border-color: var(--border-strong);
 }
 
