@@ -42,6 +42,7 @@ import {
   resolveConfiguredMediaEntryCapabilities,
 } from "./entry-capabilities.js";
 import { inspectLocalAudioSelection } from "./local-audio.js";
+import { formatMediaFailureReason, formatMediaFailureSummary } from "./media-failure-reason.js";
 import {
   assertMediaExecutionCurrent,
   hasProviderAuthAvailable,
@@ -480,11 +481,13 @@ async function runAttachmentEntries(
   output: MediaUnderstandingOutput | null;
   attempts: MediaUnderstandingModelDecision[];
   processing: MediaAttachmentProcessing;
+  failureSummary?: string;
 }> {
   const { entries, capability } = params;
   const attachmentIndex = params.attachment.index;
   const attempts: MediaUnderstandingModelDecision[] = [];
   let processing: MediaAttachmentProcessing = "omitted";
+  let failureSummary: string | undefined;
   for await (const candidate of entries) {
     const { entry } = candidate;
     const entryType = entry.type ?? (entry.command ? "cli" : "provider");
@@ -503,12 +506,13 @@ async function runAttachmentEntries(
         if (
           !(params.automaticAudio && isProviderAuthError(attempt.error, "missing-provider-auth"))
         ) {
+          failureSummary ??= formatMediaFailureSummary(attempt.error);
           attempts.push(
             buildModelDecision({
               entry,
               entryType,
               outcome: "failed",
-              reason: String(attempt.error),
+              reason: formatMediaFailureReason(attempt.error),
             }),
           );
         }
@@ -550,12 +554,13 @@ async function runAttachmentEntries(
           logVerbose(`Skipping ${capability} model due to ${err.reason}: ${err.message}`);
         }
       } else {
+        failureSummary ??= formatMediaFailureSummary(err);
         attempts.push(
           buildModelDecision({
             entry,
             entryType,
             outcome: "failed",
-            reason: String(err),
+            reason: formatMediaFailureReason(err),
           }),
         );
         if (shouldLogVerbose()) {
@@ -568,7 +573,12 @@ async function runAttachmentEntries(
     }
   }
 
-  return { output: null, attempts, processing };
+  return {
+    output: null,
+    attempts,
+    processing,
+    ...(failureSummary ? { failureSummary } : {}),
+  };
 }
 
 export async function runCapability(
@@ -766,7 +776,7 @@ export async function runCapability(
   const attachmentDecisions: MediaUnderstandingDecision["attachments"] = [];
   const attachmentDispositions = buildDispositions({ kind: "failed" }, { kind: "not-selected" });
   for (const attachment of selection.selected) {
-    const { output, attempts, processing } = await runAttachmentEntries({
+    const { output, attempts, processing, failureSummary } = await runAttachmentEntries({
       ...params,
       attachment,
       providerRegistry,
@@ -790,7 +800,7 @@ export async function runCapability(
     attachmentDispositions[attachment.index] = output
       ? { kind: "handled" }
       : attempts.length > 0
-        ? { kind: "failed" }
+        ? { kind: "failed", ...(failureSummary ? { reason: failureSummary } : {}) }
         : { kind: "no-model" };
     attachmentDecisions.push({
       attachmentIndex: attachment.index,
