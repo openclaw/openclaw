@@ -255,14 +255,13 @@ it("external edits are one observed batch; rename and deletion keep per-file his
     const p = path.join(f.root, "private", r.path);
     await writeFile(p, (await readFile(p, "utf8")).replace("First bytes.", "External bytes."));
   }
-  const snapshot = PublicationFiles.prototype.snapshot;
-  const snapshots = vi.spyOn(PublicationFiles.prototype, "snapshot").mockImplementation(function (
-    this: PublicationFiles,
-    ...args
-  ) {
-    f.store.withDatabase((db) => db.exec("PRAGMA busy_timeout=0; BEGIN IMMEDIATE; ROLLBACK"));
-    return snapshot.apply(this, args);
-  });
+  const snapshot = PublicationFiles.prototype.snapshot.bind(new PublicationFiles(f.root));
+  const snapshots = vi
+    .spyOn(PublicationFiles.prototype, "snapshot")
+    .mockImplementation((...args) => {
+      f.store.withDatabase((db) => db.exec("PRAGMA busy_timeout=0; BEGIN IMMEDIATE; ROLLBACK"));
+      return snapshot(...args);
+    });
   afterTest(() => snapshots.mockRestore());
   await f.read(a.id);
   expect(snapshots).toHaveBeenCalled();
