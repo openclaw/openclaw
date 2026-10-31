@@ -1,9 +1,9 @@
 import { formatCliCommand } from "../../cli/command-format.js";
-import { quoteCliArg } from "../../cli/quote-cli-arg.js";
+import { quoteCliArg, quotePowerShellArg } from "../../cli/quote-cli-arg.js";
 
 /**
  * Renders the transcript-trim command for each shell an operator may paste into. Bare keys read the
- * same everywhere; once a key needs quoting, POSIX shells and cmd.exe spell it differently.
+ * same everywhere; once a key needs quoting, POSIX, PowerShell, and cmd.exe spell it differently.
  */
 function formatTrimCommands(params: { agentId?: string; sessionKey?: string }): string {
   const render = (quote: (value: string) => string) => {
@@ -13,13 +13,17 @@ function formatTrimCommands(params: { agentId?: string; sessionKey?: string }): 
     return `\`${formatCliCommand(`openclaw sessions compact ${keyArg}${agentArg} --max-lines 200`)}\``;
   };
   const posix = render(quoteCliArg);
+  const powershell = render(quotePowerShellArg);
   // cmd.exe keeps single quotes as key characters; inside double quotes it leaves
   // ! and $ (Matrix keys) literal while delayed expansion is off, its default.
   const commandPrompt = render((value) => `"${value}"`);
   if (posix === commandPrompt) {
     return posix;
   }
-  return `${posix} (macOS, Linux, or PowerShell) or ${commandPrompt} (Windows Command Prompt)`;
+  if (posix === powershell) {
+    return `${posix} (macOS, Linux, or PowerShell) or ${commandPrompt} (Windows Command Prompt)`;
+  }
+  return `${posix} (macOS or Linux), ${powershell} (PowerShell), or ${commandPrompt} (Windows Command Prompt)`;
 }
 
 /** Builds recovery instructions while preserving the existing session mapping. */

@@ -18,12 +18,24 @@ it("replaces the failed /compact advice with a warned, session-specific trim com
   expect(commandAt).toBeGreaterThan(backupAt);
 });
 
-it("labels shell-specific forms for keys that need quoting", () => {
+it("labels the POSIX and PowerShell form together when their quoting matches", () => {
   const key = "agent:main:matrix:channel:!ops:example.org:thread:$RootEvent:Example.Org";
   const text = buildContextOverflowRecoveryText({ agentId: "main", sessionKey: key });
   expect(text).toContain(
     `then \`openclaw sessions compact '${key}' --agent main --max-lines 200\` (macOS, Linux, or PowerShell)` +
       ` or \`openclaw sessions compact "${key}" --agent main --max-lines 200\` (Windows Command Prompt).`,
+  );
+});
+
+it("renders a separate PowerShell form when an apostrophe makes the quoting diverge", () => {
+  const text = buildContextOverflowRecoveryText({
+    agentId: "main",
+    sessionKey: "agent:main:bob's",
+  });
+  expect(text).toContain(
+    "then `openclaw sessions compact 'agent:main:bob'\\''s' --agent main --max-lines 200` (macOS or Linux)," +
+      " `openclaw sessions compact 'agent:main:bob''s' --agent main --max-lines 200` (PowerShell)," +
+      ' or `openclaw sessions compact "agent:main:bob\'s" --agent main --max-lines 200` (Windows Command Prompt).',
   );
 });
 
