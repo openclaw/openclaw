@@ -186,6 +186,27 @@ it.each([
     "--batch-json=***",
   ),
   redactionCase("openclaw config set --batch-json", '[{"path":"token","value":"secret"}]'),
+  redactionCase('openclaw config set --expect-current-json {"theme":"dark"} channels.slack.token'),
+  [
+    [
+      "openclaw",
+      "config",
+      "set",
+      "channels.slack.token",
+      "secret-value",
+      "--expect-current-json",
+      '{"theme":"dark"}',
+    ],
+    [
+      "openclaw",
+      "config",
+      "set",
+      "channels.slack.token",
+      "***",
+      "--expect-current-json",
+      '{"theme":"dark"}',
+    ],
+  ] as const,
 ])("redacts %j in persisted audit process info", (argv, expected) => {
   expect(createAuditRecordBase("/tmp/openclaw.json", [...argv]).argv).toEqual(expected);
 });
