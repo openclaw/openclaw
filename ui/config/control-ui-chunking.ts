@@ -78,6 +78,14 @@ export const controlUiLocaleConfigHintsChunkPrefix = "locale-config-hints-";
 export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
+  if (
+    normalized.endsWith("/ui/src/styles/settings.css") ||
+    normalized.endsWith("/ui/src/styles/hub-tabs.css")
+  ) {
+    // Share document CSS without coupling style-only consumers to page chrome or inline CSS text.
+    return "route-chrome-styles";
+  }
+
   switch (controlUiBootManifestKey(id)) {
     case "ui/src/components/sandbox-host.ts":
     case "ui/src/lib/widget-sandbox-host.ts":
@@ -360,6 +368,26 @@ export function controlUiStableChunkName(id: string): string | undefined {
       return "devices-page";
     case "ui/src/pages/plugins/plugins-page.tsx":
       return "plugins-page";
+    case "src/config/cron-limits.ts":
+    case "src/cron/store/delivery-codec.ts":
+    case "src/cron/stagger.ts":
+    case "src/shared/iso-time.ts":
+    case "src/infra/format-time/parse-offsetless-zoned-datetime.ts":
+    case "ui/src/lib/cron/decimal.ts":
+    case "ui/src/lib/cron/form.ts":
+    case "ui/src/lib/cron/form-schedule.ts":
+    case "ui/src/lib/cron/index.ts":
+    case "ui/src/lib/cron/payload.ts":
+    case "ui/src/lib/cron/run-feedback.ts":
+    case "ui/src/lib/cron/runs.ts":
+    case "ui/src/lib/cron/scope.ts":
+    case "ui/src/lib/cron/webhook-url.ts":
+      // These shared Cron owners already load together in Cron and Agents.
+      return "cron-domain";
+    case "ui/src/lib/cron/model-suggestions.ts":
+    case "ui/src/pages/chat/chat-transcript-pages.ts":
+    case "packages/model-catalog-core/src/configured-model-refs.ts":
+    case "ui/src/styles/cron.css":
     case "ui/src/pages/cron/cron-page.tsx":
     case "ui/src/pages/cron/cron-page-state.ts":
     case "ui/src/pages/cron/cron-page-presentation.ts":
