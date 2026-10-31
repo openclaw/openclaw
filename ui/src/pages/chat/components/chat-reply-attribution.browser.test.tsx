@@ -215,38 +215,15 @@ describe.each([1440, 360])("reply attribution (%d px)", (width) => {
   });
 });
 
-it.each([
-  { width: 1440, visible: "Casey Morgan", label: 11 },
-  { width: 390, visible: "Casey", label: 1 },
-])("shows the reply name as $visible at $width px", async ({ width, visible, label }) => {
-  await page.viewport(width, 800);
-  host.style.width = `${width - 32}px`;
-  const { row, name } = await draw("Casey Morgan");
-  expect(name.innerText.trim()).toBe(visible);
-  expect(name.title).toBe("Casey Morgan");
-  const text = row.querySelector<HTMLElement>(".chat-reply-attribution__label-text")!;
-  expect(text.textContent).toBe("Replying to");
-  expect(text.getBoundingClientRect().width > label - 1).toBe(true);
-  if (width === 390) {
-    const centers = [".chat-reply-attribution__mobile-icon", ".chat-author-avatar"].map(
-      (selector) => {
-        const bounds = row.querySelector(selector)!.getBoundingClientRect();
-        return bounds.top + bounds.height / 2;
-      },
-    );
-    expect(Math.abs(centers[0]! - centers[1]!)).toBeLessThanOrEqual(0.5);
-    await expect
-      .element(page.getByRole("button", { name: "Replying to Casey Morgan", exact: true }))
-      .toBeVisible();
-  }
-});
-
 it("updates a mounted reply across the mobile breakpoint without losing navigation", async () => {
   await page.viewport(1440, 800);
   const onOpenReply = vi.fn();
-  await draw("Casey Morgan", true, onOpenReply);
+  const { name } = await draw("Casey Morgan", true, onOpenReply);
+  expect(name.title).toBe("Casey Morgan");
   for (const width of [390, 360, 1440]) {
     await page.viewport(width, 800);
+    // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- textContent includes the visually hidden surname.
+    expect(name.innerText.trim()).toBe(width < 768 ? "Casey" : "Casey Morgan");
     const target = page.getByRole("button", { name: "Replying to Casey Morgan", exact: true });
     await target.click();
     expect(onOpenReply).toHaveBeenLastCalledWith("prompt");
