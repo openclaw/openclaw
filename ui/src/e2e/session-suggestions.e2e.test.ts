@@ -388,7 +388,11 @@ suite.define(() => {
       const typingAvatar = typingRow.locator(
         ".chat-message-avatar-anchor > :is(.chat-avatar, .chat-avatar-slot)",
       );
-      await expect(typingAvatar).toBeVisible();
+      const typingInitials = typingRow.locator(
+        ".chat-message-avatar-anchor .chat-avatar--sender-initials",
+      );
+      await expect(typingInitials).toBeVisible();
+      await expect(typingInitials).toHaveText("O");
       await expect(typingAvatar).toHaveCSS("position", "absolute");
 
       const draft = "yea, cool. Live drafts stream into the bubble now.";
