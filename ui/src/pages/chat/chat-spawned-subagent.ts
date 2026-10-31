@@ -17,6 +17,8 @@ export type SubagentRoster = {
   subagentSessions?: readonly GatewaySessionRow[];
   /** True once the pane's own child query answered; seeded rows can be partial. */
   subagentSessionsHydrated?: boolean;
+  /** The optional child read settled unsuccessfully; live parent facts still apply. */
+  subagentSessionsUnavailable?: boolean;
   /** A newly named child is still awaiting a covering read before the wait can count it. */
   subagentSessionsPending?: boolean;
 };

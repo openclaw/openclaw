@@ -37,6 +37,7 @@ const { values } = parseArgs({
     sessions: { type: "string", default: "3000" },
     "rtt-ms": { type: "string", default: "80" },
     "capture-ms": { type: "string", default: "8000" },
+    "init-script": { type: "string", multiple: true, default: [] },
     route: { type: "string", default: "both" },
     "audit-report": { type: "string" },
     "paint-audit": { type: "string" },
@@ -48,6 +49,7 @@ if (values.help) {
   --dist dist --ui-root dist/control-ui --output .local/warm-reload-proof
   --admission signed-in|token --base <dist|ref> --candidate <dist|ref>
   --reloads 11 --sessions 3000 --rtt-ms 80 --capture-ms 8000 --route both|chat|dashboard
+  --init-script <browser-script.js> (repeatable)
 Creates fresh isolated state and Chromium, records cold + warm reloads, then stops both.
 Offline paint audit: --audit-report <report.json> --paint-audit <paint-audit.json>
 See scripts/perf/warm-reload-proof.md for metric definitions and limitations.`);
@@ -78,6 +80,9 @@ const reloads = integer(values.reloads, "--reloads", 0, 100);
 const sessions = integer(values.sessions, "--sessions", 2000, 20000);
 const rttMs = integer(values["rtt-ms"], "--rtt-ms", 0, 1000);
 const captureMs = integer(values["capture-ms"], "--capture-ms", 1000, 60000);
+const extraInitScripts = await Promise.all(
+  values["init-script"].map((file) => readFile(file, "utf8")),
+);
 if (!["both", "chat", "dashboard"].includes(values.route)) {
   throw new Error("--route must be both, chat, or dashboard");
 }
@@ -758,6 +763,9 @@ try {
           const page = await context.newPage();
           diagnosticPage = page;
           page.setDefaultTimeout(60000);
+          if (extraInitScripts.length) {
+            await page.addInitScript({ content: extraInitScripts.join("\n") });
+          }
           await page.addInitScript({
             content: `globalThis.__name = (fn) => fn; (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)});`,
           });
