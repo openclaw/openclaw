@@ -83,10 +83,10 @@ export function listDecisionModels({
             models.set(row.id, row);
           }
         }
-        // Preserve manifest-only discovery when configured inventory omits a row (replace mode).
-        // A captured row is authoritative even when route matching cleared its capabilities.
+        // Installed adapters retain their existing selector advertisement, including custom
+        // routes and replace mode. This projection never restores prepared execution facts.
         for (const row of plugin.modelCatalog?.providers?.[provider]?.models ?? []) {
-          if (!models.has(row.id)) {
+          if (!models.get(row.id)?.inference?.decision) {
             models.set(row.id, row);
           }
         }
