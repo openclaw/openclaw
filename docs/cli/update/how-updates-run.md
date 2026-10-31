@@ -1475,6 +1475,15 @@ A failed plugin operation retains previous payloads and install records where
 possible and preserves registry choices, plugin settings, enable/disable choices,
 and active slots. A plugin can remain unavailable until repaired.
 
+Plugin finalization re-reads config under the config write lock and retries
+publication up to five times. It preserves unrelated edits and accepts changes
+that are already applied. If a field being finalized conflicts with another edit,
+or publication keeps racing another writer, finalization rolls back its pending
+plugin transaction and records a warning with `openclaw plugins doctor` and
+`openclaw doctor --fix` follow-up guidance. That warning does not fail the core
+update or prevent Gateway recovery. The candidate must contain this repair;
+older candidates retain their previous finalization behavior.
+
 After installing the core and before restarting the managed Gateway,
 `openclaw update` runs mandatory **post-core convergence**: it repairs missing
 configured plugin payloads, validates each _active_ tracked install record on disk,
