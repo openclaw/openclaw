@@ -382,10 +382,20 @@ test("slow writer failure separates waiting and execution", async () => {
         workerThreadId: 7,
       });
       expect(fieldsFor("session.history.archive-prune")).not.toHaveProperty("payload");
+      expect(fieldsFor("session.pending-input.stage")).toHaveProperty("holderAtEnqueue", {
+        operation: "session.history.archive-prune",
+        threadId,
+        heldMs: 100,
+      });
       const record = fieldsFor("session.maintenance.plan");
       expect(record).toMatchObject({
         ...timing(1_900, 1_500, 400),
         operation: "session.maintenance.plan",
+        holderAtEnqueue: {
+          operation: "session.history.archive-prune",
+          threadId,
+          heldMs: 100,
+        },
         error: failure.message,
       });
       expect(record).not.toHaveProperty("reclamationKind");

@@ -72,6 +72,7 @@ export {
   isSystemAgentSetupRuntimeStartParams,
   isWizardStartParams,
   isMcpAuthLoginParams,
+  isMcpAuthLogoutParams,
   isWizardNextParams,
   isWizardCancelParams,
   isWizardStatusParams,

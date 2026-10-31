@@ -19,7 +19,6 @@ import type { SessionActor } from "../config/sessions/session-actor-contract.js"
 import type { SessionAdmissionDatabaseClaim } from "../config/sessions/session-admission-claim.types.js";
 import type { SessionAdmissionTransition } from "../config/sessions/session-admission-transition.types.js";
 import type { SessionEntryCohortReader } from "../config/sessions/session-entry-read-runtime.types.js";
-import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { AgentRunDelegatedAuthority } from "../infra/agent-run-authority.types.js";
 import type { DiagnosticEmbeddedRunOwner } from "../infra/diagnostic-model-request-provenance.js";
 import type { Context, Model } from "../llm/types.js";
@@ -378,11 +377,6 @@ export type ReplyOperationAdmission = {
   resolveSessionTarget?: () => SessionEntryTargetPatchScope | undefined;
   sessionActor?: SessionActor;
   acquireSessionActor?: () => Promise<SessionActor | undefined>;
-  /** Accepted input keeps its durable claim while capacity admission adopts the writer. */
-  adoptInput?: (writer?: {
-    runId: string;
-    assertCurrent?: () => void;
-  }) => Promise<InternalSessionEntry>;
   afterTransition?: (transition: SessionAdmissionTransition) => Promise<void>;
 };
 
@@ -550,7 +544,6 @@ export type SessionControllerInput = {
     predecessor: Promise<boolean>;
     settled: Promise<boolean>;
     settle(accepted: boolean): void;
-    accepted?: boolean;
     admitted?: boolean;
   };
   claim?: SessionControllerMailboxClaim;
@@ -647,6 +640,7 @@ export type SessionControllerSourceAdapter = {
 export type SessionControllerSourceInjection = {
   admit(): Promise<boolean>;
   accepted(accepted: boolean): void;
+  /** Authoritative final custody; only proven withdrawal can undo native acceptance. */
   finish(consumed: boolean): void;
 };
 

@@ -57,12 +57,43 @@ Doctor completes recognized schema-1 databases that predate the audit ledger bef
 | 33      | Native PostgreSQL ordering for predicate-proven non-null partial-index keys; metadata-only SQLite advance ([#183443](https://github.com/openclaw/openclaw/pull/183443))                                                                                                                                                                        | Unreleased          |
 | 34      | Durable default cron partition binding, independent of the state directory                                                                                                                                                                                                                                                                     | Unreleased          |
 | 35      | Content-addressed local workspace directory packs and source path sets, with compact per-projection file fingerprints                                                                                                                                                                                                                          | Unreleased          |
-
-| 36 | Starter install tables, record versions, and provenance use canonical Template names; unrelated data and absent optional provenance stay unchanged | Unreleased |
+| 36      | Starter install tables, record versions, and provenance use canonical Template names; unrelated data and absent optional provenance stay unchanged                                                                                                                                                                                             | Unreleased          |
+| 37      | Immutable provider resource receipts retained with worker environments through terminal cleanup                                                                                                                                                                                                                                                | Unreleased          |
 
 Earlier beta releases first included schema 1 in `v2026.5.30-beta.1`, schema 2
 in `v2026.7.2-beta.1`, schema 3 in `v2026.7.2-beta.2`, schema 5 in
 `v2026.7.2-beta.4`, and schema 6 in `v2026.7.2-beta.5`.
+
+### State schema 37
+
+Schema 37 adds nullable `worker_environments.resource_receipt_json`, implementing
+the [accepted retained-resource design](https://github.com/openclaw/openclaw/issues/188796).
+The existing environment writer records a bounded version-1 receipt containing
+the original lease ID and provider-defined string identity fields. It compares
+the original provision operation and any existing lease in its transaction.
+The first receipt is immutable; recording the same receipt, regardless of
+identity-key order, leaves the row unchanged. The existing transaction and
+commit admission retain live caller authority and publish acknowledged facts.
+
+Allocation can record its receipt before node enrollment or readiness. State
+transitions preserve it, including failed teardown that clears the active lease.
+The receipt is removed only when the existing environment-retention owner prunes
+the entire row; there is no separate timer, manager, or sidecar. Corrupt receipts
+refuse inventory admission rather than becoming legacy absence.
+
+SQLite startup and Doctor add the column without inventing identity for existing
+environments: legacy rows retain `NULL`. The nullable addition requires no
+payload rewrite; SQLite STRICT validation and the existing integrity checks can
+still scan the table. The declared backup scope is `worker_environments`, plus
+schema and content-version metadata supplied by the backup owner. PostgreSQL
+adds the equivalent nullable text column through its consecutive migration owner;
+the generated schema remains derived from canonical SQLite DDL.
+
+A refused migration rolls back the column and version publication together.
+Older binaries cannot enforce exact resource matching and must refuse schema 37.
+Rollback restores the verified pre-upgrade backup and matching binary, after
+reconciling provider resources created since that backup. Never lower schema
+markers to bypass the downgrade fence. The agent schema is unchanged.
 
 ### State schema 36
 

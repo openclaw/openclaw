@@ -34,6 +34,13 @@ visibility, or remote session-link titles. Side Chat is hidden, and session link
 keep their locally available labels. MCP Apps discovery requires general write
 access. The Gateway continues to authorize every request.
 
+Connections without general read access also skip CLI session catalogs, plugin
+tool artwork, and detailed usage reads. Tool activities keep their standard
+symbols and context meters keep the session's total token count. The context
+breakdown and Usage page explain how to request access instead of offering a
+retry that cannot succeed. Session creation and effective tool access still
+follow their separate session scopes.
+
 When the Gateway starts with `OPENCLAW_CONFIG_READONLY=1` or `OPENCLAW_NIX_MODE=1`,
 its Control UI shows **Gateway configuration is read-only.** You can inspect the
 configuration there. OpenClaw refuses changes to `openclaw.json` through the Gateway.
@@ -133,6 +140,8 @@ Message reactions share the message footer. Desktop Chat Details lists automatio
 
 A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen. A reader action checks up to three consecutive pages when entries are empty, overlapping, or hidden by display preferences; longer hidden intervals remain available through another action. Transient read failures retry within the existing one-minute history-recovery budget, honoring the server’s backoff. Permission denials are not automatically retried. The touch-friendly history control keeps keyboard focus during loading and ignores repeated activation. Failed reads show **Retry earlier messages** at that same boundary without removing the loaded conversation. While disconnected, the control shows **Waiting for connection…** instead of accepting a click that cannot load history.
 
+Earlier history is offered only when the Gateway provides a cursor or a loaded transcript entry can anchor the request. Tool activity summaries do not prevent loading older messages. If neither boundary exists, the control stays hidden and automatic loading stops without an error.
+
 GitHub item URLs and repository-qualified references such as `owner/repo#126` render as compact links. Use `PR owner/repo#126` for a pull request or `issue owner/repo#126` for an issue. References identified by keywords, such as `PR #126`, remain plain text without a repository qualifier. Project display names, the checkout, the project catalog, and other messages do not supply a destination. A standalone hash token that is also a valid hexadecimal color, such as `#126`, retains its color preview without a GitHub link.
 
 GitHub polling uses conditional requests when GitHub supplies an ETag. Unchanged responses reuse parsed metadata without downloading the body again. Reuse is bounded and isolated by API endpoint and credential; every refresh still checks GitHub and the current access rules. Authenticated `304 Not Modified` responses do not consume GitHub’s primary REST rate limit.
@@ -195,6 +204,8 @@ Sidebar pull-request indicators reuse the last known snapshot. Subscriptions ack
 
 Changes summaries share identical concurrent polls and reuse unchanged checkout results when file metadata can establish freshness. Summary reads have a separate worker queue from full patches and PR statistics, with priority inside the shared Git child limit. Running Git commands still finish normally, and background work keeps making progress.
 
+Environment change totals request counts without patches or branch history. Opening Review loads patches separately.
+
 If session metadata takes more than two seconds to load, the Changes panel keeps waiting and polls again while that shared read finishes in the background. An empty pending response does not mean there are no changes. The completed diff still requires current session and workspace access.
 
 When a checkout is too large or its Git layout cannot be validated cheaply, summaries reuse the last result for up to ten seconds before probing again. Missing or unavailable checkouts retry after one second. Full patches still require fresh revision validation.
@@ -242,9 +253,9 @@ If an app times out during initialization, use **Retry** to load it again.
 Changing Gateway, losing access, or selecting different content retires the old
 frame and its local state.
 
-Hidden retained chats defer command and model metadata refreshes until you return to them. Returning to a recently opened chat reuses its completed metadata on the same connection until a Gateway change invalidates it. Concurrent readers share the same request. Session events with an unchanged model-selection revision retain the model catalog, and session-only changes retain agent commands. Native sessions without a model-selection revision wait for a 2.5-second quiet period after ordinary patches before refreshing the catalog and session facts. Explicit model, account, and runtime selections refresh promptly. Configuration and command changes refresh commands; catalog and session lifecycle changes refresh affected model choices. Agent-specific catalog changes retain other agents’ cached choices and pending catalog requests. Repeated changes during a request share one trailing refresh instead of issuing overlapping requests.
+Hidden retained chats defer command and model metadata refreshes until you return to them. Returning to a recently opened chat reuses its completed metadata on the same connection until a Gateway change invalidates it. Concurrent readers share the same request. Session events with an unchanged model-selection revision retain the model catalog, and session-only changes retain agent commands. Native sessions without a model-selection revision wait for a 2.5-second quiet period after ordinary patches before refreshing the catalog and session facts. Explicit model, account, and runtime selections refresh promptly. The Gateway publishes metadata changes when catalog or command inputs change; UI-only config changes retain both. Catalog and session lifecycle changes refresh affected model choices. Agent-specific catalog changes retain other agents’ cached choices and pending catalog requests. Repeated changes during a request share one trailing refresh instead of issuing overlapping requests.
 
-Deleting a session refreshes the roster and invalidates that session's model choices without reloading metadata for unrelated chats. Session action menus build their contents when opened.
+Deleting a session refreshes the roster and invalidates that session's model choices without reloading metadata for unrelated chats. Session action menus build their contents when opened. Search keeps a pending model catalog read when its command cache expires; catalog change events still replace obsolete model reads.
 
 Provider speed observations are tracked separately for each requested tier. Repeated identical responses retain the matching Fast or Ultrafast hint without refreshing every open chat's model choices. Recovery or expiry clears only the affected hint.
 
@@ -431,10 +442,25 @@ brings the selected agent into view.
 
 ## Download files
 
+Files search is case-insensitive, including the Greek sigma forms `Σ`, `σ`, and
+`ς`. Search comparison leaves saved filenames and file contents unchanged;
+punctuation and spaces inside the query still match literally.
+
+When a reply file in the current session is too large to attach, its card offers **Find in Files**.
+This searches the current session's Files using the filename as a hint. Choose
+the intended file by its folder, then use **Download file**. The search does not
+select a same-named file automatically or grant access to a moved, deleted, or
+restricted file. Existing attachment limits stay in effect.
+
 Chat filename links first try the named path. If a bare filename is missing there,
 the preview opens a nested file only when a complete workspace search finds exactly
 one matching filename. Ambiguous or incomplete searches keep the missing-file error;
 use an explicit path to select the intended file.
+
+Viewing a shared conversation does not grant access to its host workspace files.
+If your role requires a sandbox, those file links show a read-specific restriction.
+Ask the owner to download and share the file, then attach it to your own session.
+Creating a new session alone does not transfer the file or change access.
 
 Links to managed attachments already delivered in the current chat open the saved
 artifact in the file reader. Click the link or focus it and press **Enter** or
@@ -614,6 +640,10 @@ versioned profile image; profiles with neither use initials without probing an i
 misses for current profile revisions, agent avatars, and resolved workspace icons can remain in
 the browser cache for up to one minute. New profile and agent image revisions use a new URL.
 This behavior is shared by the roster, agent switcher, identity chips, settings, and chat.
+
+Current Work applies complete session events without a periodic list refresh.
+Uncertain membership and reconnects still fetch an authoritative list. Activity
+History retains its one-minute fallback for people counts and pulse aggregates.
 
 Activity and previews in the sidebar roster refresh on session events
 and Gateway reconnects. Reusing cached ancestry for the selected session does not

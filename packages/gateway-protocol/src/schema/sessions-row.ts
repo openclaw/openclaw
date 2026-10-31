@@ -197,6 +197,8 @@ export const SessionRowSchema = Type.Object(
     lastActivityAt: Type.Optional(Type.Number()),
     lastInteractionAt: Type.Optional(Type.Number()),
     status: Type.Optional(SessionRunStatusSchema),
+    /** Running background exec processes; absent when none remain. */
+    backgroundProcessCount: Type.Optional(Type.Integer({ minimum: 1 })),
     lastRunError: Type.Optional(Type.String()),
     suppressErrorNotice: Type.Optional(Type.Boolean()),
     providerReview: Type.Optional(SessionProviderReviewProjectionSchema),

@@ -1,4 +1,5 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { patchSettings } from "../app/settings.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import {
   mountRoster,
@@ -143,4 +144,68 @@ it("restores focus when unpinning an agent outside the roster viewport", async (
     expect(document.activeElement).toBe(row);
     expect(pinned.isConnected).toBe(false);
   });
+});
+
+it("retires inactive session body work across roster and chip mode changes", async () => {
+  patchSettings({ gatewayUrl: "ws://gateway.test", sidebarAgentsMode: "roster" });
+  const { sidebar, context } = await mountRoster(roster);
+  await settleRoster(sidebar);
+  await waitForSolid(() => expect(sidebar.querySelector("[data-agent-group]")).not.toBeNull());
+  const owner = getAppSidebarOwner(sidebar.hostElement)!;
+  const groups = vi.spyOn(owner, "personalGroupSessionRows");
+  const body = sidebar.querySelector(".sidebar-shell__body");
+  expect(body).not.toBeNull();
+  const initialRoster = sidebar.querySelector("openclaw-sidebar-agent-roster");
+  const record = (phase: string) =>
+    console.log(
+      "inactive-sidebar-counts",
+      JSON.stringify({
+        phase,
+        groups: groups.mock.calls.length,
+      }),
+    );
+  record("cold-roster");
+  const update = async (phase: string, expectedGroups: number) => {
+    groups.mockClear();
+    for (let i = 0; i < 10; i++) {
+      sidebar.devGitBranch = `${phase}-${i}`;
+      await settleRoster(sidebar);
+      expect(sidebar.textContent).toContain(`${phase}-${i}`);
+    }
+    record(phase);
+    expect.soft(groups).toHaveBeenCalledTimes(expectedGroups);
+  };
+  await update("ten-cold-roster-updates", 0);
+
+  sidebar.sidebarEntries = ["session:agent:main:pinned"];
+  context.navigation.update({
+    personalSessionGroups: [
+      { id: "project", label: "Project", sessionKeys: ["agent:main:recent"] },
+    ],
+  });
+  const expectRows = () => {
+    expect(sidebar.querySelectorAll('[data-session-section="pinned"]')).toHaveLength(1);
+    expect(sidebar.querySelectorAll('[data-personal-session-group="project"]')).toHaveLength(1);
+    expect(sidebar.querySelectorAll('[data-session-key="agent:main:pinned"]')).toHaveLength(1);
+    expect(
+      sidebar.querySelectorAll(
+        '[data-personal-session-group="project"] [data-session-key="agent:main:recent"]',
+      ),
+    ).toHaveLength(1);
+  };
+  await settleRoster(sidebar);
+  await waitForSolid(expectRows);
+  // Each group has owner bookkeeping.
+  await update("ten-roster-updates-with-pins", 40);
+  for (const [index, mode] of (["chip", "roster", "chip", "roster"] as const).entries()) {
+    groups.mockClear();
+    sidebar.sidebarAgentsMode = mode;
+    await settleRoster(sidebar);
+    await waitForSolid(expectRows);
+    expect(sidebar.querySelector(".sidebar-shell__body")).toBe(body);
+    expect(Boolean(sidebar.querySelector("openclaw-sidebar-agent-roster"))).toBe(mode === "roster");
+    record(`switch-${index}-${mode}`);
+    await update(`ten-${index}-${mode}-updates-with-pins`, mode === "roster" ? 40 : 50);
+  }
+  expect(initialRoster?.isConnected).toBe(false);
 });

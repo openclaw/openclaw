@@ -20,7 +20,6 @@
   align-items: center;
   gap: 8px;
   height: 40px;
-  box-sizing: border-box;
   padding: 0;
   border: 0;
   border-radius: 0;
@@ -177,7 +176,6 @@
 
 .chat-workspace-mobile__content {
   min-height: 100%;
-  box-sizing: border-box;
   padding: 4px 12px 16px;
 }
 

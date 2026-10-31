@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { selectResetKeptEntries } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import type { SessionTranscriptBoundedActiveContext } from "./session-accessor.sqlite-contract.js";
 import type { SessionActorHotState } from "./session-actor-state.types.js";
+import { fitBackgroundResultDependencies } from "./session-background-result-dependencies.js";
 import {
   normalizeBoundedContextLimits,
   selectBoundedContextRows,
@@ -89,10 +90,26 @@ export function readSessionActorBoundedHistory(
     if (!boundedLimits || serializedBytes + boundary.serialized_bytes <= boundedLimits.maxBytes) {
       injected = boundary;
       rows.unshift(boundary);
-      serializedBytes += boundary.serialized_bytes;
     } else {
       truncated = true;
     }
+  }
+  const fitted = fitBackgroundResultDependencies(
+    rows.map((row) => ({ seq: row.rawSeq, serialized_bytes: row.serialized_bytes })),
+    active.map((row) => ({
+      seq: row.rawSeq,
+      serialized_bytes: row.serialized_bytes,
+      event: row.event,
+    })),
+    headerBytes,
+    boundedLimits?.maxBytes,
+  );
+  const bySequence = new Map(active.map((row) => [row.rawSeq, row]));
+  rows.splice(0, rows.length, ...fitted.rows.map((row) => bySequence.get(row.seq)!));
+  serializedBytes = fitted.serializedBytes;
+  truncated ||= fitted.truncated;
+  if (injected && !rows.includes(injected)) {
+    injected = undefined;
   }
   const parents = new Map(
     rows.map((row) => [row.node.id, active[row.activePosition - 1]?.node.id ?? null]),
@@ -141,11 +158,12 @@ export function readSessionActorBoundedHistory(
       endIndex: endIndex + headerOffset,
     });
   }
+  const firstSelected = selectedRows.findLast((row) => rows.includes(row));
   const anchors = [
     ...(injected && isRecord(injected.event) && injected.event.type === "compaction"
       ? [injected]
       : []),
-    ...(selectedRows.at(-1) ? [selectedRows.at(-1)!] : []),
+    ...(firstSelected ? [firstSelected] : []),
   ];
   const cacheTtlProjectionPrefixes = anchors.flatMap((anchor) => {
     const prefix = collectCacheTtlProjectionPrefix(

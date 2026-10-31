@@ -38,6 +38,7 @@ export async function runGatewayStartupObservers(params: {
     ...args: Parameters<typeof createHookRunner>
   ) => ReturnType<typeof createHookRunner> | Promise<ReturnType<typeof createHookRunner>>;
   refreshLatestUpdateRestartSentinel: () => Promise<unknown>;
+  startDurableProcesses?: () => Promise<void>;
 }): Promise<void> {
   if (params.signal.aborted || params.isClosing?.()) {
     return;
@@ -52,6 +53,7 @@ export async function runGatewayStartupObservers(params: {
       if (!context || params.signal.aborted || params.isClosing?.()) {
         return;
       }
+      await params.startDurableProcesses?.();
       const { resumeAgentDeletions } = await import("./server-agent-deletion-recovery.js");
       await resumeAgentDeletions(context, params.signal);
       const activateSubagentRegistry = await params.loadSubagentRegistryActivation();

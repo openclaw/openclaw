@@ -1,8 +1,17 @@
+type TranscriptWitness = { messageId: string; rowKey: string; text: string };
+export type TranscriptWitnesses = { saved: TranscriptWitness; live: TranscriptWitness };
+
 /** Browser-only diagnostic, serialized after the mock socket and wire-delay probe. */
 export function warmReloadProbe(
-  input: { rowFacts?: boolean; avatars?: boolean; lateRowFacts?: boolean } = {},
+  input: {
+    rowFacts?: boolean;
+    avatars?: boolean;
+    lateRowFacts?: boolean;
+    witnesses?: TranscriptWitnesses;
+  } = {},
   samplePaneChrome?: (at: number) => void,
 ) {
+  const witnesses = input.witnesses;
   const milestones: Record<string, number> = {};
   const mutations: Array<{ at: number; count: number; region: string }> = [];
   const shifts: Array<{ at: number; value: number }> = [];
@@ -46,6 +55,61 @@ export function warmReloadProbe(
   };
   const transcriptPaints: Array<{ renderTime: number; element: string; rowKey: string | null }> =
     [];
+  type WitnessSource = "saved" | "live";
+  const witnessElements = new WeakMap<Element, { source: WitnessSource; rowKey: string }>();
+  const witnessPaints: Array<{
+    source: WitnessSource;
+    identifier: string;
+    rowKey: string;
+    renderTime: number;
+  }> = [];
+  const witnessHistory: Array<{
+    atMs: number;
+    source: string;
+    messageCount: number | null;
+    saved: number;
+    live: number;
+  }> = [];
+  const recordWitnessHistory = (source: string, messages: unknown) => {
+    if (!witnesses) {
+      return;
+    }
+    const matches = { saved: 0, live: 0 };
+    for (const message of Array.isArray(messages) ? messages : []) {
+      if (!message || typeof message !== "object") {
+        continue;
+      }
+      const metadata = Reflect.get(message, "__openclaw");
+      const id = metadata && typeof metadata === "object" ? Reflect.get(metadata, "id") : null;
+      for (const witnessSource of ["saved", "live"] as const) {
+        if (id !== witnesses[witnessSource].messageId) {
+          continue;
+        }
+        const content = Reflect.get(message, "content");
+        const text =
+          typeof content === "string"
+            ? content
+            : Array.isArray(content)
+              ? content
+                  .flatMap((block) =>
+                    block && typeof block === "object" && Reflect.get(block, "type") === "text"
+                      ? [Reflect.get(block, "text")]
+                      : [],
+                  )
+                  .join("\n")
+              : "";
+        if (text.includes(witnesses[witnessSource].text)) {
+          matches[witnessSource]++;
+        }
+      }
+    }
+    witnessHistory.push({
+      atMs: performance.now(),
+      source,
+      messageCount: Array.isArray(messages) ? messages.length : null,
+      ...matches,
+    });
+  };
   const largestPaints: Array<{
     renderTime: number;
     loadTime: number;
@@ -163,8 +227,10 @@ export function warmReloadProbe(
       // Element Timing is implemented by Chromium but absent from lib.dom.
       const paint = entry as ElementPaint;
       const row = paint.element?.closest(".chat-virtual-row");
+      const witness = paint.element ? witnessElements.get(paint.element) : undefined;
       if (
-        paint.identifier !== "openclaw-transcript" ||
+        (paint.identifier !== "openclaw-transcript" &&
+          (!witness || paint.identifier !== `openclaw-transcript-${witness.source}`)) ||
         !row ||
         !paint.element ||
         paint.renderTime <= 0 ||
@@ -179,6 +245,16 @@ export function warmReloadProbe(
         element: elementLabel(paint.element),
         rowKey: row.getAttribute("data-virtual-row-key"),
       });
+      if (witness && paint.identifier === `openclaw-transcript-${witness.source}`) {
+        milestones[
+          witness.source === "saved" ? "firstSavedWitnessPaint" : "firstLiveWitnessPaint"
+        ] ??= paint.renderTime;
+        witnessPaints.push({
+          ...witness,
+          identifier: paint.identifier,
+          renderTime: paint.renderTime,
+        });
+      }
     }
   });
   observe("largest-contentful-paint", (entries) => {
@@ -245,6 +321,7 @@ export function warmReloadProbe(
       });
       if (store === "snapshots" && request.result !== undefined) {
         mark("cacheRead");
+        recordWitnessHistory("snapshot-read", request.result?.snapshot?.messages);
       }
     });
     return request;
@@ -316,6 +393,19 @@ export function warmReloadProbe(
           ) {
             mark("catchupResponse");
           }
+          if (frame.ok === true) {
+            if (method === "chat.startup" || method === "chat.history") {
+              recordWitnessHistory(method, frame.payload?.messages);
+            } else if (
+              method === "sessions.messages.subscribe" &&
+              frame.payload?.initialHistory?.ok === true
+            ) {
+              recordWitnessHistory(
+                "subscription-initial-history",
+                frame.payload.initialHistory.payload?.messages,
+              );
+            }
+          }
         }
       });
       return socket;
@@ -324,6 +414,7 @@ export function warmReloadProbe(
   const observer = new MutationObserver((records) => {
     const regions = new Map<string, number>();
     const textRoots = new Set<Element>();
+    const addedRoots = new Set<Element>();
     const textSelector = input.lateRowFacts ? ".chat-text, .chat-notice" : ".chat-text";
     for (const record of records) {
       const element =
@@ -353,6 +444,9 @@ export function warmReloadProbe(
         if (!(node instanceof Element)) {
           continue;
         }
+        if (witnesses) {
+          addedRoots.add(node);
+        }
         if (node.matches(textSelector)) {
           textRoots.add(node);
         }
@@ -377,15 +471,34 @@ export function warmReloadProbe(
     // Tag direct text owners before paint. A row/container attribute does not
     // cover descendant block text, and a DOM/rAF timestamp is not presentation.
     for (const root of textRoots) {
-      if (!root.closest(".chat-virtual-row")) {
+      const row = root.closest(".chat-virtual-row");
+      if (!row) {
         continue;
       }
       const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
       let text: Node | null;
       while ((text = walker.nextNode())) {
         const parent = text.parentElement;
-        if (text.textContent?.trim() && parent && !parent.hasAttribute("elementtiming")) {
-          parent.setAttribute("elementtiming", "openclaw-transcript");
+        const textContent = text.textContent;
+        if (textContent?.trim() && parent && !parent.hasAttribute("elementtiming")) {
+          const rowKey = row.getAttribute("data-virtual-row-key");
+          const source = witnesses
+            ? (["saved", "live"] as const).find(
+                (kind) =>
+                  witnesses[kind].rowKey === rowKey &&
+                  textContent.includes(witnesses[kind].text) &&
+                  [...addedRoots].some((added) => added === parent || added.contains(parent)),
+              )
+            : undefined;
+          // Only a fresh text owner may become a witness. Never relabel an already-painted node.
+          if (source && rowKey) {
+            witnessElements.set(parent, { source, rowKey });
+            mark(source === "saved" ? "firstSavedWitnessDom" : "firstLiveWitnessDom");
+          }
+          parent.setAttribute(
+            "elementtiming",
+            source ? `openclaw-transcript-${source}` : "openclaw-transcript",
+          );
         }
       }
     }
@@ -619,6 +732,9 @@ export function warmReloadProbe(
         };
       }
     }
+    if (visible && caughtUp) {
+      mark("firstLiveTranscript");
+    }
     const composer = pane?.querySelector<HTMLTextAreaElement>("textarea");
     if (composer && !composer.disabled && !composer.readOnly) {
       mark("inputReady");
@@ -641,7 +757,35 @@ export function warmReloadProbe(
     requestAnimationFrame(sample);
   };
   requestAnimationFrame(sample);
+  const readWitnesses = () =>
+    witnesses
+      ? {
+          history: [...witnessHistory],
+          paints: [...witnessPaints],
+          saved: {
+            domMs: milestones.firstSavedWitnessDom ?? null,
+            paintMs: milestones.firstSavedWitnessPaint ?? null,
+          },
+          live: {
+            domMs: milestones.firstLiveWitnessDom ?? null,
+            paintMs: milestones.firstLiveWitnessPaint ?? null,
+          },
+          attached: Object.fromEntries(
+            (["saved", "live"] as const).map((source) => [
+              source,
+              [
+                ...document.querySelectorAll(".chat-pane-cache__pane--active .chat-virtual-row"),
+              ].some(
+                (row) =>
+                  row.getAttribute("data-virtual-row-key") === witnesses[source].rowKey &&
+                  row.querySelector(".chat-text")?.textContent?.includes(witnesses[source].text),
+              ),
+            ]),
+          ),
+        }
+      : undefined;
   Reflect.set(window, "__warmReload", {
+    witnesses: readWitnesses,
     read() {
       stopped = true;
       observer.disconnect();
@@ -734,6 +878,7 @@ export function warmReloadProbe(
         },
         measures: performance.getEntriesByType("measure").map((entry) => entry.toJSON()),
         transcriptPaints,
+        transcriptWitnesses: readWitnesses(),
         largestPaints,
         reads,
         historyRequests,

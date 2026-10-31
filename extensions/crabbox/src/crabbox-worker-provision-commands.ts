@@ -23,6 +23,7 @@ import {
 import { withCrabboxWorkerEnvProfile } from "./crabbox-worker-env-profile.js";
 import { parseInspectJson, type ParsedInspect } from "./crabbox-worker-inspect.js";
 import { buildCrabboxAllocationArgs, type parseCrabboxProfile } from "./crabbox-worker-profile.js";
+import { assertCrabboxResourceReceipt } from "./crabbox-worker-resource-receipt.js";
 import { runCrabboxSetupEgress } from "./crabbox-worker-setup-egress.js";
 import {
   CRABBOX_LIFECYCLE_TIMEOUT_MS,
@@ -118,9 +119,15 @@ export async function inspectWithContext(
         inspect.lifetime = { ...inspect.lifetime, policyNotice: notice };
       }
     } catch (error) {
-      throw new WorkerProviderError(
-        error instanceof Error ? error.message : "Crabbox inspect returned invalid output",
-      );
+      const message =
+        error instanceof Error ? error.message : "Crabbox inspect returned invalid output";
+      if (params.resourceReceipt) {
+        throw new Error(message, { cause: error });
+      }
+      throw new WorkerProviderError(message);
+    }
+    if (params.resourceReceipt) {
+      assertCrabboxResourceReceipt(params.resourceReceipt, inspect.resourceReceipt);
     }
     if (inspect.id !== params.id) {
       throw new WorkerProviderError("Crabbox inspect returned a different lease id");
@@ -142,6 +149,9 @@ export async function inspectWithContext(
     (unavailableResource && !params.requireConfirmedAbsence) ||
     isUnrecognizedLease(result, params.id, "inspect", params.requireConfirmedAbsence)
   ) {
+    if (params.resourceReceipt) {
+      throw new Error("Crabbox resource observation is unavailable; ownership preserved");
+    }
     return undefined;
   }
   // An inspect response may contain connection material, even on a failed

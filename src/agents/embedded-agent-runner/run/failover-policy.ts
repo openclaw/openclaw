@@ -18,30 +18,28 @@ type RetryLimitDecisionParams = {
   failoverReason: FailoverReason | null;
 };
 
-type PromptDecisionParams = {
-  stage: "prompt";
+type ProfileDecisionParams = {
   allowFormatRetry?: boolean;
-  externalAbort: boolean;
   fallbackConfigured: boolean;
-  failoverCode?: string;
   failoverFailure: boolean;
   failoverReason: FailoverReason | null;
   harnessOwnsTransport?: boolean;
-  promptTimeoutFallbackSafe?: boolean;
-  timedOutByRunBudget?: boolean;
   profileRotated: boolean;
 };
 
-type AssistantDecisionParams = {
+type PromptDecisionParams = ProfileDecisionParams & {
+  stage: "prompt";
+  externalAbort: boolean;
+  failoverCode?: string;
+  promptTimeoutFallbackSafe?: boolean;
+  timedOutByRunBudget?: boolean;
+};
+
+type AssistantDecisionParams = ProfileDecisionParams & {
   stage: "assistant";
-  allowFormatRetry?: boolean;
   terminal: AgentRunAttemptTerminal;
   signalOwnedInterruption?: boolean;
-  fallbackConfigured: boolean;
-  failoverFailure: boolean;
-  failoverReason: FailoverReason | null;
-  harnessOwnsTransport?: boolean;
-  profileRotated: boolean;
+  errorMessage?: string;
 };
 
 type RunFailoverDecisionParams =
@@ -49,11 +47,9 @@ type RunFailoverDecisionParams =
   | PromptDecisionParams
   | AssistantDecisionParams;
 
-function isTerminalFormatFailure(params: {
-  allowFormatRetry?: boolean;
-  failoverFailure: boolean;
-  failoverReason: FailoverReason | null;
-}): boolean {
+function isTerminalFormatFailure(
+  params: Pick<ProfileDecisionParams, "allowFormatRetry" | "failoverFailure" | "failoverReason">,
+): boolean {
   return (
     params.failoverFailure && params.failoverReason === "format" && params.allowFormatRetry !== true
   );
@@ -119,14 +115,9 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
       reason !== "format" &&
       reason !== "session_expired"
     ) {
-      return {
-        action: "fallback_model",
-        reason,
-      };
+      return { action: "fallback_model", reason };
     }
-    return {
-      action: "return_error_payload",
-    };
+    return { action: "return_error_payload" };
   }
   const surfaceError = { action: "surface_error" as const, reason: params.failoverReason };
   let shouldRotate: boolean;
@@ -177,9 +168,20 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
         ? { action: "fallback_model", reason: "timeout" }
         : { action: "continue_normal" };
     }
-    if (params.failoverFailure && params.failoverReason === "tls_certificate") {
+    // Model absence is shared by credentials; account and plan denials still rotate.
+    if (
+      params.failoverFailure &&
+      (params.failoverReason === "tls_certificate" ||
+        (params.failoverReason === "model_not_found" &&
+          /\b(?:unknown model|invalid model|model[_\-\s]?not[_\-\s]?found|is not a valid model id|models?[/\s:].{0,120}?(?:not found|does not exist|retired|deprecated|no longer available)|[\w./:@-]+ was retired at \d{4}-\d{2}-\d{2}|no endpoints found for)\b/i.test(
+            params.errorMessage ?? "",
+          ) &&
+          !/\b(?:access|permissions?|accounts?|plans?|tiers?|subscriptions?|memberships?|entitlements?|unauthorized|forbidden)\b/i.test(
+            params.errorMessage ?? "",
+          )))
+    ) {
       return params.fallbackConfigured
-        ? { action: "fallback_model", reason: "tls_certificate" }
+        ? { action: "fallback_model", reason: fallbackReason }
         : surfaceError;
     }
     shouldRotate = shouldRotateAssistant(params);
@@ -192,10 +194,7 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
     }
   }
   if (!params.profileRotated && shouldRotate) {
-    return {
-      action: "rotate_profile",
-      reason: params.failoverReason,
-    };
+    return { action: "rotate_profile", reason: params.failoverReason };
   }
   return shouldFallback && params.fallbackConfigured
     ? { action: "fallback_model", reason: fallbackReason }

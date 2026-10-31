@@ -46,6 +46,8 @@ suite.define(() => {
       if (overflow) {
         await page.getByRole("button", { name: "Show more", exact: true }).click();
         const body = page.locator(".sidebar-shell__body");
+        const toolbar = page.locator(".sidebar-session-toolbar");
+        const toolbarBefore = await toolbar.boundingBox();
         const last = page.locator(
           '.sidebar-recent-session[data-session-key="agent:main:dashboard:session-19"]',
         );
@@ -57,6 +59,17 @@ suite.define(() => {
             return last.isVisible();
           })
           .toBe(true);
+        // The session toolbar stays pinned and unobscured above the scrolled list.
+        expect(await toolbar.boundingBox()).toEqual(toolbarBefore);
+        expect(
+          await toolbar.evaluate((element) => {
+            const title = element.firstElementChild!;
+            const box = title.getBoundingClientRect();
+            return title.contains(
+              document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2),
+            );
+          }),
+        ).toBe(true);
         await body.evaluate((element) => {
           element.scrollTop = 0;
         });

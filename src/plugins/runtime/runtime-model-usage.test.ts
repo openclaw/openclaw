@@ -1,14 +1,12 @@
 import { afterEach, expect, it } from "vitest";
+import type { PreparedDecisionBillingFacts } from "../../decisions/host-billing.js";
 import {
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
 import { markTrustedOtelDiagnosticListener } from "../../infra/diagnostic-otel-listener-provenance.js";
-import {
-  finalizePluginModelUsage,
-  type PreparedDecisionBillingFacts,
-} from "./runtime-model-usage.js";
+import { finalizePluginModelUsage } from "./runtime-model-usage.js";
 
 afterEach(resetDiagnosticEventsForTest);
 

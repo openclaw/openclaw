@@ -1,8 +1,12 @@
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
+import {
+  getGatewayToolCallerIdentity,
+  resolveGatewayToolOperatorSelection,
+} from "../agents/tools/gateway-caller-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginGatewayAccessAuthority } from "../plugins/gateway-access-policy.types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { intersectOperatorScopes, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import {
   decodeGitHubPublicationRequester,
   type GitHubPublicationRequesterSnapshot,
@@ -91,6 +95,38 @@ export type GitHubPublicationRequesterPolicyV2 = GitHubPublicationRequesterPolic
   }>;
 export type GitHubPublicationRequesterV2 = GitHubPublicationRequesterPolicyV2 &
   Pick<GitHubPublicationRequester, "assertInvocationCurrent">;
+
+/** A System-backed tool bridge cannot widen the selected person's action capability. */
+export function captureGitHubPublicationActionAuthority(
+  requester: GitHubPublicationRequesterPolicyV2,
+) {
+  const caller = getGatewayToolCallerIdentity();
+  const selection = caller ? resolveGatewayToolOperatorSelection() : undefined;
+  const scopes = caller
+    ? intersectOperatorScopes(requester.snapshot.scopes, selection?.operatorAuthority?.scopes ?? [])
+    : requester.snapshot.scopes;
+  const operatorWrite = roleScopesAllow({
+    role: "operator",
+    requestedScopes: ["operator.write"],
+    allowedScopes: scopes,
+  });
+  const assertCurrent = () => {
+    requester.assertCurrent();
+    selection?.assertCurrent();
+  };
+  assertCurrent();
+  return {
+    operatorWrite,
+    assertCurrent,
+    assertOperatorWrite: () => {
+      assertCurrent();
+      if (!operatorWrite) {
+        throw new Error("GitHub pull request assistance requires full operator write permission.");
+      }
+    },
+  };
+}
+
 const workerRequesters = resolveGlobalSingleton(
   Symbol.for("openclaw.githubPublicationWorkerRequesters"),
   () => new WeakSet<GitHubPublicationRequesterPolicy>(),

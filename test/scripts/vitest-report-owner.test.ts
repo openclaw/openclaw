@@ -28,7 +28,6 @@ const aggregateOf = (result: ReportResult): VitestReportCapture =>
   json(result.reportSet!, "aggregate.json.capture.json");
 const captureOf = (part: { json: string }): VitestReportCapture =>
   json(`${part.json}.capture.json`);
-const lastPart = (entry: ReportEntry) => entry.attempts.at(-1)!;
 const project = (
   root: string,
   name: string,
@@ -101,11 +100,11 @@ it.for([
 
 describe.skipIf(process.platform === "win32")("native multi-invocation report ownership", () => {
   const cacheLifetime = createFixtureLifetime();
-  let compileCache: string;
+  let cacheRoot: string;
   let receipts: FixtureReceiptChannel;
   beforeAll(async () => {
     receipts = await openFixtureReceiptChannel();
-    compileCache = cacheLifetime.createTempDir("oc-report-compile-");
+    cacheRoot = cacheLifetime.createTempDir("oc-report-cache-");
     vi.setConfig({ maxConcurrency: 2 });
     return () => vi.resetConfig();
   });
@@ -122,11 +121,12 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
       const lifetime = createFixtureLifetime();
       onTestFinished(() => lifetime.cleanup());
       const root = lifetime.createTempDir("oc-report-");
-      const invoke = createVitestReportFixture(root, { receipts, signal }, undefined, compileCache);
+      const invoke = createVitestReportFixture(root, { receipts, signal }, undefined, cacheRoot);
       await use({
         root,
-        run: (...args) => {
-          const completion = lifetime.run(() => invoke(...args));
+        run: (mode, options) => {
+          const env = { XDG_CACHE_HOME: cacheRoot, ...options?.env };
+          const completion = lifetime.run(() => invoke(mode, { ...options, env }));
           void cacheLifetime.track(completion.then(() => undefined));
           return completion;
         },
@@ -229,7 +229,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
         cases = expected.slice(2);
       }
       const index = expectPublished(expect, result, cases);
-      const parts: ReportPart[] = index.entries.map(lastPart);
+      const parts: ReportPart[] = index.entries.map((entry: ReportEntry) => entry.attempts.at(-1)!);
       expect(parts).toHaveLength(2);
       const captures = parts.map(captureOf);
       for (const [partIndex, part] of parts.entries()) {
@@ -269,12 +269,21 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
         expect(text(root, "reports/merge-after-joins")).toBe("joined");
         expect(captures.map((capture) => isPidDefinitelyDead(capture.pid))).toEqual([true, true]);
       }
+      if (
+        ["config-load-once", "serial", "grouped", "nested-shared-leaf", "empty-group"].includes(
+          mode,
+        )
+      ) {
+        expect(text(root, "node_modules/.vitest-cache/canary")).toBe("another cache owner");
+        expect(text(root, "node_modules/.vitest-cache/_metadata.json")).toBe(
+          '{"lockfileHash":"unrelated-owner"}',
+        );
+        expect(text(root, "node_modules/.vite/canary")).toBe("another result-cache owner");
+        expect(fs.readdirSync(path.join(root, "node_modules/.vite"))).toEqual(["canary"]);
+      }
       if (mode === "config-load-once") {
         expect(lines(root, "reports/config-loads.txt")).toEqual(["alpha", "beta"]);
         const replay = aggregateOf(result);
-        const defaultCache = path.join(root, "node_modules/.vitest-cache");
-        expect(text(defaultCache, "canary")).toBe("another cache owner");
-        expect(text(defaultCache, "_metadata.json")).toBe('{"lockfileHash":"unrelated-owner"}');
         for (const name of ["alpha", "beta"]) {
           expect(json(root, `fs-cache-${name}/_metadata.json`).lockfileHash).toBeTypeOf("string");
         }
@@ -724,6 +733,23 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
         }
         if (kind === "native-error") {
           expect(result.stderr).toMatch(/No test tags found|standalone mode requires --watch/u);
+        }
+        if (kind === "idle") {
+          for (const name of ["alpha", "beta"]) {
+            expect(result.stdout).toContain(
+              `cleared fs module cache at ${path.join(reports.root, "fs-cache-" + name)}`,
+            );
+          }
+          expect(text(reports.root, "node_modules/.vitest-cache/canary")).toBe(
+            "another cache owner",
+          );
+          expect(text(reports.root, "node_modules/.vitest-cache/_metadata.json")).toBe(
+            '{"lockfileHash":"unrelated-owner"}',
+          );
+          expect(text(reports.root, "node_modules/.vite/canary")).toBe(
+            "another result-cache owner",
+          );
+          expect(fs.readdirSync(path.join(reports.root, "node_modules/.vite"))).toEqual(["canary"]);
         }
       }
       if (entry === "batch-cli") {

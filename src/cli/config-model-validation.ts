@@ -391,15 +391,17 @@ async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> 
     }
     const { provider, model } = resolvedRef;
     const stores = lease.snapshot.createStores();
-    const resolution = await modelRuntime.resolveModelAsync(provider, model, agentDir, config, {
-      ...stores,
-      modelIdSource: "selected",
-      agentId: targetAgentId,
-      allowBundledStaticCatalogFallback: true,
-      ...(ref.authProfileId ? { authProfileId: ref.authProfileId } : {}),
-      preparedModelRuntime: lease.snapshot,
-      workspaceDir,
-    });
+    const resolution = await lease.run(() =>
+      modelRuntime.resolveModelAsync(provider, model, agentDir, config, {
+        ...stores,
+        modelIdSource: "selected",
+        agentId: targetAgentId,
+        allowBundledStaticCatalogFallback: true,
+        ...(ref.authProfileId ? { authProfileId: ref.authProfileId } : {}),
+        preparedModelRuntime: lease.snapshot,
+        workspaceDir,
+      }),
+    );
     return resolution.model
       ? undefined
       : (resolution.error ?? `Unknown model: ${provider}/${model}`);

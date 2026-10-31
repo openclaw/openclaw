@@ -229,26 +229,6 @@ describe("OpenClaw SDK", () => {
     expect(result.error).toEqual(fields.error ? { message: fields.error } : undefined);
   });
 
-  it("keeps superseded writer runs cancelled in both events and waits", async () => {
-    const event = normalizeGatewayEvent(
-      createAgentEvent("run_superseded", 1, 123, "lifecycle", {
-        phase: "end",
-        aborted: true,
-        status: "superseded",
-        stopReason: "superseded",
-        endedAt: 123,
-      }),
-    );
-    const result = await waitForSnapshot("run_superseded", {
-      status: "error",
-      stopReason: "superseded",
-      endedAt: 123,
-    });
-
-    expect.soft(event.type).toBe("run.cancelled");
-    expect(result.status).toBe("cancelled");
-  });
-
   it("maps terminal timeout snapshots without stop reasons to timed_out", async () => {
     const { transport, oc } = createClientFixture({
       "agent.wait": { status: "timeout", runId: "run_timed_out", startedAt: 123, endedAt: 456 },

@@ -60,8 +60,7 @@ type ValidationEntry = {
   revoked?: true;
 };
 
-// Ordinary close retains proof. Durable canonical receipts never mint integrity
-// verification; only a successful writable open supplies proof workers can borrow.
+// Writable admission owns transferable proof; canonical row receipts cannot supply it.
 const validatedPaths = resolveGlobalSingleton<Map<string, ValidationEntry>>(
   Symbol.for("openclaw.agentDatabaseValidatedPaths"),
   () => new Map(),
@@ -422,6 +421,7 @@ function captureValidationTransfer(
       captured.validation.birthtime === received.birthtime &&
       Atomics.load(new Int32Array(captured.validation.valid), 0) === 1
     ) {
+      captured.validation.integrityVerifiedAt ??= received.integrityVerifiedAt;
       const currentSchema = captured.validation.schema;
       if (
         currentSchema &&
@@ -468,7 +468,6 @@ function captureValidationTransfer(
     // Successful admission promotes this owner; only revocation retires pending handoffs.
     Object.assign(captured, { validation: received, integrityVerified: true, revoked: undefined });
     validatedPaths.set(pathname, captured);
-    // A verified replacement is one physical receipt, including its already-admitted aliases.
     for (const alias of aliases) {
       validatedPaths.set(alias, { validation: received, integrityVerified: true });
     }

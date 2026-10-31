@@ -277,25 +277,35 @@ describe("FeishuStreamingSession", () => {
       data: expect.objectContaining({ reply_in_thread: true }),
     },
   ] as const)(
-    "updates and closes an accepted $mode card when its optional message receipt is absent",
+    "retries, updates and closes an accepted $mode card without its optional message receipt",
     async ({ mode, options, method, data }) => {
+      vi.useFakeTimers();
       const { session, requests, create, reply } = mockAcceptedStreamingCard({
         accountId: `accepted-without-receipt-${mode}`,
       });
 
-      await session.start("chat_1", "chat_id", options);
+      const send = method === "reply" ? reply : create;
+      send.mockRejectedValueOnce(
+        Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
+      );
+      const started = session.start("chat_1", "chat_id", options);
+      const accepted = expect(started).resolves.toBeUndefined();
+      await vi.runAllTimersAsync();
+      await accepted;
       await session.update("The accepted answer");
 
       await expect(session.closeWithResult("The accepted answer")).resolves.toEqual({
         visibleReplySent: true,
         content: "The accepted answer",
       });
-      expect(method === "reply" ? reply : create).toHaveBeenCalledExactlyOnceWith(
+      expect(send).toHaveBeenCalledTimes(2);
+      expect(send).toHaveBeenCalledWith(
         expect.objectContaining({
           data,
           ...(method === "reply" ? { path: { message_id: "inbound_1" } } : {}),
         }),
       );
+      expect(send.mock.calls[1]).toEqual(send.mock.calls[0]);
       expect(method === "reply" ? create : reply).not.toHaveBeenCalled();
       expect(requests.map(({ path }) => path)).toEqual([
         "/open-apis/cardkit/v1/cards/card_accepted/elements/content/content",

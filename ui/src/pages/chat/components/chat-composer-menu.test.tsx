@@ -578,7 +578,7 @@ it("filters skills across groups and restores the catalog when header search clo
     capabilityMenu: makeCapabilities({
       skills: [
         { key: "notes", name: "Notes", enabled: true, baseEnabled: true },
-        { key: "weather", name: "Weather", enabled: false, baseEnabled: false, missingDeps: true },
+        { key: "nfd", name: "e\u0301", enabled: false, baseEnabled: false, missingDeps: true },
       ],
     }),
   });
@@ -589,18 +589,18 @@ it("filters skills across groups and restores the catalog when header search clo
   );
   view.getByRole("button", { name: "Search skills", hidden: true }).click();
   await waitForSolid(() =>
-    expect(view.queryByRole("textbox", { name: "Search skills", hidden: true })).not.toBeNull(),
+    expect(view.queryByRole("searchbox", { name: "Search skills", hidden: true })).not.toBeNull(),
   );
-  const input = view.getByRole("textbox", {
+  const input = view.getByRole("searchbox", {
     name: "Search skills",
     hidden: true,
   }) as HTMLInputElement;
-  input.value = "weather";
+  input.value = "É";
   input.dispatchEvent(new Event("input", { bubbles: true }));
   await waitForSolid(() => {
     expect(view.queryByRole("menuitemcheckbox", { name: "Notes", hidden: true })).toBeNull();
     expect(
-      view.getByRole("menuitem", { name: "Weather", hidden: true }).getAttribute("aria-disabled"),
+      view.getByRole("menuitem", { name: "e\u0301", hidden: true }).getAttribute("aria-disabled"),
     ).toBe("true");
   });
   input.value = "missing";
@@ -610,9 +610,9 @@ it("filters skills across groups and restores the catalog when header search clo
   );
   view.getByRole("menuitem", { name: "Skills", hidden: true }).click();
   await waitForSolid(() => {
-    expect(view.queryByRole("textbox", { name: "Search skills", hidden: true })).toBeNull();
+    expect(view.queryByRole("searchbox", { name: "Search skills", hidden: true })).toBeNull();
     expect(view.getByRole("menuitemcheckbox", { name: "Notes", hidden: true })).not.toBeNull();
-    expect(view.getByRole("menuitem", { name: "Weather", hidden: true })).not.toBeNull();
+    expect(view.getByRole("menuitem", { name: "e\u0301", hidden: true })).not.toBeNull();
   });
   setMenu((previous) => ({ ...previous, view: "libraries" }));
   await waitForSolid(() => {

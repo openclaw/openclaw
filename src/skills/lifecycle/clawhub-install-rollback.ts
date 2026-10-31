@@ -51,7 +51,7 @@ export async function rollbackDeferredSkillInstall(params: {
   }
   await params.transaction.rollback(params.assertCurrent);
   if (hasInstalledEntry && params.installed) {
-    replaceClawHubSkillLockEntryExpected({
+    await replaceClawHubSkillLockEntryExpected({
       workspaceDir: params.workspaceDir,
       slug: params.slug,
       expected: params.installed,

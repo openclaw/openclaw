@@ -89,6 +89,7 @@ function runtimeLease(
       configuredCatalogEntries: [],
       pluginRegistry: snapshot.pluginRegistry,
     },
+    run: <T>(run: () => T): T => run(),
     [Symbol.asyncDispose]: release,
   };
 }

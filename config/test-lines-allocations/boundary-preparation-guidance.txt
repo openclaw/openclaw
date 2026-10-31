@@ -1,0 +1,2 @@
+# One real lint-entrypoint failure regression for actionable boundary preparation guidance.
+9

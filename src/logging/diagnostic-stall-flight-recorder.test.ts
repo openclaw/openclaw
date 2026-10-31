@@ -74,7 +74,7 @@ function fixture(firstProfile?: string) {
   recorders.push(recorder);
   const sampleAt = (
     value: number,
-    stall: { startedAt: number; endedAt: number } | null = {
+    stall: { startedAt: number; endedAt: number; task?: string } | null = {
       startedAt: value - 1_500,
       endedAt: value,
     },
@@ -88,6 +88,78 @@ function capture(json: string) {
   const fixtureState = fixture(json);
   return { ...fixtureState, result: fixtureState.sampleAt(1_500) };
 }
+it("retains the recorded async task when the sampled stack ends in a dependency", () => {
+  const dependencyUrl = new URL(
+    "../../node_modules/@openclaw/fs-safe/dist/write.js",
+    import.meta.url,
+  ).href;
+  const { sampleAt } = fixture(profile(0, "runPinnedWriteNative", dependencyUrl));
+  const result = sampleAt(1_500, {
+    startedAt: 0,
+    endedAt: 1_500,
+    task: "schema-store:write",
+  });
+  expect(result).toContain("[async task:schema-store:write]");
+  expect(result).toContain("runPinnedWriteNative@node_modules/@openclaw/fs-safe");
+  expect(Buffer.byteLength(result!)).toBeLessThanOrEqual(2_048);
+});
+
+it.each([false, true])(
+  "identifies sampled leaves below shared ancestors within the log cap (long=%s)",
+  (long) => {
+    const frame = (id: number, name: string, url: string, children?: number[]) => ({
+      id,
+      callFrame: { functionName: name, url, lineNumber: 9, columnNumber: 0, scriptId: 1 },
+      children,
+    });
+    const appUrl = new URL("../agents/admitted-run-context.ts", import.meta.url).href;
+    const dependencyUrl = new URL(
+      "../../node_modules/@openclaw/fs-safe/dist/write.js",
+      import.meta.url,
+    ).href;
+    const suffix = long ? "x".repeat(200) : "";
+    const depth = long ? 24 : 12;
+    const nodes = Array.from({ length: depth }, (_, i) =>
+      frame(
+        i,
+        `shared${i}${suffix}`,
+        i === 0 ? appUrl : dependencyUrl,
+        i < depth - 1 ? [i + 1] : Array.from({ length: 12 }, (_leaf, j) => j + depth),
+      ),
+    );
+    nodes.push(
+      ...Array.from({ length: 12 }, (_, i) => frame(i + depth, `probe${i}${suffix}`, "node:fs")),
+    );
+    const { result, warn } = capture(
+      JSON.stringify({
+        startTime: 0,
+        endTime: 1_500_000,
+        nodes,
+        samples: Array.from({ length: 12 }, (_, i) => i + depth),
+        timeDeltas: Array.from({ length: 12 }, () => 100_000),
+      }),
+    );
+    expect(warn).not.toHaveBeenCalled();
+    expect(result).toContain("self=");
+    const self = JSON.parse(result!.match(/ self=(.*) deepest=/)![1]!) as Array<
+      [string, number, number, string]
+    >;
+    const deepest = JSON.parse(result!.split(" deepest=")[1]!) as Array<[number, string[]]>;
+    expect(self[0]).toEqual([
+      expect.stringContaining("probe0"),
+      1,
+      100,
+      expect.stringContaining("shared0"),
+    ]);
+    expect(deepest[0]?.[1][0]).toContain("shared0");
+    expect(deepest[0]?.[1].at(-1)).toContain("probe0");
+    expect(Buffer.byteLength(result!)).toBeLessThanOrEqual(2_048);
+    if (long) {
+      expect(result).toContain("reportTruncated=true");
+      expect(deepest[0]?.[1]).toContain("[...]");
+    }
+  },
+);
 it("rotates without a sampling gap and reports only the recent stall's inclusive frames", () => {
   const { recorder, handles, sampleAt } = fixture();
   expect(sampleAt(5_000, null)).toBeUndefined();

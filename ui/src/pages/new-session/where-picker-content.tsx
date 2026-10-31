@@ -1,5 +1,15 @@
-import { action, createMemo, createOptimistic, For, Loading, onSettled, Show } from "solid-js";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  For,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
 import { resolveCloudProfileIconData } from "../../components/provider-icon-data.ts";
+import { HeaderSearch } from "../../components/solid/header-search.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { CloudProfileIcon } from "../../components/solid/provider-icon.tsx";
 import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
@@ -70,11 +80,12 @@ function EnvironmentHeading(props: {
 
 export function WherePickerContent(
   props: Omit<WhereChipProps, "ref"> & {
-    onReady: (search: HTMLInputElement) => void;
+    onReady: (search: HTMLElement) => void;
   },
 ) {
-  let search!: HTMLInputElement;
+  let search!: HTMLElement;
   onSettled(() => props.onReady(search));
+  const [searching, setSearching] = createSignal(false);
   const [saving, setSaving] = createOptimistic(false);
   const presentAdoption = action(function* (request: SuggestedProfileAdoption) {
     if (request.isCurrent()) {
@@ -219,27 +230,18 @@ export function WherePickerContent(
   return (
     <div class="new-session-page__environment-layout">
       <div class="new-session-page__picker-root new-session-page__environment-picker">
-        <label class="new-session-page__environment-search">
-          <span aria-hidden="true">
-            <Icon name="search" />
-          </span>
-          <input
-            ref={(element) => {
-              search = element;
-            }}
-            type="search"
-            autofocus
-            aria-label={t("newSession.environmentSearchPlaceholder")}
-            placeholder={t("newSession.environmentSearchPlaceholder")}
-            value={props.params.place.browser.environmentQuery}
-            disabled={busy()}
-            onInput={(event: Event) => {
-              if (event.currentTarget instanceof HTMLInputElement) {
-                props.params.place.browser.changeEnvironmentQuery(event.currentTarget.value);
-              }
-            }}
-          />
-        </label>
+        <HeaderSearch
+          title={t("newSession.where")}
+          label={t("newSession.environmentSearchPlaceholder")}
+          query={props.params.place.browser.environmentQuery}
+          open={searching() || Boolean(props.params.place.browser.environmentQuery)}
+          disabled={busy()}
+          toggleRef={(element) => {
+            search = element;
+          }}
+          onOpenChange={setSearching}
+          onQueryChange={(query) => props.params.place.browser.changeEnvironmentQuery(query)}
+        />
         <div class="new-session-page__environment-list">
           <Show when={view().showLocal || view().devices.length || view().showAuto}>
             <EnvironmentHeading

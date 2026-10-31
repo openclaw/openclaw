@@ -97,24 +97,35 @@ it.each([
   { boundary: "other channel", provenance: { kind: "realtime_voice", sourceChannel: "discord" } },
   { boundary: "other kind", provenance: { kind: "internal_system", sourceChannel: "talk" } },
   { boundary: "missing channel", provenance: { kind: "realtime_voice" } },
-])("does not reopen a consult after $boundary", async ({ boundary, provenance }) => {
-  const { scope, consult, recordSpeech, expectRejected } = await createConsult();
-  await appendTranscriptMessage(scope, {
-    eventId: "closing-message",
-    message:
-      boundary === "newer-key"
-        ? { ...consult, idempotencyKey: "newer-consult:user" }
-        : {
-            ...assistantMessage("The original task is finished."),
-            ...(boundary === "excluded-completed" ? { excludeFromContext: true } : {}),
-            ...(provenance ? { provenance } : {}),
-          },
-  });
-  if (!provenance) {
-    await recordSpeech(["user", "assistant"]);
-  }
-  await expectRejected(consult, "Session transcript keyed user is outside the current turn");
-});
+])(
+  "acknowledges a consult after $boundary without changing its tail",
+  async ({ boundary, provenance }) => {
+    const { scope, consult, recordSpeech, messages, open } = await createConsult();
+    await appendTranscriptMessage(scope, {
+      eventId: "closing-message",
+      message:
+        boundary === "newer-key"
+          ? { ...consult, idempotencyKey: "newer-consult:user" }
+          : {
+              ...assistantMessage("The original task is finished."),
+              ...(boundary === "excluded-completed" ? { excludeFromContext: true } : {}),
+              ...(provenance ? { provenance } : {}),
+            },
+    });
+    if (!provenance) {
+      await recordSpeech(["user", "assistant"]);
+    }
+    const before = await messages();
+    const manager = open();
+    const tail = manager.getAppendParentId();
+    expect(manager.appendMessageWithTranscriptAnchor(consult)).toMatchObject({
+      entryId: "keyed-consult-turn",
+      appended: false,
+    });
+    expect(manager.getAppendParentId()).toBe(tail);
+    expect(await messages()).toEqual(before);
+  },
+);
 
 it("rejects a changed payload using the consult key after live speech", async () => {
   const { consult, recordSpeech, expectRejected } = await createConsult();

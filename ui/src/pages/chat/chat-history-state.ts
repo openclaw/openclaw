@@ -366,7 +366,11 @@ export function acceptsHistoryResult(
   );
 }
 
-export function resetChatHistoryProjection(state: ChatState, agentId?: string): void {
+export function resetChatHistoryProjection(
+  state: ChatState,
+  agentId?: string,
+  retainedHistory: unknown[] = [],
+): void {
   retireChatHistoryRead(state);
   retireInitialChatSnapshot(state);
   retirePullRequestRefreshes(state);
@@ -385,6 +389,15 @@ export function resetChatHistoryProjection(state: ChatState, agentId?: string): 
   // Destructive operations keep the public session key, so only an explicit
   // reducer reset can prevent old live or pending rows from crossing epochs.
   reduceChatSessionProjection(state, { type: "sessionReset" }, { scope });
+  if (retainedHistory.length) {
+    // A successful rewind proves its unchanged prefix. Publish it in the same
+    // turn as the epoch reset so the mounted transcript never becomes empty.
+    reduceChatSessionProjection(
+      state,
+      { type: "snapshotLoaded", messages: retainedHistory },
+      { scope },
+    );
+  }
 }
 
 export function setChatError(

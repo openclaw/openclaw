@@ -66,7 +66,28 @@ Do not write a separate permission store or infer consent from successful login.
 - **Docs.** Add `docs/providers/<id>.md` and list the provider in alphabetical
   order on the provider index.
 - **Proof.** Run a real agent turn on an isolated Gateway with a real key before
-  the PR opens. API calls and mocked transports do not replace it.
+  the PR opens. API calls and mocked transports do not replace it. Make that
+  Gateway look like a real install:
+  - Enable the bundled plugins users run alongside yours, with credentials,
+    not only your provider. Other plugins' hooks only show up when they are
+    configured.
+  - Save the key the way users do (the Control UI provider dialog, or
+    `openclaw models auth paste-api-key`), not only through an environment
+    variable.
+  - Set `OPENCLAW_DEBUG_MODEL_TRANSPORT=1` and check that the
+    `[model-fetch] start provider=<id> … url=` line names your vendor's
+    endpoint.
+- **Stay inside your provider.** Core also runs some hooks for providers you do
+  not own:
+  - `normalizeTransport` receives other providers' transports. Return nothing
+    unless the context names your provider or already targets your endpoint.
+    Core ignores another plugin's change that moves a provider to a different
+    origin, and
+    `src/plugins/contracts/provider-transport-scope.contract.test.ts` fails any
+    bundled hook that rewrites a foreign transport.
+  - `augmentModelCatalog` and `resolveExternalAuthProfiles` run as global
+    discovery. Return only catalog rows and auth profiles for providers your
+    plugin owns.
 - **New model for an existing provider.** Add catalog data, not code. Search
   every provider for the predecessor model ID before adding an exact-ID rule.
 
@@ -828,3 +849,32 @@ resolve here.
 - [Building plugins](/plugins/building-plugins)
 - [Building channel plugins](/plugins/sdk-channel-plugins)
 - [Model providers](/concepts/model-providers)
+
+## Worker resource receipts
+
+A worker provider may advertise `supportsResourceReceipts: true` on its existing
+`WorkerProvider` registration. This promises exact-resource handling in
+provision replay, inspection, and destruction; it does not advertise disk retention.
+
+`WorkerResourceReceipt` has version `1`, the exact `leaseId`, and an `identity`
+map containing bounded, nonsecret immutable provider fields. The provider owns
+those fields; core validates their representation and preserves their equality,
+without interpreting vendor resource names. Use 1–16 ASCII identifier keys
+(up to 64 characters), with nonempty trimmed string values up to 2,048 characters
+and no control characters. Never include credentials or bearer URLs.
+
+During provisioning, await `options.recordResourceReceipt(receipt)` as soon as the
+allocated resource can be qualified, before setup, enrollment, or compensating
+cleanup affects that resource. Return the same receipt with the lease. The host
+commits it against the environment's original provision operation. Subsequent
+calls carry `resourceReceipt`: verify it against provider-owned facts, never
+replace it or allocate a successor. Inspection returns the same qualified receipt
+alongside status; an unavailable or mismatched observation throws. Even a
+`destroyed` observation cannot settle receipt-bound custody without that identity.
+
+Destruction checks `assertCurrent` after preparation and immediately before each
+provider effect, and resolves only after exact-resource deletion is confirmed.
+A rejected or lost deletion reply retains cleanup custody. The host can retry
+that exact deletion after restart even when live inspection labels are gone.
+Legacy providers and persisted rows with no receipt keep their existing contract;
+receipt-bearing rows refuse providers that no longer advertise this capability.

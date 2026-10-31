@@ -111,7 +111,7 @@ export type PluginCommandContext = {
 export type PluginCommandResult = ReplyPayload & {
   /** Allows the agent session to continue processing after the command. */
   continueAgent?: boolean;
-  /** Suppresses channel fallback replies when the handler already delivered a response. */
+  /** The handler already delivered its response: send neither the result text nor a missing-reply notice. */
   suppressReply?: boolean;
 };
 

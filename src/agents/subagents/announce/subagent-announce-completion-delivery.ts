@@ -1,6 +1,7 @@
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizePendingFinalDeliveryText } from "../../../auto-reply/reply/pending-final-delivery-state.js";
+import { runOutsideAdmittedGenerationScopes } from "../../../auto-reply/reply/queue/drain-admission-scope.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { runOutsideOperatorToolGatewayAuthority } from "../../../gateway/operator-tool-gateway-authority.js";
 import { waitForGatewayDispatch } from "../../../gateway/server-in-process-dispatch.js";
@@ -99,80 +100,82 @@ export async function runAnnounceAgentCall(params: {
       if (!params.isExecutionAllowed() || params.isSourceSessionAdmissionAllowed?.() === false) {
         throw new SourceOwnerChangedError();
       }
-      return dispatchGatewayMethodInProcess("agent", params.agentParams, {
-        controllerInput: params.controllerInput,
-        cancelOnDeadline: true,
-        privateCompletion: params.privateCompletion,
-        replyExpectation: params.replyExpectation,
-        agentToolCaller: params.agentToolCaller,
-        settleWakeReplay: params.settleWakeSourceSessionKeys
-          ? {
-              sourceSessionKeys: params.settleWakeSourceSessionKeys,
-              assertCurrent: () => {
-                if (!params.isExecutionAllowed()) {
-                  throw new SourceOwnerChangedError();
-                }
-              },
-            }
-          : undefined,
-        expectFinal: params.expectFinal,
-        forceSyntheticClient: shouldPreserveUserFacingSessionStateForInputProvenance(
-          params.agentParams.inputProvenance,
-        ),
-        operatorRoleActor: { kind: "system" },
-        delegatedToolPolicyHandoff: params.delegatedToolPolicyHandoff,
-        signal: executionSignal,
-        ...(isSourceSessionAdmissionAllowed
-          ? {
-              sessionMutationCommitGuard: () => {
-                if (!isSourceSessionAdmissionAllowed()) {
-                  const error = new SourceOwnerChangedError();
-                  materializeErrorStack(error);
-                  sourceLifecycle.abort(error);
-                  throw error;
-                }
-              },
-            }
-          : {}),
-        // Accepted queue waits belong to session admission; execution belongs to
-        // the requester runtime budget, not the announcement handoff deadline.
-        onAccepted: (payload) => {
-          clearTimeout(timer);
-          params.onAccepted?.(payload);
-        },
-        onStartOwner: (owner) => {
-          // Private callers still time out their observation while admission keeps custody.
-          // Public handoffs transfer their cancelling deadline at source registration.
-          if (!params.privateCompletion && owner.observe()) {
+      return runOutsideAdmittedGenerationScopes(() =>
+        dispatchGatewayMethodInProcess("agent", params.agentParams, {
+          controllerInput: params.controllerInput,
+          cancelOnDeadline: true,
+          privateCompletion: params.privateCompletion,
+          replyExpectation: params.replyExpectation,
+          agentToolCaller: params.agentToolCaller,
+          settleWakeReplay: params.settleWakeSourceSessionKeys
+            ? {
+                sourceSessionKeys: params.settleWakeSourceSessionKeys,
+                assertCurrent: () => {
+                  if (!params.isExecutionAllowed()) {
+                    throw new SourceOwnerChangedError();
+                  }
+                },
+              }
+            : undefined,
+          expectFinal: params.expectFinal,
+          forceSyntheticClient: shouldPreserveUserFacingSessionStateForInputProvenance(
+            params.agentParams.inputProvenance,
+          ),
+          operatorRoleActor: { kind: "system" },
+          delegatedToolPolicyHandoff: params.delegatedToolPolicyHandoff,
+          signal: executionSignal,
+          ...(isSourceSessionAdmissionAllowed
+            ? {
+                sessionMutationCommitGuard: () => {
+                  if (!isSourceSessionAdmissionAllowed()) {
+                    const error = new SourceOwnerChangedError();
+                    materializeErrorStack(error);
+                    sourceLifecycle.abort(error);
+                    throw error;
+                  }
+                },
+              }
+            : {}),
+          // Accepted queue waits belong to session admission; execution belongs to
+          // the requester runtime budget, not the announcement handoff deadline.
+          onAccepted: (payload) => {
             clearTimeout(timer);
-          }
-        },
-        onExecutionStarted: () => {
-          executionSignal.throwIfAborted();
-          if (!params.isExecutionAllowed()) {
-            const reason = new SourceOwnerChangedError();
-            materializeErrorStack(reason);
-            sourceLifecycle.abort(reason);
-            // Classify execution immediately, before Gateway observes cancellation.
-            throw createAgentRunDirectAbortError();
-          }
-          // Execution can be observed before acceptance on an already-running replay.
-          clearTimeout(timer);
-          params.onExecutionStarted?.();
-          if (params.typing) {
-            stopTyping ??= typingRuntime?.startTyping?.({
-              ...params.typing,
-              isCurrent: () =>
-                !executionSignal.aborted &&
-                params.isExecutionAllowed() &&
-                (params.resolveGatewayContext
-                  ? params.resolveGatewayContext()?.lifecycleRuntime === typingRuntime
-                  : getGatewayLifecycleRuntime() === typingRuntime),
-            });
-          }
-        },
-        resolveGatewayContext: params.resolveGatewayContext,
-      });
+            params.onAccepted?.(payload);
+          },
+          onStartOwner: (owner) => {
+            // Private callers still time out their observation while admission keeps custody.
+            // Public handoffs transfer their cancelling deadline at source registration.
+            if (!params.privateCompletion && owner.observe()) {
+              clearTimeout(timer);
+            }
+          },
+          onExecutionStarted: () => {
+            executionSignal.throwIfAborted();
+            if (!params.isExecutionAllowed()) {
+              const reason = new SourceOwnerChangedError();
+              materializeErrorStack(reason);
+              sourceLifecycle.abort(reason);
+              // Classify execution immediately, before Gateway observes cancellation.
+              throw createAgentRunDirectAbortError();
+            }
+            // Execution can be observed before acceptance on an already-running replay.
+            clearTimeout(timer);
+            params.onExecutionStarted?.();
+            if (params.typing) {
+              stopTyping ??= typingRuntime?.startTyping?.({
+                ...params.typing,
+                isCurrent: () =>
+                  !executionSignal.aborted &&
+                  params.isExecutionAllowed() &&
+                  (params.resolveGatewayContext
+                    ? params.resolveGatewayContext()?.lifecycleRuntime === typingRuntime
+                    : getGatewayLifecycleRuntime() === typingRuntime),
+              });
+            }
+          },
+          resolveGatewayContext: params.resolveGatewayContext,
+        }),
+      );
     };
     const continuationCaller = params.controllerInput?.continuationCaller;
     const dispatched = runOutsideOperatorToolGatewayAuthority(() =>

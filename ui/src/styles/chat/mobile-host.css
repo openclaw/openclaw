@@ -12,8 +12,6 @@
   --mobile-safe-top: env(safe-area-inset-top, 0px);
   --mobile-sheet-radius: 26px;
   --mobile-content-inset: 16px;
-  --mobile-rail-inset: 16px;
-  --mobile-control-icon-size: 16px;
   --mobile-dock-size: max(
     var(--mobile-min-height, 152px),
     min(var(--mobile-dock-height, 52%), calc(100% - 200px))
@@ -25,6 +23,8 @@
     );
   background: var(--bg);
   grid-template-areas: "main-header" "main" "mobile-host";
+  /* The exiting sheet must not give focus scrolling an off-screen destination. */
+  overflow: clip;
   /* The conversation edge rides the same spring as the sheet it reveals. */
   transition: grid-template-rows var(--motion-sheet);
 }
@@ -62,15 +62,14 @@
   transform: none;
   /* Only a sheet pulled below its minimum translates; none keeps fixed descendants intact. */
   translate: var(--mobile-live-translate, none);
-  /* One spring presents, resizes and dismisses the sheet; a gesture release overrides
-     --motion-sheet with a curve that starts at the finger's speed. A hidden sheet stays
-     displayed until it slides out, and above the conversation until it docks. */
+  /* Keep the sheet out of the grid while it exits. Transitioning display from
+     desktop's contents to none leaves its children in implicit grid rows. */
   transition:
     height var(--motion-sheet),
     transform var(--motion-sheet),
     translate var(--motion-sheet),
     border-radius var(--motion-sheet),
-    display var(--motion-sheet) allow-discrete,
+    visibility 0s,
     z-index 0s var(--motion-sheet-duration);
   @starting-style {
     transform: translateY(100%);
@@ -78,7 +77,13 @@
 }
 
 .sidebar-region--mobile-host > .chat-mobile-host[hidden] {
+  /* Keep its box through picker dismissal: display:none here can spin WebKit's
+     style resolver when a composer's native details closes. */
+  display: flex;
+  visibility: hidden;
   transform: translateY(100%);
+  /* Visible until the exit ends, but at once on open so focus can enter it. */
+  transition-duration: var(--motion-sheet-duration);
 }
 
 .sidebar-region--mobile-host > .chat-mobile-host[data-mode="expanded"] {
@@ -307,7 +312,6 @@
   box-shadow: none;
 }
 
-.sidebar-region--mobile-host > .chat-mobile-host[hidden],
 .sidebar-region--mobile-host > .chat-mobile-host > .chat-mobile-host__panels[hidden],
 .sidebar-region--mobile-host > .chat-mobile-host > .chat-mobile-host__details[hidden],
 .sidebar-region--mobile-host
@@ -550,14 +554,6 @@
   background: var(--bg);
 }
 
-/* The Panels launcher stays visible while a closing sheet slides away; the hidden
-   shell's own display: none removes it when the exit ends. */
-.sidebar-region--mobile-host:not(.sidebar-region--open)
-  > .chat-mobile-host[hidden]
-  .side-panel__empty-body {
-  display: flex;
-}
-
 /* Resource wrappers must reveal the host surface; canvases keep their own fill. */
 .sidebar-region--mobile-host .chat-mobile-host .side-panel__panel {
   background: transparent;
@@ -580,6 +576,13 @@
 
   .shell--mobile-nav .content--chat .chat.chat {
     border-radius: 0;
+  }
+
+  /* Like desktop chat, the session workbench starts at the top edge; the generic
+     mobile content inset would expose the shell canvas as a seam under the
+     system chrome. */
+  .shell--mobile-nav .content--workbench {
+    padding-top: 0;
   }
 }
 

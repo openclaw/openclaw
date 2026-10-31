@@ -171,16 +171,18 @@ export function deleteMcpOAuthPendingAuthorization(
 }
 
 /** Clear one OAuth session while retaining explicit logout provenance. */
-export function clearMcpOAuthStore({
-  storeKey,
-  lease,
-  context,
-}: McpOAuthStoreWriteOptions): Promise<void> {
-  return runMcpOAuthCredentialWrite({ storeKey, lease, context }, (scope, identity) =>
-    scope.execute(
-      { type: "mcpOAuth.clear", input: { storeKey, identity } },
-      { signal: lease.signal },
-    ),
+export function clearMcpOAuthStore(
+  { storeKey, lease, context }: McpOAuthStoreWriteOptions,
+  authority?: OpenClawStateLeaseWorkerAuthority,
+): Promise<void> {
+  return runMcpOAuthCredentialWrite(
+    { storeKey, lease, context },
+    (scope, identity) =>
+      scope.execute(
+        { type: "mcpOAuth.clear", input: { storeKey, identity } },
+        { signal: lease.signal },
+      ),
+    authority,
   );
 }
 

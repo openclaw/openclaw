@@ -1,5 +1,5 @@
 /** @jsxImportSource @solidjs/web */
-import { createEffect, createSignal, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, untrack } from "solid-js";
 import { workboardLocale } from "../../host.ts";
 import { t } from "../../i18n/index.ts";
 import { formatDurationCompact } from "../../lib/format.ts";
@@ -75,37 +75,32 @@ function formatAutomationTime(timestamp: number, now: number) {
   });
 }
 export function RelativeTime(props: { timestamp: number; now: number; automation?: boolean }) {
+  const timestamp = createMemo(() => props.timestamp);
   const [now, setNow] = createSignal(untrack(() => props.now));
   const update = () => setNow(Date.now());
-  createEffect(
-    () => props.timestamp,
-    (timestamp) => {
+  createEffect(timestamp, (value) => {
+    if (!subscribers.size) {
+      stopVisibility = listen(document, "visibilitychange", onVisibilityChange);
+    }
+    subscribers.set(update, value);
+    update();
+    schedule();
+    return () => {
+      subscribers.delete(update);
       if (!subscribers.size) {
-        stopVisibility = listen(document, "visibilitychange", onVisibilityChange);
+        stopVisibility?.();
+        stopVisibility = undefined;
       }
-      subscribers.set(update, timestamp);
-      update();
       schedule();
-      return () => {
-        subscribers.delete(update);
-        if (!subscribers.size) {
-          stopVisibility?.();
-          stopVisibility = undefined;
-        }
-        schedule();
-      };
-    },
-  );
+    };
+  });
   return (
     <>
       {props.automation
-        ? formatAutomationTime(props.timestamp, now())
-        : formatCardTime(props.timestamp, now())}
+        ? formatAutomationTime(timestamp(), now())
+        : formatCardTime(timestamp(), now())}
     </>
   );
-}
-export function cardRelativeTime(timestamp: number, now: number) {
-  return <RelativeTime timestamp={timestamp} now={now} />;
 }
 export function automationNextRunTime(timestamp: number, now: number) {
   return <RelativeTime timestamp={timestamp} now={now} automation />;

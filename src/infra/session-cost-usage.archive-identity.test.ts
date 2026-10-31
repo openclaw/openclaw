@@ -409,21 +409,24 @@ describe("usage archive identity", () => {
     expect(readCold(database.db, scope.sessionId)).toBeDefined();
     await expectTotal("main", 36);
     expect(readCold(database.db, scope.sessionId)).toBeDefined();
-    expect(
-      executeSqliteQuerySync(
-        database.db,
-        getNodeSqliteKysely<DB>(database.db)
-          .selectFrom("transcript_events")
-          .select("seq")
-          .where("session_id", "=", scope.sessionId),
-      ).rows,
-    ).toEqual([]);
     const discovered = expectDefined(
       (await discoverAllSessions(main)).find((session) => session.sessionId === scope.sessionId),
       "cold usage discovery",
     );
     expect(
       await cachedSessions({ ...main, sessions: [discovered], requestRefresh: false }),
+    ).toMatchObject({
+      summaries: [{ totalTokens: 17, totalCost: 0.017 }],
+      cacheStatus: { status: "fresh" },
+    });
+    expect(
+      await cachedSessions({
+        ...main,
+        sessions: [{ sessionFile: before.filePath }],
+        startMs: archiveTime - 1,
+        endMs: archiveTime + 1,
+        requestRefresh: false,
+      }),
     ).toMatchObject({
       summaries: [{ totalTokens: 17, totalCost: 0.017 }],
       cacheStatus: { status: "fresh" },

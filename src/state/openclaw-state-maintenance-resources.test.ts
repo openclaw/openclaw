@@ -1,3 +1,4 @@
+import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { afterEach, assert, expect, it } from "vitest";
 import { beginDoctorMaintenance } from "../commands/doctor-maintenance.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
@@ -299,6 +300,9 @@ it.each(["Doctor", "Gateway lock"] as const)(
         const captureEof = captureBodyEofs.get(response);
         assert(captureEof, "Expected capture to clone the fixture response");
         await captureEof;
+        // TransformStream flush resolves before the consumer observes its terminal read.
+        // Let capture record EOF before this fixture can begin maintenance finalization.
+        await nextEventLoopTurn();
       };
       defer(() => finalizeDebugProxyCaptureAsync(settings, deps));
       await initializeDebugProxyCaptureAsync("outside", settings, deps);

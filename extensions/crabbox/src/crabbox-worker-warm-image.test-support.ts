@@ -87,7 +87,7 @@ export function createWarmProvider(
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   vi.spyOn(managedBinary, "ensureManagedCrabboxBinary").mockImplementation(async (params) => ({
     binary: params?.binary ?? "crabbox",
-    version: "0.79.2",
+    version: managedBinary.CRABBOX_MIN_VERSION,
   }));
   const calls: CommandCall[] = [];
   const warn = vi.fn();
@@ -113,6 +113,18 @@ export function createWarmProvider(
       if (argv[1] === "inspect" || argv[1] === "status") {
         return jsonResult({
           ...lease(),
+          ...(argv[argv.indexOf("--provider") + 1] === "azure-sandbox"
+            ? {
+                provider: "azure-sandbox",
+                serverId: "fixture-sandbox",
+                slug: "fixture-slug",
+                labels: {
+                  crabbox_lease: lease().id,
+                  crabbox_attempt: "fixture-attempt",
+                  crabbox_fingerprint: "fixture-fingerprint",
+                },
+              }
+            : {}),
           ready: true,
           providerMetadata: { instanceProfileAttached: false },
         });

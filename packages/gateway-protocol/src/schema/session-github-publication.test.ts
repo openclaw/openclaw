@@ -33,9 +33,13 @@ function rejectsAction(base: object, fields: Record<string, unknown>) {
 }
 
 describe("session GitHub publication protocol", () => {
-  it("binds review requests to the current PR without freeform text", () => {
+  it("accepts current or explicit PR review requests without freeform text", () => {
     const review = { ...request("request_review"), requestId, expectedHeadCommit: head };
-    action.accepts(review, { ...review, requestId: undefined });
+    action.accepts(review, {
+      ...review,
+      requestId: undefined,
+      pullRequestUrl: "https://github.com/example/repository/pull/7",
+    });
     rejectsAction(review, {
       ...foreignTarget,
       body: "@clawsweeper stop",
@@ -56,17 +60,21 @@ describe("session GitHub publication protocol", () => {
       baseCommit: "main",
     });
   });
-  it("binds metadata edits without target or lifecycle selectors", () => {
+  it("accepts a verified URL selector for metadata without lifecycle or authority fields", () => {
     const edit = request("edit");
-    action.accepts(edit, {
-      ...edit,
-      title: "New title",
-      expectedTitle: "Old title",
-      body: "Full description",
-      expectedBody: "Previous description",
-      requestId,
-      expectedHeadCommit: head,
-    });
+    action.accepts(
+      edit,
+      { ...edit, pullRequestUrl: "https://github.com/example/repository/pull/7" },
+      {
+        ...edit,
+        title: "New title",
+        expectedTitle: "Old title",
+        body: "Full description",
+        expectedBody: "Previous description",
+        requestId,
+        expectedHeadCommit: head,
+      },
+    );
     rejectsAction(edit, {
       ...foreignTarget,
       mergeMethod: "squash",

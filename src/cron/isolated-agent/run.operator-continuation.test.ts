@@ -115,6 +115,8 @@ afterEach(() => {
 // Exercise custody transfer through durable reload, scheduled admission and the real action owner.
 it.each([
   "operator",
+  "write-scoped operator",
+  "cron-scoped operator",
   "self removal",
   "self removal then role revoked during merge",
   "self removal then session replaced during merge",
@@ -139,6 +141,8 @@ it.each([
   const queuedEdit = ownerEdit || managerRename || captureRace;
   const recurring = scenario === "recurring trigger reload";
   const selfRemoving = scenario.startsWith("self removal");
+  const scopedOperator =
+    scenario === "write-scoped operator" || scenario === "cron-scoped operator";
   const config = await prepareAuthorityConfig({
     tools: { allow: [AUTOMATIONS_TOOL_NAME, "github_publish"] },
     ...(recurring ? { cron: { triggers: { enabled: true } } } : {}),
@@ -150,7 +154,14 @@ it.each([
   const profile = ensureProfileForEmail("scheduled-operator@example.test");
   const client = createOperatorClient({
     profileId: profile.id,
-    scopes: scenario === "guest" ? ["operator.sessions.write"] : ["operator.admin"],
+    scopes:
+      scenario === "guest"
+        ? ["operator.sessions.write"]
+        : scenario === "write-scoped operator"
+          ? ["operator.write"]
+          : scenario === "cron-scoped operator"
+            ? ["operator.sessions.write", "operator.cron"]
+            : ["operator.admin"],
   });
   client.connect.client.id = "openclaw-control-ui";
   client.connect.client.mode = "webchat";
@@ -260,7 +271,7 @@ it.each([
                   toolConstructionPlan: { ...toolConstructionPlan },
                   runId: "operator-creates-continuation",
                   operationalRunInstance: admitted.operationalRunInstance,
-                  senderIsOwner: true,
+                  senderIsOwner: !scopedOperator,
                   cronCreatorToolAllowlistRef: capturedTools,
                   cronCreatorToolAllowlistCaptureRef: capture,
                 });
@@ -364,6 +375,9 @@ it.each([
   }
   // No operator request, original admitted run or human follow-up survives this point.
   const job = expectDefined((await fixture.read())[0], "durably stored continuation");
+  if (scopedOperator) {
+    expect(job.operatorSource?.source.snapshot.scopes).toEqual(client.connect.scopes);
+  }
   if (scenario === "foreign target") {
     expect(job.operatorSource).toBeUndefined();
   }
@@ -517,7 +531,11 @@ it.each([
             ),
           ).toBe(nextCheckDefinition);
         }
-        admittedOperator = readAdmittedRunOperatorAuthority(admitted) !== undefined;
+        const scheduledOperator = readAdmittedRunOperatorAuthority(admitted);
+        admittedOperator = scheduledOperator !== undefined;
+        if (scopedOperator) {
+          expect(scheduledOperator?.scopes).toEqual(client.connect.scopes);
+        }
         if (selfRemoving) {
           const automations = expectDefined(
             tools.find((tool) => tool.name === AUTOMATIONS_TOOL_NAME),
@@ -736,7 +754,13 @@ it.each([
         scenario === "role revoked during merge" ? "error" : "ok",
       );
       expect(entered).toBe(1);
-      if (scenario === "operator" || scenario === "paused force run" || ownerEdit || recurring) {
+      if (
+        scenario === "operator" ||
+        scenario === "write-scoped operator" ||
+        scenario === "paused force run" ||
+        ownerEdit ||
+        recurring
+      ) {
         expect(rejected).toBeUndefined();
         expect(results).toMatchObject([
           {
@@ -761,13 +785,18 @@ it.each([
       } else if (scenario === "current tool deny") {
         expect(offered).toBeUndefined();
       } else {
-        expect(admittedOperator).toBe(false);
-        expect(rejected).toContain("require full operator write permission");
+        expect(admittedOperator).toBe(scenario === "cron-scoped operator");
+        expect(rejected).toContain(
+          scopedOperator
+            ? "missing scope: operator.write"
+            : "require full operator write permission",
+        );
         expect(results).toEqual([]);
       }
     }
     if (
       scenario !== "operator" &&
+      scenario !== "write-scoped operator" &&
       scenario !== "paused force run" &&
       !ownerEdit &&
       !recurring &&

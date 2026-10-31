@@ -633,6 +633,10 @@ describe("Report action from the authoritative update ledger", () => {
   it.each([
     { reason: "not-git-install", reportable: true },
     { reason: "already-current", reportable: false },
+    { reason: "managed-service-handoff-unavailable", reportable: false },
+    { reason: "immutable-native-updater-required", reportable: false },
+    { reason: "restart-disabled", reportable: false },
+    { reason: "downgrade-confirmation-required", reportable: false },
     { reason: "dry-run", reportable: false },
     { reason: "cancelled", reportable: false },
   ])(

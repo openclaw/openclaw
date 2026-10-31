@@ -87,8 +87,6 @@ export function getPluginRegistrationContracts(): PluginRegistrationContractEntr
     );
 }
 
-export let providerContractLoadError: Error | undefined;
-
 function formatBundledCapabilityPluginLoadError(params: {
   pluginId: string;
   capabilityLabel: string;
@@ -146,7 +144,9 @@ function loadScopedCapabilityRuntimeRegistryEntries<T>(params: {
   });
 }
 
-function loadProviderContractEntriesForPluginId(pluginId: string): ProviderContractEntry[] {
+export function resolveProviderContractEntriesForPluginId(
+  pluginId: string,
+): ProviderContractEntry[] {
   const publicArtifactEntries = resolveBundledExplicitProviderContractsFromPublicArtifacts({
     onlyPluginIds: [pluginId],
   });
@@ -154,23 +154,17 @@ function loadProviderContractEntriesForPluginId(pluginId: string): ProviderContr
     return publicArtifactEntries;
   }
 
-  try {
-    providerContractLoadError = undefined;
-    return loadScopedCapabilityRuntimeRegistryEntries({
-      pluginId,
-      capabilityLabel: "provider",
-      loadEntries: (registry) =>
-        registry.providers
-          .filter((entry) => entry.pluginId === pluginId)
-          .map((entry) => ({
-            pluginId: entry.pluginId,
-            provider: entry.provider,
-          })),
-    });
-  } catch (error) {
-    providerContractLoadError = error instanceof Error ? error : new Error(String(error));
-    return [];
-  }
+  return loadScopedCapabilityRuntimeRegistryEntries({
+    pluginId,
+    capabilityLabel: "provider",
+    loadEntries: (registry) =>
+      registry.providers
+        .filter((entry) => entry.pluginId === pluginId)
+        .map((entry) => ({
+          pluginId: entry.pluginId,
+          provider: entry.provider,
+        })),
+  });
 }
 
 function resolveWebSearchCredentialValue(provider: WebSearchProviderPlugin): unknown {
@@ -254,7 +248,7 @@ export function resolveProviderContractProvidersForPluginIds(
   return [
     ...new Map(
       [...allowed]
-        .flatMap(loadProviderContractEntriesForPluginId)
+        .flatMap(resolveProviderContractEntriesForPluginId)
         .filter((entry) => allowed.has(entry.pluginId))
         .map((entry) => [entry.provider.id, entry.provider]),
     ).values(),

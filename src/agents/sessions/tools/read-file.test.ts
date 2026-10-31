@@ -71,18 +71,20 @@ it("isolates renamed hardlinks to database files", async () => {
 });
 
 it("reuses the broker for isolated reads, preserving bytes, failures, and cancellation", async () => {
+  vi.mocked(command.runCommandBuffered).mockRestore();
   const broker = createSpawnBrokerHost();
   onTestFinished(() => broker.close());
   const filePath = file("state/notes.txt");
   const read = (name = "notes.txt", signal?: AbortSignal) =>
     readLocalFile(file("state", name), signal);
-  const bytes = Buffer.alloc(1024 * 1024 + 13, 0xa7);
-  fs.writeFileSync(filePath, bytes);
+  const hex = "a7".repeat(1024 * 1024 + 13);
+  fs.writeFileSync(filePath, hex, "hex");
   write("state/empty.txt", "");
+  await expect(read("missing.txt")).rejects.toMatchObject({ code: "ENOENT" });
   await broker.ready();
   await runWithSpawnBroker(broker, async () => {
     const reads = await Promise.all([read(), read("empty.txt"), read()]);
-    expect(reads).toEqual([bytes, Buffer.alloc(0), bytes]);
+    expect(reads.map((buffer) => buffer.toString("hex"))).toEqual([hex, "", hex]);
     await expect(read("missing.txt")).rejects.toMatchObject({ code: "ENOENT" });
     await expect(read("")).rejects.toThrow("regular file");
     fs.symlinkSync(filePath, file("state/link.txt"));
@@ -94,7 +96,7 @@ it("reuses the broker for isolated reads, preserving bytes, failures, and cancel
     await Promise.resolve();
     active.abort(reason);
     await expect(reading).rejects.toBe(reason);
-    await expect(read()).resolves.toEqual(bytes);
+    expect((await read()).toString("hex")).toBe(hex);
   });
   await broker.close();
   await expect(broker.readFile(filePath)).rejects.toThrow("closing");

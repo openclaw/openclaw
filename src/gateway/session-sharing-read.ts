@@ -344,10 +344,7 @@ export function createSessionSharingInputAuthority(
   };
 }
 
-const projectedSharingKeys = new WeakMap<
-  object,
-  WeakMap<object, { facts: readonly unknown[]; key: string }>
->();
+const projectedSharingKeys = new WeakMap<object, { facts: readonly unknown[]; key: string }>();
 const emptyProfileAliases: ReadonlySet<string> = new Set();
 
 export function prepareProjectedSessionSharing(params: {
@@ -387,15 +384,14 @@ export function prepareProjectedSessionSharing(params: {
       isMember,
     }),
     policy,
-    /** Only publication owners may supply a revision retired on sharing/config changes. */
-    getCacheKey(revision?: object) {
+    /** Connection facts follow config/access publications, independently of row revisions. */
+    getCacheKey() {
       if (cacheKey !== undefined) {
         return cacheKey;
       }
-      let keys = revision && projectedSharingKeys.get(revision);
       const viewer = client ?? cfg;
       const scopes = client?.connect.scopes;
-      const previous = keys?.get(viewer);
+      const previous = projectedSharingKeys.get(viewer);
       const facts = previous?.facts;
       // Compare live authority directly; only misses need a new fact snapshot.
       if (
@@ -436,29 +432,26 @@ export function prepareProjectedSessionSharing(params: {
         policy,
         Boolean(cfg.gateway?.roles),
       ]);
-      if (revision) {
-        const next: unknown[] = [
-          cfg,
-          getRuntimeConfigSnapshotMetadata(),
-          readGatewayAccessRevision(),
-          actor?.kind,
-          actor?.kind === "operator" ? actor.profileId : undefined,
-          identity?.id,
-          client?.authenticatedUserProfile?.profileId,
-          client?.authenticatedUserId,
-          Boolean(client?.authenticatedGitHubIdentitySync),
-          profile,
-          policy,
-          Boolean(cfg.gateway?.roles),
-          scopes !== undefined,
-        ];
-        if (!keys) {
-          keys = new WeakMap();
-          projectedSharingKeys.set(revision, keys);
-        }
-        // Concatenation retains an exact-sized snapshot instead of push's spare capacity.
-        keys.set(viewer, { facts: scopes?.length ? next.concat(scopes) : next, key: cacheKey });
-      }
+      const next: unknown[] = [
+        cfg,
+        getRuntimeConfigSnapshotMetadata(),
+        readGatewayAccessRevision(),
+        actor?.kind,
+        actor?.kind === "operator" ? actor.profileId : undefined,
+        identity?.id,
+        client?.authenticatedUserProfile?.profileId,
+        client?.authenticatedUserId,
+        Boolean(client?.authenticatedGitHubIdentitySync),
+        profile,
+        policy,
+        Boolean(cfg.gateway?.roles),
+        scopes !== undefined,
+      ];
+      // Concatenation retains an exact-sized snapshot instead of push's spare capacity.
+      projectedSharingKeys.set(viewer, {
+        facts: scopes?.length ? next.concat(scopes) : next,
+        key: cacheKey,
+      });
       return cacheKey;
     },
   };

@@ -43,6 +43,15 @@ or starting model work. Start a new call to use the current route. Changing only
 the default Talk agent preserves an existing call's selected agent, and ending
 its audio transport does not cancel work already accepted by the Gateway.
 
+Talk starts closing at the Gateway shutdown fence. On process exit, the shutdown
+plan's five-second prelude grace bounds the persistence join and reports unfinished
+cleanup. When the join has no outer deadline, including embedded close and
+state-store retirement, Talk uses its own grace derived from the remaining
+shutdown budget and capped at 30 seconds. It then requests abort and allows a
+second bounded grace period for its work to settle.
+Completed writes keep their receipts, and uncertain delivery is not replayed.
+Work that ignores abort is reported as retained, never as saved.
+
 Native steering uses the current caller's tool policy and session permissions. The
 host captures the actual backend attempt's authority after policy preparation and
 checks that exact owner again before delivering a control. Changed caller authority, tool

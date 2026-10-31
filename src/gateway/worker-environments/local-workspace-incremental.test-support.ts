@@ -23,7 +23,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { localWorkspaceDigestBytes } from "./local-workspace-cas.js";
+import { decodeLocalWorkspaceTree, localWorkspaceDigestBytes } from "./local-workspace-cas.js";
 import { readLocalWorkspaceTree } from "./local-workspace-cas.kernel.js";
 import type { LocalWorkspaceManifestCheckpoint } from "./local-workspace-manifest-scan.js";
 import {
@@ -255,6 +255,7 @@ export async function proveStagedInputCheckpointOwnership(owner: LocalWorkspaceO
 export async function prepareSandboxCheckpointFixture(
   owner: LocalWorkspaceOwner & Partial<Disposable>,
   assertCurrent?: () => void,
+  signal?: AbortSignal,
 ) {
   const projectionOwner = await import("./local-workspace-projection.js");
   const { prepareLocalSandboxWorkspace } = await import("../../agents/sandbox/local-workspace.js");
@@ -270,6 +271,7 @@ export async function prepareSandboxCheckpointFixture(
     workspaceDir: owner.worktree.path,
     sandbox: resolveSandboxConfigForAgent({}, owner.agentId),
     assertCurrent,
+    signal,
   });
   assert(projection, "Expected managed projection");
   return projection;
@@ -435,14 +437,18 @@ function restoreV31CheckpointLayout(
   pending: workspaceStore.LocalWorkspaceProjection,
 ): void {
   const database = openOpenClawStateDatabase();
-  const baseline = readLocalWorkspaceTree(database.db, pending.tree_root_digest!);
+  const baseline = decodeLocalWorkspaceTree(
+    readLocalWorkspaceTree(database.db, pending.tree_root_digest!),
+  );
   const {
     treeRoot,
     previousTreeRoot: _previousTreeRoot,
     fingerprints: _fingerprints,
     ...checkpoint
   } = JSON.parse(pending.checkpoint_json!) as LocalWorkspaceManifestCheckpoint;
-  const resulting = readLocalWorkspaceTree(database.db, localWorkspaceDigestBytes(treeRoot!));
+  const resulting = decodeLocalWorkspaceTree(
+    readLocalWorkspaceTree(database.db, localWorkspaceDigestBytes(treeRoot!)),
+  );
   // Recreate the released v31 layout around the actual interrupted receipt.
   // Recovery must convert this projection online before staging and accepting its edits.
   for (const record of baseline.values()) {

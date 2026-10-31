@@ -8,7 +8,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
-import * as directives from "../../tts/directives.js";
+import * as directives from "../../tts/directive-facts.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
@@ -96,7 +96,7 @@ it.each(["See [", "Example:\n```text\nkeep two spaces  \nkeep a tab\t\n```"])(
     });
     await dispatchReplyFromConfig({
       ctx: buildTestCtx({ Provider: "telegram", Surface: "telegram" }),
-      cfg: emptyConfig,
+      cfg: { tts: { auto: "always" } },
       dispatcher,
       replyResolver: async (_ctx, opts) => {
         await opts?.onBlockReply?.({ text });

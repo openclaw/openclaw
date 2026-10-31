@@ -47,7 +47,7 @@ describe("host database engine selection", () => {
     );
     expect(selection).toEqual({
       effectiveEngines: { ...sqliteEngines, state: "postgres" },
-      postgres: { connection, schemaPrefix: "openclaw" },
+      postgres: { connection, schemaPrefix: "openclaw", connectionEnvKey: "TEST_DATABASE_DSN" },
     });
     expect(Object.isFrozen(selection)).toBe(true);
     expect(Object.isFrozen(selection.effectiveEngines)).toBe(true);

@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { formatCliProcessFailure, runCliProcessChild } from "./cli-process-child.test-helpers.js";
+import { updateExecutorNativeEntrypoints as updateEntrypoints } from "./update-cli/update-command-executor-native-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const fixture = fileURLToPath(new URL("./update-result-output.test-support.ts", import.meta.url));
 
 describe("failed update result output", () => {
   it("drains a noisy failure result before exiting so its recovery verdict reaches the helper", async () => {
@@ -14,7 +14,7 @@ describe("failed update result output", () => {
     const state = path.join(root, "state");
     await fs.mkdir(state);
     const result = await runCliProcessChild({
-      nodeArgs: ["--import", "tsx", fixture],
+      nodeArgs: resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(updateEntrypoints.resultOutput)),
       env: {
         HOME: root,
         USERPROFILE: root,
@@ -29,8 +29,7 @@ describe("failed update result output", () => {
       },
     });
     const failure = formatCliProcessFailure({ reason: "noisy failed update", ...result });
-    expect(result.signal, failure).toBeNull();
-    expect(result.code, failure).toBe(79);
+    expect(result, failure).toMatchObject({ signal: null, code: 79 });
     const output = JSON.parse(result.stdout);
     expect(output).toMatchObject({
       status: "error",

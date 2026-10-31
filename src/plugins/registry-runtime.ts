@@ -3,6 +3,7 @@ import { createChannelIngressDrain } from "../channels/message/ingress-drain.js"
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import { readRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { DecisionEvaluateOptions } from "../decisions/execution-types.js";
 import {
   createPluginBlobStore,
   type OpenBlobStoreOptions,
@@ -126,6 +127,38 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       ) {
         throw new Error(`Plugin "${pluginId}" runtime is no longer active.`);
       }
+    };
+    const evaluateDecision = async <Evaluation, Outcome>(
+      options: DecisionEvaluateOptions,
+      run: (
+        runtime: typeof import("../decisions/runtime.js"),
+        registry: PluginRegistry,
+        config: OpenClawConfig,
+        isAdmissible: () => boolean,
+      ) => Promise<Evaluation>,
+      complete: (
+        completion: typeof import("../decisions/completion.js"),
+        result: Evaluation,
+      ) => Outcome,
+    ): Promise<Outcome> => {
+      assertRuntimeCurrent();
+      const capturedRegistry = currentDecisionRegistry();
+      const [decisions, completion] = await Promise.all([
+        import("../decisions/runtime.js"),
+        import("../decisions/completion.js"),
+      ]);
+      assertRuntimeCurrent();
+      const selectedRegistry = currentDecisionRegistry(capturedRegistry);
+      const config = readRuntimeConfig();
+      const result = await withPluginRuntimeRegistryScope(selectedRegistry, () =>
+        run(decisions, selectedRegistry, config, () => {
+          assertRuntimeCurrent();
+          return true;
+        }),
+      );
+      assertRuntimeCurrent();
+      options.signal.throwIfAborted();
+      return complete(completion, result);
     };
     const assertNativeRuntimeCurrent = () => {
       assertRuntimeCurrent();
@@ -308,55 +341,34 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         }
         if (prop === "decisions") {
           return {
-            evaluate: async (batch, options) => {
-              assertRuntimeCurrent();
-              const capturedRegistry = currentDecisionRegistry();
-              const { evaluateDecisionOperation, completeDecisionEvaluation } =
-                await import("../decisions/runtime.js");
-              assertRuntimeCurrent();
-              const selectedRegistry = currentDecisionRegistry(capturedRegistry);
-              const result = await withPluginRuntimeRegistryScope(selectedRegistry, () =>
-                evaluateDecisionOperation(
-                  batch,
-                  options,
-                  selectedRegistry,
-                  readRuntimeConfig(),
-                  record.id,
-                  () => {
-                    assertRuntimeCurrent();
-                    return true;
-                  },
-                ),
-              );
-              assertRuntimeCurrent();
-              options.signal.throwIfAborted();
-              return completeDecisionEvaluation(result);
-            },
-            evaluateV2: async (batch, options) => {
-              assertRuntimeCurrent();
-              const capturedRegistry = currentDecisionRegistry();
-              const { evaluateDecisionV2Operation, completeDecisionEvaluation } =
-                await import("../decisions/runtime.js");
-              assertRuntimeCurrent();
-              const selectedRegistry = currentDecisionRegistry(capturedRegistry);
-              const config = readRuntimeConfig();
-              const result = await withPluginRuntimeRegistryScope(selectedRegistry, () =>
-                evaluateDecisionV2Operation(
-                  batch,
-                  options,
-                  selectedRegistry,
-                  config,
-                  record.id,
-                  () => {
-                    assertRuntimeCurrent();
-                    return true;
-                  },
-                ),
-              );
-              assertRuntimeCurrent();
-              options.signal.throwIfAborted();
-              return completeDecisionEvaluation(result);
-            },
+            evaluate: (batch, options) =>
+              evaluateDecision(
+                options,
+                (decisions, selectedRegistry, config, isAdmissible) =>
+                  decisions.evaluateDecisionOperation(
+                    batch,
+                    options,
+                    selectedRegistry,
+                    config,
+                    record.id,
+                    isAdmissible,
+                  ),
+                (completion, evaluation) => completion.completeDecisionEvaluation(evaluation),
+              ),
+            evaluateV2: (batch, options) =>
+              evaluateDecision(
+                options,
+                (decisions, selectedRegistry, config, isAdmissible) =>
+                  decisions.evaluateDecisionV2Operation(
+                    batch,
+                    options,
+                    selectedRegistry,
+                    config,
+                    record.id,
+                    isAdmissible,
+                  ),
+                (completion, evaluation) => completion.completeDecisionEvaluation(evaluation),
+              ),
           } satisfies PluginRuntime["decisions"];
         }
         if (prop === "llm") {

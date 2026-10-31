@@ -16,6 +16,11 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
 - `commands.list` (`operator.read`) fetches the runtime command inventory for
   an agent.
   - `agentId` is optional; omit it to read the default agent workspace.
+  - `projectId` is optional and only valid without `sessionKey`. It previews
+    the skills of a registered project selected before a session exists. The
+    Gateway reads that project's `skills/` and `.agents/skills/` only when the
+    client could create a session there for the agent, including sandbox
+    containment; otherwise the agent catalog is returned unchanged.
   - `scope` controls which surface the primary `name` targets: `text` returns
     the primary text command token without the leading `/`; `native` and the
     default `both` path return provider-aware native names when available.
@@ -30,6 +35,11 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
   - `source`: `core` or `plugin`
   - `pluginId`: plugin owner when `source="plugin"`
   - `optional`: whether a plugin tool is optional
+
+  Plugin discovery yields between registrations so other Gateway requests can
+  progress while the catalog loads. An individual synchronous plugin callback
+  still blocks for its own duration.
+
 - `tools.effective` (`operator.read`) fetches a prospective tool preview for a
   session.
   - `sessionKey` is required.

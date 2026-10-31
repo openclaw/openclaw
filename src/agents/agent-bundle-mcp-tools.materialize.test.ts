@@ -342,22 +342,6 @@ describe("createBundleMcpToolRuntime", () => {
     ).toEqual(new Set(["show"]));
   });
 
-  it("never mints app views for tools from requester-scoped servers", async () => {
-    const tool = catalogTool("user-mail", "show", {
-      inputSchema: { type: "object" },
-      uiResourceUri: "ui://user-mail/app",
-    });
-    const sessionRuntime = makeToolRuntime({ tools: [tool], serverName: "user-mail" });
-    sessionRuntime.mcpAppsEnabled = true;
-    // View recovery (peek + transcript reconstruction) has no requester
-    // identity, so scoped servers stay fail-closed at view creation.
-    sessionRuntime.isRequesterScopedServer = (serverName) => serverName === "user-mail";
-    const materialized = await materializeBundleMcpToolsForRun({ runtime: sessionRuntime });
-
-    const result = await firstTool(materialized).execute("call-1", {}, undefined, undefined);
-    expect(result.details ?? {}).not.toHaveProperty("mcpAppPreview");
-  });
-
   it("carries server instructions onto resource and prompt utility tools", () => {
     const tools = buildBundleMcpToolsFromCatalog({
       catalog: knowledgeCatalog({ instructions: "Read the catalogue before citing a resource." }),

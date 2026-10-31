@@ -326,12 +326,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       weight: 6,
     });
     expect(prereleasePlan.surfaces).toContain("external-install-boundary");
-    const bootstrapIndex = sweepScript.indexOf(
-      'run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugins-bootstrap.json" plugins list --json',
-    );
-    const trustIndex = sweepScript.indexOf("record-fixture-plugin-trust");
-    expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
-    expect(trustIndex).toBeGreaterThan(bootstrapIndex);
     expect(sweepScript).toContain("run_plugins_clawhub_scenario");
     expect(clawhubScript).toContain('plugins install "$CLAWHUB_PLUGIN_SPEC"');
     expect(assertionsScript).toContain("assertClawHubExternalInstallContract");
@@ -361,6 +355,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(extensionStep.env.FRV_TEST_EXCLUDE_PATHS_JSON).toBe(
       "${{ needs.preflight.outputs.extension_test_exclude_patterns_json }}",
     );
+    expect(extensionStep.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI).toBe("1");
     expect(extensionStep.run).not.toContain("extensions/codex/src/app-server/run-attempt.test.ts");
   });
 

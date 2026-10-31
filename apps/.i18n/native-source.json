@@ -2660,6 +2660,7 @@
     {"path":"apps/macos/Sources/OpenClaw/DashboardWindowController.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.0fc8bd5d7e83da87","source":"Gateway sign-in required"},
     {"path":"apps/macos/Sources/OpenClaw/DashboardWindowController.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.0727ac92fee6dd66","source":"Reconnect in Connection → Gateways."},
     {"path":"apps/macos/Sources/OpenClaw/DashboardWindowController.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.94698c3702d1370e","source":"Sign in again in Connection → Gateways."},
+    {"path":"apps/macos/Sources/OpenClaw/VoiceWakeOverlayView.swift","kind":"ui-call","surface":"apple","id":"native.apple.a364776a6b6b1fa7","source":"Send failed. Click Send to retry."},
     {"path":"apps/macos/Sources/OpenClaw/VoiceWakeOverlayView.swift","kind":"ui-modifier","surface":"apple","id":"native.apple.addaba7d7374d016","source":"Cancel"},
     {"path":"apps/macos/Sources/OpenClaw/VoiceWakeOverlayView.swift","kind":"ui-modifier","surface":"apple","id":"native.apple.cf9d89cbf01c548c","source":"Send message"},
     {"path":"apps/macos/Sources/OpenClaw/CostUsageMenuView.swift","kind":"ui-call","surface":"apple","id":"native.apple.6bd78f014af54091","source":"Today"},

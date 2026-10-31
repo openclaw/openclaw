@@ -19,6 +19,7 @@ import { embedSessionColdArchivesInSnapshot } from "../config/sessions/session-c
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
 import { capturePostgresBackup, readBackupEngineImage } from "../snapshot/database-backup.js";
 import { listDefaultAgentDatabasePaths } from "../state/agent-database-path-discovery.js";
 import type { OpenClawRegisteredAgentDatabase } from "../state/openclaw-agent-db-contract.js";
@@ -61,10 +62,13 @@ import { probeSqliteDatabaseHeaders } from "./sqlite-header-probe.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 import {
   createLegacyAuditDatabaseWitness,
+  createLegacyAuditBackupCapture,
+  legacyAuditBackupCapturesMatch,
   LegacyAuditBackupStateChangedError,
   rewriteLegacyAuditBackupCheckpoints,
   type LegacyAuditBackupSnapshot,
 } from "./state-migrations.audit-backup.js";
+import { withLegacyAuditMigrationLease } from "./state-migrations.audit-coordination.js";
 import { collectStateDatabasePaths } from "./update-candidate-state.js";
 import { assertNotUpdateCapturePath } from "./update-capture-paths.js";
 
@@ -99,15 +103,6 @@ function stripSqliteSidecarSuffix(sourcePath: string): string {
   return sidecarSuffix ? sourcePath.slice(0, -sidecarSuffix.length) : sourcePath;
 }
 
-function headerAnswers(inventory: BackupResourceInventory): Map<string, boolean> {
-  let answers = sqliteHeaderAnswers.get(inventory);
-  if (!answers) {
-    answers = new Map();
-    sqliteHeaderAnswers.set(inventory, answers);
-  }
-  return answers;
-}
-
 export function classifyBackupSqliteSource(
   sourcePath: string,
   inventory: BackupResourceInventory,
@@ -128,7 +123,7 @@ export function classifyBackupSqliteSource(
     return nameTrusted ? "excluded" : undefined;
   }
   if (!transient && !nameTrusted) {
-    const answers = headerAnswers(inventory);
+    const answers = getOrCreateWeakOwnerMap(sqliteHeaderAnswers, inventory);
     if (!answers.has(databasePath)) {
       for (const [pathname, sqlite] of probeSqliteDatabaseHeaders([databasePath])) {
         answers.set(pathname, sqlite);
@@ -213,7 +208,7 @@ async function discoverBackupSqliteSources(params: {
 
   // One isolated read batch serves discovery and archive traversal. Include
   // visited directories so traversal never launches a probe for each directory.
-  const answers = headerAnswers(params.inventory);
+  const answers = getOrCreateWeakOwnerMap(sqliteHeaderAnswers, params.inventory);
   const probePaths = [...candidates.map((entry) => entry.path), ...visitedDirectories]
     .map(stripSqliteSidecarSuffix)
     .filter((pathname) => !pathname.endsWith(".sqlite"));
@@ -350,6 +345,8 @@ export async function createBackupSqliteSnapshotPlan(params: {
   tempDir: string;
   legacyAuditSnapshots: readonly LegacyAuditBackupSnapshot[];
   legacyAuditDatabaseWitness?: string;
+  /** Only in an isolated backup process; preserves source artifacts and snapshot row IDs. */
+  preserveSourceArtifacts?: boolean;
 }): Promise<{
   inventory: BackupResourceInventory;
   snapshots: SqliteBackupAsset[];
@@ -398,6 +395,16 @@ export async function createBackupSqliteSnapshotPlan(params: {
         createVerifiedSqliteSnapshot({
           sourcePath: sourceDatabasePath,
           targetPath: sourcePath,
+          ...(params.preserveSourceArtifacts
+            ? {
+                sourceAcquisition: {
+                  mode: "isolated-process" as const,
+                  stagingRoot: params.tempDir,
+                  preserveSourceArtifacts: true,
+                },
+                preserveRowIds: true,
+              }
+            : {}),
           requireNonEmptySource: Boolean(canonicalSource),
           validate: canonicalSource
             ? (database, pathname) => {
@@ -652,4 +659,62 @@ export async function createBackupSqliteSnapshotPlan(params: {
     discoveredSourcePaths: discovery.discoveredSourcePaths,
     sharedDatabaseSourcePath,
   };
+}
+
+const MAX_LEGACY_AUDIT_CAPTURE_ATTEMPTS = 3;
+
+export type BackupStateSnapshotPlan = {
+  legacyAuditSnapshots: LegacyAuditBackupSnapshot[];
+  stateSqliteBackup: Awaited<ReturnType<typeof createBackupSqliteSnapshotPlan>>;
+};
+
+export async function createLegacyAuditStateSnapshotPlan(params: {
+  resources: BackupResourcePlan;
+  stateDir: string;
+  tempDir: string;
+  preserveSourceArtifacts?: boolean;
+}): Promise<BackupStateSnapshotPlan> {
+  const stateDir = params.stateDir;
+  // Legacy audit reconciliation takes a source write lease, unlike private-image capture.
+  if (params.preserveSourceArtifacts) {
+    throw new Error(
+      "Source-artifact-preserving backup requires legacy audit migration to finish before capture; no source write lease was acquired.",
+    );
+  }
+
+  let lastStateChangeMessage: string | undefined;
+  for (let attempt = 0; attempt < MAX_LEGACY_AUDIT_CAPTURE_ATTEMPTS; attempt += 1) {
+    const attemptDir = path.join(params.tempDir, `state-snapshot-attempt-${attempt + 1}`);
+    const verificationDir = path.join(attemptDir, "legacy-verification");
+    await fs.mkdir(attemptDir, { recursive: true });
+    try {
+      const firstCapture = await withLegacyAuditMigrationLease(stateDir, () =>
+        createLegacyAuditBackupCapture({ stateDir, tempDir: attemptDir }),
+      );
+      const stateSqliteBackup = await createBackupSqliteSnapshotPlan({
+        resources: params.resources,
+        tempDir: attemptDir,
+        legacyAuditSnapshots: firstCapture.snapshots,
+        legacyAuditDatabaseWitness: firstCapture.databaseWitness,
+      });
+      await fs.mkdir(verificationDir, { recursive: true });
+      const secondCapture = await withLegacyAuditMigrationLease(stateDir, () =>
+        createLegacyAuditBackupCapture({ stateDir, tempDir: verificationDir }),
+      );
+      if (!legacyAuditBackupCapturesMatch(firstCapture, secondCapture)) {
+        throw new LegacyAuditBackupStateChangedError();
+      }
+      await fs.rm(verificationDir, { recursive: true, force: true });
+      return { legacyAuditSnapshots: firstCapture.snapshots, stateSqliteBackup };
+    } catch (error) {
+      await fs.rm(attemptDir, { recursive: true, force: true });
+      if (!(error instanceof LegacyAuditBackupStateChangedError)) {
+        throw error;
+      }
+      lastStateChangeMessage = error.message;
+    }
+  }
+  throw new LegacyAuditBackupStateChangedError(
+    `${lastStateChangeMessage ?? "Legacy audit state changed while backup was capturing it"}; retry backup after legacy audit migration settles`,
+  );
 }

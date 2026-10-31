@@ -9,6 +9,7 @@ import {
 import { getMediaDir } from "../media/store.js";
 import * as assistantDisplay from "../shared/assistant-display-content.js";
 import { readRunFailureNotice } from "../shared/run-failure-notice.js";
+import { extractTextFromMessage } from "../tui/tui-formatters.js";
 import { augmentChatHistoryWithCanvasBlocks } from "./chat-display-projection.canvas.js";
 import {
   projectChatDisplayMessage,
@@ -18,6 +19,47 @@ import {
 import { sanitizeChatHistoryMessages } from "./chat-display-projection.sanitize.js";
 
 const text = (value: string) => ({ type: "text", text: value });
+
+it("keeps size recovery in text fallback without adding prose to the rich card", () => {
+  const card = {
+    type: "attachment_error",
+    attachment: {
+      code: "file-too-large",
+      kind: "document",
+      label: "private-filename.zip",
+      mimeType: "application/zip",
+    },
+  };
+  const display = [text("Saved the import pack."), card];
+  const saved = {
+    role: "assistant",
+    content: [text("Original model text remains private to its own history.")],
+    openclawDisplayContent: display,
+  };
+  const before = structuredClone(saved);
+  const history = projectChatDisplayMessages([saved])[0]!;
+  const live = projectChatDisplayMessage({ role: "assistant", content: display })!;
+  for (const message of [history, live, projectChatDisplayMessage(history)!]) {
+    expect(message.content).toEqual(display);
+    expect(message.text).toBe(
+      "⚠️ file attachment: Too large to attach. Look for this file in Files.\nSaved the import pack.",
+    );
+    // This reader still recognizes only the shipped four attachment-error codes.
+    expect(extractTextFromMessage(message)).toBe(message.text);
+    expect(message.text).not.toContain("private-filename");
+    expect(message.text).not.toContain("Original model text");
+  }
+  expect(saved).toEqual(before);
+  const failureOnly = projectChatDisplayMessage({ role: "assistant", content: [card] })!;
+  expect(extractTextFromMessage(failureOnly)).toContain("Look for this file in Files");
+  const bounded = projectChatDisplayMessages(
+    [{ role: "assistant", content: [text("Long caption. ".repeat(100)), card] }],
+    { maxChars: 256 },
+  )[0]!;
+  expect(extractTextFromMessage(bounded)).toContain("Look for this file in Files");
+  const unrelated = { role: "assistant", content: [text("Ordinary reply.")] };
+  expect(projectChatDisplayMessage(unrelated)).not.toHaveProperty("text");
+});
 
 it("admits display content once before sanitizing a history page", () => {
   const messages = [
