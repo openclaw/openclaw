@@ -345,7 +345,6 @@
 .task-progress-details .session-progress-card__step-marker[data-status="pending"] > svg {
   width: calc(var(--session-progress-marker-size) - 2px);
   height: calc(var(--session-progress-marker-size) - 2px);
-  border-width: 1px;
 }
 
 /* Keep the checklist's smaller type while sharing the desktop row geometry. */

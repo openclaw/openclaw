@@ -146,6 +146,11 @@ describe.skipIf(!hasBrowserLayout)("sidebar glyph geometry", () => {
         const slot = bounds(".session-glyph");
         const ringStyle = getComputedStyle(ringElement);
         expect(ringStyle.width).toBe(ringStyle.height);
+        // Three solid sides and one open side: a three-quarter arc with no track.
+        expect(ringStyle.borderTopWidth).toBe("2px");
+        expect(ringStyle.borderBottomColor).toBe(ringStyle.borderTopColor);
+        expect(ringStyle.borderLeftColor).toBe(ringStyle.borderTopColor);
+        expect(ringStyle.borderRightColor).toBe("rgba(0, 0, 0, 0)");
         expect(Number.parseFloat(ringStyle.width)).toBeGreaterThan(artwork.width);
         expect(ring.x + ring.width / 2).toBeCloseTo(slot.x + slot.width / 2, 3);
         expect(ring.y + ring.height / 2).toBeCloseTo(slot.y + slot.height / 2, 3);

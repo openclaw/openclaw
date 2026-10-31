@@ -85,10 +85,10 @@
 .session-worker-stop__spinner {
   width: 14px;
   height: 14px;
-  border: 1.5px solid color-mix(in srgb, currentColor 25%, transparent);
-  border-top-color: currentColor;
+  border: var(--spinner-stroke) solid currentColor;
+  border-right-color: var(--spinner-gap);
   border-radius: 50%;
-  animation: btn-spinner-spin 0.8s linear infinite;
+  animation: btn-spinner-spin var(--spinner-duration) linear infinite;
 }
 @media (max-width: 640px) {
   .session-worker-stop {

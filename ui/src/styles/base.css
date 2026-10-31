@@ -355,6 +355,14 @@
   --radius-full: 9999px;
   --radius: 10px;
 
+  /* Every spinner: a three-quarter arc in a solid color with an open gap. */
+  --spinner-duration: 0.9s;
+  --spinner-duration-background: 1.8s;
+  --spinner-stroke: 2px;
+  --spinner-stroke-large: 2.5px;
+  --spinner-gap: transparent;
+  --spinner-trace-dash: 72 28;
+
   /* One profile for every scroll surface: 12px hit target, 6px visible thumb
      (transparent border + content-box clip). Derived from --muted so every
      theme family and both modes follow with no override. scrollbar-color is a
@@ -455,6 +463,13 @@
 @media (pointer: coarse) {
   :root {
     --menu-item-height: 44px;
+  }
+}
+
+/* A still spinner closes its gap, so it reads as a status ring and not a frozen arc. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --spinner-gap: currentColor;
   }
 }
 

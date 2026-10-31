@@ -90,11 +90,12 @@
   display: block;
   width: 8px;
   height: 8px;
-  border: 1.25px solid color-mix(in srgb, var(--accent) 30%, var(--details-surface, var(--card)));
-  border-top-color: var(--accent);
+  color: var(--accent);
+  border: var(--spinner-stroke) solid currentColor;
+  border-right-color: var(--spinner-gap);
   border-radius: 50%;
   corner-shape: round;
-  animation: btn-spinner-spin 1.5s linear infinite;
+  animation: btn-spinner-spin var(--spinner-duration) linear infinite;
 
   @media (prefers-reduced-motion: reduce) {
     animation: none;

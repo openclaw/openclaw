@@ -89,11 +89,12 @@
   bottom: -2px;
   width: 10px;
   height: 10px;
-  border: 1.5px solid color-mix(in srgb, currentColor 28%, transparent);
-  border-top-color: currentColor;
+  color: var(--accent);
+  border: var(--spinner-stroke) solid currentColor;
+  border-right-color: var(--spinner-gap);
   border-radius: 50%;
   background: var(--bg);
-  animation: btn-spinner-spin 1.6s linear infinite;
+  animation: btn-spinner-spin var(--spinner-duration) linear infinite;
 }
 .chat-processes__open {
   white-space: normal;

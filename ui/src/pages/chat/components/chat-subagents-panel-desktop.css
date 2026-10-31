@@ -132,12 +132,13 @@
   bottom: -3px;
   width: 11px;
   height: 11px;
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
-  border-top-color: var(--accent);
+  color: var(--accent);
+  border: var(--spinner-stroke) solid currentColor;
+  border-right-color: var(--spinner-gap);
   border-radius: 50%;
   background: var(--bg);
   box-shadow: 0 0 0 2px var(--bg);
-  animation: btn-spinner-spin 1.5s linear infinite;
+  animation: btn-spinner-spin var(--spinner-duration) linear infinite;
 }
 
 .subagents-desktop__identity {

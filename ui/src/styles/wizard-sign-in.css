@@ -29,10 +29,11 @@
 .wizard-sign-in__ring {
   position: absolute;
   inset: 0;
-  border: 2px solid color-mix(in srgb, var(--accent) 18%, transparent);
-  border-top-color: var(--accent);
+  color: var(--accent);
+  border: var(--spinner-stroke-large) solid currentColor;
+  border-right-color: var(--spinner-gap);
   border-radius: 50%;
-  animation: btn-spinner-spin 1.2s linear infinite;
+  animation: btn-spinner-spin var(--spinner-duration) linear infinite;
 }
 
 .wizard-sign-in__title {
@@ -103,6 +104,5 @@
 @media (prefers-reduced-motion: reduce) {
   .wizard-sign-in__ring {
     animation: none;
-    border-color: var(--accent);
   }
 }

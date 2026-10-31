@@ -347,8 +347,9 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 .session-glyph__ring {
   position: absolute;
   inset: -2px;
-  border: 1.5px solid color-mix(in srgb, var(--accent) 20%, transparent);
-  border-top-color: var(--accent);
+  color: var(--accent);
+  border: var(--spinner-stroke) solid currentColor;
+  border-right-color: var(--spinner-gap);
   border-radius: var(--radius-full);
   pointer-events: none;
 }
@@ -374,11 +375,11 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 
 .session-glyph__trace path {
   fill: none;
-  stroke-width: 1.5;
+  stroke-width: var(--spinner-stroke);
 }
 
 .session-glyph__trace-track {
-  stroke: color-mix(in srgb, var(--accent) 20%, transparent);
+  stroke: transparent;
 }
 
 /* The arc covers the same share of its outline as the ring's quarter turn and
@@ -386,8 +387,8 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 .session-glyph__trace-run {
   stroke: var(--accent);
   stroke-linecap: round;
-  stroke-dasharray: 25 75;
-  animation: session-run-trace 2s linear infinite;
+  stroke-dasharray: var(--spinner-trace-dash);
+  animation: session-run-trace var(--spinner-duration) linear infinite;
 }
 
 .session-glyph__badge {
@@ -528,10 +529,10 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   width: 12px;
   height: 12px;
   flex: 0 0 auto;
-  border: 2px solid color-mix(in srgb, currentColor 35%, transparent);
-  border-top-color: currentColor;
+  border: var(--spinner-stroke) solid currentColor;
+  border-right-color: var(--spinner-gap);
   border-radius: var(--radius-full);
-  animation: btn-spinner-spin 0.7s linear infinite;
+  animation: btn-spinner-spin var(--spinner-duration) linear infinite;
 }
 
 .settings-save-indicator__spinner svg {
@@ -3115,14 +3116,15 @@ td.data-table-key-col {
   width: 12px;
   height: 12px;
   flex: 0 0 auto;
-  border: 1.5px solid color-mix(in srgb, var(--accent) 28%, transparent);
-  border-top-color: var(--accent);
+  color: var(--accent);
+  border: var(--spinner-stroke) solid currentColor;
+  border-right-color: var(--spinner-gap);
   border-radius: var(--radius-full);
 }
 
 .session-run-spinner,
 .session-glyph__ring {
-  animation: btn-spinner-spin 1.6s linear infinite;
+  animation: btn-spinner-spin var(--spinner-duration) linear infinite;
 }
 
 .session-glyph__ring--queued,
@@ -3138,7 +3140,36 @@ td.data-table-key-col {
 
 .session-glyph__ring--background,
 .session-glyph__trace--background .session-glyph__trace-run {
-  animation-duration: 3.2s;
+  animation-duration: var(--spinner-duration-background);
+}
+
+/* Forced colors repaints every border side, which would close the gap and stop
+   the rotation from showing. */
+@media (forced-colors: active) {
+  .session-run-spinner,
+  .session-glyph__ring,
+  .btn__spinner,
+  .activity-pill__spinner,
+  .chat-details-processes__spinner,
+  .chat-details-subagents__spinner,
+  .chat-processes__spinner,
+  .subagents-desktop__spinner,
+  .session-worker-stop__spinner,
+  .approval-page__spinner,
+  .config-loading__spinner,
+  .custodian__history-spinner,
+  .device-pair-setup__spinner,
+  .desktop-spinner,
+  .wizard-sign-in__ring,
+  .wizard-step__spinner {
+    forced-color-adjust: none;
+    color: CanvasText !important;
+  }
+
+  .session-glyph__trace-run {
+    forced-color-adjust: none;
+    stroke: CanvasText;
+  }
 }
 
 @keyframes session-run-trace {
@@ -3151,7 +3182,6 @@ td.data-table-key-col {
   .session-run-spinner,
   .session-glyph__ring {
     animation: none;
-    border-color: var(--accent);
   }
 
   .session-glyph__trace-run {

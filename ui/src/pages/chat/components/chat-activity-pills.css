@@ -157,17 +157,14 @@
   height: 14px;
   flex: none;
   color: var(--accent);
-  border: 1.5px solid color-mix(in srgb, currentColor 28%, transparent);
-  border-top-color: currentColor;
+  border: var(--spinner-stroke) solid currentColor;
+  border-right-color: var(--spinner-gap);
   border-radius: 999px;
-  animation: btn-spinner-spin 1.6s linear infinite;
+  animation: btn-spinner-spin var(--spinner-duration) linear infinite;
 }
 .chat-activity-pills .activity-pill__badge .activity-pill__spinner {
   width: 9px;
   height: 9px;
-  border-color: color-mix(in srgb, currentColor 45%, transparent);
-  border-top-color: currentColor;
-  animation-duration: 1.5s;
 }
 .chat-activity-pills [data-family="progress"] {
   gap: 7px;
@@ -376,7 +373,6 @@
   }
   .chat-activity-pills .activity-pill__spinner {
     animation: none;
-    border-color: currentColor;
   }
 }
 :root[data-theme-mode="light"] .chat-activity-pills .activity-pill {

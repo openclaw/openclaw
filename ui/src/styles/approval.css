@@ -361,10 +361,11 @@
   width: 34px;
   height: 34px;
   margin-bottom: 20px;
-  border: 2px solid var(--border-strong);
-  border-top-color: var(--accent);
+  color: var(--accent);
+  border: var(--spinner-stroke-large) solid currentColor;
+  border-right-color: var(--spinner-gap);
   border-radius: 50%;
-  animation: btn-spinner-spin 800ms linear infinite;
+  animation: btn-spinner-spin var(--spinner-duration) linear infinite;
 }
 
 .approval-page__state-mark {

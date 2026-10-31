@@ -447,10 +447,10 @@ openclaw-custodian-page {
   width: 14px;
   height: 14px;
   margin: 6px auto;
-  border: 2px solid color-mix(in srgb, currentcolor 35%, transparent);
-  border-top-color: currentcolor;
+  border: var(--spinner-stroke) solid currentColor;
+  border-right-color: var(--spinner-gap);
   border-radius: var(--radius-full);
-  animation: btn-spinner-spin 0.7s linear infinite;
+  animation: btn-spinner-spin var(--spinner-duration) linear infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {

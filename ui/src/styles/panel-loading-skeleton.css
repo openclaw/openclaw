@@ -31,10 +31,11 @@ openclaw-panel-loading-skeleton {
   .desktop-spinner {
     width: 24px;
     height: 24px;
-    border: 2px solid var(--border);
-    border-top-color: var(--muted);
+    color: var(--accent);
+    border: var(--spinner-stroke-large) solid currentColor;
+    border-right-color: var(--spinner-gap);
     border-radius: 50%;
-    animation: panel-skeleton-spin 1s linear infinite;
+    animation: panel-skeleton-spin var(--spinner-duration) linear infinite;
   }
 
   &[overlay] {

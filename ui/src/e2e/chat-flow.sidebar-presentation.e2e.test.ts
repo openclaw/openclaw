@@ -399,9 +399,17 @@ suite.define(() => {
             const style = getComputedStyle(element);
             const accent = document.createElement("span").style;
             accent.color = style.getPropertyValue("--accent").trim();
-            return { actual: style.borderTopColor, expected: accent.color };
+            return {
+              actual: style.borderTopColor,
+              expected: accent.color,
+              gap: style.borderRightColor,
+            };
           });
         expect.soft(spinnerColors.actual).toBe(spinnerColors.expected);
+        // A still spinner closes its gap so it never reads as a frozen arc.
+        expect
+          .soft(spinnerColors.gap)
+          .toBe(reducedMotion === "reduce" ? spinnerColors.expected : "rgba(0, 0, 0, 0)");
       }
       await page.emulateMedia({ reducedMotion: "no-preference" });
     }
