@@ -82,7 +82,7 @@ function InstalledRows(
     plugins: NonNullable<InventoryProps["result"]>["plugins"];
   },
 ): JSX.Element {
-  const visible = createProgressiveList(() => props.plugins, { initial: 20, batch: 40 });
+  const visible = createProgressiveList(() => props.plugins, { initial: 20, batch: 200 });
   return (
     <div class="settings-group oc-settings-group" aria-busy={visible.pending() ? "true" : "false"}>
       {props.error ? <PluginRetryError error={props.error} onRetry={props.onRefresh} /> : null}
