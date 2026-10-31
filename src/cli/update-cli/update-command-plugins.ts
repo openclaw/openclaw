@@ -17,10 +17,17 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { comparePackageUpdateVersions } from "../../infra/package-update-utils.js";
 import { resolveRegistryUpdateChannel, type UpdateChannel } from "../../infra/update-channels.js";
+import type { UpdateRecoveryFence } from "../../infra/update-run-recovery-types.js";
 import { getLogger } from "../../logging/logger.js";
 import type { PluginCapabilityConsentHandler } from "../../plugins/capability-consent.js";
 import { commitPluginInstallRecordsWithConfig } from "../../plugins/install-record-commit.js";
-import { resolvePluginInstallOwnerMigrations } from "../../plugins/install-transaction.js";
+import {
+  copyPluginInstallTransactionRequest,
+  requestDeferredPluginInstall,
+  resolvePluginInstallOwnerMigrations,
+  settlePluginInstallTransactions,
+  type PluginInstallTransaction,
+} from "../../plugins/install-transaction.js";
 import {
   loadInstalledPluginIndexInstallRecords,
   withoutPluginInstallRecords,
@@ -35,6 +42,7 @@ import {
   type PluginLifecycleLeaseContext,
 } from "../../plugins/plugin-lifecycle-lease.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
+import { createPluginCohortPublication } from "../../plugins/update-cohort-recovery.js";
 import { convergePluginReleaseCohort } from "../../plugins/update-cohort.js";
 import {
   resolveExactNpmSpecVersion,
@@ -78,6 +86,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
   acceptCapabilities?: boolean;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   runtime?: RuntimeEnv;
+  cohort?: { runId: string; env: NodeJS.ProcessEnv; fence: UpdateRecoveryFence };
 }): Promise<PostCorePluginUpdateResult> {
   if (!params.configSnapshot.valid) {
     params.assertCurrent?.();
@@ -93,17 +102,51 @@ export async function updatePluginsAfterCoreUpdate(params: {
   }
   // Same-run migration receipts are facts from this lease. Keep their owner
   // continuously held from cohort planning through final index/config publication.
-  return await withPluginLifecycleLease({ assertCurrent: params.assertCurrent }, (lease) =>
-    updatePluginsAfterCoreUpdateWithLease(
-      { ...params, assertCurrent: () => lease.assertOwned() },
-      lease,
-    ),
-  );
+  return await withPluginLifecycleLease({ assertCurrent: params.assertCurrent }, async (lease) => {
+    const assertCurrent = () => {
+      params.assertCurrent?.();
+      lease.assertOwned();
+    };
+    const publication =
+      params.cohort &&
+      createPluginCohortPublication({
+        ...params.cohort,
+        fence: { assertCurrent },
+        deferRecordPublication: true,
+      });
+    if (params.cohort && !publication) {
+      throw new Error(
+        "The outer updater did not retain the plugin cohort before activation; retry using the updated updater before changing plugins.",
+      );
+    }
+    const transactions: PluginInstallTransaction[] = [];
+    const owned = publication
+      ? requestDeferredPluginInstall(
+          { ...params, assertCurrent },
+          transactions,
+          assertCurrent,
+          undefined,
+          publication.observer,
+        )
+      : { ...params, assertCurrent };
+    let result: PostCorePluginUpdateResult;
+    try {
+      result = await updatePluginsAfterCoreUpdateWithLease(owned, lease, publication);
+    } catch (error) {
+      await settlePluginInstallTransactions(transactions, "rollback", { error }, assertCurrent);
+      throw error;
+    }
+    // The matching records are published. Cleanup failure must not remove
+    // packages underneath those records, including siblings not yet committed.
+    await settlePluginInstallTransactions(transactions, "commit", undefined, assertCurrent);
+    return result;
+  });
 }
 
 async function updatePluginsAfterCoreUpdateWithLease(
   params: Parameters<typeof updatePluginsAfterCoreUpdate>[0],
   lease: PluginLifecycleLeaseContext,
+  publication?: ReturnType<typeof createPluginCohortPublication>,
 ): Promise<PostCorePluginUpdateResult> {
   params.assertCurrent?.();
   const runtime = params.runtime ?? defaultRuntime;
@@ -213,31 +256,33 @@ async function updatePluginsAfterCoreUpdateWithLease(
     workspaceDir: params.root,
   });
   params.assertCurrent?.();
-  const cohort = await convergePluginReleaseCohort({
-    config: withPluginInstallRecords(params.configSnapshot.sourceConfig, pluginInstallRecords),
-    channel: pluginUpdateChannel,
-    coreVersion: coreVersion ?? undefined,
-    versionBoundPluginIds: VERSION_BOUND_RUNTIME_PLUGIN_IDS,
-    timeoutMs: params.timeoutMs,
-    workTimeoutMs: params.workTimeoutMs,
-    workspaceDir: params.root,
-    externalizedBundledPluginBridges,
-    beforePersistentEffect: params.assertCurrent,
-    logger: pluginLogger,
-    onIntegrityDrift: async (drift) => {
-      integrityDrifts.push({
-        pluginId: drift.pluginId,
-        spec: drift.spec,
-        expectedIntegrity: drift.expectedIntegrity,
-        actualIntegrity: drift.actualIntegrity,
-        ...(drift.resolvedSpec ? { resolvedSpec: drift.resolvedSpec } : {}),
-        ...(drift.resolvedVersion ? { resolvedVersion: drift.resolvedVersion } : {}),
-        action: "aborted",
-      });
-      return false;
-    },
-    ...capabilityConsent,
-  });
+  const cohort = await convergePluginReleaseCohort(
+    copyPluginInstallTransactionRequest(params, {
+      config: withPluginInstallRecords(params.configSnapshot.sourceConfig, pluginInstallRecords),
+      channel: pluginUpdateChannel,
+      coreVersion: coreVersion ?? undefined,
+      versionBoundPluginIds: VERSION_BOUND_RUNTIME_PLUGIN_IDS,
+      timeoutMs: params.timeoutMs,
+      workTimeoutMs: params.workTimeoutMs,
+      workspaceDir: params.root,
+      externalizedBundledPluginBridges,
+      beforePersistentEffect: params.assertCurrent,
+      logger: pluginLogger,
+      onIntegrityDrift: async (drift) => {
+        integrityDrifts.push({
+          pluginId: drift.pluginId,
+          spec: drift.spec,
+          expectedIntegrity: drift.expectedIntegrity,
+          actualIntegrity: drift.actualIntegrity,
+          ...(drift.resolvedSpec ? { resolvedSpec: drift.resolvedSpec } : {}),
+          ...(drift.resolvedVersion ? { resolvedVersion: drift.resolvedVersion } : {}),
+          action: "aborted",
+        });
+        return false;
+      },
+      ...capabilityConsent,
+    }),
+  );
   params.assertCurrent?.();
   for (const error of cohort.sync.summary.errors) {
     collectPluginOutcome({ ...error, status: "error" });
@@ -272,17 +317,19 @@ async function updatePluginsAfterCoreUpdateWithLease(
     }),
   );
   const convergenceEnv = resolvePostCoreConvergenceEnv(process.env, coreVersion ?? undefined);
-  const convergence = await runPostCorePluginConvergence({
-    cfg: pluginConfig,
-    timeoutMs: params.timeoutMs,
-    workTimeoutMs: params.workTimeoutMs,
-    configPersistence: "caller",
-    env: convergenceEnv,
-    compatibilityHostVersion: coreVersion ?? undefined,
-    baselineInstallRecords: convergenceBaselineRecords,
-    beforePersistentEffect: params.assertCurrent,
-    ...capabilityConsent,
-  });
+  const convergence = await runPostCorePluginConvergence(
+    copyPluginInstallTransactionRequest(params, {
+      cfg: pluginConfig,
+      timeoutMs: params.timeoutMs,
+      workTimeoutMs: params.workTimeoutMs,
+      configPersistence: "caller",
+      env: convergenceEnv,
+      compatibilityHostVersion: coreVersion ?? undefined,
+      baselineInstallRecords: convergenceBaselineRecords,
+      beforePersistentEffect: params.assertCurrent,
+      ...capabilityConsent,
+    }),
+  );
   params.assertCurrent?.();
   const repairedPluginIds = new Set([
     ...[...cohort.repairOutcomes, ...cohort.updateOutcomes]
@@ -431,6 +478,8 @@ async function updatePluginsAfterCoreUpdateWithLease(
       );
     assertCurrent();
     await assertRecoveryCurrent();
+    assertCurrent();
+    await publication?.beforePublication();
     assertCurrent();
     await commitPluginInstallRecordsWithConfig({
       beforePersistentEffect: assertCurrent,

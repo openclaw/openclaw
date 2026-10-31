@@ -35,7 +35,6 @@ import { coordinateWorkerPlacementDispatch } from "./worker-environments/placeme
 import { createHarness } from "./worker-environments/placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { writePlacementEnvironmentFixture } from "./worker-environments/placement-test-fixtures.js";
-import { prepareRepositoryGitHubIdentity } from "./worker-environments/repository-github-identity.js";
 import { createRepositoryPolicySource } from "./worker-environments/repository-policy-node.test-support.js";
 import { deriveEnvironmentIntent } from "./worker-environments/service-contract.js";
 import { captureWorkspaceManifest } from "./worker-environments/workspace-manifest-worker.js";
@@ -143,10 +142,9 @@ test.each(["allowed", "policy", "source", "stop", "caller"] as const)(
     harness.environments.prepareProjectIntent = async (selected, request) => {
       entered.resolve();
       await resume.promise;
-      await prepareRepositoryGitHubIdentity("main", request!.assertCurrent!, {
-        repositoryUrl: "https://github.com/example/repository",
-        readNativeCredential: request?.readNativeCredential,
-      });
+      expect(request).toMatchObject({ imageReserve: true });
+      expect(request).not.toHaveProperty("readNativeCredential");
+      // Delay runtime allocation only; real repository startup owns identity admission.
       return originalIntent(selected, request);
     };
     const originalCreate = harness.environments.createWithRequest;
@@ -334,6 +332,7 @@ test.each(["allowed", "policy", "source", "stop", "caller"] as const)(
       await stop;
       if (scenario === "allowed") {
         expect(outcome, String(outcome)).toMatchObject({ state: "active" });
+        expect(verify).toHaveBeenCalledTimes(1);
         const placement = (
           await placements.readProjection([entry()!.sessionId], { current: true })
         ).placements.get(entry()!.sessionId)!;

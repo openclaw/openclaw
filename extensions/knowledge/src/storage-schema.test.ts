@@ -1,4 +1,6 @@
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { statSync } from "node:fs";
 import { copyFile, rename } from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -132,6 +134,23 @@ it("a new state database has the full schema and durable connection defaults", a
   }));
   // Rollback journal with synchronous=FULL, as every earlier release configured explicitly.
   expect(pragmas).toStrictEqual({ busyTimeout: 5000, journal: "delete", synchronous: 2 });
+  expect(inspect(file).stamp).toEqual([{ store: "state", version: 5 }]);
+});
+
+it("an interrupted first initialization recovers before classifying the empty database", async () => {
+  const file = path.join(tempDirs.make("knowledge-schema-crash-"), "state.sqlite");
+  const child = spawnSync("node", [
+    "--input-type=module",
+    "-e",
+    `import { DatabaseSync } from 'node:sqlite';
+     const db = new DatabaseSync(process.argv[1]);
+     db.exec("PRAGMA cache_size=1; PRAGMA cache_spill=1; BEGIN IMMEDIATE; CREATE TABLE identities (agent_key TEXT PRIMARY KEY, manifest TEXT NOT NULL) STRICT; INSERT INTO identities VALUES ('interrupted', printf('%.*c', 65536, 'x'));");
+     process.exit(77);`,
+    file,
+  ]);
+  expect(child.status).toBe(77);
+  expect(statSync(file).size).toBeGreaterThan(0);
+  expect(await new SqliteIdentityStore(file).lookup("interrupted")).toBeUndefined();
   expect(inspect(file).stamp).toEqual([{ store: "state", version: 5 }]);
 });
 

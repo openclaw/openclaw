@@ -7,6 +7,10 @@ import {
   recordDeferredPluginMigrationsInTransaction,
   type DeferredPluginMigrationRecordInput,
 } from "../infra/deferred-plugin-migrations.js";
+import {
+  PluginCohortRecoveryWriteBindingSchema,
+  type PluginCohortRecoveryWriteBinding,
+} from "../infra/update-plugin-cohort-schema.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { assertOpenClawStateLeaseWorkerOwnedInTransaction } from "../state/openclaw-state-lease-worker.js";
 import type { OpenClawStateLeaseIdentity } from "../state/openclaw-state-lease.types.js";
@@ -52,6 +56,8 @@ export const pluginRuntimeOperations = {
       input.index,
       { database: open() },
       indexWriteLease(input.identity),
+      false,
+      input.pluginCohort,
     ),
   "plugins.metadata.index.restore": (
     input: InstalledPluginIndexWriteOperations["plugins.metadata.index.restore"]["input"],
@@ -62,6 +68,7 @@ export const pluginRuntimeOperations = {
       input.expectedRevision,
       open(),
       indexWriteLease(input.identity),
+      input.pluginCohort,
     ),
   "plugins.metadata.index.refresh": (
     input: InstalledPluginIndexWriteOperations["plugins.metadata.index.refresh"]["input"],
@@ -87,6 +94,7 @@ export const pluginRuntimeOperations = {
           database,
           ...(nowMs !== undefined ? { now: () => new Date(nowMs) } : {}),
           lease: indexWriteLease(input.identity),
+          pluginCohort: input.pluginCohort,
         });
       }),
     );
@@ -133,6 +141,7 @@ export const pluginRuntimeOperations = {
   "plugins.deferredMigrations.record": (
     input: Omit<DeferredPluginMigrationRecordInput, "env"> & {
       identity: OpenClawStateLeaseIdentity;
+      pluginCohort?: PluginCohortRecoveryWriteBinding;
     },
     { open, stateOptions },
   ) => {
@@ -141,7 +150,11 @@ export const pluginRuntimeOperations = {
       return runOpenClawStateWriteTransaction(
         ({ db }) => {
           assertOpenClawStateLeaseWorkerOwnedInTransaction(db, input.identity);
-          const transitions = recordDeferredPluginMigrationsInTransaction(db, input);
+          const transitions = recordDeferredPluginMigrationsInTransaction(
+            db,
+            input,
+            input.pluginCohort && PluginCohortRecoveryWriteBindingSchema.parse(input.pluginCohort),
+          );
           assertOpenClawStateLeaseWorkerOwnedInTransaction(db, input.identity, "write", "commit");
           return { kind: "recorded" as const, transitions };
         },

@@ -573,6 +573,16 @@ export function installRemainingPluginMock(fixture: RemainingFixture) {
         });
       } else if (operation === "connections") {
         reply({ connections: [], total: 0, nextOffset: null, snapshot: fixture.hash });
+      } else if (operation === "timeline") {
+        reply({
+          items: [],
+          total: 0,
+          offset,
+          nextOffset: null,
+          snapshot: fixture.hash,
+          freshness: fixture.freshness,
+          coverage: { complete: true, message: "Fixture records have no dated sources." },
+        });
       } else if (operation === "history") {
         reply({
           git: { state: "idle", pending: 0, message: "" },

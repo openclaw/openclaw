@@ -1,7 +1,7 @@
 import { matchesGlob } from "node:path";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
-import { readCiWorkflow, readWorkflow } from "./ci-workflow.test-support.js";
+import { acceptsWorkflowPaths, readCiWorkflow, readWorkflow } from "./ci-workflow.test-support.js";
 
 const before = "a".repeat(40);
 const head = "b".repeat(40);
@@ -14,17 +14,42 @@ const context = {
 const action = readWorkflow(".github/actions/detect-scheduled-changes/action.yml");
 const script = action.runs.steps[0].with.script;
 
-function acceptsPaths(patterns: string[], files: readonly string[]) {
-  return files.some((file) =>
-    patterns.reduce(
-      (selected, pattern) =>
-        pattern.startsWith("!")
-          ? selected && !matchesGlob(file, pattern.slice(1))
-          : selected || matchesGlob(file, pattern),
-      false,
-    ),
-  );
-}
+describe("Darwin tooling event scope", () => {
+  it.each([
+    [["scripts/lib/ci-node-test-plan.mts"], false],
+    [["scripts/lib/ci-extension-test-shards.mts"], false],
+    [["scripts/lib/ci-native-generated-scope.mjs"], false],
+    [["test/scripts/pr-ci-sweeper.test.ts"], false],
+    [["test/scripts/pr-ci-sweeper.test-support.ts"], false],
+    [["test/scripts/pr-prepare-gates.test.ts"], false],
+    [["test/scripts/pr-review-artifact-validation.test.ts"], false],
+    [["test/scripts/pr-main-refresh.test.ts"], false],
+    [["test/scripts/pr-future.test.ts"], false],
+    [["test/scripts/pr-dependency-cache.test.ts"], true],
+    [["test/scripts/pr-wrappers.test.ts"], true],
+    [["test/scripts/pr-materialized-anchor.test.ts"], true],
+    [["test/scripts/pr-operation-lock.test.ts"], true],
+    [["test/scripts/pr-git-invocation.test.ts"], true],
+    [["test/scripts/pr-wrapper.test-support.ts"], true],
+    [["test/scripts/pr-main-refresh.test-support.ts"], true],
+    [["test/scripts/pr-darwin-process-identity.test.py"], true],
+    [["test/scripts/pr-future-input.json"], true],
+    [["test/scripts/pr-future.test.ts", "test/scripts/pr-wrappers.test.ts"], true],
+    [["test/scripts/pr-future.test.ts", "scripts/pr-lib/materialized-anchor.mjs"], true],
+    [["test/scripts/pr-future.test.ts", "test/scripts/pr-ci-sweeper.test-support.ts"], false],
+    [["scripts/lib/ci-test-timings.mts"], true],
+    [["scripts/lib/ci-test-timings-schema.mts"], true],
+    [["scripts/lib/ci-test-timings-refit.mts"], true],
+    [["scripts/lib/ci-node-test-groups-codec.mts"], true],
+    [["scripts/lib/ci-static-check-evidence.mjs"], true],
+    [["scripts/lib/new-native-input.mts"], true],
+    [["scripts/lib/ci-node-test-plan.mts", "scripts/pr"], true],
+    [[".github/workflows/pr-tooling-darwin.yml"], true],
+  ] as const)("routes %j", (files, expected) => {
+    const workflow = readWorkflow(".github/workflows/pr-tooling-darwin.yml");
+    expect(acceptsWorkflowPaths(workflow.on.pull_request.paths, files)).toBe(expected);
+  });
+});
 
 describe("native locale refresh event scope", () => {
   it.each([
@@ -39,7 +64,7 @@ describe("native locale refresh event scope", () => {
     [[".github/workflows/native-app-locale-refresh.yml"], true],
   ] as const)("routes %j", (files, expected) => {
     const workflow = readWorkflow(".github/workflows/native-app-locale-refresh.yml");
-    expect(acceptsPaths(workflow.on.push.paths, files)).toBe(expected);
+    expect(acceptsWorkflowPaths(workflow.on.push.paths, files)).toBe(expected);
     expect(workflow.on.workflow_dispatch).toBeDefined();
   });
 });
@@ -55,7 +80,7 @@ describe("plugin scaffold event scope", () => {
     const workflow = readWorkflow(".github/workflows/plugin-init-scaffold-validation.yml");
     expect(workflow.on.push.paths).toEqual(workflow.on.pull_request.paths);
     for (const event of ["push", "pull_request"]) {
-      expect(acceptsPaths(workflow.on[event].paths, files)).toBe(expected);
+      expect(acceptsWorkflowPaths(workflow.on[event].paths, files)).toBe(expected);
     }
     expect(workflow.on.workflow_dispatch).toBeDefined();
     expect(workflow.on.schedule).toBeDefined();
@@ -311,7 +336,7 @@ describe("node runtime event scope", () => {
   ] as const)("routes %j", (files, expected) => {
     const workflow = readWorkflow(".github/workflows/node-runtime-conformance.yml");
     for (const event of ["push", "pull_request"]) {
-      expect(acceptsPaths(workflow.on[event].paths, files)).toBe(expected);
+      expect(acceptsWorkflowPaths(workflow.on[event].paths, files)).toBe(expected);
     }
     expect(workflow.on.workflow_dispatch).toBeDefined();
     expect(workflow.on.schedule).toBeDefined();
@@ -323,7 +348,8 @@ describe("workflow cost admission", () => {
     "keeps %s scoped to its hydration inputs",
     (name) => {
       const workflow = readWorkflow(`.github/workflows/${name}.yml`);
-      const accepts = (file: string) => acceptsPaths(workflow.on.pull_request.paths, [file]);
+      const accepts = (file: string) =>
+        acceptsWorkflowPaths(workflow.on.pull_request.paths, [file]);
       expect(accepts(".github/workflows/docs.yml")).toBe(false);
       for (const path of ["scripts/README.md", "scripts/AGENTS.md", "patches/README.md"]) {
         expect(accepts(path), path).toBe(false);

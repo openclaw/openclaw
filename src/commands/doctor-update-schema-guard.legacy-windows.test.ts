@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
+import { expectBytesEqual } from "../../test/helpers/file-snapshots.js";
 import { formatCliFailureLines } from "../cli/failure-output.js";
 import * as packageRoot from "../infra/openclaw-root.js";
 import * as sqliteSnapshot from "../infra/sqlite-snapshot-source.js";
@@ -107,7 +108,7 @@ async function inspectDoctor(scenario: Scenario) {
     ).catch((caught: unknown) => {
       error = caught;
     });
-    expect(fs.readFileSync(databasePath)).toEqual(before);
+    expectBytesEqual(fs.readFileSync(databasePath), before, databasePath);
     return { error, result, schemas };
   });
 }

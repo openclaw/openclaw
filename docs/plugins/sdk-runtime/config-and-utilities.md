@@ -506,6 +506,10 @@ Recheck the gates when emitting a delayed summary. Keep fields bounded and
 content-free, and preserve the operation's result if the diagnostic sink fails.
 This predicate does not enable or authorize [audit identity collection](/gateway/audit).
 
+`normalizeDiagnosticTraceContext(value)` validates unknown trace fields and returns only the
+recognized context fields, or `undefined` when any supplied field is invalid. It does not
+generate IDs, change casing, or establish that an event is trusted.
+
 `onInternalDiagnosticEvent(listener, interest?)` filters events before copying
 their payload for the listener. `include` and `exclude` apply to every event;
 the optional `includeTrusted` list further restricts only events marked trusted

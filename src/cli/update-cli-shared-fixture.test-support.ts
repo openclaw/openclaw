@@ -2,6 +2,23 @@ import { vi, type Mock } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { getMockCallOutput } from "./test-runtime-capture.js";
 
+/** Model the parent phase that precedes an otherwise standalone post-core child. */
+export async function withPostCoreUpdateFixtureRun<T>(operation: () => Promise<T>): Promise<T> {
+  if (process.env.OPENCLAW_UPDATE_RUN_ID?.trim()) {
+    return await operation();
+  }
+  const [{ createUpdateRun, recordUpdateRunStep }, { withEnvAsync }, { VERSION }] =
+    await Promise.all([
+      import("../infra/update-run-ledger.js"),
+      import("../test-utils/env.js"),
+      import("../version.js"),
+    ]);
+  const { runId } = createUpdateRun({ trigger: "cli", before: { version: VERSION } });
+  recordUpdateRunStep(runId, { step: "openclaw doctor", status: "completed" });
+  recordUpdateRunStep(runId, { step: "post-update verification", status: "in_progress" });
+  return await withEnvAsync({ OPENCLAW_UPDATE_RUN_ID: runId }, operation);
+}
+
 export function createUpdateConfigMock() {
   const readConfigFileSnapshot = vi.fn();
   return {

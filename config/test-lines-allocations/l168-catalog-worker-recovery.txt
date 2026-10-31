@@ -1,0 +1,2 @@
+9
+# Preserve the real worker-recovery scenario with request-wide host error identity across fixture loaders.

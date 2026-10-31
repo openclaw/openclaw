@@ -27,9 +27,7 @@ const readProvider = getMediaUnderstandingProvider;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type ProviderDeps = NonNullable<Parameters<typeof testing.setProviderDepsForTest>[0]>;
-type MockImageLoadWebMedia = Awaited<
-  ReturnType<NonNullable<ProviderDeps["loadImageWebMediaRuntime"]>>
->["loadWebMedia"];
+type MockImageLoadWebMedia = NonNullable<ProviderDeps["loadWebMedia"]>;
 
 function imageMedia() {
   return {
@@ -84,14 +82,12 @@ describe("image tool run abort", () => {
       resolveRegisteredMediaUnderstandingProvider: ({ providerId }) =>
         readProvider(providerId, providerRegistry),
       resolveModelAsync,
-      loadImageWebMediaRuntime: async () => ({
-        loadWebMedia,
-        optimizeImageBufferForWebMedia: async ({ buffer, contentType, fileName }) => ({
-          buffer,
-          contentType: contentType ?? "image/png",
-          kind: "image",
-          fileName,
-        }),
+      loadWebMedia,
+      optimizeImageBufferForWebMedia: async ({ buffer, contentType, fileName }) => ({
+        buffer,
+        contentType: contentType ?? "image/png",
+        kind: "image",
+        fileName,
       }),
       describeImageWithModel: spies.describeImage,
       describeImagesWithModel: spies.describeImages,
@@ -226,7 +222,7 @@ describe("image tool run abort", () => {
     const controller = new AbortController();
     const downloadStarted = createDeferredCore();
     const loadWebMedia: MockImageLoadWebMedia = vi.fn(async (_url, options) => {
-      const downloadSignal = options?.requestInit?.signal;
+      const downloadSignal = typeof options === "object" ? options.requestInit?.signal : undefined;
       expect(downloadSignal).toBe(controller.signal);
       downloadStarted.resolve();
       return await new Promise<never>((_, reject) => {

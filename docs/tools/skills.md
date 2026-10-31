@@ -74,7 +74,8 @@ project skills overriding bundled skills, and managed-worktree skills overriding
 project checkout skills, are warnings; other collisions are informational.
 Worktree provenance uses the configured `worktreeRoot` (the state directory's
 `worktrees/` by default), without checking Git. Identical content stays silent.
-Unchanged root-pair summaries are not repeated on refresh; changes to content,
+Unchanged root-pair summaries are not repeated on refresh or when switching
+between execution workspaces and the agent-only catalog; changes to content,
 declared metadata, or collision membership update the summary. Precedence is unchanged.
 
 Skill roots support grouped layouts. OpenClaw discovers a skill whenever
@@ -291,6 +292,9 @@ reference more than one skill:
 ```text
 Use $github and $release_notes to summarize this change for the release.
 ```
+
+The picker matches display titles across composed and decomposed Unicode forms
+without changing the displayed title or inserted command name.
 
 OpenClaw resolves explicit references from authorized senders on every channel
 and on generic Gateway, CLI, and webhook agent turns. It matches the current
@@ -907,6 +911,15 @@ Codex refuses a skill read that exceeds the turn's dynamic-tool output budget
 instead of returning partial instructions as a successful read.
 An existing `read` policy grant also permits `skills_read`. An explicit
 `skills_read` denial still wins; search permission alone does not grant reads.
+
+For installed local Gateway skills, `skills_read({ name, relativePath })` and
+Code Mode's `await skills.read(name, relativePath)` read a companion file relative
+to the directory containing `SKILL.md`, for example `references/workflow.md`.
+Companions return plain UTF-8 text, capped at 256 KiB; invalid UTF-8 and NUL bytes
+are rejected. Reads reject traversal, symlinks, hardlinks, and replaced skill
+directories. This extends the existing skill-read grant to that skill's files;
+it does not list directories or execute scripts. Sandbox, remote workspace,
+node-hosted, and required-workspace placements remain instruction-only.
 
 For embedded runs, finite runtime tool allowlists retain the Skills catalog when
 the final callable tool set supports reading instructions. Missing readers are

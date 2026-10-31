@@ -326,7 +326,9 @@ export function resolveSqliteWriteAdmissionScope(
 export function withPreparedSqliteScope<T>(
   scope: SqliteScopeInput & { sessionKey: string },
   run: (resolved: ResolvedSqliteScope) => T | Promise<T>,
+  signal?: AbortSignal,
 ): T | Promise<T> {
+  signal?.throwIfAborted();
   const env = cloneEnvWithPlatformSemantics(scope.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const captured = { ...scope, env };
@@ -341,7 +343,7 @@ export function withPreparedSqliteScope<T>(
     return run(resolveSqliteScope(captured, undefined, target));
   }
   // Shared and custom locators need worker-owned discovery; the resolved writer owns admission.
-  return prepareSqliteScopeTarget(captured).then((prepared) =>
+  return prepareSqliteScopeTarget(captured, signal).then((prepared) =>
     run(resolveSqliteScope(captured, undefined, prepared)),
   );
 }

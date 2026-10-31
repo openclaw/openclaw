@@ -3,10 +3,7 @@ import { existsSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
-import {
-  inspectPluginInstallRecordMap,
-  serializePluginInstallRecordMap,
-} from "../config/plugin-install-record-map.js";
+import { serializePluginInstallRecordMap } from "../config/plugin-install-record-map.js";
 import { resolveUserPath } from "../infra/home-dir.js";
 import {
   compileSqliteQueryBindings,
@@ -15,9 +12,13 @@ import {
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
+import { pluginCohortPublicationContext } from "../infra/update-plugin-cohort-context.js";
+import type { PluginCohortRecovery } from "../infra/update-plugin-cohort-schema.js";
+import { recordPluginCohortIndexPublicationInDatabase } from "../infra/update-run-recovery-store.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { readOpenClawStateLease } from "../state/openclaw-state-lease-store.js";
 import type { OpenClawStateLeaseIdentity } from "../state/openclaw-state-lease.types.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -40,6 +41,7 @@ import {
 import { resolveCompatRegistryVersion } from "./installed-plugin-index-policy.js";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "./installed-plugin-index-record-cache.js";
 import { findForeignManagedNpmInstallRecordPluginIds } from "./installed-plugin-index-record-reader.js";
+import { inspectPersistedInstalledPluginIndexInstallRecords } from "./installed-plugin-index-record-state.js";
 import { INSTALLED_PLUGIN_INDEX_STATE_KEY } from "./installed-plugin-index-row.js";
 import { preservePluginSourceAdmissions } from "./installed-plugin-index-source-admissions.js";
 import {
@@ -112,7 +114,11 @@ export type InstalledPluginIndexWriteReceipt = {
 
 export type InstalledPluginIndexWriteOperations = {
   "plugins.metadata.index.write": {
-    input: { identity: OpenClawStateLeaseIdentity; index: InstalledPluginIndex };
+    input: {
+      identity: OpenClawStateLeaseIdentity;
+      index: InstalledPluginIndex;
+      pluginCohort?: PluginCohortIndexBinding;
+    };
     output: InstalledPluginIndexWriteReceipt;
   };
   "plugins.metadata.index.restore": {
@@ -120,14 +126,24 @@ export type InstalledPluginIndexWriteOperations = {
       identity: OpenClawStateLeaseIdentity;
       index: InstalledPluginIndex | null;
       expectedRevision: number;
+      pluginCohort?: PluginCohortIndexBinding;
     };
     output: boolean;
   };
   "plugins.metadata.index.refresh": {
-    input: { identity: OpenClawStateLeaseIdentity; prepared: PreparedInstalledPluginIndexRefresh };
+    input: {
+      identity: OpenClawStateLeaseIdentity;
+      prepared: PreparedInstalledPluginIndexRefresh;
+      pluginCohort?: PluginCohortIndexBinding;
+    };
     output: InstalledPluginIndexWriteReceipt & { index: InstalledPluginIndex };
   };
 };
+
+type PluginCohortIndexBinding = Pick<
+  PluginCohortRecovery,
+  "runId" | "transactionId" | "installKey"
+>;
 
 type InstalledPluginIndexDatabase = Pick<OpenClawStateKyselyDatabase, "config_machine_state">;
 type InstalledPluginIndexRow = Pick<
@@ -256,6 +272,7 @@ export function writePersistedInstalledPluginIndexToSqlite(
   options: InstalledPluginIndexStoreOptions & { database?: OpenClawStateDatabase },
   lease: InstalledPluginIndexWriteLease,
   preserveAdmissions = false,
+  pluginCohort?: PluginCohortIndexBinding,
 ): InstalledPluginIndexWriteReceipt {
   assertWritableInstalledPluginIndexStoreOptions(options);
   const persisted = preparePersistedInstalledPluginIndex(index);
@@ -264,22 +281,30 @@ export function writePersistedInstalledPluginIndexToSqlite(
       const before = readInstalledPluginIndexRow(db);
       const previousRow = parseInstalledPluginIndexRow(before);
       const previous = previousRow ? parseInstalledPluginIndex(previousRow.index) : null;
-      if (previousRow && !previous) {
-        // SAFETY: field probe on the stored value; inspectPluginInstallRecordMap validates it.
-        const previousInstallRecords = (previousRow.index as { installRecords?: unknown } | null)
-          ?.installRecords;
-        if (
-          previousInstallRecords === undefined ||
-          inspectPluginInstallRecordMap(previousInstallRecords).status === "invalid"
-        ) {
+      let previousInstallRecords = previous?.installRecords;
+      // Raw unversioned rows need record preimages only during cohort recovery.
+      if (!previous && before && (previousRow || pluginCohort)) {
+        const state = inspectPersistedInstalledPluginIndexInstallRecords({
+          state: { status: "present", value: safeParseJson(before.value_json) },
+        });
+        if (state.status === "invalid") {
           throw new Error(
             "Persisted plugin install records are invalid. Repair the state before writing plugin installation metadata.",
           );
         }
+        previousInstallRecords = state.status === "valid" ? state.records : {};
       }
       lease.assertOwnedInTransaction(db);
       if (preserveAdmissions) {
         preservePluginSourceAdmissions(previous, persisted);
+      }
+      if (pluginCohort) {
+        recordPluginCohortIndexPublicationInDatabase(
+          db,
+          pluginCohort,
+          previousInstallRecords ?? {},
+          persisted.installRecords,
+        );
       }
       const revision = resolveNextInstalledPluginIndexRevision(
         previousRow ? previousRow.revision : null,
@@ -356,10 +381,10 @@ export async function writePersistedInstalledPluginIndex(
   return await withPluginLifecycleLeaseAsync(
     resolveInstalledPluginIndexStateDatabaseOptions(captured),
     async (lease) => {
-      await runInstalledPluginIndexWrite(captured, lease, (scope, identity) =>
+      await runInstalledPluginIndexWrite(captured, lease, (scope, identity, pluginCohort) =>
         scope.execute({
           type: "plugins.metadata.index.write",
-          input: { identity, index },
+          input: { identity, index, ...(pluginCohort ? { pluginCohort } : {}) },
         }),
       );
       return captured.filePath;
@@ -380,10 +405,10 @@ export async function restorePersistedInstalledPluginIndexIfCurrent(
   if (!existsSync(resolveInstalledPluginIndexStorePath(storeOptions))) {
     return false;
   }
-  return runInstalledPluginIndexWrite(storeOptions, lease, (scope, identity) =>
+  return runInstalledPluginIndexWrite(storeOptions, lease, (scope, identity, pluginCohort) =>
     scope.execute({
       type: "plugins.metadata.index.restore",
-      input: { identity, index, expectedRevision },
+      input: { identity, index, expectedRevision, ...(pluginCohort ? { pluginCohort } : {}) },
     }),
   );
 }
@@ -393,6 +418,7 @@ export function restorePersistedInstalledPluginIndexInDatabase(
   expectedRevision: number,
   database: OpenClawStateDatabase,
   lease: InstalledPluginIndexWriteLease,
+  pluginCohort?: PluginCohortIndexBinding,
 ): boolean {
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
@@ -403,6 +429,22 @@ export function restorePersistedInstalledPluginIndexInDatabase(
       if (currentRevision !== expectedRevision) {
         lease.assertOwnedInTransaction(db, "commit");
         return false;
+      }
+      if (pluginCohort) {
+        const current = inspectPersistedInstalledPluginIndexInstallRecords({
+          state: currentRow
+            ? { status: "present", value: { index: currentRow.index } }
+            : { status: "missing" },
+        });
+        if (current.status === "invalid") {
+          throw new Error("Plugin index compensation cannot journal invalid current records.");
+        }
+        recordPluginCohortIndexPublicationInDatabase(
+          db,
+          pluginCohort,
+          current.status === "valid" ? current.records : {},
+          index?.installRecords ?? {},
+        );
       }
       if (index) {
         writePersistedInstalledPluginIndexRow(
@@ -432,6 +474,7 @@ async function runInstalledPluginIndexWrite<T>(
   operation: (
     scope: Pick<SqliteWorkerStore<InstalledPluginIndexWriteOperations>, "execute">,
     identity: OpenClawStateLeaseIdentity,
+    pluginCohort?: PluginCohortIndexBinding,
   ) => Promise<T>,
   assertCurrent?: () => void,
   onAcknowledged?: (result: T) => void,
@@ -439,18 +482,32 @@ async function runInstalledPluginIndexWrite<T>(
   const context = captureOpenClawStateWorkerContext(
     resolveInstalledPluginIndexStateDatabaseOptions(options),
   );
+  const scoped = pluginCohortPublicationContext.getStore();
+  const cohort =
+    scoped && resolveOpenClawStateSqlitePath(scoped.env) === context.admission.databasePath
+      ? scoped
+      : undefined;
+  const binding = cohort
+    ? { runId: cohort.runId, transactionId: cohort.transactionId, installKey: cohort.installKey }
+    : undefined;
   const assertAuthority = () => {
     lease.assertCurrent();
     assertCurrent?.();
+    cohort?.assertCurrent();
   };
   assertAuthority();
   const { runWithOpenClawStateLeaseWorker } =
     await import("../state/openclaw-state-lease-worker-operation.js");
-  const result = await runWithOpenClawStateLeaseWorker(lease.stateLease, context, operation, {
-    assertCurrent: () => lease.assertCurrent(),
-    beforeTransaction: assertAuthority,
-    beforeCommit: assertAuthority,
-  });
+  const result = await runWithOpenClawStateLeaseWorker(
+    lease.stateLease,
+    context,
+    (scope, identity) => operation(scope, identity, binding),
+    {
+      assertCurrent: () => lease.assertCurrent(),
+      beforeTransaction: assertAuthority,
+      beforeCommit: assertAuthority,
+    },
+  );
   // Preserve the committed outcome for compensation before refusing a late caller.
   try {
     onAcknowledged?.(result);
@@ -619,8 +676,11 @@ export async function refreshPersistedInstalledPluginIndexWithReceipt(
     const receipt = await runInstalledPluginIndexWrite(
       storeOptions,
       lease,
-      (scope, identity) =>
-        scope.execute({ type: "plugins.metadata.index.refresh", input: { identity, prepared } }),
+      (scope, identity, pluginCohort) =>
+        scope.execute({
+          type: "plugins.metadata.index.refresh",
+          input: { identity, prepared, ...(pluginCohort ? { pluginCohort } : {}) },
+        }),
       assertCurrent,
       onAcknowledged,
     );
@@ -634,11 +694,18 @@ export function refreshPersistedInstalledPluginIndexWithLeaseSync(
     InstalledPluginIndexStoreOptions & {
       lease: InstalledPluginIndexWriteLease;
       database?: OpenClawStateDatabase;
+      pluginCohort?: PluginCohortIndexBinding;
     },
 ): InstalledPluginIndexWriteReceipt & { index: InstalledPluginIndex } {
   const { lease, ...storeParams } = params;
   const index = resolveRefreshedPersistedInstalledPluginIndex(storeParams);
-  const receipt = writePersistedInstalledPluginIndexToSqlite(index, storeParams, lease, true);
+  const receipt = writePersistedInstalledPluginIndexToSqlite(
+    index,
+    storeParams,
+    lease,
+    true,
+    params.pluginCohort,
+  );
   clearPersistedInstalledPluginIndexCaches();
   return { ...receipt, index };
 }

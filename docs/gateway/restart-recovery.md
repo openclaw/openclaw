@@ -34,6 +34,11 @@ Doctor names the session and asks the operator to inspect its retained identitie
 and delivery outcome against the transcript before repairing custody. Legacy scalar
 delivery fields can still be normalized without discarding the pending final, so
 ordinary admission no longer depends on the retired tombstone gate.
+For unmatched custody with no live execution owner, `openclaw doctor --fix` backs
+up and retires the legacy recovery fields when the session is terminal or archived,
+preserving its status, archive, current writer identities, and delivery notice
+without resuming it or replaying a pending final; startup reports an aggregate
+count per agent instead of repeating warnings for each such session.
 
 ## What survives a restart
 
@@ -119,6 +124,11 @@ share one monotonic deadline, including worker startup time, and report retained
 cleanup owners before forcing exit. A duplicate `SIGTERM` during shutdown is
 logged once and ignored. That signal exit is accepted, and the supervisor starts
 a fresh Gateway.
+
+A previously recorded supervisor cleanup failure is reported as retained resources
+with its original owner details; it does not fail a later external stop. The Gateway
+still joins the supervisor before retiring database admission, read-only workers,
+and the spawn broker, even when that join rejects.
 
 Reversible suspension and host freeze preparation keep their own semantics. A
 suspension does not mark sessions or abort them. Preparation with `drain: true`

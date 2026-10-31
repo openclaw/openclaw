@@ -507,6 +507,8 @@ function buildLongTranscriptFixture(messageCount: number): Array<Record<string, 
 suite.define(() => {
   it("commits a streamed delta burst in frame-bound transcript batches", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      // Missing Resource Timing entries must not prevent menu readiness.
+      await page.addInitScript(() => performance.setResourceTimingBufferSize(0));
       const heldMenu = await holdModuleResponse(
         page,
         /\/board-widget-menu[^/]*\.(?:js|tsx)(?:\?.*)?$/u,
@@ -557,37 +559,23 @@ suite.define(() => {
           ),
         )
         .toBe(true);
-      // Idle-warmed menus register English catalogs even while closed. First
-      // observe both fetched entry files, then join their dependency evaluation.
-      const fetchedMenus = await page.waitForFunction(
-        (names) => {
-          const urls = names.map(
-            (name) =>
-              performance.getEntriesByType("resource").find((entry) => entry.name.includes(name))
-                ?.name,
-          );
-          return urls.every(Boolean) ? urls : null;
-        },
-        ["chat-header-session-menu-content", "chat-composer-plus-menu-content"],
-      );
-      const menuUrls = await fetchedMenus.jsonValue();
-      await fetchedMenus.dispose();
-      let catalogsJoined = false;
-      const catalogs = page
-        .evaluate(
-          `Promise.all(${JSON.stringify(menuUrls)}.map(url => import(url))).then(() => undefined)`,
-        )
-        .then(() => {
-          catalogsJoined = true;
-        });
+      // Exercise the lazy menus and observe rendered readiness, independent of
+      // resource timing entries or whether their modules were already evaluated.
+      const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+      await pane.locator(".chat-header-session-menu__trigger").click();
       await heldMenu.request;
-      await page.evaluate(() => undefined);
-      expect(catalogsJoined).toBe(false);
+      const sessionMenu = pane.locator("openclaw-chat-header-session-menu");
+      expect(await sessionMenu.getByRole("menuitem", { name: "Advanced" }).count()).toBe(0);
       heldMenu.release();
-      await catalogs;
-      await page
-        .locator("openclaw-chat-pane.chat-pane-cache__pane--active")
-        .evaluate((pane: ChatPaneElement) => pane.updateComplete);
+      await sessionMenu.getByRole("menuitem", { name: "Advanced" }).waitFor({ state: "visible" });
+      await page.keyboard.press("Escape");
+      await pane.getByRole("button", { name: "Add attachment", exact: true }).click();
+      await pane
+        .locator(".agent-chat__capability-menu .oc-menu-item:not([disabled])")
+        .first()
+        .waitFor({ state: "visible" });
+      await page.keyboard.press("Escape");
+      await pane.evaluate((element: ChatPaneElement) => element.updateComplete);
       await waitForChatScrollIdle(page);
       await installRenderProbe(page);
       await resetRenderProbe(page);

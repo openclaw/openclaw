@@ -18,7 +18,11 @@ import {
   recordMutableUpdateInterruption,
 } from "./update-command-mutable-signals.js";
 import { createUpdateCommandFinalizationFence } from "./update-command-recovery.js";
-import { isUpdateStateReadContention, UpdateCommandFailure } from "./update-command-result.js";
+import {
+  isUpdateStateReadContention,
+  UpdateCommandFailure,
+  UpdateCommandPendingRecoveryFailure,
+} from "./update-command-result.js";
 import { GatewayRestartHealthError } from "./update-command-service-command.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import type { UpdateCommandTerminalRecord } from "./update-command-terminal-record.js";
@@ -198,6 +202,9 @@ export async function prepareSettledUpdateCommandResult(
     state.pendingResult,
     state.failure,
     state.terminalRecord,
+    assertCurrent && params.opts.run?.executorFence
+      ? { runId: params.opts.run.runId, fence: params.opts.run.executorFence }
+      : undefined,
   );
   assertCurrent?.();
   const result = completeUpdateCommandResult(params, settled.result);
@@ -236,6 +243,9 @@ export function createPostUpdateExceptionResult(
   activationVerified = false,
 ): { result: UpdateRunResult; message: string } {
   const message = formatErrorMessage(error);
+  if (error instanceof UpdateCommandPendingRecoveryFailure) {
+    return { result: error.result, message };
+  }
   const failureFacts = collectUpdateDoctorFailureFacts(error);
   const refusal = classifyDoctorMaintenanceRefusal(error);
   if (
