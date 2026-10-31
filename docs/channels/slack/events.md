@@ -32,6 +32,27 @@ Which Slack events OpenClaw observes, and what it does with them.
 
 Define global or message shortcuts in your Slack app configuration and use any non-empty callback ID. OpenClaw acknowledges matching shortcut payloads, applies the same DM/channel sender policy as other Slack interactions, and queues the sanitized event for the routed agent session. Trigger IDs and response URLs are redacted from agent context.
 
+### Reaction notifications
+
+`channels.slack.reactionNotifications` controls which incoming reaction-added and
+reaction-removed events become system events:
+
+- `"off"`: ignore reaction events.
+- `"own"` (default): accept reactions on messages authored by the bot.
+- `"all"`: accept reactions on any message.
+- `"allowlist"`: accept reactions from senders in `channels.slack.reactionAllowlist`;
+  an empty list accepts none. This filters the user who adds or removes the reaction,
+  not the message author.
+
+Normal channel and sender access checks still apply in every enabled mode.
+Account settings under `channels.slack.accounts.<accountId>` override the channel
+settings. Use stable Slack user IDs in `reactionAllowlist`; see
+[Enterprise Grid](/channels/slack/enterprise-grid) for workspace-qualified entries.
+
+These settings control incoming events. The acknowledgment and typing reactions
+OpenClaw adds to messages are configured separately in
+[Messaging](/channels/slack/messaging).
+
 ### Presence events
 
 Slack does not send presence changes through the Events API or Socket Mode. OpenClaw can instead poll [`users.getPresence`](https://docs.slack.dev/reference/methods/users.getPresence/) for human participants whose messages passed normal Slack access and routing checks.
