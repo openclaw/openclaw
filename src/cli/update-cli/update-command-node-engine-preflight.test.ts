@@ -25,15 +25,24 @@ const { fixture } = installFreshUpdateFixture();
 const engine = ">=24.22.1 <25 || >=26.12.1";
 
 it.each([
-  ["24.22.1", "26.8.2", "26.8.2", true, true, true],
-  ["26.8.2", "24.22.1", "26.8.2", true, true, true],
-  ["26.8.2", "26.8.2", "24.22.1", true, true, true],
-  ["26.8.2", "26.8.2", "26.8.2", true, true, false],
-  ["26.8.2", "24.22.1", "24.22.1", false, true, false],
-  ["26.8.2", "24.22.1", "24.22.1", true, false, false],
+  ["24.22.1", "26.8.2", "26.8.2", true, true, true, true],
+  ["26.8.2", "24.22.1", "26.8.2", true, true, true, true],
+  ["26.8.2", "26.8.2", "24.22.1", true, true, true, true],
+  ["26.8.2", "26.8.2", "26.8.2", true, true, false, true],
+  ["26.8.2", "24.22.1", "24.22.1", false, true, false, true],
+  ["26.8.2", "24.22.1", "24.22.1", true, false, false, true],
+  ["26.8.2", "26.8.2", "24.22.1", true, true, false, false],
 ] as const)(
-  "checks service %s, updater %s, PATH %s (restart=%s, writable=%s, admitted=%s)",
-  async (serviceVersion, updaterVersion, pathVersion, restart, writable, compatible) => {
+  "checks service %s, updater %s, PATH %s (restart=%s, writable=%s, admitted=%s, inherited=%s)",
+  async (
+    serviceVersion,
+    updaterVersion,
+    pathVersion,
+    restart,
+    writable,
+    compatible,
+    inheritPath,
+  ) => {
     const current = stubNodeRuntime();
     vi.spyOn(process, "versions", "get").mockReturnValue({
       ...current.versions,
@@ -93,7 +102,13 @@ it.each([
 
     // The staging boundary deliberately stops the update before any package mutation.
     await expect(
-      updateCommand({ tag: "2026.10.9", yes: true, json: true, restart }),
+      updateCommand({
+        tag: "2026.10.9",
+        yes: true,
+        json: true,
+        restart,
+        runtimeRecoveryEnv: { PATH: inheritPath ? process.env.PATH : "" },
+      }),
     ).rejects.toBeDefined();
 
     if (compatible) {
@@ -136,7 +151,9 @@ it.each([
       expect(output).toContain(`Gateway install root: ${fixture.root}`);
       expect(output).toContain(serviceNode);
       expect(output).toContain(current.execPath);
-      expect(output).toContain(`PATH Node ${pathVersion} at ${pathNode}`);
+      expect(output).toContain(
+        inheritPath ? `PATH Node ${pathVersion} at ${pathNode}` : "PATH Node: not found",
+      );
       expect(output).toContain(engine);
       expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
     }

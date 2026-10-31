@@ -200,9 +200,9 @@ export async function resolvePackageRuntimePreflight(params: {
           : await gatewayServiceCommandUsesRoot({ root: params.root }))
         ? resolveNodeRunner()
         : undefined);
-    // Initialization may prepend the updater's runtime to its own PATH. Keep
-    // discovery on the inspected service environment captured before that change.
-    const pathEnv = params.service?.serviceEnv ?? process.env;
+    // Initialization can prepend Node and dotenv can add selectors. Discovery
+    // uses the CLI's inherited snapshot or the native service's explicit environment.
+    const pathEnv = params.runtimeRecovery?.env ?? params.service?.serviceDefinitionEnv ?? {};
     const pathNodeRunner = params.engineOnly
       ? resolveExecutableFromPathEnv("node", pathEnv.PATH ?? "", pathEnv, {
           useCache: false,

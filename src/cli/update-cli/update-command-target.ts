@@ -623,6 +623,7 @@ export async function resolveUpdateCommandTarget(
           nodeRunner: managedServiceNodeRunner ?? packageUpdateNodeRunner,
           service: managedServicePlan?.service,
           shouldRestart: prepared.shouldRestart,
+          runtimeRecovery: opts.runtimeRecoveryEnv ? { env: opts.runtimeRecoveryEnv } : undefined,
           timeoutMs: updateStepTimeoutMs,
         });
         if (!runtime.ok) {
@@ -638,12 +639,10 @@ export async function resolveUpdateCommandTarget(
         if (packageInstallEnv && packageUpdateNodeRunner) {
           packageInstallEnv = withNodeRuntimePath(packageInstallEnv, packageUpdateNodeRunner);
         }
-        if (
-          runtime.value.nodeSecurityWarning &&
-          runtime.value.nodeSecurityWarning !== prepared.nodeSecurityWarning
-        ) {
-          warn(`SECURITY WARNING: ${runtime.value.nodeSecurityWarning}`);
-          recordNodeSecurityWarning(runtime.value.nodeSecurityWarning);
+        const warning = runtime.value.nodeSecurityWarning;
+        if (warning && warning !== prepared.nodeSecurityWarning) {
+          warn(`SECURITY WARNING: ${warning}`);
+          recordNodeSecurityWarning(warning);
         }
       }
 
