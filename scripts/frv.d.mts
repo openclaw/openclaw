@@ -69,14 +69,7 @@ export type FrvConcreteClient = FrvClient & {
 } & Required<
     Pick<
       FrvClient,
-      | "cancelRun"
-      | "rerunFailed"
-      | "rerunJob"
-      | "rerunParent"
-      | "rerunRun"
-      | "listRuns"
-      | "verify"
-      | "verifySeal"
+      "cancelRun" | "rerunJob" | "rerunParent" | "rerunRun" | "listRuns" | "verify" | "verifySeal"
     >
   >;
 
