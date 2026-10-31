@@ -150,7 +150,13 @@ it.each([
 ] as const)(
   "selects real-Gateway tests through their source, fixture, and protocol owners: %s",
   (file, expected) => {
-    expect(hasUiE2eAffectingChange([file], { family: "real-gateway" })).toBe(expected);
+    const timings = vi.spyOn(testTimings, "readUiE2eFileTimings");
+    try {
+      expect(hasUiE2eAffectingChange([file], { family: "real-gateway" })).toBe(expected);
+      expect(timings).not.toHaveBeenCalled();
+    } finally {
+      timings.mockRestore();
+    }
   },
 );
 
