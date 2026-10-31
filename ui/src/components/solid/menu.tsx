@@ -285,18 +285,22 @@ export function Menu(props: BranchProps): JSX.Element {
     ids: { trigger: initialIdentity.triggerId },
     pointerFocus: () => props.pointerFocus ?? "menu",
   });
-  const searchInput = () =>
+  const searchControl = () =>
     registeredElements().find(
-      (node): node is HTMLInputElement =>
-        node instanceof HTMLInputElement &&
-        node.hasAttribute("data-search") &&
+      (node): node is HTMLInputElement | HTMLButtonElement =>
+        ((node instanceof HTMLInputElement && node.hasAttribute("data-search")) ||
+          (node instanceof HTMLButtonElement && node.hasAttribute("data-search-toggle"))) &&
         node.closest('[role="menu"]') === overlay.surface,
     );
+  const searchInput = () => {
+    const control = searchControl();
+    return control instanceof HTMLInputElement ? control : undefined;
+  };
   onSettled(() =>
     registerMenuShortcuts(
       overlay.surface,
       () => binding.items().map((element) => ({ element, key: element.dataset.shortcut })),
-      searchInput,
+      searchControl,
     ),
   );
   const searchKeydown = nativeListener(
@@ -321,7 +325,7 @@ export function Menu(props: BranchProps): JSX.Element {
         return;
       }
       const search = findMenuSearch(overlay.surface);
-      if (search) {
+      if (search instanceof HTMLInputElement) {
         search.focus({ preventScroll: true });
         // Keep native text insertion, but do not activate a parent shortcut or typeahead.
         event.stopImmediatePropagation();

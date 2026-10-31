@@ -88,6 +88,7 @@ export function HeaderSearchToggle(props: {
   disabled?: boolean;
   controlRef?: () => ((element: HTMLElement) => void) | undefined;
   toggleRef?: (element: HTMLButtonElement) => void;
+  typeToSearch?: boolean;
   onToggle: () => void;
 }) {
   return (
@@ -106,6 +107,7 @@ export function HeaderSearchToggle(props: {
       type="button"
       class="header-search__toggle"
       data-form-control=""
+      data-search-toggle={props.typeToSearch && !props.open ? "" : undefined}
       aria-label={props.open ? (props.closeLabel ?? t("common.close")) : props.label}
       disabled={props.disabled}
     >
@@ -237,6 +239,7 @@ export function HeaderSearch(props: HeaderSearchProps) {
         <span class="header-search__title">{props.title}</span>
       )}
       <HeaderSearchToggle
+        typeToSearch
         open={props.open}
         label={props.label}
         closeLabel={props.closeLabel}
