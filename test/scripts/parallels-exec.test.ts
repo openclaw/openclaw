@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   resolveMacosPrlctlInvocation,
   runMacosHostCommand,
+  runWindowsHostCommand,
 } from "../../scripts/e2e/parallels/macos-exec.ts";
 
 const host = vi.hoisted(() => ({ run: vi.fn() }));
@@ -19,27 +20,34 @@ afterEach(() => {
 });
 
 describe("macOS Parallels execution boundary", () => {
-  it("preserves VM, command arguments, stdin, and the caller budget without replay", () => {
-    useHost("darwin");
-    const args = ["exec", "Synthetic VM", "--current-user", "/bin/sh -c 'exit 7'"];
-    const options = { check: false, input: "guest input\n", timeoutMs: 45_000 };
-    const result = { status: 7, stdout: "executed once\n", stderr: "guest error\n" };
-    host.run.mockReturnValue(result);
+  it.each([
+    ["macOS", runMacosHostCommand, []],
+    ["Windows", runWindowsHostCommand, ["--windows"]],
+  ] as const)(
+    "preserves %s VM arguments, stdin, and budget without replay",
+    (_guest, runCommand, guestArgs) => {
+      useHost("darwin");
+      const args = ["exec", "Synthetic VM", "--current-user", "/bin/sh -c 'exit 7'"];
+      const options = { check: false, input: "guest input\n", timeoutMs: 45_000 };
+      const result = { status: 7, stdout: "executed once\n", stderr: "guest error\n" };
+      host.run.mockReturnValue(result);
 
-    expect(runMacosHostCommand("prlctl", args, options)).toBe(result);
-    expect(host.run).toHaveBeenCalledExactlyOnceWith(
-      "python3",
-      [
-        "-B",
-        fileURLToPath(new URL("../../scripts/e2e/parallels/parallels-exec.py", import.meta.url)),
-        "--timeout-ms",
-        "45000",
-        "--",
-        ...args,
-      ],
-      options,
-    );
-  });
+      expect(runCommand("prlctl", args, options)).toBe(result);
+      expect(host.run).toHaveBeenCalledExactlyOnceWith(
+        "python3",
+        [
+          "-B",
+          fileURLToPath(new URL("../../scripts/e2e/parallels/parallels-exec.py", import.meta.url)),
+          "--timeout-ms",
+          "45000",
+          ...guestArgs,
+          "--",
+          ...args,
+        ],
+        options,
+      );
+    },
+  );
 
   it.each([
     ["linux", "arm64", "prlctl", ["exec", "Linux VM", "true"]],

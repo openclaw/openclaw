@@ -104,11 +104,12 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 
 - The Parallels smoke shell scripts should tolerate a literal bare `--` arg so `pnpm test:parallels:* -- --json` and similar forwarded invocations work without needing to call `bash scripts/e2e/...` directly.
 
-## macOS guest-command transport
+## macOS and Windows guest-command transport
 
-The macOS smoke and same-guest update lanes route guest commands through
+The macOS and Windows smoke and same-guest update lanes route guest commands through
 `scripts/e2e/parallels/parallels-exec.py`; macOS hosts need `python3` with its standard
-library. On verified Parallels 27.0.0 (58628) and 27.0.2 (58673) Apple-silicon installations, the
+library. On verified Parallels 27.0.0 (58628) and 27.0.2 (58673) Apple-silicon installations for macOS guests,
+and 27.1.0 (58756) for Windows guests, the
 client retains SDK login-job handles through result extraction, avoiding the
 host CLI's intermittent `PrlJob_GetRetCode: Invalid argument` failure. This error
 is not proof that the guest needs reinstallation or another Tools update.
@@ -116,11 +117,12 @@ is not proof that the guest needs reinstallation or another Tools update.
 Selection checks the actual `prlctl` on PATH and the installed CLI digest before
 execution. Other binaries retain ordinary `prlctl`; an SDK failure never retries
 through another transport. Root/current-user choice, raw shell-argument joining,
-stdin, stdout/stderr, and guest exit status are preserved. Callers still own shell
-quoting. Bare UUIDs use the CLI's braced lookup form; when that UUID is absent,
+stdin, stdout/stderr, and guest exit status are preserved. Windows calls pass `--windows`
+to keep the program separate from its raw arguments; POSIX calls retain shell joining.
+Callers still own shell quoting. Bare UUIDs use the CLI's braced lookup form; when that UUID is absent,
 the client checks the original literal VM name once before any guest execution.
 Other lookup failures are terminal. Snapshot/start/stop/input/capture and
-Linux/Windows execution are unchanged.
+Linux execution are unchanged.
 
 For an already-owned, running macOS guest, the same transport can be checked directly:
 

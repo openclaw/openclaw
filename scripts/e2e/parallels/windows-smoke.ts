@@ -26,6 +26,7 @@ import {
 } from "./common.ts";
 import { runWindowsBackgroundPowerShell, WindowsGuest } from "./guest-transports.ts";
 import { startHostServer } from "./host-server.ts";
+import { runWindowsHostCommand } from "./macos-exec.ts";
 import { ensureVmRunning } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
 import {
@@ -391,7 +392,7 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
   private waitForGuestReady(timeoutSeconds = 240): void {
     const deadline = Date.now() + timeoutSeconds * 1000;
     while (Date.now() < deadline) {
-      const result = run(
+      const result = runWindowsHostCommand(
         "prlctl",
         ["exec", this.options.vmName, "--current-user", "cmd.exe", "/d", "/s", "/c", "echo ready"],
         {

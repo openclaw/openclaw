@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { sleep } from "../../lib/sleep.mjs";
 import { run } from "./host-command.ts";
-import { runMacosHostCommand } from "./macos-exec.ts";
+import { runMacosHostCommand, runWindowsHostCommand } from "./macos-exec.ts";
 import type { PhaseRunner } from "./phase-runner.ts";
 import { encodePowerShell, psSingleQuote } from "./powershell.ts";
 import type { CommandResult } from "./types.ts";
@@ -354,7 +354,7 @@ export async function runWindowsBackgroundPowerShell(
     Math.floor(options.completedLogDrainGraceMs ?? 30_000),
   );
   const pollIntervalMs = Math.max(1, Math.floor(options.pollIntervalMs ?? 5_000));
-  const runCommand = options.runCommand ?? run;
+  const runCommand = options.runCommand ?? runWindowsHostCommand;
   const safeLabel = options.label.replaceAll(/[^A-Za-z0-9_-]/g, "-");
   const nonce = `${safeLabel}-${randomUUID()}`;
   const guestRunDir = `openclaw-parallels\\${nonce}`;
@@ -857,6 +857,7 @@ export class MacosGuest extends ParallelsGuest<PosixGuestOptions> {
 }
 
 export class WindowsGuest extends ParallelsGuest<GuestExecOptions> {
+  protected override runCommand = runWindowsHostCommand;
   protected label = "Windows guest command";
   private vmName: string;
   private getEnv: () => Record<string, string>;
@@ -878,7 +879,7 @@ export class WindowsGuest extends ParallelsGuest<GuestExecOptions> {
     const writeArgs = windowsPowerShellArgs(this.vmName, writeScript, true);
     const input = `${windowsProcessEnvScript(this.getEnv())}\n${script}`;
     for (let attempt = 0; attempt < 2; attempt++) {
-      const write = run("prlctl", writeArgs, {
+      const write = this.runCommand("prlctl", writeArgs, {
         check: false,
         input,
         timeoutMs: this.phases.remainingTimeoutMs(120_000),

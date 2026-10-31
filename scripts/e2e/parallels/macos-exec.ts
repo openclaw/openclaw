@@ -7,6 +7,7 @@ export function resolveMacosPrlctlInvocation(
   command: string,
   args: string[],
   timeoutMs?: number,
+  windows = false,
 ): { command: string; args: string[] } {
   if (
     command !== "prlctl" ||
@@ -26,6 +27,7 @@ export function resolveMacosPrlctlInvocation(
       "-B",
       fileURLToPath(new URL("./parallels-exec.py", import.meta.url)),
       ...timeoutArgs,
+      ...(windows ? ["--windows"] : []),
       "--",
       ...args,
     ],
@@ -38,5 +40,14 @@ export function runMacosHostCommand(
   options: RunOptions = {},
 ): CommandResult {
   const invocation = resolveMacosPrlctlInvocation(command, args, options.timeoutMs);
+  return run(invocation.command, invocation.args, options);
+}
+
+export function runWindowsHostCommand(
+  command: string,
+  args: string[],
+  options: RunOptions = {},
+): CommandResult {
+  const invocation = resolveMacosPrlctlInvocation(command, args, options.timeoutMs, true);
   return run(invocation.command, invocation.args, options);
 }
