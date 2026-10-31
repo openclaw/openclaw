@@ -257,7 +257,7 @@ export function createPlacementRecoveryActions(
                 `Worker lost; recovery required. Unresolved workspace changes remain unverified. ${loss.message}`,
               ),
             );
-          } else if (isCurrentActiveWorkerEnvironment(placement, environment)) {
+          } else if (isExactAttachedEnvironment(environment, placement)) {
             // Stop can commit draining before its final-save claim. Enroll the existing
             // file-recovery owner; later sweeps settle it without replaying input.
             await retainDrainingWorkspace(placement);

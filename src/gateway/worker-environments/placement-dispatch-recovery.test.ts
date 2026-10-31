@@ -59,10 +59,15 @@ describe("worker placement restart recovery", () => {
     expect(harness.environments.startTunnel).not.toHaveBeenCalled();
   });
 
-  it.each(["startup", "disconnected startup", "interrupted drain"] as const)(
+  it.each([
+    "startup",
+    "disconnected startup",
+    "interrupted drain",
+    "stale interrupted drain",
+  ] as const)(
     "saves an interrupted worker's files before releasing its claim: %s",
     async (mode) => {
-      const interruptedDrain = mode === "interrupted drain";
+      const interruptedDrain = mode === "interrupted drain" || mode === "stale interrupted drain";
       const disconnected = mode !== "startup";
       const workspacePath = path.join(support.testState.root, "gateway-workspace");
       const workerPath = path.join(support.testState.root, "worker-workspace");
@@ -99,6 +104,9 @@ describe("worker placement restart recovery", () => {
         workspacePath,
       });
       restarted.markEnvironmentNodeDeviceId("interrupted-worker-node");
+      if (mode === "stale interrupted drain") {
+        restarted.markEnvironmentProtocolFeatures([]);
+      }
       const tunnel = restarted.tunnelHandle(active.activeOwnerEpoch);
       const launchTurn = vi.spyOn(tunnel, "launchTurn");
       vi.mocked(tunnel.reconcileWorkspace).mockImplementation(
