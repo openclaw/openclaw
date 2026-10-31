@@ -262,7 +262,7 @@ vi.mock("../config/config.js", () => ({
   },
 }));
 
-vi.mock("../config/sessions/startup-migration.js", () => ({
+vi.mock("../config/sessions/startup-migration-runtime.js", () => ({
   runSessionStartupMigration: (...args: Parameters<typeof runSessionStartupMigrationMock>) =>
     runSessionStartupMigrationMock(...args),
 }));
@@ -919,8 +919,8 @@ describe("EmbeddedTuiBackend", () => {
       const before = await fs.readFile(storePath);
       getRuntimeConfigMock.mockReturnValue({ session: { store: storePath } });
       const actual = await vi.importActual<
-        typeof import("../config/sessions/startup-migration.js")
-      >("../config/sessions/startup-migration.js");
+        typeof import("../config/sessions/startup-migration-runtime.js")
+      >("../config/sessions/startup-migration-runtime.js");
       runSessionStartupMigrationMock.mockImplementationOnce(async (...args: unknown[]) => {
         await actual.runSessionStartupMigration(
           args[0] as Parameters<typeof actual.runSessionStartupMigration>[0],

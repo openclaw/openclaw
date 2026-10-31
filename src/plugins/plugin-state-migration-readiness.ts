@@ -79,7 +79,6 @@ export async function confirmPluginStateMigrationReadiness(params: {
   warn: (message: string) => void;
 }): Promise<void> {
   const database = { env: params.env, artifactPreservingReadOnly: false };
-  const expectedPending = await readDeferredPluginMigrationsAsync(database);
   const obligations = await readDeferredPluginMigrationsAsync({
     ...database,
     includeDeferred: true,
@@ -87,6 +86,7 @@ export async function confirmPluginStateMigrationReadiness(params: {
   if (obligations.length === 0) {
     return;
   }
+  const expectedPending = await readDeferredPluginMigrationsAsync(database);
   const [{ runPostSessionPluginDoctorStateRepairs }, { withPluginLifecycleLeaseAsync }] =
     await Promise.all([
       import("../infra/state-migrations.plugin-doctor.js"),
