@@ -557,6 +557,71 @@ describe("createInboundDebouncer", () => {
     expect({ started, finished }).toStrictEqual({ started: ["2", "3"], finished: ["2", "3"] });
   });
 
+  it("seals a hot key's batch at the item cap instead of buffering unbounded messages", async () => {
+    const { calls, debouncer } = createRecordingDebouncer({
+      debounceMs: 50,
+      maxItemsPerFlush: 2,
+    });
+
+    for (const id of ["1", "2", "3", "4", "5"]) {
+      await debouncer.enqueue({ key: "a", id });
+    }
+    await vi.advanceTimersByTimeAsync(50);
+    await debouncer.drain();
+
+    expect(calls).toEqual([["1", "2"], ["3", "4"], ["5"]]);
+  });
+
+  it("applies the default item cap when no explicit limit is configured", async () => {
+    const { calls, debouncer } = createRecordingDebouncer({ debounceMs: 50 });
+
+    for (let index = 0; index < 102; index += 1) {
+      await debouncer.enqueue({ key: "a", id: `${index}` });
+    }
+    await vi.advanceTimersByTimeAsync(50);
+    await debouncer.drain();
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toHaveLength(100);
+    expect(calls[1]).toHaveLength(2);
+  });
+
+  it("holds new buffered work when sealed batches accumulate behind blocked admission", async () => {
+    const firstGate = createDeferred();
+    const calls: string[][] = [];
+    const debouncer = batchDebouncer<Message>(
+      {
+        debounceMs: 50,
+        buildKey: () => "sender",
+        maxPendingBatchesPerKey: 2,
+        canAppend: () => false,
+      },
+      async (items) => {
+        calls.push(items.map((item) => item.id));
+        if (items[0]?.id === "1") {
+          await firstGate.promise;
+        }
+      },
+    );
+
+    for (const id of ["1", "2", "3"]) {
+      await debouncer.enqueue({ key: "a", id });
+    }
+    const held = debouncer.enqueue({ key: "a", id: "4" });
+    let heldResolved = false;
+    void held.then(() => {
+      heldResolved = true;
+    });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(heldResolved).toBe(false);
+    expect(calls).toEqual([["1"]]);
+
+    firstGate.resolve();
+    await vi.advanceTimersByTimeAsync(100);
+    await Promise.all([held, debouncer.drain()]);
+    expect(calls).toEqual([["1"], ["2"], ["3"], ["4"]]);
+  });
+
   it("counts tracked debounce keys by union of buffers and active chains", async () => {
     const { debouncer, started, finished, entered, release } = createBlockedDebouncer(
       { maxTrackedKeys: 3 },
