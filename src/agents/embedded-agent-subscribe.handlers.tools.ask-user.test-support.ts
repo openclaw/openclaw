@@ -1,8 +1,17 @@
-import { expect, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
+import { ReplyDispatchDeliveryError } from "../auto-reply/reply/reply-dispatch-outcome.js";
 import { QuestionManager } from "../gateway/question-manager.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { createTestContext } from "./embedded-agent-subscribe.handlers.tools.test-support.js";
+import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.types.js";
 import * as questionDispatch from "./harness/gateway-question-dispatch.js";
-import { createAskUserTool } from "./tools/ask-user-tool.js";
+import {
+  beginAskUserPromptDelivery,
+  cancelAskUserPromptDelivery,
+  createAskUserTool,
+  normalizeAskUserParams,
+  reserveAskUserPromptDelivery,
+} from "./tools/ask-user-tool.js";
 
 const pendingAskUserFinishes = new Set<() => Promise<void>>();
 
@@ -75,4 +84,76 @@ export async function activateAskUserPrompt(toolCallId: string, args: unknown) {
 
 export async function finishPendingAskUserPrompts() {
   await Promise.all([...pendingAskUserFinishes].map((finish) => finish()));
+}
+
+export function registerAskUserPromptFailureTests(
+  startTool: (
+    ctx: ToolHandlerContext,
+    event: { toolName: "ask_user"; toolCallId: string; args: unknown },
+  ) => void | Promise<void>,
+) {
+  it.each([
+    [
+      new Error("route declined", {
+        cause: Object.assign(new Error("socket closed"), { code: "ECONNRESET" }),
+      }),
+      "route declined | socket closed | ECONNRESET",
+    ],
+    [new ReplyDispatchDeliveryError("failed-before-deliver"), "queued reply delivery failed"],
+  ])("logs question delivery diagnostics for %s", async (error, diagnostic) => {
+    const { ctx, warn } = createTestContext();
+    ctx.params.messageChannel = "telegram";
+    ctx.params.currentAccountId = "default";
+    ctx.params.onToolResult = async () => {
+      throw error;
+    };
+    const args = createBasicAskUserArgs();
+    const toolCallId = "ask-delivery-diagnostics";
+    await startTool(ctx, { toolName: "ask_user", toolCallId, args });
+    const delivery = beginAskUserPromptDelivery({
+      toolCallId,
+      sessionKey: ctx.params.sessionKey,
+      runId: ctx.params.runId,
+      agentId: ctx.params.agentId,
+      ...normalizeAskUserParams(args),
+    });
+    delivery.markReady();
+    await expect(delivery.waitForDelivery()).resolves.toEqual({ error });
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(diagnostic),
+      expect.objectContaining({
+        runId: "run-test",
+        toolCallId,
+        questionId: delivery.questionId,
+        channel: "telegram",
+        accountId: "default",
+        ...(error instanceof ReplyDispatchDeliveryError
+          ? { outcome: "failed-before-deliver" }
+          : {}),
+      }),
+    );
+    delivery.release();
+  });
+
+  it("releases ask_user reservation when the callback flush throws synchronously", () => {
+    const { ctx, onBlockReplyFlush } = createTestContext();
+    ctx.params.onToolResult = vi.fn();
+    const failure = new Error("flush failed");
+    onBlockReplyFlush.mockImplementation(() => {
+      throw failure;
+    });
+    const args = createBasicAskUserArgs();
+
+    expect(() =>
+      startTool(ctx, { toolName: "ask_user", toolCallId: "ask-callback-failure", args }),
+    ).toThrow(failure);
+    onTestFinished(() => cancelAskUserPromptDelivery("ask-callback-retry", "agent:unit-session"));
+    expect(
+      reserveAskUserPromptDelivery({
+        toolCallId: "ask-callback-retry",
+        sessionKey: "agent:unit-session",
+        questions: normalizeAskUserParams(args).questions,
+      }),
+    ).toBeDefined();
+  });
 }
