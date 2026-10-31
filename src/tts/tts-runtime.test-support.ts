@@ -124,14 +124,6 @@ export {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 
-export const nativeVoiceNoteChannels = [
-  "discord",
-  "feishu",
-  "matrix",
-  "telegram",
-  "whatsapp",
-] as const;
-
 export function createMockSpeechProvider(
   id = "mock",
   options: Partial<SpeechProviderPlugin> = {},
