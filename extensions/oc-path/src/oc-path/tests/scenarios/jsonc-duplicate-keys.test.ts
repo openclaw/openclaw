@@ -58,6 +58,11 @@ describe("duplicate JSON object keys", () => {
   it("refuses to insert under a key whose earlier duplicate jsonc-parser would pick", () => {
     expect(() =>
       setOcPath(parseJsonc('{"a":{},"a":{"b":1}}'), parseOcPath("oc://x.json/a/+c"), "1"),
-    ).toThrow();
+    ).toThrow(
+      expect.objectContaining({
+        reason: "not-writable",
+        message: expect.stringContaining("merge the duplicate keys"),
+      }),
+    );
   });
 });

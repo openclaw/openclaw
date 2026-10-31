@@ -74,7 +74,10 @@ export function insertJsoncOcPath(
 
   const tree = parseTree(ast.raw, [], { allowTrailingComma: true });
   if (tree && findNodeAtLocation(tree, target.path) !== findEffectiveJsoncNode(tree, target.path)) {
-    throw new OcPathEditError("not-writable", "insertion under a duplicated key is ambiguous");
+    throw new OcPathEditError(
+      "not-writable",
+      "insertion under a duplicated key is ambiguous; merge the duplicate keys into one (keeping the last, effective value), then retry the insertion",
+    );
   }
   const segment = typeof indexOrKey === "number" && indexOrKey < 0 ? -1 : indexOrKey;
   const editPath = [...target.path, segment];
