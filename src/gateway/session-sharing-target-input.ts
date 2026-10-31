@@ -10,6 +10,7 @@ import {
   getRpcSourceIdentity,
 } from "../sessions/session-controller.rpc-sources.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
+import { resolveSessionMethodScope } from "../shared/session-method-scopes-base.js";
 import { resolveAuthorizedBoardViewTicketClaims } from "./board-view-ticket.js";
 import type { operatorSessionCap } from "./operator-role-policy.js";
 import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
@@ -316,7 +317,12 @@ export function resolveSessionMutationTargets(params: {
   if (directTargets.length) {
     return directTargets;
   }
-  if (params.method === "board.event" || params.method === "board.action") {
+  if (
+    params.method === "board.event" ||
+    params.method === "board.action" ||
+    (params.method === "board.data.read" &&
+      resolveSessionMethodScope(params.method, params.requestParams) === "operator.sessions.read")
+  ) {
     const ticket = readSessionSharingStringParam(params.requestParams, "ticket");
     const claims = ticket
       ? resolveAuthorizedBoardViewTicketClaims(ticket, { gatewayContext: params.context })

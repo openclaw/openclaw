@@ -374,6 +374,14 @@ Network-origin grants never supply GitHub identity authority. Approval discloses
 that Actions metadata, including private repository data accessible to the
 agent, is shared with the widget/session audience.
 
+Authenticated session readers can use this binding without general Gateway read
+access. The router derives the session from the verified view ticket and retains
+the caller's current session visibility through delivery, including cached
+results. The binding still requires the exact repository grant on the current
+widget bytes, revision, and view generation. Session visibility alone does not
+approve sharing private Actions metadata. Other data bindings, actions, and
+anonymous transcript embeds do not gain host API access.
+
 Author guidance is conditional on a usable connected agent identity, not a
 tool-construction-time check. `board.widget.put` verifies and revalidates that
 identity before saving HTML (including materialized Canvas documents) declaring
@@ -545,7 +553,9 @@ RPCs (core method table, typebox schemas in `gateway-protocol`):
 - `board.prompt.authorize { ticket }` — returns whether a visible prompt send
   still needs per-click confirmation — `operator.read`
 - `board.data.read { ticket, bindingId, params? }` — gateway-side allowlisted
-  core or active-plugin read binding resolution — `operator.read`
+  core or active-plugin read binding resolution — `operator.read`. Only
+  `github.actions.runs` also accepts authenticated `operator.sessions.read`, with
+  ticket-derived session authorization and an exact repository grant.
 - `board.action { ticket, action, ... }` — exact-grant automation dispatch
   through the existing cron run-now path or an active plugin's validated action
   verb — `operator.write`

@@ -93,6 +93,16 @@ export function resolveSessionMethodScope(
   method: string,
   params?: unknown,
 ): SessionOperatorScope | undefined {
+  // Only this repository-scoped read has an approved session-audience contract.
+  // Other host bindings keep their broad operator scope. Ticket, visibility and
+  // exact widget grants are enforced by the Gateway before data delivery.
+  if (
+    method === "board.data.read" &&
+    isRecord(params) &&
+    params.bindingId === "github.actions.runs"
+  ) {
+    return "operator.sessions.read";
+  }
   // Selecting a device filesystem requires the broader operator capability.
   if (method === "sessions.create" && isRecord(params) && params.deviceFolder !== undefined) {
     return undefined;

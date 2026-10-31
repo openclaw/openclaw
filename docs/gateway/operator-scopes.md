@@ -168,6 +168,14 @@ scopes and widget approvals remain unchanged. Canvas imports require a saved wid
 receipt in the dashboard conversation, with source access retained through the write.
 Broad readers keep their existing document-ID-only access.
 
+For saved HTML dashboards, session readers can use the explicitly approved
+`github.actions.runs` binding for its exact granted repository. The Gateway
+authorizes the session from the view ticket, not a widget-supplied session key,
+and rechecks caller access and the current widget grant before returning even
+cached data. Approval shares the agent-accessible Actions metadata with the
+session audience; visibility alone is not approval. Other dashboard host data
+bindings and actions retain their broader scopes.
+
 Session readers can also use `artifacts.list`, `artifacts.get`, and
 `artifacts.download` for artifacts in a conversation they can currently read.
 Both session-key and run-ID queries retain the selected session's visibility,
