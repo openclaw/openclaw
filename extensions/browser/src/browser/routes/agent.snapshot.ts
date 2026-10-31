@@ -1,9 +1,3 @@
-import path from "node:path";
-import {
-  ensureMediaDir,
-  getImageMetadata,
-  saveMediaBuffer,
-} from "openclaw/plugin-sdk/media-runtime";
 import { resolveBrowserNavigationTimeoutMs } from "../act-policy.js";
 import type { CdpDocumentIdentities } from "../cdp-page-session.js";
 import {
@@ -29,13 +23,6 @@ import {
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import { getLoadedPwAiModule, getPwAiModule } from "../pw-ai-module.js";
 import { finalizeRoleSnapshot } from "../pw-role-snapshot.js";
-import type { AnnotationItem } from "../screenshot-annotate.js";
-import { scaleAnnotations } from "../screenshot-annotate.js";
-import {
-  DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
-  DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
-  normalizeBrowserScreenshot,
-} from "../screenshot.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import {
   getPreviousSnapshotKeys,
@@ -54,6 +41,11 @@ import {
   withRouteTabContext,
 } from "./agent.shared.js";
 import {
+  saveBrowserMedia,
+  saveBrowserScreenshot,
+  type ScreenshotCapture,
+} from "./agent.snapshot-media.js";
+import {
   captureBrowserOperationTarget,
   resolveOperationTargetOutcome,
 } from "./agent.snapshot-target.js";
@@ -62,59 +54,6 @@ import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import { readRoutePositiveInteger, readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 import { jsonError, runProfileRouteOperation, toBoolean, toStringOrEmpty } from "./utils.js";
-
-type ScreenshotCapture = {
-  buffer: Buffer;
-  labels?: number;
-  skipped?: number;
-  truncated?: boolean;
-  annotations?: AnnotationItem[];
-};
-
-async function saveBrowserMedia(buffer: Buffer, contentType: string, maxBytes: number) {
-  await ensureMediaDir();
-  const saved = await saveMediaBuffer(buffer, contentType, "browser", maxBytes);
-  return path.resolve(saved.path);
-}
-
-async function saveBrowserScreenshot(capture: ScreenshotCapture, type: "png" | "jpeg") {
-  const normalized = await normalizeBrowserScreenshot(capture.buffer, {
-    maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
-  });
-  let annotations = capture.annotations;
-  const originalBuffer = capture.buffer;
-  if (annotations?.length) {
-    const orig = normalized.sourceDimensions;
-    // Preserve coordinates when dimensions are unavailable or identical bytes cannot rescale boxes.
-    if (originalBuffer !== normalized.buffer && orig?.width && orig?.height) {
-      const next = await getImageMetadata(normalized.buffer);
-      if (
-        next?.width &&
-        next?.height &&
-        (next.width !== orig.width || next.height !== orig.height)
-      ) {
-        annotations = scaleAnnotations(
-          annotations,
-          next.width / orig.width,
-          next.height / orig.height,
-        );
-      }
-    }
-  }
-  const imagePath = await saveBrowserMedia(
-    normalized.buffer,
-    normalized.contentType ?? `image/${type}`,
-    DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
-  );
-  return {
-    imagePath,
-    imageType: normalized.contentType?.includes("jpeg") ? "jpeg" : type,
-    ...(typeof capture.labels === "number" ? { labels: true, labelsCount: capture.labels } : {}),
-    ...(typeof capture.skipped === "number" ? { labelsSkipped: capture.skipped } : {}),
-    ...(capture.truncated ? { truncated: true } : {}),
-    ...(annotations?.length ? { annotations } : {}),
-  };
-}
 
 export function registerBrowserAgentSnapshotRoutes(
   app: BrowserRouteRegistrar,
@@ -315,6 +254,9 @@ export function registerBrowserAgentSnapshotRoutes(
           return;
         }
 
+        const profileRuntime = ctx.state().profiles.get(profileCtx.profile.name);
+        const headless =
+          profileRuntime?.running?.headless ?? (await profileRuntime?.externalBrowserMode?.headless);
         let capture: ScreenshotCapture;
         const shouldUsePlaywright =
           labels ||
@@ -344,6 +286,7 @@ export function registerBrowserAgentSnapshotRoutes(
             element,
             fullPage,
             type,
+            headless,
             timeoutMs,
             signal,
           };
@@ -351,7 +294,6 @@ export function registerBrowserAgentSnapshotRoutes(
             ? await pw.screenshotWithLabelsViaPlaywright({ ...screenshotOptions, refs: snap?.refs })
             : await pw.takeScreenshotViaPlaywright(screenshotOptions);
         } else {
-          const profileRuntime = ctx.state().profiles.get(profileCtx.profile.name);
           capture = {
             buffer: await captureScreenshot({
               wsUrl: tab.wsUrl ?? "",
@@ -360,9 +302,7 @@ export function registerBrowserAgentSnapshotRoutes(
               format: type,
               quality: type === "jpeg" ? 85 : undefined,
               timeoutMs,
-              headless:
-                profileRuntime?.running?.headless ??
-                (await profileRuntime?.externalBrowserMode?.headless),
+              headless,
             }),
           };
         }
@@ -657,10 +597,15 @@ export function registerBrowserAgentSnapshotRoutes(
               if (!pw) {
                 return jsonError(res, 501, "Snapshot labels require Playwright.");
               }
+              const profileRuntime = ctx.state().profiles.get(profileCtx.profile.name);
+              const headless =
+                profileRuntime?.running?.headless ??
+                (await profileRuntime?.externalBrowserMode?.headless);
               const labeled = await pw.screenshotWithLabelsViaPlaywright({
                 ...playwrightTarget,
                 refs: "refs" in snap ? snap.refs : {},
                 type: "png",
+                headless,
                 timeoutMs: plan.timeoutMs,
                 signal,
               });

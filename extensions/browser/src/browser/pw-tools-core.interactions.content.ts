@@ -199,6 +199,7 @@ export async function waitForViaPlaywright(
 }
 
 type ScreenshotOptions = {
+  headless?: boolean;
   fullPage?: boolean;
   type?: "png" | "jpeg";
   timeoutMs?: number;
@@ -240,6 +241,12 @@ async function capturePageScreenshot(
   opts.signal?.throwIfAborted();
   if (locator && opts.fullPage) {
     throw new Error("fullPage is not supported for element screenshots");
+  }
+  // Match raw CDP capture: background headless tabs can stall without a frame.
+  // Preserve focus when the launch owner confirms that this browser is headed.
+  if (opts.headless !== false) {
+    await page.bringToFront().catch(() => {});
+    opts.signal?.throwIfAborted();
   }
   const type = opts.type ?? "png";
   const emulation = ensurePageState(page).emulation;

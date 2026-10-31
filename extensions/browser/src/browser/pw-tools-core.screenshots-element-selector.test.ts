@@ -20,6 +20,23 @@ const downloads = await import("./pw-tools-core.downloads.js");
 
 const target = { cdpUrl: "http://127.0.0.1:18792", targetId: "T1" };
 
+it.each([true, false, undefined])(
+  "respects launch mode %s during screenshot capture",
+  async (headless) => {
+    const bringToFront = vi.fn(async () => {});
+    const page = {
+      bringToFront,
+      screenshot: vi.fn(async () => {
+        expect(bringToFront).toHaveBeenCalledTimes(headless === false ? 0 : 1);
+        return Buffer.from("capture");
+      }),
+    };
+    setPwToolsCoreCurrentPage(page);
+
+    expect((await capture({ ...target, headless })).buffer.toString()).toBe("capture");
+  },
+);
+
 it("screenshots a ref locator", async () => {
   const refScreenshot = vi.fn(async () => Buffer.from("R"));
   setPwToolsCoreCurrentRefLocator({
