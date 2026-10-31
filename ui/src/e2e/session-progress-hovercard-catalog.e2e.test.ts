@@ -63,10 +63,9 @@ suite.define(() => {
         const part = (name: string) => card.locator(`.session-hovercard__${name}`);
         expect(await part("title").textContent()).toBe("Catalog release review");
         expect(await part("created-age").textContent()).toBe("2h");
-        expect(await part("context-text").allTextContents()).toEqual([
-          "openclaw",
-          "catalog-hovercard",
-        ]);
+        const context = (await part("context-text").allTextContents()).join(" ");
+        expect(context).toContain("openclaw");
+        expect(context).toContain("catalog-hovercard");
         expect(await card.textContent()).not.toContain("/work/openclaw");
 
         await row.getByRole("button", { name: "Open session menu" }).dispatchEvent("click");

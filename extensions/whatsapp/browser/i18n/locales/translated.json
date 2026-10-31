@@ -691,5 +691,38 @@
         "logoutConfirmMessage": "Om du loggar ut från kontot {accountId} stoppas dess lyssnare och dess sparade inloggningsuppgifter raderas."
       }
     }
+  },
+  "ca": {
+    "common": {
+      "configured": "Configurat",
+      "linked": "Vinculat",
+      "running": "En execució",
+      "connected": "Connectat",
+      "lastConnect": "Última connexió",
+      "lastMessage": "Últim missatge",
+      "authAge": "Antiguitat de l'autenticació",
+      "na": "n/d",
+      "yes": "Sí",
+      "no": "No",
+      "relink": "Torna a vincular",
+      "working": "En procés…",
+      "showQr": "Mostra el QR",
+      "waitForScan": "Espera l'escaneig",
+      "logout": "Tanca la sessió",
+      "refresh": "Actualitza"
+    },
+    "channels": {
+      "lastError": "Últim error",
+      "setup": {
+        "whatsappQrAlt": "QR de WhatsApp"
+      },
+      "whatsapp": {
+        "title": "WhatsApp",
+        "subtitle": "Vincula WhatsApp Web i supervisa l'estat de la connexió.",
+        "phoneNumber": "Número de telèfon",
+        "logoutConfirmTitle": "Voleu tancar la sessió del compte de WhatsApp {accountId}?",
+        "logoutConfirmMessage": "Tancar la sessió del compte {accountId} atura el seu procés d'escolta i elimina les seves credencials desades."
+      }
+    }
   }
 }

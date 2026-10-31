@@ -5,7 +5,7 @@ import {
 } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { updatePickers, openPicker } from "../../test-helpers/select-picker.ts";
 import "../../styles.css";
-import { renderAppearance } from "./config-view.test-support.tsx";
+import { renderAppearance, renderConfigInto } from "./config-view.test-support.tsx";
 
 const catalog = (...themes: ThemeCatalogEntry[]) => ({ error: null, themes });
 const theme = (
@@ -40,7 +40,7 @@ it("hides the collection and visit controls without changing their saved prefere
 
 it("offers plugin and personal themes from the shared catalog with their descriptions", () => {
   const setTheme = vi.fn();
-  const { container } = renderAppearance({
+  const { container, props } = renderAppearance({
     setTheme,
     themeCatalog: catalog(
       ...BUILTIN_THEMES,
@@ -58,7 +58,14 @@ it("offers plugin and personal themes from the shared catalog with their descrip
   expect(pluginTheme?.title).toBe("Alien theme");
   pluginTheme?.click();
   expect(setTheme).toHaveBeenCalledWith("space-pack/xenovessel");
-  expect(themeButton(container, "user/candlelight")?.textContent).toContain("Candlelight");
+  const personalTheme = themeButton(container, "user/candlelight")!;
+  expect(personalTheme.textContent).toContain("Candlelight");
+  props.theme = "user/candlelight";
+  renderConfigInto(props, container);
+  expect(personalTheme.querySelector(".settings-theme-card__palette")).not.toBeNull();
+  props.theme = "claw";
+  renderConfigInto(props, container);
+  expect(personalTheme.querySelector(".settings-theme-card__icon")).not.toBeNull();
 });
 
 it.each(["profile", "device-local"] as const)(

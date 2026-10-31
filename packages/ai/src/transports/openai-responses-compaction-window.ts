@@ -1,6 +1,7 @@
 import type { Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ResponseInputItem } from "openai/resources/responses/responses.js";
+import { getAiTransportHost } from "../host.js";
 import { createSseByteGuard } from "../utils/streaming-byte-guard.js";
 import type {
   ReplayableResponseCompactionItem,
@@ -20,6 +21,43 @@ export type OpenAIResponsesCompactionOutput = Array<
 export type OpenAIResponsesCompactedWindow =
   | { state: "ready"; output: string; outputTokens?: number }
   | { state: "refresh-required" };
+
+// Retain identity only, never parsed windows or their image data, alongside saved replay state.
+const compactionInputIdentities = new WeakMap<object, object[]>();
+const preparedCompactionInputs = new WeakMap<object, object>();
+
+export function getResponsesCompactionInputIdentity(item: object): object | undefined {
+  return preparedCompactionInputs.get(item);
+}
+
+export function publishResponsesCompactionInput<T extends object[]>(source: object, input: T): T {
+  const immutable = getAiTransportHost().immutableData;
+  if (!immutable?.isDeeplyFrozenPlainData(source)) {
+    return input;
+  }
+  let identities = compactionInputIdentities.get(source);
+  if (!identities) {
+    identities = [];
+    compactionInputIdentities.set(source, identities);
+  }
+  let index = 0;
+  for (const item of input) {
+    immutable.freezeJsonSnapshot(item);
+    preparedCompactionInputs.set(item, (identities[index++] ??= {}));
+  }
+  return input;
+}
+
+/** Provenance is off-wire; an alias of prepared immutable input keeps its byte identity. */
+export function tagResponsesCompactionInput<T extends object>(item: T, marker: symbol): T {
+  const tagged = { ...item, [marker]: true };
+  const identity = preparedCompactionInputs.get(item);
+  if (identity) {
+    Object.freeze(tagged);
+    preparedCompactionInputs.set(tagged, identity);
+  }
+  return tagged;
+}
 
 // Schema validation, not coercion: supplied non-string fields must be rejected.
 function isOptionalCompactionString(value: unknown): boolean {
@@ -199,7 +237,7 @@ export function readOpenAIResponsesCompactionWindow(
         delete message.id;
       }
     }
-    return output;
+    return publishResponsesCompactionInput(replay, output);
   } catch {
     return undefined;
   }

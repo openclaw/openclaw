@@ -215,10 +215,6 @@
   padding-left: calc(38px + var(--space-4));
 }
 
-.device-group__dups + .settings-row {
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-}
-
 .device-group__dups > summary {
   padding: var(--space-2) var(--space-4);
   font-size: var(--control-ui-text-sm);
