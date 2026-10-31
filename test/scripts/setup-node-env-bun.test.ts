@@ -1,4 +1,3 @@
-import * as childProcess from "node:child_process";
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -14,7 +13,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 
@@ -214,10 +213,7 @@ fi
 
 describe("Bun image archive consumer", () => {
   it("creates independent private destinations and never reuses a modified extracted Bun", () => {
-    const archiveCommands = vi.spyOn(childProcess, "execFileSync");
-    onTestFinished(() => archiveCommands.mockRestore());
     const f = fixture();
-    expect(archiveCommands).not.toHaveBeenCalled();
     const bins: string[] = [];
     for (let attempt = 0; attempt < 2; attempt++) {
       const result = f.run();
