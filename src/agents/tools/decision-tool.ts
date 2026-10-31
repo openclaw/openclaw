@@ -71,8 +71,10 @@ export function createDecisionTool(
         return decisionToolResult({ status: "unavailable", reason: "unsupported-input" });
       }
       // Load execution only on invocation; the runtime rereads selection and checks live authority.
-      const { evaluateDecisionV2Operation, completeDecisionEvaluation } =
-        await import("../../decisions/runtime.js");
+      const [{ evaluateDecisionV2Operation }, { completeDecisionEvaluation }] = await Promise.all([
+        import("../../decisions/runtime.js"),
+        import("../../decisions/completion.js"),
+      ]);
       operationSignal.throwIfAborted();
       const currentConfig = getRuntimeConfig();
       const currentSelection = resolveDecisionModelSetting(currentConfig, agentId);

@@ -19,8 +19,8 @@ import {
   assertAllowedCompletionModel,
   resolvePluginLlmPolicy,
 } from "../plugins/runtime/runtime-model-policy.js";
-import { finalizePluginModelUsage } from "../plugins/runtime/runtime-model-usage.js";
 import { modelKey } from "../shared/model-key.js";
+import { completeDecisionEvaluation, type DecisionEvaluation } from "./completion.js";
 import { DecisionContractError } from "./contract-error.js";
 import { logDecisionEvaluation } from "./diagnostics.js";
 import type { DecisionEvaluateOptions, DecisionEvaluateOptionsV2 } from "./execution-types.js";
@@ -54,29 +54,6 @@ export function evaluateDecisionV2(
     getPluginRegistryForContext(),
     getRuntimeConfig(),
   );
-}
-
-type Outcome = DecisionOutcome | DecisionOutcomeV2;
-export type DecisionEvaluation<T extends Outcome = Outcome> = {
-  outcome: T;
-  usageFacts?: Pick<
-    Parameters<typeof finalizePluginModelUsage>[0],
-    "cfg" | "hostPluginId" | "target" | "preparedBilling"
-  >;
-};
-
-/** Complete only at the caller's successful return, after its late guards and projection. */
-export function completeDecisionEvaluation<T extends Outcome>(
-  evaluation: DecisionEvaluation<T>,
-): T {
-  if (evaluation.outcome.status === "ok" && evaluation.usageFacts) {
-    finalizePluginModelUsage({
-      ...evaluation.usageFacts,
-      rawUsage: evaluation.outcome.result.usage,
-      estimate: "none",
-    });
-  }
-  return evaluation.outcome;
 }
 
 export async function evaluateDecisionInRegistry(
