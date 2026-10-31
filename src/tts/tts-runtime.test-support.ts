@@ -100,7 +100,6 @@ vi.mock("../plugins/capability-provider-runtime.js", async () => {
 installSpeechProviders([createMockSpeechProvider("mock", { label: "Mock" })]);
 
 export const {
-  testApi,
   buildTtsSystemPromptHint,
   getTtsPersona,
   getTtsProviderAsync,
