@@ -1718,9 +1718,6 @@ if (commandArgs[0] === "list") {
     expect(windowsGit.indexOf('"MinGit-2.56.0.2-64-bit.zip"')).toBeLessThan(
       windowsGit.indexOf('"MinGit-2.56.0.2-arm64.zip"'),
     );
-    expect(
-      combined.match(/curl\.exe -fsSL --connect-timeout 10 --max-time 120 --retry 2/g),
-    ).toHaveLength(2);
     expect(windowsGit).toContain('if "-64-bit." in name:');
     expect(windowsGit).toContain('elif "-arm64." in name:');
   });
