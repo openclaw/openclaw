@@ -667,10 +667,9 @@ Transcript-match slow holds include a fixed caller category, selector, outcome,
 and visited-row counts. `projectedRows` counts hot rows with navigation projections;
 `identityRows` counts hot rows using inline canonical text, not identity-index hits.
 `coldRows` counts decoded archive event rows, including required verification after
-a match. These counters appear only on the existing slow-hold warning. Hot
-idempotency misses seek existing key ownership before scanning; positive matches
-retain newest-first historical selection. Cold matching is unchanged, and no
-schema, backfill, or persistent cache is added.
+a match. These counters appear only on the existing slow-hold warning; they do not
+count fast requests or provide a complete traffic census. Matching, schemas,
+storage layout, and retention are unchanged.
 
 Bounded model-context reads retain only the selectable request suffix and current
 model, thinking, and context-boundary markers. Discarded requests contribute exact
