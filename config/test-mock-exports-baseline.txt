@@ -609,7 +609,6 @@
 ["extensions/memory-wiki/src/gateway.test.ts","./status.js","e38b12a09feb987e517758d2d9d074cb6a82f5f620c82cea91e4bb4cea0eb184",1]
 ["extensions/memory-wiki/src/obsidian.discovery.test.ts","openclaw/plugin-sdk/process-runtime","fe6b05a282c929877c3c6ca08dc14cdd9611aaf1780cfb5645e57f8d76442cb8",1]
 ["extensions/memory-wiki/src/query.test.ts","openclaw/plugin-sdk/agent-scope-runtime","79386e1f4c397b086ffef3c2c825384f71b3eebf4e07e524e6bf79ca5ca50110",1]
-["extensions/memory-wiki/src/query.test.ts","openclaw/plugin-sdk/memory-host-core","5de3353f030a144bce721267d0e5dc396ac6083f6e0f4910d0aa98e776ec8ac1",1]
 ["extensions/memory-wiki/src/query.test.ts","openclaw/plugin-sdk/memory-host-search","f48cc52f2e4c8cf2498e3b6c67dd8ceb52edbd9cfde0b91f77ce6c326115079c",1]
 ["extensions/microsoft-foundry/onboard.connection.test.ts","openclaw/plugin-sdk/ssrf-runtime","fc209654409ddfa1f204d534837b332b36fc12950871a06cfe56820b88546131",1]
 ["extensions/msteams/doctor-contract-api.cold.test.ts","openclaw/plugin-sdk/session-store-runtime","720b41750dc9340969ef858ff1b7b9059adaab571c09770b099ad2ea6273549d",1]

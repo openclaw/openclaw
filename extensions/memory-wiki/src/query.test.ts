@@ -40,9 +40,14 @@ vi.mock("openclaw/plugin-sdk/agent-scope-runtime", () => ({
   resolveSessionAgentIdStrict: resolveSessionAgentIdMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/memory-host-core", () => ({
-  resolveDefaultAgentId: resolveDefaultAgentIdMock,
-}));
+vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-runtime-core")>();
+  return {
+    ...actual,
+    resolveAgentOperationAgentId: resolveDefaultAgentIdMock,
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-sessions", async (importOriginal) => {
   const actual =

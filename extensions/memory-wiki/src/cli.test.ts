@@ -848,6 +848,23 @@ describe("memory-wiki cli", () => {
       );
     });
 
+    it("resolves agents.defaults.systemAgent for the default CLI agent", async () => {
+      const { rootDir, config } = await createCliVault({ config: { vault: { scope: "agent" } } });
+      const explicitOwnerConfig = {
+        agents: {
+          ownership: "explicit" as const,
+          entries: { main: {}, ops: {} },
+          defaults: { systemAgent: { agentId: "main" } },
+        },
+      } satisfies OpenClawConfig;
+
+      await runWiki(config, ["init"], explicitOwnerConfig, true);
+      const output = await runWiki(config, ["doctor"], explicitOwnerConfig, true);
+
+      expect(output).toContain("Vault scope: agent (main)");
+      expect(output).toContain(path.join(rootDir, "main"));
+    });
+
     it("runs wiki doctor against explicitly selected agent-scoped vaults", async () => {
       const { rootDir, config } = await createCliVault({ config: { vault: { scope: "agent" } } });
       for (const agent of ["marketing", "support"]) {
