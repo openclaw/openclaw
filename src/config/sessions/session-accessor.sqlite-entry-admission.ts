@@ -191,7 +191,28 @@ export async function loadSessionEntryForAdmission(
                 borrowed: OpenClawAgentDatabaseExecution,
                 admittedEntry: SessionAdmissionEntryIdentity | undefined,
               ): ActorSessionAdmissionClaim => {
-                const generation = borrowed.captureGenerationClaim();
+                let currentGeneration = borrowed.captureGenerationClaim();
+                const generation = {
+                  identity: currentGeneration.identity,
+                  get incarnation() {
+                    return currentGeneration.incarnation;
+                  },
+                  assertCurrent() {
+                    // Retain the logical borrower and physical file, including its birthtime.
+                    borrowed.assertCurrent();
+                    try {
+                      currentGeneration.assertCurrent();
+                    } catch (error) {
+                      // Another operation may have recovered an idle worker. Never reopen here.
+                      const successor = borrowed.capturePreparedGenerationClaim();
+                      if (!successor || successor.identity !== generation.identity) {
+                        throw error;
+                      }
+                      successor.assertCurrent();
+                      currentGeneration = successor;
+                    }
+                  },
+                };
                 const identity = borrowed.fileIdentity;
                 if (!identity) {
                   throw new Error("Session admission requires its captured physical identity");
@@ -203,7 +224,9 @@ export async function loadSessionEntryForAdmission(
                 return {
                   kind: "worker",
                   identity: generation.identity,
-                  incarnation: generation.incarnation,
+                  get incarnation() {
+                    return generation.incarnation;
+                  },
                   target: {
                     agentId: target.logicalAgentId,
                     env,
