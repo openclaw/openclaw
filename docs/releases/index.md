@@ -14,6 +14,9 @@ who contributed, with links to the source changes.
 ### October 2026
 
 <CardGroup cols={2}>
+  <Card title="v2026.10.10 (draft)" href="/releases/2026.10.10">
+    Proposed full release notes covering conversation workspaces, speech, paired devices, and supporting updates and fixes.
+  </Card>
   <Card title="v2026.10.9 (latest)" href="/releases/2026.10.9">
     Security remediations and fixes for updates, database recovery, workspace restrictions, and sessions.
   </Card>
