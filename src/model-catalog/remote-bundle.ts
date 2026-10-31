@@ -1,8 +1,10 @@
 import {
   validateAndSanitizeRemoteModelCatalogBundle,
   validateAndSanitizeRemoteModelCatalogBundleV2,
+  validateAndSanitizeRemoteModelCatalogBundleV3,
   type RemoteModelCatalogBundle,
   type RemoteModelCatalogBundleV2,
+  type RemoteModelCatalogBundleV3,
 } from "@openclaw/model-catalog-core";
 import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type {
@@ -14,7 +16,10 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("model-catalog");
 
-export type RemoteModelCatalogWireBundle = RemoteModelCatalogBundle | RemoteModelCatalogBundleV2;
+export type RemoteModelCatalogWireBundle =
+  | RemoteModelCatalogBundle
+  | RemoteModelCatalogBundleV2
+  | RemoteModelCatalogBundleV3;
 export type RemoteModelCatalogPrice = { cost: ModelCatalogCost; explicit: boolean };
 /**
  * Upstream vendor/model rates in source priority order. Direct lookups use the first;
@@ -27,9 +32,13 @@ export type RemoteModelCatalogUpstreamPrice = {
 
 /** Configured v1 mirrors remain a public input contract; runtime uses one projection. */
 export function parseRemoteModelCatalogWireBundle(value: unknown): RemoteModelCatalogWireBundle {
+  const warn = (message: string) => log.warn(message);
+  if (isRecord(value) && value.schemaVersion === 3) {
+    return validateAndSanitizeRemoteModelCatalogBundleV3(value, warn);
+  }
   return isRecord(value) && value.schemaVersion === 2
-    ? validateAndSanitizeRemoteModelCatalogBundleV2(value, (message) => log.warn(message))
-    : validateAndSanitizeRemoteModelCatalogBundle(value, (message) => log.warn(message));
+    ? validateAndSanitizeRemoteModelCatalogBundleV2(value, warn)
+    : validateAndSanitizeRemoteModelCatalogBundle(value, warn);
 }
 
 export function projectRemoteModelCatalog(bundle: RemoteModelCatalogWireBundle): {

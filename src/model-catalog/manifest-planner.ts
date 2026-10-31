@@ -105,7 +105,11 @@ function mergeRemoteModelWithTrustedTransport(
         {
           inference: remoteModel.inference,
           api: remoteModel.api ?? remoteProvider.api ?? trustedProvider.api,
-          baseUrl: remoteModel.baseUrl ?? remoteProvider.baseUrl ?? trustedProvider.baseUrl,
+          baseUrl:
+            remoteModel.baseUrl ??
+            remoteProvider.baseUrl ??
+            trustedModel?.baseUrl ??
+            trustedProvider.baseUrl,
         },
         target,
       )

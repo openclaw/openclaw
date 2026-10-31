@@ -11,7 +11,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assembleModelCatalogBundle,
-  assembleModelCatalogBundleV2,
+  assembleVersionedModelCatalogBundle,
   enrichModelCatalogPricing,
   hydrateModelCatalogFromModelsDev,
   MODEL_CATALOG_MIN_MODELS,
@@ -864,7 +864,7 @@ describe("publish model catalog", () => {
       return respond();
     });
     const featured = await resolveProviderFeaturedModels({ bundle, fetchImpl });
-    const bundleV2 = await assembleModelCatalogBundleV2(
+    const bundleV2 = await assembleVersionedModelCatalogBundle(
       bundle,
       new WeakMap(),
       undefined,
