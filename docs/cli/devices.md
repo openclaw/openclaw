@@ -147,6 +147,11 @@ See [Connect a machine](/cli/connect).
 
 Remove one paired device entry.
 
+When removing this installation's own device from its default local Gateway,
+the CLI also forgets its cached operator token so later local commands do not
+retry the removed credential. Other cached roles and remote Gateway credentials
+are preserved. The same cleanup applies to `devices clear --yes`.
+
 ```bash
 openclaw devices remove <deviceId>
 openclaw devices remove <deviceId> --json
