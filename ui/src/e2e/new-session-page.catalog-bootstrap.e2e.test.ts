@@ -41,29 +41,41 @@ function catalogScenario(ids = ["alpha", "bravo"]) {
 }
 
 suite.define(() => {
-  it("shares the startup catalog across notifications, picker opens, and settings navigation", async () =>
+  it("retains the pending search catalog through command expiry and reuses it on navigation", async () =>
     suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const startedAt = Date.now();
+      await page.clock.setFixedTime(startedAt);
+      const scenario = catalogScenario(["alpha"]);
       const gateway = await installMockGateway(page, {
-        ...catalogScenario(["alpha"]),
+        ...scenario,
         connectCapabilities: [],
+        featureMethods: ["cron.list"],
+        methodResponses: {
+          ...scenario.methodResponses,
+          "cron.list": { jobs: [{ id: "catalog-ready", name: "Catalog ready" }] },
+        },
       });
       await page.goto(`${suite.server.baseUrl}new?agent=alpha`);
       await gateway.waitForRequest("models.list", { match: { agentId: "alpha" } });
       const count = async () => (await gateway.getRequests("models.list")).length;
       expect(await count()).toBe(1);
-      for (let index = 0; index < 4; index++) {
-        await gateway.emitGatewayEvent("chat.metadata.changed", {
-          agentId: "alpha",
-          modelCatalogChanged: true,
-          commandsChanged: false,
-          authChanged: false,
-        });
-      }
-      expect.soft(await count(), "notifications join the startup read").toBe(1);
+      await page.keyboard.press("ControlOrMeta+K");
+      const palette = page.locator("openclaw-command-palette");
+      const input = palette.locator(".cmd-palette__input");
+      await input.fill("catalog ready");
+      await palette.getByRole("option", { name: /Catalog ready/ }).waitFor();
+      // Search has an unbounded deadline; the startup read has a 30-second deadline.
+      expect(await count()).toBe(2);
+      await page.clock.setFixedTime(startedAt + 30_001);
+      await input.fill("current");
+      await gateway.waitForRequest("sessions.list", { match: { search: "current" } });
+      expect.soft(await count(), "command expiry preserves the pending model read").toBe(2);
       await gateway.resolveDeferred("models.list", { models: [current] });
+      await palette.getByRole("option", { name: /Current model/ }).waitFor();
+      await page.keyboard.press("Escape");
       await page.locator("[data-chat-model-select]").click();
       await reveal(page);
-      expect(await count()).toBe(1);
+      expect(await count()).toBe(2);
       for (const [pathname, routeId] of [
         ["/settings/model-providers", "model-providers"],
         ["/new", "new-session"],
@@ -73,7 +85,7 @@ suite.define(() => {
           window.dispatchEvent(new PopStateEvent("popstate"));
         }, pathname);
         await waitForControlUiRoute(page, { pathname, routeId });
-        expect(await count(), pathname).toBe(1);
+        expect(await count(), pathname).toBe(2);
       }
     }));
 

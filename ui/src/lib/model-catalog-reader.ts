@@ -86,12 +86,9 @@ export class ModelCatalogReader {
     );
     const unwatchEvents = subscribeModelCatalogChanges(
       gateway,
-      (invalidation) => {
+      () => {
         if (this.owns(binding)) {
-          // Keep the pending read subscribed, but adopt published snapshots immediately.
-          if (!this.pending || invalidation === "clear" || peekModelCatalog(client, scope)) {
-            void this.read();
-          }
+          void this.read();
         } else {
           this.notify();
         }
