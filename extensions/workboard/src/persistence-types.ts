@@ -104,6 +104,8 @@ export type WorkboardCardReadScope =
   | { kind: "board"; boardId: string }
   | { kind: "session"; sessionKey: string }
   | { kind: "session-links"; sessionKey: string; boardId?: string }
+  | { kind: "lifecycle"; boardId?: string }
+  | { kind: "lifecycle-event"; sessionKey?: string; runId?: string; boardId?: string }
   | {
       kind: "worker-context";
       cardId: string;

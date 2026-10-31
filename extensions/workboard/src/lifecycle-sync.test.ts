@@ -1,3 +1,4 @@
+import { DatabaseSync } from "node:sqlite";
 import {
   createHookRunner,
   createMockPluginRegistry,
@@ -877,4 +878,118 @@ describe("Workboard prepared launch restart recovery", () => {
       });
     },
   );
+});
+
+describe("Workboard lifecycle scoped reads", () => {
+  beforeEach(resetStore);
+
+  it("lists only cards linked to the requested session", async () => {
+    const linkedCard = await createLinkedCard(store, { sessionKey: "agent:main:linked" });
+    await store.create({
+      title: "Other session",
+      status: "ready",
+      sessionKey: "agent:main:other",
+    });
+
+    const cards = await store.list({ sessionKey: "agent:main:linked" });
+
+    expect(cards.map((card) => card.id)).toEqual([linkedCard.id]);
+  });
+
+  it("matches a lifecycle event by a bare subagent session suffix", async () => {
+    const linkedCard = await createLinkedCard(store, {
+      sessionKey: "subagent:workboard-suffix",
+    });
+
+    const cards = await store.list({ sessionKey: "agent:alpha:subagent:workboard-suffix" });
+
+    expect(cards.map((card) => card.id)).toEqual([linkedCard.id]);
+  });
+
+  it("matches an execution-only session by its bare suffix", async () => {
+    const linkedCard = await createLinkedCard(store, {
+      execution: execution("subagent:workboard-exec", "run-exec"),
+    });
+
+    const cards = await store.list({ sessionKey: "agent:alpha:subagent:workboard-exec" });
+
+    expect(cards.map((card) => card.id)).toEqual([linkedCard.id]);
+  });
+
+  it("retains an archived worktree with an outstanding cleanup obligation", async () => {
+    const card = await store.create({
+      title: "Archived worktree",
+      status: "done",
+      workspace: {
+        kind: "worktree",
+        path: "/tmp/managed-worktree",
+        sourcePath: "/tmp/source-worktree",
+        sourceBranch: "main",
+      },
+    });
+    await store.archive(card.id, true);
+
+    const candidateIds = (await store.list({ lifecycle: true })).map((entry) => entry.id);
+
+    expect(candidateIds).toContain(card.id);
+  });
+
+  it("excludes a worktree whose cleanup obligation is already discharged", async () => {
+    const card = await store.create({
+      title: "Discharged worktree",
+      status: "done",
+      workspace: {
+        kind: "worktree",
+        path: "/tmp/managed-worktree",
+        sourcePath: "/tmp/source-worktree",
+        sourceBranch: "main",
+      },
+    });
+    await store.update(card.id, {
+      workspace: { kind: "worktree", path: "/tmp/source-worktree" },
+    });
+
+    const candidateIds = (await store.list({ lifecycle: true })).map((entry) => entry.id);
+
+    expect(candidateIds).not.toContain(card.id);
+  });
+
+  it("preserves board filtering for lifecycle candidate reads", async () => {
+    const ops = await store.create({ title: "Ops active", status: "running", boardId: "ops" });
+    await store.create({ title: "Default active", status: "running", boardId: "default" });
+
+    const ids = (await store.list({ boardId: "ops", lifecycle: true })).map((card) => card.id);
+
+    expect(ids).toEqual([ops.id]);
+  });
+
+  it("preserves board filtering for lifecycle event reads", async () => {
+    const sessionKey = "agent:main:shared-board";
+    const ops = await createLinkedCard(store, { boardId: "ops", sessionKey });
+    await createLinkedCard(store, { boardId: "default", sessionKey });
+
+    const ids = (await store.list({ boardId: "ops", sessionKey })).map((card) => card.id);
+
+    expect(ids).toEqual([ops.id]);
+  });
+
+  it("does not decode child rows of settled history", async () => {
+    const { store: isolated, dbPath } = createWorkboardSqliteTestHarness();
+    try {
+      const active = await isolated.create({ title: "Active card", status: "running" });
+      const history = await isolated.create({ title: "Settled history", status: "done" });
+      const db = new DatabaseSync(dbPath);
+      // Full hydration would reject this empty required body; a bounded read never sees it.
+      db.prepare(
+        "INSERT INTO workboard_card_comments (id, card_id, ordinal, body, created_at) VALUES (?, ?, 0, '', ?)",
+      ).run("empty-history-body", history.id, Date.now());
+      db.close();
+
+      const candidates = await isolated.list({ lifecycle: true });
+
+      expect(candidates.map((card) => card.id)).toEqual([active.id]);
+    } finally {
+      await isolated.close();
+    }
+  });
 });

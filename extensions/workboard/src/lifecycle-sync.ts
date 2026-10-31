@@ -128,7 +128,16 @@ async function syncWorkboardLifecycleEvent(params: {
   now: number;
   onMatched?: WorkboardLifecycleMatchHandler;
 }): Promise<{ cards: readonly WorkboardCard[]; count: number }> {
-  const cards = (await params.store.list()).filter(
+  const cards = (
+    await params.store.list(
+      params.source.sessionKey || params.source.runId
+        ? {
+            ...(params.source.sessionKey ? { sessionKey: params.source.sessionKey } : {}),
+            ...(params.source.runId ? { runId: params.source.runId } : {}),
+          }
+        : {},
+    )
+  ).filter(
     (card) => !card.metadata?.archivedAt && workboardCardMatchesLifecycleLink(card, params.source),
   );
   const updates = Promise.all(
@@ -488,7 +497,7 @@ export function createWorkboardLifecycleService(params: {
       const reconcile = async () => {
         try {
           await params.store.runOperation(async () => {
-            let cards = await params.store.list();
+            const cards = await params.store.list({ lifecycle: true });
             if (generation !== owner) {
               return;
             }
@@ -578,11 +587,12 @@ export function createWorkboardLifecycleService(params: {
                 }
               }
             }
-            if (cardsByKey.size > 0) {
-              cards = await params.store.list();
-            }
+            // Reconciliation can move a running worktree card to a terminal status;
+            // re-read only the bounded candidate set before cleanup.
+            const cleanupCards =
+              cardsByKey.size > 0 ? await params.store.list({ lifecycle: true }) : cards;
             if (generation === owner) {
-              await cleanupWorktrees(cards, (message) => ctx.logger.warn(message));
+              await cleanupWorktrees(cleanupCards, (message) => ctx.logger.warn(message));
             }
           });
         } catch (error) {

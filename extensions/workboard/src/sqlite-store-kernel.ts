@@ -31,6 +31,10 @@ import type {
   WorkboardSubscriptionStore,
 } from "./persistence-types.js";
 import {
+  readLifecycleCandidateIds,
+  readLifecycleEventCandidateIds,
+} from "./sqlite-store-lifecycle-reads.js";
+import {
   blobToBase64,
   jsonValue,
   loadCardChildRows,
@@ -250,6 +254,8 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
     // Keep lightweight selection and full hydration in one consistent snapshot.
     return scope?.kind === "worker-context" ||
       scope?.kind === "session-links" ||
+      scope?.kind === "lifecycle" ||
+      scope?.kind === "lifecycle-event" ||
       (scope?.kind === "page" && scope.sessionKey !== undefined)
       ? runEngineStoreReadSnapshot(this.db, () => this.readEntries(scope))
       : this.readEntries(scope);
@@ -314,6 +320,18 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
       );
     } else if (scope?.kind === "session-links") {
       const ids = readSessionLinkedCardIds(this.db, scope);
+      if (ids.length === 0) {
+        return [];
+      }
+      query = query.where("id", "in", sqliteStringSet(ids));
+    } else if (scope?.kind === "lifecycle") {
+      const ids = readLifecycleCandidateIds(this.db, scope.boardId);
+      if (ids.length === 0) {
+        return [];
+      }
+      query = query.where("id", "in", sqliteStringSet(ids));
+    } else if (scope?.kind === "lifecycle-event") {
+      const ids = readLifecycleEventCandidateIds(this.db, scope);
       if (ids.length === 0) {
         return [];
       }
