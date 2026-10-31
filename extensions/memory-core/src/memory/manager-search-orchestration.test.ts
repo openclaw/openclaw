@@ -168,6 +168,27 @@ describe("memory index", () => {
     ).toBe(true);
   });
 
+  it("hands a pending format upgrade to search maintenance while serving keyword rows", async () => {
+    const manager = await syncedManager({}, true);
+    const db = memoryIndexFixtureWriter(manager);
+    db.exec(
+      `UPDATE memory_index_meta SET value = json_set(value, '$.chunkingVersion', ${
+        MEMORY_CHUNKING_VERSION - 1
+      }) WHERE key = 'memory_index_meta_v1'`,
+    );
+
+    const maintenanceRun = pauseMaintenance();
+    try {
+      const results = await manager.search("alpha");
+
+      expectFixtureHit(results);
+      await maintenanceRun.ready;
+    } finally {
+      maintenanceRun.release();
+      maintenanceRun.spy.mockRestore();
+    }
+  });
+
   it("invalidates keyword snapshots before changing the fallback provider", async () => {
     const manager = await syncedManager({ fallback: "fallback-provider", minScore: 0 });
     const fallbackGate = createDeferred<void>();
