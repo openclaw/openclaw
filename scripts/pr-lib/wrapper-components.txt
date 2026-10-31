@@ -1190,6 +1190,7 @@ src/infra/sqlite-commit-receipt.ts
 src/infra/sqlite-database-admission-context.ts
 src/infra/sqlite-database-admission-key.ts
 src/infra/sqlite-database-admission-read.ts
+src/infra/sqlite-database-admission-delta.ts
 src/infra/sqlite-database-admission-record.ts
 src/infra/sqlite-database-admission-seal.ts
 src/infra/sqlite-database-admission-turn.ts
