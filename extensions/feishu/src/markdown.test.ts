@@ -49,6 +49,22 @@ describe("chunkedFencesBalance", () => {
     const converted = convertMarkdownTables(`${authored}\n\n${table}`, "code");
     expect(chunkedFencesBalance(converted, 4_000, "length")).toBe(balanced);
   });
+
+  // The conversion and a card read a tag line as prose, so it cannot hide the fence after it.
+  it.each(["", "<div>\n"])("refuses a cut through a list table's fence after %j", (lead) => {
+    const rows = Array.from({ length: 160 }, (_row, i) => `    | row-${i} | value-${i} |`);
+    const converted = convertMarkdownTables(
+      `${lead}  - | A | B |\n    | --- | --- |\n${rows.join("\n")}`,
+      "code",
+    );
+    for (const mode of ["length", "newline"] as const) {
+      const chunks = chunkMarkdownTextWithMode(converted, 4_000, mode);
+      expect(chunks).toHaveLength(2);
+      expect(chunks[0]).toContain("  - ```\n");
+      expect(chunks[1]).toMatch(/\n {4}```$/u);
+      expect(chunkedFencesBalance(converted, 4_000, mode)).toBe(false);
+    }
+  });
 });
 
 const fenceSequences = new Map<object, number>();

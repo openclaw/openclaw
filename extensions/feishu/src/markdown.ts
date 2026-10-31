@@ -1,4 +1,4 @@
-import { fromMarkdown, type CompileContext, type Extension } from "mdast-util-from-markdown";
+import { fromMarkdown, type CompileContext } from "mdast-util-from-markdown";
 import { gfmTableFromMarkdown } from "mdast-util-gfm-table";
 import { gfmTable } from "micromark-extension-gfm-table";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
@@ -38,24 +38,33 @@ function isFenceMarkerLine(line: string): boolean {
  * conversion only runs when every chunk closes what it opened. Whether a line closes a fence
  * depends on every quote and list item around it, including a list the chunk opened before the
  * fence, and on what follows the marker, so the parser answers it rather than a second reading
- * of the rules. micromark emits one fence sequence for an opener and one for a closer, which
- * makes a code node with two of them a closed block. A chunk with no marker line has no fence to
- * ask about, which keeps the parse off ordinary prose.
+ * of the rules. Table conversion reads Markdown with HTML switched off and a presentation card
+ * escapes a tag into text, so this parse switches the HTML constructs off too, or a `<div>` line
+ * would take a generated opener into an HTML block and leave no fence to count. micromark emits
+ * one fence sequence for an opener and one for a closer, which makes a code node with two of them
+ * a closed block. A chunk with no marker line has no fence to ask about, which keeps the parse off
+ * ordinary prose.
  */
 function fencesBalance(chunk: string): boolean {
   if (!chunk.split("\n").some(isFenceMarkerLine)) {
     return true;
   }
   const sequences = new Map<object, number>();
-  parseFeishuMarkdown(chunk, {
-    exit: {
-      codeFencedFenceSequence(this: CompileContext) {
-        const code = this.stack.toReversed().find((node) => node.type === "code");
-        if (code) {
-          sequences.set(code, (sequences.get(code) ?? 0) + 1);
-        }
+  fromMarkdown(chunk, {
+    extensions: [gfmTable(), { disable: { null: ["htmlFlow", "htmlText"] } }],
+    mdastExtensions: [
+      gfmTableFromMarkdown(),
+      {
+        exit: {
+          codeFencedFenceSequence(this: CompileContext) {
+            const code = this.stack.toReversed().find((node) => node.type === "code");
+            if (code) {
+              sequences.set(code, (sequences.get(code) ?? 0) + 1);
+            }
+          },
+        },
       },
-    },
+    ],
   });
   return [...sequences.values()].every((count) => count === 2);
 }
@@ -155,14 +164,11 @@ type FeishuPostMessageElement =
 
 const FEISHU_POST_MAX_BYTES = 30 * 1024;
 
-/**
- * One parser contract for Feishu message and document Markdown decisions. An observer extension
- * sees the same parse and changes nothing about it.
- */
-export function parseFeishuMarkdown(text: string, ...observers: Extension[]): FeishuMarkdownNode {
+/** One parser contract for Feishu message and document Markdown decisions. */
+export function parseFeishuMarkdown(text: string): FeishuMarkdownNode {
   return fromMarkdown(text, {
     extensions: [gfmTable()],
-    mdastExtensions: [gfmTableFromMarkdown(), ...observers],
+    mdastExtensions: [gfmTableFromMarkdown()],
   }) as FeishuMarkdownNode;
 }
 
