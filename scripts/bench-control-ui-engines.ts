@@ -982,8 +982,10 @@ const rows = summary
         row.bundle === chromium.bundle &&
         row.networkProfile === chromium.networkProfile,
     );
-    const chromiumTiming = chromium.evidence.visitReadyMs ?? chromium.wallMs;
-    const webkitTiming = webkit?.evidence.visitReadyMs ?? webkit?.wallMs;
+    const chromiumTiming =
+      chromium.evidence.visitReadyMs ?? chromium.evidence.leaveReadyMs ?? chromium.wallMs;
+    const webkitTiming =
+      webkit?.evidence.visitReadyMs ?? webkit?.evidence.leaveReadyMs ?? webkit?.wallMs;
     const ratio =
       chromiumTiming && webkitTiming ? webkitTiming.median / chromiumTiming.median : null;
     return { chromium, webkit, chromiumTiming, webkitTiming, ratio };
@@ -1000,7 +1002,7 @@ await writeFile(
     "",
     `Network profiles: ${networkProfiles.map(({ name, httpLatencyMs, gatewayLatencyMs }) => `${name} (${httpLatencyMs} ms per HTTP request; ${gatewayLatencyMs} ms per incoming Gateway frame)`).join("; ")}. The Gateway probe retains event ordering and uses no extra frame gap or throughput cap.`,
     "",
-    "Visit comparisons use browser-local route-ready time; other scenarios use wall time.",
+    "Visit and departure comparisons use browser-local route-ready time; other scenarios use wall time.",
     "",
     "| Viewport | Scenario | Network | Bundle | Chromium median/p95 (ms) | WebKit median/p95 (ms) | WebKit/Chromium |",
     "| --- | --- | --- | --- | --- | --- | --- |",

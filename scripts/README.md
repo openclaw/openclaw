@@ -354,6 +354,10 @@ are a longest task of 50 ms at 1x or 200 ms at 4x, zero CLS, and WebKit ready ti
 at most 1.3x Chromium. Redirects, native-only actions, and resource execution
 outside the selected flow are recorded explicitly in the coverage manifest.
 
+Store benchmark artifacts on the SSD with `--output`. The harness intentionally
+leaves `TMPDIR` unchanged so OpenClaw's secure-temp guard keeps using the
+OS-provided private temporary directory.
+
 The opt-in [`chat-actions` census](bench-control-ui-chat-actions.md) covers command
 and mention menus, message actions, attachments, transcript search, and side panels.
 
