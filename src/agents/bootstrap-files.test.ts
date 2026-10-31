@@ -38,6 +38,7 @@ import { createLocalRemoteShellScriptRunner } from "./sandbox/remote-fs-bridge.t
 import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
 import { SessionManager } from "./sessions/session-manager.js";
 import { registerAgentWorkspaceAccess } from "./workspace-access.js";
+import { DEFAULT_AGENTS_FILENAME, DEFAULT_SOUL_FILENAME } from "./workspace-bootstrap-policy.js";
 import { resetLegacyWorkspaceStateCheckForTest } from "./workspace-legacy-state.test-support.js";
 import { mergeWorkspaceSetupState } from "./workspace-state-store.js";
 import {
@@ -577,5 +578,57 @@ describe("resolveContextInjectionMode", () => {
     [config, "worker", "never"],
   ] as const)("resolves injection mode for %s/%s", (cfg, agentId, expected) => {
     expect(resolveContextInjectionMode(cfg, agentId)).toBe(expected);
+  });
+});
+
+describe("agentDir bootstrap diagnostics", () => {
+  it("warns when bootstrap files exist in agentDir outside the workspace", async () => {
+    const workspaceDir = tempDirs.make("openclaw-bootstrap-ws-");
+    const agentDir = tempDirs.make("openclaw-agentdir-");
+    await fs.writeFile(path.join(agentDir, DEFAULT_SOUL_FILENAME), "Respond in French.", "utf8");
+    await fs.writeFile(path.join(agentDir, DEFAULT_AGENTS_FILENAME), "agent rules", "utf8");
+    const warnings: string[] = [];
+    await resolveBootstrapFilesForRun({
+      workspaceDir,
+      config: { agents: { entries: { main: { agentDir } } } } as OpenClawConfig,
+      agentId: "main",
+      warn: (message) => warnings.push(message),
+    });
+    expect(
+      warnings.some(
+        (message) =>
+          message.includes("agentDir") &&
+          message.includes("SOUL.md") &&
+          message.includes("AGENTS.md") &&
+          message.includes(agentDir),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not warn when agentDir holds no bootstrap files", async () => {
+    const workspaceDir = tempDirs.make("openclaw-bootstrap-ws-");
+    const agentDir = tempDirs.make("openclaw-agentdir-");
+    await fs.writeFile(path.join(agentDir, "NOTES.md"), "not a bootstrap file", "utf8");
+    const warnings: string[] = [];
+    await resolveBootstrapFilesForRun({
+      workspaceDir,
+      config: { agents: { entries: { main: { agentDir } } } } as OpenClawConfig,
+      agentId: "main",
+      warn: (message) => warnings.push(message),
+    });
+    expect(warnings).toEqual([]);
+  });
+
+  it("does not warn when agentDir resolves to the workspace itself", async () => {
+    const workspaceDir = tempDirs.make("openclaw-bootstrap-ws-");
+    await fs.writeFile(path.join(workspaceDir, DEFAULT_SOUL_FILENAME), "workspace soul", "utf8");
+    const warnings: string[] = [];
+    await resolveBootstrapFilesForRun({
+      workspaceDir,
+      config: { agents: { entries: { main: { agentDir: workspaceDir } } } } as OpenClawConfig,
+      agentId: "main",
+      warn: (message) => warnings.push(message),
+    });
+    expect(warnings).toEqual([]);
   });
 });
