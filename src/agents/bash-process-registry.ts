@@ -241,6 +241,7 @@ export function createProcessSession(
   };
 }
 
+const pollWaiters = new WeakMap<ProcessSession, Set<() => void>>();
 const runningSessions = new Map<string, ProcessSession>();
 const finishedSessions = new Map<string, ProcessSession & { endedAt: number; expiresAt: number }>();
 // Display uses start chronology; retained records are evicted in completion order.
@@ -428,6 +429,7 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
   const previousLength = session.output.length;
   session.output.append(ownedChunk, session.maxOutputChars, chunk.length);
   session.truncated ||= session.output.length < previousLength + chunk.length;
+  wakeSessionPolls(session);
   if (session.backgrounded) {
     queueProcessChange(session);
   }
@@ -486,9 +488,47 @@ export function prepareSessionPoll(session: ProcessSession, scope: object | unde
   };
 }
 
-/** Returns whether a prior poll has output ready for immediate replay. */
-export function hasPendingPollDelivery(session: ProcessSession): boolean {
-  return session.pendingPollDelivery !== undefined;
+function wakeSessionPolls(session: ProcessSession) {
+  const waiters = pollWaiters.get(session);
+  if (waiters) {
+    for (const wake of waiters) {
+      wake();
+    }
+  }
+}
+
+/** Waits for this exact process's output, exit, timeout, or caller cancellation. */
+export function waitForSessionPoll(
+  session: ProcessSession,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (
+    session.exited ||
+    session.pendingPollDelivery ||
+    session.pendingStdoutChars + session.pendingStderrChars > 0 ||
+    session.pendingOutputDropped ||
+    signal?.aborted
+  ) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    const waiters = pollWaiters.get(session) ?? new Set<() => void>();
+    const wake = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", wake);
+      waiters.delete(wake);
+      if (waiters.size === 0) {
+        pollWaiters.delete(session);
+      }
+      resolve();
+    };
+    // Retain one timer so a one-shot caller stays alive until the result arrives.
+    const timer = setTimeout(wake, timeoutMs);
+    waiters.add(wake);
+    pollWaiters.set(session, waiters);
+    signal?.addEventListener("abort", wake, { once: true });
+  });
 }
 
 /** Moves a session to finished state and records exit metadata. */
@@ -516,6 +556,7 @@ export function markExited(
   session.pendingOutputDropped = pending.outputDropped;
   session.output.freeze();
   moveToFinished(session);
+  wakeSessionPolls(session);
   if (session.backgrounded) {
     queueProcessChange(session);
   }

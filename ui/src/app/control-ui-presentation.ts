@@ -60,28 +60,30 @@ const systemChromeRevisions = new WeakMap<
   {
     source: string;
     palette: string;
-    narrowChat: boolean;
+    narrowCanvas: boolean;
     pageBackground: string;
-    chatBackground: string;
+    canvasBackground: string;
   }
 >();
 
 // Project the independently rendered shell into the static document's chrome and head metadata.
-export function syncControlUiSystemChrome(paletteChanged = false, chatShell?: boolean): void {
+// `contentCanvas` marks a committed route that leaves the shell's --bg-content canvas exposed at
+// the narrow viewport edges; every other layout, including the session workbench, paints --bg.
+export function syncControlUiSystemChrome(paletteChanged = false, contentCanvas?: boolean): void {
   if (typeof document === "undefined") {
     return;
   }
   const root = document.documentElement;
-  const hasChatShell = chatShell ?? root.classList.contains("control-ui-chat-shell");
-  if (root.classList.contains("control-ui-chat-shell") !== hasChatShell) {
-    root.classList.toggle("control-ui-chat-shell", hasChatShell);
+  const hasContentCanvas = contentCanvas ?? root.classList.contains("control-ui-content-canvas");
+  if (root.classList.contains("control-ui-content-canvas") !== hasContentCanvas) {
+    root.classList.toggle("control-ui-content-canvas", hasContentCanvas);
   }
   const narrow = globalThis.matchMedia?.(
     "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
   ).matches;
-  const narrowChat = narrow && hasChatShell;
+  const narrowCanvas = narrow && hasContentCanvas;
   const revision = (style: string | null) =>
-    JSON.stringify([root.dataset.theme, root.dataset.themeMode, style, narrowChat]);
+    JSON.stringify([root.dataset.theme, root.dataset.themeMode, style, narrowCanvas]);
   const source = revision(root.getAttribute("style"));
   const previous = systemChromeRevisions.get(root);
   // Most shell commits do not touch styles. Keep that path free of declaration scans.
@@ -93,8 +95,8 @@ export function syncControlUiSystemChrome(paletteChanged = false, chatShell?: bo
     root.dataset.themeMode,
     controlUiPaletteStyle(root),
   ]);
-  const publishBackground = (pageBackground: string, chatBackground: string) => {
-    const background = narrowChat ? chatBackground || pageBackground : pageBackground;
+  const publishBackground = (pageBackground: string, canvasBackground: string) => {
+    const background = narrowCanvas ? canvasBackground || pageBackground : pageBackground;
     if (!background) {
       return;
     }
@@ -106,17 +108,17 @@ export function syncControlUiSystemChrome(paletteChanged = false, chatShell?: bo
     systemChromeRevisions.set(root, {
       source: revision(root.getAttribute("style")),
       palette,
-      narrowChat,
+      narrowCanvas,
       pageBackground,
-      chatBackground,
+      canvasBackground,
     });
   };
   if (!paletteChanged && previous?.palette === palette) {
     // Routes and breakpoints select a prepared surface; they do not change its palette.
-    if (previous.narrowChat === narrowChat) {
+    if (previous.narrowCanvas === narrowCanvas) {
       systemChromeRevisions.set(root, { ...previous, source });
     } else {
-      publishBackground(previous.pageBackground, previous.chatBackground);
+      publishBackground(previous.pageBackground, previous.canvasBackground);
     }
     return;
   }
@@ -177,8 +179,9 @@ export function syncControlUiSystemChrome(paletteChanged = false, chatShell?: bo
       themeLinksValue = undefined;
     }
   }
-  const pageBackground = computedStyle.getPropertyValue("--bg").trim();
-  publishBackground(pageBackground, computedStyle.getPropertyValue("--bg-content").trim());
+  // Browser chrome parses theme-color outside the cascade; publish concrete colors, not palette
+  // expressions such as the color-mix() surfaces named themes derive from --bg-content.
+  publishBackground(resolveThemeColor(computedStyle, "--bg"), canvas);
 }
 
 export function applyControlUiAccent(userAccent?: string): void {

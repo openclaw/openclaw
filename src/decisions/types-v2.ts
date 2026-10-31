@@ -1,10 +1,6 @@
-import type {
-  DecisionEntry,
-  DecisionOutcome,
-  DecisionQuestion,
-  JsonValue,
-  ProviderDecisionOutcome,
-} from "./types.js";
+import type { DecisionOutcome } from "./host-outcomes.js";
+import type { DecisionEntry, DecisionQuestion, JsonValue } from "./input-types.js";
+import type { ProviderDecisionOutcome } from "./provider-outcomes.js";
 
 /** Explicit evidence supplied by the caller; the host collects no additional context. */
 export type DecisionContentV2 =

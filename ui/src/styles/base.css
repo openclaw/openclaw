@@ -368,13 +368,27 @@
      Engines without corner-shape keep the circular radius. */
   --chat-composer-corner-shape: superellipse(1.5);
 
-  /* Menu items stay optically parallel to their panel edge: radius 6 + padding 4
-     = panel radius 10. Shared knobs keep transient menus from drifting again. */
-  --menu-radius: var(--radius-md);
-  --menu-item-radius: var(--radius-sm);
+  /* Menu steps sit on the --radius-* chain so themes keep their corner character;
+     near-square themes pin them. Shared knobs keep transient menus from drifting. */
+  --radius-menu: calc(var(--radius-md) * 1.6 * var(--openclaw-corner-radius-scale));
+  --radius-menu-item: calc(var(--radius-sm) * 2 * var(--openclaw-corner-radius-scale));
+  --menu-radius: var(--radius-menu);
+  --menu-item-radius: var(--radius-menu-item);
   --menu-item-height: 28px;
   --menu-padding: 4px;
   --menu-selected: var(--surface-selected);
+  --menu-surface: color-mix(in srgb, var(--popover) 90%, transparent);
+  --menu-backdrop: blur(8px);
+  /* Hairlines are spread shadows so they never consume the panel's box. */
+  --menu-shadow:
+    0 0 0 0.5px var(--overlay-border), 0 0 0 0.5px var(--border),
+    0 8px 16px -4px rgb(0 0 0 / 12.16%);
+  --menu-enter-duration: 150ms;
+  --menu-exit-duration: 100ms;
+  --select-enter-duration: 300ms;
+  --select-exit-duration: 200ms;
+  --overlay-ease-enter: cubic-bezier(0.19, 1, 0.22, 1);
+  --overlay-ease-exit: cubic-bezier(0.8, 0, 0.4, 1);
 
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
@@ -940,10 +954,10 @@ summary,
     --shell-popup-inline-gutter: var(--chat-mobile-edge-inset);
   }
 
-  html.control-ui-chat-shell,
-  .control-ui-chat-shell body {
+  html.control-ui-content-canvas,
+  .control-ui-content-canvas body {
     /* iOS Safari exposes the document canvas around its browser chrome; keep
-       that canvas on the same semantic surface as the narrow transcript. */
+       that canvas on the same surface as the exposed narrow route canvas. */
     background: var(--control-ui-system-chrome-background, var(--bg-content, var(--bg)));
   }
 }

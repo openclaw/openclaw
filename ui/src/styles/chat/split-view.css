@@ -299,10 +299,6 @@
 
 .chat-pane__placement-menu > .oc-menu {
   width: 250px;
-  padding: 6px;
-  border: 1px solid var(--overlay-border);
-  border-radius: 8px;
-  box-shadow: var(--overlay-shadow);
 }
 
 .chat-pane__placement-chip {

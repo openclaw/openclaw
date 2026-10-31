@@ -115,6 +115,7 @@ export const GitHubPublicationEditSchema = closedObject({
 });
 export const GitHubPublicationReviewRequestSchema = closedObject({
   action: Type.Literal("request_review"),
+  pullRequestUrl: Type.Optional(GitHubPullRequestInspectSchema.properties.pullRequestUrl),
   requestId: Type.Optional(PersonalGitHubGenerationSchema),
   expectedHeadCommit: Type.String({ pattern: "^[a-f0-9]{40}$" }),
 });

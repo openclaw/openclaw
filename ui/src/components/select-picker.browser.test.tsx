@@ -16,6 +16,9 @@ import "../styles/settings-controls.css";
 import "../styles/settings.css";
 import "../styles/model-providers.css";
 
+// Geometry assertions measure the settled list, not the Select entry scale.
+document.documentElement.style.setProperty("--select-enter-duration", "0s");
+
 afterEach(async () => {
   cleanupSolid();
   document.body.replaceChildren();
@@ -112,6 +115,8 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
       );
       await role("button", "Model: Model 0").click();
       const list = picker.querySelector<HTMLElement>(".picker-select__options")!;
+      // Keep the edge rows below within a short region regardless of the Select height budget.
+      list.style.maxHeight = "240px";
       const rows = () => [...picker.querySelectorAll<HTMLElement>('[role="option"]')];
       await expect.poll(() => list.scrollHeight).toBeGreaterThan(list.clientHeight);
       await expect.poll(() => rows()[0]?.getBoundingClientRect().height ?? 0).toBeGreaterThan(0);
@@ -128,13 +133,15 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
         await settle();
         const top = list.scrollTop;
         const bounds = list.getBoundingClientRect();
-        const clipped = rows().find((row) => {
-          const rect = row.getBoundingClientRect();
-          return edge === "bottom"
-            ? rect.top < bounds.bottom - 2 && rect.bottom > bounds.bottom + 2
-            : rect.top < bounds.top - 2 && rect.bottom > bounds.top + 2;
-        })!;
-        expect(clipped, edge).toBeDefined();
+        const findClipped = () =>
+          rows().find((row) => {
+            const rect = row.getBoundingClientRect();
+            return edge === "bottom"
+              ? rect.top < bounds.bottom - 2 && rect.bottom > bounds.bottom + 2
+              : rect.top < bounds.top - 2 && rect.bottom > bounds.top + 2;
+          });
+        await expect.poll(findClipped, { message: edge }).toBeDefined();
+        const clipped = findClipped()!;
         const rect = clipped.getBoundingClientRect();
         // Hover the list at the clipped row's visible sliver; hovering the row
         // itself would let Playwright scroll it into view before moving.

@@ -525,13 +525,21 @@ export function Menu(props: BranchProps): JSX.Element {
                   >
                     <Show when={item().type}>
                       <span class="oc-menu-item__check" aria-hidden="true">
-                        {item().checked ? "✓" : ""}
+                        <Show when={item().checked}>
+                          <Icon name="check" />
+                        </Show>
                       </span>
                     </Show>
                     <Show when={item().icon}>
                       <span class="oc-menu-item__icon">{item().icon}</span>
                     </Show>
-                    <span class={["oc-menu-item__label", item().labelClass]}>
+                    <span
+                      class={[
+                        "oc-menu-item__label",
+                        { "oc-menu-item__label--text": item().content === undefined },
+                        item().labelClass,
+                      ]}
+                    >
                       {item().content ?? item().label}
                     </span>
 
@@ -565,7 +573,13 @@ export function Menu(props: BranchProps): JSX.Element {
                               <Show when={item().icon}>
                                 <span class="oc-menu-item__icon">{item().icon}</span>
                               </Show>
-                              <span class={["oc-menu-item__label", item().labelClass]}>
+                              <span
+                                class={[
+                                  "oc-menu-item__label",
+                                  "oc-menu-item__label--text",
+                                  item().labelClass,
+                                ]}
+                              >
                                 {item().label}
                               </span>
 

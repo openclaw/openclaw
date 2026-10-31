@@ -20,9 +20,10 @@ import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import type { DecisionOutcome } from "./host-outcomes.js";
 import { prepareDecisionProviderReload } from "./provider-reload.js";
 import type { DecisionBatchV2, DecisionOutcomeV2 } from "./types-v2.js";
-import type { DecisionBatch, DecisionOutcome } from "./types.js";
+import type { DecisionBatch } from "./types.js";
 
 const enabled =
   process.env.OPENCLAW_LIVE_TEST === "1" && Boolean(process.env.OPENAI_API_KEY?.trim());

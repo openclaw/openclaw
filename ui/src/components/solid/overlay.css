@@ -54,7 +54,7 @@
     var(--oc-overlay-available-height, calc(100% - 16px)),
     calc(100dvh - 16px)
   );
-  margin: var(--oc-overlay-distance, 6px) 0 0;
+  margin: var(--oc-overlay-distance, 4px) 0 0;
   overflow: auto;
   overscroll-behavior: contain;
   position-area: bottom span-right;
@@ -68,7 +68,7 @@
 .oc-overlay[data-placement="top"],
 .oc-overlay[data-placement="top-start"],
 .oc-overlay[data-placement="top-end"] {
-  margin: 0 0 var(--oc-overlay-distance, 6px);
+  margin: 0 0 var(--oc-overlay-distance, 4px);
   transform-origin: bottom;
 }
 
@@ -115,7 +115,7 @@
 .oc-overlay[data-placement="left"],
 .oc-overlay[data-placement="left-start"],
 .oc-overlay[data-placement="left-end"] {
-  margin: 0 var(--oc-overlay-distance, 6px) 0 0;
+  margin: 0 var(--oc-overlay-distance, 4px) 0 0;
   position-try-fallbacks:
     flip-block,
     flip-inline,
@@ -130,7 +130,7 @@
 .oc-overlay[data-placement="right"],
 .oc-overlay[data-placement="right-start"],
 .oc-overlay[data-placement="right-end"] {
-  margin: 0 0 0 var(--oc-overlay-distance, 6px);
+  margin: 0 0 0 var(--oc-overlay-distance, 4px);
   position-try-fallbacks:
     flip-block,
     flip-inline,
@@ -173,22 +173,22 @@
 /* A menu taller than both half-planes can still scroll beside its trigger. */
 @position-try --oc-overlay-right-center {
   position-area: right;
-  margin: 0 0 0 var(--oc-overlay-distance, 6px);
+  margin: 0 0 0 var(--oc-overlay-distance, 4px);
 }
 
 @position-try --oc-overlay-left-center {
   position-area: left;
-  margin: 0 var(--oc-overlay-distance, 6px) 0 0;
+  margin: 0 var(--oc-overlay-distance, 4px) 0 0;
 }
 
 @position-try --oc-overlay-below {
   position-area: bottom span-right;
-  margin: var(--oc-overlay-distance, 6px) 0 0;
+  margin: var(--oc-overlay-distance, 4px) 0 0;
 }
 
 @position-try --oc-overlay-above {
   position-area: top span-right;
-  margin: 0 0 var(--oc-overlay-distance, 6px);
+  margin: 0 0 var(--oc-overlay-distance, 4px);
 }
 
 .oc-overlay[data-placement="top-start"]:dir(rtl) {
@@ -216,25 +216,55 @@
 .oc-popover {
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--overlay-border);
+  border: 0;
   border-radius: var(--menu-radius);
-  background: var(--popover);
-  box-shadow: var(--overlay-shadow);
+  background: var(--menu-surface);
+  box-shadow: var(--menu-shadow);
+  backdrop-filter: var(--menu-backdrop);
   color: var(--text);
   font: inherit;
   font-weight: var(--control-ui-font-weight-normal);
   text-align: start;
   opacity: 0;
-  scale: 0.9;
+  scale: 0.95;
   /* Keep the native top layer until the lifecycle's closing animation settles. */
   transition:
-    opacity var(--oc-overlay-hide-duration, var(--control-ui-transition-fast)) ease,
-    scale var(--oc-overlay-hide-duration, var(--control-ui-transition-fast)) ease,
-    display var(--oc-overlay-hide-duration, var(--control-ui-transition-fast)) allow-discrete,
-    overlay var(--oc-overlay-hide-duration, var(--control-ui-transition-fast)) allow-discrete;
+    opacity var(--oc-overlay-hide-duration, var(--menu-exit-duration)) var(--overlay-ease-exit),
+    scale var(--oc-overlay-hide-duration, var(--menu-exit-duration)) var(--overlay-ease-exit),
+    display var(--oc-overlay-hide-duration, var(--menu-exit-duration)) allow-discrete,
+    overlay var(--oc-overlay-hide-duration, var(--menu-exit-duration)) allow-discrete;
+}
+
+/* Zero specificity: every caller's own size budget wins regardless of load order. */
+:where(.oc-menu) {
+  --oc-overlay-max-height: calc(100dvh - 16px);
+
+  min-width: min(220px, calc(100dvw - 16px));
+}
+
+/* Flyouts clear the parent's gutter, then line their first row up with the parent row. */
+:where(.oc-menu-item--submenu) + :where(.oc-menu) {
+  --oc-overlay-distance: calc(var(--menu-padding) + 4px);
+  --oc-overlay-max-width: min(360px, calc(100dvw - 16px));
+
+  min-width: min(180px, calc(100dvw - 16px));
+}
+
+.oc-menu-item--submenu
+  + .oc-menu:is([data-placement="right-start"], [data-placement="left-start"]) {
+  margin-block-start: calc(-1 * var(--menu-padding));
+}
+
+:where(.oc-menu, .oc-popover) [role="separator"] {
+  flex: none;
+  height: 1px;
+  margin: 4px 8px;
+  border: 0;
+  background: var(--border);
 }
 
 .oc-menu {
+  --oc-menu-shortcut-rail: 0px;
   padding: var(--menu-padding);
   font-size: calc(13px * var(--control-ui-text-scale));
   user-select: none;
@@ -256,40 +286,31 @@
 .oc-menu-item {
   position: relative;
   display: flex;
+  flex-shrink: 0;
   align-items: center;
+  gap: 6px;
   width: 100%;
-  padding: 0.5em 1em;
+  min-height: var(--menu-item-height);
+  padding: 5px var(--oc-menu-item-padding-inline, 8px);
   border: 0;
   border-radius: var(--menu-item-radius);
   background: transparent;
   color: var(--text);
   font: inherit;
-  line-height: 1.2;
+  line-height: calc(1.25 / 0.875);
   text-align: start;
   cursor: var(--cursor-action);
-  transition:
-    background-color var(--control-ui-transition-fast) ease,
-    color var(--control-ui-transition-fast) ease;
 }
 
 a.oc-menu-item[href] {
   cursor: pointer;
 }
 
-.oc-menu-item:is(:hover, :focus-visible):not(:disabled):not([aria-disabled="true"]) {
-  background: var(--surface-hover);
-}
-
-.oc-menu-item:is([aria-expanded="true"], [aria-checked="true"]):not(:disabled):not(
+/* Hover, focus and an open submenu parent read as one state; the check alone marks selection. */
+.oc-menu-item:is(:hover, :focus-visible, [aria-expanded="true"]):not(:disabled):not(
     [aria-disabled="true"]
   ) {
-  background: var(--surface-selected);
-}
-
-.oc-menu-item:is([aria-expanded="true"], [aria-checked="true"]):is(:hover, :focus-visible):not(
-    :disabled
-  ):not([aria-disabled="true"]) {
-  background: var(--surface-selected-hover);
+  background: var(--surface-hover);
 }
 
 .oc-menu-item:focus-visible {
@@ -300,7 +321,7 @@ a.oc-menu-item[href] {
 
 .oc-menu-item:is(:disabled, [aria-disabled="true"]) {
   opacity: 0.5;
-  cursor: not-allowed;
+  cursor: default;
 }
 
 .oc-menu-item[data-variant="danger"],
@@ -319,6 +340,21 @@ a.oc-menu-item[href] {
   min-width: 0;
 }
 
+.oc-menu-item__label > :where(.session-menu__text) {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Plain text labels stay on one line; rows with custom content keep their own wrapping. */
+.oc-menu-item__label--text {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .oc-menu-item--submenu > .oc-menu-item__label {
   display: contents;
 }
@@ -333,13 +369,21 @@ a.oc-menu-item[href] {
 }
 
 .oc-menu-item__icon {
-  margin-inline-end: 0.75em;
+  justify-content: center;
+  min-width: 15px;
+  min-height: 15px;
 }
 
-.oc-menu-item__details,
-.oc-menu-item__submenu-icon {
-  margin-inline-start: 0.75em;
-  color: var(--muted);
+.oc-menu-item__icon > svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.75px;
+}
+
+.oc-menu-item__details {
+  margin-inline-start: auto;
+  color: var(--text-tertiary);
+  font-size: calc(12px * var(--control-ui-text-scale));
 }
 
 .oc-menu-item__icon:empty,
@@ -349,41 +393,55 @@ a.oc-menu-item[href] {
 
 .oc-menu-item__check {
   order: 1;
-  width: 1em;
-  margin-inline-start: 0.75em;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
   color: var(--accent);
 }
 
-.oc-menu-item__submenu-icon {
-  margin-inline-start: auto;
-  padding-inline-start: 0.75em;
+.oc-menu-item__check > svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.75px;
 }
 
+.oc-menu-item__submenu-icon {
+  justify-content: flex-end;
+  width: 16px;
+  height: 16px;
+  margin-inline-start: auto;
+  color: var(--text-tertiary);
+}
+
+/* The chevron's glyph sits inset in its box; pull it out to the shortcut column's edge. */
 .oc-menu-item__submenu-icon > svg {
   display: block;
   flex: none;
-  width: 1em;
-  height: 1em;
+  width: 14px;
+  height: 14px;
+  margin-inline-end: -4px;
+  stroke-width: 1.75px;
 }
 
-/* Reserve an indicator rail only for checks or submenu rows with shortcuts.
-   An unrelated Help submenu must not indent an account menu's shortcut badges. */
+/* Shortcuts reserve the indicator rail only when a row of this same menu shows an
+   indicator; nested flyouts decide for themselves, so the column stays aligned. */
+.oc-menu:has(
+  > .oc-menu-item > .oc-menu-item__check,
+  > :not(.oc-overlay) > .oc-menu-item > .oc-menu-item__check,
+  > .oc-menu-item--submenu .shortcut-kbd,
+  > :not(.oc-overlay) > .oc-menu-item--submenu .shortcut-kbd
+) {
+  --oc-menu-shortcut-rail: 22px;
+}
+
 .oc-menu-item__details:has(.shortcut-kbd) {
-  margin-inline-start: auto;
-  padding-inline-start: 0.75em;
-  padding-inline-end: 1.75em;
-}
-
-.oc-menu:not(:has(.oc-menu-item__check, .oc-menu-item--submenu .shortcut-kbd))
-  .oc-menu-item__details:has(.shortcut-kbd) {
-  padding-inline-end: 0;
+  padding-inline-end: var(--oc-menu-shortcut-rail, 0px);
 }
 
 .oc-menu-item:has(.oc-menu-item__details .shortcut-kbd)
   > :is(.oc-menu-item__check, .oc-menu-item__submenu-icon) {
   position: absolute;
-  inset-inline-end: var(--oc-menu-item-padding-inline, 1em);
-  width: 1em;
+  inset-inline-end: var(--oc-menu-item-padding-inline, 8px);
   margin: 0;
   padding: 0;
 }
@@ -401,7 +459,8 @@ a.oc-menu-item[href] {
 .oc-popover:popover-open:where(:not([data-phase="closing"])) {
   opacity: 1;
   scale: 1;
-  transition-duration: var(--oc-overlay-show-duration, var(--control-ui-transition-fast));
+  transition-duration: var(--oc-overlay-show-duration, var(--menu-enter-duration));
+  transition-timing-function: var(--overlay-ease-enter);
 }
 
 .oc-overlay[hidden],
@@ -413,17 +472,28 @@ a.oc-menu-item[href] {
 @starting-style {
   .oc-menu:popover-open,
   .oc-popover:popover-open {
-    scale: 0.9;
+    scale: 0.95;
     opacity: 0;
+  }
+}
+
+/* Translucency needs a blur behind it to stay legible, and users can opt out of it. */
+@supports not (backdrop-filter: blur(8px)) {
+  :root {
+    --menu-surface: var(--popover);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --menu-surface: var(--popover);
+    --menu-backdrop: none;
   }
 }
 
 @supports (corner-shape: superellipse(1.5)) {
   .oc-menu,
   .oc-popover {
-    --menu-radius: calc(10px * var(--openclaw-corner-radius-scale));
-    --menu-item-radius: calc(var(--menu-radius) - var(--menu-padding));
-
     corner-shape: superellipse(1.5);
   }
 
@@ -435,8 +505,10 @@ a.oc-menu-item[href] {
 @media (forced-colors: active) {
   .oc-menu,
   .oc-popover {
-    border-color: CanvasText;
+    border: 1px solid CanvasText;
+    background: Canvas;
     box-shadow: none;
+    backdrop-filter: none;
   }
 
   .oc-menu-item:focus-visible {

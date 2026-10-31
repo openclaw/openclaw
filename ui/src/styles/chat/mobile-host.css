@@ -585,6 +585,13 @@
   .shell--mobile-nav .content--chat .chat.chat {
     border-radius: 0;
   }
+
+  /* Like desktop chat, the session workbench starts at the top edge; the generic
+     mobile content inset would expose the shell canvas as a seam under the
+     system chrome. */
+  .shell--mobile-nav .content--workbench {
+    padding-top: 0;
+  }
 }
 
 .sidebar-region--mobile-host[data-mobile-dragging] > .chat-mobile-host {
