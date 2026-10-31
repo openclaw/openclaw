@@ -40,7 +40,8 @@ export function ChatPdfPreview(props: {
   sizeBytes?: number;
   file?: FilePreviewSource;
 }) {
-  // A new ticket keeps its reader; a different attachment or missing source retires it.
+  // Renewed tickets and download callbacks revalidate bytes without retiring the reader.
+  // Only attachment identity, size, or source availability changes retire it.
   const source = createMemo(
     () =>
       [
@@ -48,7 +49,6 @@ export function ChatPdfPreview(props: {
         props.sourceIdentity ? undefined : props.src,
         props.sizeBytes,
         Boolean(props.src || props.file),
-        props.file?.download,
       ] as const,
     { equals: (before, next) => before.every((value, index) => Object.is(value, next[index])) },
   );
