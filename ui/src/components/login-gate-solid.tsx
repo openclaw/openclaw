@@ -50,6 +50,8 @@ export type LoginGateProps = LoginFailureFeedbackParams & {
   onSecretChange: (value: string) => void;
   onToggleGatewaySecret: () => void;
   onConnect: () => void;
+  /** A submitted connection attempt is still waiting for the Gateway handshake. */
+  connecting?: boolean;
   onOpenGatewaySettings?: () => void;
 };
 
@@ -138,7 +140,11 @@ function LoginForm(
     props.feedback?.placement === "form" ? props.feedback.field : undefined;
   const connect = () => {
     props.cancelRefresh();
-    props.model.onConnect();
+    // A first attempt disables submit; a known failure keeps the button available so the
+    // operator can force a retry while automatic reconnect keeps running.
+    if (!props.model.connecting || props.model.lastError) {
+      props.model.onConnect();
+    }
   };
   const submitOnEnter = (event: KeyboardEvent) => {
     if (event.key === "Enter") {
@@ -209,8 +215,15 @@ function LoginForm(
         )}
       </div>
       {props.withSubmit && (
-        <button class="btn primary login-gate__connect" onClick={connect}>
-          {t("common.connect")}
+        <button
+          class="btn primary login-gate__connect"
+          disabled={props.model.connecting && !props.model.lastError}
+          aria-busy={props.model.connecting ? "true" : undefined}
+          onClick={connect}
+        >
+          <Show when={props.model.connecting} fallback={t("common.connect")}>
+            {t("connection.connecting")}
+          </Show>
         </button>
       )}
     </div>
@@ -247,10 +260,18 @@ function StatusBody(
   const retrySeconds = () =>
     Math.max(0, Math.ceil(((props.model.reconnectAt ?? 0) - props.now) / 1000));
   const connectLabel = () => {
+    // Pairing recovery owns its own action copy; the pending hint only fills the ordinary
+    // Connect/Retry action.
     if (props.feedback.kind === "pairing-rejected" || props.feedback.kind === "pairing-expired") {
       return t("login.failure.pairing.requestAgain");
     }
-    return t(waiting() ? "login.failure.pairing.checkNow" : "common.connect");
+    if (waiting()) {
+      return t("login.failure.pairing.checkNow");
+    }
+    if (props.model.connecting) {
+      return t("connection.connecting");
+    }
+    return t("common.connect");
   };
   return (
     <section
@@ -310,6 +331,7 @@ function StatusBody(
         </Show>
         <button
           class="btn login-gate__connect"
+          aria-busy={props.model.connecting ? "true" : undefined}
           onClick={() => {
             props.cancelRefresh();
             props.model.onConnect();

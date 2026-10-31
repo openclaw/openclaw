@@ -500,6 +500,7 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
             resourceBasePath: context.resourceBasePath,
             branding: context.theme.branding,
             connected: connected(),
+            connecting: snapshot().phase === "connecting" || snapshot().phase === "reconnecting",
             lastError: snapshot().lastError,
             reconnectAt: snapshot().reconnectAt,
             reconnectPending:

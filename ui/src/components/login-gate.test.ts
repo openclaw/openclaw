@@ -45,6 +45,29 @@ describe("login gate failure recovery", () => {
     }),
   ).replace(/=+$/g, "");
 
+  it("shows a Connecting action while the manual handshake is pending", async () => {
+    const clean = await mountFailure("", null);
+    const cleanButton = () => clean.querySelector<HTMLButtonElement>(".login-gate__connect")!;
+    expect(cleanButton().disabled).toBe(false);
+    expect(cleanButton().textContent?.trim()).toBe("Connect");
+
+    clean.props = { ...clean.props, connecting: true };
+    await clean.updateComplete;
+
+    expect(cleanButton().disabled).toBe(true);
+    expect(cleanButton().getAttribute("aria-busy")).toBe("true");
+    expect(cleanButton().textContent?.trim()).toBe("Connecting…");
+
+    // A known failure keeps the action available: retrying is the recovery path.
+    const failed = await mountFailure("Gateway unreachable", null);
+    failed.props = { ...failed.props, connecting: true };
+    await failed.updateComplete;
+    const failureButton = () => failed.querySelector<HTMLButtonElement>(".login-gate__connect")!;
+    expect(failureButton().disabled).toBe(false);
+    expect(failureButton().getAttribute("aria-busy")).toBe("true");
+    expect(failureButton().textContent?.trim()).toBe("Connecting…");
+  });
+
   it("pauses the busy countdown while hidden and catches up on return and reconnect", async () => {
     vi.useFakeTimers();
     let visibility: DocumentVisibilityState = "visible";
