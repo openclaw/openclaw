@@ -6,6 +6,7 @@ import { createFileSync, createRootFileOpenBatchSync } from "@openclaw/fs-safe/a
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { retireSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { createPrivateSqliteTempDirectorySync } from "../infra/sqlite-private-directory.js";
 import {
@@ -27,20 +28,15 @@ import {
   digestPluginSnapshotClosure,
   resolvePluginSnapshotLink,
 } from "./plugin-source-snapshot-payload.js";
-import type { PluginSourceSnapshotDescriptor } from "./plugin-source-snapshot.types.js";
+import type {
+  PluginSourceSnapshotBinding,
+  PluginSourceSnapshotDescriptor,
+} from "./plugin-source-snapshot.types.js";
 
 const PLUGIN_SOURCE_SNAPSHOT_FORMAT = 1;
 const MANIFEST = "manifest.json";
 const PAYLOAD = "payload";
 const MAX_MANIFEST_BYTES = 64 * 1024 * 1024;
-export type PluginSourceSnapshotBinding = Pick<
-  PluginSourceSnapshotDescriptor,
-  | "installRecordHash"
-  | "contentDigest"
-  | "dependencyClosureDigest"
-  | "buildResolutionDigest"
-  | "packageIntegrity"
->;
 type Entry = { path: string; identity: string } & (
   | { kind: "directory" }
   | { kind: "file"; contentHash: string; sizeBytes: number; mode: number }
@@ -340,6 +336,8 @@ export async function stagePluginSourceSnapshot(params: {
           assertSnapshotIdentities(descriptor, manifest, publishedPayload);
           token!();
           token = undefined;
+          // Windows cannot rename while admission retains the closed token's descriptor.
+          retireSqliteDatabaseAdmissionForPath(path.join(stage, SQLITE_STAGING_TOKEN_FILES[0]));
           fs.renameSync(stage, root);
           descriptor.artifact.path = root;
           published = true;

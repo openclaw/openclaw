@@ -32,6 +32,15 @@ export const PluginSourceSnapshotDescriptorSchema = z.strictObject({
 
 export type PluginSourceSnapshotDescriptor = z.infer<typeof PluginSourceSnapshotDescriptorSchema>;
 
+export type PluginSourceSnapshotBinding = Pick<
+  PluginSourceSnapshotDescriptor,
+  | "installRecordHash"
+  | "contentDigest"
+  | "dependencyClosureDigest"
+  | "buildResolutionDigest"
+  | "packageIntegrity"
+>;
+
 export type PluginSourceSnapshotPublication = {
   pluginId: string;
   installOwner: string;

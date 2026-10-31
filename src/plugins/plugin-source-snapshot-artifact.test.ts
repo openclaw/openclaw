@@ -5,7 +5,12 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import {
+  captureSqliteDatabaseAdmissions,
+  retainSqliteDatabaseAdmissionLocation,
+} from "../infra/sqlite-database-admission.js";
 import {
   capturePluginSnapshotGeneration,
   capturePluginSourceSnapshot,
@@ -120,6 +125,52 @@ it("keeps absolute dependency links valid across atomic publication", async () =
   expect(fs.readFileSync(path.join(reader.rootDir, "node_modules/dep/index.cjs"), "utf8")).toBe(
     "module.exports = 'original';",
   );
+});
+
+it("releases staging token descriptor custody before atomic rename", async () => {
+  const { stateDir, capture, binding } = await fixture(false);
+  const rename = fs.renameSync.bind(fs);
+  let tokenDescriptor: number | undefined;
+  let tokenIdentity: fs.BigIntStats | undefined;
+  vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+    if (path.basename(String(from)).startsWith("snapshot-v1-staging-")) {
+      // Model Windows sharing: a retained token descriptor prevents its parent rename.
+      let opened: fs.BigIntStats | undefined;
+      try {
+        opened = fs.fstatSync(tokenDescriptor!, { bigint: true });
+      } catch (error) {
+        if (!hasErrnoCode(error, "EBADF")) {
+          throw error;
+        }
+      }
+      if (opened && opened.dev === tokenIdentity?.dev && opened.ino === tokenIdentity?.ino) {
+        throw Object.assign(new Error("Staging token still has descriptor custody"), {
+          code: "EPERM",
+        });
+      }
+    }
+    rename(from, to);
+  });
+  let checks = 0;
+  const published = await publishPluginSourceSnapshot({
+    stateDir,
+    capture,
+    binding,
+    assertCurrent() {
+      if (++checks !== 2) {
+        return;
+      }
+      const parent = resolvePluginSourceCapturesDirectory(stateDir);
+      const stage = fs.readdirSync(parent).find((name) => name.startsWith("snapshot-v1-staging-"))!;
+      // Exercise the physical-descriptor cache that Windows publication must release.
+      const location = path.join(parent, stage, "owner.sqlite");
+      retainSqliteDatabaseAdmissionLocation(location);
+      tokenDescriptor = captureSqliteDatabaseAdmissions(undefined, { location })[0]?.descriptor;
+      expect(tokenDescriptor).toBeDefined();
+      tokenIdentity = fs.fstatSync(tokenDescriptor!, { bigint: true });
+    },
+  });
+  expect(fs.existsSync(published.artifact.path)).toBe(true);
 });
 
 it("keeps a current-process snapshot publisher out of capture maintenance", async () => {

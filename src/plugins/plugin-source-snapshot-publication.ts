@@ -1,9 +1,7 @@
 import { updatePluginSnapshotCandidates } from "./installed-plugin-snapshot-candidates.js";
 import { withPluginLifecycleLeaseAsync } from "./plugin-lifecycle-lease.js";
-import type {
-  PluginSourceSnapshotBinding,
-  stagePluginSourceSnapshot,
-} from "./plugin-source-snapshot-artifact.js";
+import type { stagePluginSourceSnapshot } from "./plugin-source-snapshot-artifact.js";
+import type { PluginSourceSnapshotBinding } from "./plugin-source-snapshot.types.js";
 
 type CapturedSource = {
   contentDigest: string;

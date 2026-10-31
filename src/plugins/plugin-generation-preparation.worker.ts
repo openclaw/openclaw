@@ -38,8 +38,8 @@ import {
   acquirePluginSourceSnapshot,
   pluginSourceSnapshotClosureDigest,
   stagePluginSourceSnapshot,
-  type PluginSourceSnapshotBinding,
 } from "./plugin-source-snapshot-artifact.js";
+import type { PluginSourceSnapshotBinding } from "./plugin-source-snapshot.types.js";
 
 type Resource = { dispose(): void; disposeAsync(): Promise<void> };
 type CaptureCommand = Extract<GenerationWorkerInput, { operation: "capture" }>;

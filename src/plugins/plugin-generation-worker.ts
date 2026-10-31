@@ -47,11 +47,11 @@ import { createPluginSourceAdmissionPublisher } from "./plugin-source-admission-
 import { resolvePluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 import { createPluginSourceCaptureRoot } from "./plugin-source-capture-directory.js";
 import { subscribePluginNativeLoads } from "./plugin-source-capture-native-loads.js";
-import {
-  PluginSourceSnapshotValidationError,
-  type PluginSourceSnapshotBinding,
-} from "./plugin-source-snapshot-artifact.js";
-import type { PluginSourceSnapshotDescriptor } from "./plugin-source-snapshot.types.js";
+import { PluginSourceSnapshotValidationError } from "./plugin-source-snapshot-artifact.js";
+import type {
+  PluginSourceSnapshotBinding,
+  PluginSourceSnapshotDescriptor,
+} from "./plugin-source-snapshot.types.js";
 
 export type PreparedPluginGenerationArtifact = {
   artifact: PluginGenerationArtifact;
@@ -204,8 +204,8 @@ export async function preparePluginSourceSnapshot(params: {
     },
   });
   const { bindPluginSnapshotPublication } = await import("./plugin-source-snapshot-publication.js");
-  // SAFETY: The source-only command returns the worker's owned staging handle.
   return bindPluginSnapshotPublication(
+    // SAFETY: The source-only command returns the worker's owned staging handle.
     prepared.value as Parameters<typeof bindPluginSnapshotPublication>[0],
     params.stateDir,
   );
