@@ -35,6 +35,7 @@ it.for(["unchanged", "removed", "rotated"] as const)(
         vi.stubEnv("GITHUB_TOKEN", "");
         let now = 1_000_000;
         vi.spyOn(Date, "now").mockImplementation(() => now);
+        vi.spyOn(performance, "now").mockImplementation(() => now);
         const profileId = `ghp_${"9".repeat(32)}`;
         const cfg: OpenClawConfig = {
           agents: { entries: { main: { tools: { github: { profileId } } } } },

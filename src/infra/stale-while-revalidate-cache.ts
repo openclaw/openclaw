@@ -26,7 +26,7 @@ export function createStaleWhileRevalidateCache<T>(options: {
       const entries = values;
       const loads = pending;
       const cached = entries.get(key);
-      if (!readOptions.refresh && cached && cached.expiresAt > Date.now()) {
+      if (!readOptions.refresh && cached && cached.expiresAt > performance.now()) {
         if (cached.kind === "error") {
           throw cached.error;
         }
@@ -63,7 +63,7 @@ export function createStaleWhileRevalidateCache<T>(options: {
                 entries.set(key, {
                   kind: "value",
                   value,
-                  expiresAt: Date.now() + options.ttlMs,
+                  expiresAt: performance.now() + options.ttlMs,
                 });
                 pruneMapToMaxSize(entries, options.maxEntries);
               } else {
@@ -76,7 +76,7 @@ export function createStaleWhileRevalidateCache<T>(options: {
                 entries.delete(key);
                 const ttl = options.errorTtlMs?.(error) ?? 0;
                 if (ttl > 0) {
-                  entries.set(key, { kind: "error", error, expiresAt: Date.now() + ttl });
+                  entries.set(key, { kind: "error", error, expiresAt: performance.now() + ttl });
                   pruneMapToMaxSize(entries, options.maxEntries);
                 }
                 if (stale) {
