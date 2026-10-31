@@ -48,7 +48,7 @@ export type ImageRenderOptions = {
   /** Navigation membership for an opened tile; sibling message ids keep their media scope. */
   galleryImages?: (image: ImageBlock) => {
     index: number;
-    items: readonly { image: ImageBlock; messageId?: string }[];
+    items: readonly { image: ImageBlock; messageId: string | undefined }[];
   };
   galleryVideos?: (item: AttachmentItem) => {
     index: number;

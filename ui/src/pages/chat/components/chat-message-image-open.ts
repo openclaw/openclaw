@@ -110,7 +110,7 @@ export function withMessageImageGallery(
       options?.galleryImages ??
       ((selected) => ({
         index: images.indexOf(selected),
-        items: images.map((image) => ({ image })),
+        items: images.map((image) => ({ image, messageId: options?.messageId })),
       })),
   };
 }
@@ -139,10 +139,8 @@ export function openMessageImage(
       nextItem.gallery = {
         index: gallery.index,
         items: gallery.items.map(({ image, messageId }) => {
-          const options =
-            messageId === undefined || messageId === opts?.messageId
-              ? opts
-              : { ...opts, messageId };
+          // Unidentified siblings (a live stream) must not borrow the opener's media scope.
+          const options = messageId === opts?.messageId ? opts : { ...opts, messageId };
           return (retryFailed = false) => loadGalleryImage(image, options, retryFailed);
         }),
       };
