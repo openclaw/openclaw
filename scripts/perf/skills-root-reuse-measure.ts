@@ -19,6 +19,7 @@ import inspector from "node:inspector/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
+import { mock } from "node:test";
 import { setImmediate as yieldTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
@@ -137,16 +138,18 @@ const capture = (...args: unknown[]) => {
 };
 loggingState.rawConsole = { log: capture, info: capture, warn: capture, error: capture };
 const { WorkerTaskPool } = await import("../../src/infra/worker-task-pool.js");
-// The wrapper forwards the original receiver with call.
-// oxlint-disable-next-line typescript/unbound-method
-const run = WorkerTaskPool.prototype.run;
-const tasks: Record<string, number> = {};
-WorkerTaskPool.prototype.run = function (input, options) {
-  if (input && typeof input === "object" && "kind" in input && typeof input.kind === "string") {
-    tasks[input.kind] = (tasks[input.kind] ?? 0) + 1;
+const taskObserver = mock.method(WorkerTaskPool.prototype, "run");
+function countTasks() {
+  const tasks: Record<string, number> = {};
+  for (const {
+    arguments: [input],
+  } of taskObserver.mock.calls) {
+    if (input && typeof input === "object" && "kind" in input && typeof input.kind === "string") {
+      tasks[input.kind] = (tasks[input.kind] ?? 0) + 1;
+    }
   }
-  return run.call(this, input, options);
-};
+  return tasks;
+}
 const { closeSkillsWatchers, prepareSkillSourcePlan } =
   await import("../../src/skills/runtime/refresh.js");
 const { prepareWorkspaceSkillEntries } = (await import(
@@ -187,15 +190,13 @@ try {
   } else {
     await prepare(project);
     await prepare();
-    const cold = { warnings, tasks: { ...tasks } };
+    const cold = { warnings, tasks: countTasks() };
     for (let index = 0; index < 10; index++) {
       await prepare(project);
       await prepare();
     }
     warnings = 0;
-    for (const key of Object.keys(tasks)) {
-      tasks[key] = 0;
-    }
+    taskObserver.mock.resetCalls();
     global.gc();
     await yieldTurn();
     const profiler = values.allocations ? new inspector.Session() : undefined;
@@ -243,10 +244,10 @@ try {
       max: orderedSamples.at(-1),
     };
     process.stdout.write(
-      `${JSON.stringify({ fsCalls: observation?.counts, latencyMs, owner: values.owner, iterations, calls: iterations * 3, cold, tasks, warnings, digest: digest.digest("hex"), elapsedMs, cpuMs: (cpu.user + cpu.system) / 1000, allocatedBytes, loadStart, loadEnd: loadavg() })}\n`,
+      `${JSON.stringify({ fsCalls: observation?.counts, latencyMs, owner: values.owner, iterations, calls: iterations * 3, cold, tasks: countTasks(), warnings, digest: digest.digest("hex"), elapsedMs, cpuMs: (cpu.user + cpu.system) / 1000, allocatedBytes, loadStart, loadEnd: loadavg() })}\n`,
     );
   }
 } finally {
-  WorkerTaskPool.prototype.run = run;
+  taskObserver.mock.restore();
   await closeSkillsWatchers(true);
 }
