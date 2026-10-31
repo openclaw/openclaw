@@ -870,6 +870,36 @@ async function runWorker() {
             string,
             { startedAtMs: number; browserStartedAtMs: number }
           >();
+          const websocketLifecycle: Array<{
+            event: "created" | "handshake-request" | "handshake-response" | "error" | "closed";
+            requestId: string;
+            atMs: number;
+            browserAtMs?: number;
+            status?: number;
+          }> = [];
+          cdp.on("Network.webSocketCreated", (event) => {
+            websocketLifecycle.push({
+              event: "created",
+              requestId: event.requestId,
+              atMs: performance.now(),
+            });
+          });
+          cdp.on("Network.webSocketFrameError", (event) => {
+            websocketLifecycle.push({
+              event: "error",
+              requestId: event.requestId,
+              atMs: performance.now(),
+              browserAtMs: event.timestamp * 1000,
+            });
+          });
+          cdp.on("Network.webSocketClosed", (event) => {
+            websocketLifecycle.push({
+              event: "closed",
+              requestId: event.requestId,
+              atMs: performance.now(),
+              browserAtMs: event.timestamp * 1000,
+            });
+          });
           const negotiations: Array<{
             requestId: string;
             startedAtMs?: number;
@@ -880,12 +910,25 @@ async function runWorker() {
             extensions: string;
           }> = [];
           cdp.on("Network.webSocketWillSendHandshakeRequest", (event) => {
+            websocketLifecycle.push({
+              event: "handshake-request",
+              requestId: event.requestId,
+              atMs: performance.now(),
+              browserAtMs: event.timestamp * 1000,
+            });
             upgradeRequests.set(event.requestId, {
               startedAtMs: performance.now(),
               browserStartedAtMs: event.timestamp * 1000,
             });
           });
           cdp.on("Network.webSocketHandshakeResponseReceived", (event) => {
+            websocketLifecycle.push({
+              event: "handshake-response",
+              requestId: event.requestId,
+              atMs: performance.now(),
+              browserAtMs: event.timestamp * 1000,
+              status: event.response.status,
+            });
             negotiations.push({
               requestId: event.requestId,
               ...upgradeRequests.get(event.requestId),
@@ -1299,6 +1342,25 @@ async function runWorker() {
                 incompleteHttpRequests: http.filter((request) => request.finishedAtMs === undefined)
                   .length,
                 http,
+                ...(name === "reconnect"
+                  ? {
+                      websocketLifecycle: websocketLifecycle
+                        .filter(
+                          (event) =>
+                            event.atMs >=
+                            startedAtMs -
+                              (typeof details?.outageMs === "number" ? details.outageMs : 0),
+                        )
+                        .map((event) => ({
+                          ...event,
+                          atMs: event.atMs - startedAtMs,
+                          browserAtMs:
+                            event.browserAtMs === undefined
+                              ? undefined
+                              : event.browserAtMs - actionBrowserStartMs,
+                        })),
+                    }
+                  : {}),
                 websocketUpgrades: negotiations
                   .filter((upgrade) => upgrade.atMs >= startedAtMs)
                   .map((upgrade) =>

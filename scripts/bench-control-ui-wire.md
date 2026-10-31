@@ -133,7 +133,13 @@ for session switch and reconnect and records initial-history JSON parse interval
 Keep those traced runs out of untraced latency comparisons.
 
 Each sample includes `websocketUpgrades` with upgrade request/response timestamps
-and status. HTTP `browserStartedAtMs`, `browserResponseAtMs`, and
+and status. Reconnect also includes `websocketLifecycle`: socket creation,
+handshake requests/responses, errors, and closes from the preceding outage through
+the settled capture. Negative times precede link restoration. Records contain
+only event names, opaque request IDs, timestamps, and HTTP status; URLs, headers,
+error text, and close reasons are omitted. CDP socket creation has no browser
+timestamp, so those records use only the observer's `atMs` clock. HTTP
+`browserStartedAtMs`, `browserResponseAtMs`, and
 `browserFinishedAtMs`, upgrade browser timestamps, and frame `decodedAtMs` share
 the action's browser clock, starting at zero. Pair WebSocket requests and responses
 by `connection` plus `requestId`; `type` distinguishes requests, responses, and
@@ -142,8 +148,10 @@ round trips; `beforeTranscriptVisible` marks delivery before the first visible
 transcript row, and `criticalBeforeReady` marks delivery before both authoritative
 history and composer are ready,
 not proof that every such frame is a dependency. No request bodies or authentication
-headers are retained. Frame `atMs` records proxy ingress observation, which can
-follow server transmission when the shared link applies backpressure.
+headers are retained. Frame `atMs` records when the complete RFC6455 frame is
+available to the proxy parser. Joined packet `receivedAtMs` values locate first
+ingress, which can follow server transmission when the shared link applies
+backpressure.
 
 Interpret these as synthetic transport and rendering measurements. The proxy
 does not simulate TLS, TCP handshake latency, packet loss, or Internet routing.
