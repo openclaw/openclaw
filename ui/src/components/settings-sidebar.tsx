@@ -420,7 +420,6 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
           )}
         >
           <Loading
-            on={query()}
             fallback={
               <p class="settings-sidebar__empty" role="status">
                 {t("common.loading")}

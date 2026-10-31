@@ -1,11 +1,7 @@
 import type { Page } from "playwright";
-import { expect, it, onTestFinished } from "vitest";
+import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
-import {
-  createControlUiE2eSuite,
-  holdModuleResponse,
-} from "./control-ui-e2e-suite.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { pluginResponses } from "./plugins-settings-admin.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Plugin settings keyboard dismissal" });
@@ -22,24 +18,17 @@ async function openSettings(page: Page, responses = pluginResponses()) {
 }
 
 suite.define(() => {
-  it("lets the Settings sidebar clear a loading search without closing plugin details", async () => {
+  it("lets the Settings sidebar clear its search without closing plugin details", async () => {
     await suite.withPage({ viewport }, async ({ page }) => {
-      const searchModule = await holdModuleResponse(
-        page,
-        controlUiE2eBuiltModuleRequest("ui/src/pages/config/settings-search.ts"),
-      );
-      onTestFinished(searchModule.release);
       const gateway = await openSettings(page);
       await page.locator(".plugin-editor").waitFor();
       const search = page.locator(".settings-sidebar__search-input");
       await search.fill("appearance");
-      await searchModule.request;
       await search.press("Escape");
       expect(page.url()).toBe(settingsUrl());
       expect(await search.inputValue()).toBe("");
       expect(await page.locator(".plugin-editor").isVisible()).toBe(true);
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
-      searchModule.release();
       await search.blur();
       await page.keyboard.press("Escape");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/plugins");

@@ -1,27 +1,17 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import { For, onSettled, Show } from "solid-js";
 import { SettingsRow, SettingsStatus, SettingsValue } from "../../components/solid/settings-ui.tsx";
+import { projectCallbackOwner } from "../../lib/reactive/callback-owner.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { DiscordIdentityState } from "./discord-identity-state.ts";
 
 export function DiscordIdentity() {
   const context = useApplication();
-  const [revision, publish] = createSignal(0, { ownedWrite: true });
-  const state = new DiscordIdentityState(() => publish((value) => value + 1));
-  const view = createMemo(() => {
-    revision();
-    return {
-      accounts: state.accounts,
-      selected: state.selected,
-      accountId: state.accountId,
-      loading: state.loading,
-      busy: state.busy,
-      available: state.available,
-      flow: state.flow,
-      error: state.error,
-    };
-  });
+  const { owner: state, view } = projectCallbackOwner(
+    (publish) => new DiscordIdentityState(publish),
+    (owner) => owner,
+  );
   onSettled(() => {
     const stop = context.gateway.subscribe((snapshot) => state.sync(snapshot));
     const stopEvents = context.gateway.subscribeEvents((event) => {
@@ -47,7 +37,7 @@ export function DiscordIdentity() {
       description={
         <>
           <span>{t("profilePage.discord.description")}</span>
-          <Show when={view().error}>
+          <Show when={view.read().error}>
             {(error) => (
               <div class="callout danger" role="alert">
                 {error()}{" "}
@@ -59,10 +49,10 @@ export function DiscordIdentity() {
           </Show>
           <Show
             when={
-              !view().loading &&
-              !view().selected?.available &&
-              !view().selected?.senderIds.length &&
-              !view().error
+              !view.read().loading &&
+              !view.read().selected?.available &&
+              !view.read().selected?.senderIds.length &&
+              !view.read().error
             }
           >
             <div>{t("profilePage.discord.unavailable")}</div>
@@ -71,34 +61,38 @@ export function DiscordIdentity() {
       }
       control={
         <>
-          <Show when={view().accounts.length > 1}>
+          <Show when={view.read().accounts.length > 1}>
             <select
               aria-label={t("profilePage.discord.gatewayAccount")}
-              value={view().accountId}
-              disabled={view().busy || Boolean(view().flow)}
+              value={view.read().accountId}
+              disabled={view.read().busy || Boolean(view.read().flow)}
               onChange={(event) => {
                 state.accountId = event.currentTarget.value;
                 state.publish();
               }}
             >
-              <For each={view().accounts}>
+              <For each={view.read().accounts}>
                 {(account) => <option value={account.accountId}>{account.accountId}</option>}
               </For>
             </select>
           </Show>
           <Show
-            when={!view().loading}
+            when={!view.read().loading}
             fallback={<SettingsStatus kind="muted" label={t("common.loading")} />}
           >
             <Show
-              when={view().selected?.senderIds.length}
+              when={view.read().selected?.senderIds.length}
               fallback={
                 <Show
-                  when={view().flow}
+                  when={view.read().flow}
                   fallback={
                     <button
                       class="btn btn--sm"
-                      disabled={!view().available || !view().selected?.available || view().busy}
+                      disabled={
+                        !view.read().available ||
+                        !view.read().selected?.available ||
+                        view.read().busy
+                      }
                       onClick={() => void state.connect()}
                     >
                       {t("profilePage.discord.connect")}
@@ -113,8 +107,8 @@ export function DiscordIdentity() {
                       </a>
                       <button
                         class="btn btn--sm"
-                        disabled={view().busy}
-                        onClick={() => void state.cancel()}
+                        disabled={view.read().busy}
+                        onClick={() => void state.mutate("cancel")}
                       >
                         {t("common.cancel")}
                       </button>
@@ -123,12 +117,12 @@ export function DiscordIdentity() {
                 </Show>
               }
             >
-              <SettingsValue value={view().selected?.senderIds.join(", ") ?? ""} />
+              <SettingsValue value={view.read().selected?.senderIds.join(", ") ?? ""} />
               <SettingsStatus kind="ok" label={t("profilePage.discord.verified")} />
               <button
                 class="btn btn--sm"
-                disabled={!view().available || view().busy}
-                onClick={() => void state.disconnect()}
+                disabled={!view.read().available || view.read().busy}
+                onClick={() => void state.mutate("disconnect")}
               >
                 {t("profilePage.discord.disconnect")}
               </button>

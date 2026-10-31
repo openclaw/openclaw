@@ -140,17 +140,6 @@ describe("settings sidebar search", () => {
     expect(container.querySelector(".settings-sidebar__search-input")).toBe(search.input);
     expect(document.activeElement).toBe(search.input);
     expect(search.input.value).toBe("collapse task progress");
-    const pending = Promise.withResolvers<void>();
-    const prepareLocale = vi.spyOn(i18n, "prepareLocale").mockReturnValueOnce(pending.promise);
-    try {
-      search.enter("collapse task progress");
-      await vi.waitFor(() => expect(prepareLocale).toHaveBeenCalledOnce());
-      expect(labels(".settings-sidebar__subitem-label")).toContain("Chat");
-      expect(container.textContent).not.toContain(t("common.loading"));
-    } finally {
-      pending.resolve();
-      prepareLocale.mockRestore();
-    }
   });
 
   it("keeps save recovery available in the embedded page header", async () => {

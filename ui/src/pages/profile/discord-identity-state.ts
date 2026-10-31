@@ -202,13 +202,7 @@ export class DiscordIdentityState {
       this.publish();
     }
   }
-  async disconnect() {
-    await this.mutate("disconnect");
-  }
-  async cancel() {
-    await this.mutate("cancel");
-  }
-  private async mutate(action: "disconnect" | "cancel") {
+  async mutate(action: "disconnect" | "cancel") {
     if (this.busy) {
       return;
     }

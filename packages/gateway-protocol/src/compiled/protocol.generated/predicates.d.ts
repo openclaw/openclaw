@@ -795,11 +795,6 @@ export function isTranscriptsStatusParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").TranscriptsStatusParamsSchema
 >;
-export function isUsersChannelIdentityParams(
-  value: unknown,
-): value is import("typebox").Static<
-  typeof import("../../schema-modules.js").UsersChannelIdentityParamsSchema
->;
 export function isMessageActionParams(
   value: unknown,
 ): value is import("typebox").Static<
@@ -2217,6 +2212,11 @@ export function isSessionsFilesPreviewReleaseParams(
   value: unknown,
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SessionsFilesPreviewReleaseParamsSchema
+>;
+export function isUsersChannelIdentityParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema/users.js").UsersChannelIdentityParamsSchema
 >;
 export function isConnectParams(
   value: unknown,

@@ -67,5 +67,4 @@ export {
   isTranscriptsGetParams,
   isTranscriptsExportParams,
   isTranscriptsStatusParams,
-  isUsersChannelIdentityParams,
 } from "./predicates.js";
