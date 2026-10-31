@@ -29,7 +29,9 @@ Since v2026.5.7, `openclaw channels list` no longer prints provider usage; it po
 
 `/usage cost` warns that the **Today** and **Last 30d** totals may be incomplete
 if their aggregate cache is refreshing, partial, or stale, and suggests running
-the command again later. The **Session** total is loaded separately. The CLI
+the command again later. The **Session** total waits up to ten seconds for pending
+refreshes, then shows the last known total marked **stale** while refresh continues.
+Without a cached total, it shows **Session n/a**. The CLI
 `openclaw gateway usage-cost` also reports the recorded cache state before its
 totals.
 
@@ -79,10 +81,10 @@ transcript changes. A refresh that overlaps agent database creation joins that
 database's preparation before writing its projection. An empty store stays absent
 until a transcript needs a rollup. Background refresh waits for 30 seconds without new usage
 or an active agent turn. After five minutes of pending work, it can start in the
-next idle gap without another quiet period. Explicit cost and overview reads
-flush and await pending updates, so a completed turn does not need to wait for
-that timer. This display batching does not delay Goal budgets or provider billing
-limits. A restart or pricing change can require background backfill;
+next idle gap without another quiet period. Explicit session cost reads flush
+pending updates within the bounded report wait. Overview reads also use their
+existing bounded refresh wait. This display batching does not delay Goal budgets
+or provider billing limits. A restart or pricing change can require background backfill;
 the page shows partial totals while it advances. A pricing change (a new build or
 model catalog update) rescans only sessions with a turn that has no recorded cost;
 sessions whose turns all recorded their cost keep their projection. Sessions without a cached
