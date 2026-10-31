@@ -141,6 +141,7 @@ export function createSlackDraftStream(params: {
             threadTs,
             identity: params.identity,
             eventScope: params.eventScope,
+            nativeLists: false,
             ...(visibleUpdate.textIsSlackMrkdwn ? { textIsSlackMrkdwn: true } : {}),
             ...(params.metadata ? { metadata: params.metadata } : {}),
             ...(visibleUpdate.blocks ? { blocks: visibleUpdate.blocks } : {}),

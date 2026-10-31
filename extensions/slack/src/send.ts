@@ -123,6 +123,8 @@ type SlackSendOpts = {
   textLimit?: number;
   /** Slack-private marker for text that is already safe mrkdwn and must not be parsed again. */
   textIsSlackMrkdwn?: boolean;
+  /** Draft creation must match mrkdwn edits while retaining Markdown chunking. */
+  nativeLists?: false;
   /** Slack-private literal fallback text; disables mrkdwn parsing. */
   textIsSlackPlainText?: boolean;
   /** Producer-owned placement of authored text after final block compilation. */
@@ -1052,11 +1054,12 @@ export async function sendMessageSlack(
               : [trimmedMessage];
           // Compile ordinary text once. Its mrkdwn is the accessibility fallback,
           // not an additional authored section beside the native list.
-          nativeMessages = opts.mediaUrl
-            ? undefined
-            : markdownChunks.flatMap((markdown) =>
-                markdownToSlackMessageChunks(markdown, textChunkLimit, { tableMode }),
-              );
+          nativeMessages =
+            opts.mediaUrl || opts.nativeLists === false
+              ? undefined
+              : markdownChunks.flatMap((markdown) =>
+                  markdownToSlackMessageChunks(markdown, textChunkLimit, { tableMode }),
+                );
           const chunks = nativeMessages
             ? nativeMessages.map(({ text }) => text)
             : markdownChunks.flatMap((markdown) =>

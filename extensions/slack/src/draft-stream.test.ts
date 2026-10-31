@@ -1,3 +1,4 @@
+import { WebClient } from "@slack/web-api";
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
@@ -96,6 +97,57 @@ function rotatingSend() {
 }
 
 describe("createSlackDraftStream", () => {
+  it("keeps list previews in mrkdwn through creation and editing", async () => {
+    const client = new WebClient("xoxb-test");
+    const post = vi.spyOn(client.chat, "postMessage").mockResolvedValue({
+      ok: true,
+      channel: "C123",
+      ts: "111.222",
+    });
+    const update = vi.spyOn(client.chat, "update").mockResolvedValue({ ok: true });
+    const actualSend = await vi.importActual<typeof import("./send.js")>("./send.js");
+    const actualActions = await vi.importActual<typeof import("./actions.js")>("./actions.js");
+    const { stream, send, edit, editRendered, warn } = createDraftStreamHarness();
+    send.mockImplementation((to, text, opts) =>
+      actualSend.sendMessageSlack(to, text, {
+        ...opts,
+        client,
+        cfg: { channels: { slack: { textChunkLimit: 100 } } },
+      }),
+    );
+    edit.mockImplementation((channel, ts, text, opts) =>
+      actualActions.editSlackMessage(channel, ts, text, { ...opts, client }),
+    );
+    editRendered.mockImplementation((channel, ts, text, opts) =>
+      actualActions.editSlackRenderedMessage(channel, ts, text, { ...opts, client }),
+    );
+
+    await publish(stream, "- **One**");
+    await publish(stream, "- **One**\n- Two");
+    await stream.seal();
+
+    expect(warn).not.toHaveBeenCalled();
+    expect(post.mock.calls).toEqual([
+      [expect.objectContaining({ channel: "C123", text: "• *One*" })],
+    ]);
+    expect(post.mock.calls[0]![0]).not.toHaveProperty("blocks");
+    expect(update.mock.calls).toEqual([
+      [expect.objectContaining({ channel: "C123", ts: "111.222", text: "• *One*\n• Two" })],
+    ]);
+    expect(update.mock.calls[0]![0]).not.toHaveProperty("blocks");
+    stream.forceNewMessage();
+    await publish(stream, `**${"&".repeat(24)}**`);
+    await stream.seal();
+    const chunks = post.mock.calls
+      .slice(1)
+      .map(([payload]) => ("text" in payload ? (payload.text ?? "") : ""));
+    expect(chunks).toHaveLength(2);
+    expect(
+      chunks.every((text) => text.length <= 100 && text.startsWith("*") && text.endsWith("*")),
+    ).toBe(true);
+    expect(chunks.map((text) => text.slice(1, -1)).join("")).toBe("&amp;".repeat(24));
+  });
+
   it("waits for a complete preamble when a human reply rotates the draft", async () => {
     const { stream, send, edit } = createDraftStreamHarness({ threadTs: "100.000" });
     await publish(stream, "_I’ll check the report._");
