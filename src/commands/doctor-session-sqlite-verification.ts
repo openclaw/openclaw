@@ -75,10 +75,12 @@ export function createRecoveryDestinationVerifier(
         (target.databaseIdentity && String(files[0]?.ino) !== target.databaseIdentity.ino) ||
         files.some((file) => file && (!file.isFile() || file.nlink !== 1n)) ||
         (expected &&
+          (["dev", "ino"] as const).some((key) => files[0]?.[key] !== expected.files[0]?.[key])) ||
+        (expected &&
           !options.allowOwnedMutation &&
           files.some((file, index) =>
             (index === 0
-              ? (["ino", "ctimeNs", "mtimeNs", "size"] as const)
+              ? (["ctimeNs", "mtimeNs", "size"] as const)
               : (["dev", "ino", "size"] as const)
             ).some((key) => file?.[key] !== expected.files[index]?.[key]),
           ))

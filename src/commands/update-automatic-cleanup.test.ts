@@ -377,6 +377,62 @@ it("allows its current Gateway owner to mutate a recovery destination during ret
   }
 });
 
+it("stops owned retirement when its recovery destination file is replaced", async () => {
+  const fixture = await recoveryFixture();
+  const originals = new Map(
+    fixture.target.completedMoves
+      .filter((move) => move.artifact?.classification !== "protected")
+      .map((move) => [move.archivePath, fs.readFileSync(move.archivePath)]),
+  );
+  const { runId } = capturedRun(now, "succeeded");
+  await closeOpenClawStateDatabaseAsync();
+  const owner = acquireGatewayStateOwner({
+    databasePath: resolveOpenClawStateSqlitePath(env),
+    payload: {
+      pid: process.pid,
+      createdAt: new Date().toISOString(),
+      configPath: env.OPENCLAW_CONFIG_PATH!,
+      role: "gateway",
+      processNamespace: readGatewayLockProcessNamespace(),
+    },
+  });
+  let replaced = false;
+  try {
+    const result = await cleanupGatewayUpdateRecovery(runId, env, () => {
+      const claimed = fixture.target.completedMoves.some((move) => {
+        const disposal = readSessionSqliteMigrationManifest(
+          fixture.manifestPath,
+        )!.targets[0]!.completedMoves.find((current) => current.archivePath === move.archivePath)
+          ?.artifact?.disposal;
+        return disposal?.state === "pending-disposal" && fs.existsSync(disposal.claimPath);
+      });
+      if (!replaced && claimed) {
+        const replacement = `${fixture.target.sqlitePath}.replacement`;
+        fs.copyFileSync(fixture.target.sqlitePath, replacement);
+        fs.renameSync(replacement, fixture.target.sqlitePath);
+        replaced = true;
+      }
+    });
+    expect(replaced).toBe(true);
+    expect(result?.advisory?.message).toContain("Recovery destination database changed");
+    for (const [file, contents] of originals) {
+      const move = readSessionSqliteMigrationManifest(
+        fixture.manifestPath,
+      )!.targets[0]!.completedMoves.find((current) => current.archivePath === file)!;
+      const disposal = move.artifact!.disposal;
+      const retained = fs.existsSync(file)
+        ? file
+        : disposal.state === "pending-disposal" && fs.existsSync(disposal.claimPath)
+          ? disposal.claimPath
+          : undefined;
+      expect(retained, file).toBeDefined();
+      expect(fs.readFileSync(retained!)).toEqual(contents);
+    }
+  } finally {
+    owner.release();
+  }
+});
+
 it.each(["before-first-effect", "claim-publication", "first-unlink"] as const)(
   "stops migration-original retirement when its physical owner is replaced after %s",
   async (phase) => {
