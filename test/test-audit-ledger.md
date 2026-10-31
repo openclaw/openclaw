@@ -110,5 +110,27 @@ Untouched baseline: 76 tests across seven suites; retained candidate: 73 passed.
 Focused lint and changed test-graph type checks passed. Complete removal-check
 results and landing: [PR #189180](https://github.com/openclaw/openclaw/pull/189180).
 
+Additional completed source review at the original audit revision (no runtime proof):
+
+| Owner scope                              | Suites    | Decision                                                                                                                                                                              |
+| ---------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Daemon                                   | 127       | Retain 920 declarations; native process, custody, and platform contracts differ. Windows registered-task proof is conditional on successful fixture creation.                         |
+| Talk                                     | 39        | Retain 250 direct declarations and one inherited database table; measured replacement-work bound remains a regression contract.                                                       |
+| Wizard                                   | 30        | Retain 239 declarations, including the actual PTY child, migration lock, and installed-service state.                                                                                 |
+| Security                                 | 46        | Retain 181 declarations; repair one legacy-auth remediation assertion that assumes POSIX chmod on Windows.                                                                            |
+| Model catalog / memory / memory-host SDK | 7         | Retain 71 declarations; host policy, physical storage, provenance, and child snapshots have no absorbing package keeper.                                                              |
+| Docs / remaining root scripts            | 21        | Retain 63 declarations; quoting policy, publication guards, parser contracts, and actual CLI checks differ.                                                                           |
+| Shared OpenClawKit                       | 209 files | Retain 2,523 declarations; three proof repairs and two possible consolidations await qualified native execution.                                                                      |
+| Shared NativeState / MLX protocol        | 5         | Retain 46 declarations; retarget one missing-table test that now stops at credential-cutover refusal. MLX protocol's standalone test CI route remains unverified.                     |
+| Swabble                                  | 6         | Retain 12 declarations; real CLI, parser, cooldown, config, resampling, and wake extraction differ. Explicit package-test CI route inspected.                                         |
+| macOS MLX helper                         | 1         | Retain five declarations; one PCM helper replay is absorbed by actual streaming bytes, pending native keeper proof. Packaging builds do not establish test execution.                 |
+| Advisor / agent guidance                 | 2         | Retain 14 declarations; actual scheduling, run admission, cancellation, instruction snapshots, filesystem boundaries, and atomic registration differ. Host caller closure is bounded. |
+
+Next support batch starts at `7eec88c07c3`, after the reviewed core batch.
+Remove the mock context engine whose only factory is never invoked during registration,
+and the unused CLI-history entry builder whose last consumer was removed in `cd3e054c9a4`.
+Retain the actual registration supersession cases, passthrough engine methods, and
+all remaining history fixtures. Untouched baseline and removal proof remain pending.
+
 Remaining: declaration-level review across remaining core, plugins, UI, native apps,
 root/script suites and shared fixtures; close owner-reading gaps and land subsequent batches.
