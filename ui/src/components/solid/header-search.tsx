@@ -1,87 +1,11 @@
 import type { JSX } from "@solidjs/web";
 import { onSettled } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
+import { registryFor } from "../overlay-registry.ts";
 import { Icon } from "./icon.tsx";
 import "./overlay.css";
-
-const SURFACE_SELECTOR = '[popover], [role="menu"], [role="dialog"], .picker-select__menu';
-const HEADER_SELECTOR = ".header-search";
-
-type HeaderSearchController = {
-  type: (key: string) => boolean;
-  surfaceClosed: () => void;
-};
-
-// Menus keep rendered content across close and reopen, so these outlive one mount's owner.
-const controllers = new WeakMap<Element, HeaderSearchController>();
-let surfacesWatched = false;
-
-function ownHeaders(surface: Element) {
-  return [...surface.querySelectorAll(HEADER_SELECTOR)].filter(
-    (header) => header.closest(SURFACE_SELECTOR) === surface,
-  );
-}
-
-/** Hover can open a submenu while focus stays in its parent, and focus can rest on the page. */
-function headerForTyping(target: Element) {
-  const visible = (header: Element) => header.checkVisibility();
-  if (target === target.ownerDocument.body) {
-    return [...target.querySelectorAll(HEADER_SELECTOR)].findLast(visible);
-  }
-  const surface = target.closest(SURFACE_SELECTOR);
-  return (
-    surface &&
-    (ownHeaders(surface).find(visible) ??
-      [...surface.querySelectorAll(HEADER_SELECTOR)].findLast(visible))
-  );
-}
-
-function watchSurfaces() {
-  if (surfacesWatched) {
-    return;
-  }
-  surfacesWatched = true;
-  // Typing anywhere on the surface starts a search, as the old focused field did.
-  // The window phase runs before menu shortcuts claim the same letter.
-  window.addEventListener(
-    "keydown",
-    (event) => {
-      const target = event.target;
-      if (
-        event.defaultPrevented ||
-        event.isComposing ||
-        event.key.length !== 1 ||
-        event.key === " " ||
-        event.ctrlKey ||
-        event.metaKey ||
-        event.altKey ||
-        !(target instanceof Element) ||
-        target.closest('input, textarea, select, [contenteditable="true"]')
-      ) {
-        return;
-      }
-      const header = headerForTyping(target);
-      if (header && controllers.get(header)?.type(event.key)) {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-      }
-    },
-    true,
-  );
-  // A surface reopened with no query starts from the title again.
-  window.addEventListener(
-    "toggle",
-    (event) => {
-      if (event.target instanceof Element && (event as ToggleEvent).newState === "closed") {
-        for (const header of ownHeaders(event.target)) {
-          controllers.get(header)?.surfaceClosed();
-        }
-      }
-    },
-    true,
-  );
-}
 
 type HeaderSearchFieldProps = {
   label: string;
@@ -136,10 +60,10 @@ export function HeaderSearchField(props: HeaderSearchFieldProps) {
     <input
       {...props.inputProps}
       ref={[
+        props.controlRef?.(),
         (element: HTMLInputElement) => {
           input = element;
           props.inputRef?.(element);
-          props.controlRef?.()?.(element);
         },
         keydown,
         nativeListener("click", (event) => event.stopPropagation()),
@@ -169,9 +93,9 @@ export function HeaderSearchToggle(props: {
   return (
     <button
       ref={[
+        props.controlRef?.(),
         (element: HTMLButtonElement) => {
           props.toggleRef?.(element);
-          props.controlRef?.()?.(element);
         },
         // Menus stop content clicks natively, before any delegated handler could run.
         nativeListener("click", (event) => {
@@ -213,6 +137,7 @@ export type HeaderSearchProps = {
 
 /** One header row that swaps its title for the search field while searching. */
 export function HeaderSearch(props: HeaderSearchProps) {
+  let root!: HTMLDivElement;
   let toggle!: HTMLButtonElement;
   let focusField = false;
   const openSearch = () => {
@@ -224,27 +149,70 @@ export function HeaderSearch(props: HeaderSearchProps) {
     props.onOpenChange(false);
     toggle.focus({ preventScroll: true });
   };
+  onSettled(() => {
+    // Menu entries can be built before insertion, while their nodes belong to a template document.
+    const ownerDocument = document;
+    const releaseTyping = listen(
+      ownerDocument,
+      "keydown",
+      (event) => {
+        if (
+          event.defaultPrevented ||
+          event.isComposing ||
+          event.keyCode === 229 ||
+          props.open ||
+          props.disabled ||
+          event.key.length !== 1 ||
+          event.key === " " ||
+          event.ctrlKey ||
+          event.metaKey ||
+          event.altKey ||
+          event
+            .composedPath()
+            .some(
+              (target) =>
+                target instanceof Element &&
+                target.matches('input, textarea, select, [contenteditable="true"]'),
+            )
+        ) {
+          return;
+        }
+        // The overlay owner chooses the active card, including hover-opened submenus.
+        const active = registryFor(ownerDocument).stack.at(-1);
+        if (!active?.open || !active.surface.contains(root) || !root.checkVisibility()) {
+          return;
+        }
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        focusField = true;
+        props.onOpenChange(true);
+        props.onQueryChange(event.key);
+      },
+      true,
+    );
+    const releaseClose = listen(
+      ownerDocument,
+      "overlay-after-hide",
+      (event) => {
+        if (
+          event.target instanceof HTMLElement &&
+          event.target.contains(root) &&
+          props.open &&
+          !props.query
+        ) {
+          props.onOpenChange(false);
+        }
+      },
+      true,
+    );
+    return () => {
+      releaseTyping();
+      releaseClose();
+    };
+  });
   return (
     <div
-      ref={(element) => {
-        watchSurfaces();
-        controllers.set(element, {
-          type(key) {
-            if (props.open || props.disabled) {
-              return false;
-            }
-            focusField = true;
-            props.onOpenChange(true);
-            props.onQueryChange(key);
-            return true;
-          },
-          surfaceClosed() {
-            if (props.open && !props.query) {
-              props.onOpenChange(false);
-            }
-          },
-        });
-      }}
+      ref={(element) => (root = element)}
       class={["header-search", props.class]}
       data-searching={props.open ? "" : undefined}
     >

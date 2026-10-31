@@ -292,7 +292,9 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
         await page.elementLocator(search).fill("one");
         expect(getComputedStyle(search).textAlign).toBe("start");
         await userEvent.keyboard("{Escape}");
-        await expect.element(picker.querySelector(".header-search__toggle")!).toHaveFocus();
+        await expect
+          .element(picker.querySelector<HTMLButtonElement>(".header-search__toggle")!)
+          .toHaveFocus();
         await userEvent.keyboard("{Escape}");
         await expect.element(trigger).toHaveFocus();
       }

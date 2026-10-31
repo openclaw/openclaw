@@ -58,7 +58,7 @@ function listRequest<P>(list: (params?: P) => unknown, methods: Record<string, (
   return mockSessionRequests({ "sessions.list": list, ...methods });
 }
 const subscribed = () => ({ subscribed: true });
-function escape(input: HTMLInputElement) {
+function escape(input: HTMLElement) {
   const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
   input.dispatchEvent(event);
   expect(event.defaultPrevented).toBe(true);
