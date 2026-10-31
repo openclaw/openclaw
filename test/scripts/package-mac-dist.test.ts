@@ -103,6 +103,7 @@ function packageFixture(fakeTools: boolean) {
     "lib/mac-notarization-recovery.py",
     "lib/swift-toolchain.sh",
     "lib/plistbuddy.sh",
+    "lib/mac-pnpm.sh",
     "lib/mac-disk-image.sh",
     "lib/mac-signing-identity.sh",
     ...(fakeTools ? [] : ["notarize-mac-artifact.sh"]),
@@ -426,7 +427,10 @@ function runHelper(script: string) {
 }
 
 function runSparkleBootstrap(nodeAfterInstall: string, pnpmBody: string) {
-  const helpers = packageBlock("DIST_PNPM_CMD=()", "correction_build_from_exact_tag()");
+  const helpers =
+    readFileSync("scripts/lib/mac-pnpm.sh", "utf8") +
+    "\n" +
+    packageBlock("SPARKLE_BUILD_DEPS_RETRIED=0", "correction_build_from_exact_tag()");
   const dir = checkpointDirs.make("openclaw-dist-sparkle-");
   const tools = path.join(dir, "tools");
   const marker = path.join(dir, "installed");
@@ -520,7 +524,7 @@ it("fails on old Swift before reading package metadata", () => {
 });
 
 it("prefers repo Corepack pnpm over a global pnpm shim", () => {
-  const helperBlock = packageBlock("DIST_PNPM_CMD=()", "ensure_sparkle_build_deps()");
+  const helperBlock = readFileSync("scripts/lib/mac-pnpm.sh", "utf8");
   const tempRoot = checkpointDirs.make("openclaw-dist-pnpm-root-");
   const outerRoot = checkpointDirs.make("openclaw-dist-pnpm-outer-");
   const toolsDir = checkpointDirs.make("openclaw-dist-pnpm-tools-");
@@ -555,7 +559,7 @@ fi`,
       PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
       cd ${JSON.stringify(outerRoot)}
       ${helperBlock}
-      run_dist_pnpm --version
+      run_pnpm --version
     `);
 
   expectSuccess(result);
