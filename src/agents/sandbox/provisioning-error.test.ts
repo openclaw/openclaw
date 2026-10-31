@@ -8,6 +8,28 @@ describe("sandbox provisioning errors", () => {
     expect(toSandboxProvisioningError(error, "other")).toBe(error);
   });
 
+  it("turns nested permission failures into an actionable sandbox diagnostic", () => {
+    const permission = Object.assign(
+      new Error("EACCES: permission denied, lstat '/workspace/.openclaw/sandbox-skills'"),
+      { code: "EACCES" },
+    );
+    const wrapped = new Error("path alias escape blocked", { cause: permission });
+
+    expect(toSandboxProvisioningError(wrapped, "docker").message).toBe(
+      "Sandbox provisioning could not access the workspace or its generated skill mount directory. Check that the Gateway user can traverse and write the workspace, then retry. Details: path alias escape blocked | EACCES: permission denied, lstat '/workspace/.openclaw/sandbox-skills' | EACCES",
+    );
+  });
+
+  it("keeps opaque nested errors from breaking provisioning error normalization", () => {
+    const opaque = Object.defineProperty(new Error("path alias escape blocked"), "code", {
+      get() {
+        throw new Error("opaque code");
+      },
+    });
+
+    expect(toSandboxProvisioningError(opaque, "docker").message).toBe("path alias escape blocked");
+  });
+
   it("recognizes markers beside opaque getters and through cyclic wrappers", () => {
     const error = toSandboxProvisioningError(new Error("backend unavailable"), "docker");
     const wrapper = Object.defineProperty({ errors: [error] }, "cause", {

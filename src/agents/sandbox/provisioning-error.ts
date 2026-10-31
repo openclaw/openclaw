@@ -7,6 +7,20 @@ import {
 
 const SANDBOX_PROVISIONING_ERROR_CODE = "sandbox_provisioning";
 
+function hasPermissionFailure(error: unknown): boolean {
+  return collectNestedErrorCandidates(error).some((candidate) => {
+    if (candidate === null || typeof candidate !== "object") {
+      return false;
+    }
+    try {
+      const code = "code" in candidate ? candidate.code : undefined;
+      return code === "EACCES" || code === "EPERM";
+    } catch {
+      return false;
+    }
+  });
+}
+
 /** A provider has confirmed that this exact runtime can never be resumed. */
 export class SandboxRuntimeRetiredError extends Error {
   constructor(readonly runtimeId: string) {
@@ -35,7 +49,9 @@ export function toSandboxProvisioningError(error: unknown, backendId: string) {
   const detail = formatErrorMessage(error) || `Sandbox backend "${backendId}" provisioning failed.`;
   const message = isTrustedSecretSurfaceUnavailableError(error)
     ? `${detail} Fix the referenced secret, run \`${SECRET_DEGRADATION_RETRY_HINT}\`, then retry.`
-    : detail;
+    : hasPermissionFailure(error)
+      ? `Sandbox provisioning could not access the workspace or its generated skill mount directory. Check that the Gateway user can traverse and write the workspace, then retry. Details: ${detail}`
+      : detail;
   return new SandboxProvisioningError(message, { backendId, cause: error });
 }
 
