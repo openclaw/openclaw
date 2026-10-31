@@ -106,7 +106,7 @@ function localSessionsAction(
 
 function registerSessionsLifecycleCommand(
   sessionsCmd: Command,
-  operation: "archive" | "delete",
+  operation: "archive" | "restore" | "delete",
 ): void {
   const destructive = operation === "delete";
   const examples: Array<[string, string]> = destructive
@@ -121,23 +121,37 @@ function registerSessionsLifecycleCommand(
           "Preview an agent-scoped delete.",
         ],
       ]
-    : [
-        ['openclaw sessions archive "agent:main:scratch-1"', "Archive one session."],
-        [
-          'openclaw sessions archive "agent:main:scratch-1" "agent:main:scratch-2"',
-          "Archive several sessions.",
-        ],
-        [
-          'openclaw sessions archive "agent:work:scratch-1" --agent work --dry-run',
-          "Preview an agent-scoped archive.",
-        ],
-      ];
+    : operation === "restore"
+      ? [
+          ['openclaw sessions restore "agent:main:scratch-1"', "Restore one archived session."],
+          [
+            'openclaw sessions restore "agent:main:scratch-1" "agent:main:scratch-2"',
+            "Restore several archived sessions.",
+          ],
+          [
+            'openclaw sessions restore "agent:work:scratch-1" --agent work --dry-run',
+            "Preview an agent-scoped restore.",
+          ],
+        ]
+      : [
+          ['openclaw sessions archive "agent:main:scratch-1"', "Archive one session."],
+          [
+            'openclaw sessions archive "agent:main:scratch-1" "agent:main:scratch-2"',
+            "Archive several sessions.",
+          ],
+          [
+            'openclaw sessions archive "agent:work:scratch-1" --agent work --dry-run',
+            "Preview an agent-scoped archive.",
+          ],
+        ];
   const command = sessionsCmd
     .command(`${operation} <keys...>`)
     .description(
       destructive
         ? "Delete stored sessions and their live artifacts via the running gateway. Retained archives can remain searchable."
-        : "Archive stored sessions via the running gateway",
+        : operation === "restore"
+          ? "Restore archived sessions via the running gateway"
+          : "Archive stored sessions via the running gateway",
     )
     .option(`--dry-run`, `Preview ${operation} actions without writing`, false);
   if (destructive) {
@@ -399,6 +413,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     );
 
   registerSessionsLifecycleCommand(sessionsCmd, "archive");
+  registerSessionsLifecycleCommand(sessionsCmd, "restore");
   registerSessionsLifecycleCommand(sessionsCmd, "delete");
 
   addSessionsGatewayOptions(sessionsCmd.command("import [catalogId] [threadId]"))
