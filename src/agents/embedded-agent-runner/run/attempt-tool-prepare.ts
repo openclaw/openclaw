@@ -298,6 +298,8 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     sessionPermissionPolicy: PreparedSessionPermissionPolicy | undefined,
     abortSignal: AbortSignal,
   ) => {
+    // A new generation must reach final policy/schema capture before its factories can prepare approvals.
+    delete cronCreatorToolAllowlistCaptureRef.value;
     webSearchUnconfigured = false;
     additionalInheritedToolNamesRef.length = 0;
     let constructedToolsRaw: Awaited<ReturnType<typeof createOpenClawCodingToolsInternalAsync>> =

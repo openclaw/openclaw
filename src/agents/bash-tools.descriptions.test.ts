@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as execApprovals from "../infra/exec-approvals.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+import { gateAgentToolExecution } from "./agent-tool-availability.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { createExecTool, createProcessTool } from "./bash-tools.js";
 import { createLazyExecTool } from "./lazy-exec-tool.js";
@@ -14,6 +15,32 @@ const processTool = createProcessTool();
 afterEach(() => vi.restoreAllMocks());
 
 describe("tool descriptions", () => {
+  it("retains offered exec descriptors while a process execution gate refuses durable work", async () => {
+    const exec = createLazyExecTool(execDefaults);
+    const process = createProcessTool();
+    const prepare = (continuation: typeof process) =>
+      expectDefined(
+        finalizeAgentTools({
+          tools: [exec, continuation],
+          hookContext: {},
+          wrapBeforeToolCallHook: false,
+        })[0],
+        "finalized exec tool",
+      );
+    const offered = prepare(process);
+    const gated = prepare(
+      gateAgentToolExecution(process, "Completion turn cannot control processes."),
+    );
+    expect(gated.parameters).toEqual(offered.parameters);
+    expect(gated.description).toBe(offered.description);
+    for (const field of ["background", "durable", "yieldMs"]) {
+      expect(gated.parameters).toHaveProperty(`properties.${field}`);
+    }
+    await expect(
+      gated.execute("denied-durable", { command: "exit 99", background: true, durable: true }),
+    ).rejects.toThrow("the process tool enabled");
+  });
+
   it.each(["auto", "ask"] as const)(
     "includes denial guidance only for auto review through finalization: %s",
     (mode) => {

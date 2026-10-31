@@ -6,6 +6,7 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/help
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.entry.js";
 import { SessionWorkStartInvalidatedError } from "../../../config/sessions/work-start-error.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { OpenClawPluginToolContext } from "../../../plugins/tool-types.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -17,8 +18,10 @@ import {
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.js";
 import type { AnyAgentTool } from "../../agent-tools.types.js";
 import { markCodeModePermissionChangeResult } from "../../code-mode-permission-change.js";
+import { preparePluginToolExecutionCapabilities } from "../../plugin-tool-execution.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
+import { captureFinalEffectiveCronCreatorToolAllowlist } from "../../tools/cron-tool-creator-cap.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import { getHoisted, resetEmbeddedAttemptHarness } from "./attempt-spawn-workspace.test-support.js";
 import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
@@ -160,6 +163,55 @@ it("prepares tools without enumerating unrelated attempt state", async () => {
   expect(fixture.result.toolsRaw.map((tool) => tool.name)).toEqual(["read"]);
   expect(codingTools).toHaveBeenCalledTimes(1);
   expect(enumerate).not.toHaveBeenCalled();
+});
+
+it("withholds a new generation's automation preparer until its own final capture", async () => {
+  const callbacks: NonNullable<OpenClawPluginToolContext["prepareCronToolSelection"]>[] = [];
+  const earlyResults: Promise<unknown>[] = [];
+  codingTools.mockImplementation((options) => {
+    assert(options?.assertInvocationCurrent);
+    const capabilities = preparePluginToolExecutionCapabilities({
+      signal: options.abortSignal,
+      config: options.config,
+      cronCreatorToolAllowlist: options.cronCreatorToolAllowlistRef,
+      cronCreatorToolAllowlistCaptureRef: options.cronCreatorToolAllowlistCaptureRef,
+    })(options.assertInvocationCurrent);
+    assert(capabilities.prepareCronToolSelection);
+    callbacks.push(capabilities.prepareCronToolSelection);
+    earlyResults.push(
+      capabilities.prepareCronToolSelection({ toolsAllow: ["write"], mode: "exact" }),
+    );
+    return [];
+  });
+  await using fixture = await createFixture();
+  const { result } = fixture;
+  const capture = (name: string) =>
+    captureFinalEffectiveCronCreatorToolAllowlist(
+      result.cronCreatorToolAllowlist,
+      result.cronCreatorToolAllowlistCaptureRef,
+      [{ name }],
+    );
+  capture("write");
+  expect((await callbacks[0]!({ toolsAllow: ["write"], mode: "exact" })).status).toBe("prepared");
+  await result.refreshPermissionMode(null, () => {});
+  expect(await callbacks[0]!({ toolsAllow: ["write"], mode: "exact" })).toEqual({
+    status: "unavailable",
+  });
+  expect(await callbacks[1]!({ toolsAllow: ["write"], mode: "exact" })).toEqual({
+    status: "unavailable",
+  });
+  expect(await Promise.all(earlyResults)).toEqual([
+    { status: "unavailable" },
+    { status: "unavailable" },
+  ]);
+  capture("read");
+  expect(await callbacks[1]!({ toolsAllow: ["write"], mode: "exact" })).toEqual({
+    status: "denied",
+  });
+  expect(await callbacks[1]!({ toolsAllow: ["read"], mode: "exact" })).toEqual({
+    status: "prepared",
+    toolsAllow: ["read"],
+  });
 });
 
 it.each(

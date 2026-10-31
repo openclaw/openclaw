@@ -12,6 +12,7 @@ import {
   bindOperatorModelExecution,
   type AdmittedRunOperatorAuthority,
 } from "./admitted-run-context.js";
+import { bindActiveCronCreatorToolSelection } from "./cron-creator-authority-context.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 import { SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "./sandbox/constants.js";
 import { resolveProtectedSandboxDirectory } from "./sandbox/fs-paths.js";
@@ -19,11 +20,20 @@ import { prepareSandboxProcessCleanup } from "./sandbox/process-cleanup.js";
 import { shellEscape } from "./sandbox/remote-shell-command.js";
 import type { SandboxContext } from "./sandbox/types.js";
 import { assertCompleteToolResult, resolveToolResultBudget } from "./tool-result-limits.js";
+import { prepareCronToolSelection } from "./tools/cron-tool-creator-cap.js";
+import type {
+  CronCreatorToolAllowlistEntry,
+  CronToolsAllowCaptureRef,
+} from "./tools/cron-tool.types.js";
 import { canonicalizePath } from "./utils/paths.js";
 
 export type PluginToolExecutionCapabilities = Pick<
   OpenClawPluginToolContext<2>,
-  "sandbox" | "modelExecution" | "assertCompleteResult" | "runtimeContext"
+  | "sandbox"
+  | "modelExecution"
+  | "assertCompleteResult"
+  | "runtimeContext"
+  | "prepareCronToolSelection"
 >;
 
 /** Capture once at assembly; a retained plugin never resolves a later run's sandbox or identity. */
@@ -34,6 +44,10 @@ export function preparePluginToolExecutionCapabilities(params: {
   authority?: AdmittedRunOperatorAuthority;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   config?: OpenClawConfig;
+  getRuntimeConfig?: () => OpenClawConfig | undefined;
+  cronCreatorToolAllowlist?: readonly CronCreatorToolAllowlistEntry[];
+  cronCreatorToolAllowlistCaptureRef?: CronToolsAllowCaptureRef;
+  runId?: string;
   agentId?: string;
   sessionKey?: string;
   sessionId?: string;
@@ -88,8 +102,50 @@ export function preparePluginToolExecutionCapabilities(params: {
       }
     }
   }
+  const cronCreatorSource = bindActiveCronCreatorToolSelection(params.runId);
   const resultBudget = resolveToolResultBudget(params.modelContextWindowTokens);
   return (assertInvocationCurrent, pluginSignal) => ({
+    async prepareCronToolSelection(selection) {
+      const assertCurrent = () => {
+        params.signal?.throwIfAborted();
+        pluginSignal?.throwIfAborted();
+        assertInvocationCurrent();
+        cronCreatorSource?.assertCurrent();
+      };
+      try {
+        assertCurrent();
+        if (
+          !cronCreatorSource &&
+          (!params.cronCreatorToolAllowlist ||
+            params.cronCreatorToolAllowlistCaptureRef?.value?.source !== "final-executable-surface")
+        ) {
+          return { status: "unavailable" };
+        }
+        const config = params.getRuntimeConfig ? params.getRuntimeConfig() : params.config;
+        if (!config) {
+          return { status: "unavailable" };
+        }
+        // Native MCP/app tools can be absent from the dynamic bridge capture. Its
+        // existing creator owner materializes the complete surface without a grant.
+        const snapshot = cronCreatorSource
+          ? await cronCreatorSource.materialize({
+              signal: AbortSignal.any(
+                [params.signal, pluginSignal].filter((value): value is AbortSignal =>
+                  Boolean(value),
+                ),
+              ),
+            })
+          : undefined;
+        assertCurrent();
+        const tools = snapshot?.tools ?? params.cronCreatorToolAllowlist;
+        if (!tools || (snapshot && snapshot.provenance.source !== "final-executable-surface")) {
+          return { status: "unavailable" };
+        }
+        return prepareCronToolSelection(selection, tools, config.cron?.defaultTools);
+      } catch {
+        return { status: "unavailable" };
+      }
+    },
     runtimeContext: {
       models: authority
         ? createPluginRequesterModels({

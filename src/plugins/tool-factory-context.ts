@@ -53,14 +53,19 @@ export function createPluginToolFactoryContext(params: {
     continuation?.assertCurrent();
     assertMemoryAudienceCurrent?.();
   };
-  return {
-    ...context,
-    ...(entry.contextVersion === 2
+  // Legacy factories may prepare approvals only when a real host invocation owns them.
+  const executionCapabilities =
+    entry.contextVersion === 2 || params.assertInvocationCurrent
       ? params.bindExecutionCapabilities?.(
           assertInvocationCurrent,
           record && getPluginInstance(record)?.lifecycle.signal,
         )
-      : {}),
+      : undefined;
+  return {
+    ...context,
+    ...(entry.contextVersion === 2
+      ? executionCapabilities
+      : { prepareCronToolSelection: executionCapabilities?.prepareCronToolSelection }),
     ...(continuation
       ? {
           requesterSenderId: continuation.senderId,

@@ -364,6 +364,7 @@ function* assembleOpenClawCodingTools(
   });
   const pluginToolOptions = {
     ...options,
+    cronCreatorToolAllowlist,
     listingClientCaps,
     agentSessionKey: options?.sessionKey,
     agentChannel: resolveGatewayMessageChannel(options?.messageChannel ?? options?.messageProvider),
