@@ -19,6 +19,11 @@ import {
   shouldReportSqliteLockFailure,
 } from "./sqlite-busy-timeout.js";
 import {
+  readSqliteTransactionWriter,
+  recordSqliteTransactionWriter,
+  sqliteTransactionWriterSlot,
+} from "./sqlite-database-admission-context.js";
+import {
   isSqliteLockError,
   sqliteErrorCode,
   sqliteExtendedResultCode,
@@ -229,6 +234,7 @@ function logTransactionStep(
     beginAdmission?: SqliteBeginAdmissionDiagnostics;
     db: DatabaseSync;
     elapsedMs: number;
+    holderAtWaitStart?: ReturnType<typeof readSqliteTransactionWriter>;
     options?: SqliteTransactionOptions;
     step: SqliteTransactionStep;
   },
@@ -250,6 +256,7 @@ function logTransactionStep(
         ...transactionDiagnosticLabels(params.db, params.options),
         ...(failure ? { code: sqliteErrorCode(failure.error) } : {}),
         elapsedMs: params.elapsedMs,
+        ...(params.holderAtWaitStart ? { holderAtWaitStart: params.holderAtWaitStart } : {}),
         ...(failure ? { failureKind: "lock-contention" } : {}),
         isMainThread,
         pid: process.pid,
@@ -272,6 +279,10 @@ function execTimedTransactionStep(params: {
   step: SqliteTransactionStep;
 }): number {
   const startedAt = Date.now();
+  const holderAtWaitStart =
+    params.sql === "BEGIN IMMEDIATE"
+      ? readSqliteTransactionWriter(params.db, startedAt)
+      : undefined;
   const beginAdmission =
     params.sql === "BEGIN IMMEDIATE"
       ? { nativeAttempts: 0, nativeMs: 0, serviceCalls: 0, serviceMs: 0 }
@@ -287,6 +298,7 @@ function execTimedTransactionStep(params: {
       beginAdmission,
       db: params.db,
       elapsedMs,
+      holderAtWaitStart,
       options: params.options,
       step: params.step,
     });
@@ -299,7 +311,14 @@ function execTimedTransactionStep(params: {
       !(params.step === "begin" && params.options?.beginLockFailureReporting === "suppress")
     ) {
       logTransactionStep(
-        { beginAdmission, db: params.db, elapsedMs, options: params.options, step: params.step },
+        {
+          beginAdmission,
+          db: params.db,
+          elapsedMs,
+          holderAtWaitStart,
+          options: params.options,
+          step: params.step,
+        },
         { error },
       );
     }
@@ -426,6 +445,14 @@ function settleSqliteTransactionSync<T>(
 ): T {
   const timing = currentSqliteOperationTiming();
   const transactionStartedAt = Date.now();
+  const writerSlot = mode === "immediate" ? sqliteTransactionWriterSlot(db) : undefined;
+  if (writerSlot) {
+    recordSqliteTransactionWriter(
+      writerSlot,
+      options?.operationLabel || captureSqliteReaderOwner()?.operation || "unlabeled",
+      transactionStartedAt,
+    );
+  }
   const admissionWaitBefore = timing?.hostAdmissionWaitMs ?? 0;
   const databaseAdmissionWaitBefore = timing?.databaseAdmissionWaitMs ?? 0;
   let commitMs = 0;
@@ -471,6 +498,10 @@ function settleSqliteTransactionSync<T>(
     assertTransactionUsable(db);
     throw error;
   } finally {
+    // COMMIT may have admitted a different worker before this finally resumes.
+    if (writerSlot) {
+      Atomics.compareExchange(writerSlot, 1, threadId + 1, 0);
+    }
     // Include COMMIT and failed holders: both keep other writers waiting too.
     try {
       const elapsedMs = Date.now() - transactionStartedAt;
