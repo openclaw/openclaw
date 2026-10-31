@@ -1320,6 +1320,7 @@ src/infra/tmp-openclaw-dir.ts
 src/infra/update-capture-space.ts
 src/infra/update-channels.ts
 src/infra/update-database-generations.ts
+src/infra/update-database-path.ts
 src/infra/update-doctor-config-schema.ts
 src/infra/update-doctor-lint-schema.ts
 src/infra/update-doctor-migration-attribution.ts
