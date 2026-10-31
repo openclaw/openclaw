@@ -95,14 +95,22 @@ it("preserves exact compressed payloads in label and header repair snapshots", (
   `);
   // Even exceptional inline rows belong to the archive, not Doctor's hot repairs.
   expect(reader.sessionIds()).toEqual(["compressed"]);
+  const errors: string[] = [];
+  expect(reader.headerlessSessionIds((id) => errors.push(id))).toEqual(["compressed"]);
+  expect(errors).toEqual([]);
+  database.exec(`
+    UPDATE transcript_events SET event_json = '{"type":"metadata"}'
+      WHERE session_id = 'archived' AND seq = 0;
+  `);
+  expect(reader.headerlessSessionIds((id) => errors.push(id))).toEqual(["compressed"]);
+  expect(errors).toEqual([]);
   database
     .prepare("UPDATE transcript_events SET event_zstd = ? WHERE session_id = ? AND seq = 2")
     .run(new Uint8Array([0]), "compressed");
   expect(reader.labelRepairSnapshot("compressed", accept, accept)).toMatchObject({ ok: false });
   database
-    .prepare("UPDATE transcript_events SET event_zstd = ? WHERE seq = 0")
-    .run(new Uint8Array([0]));
-  const errors: string[] = [];
+    .prepare("UPDATE transcript_events SET event_zstd = ? WHERE session_id = ? AND seq = 0")
+    .run(new Uint8Array([0]), "compressed");
   expect(reader.headerlessSessionIds((id) => errors.push(id))).toEqual([]);
   expect(errors).toEqual(["compressed"]);
 });

@@ -77,6 +77,11 @@ export class ReadOnlySqliteTranscriptReader {
     const db = getSessionKysely(this.database);
     const firstRows = db
       .selectFrom("transcript_events")
+      .$if(tableExists(this.database, "session_transcript_cold_archives"), (query) =>
+        query.where("session_id", "not in", (eb) =>
+          eb.selectFrom("session_transcript_cold_archives").select("session_id"),
+        ),
+      )
       .select("session_id")
       .select((eb) => eb.fn.min<number>("seq").as("seq"))
       .groupBy("session_id")

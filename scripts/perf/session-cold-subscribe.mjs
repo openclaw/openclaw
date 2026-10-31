@@ -13,7 +13,8 @@
  *
  * Each operation selects an independent 256-message transcript prepared outside
  * measurement. busy holds the writer for 1,000 ms; hot/cold leave it available.
- * CPU includes worker threads. Allocation samples only the main isolate, including
+ * CPU includes worker threads; mainThreadCpuMs records the calling thread separately.
+ * Allocation samples only the main isolate, including
  * collected objects, at 16 KiB. Traced timings are not latency evidence. p99 with
  * fewer than 1,000 observations is context only. State is private and cleaned up.
  */
@@ -153,7 +154,7 @@ try {
       routeVariants: [],
       catalogComplete: true,
     }),
-    logGateway: { info: empty, warn: empty, error: empty, debug: empty },
+    logGateway: { info: empty, warn: empty, error: empty, debug: empty, isEnabled: () => false },
     agentRunSeq: new Map(),
     chatRunState: createChatRunState(),
     addChatRun: empty,
@@ -255,9 +256,11 @@ try {
         }, 1000);
       }
       const started = performance.now(),
-        cpu = process.cpuUsage();
+        cpu = process.cpuUsage(),
+        mainThreadCpu = process.threadCpuUsage();
       const payload = await request(scope);
       const used = process.cpuUsage(cpu),
+        mainThreadUsed = process.threadCpuUsage(mainThreadCpu),
         ms = performance.now() - started;
       assert.equal(payload.messages.length, 80, "bounded history page length");
       assert.equal(
@@ -268,6 +271,7 @@ try {
       samples.push({
         wallMs: ms,
         cpuMs: (used.user + used.system) / 1000,
+        mainThreadCpuMs: (mainThreadUsed.user + mainThreadUsed.system) / 1000,
         writerReleased: released,
       });
       if (
@@ -307,6 +311,7 @@ try {
       p99Ms: sorted[Math.ceil(count * 0.99) - 1],
       p99ContextOnly: count < 1000,
       cpuMs: samples.reduce((a, s) => a + s.cpuMs, 0),
+      mainThreadCpuMs: samples.reduce((a, s) => a + s.mainThreadCpuMs, 0),
       sampledMainAllocatedBytes: allocatedBytes,
       archivesRetained: retained,
       hostLoadBefore,
