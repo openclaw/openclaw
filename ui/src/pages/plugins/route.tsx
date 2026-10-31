@@ -61,7 +61,9 @@ function definePluginsPage(routeId: "plugins" | "plugin-settings", surface: Plug
       const module = await import("./plugins-page.tsx");
       if (surface === "settings") {
         // Let module evaluation finish its task before replacing the previous page.
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
       }
       return {
         renderSolid: (props: SolidRouteProps<PluginsRouteData>) => (
