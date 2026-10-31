@@ -30,8 +30,13 @@ enum PreviewRole: String {
 actor SessionPreviewCache {
     static let shared = SessionPreviewCache()
 
+    private let now: @Sendable () -> Date
     private var entries: [String: (
         snapshot: SessionMenuPreviewSnapshot, updatedAt: Date, lease: GatewayConnection.ServerLease)] = [:]
+
+    init(now: @escaping @Sendable () -> Date = { Date() }) {
+        self.now = now
+    }
 
     func cachedSnapshot(
         for sessionKey: String,
@@ -40,7 +45,7 @@ actor SessionPreviewCache {
     {
         guard let entry = self.entries[sessionKey] else { return nil }
         guard gateway.serverLeaseMatchesCurrentRoute(entry.lease),
-              maxAge.map({ Date().timeIntervalSince(entry.updatedAt) < $0 }) ?? true else { return nil }
+              maxAge.map({ self.now().timeIntervalSince(entry.updatedAt) < $0 }) ?? true else { return nil }
         return (entry.snapshot, entry.lease)
     }
 
@@ -50,8 +55,8 @@ actor SessionPreviewCache {
         gateway: GatewayConnection,
         lease: GatewayConnection.ServerLease)
     {
-        guard gateway.serverLeaseMatchesCurrentRoute(lease) else { return }
-        self.entries[sessionKey] = (snapshot, Date(), lease)
+        guard !Task.isCancelled, gateway.serverLeaseMatchesCurrentRoute(lease) else { return }
+        self.entries[sessionKey] = (snapshot, self.now(), lease)
     }
 }
 
@@ -209,7 +214,8 @@ enum SessionMenuPreviewLoader {
     static func prewarm(
         sessionKeys: [String],
         maxItems: Int,
-        gateway: GatewayConnection = .shared) async
+        gateway: GatewayConnection = .shared,
+        cache: SessionPreviewCache = .shared) async
     {
         var seen = Set<String>()
         let keys = sessionKeys.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -218,7 +224,7 @@ enum SessionMenuPreviewLoader {
         do {
             let (payload, lease) = try await self.requestPreview(keys: keys, maxItems: maxItems, gateway: gateway)
             for entry in payload.previews {
-                await SessionPreviewCache.shared.store(
+                await cache.store(
                     snapshot: self.snapshot(from: entry, maxItems: maxItems),
                     for: entry.key,
                     gateway: gateway,
@@ -235,9 +241,10 @@ enum SessionMenuPreviewLoader {
     static func load(
         sessionKey: String,
         maxItems: Int,
-        gateway: GatewayConnection = .shared) async -> SessionMenuPreviewSnapshot
+        gateway: GatewayConnection = .shared,
+        cache: SessionPreviewCache = .shared) async -> SessionMenuPreviewSnapshot
     {
-        if let cached = await SessionPreviewCache.shared.cachedSnapshot(
+        if let cached = await cache.cachedSnapshot(
             for: sessionKey,
             gateway: gateway,
             maxAge: cacheMaxAgeSeconds),
@@ -252,13 +259,13 @@ enum SessionMenuPreviewLoader {
             let entry = payload.previews.first(where: { $0.key == sessionKey }) ?? payload.previews.first
             let snapshot = entry.map { self.snapshot(from: $0, maxItems: maxItems) }
                 ?? SessionMenuPreviewSnapshot(items: [], status: .error("Preview unavailable"))
-            await SessionPreviewCache.shared.store(snapshot: snapshot, for: sessionKey, gateway: gateway, lease: lease)
+            await cache.store(snapshot: snapshot, for: sessionKey, gateway: gateway, lease: lease)
             guard gateway.serverLeaseMatchesCurrentRoute(lease) else { throw CancellationError() }
             return snapshot
         } catch is CancellationError {
             return SessionMenuPreviewSnapshot(items: [], status: .loading)
         } catch {
-            if let fallback = await SessionPreviewCache.shared.cachedSnapshot(for: sessionKey, gateway: gateway),
+            if let fallback = await cache.cachedSnapshot(for: sessionKey, gateway: gateway),
                gateway.serverLeaseMatchesCurrentRoute(fallback.lease)
             {
                 return fallback.snapshot
