@@ -87,6 +87,7 @@ describe("config appearance preferences", () => {
   it.each([
     { systemLocale: "pt-BR", localeOverride: undefined, label: "Português (Brazilian Portuguese)" },
     { systemLocale: "de", localeOverride: "fr", label: "Deutsch (German)" },
+    { systemLocale: "cs", localeOverride: undefined, label: "Čeština (Czech)" },
   ] as const)(
     "renders and changes language with system locale $systemLocale",
     async ({ systemLocale, localeOverride, label }) => {
@@ -123,6 +124,21 @@ describe("config appearance preferences", () => {
       expect(props.onLocaleChange).toHaveBeenCalledWith(undefined);
     },
   );
+
+  it("offers Czech as an explicit language choice", async () => {
+    const { container, props } = renderAppearance({ systemLocale: "en" });
+    await updatePickers(container);
+    const select = container.querySelector<SelectPicker>(
+      "#settings-language openclaw-select-picker",
+    );
+    if (!select) {
+      throw new Error("Missing language select");
+    }
+    await openPicker(select);
+    expect(pickerOption(select, "cs")?.textContent).toContain("Čeština (Czech)");
+    await choosePickerValue(select, "cs");
+    expect(props.onLocaleChange).toHaveBeenCalledWith("cs");
+  });
 
   it("names the theme's chat face and maps typography sentinels back to unset overrides", async () => {
     const { container, props } = renderAppearance({
