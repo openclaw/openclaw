@@ -71,6 +71,7 @@ let targets = explicitTargets
         .map((file) => `src/infra/database-engine/${file.replaceAll("\\", "/")}`)
         .toSorted(),
       "src/commands/doctor-database-diagnostics.postgres.test.ts",
+      "src/commands/startup-client-credentials.gateway.postgres.test.ts",
       "src/commands/startup-client-credentials.postgres.test.ts",
       "src/config/sessions/session-accessor.sqlite-lifecycle-artifacts.postgres.test.ts",
       "src/config/sessions/session-accessor.sqlite-read-hold.postgres.test.ts",

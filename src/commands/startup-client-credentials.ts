@@ -238,10 +238,11 @@ export async function prepareStartupClientCredentials(
             runtime.error(warning);
           }
         }
-        const [identity, auth, approvals] = await Promise.all([
+        const [identity, auth, approvals, { withEngineStoreAdmission }] = await Promise.all([
           import("../infra/state-migrations.device-identity.js"),
           import("../infra/state-migrations.device-auth.js"),
           import("../infra/state-migrations.exec-approvals.js"),
+          import("../infra/database-engine/admission-scope.js"),
         ]);
         const context = { env, stateDir: resolveStateDir(env), doctorOnlyStateMigrations: true };
         const detectedIdentity = preparedIdentity ?? identity.detectLegacyDeviceIdentity(context);
@@ -260,7 +261,10 @@ export async function prepareStartupClientCredentials(
           () =>
             approvals.migrateLegacyExecApprovals({
               ...context,
-              detected: approvals.detectLegacyExecApprovals(context),
+              // Detection reads canonical state synchronously on the Gateway main thread.
+              detected: withEngineStoreAdmission(() =>
+                approvals.detectLegacyExecApprovals(context),
+              ),
             }),
         ]) {
           for (const warning of (await migrate()).warnings) {
