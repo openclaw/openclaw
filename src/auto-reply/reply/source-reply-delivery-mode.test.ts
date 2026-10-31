@@ -1,5 +1,13 @@
 import { expect, it } from "vitest";
-import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
+import {
+  BOT_SENDER_DELIVERY_HINT,
+  MESSAGE_TOOL_ONLY_DELIVERY_HINT,
+} from "../../plugin-sdk/message-tool-delivery-hints.js";
+import {
+  resolveSourceReplyExpectation,
+  resolveSourceReplyVisibilityPolicy,
+  resolveUserRequestDeliveryHint,
+} from "./source-reply-delivery-mode.js";
 
 const automaticGroups = { messages: { groupChat: { visibleReplies: "automatic" } } } as const;
 const toolReplies = { messages: { visibleReplies: "message_tool" } } as const;
@@ -263,4 +271,33 @@ it.each([
       ...input,
     }),
   ).toEqual({ ...visible, ...expected });
+});
+
+const unaddressedGroupTurn = {
+  ChatType: "group",
+  Provider: "telegram",
+  WasMentioned: false,
+} as const;
+const explicitBotMention = { WasMentioned: true, MentionSource: "explicit_bot" } as const;
+
+// Reply expectations come from the real admission resolver, so the hint follows admission.
+it.each([
+  ["bot sender on an optional turn", true, "allow", {}, BOT_SENDER_DELIVERY_HINT],
+  ["bot sender under disallow", true, "disallow", {}, MESSAGE_TOOL_ONLY_DELIVERY_HINT],
+  [
+    "bot sender's explicit mention",
+    true,
+    "allow",
+    explicitBotMention,
+    MESSAGE_TOOL_ONLY_DELIVERY_HINT,
+  ],
+  ["human sender on an optional turn", false, "allow", {}, MESSAGE_TOOL_ONLY_DELIVERY_HINT],
+  ["unknown sender on an optional turn", undefined, "allow", {}, MESSAGE_TOOL_ONLY_DELIVERY_HINT],
+] as const)("delivery hint: %s", (_name, senderIsBot, group, mention, hint) => {
+  const replyExpectation = resolveSourceReplyExpectation({
+    cfg: { agents: { defaults: { silentReply: { group } } } },
+    ctx: { ...unaddressedGroupTurn, ...mention },
+  });
+
+  expect(resolveUserRequestDeliveryHint({ senderIsBot, replyExpectation })).toBe(hint);
 });
