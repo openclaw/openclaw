@@ -92,6 +92,7 @@ export async function prepareLocalSandboxWorkspace(params: {
     assertCurrent();
     markManagedWorktreePreparation();
     assertLocalSandboxWorkspaceBackend(params.sandbox.backend);
+    phases.mark("attempt.setup.sandbox.workspace_selection.reuse.acquire");
     const workspaceDir = await withLocalWorkspacePreparation(
       executionOwner,
       {
@@ -100,7 +101,6 @@ export async function prepareLocalSandboxWorkspace(params: {
         signal: params.signal,
       },
       async (beginCapture) => {
-        phases.mark("attempt.setup.sandbox.workspace_selection.reuse.acquire");
         const existing = await reuseLocalWorkspaceProjection(
           executionOwner,
           params.signal,
