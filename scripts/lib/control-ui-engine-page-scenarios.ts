@@ -335,12 +335,26 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
     action: click("openclaw-channels-page button.channels-item", ".channels-detail"),
   },
   "cloud-workers": {
-    ready: 'openclaw-cloud-workers-page button[aria-label^="Edit"]',
+    ready: "openclaw-cloud-workers-page .cloud-environments__advanced > summary",
     rows: { selector: 'openclaw-cloud-workers-page button[aria-label^="Edit"]', minimum: 30 },
-    action: click(
-      'openclaw-cloud-workers-page button[aria-label^="Edit"]',
-      'openclaw-cloud-workers-page input[aria-label="Profile ID"]',
-    ),
+    action: {
+      label: "Expand advanced cloud environment settings and edit a machine profile",
+      run: async (page) => {
+        const editor = page.locator(
+          'openclaw-cloud-workers-page input[aria-label="Crabbox backend"]',
+        );
+        assert.equal(await editor.filter({ visible: true }).count(), 0);
+        await page.locator(".cloud-environments__advanced > summary").click();
+        await page
+          .locator('openclaw-cloud-workers-page button[aria-label^="Edit"]')
+          .first()
+          .click();
+        await editor.waitFor({ state: "visible" });
+        assert.equal(await editor.inputValue(), "aws");
+        await frames(page);
+        return { opened: true };
+      },
+    },
   },
   connection: {
     ready: "openclaw-connection-page .settings-page",
