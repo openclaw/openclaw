@@ -36,7 +36,7 @@ export function PluginRetryError(props: { error: string; onRetry: () => void }):
     </div>
   );
 }
-export function InstalledInventory(props: InventoryProps): JSX.Element {
+function InstalledInventory(props: InventoryProps): JSX.Element {
   const query = createMemo(() => props.query.trim().toLocaleLowerCase());
   const plugins = createMemo(() =>
     (props.result?.plugins ?? [])
