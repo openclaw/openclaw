@@ -54,6 +54,57 @@ async function createRelay(platform: "darwin" | "win32", retainLineage = false) 
   );
 }
 
+it("retires a certified Linux stdio owner after channel closure", async () => {
+  platformMock = mockProcessPlatform("linux");
+  const stub = createWritableRelayChild();
+  mocks.spawn.mockReturnValue(stub.child);
+  const starting = createServiceChildRelayAdapter({
+    command: "synthetic-command",
+    args: [],
+    stdinMode: "pipe-closed",
+    oomScoreWrapperSelected: false,
+  });
+  const start = firstMockArg(stub.sendMock, "service start");
+  if (!isRecord(start) || typeof start.generation !== "string") {
+    throw new Error("Expected an admitted Linux service generation");
+  }
+  expect(start.treeOwnership).toBe("linux-subreaper");
+  const generation = start.generation;
+  let sequence = 0;
+  const emit = (payload: ServiceChildAnchorPayload) => {
+    stub.control.push(
+      Buffer.from(encodeServiceChildMessage({ ...payload, generation, sequence: ++sequence })),
+    );
+  };
+  emit({
+    type: "ready",
+    commandPid: 1234,
+    anchorPid: 1235,
+    treeOwnership: "linux-subreaper",
+  });
+  const adapter = await starting;
+  const groupProbe = vi.spyOn(process, "kill").mockReturnValue(true);
+  emit({ type: "root-result", code: 0, signal: null });
+  stub.stdout.emit("end");
+  stub.stderr.emit("end");
+  await adapter.wait();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const closing = closeOwnedStdioProcess(adapter);
+  emit({ type: "closing", reason: "lineage-closed", descendantsReaped: true });
+  stub.control.destroy();
+  stub.lineage.end();
+  await nextTurn();
+  expect(stub.killMock).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+  stub.disconnectMock();
+  stub.emitExit(0);
+  await expect(closing).resolves.toMatchObject({
+    reason: "forced-relay-exit",
+    signalRequested: "SIGKILL",
+    exit: { code: 0, signal: null },
+  });
+  expect(groupProbe).not.toHaveBeenCalled();
+});
+
 it.each(["before", "after"] as const)(
   "checks launch policy %s relay start dispatch",
   async (timing) => {
