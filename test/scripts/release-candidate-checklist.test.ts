@@ -365,24 +365,59 @@ describe("release candidate checklist", () => {
     }
   });
 
-  it.each([
-    {
-      flags: [
-        "--tag",
-        "v2026.9.1",
-        "--workflow-sha",
-        "b".repeat(40),
-        "--publish-workflow-ref",
-        publishWorkflowRef,
+  it.each<[string[], string]>([
+    [
+      ["--workflow-sha", "b".repeat(40), "--publish-workflow-ref", publishWorkflowRef],
+      "--workflow-sha and --publish-workflow-ref are mutually exclusive",
+    ],
+    [["--workflow-sha", "b".repeat(12)], "--workflow-sha must be a full lowercase commit SHA"],
+    [["--target-sha", "not-a-sha"], "--target-sha must be a full lowercase commit SHA"],
+    [["--publish-workflow-ref", "main"], "protected release-publish tag"],
+    [
+      ["--run-parallels", "--skip-parallels"],
+      "--run-parallels and --skip-parallels cannot be combined",
+    ],
+    [["--skip-dispatch"], "--skip-dispatch requires --full-release-validation-run-id"],
+    [["--full-release-validation-run-id", "111", "--full-release-run", "222"], "do not combine"],
+    [["--workflow-ref", "release/2026.5.14"], "--workflow-ref must be main"],
+    [["--tag", "v2026.7.1-alpha.3"], "Alpha releases are retired;"],
+    [
+      ["--tag", "v2026.5.14-beta.4", "--tag", "v2026.5.14-beta.3"],
+      "--tag was provided more than once",
+    ],
+    [["--plugin-sdk-api-acknowledgement", "ABC"], "8-character lowercase digest"],
+    [
+      ["--windows-node-tag", "latest"],
+      "--windows-node-tag must be an explicit version tag, not latest",
+    ],
+    [["--plugin-publish-scope", "selected"], "--plugin-publish-scope selected requires --plugins"],
+    [
+      ["--plugin-publish-scope", "selected", "--plugins", "@openclaw/diffs"],
+      "release candidates publish OpenClaw with --plugin-publish-scope all-publishable",
+    ],
+  ])("rejects invalid candidate options %j: %s", (flags, message) => {
+    expect(() =>
+      parseArgs(flags.includes("--tag") ? flags : ["--tag", "v2026.5.14-beta.3", ...flags]),
+    ).toThrow(message);
+  });
+
+  it("keeps help short-circuiting before deprecated alias conflict checks", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "./scripts/tsx.mjs",
+        "scripts/release-candidate-checklist.mts",
+        "--help",
+        "--full-release-validation-run-id",
+        "111",
+        "--full-release-run",
+        "222",
       ],
-      message: "--workflow-sha and --publish-workflow-ref are mutually exclusive",
-    },
-    {
-      flags: ["--tag", "v2026.9.1", "--workflow-sha", "b".repeat(12)],
-      message: "--workflow-sha must be a full lowercase commit SHA",
-    },
-  ])("rejects invalid tooling SHA selection: $message", ({ flags, message }) => {
-    expect(() => parseArgs(flags)).toThrow(message);
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("Usage: pnpm release:candidate");
   });
 
   it("requires an explicit prepared route and preserves historical normal state semantics", () => {
@@ -2826,7 +2861,7 @@ describe("release candidate checklist", () => {
         "latest",
         "--publish-workflow-ref",
         preparedWorkflowRef,
-        "--full-release-run",
+        "--full-release-validation-run-id",
         "111",
         "--npm-preflight-run",
         "222",
