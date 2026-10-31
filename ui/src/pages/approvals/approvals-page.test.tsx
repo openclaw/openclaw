@@ -56,6 +56,21 @@ const terminal = (id: string, resolvedAtMs: number): ApprovalHistoryResult["item
   resolver: { kind: "device", id: "reviewer-device" },
 });
 
+const pluginTerminal = (
+  id: string,
+  resolvedAtMs: number,
+  severity: "info" | "warning" | "critical",
+): ApprovalHistoryResult["items"][number] => ({
+  ...terminal(id, resolvedAtMs),
+  presentation: {
+    kind: "plugin",
+    title: `Plugin ${id}`,
+    description: `Plugin approval ${id}`,
+    severity,
+    allowedDecisions: ["deny"],
+  },
+});
+
 function createPage({
   history = emptyHistory,
   hello,
@@ -438,4 +453,39 @@ it("retries a failed revoke without losing the row or accepting a stale ledger r
   flush();
   expect(p.text(grantsTable)).toContain("Revoked");
   expect(p.button()).toBeNull();
+});
+
+it("renders the plugin approval severity chip next to the kind label", async () => {
+  const p = createPage({
+    history: replyOnce({
+      items: [
+        pluginTerminal("critical-approval", 4_000, "critical"),
+        pluginTerminal("warning-approval", 3_000, "warning"),
+        pluginTerminal("info-approval", 2_000, "info"),
+        terminal("exec-approval", 1_000),
+      ],
+    }),
+    grants: () => Promise.resolve({ grants: [] }),
+  });
+  await p.waitText(historyTable, "Plugin critical-approval");
+
+  const kindCells = () =>
+    [...p.query(historyTable)!.querySelectorAll("tbody tr")].map(
+      (row) => row.querySelectorAll("td")[1],
+    );
+  const [critical, warning, info, exec] = kindCells();
+  const chip = (cell: Element | undefined) =>
+    cell?.querySelector<HTMLElement>(".approval-history__severity");
+
+  expect(critical?.textContent).toContain("Plugin");
+  expect(chip(critical)?.textContent).toBe("Critical");
+  expect(chip(critical)?.classList.contains("approval-history__severity--critical")).toBe(true);
+
+  expect(chip(warning)?.textContent).toBe("Warning");
+  expect(chip(warning)?.classList.contains("approval-history__severity--warning")).toBe(true);
+
+  expect(chip(info)?.textContent).toBe("Info");
+  expect(chip(info)?.classList.contains("approval-history__severity--info")).toBe(true);
+
+  expect(chip(exec)).toBeNull();
 });
