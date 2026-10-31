@@ -373,6 +373,12 @@ the response cache. A model that needs a new wire protocol requires plugin
 support first. Cached inventory is not authorization: ClawRouter checks current
 grants and budgets when a model request is dispatched.
 
+If a selected model has no discovered route after a refresh or restart, OpenClaw
+stops before inference or compaction rather than guessing a protocol from the
+provider default. Refresh ClawRouter models or select an available model. An
+explicit model-level `api` in `models.providers.clawrouter.models` remains an
+operator-authored route; the router still enforces its grants and rate limits.
+
 A model's optional `displayName` is its picker label; without it, OpenClaw uses
 the provider display name and catalog `id`, omitting a repeated `<provider>/`
 prefix from the label (for example, `Anthropic · claude-sonnet-4-6`). The label never changes model

@@ -626,17 +626,26 @@ export default defineSingleProviderPluginEntry({
             ...(ctx.authProfileId ? { profileId: ctx.authProfileId, lockedProfile: true } : {}),
           })
         )?.apiKey;
-        if (!apiKey) {
-          return undefined;
-        }
-        const providerConfig = await buildClawRouterProviderConfig({
-          apiKey,
-          discoveryApiKey: apiKey,
-          baseUrl: ctx.providerConfig?.baseUrl ?? configuredBaseUrl(ctx.config),
-        });
-        const model = providerConfig.models.find((entry) => entry.id === ctx.modelId);
-        if (!model) {
-          return undefined;
+        const providerConfig = apiKey
+          ? await buildClawRouterProviderConfig({
+              apiKey,
+              discoveryApiKey: apiKey,
+              baseUrl: ctx.providerConfig?.baseUrl ?? configuredBaseUrl(ctx.config),
+            })
+          : undefined;
+        const model = providerConfig?.models.find((entry) => entry.id === ctx.modelId);
+        if (!providerConfig || !model) {
+          // Keep known catalog routes and explicit authored APIs, but never synthesize
+          // an upstream protocol from the facade's provider-wide Responses default.
+          if (
+            ctx.modelRegistry.find(PROVIDER_ID, ctx.modelId)?.api ||
+            ctx.providerConfig?.models?.some((entry) => entry.id === ctx.modelId && entry.api)
+          ) {
+            return undefined;
+          }
+          throw new Error(
+            `ClawRouter model ${ctx.modelId} is not available in the current catalog. Refresh ClawRouter models or select an available model before retrying.`,
+          );
         }
         return {
           ...model,

@@ -78,6 +78,7 @@ function dynamicModelContext() {
     provider: "clawrouter",
     modelId: "openai/gpt-5.5",
     authProfileId: "clawrouter-profile",
+    modelRegistry: { find: () => undefined },
   };
 }
 
@@ -393,7 +394,9 @@ describe("ClawRouter plugin", () => {
     });
     expect(providerAuthRuntimeMocks.resolveApiKeyForProvider).toHaveBeenCalledWith(SCOPED_AUTH);
     providerAuthRuntimeMocks.resolveApiKeyForProvider.mockResolvedValue(undefined);
-    expect(await provider.prepareDynamicModel?.(context as never)).toBeUndefined();
+    await expect(provider.prepareDynamicModel?.(context as never)).rejects.toThrow(
+      /not available/u,
+    );
   });
 
   it("returns only the requested model from the caller's credential and endpoint", async () => {
@@ -415,12 +418,13 @@ describe("ClawRouter plugin", () => {
     const first = prepare(context);
     try {
       await Promise.race([firstStarted.promise, first]);
-      const other = await provider.prepareDynamicModel?.({
-        ...context,
-        authProfileId: "other-profile",
-        providerConfig: { baseUrl: "https://other.example/v1", models: [] },
-      } as never);
-      expect(other).toBeUndefined();
+      await expect(
+        provider.prepareDynamicModel?.({
+          ...context,
+          authProfileId: "other-profile",
+          providerConfig: { baseUrl: "https://other.example/v1", models: [] },
+        } as never),
+      ).rejects.toThrow(/not available/u);
       expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
         "https://clawrouter.openclaw.ai/v1/catalog",
         "https://other.example/v1/catalog",
@@ -431,7 +435,7 @@ describe("ClawRouter plugin", () => {
     }
     expect(await first).toMatchObject({ id: "openai/gpt-5.5" });
     await expectPrepared(context);
-    expect(await prepare({ ...context, modelId: "not-granted" })).toBeUndefined();
+    await expect(prepare({ ...context, modelId: "not-granted" })).rejects.toThrow(/not available/u);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
