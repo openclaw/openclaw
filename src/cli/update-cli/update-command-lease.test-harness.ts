@@ -211,14 +211,16 @@ async function prepareCandidateDoctorRuntime(): Promise<void> {
     await fs.copyFile(path.join(generation, relative), state.path(relative));
   }
   const preserved = path.join(generation, "dist/legacy-finalizer");
-  await fs.cp(preserved, state.root, { recursive: true });
+  // The preserved graph can contain embedded dependencies; keep it beside the
+  // SDK host rather than copying over that host's node_modules junction.
+  await fs.cp(preserved, state.path("legacy-finalizer"), { recursive: true });
   // Consume the real delegated grant and retain its native owner. Only the Doctor
   // health body uses this fixture's existing lease probes and intentional failures.
   await fs.writeFile(
     worker,
     `
     import {registerHooks} from 'node:module';
-    const health = new URL('../../src/flows/doctor-health.js',import.meta.url).href;
+    const health = new URL('../../legacy-finalizer/src/flows/doctor-health.js',import.meta.url).href;
     registerHooks({load(url,context,nextLoad) {
       return url !== health ? nextLoad(url,context) : {
         format:'module',shortCircuit:true,source:
@@ -231,7 +233,7 @@ async function prepareCandidateDoctorRuntime(): Promise<void> {
           'finally {process.argv=argv} authority.assertCurrent(); }'
       };
     }});
-    await import('../../src/infra/update-migrated-finalize.worker.js');
+    await import('../../legacy-finalizer/src/infra/update-migrated-finalize.worker.js');
   `,
   );
 }

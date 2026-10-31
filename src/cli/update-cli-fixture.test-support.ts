@@ -164,7 +164,8 @@ export function createUpdateCliFixture() {
       if (params?.admitMutation) {
         await assert.requireValue(options.beforeGitMutation, "Git mutation admission")({});
       }
-      if (options.onTransaction) {
+      // Explicit inspection-only failures have no published runtime to retain.
+      if (params?.admitMutation !== false && options.onTransaction) {
         await retainFixtureGitRuntime(gitRoot, options.onTransaction);
       }
       return params?.gatewayUpdateImpl

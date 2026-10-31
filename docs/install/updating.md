@@ -1239,6 +1239,9 @@ ownership. It preserves later independent changes; conflicting records, settings
 or artifacts leave recovery unfinished instead of overwriting those changes or
 reporting the old Gateway ready. The updater performing the operation must contain
 this support; installing a newer candidate does not add it to an older parent.
+When a legacy Doctor fails or is interrupted, package rollback leaves compatible
+databases in place. Database restoration still requires the existing schema and
+write-generation checks; later independent changes prevent an unsafe restore.
 
 ### Package-publication recovery
 
