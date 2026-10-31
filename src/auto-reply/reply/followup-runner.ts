@@ -81,6 +81,9 @@ function resolveFollowupCompletion(
     return {
       kind: "failed",
       error: terminal.error ?? "Follow-up failed.",
+      ...(outcome.kind === "rejected" && outcome.payload.text
+        ? { notice: outcome.payload.text }
+        : {}),
       ...stopReason,
       ...(classification === "timeout" ? { errorKind: "timeout" } : {}),
     };
