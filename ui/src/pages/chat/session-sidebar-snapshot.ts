@@ -44,20 +44,20 @@ export async function accessSidebarSnapshot<Model>(
       await transactionComplete(transaction);
       return null;
     }
-    const previous = records.find((record) => record.sessionKey === incoming?.sessionKey);
+    const previous =
+      incoming && records.find((record) => record.sessionKey === incoming.sessionKey);
     // Tabs share this transaction: an unchanged projection needs no second write.
-    if (
+    const pendingWrite =
       incoming &&
       previous?.projectionVersion === incoming.projectionVersion &&
       Date.now() - previous.savedAt <= SIDEBAR_SNAPSHOT_MAX_AGE_MS &&
       JSON.stringify(previous.model) === JSON.stringify(incoming.model)
-    ) {
-      incoming = undefined;
-    }
-    const retained = records.filter((record) => record.sessionKey !== incoming?.sessionKey);
-    if (incoming) {
-      retained.push(incoming);
-      store.put(incoming);
+        ? undefined
+        : incoming;
+    const retained = records.filter((record) => record.sessionKey !== pendingWrite?.sessionKey);
+    if (pendingWrite) {
+      retained.push(pendingWrite);
+      store.put(pendingWrite);
     }
     let bytes = 0;
     let count = 0;

@@ -219,11 +219,11 @@ suite.define(() => {
           for (const [index, target] of pages.entries()) {
             await evaluateControlUiContext(
               target,
-              (app, step) => {
-                for (let repeat = 0; repeat < (step === 0 ? 20 : 1); repeat += 1) {
+              (app, tick) => {
+                for (let repeat = 0; repeat < (tick === 0 ? 20 : 1); repeat += 1) {
                   app.sessions.setPullRequestSummary("agent:main:main", {
                     state: "open",
-                    numbers: [step * 20 + repeat + 1],
+                    numbers: [tick * 20 + repeat + 1],
                   });
                 }
               },
