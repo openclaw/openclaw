@@ -326,7 +326,7 @@ describe("scheduled session execution custody", () => {
     const triggerTimeout = vi.fn();
     const watchdog = createCronAgentWatchdog({
       deferUntilRunner: true,
-      jobTimeoutMs: 120_000,
+      jobTimeoutMs: 180_001,
       triggerTimeout,
     });
     watchdog.start();
