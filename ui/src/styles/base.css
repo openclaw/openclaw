@@ -372,6 +372,7 @@
      near-square themes pin them. Shared knobs keep transient menus from drifting. */
   --radius-menu: calc(var(--radius-md) * 1.6 * var(--openclaw-corner-radius-scale));
   --radius-menu-item: calc(var(--radius-sm) * 2 * var(--openclaw-corner-radius-scale));
+  --radius-tooltip: calc(var(--radius-sm) * 1.25 * var(--openclaw-corner-radius-scale));
   --menu-radius: var(--radius-menu);
   --menu-item-radius: var(--radius-menu-item);
   --menu-item-height: 28px;

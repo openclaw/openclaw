@@ -132,7 +132,6 @@
 }
 
 .plugins-hub-header .plugins-hub-header__secondary.btn.btn--icon {
-  box-sizing: border-box;
   flex: 0 0 34px;
   width: 34px;
   min-width: 34px;
@@ -481,7 +480,6 @@
 
 .plugins-toolbar--fields > .settings-segmented,
 .plugins-toolbar--fields > .btn {
-  box-sizing: border-box;
   height: var(--settings-control-height);
 }
 

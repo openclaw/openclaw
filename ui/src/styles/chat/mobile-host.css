@@ -12,8 +12,6 @@
   --mobile-safe-top: env(safe-area-inset-top, 0px);
   --mobile-sheet-radius: 26px;
   --mobile-content-inset: 16px;
-  --mobile-rail-inset: 16px;
-  --mobile-control-icon-size: 16px;
   --mobile-dock-size: max(
     var(--mobile-min-height, 152px),
     min(var(--mobile-dock-height, 52%), calc(100% - 200px))

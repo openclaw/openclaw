@@ -293,17 +293,17 @@ describe("repairToolUseResultPairing prefers real result over synthetic error", 
     };
   }
 
-  it("keeps the real result while dropping its synthetic predecessor and an orphan", () => {
+  it("keeps a legacy real result's outcome while dropping its synthetic predecessor and an orphan", () => {
     const input = castAgentMessages([
       sparseAssistant([toolCall("call_1")]),
       makeSyntheticResult("call_1"),
       textToolResult("call_orphan", "read", "orphan", { isError: false }),
-      textToolResult("call_1", "read", "real output", { isError: false }),
+      textToolResult("", "read", "real output", { isError: false }),
     ]);
 
     const result = repairToolUseResultPairing(input);
 
-    expect(result.messages).toEqual([input[0], input[3]]);
+    expect(result.messages).toEqual([input[0], { ...input[3], toolCallId: "call_1" }]);
   });
 
   it("late real result after another assistant turn replaces prior synthetic", () => {

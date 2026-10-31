@@ -503,6 +503,11 @@ a.oc-menu-item[href] {
 }
 
 @media (forced-colors: active) {
+  :root {
+    --menu-surface: Canvas;
+    --menu-backdrop: none;
+  }
+
   .oc-menu,
   .oc-popover {
     border: 1px solid CanvasText;

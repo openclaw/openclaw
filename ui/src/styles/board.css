@@ -321,7 +321,6 @@ openclaw-board-widget-cell {
 }
 
 .board-widget__body--card {
-  box-sizing: border-box;
   padding: var(--widget-frame-inset);
 }
 
@@ -340,7 +339,6 @@ openclaw-board-widget-cell {
 }
 
 .board-widget__body--scrollable .board-widget__grant {
-  box-sizing: border-box;
   height: auto;
   min-height: 100%;
 }

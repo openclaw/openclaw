@@ -29,7 +29,6 @@
 
 .picker-select__menu,
 .multi-select__menu {
-  box-sizing: border-box;
   padding: var(--menu-padding);
   border: 0;
   border-radius: var(--menu-radius);

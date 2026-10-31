@@ -1760,7 +1760,6 @@ openclaw-session-diff:has(> .session-diff--desktop) {
 .session-diff__tree-sidebar input,
 .session-diff-menu__search {
   width: 100%;
-  box-sizing: border-box;
   min-width: 0;
 }
 .session-diff__tree ul {

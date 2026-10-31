@@ -8,10 +8,7 @@ import type {
   SidebarSessionListHost,
   PersonHeaders,
 } from "./app-sidebar-session-render-types.ts";
-import {
-  renderPendingSessionCreateRow,
-  renderSessionTree as SessionTree,
-} from "./app-sidebar-session-row-render.tsx";
+import { renderSessionTree as SessionTree } from "./app-sidebar-session-row-render.tsx";
 import { renderSidebarSessionSectionHeader as SessionSectionHeader } from "./app-sidebar-session-section-header.tsx";
 import {
   rowDemandsVisibility,
@@ -35,11 +32,6 @@ export function renderSessionSection(params: {
     () => !(section().renderHeader && host().collapsedSessionSections.has(section().id)),
   );
   const group = createMemo(() => section().category);
-  // Created rows lead their section, so a create for this group takes that slot now.
-  const pendingCreate = createMemo(() => {
-    const pending = host().sessionCreateDisplay();
-    return pending?.category && pending.category === group() ? pending : undefined;
-  });
   const personOwner = createMemo(() => section().personOwner);
   const personIdentity = createMemo(() => personOwner()?.identity);
   const presence = createMemo(() => {
@@ -391,9 +383,8 @@ export function renderSessionSection(params: {
       ) : undefined}
       {collapsed() ? undefined : (
         <>
-          {section().rows.length > 0 || pendingCreate() ? (
+          {section().rows.length > 0 ? (
             <div class="sidebar-recent-sessions__list" role="list" aria-label={label()}>
-              {renderPendingSessionCreateRow(pendingCreate, true)}
               <div
                 ref={sessionWindow.bind}
                 class="sidebar-session-window"
