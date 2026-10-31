@@ -73,30 +73,6 @@ export function listSessionEntriesReadOnly(
 ): SessionEntrySummary[] {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const result = withOpenClawAgentDatabaseReadOnly((database) => {
-    if (scope.sessionKeys && !scope.cronRetention && !scope.expiredCronRuns) {
-      captureListingSource(database, scope);
-      const sessionKeys = scope.sessionKeys;
-      const readSelected = () =>
-        runSqliteReadOperationSync(database.db, () => {
-          const entries = readSelectedSessionEntriesInDatabase(
-            database,
-            sessionKeys,
-            scope.projection === "list" ? {} : { fullEntryKeys: sessionKeys },
-          );
-          if (options.deferParticipants || scope.includeParticipants === false) {
-            return entries;
-          }
-          return [
-            ...projectSqliteSessionParticipantsBatch(
-              database.db,
-              new Map(entries.map(({ sessionKey, entry }) => [sessionKey, entry])),
-            ),
-          ].map(([sessionKey, entry]) => ({ sessionKey, entry }));
-        });
-      return options.continuation
-        ? readWithCanonicalSessionReaderContinuation(database, options.continuation, readSelected)
-        : readSelected();
-    }
     const read = () => listSqliteSessionEntriesFromDatabase(database, resolved, scope, options);
     return options.continuation
       ? readWithCanonicalSessionReaderContinuation(database, options.continuation, read)
@@ -118,6 +94,25 @@ export function listSqliteSessionEntriesFromDatabase(
   captureListingSource(database, scope);
   const deferParticipants =
     options.deferParticipants || scope.includeParticipants === false ? true : undefined;
+  if (scope.sessionKeys && !scope.cronRetention && !scope.expiredCronRuns) {
+    const sessionKeys = scope.sessionKeys;
+    return runSqliteReadOperationSync(database.db, () => {
+      const entries = readSelectedSessionEntriesInDatabase(
+        database,
+        sessionKeys,
+        scope.projection === "list" ? {} : { fullEntryKeys: sessionKeys },
+      );
+      if (deferParticipants) {
+        return entries;
+      }
+      return [
+        ...projectSqliteSessionParticipantsBatch(
+          database.db,
+          new Map(entries.map(({ sessionKey, entry }) => [sessionKey, entry])),
+        ),
+      ].map(([sessionKey, entry]) => ({ sessionKey, entry }));
+    });
+  }
   if (scope.cronRetention || scope.expiredCronRuns) {
     const expired = scope.expiredCronRuns;
     const requestedOwner = expired ? normalizeAgentId(expired.agentId) : undefined;
@@ -212,11 +207,7 @@ export function listSqliteSessionEntriesFromDatabase(
     deferParticipants,
   });
   return Array.from(
-    iterateSessionEntriesForListing(
-      snapshot,
-      projection === "list" && scope.clone !== false,
-      scope.sessionKeys ? new Set(scope.sessionKeys) : undefined,
-    ),
+    iterateSessionEntriesForListing(snapshot, projection === "list" && scope.clone !== false),
   );
 }
 
@@ -224,7 +215,6 @@ export function listSqliteSessionEntriesFromDatabase(
 function* iterateSessionEntriesForListing(
   snapshot: SessionEntryCacheSnapshot,
   cloneEntries = false,
-  sessionKeys?: ReadonlySet<string>,
 ): IterableIterator<SessionEntrySummary> {
   for (const sessionKey of snapshot.keys) {
     if (isInternalSessionEffectsKey(sessionKey)) {
@@ -239,10 +229,6 @@ function* iterateSessionEntriesForListing(
       throw canonicalSessionKeyMigrationRequiredError(
         `non-canonical persisted row resolves to session key ${deliveryCanonicalKey}`,
       );
-    }
-    // Selection cannot hide a non-canonical row elsewhere in the same snapshot.
-    if (sessionKeys && !sessionKeys.has(sessionKey)) {
-      continue;
     }
     // Full snapshots own their nested values; list snapshots may share cached entries.
     yield {

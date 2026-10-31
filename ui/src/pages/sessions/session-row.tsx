@@ -201,7 +201,7 @@ function isRowControlTarget(target: EventTarget | null): boolean {
   );
 }
 
-export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
+export function SessionRows(props: SessionsProps & { row: GatewaySessionRow; rowIndex: number }) {
   let menuTrigger: HTMLButtonElement | null = null;
   const row = createMemo(() => props.row);
   const updated = createMemo(() =>
@@ -275,6 +275,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
     <>
       <tr
         class={rowClass()}
+        aria-rowindex={props.rowIndex}
         tabindex="0"
         aria-controls={isExpanded() ? detailsId() : undefined}
         draggable={categoryMode() ? "true" : undefined}
@@ -561,7 +562,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
     }
 
     return (
-      <tr id={detailsId()} class="session-details-row">
+      <tr id={detailsId()} class="session-details-row" aria-rowindex={props.rowIndex + 1}>
         <td colspan={sessionsTableColumnCount(props)}>
           <div class="session-details-panel">
             <div class="session-details-panel__hero">

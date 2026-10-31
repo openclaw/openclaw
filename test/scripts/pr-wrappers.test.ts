@@ -804,10 +804,15 @@ exit "$status"
   itPosix("fails loudly at preflight when ripgrep is unavailable", () => {
     const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
     rmSync(join(fixture.bin, "rg"));
-    for (const command of ["bash", "basename", "dirname", "git", "gh", "jq", "pnpm", "node"]) {
+    for (const command of ["bash", "basename", "dirname", "gh", "jq", "pnpm", "node"]) {
       rmSync(join(fixture.bin, command), { force: true });
       symlinkSync(resolveCommand(command), join(fixture.bin, command));
     }
+    // Keep rg absent from the wrapper while preserving the selected Git's discovery PATH.
+    writeExecutable(
+      join(fixture.bin, "git"),
+      '#!/bin/sh\nPATH="$OPENCLAW_TEST_BACKEND_PATH" exec "$OPENCLAW_TEST_GIT" "$@"\n',
+    );
 
     const result = spawnSync(join(fixture.canonical, "scripts", "pr"), ["ls"], {
       cwd: fixture.canonical,
@@ -815,6 +820,8 @@ exit "$status"
       env: {
         ...fixture.env,
         PATH: fixture.bin,
+        OPENCLAW_TEST_GIT: resolveCommand("git"),
+        OPENCLAW_TEST_BACKEND_PATH: process.env.PATH,
       },
     });
 
@@ -2715,7 +2722,7 @@ if (process.env.PR_TEST_INTERRUPT !== "1") process.exit(Number(process.env.PR_TE
     writeFileSync(
       git,
       `#!/bin/sh
-"$OPENCLAW_TEST_GIT" "$@" || exit
+PATH="$OPENCLAW_TEST_BACKEND_PATH" "$OPENCLAW_TEST_GIT" "$@" || exit
 if [ "$3" = archive ]; then
   # Valid zero padding exceeds a pipe buffer even when tar has read every entry.
   dd if=/dev/zero bs=65536 count=32 2>/dev/null
@@ -2724,7 +2731,11 @@ fi
     );
     chmodSync(git, 0o755);
     const result = runWrapper(fixture, ["unknown-command"], "linked", {
-      env: { ...fixture.env, OPENCLAW_TEST_GIT: resolveCommand("git") },
+      env: {
+        ...fixture.env,
+        OPENCLAW_TEST_GIT: resolveCommand("git"),
+        OPENCLAW_TEST_BACKEND_PATH: process.env.PATH,
+      },
     });
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(2);
     expect(result.stderr).toContain("running wrapper code materialized from");

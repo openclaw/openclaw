@@ -97,24 +97,29 @@ it.each([false, true])(
       children,
     });
     const appUrl = new URL("../agents/admitted-run-context.ts", import.meta.url).href;
+    const dependencyUrl = new URL(
+      "../../node_modules/@openclaw/fs-safe/dist/write.js",
+      import.meta.url,
+    ).href;
     const suffix = long ? "x".repeat(200) : "";
-    const nodes = Array.from({ length: 12 }, (_, i) =>
+    const depth = long ? 24 : 12;
+    const nodes = Array.from({ length: depth }, (_, i) =>
       frame(
         i,
         `shared${i}${suffix}`,
-        appUrl,
-        i < 11 ? [i + 1] : Array.from({ length: 12 }, (_leaf, j) => j + 12),
+        i === 0 ? appUrl : dependencyUrl,
+        i < depth - 1 ? [i + 1] : Array.from({ length: 12 }, (_leaf, j) => j + depth),
       ),
     );
     nodes.push(
-      ...Array.from({ length: 12 }, (_, i) => frame(i + 12, `probe${i}${suffix}`, "node:fs")),
+      ...Array.from({ length: 12 }, (_, i) => frame(i + depth, `probe${i}${suffix}`, "node:fs")),
     );
     const { result, warn } = capture(
       JSON.stringify({
         startTime: 0,
         endTime: 1_500_000,
         nodes,
-        samples: Array.from({ length: 12 }, (_, i) => i + 12),
+        samples: Array.from({ length: 12 }, (_, i) => i + depth),
         timeDeltas: Array.from({ length: 12 }, () => 100_000),
       }),
     );
@@ -128,14 +133,14 @@ it.each([false, true])(
       expect.stringContaining("probe0"),
       1,
       100,
-      expect.stringContaining("shared11"),
+      expect.stringContaining("shared0"),
     ]);
+    expect(deepest[0]?.[1][0]).toContain("shared0");
     expect(deepest[0]?.[1].at(-1)).toContain("probe0");
     expect(Buffer.byteLength(result!)).toBeLessThanOrEqual(2_048);
-    if (!long) {
-      expect(self).toHaveLength(10);
-    } else {
+    if (long) {
       expect(result).toContain("reportTruncated=true");
+      expect(deepest[0]?.[1]).toContain("[...]");
     }
   },
 );
