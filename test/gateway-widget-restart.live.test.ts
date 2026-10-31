@@ -199,7 +199,13 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
           `widget restart: checkpoint reached; replacing owned Gateway pid=${originalProcess.pid}`,
         );
         // Interrupt the Gateway without draining; the marker releases its detached exec below.
-        process.kill(-originalProcess.pid, "SIGKILL");
+        try {
+          process.kill(-originalProcess.pid, "SIGKILL");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+            throw error;
+          }
+        }
         await vi.waitFor(
           () =>
             expect(

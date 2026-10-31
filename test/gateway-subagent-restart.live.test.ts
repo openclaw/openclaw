@@ -355,7 +355,13 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
           if (!processOwner?.pid) {
             throw new Error("Owned subagent Gateway process is unavailable");
           }
-          process.kill(-processOwner.pid, "SIGKILL");
+          try {
+            process.kill(-processOwner.pid, "SIGKILL");
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+              throw error;
+            }
+          }
           await vi.waitFor(
             () =>
               expect(
