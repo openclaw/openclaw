@@ -11,7 +11,7 @@ import {
   createAttachment,
 } from "./inbound-media.test-fixtures.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
-import { setNextcloudTalkRuntime } from "./runtime.js";
+import { getNextcloudTalkRuntime, setNextcloudTalkRuntime } from "./runtime.js";
 import type { NextcloudTalkInboundMessage } from "./types.js";
 
 const resolveNextcloudTalkAuthenticatedMediaSourceMock = vi.hoisted(() => vi.fn());
@@ -218,7 +218,9 @@ describe("nextcloud-talk inbound authz", () => {
       await fs.rm(stateDir, { recursive: true, force: true });
     }
     return {
-      core,
+      // Read the runtime the handler itself resolves: some projects load the extension
+      // through a second module instance, so the local mock is not the one dispatched.
+      core: getNextcloudTalkRuntime() as unknown as typeof core,
       config: config as unknown as {
         accessGroups: {
           staff: { members: Record<string, string[]> };
