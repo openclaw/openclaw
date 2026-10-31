@@ -133,7 +133,11 @@ function EntryMenu(props: { view: SecretsStoreViewProps; entry: SecretStoreEntry
 
 function SecretsTable(props: SecretsStoreViewProps) {
   const timestamp = createMemo(
-    () => new Intl.DateTimeFormat(getLocale(), { dateStyle: "medium", timeStyle: "short" }),
+    () => {
+      // Refresh the system timezone with the inventory.
+      props.read();
+      return new Intl.DateTimeFormat(getLocale(), { dateStyle: "medium", timeStyle: "short" });
+    },
     { lazy: true },
   );
   return (
