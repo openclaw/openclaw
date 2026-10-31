@@ -1,6 +1,7 @@
 import path from "node:path";
 import { createDedupeCache } from "../infra/dedupe.js";
 import { hasErrnoCode } from "../infra/errno.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { sleep } from "../utils/sleep.js";
 import {
@@ -69,6 +70,20 @@ function resolveClobberPaths(configPath: string): {
     prefix: `${basename}.clobbered.`,
     lockPath: path.join(dir, `${basename}.clobber.lock`),
   };
+}
+
+// Release is best effort, the snapshot is already written. A lock left behind blocks later
+// snapshots until it goes stale, so say so instead of skipping them silently.
+function warnClobberLockReleaseFailure(
+  deps: ConfigClobberSnapshotDeps,
+  lockPath: string,
+  error: unknown,
+): void {
+  if (!isFsErrorCode(error, "ENOENT")) {
+    deps.logger.warn(
+      `Config clobber snapshot lock ${lockPath} could not be released (${formatErrorMessage(error)}); snapshots are skipped until it goes stale (${CONFIG_CLOBBER_LOCK_STALE_MS / 1000}s).`,
+    );
+  }
 }
 
 function shouldRemoveStaleLock(mtimeMs: number | undefined, nowMs: number): boolean {
@@ -230,7 +245,11 @@ export async function persistBoundedClobberedConfigSnapshot(
     try {
       return await runConfigIoAsync(persistClobberedConfigSnapshot(params, paths));
     } finally {
-      await params.deps.fs.promises.rmdir(paths.lockPath).catch(() => {});
+      await params.deps.fs.promises
+        .rmdir(paths.lockPath)
+        .catch((error: unknown) =>
+          warnClobberLockReleaseFailure(params.deps, paths.lockPath, error),
+        );
     }
   });
 }
@@ -247,6 +266,8 @@ export function persistBoundedClobberedConfigSnapshotSync(
   } finally {
     try {
       params.deps.fs.rmdirSync(paths.lockPath);
-    } catch {}
+    } catch (error) {
+      warnClobberLockReleaseFailure(params.deps, paths.lockPath, error);
+    }
   }
 }
