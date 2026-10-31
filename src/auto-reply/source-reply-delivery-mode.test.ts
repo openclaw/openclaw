@@ -35,9 +35,9 @@ describe("buildHarnessVisibleReplyGuidance", () => {
         requireExplicitMessageTarget: false,
       }),
     ).toBe(
-      "Use `message` with `final=false` for progress. A completed send to the current source conversation (`final=true`, or omitted) or an added reaction to its current message with `final=true` is your complete reply. Do not duplicate replies already delivered to this conversation. Otherwise, OpenClaw delivers your final response automatically.\n\n" +
+      "Use `message` with `final=false` for progress. A completed send to the current source conversation (`final=true`, or omitted) or an added reaction to its current message with `final=true` is your complete reply. Do not repeat replies already delivered here. Otherwise, OpenClaw delivers your final response automatically.\n\n" +
         "`send`: `message`; current source is default target. Set `target` only elsewhere.\n\n" +
-        "Commentary is optional progress and may be hidden. Answer user questions or status requests received during ongoing work with `message(action=send, final=false)`, then continue the task. Before finishing, deliver every still-pending answer through this turn's visible-reply route. Do not repeat answers already delivered to this conversation.",
+        "Commentary is optional and may be hidden. Answer mid-task questions or status requests with `message(action=send, final=false)`, then resume work. Deliver all pending answers through this turn's reply route; do not repeat replies already delivered here.",
     );
   });
 });

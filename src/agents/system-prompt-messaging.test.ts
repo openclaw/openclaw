@@ -69,9 +69,9 @@ describe("system prompt messaging routing", () => {
       runtimeInfo: { channel: "discord" },
     });
     expect(prompt).not.toContain("After visible `message(send)`, final ONLY");
-    expect(prompt).toContain("confirmed final reply to the current source");
-    expect(prompt).toContain("Progress sends and sends elsewhere do not themselves end the turn");
-    expect(prompt).toContain("deliver any still-pending answer through this turn's reply route");
+    expect(prompt).toContain("confirmed final replies to the current source");
+    expect(prompt).toContain("Progress or sends elsewhere do not alone end the turn");
+    expect(prompt).toContain("deliver pending answers via this turn's reply route");
   });
 
   it("omits silence guidance for a private completion on an external channel", () => {

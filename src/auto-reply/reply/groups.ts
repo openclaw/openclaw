@@ -90,7 +90,7 @@ function resolveProviderLabel(rawProvider: string | undefined): string {
 }
 
 const SOURCE_DELIVERY_DEFAULTS_GUIDANCE =
-  "Current-turn delivery instructions override these defaults. Set `final=false` on sends to this conversation when more work or another reply must follow, including attachments sent before the final answer. A final send may end the turn; finish the work and include all still-pending answers in that reply. Do not duplicate replies already delivered to this conversation.";
+  "Current-turn delivery rules override these defaults. Use `final=false` for sends here, including attachments, if work or replies must follow. A final send may end the turn: finish the work and include all pending answers. Do not repeat replies already delivered here.";
 
 /**
  * Builds trusted group/channel delivery guidance.
@@ -114,7 +114,7 @@ function buildGroupChatContext(params: {
   const lines = [`You are in a ${providerLabel} ${sharedChatNoun}.`];
   if (messageToolOnly) {
     lines.push(
-      `By default, final text stays private and is not automatically sent to ${destinationLabel}. Use the message tool with action=send for visible replies here; its target defaults to ${destinationLabel}.`,
+      `By default, final text stays private. Send visible replies with message(action=send); target defaults to ${destinationLabel}.`,
     );
   } else {
     lines.push(
@@ -160,7 +160,7 @@ function buildDirectChatContext(params: {
     `You are in a ${providerLabel} direct conversation.`,
     ...(params.sourceReplyDeliveryMode === "message_tool_only"
       ? [
-          "By default, final text stays private and is not automatically sent to this conversation. Use the message tool with action=send for visible replies here; its target defaults to this conversation.",
+          "By default, final text stays private. Send visible replies with message(action=send); target defaults to this conversation.",
           "If no visible direct response is needed, do not call message(action=send).",
         ]
       : ["By default, final text is automatically sent to this conversation."]),

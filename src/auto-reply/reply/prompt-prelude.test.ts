@@ -152,7 +152,7 @@ it.each(
       }),
     ].join("\n\n");
     expect(prompt).toContain("message(action=send, final=false)");
-    expect(prompt).toContain("Current-turn delivery instructions override these defaults.");
+    expect(prompt).toContain("Current-turn delivery rules override these defaults.");
     expect(prompt).toContain(
       turnMode === "message_tool_only"
         ? "Visible source replies are not automatically delivered for this run."
@@ -163,8 +163,8 @@ it.each(
         ? "By default, final text is automatically sent"
         : "By default, final text stays private",
     );
-    expect(prompt).toContain("including attachments sent before the final answer");
-    expect(prompt).toContain("Do not duplicate replies already delivered to this conversation");
+    expect(prompt).toContain("including attachments");
+    expect(prompt).toContain("Do not repeat replies already delivered here");
     expect(prompt).not.toContain("Do not repeat delivered content.");
     expect(prompt).not.toContain("For ordinary text, do not use the message tool");
     expect(prompt).not.toContain("Use message(action=send) only when");

@@ -104,19 +104,19 @@ it.each([
     const automatic = sourceContext(provider, kind);
     const privateReply = sourceContext(provider, kind, true);
     expect(automatic).toContain(`automatically sent to this ${destination}`);
-    expect(privateReply).toContain(`not automatically sent to this ${destination}`);
+    expect(privateReply).toContain(`target defaults to this ${destination}`);
     expect(privateReply).toContain("By default, final text stays private");
-    expect(privateReply).toContain("message tool with action=send");
+    expect(privateReply).toContain("Send visible replies with message(action=send)");
     expect(privateReply).toContain("do not call message(action=send)");
     expect(privateReply).not.toContain("By default, final text is automatically sent");
     for (const context of [automatic, privateReply]) {
-      expect(context).toContain("Current-turn delivery instructions override these defaults.");
+      expect(context).toContain("Current-turn delivery rules override these defaults.");
       expect(context).toContain(
-        "Set `final=false` on sends to this conversation when more work or another reply must follow",
+        "Use `final=false` for sends here, including attachments, if work or replies must follow",
       );
-      expect(context).toContain("including attachments sent before the final answer");
+      expect(context).toContain("including attachments");
       expect(context).toContain("A final send may end the turn");
-      expect(context).toContain("Do not duplicate replies already delivered to this conversation");
+      expect(context).toContain("Do not repeat replies already delivered here");
     }
     if (kind === "direct") {
       expect(automatic).not.toContain("NO_REPLY");

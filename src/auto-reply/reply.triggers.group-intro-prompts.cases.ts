@@ -55,12 +55,12 @@ export function registerGroupIntroPromptCases(): void {
     const automaticGroupDeliveryGuidance = [
       "By default, final text is automatically sent to this group chat.",
       "Use the message tool for attachments when available.",
-      "Current-turn delivery instructions override these defaults.",
+      "Current-turn delivery rules override these defaults.",
     ];
     const automaticChannelDeliveryGuidance = [
       "By default, final text is automatically sent to this channel.",
       "Use the message tool for attachments when available.",
-      "Current-turn delivery instructions override these defaults.",
+      "Current-turn delivery rules override these defaults.",
     ];
     const cases: GroupIntroCase[] = [
       {
