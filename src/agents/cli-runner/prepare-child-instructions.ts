@@ -24,16 +24,21 @@ export async function prepareCliChildInstructions({
   ) {
     const [
       { buildSubagentStandingInstructions },
-      { getSubagentDepthFromSessionStoreInWorker },
+      { getSubagentDepthFromSessionStoreInWorker, getSubagentSpawnModeFromSessionStoreInWorker },
       { getLatestSubagentRunByChildSessionKey },
     ] = await Promise.all([
       import("../subagents/spawn/subagent-system-prompt.js"),
       import("../subagents/spawn/subagent-depth.js"),
       import("../subagents/registry/subagent-registry-read.js"),
     ]);
-    const [childDepth, recordedRun] = await Promise.all([
+    const [childDepth, storedMode, recordedRun] = await Promise.all([
       params.sessionEntry?.spawnDepth ??
         getSubagentDepthFromSessionStoreInWorker(childSessionKey, {
+          cfg: runConfig,
+          agentId: sessionAgentId,
+        }),
+      params.sessionEntry?.spawnMode ??
+        getSubagentSpawnModeFromSessionStoreInWorker(childSessionKey, {
           cfg: runConfig,
           agentId: sessionAgentId,
         }),
@@ -42,8 +47,11 @@ export async function prepareCliChildInstructions({
     const standingInstructions = buildSubagentStandingInstructions({
       childDepth,
       maxSpawnDepth: runConfig.agents?.defaults?.subagents?.maxSpawnDepth,
+      // The spawned entry owns mode; older entries fall back to the retained run record.
       spawnMode:
-        recordedRun?.spawnMode ?? (params.cleanupBundleMcpOnRunEnd === false ? "session" : "run"),
+        storedMode ??
+        recordedRun?.spawnMode ??
+        (params.cleanupBundleMcpOnRunEnd === false ? "session" : "run"),
     }).trim();
     // Spawn already supplies this prefix; continuations reconstruct it from session facts.
     if (

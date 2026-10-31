@@ -113,3 +113,19 @@ export function getSubagentDepthFromSessionStoreInWorker(
 ): Promise<number> {
   return withPreparedSessionCapabilityRead(() => getSubagentDepthFromSessionStore(...args));
 }
+
+/** The child's own recorded spawn mode; unlike depth, it is not derived from lineage. */
+export function getSubagentSpawnModeFromSessionStoreInWorker(
+  sessionKey: string,
+  opts?: { cfg?: OpenClawConfig; agentId?: string },
+): Promise<"run" | "session" | undefined> {
+  return withPreparedSessionCapabilityRead(() => {
+    const mode = resolveEntryForSessionKey({
+      sessionKey,
+      cfg: opts?.cfg,
+      cache: new Map(),
+      agentId: opts?.agentId,
+    })?.spawnMode;
+    return mode === "run" || mode === "session" ? mode : undefined;
+  });
+}

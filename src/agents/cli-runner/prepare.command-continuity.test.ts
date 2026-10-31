@@ -17,7 +17,6 @@ import {
 } from "../cli-runner.test-helpers.js";
 import { hashCliSessionText } from "../cli-session.js";
 import { prepareAgentCommandExecution } from "../command/prepare.js";
-import * as subagentRegistry from "../subagents/registry/subagent-registry-read.js";
 import { buildSubagentSpawnEnvelope } from "../subagents/spawn/subagent-system-prompt.js";
 import { createCliMcpTool } from "./prepare-mcp.test-support.js";
 import { prepareCliRunContext } from "./prepare.js";
@@ -119,21 +118,9 @@ describe("direct CLI command continuity", () => {
     }
   });
 
-  it("uses retained persistent mode while honoring current policy and caller additions", async () => {
+  it("keeps persistent mode after its run record is swept, honoring current policy", async () => {
+    // No registry record exists: the completed session-mode record has been swept.
     const sessionKey = "agent:main:subagent:persistent-role";
-    vi.spyOn(subagentRegistry, "getLatestSubagentRunByChildSessionKey")
-      .mockResolvedValueOnce(null)
-      .mockResolvedValue({
-        runId: "child-run",
-        childSessionKey: sessionKey,
-        requesterSessionKey: "agent:main:main",
-        requesterDisplayKey: "main",
-        task: "Inspect the report",
-        createdAt: 0,
-        cleanup: "keep",
-        spawnMode: "session",
-        execution: { status: "terminal" },
-      });
     const config: OpenClawConfig = {
       agents: { defaults: { workspace: cli.session.dir, subagents: { maxSpawnDepth: 2 } } },
       plugins: { enabled: false },
@@ -149,7 +136,12 @@ describe("direct CLI command continuity", () => {
     const common = {
       config,
       sessionKey,
-      sessionEntry: { sessionId: "session-test", updatedAt: 0, spawnDepth: 2 },
+      sessionEntry: {
+        sessionId: "session-test",
+        updatedAt: 0,
+        spawnDepth: 2,
+        spawnMode: "session" as const,
+      },
     };
     const callerInstructions = "Preserve source citations in this report.";
     const prepared: PreparedCliRunContext[] = [];

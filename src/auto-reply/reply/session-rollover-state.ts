@@ -59,6 +59,7 @@ export function resolveReplySessionRolloverState(
           spawnedWorkspaceDir: entry.spawnedWorkspaceDir,
           spawnedCwd: entry.spawnedCwd,
           spawnDepth: entry.spawnDepth,
+          spawnMode: entry.spawnMode,
           subagentRole: entry.subagentRole,
           subagentControlScope: entry.subagentControlScope,
           blindPrompt: entry.blindPrompt,

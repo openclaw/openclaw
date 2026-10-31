@@ -161,6 +161,7 @@ export async function initFastReplySessionState(params: {
           createdAt: existingEntry.createdAt,
           ...(existingEntry.sandbox === "required" ? { sandbox: "required" as const } : {}),
           spawnDepth: existingEntry.spawnDepth,
+          spawnMode: existingEntry.spawnMode,
           subagentRole: existingEntry.subagentRole,
           subagentControlScope: existingEntry.subagentControlScope,
           blindPrompt: existingEntry.blindPrompt,

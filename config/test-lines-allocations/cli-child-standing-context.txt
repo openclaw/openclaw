@@ -1,2 +1,2 @@
-# CLI child launch/follow-up continuity and non-child execution-mode controls.
-172
+# CLI child continuity, swept persistent mode and non-child execution-mode controls.
+173

@@ -33,6 +33,7 @@ type PersistedSessionCapabilityEntry = Pick<
   | "lifecycleRevision"
   | "createdVia"
   | "spawnDepth"
+  | "spawnMode"
   | "subagentRole"
   | "subagentControlScope"
   | "spawnedBy"
@@ -179,6 +180,7 @@ const capabilityFields = [
   "lifecycleRevision",
   "createdVia",
   "spawnDepth",
+  "spawnMode",
   "subagentRole",
   "subagentControlScope",
   "spawnedBy",
