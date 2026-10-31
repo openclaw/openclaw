@@ -91,10 +91,13 @@ it("keeps envelope-owned sequence facts in local output cuts and boundaries", ()
     type: "localOutput",
     message: output,
   });
+  const durableEntry = state.entries[0];
+  const localEntry = earlier.entries[1];
+  if (!durableEntry || !localEntry) {
+    throw new Error("Expected durable and local projection entries");
+  }
   expect(
-    insertSessionProjectionEntry([state.entries[0]], earlier.entries[1]).map(
-      (entry) => entry.message,
-    ),
+    insertSessionProjectionEntry([durableEntry], localEntry).map((entry) => entry.message),
   ).toEqual([output, durable]);
 });
 
