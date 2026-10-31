@@ -9,8 +9,8 @@ const composer = `${pane} .agent-chat__composer-combobox textarea`;
 const route = controlUiSessionPath("agent:main:interaction-a");
 
 /** Observe native events in-page: Playwright assertion latency is not input latency. */
-export async function installChatActionObservation(page: Page) {
-  await page.evaluate(() => {
+export async function installChatActionObservation(page: Page, collectAttribution = false) {
+  await page.evaluate((attribution) => {
     const data = {
       inputFramesMs: [] as number[],
       longTasksMs: [] as number[],
@@ -18,6 +18,7 @@ export async function installChatActionObservation(page: Page) {
       recentInputLayoutShift: 0,
       insertedRows: 0,
       removedRows: 0,
+      layoutShiftSources: [] as unknown[],
     };
     const initialRows = new Map(
       [...document.querySelectorAll(".chat-pane-cache__pane--active [data-chat-row-key]")].map(
@@ -50,6 +51,39 @@ export async function installChatActionObservation(page: Page) {
             data.recentInputLayoutShift += value;
           } else {
             data.layoutShift += value;
+          }
+          if (attribution) {
+            // SAFETY: The LayoutShift API supplies source nodes and both rectangles.
+            const sources = Reflect.get(entry, "sources") as Array<{
+              node?: Node;
+              previousRect: DOMRectReadOnly;
+              currentRect: DOMRectReadOnly;
+            }>;
+            data.layoutShiftSources.push({
+              time: entry.startTime,
+              value,
+              hadRecentInput: Reflect.get(entry, "hadRecentInput"),
+              sources: sources.map(({ node, previousRect, currentRect }) => ({
+                tag: node instanceof Element ? node.tagName : node?.nodeName,
+                classes: node instanceof Element ? node.getAttribute("class") : null,
+                row:
+                  node instanceof Element
+                    ? node.closest("[data-chat-row-key]")?.getAttribute("data-chat-row-key")
+                    : null,
+                previous: {
+                  x: previousRect.x,
+                  y: previousRect.y,
+                  width: previousRect.width,
+                  height: previousRect.height,
+                },
+                current: {
+                  x: currentRect.x,
+                  y: currentRect.y,
+                  width: currentRect.width,
+                  height: currentRect.height,
+                },
+              })),
+            });
           }
         }
       });
@@ -89,7 +123,7 @@ export async function installChatActionObservation(page: Page) {
         mutations.disconnect();
       },
     });
-  });
+  }, collectAttribution);
 }
 
 export async function readChatActionObservation(page: Page) {
@@ -127,6 +161,9 @@ export async function readChatActionObservation(page: Page) {
         ? {
             layoutShift: data.layoutShift,
             recentInputLayoutShift: data.recentInputLayoutShift,
+            ...(data.layoutShiftSources.length
+              ? { layoutShiftSources: data.layoutShiftSources }
+              : {}),
           }
         : {}),
       insertedRows: data.insertedRows,
