@@ -441,16 +441,21 @@ export function createSlackDurableIngress(
 
   const acceptReceiverEvent = async (event: ReceiverEvent): Promise<void> => {
     if (!isSlackEventCallback(event.body)) {
-      if (!app) {
+      const receiverApp = app;
+      if (!receiverApp) {
         throw new Error("Slack ingress receiver is not attached to a Bolt app.");
       }
-      await app.processEvent({
-        ...event,
-        customProperties: {
-          ...event.customProperties,
-          [SLACK_NATIVE_INGRESS_CONTEXT_KEY]: nativeIngress,
-        },
-      });
+      // Bolt listeners acknowledge before awaiting policy, routing, or dispatch.
+      // Hold the receiver's work until Bolt has joined all matching listeners.
+      await monitor.dispatchDirect(() =>
+        receiverApp.processEvent({
+          ...event,
+          customProperties: {
+            ...event.customProperties,
+            [SLACK_NATIVE_INGRESS_CONTEXT_KEY]: nativeIngress,
+          },
+        }),
+      );
       return;
     }
     await monitor.admit({

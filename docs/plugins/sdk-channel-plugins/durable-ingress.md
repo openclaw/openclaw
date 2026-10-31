@@ -135,6 +135,13 @@ Classify a transport by the recovery guarantee at its receive boundary:
   process crash window and supports local restart recovery; completion
   tombstones are near-inert against platform replay.
 
+If the same receiver also handles direct interactions such as Slack buttons or
+shortcuts, call `monitor.dispatchDirect(() => dispatch(event))` before the
+listener acknowledges the delivery. Each call owns independent Gateway work
+until dispatch finishes. New calls are rejected during Gateway drain or after
+account stop; stop waits for accepted listeners. Direct interactions are never
+written to the ingress queue, so they cannot be replayed after process loss.
+
 Use 30 days as the fleet tombstone-TTL convention, not as an SDK default. A
 high-volume redelivery window normally uses a 20,000-entry completed cap;
 lower-volume awaited and non-replay transports normally use 1,000-2,000.
