@@ -451,8 +451,14 @@ suite.define(() => {
             expect(metric.receivedMs).toBeDefined();
             expect(metric.cursor).toBe(olderCursor);
             expect(metric.offset).toBeUndefined();
-            expect([80, 1]).toContain(metric.limit);
-            expect(metric.maxBytes).toBe(256 * 1024);
+            expect(Number.isInteger(metric.limit)).toBe(true);
+            expect(metric.limit).toBeGreaterThanOrEqual(1);
+            expect(metric.limit).toBeLessThanOrEqual(400);
+            expect(metric.maxBytes).toBeGreaterThanOrEqual(256 * 1024);
+            expect(metric.maxBytes).toBeLessThanOrEqual(3 * 1024 * 1024);
+            if (metric.limit! <= 80) {
+              expect(metric.maxBytes).toBe(256 * 1024);
+            }
             expect(metric.historyBytes).toBeLessThanOrEqual(metric.maxBytes!);
             for (const source of metric.sourceNumbers ?? []) {
               covered.add(source);
@@ -466,8 +472,15 @@ suite.define(() => {
           for (const metric of reversePages) {
             expect(metric.cursor).toEqual(expect.any(String));
             expect(metric.offset).toBeUndefined();
-            expect([80, 1]).toContain(metric.limit);
-            expect(metric.maxBytes).toBe(256 * 1024);
+            expect(Number.isInteger(metric.limit)).toBe(true);
+            expect(metric.limit).toBeGreaterThanOrEqual(1);
+            expect(metric.limit).toBeLessThanOrEqual(400);
+            expect(metric.maxBytes).toBeGreaterThanOrEqual(256 * 1024);
+            expect(metric.maxBytes).toBeLessThanOrEqual(3 * 1024 * 1024);
+            if (metric.limit! <= 80) {
+              expect(metric.maxBytes).toBe(256 * 1024);
+            }
+            expect(metric.historyBytes).toBeLessThanOrEqual(metric.maxBytes!);
           }
           responseGate?.disarm();
           // Three other conversations retire this pane through the real retained-

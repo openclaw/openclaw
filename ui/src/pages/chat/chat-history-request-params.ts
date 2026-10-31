@@ -4,6 +4,8 @@ export const CHAT_HISTORY_REQUEST_LIMIT = 80;
 export const CHAT_HISTORY_REQUEST_MAX_BYTES = 256 * 1024;
 export const CHAT_HISTORY_TOOL_RESULT_MAX_CHARS = 2_000;
 
+export type ChatHistoryRequestBudget = { limit: number; maxBytes: number };
+
 export function chatHistoryRequestParams(
   method: "chat.history" | "chat.startup",
   sessionKey: string,

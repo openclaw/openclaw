@@ -15,6 +15,7 @@ import type {
 import {
   CHAT_HISTORY_REQUEST_LIMIT,
   CHAT_HISTORY_REQUEST_MAX_BYTES,
+  type ChatHistoryRequestBudget,
 } from "./chat-history-request-params.ts";
 
 // Counts admitted message entries, before renderer grouping. Source groups and
@@ -195,6 +196,63 @@ function sourceGroups(messages: readonly unknown[]) {
     }
   }
   return groups;
+}
+
+/** Estimate only the next wire read; exact admission still owns every exception. */
+export function prepareChatHistoryRequestBudget(
+  projection: SessionProjectionState,
+  messages: readonly unknown[],
+  requiredSources: ReadonlySet<string>,
+  pinnedRunId?: string | null,
+): ChatHistoryRequestBudget | undefined {
+  const pins = reduceSessionProjection(projection, {
+    type: "residencyChanged",
+    messages: [],
+    pinnedRunIds: pinnedRunId ? [pinnedRunId] : [],
+  }).messages;
+  const mandatory = new Set(requiredSources);
+  for (const message of pins) {
+    const source = nativeHistoryMessageSourceIdentity(message);
+    if (source) {
+      mandatory.add(source);
+    }
+  }
+  const groups = sourceGroups(messages);
+  if ([...requiredSources].some((source) => !groups.has(source))) {
+    return undefined;
+  }
+  let count = 0;
+  let weight = 1;
+  const reserved = new Map<unknown, number>();
+  const reserve = (values: readonly unknown[]) => {
+    const occurrences = new Map<unknown, number>();
+    for (const message of values) {
+      const occurrence = (occurrences.get(message) ?? 0) + 1;
+      occurrences.set(message, occurrence);
+      if (occurrence > (reserved.get(message) ?? 0)) {
+        count++;
+        weight += messageWeight(message);
+        reserved.set(message, occurrence);
+      }
+    }
+  };
+  const required = (message: unknown) =>
+    mandatory.has(nativeHistoryMessageSourceIdentity(message) ?? "");
+  // Count complete source fragments and repeated occurrences, then union pins
+  // and the newest local reply without lending their atomicity exceptions.
+  reserve(messages.filter(required));
+  reserve(projection.messages.filter(required));
+  reserve(pins);
+  const local = projection.entries.findLast((entry) => entry.localOutput);
+  if (local) {
+    reserve([local.message]);
+  }
+  const limit = CHAT_RESIDENT_ENTRY_TARGET - count;
+  // UTF-8 wire bytes consume at least as much as the JSON code-unit estimate.
+  const maxBytes = CHAT_RESIDENT_WEIGHT_TARGET - weight;
+  return limit > CHAT_HISTORY_REQUEST_LIMIT && maxBytes > CHAT_HISTORY_REQUEST_MAX_BYTES
+    ? { limit, maxBytes }
+    : undefined;
 }
 
 function intrinsicGroup(group: { count: number; weight: number } | undefined) {

@@ -61,13 +61,13 @@ function expectOlderRequest(
   sessionKey: string,
   offset = 2,
   index = -1,
+  budget = { limit: 80, maxBytes: 256 * 1024 },
 ) {
   expect(request.mock.calls.at(index)).toEqual([
     "chat.history",
     {
       sessionKey,
-      limit: 80,
-      maxBytes: 256 * 1024,
+      ...budget,
       toolResultMaxChars: 2_000,
       cursor: `older-${offset}`,
     },
@@ -591,7 +591,10 @@ it.each([
   }
   state.chatHistoryPagination = pagination(row.total, row.offset);
   await expect(pane.loadOlderMessages()).resolves.toBe(true);
-  expectOlderRequest(request, state.sessionKey, row.offset);
+  expectOlderRequest(request, state.sessionKey, row.offset, -1, {
+    limit: 400,
+    maxBytes: 3 * 1024 * 1024 - 1,
+  });
   expect(reads).toBe(row.reset ? 2 : 1);
   const expectedTail = row.reset ? [] : historyPage([7, 8]).messages;
   expect(state.chatMessages).toEqual([...replacement, ...expectedTail]);
@@ -911,7 +914,10 @@ it.each([
     expectHistoryPagination(state, pagination(total, hasMore ? 2 : undefined));
     expect(pane.hasOlderMessages()).toBe(hasMore);
     if (kind === "replacement") {
-      expectOlderRequest(request, state.sessionKey, 2, 0);
+      expectOlderRequest(request, state.sessionKey, 2, 0, {
+        limit: 400,
+        maxBytes: 3 * 1024 * 1024 - 1,
+      });
       expect(request).toHaveBeenNthCalledWith(
         2,
         "chat.history",

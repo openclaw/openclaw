@@ -30,6 +30,7 @@ import {
   type ChatHistoryResidencyOwner,
   invalidateChatHistoryPacketSources,
   projectResidentChatHistory,
+  prepareChatHistoryRequestBudget,
   publishResidentChatMessages,
 } from "./chat-history-window.ts";
 import { chatLocalOutputEntries } from "./chat-local-outputs.ts";
@@ -247,6 +248,24 @@ export function readChatLocalOutputEntries(owner: object): readonly SessionProje
 
 export function readChatLocalOutputs(owner: object): readonly unknown[] {
   return readChatLocalOutputEntries(owner).map((entry) => entry.message);
+}
+
+/** Tentative capacity reads never initialize or publish a projection. */
+export function readChatHistoryRequestBudget(
+  owner: ChatSessionProjectionOwner,
+  prepared: { messages: readonly unknown[]; requiredSources: ReadonlySet<string> },
+) {
+  const projection = chatSessionProjections.get(owner)?.projection;
+  const scope = readChatSessionProjectionScope(owner);
+  return projection &&
+    CHAT_PROJECTION_SCOPE_KEYS.every((key) => projection.scope[key] === scope[key])
+    ? prepareChatHistoryRequestBudget(
+        projection,
+        prepared.messages,
+        prepared.requiredSources,
+        owner.lastLocalTerminalReconcile?.runId,
+      )
+    : undefined;
 }
 
 export function getChatRunOwner(owner: object): string | undefined {

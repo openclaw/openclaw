@@ -92,8 +92,29 @@ it("keeps one overflow packet, consumes it once, and reverses through its opaque
   );
   expect(state.chatHistoryPagination.hasNewer).toBeUndefined();
   expect(pane.stagedHistory.page).toBeNull();
+  expect(request.mock.calls.map(([, params]) => params)).toEqual([
+    ...[40, 120, 200, 280].map((count) => ({
+      sessionKey: state.sessionKey,
+      toolResultMaxChars: 2_000,
+      cursor: `older-${440 - count}`,
+      limit: 400 - count,
+      maxBytes:
+        3 * 1024 * 1024 -
+        JSON.stringify(
+          Array.from({ length: count }, (_, index) => nativeHistoryMessage(441 - count + index)),
+        ).length,
+    })),
+    expect.objectContaining({ cursor: "older-80", limit: 80, maxBytes: 256 * 1024 }),
+    expect.objectContaining({
+      cursor: "newer-401",
+      limit: 320,
+      maxBytes:
+        3 * 1024 * 1024 -
+        JSON.stringify(Array.from({ length: 80 }, (_, index) => nativeHistoryMessage(321 + index)))
+          .length,
+    }),
+  ]);
   for (const [, params] of request.mock.calls) {
-    expect(params).toMatchObject({ limit: 80, maxBytes: 256 * 1024 });
     expect(params).not.toHaveProperty("messageId");
   }
 });
@@ -459,7 +480,7 @@ it.each(["older", "newer"] as const)(
     expect(
       request.mock.calls.slice(0, 2).map(([, params]) => [params.cursor, params.limit]),
     ).toEqual([
-      [`${direction}-${direction === "older" ? 6 : 2}`, 80],
+      [`${direction}-${direction === "older" ? 6 : 2}`, 399],
       [`${direction}-${direction === "older" ? 6 : 2}`, 1],
     ]);
     expect(published).toHaveBeenCalledTimes(1);
@@ -501,7 +522,7 @@ it("refines multiple intrinsic sources without granting their whole packet an ex
   expect(state.chatMessages).toEqual([...a, nativeHistoryMessage(3)]);
   expect(request.mock.calls.slice(0, 2).map(([, params]) => [params.cursor, params.limit])).toEqual(
     [
-      ["older-2", 80],
+      ["older-2", 399],
       ["older-2", 1],
     ],
   );
@@ -575,45 +596,55 @@ it.each([
   },
 );
 
-it("releases a rejected broad body before the narrower response settles", async () => {
-  const narrow = createDeferred<ChatHistoryResult>();
-  const requested = createDeferred();
-  let rejected: WeakRef<object> | undefined;
-  const request = vi.fn(async (_method: string, params: { limit: number }) => {
-    if (params.limit === 1) {
-      requested.resolve();
-      return narrow.promise;
+it.each(["fit", "raw"] as const)(
+  "releases a rejected %s body before the narrower response settles",
+  async (rejection) => {
+    const narrow = createDeferred<ChatHistoryResult>();
+    const requested = createDeferred();
+    let rejected: WeakRef<object> | undefined;
+    const request = vi.fn(async (_method: string, params: { limit: number }) => {
+      if (params.limit === (rejection === "fit" ? 1 : 80)) {
+        requested.resolve();
+        return narrow.promise;
+      }
+      const messages = Array.from({ length: 6 }, (_, index) =>
+        Array.from({ length: 100 }, (_unused, fragment) =>
+          nativeHistoryMessage(
+            index + 1,
+            `fragment-${fragment}${rejection === "raw" ? "x".repeat(600) : ""}`,
+          ),
+        ),
+      ).flat();
+      rejected = new WeakRef(messages[0]!);
+      return { messages, hasMore: false, newerCursor: "newer-7" };
+    });
+    const { pane, state } = createStagedPrefetchPane(request);
+    admitChatHistoryPages(
+      state,
+      [{ messages: [nativeHistoryMessage(7)], hasMore: true, olderCursor: "older-6" }],
+      "around",
+    );
+    state.readTranscriptAnchorSource = () => "seq:7";
+    const loading = pane.loadOlderMessages();
+    await requested.promise;
+    // Mock result histories own resolved promises independently of the producer.
+    request.mockClear();
+    const control = await (async () => new WeakRef({ unowned: true }))();
+    try {
+      await collectGarbageForTest();
+      expect(control.deref()).toBeUndefined();
+      expect(rejected?.deref()).toBeUndefined();
+      expect(state.chatMessages.map(nativeHistorySeq)).toEqual([7]);
+    } finally {
+      narrow.resolve({
+        messages: [nativeHistoryMessage(6)],
+        hasMore: false,
+        newerCursor: "newer-7",
+      });
+      await loading;
     }
-    const messages = Array.from({ length: 6 }, (_, index) =>
-      Array.from({ length: 100 }, (_unused, fragment) =>
-        nativeHistoryMessage(index + 1, `fragment-${fragment}`),
-      ),
-    ).flat();
-    rejected = new WeakRef(messages[0]!);
-    return { messages, hasMore: false, newerCursor: "newer-7" };
-  });
-  const { pane, state } = createStagedPrefetchPane(request);
-  admitChatHistoryPages(
-    state,
-    [{ messages: [nativeHistoryMessage(7)], hasMore: true, olderCursor: "older-6" }],
-    "around",
-  );
-  state.readTranscriptAnchorSource = () => "seq:7";
-  const loading = pane.loadOlderMessages();
-  await requested.promise;
-  // Mock result histories own resolved promises independently of the producer.
-  request.mockClear();
-  const control = await (async () => new WeakRef({ unowned: true }))();
-  try {
-    await collectGarbageForTest();
-    expect(control.deref()).toBeUndefined();
-    expect(rejected?.deref()).toBeUndefined();
-    expect(state.chatMessages.map(nativeHistorySeq)).toEqual([7]);
-  } finally {
-    narrow.resolve({ messages: [nativeHistoryMessage(6)], hasMore: false, newerCursor: "newer-7" });
-    await loading;
-  }
-});
+  },
+);
 
 it.each([true, false])(
   "preserves reverse navigation after moving inside one original packet (id=%s)",
@@ -696,7 +727,7 @@ it.each([true, false])(
         request.mock.calls
           .filter(([, params]) => params.cursor === "older-2")
           .map(([, params]) => params.limit),
-      ).toEqual([80, 1]);
+      ).toEqual([399, 1]);
       reader = "seq:2";
       await expect(pane.loadOlderMessages()).resolves.toBe(true);
     }

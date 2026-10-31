@@ -401,6 +401,7 @@ export function prepareChatHistoryPages(
   return {
     messages,
     pagination: resident.pagination,
+    requiredSources: required,
     fits: [...required].every((source) => retained.has(source)) && resident.withinBudget,
   };
 }

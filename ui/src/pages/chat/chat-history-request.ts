@@ -15,6 +15,7 @@ import {
   CHAT_HISTORY_TOOL_RESULT_MAX_CHARS,
   CHAT_HISTORY_REQUEST_LIMIT,
   CHAT_HISTORY_REQUEST_MAX_BYTES,
+  type ChatHistoryRequestBudget,
 } from "./chat-history-request-params.ts";
 import { retryChatHistoryRead } from "./chat-history-retry.ts";
 import {
@@ -403,9 +404,20 @@ export async function requestOlderChatHistoryPage(
   selector: OlderHistorySelector,
   isCurrent: () => boolean,
   signal?: AbortSignal,
-): Promise<ChatHistoryResult> {
-  const result = attachHistoryActivity(
-    await retryChatHistoryRead({
+  requestBudget?: ChatHistoryRequestBudget,
+): Promise<ChatHistoryResult & { requestBudget?: ChatHistoryRequestBudget; smallOnly?: boolean }> {
+  let budget = requestBudget;
+  let smallOnly = false;
+  for (;;) {
+    const issued = {
+      limit: "messageId" in selector && !selector.continuity ? 1 : CHAT_HISTORY_REQUEST_LIMIT,
+      maxBytes: CHAT_HISTORY_REQUEST_MAX_BYTES,
+      ...("cursor" in selector && !selector.limit ? budget : {}),
+      ...("limit" in selector ? { limit: selector.limit } : {}),
+    };
+    // Classify synchronously so rejected raw bodies never enter suspended loop
+    // bindings and remain retained while this cursor is reread under small bounds.
+    const accepted = await retryChatHistoryRead({
       method: "chat.history",
       controller: new AbortController(),
       signal,
@@ -417,24 +429,56 @@ export async function requestOlderChatHistoryPage(
             sessionKey,
             toolResultMaxChars: CHAT_HISTORY_TOOL_RESULT_MAX_CHARS,
             ...(requestAgentId ? { agentId: requestAgentId } : {}),
-            limit: "messageId" in selector && !selector.continuity ? 1 : CHAT_HISTORY_REQUEST_LIMIT,
-            maxBytes: CHAT_HISTORY_REQUEST_MAX_BYTES,
+            ...issued,
             ...selector,
           },
           { signal: readSignal },
         ),
-    }),
-  );
-  const messages = visibleChatHistoryMessages(result.messages);
-  return {
-    ...result,
-    messages,
-    packet: prepareChatHistoryPacket(
-      messages,
-      resolveChatHistoryPagination(result),
-      result.newerCursor,
-    ),
-  };
+    }).then((response) => {
+      if (signal?.aborted || !isCurrent()) {
+        return undefined;
+      }
+      const result = attachHistoryActivity(response);
+      const raw = result.messages ?? [];
+      const rawPacket = prepareChatHistoryPacket(
+        raw,
+        resolveChatHistoryPagination(result),
+        result.newerCursor,
+      );
+      if (
+        (issued.limit > CHAT_HISTORY_REQUEST_LIMIT ||
+          issued.maxBytes > CHAT_HISTORY_REQUEST_MAX_BYTES) &&
+        ((!rawPacket.boundedPacket &&
+          raw.some((message) => !nativeHistoryMessageSourceId(message))) ||
+          rawPacket.sources.length > issued.limit ||
+          new TextEncoder().encode(JSON.stringify(raw)).byteLength > issued.maxBytes)
+      ) {
+        // An actual unkeyed/mixed broad reply cannot reopen interior cuts. Drop
+        // its body and receipts before rereading this exact cursor under small bounds.
+        return undefined;
+      }
+      const messages = visibleChatHistoryMessages(result.messages);
+      const packet =
+        messages.length === raw.length
+          ? rawPacket
+          : prepareChatHistoryPacket(
+              messages,
+              resolveChatHistoryPagination(result),
+              result.newerCursor,
+            );
+      // Filtering cannot turn a larger raw response into a certified small packet.
+      packet.boundedPacket = rawPacket.boundedPacket;
+      return { ...result, messages, packet, requestBudget: issued, smallOnly };
+    });
+    if (signal?.aborted || !isCurrent()) {
+      return {};
+    }
+    if (accepted) {
+      return accepted;
+    }
+    budget = undefined;
+    smallOnly = true;
+  }
 }
 
 /** One version claim owns every serial packet until its atomic admission. */
@@ -461,7 +505,11 @@ export function createChatHistoryPageRead(state: ChatState, speculative = false)
   return {
     claim,
     isCurrent: () => acceptsHistoryResult(state, claim),
-    read: async (selector: OlderHistorySelector, signal: AbortSignal) => {
+    read: async (
+      selector: OlderHistorySelector,
+      signal: AbortSignal,
+      budget?: ChatHistoryRequestBudget,
+    ) => {
       const result = await requestOlderChatHistoryPage(
         client,
         sessionKey,
@@ -469,6 +517,7 @@ export function createChatHistoryPageRead(state: ChatState, speculative = false)
         selector,
         () => acceptsHistoryResult(state, claim),
         signal,
+        budget,
       );
       return !signal.aborted && acceptsHistoryResult(state, claim) ? result : undefined;
     },
@@ -487,7 +536,7 @@ export type StagedOlderHistoryPage = {
   claim: NonNullable<ReturnType<typeof createChatHistoryPageRead>>["claim"];
   requestedCursor: string;
   limit?: 1;
-  result: ChatHistoryResult;
+  result: Awaited<ReturnType<typeof requestOlderChatHistoryPage>>;
 };
 
 /** Validate the published root, never the chain's private advancing frontier. */

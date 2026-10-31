@@ -2,6 +2,10 @@ import { t } from "../../i18n/index.ts";
 import { nativeHistoryMessageSourceIdentity } from "../../lib/chat/history-message-identity.ts";
 import { hasVisibleOlderHistoryPage } from "./chat-history-page-visibility.ts";
 import {
+  CHAT_HISTORY_REQUEST_LIMIT,
+  CHAT_HISTORY_REQUEST_MAX_BYTES,
+} from "./chat-history-request-params.ts";
+import {
   createChatHistoryPageRead,
   chatHistoryPageSelector,
   isStagedOlderHistoryPageCurrent,
@@ -17,6 +21,7 @@ import {
 import { chatHistoryWindowBoundary, MAX_RESIDENT_SEGMENTS } from "./chat-history-window.ts";
 import { reloadChatHistoryWindow, requiresChatHistoryReload } from "./chat-history.ts";
 import { ChatPaneSnapshotHydration } from "./chat-pane-snapshot-hydration.ts";
+import { readChatHistoryRequestBudget } from "./history-merge.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 
 export abstract class ChatPaneHistoryPackets extends ChatPaneSnapshotHydration {
@@ -91,11 +96,20 @@ export abstract class ChatPaneHistoryPackets extends ChatPaneSnapshotHydration {
     let capacityBlocked = false;
     let coverageAdvanced = false;
     let sparse = 0;
+    let smallOnly = false;
+    const large = (page: StagedOlderHistoryPage) =>
+      !page.result.packet?.boundedPacket &&
+      ((page.result.requestBudget?.limit ?? 0) > CHAT_HISTORY_REQUEST_LIMIT ||
+        (page.result.requestBudget?.maxBytes ?? 0) > CHAT_HISTORY_REQUEST_MAX_BYTES);
     try {
       let selector = chatHistoryPageSelector(state, direction);
       if (!selector || (!readerIntent && "messageId" in selector)) {
         return false;
       }
+      let budget =
+        readerIntent && !staged && "cursor" in selector
+          ? readChatHistoryRequestBudget(state, prepareChatHistoryPages(state, [], direction))
+          : undefined;
       for (let packet = 0; packet < (readerIntent ? MAX_RESIDENT_SEGMENTS : 1); packet++) {
         const requestedCursor: string = "cursor" in selector ? selector.cursor : "";
         const boundary =
@@ -112,7 +126,7 @@ export abstract class ChatPaneHistoryPackets extends ChatPaneSnapshotHydration {
           this.history.loadingOlder = true;
         }
         const limit = staged?.limit ?? ("limit" in selector ? selector.limit : undefined);
-        let result = staged?.result ?? (await read.read(selector, signal));
+        let result = staged?.result ?? (await read.read(selector, signal, budget));
         staged = null;
         if (!settleForegroundRead()) {
           return false;
@@ -120,6 +134,7 @@ export abstract class ChatPaneHistoryPackets extends ChatPaneSnapshotHydration {
         if (!result) {
           throw new Error(t("chat.thread.earlierInterrupted"));
         }
+        smallOnly ||= result.smallOnly === true;
         if (requiresChatHistoryReload(result, sessionId, boundary)) {
           owner.page = null;
           owner.controller.abort();
@@ -154,6 +169,10 @@ export abstract class ChatPaneHistoryPackets extends ChatPaneSnapshotHydration {
           if (!selector) {
             break;
           }
+          budget =
+            readerIntent && !smallOnly && "cursor" in selector
+              ? readChatHistoryRequestBudget(state, prepareChatHistoryPages(state, [], direction))
+              : undefined;
           continue;
         }
         const cursor = direction === "older" ? next.hasMore && next.olderCursor : next.newerCursor;
@@ -167,7 +186,23 @@ export abstract class ChatPaneHistoryPackets extends ChatPaneSnapshotHydration {
           ...(limit ? { limit } : {}),
         };
         let results = [...packets.map((entry) => entry.result), result];
-        if (!prepareChatHistoryPages(state, results, direction).fits) {
+        let prepared: ReturnType<typeof prepareChatHistoryPages> | undefined =
+          prepareChatHistoryPages(state, results, direction);
+        if (!prepared.fits) {
+          // Async continuations can retain loop-local bindings after continue.
+          // Release the rejected merged array before any narrower await.
+          prepared = undefined;
+          if (large(page)) {
+            // Broad overflow never occupies the small speculative slot. Reissue
+            // at the same edge; the existing small/refinement path owns progress.
+            smallOnly = true;
+            budget = undefined;
+            selector = { cursor: requestedCursor };
+            result = undefined;
+            page = null;
+            results = [];
+            continue;
+          }
           if (!packets.length && !limit) {
             // Discard this body before awaiting a narrower read from the same
             // authoritative edge; rejected replies never certify coverage.
@@ -193,6 +228,11 @@ export abstract class ChatPaneHistoryPackets extends ChatPaneSnapshotHydration {
           break;
         }
         selector = { cursor };
+        // Reuse this fit's facts synchronously; only numeric bounds cross the
+        // next await. Changed live/reader custody is checked again on arrival.
+        budget =
+          readerIntent && !smallOnly ? readChatHistoryRequestBudget(state, prepared) : undefined;
+        prepared = undefined;
       }
     } catch (error) {
       if (!settleForegroundRead()) {
@@ -204,8 +244,8 @@ export abstract class ChatPaneHistoryPackets extends ChatPaneSnapshotHydration {
       return false;
     }
     // Reader/live publication may have changed capacity during a later reply.
-    // Keep only a fitting contiguous prefix; its first unadmitted packet is
-    // the sole staged remainder. Later bodies are released without moving an edge.
+    // Keep a fitting contiguous prefix. Only an original small packet may wait
+    // in the staged slot; discarded broad bodies never advance an opaque edge.
     while (
       packets.length &&
       !prepareChatHistoryPages(
@@ -214,7 +254,12 @@ export abstract class ChatPaneHistoryPackets extends ChatPaneSnapshotHydration {
         direction,
       ).fits
     ) {
-      overflow = packets.pop()!;
+      const rejected = packets.pop()!;
+      overflow = large(rejected) ? null : rejected;
+      if (!packets.length && !overflow) {
+        capacityBlocked = true;
+        failure = new Error(t("chat.thread.historyCapacity"));
+      }
     }
     if (!packets.length && !failure && overflow) {
       capacityBlocked = true;
