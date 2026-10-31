@@ -228,6 +228,19 @@ describe("startSshPortForward", () => {
     },
   );
 
+  it("passes the configured identity to ssh without trimming its whitespace", async () => {
+    const stop = new Error("captured SSH process boundary");
+    mocks.spawn.mockImplementationOnce(() => {
+      throw stop;
+    });
+    await expect(startTunnel(43210, { identity: "/keys/id test " })).rejects.toBe(stop);
+    const args = mocks.spawn.mock.calls[0]?.[1] as string[];
+    expect(args.slice(args.indexOf("-i"), args.indexOf("-i") + 2)).toEqual([
+      "-i",
+      "/keys/id test ",
+    ]);
+  });
+
   it.each(["PortInUseError", "EADDRINUSE", "EACCES", "EPERM"])(
     "falls back to an ephemeral port when the preferred port fails with %s",
     async (code) => {

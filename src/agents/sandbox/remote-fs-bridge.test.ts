@@ -340,6 +340,22 @@ describe("remote sandbox fs bridge", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "addresses literal whitespace-padded paths instead of their trimmed siblings",
+    async () => {
+      const { bridge, put, contents, at } = await createFixture();
+      await put("note.txt", "trimmed sibling");
+      await put(" note.txt", "literal");
+      await expect(bridge.readFile({ filePath: " note.txt" })).resolves.toEqual(
+        Buffer.from("literal"),
+      );
+      await bridge.writeFile({ filePath: " note.txt", data: "updated" });
+      await contents(" note.txt", "updated");
+      await contents("note.txt", "trimmed sibling");
+      expect(await fs.readdir(at("."))).toEqual(expect.arrayContaining(["note.txt", " note.txt"]));
+    },
+  );
+
   it.each([
     [
       "1",
