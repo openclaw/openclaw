@@ -510,6 +510,7 @@ function buildCoreDistEntries(pluginIds: readonly string[]): Record<string, stri
   return {
     index: "src/index.ts",
     entry: "src/entry.ts",
+    "runtime-artifacts": "src/runtime-artifacts.ts",
     "gateway-prewarm": "src/gateway/server-start.ts",
     "infra/package-lifecycle": "src/infra/package-lifecycle.ts",
     "commands/doctor-update-schema-guard": "src/commands/doctor-update-schema-guard.ts",
@@ -797,12 +798,12 @@ function buildUnifiedDeclarationGroups(
     })),
   );
   // Runtime entrypoints include workers, lazy loaders, and private implementation
-  // sidecars. Only the library root, typed SDK, and plugin contracts own declarations.
+  // sidecars. Only public library entrypoints, typed SDK, and plugin contracts own declarations.
   const sortedEntries = Object.entries(entries)
     .filter(([name]) =>
       name.startsWith("plugin-sdk/")
         ? shouldBuildPrivateQaEntries || publicPluginSdkEntryNames.has(name)
-        : name === "index" || Object.hasOwn(pluginContracts, name),
+        : name === "index" || name === "runtime-artifacts" || Object.hasOwn(pluginContracts, name),
     )
     .toSorted(([left], [right]) => left.localeCompare(right));
   // These entrypoints share most of their compiler inputs. Partitioning them

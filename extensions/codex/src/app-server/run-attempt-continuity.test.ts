@@ -6,10 +6,9 @@ import {
   protectCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
-import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-context.js";
-import { getCodexInferenceThread, ownCodexInferenceClient } from "./inference-routing.js";
+import { ownCodexInferenceClient } from "./inference-routing.js";
 import { isJsonObject } from "./protocol.js";
-import { retainSourceAuthority } from "./run-attempt-continuity.test-support.js";
+import * as continuity from "./run-attempt-continuity.test-support.js";
 import {
   createParams,
   createStartedThreadHarness,
@@ -28,6 +27,8 @@ it("retains a protected parent through private completion and owner reentry", as
   const codexHome = resolveCodexAppServerHomeDir(agentDir);
   const rolloutPath = path.join(codexHome, "sessions", "continuity-parent.jsonl");
   let creationPolicy = "";
+  const policy = "Persistent synthetic operator policy.";
+  let recorded: unknown;
   const harness = createStartedThreadHarness(
     async (method, request) => {
       if (method === "account/read") {
@@ -51,20 +52,28 @@ it("retains a protected parent through private completion and owner reentry", as
   try {
     for (const [index, text] of [
       "Owner conversation context.",
-      "Owner conversation context.",
+      undefined,
       "Private completion context.",
       "Owner conversation context.",
     ].entries()) {
       const params = createParams(sessionFile, tempDir, { runId: `continuity-${index}` });
       params.agentDir = agentDir;
       params.timeoutMs = 60_000;
-      params.extraSystemPrompt = `${text}\n\nPersistent synthetic operator policy.`;
-      params.extraSystemPromptTurnContext = { start: 0, text };
+      params.extraSystemPrompt = [text, policy].filter(Boolean).join("\n\n");
+      params.extraSystemPromptTurnContext = text ? { start: 0, text } : undefined;
       params.privateCompletion = index === 2 ? true : undefined;
       params.hostCapabilities = createCodexTestHostCapabilities({
         ...params.hostCapabilities,
+        trajectory: {
+          recordEvent: (type, data) => {
+            recorded = type === "context.compiled" ? data : recorded;
+          },
+          flush: async () => {},
+        },
         retainSourceAuthority:
-          index === 2 ? () => undefined : retainSourceAuthority(new AbortController().signal),
+          index === 2
+            ? () => undefined
+            : continuity.retainSourceAuthority(new AbortController().signal),
       });
       const run = runCodexAppServerAttempt(params);
       await run.waitForTurnAccepted();
@@ -72,30 +81,20 @@ it("retains a protected parent through private completion and owner reentry", as
         expect(harness.client.getRuntimeIdentity()?.codexHome).toBe(codexHome);
         release = protectCodexAppServerLiveThread(harness.client, "thread-1");
       }
-      await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-        threadId: "thread-1",
-      });
+      expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe("thread-1");
       const request = harness.requests.findLast(({ method }) => method === "turn/start")?.params;
-      const route = getCodexInferenceThread(harness.client, "thread-1");
-      const metadata =
-        isJsonObject(request) && isJsonObject(request.responsesapiClientMetadata)
-          ? request.responsesapiClientMetadata
-          : undefined;
-      const generation = metadata?.[CODEX_INFERENCE_GENERATION_KEY];
-      if (!route || typeof generation !== "string") {
-        throw new Error("Missing admitted inference context");
-      }
-      const prepared = route.context.prepare(
-        { instructions: `Native model policy.\n${creationPolicy}`, input: [] },
-        { requestKind: "turn", threadId: "thread-1", generation },
+      const instructions = continuity.readManagedInstructions(harness.client, request);
+      expect(instructions).toContain(
+        text ?? "No additional conversation instructions for this turn.",
       );
-      prepared.assertCurrent();
-      expect(prepared.body.instructions).toContain(text);
-      expect(prepared.body.instructions).not.toContain(
+      expect(instructions).not.toContain(
         index === 2 ? "Owner conversation context." : "Private completion context.",
       );
       await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-      await run;
+      const result = await run;
+      const expected = instructions.replace("Native model-owned policy", creationPolicy);
+      expect(recorded).toHaveProperty("systemPrompt", expected);
+      expect(result.systemPromptReport?.systemPrompt.chars).toBe(expected.length);
     }
     const changed = createParams(sessionFile, tempDir, { runId: "changed-policy" });
     changed.agentDir = agentDir;
