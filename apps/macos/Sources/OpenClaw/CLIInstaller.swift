@@ -232,9 +232,10 @@ enum CLIInstaller {
         expectedVersion: String? = GatewayEnvironment.expectedGatewayVersionString(),
         installedCLI: GatewayLaunchAgentManager.InstalledServiceCLI? = nil,
         serviceProfile: AppProfile = .current,
-        usesBundledRuntime: Bool = true) async -> Status
+        usesBundledRuntime: Bool = true,
+        homeDirectory: URL = FileManager().homeDirectoryForCurrentUser) async -> Status
     {
-        let location = self.managedExecutableLocation()
+        let location = self.managedExecutableLocation(homeDirectory: homeDirectory)
         if let installedCLI {
             let environment = GatewayLaunchAgentManager.daemonEnvironment(
                 installedCLI: installedCLI,
@@ -252,20 +253,20 @@ enum CLIInstaller {
                authority.file == nil
             {
                 return await self.managedStatus(
-                    expectedVersion: expectedVersion, installedCLI: authority.cli, usesBundledRuntime: false)
+                    expectedVersion: expectedVersion,
+                    installedCLI: authority.cli,
+                    serviceProfile: serviceProfile,
+                    usesBundledRuntime: false,
+                    homeDirectory: homeDirectory)
             }
             return .missing(location: location)
         }
 
         let preferredPaths = await CommandResolver.preferredPathsAsync()
-        let status = await self.status(
+        return await self.status(
             location: location,
             expectedVersion: expectedVersion,
             preferredPaths: preferredPaths)
-        if status.isReady {
-            self.rememberValidated(status, defaults: AppDefaults.standard)
-        }
-        return status
     }
 
     static func status(location: String) async -> Status {
@@ -430,6 +431,7 @@ enum CLIInstaller {
                 await statusHandler("Install failed: \(error.localizedDescription)")
                 return false
             }
+            self.rememberValidated(managedStatus, defaults: AppDefaults.standard)
             let parsed = self.parseInstallEvents(response.stdout)
             let installedVersion = parsed.last { $0.event == "done" }?.version
             let summary = installedVersion.map { "Installed openclaw \($0)." } ?? "Installed openclaw."
@@ -570,25 +572,32 @@ enum CLIInstaller {
         targetVersion: String,
         restartGateway: Bool = true,
         repair: Bool = false,
+        homeDirectory: URL = FileManager().homeDirectoryForCurrentUser,
         installedCLI: GatewayLaunchAgentManager.InstalledServiceCLI? = nil,
         checkCurrent: (@MainActor @Sendable () async throws -> Void)? = nil,
         onDispatch: (@MainActor @Sendable () throws -> Void)? = nil,
         statusHandler: @escaping @MainActor @Sendable (String) async -> Void) async
         -> ManagedCLIUpdateOutcome
     {
-        let executable = self.managedExecutableLocation()
+        let executable = self.managedExecutableLocation(homeDirectory: homeDirectory)
         // A CLI update may have advanced the runtime after the app selected its receipt.
         // Reconcile at the update owner; an unreadable version keeps the existing repair path.
         if !repair,
            case let .ready(_, installedVersion) = await self.managedStatus(
-               expectedVersion: nil, installedCLI: installedCLI, usesBundledRuntime: false),
+               expectedVersion: nil, installedCLI: installedCLI, usesBundledRuntime: false,
+               homeDirectory: homeDirectory),
            CLIInstallPrompter.isManagedUpgrade(found: targetVersion, required: installedVersion)
         {
+            let canonicalStatus = await self.status(
+                location: executable,
+                expectedVersion: installedVersion,
+                preferredPaths: await CommandResolver.preferredPathsAsync())
             do { try await checkCurrent?() } catch {
                 return .failure(
                     message: String(localized: "Gateway update failed."),
                     details: error.localizedDescription)
             }
+            self.rememberValidated(canonicalStatus, defaults: AppDefaults.standard)
             await statusHandler(String(
                 format: String(localized: "OpenClaw Gateway %@ is installed."), installedVersion))
             return .success(fromVersion: installedVersion, toVersion: installedVersion)
@@ -649,13 +658,19 @@ enum CLIInstaller {
             // rather than retrying the obsolete receipt or granting downgrade consent.
             if !repair, reason == "downgrade-confirmation-required",
                case let .ready(_, installedVersion) = await self.managedStatus(
-                   expectedVersion: nil, installedCLI: installedCLI, usesBundledRuntime: false),
+                   expectedVersion: nil, installedCLI: installedCLI, usesBundledRuntime: false,
+                   homeDirectory: homeDirectory),
                CLIInstallPrompter.isManagedUpgrade(found: targetVersion, required: installedVersion)
             {
+                let canonicalStatus = await self.status(
+                    location: executable,
+                    expectedVersion: installedVersion,
+                    preferredPaths: await CommandResolver.preferredPathsAsync())
                 do { try await checkCurrent?() } catch {
                     return .failure(
                         message: String(localized: "Gateway update failed."), details: error.localizedDescription)
                 }
+                self.rememberValidated(canonicalStatus, defaults: AppDefaults.standard)
                 await statusHandler(String(
                     format: String(localized: "OpenClaw Gateway %@ is installed."), installedVersion))
                 return .success(fromVersion: summary?.before?.version, toVersion: installedVersion)
@@ -680,7 +695,8 @@ enum CLIInstaller {
         let managedStatus = await self.managedStatus(
             expectedVersion: nil,
             installedCLI: installedCLI,
-            usesBundledRuntime: false)
+            usesBundledRuntime: false,
+            homeDirectory: homeDirectory)
         guard case let .ready(_, installedVersion) = managedStatus,
               self.satisfiesUpdateTarget(installedVersion: installedVersion, targetVersion: targetVersion)
         else {
@@ -689,6 +705,14 @@ enum CLIInstaller {
             return .failure(message: message, details: managedStatus.message)
         }
 
+        let canonicalStatus = await self.status(
+            location: executable,
+            expectedVersion: installedVersion,
+            preferredPaths: await CommandResolver.preferredPathsAsync())
+        do { try await checkCurrent?() } catch {
+            return .failure(message: String(localized: "Gateway update failed."), details: error.localizedDescription)
+        }
+        self.rememberValidated(canonicalStatus, defaults: AppDefaults.standard)
         self.rememberInstallPolicy(.exact(targetVersion))
         NotificationCenter.default.post(name: .openclawCLIInstalled, object: nil)
         await statusHandler(String(
