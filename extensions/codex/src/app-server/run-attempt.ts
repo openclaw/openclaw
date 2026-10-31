@@ -81,16 +81,20 @@ async function runCodexAppServerAttemptOnce(
         const attemptPrompt = await preparation.measure("prompt", () =>
           prepareCodexAttemptPrompt(attemptContext, assembly),
         );
-        assertDeferredToolInventoryFits({
-          names: collectCodexDeferredToolNames(attemptTools.toolBridge.specs),
-          model: runtime.effectiveRuntimeModelId,
-          contextSource: runtime.effectiveContextWindowInfo?.source,
-          contextTokens:
-            runtime.effectiveContextWindowInfo?.tokens ??
-            runtime.effectiveContextTokenBudget ??
-            params.model.contextWindow ??
-            DEFAULT_CONTEXT_TOKENS,
-        });
+        // Only restricted turns deferred by connection discovery are admitted here;
+        // other searchable turns keep their existing admission.
+        if (runtime.toolDiscoveryClient?.modelListedOnConnection) {
+          assertDeferredToolInventoryFits({
+            names: collectCodexDeferredToolNames(attemptTools.toolBridge.specs),
+            model: runtime.effectiveRuntimeModelId,
+            contextSource: runtime.effectiveContextWindowInfo?.source,
+            contextTokens:
+              runtime.effectiveContextWindowInfo?.tokens ??
+              runtime.effectiveContextTokenBudget ??
+              params.model.contextWindow ??
+              DEFAULT_CONTEXT_TOKENS,
+          });
+        }
         const resources = prepareCodexAttemptResources(attemptPrompt);
         // This turn's claimed children make the yield; otherwise report native
         // children of earlier turns, whose completion still resumes the session.

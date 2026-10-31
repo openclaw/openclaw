@@ -169,36 +169,50 @@ it.each([true, false])(
   },
 );
 
-it("rejects an overflowing inventory as a global preflight before native startup", async () => {
-  const params = createTestParams();
-  const harness = createStartedThreadHarness(async (method) =>
-    method === "model/list"
-      ? { data: [createModelFixture(params.modelId)], nextCursor: null }
-      : undefined,
-  );
-  const tool = createRuntimeDynamicTool("lookup_record");
-  const { run } = await startTool(tool, {
-    harness,
-    clock: true,
-    pluginHarnessToolPolicyRestricted: true,
-    contextWindowInfo: { tokens: 100, source: "agentContextTokens" },
-  });
-  const failure: unknown = await run.catch((error: unknown) => error);
-  expect(failure).toBeInstanceOf(AgentHarnessPreflightError);
-  expect(failure).toMatchObject({
-    code: "TOOL_INVENTORY_BUDGET_EXCEEDED",
-    scope: undefined,
-    toolCount: 1,
-    requiredSize: 22,
-    limit: 10,
-    userMessage: expect.stringContaining("requiredSize=22, limit=10"),
-  });
-  expect(
-    harness.requests.filter(({ method }) => method === "thread/start" || method === "turn/start"),
-  ).toEqual([]);
-  expect(tool.execute).not.toHaveBeenCalled();
-  expect(harness.requests.filter(({ method }) => method === "model/list")).toHaveLength(1);
-});
+it.each([true, false])(
+  "admits an overflowing inventory only for restricted discovery (restricted: %s)",
+  async (restricted) => {
+    const params = createTestParams();
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "model/list") {
+        return { data: [createModelFixture(params.modelId)], nextCursor: null };
+      }
+      if (method === "mcpServerStatus/list") {
+        return { data: [], nextCursor: null };
+      }
+      return undefined;
+    });
+    const tool = createRuntimeDynamicTool("lookup_record");
+    const { run } = await startTool(tool, {
+      harness,
+      clock: true,
+      pluginHarnessToolPolicyRestricted: restricted,
+      contextWindowInfo: { tokens: 100, source: "agentContextTokens" },
+    });
+    if (!restricted) {
+      await run.waitForTurnAccepted();
+      await completeRun(harness, run);
+      expect(harness.requests.filter(({ method }) => method === "model/list")).toEqual([]);
+      return;
+    }
+    const failure: unknown = await run.catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AgentHarnessPreflightError);
+    expect(failure).toMatchObject({
+      code: "TOOL_INVENTORY_BUDGET_EXCEEDED",
+      scope: undefined,
+      toolCount: 1,
+      requiredSize: 22,
+      limit: 10,
+      message: expect.stringContaining("requiredSize=22, limit=10"),
+      userMessage: expect.stringContaining('codexDynamicToolsLoading to "direct"'),
+    });
+    expect(
+      harness.requests.filter(({ method }) => method === "thread/start" || method === "turn/start"),
+    ).toEqual([]);
+    expect(tool.execute).not.toHaveBeenCalled();
+    expect(harness.requests.filter(({ method }) => method === "model/list")).toHaveLength(1);
+  },
+);
 
 describe("runCodexAppServerAttempt dynamic tools", () => {
   it("enforces Gateway policy on an owner turn's tool declarations and callbacks", async () => {

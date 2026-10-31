@@ -39,12 +39,16 @@ catalogs remain unchanged. Catalog membership is a compatibility proxy, not a
 native discovery capability guarantee: remotely refreshed model metadata can drift
 from the bundled catalog tested with Codex 0.164.0.
 
-The model receives the complete list of deferred tool names. OpenClaw checks the
-comma-space-separated, qualified names against one tenth of the resolved context
-window in UTF-16 code units (approximately 2.5% of the token window). If the list
-exceeds that budget, preparation fails with `TOOL_INVENTORY_BUDGET_EXCEEDED` and
-reports the tool count, size and limit. It does not drop names or retry eagerly.
-This checks the inventory, not the entire request or the mandatory direct schemas.
+The model receives the complete list of deferred tool names. For these restricted
+turns, OpenClaw checks the comma-space-separated, qualified names against one
+tenth of the resolved context window in UTF-16 code units (approximately 2.5% of
+the token window). If the list exceeds that budget, the turn fails before native
+startup with `TOOL_INVENTORY_BUDGET_EXCEEDED`. The user is told to enable fewer
+tools, use a larger context window, or set
+`codexDynamicToolsLoading: "direct"`; diagnostics keep the tool count, size and
+limit. It does not drop names or retry eagerly. This checks the inventory, not
+the entire request or the mandatory direct schemas. Other searchable turns are
+not subject to this check.
 
 OpenClaw's restricted-turn flags do not guarantee that Codex's selected model
 disables Code Mode. Use directly listed tools by their exact names, or inspect
