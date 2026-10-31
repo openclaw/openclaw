@@ -826,7 +826,8 @@ extension DashboardWindowController {
                 self.reconnectTask = nil
                 self.signedOut = page
                 self.showFailureHTML(
-                    DashboardFailurePage.html(signedOut: page, error: error.localizedDescription), present: false)
+                    DashboardFailurePage.html(signedOut: page, error: DashboardFailurePage.signInError(error)),
+                    present: false)
             }
         }
         self.reconnectTask = (attempt, task)

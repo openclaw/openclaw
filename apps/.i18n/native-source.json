@@ -4659,6 +4659,7 @@
     {"path":"apps/macos/Sources/OpenClaw/DashboardFailurePage.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.c109419e4662ddfa","source":"Open browser"},
     {"path":"apps/macos/Sources/OpenClaw/DashboardFailurePage.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.4b8aa5dbbf85ac82","source":"Reload"},
     {"path":"apps/macos/Sources/OpenClaw/DashboardFailurePage.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.2bac736b68242f20","source":"Sign in again"},
+    {"path":"apps/macos/Sources/OpenClaw/DashboardFailurePage.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.14bac08e2f5473c7","source":"Sign-in cancelled. Try again."},
     {"path":"apps/macos/Sources/OpenClaw/DashboardFailurePage.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.a28d95db9b1069a3","source":"Signed out of %@"},
     {"path":"apps/macos/Sources/OpenClaw/DashboardFailurePage.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.37bc65fc6431be71","source":"Your browser sign-in to %@ expired %@. Sign in again to continue."},
     {"path":"apps/macos/Sources/OpenClaw/DashboardFailurePage.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.e0f10df53e1715e8","source":"Your browser sign-in to %@ expires soon. Sign in again to continue."},
