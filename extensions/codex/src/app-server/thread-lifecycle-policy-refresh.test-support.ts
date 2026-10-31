@@ -338,7 +338,7 @@ export function registerThreadPolicyRefreshTests({
         ]);
         const policy = JSON.stringify(requests.at(-1)?.params);
         expect(policy).toContain(developerInstructions || "an empty block withdraws that policy");
-        expect(policy).toContain("This complete block replaces earlier versions of that policy");
+        expect(policy).toContain("replaces only earlier blocks with the same delimiters");
         expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe(threadId);
       } finally {
         close(wire);

@@ -59,7 +59,7 @@ export async function refreshCodexThreadPolicy(
   params: CodexThreadHandoffParams & { developerInstructions: string },
 ): Promise<void> {
   const notice =
-    "Update only the OpenClaw native-thread policy delimited by <openclaw_thread_policy> below. This complete block replaces earlier versions of that policy, including legacy OpenClaw-supplied generic policy without these delimiters. Rules absent from the new block are withdrawn; an empty block withdraws that policy. It does not replace the enclosing native developer message or all preceding instructions. Separately supplied instructions retain their authority, including current-inference persona, skills, memory and conversation guidance, and independent native managed, guardian, security, collaboration and project instructions. The replacement itself does not erase conversation history, facts or results, or cancel unfinished user requests.\n\n";
+    "Update only the OpenClaw native-thread policy delimited by <openclaw_thread_policy> below. This complete block replaces only earlier blocks with the same delimiters. Rules omitted from the new block are withdrawn only from those earlier blocks; an empty block withdraws that policy. It does not replace text outside those blocks, the enclosing native developer message or all preceding instructions. Separately supplied instructions retain their authority, including current-inference persona, skills, memory and conversation guidance, and independent native managed, guardian, security, collaboration and project instructions. The replacement itself does not erase conversation history, facts or results, or cancel unfinished user requests.\n\n";
   await injectCodexThreadDeveloperHandoff(params, notice + params.developerInstructions);
 }
 

@@ -43,7 +43,8 @@ describe("native thread policy refresh", () => {
         await update;
         expect(request.method).toBe("thread/inject_items");
         const text = request.params.items[0].content[0].text;
-        expect(text).toContain("legacy OpenClaw-supplied generic policy without these delimiters");
+        expect(text).toContain("replaces only earlier blocks with the same delimiters");
+        expect(text).not.toContain("legacy OpenClaw-supplied generic policy");
         expect(text).toContain("an empty block withdraws that policy");
         expect(text).toContain(
           "current-inference persona, skills, memory and conversation guidance",
