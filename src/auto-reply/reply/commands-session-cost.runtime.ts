@@ -54,7 +54,12 @@ export async function formatSessionUsageCostSummary(params: {
   const sessionTokens = sessionSummary?.totalTokens
     ? formatTokenCount(sessionSummary.totalTokens)
     : undefined;
-  const sessionSuffix = (sessionSummary?.missingCostEntries ?? 0) > 0 ? " (partial)" : "";
+  const sessionSuffix =
+    sessionSummary?.staleSince !== undefined
+      ? " (stale)"
+      : (sessionSummary?.missingCostEntries ?? 0) > 0
+        ? " (partial)"
+        : "";
   const sessionLine =
     sessionCost || sessionTokens
       ? `Session ${sessionCost ?? "n/a"}${sessionSuffix}${sessionTokens ? ` · ${sessionTokens} tokens` : ""}`

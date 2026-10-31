@@ -198,7 +198,12 @@ function PinnedSessionSection(params: { host: SidebarSessionListHost }) {
   );
 }
 
-export function renderSessionListFrame(host: () => SidebarSessionListHost, body: JSX.Element) {
+/** The roster leads with its agents; the session list keeps its own sections first. */
+export function renderSessionListFrame(
+  host: () => SidebarSessionListHost,
+  body: JSX.Element,
+  bodyFirst = false,
+) {
   const home = createMemo(() =>
     host().sidebarAgentsMode === "roster" ? null : host().mainSessionRow(),
   );
@@ -239,9 +244,10 @@ export function renderSessionListFrame(host: () => SidebarSessionListHost, body:
         </div>
       ) : undefined}
       {renderSessionMutationError(host())}
+      {bodyFirst ? body : undefined}
       <PinnedSessionSection host={host()} />
       <PersonalSessionGroups host={host()} />
-      {body}
+      {bodyFirst ? undefined : body}
     </section>
   );
 }

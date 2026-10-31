@@ -5,6 +5,8 @@ import { CURRENT_SESSION_VERSION, SessionManager } from "../../agents/sessions/s
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
+import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -212,6 +214,72 @@ function observePayloadAcquisition(
     pendingRows: pending.size,
   };
 }
+
+it("does not acquire unrelated excluded history while selecting background dependencies", async ({
+  scope,
+}) => {
+  const marker = "unrelated-excluded-history";
+  const excluded = Array.from({ length: 16 }, (_, index) =>
+    transcriptMessage(`${marker}-${index}`, index === 0 ? null : `${marker}-${index - 1}`, {
+      ...makeAgentAssistantMessage({ content: [] }),
+      excludeFromContext: true,
+    }),
+  );
+  await persist(scope, [...excluded, user("anchor", `${marker}-15`), user("tail", "anchor")]);
+  await waitProjection(scope);
+  const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
+  const acquisition = observePayloadAcquisition(db, marker, () => {
+    expect(eventIds(readContext(scope, 16384, 1).events)).toEqual([scope.sessionId, "tail"]);
+  });
+  expect(acquisition.acquiredBytes).toBe(0);
+});
+
+it("does not parse indexed legacy payloads outside the bounded context", async ({ scope }) => {
+  const marker = "unselected-legacy-payload";
+  await persist(scope, [
+    ...Array.from({ length: 16 }, (_, index) =>
+      user(`old-${index}`, index === 0 ? null : `old-${index - 1}`, marker),
+    ),
+    user("tail", "old-15"),
+  ]);
+  await waitProjection(scope);
+  runOpenClawAgentWriteTransaction(
+    (database) => {
+      database.db
+        .prepare(`UPDATE transcript_events
+          SET navigation_type = NULL, navigation_custom_type = NULL,
+              navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
+              navigation_last_custom_type = NULL, navigation_valid = 1
+          WHERE session_id = ?`)
+        .run(scope.sessionId);
+    },
+    { agentId: scope.agentId },
+  );
+  const database = openOpenClawAgentDatabaseReadOnly({ agentId: scope.agentId });
+  assert(database.found);
+  const nativeJson = new (requireNodeSqlite().DatabaseSync)(":memory:");
+  const validJson = nativeJson.prepare("SELECT json_valid(?) AS valid");
+  let unrelatedParses = 0;
+  try {
+    requireNativeSqliteDatabase(database.database.db).function(
+      "json_valid",
+      { deterministic: true },
+      (value) => {
+        unrelatedParses += Number(typeof value === "string" && value.includes(marker));
+        return validJson.get(value)?.valid ?? 0;
+      },
+    );
+    const context = runSqliteReadSnapshotSync(database.database.db, () =>
+      boundedContext(scope, { maxBytes: 4096, maxEvents: 1, transaction: database.database }),
+    );
+    expect(eventIds(context.events)).toEqual([scope.sessionId, "tail"]);
+    expect(context).toMatchObject({ totalEvents: 17, truncated: true });
+    expect(unrelatedParses).toBe(0);
+  } finally {
+    database.database.close();
+    nativeJson.close();
+  }
+});
 
 it("enforces context count and byte budgets and releases rejected reads for later appends", async ({
   scope,

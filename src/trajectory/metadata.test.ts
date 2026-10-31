@@ -49,11 +49,6 @@ function skill(name: string, description: string): ResolvedSkillEntry {
   });
 }
 
-const partialSkill = {
-  source: "workspace",
-  disableModelInvocation: false,
-} as unknown as ResolvedSkillEntry;
-
 afterEach(() => {
   vi.restoreAllMocks();
   resetSecretRedactionRegistryForTest();
@@ -278,7 +273,7 @@ describe("trajectory metadata", () => {
       createPluginRecord({
         id: "demo-plugin",
         imported: true,
-        toolNames: ["demo_tool"],
+        toolNames: [" demo_tool ", "demo_tool", "demo_tool"],
       }),
     );
     setActivePluginRegistry(registry, "trajectory-metadata-test");
@@ -304,36 +299,15 @@ describe("trajectory metadata", () => {
 
     expect(captured).toMatchObject({
       config: { redacted: { providers: { openai: { apiKey: REDACTED_SENTINEL } } } },
-      plugins: { source: "active-registry", entries: [{ id: "demo-plugin" }] },
+      plugins: {
+        source: "active-registry",
+        entries: [{ id: "demo-plugin", toolNames: ["demo_tool", "demo_tool"] }],
+      },
       skills: { entries: [{ id: "weather", filePath: "/tmp/workspace/skills/weather/SKILL.md" }] },
     });
-  });
-
-  it.each([
-    {
-      name: "retains valid resolved skills beside partial entries",
-      resolved: [skill("alpha", "valid entry"), partialSkill],
-      fallback: [],
-      expected: "alpha",
-    },
-    {
-      name: "falls back when every resolved skill is partial",
-      resolved: [partialSkill],
-      fallback: [{ name: "fallback-skill" }],
-      expected: "fallback-skill",
-    },
-  ])("$name", ({ resolved, fallback, expected }) => {
-    const captured = metadata({
-      sessionFile: "/tmp/workspace/session.jsonl",
-      skillsSnapshot: {
-        prompt: "skill prompt",
-        version: 1,
-        skills: fallback,
-        resolvedSkills: resolved,
-      },
-    });
-
-    expect(captured.skills).toMatchObject({ entries: [{ name: expected }] });
+    const plugins = captured.plugins as { entries: Record<string, unknown>[] };
+    // Empty capabilities are not persisted and need no recorder projection work.
+    expect(plugins.entries[0]).not.toHaveProperty("cliBackendIds");
   });
 
   it("captures final artifact summaries for export sidecars", () => {

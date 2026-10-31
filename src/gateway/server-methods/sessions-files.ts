@@ -118,7 +118,13 @@ async function handleSessionFilesRead(
   let transportOwnsRead = false;
   let readAuthority: ReturnType<typeof createSessionFileReadAuthority> | undefined;
   return withSessionFileRoot(
-    { ...params, agentId, getRuntimeConfig: context.getRuntimeConfig },
+    {
+      ...params,
+      agentId,
+      getRuntimeConfig: context.getRuntimeConfig,
+      projection: "list",
+      retained: read?.prepared,
+    },
     context.getRuntimeConfig(),
     async (source, assertSourceCurrent, readEntry) => {
       if (rejectDeviceFolderFiles(source.entry, respond)) {

@@ -12,6 +12,7 @@ import type {
   ShortTermDreamingStatsEntry,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { ConceptTagScriptCoverage } from "./concept-vocabulary.js";
+import type { WorkspaceFileMode } from "./workspace-file-mode.js";
 
 export const DEFAULT_PROMOTION_MIN_SCORE = DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE;
 export const DEFAULT_PROMOTION_MIN_RECALL_COUNT = DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT;
@@ -122,6 +123,7 @@ export type ApplyShortTermPromotionsOptions = PromotionThresholdOptions & {
   agentId?: string;
   workspaceAgentIds?: readonly string[];
   workspaceDir: string;
+  workspaceFileMode?: WorkspaceFileMode;
   candidates: PromotionCandidate[];
   limit?: number;
   nowMs?: number;

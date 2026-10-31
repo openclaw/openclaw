@@ -628,14 +628,14 @@ describe("AppSidebar viewer presence", () => {
       [...(sessionFacepile?.querySelectorAll<HTMLElement>("[data-viewer-id]") ?? [])].map(
         (avatar) => avatar.dataset.viewerId,
       ),
-    ).toEqual(["alice", "bob", "carol"]);
-    expect(sessionFacepile?.querySelector(".viewer-avatar--overflow")?.textContent).toContain("+3");
+    ).toEqual(["alice", "bob"]);
+    expect(sessionFacepile?.querySelector(".viewer-avatar--overflow")?.textContent).toContain("+4");
     expect(sessionFacepile?.querySelector('[data-viewer-id="alice"] img')).not.toBeNull();
     expect(
       [...(sessionFacepile?.querySelectorAll("openclaw-tooltip") ?? [])].map(
         (tooltip) => (tooltip as HTMLElement & { content?: string }).content,
       ),
-    ).toEqual(["Alice", "bob@example.test", "Carol", "Dave\nErin\nFrank"]);
+    ).toEqual(["Alice", "bob@example.test", "Carol\nDave\nErin\nFrank"]);
 
     const identityCard = sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card");
     expect(identityCard?.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe(

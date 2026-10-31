@@ -16,6 +16,7 @@ How the Gateway scheduler runs a job, what it keeps between runs, and how a repe
 - Automations run **inside the Gateway process**, not inside the model. The Gateway must be running for schedules to fire.
 - Job definitions, runtime state, and run history persist in OpenClaw's shared SQLite state database, so restarts do not lose schedules.
 - Automation runs are recorded in cron run history.
+- A run-now request is authorized when it is queued. If it targets the requesting conversation, it starts after that turn ends, using the job's current scheduled authority. Removing or disabling the job before launch still stops it. Skipped runs and failures before agent execution add a notice to the owning conversation with the reason and the next step.
 - Main-session system events use ordinary session admission and remain running until the exact turn settles. A restart before adoption records one interrupted failure; it does not report success or replay the reminder.
 - A running automation can remove itself through its scoped automation tool and still finish its final reply. Removing or disabling it from another turn, or pressing Stop, still cancels the active run. Explicitly disabling an already-paused job also cancels a manually forced run; unrelated edits leave that run alone.
 - Agent, command, and script jobs write their result once into the chat or topic that receives it, including jobs without a creating conversation. A different delivery destination gets the result instead of the creating chat; without an external route, the creating conversation receives it. Execution context remains separate. See [Automation delivery](/automation/cron-jobs/delivery).
@@ -30,7 +31,7 @@ How the Gateway scheduler runs a job, what it keeps between runs, and how a repe
 
 <AccordionGroup>
   <Accordion title="Isolated run hardening">
-    - Scheduled runs have their own execution lifetime from admission through result persistence and cleanup. Timer ticks, startup catch-up, and event-source watchers do not inherit the request state of the conversation that created or updated them. Manual runs retain their caller authority.
+    - Scheduled runs have their own execution lifetime from admission through result persistence and cleanup. Timer ticks, startup catch-up, and event-source watchers do not inherit the request state of the conversation that created or updated them. Manual run requests require current caller authority through durable enqueue; accepted runs launch under the job's scheduled authority and final eligibility checks.
     - Isolated runs best-effort close tracked browser tabs/processes for their `cron:<jobId>` session on completion, and dispose any bundled MCP runtime instances created for the job through the same shared teardown path used by main-session and custom-session runs. Cleanup failures are ignored so the run result still wins.
     - A run's continuation session stays available while descendant subagents are running or their completion delivery is pending, including during retention sweeps, so cleanup cannot strand their results.
     - Isolated runs with the narrow automation self-cleanup grant can read scheduler status, a self-filtered list containing only their own job, and that job's run history, and may remove only their own job.

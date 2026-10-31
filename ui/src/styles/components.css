@@ -69,6 +69,11 @@ openclaw-session-progress-hovercard-provider {
   margin: 24px auto 0;
 }
 
+.loading-skeleton__content {
+  min-height: 0;
+  overflow: auto;
+}
+
 .loading-skeleton__message {
   display: grid;
   gap: 14px;
@@ -145,8 +150,34 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 }
 
 .sidebar-recent-session .session-owner-chip--row {
+  width: 18px;
+  height: 18px;
   border: 0;
   box-shadow: none;
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.sidebar-recent-session .session-glyph--circular .session-glyph__content {
+  width: 18px;
+  height: 18px;
+}
+
+/* An emoji agent owner sits on the same disc as a photo avatar. */
+.sidebar .identity-avatar--agent.is-fallback {
+  width: 100%;
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+.sidebar-recent-session .identity-avatar--agent.is-fallback {
+  font-size: 10px;
+}
+
+.sidebar-recent-session .session-glyph__content:has(> .identity-avatar--agent) {
+  width: 18px;
+  height: 18px;
 }
 
 .session-owner-stack {
@@ -298,22 +329,27 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   height: 16px;
 }
 
+.sidebar-recent-session .session-glyph__icon .session-css-icon {
+  width: 15px;
+  height: 15px;
+}
+
 .session-glyph__icon img {
   object-fit: contain;
 }
 
 .session-glyph__icon {
   display: inline-flex;
-  color: inherit;
+  color: var(--muted);
 }
 
 /* Keep artwork at its resting size inside a consistent 25px circular ring.
    Owner pairs retain their fitted trace below rather than shrinking their faces. */
 .session-glyph__ring {
   position: absolute;
-  inset: -2.5px;
+  inset: -2px;
   box-sizing: border-box;
-  border: 1.5px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  border: 1.5px solid color-mix(in srgb, var(--accent) 20%, transparent);
   border-top-color: var(--accent);
   border-radius: var(--radius-full);
   pointer-events: none;
@@ -344,7 +380,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 }
 
 .session-glyph__trace-track {
-  stroke: color-mix(in srgb, var(--accent) 28%, transparent);
+  stroke: color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
 /* The arc covers the same share of its outline as the ring's quarter turn and
@@ -359,13 +395,16 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 .session-glyph__badge {
   position: absolute;
   z-index: 1;
-  top: -2px;
-  right: -2px;
-  width: 7px;
-  height: 7px;
+  top: -1px;
+  right: -1px;
+  width: 8px;
+  height: 8px;
   border-radius: var(--radius-full);
   background: currentColor;
-  box-shadow: 0 0 0 1.5px var(--bg);
+  /* Two equal rings: the row fill over the sidebar, so the cut holds in every state. */
+  box-shadow:
+    0 0 0 1.5px var(--session-row-bg, transparent),
+    0 0 0 1.5px var(--sidebar-bg, var(--bg));
 }
 
 .session-glyph__badge--unread {
@@ -2755,14 +2794,9 @@ td.data-table-key-col {
 
 .session-row-draft-indicator {
   display: inline-grid;
-  width: 18px;
-  height: 18px;
   flex: 0 0 auto;
   place-items: center;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
-  font-size: 12px;
+  color: var(--muted);
 }
 
 /* Unread indicator shared by the sidebar recents list, the chat session
@@ -2775,6 +2809,12 @@ td.data-table-key-col {
   border-radius: var(--radius-full);
   background: var(--accent);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.sidebar-recent-session .session-unread-dot {
+  width: 8px;
+  height: 8px;
+  box-shadow: none;
 }
 
 .session-row-aside {
@@ -2792,9 +2832,8 @@ td.data-table-key-col {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: var(--session-row-muted, var(--muted));
-  font-size: var(--control-ui-text-xs);
-  font-variant-numeric: tabular-nums;
+  font-size: calc(11px * var(--control-ui-text-scale));
+  letter-spacing: 0;
   white-space: nowrap;
   transition: opacity var(--duration-fast) ease;
   /* Display-only, and its opacity transition forms a stacking context that
@@ -2804,15 +2843,15 @@ td.data-table-key-col {
 
 .sidebar-session-fork-indicator {
   display: inline-flex;
-  margin-right: 4px;
+  margin-right: 6px;
   color: var(--muted);
   vertical-align: -2px;
 }
 
 .sidebar-session-fork-indicator svg {
-  width: 14px;
-  height: 14px;
-  stroke-width: 1.6px;
+  width: 13px;
+  height: 13px;
+  stroke-width: 2px;
 }
 
 /* Attribute badges (approval, cloud placement):
@@ -2820,7 +2859,7 @@ td.data-table-key-col {
 .session-row-badges {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex: 0 0 auto;
 }
 
@@ -2829,10 +2868,18 @@ td.data-table-key-col {
 .session-row-badge {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  color: var(--muted);
-  font-size: 10px;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
+}
+
+/* Trailing signals stay quieter than secondary text; only action or live state adds color. */
+.session-row-trail,
+.session-row-badge,
+.session-row-badges,
+.sidebar-child-session-toggle {
+  color: color-mix(in srgb, var(--muted) 82%, var(--sidebar-bg, var(--bg)));
 }
 
 .session-row-badge--attention,
@@ -2840,30 +2887,10 @@ td.data-table-key-col {
   color: var(--warn);
 }
 
-.session-row-badge--pull-request[data-pull-request-state="open"],
-.session-row-badge--cloud[data-placement-state="active"] {
-  color: var(--ok);
-}
-
-.session-row-badge--pull-request[data-pull-request-state="merged"] {
-  color: var(--pr-merged);
-}
-
-.session-row-badge--pull-request[data-pull-request-state="closed"],
+/* A pull request's icon already carries its state; color is reserved for what needs action. */
 .session-row-badge--cloud[data-placement-state="failed"],
 .session-row-badge--cloud[data-disk-space-status="critical"] {
   color: var(--danger);
-}
-
-.session-row-badge--cloud:is(
-  [data-placement-state="requested"],
-  [data-placement-state="provisioning"],
-  [data-placement-state="syncing"],
-  [data-placement-state="starting"],
-  [data-placement-state="draining"],
-  [data-placement-state="reconciling"]
-) {
-  color: var(--accent);
 }
 
 .session-row-badge--cloud[data-workspace-conflicts],
@@ -2874,7 +2901,7 @@ td.data-table-key-col {
 .session-row-actions {
   display: inline-flex;
   align-items: center;
-  gap: 1px;
+  gap: 0;
 }
 
 /* Shared icon-button box; each surface retains positioning, paint, and state. */
@@ -2897,6 +2924,7 @@ td.data-table-key-col {
 
 .session-action {
   background: transparent;
+  color: color-mix(in srgb, var(--muted) 82%, var(--sidebar-bg, var(--bg)));
   opacity: 0;
   pointer-events: none;
   transition:
@@ -2991,6 +3019,16 @@ td.data-table-key-col {
 .session-run-indicator--offscreen,
 .session-glyph__trace--queued .session-glyph__trace-run {
   animation-play-state: paused;
+}
+
+.session-glyph__ring--background,
+.session-glyph__trace--background {
+  opacity: 0.6;
+}
+
+.session-glyph__ring--background,
+.session-glyph__trace--background .session-glyph__trace-run {
+  animation-duration: 3.2s;
 }
 
 @keyframes session-run-trace {
@@ -3260,4 +3298,43 @@ td.data-table-key-col {
 .person-activity-avatar-link {
   display: block;
   line-height: 0;
+}
+
+.session-row-trail--snooze {
+  gap: 4px;
+}
+
+/* Sidebar numbers stay tabular so counts and elapsed times hold their column. */
+:is(
+  .session-row-badge,
+  .session-row-trail,
+  .sidebar-child-session-toggle__count,
+  .sidebar-session-group-count,
+  .sidebar-agent-roster__unread,
+  .sidebar-issues-button__count,
+  .viewer-avatar--overflow,
+  .sidebar-session-tree__show-more
+) {
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+.sidebar-child-session-toggle,
+.session-action,
+.sidebar-session-group-actions {
+  border-radius: 7px;
+  corner-shape: superellipse(1.5);
+}
+
+.sidebar-recent-session .hover-marquee {
+  --hover-marquee-fade-width: 24px;
+}
+
+/* Text on a tag fill keeps its readable tone; only icons take the quieter one. */
+.sidebar-recent-session--colored .session-row-trail {
+  color: var(--session-row-muted, var(--muted));
+}
+
+/* A tighter pair leaves room between its run outline and the title. */
+.sidebar-recent-session .session-owner-stack {
+  width: 26px;
 }

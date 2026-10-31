@@ -1,6 +1,7 @@
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import type { BackupSqliteSnapshotFact } from "../commands/backup-resource-inventory.js";
 import type { DoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
+import { createDoctorWriteAuthority } from "../commands/doctor-policy-custody.js";
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
 import * as doctorMode from "../commands/doctor-repair-mode.js";
 import * as updatePhase from "../commands/doctor/shared/update-phase.js";
@@ -47,11 +48,12 @@ import { publishDoctorUpdateResult } from "./doctor-health-update-result.js";
 export async function runDoctorHealthFlow(
   runtime?: RuntimeEnv,
   options: DoctorOptions = {},
-  writeAuthority?: UpdateDoctorWriteAuthority,
+  delegatedAuthority?: UpdateDoctorWriteAuthority,
   databasePreflight?: DoctorDatabasePreflight,
 ) {
   const signal = resolveCommandProcessSignal(getAsyncWorkSignal());
   signal?.throwIfAborted();
+  const writeAuthority = delegatedAuthority && createDoctorWriteAuthority(delegatedAuthority);
   using custody = await retainUpdateDoctorProcesses(
     writeAuthority?.assertCurrent,
     writeAuthority?.commandAuthority,
@@ -123,7 +125,12 @@ export async function runDoctorHealthFlow(
     await import("../plugins/plugin-generation-source-lookup.js");
   await withPluginGenerationSourceCustody(() =>
     custody ? withCommandProcessScope(run, undefined, custody) : run(),
-  );
+  ).catch(async (error: unknown) => {
+    const { reportDoctorReadOnlyFilesystemError } =
+      await import("../commands/doctor-maintenance-inspection.js");
+    await reportDoctorReadOnlyFilesystemError(error, runtime);
+    throw error;
+  });
   signal?.throwIfAborted();
   requestedExit?.();
 }
@@ -225,6 +232,7 @@ async function runDoctorHealthFlowWithResult(
         root,
         runtime: repairRuntime,
         assertCurrent: writeAuthority?.assertCurrent,
+        lendPolicyCustody: writeAuthority?.lendPolicyCustody,
         databaseGenerations: writeAuthority?.databaseGenerations,
         databasePluginOwners: writeAuthority?.databasePluginOwners,
         serviceInspectionDeadlineAtMs: writeAuthority?.serviceInspectionDeadlineAtMs,
@@ -410,6 +418,7 @@ async function runDoctorHealthFlowWithResult(
         runtime: doctorRuntime,
         healthFindings: startupFindings.healthFindings,
         options,
+        retirementOnly: writeAuthority?.retirementOnly === true,
         prompter,
         configResult,
         cfg: configResult.cfg,
@@ -603,25 +612,13 @@ async function runDoctorHealthFlowWithResult(
       showDoctorHealthSummary(healthContext ?? startupFindings);
       writeAuthority?.assertCurrent();
       // Admission restored its service before refusing; no migration work has started.
-      const { recordUpdateDoctorRefusal } = await import("../commands/doctor-update-refusal.js");
+      const { recordDeferredUpdateDoctorWarning, recordUpdateDoctorRefusal } =
+        await import("../commands/doctor-update-refusal.js");
       recordUpdateDoctorRefusal(error.message);
       effectiveRuntime.error(error.message);
       doctorResult = { status: "ok", warnings: [error.message], maintenanceRefusal: error.refusal };
-      const runId = process.env.OPENCLAW_UPDATE_RUN_ID?.trim();
-      if (!updateResult && runId) {
-        try {
-          const { recordUpdateRunStep } = await import("../infra/update-run-ledger.js");
-          recordUpdateRunStep(runId, {
-            step: "warning:doctor-maintenance",
-            status: "completed",
-            endedAtMs: Date.now(),
-            detail: error.message,
-          });
-        } catch {
-          effectiveRuntime.error(
-            "Doctor maintenance warning could not be saved to update history.",
-          );
-        }
+      if (!updateResult) {
+        await recordDeferredUpdateDoctorWarning(error.message, effectiveRuntime);
       }
       startup.showDoctorOutro("Doctor maintenance deferred; pending repairs remain unchanged.");
       exitCode = 0;

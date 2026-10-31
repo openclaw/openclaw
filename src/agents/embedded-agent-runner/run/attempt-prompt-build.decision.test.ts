@@ -5,8 +5,9 @@ import {
 } from "../../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { AgentDefaultsBaseSchema } from "../../../config/zod-schema.agent-defaults-base.js";
+import type { DecisionProviderV1 } from "../../../decisions/provider-types.js";
 import { registered } from "../../../decisions/runtime.test-support.js";
-import type { DecisionProviderV1, ProviderDecisionOutcome } from "../../../decisions/types.js";
+import type { ProviderDecisionOutcome } from "../../../decisions/types.js";
 import * as operatorInvocation from "../../../gateway/operator-invocation-authority.js";
 import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-fixtures.js";
 import { resetPluginRuntimeStateForTest } from "../../../plugins/runtime.js";

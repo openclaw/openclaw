@@ -1,5 +1,6 @@
 import { getModelProviderRequestTransport } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
+  decodeSystemOneResponse,
   validateDecisionResultV2,
   type DecisionBatchV2,
   type DecisionEntry,
@@ -65,78 +66,33 @@ function parseResult(
   payload: Record<string, unknown>,
 ): ProviderDecisionOutcomeV2 {
   const invalid = { status: "unavailable", reason: "invalid-response" } as const;
-  if (
-    !isRecord(payload.answers) ||
-    Object.keys(payload.answers).length !== Object.keys(batch.questions).length ||
-    !isRecord(payload.usage)
-  ) {
+  if (!isRecord(payload.answers) || !isRecord(payload.usage)) {
     return invalid;
   }
   const usage = payload.usage;
-  if (
-    !Number.isSafeInteger(usage.input_tokens) ||
-    typeof usage.input_tokens !== "number" ||
-    usage.input_tokens < 0 ||
-    usage.output_tokens !== Object.keys(batch.questions).length
-  ) {
+  if (usage.output_tokens !== Object.keys(batch.questions).length) {
     return invalid;
   }
-  const answers: Record<string, unknown> = Object.create(null);
   for (const [id, q] of Object.entries(batch.questions)) {
-    const answer = payload.answers[id];
-    if (!isRecord(answer)) {
-      return invalid;
-    }
-    if (q.type === "boolean") {
-      if (answer.type !== "noul") {
-        return invalid;
-      }
-      answers[id] = { type: "boolean", probabilityTrue: answer.noul };
+    if (q.type !== "score") {
       continue;
     }
+    const answer = payload.answers[id];
+    const legend = isRecord(answer) ? answer.legend : undefined;
     if (
-      answer.type !== q.type ||
-      !isRecord(answer.probabilities) ||
-      typeof answer.confidence !== "number" ||
-      answer.confidence < 0 ||
-      answer.confidence > 1
+      !isRecord(legend) ||
+      Object.keys(legend).length !== q.criteria.length ||
+      q.criteria.some((value, index) => legend[String(index)] !== text(value))
     ) {
       return invalid;
     }
-    if (q.type === "choice") {
-      answers[id] = {
-        type: "choice",
-        choice: answer.choice,
-        probabilities: answer.probabilities,
-        confidence: answer.confidence,
-      };
-    } else if (q.type === "score") {
-      const legend = answer.legend;
-      const probabilities = answer.probabilities;
-      if (
-        !isRecord(legend) ||
-        Object.keys(legend).length !== q.criteria.length ||
-        Object.keys(probabilities).length !== q.criteria.length ||
-        q.criteria.some((value, index) => legend[String(index)] !== text(value))
-      ) {
-        return invalid;
-      }
-      answers[id] = {
-        type: "score",
-        score: answer.score,
-        probabilities: q.criteria.map((_, index) => probabilities[String(index)]),
-        confidence: answer.confidence,
-      };
-    } else {
-      return invalid;
-    }
   }
-  // The backend model may differ from the requested public slug. Preserve it.
-  const result = {
+  // Baseten exposes the served model and token usage, without other native accounting fields.
+  const result = decodeSystemOneResponse(batch, {
     model: payload.model,
-    answers,
-    usage: { inputTokens: usage.input_tokens, outputTokens: usage.output_tokens },
-  };
+    answers: payload.answers,
+    usage: { input_tokens: usage.input_tokens, output_tokens: usage.output_tokens },
+  });
   return validateDecisionResultV2(batch, result) ? { status: "ok", result } : invalid;
 }
 

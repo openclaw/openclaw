@@ -133,6 +133,7 @@ const sourceFiles = [
   "en-chat-camera.ts",
   "en-chat-ci.ts",
   "en-chat-command-results.ts",
+  "en-chat-commands.ts",
   "en-chat-composer.ts",
   "en-chat-details.ts",
   "en-chat-goals.ts",
@@ -143,6 +144,7 @@ const sourceFiles = [
   "en-chat-session.ts",
   "en-chat-tool-content.ts",
   "en-chat-tool-labels.ts",
+  "en-chat-welcome.ts",
   "en-templates.ts",
   "en-code-blocks.ts",
   "en-command-palette.ts",
@@ -163,6 +165,7 @@ const sourceFiles = [
   "en-mcp-app.ts",
   "en-meetings.ts",
   "en-memory-import.ts",
+  "en-model-account-list.ts",
   "en-model-accounts.ts",
   "en-model-controls.ts",
   "en-model-setup.ts",
@@ -181,6 +184,7 @@ const sourceFiles = [
   "en-portals.ts",
   "en-profile.ts",
   "en-settings.ts",
+  "en-settings-sidebar.ts",
   "en-sidebar-attention.ts",
   "en-skill-library.ts",
   "en-session-skill-library.ts",
@@ -261,14 +265,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
             : name === "contextSystem"
               ? ["contextFree"]
               : name === "contextOffline"
-                ? [
-                    "contextUnavailable",
-                    "contextReserve",
-                    "contextCompactDescription",
-                    "contextCompact",
-                    "contextCompacting",
-                    "contextCompactShort",
-                  ]
+                ? ["contextUnavailable", "contextReserve"]
                 : name === "contextExactCount"
                   ? [
                       "contextFreeShort",

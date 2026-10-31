@@ -484,6 +484,7 @@ async function writeLiveGatewayConfig(params: {
   codeModeOnly?: boolean;
   compactionMode: CodexCompactionStressMode;
   nativeSupervision?: { command: string };
+  sessionCatalogHomes?: string[];
   loopDetectionPreToolUseRelay?: boolean;
   queueMode?: "steer";
   configPath: string;
@@ -510,6 +511,9 @@ async function writeLiveGatewayConfig(params: {
           enabled: true,
           config: {
             ...(params.nativeSupervision ? { supervision: { enabled: true } } : {}),
+            ...(params.sessionCatalogHomes
+              ? { sessionCatalog: { homes: params.sessionCatalogHomes } }
+              : {}),
             appServer: {
               ...(params.nativeSupervision
                 ? { command: params.nativeSupervision.command, homeScope: "user" as const }
@@ -2195,6 +2199,7 @@ describeLive("gateway live (Codex harness)", () => {
           workspace,
           compactionMode: { kind: "off" },
           nativeSupervision: { command: codexCommand },
+          sessionCatalogHomes: [codexHome],
         });
         const deviceIdentity = await ensurePairedTestGatewayClientIdentity({
           displayName: "vitest-codex-canonical-live",

@@ -2,7 +2,7 @@ import type fs from "node:fs";
 import path from "node:path";
 import { replaceFileAtomic, replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import JSON5 from "json5";
-import { readExistingStateRootMode } from "../infra/private-dir-mode.js";
+import { stateRootDirectoryMode } from "../infra/private-dir-mode.js";
 import {
   enqueueConfigAuditRecord,
   captureConfigAuditAppender,
@@ -39,11 +39,16 @@ import type {
   ConfigRecoveryCandidatePreparation,
   PrepareConfigRecoveryCandidate,
 } from "./io.types.js";
-import { chmodConfigBestEffort, chmodConfigBestEffortSync } from "./io.write-safety.js";
+import {
+  captureConfigRootWriteTarget,
+  chmodConfigBestEffort,
+  chmodConfigBestEffortSync,
+  resolveConfigWriteDirectory,
+} from "./io.write-safety.js";
 import { formatConfigIssueSummary } from "./issue-format.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
-import { resolveIsConfigReadOnly, resolveStateDir } from "./paths.js";
+import { resolveIsConfigReadOnly } from "./paths.js";
 import {
   collectPollutedSecretPlaceholders,
   isPluginLocalInvalidConfigSnapshot,
@@ -77,18 +82,22 @@ function createRecoveryCommitEffect(params: {
   raw: string;
   beforeCommit?: () => void;
 }): ConfigRecoveryEffect<void> {
+  const { path: publicationPath, pathProof } = captureConfigRootWriteTarget(
+    params.configPath,
+    params.deps.fs,
+  );
   const options = {
-    filePath: params.configPath,
+    filePath: publicationPath,
     content: params.raw,
     dirMode:
-      readExistingStateRootMode(
-        path.dirname(params.configPath),
-        resolveStateDir(params.deps.env, params.deps.homedir),
-        params.deps.fs,
+      stateRootDirectoryMode(
+        path.dirname(publicationPath),
+        resolveConfigWriteDirectory(params.configPath, publicationPath, params.deps).path,
       ) ?? 0o700,
     mode: 0o600,
     tempPrefix: path.basename(params.configPath),
     fileSystem: params.deps.fs,
+    assertBeforeMutation: pathProof.assertCurrent,
   };
   return {
     sync: () => {

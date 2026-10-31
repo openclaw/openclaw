@@ -17,7 +17,7 @@ import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { readTranscriptEventRows } from "../config/sessions/session-accessor.sqlite-read.js";
 import { appendTranscriptEventInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
-import { runSessionStartupMigration } from "../config/sessions/startup-migration.js";
+import { runSessionStartupMigration } from "../config/sessions/startup-migration-runtime.js";
 import * as sessionTargets from "../config/sessions/targets.js";
 import { resetAgentRunRegistryForTest } from "../infra/agent-run-registry.js";
 import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";

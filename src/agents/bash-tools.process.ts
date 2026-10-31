@@ -317,6 +317,10 @@ export function createProcessTool(
 
       if (params.action === "list") {
         await scope.resolveAncestorScopes();
+        for (const session of listRunningSessions().filter((record) => isInScope(record))) {
+          await session.durable?.observe();
+          assertCurrent();
+        }
         return await runWithAgentToolSourceExecutionScope(assertSourceCurrent, async () => {
           assertCurrent();
           const sessions = [...listRunningSessions(), ...listFinishedSessions()]
@@ -381,8 +385,8 @@ export function createProcessTool(
       }
 
       const sessionId = params.sessionId;
-      const session = getSession(sessionId);
-      const finished = getFinishedSession(sessionId);
+      let session = getSession(sessionId);
+      let finished = getFinishedSession(sessionId);
       const assertSelectedCurrent = (record: ProcessSession) => {
         assertCurrent();
         if (
@@ -404,6 +408,12 @@ export function createProcessTool(
         if (isInScope(selected)) {
           assertSelectedCurrent(selected);
         }
+      }
+      if (session && isInScope(session) && session.durable) {
+        await session.durable.observe();
+        assertSelectedCurrent(session);
+        session = getSession(sessionId);
+        finished = getFinishedSession(sessionId);
       }
       const scopedSession = isInScope(session) ? session : undefined;
       const scopedFinished = isInScope(finished) ? finished : undefined;
@@ -575,6 +585,11 @@ export function createProcessTool(
               return failText(controlError);
             }
             const stdin = scopedSession.stdin;
+            if (scopedSession.durable) {
+              return failText(
+                "Durable processes have no interactive input; use a non-durable process for write/send-keys/submit/paste.",
+              );
+            }
             if (!isWritableStdin(stdin)) {
               return failText(`Session ${sessionId} stdin is not writable.`);
             }

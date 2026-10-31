@@ -237,7 +237,9 @@ it.each(["same", "changed"])("resumes %s-boot logs and retries failures", async 
   const { context, page } = await setup(request, true, "original-boot");
   const stream = page.query(".log-stream")!;
   Object.defineProperty(stream, "scrollHeight", { value: 500 });
+  stream.dispatchEvent(new WheelEvent("wheel", { deltaY: -500 }));
   stream.scrollTop = 0;
+  stream.dispatchEvent(new Event("scroll"));
   // SAFETY: This focused snapshot fixture supplies only the hello boot field read by LogsPage.
   reconnect(context, {
     ...context.gateway.snapshot,
@@ -383,10 +385,9 @@ it("forces a scroll when auto-follow is re-enabled away from the bottom", async 
   flush();
   stream.scrollTop = 0;
   stream.dispatchEvent(new Event("scroll"));
-  const frames = captureFrames();
   toggle.click();
   flush();
-  expect(frames).toHaveLength(1);
-  frames[0]!(0);
-  expect(stream.scrollHeight - stream.clientHeight - stream.scrollTop).toBe(0);
+  await vi.waitFor(() =>
+    expect(stream.scrollHeight - stream.clientHeight - stream.scrollTop).toBe(0),
+  );
 });

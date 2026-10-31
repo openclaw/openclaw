@@ -265,6 +265,7 @@ import {
   OTEL_TEST_ENDPOINT,
   RUN_FIXTURE,
   SPAN_ID,
+  snapshotOtelEnv,
   startOtelService,
   stopStartedOtelServices,
   TOOL_SPAN_ID,
@@ -310,7 +311,7 @@ const OTEL_ENV_KEYS = [
     "TRACES_SAMPLER_ARG",
   ].map((field) => `OTEL_${field}`),
 ];
-const originalOtelEnv = new Map(OTEL_ENV_KEYS.map((key) => [key, process.env[key]]));
+const restoreOtelEnv = snapshotOtelEnv(OTEL_ENV_KEYS);
 
 function startedSpanCall(name: string, index = 0) {
   return telemetryState.tracer.startSpan.mock.calls.filter(([spanName]) => spanName === name)[
@@ -731,13 +732,7 @@ describe("diagnostics-otel service", () => {
   afterEach(async () => {
     await stopStartedOtelServices();
     resetDiagnosticEventsForTest();
-    for (const [key, value] of originalOtelEnv) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
+    restoreOtelEnv();
   });
 
   test("records message-flow metrics and spans", async () => {

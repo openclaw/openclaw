@@ -1013,11 +1013,15 @@ openclaw-pending-session-create {
   animation: fade-in 150ms var(--ease-out);
 }
 
-.context-usage__header {
+.context-usage__header,
+.context-usage__actions,
+.context-usage__latest {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+.context-usage__header {
   min-height: 20px;
 }
 .context-usage__context-value {
@@ -1037,17 +1041,56 @@ openclaw-pending-session-create {
   color: var(--muted);
   font: inherit;
   font-size: 11.5px;
+
+  svg {
+    width: 11px;
+    height: 11px;
+    transition: transform 150ms var(--ease-out);
+  }
+
+  @media (hover: hover) {
+    &:hover:not(:disabled) {
+      color: var(--text);
+
+      svg {
+        transform: translateX(2px);
+      }
+    }
+  }
 }
-.context-usage__open svg {
-  width: 11px;
-  height: 11px;
-  transition: transform 150ms var(--ease-out);
+/* The label's caps sit 1px above its content-box center. Lift only the outline so it
+   centers on the line it shares with View context; both labels keep one baseline. */
+.context-usage__actions .chat-context__compact {
+  margin-top: -2px;
+  padding-top: 2px;
 }
-.context-usage__open:hover:not(:disabled) {
-  color: var(--text);
+/* Shared Compact control: the composer popover and the context panel size it. */
+.chat-context__compact {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+  color: var(--text-strong);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 500;
 }
-.context-usage__open:hover:not(:disabled) svg {
-  transform: translateX(2px);
+.chat-context__compact:disabled {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--border);
+  color: var(--muted);
+}
+@media (hover: hover) {
+  .chat-context__compact:not(:disabled):not(.chat-context__compact--high):hover {
+    background: var(--bg-hover);
+  }
 }
 .context-usage__separator {
   height: 1px;
@@ -1055,9 +1098,6 @@ openclaw-pending-session-create {
   background: var(--details-separator);
 }
 .context-usage__latest {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
   flex-wrap: wrap;
   gap: 4px 8px;
   min-height: 26px;

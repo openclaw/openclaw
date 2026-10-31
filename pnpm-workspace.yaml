@@ -39,18 +39,30 @@ minimumReleaseAgeExclude:
   - "node-edge-tts@1.2.11"
   # Reviewed acpx 0.21.0 release (agent process env controls, openclaw/acpx#897); remove after 2026-10-31T00:42:33.101Z.
   - "acpx@0.21.0"
-  # Reviewed fs-safe 0.26.13 release and native helpers; remove after 2026-10-31T07:48:44.970Z.
-  - "@openclaw/fs-safe@0.26.13"
-  - "@openclaw/fs-safe-darwin-arm64@0.26.13"
-  - "@openclaw/fs-safe-darwin-x64@0.26.13"
-  - "@openclaw/fs-safe-freebsd-arm64@0.26.13"
-  - "@openclaw/fs-safe-freebsd-x64@0.26.13"
-  - "@openclaw/fs-safe-linux-arm64-gnu@0.26.13"
-  - "@openclaw/fs-safe-linux-arm64-musl@0.26.13"
-  - "@openclaw/fs-safe-linux-x64-gnu@0.26.13"
-  - "@openclaw/fs-safe-linux-x64-musl@0.26.13"
-  - "@openclaw/fs-safe-win32-arm64-msvc@0.26.13"
-  - "@openclaw/fs-safe-win32-x64-msvc@0.26.13"
+  # Reviewed fs-safe 0.27.0 release and native helpers; remove after 2026-11-06T23:51:48.523Z.
+  - "@openclaw/fs-safe-darwin-arm64@0.27.0"
+  - "@openclaw/fs-safe-darwin-x64@0.27.0"
+  - "@openclaw/fs-safe-freebsd-arm64@0.27.0"
+  - "@openclaw/fs-safe-freebsd-x64@0.27.0"
+  - "@openclaw/fs-safe-linux-arm64-gnu@0.27.0"
+  - "@openclaw/fs-safe-linux-arm64-musl@0.27.0"
+  - "@openclaw/fs-safe-linux-x64-gnu@0.27.0"
+  - "@openclaw/fs-safe-linux-x64-musl@0.27.0"
+  - "@openclaw/fs-safe-win32-arm64-msvc@0.27.0"
+  - "@openclaw/fs-safe-win32-x64-msvc@0.27.0"
+  - "@openclaw/fs-safe@0.27.0"
+  # Reviewed fs-safe 0.26.15 release and native helpers; remove after 2026-11-06T18:45:32.211Z.
+  - "@openclaw/fs-safe@0.26.15"
+  - "@openclaw/fs-safe-darwin-arm64@0.26.15"
+  - "@openclaw/fs-safe-darwin-x64@0.26.15"
+  - "@openclaw/fs-safe-freebsd-arm64@0.26.15"
+  - "@openclaw/fs-safe-freebsd-x64@0.26.15"
+  - "@openclaw/fs-safe-linux-arm64-gnu@0.26.15"
+  - "@openclaw/fs-safe-linux-arm64-musl@0.26.15"
+  - "@openclaw/fs-safe-linux-x64-gnu@0.26.15"
+  - "@openclaw/fs-safe-linux-x64-musl@0.26.15"
+  - "@openclaw/fs-safe-win32-arm64-msvc@0.26.15"
+  - "@openclaw/fs-safe-win32-x64-msvc@0.26.15"
   # Reviewed proc-safe 0.4.2 release and native helpers; remove after 2026-10-26T00:51:31.079Z.
   - "@openclaw/proc-safe@0.4.2"
   - "@openclaw/proc-safe-darwin-arm64@0.4.2"
@@ -95,16 +107,16 @@ overrides:
   "@agentclientprotocol/codex-acp@2.2.2>@openai/codex": 0.164.0
   "@codemirror/commands@6.11.1>@codemirror/view": 6.43.15
   "@codemirror/view@6.43.15>@codemirror/state": 6.7.6
-  "@anthropic-ai/sdk": 0.135.0
-  "@anthropic-ai/vertex-sdk@0.21.0>google-auth-library": 11.3.1
+  "@anthropic-ai/sdk": 0.137.0
+  "@anthropic-ai/vertex-sdk@0.22.0>google-auth-library": 11.3.1
   "@opentelemetry/core": 2.12.0
   "@opentelemetry/propagator-jaeger": 2.12.0
   "@aws-sdk/core": 3.978.4
-  "@aws-sdk/credential-provider-node": 3.972.87
+  "@aws-sdk/credential-provider-node": 3.972.88
   "@aws-sdk/xml-builder": 3.972.41
   "@hono/node-server": 2.1.5
   axios: 1.20.0
-  fast-uri: 4.2.2
+  fast-uri: 4.2.3
   follow-redirects: 1.16.1
   defu: 6.1.7
   fast-xml-parser: 5.11.2
@@ -122,7 +134,7 @@ overrides:
   proxy-addr: 2.0.8
   qs: 6.16.1
   node-domexception: "npm:@nolyfill/domexception@1.0.28"
-  typebox: 1.4.2
+  typebox: 1.4.3
   tar: 7.5.22
   tough-cookie: 6.0.2
   "tsdown>rolldown-plugin-dts": 0.28.8
@@ -171,7 +183,7 @@ packageExtensions:
 patchedDependencies:
   "apache-arrow@21.2.0": patches/apache-arrow@21.2.0.patch
   "@shinyoshiaki/binary-data@0.6.1": patches/@shinyoshiaki__binary-data@0.6.1.patch
-  "@openclaw/crabline@0.1.30": patches/@openclaw__crabline@0.1.30.patch
+  "@openclaw/crabline@0.1.31": patches/@openclaw__crabline@0.1.31.patch
   playwright-core@1.64.1: patches/playwright-core@1.64.1.patch
   minizlib@3.1.0: patches/minizlib@3.1.0.patch
   tar@7.5.22: patches/tar@7.5.22.patch
@@ -180,9 +192,9 @@ patchedDependencies:
   "@novnc/novnc@1.7.0": patches/@novnc__novnc@1.7.0.patch
   vitest@5.0.5: patches/vitest@5.0.5.patch
   ghostty-web@0.4.0: patches/ghostty-web@0.4.0.patch
-  chrome-devtools-mcp@1.11.0: patches/chrome-devtools-mcp@1.11.0.patch
+  chrome-devtools-mcp@1.12.0: patches/chrome-devtools-mcp@1.12.0.patch
   "@solidjs/web@2.0.0-rc.18": patches/@solidjs__web@2.0.0-rc.18.patch
   "@solidjs/signals@2.0.0-rc.18": patches/@solidjs__signals@2.0.0-rc.18.patch
   "@homebridge/ciao@1.3.12": patches/@homebridge__ciao@1.3.12.patch
   proper-lockfile@4.1.2: patches/proper-lockfile@4.1.2.patch
-  "@clawdbot/lobster@2026.9.16": patches/@clawdbot__lobster@2026.9.16.patch
+  "@clawdbot/lobster@2026.10.1": patches/@clawdbot__lobster@2026.10.1.patch

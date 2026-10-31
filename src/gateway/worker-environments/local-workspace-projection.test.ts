@@ -48,6 +48,11 @@ import {
   proveWorkerOwnedIncrementalWorkspace,
 } from "./local-workspace-incremental.test-support.js";
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
+import {
+  proveWarmWorkspaceConflictRecovery,
+  proveWarmWorkspaceReuse,
+  proveWarmWorkspaceReuseFailure,
+} from "./local-workspace-reuse.test-support.js";
 import { withLocalWorkspaceStore } from "./local-workspace-store.js";
 import {
   observeLocalWorkspaceStoreSql,
@@ -167,6 +172,17 @@ afterEach(async () => {
 
 it("checkpoints sandbox file writes once", () => proveSandboxMutationCheckpoints(owner));
 
+it("keeps unchanged sandbox turns running and reconciles later guest and host edits", () =>
+  proveWarmWorkspaceReuse(owner));
+
+it.each(["read", "authority", "observation", "cancel"] as const)(
+  "retries only read failures during warm reuse (%s)",
+  (failure) =>
+    proveWarmWorkspaceReuseFailure(owner, failure, () => {
+      revoked = true;
+    }),
+);
+
 it("avoids lease requests for absent projections and checkpoints a later projection", () =>
   proveAbsentProjectionCheckpoints(owner));
 
@@ -203,6 +219,26 @@ it("recovers an aggregate payload of individually valid artifacts without losing
     await import("./local-workspace-recovery.test-support.js");
   await proveAggregateWorkspaceRecovery({ owner, canonical, stateRoot });
 });
+
+it.skipIf(process.platform === "win32")(
+  "lets a fresh turn correct an unstaged filename without replacing accepted canonical edits",
+  async () => {
+    const { proveUnsafePathWorkspaceRecovery } =
+      await import("./local-workspace-recovery.test-support.js");
+    await proveUnsafePathWorkspaceRecovery(owner, (value) => {
+      revoked = value;
+    });
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "retains a canonical destination collision after an explicit filename correction",
+  async () => {
+    const { proveUnsafePathWorkspaceCollision } =
+      await import("./local-workspace-recovery.test-support.js");
+    await proveUnsafePathWorkspaceCollision(owner);
+  },
+);
 
 it.each([false, true])(
   "settles old runtime-file results (source already copied: %s)",
@@ -510,19 +546,8 @@ it.each(["archive", "interrupted eviction"] as const)(
   },
 );
 
-it("retains both sides and a durable pending result when edits conflict", async () => {
-  const projection = await prepare();
-  await writeText(projection, "source.txt", "guest conflict\n");
-  await writeText(canonical, "source.txt", "human conflict\n");
-  await expect(synchronize()).rejects.toThrow("conflict");
-  expect((await readProjection())?.pending_ref).toBeTruthy();
-  await expectText(projection, "source.txt", "guest conflict\n");
-  await expectText(canonical, "source.txt", "human conflict\n");
-  await writeText(canonical, "source.txt", "original\n");
-  await settleProjection();
-  await expectText(canonical, "source.txt", "guest conflict\n");
-  expect((await readProjection())?.pending_ref).toBeNull();
-});
+it("retains both sides and a durable pending result when edits conflict", () =>
+  proveWarmWorkspaceConflictRecovery(owner));
 
 it("replaces rejected v31 storage when a full rescan matches the unchanged accepted root", async () => {
   const projection = await prepare();

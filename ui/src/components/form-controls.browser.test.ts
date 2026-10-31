@@ -506,7 +506,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
               <input data-scale data-baseline="16" data-scale-base="12.5" class="settings-sidebar__search-input" value="settings" />
               <div class="sidebar-recent-session sidebar-recent-session--child">
                 <span data-scale data-baseline="12" class="sidebar-recent-session__name">Child session</span>
-                <span data-scale data-baseline="10" class="session-row-trail">3m</span>
+                <span data-scale class="session-row-trail">3m</span>
               </div>
             </div>`
             : `<span data-scale class="nav-item__text">Navigation</span>

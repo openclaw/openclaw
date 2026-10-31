@@ -686,12 +686,27 @@ AFTER_CD
   });
 
   it.each([
-    // name, body, override, permission, issue, admitted, reacts
-    ["multiline", "context\r\n \t/merge now \r\n", "", "write", false, true, true],
-    ["non-maintainer", "/merge", "", "read", false, true, false],
+    // name, body, override, permission, issue, admitted, reacts, permission lookup
+    ["multiline", "context\r\n \t/merge now \r\n", "", "write", false, true, true, true],
+    ["non-maintainer", "/merge", "", "read", false, true, false, true],
+    ["link", "https://example.com/project", "", "write", false, false, false, false],
+    ["path", "see src/example.ts", "", "write", false, false, false, false],
+    ["untracked", "try /help", "", "write", false, false, false, false],
+    ["autoclose", "/autoclose", "", "write", false, true, true, true],
+    ["sweeper close", "/clawsweeper autoclose", "", "write", false, true, true, true],
+    ["sweeper merge", "/clawsweeper automerge", "", "write", false, true, true, true],
+    ["merge", "/merge", "", "write", false, true, true, true],
+    ["land", "/land", "", "write", false, true, true, true],
+    ["landpr", "/landpr", "", "write", false, true, true, true],
+    ["custom", "ship", "ship", "write", false, true, true, true],
+    ["custom no match", "ordinary text", "ship", "write", false, true, false, false],
+    ["prefix only", "/landscape", "", "write", false, true, false, false],
+    ["issue autoclose", "/autoclose", "", "write", true, true, true, true],
+    ["issue sweeper close", "/clawsweeper autoclose", "", "write", true, true, true, true],
+    ["issue merge", "/merge", "", "write", true, true, false, false],
   ] as const)(
     "preserves reaction admission and actions for %s",
-    async (_name, body, commands, permission, issue, admitted, reacts) => {
+    async (_name, body, commands, permission, issue, admitted, reacts, lookup) => {
       const job = readWorkflow(".github/workflows/maintainer-command-reactions.yml").jobs.react;
       const event = {
         comment: { id: 456, body, user: { login: "comment-author" } },
@@ -736,7 +751,7 @@ AFTER_CD
         },
       });
       expect(reactions).toEqual(reacts ? ["eyes"] : []);
-      expect(permissionUsers.every((login) => login === "comment-author")).toBe(true);
+      expect(permissionUsers).toEqual(lookup ? ["comment-author"] : []);
       expect(Boolean(evaluateWorkflowExpression(job.if, context))).toBe(admitted);
     },
   );
@@ -1273,9 +1288,9 @@ AFTER_CD
       const run = expectDefined(installStep.run, `Install opengrep script in ${workflowPath}`);
 
       expect(installStep.env, workflowPath).toMatchObject({
-        OPENGREP_VERSION: "v1.31.0",
+        OPENGREP_VERSION: "v1.32.0",
         OPENGREP_LINUX_X64_SHA256:
-          "dbbe3c2058dbe600c449a8ba22ea79a1643a6660658400090d0323a8d0d31147",
+          "7360d60174880bd9214f2dfbe439b7bce82b7a3d44cfe945ba833c85cc8bda75",
       });
       expectIncludes(
         run,

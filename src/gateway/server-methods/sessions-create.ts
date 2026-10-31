@@ -398,6 +398,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     sessionCwd = preparedRoot?.value.sessionCwd;
     if (repository) {
       prepareLifecycle = prepareSessionRepositoryWorkspace(repository, {
+        branchPrefix: cfg.repositoryBranchPrefix,
         runSetupScript: clientScopes.includes(ADMIN_SCOPE),
         assertCurrent: commitGuard,
       });

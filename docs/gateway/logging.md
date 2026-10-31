@@ -373,6 +373,22 @@ waiting for display-row refreshes; incognito reads retain their exact-row
 preparation. Approval subscriptions still prepare and validate the authoritative
 replay before acknowledging. Records contain no session keys or message content.
 
+With the same diagnostics and warning settings, `workboard.cards.list` requests
+taking at least one second emit `slow workboard cards list`. The router records
+`setup`, `projectionReadiness`, `accessFacts`, `admission`, `handlerPreparation`,
+`handler` (including response delivery), and `cleanup` in `phaseDurationsMs`.
+This includes authorization before the Workboard handler, so a fast card query
+does not hide a slow session-access preparation.
+
+Fixed `detail.sessionAuthority.*` timings distinguish profile preparation,
+target preparation, and policy checks. Within target preparation,
+`detail.sessionFacts.*` distinguishes inventory construction, storage readiness,
+discovery, row reads, publication settlement, and selection. These are nested
+wall times: do not add them to the outer phases. Failed calls retain the time
+spent in each phase before the failure. Records contain no request parameters,
+session or card IDs, paths, or error contents. Fast requests emit no warning; no additional logging
+configuration is required beyond the existing diagnostics settings.
+
 The `materialize` phase measures the wait for session-row projection readiness. In-flight
 catalog renewals no longer block lists or descriptions once a catalog is loaded:
 reads use the current catalog while its replacement loads in the background, then

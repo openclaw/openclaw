@@ -485,7 +485,8 @@ it.each(["durable", "admitted", "incognito"] as const)(
               event.type === "worker.request" &&
               event.phase === "queued" &&
               (event.kind === "sessionTranscript" ||
-                (event.kind === "sqlite_writer" && event.requestClass === "sessions"))
+                (event.kind === "sqlite_writer" &&
+                  (event.requestClass === "sessions" || event.requestClass.startsWith("session."))))
             ) {
               requests.push({ kind: event.kind, requestClass: event.requestClass });
             }

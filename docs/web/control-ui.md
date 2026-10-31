@@ -34,6 +34,13 @@ visibility, or remote session-link titles. Side Chat is hidden, and session link
 keep their locally available labels. MCP Apps discovery requires general write
 access. The Gateway continues to authorize every request.
 
+Connections without general read access also skip CLI session catalogs, plugin
+tool artwork, and detailed usage reads. Tool activities keep their standard
+symbols and context meters keep the session's total token count. The context
+breakdown and Usage page explain how to request access instead of offering a
+retry that cannot succeed. Session creation and effective tool access still
+follow their separate session scopes.
+
 When the Gateway starts with `OPENCLAW_CONFIG_READONLY=1` or `OPENCLAW_NIX_MODE=1`,
 its Control UI shows **Gateway configuration is read-only.** You can inspect the
 configuration there. OpenClaw refuses changes to `openclaw.json` through the Gateway.
@@ -82,6 +89,12 @@ While automatic reconnection is running, the indicator shows **Reconnecting…**
 with the sidebar's standard spinner and without a Retry button. **Retry** remains available when automatic recovery stops.
 A required page refresh keeps its separate refresh action.
 
+During an update, a protected conversation link waits for its selected agent's
+read readiness before serving the refreshed app. Access is checked again after
+that wait. If preparation outlasts the browser request or the connection fails,
+the existing reload or login action remains available; the wait does not grant
+access to an unavailable conversation.
+
 A saved chat can restore its archived or read-only composer and parent breadcrumb
 while reconnecting. These saved display facts never authorize actions; live session
 state replaces them when the connection returns.
@@ -126,6 +139,8 @@ The saved sidebar also retains unread marks, activity and attention glyphs, pull
 Message reactions share the message footer. Desktop Chat Details lists automations after session information and task progress so arriving automation results keep those sections in place. The mobile composer reserves one activity row so arriving task and subagent status does not move the transcript.
 
 A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen. A reader action checks up to three consecutive pages when entries are empty, overlapping, or hidden by display preferences; longer hidden intervals remain available through another action. Transient read failures retry within the existing one-minute history-recovery budget, honoring the server’s backoff. Permission denials are not automatically retried. The touch-friendly history control keeps keyboard focus during loading and ignores repeated activation. Failed reads show **Retry earlier messages** at that same boundary without removing the loaded conversation. While disconnected, the control shows **Waiting for connection…** instead of accepting a click that cannot load history.
+
+Earlier history is offered only when the Gateway provides a cursor or a loaded transcript entry can anchor the request. Tool activity summaries do not prevent loading older messages. If neither boundary exists, the control stays hidden and automatic loading stops without an error.
 
 GitHub item URLs and repository-qualified references such as `owner/repo#126` render as compact links. Use `PR owner/repo#126` for a pull request or `issue owner/repo#126` for an issue. References identified by keywords, such as `PR #126`, remain plain text without a repository qualifier. Project display names, the checkout, the project catalog, and other messages do not supply a destination. A standalone hash token that is also a valid hexadecimal color, such as `#126`, retains its color preview without a GitHub link.
 

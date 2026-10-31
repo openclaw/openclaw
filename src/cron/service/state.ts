@@ -56,6 +56,8 @@ export type { CronAddOptions } from "./job-options.types.js";
 
 /** Transient internal context delivered beside, but never projected into, a CronEvent. */
 type CronEventContext = {
+  runNotStarted?: boolean;
+  quietTrigger?: boolean;
   failureNotificationDetail?: CronFailureNotificationDetail;
 };
 

@@ -13,6 +13,7 @@ import type {
 import type { AnyNode, Program } from "acorn";
 import { moduleResolve } from "import-meta-resolve";
 import type { createJiti } from "jiti";
+import { markPluginSourceAcquisitionError } from "./plugin-instance-error.js";
 
 let parser: typeof import("acorn") | undefined;
 
@@ -411,9 +412,11 @@ function parseTransformedPluginSource(source: string, code: string): Program {
       throw error;
     }
     // Name the blocking file; positions refer to the Jiti output, not the authored source.
-    throw new SyntaxError(`${source}: could not parse transformed source: ${error.message}`, {
-      cause: error,
-    });
+    throw markPluginSourceAcquisitionError(
+      new SyntaxError(`${source}: could not parse transformed source: ${error.message}`, {
+        cause: error,
+      }),
+    );
   }
 }
 

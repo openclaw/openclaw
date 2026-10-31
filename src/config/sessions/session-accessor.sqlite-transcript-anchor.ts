@@ -346,6 +346,40 @@ export function readTranscriptMessageAppendMetadataBatchInTransaction(
   return result;
 }
 
+/** Only the append owner can supply these identities and accepted projection positions. */
+export function createTranscriptMessageAppendMetadataFromWrites(
+  database: TranscriptEntryRead["database"],
+  resolved: ResolvedTranscriptScope,
+  messages: readonly {
+    messageId: string;
+    message: unknown;
+    parentId: string | null;
+    seq: number;
+    messagePosition: number;
+  }[],
+  version: { generation: string; rawSeq: number; updatedAt: number | null },
+) {
+  const revision = getSqliteReadScopeRevision(database.db);
+  return new Map(
+    messages.map((message) => [
+      message.messageId,
+      createTranscriptMessageAppendMetadata(
+        { database, resolved, entryId: message.messageId, message: message.message },
+        {
+          seq: message.seq,
+          parent_id: message.parentId,
+          message_idempotency_key: null,
+          message_position: message.messagePosition,
+          generation: version.generation,
+          latestSeq: version.rawSeq,
+          transcriptUpdatedAt: version.updatedAt,
+        },
+        revision,
+      ),
+    ]),
+  );
+}
+
 /** Projects anchor fields after the caller verifies readiness in the same snapshot. */
 export function createTranscriptEntryAnchor(params: {
   database: Pick<OpenClawAgentDatabase, "path">;

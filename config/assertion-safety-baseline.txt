@@ -153,7 +153,6 @@ extensions/copilot/src/tool-bridge.ts	2
 extensions/copilot/src/workspace-bootstrap.ts	1
 extensions/cua-computer/src/commands.ts	2
 extensions/cua-computer/src/driver-artifact-verification.ts	1
-extensions/cua-computer/src/driver-artifacts.ts	1
 extensions/cua-computer/src/driver-client.ts	9
 extensions/cua-computer/src/driver-result.ts	3
 extensions/cua-computer/src/mcp-driver-client.ts	2
@@ -249,7 +248,7 @@ extensions/fal/video-generation-provider.ts	3
 extensions/feishu/src/accounts.ts	2
 extensions/feishu/src/bitable.ts	1
 extensions/feishu/src/bot-content.ts	1
-extensions/feishu/src/bot.ts	7
+extensions/feishu/src/bot.ts	6
 extensions/feishu/src/card-action.ts	1
 extensions/feishu/src/card-interaction.ts	1
 extensions/feishu/src/channel.ts	4
@@ -883,7 +882,6 @@ extensions/zalouser/src/tool.ts	1
 extensions/zalouser/src/zalo-js.ts	7
 extensions/zalouser/src/zca-client.ts	1
 packages/acp-core/src/runtime/errors.ts	5
-packages/agent-core/src/agent-loop.ts	1
 packages/agent-core/src/harness/compaction/branch-summarization.ts	1
 packages/agent-core/src/harness/compaction/compaction.ts	1
 packages/agent-core/src/harness/session/uuid.ts	1
@@ -1745,7 +1743,6 @@ src/gateway/server-methods/channels.ts	2
 src/gateway/server-methods/chat-abort-authorization.ts	2
 src/gateway/server-methods/chat-assistant-content.ts	1
 src/gateway/server-methods/chat-broadcast.ts	1
-src/gateway/server-methods/chat-send-attachments.ts	1
 src/gateway/server-methods/chat-send-request.ts	1
 src/gateway/server-methods/chat-server-timing.ts	1
 src/gateway/server-methods/chat-transcript-inject.ts	1
@@ -2080,7 +2077,6 @@ src/plugins/command-registration.ts	3
 src/plugins/config-normalization-shared.ts	1
 src/plugins/config-schema.ts	5
 src/plugins/contracts/inventory/bundled-capability-metadata.ts	3
-src/plugins/contracts/registry.ts	1
 src/plugins/contracts/tts-contract-suites.ts	18
 src/plugins/dashboard-capabilities.ts	1
 src/plugins/dev-source-root.ts	1
@@ -2125,7 +2121,6 @@ src/plugins/manifest.ts	2
 src/plugins/marketplace.ts	5
 src/plugins/memory-runtime.ts	1
 src/plugins/native-module-require.ts	2
-src/plugins/openai-compatible-embedding-provider.ts	1
 src/plugins/plugin-command-dispatch-contract.ts	1
 src/plugins/plugin-command-runtime.ts	1
 src/plugins/plugin-metadata-snapshot.runtime.ts	1
