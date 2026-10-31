@@ -113,6 +113,62 @@ it("disposes run execution before joining its held worktree lease without retiri
   }
 });
 
+it("retains real Gateway state until connection finalizers settle beyond grace", async () => {
+  const fixture = await createGatewayMetadataCloseFixture("gateway-connection-finalizer-grace");
+  const release = createDeferred();
+  let closing: Promise<unknown> | undefined;
+  let finalizer: Promise<void> | undefined;
+  let lease: Awaited<ReturnType<typeof acquireWorktreeRunLease>> | undefined;
+  try {
+    const { server, kernel } = await fixture.startServer();
+    const repoRoot = await initializeRepository(fixture.state.statePath("finalizer-source"));
+    const [record] = await materializeManagedWorktreeFixtures({
+      env: fixture.state.env,
+      stateDir: fixture.state.statePath(),
+      repoRoot,
+      now: 1,
+      names: ["finalizing"],
+    });
+    lease = await acquireWorktreeRunLease(expectDefined(record, "Finalizing worktree").id, {
+      env: fixture.state.env,
+    });
+    const shared = openOpenClawStateDatabase({ env: fixture.state.env }).db;
+    finalizer = kernel.connectionWork.track(async () => {
+      await release.promise;
+      await lease?.release();
+    });
+    const draining = createDeferred();
+    const drain = kernel.connectionWork.drain.bind(kernel.connectionWork);
+    vi.spyOn(kernel.connectionWork, "drain").mockImplementation(() => {
+      draining.resolve();
+      return drain();
+    });
+    let closed = false;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    closing = server
+      .close({ reason: "held connection finalizer", exitAfterClose: true })
+      .catch((error: unknown) => error)
+      .finally(() => {
+        closed = true;
+      });
+    await draining.promise;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(closed).toBe(false);
+    expect(shared.isOpen).toBe(true);
+    vi.useRealTimers();
+    release.resolve();
+    await finalizer;
+    expect(await closing).toBeUndefined();
+    expect(shared.isOpen).toBe(false);
+    expectNoRunLeases(fixture.state.env);
+  } finally {
+    vi.useRealTimers();
+    release.resolve();
+    await Promise.allSettled([finalizer, closing, lease?.release()]);
+    await fixture.cleanup();
+  }
+});
+
 // mock-isolation: Keep upstream polling and its agent runtime out of this close-order fixture.
 vi.mock("../sessions/session-upstream-monitor.js", () => ({
   startSessionUpstreamMonitor: () => ({ stop: () => Promise.resolve() }),

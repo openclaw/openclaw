@@ -1,0 +1,3 @@
+97
+# Shutdown persistence backport: sibling rejection join, required cleanup grace, and real Gateway state/worktree-lease settlement.
+# Three existing test files; exact net LF growth, production-boundary regression replaces unavailable built E2E.

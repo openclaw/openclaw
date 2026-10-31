@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isProcessAlive } from "../../test/helpers/process-wait.js";
+import { nextEventLoopTurn } from "../../test/helpers/promise.js";
 import { registerPreparedModelRuntimeClose } from "../agents/prepared-model-runtime.lifecycle.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
@@ -37,6 +38,7 @@ import {
   type GatewayCloseParams,
   firstMockCall,
 } from "./server-close.test-support.js";
+import { prepareGatewayRunShutdown } from "./server-run-shutdown.js";
 import { isGatewayCleanupRetainedError } from "./server-shutdown.js";
 import { claimRpcSourceForTest, createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
@@ -894,6 +896,39 @@ describe("createGatewayCloseHandler", () => {
       }
     },
   );
+
+  it("joins every terminal persistence sibling after one rejects", async () => {
+    const failed = createDeferredCore();
+    const pending = createDeferredCore();
+    await createCloseSource("failed-terminal", {
+      projectSessionTerminalPersistence: failed.promise,
+    });
+    await createCloseSource("pending-terminal", {
+      projectSessionTerminalPersistence: pending.promise,
+    });
+    const shutdown = await prepareGatewayRunShutdown({
+      resolveGatewayContext: resolveTestGatewayContext,
+      warnings: [],
+    });
+    let settled = false;
+    const outcome = shutdown.released
+      .catch((error: unknown) => error)
+      .finally(() => {
+        settled = true;
+      });
+    const failure = new Error("terminal write failed");
+    try {
+      failed.reject(failure);
+      await nextEventLoopTurn();
+      expect(settled).toBe(false);
+      pending.resolve();
+      expect(await outcome).toBe(failure);
+    } finally {
+      failed.resolve();
+      pending.resolve();
+      await outcome;
+    }
+  });
 
   it("disposes Code Mode runs before agent and bundle runtimes during shutdown", async () => {
     const closeOrder: string[] = [];

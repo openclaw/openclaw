@@ -1,6 +1,7 @@
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../infra/agent-events.js";
+import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { hasGatewayContextOwner } from "../plugins/runtime/gateway-request-scope.js";
 import { getProcessCleanupBudget } from "../process/supervisor/cleanup-budget.js";
@@ -105,10 +106,10 @@ export async function prepareGatewayRunShutdown(
       ? [source.adapter.projectSessionTerminalPersistence]
       : [],
   );
-  return {
-    failure,
-    released: Promise.all([capture.settled, interrupted.released, ...terminalPersistence]).then(
-      () => undefined,
-    ),
-  };
+  const released = Promise.allSettled([
+    capture.settled,
+    interrupted.released,
+    ...terminalPersistence,
+  ]).then((results) => throwIfSettledRejected(results, "Session shutdown persistence failed"));
+  return { failure, released };
 }

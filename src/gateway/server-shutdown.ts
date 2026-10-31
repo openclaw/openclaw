@@ -116,11 +116,13 @@ export async function runGatewayCloseSteps(params: {
       if (!(await settlesWithin(pending, graceMs))) {
         const message = `${step.name} cleanup exceeded ${graceMs}ms; resources remain; pending: ${formatGatewayPendingCloseSteps()}`;
         params.onError(message);
-        leftovers.push(new Error(message));
-        // Dependencies of a retained connection writer cannot be disposed safely.
+        // Grace is diagnostic for required joins: releasing the Gateway lock
+        // invalidates state admission while their accepted finalizers still write.
         if (step.required) {
-          break;
+          await pending;
+          continue;
         }
+        leftovers.push(new Error(message));
       }
     } catch (error) {
       const message = `shutdown step failed (${step.name}): ${formatErrorMessage(error)}`;
