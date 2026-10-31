@@ -2,12 +2,15 @@ package ai.openclaw.app.wear
 
 import ai.openclaw.app.node.asStringOrNull
 import ai.openclaw.app.node.parseJsonParamsObject
+import ai.openclaw.app.voice.REALTIME_AUDIO_APPEND_LIVENESS_TIMEOUT_MS
 import ai.openclaw.app.voice.RealtimeAgentCoordinator
 import ai.openclaw.app.voice.RealtimeAgentSession
+import ai.openclaw.app.voice.RealtimeInputAudioBudget
 import ai.openclaw.app.voice.requestPhoneRealtimeSessionWithLanguageFallback
 import ai.openclaw.wear.shared.WearProtocol
 import ai.openclaw.wear.shared.WearRealtimeAudioFrameType
 import ai.openclaw.wear.shared.WearRealtimeTalkEntry
+import ai.openclaw.wear.shared.WearRealtimeTalkNotice
 import ai.openclaw.wear.shared.WearRealtimeTalkRole
 import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
 import ai.openclaw.wear.shared.WearRealtimeTalkStatus
@@ -85,7 +88,8 @@ internal class WearRealtimeTalkController(
       method: String,
       paramsJson: String?,
       timeoutMs: Long,
-      onError: (String) -> Unit,
+      // Null acknowledges the frame; otherwise the Gateway error message.
+      onResult: (String?) -> Unit,
     ) -> Unit,
   private val sendWatchFrame:
     suspend (
@@ -592,10 +596,15 @@ internal class WearRealtimeTalkController(
     appendJob?.cancel()
     val frames = Channel<ByteArray>(capacity = INPUT_QUEUE_CAPACITY)
     audioFrames = frames
+    val inputBudget =
+      RealtimeInputAudioBudget(WearProtocol.REALTIME_AUDIO_SAMPLE_RATE_HZ) { notice ->
+        showInputNotice(owner, activeSessionId, notice)
+      }
     appendJob =
       scope.launch {
         for (frame in frames) {
           if (!isCurrent(owner, activeSessionId)) continue
+          if (!inputBudget.admit(frame.size)) continue
           val params =
             buildJsonObject {
               put("sessionId", JsonPrimitive(activeSessionId))
@@ -609,15 +618,19 @@ internal class WearRealtimeTalkController(
             sendGatewayFrame(
               "talk.session.appendAudio",
               params.toString(),
-              8_000L,
-            ) { message ->
-              fail(
-                message,
-                expectedOwner = owner,
-                expectedSessionId = activeSessionId,
-              )
+              REALTIME_AUDIO_APPEND_LIVENESS_TIMEOUT_MS,
+            ) { error ->
+              inputBudget.settle(frame.size, acknowledged = error == null)
+              if (error != null) {
+                fail(
+                  error,
+                  expectedOwner = owner,
+                  expectedSessionId = activeSessionId,
+                )
+              }
             }
           } catch (err: Throwable) {
+            inputBudget.settle(frame.size, acknowledged = false)
             if (err is CancellationException) throw err
             fail(
               err.message ?: "Unable to send Watch audio",
@@ -718,6 +731,7 @@ internal class WearRealtimeTalkController(
         speaking = state == ActiveTalkState.Speaking,
         status = state.status,
         statusText = state.text,
+        notice = null,
         attemptId = activeOwner?.attemptId,
       ),
     )
@@ -731,6 +745,28 @@ internal class WearRealtimeTalkController(
     synchronized(lifecycleStateLock) {
       if (!isCurrent(owner, sessionId)) return
       updateActiveState(state)
+    }
+  }
+
+  /** Input-loss notices keep the watch listening while the user repeats. */
+  private fun showInputNotice(
+    owner: WearRealtimeAttemptOwner,
+    sessionId: String,
+    notice: RealtimeInputAudioBudget.Notice,
+  ) {
+    synchronized(lifecycleStateLock) {
+      if (!isCurrent(owner, sessionId) || _snapshot.value.status != WearRealtimeTalkStatus.LISTENING) return
+      val text =
+        when (notice) {
+          RealtimeInputAudioBudget.Notice.FellBehind -> "Realtime audio input fell behind; repeat the last part"
+          RealtimeInputAudioBudget.Notice.Recovered -> "Microphone input recovered; repeat the last part"
+        }
+      val wearNotice =
+        when (notice) {
+          RealtimeInputAudioBudget.Notice.FellBehind -> WearRealtimeTalkNotice.INPUT_FELL_BEHIND
+          RealtimeInputAudioBudget.Notice.Recovered -> WearRealtimeTalkNotice.INPUT_RECOVERED
+        }
+      setSnapshot(_snapshot.value.copy(statusText = text, notice = wearNotice))
     }
   }
 

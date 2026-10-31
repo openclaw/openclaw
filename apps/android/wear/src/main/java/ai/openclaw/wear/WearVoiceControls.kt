@@ -1,5 +1,6 @@
 package ai.openclaw.wear
 
+import ai.openclaw.wear.shared.WearRealtimeTalkNotice
 import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
 import ai.openclaw.wear.shared.WearRealtimeTalkStatus
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -153,12 +154,19 @@ internal fun VoiceHomeMode(
       RealtimeVoiceButtonState.SPEAKING -> stringResource(R.string.speaking)
       RealtimeVoiceButtonState.ERROR -> stringResource(R.string.real_time_audio_failed)
     }
+  val noticeText =
+    when (voice.realtimeTalk.notice.takeIf { state == RealtimeVoiceButtonState.LISTENING }) {
+      WearRealtimeTalkNotice.INPUT_FELL_BEHIND -> stringResource(R.string.realtime_input_fell_behind)
+      WearRealtimeTalkNotice.INPUT_RECOVERED -> stringResource(R.string.realtime_input_recovered)
+      null -> null
+    }
   val statusText =
     when {
       voice.realtimeStopping -> stringResource(R.string.stopping)
       dictatePreview -> stringResource(R.string.listening)
       recoverMicrophone -> stringResource(R.string.microphone_permission_required)
       label == null -> null
+      noticeText != null -> noticeText
       realtimeActive -> "$label · ${formatVoiceElapsedTime(voice.realtimeElapsedSeconds)}"
       else -> label
     }

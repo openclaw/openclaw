@@ -33,6 +33,8 @@
     <string name="listening">Listening</string>
     <!-- The serialized native-locale refresh publishes this pending translation after merge. -->
     <string name="stopping" tools:ignore="MissingTranslation">Ending call…</string>
+    <string name="realtime_input_fell_behind" tools:ignore="MissingTranslation">Audio fell behind. Repeat the last part.</string>
+    <string name="realtime_input_recovered" tools:ignore="MissingTranslation">Audio recovered. Repeat the last part.</string>
     <string name="connecting">Connecting</string>
     <string name="thinking">Thinking</string>
     <string name="typing">Typing</string>

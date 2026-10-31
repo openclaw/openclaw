@@ -18,7 +18,12 @@ data class WearRealtimeTalkSnapshot(
   val status: WearRealtimeTalkStatus = WearRealtimeTalkStatus.OFF,
   val statusText: String = "Off",
   val conversation: List<WearRealtimeTalkEntry> = emptyList(),
+  // The watch renders notices from its own resources; statusText stays the phone's English text.
+  val notice: WearRealtimeTalkNotice? = null,
 )
+
+@Serializable
+enum class WearRealtimeTalkNotice { INPUT_FELL_BEHIND, INPUT_RECOVERED }
 
 @Serializable
 data class WearRealtimeTalkEntry(
