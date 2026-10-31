@@ -624,3 +624,101 @@ docker compose exec openclaw-gateway sh -lc 'node dist/index.js gateway health -
 - [Cloudflare Containers](/install/cloudflare) — experimental Worker plus container deployment with Litestream backups to R2
 - [Updating](/install/updating) — keeping OpenClaw up to date
 - [Configuration](/gateway/configuration) — Gateway configuration after install
+
+## Build from an offline installed runtime
+
+Release tooling can combine a portable OpenClaw package with an inventoried
+Linux/x64 dependency tree without rebuilding the package. Keep the package,
+dependency input, and source checkout immutable during composition. The source
+checkout must match the dependency input's package and lockfile hashes and the
+package's build identity; the tooling checkout has its own identity.
+
+From the tooling checkout:
+
+```bash
+node --import ./scripts/tsx.mjs scripts/compose-installed-runtime.mts \
+--package /path/to/openclaw.tgz \
+--package-receipt /path/to/package-receipt.json \
+--dependency-root /path/to/linux-dependencies \
+--dependency-manifest /path/to/linux-dependencies.jsonl \
+--dependency-manifest-sha256 "$DEPENDENCY_MANIFEST_SHA256" \
+--source-root /path/to/runtime-source \
+--platform linux --arch x64 \
+--output-dir /path/to/new-composition
+
+```
+
+The output directory must not exist or overlap an input. The package receipt
+supplies `sha256`, `bytes`, and `buildInfo: { version, commit, buildId }`.
+The dependency root supplies `runtime-input.json` with `platform`, `arch`,
+`packageJsonSha256`, and `lockfileSha256`. Its newline-delimited JSON inventory
+uses paths prefixed with `node-runtime-dependencies/linux-x64` and records each
+entry's `kind` and octal `mode`, plus `size`/`sha256` for files or `target` for
+links. These input artifacts and their trusted digests come from the release
+owner; this command does not install dependencies or authorize their source.
+
+Composition preserves packaged bundled dependencies, materializes the remaining
+importer-relative dependency closure, and stages the maintained Linux lifecycle
+helpers. It writes `app/`, `installed-runtime.tgz`, a complete output inventory,
+and `receipt.json`. Symlink permission bits can differ across input filesystems;
+that count is recorded, while file/directory modes, content, targets and
+containment remain strict. No input is modified.
+
+Full-inventory checking remains the default. To reuse a prior strict composition,
+add `--qualified-dependency-receipt /path/to/prior/receipt.json` and
+`--qualified-dependency-receipt-sha256 "$PRIOR_RECEIPT_SHA256"`. The release owner
+must supply the trusted receipt digest; a caller-written operation report is not
+qualification. The receipt must bind the same dependency manifest, source package,
+lockfile, and target. Relocated donors are supported, but never trusted by location
+or by a prior receipt alone: composition rechecks their complete topology, modes,
+sizes, link targets/containment, and package manifests, then hashes the actual
+selected copies against the qualified inventory. Unselected payload bytes are
+not rehashed. The new receipt labels this `qualified-reuse` with
+`inputInventory: false`; it cannot qualify another reuse.
+
+Before passing the composition to Docker, verify it and obtain the maintained
+image recipe:
+
+```bash
+node --import ./scripts/tsx.mjs scripts/compose-installed-runtime.mts \
+--operation image-recipe \
+--composition-root /path/to/composition \
+--receipt-sha256 "$RECEIPT_SHA256" \
+--portable-package-sha256 "$PACKAGE_SHA256" \
+--runtime-version "$RUNTIME_VERSION" \
+--runtime-commit "$RUNTIME_COMMIT" \
+--runtime-build-id "$RUNTIME_BUILD_ID"
+
+```
+
+All six location/identity flags are required. `--operation verify` uses the same
+flags. By default both operations verify the complete installed inventory.
+They also check the tooling lockfile against the runtime
+source lock, the Docker entrypoint against the original runtime commit's Git
+blob, and the maintained final-stage COPY inputs. The runtime commit must be
+available in the tooling checkout's Git object database.
+
+For an archive-bound recipe, add `--image-input archive` to `image-recipe`. This
+checks the receipt, archive, and manifest digests plus the small identity, root
+module, and helper inputs used during admission, without rehashing all of `app/`.
+Its `archive-bound` result is not a full directory verification. The recipe adds
+`OPENCLAW_INSTALLED_RUNTIME_INPUT=installed-runtime-archive-input` and
+`OPENCLAW_INSTALLED_RUNTIME_SHA256`: Docker copies the archive, verifies that exact
+digest inside the build, and only then extracts it. Changes to unchecked `app/`
+bytes cannot enter this route; a changed archive fails before extraction.
+
+The JSON recipe names the maintained Dockerfile, `openclaw-runtime` target,
+`OPENCLAW_RUNTIME_ASSETS=installed-runtime-assets` build argument, and
+`openclaw_installed_runtime` named context pointing at the composition root.
+Pass these to Buildx from the pinned tooling checkout. Keep the context unchanged
+through consumption, then verify it again. The default source-build route is
+unchanged. The installed-assets stage runs finalization with networking disabled;
+it checks the native prebuild before lifecycle and never repairs missing app
+dependencies with npm. Later shared image stages still install OS utilities and
+operator tools and can require network access.
+
+Composition and recipe verification are **not Linux runtime qualification**.
+Receipts retain `compositionOnly: true`, ABI/libc `requires-target-acceptance`,
+and lifecycle `target-required`. Native loading, lifecycle completion,
+entrypoint, provider identity, and runtime export checks still require actual
+Linux target acceptance.

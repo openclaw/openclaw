@@ -168,15 +168,6 @@ function droppedMessage(id: string) {
   });
 }
 
-function appendWindowAt(
-  scripted: ReturnType<typeof createScriptedWebListenerFactory>,
-  index: number,
-) {
-  const options = scripted.listenerFactory.mock.calls[index]?.[0] as ListenerOptions | undefined;
-  assert(options, `Expected listener options at index ${index}`);
-  return options.appendReplyWindow;
-}
-
 async function openOnce(
   tuning?: Parameters<Monitor>[6],
   resolver: Parameters<Monitor>[3] = async () => undefined,
@@ -276,28 +267,13 @@ it.each([
   },
 );
 
-it("widens append catch-up only after reconnecting a recently active listener", async () => {
-  const monitor = startMonitor({ messageTimeoutMs: 30 * 60_000 });
-  const { scripted } = monitor;
-
-  await vi.waitFor(() => expect(scripted.getListenerCount()).toBe(1));
-  expect(appendWindowAt(scripted, 0)).toBeUndefined();
-
-  // The controller records inbound activity before admission; this test only needs that
-  // lifecycle fact and must not start unrelated delivery/session work.
-  await requireOnMessage(scripted.getOnMessage())(droppedMessage("active-before-reconnect"));
-
-  const reconnectStartedAt = Date.now();
-  scripted.resolveClose(0, { status: 408, isLoggedOut: false, error: new Error("timeout") });
-  await vi.waitFor(() => expect(scripted.getListenerCount()).toBe(2));
-
-  const appendReplyWindow = appendWindowAt(scripted, 1);
-  expect(appendReplyWindow?.afterMs).toBeGreaterThanOrEqual(reconnectStartedAt - 20 * 60_000);
-  expect(appendReplyWindow?.afterMs).toBeLessThanOrEqual(Date.now() - 20 * 60_000);
-  expect(appendReplyWindow?.untilMs).toBeGreaterThanOrEqual(reconnectStartedAt + 20 * 60_000);
-  expect(appendReplyWindow?.maxAgeMs).toBe(20 * 60_000);
-
-  await stopMonitor(monitor);
+it.each([
+  [30 * 60_000, 20 * 60_000],
+  [5 * 60_000, 5 * 60_000],
+  [1, 60_000],
+])("bounds offline catch-up for a %i ms message timeout", async (messageTimeoutMs, expected) => {
+  const options = await openOnce({ messageTimeoutMs });
+  expect(options?.appendReplyMaxAgeMs).toBe(expected);
 });
 
 it.each([

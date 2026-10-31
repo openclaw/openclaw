@@ -134,8 +134,10 @@ uses that build while both baseline controls keep `--ui`. Each role's complete
 UI tree hash is recorded in `helper-sources.json` and checked again after cleanup.
 Gateway and UI build identities are separate; do not attribute a new renderer to
 a backend-only build. The driver verifies each source commit against build-info
-and both local build stamps, then hashes the complete runtime output before and
-after the experiment. It does not build, install, contact a provider, or use an
+and both local build stamps, then hashes the complete runtime output and generated
+workspace package outputs before and after the experiment. A frozen source build
+needs both `dist/` and the package `dist/` roots listed by
+`scripts/lib/tsdown-output-roots.mts`. It does not build, install, contact a provider, or use an
 operator's Gateway state.
 
 The source helper only seeds durable synthetic state and exits after draining
@@ -152,6 +154,9 @@ worker entrypoints. Seeding and startup are separate from browser default
 readiness, full-range loading, and warm filters. Numeric dispatch counters
 observe native worker messages, including the first synchronous task, without
 retaining or rewriting their payloads.
+Synthetic state uses the system temp directory so secure temporary-state discovery
+keeps its normal protection; `--out` owns the retained proof artifacts separately.
+The driver fixes one UTC end date for every fixture, including runs crossing midnight.
 All roles use the invoking driver's seed, RTT, and dispatch-observer helpers,
 whose hashes are recorded separately from the per-checkout runtime. The seed
 helper must remain compatible with both checkouts' database schemas. No
@@ -185,7 +190,38 @@ noisy wall times with CPU and work counts. A clean median regression is at most
 Use `--warm-cpu 1` or `--warm-cpu 4` to select one CPU rate for an ordinary warm
 run. Both models and RTT settings remain measured; for example, `--pairs 10
 --warm-cpu 1` records 120 filter observations plus 12 setup observations. The
-selector is rejected with the specialized smoke, cold, or attribution modes.
+selector is also available with `--diagnostic` and `--structure` to attribute the
+same CPU rate; it is rejected with smoke or cold modes. Attribution still defaults
+to native CPU when the selector is omitted.
+
+Use `--engine webkit` for the same real-Gateway model queries, independent fixture
+assertions, alternating baseline/candidate/baseline triplets, and both RTT profiles
+in headless WebKit. WebKit runs at **native CPU only**; `--warm-cpu 4` is rejected
+because Playwright WebKit has no equivalent throttling control. It cannot certify
+a WebKit 4× target. Untraced browser CPU/heap/process counters are null, not zero;
+Gateway CPU and worker counts remain available. `--diagnostic --engine webkit`
+uses the existing in-process Inspector transport for separate Timeline and
+ScriptProfiler attribution. These durations are elapsed wall time, not CPU, and
+the trace includes automation and metric-probe boundaries. CPUProfiler's smoothed
+utilization is not action CPU. CDP-only `--structure` and `--warm-sequence` remain
+Chromium-only.
+
+Add `--profile-last-pair` to an ordinary warm run to append one traced pair
+covering both models after all requested untraced pairs. It reuses the same
+prepared Gateways, browsers, CPU rate and RTT, and produces the same attribution
+files as `--diagnostic`, plus mutation counts and before/after local node
+identities without copying DOM content or forcing GC. The mutation observer runs
+only during the appended diagnostics. Appended rows have `diagnostic: true`;
+exclude them from timing summaries. This option cannot be combined with smoke, cold, diagnostic,
+structure or warm-sequence modes.
+
+Add `--screenshots` to capture each role's first model pair after action timing,
+resource probes, and any trace shutdown. These synthetic full-page PNGs identify
+the role, engine, CPU rate, RTT, and model in their names. Inspect them before
+publishing. Screenshot work is outside the recorded action interval.
+After the full localhost sequence, it also captures the overview, cost-window, and session
+panels, then the session panel at a 390 px viewport. These lower-panel captures
+do not change the viewport or scroll position during any timed action.
 
 Outputs include actual RPC latency/bytes, Gateway process and main-thread CPU,
 Chromium thread-tick task/script/layout/style CPU for non-navigation actions,

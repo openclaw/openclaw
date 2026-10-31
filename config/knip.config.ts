@@ -31,6 +31,9 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  // Offline composition is documented; Docker executes the staged finalizer by path.
+  "scripts/compose-installed-runtime.mts!",
+  "scripts/finalize-installed-runtime.mjs!",
   // Performance drivers and their preloads are invoked directly from documented commands.
   "scripts/perf/**/*.{js,mjs,cjs,ts,mts,cts}!",
   // Spawned directly by native-allocation-profile.test.ts.
@@ -46,6 +49,7 @@ const repositoryScriptEntries = [
   "scripts/perf/backup-verify-fixture.mjs!",
   "scripts/perf/backup-verify-measure.mjs!",
   "scripts/perf/board-read-admission-measure.ts!",
+  "scripts/perf/spawn-broker-shutdown-measure.ts!",
   // catalog-compare-released.mts copies and spawns this sandboxed reader by path.
   "scripts/lib/catalog-compare-released-worker.mts!",
   // The prepublish registry executes this shared build-and-pack lifetime by path.

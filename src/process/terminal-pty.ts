@@ -7,7 +7,7 @@ import {
   resolveWindowsSpawnProgram,
 } from "../plugin-sdk/windows-spawn.js";
 import { signalPtySessionTree } from "./kill-tree.js";
-import { getAgentExecCgroup } from "./linux-exec-cgroup.js";
+import { getAgentExecCgroup, type ProcessExecutionIntent } from "./linux-exec-cgroup.js";
 import { resolvePtyTerminalName, setPtyTerminalName } from "./pty-terminal-name.js";
 import { prepareChildProcessSpawnRecorder } from "./spawn-diagnostics.js";
 import type { SpawnInitiation } from "./spawn-initiation.js";
@@ -49,6 +49,7 @@ function resolveTerminalNodeExecutable(env: NodeJS.ProcessEnv): string {
 }
 
 export type TerminalPtySpawnParams = {
+  executionIntent?: ProcessExecutionIntent;
   file: string;
   args: string[];
   cwd?: string;
@@ -83,7 +84,7 @@ export async function spawnTerminalPty(
   assertCurrent();
   const needsNodeFlowControl =
     process.versions.bun && process.platform !== "win32" && !bunTerminalHasFlowControl();
-  const execCgroup = getAgentExecCgroup();
+  const execCgroup = params.executionIntent === "agent-tool" ? getAgentExecCgroup() : undefined;
   const canIsolate = execCgroup && (needsNodeFlowControl || resolveNodeRuntimeExecutable());
   if (execCgroup && !canIsolate) {
     process.emitWarning(

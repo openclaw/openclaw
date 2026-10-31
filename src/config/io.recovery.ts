@@ -1,6 +1,6 @@
 import path from "node:path";
 import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
-import { readExistingStateRootMode } from "../infra/private-dir-mode.js";
+import { stateRootDirectoryMode } from "../infra/private-dir-mode.js";
 import { persistBoundedClobberedConfigSnapshot } from "./io.clobber-snapshot.js";
 import type { ConfigIoContext } from "./io.context.js";
 import {
@@ -145,10 +145,9 @@ async function recoverConfigJsonRootSuffixUnderLock(
     filePath: publicationPath,
     content: suffixRecovery.raw,
     dirMode:
-      readExistingStateRootMode(
+      stateRootDirectoryMode(
         path.dirname(publicationPath),
         resolveConfigWriteDirectory(context.configPath, publicationPath, context.deps).path,
-        context.deps.fs,
       ) ?? 0o700,
     mode: 0o600,
     tempPrefix: path.basename(context.configPath),

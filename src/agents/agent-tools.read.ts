@@ -44,6 +44,7 @@ import type { AgentTool, AgentToolResult } from "./runtime/index.js";
 import { assertSandboxPath, normalizeFileReferencePrefix } from "./sandbox-paths.js";
 import { resolveSandboxFileMutationQueueKey } from "./sandbox/file-mutation-identity.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import { withFileMutationQueueKeyResolution } from "./sessions/tools/file-mutation-queue.js";
 import {
   createEditTool,
   createReadTool,
@@ -554,41 +555,39 @@ async function appendMemoryFlushContent(params: {
   signal?: AbortSignal;
   assertCurrent: ReturnType<typeof captureAgentToolSourceExecutionGuard>;
 }) {
-  if (!params.sandbox) {
-    const root = await fsRoot(params.root);
-    await runWithAgentToolSourceExecutionScope(params.assertCurrent, async () => {
+  await runWithAgentToolSourceExecutionScope(params.assertCurrent, async () => {
+    const sandbox = params.sandbox;
+    if (!sandbox) {
+      const root = await fsRoot(params.root);
       params.assertCurrent();
       await root.append(params.relativePath, params.content, {
         mkdir: true,
         prependNewlineIfNeeded: true,
         assertBeforeMutation: params.assertCurrent,
       });
-    });
-    return;
-  }
-
-  const existing = await runWithAgentToolSourceExecutionScope(params.assertCurrent, async () => {
-    const content = await readOptionalUtf8File({
-      absolutePath: params.absolutePath,
-      relativePath: params.relativePath,
-      sandbox: params.sandbox,
-      signal: params.signal,
-    });
-    params.assertCurrent();
-    return content;
-  });
-  const separator =
-    existing.length > 0 && !existing.endsWith("\n") && !params.content.startsWith("\n") ? "\n" : "";
-  const next = `${existing}${separator}${params.content}`;
-  const sandbox = params.sandbox;
-  await runWithAgentToolSourceExecutionScope(params.assertCurrent, async () => {
-    params.assertCurrent();
-    await sandbox.bridge.writeFile({
-      filePath: params.relativePath,
+      return;
+    }
+    // Share write/edit ordering; the bridge has no cross-process append primitive.
+    const queueKey = resolveSandboxFileMutationQueueKey({
+      ...sandbox,
+      filePath: params.absolutePath,
       cwd: sandbox.root,
-      data: next,
-      mkdir: true,
       signal: params.signal,
+    });
+    await withFileMutationQueueKeyResolution(queueKey, async () => {
+      const existing = await readOptionalUtf8File(params);
+      const separator =
+        existing.length > 0 && !existing.endsWith("\n") && !params.content.startsWith("\n")
+          ? "\n"
+          : "";
+      params.assertCurrent();
+      await sandbox.bridge.writeFile({
+        filePath: params.relativePath,
+        cwd: sandbox.root,
+        data: `${existing}${separator}${params.content}`,
+        mkdir: true,
+        signal: params.signal,
+      });
     });
   });
 }

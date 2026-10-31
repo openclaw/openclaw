@@ -1,4 +1,4 @@
-import { readBestEffortConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { checkManagedServiceEnvDrift, checkTokenDrift } from "../../daemon/service-audit.js";
 import { readGatewayServiceLoadState } from "../../daemon/service-load-state.js";
@@ -471,7 +471,10 @@ export async function runServiceRestart(params: {
   service: GatewayService;
   renderStartHints: () => string[];
   opts?: ServiceLifecycleOptions;
-  checkTokenDrift?: boolean;
+  readDriftContext?: () => {
+    config: OpenClawConfig;
+    command: GatewayServiceState["command"] | undefined;
+  };
   expectedPort?: number;
   beforeServiceMutation?: () => void;
   repairLoadedService?: (
@@ -620,13 +623,12 @@ export async function runServiceRestart(params: {
       if (commandInterrupted(err)) {
         return false;
       }
-      const hints = renderRestartFailureHints(err);
-      fail(`${params.serviceNoun} repair failed: ${String(err)}`, hints);
+      fail(`${params.serviceNoun} repair failed: ${String(err)}`, renderRestartFailureHints(err));
       return false;
     }
   }
 
-  if (loaded && !handledRecovery && !configIssue && params.checkTokenDrift) {
+  if (loaded && !handledRecovery && !configIssue && params.readDriftContext) {
     const warnDrift = (message: string, source?: string) => {
       const recovery = source
         ? (resolveDaemonInstallBlockMessage("gateway") ??
@@ -639,8 +641,7 @@ export async function runServiceRestart(params: {
       }
     };
     try {
-      const command = await params.service.readCommand(process.env);
-      const cfg = await readBestEffortConfig();
+      const { command, config: cfg } = params.readDriftContext();
       const driftEnv = { ...process.env, ...command?.environment };
       try {
         const configToken = await resolveGatewayTokenForDriftCheck({ cfg, env: driftEnv });
@@ -661,7 +662,7 @@ export async function runServiceRestart(params: {
       const { collectDurableServiceEnvVars } = await import("../../config/state-dir-dotenv.js");
       const { collectEnvSecretRefIds } = await import("../../config/resolution-facts.js");
       const issue = checkManagedServiceEnvDrift({
-        command,
+        command: command ?? null,
         durableEnvironment: collectDurableServiceEnvVars({ env: driftEnv, config: cfg }),
         secretRefKeys: collectEnvSecretRefIds(cfg),
       });
@@ -735,8 +736,7 @@ export async function runServiceRestart(params: {
     if (commandInterrupted(err)) {
       return false;
     }
-    const hints = renderRestartFailureHints(err);
-    fail(`${params.serviceNoun} restart failed: ${String(err)}`, hints);
+    fail(`${params.serviceNoun} restart failed: ${String(err)}`, renderRestartFailureHints(err));
     return false;
   }
 }

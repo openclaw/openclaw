@@ -15,7 +15,10 @@ import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/ma
 import { isNativeSessionCatalogOptOutOnly } from "../plugins/native-session-catalog-config.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { resolveOwningPluginIdsForModelRef } from "../plugins/providers.js";
-import { resolvePluginSetupAutoEnableReasons } from "../plugins/setup-registry.js";
+import {
+  resolvePluginSetupAutoEnableReasons,
+  resolvePluginSetupRegistryAsync,
+} from "../plugins/setup-registry.js";
 import {
   collectConfiguredStorageProviderIds,
   listBundledStorageProviderOwners,
@@ -199,6 +202,25 @@ function hasSetupAutoEnableRelevantConfig(cfg: OpenClawConfig): boolean {
     hasXaiSetupAutoEnableRelevantConfig(cfg) ||
     hasConfiguredPluginConfigEntry(cfg)
   );
+}
+
+/** Prepare the same setup owners consulted by readiness and auto-enable probes. */
+export async function preparePluginAutoEnableSetup(params: {
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  manifestRegistry?: PluginManifestRegistry;
+  assertCurrent?: () => void;
+}): Promise<void> {
+  if (
+    params.config.plugins?.enabled === false ||
+    !hasSetupAutoEnableRelevantConfig(params.config)
+  ) {
+    return;
+  }
+  await resolvePluginSetupRegistryAsync({
+    ...params,
+    pluginIds: resolveRelevantSetupAutoEnablePluginIds(params.config),
+  });
 }
 
 function hasPluginAllowlistWithMaterialEntries(cfg: OpenClawConfig): boolean {

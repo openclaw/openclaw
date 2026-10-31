@@ -6,7 +6,7 @@ import {
   SettingsSegmented,
 } from "../../components/solid/settings-ui.tsx";
 import { parseCronDurationMs } from "../../lib/cron/decimal.ts";
-import { parseCronScheduleAt } from "../../lib/cron/form-schedule.ts";
+import { hasUnchangedCronSchedule, parseCronScheduleAt } from "../../lib/cron/form-schedule.ts";
 import type { CronFormState } from "../../lib/cron/types.ts";
 import { formatMs } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -18,6 +18,7 @@ import {
   CronInput,
   CronSelect,
 } from "./view-fields.tsx";
+import { describeJobNextRun } from "./view-job-status.tsx";
 import type { CronProps } from "./view-types.ts";
 const EVERY_SUMMARY_KEYS = {
   seconds: ["cron.form.summaryEverySecondOne", "cron.form.summaryEverySeconds"],
@@ -140,7 +141,25 @@ export function ScheduleSection(props: CronProps) {
         : []),
     ];
   };
-  const summary = createMemo(() => describeFormSchedule(form()));
+  // The form owns the authored occurrence; runtime deadlines may move after
+  // a continuation or retry. Never copy that deadline into the editable time.
+  const savedOneShot = createMemo(
+    () => {
+      const job = props.editingJob;
+      return job?.schedule.kind === "at" && hasUnchangedCronSchedule(form(), job) ? job : undefined;
+    },
+    { equals: false },
+  );
+  const summary = createMemo(() => {
+    const job = savedOneShot();
+    return job?.schedule.kind === "at"
+      ? t("cron.form.summaryConfiguredAt", { at: formatMs(Date.parse(job.schedule.at)) })
+      : describeFormSchedule(form());
+  });
+  const runtimeSummary = () => {
+    const job = savedOneShot();
+    return job ? describeJobNextRun(job, true) : null;
+  };
   return (
     <SettingsSection title={t("cron.detail.scheduleSection")}>
       <SettingsRow
@@ -171,7 +190,11 @@ export function ScheduleSection(props: CronProps) {
         <CronInput
           {...props}
           field="scheduleAt"
-          label={t("cron.form.runAt")}
+          label={t(
+            props.editingJob?.schedule.kind === "at"
+              ? "cron.form.configuredTime"
+              : "cron.form.runAt",
+          )}
           required
           errorKey="scheduleAt"
           type="datetime-local"
@@ -204,7 +227,15 @@ export function ScheduleSection(props: CronProps) {
       {summary() ? (
         <div class="cron-schedule-summary">
           <Icon name="clock" />
-          <span>{summary()}</span>
+          <span>
+            {summary()}
+            {runtimeSummary() ? (
+              <>
+                {" · "}
+                <strong>{runtimeSummary()}</strong>
+              </>
+            ) : undefined}
+          </span>
         </div>
       ) : undefined}
     </SettingsSection>

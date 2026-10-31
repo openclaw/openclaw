@@ -568,8 +568,9 @@ automatically re-executes those workflows.
 ### Comment automation
 
 Comment jobs reject known no-ops before acquiring a hosted runner. Maintainer
-Command Reactions skips comments without `/` only when using its default command
-list; any nonempty `MAINTAINER_COMMAND_REACTIONS` override retains the full matcher,
+Command Reactions skips comments without a tracked command prefix when using its
+default list. Ordinary links and paths without those prefixes no longer allocate
+a runner. The full parser still checks command boundaries. Any nonempty `MAINTAINER_COMMAND_REACTIONS` override retains the full matcher,
 including commands without slashes. Auto response skips Bot-authored issue
 comments that Barnacle already ignores and targets whose author association
 already exempts them. Its edit admission retains title, body, and PR-base changes.

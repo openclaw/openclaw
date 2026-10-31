@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { constants } from "node:os";
 import { toErrorObject } from "../infra/errors.js";
+import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import { resolveNodeRuntimeExecutable } from "../infra/node-runtime-executable.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -24,11 +25,16 @@ export async function spawnNodeTerminalPty(
     throw new Error("A Node executable is required for this terminal helper; add node to PATH.");
   }
   const worker = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.terminalPty);
-  const child = spawn(node, resolveRuntimeWorkerArgv(worker, node), {
-    stdio: ["ignore", "pipe", "pipe", "ipc"],
-    serialization: "json",
-    env: process.env,
-  });
+  const child = runWithMainThreadTask(
+    "process:spawn",
+    () =>
+      spawn(node, resolveRuntimeWorkerArgv(worker, node), {
+        stdio: ["ignore", "pipe", "pipe", "ipc"],
+        serialization: "json",
+        env: process.env,
+      }),
+    "pty-helper",
+  );
   const stdout = child.stdout;
   const stderrPipe = child.stderr;
   if (!stdout || !stderrPipe) {
