@@ -554,14 +554,6 @@
   background: var(--bg);
 }
 
-/* The Panels launcher stays visible while a closing sheet slides away; the hidden
-   shell's own display: none removes it when the exit ends. */
-.sidebar-region--mobile-host:not(.sidebar-region--open)
-  > .chat-mobile-host[hidden]
-  .side-panel__empty-body {
-  display: flex;
-}
-
 /* Resource wrappers must reveal the host surface; canvases keep their own fill. */
 .sidebar-region--mobile-host .chat-mobile-host .side-panel__panel {
   background: transparent;
