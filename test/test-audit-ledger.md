@@ -41,13 +41,16 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main `4d65c1cb2871`: qualify eight redundant Knowledge legacy schema
-fixtures and four orphaned Mattermost delivery traces. Keep Knowledge's
-`person.yaml` and its unchanged schema-rejection keeper; the scanner diagnoses
-schema paths without reading their YAML. Mattermost's sole trace consumer was
-already removed. Preserve all declarations/assertions, packaged skill assets
-and sample/invalid vault fixtures. Untouched runtime/removal baselines, candidate
-proof, committed review, final head and CI are pending.
+Pinned main `4d65c1cb2871`: [189612](https://github.com/openclaw/openclaw/pull/189612)
+removes eight redundant legacy YAML inputs and four orphaned Mattermost traces
+(118 fixture LOC). All 24 tests/three suites pass before/after. Knowledge keeps
+`person.yaml` and its unchanged rejection case; omitting the scanner diagnostic
+with that sole fixture fails the keeper. The temporary owner fault is restored.
+All declarations/assertions, packaged skills and sample/invalid vault fixtures
+remain. All baseline removal phases are clean.
+Candidate scans, fresh committed review, final published-head proof and CI are
+pending. The initial task preflight ran before the native dependency bootstrap;
+it stopped before tests, then the official runner installed and passed.
 
 ## Completed source review
 
