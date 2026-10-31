@@ -11,6 +11,7 @@ export function registerAbortDetectionCases(
       "stop",
       "esc",
       "abort",
+      "cancel",
       "exit",
       "interrupt",
       "stop openclaw",
@@ -32,8 +33,24 @@ export function registerAbortDetectionCases(
       "stop openclaw!!!",
       "stop don’t do anything",
       "detente",
+      "deten",
       "detén",
+      "para",
+      "no lo hagas",
+      "no hagas eso",
+      "detenlo",
+      "no hagas nada",
+      "cancela",
+      "basta",
+      "no sigas",
+      "deja eso",
+      "alto",
+      "corta",
+      "abortar",
       "arrête",
+      "arrete",
+      "abandonner",
+      "interrompre",
       "停止",
       "停下来",
       "暂停",
@@ -41,7 +58,15 @@ export function registerAbortDetectionCases(
       "やめて",
       "止めて",
       "रुको",
+      "रुकिए",
+      "बंद करो",
+      "खत्म करो",
+      "बाहर निकलें",
+      "निरस्त करें",
       "توقف",
+      "قف",
+      "إلغاء",
+      "خروج",
       "стоп",
       "остановись",
       "останови",
@@ -62,6 +87,11 @@ export function registerAbortDetectionCases(
     expect(isAbortTrigger("wait")).toBe(false);
     expect(isAbortTrigger("please wait")).toBe(false);
     expect(isAbortTrigger("please do not do that")).toBe(false);
+    expect(isAbortTrigger("para ti")).toBe(false);
+    expect(isAbortTrigger("no lo hagas ahora")).toBe(false);
+    expect(isAbortTrigger("basta de esto")).toBe(false);
+    expect(isAbortTrigger("alto el fuego")).toBe(false);
+    expect(isAbortTrigger("cancel that meeting")).toBe(false);
     // /stop is NOT matched by isAbortTrigger - it's handled separately.
     expect(isAbortTrigger("/stop")).toBe(false);
   });
@@ -83,7 +113,12 @@ export function registerAbortDetectionCases(
     expect(isAbortRequestText("halt")).toBe(true);
     expect(isAbortRequestText("stopp")).toBe(true);
     expect(isAbortRequestText("pare")).toBe(true);
+    expect(isAbortRequestText("para")).toBe(true);
+    expect(isAbortRequestText("बंद करो")).toBe(true);
+    expect(isAbortRequestText("قف")).toBe(true);
+    expect(isAbortRequestText("cancel")).toBe(true);
     expect(isAbortRequestText(" توقف ")).toBe(true);
+    expect(isAbortRequestText("para ti")).toBe(false);
     expect(isAbortRequestText("/stop@openclaw_bot", { botUsername: "openclaw_bot" })).toBe(true);
     expect(isAbortRequestText("/Stop@openclaw_bot", { botUsername: "openclaw_bot" })).toBe(true);
     expect(
