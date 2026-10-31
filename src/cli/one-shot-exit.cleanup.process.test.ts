@@ -5,6 +5,72 @@ import { it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 
+it("retires a real retained SQLite snapshot before a one-shot command exits", async ({
+  expect,
+  signal,
+  onTestFinished,
+}) => {
+  const fixture = createFixtureLifetime();
+  onTestFinished(() => fixture.cleanup());
+  await fixture.run(async () => {
+    const directory = fixture.createTempDir("openclaw-cli-snapshot-exit-");
+    const databasePath = path.join(directory, "source.sqlite");
+    const source = new DatabaseSync(databasePath);
+    source.exec("CREATE TABLE observations(value INTEGER); INSERT INTO observations VALUES (42)");
+    source.close();
+    const originalBytes = fs.readFileSync(databasePath);
+    const script = `
+      import fs from "node:fs";
+      import { DatabaseSync } from "node:sqlite";
+      import { startSqliteReadOnlyLocationAsync } from ${JSON.stringify(new URL("../infra/sqlite-snapshot-source.ts", import.meta.url).href)};
+      import { closeCliResources } from ${JSON.stringify(new URL("./runtime-cleanup.ts", import.meta.url).href)};
+      import { runCliWithExitFinalization } from ${JSON.stringify(new URL("./one-shot-exit.ts", import.meta.url).href)};
+      import { defaultRuntime } from ${JSON.stringify(new URL("../runtime.ts", import.meta.url).href)};
+
+      await runCliWithExitFinalization({
+        run: async () => {
+          const snapshot = await startSqliteReadOnlyLocationAsync(
+            ${JSON.stringify(databasePath)}, { preserveSourceArtifacts: true },
+          ).result;
+          const reader = new DatabaseSync(snapshot.location, { readOnly: true });
+          const result = reader.prepare("SELECT value FROM observations").get();
+          reader.close();
+          if (!snapshot.cleanupRoot || !fs.existsSync(snapshot.location)) {
+            throw new Error("No retained snapshot was prepared");
+          }
+          defaultRuntime.writeJson({ value: result.value, snapshotRoot: snapshot.cleanupRoot });
+        },
+        finalize: closeCliResources,
+        onError: error => { throw error; },
+      });
+    `;
+    const result = await fixture.track(
+      runNodeScript(
+        ["--import=tsx", "--input-type=module", "--eval", script],
+        {
+          PATH: process.env.PATH,
+          SystemRoot: process.env.SystemRoot,
+          HOME: directory,
+          USERPROFILE: directory,
+          XDG_CACHE_HOME: path.join(directory, "cache"),
+          OPENCLAW_STATE_DIR: path.join(directory, "state"),
+          TERM: "dumb",
+          NODE_DISABLE_COMPILE_CACHE: "1",
+          TSX_DISABLE_CACHE: "1",
+        },
+        20_000,
+        { signal, maxBuffer: 1024 * 1024 },
+      ),
+    );
+    expect(result).toMatchObject({ error: undefined, status: 0 });
+    const output = JSON.parse(result.stdout);
+    expect(output.value).toBe(42);
+    expect(path.isAbsolute(output.snapshotRoot)).toBe(true);
+    expect(fs.existsSync(output.snapshotRoot)).toBe(false);
+    expect(fs.readFileSync(databasePath)).toEqual(originalBytes);
+  });
+});
+
 it.concurrent.for([
   { mode: "complete", exitCode: 0 },
   { mode: "requested", exitCode: 7 },
