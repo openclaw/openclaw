@@ -528,8 +528,8 @@ openclaw database port --rollback <manifest> [--json]
 Stop the Gateway and embedded agents first. `--family` selects all existing
 physical stores of one family and changes only that family's override. Omit it
 to port all eligible families when their engines are homogeneous; mixed
-selections require a family. A scoped agent port cannot put agents on a different
-engine from shared state until PR3 mixed-pair conformance. `--dry-run` checks
+selections require a family. Agent and shared-state families can use different
+engines. `--dry-run` checks
 read-only prerequisites without creating migration
 artifacts. Recovery requires the active manifest at
 `<stateDir>/recovery/database-port/manifest.json`; `--resume` and `--rollback` are

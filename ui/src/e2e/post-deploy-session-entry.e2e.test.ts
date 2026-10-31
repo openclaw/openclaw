@@ -41,7 +41,6 @@ import {
   controlUiE2eWaitTimeoutMs,
   installMockGateway,
   refreshProductionControlUiE2e,
-  resolvePlaywrightChromiumExecutablePath,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
 
@@ -61,6 +60,8 @@ const unrelatedScope = {
 const publishedMessage = "Synthetic published conversation.";
 const operatorEmail = "reload-operator@example.test";
 const trustedProxy = { userHeader: "x-forwarded-user", allowLoopback: true };
+const { executablePath: chromiumExecutablePath, wsEndpoint: chromiumWsEndpoint } =
+  inject("controlUiE2eChromium");
 type HttpSample = { path: string; status: number };
 
 // Real HTTP authentication, session publication, HTML delivery and built workers;
@@ -177,9 +178,9 @@ describe("public-session post-deploy app handoff", () => {
       },
     });
     baseUrl = `http://127.0.0.1:${listener.claim.port}`;
-    browser = await chromium.launch({
-      executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
-    });
+    browser = chromiumWsEndpoint
+      ? await chromium.connect(chromiumWsEndpoint, { timeout: 30_000 })
+      : await chromium.launch({ executablePath: chromiumExecutablePath });
   }, 180_000);
 
   afterAll(async () => {

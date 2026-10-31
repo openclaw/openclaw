@@ -175,7 +175,8 @@ Keep the local state directory and configured agent directories. Each PostgreSQL
 store still has a small SQLite **anchor** at its usual database path. It records
 the store UUID and server namespace, not the server's application rows. An anchor
 and its matching PostgreSQL data are one recovery unit. Never delete an anchor to
-change engines.
+change engines. If an agent's namespace is lost, follow the
+[retained-store recovery procedure](#recover-a-retained-agent-store).
 
 The quarantine, managed-update, and package-activation safety journals remain
 local SQLite. Daemon runtime pins remain in `control/services.sqlite` so service
@@ -194,31 +195,62 @@ When present, the local credential store is captured as a fixed-local resource,
 outside the engine families. User backups apply its credential sanitization;
 updater recovery captures it exactly.
 
-Existing-state reads, one-shot writes, and read-only agent database opens such
-as session loads reuse up to four idle PostgreSQL connections per worker.
-Writable agent database owners and maintenance opens keep dedicated connections.
-Each caller has exclusive use until close; an open transaction is never returned to
-the cache. Connection settings and the store
-namespace separate cache entries. Session setup runs when a backend connects,
-and an idle connection lost by the server is replaced at the next open. Workers
-close their cached connections after three minutes idle or on shutdown. Taking a
-connection from the cache cancels its idle timeout; checked-out connections are
-not expired by this cache.
+Read-only agent scopes retain their store identity and schema admission between
+reads, but return their PostgreSQL transport after the last borrower finishes.
+Each worker isolate caches **at most two returned transports across all stores**,
+keyed by connection and timeout settings. Reusing one for a different store changes
+its `search_path` before the next query. Same-store reuse within one second needs
+no extra query. After at least one second in the idle cache, the transport is
+validated before the next statement and reconnected if validation fails. An
+already-reported connection error also reconnects before reuse. A backend
+terminated less than one second after its last use can still fail the next
+statement if its termination notification has not arrived; user statements are
+never replayed after a connection failure.
+An open transaction is never returned to the cache; checked-out connections remain
+exclusive. Returned transports expire after three minutes idle or on worker shutdown.
+SQLite handle retention is unchanged.
+
+Budget PostgreSQL backends as the sum of each isolate's **checked-out connections
+plus up to two returned transports**, approximately `isolates × (active + 2)`.
+Here, active means a checked-out connection, including dedicated writable and
+maintenance handles, even when PostgreSQL reports it as idle. This is a retention
+bound, not a process-wide connection limit; concurrent work still needs headroom.
+
+A PostgreSQL 17 synthetic workload (four sessions per agent, startup through six
+idle minutes, then 130 history reads and a usage refresh) measured:
+
+| Agent stores | Earlier unbounded peak (role limit 200) | Bounded-retention peak (role limit 40) | Backends after six idle minutes |
+| ------------ | --------------------------------------- | -------------------------------------- | ------------------------------- |
+| 1            | 19                                      | 18                                     | 8                               |
+| 4            | 43                                      | 18                                     | 11                              |
+| 13           | 101                                     | 24                                     | 12                              |
+
+The final retirement policy was replayed at 1 and 13 stores; the 4-store row is
+from the preceding candidate. All bounded runs completed without connection-limit
+errors. The 13-store read burst peaked at 16 backends after the idle window.
+These are workload measurements, not universal limits.
+
+For one Gateway with this 1–13-store workload, use a runtime role limit of at least
+40 and server `max_connections` of at least 100, leaving room for administration
+and other clients. For multiple Gateways, budget each role separately and add their
+peak budgets, other clients, and PostgreSQL's reserved slots to `max_connections`.
+More concurrent work or plugin workers can require a larger budget even at the
+same agent count; check `pg_stat_activity` during startup and representative bursts.
 
 Gateway workers share four PostgreSQL I/O services per process. The Gateway
 starts them when it selects PostgreSQL, overlapping their initialization with
 config and plugin preparation. Replies wake only their own connection; blocked
 callers check for service failure at intervals of at most 50 milliseconds.
-This changes where connections run, not their exclusive ownership or idle retention. An
+These services multiplex connections; four services do not mean four backends. An
 externally constructed SDK or plugin worker without inherited pool endpoints
 starts its own four services on first PostgreSQL use. It emits a once-per-thread
 warning and `openclaw.postgres.pool.self-root` diagnostic with the worker label
 and thread ID. Worker diagnostics count these roots separately from physical
 I/O services, so unexpected worker creation remains visible.
 
-Usage reports retain their reader in the existing history worker between requests.
-Each report still uses a fresh read snapshot; database maintenance and worker
-shutdown close the retained connection before releasing custody.
+Usage reports retain their logical reader in the existing history worker between
+requests and return its idle transport. Each report still uses a fresh read snapshot;
+database maintenance and worker shutdown close the reader before releasing custody.
 
 ## Requirements
 
@@ -279,6 +311,15 @@ administrator has revoked those defaults, also grant the runtime role access to
 the required extension functions and types. Do not grant the runtime role
 permission to install extensions or access other installations' schemas merely
 to make admission pass.
+
+### Connection poolers
+
+Connect directly to PostgreSQL or use a pooler in **session mode**. Transaction-mode
+poolers, including PgBouncer with `pool_mode=transaction`, Supavisor transaction
+mode, and similar services, are **not supported**. The bridge relies on
+per-connection session state: `lock_timeout`, `statement_timeout`, `search_path`,
+and named prepared statements. A pooler must preserve that session for the life
+of the connection.
 
 ### Supply the connection securely
 
@@ -550,8 +591,8 @@ retain whole-installation behavior for homogeneous eligible families; mixed
 selections require `--family`.
 
 Mixed installations support matched backup/restore and compatible updates.
-Whole-installation backups containing any PostgreSQL store require offline
-custody. [Archive restore](#restore-all-postgresql-stores) imports captured
+Whole-installation archives containing PostgreSQL stores can be created while the
+Gateway runs; restore requires offline custody. [Archive restore](#restore-all-postgresql-stores) imports captured
 PostgreSQL stores into fresh namespaces and publishes matching local anchors.
 Updates require candidate proof of family-override support as well as support
 for each selected or retained PostgreSQL family.
@@ -660,11 +701,16 @@ the original data; never edit metadata or discard an anchor to force admission.
 
 ### Capture both server data and local state
 
-Stop the Gateway and embedded writers before capturing PostgreSQL. Then run:
+Run this while the Gateway is up or stopped:
 
 ```bash
 openclaw backup create --output ~/Backups/openclaw --verify
 ```
+
+With the Gateway running, each PostgreSQL store is exported from its own
+`REPEATABLE READ READ ONLY` snapshot while the Gateway keeps serving; stores are
+not captured at one shared instant. Sequence allocation facts are read inside
+that snapshot, so a restored store never reissues a captured row ID.
 
 The archive combines local files and SQLite images with each actual PostgreSQL
 store's matched **format-2 envelope**: original anchor, portable SQLite export image, and manifest
@@ -722,6 +768,42 @@ Git restore supports `--global`, `--agent <id>`, and `--store <id>` for recorded
 plugin or additional-root identities. Use the identity recorded under `stores/`
 in the Git repository. Each restore creates a fresh namespace and publishes its
 matching local anchor after verification.
+
+### Recover a retained agent store
+
+An agent's local PostgreSQL anchor and its initialized server namespace form one
+store. `agents add`, Gateway `agents.create`, and guided creation refuse a retained
+anchor whose namespace is missing, uninitialized, or belongs to another identity.
+They leave its anchor, requested workspace, and configuration unchanged instead
+of creating an empty replacement under the retained identity.
+
+1. Check that `database.postgres.connection` resolves to the intended server and
+   database. Restore connectivity or the correct connection if the store still
+   exists there.
+2. If the namespace was lost, stop the Gateway and embedded writers and restore a
+   matching backup:
+
+   ```bash
+   openclaw backup restore <archive> --target <fresh-recovery-directory>
+   ```
+
+   Restore uses fresh namespaces and publishes their matching anchors. Activate
+   the restored installation as a matched set; do not pair an old anchor with a
+   newly restored namespace. See [archive restore](#restore-all-postgresql-stores)
+   or [selected-store recovery from Git](#disaster-recovery-from-git).
+
+3. If the history is intentionally gone and a fresh agent is wanted, keep writers
+   stopped and move the exact anchor named in the error, together with any of its
+   `-wal`, `-shm`, or `-journal` sidecars, to a recovery directory outside the state
+   and agent directories. Then rerun the same `openclaw agents add` command. Move
+   only that store's files; preserve the old files until the new agent is verified.
+   This explicitly discards the old identity rather than restoring its history.
+
+New agent anchors are published only after PostgreSQL commits the schema and agent
+identity, so an interrupted first creation can be retried. Older versions could
+leave an anchor before that initialization completed. Such an anchor cannot be
+distinguished from lost retained history and uses the same conservative recovery
+procedure; there is no automatic discard or migration.
 
 ### Disaster recovery from Git
 
@@ -933,6 +1015,11 @@ Memory transcript visibility retains the same 200-candidate ACL postfilter as
 SQLite; it does not promise complete recall beyond that candidate window. The
 separate transcript search API applies its agent/session/role filters before its
 result cap. See [search modes and limits](/reference/database-engines#search-on-postgresql).
+
+Transcript search keeps its agent prefix literal in the prepared query so
+PostgreSQL retains that selectivity estimate when it chooses a generic plan.
+Other query inputs stay parameterized; server-wide plan policy and search
+results are unchanged.
 
 Without pgvector, explicitly select keyword-only memory before opening its store:
 

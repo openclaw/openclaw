@@ -3,4 +3,5 @@ export const {
   isPluginProvidersLoadInFlight,
   resolvePluginProviderRegistryCore,
   resolvePluginProvidersCore,
+  withPluginProviders,
 } = nativePluginBindings.providerRegistry;

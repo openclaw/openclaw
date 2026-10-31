@@ -432,8 +432,8 @@ export function NewSessionComposer(props: {
     <div
       ref={footerControl}
       class="agent-chat__composer-shell new-session-page__composer"
-      onPointerEnter={prepareComposerWidthEdge}
-      onKeyDown={prepareComposerWidthEdge}
+      onPointerEnter={() => void prepareComposerWidthEdge()}
+      onKeyDown={() => void prepareComposerWidthEdge()}
       onDrop={(event) => {
         if (options().nativeTerminal && event.dataTransfer?.files.length) {
           event.preventDefault();

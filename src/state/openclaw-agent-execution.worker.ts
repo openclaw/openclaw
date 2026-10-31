@@ -4,6 +4,7 @@ import type { Result } from "@openclaw/normalization-core/result";
 import { isSessionActorCommand } from "../config/sessions/session-actor-command.js";
 import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { sqlPublicationAnchor } from "../infra/sql-connection.js";
+import { recordSqliteDatabaseIntegrity } from "../infra/sqlite-database-admission.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import {
   assertTransactionUsable,
@@ -23,8 +24,10 @@ import {
 } from "../infra/sqlite-worker-identity.js";
 import {
   requestSqliteWorkerOperationAdmission,
+  withSqliteWorkerOperationAdmissionAsync,
   type SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
+import { currentSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-settlement.js";
 import { withAgentCreationClaimWitness } from "./agent-creation-claim.js";
 import { withAgentDeletionWorkerCleanup } from "./agent-deletion-cleanup.worker.js";
 import { readAgentDeletionJournalStatusInDatabase } from "./agent-deletion-journal.read.js";
@@ -32,17 +35,20 @@ import { retainAgentDatabase } from "./openclaw-agent-db-borrower.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseRegistrationCommit,
+  OpenClawAgentDatabaseRegistrationObserver,
 } from "./openclaw-agent-db-contract.js";
 import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import { prepareOpenClawAgentDatabaseWorkerLease } from "./openclaw-agent-db-lease.js";
 import { refreshOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema-refresh.js";
 import {
   getOpenClawAgentDatabaseValidation,
+  publishOpenClawAgentDatabaseSchema,
   type OpenClawAgentDatabaseValidation,
 } from "./openclaw-agent-db-validation-cache.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
+  openOpenClawAgentDatabaseInWorker,
   runOpenClawAgentWriteTransaction,
 } from "./openclaw-agent-db.js";
 import { createAgentDatabaseExecutionCloser } from "./openclaw-agent-execution-close.js";
@@ -63,7 +69,10 @@ import {
   prepareAgentNativeBindingOperation,
   type RegisteredAgentWorkerOperations,
 } from "./openclaw-agent-execution-operations.js";
-import { readAgentDatabaseRequestPreparation } from "./openclaw-agent-execution-preparation.js";
+import {
+  agentDatabaseStartupInspectionSignal,
+  readAgentDatabaseRequestPreparation,
+} from "./openclaw-agent-execution-preparation.js";
 import { prepareAgentTranscript } from "./openclaw-agent-execution-transcript.worker.js";
 import type { AgentWorkerOperationContext } from "./openclaw-agent-operation-context.js";
 import {
@@ -211,7 +220,14 @@ function openAgentDatabaseBackend(
       expectDefined(shared, "Agent execution shared-state owner").db,
       input.agentId,
     ) !== "absent";
-  const openClaimedWriter = (refreshSchema = false) => {
+  function* openClaimedWriterSteps(refreshSchema = false): Generator<
+    {
+      lease: ReturnType<typeof prepareOpenClawAgentDatabaseWorkerLease>;
+      observer: OpenClawAgentDatabaseRegistrationObserver;
+    },
+    OpenClawAgentDatabase,
+    OpenClawAgentDatabase
+  > {
     let validation: OpenClawAgentDatabaseValidation | undefined;
     if (!database) {
       // Promotion needs the current command's source authority before any durable open work.
@@ -238,9 +254,11 @@ function openAgentDatabaseBackend(
         const preparation = receiveMessageOnPort(port1)?.message as {
           validation?: OpenClawAgentDatabaseValidation;
           integrityRevoked: boolean;
+          startupIntegrity?: import("./agent-database-startup-integrity.js").AgentDatabaseStartupIntegrity;
         };
         lease.validation = preparation.validation;
         lease.integrityRevoked = preparation.integrityRevoked;
+        lease.startupIntegrity = preparation.startupIntegrity;
         lease.startupRepair = startupJournalRequested
           ? maintenance.repairStartupIntegrity.bind(undefined, lease.receipt)
           : undefined;
@@ -256,16 +274,19 @@ function openAgentDatabaseBackend(
       try {
         // Admission callbacks inside the opener may run after its native handle exists.
         nativeOpenStarted = true;
-        const opened = openOpenClawAgentDatabase(options, lease, {
-          starting: () =>
-            requestSqliteWorkerOperationAdmission({
-              stage: "prepare",
-              facts: { kind: "agent-registration-start", lease: lease.receipt },
-            }),
-          committed(receipt) {
-            registration = receipt;
+        const opened = yield {
+          lease,
+          observer: {
+            starting: () =>
+              requestSqliteWorkerOperationAdmission({
+                stage: "prepare",
+                facts: { kind: "agent-registration-start", lease: lease.receipt },
+              }),
+            committed(receipt) {
+              registration = receipt;
+            },
           },
-        });
+        };
         database = opened;
         releaseBorrow = retainAgentDatabase(opened.db);
         openingResult = { ok: true, value: opened };
@@ -341,6 +362,46 @@ function openAgentDatabaseBackend(
       },
     });
     return database;
+  }
+  const openClaimedWriter = (refreshSchema = false) => {
+    const steps = openClaimedWriterSteps(refreshSchema);
+    let step = steps.next();
+    while (!step.done) {
+      try {
+        step = steps.next(
+          openOpenClawAgentDatabase(options, step.value.lease, step.value.observer),
+        );
+      } catch (error) {
+        step = steps.throw(error);
+      }
+    }
+    return step.value;
+  };
+  const prepareStartupWriter = async (preparation: RequestPreparation) => {
+    const signal = agentDatabaseStartupInspectionSignal(
+      expectDefined(preparation.startupCancellation, "Startup inspection cancellation"),
+    );
+    startupJournalRequested = preparation.startupJournal;
+    const steps = openClaimedWriterSteps(true);
+    try {
+      let step = steps.next();
+      while (!step.done) {
+        try {
+          step = steps.next(
+            await openOpenClawAgentDatabaseInWorker(
+              options,
+              step.value.lease,
+              step.value.observer,
+              signal,
+            ),
+          );
+        } catch (error) {
+          step = steps.throw(error);
+        }
+      }
+    } finally {
+      startupJournalRequested = false;
+    }
   };
   const openWriter = (refreshSchema = false) =>
     input.creationClaim
@@ -470,6 +531,19 @@ function openAgentDatabaseBackend(
       openWriter(true);
       return undefined;
     }
+    if (command.type === "database.integrityVerified") {
+      const opened = openWriter();
+      admit("commit");
+      recordSqliteDatabaseIntegrity(sqlPublicationAnchor(opened.db), command.input.verifiedAt);
+      const validation = getOpenClawAgentDatabaseValidation(opened);
+      if (validation) {
+        validation.integrityVerifiedAt = command.input.verifiedAt;
+      }
+      // Publish the completed receipt through the same native admission owner.
+      publishOpenClawAgentDatabaseSchema(opened);
+      requestSqliteWorkerOperationAdmission({ stage: "prepare", facts: { identity, validation } });
+      return undefined;
+    }
     if (command.type === "database.walMaintenance") {
       return (
         openWriter().walMaintenance.maintainPeriodic?.(command.input, admit) ?? {
@@ -569,6 +643,19 @@ function openAgentDatabaseBackend(
       return preparing;
     },
     [SQLITE_WORKER_PREPARE_ADMITTED](command) {
+      if (command.type === "database.prepareWrite") {
+        const preparation = readAgentDatabaseRequestPreparation();
+        if (preparation.startupCancellation) {
+          // This accepted preparation retains its port and revalidates with the host after every read.
+          const scope = expectDefined(
+            currentSqliteWorkerOperationAdmission.getStore(),
+            "Startup preparation admission",
+          );
+          return withSqliteWorkerOperationAdmissionAsync(scope.owner, () =>
+            prepareStartupWriter(preparation),
+          );
+        }
+      }
       if (command.type !== "database.domain.publish") {
         return undefined;
       }

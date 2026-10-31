@@ -5,7 +5,7 @@
 
 /* Native mobile presentation is supplied by the pane, independently of width. */
 .agent-chat__composer-shell[data-mobile-composer="true"] {
-  --chat-composer-bottom-gap: 6px;
+  --chat-composer-bottom-gap: 10px;
   --chat-composer-top-margin: 0px;
 
   gap: 6px;

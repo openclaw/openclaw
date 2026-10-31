@@ -12,14 +12,10 @@ import { createToolLoadContext } from "../plugins/tools.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createDecisionRegistry, unavailable, waitForAbort } from "./contract.test-support.js";
 import { DecisionProviderHost } from "./provider-host.js";
+import type { DecisionProviderV1 } from "./provider-types.js";
 import { adoptRuntimeDecisionProviders } from "./registry-adoption.js";
-import {
-  evaluateDecisionInRegistry,
-  inspectDecisionProviders as inspect,
-  prepareDecisionProviderReload,
-} from "./runtime.js";
+import { evaluateDecisionInRegistry, prepareDecisionProviderReload } from "./runtime.js";
 import { answer, batch, config as baseConfig, options } from "./runtime.test-support.js";
-import type { DecisionProviderV1 } from "./types.js";
 
 const config = {
   ...baseConfig,
@@ -48,8 +44,11 @@ function fixture(evaluate: DecisionProviderV1["evaluate"] = async () => answer) 
 }
 
 afterEach(() => resetPluginRuntimeStateForTest());
-const expectRootReady = (root: Parameters<typeof inspect>[1]) =>
-  expect(inspect(config, root)[0]).toMatchObject({ callable: true, activeRequests: 0 });
+const expectRootReady = (root: ReturnType<typeof fixture>["root"]) =>
+  expect(root.decisionProviders[0]!.host.inspect(config)).toMatchObject({
+    callable: true,
+    activeRequests: 0,
+  });
 
 it("releases a prepared consumer without retiring the shared Gateway provider", async () => {
   let settled = false;

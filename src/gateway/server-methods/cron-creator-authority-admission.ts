@@ -7,8 +7,9 @@ import {
   revokeRequesterCronAuthority,
 } from "../../agents/subagents/requester-cron-authority.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
+import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { revokeCronCreatorAuthorityRunScope } from "../cron-creator-authority-grant.js";
-import { hasGatewayAdminScope } from "../operator-scopes.js";
+import { CRON_SCOPE, hasGatewayAdminScope } from "../operator-scopes.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import type { GatewayClient } from "./shared-types.js";
 
@@ -80,24 +81,28 @@ function resolveDirectOperatorAuthority(
     isDirectTurn &&
     hasGatewayAdminScope(params.client) &&
     (internal?.isLocalClient === true || internal?.controlUiAdmin === true);
-  return isDirectOperator
+  const isScopedOperator =
+    isDirectTurn && operatorScopeSatisfied(CRON_SCOPE, params.client?.connect.scopes ?? []);
+  return isDirectOperator || isScopedOperator
     ? Object.freeze({
         runId,
         // Remote management admission does not confer the direct-local creator/operator capability.
         callerOrigin:
-          internal?.isLocalClient === true
+          isDirectOperator && internal?.isLocalClient === true
             ? { kind: "local" as const }
             : { kind: "unknown" as const },
-        ...(internal?.controlUiAdmin === true
+        ...(isDirectOperator && internal?.controlUiAdmin === true
           ? { managementEntitlement: { source: "control-ui-admin" as const } }
           : {}),
-        ...(internal?.isLocalClient !== true ? { callerScopedCreation: true as const } : {}),
+        ...(!isDirectOperator || internal?.isLocalClient !== true
+          ? { callerScopedCreation: true as const }
+          : {}),
         ...(params.isCurrent ? { isCurrent: params.isCurrent } : {}),
       })
     : undefined;
 }
 
-/** Mints cron authority for an admitted local operator or authenticated Control UI admin turn. */
+/** Admits scoped scheduling separately from local-owner and Control UI admin management. */
 export function resolveGatewayCronCreatorAuthorityAdmission(params: {
   runId: string;
   resolvedSessionKey?: string;

@@ -493,6 +493,51 @@ export async function reconcileRegisteredOpenClawHostLinks(params: {
   return { repaired, issues };
 }
 
+// Admitted repairs must settle before rejection; siblings must not keep
+// mutating after their lifecycle owner has reported failure.
+export async function repairInstalledOpenClawHostLinks(params: {
+  managedNpmRoots: string[];
+  installRecords: Record<string, PluginInstallRecord>;
+  extensionsDir: string;
+  env?: NodeJS.ProcessEnv;
+  logger: PluginPeerLinkLogger;
+  onPackageReadError?: (
+    error: unknown,
+    packageDir: string,
+    kind: "managed npm" | "registered",
+  ) => void;
+  beforePersistentApply?: () => void;
+  beforePersistentEffect?: () => void | Promise<void>;
+}): Promise<{ managedRepaired: number; registeredRepaired: number }> {
+  const onPackageReadError = params.onPackageReadError;
+  const results = await Promise.allSettled(
+    params.managedNpmRoots.map((npmRoot) =>
+      relinkOpenClawPeerDependenciesInManagedNpmRoot({
+        ...params,
+        npmRoot,
+        onPackageReadError: onPackageReadError
+          ? (error, packageDir) => onPackageReadError(error, packageDir, "managed npm")
+          : undefined,
+      }),
+    ),
+  );
+  let managedRepaired = 0;
+  for (const result of results) {
+    if (result.status === "rejected") {
+      throw result.reason;
+    }
+    managedRepaired += result.value.repaired;
+  }
+  const registered = await reconcileRegisteredOpenClawHostLinks({
+    ...params,
+    mode: "repair",
+    onPackageReadError: onPackageReadError
+      ? (error, packageDir) => onPackageReadError(error, packageDir, "registered")
+      : undefined,
+  });
+  return { managedRepaired, registeredRepaired: registered.repaired };
+}
+
 export async function relinkOpenClawPeerDependenciesInManagedNpmRoot(params: {
   npmRoot: string;
   beforePersistentApply?: () => void;

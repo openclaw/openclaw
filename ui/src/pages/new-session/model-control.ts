@@ -715,7 +715,7 @@ export class NewSessionModelControl extends NewSessionModelSelection {
       },
       onModelPickerTargetRetry: (groupId) => {
         if (groupId === "cliAgents") {
-          this.catalogTargets.retry(this.metadataClient, this.agentId);
+          this.catalogTargets.retry(options.context?.gateway.snapshot, this.agentId);
         }
       },
       onThinkingSelect: this.selectThinkingLevel,
@@ -736,7 +736,7 @@ export class NewSessionModelControl extends NewSessionModelSelection {
         if (!this.metadataReader.pending && metadataClient && metadataScope) {
           void this.metadataReader.read();
         }
-        this.catalogTargets.retry(metadataClient, this.agentId);
+        this.catalogTargets.retry(options.context?.gateway.snapshot, this.agentId);
       },
     };
   }

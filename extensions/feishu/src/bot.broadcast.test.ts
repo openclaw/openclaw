@@ -67,6 +67,7 @@ describe("broadcast dispatch", () => {
     mockGetChatInfo,
     mockResolveStorePath,
     resolvedTurnCalls,
+    runtimeStub,
   } = setupFeishuBroadcastTestHarness();
 
   function mockActiveDispatcher(ensureNoVisibleReplyFallback = vi.fn()) {
@@ -95,6 +96,32 @@ describe("broadcast dispatch", () => {
       ...options,
     });
   }
+
+  it("settles observer commands without dispatching or replaying them", async () => {
+    const { broadcastClaim, susanClaim, mainClaim } = mockBroadcastClaims("broadcast-command");
+    const turnAdoptionLifecycle = createIngressLifecycle();
+    vi.spyOn(runtimeStub.channel.commands, "shouldComputeCommandAuthorized").mockReturnValue(true);
+    const cfg = createBroadcastConfig();
+    cfg.channels = {
+      ...cfg.channels,
+      feishu: { ...cfg.channels?.feishu, allowFrom: ["ou_sender"] },
+    };
+    const event = createBroadcastEvent({
+      messageId: "broadcast-command",
+      text: "/followup next task",
+      botMentioned: true,
+    });
+    event.sender.sender_id.open_id = "ou_sender";
+    await dispatchBroadcast("broadcast-command", { cfg, event, turnAdoptionLifecycle });
+    expect(mockDispatchReply).toHaveBeenCalledTimes(1);
+    expectClaim(susanClaim, true);
+    expectClaim(mainClaim, true);
+    expectClaim(broadcastClaim, true);
+    await dispatchBroadcast("broadcast-command", { cfg, event, turnAdoptionLifecycle });
+    expect(mockDispatchReply).toHaveBeenCalledTimes(1);
+    expect(turnAdoptionLifecycle.onAdopted).toHaveBeenCalledTimes(1);
+    expect(turnAdoptionLifecycle.onAbandoned).not.toHaveBeenCalled();
+  });
 
   it("sends no-visible-reply fallback for active broadcast failed final delivery", async () => {
     mockAgentReply("main", {

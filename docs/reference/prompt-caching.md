@@ -124,7 +124,21 @@ guidance beside the receiving turn, including recovered deliveries. These
 instructions keep their wording without changing the earlier system prefix.
 Unrelated caller-supplied system instructions retain their existing placement.
 
+Background results accepted during an active run remain immediately visible and
+durable, but enter model history only at the next request boundary. An appended
+`openclaw.background-result-placement` transcript marker references the original
+result entries and its preceding entry. Live requests and replay consume that
+same placement, after any assistant output already committed. Accepted result
+bytes are never rewritten. If a run stops before placement, its next request
+places the pending result. Transcripts without placement markers keep their
+existing interpretation; older readers omit pending results rather than insert
+them ahead of signed output.
+
 ## Keep replayed tool results stable
+
+Image attachments use the same agent image sanitization on initial submission and
+history replay. Replay loads the original attachment bytes without a separate
+delivery resize, so an aborted turn or session reopen preserves the image prefix.
 
 OpenClaw applies the same tool-result text cap before the first model request
 and when persisting the result. Subsequent turns therefore replay the same

@@ -132,9 +132,9 @@ the update-only GET. Explicit `telemetry.enabled: true` enables both counting an
 optional feature statistics. The whole-update opt-outs below suppress all requests.
 CI's production-host suppression and test-receiver exception remain unchanged.
 
-The existing `config_machine_state` SQLite table holds only the last attempted
+The existing `config_machine_state` table in the selected state database holds only the last attempted
 receiver day per endpoint and physical installation-state root. An endpoint-only
-hash scopes that local key; it is identical for everyone using that endpoint and
+hash scopes that state key; it is identical for everyone using that endpoint and
 is never transmitted. After receiving support, the worker atomically claims the
 advertised day **before the count POST**, then the client rechecks policy.
 A lost response, HTTP failure, crash, revoked policy, or process exit can lose

@@ -66,7 +66,7 @@ describe("AppSidebar delegated activity", () => {
     await waitForFast(() => expect(parent().querySelector(".session-glyph__ring")).toBeNull());
   });
 
-  it("keeps subagent runs out of the session tree while preserving parent activity and failure attention", async () => {
+  it("keeps subagent runs out of the session tree while preserving live parent activity without inherited failures", async () => {
     const parentKey = "agent:main:dashboard:release";
     const childKey = "agent:main:subagent:review";
     const sessions = createSessionsHarness("main", [parentKey, childKey]);
@@ -117,15 +117,8 @@ describe("AppSidebar delegated activity", () => {
     });
     await settleLitElement(sidebar);
     expect(parent().querySelector(".session-glyph__ring")).toBeNull();
-    const parentAttention = parent().querySelector('[data-session-attention="error"]')!;
-    expect(parentAttention).not.toBeNull();
-    await parentAttention.closest<HTMLElementTagNameMap["openclaw-tooltip"]>("openclaw-tooltip")!
-      .updateComplete;
-    const parentDescription = (parentAttention.getAttribute("aria-describedby") ?? "")
-      .split(/\s+/u)
-      .map((id) => parentAttention.ownerDocument.getElementById(id)?.textContent ?? "")
-      .join(" ");
-    expect(parentDescription).toContain("Child session Review changes failed: Review failed");
+    expect(parent().querySelector('[data-session-attention="error"]')).toBeNull();
+    expect(parent().querySelector(".sidebar-child-session__status--failed")).toBeNull();
     expect(sidebar.querySelector(`[data-session-key="${childKey}"]`)).toBeNull();
     expect(
       sidebar.querySelector("[data-child-session-toggle], [data-show-more-children]"),

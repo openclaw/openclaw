@@ -8,7 +8,7 @@ title: "Exec tool"
 
 Run shell commands in the workspace. `exec` is a mutating shell surface: commands can create, edit, or delete files wherever the selected host or sandbox filesystem permits. Disabling OpenClaw filesystem tools such as `write`, `edit`, or `apply_patch` does not make `exec` read-only.
 
-Gateway, sandbox, and worker-local execution support foreground and background execution via `process`. Remote `host=node` execution uses synchronous `system.run` and never creates a `process` session, even when `process` is enabled. If `process` is disallowed, local `exec` also runs synchronously and ignores `yieldMs`/`background`. Background sessions are scoped to their originating session. Child sessions can also manage ancestor processes within the same agent; unrelated session trees and other agents cannot access them.
+Gateway, sandbox, and worker-local execution support foreground and background execution via `process`. On Linux, Gateway-hosted background commands can opt into [durable execution](/gateway/background-process#durable-processes) to survive Gateway restarts. Remote `host=node` execution uses synchronous `system.run` and never creates a `process` session, even when `process` is enabled. If `process` is disallowed, local `exec` also runs synchronously and ignores `yieldMs`/`background`; durable execution is refused. Background sessions are scoped to their originating session. Child sessions can also manage ancestor processes within the same agent; unrelated session trees and other agents cannot access them.
 
 Completed calls return command output directly. Use `process` only when `exec` reports that a command is still running and provides a `sessionId`; an identifier printed by the command is ordinary output, not a process handle.
 
@@ -23,6 +23,8 @@ On Linux, Gateway-hosted exec commands have a default memory bound across the co
 OpenClaw samples resident memory plus swapped private pages and kills the owned process tree when it exceeds the bound. Sampling starts after one second. Trees below half their bound are sampled every five seconds; usage at or above half the bound, or a newly discovered descendant, restores the one-second interval. A fast runaway from a previously quiet tree can therefore take about six seconds to be detected and killed, including sampling overhead. The tool reports `memory-limit`, the observed usage, and the applied limit in MiB; background `process` polling and logs retain the diagnostic. Reduce concurrency or input size, split the work, or move it to a separately resource-limited worker.
 
 This is a sampled safeguard, not a kernel-enforced ceiling: rapid allocations can overshoot it, shared resident pages may count more than once across processes, and concurrent commands do not share an aggregate budget. Virtual address reservations are not counted. Ordinary child execution retains a tree owner for reparented descendants. PTY monitoring follows the live command's descendants only; daemonized children that reparent outside that tree are not covered. Use `background: true` without PTY for supervised long-running work instead of shell daemonization. Sandbox backends retain their own limits. This watchdog does not apply to remote `host=node`, Codex-native shell commands, or non-Linux hosts.
+
+Durable commands apply the same computed bound through the systemd unit's `MemoryMax` instead of the sampler. The kernel bounds the unit's cgroup, including its descendants. Each durable command has its own bound; commands do not share an aggregate budget.
 
 ## Parameters
 
@@ -48,10 +50,20 @@ Return a running process handle after this delay (ms). On the Gateway and in its
 Start a deliberately independent service immediately. Request Stop leaves it running; stop it separately with its process handle. Use `yieldMs` for ordinary work. The process timeout still applies after the tool returns.
 </ParamField>
 
+<ParamField path="durable" type="boolean" default="false">
+Keep a background command running across Gateway restarts. Requires explicit `background: true` or `yieldMs`, the `process` tool, and Gateway-host execution on Linux with systemd 250 or newer and a reachable systemd user manager (`XDG_RUNTIME_DIR` or `DBUS_SESSION_BUS_ADDRESS`). Unsupported hosts and unavailable user managers return an error; execution never silently falls back to a non-durable process. Sandbox, remote node, worker, macOS, and Windows execution are unsupported.
+
+Durable commands have no interactive input: `pty: true`, `awaitResults: true`, and process input actions are refused. Exec policy, approvals, cwd restrictions, and environment preparation still apply. Durable commands launch without secret-egress proxy grants, secret-store sentinels, or proxy environment because those grants end when the Gateway restarts. The result reports how many credentials were omitted. Use the managed GitHub identity, the command's own configuration, or non-durable background execution for commands that need credentials. A managed GitHub identity's direct credential is still injected at launch, but its token is not refreshed for the running command and can expire during long work.
+
+Durable units receive their launch environment as user-manager unit properties held in memory/tmpfs and readable by the same Unix user via `systemctl --user show`; use durable mode only where the Gateway user's other processes may see that environment. Durable process bookkeeping does not copy launch environment values into its OpenClaw state-database records or logs.
+
+The process uses a transient systemd user service with `ExitType=cgroup`, so descendants keep the process running after its initial shell exits. `timeoutSeconds` applies as `RuntimeMaxSec`, and output appends under `$OPENCLAW_STATE_DIR/processes/`. After restart, the same registry adopts the process under its existing session scope; `process list`, `poll`, `log`, and `kill` continue to work. See [durable processes](/gateway/background-process#durable-processes) for completion authority, retention, and host lifetime limits.
+</ParamField>
+
 <ParamField path="timeoutSeconds" type="number" default="tools.exec.timeoutSeconds">
 Limit the command's total lifetime, in **seconds**, overriding the configured exec timeout for this call. Expiry terminates the process even after `background` or `yieldMs` returns a session ID. `yieldMs` controls how long the tool waits before backgrounding. The `process` tool's `timeout` controls how long a poll waits, also in milliseconds.
 
-Applies to gateway, sandbox, and node `system.run` execution. `timeoutSeconds: 0` disables the exec process timeout for that call. For a persistent service on the gateway or in a sandbox, use `background: true` with `timeoutSeconds: 0`, then stop it with `process` action `kill` when finished. Disabling this timeout does not make the process survive its host or worker shutting down.
+Applies to gateway, sandbox, and node `system.run` execution. `timeoutSeconds: 0` disables the exec process timeout for that call. For a persistent service on the gateway or in a sandbox, use `background: true` with `timeoutSeconds: 0`, then stop it with `process` action `kill` when finished. Surviving a Gateway restart additionally requires `durable: true`; disabling the timeout alone does not extend the host or worker lifetime.
 
 Codex foreground `node_exec` inherits this budget, including per-agent defaults,
 instead of the ordinary dynamic-tool timeout. Node transport waits remain bounded
@@ -98,7 +110,7 @@ Notes:
 - Host execution (`gateway`/`node`) rejects `env.PATH` and loader overrides (`LD_*`/`DYLD_*`) to prevent binary hijacking or injected code.
 - Exact `"cat"` or empty `GIT_PAGER` and `PAGER` overrides are normalized to empty values, including on node shell-wrapper execution. This disables Git paging without passing an executable pager name through `PATH`. Other programs may interpret an empty `PAGER` differently. Use their noninteractive flags when needed. Other pager commands, paths, whitespace variants, and `MANPAGER` overrides remain blocked.
 - OpenClaw sets `OPENCLAW_SHELL=exec` in the spawned command environment (including PTY and sandbox execution) so shell/profile rules can detect exec-tool context.
-- With the default-off [secret egress proxy](/gateway/secrets#secret-egress-proxy), Gateway-hosted exec receives shared-store `secret` entries only as process-local sentinels. The authenticated loopback proxy substitutes plaintext at outbound HTTPS request time. Each managed process has its own proxy grant, which survives the originating turn and is revoked on process exit, cancellation, timeout, or Gateway shutdown.
+- With the default-off [secret egress proxy](/gateway/secrets#secret-egress-proxy), non-durable Gateway-hosted exec receives shared-store `secret` entries only as process-local sentinels. The authenticated loopback proxy substitutes plaintext at outbound HTTPS request time. Each managed process has its own proxy grant, which survives the originating turn and is revoked on process exit, cancellation, timeout, or Gateway shutdown.
 - Shared-store `env` entries are intentionally plaintext and reach Gateway-hosted exec from the next agent run. They do not reach sandbox, remote `node`, ACP, or Codex-native shell execution. Under the Codex harness, use `gateway_exec` for this OpenClaw-managed environment path.
 - With a [managed GitHub identity](/gateway/config-tools#tools.github), Gateway-hosted exec validates the selected profile and binds its credential privately at each process launch. An unavailable profile blocks that local execution with reconnect guidance instead of falling back to native keyring credentials. Running shells retain their launch token. Later exec launches observe refreshes. Codex-native shell does not share this launch binding.
 - Sandboxed exec excludes that identity unless `agents.entries.<id>.tools.github.allowInSandbox: true`. This agent-only opt-in supports Docker and Podman, including role-required sandboxes: the profile is mounted read-only at `/openclaw/github`, and commands receive its managed token and Git author. Effective shared scope refuses injection with a warning; security audit warns for every opt-in. See [sandbox GitHub identity](/gateway/config-tools/github-identity#sandbox-opt-in).
@@ -111,8 +123,8 @@ Notes:
 - For long-running work that starts now, start it once. When enabled, automatic completion wake can happen after the command exits. New output while the command is still running does not start another turn. Use `process` for logs, status, input, or intervention. Do not emulate scheduling with sleep loops, timeout loops, or repeated polling.
 
 - When `tools.exec.notifyOnExit=false`, a running result explicitly says that automatic completion wake is disabled, in both its text and structured `followUp`. Later `process poll`, `log`, and `list` results preserve that guidance while the command is running, using the policy captured when it started. If the task needs the result, collect it with `process poll` and a timeout before ending the turn, unless another continuation is already arranged. A running process or active session goal does not arrange that continuation.
-- Running results preserve execution warnings in structured `warningText` as well as visible text, so Code Mode callers can follow guidance such as using a noninteractive command when sandbox PTY is unavailable. Calls without warnings omit this field.
-- A background command continuation keeps the original requester's still-current authority, including permitted reviewer models. Another participant's permissions do not replace it, and revoked authority prevents further execution.
+- Running, completed, and failed results preserve execution warnings in structured `warningText` as well as visible text, so Code Mode callers can follow guidance such as using a noninteractive command when sandbox PTY is unavailable. Calls without warnings omit this field.
+- Before a Gateway restart, a background command continuation keeps the original requester's still-current authority, including permitted reviewer models. Another participant's permissions do not replace it, and revoked authority prevents further execution. Adopted durable completions after restart are new system input under the owning session principal's current authority; requester continuations are not restored.
 - When an approved async command completes, its continuation uses the normal agent run timeout from `agents.defaults.timeoutSeconds`. The follow-up observer can finish waiting while the accepted agent run continues.
 - Subagent sessions do not receive automatic background-exec wakes. Collect the result with `process poll` before yielding without another completion source.
 - The process owner tracks agent-started background commands. Use the returned process session ID to inspect output, poll, or stop a command; its completion can wake the agent.
@@ -302,6 +314,12 @@ Ordinary work that yields a handle, then poll:
 ```json
 {"tool":"exec","command":"npm run build","yieldMs":1000}
 {"tool":"process","action":"poll","sessionId":"<id>","timeout":30000}
+```
+
+Run noninteractive work that survives a Gateway restart on a supported Linux host:
+
+```json
+{ "tool": "exec", "command": "npm run build", "background": true, "durable": true }
 ```
 
 Use `process poll` for on-demand status and bounded waits when no automatic completion wake is available. Avoid rapid status loops; pass a timeout while waiting for a result the current task needs. If automatic completion wake is enabled, the command can wake the session after it exits. New output while it is still running does not wake the session.

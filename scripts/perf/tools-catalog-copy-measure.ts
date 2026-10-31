@@ -50,6 +50,12 @@ export const resolvePluginTools = () => sourceTools;
 export const getPluginToolMeta = tool => ({pluginId: tool.pluginId});
 export const ensureStandalonePluginToolRegistryLoaded = () => registry;
 export const getActivePluginRegistry = () => registry;
+const acquisition = Object.freeze({registry, resolveTools: () => sourceTools, release: async () => {}});
+export const acquireStandalonePluginToolRegistry = async () => acquisition;
+export const retainRuntimePluginWork = () => () => {};
+export const capturePluginLifecycleAuthority = () => () => true;
+export const getPluginRuntimeGatewayRequestScope = () => undefined;
+export const getPluginRuntimeLoadContext = () => undefined;
 export const createPluginToolMetadataLookup = () => () => undefined;
 export const resolveAgentIdOrRespondError = () => ({cfg: {}, agentId: 'synthetic'});
 export const resolveAgentDir = () => '/synthetic/agent';
@@ -86,7 +92,7 @@ type CatalogOwner = {
       params: object;
       context: { getRuntimeConfig: () => object };
       respond: (ok: boolean, value: ToolsCatalogResult) => void;
-    }) => void;
+    }) => void | Promise<void>;
   };
 };
 const owner: CatalogOwner = await import(ownerUrl.href);
@@ -103,12 +109,12 @@ const request = {
     output = value;
   },
 };
-const run = (count: number) => {
+const run = async (count: number) => {
   for (let i = 0; i < count; i++) {
-    owner.toolsCatalogHandlers["tools.catalog"](request);
+    await owner.toolsCatalogHandlers["tools.catalog"](request);
   }
 };
-run(100);
+await run(100);
 let copies = 0;
 let copiedElements = 0;
 const originalSort = Array.prototype.toSorted;
@@ -133,7 +139,7 @@ try {
   }
   const cpu = cpuUsage();
   const started = performance.now();
-  run(iterations);
+  await run(iterations);
   const wallMs = performance.now() - started;
   const used = cpuUsage(cpu);
   if (values.mode === "allocation") {

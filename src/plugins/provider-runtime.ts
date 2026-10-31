@@ -569,8 +569,6 @@ export { classifyProviderFailoverSignalWithPlugin } from "./provider-failover.js
 
 export const formatProviderAuthProfileApiKeyWithPlugin = runtimeHook("formatApiKey");
 
-export const buildProviderAuthDoctorHintWithPlugin = asyncRuntimeHook("buildAuthDoctorHint");
-
 export const resolveProviderCacheTtlEligibility = runtimeHook("isCacheTtlEligible");
 
 export const resolveProviderModernModelRef = runtimeHook("isModernModelRef");

@@ -17,6 +17,7 @@ import {
 import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-read.js";
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import {
+  createTranscriptMessageAppendMetadataFromWrites,
   readActiveTranscriptEntryAnchorInTransaction,
   readTranscriptMessageAppendMetadataInTransaction,
   readTranscriptMessageAppendMetadataBatchInTransaction,
@@ -205,15 +206,21 @@ export function appendFreshLinearTranscriptMessagesInTransaction(
   if (new Set(eventIds).size !== eventIds.length) {
     return undefined;
   }
-  // The batch's one identity probe precedes all effects. Replays retain the ordered appender.
+  // Only caller-supplied identities need probing; this call just minted the other UUIDs.
   const batch = createTranscriptAppendBatch(
     database,
     resolved,
-    messages.map((append, index) => ({
-      type: "message",
-      id: eventIds[index]!,
-      message: append.message,
-    })),
+    messages.flatMap((append, index) =>
+      append.eventId === undefined
+        ? []
+        : [
+            {
+              type: "message",
+              id: eventIds[index]!,
+              message: append.message,
+            },
+          ],
+    ),
     projection ?? {},
   );
   if (batch.cursor.batch?.knownEventIds.size) {
@@ -231,6 +238,8 @@ export function appendFreshLinearTranscriptMessagesInTransaction(
     },
   };
   let completed = false;
+  let version: SessionTranscriptContextVersion | undefined;
+  const positions: { seq: number; messagePosition: number }[] = [];
   try {
     for (const [index, append] of messages.entries()) {
       const committed = appendTranscriptMessageInTransaction(
@@ -245,6 +254,11 @@ export function appendFreshLinearTranscriptMessagesInTransaction(
         throw new Error("Fresh transcript turn reused an existing event identity");
       }
       commits.push(committed);
+      const postimage = context.cursor.appendToIndex?.readPostimage();
+      const seq = context.cursor.nextSeq === undefined ? undefined : context.cursor.nextSeq - 1;
+      if (seq !== undefined && postimage?.state.indexedSeq === seq) {
+        positions.push({ seq, messagePosition: postimage.state.activeMessageCount - 1 });
+      }
       const assistant = context.cursor.rowTranscript?.lastAssistantMessage;
       // Disk rows keep the per-message sentinel; the one publication carries
       // the assistant fact from earlier messages in this same transaction.
@@ -258,7 +272,7 @@ export function appendFreshLinearTranscriptMessagesInTransaction(
     }
     completed = true;
   } finally {
-    batch.settle(completed, commits.length, projectionNeedsRebuild, {
+    version = batch.settle(completed, commits.length, projectionNeedsRebuild, {
       steps: commits.length,
       adjustedTime,
       publicationAssistant,
@@ -267,11 +281,29 @@ export function appendFreshLinearTranscriptMessagesInTransaction(
   if (projectionNeedsRebuild) {
     projection?.onProjectionReconcileNeeded?.();
   }
-  const metadata = readTranscriptMessageAppendMetadataBatchInTransaction(
-    database,
-    resolved,
-    commits.map(({ result }) => result),
-  );
+  const postimage = context.cursor.appendToIndex?.readPostimage();
+  const metadata =
+    !projectionNeedsRebuild &&
+    version?.generation &&
+    version.rawSeq !== null &&
+    postimage?.flushed &&
+    postimage.state.indexedSeq === version.rawSeq &&
+    positions.length === commits.length
+      ? createTranscriptMessageAppendMetadataFromWrites(
+          database,
+          resolved,
+          commits.map(({ result }, index) => ({
+            ...result,
+            parentId: result.effectiveParentId ?? null,
+            ...positions[index]!,
+          })),
+          { ...version, generation: version.generation, rawSeq: version.rawSeq },
+        )
+      : readTranscriptMessageAppendMetadataBatchInTransaction(
+          database,
+          resolved,
+          commits.map(({ result }) => result),
+        );
   for (const committed of commits) {
     const facts = metadata.get(committed.result.messageId);
     if (facts?.anchor) {
@@ -421,7 +453,7 @@ export function appendTranscriptMessageInTransaction<TMessage>(
   const cursor: TranscriptAppendCursor | undefined =
     turn?.cursor ?? (readSessionActorTransactionState(database, resolved) ? undefined : {});
   if (cursor && !cursor.initialized && !cursor.initialState) {
-    cursor.initialState = readTranscriptAppendStateInTransaction(database, resolved);
+    cursor.initialState = readTranscriptAppendStateInTransaction(database, resolved, true);
   }
   if (!turn?.headerEnsured) {
     ensureTranscriptHeader(database, resolved, options.cwd, projection, cursor);
@@ -430,11 +462,21 @@ export function appendTranscriptMessageInTransaction<TMessage>(
     }
   }
   if (turn && turn.parentId === undefined) {
-    turn.parentId = resolveTranscriptMessageAppendParent(database, resolved.sessionId, options);
+    turn.parentId = resolveTranscriptMessageAppendParent(
+      database,
+      resolved.sessionId,
+      options,
+      cursor?.initialState?.parent,
+    );
   }
   const parentId = turn
     ? turn.parentId
-    : resolveTranscriptMessageAppendParent(database, resolved.sessionId, options);
+    : resolveTranscriptMessageAppendParent(
+        database,
+        resolved.sessionId,
+        options,
+        cursor?.initialState?.parent,
+      );
   const event = createTranscriptMessageEvent({
     messageId,
     parentId: parentId ?? null,

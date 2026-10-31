@@ -279,11 +279,18 @@ describe("mobile release CI tools", () => {
   describe.each(releasePlatforms)("$platform release artifact recovery", ({ workflow }) => {
     it("checks out and verifies the dispatch commit before accessing signing credentials", () => {
       const steps = releaseSteps(workflow);
-      expect(steps[0]).toMatchObject({
+      const checkoutIndex = steps.findIndex((step) => step.uses?.startsWith("actions/checkout@"));
+      expect(steps[checkoutIndex]).toMatchObject({
         uses: expect.stringMatching(/^actions\/checkout@/u),
         with: { ref: "${{ github.sha }}", "fetch-depth": 1 },
       });
-      const verification = expectDefined(steps[1]?.run, "Release checkout verification");
+      const verification = expectDefined(
+        steps[checkoutIndex + 1]?.run,
+        "Release checkout verification",
+      );
+      expect(steps.findIndex((step) => JSON.stringify(step).includes("secrets."))).toBeGreaterThan(
+        checkoutIndex + 1,
+      );
       const root = tempRoots.make("openclaw-release-dispatch-");
       initGit(root, { name: "Release Fixture", email: "release@example.invalid" });
       writeFile(root, "README.md", "Synthetic release source\n");
@@ -1715,15 +1722,14 @@ describe("mobile release CI tools", () => {
         timeoutMs: number;
       }) => {
         const pidFile = path.join(runnerTemp, `${name}.pid`);
+        // Publish both PIDs before the grandchild can trigger the output cap.
+        const childSource = `process.on("SIGTERM", () => {}); require("node:fs").writeFileSync(process.env.PID_FILE, \`\${process.ppid}\\n\${process.pid}\\n\`); ${grandchildSource}`;
         const parentSource = [
-          // A timeout during PID publication must not terminate the fixture before it writes.
           'process.on("SIGTERM", () => {});',
           'const { spawn } = require("node:child_process");',
-          'const fs = require("node:fs");',
-          `const child = spawn(process.execPath, ["-e", ${JSON.stringify(grandchildSource)}], {`,
+          `spawn(process.execPath, ["-e", ${JSON.stringify(childSource)}], {`,
           '  stdio: ["ignore", process.stdout, process.stderr],',
           "});",
-          "fs.writeFileSync(process.env.PID_FILE, `${process.pid}\\n${child.pid}\\n`);",
           "setInterval(() => {}, 1000);",
         ].join("\n");
         const runnerSource = `
@@ -1778,14 +1784,13 @@ process.stdout.write(JSON.stringify({ elapsedMs: Date.now() - startedAt, message
 
       await exerciseOwnedProcessTree({
         expectedError: "timed out after 1000ms",
-        grandchildSource: 'process.on("SIGTERM", () => {}); setTimeout(() => {}, 5000);',
+        grandchildSource: "setTimeout(() => {}, 5000);",
         name: "timeout-tree",
         timeoutMs: 1_000,
       });
       await exerciseOwnedProcessTree({
         expectedError: "exceeded the 4096-byte output limit",
-        grandchildSource:
-          'process.on("SIGTERM", () => {}); setInterval(() => process.stdout.write("x".repeat(2048)), 1);',
+        grandchildSource: 'setInterval(() => process.stdout.write("x".repeat(2048)), 1);',
         maxOutputBytes: 4096,
         name: "output-cap-tree",
         timeoutMs: 5_000,

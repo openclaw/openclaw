@@ -1938,7 +1938,10 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       "1,000 actual native Workboard cards preserve cancelled/coalesced popover transitions, pending hover cancellation, placement and independent resource retirement. Requires --resource-counts; diagnostic waits are not CPU timing.",
     rowSelector: ".workboard-card",
     prepare: (page) => prepareWorkboardResourceFixture(page, settleSidebarBackgroundWork),
-    run: (page, gateway) => exerciseWorkboardResourceFixture(page, gateway, frames),
+    run: (page, gateway) =>
+      exerciseWorkboardResourceFixture(page, gateway, async (target) => {
+        await frames(target);
+      }),
   },
   {
     id: "workboard-events-cpu",
@@ -1950,7 +1953,9 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       "1,000 closed cards receive eight actual viewport changes and eight native column scrolls with no diagnostic listeners; measure CPU without --resource-counts.",
     prepare: (page) => prepareWorkboardResourceFixture(page, settleSidebarBackgroundWork),
     run: async (page) => {
-      const evidence = await runWorkboardEventsCpu(page, frames);
+      const evidence = await runWorkboardEventsCpu(page, async (target) => {
+        await frames(target);
+      });
       await settleSidebarCapture(page);
       return evidence;
     },
@@ -1965,7 +1970,9 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       "Retire 1,000 actual cards, then mount 1,000 through real paginated responses inside the warm CPU interval; measure without --resource-counts.",
     prepare: (page) => prepareWorkboardResourceFixture(page, settleSidebarBackgroundWork),
     run: async (page, gateway) => {
-      const evidence = await runWorkboardRemountCpu(page, gateway, frames);
+      const evidence = await runWorkboardRemountCpu(page, gateway, async (target) => {
+        await frames(target);
+      });
       await settleSidebarCapture(page);
       return evidence;
     },
@@ -2589,7 +2596,9 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       ) {
         throw new Error("Graph streaming lost content during finalization");
       }
-      await page.locator(`${activePane} .chat-send-btn--send`).waitFor();
+      // Empty mobile composers show voice input instead of the disabled Send button.
+      await page.locator(`${activePane} .chat-send-btn--send`).waitFor({ state: "attached" });
+      await page.locator(`${activePane} .chat-send-btn--stop`).waitFor({ state: "detached" });
       return { deltas: 100, finalized: true };
     },
   },

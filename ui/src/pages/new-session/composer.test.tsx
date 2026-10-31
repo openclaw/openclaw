@@ -13,7 +13,7 @@ import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { adjustTextareaHeight } from "../chat/components/chat-composer-dom.ts";
-import { loadComposerWidthEdge } from "../chat/components/chat-composer-width-ref.tsx";
+import { prepareComposerWidthEdge } from "../chat/components/chat-composer-width-ref.tsx";
 import { createNewSessionComposerTextarea } from "./composer-textarea.ts";
 import {
   composerContext,
@@ -512,7 +512,7 @@ describe("new-session composer sizing lifecycle", () => {
   });
 
   it("keeps its sizing observers across controlled updates and remeasures programmatic drafts", async () => {
-    await loadComposerWidthEdge();
+    await prepareComposerWidthEdge();
     const observers = new Set<TestResizeObserver>();
     class TestResizeObserver implements ResizeObserver {
       readonly targets = new Set<Element>();

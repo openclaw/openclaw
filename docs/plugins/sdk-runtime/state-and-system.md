@@ -1,5 +1,5 @@
 ---
-summary: "Config snapshot, SQLite-backed plugin state, system utilities, events, and logging"
+summary: "Config snapshot, shared plugin state, system utilities, events, and logging"
 read_when:
   - You need durable keyed or blob storage scoped to your plugin
   - You maintain a bundled or official plugin that writes through per-agent SQLite handles
@@ -189,6 +189,13 @@ keep the existing synchronous fallback.
     const blob = await blobs.lookup("artifact-1");
     ```
 
+    Gateway close fences new plugin shared-state operations, including resident
+    reads, with terminal `STATE_DATABASE_READ_ADMISSION_INVALIDATED` errors.
+    Accepted operations finish before shared-state retirement. SDK retry runners
+    do not retry this refusal or a retiring shared-state worker. Custom recovery
+    loops can use `isStateDatabaseAdmissionClosedError` from
+    `openclaw/plugin-sdk/retry-runtime` to stop at the same boundary.
+
     Keyed stores use the boot-selected `state` family engine. To open an additional
     physical state root, pass `env: { ...process.env, OPENCLAW_STATE_DIR: root }`
     in the store options. Every root retains the same keyed-store contract and,
@@ -204,7 +211,7 @@ keep the existing synchronous fallback.
     from being admitted, while a write already accepted by the worker still
     settles normally.
 
-    Keyed stores survive restarts and are isolated by the runtime-bound plugin id. Use `registerIfAbsent(...)` for atomic dedupe claims: it returns `true` when the key was missing or expired and registered, or `false` when a live value already exists without overwriting its value, creation time, or TTL. Use `observe(...)` with `compareAndApply(...)` when a mutation depends on the current value; the comparison and mutation run in one SQLite worker transaction. Each namespace owns its `maxEntries` retention policy and optional TTL expiry; there is no aggregate row limit across a plugin’s namespaces. JSON values are limited to 1 MiB of UTF-8 encoded JSON. By default, a write over `maxEntries` sheds the oldest live rows only from that namespace. Set `overflowPolicy: "reject-new"` for durable ownership records that must never be evicted: new keys fail at the namespace limit, while existing keys remain updateable. Growth in a sibling cache cannot reject or evict those ownership records. Existing databases need no migration or cleanup when upgrading; their stored rows are preserved.
+    Keyed stores survive restarts and are isolated by the runtime-bound plugin id. Use `registerIfAbsent(...)` for atomic dedupe claims: it returns `true` when the key was missing or expired and registered, or `false` when a live value already exists without overwriting its value, creation time, or TTL. Use `observe(...)` with `compareAndApply(...)` when a mutation depends on the current value; the comparison and mutation run in one shared-state worker transaction. Each namespace owns its `maxEntries` retention policy and optional TTL expiry; there is no aggregate row limit across a plugin’s namespaces. JSON values are limited to 1 MiB of UTF-8 encoded JSON. By default, a write over `maxEntries` sheds the oldest live rows only from that namespace. Set `overflowPolicy: "reject-new"` for durable ownership records that must never be evicted: new keys fail at the namespace limit, while existing keys remain updateable. Growth in a sibling cache cannot reject or evict those ownership records. Existing databases need no migration or cleanup when upgrading; their stored rows are preserved.
 
     The Gateway keeps complete active namespace views in memory and updates them from committed write receipts before acknowledging a write. Ordinary reads reuse those views without SQL. Residency is bounded to 64 namespaces, 16 MiB of accounted data in total, and 8 MiB or 10,000 rows per namespace. Cold or evicted namespaces load on demand; oversized namespaces and transaction-local reads use SQL. Eviction never deletes durable rows. Synchronous compatibility writers publish to the same owner. A restart rebuilds the views from the database.
 
@@ -224,7 +231,7 @@ keep the existing synchronous fallback.
 
     `OpenKeyedStoreOptions` remains the bounded option type. `OpenRetainedKeyedStoreOptions` describes retained settings, and `OpenAsyncKeyedStoreOptions` is the async opener's union. Synchronous openers accept bounded settings only.
 
-    Retained stores use the existing SQLite table under an internal `@retained.` namespace prefix, which cannot collide with a valid caller-supplied namespace. They do not consume bounded-store row quotas. They reject `maxEntries`, `overflowPolicy`, default TTL, and per-write TTL; records remain until explicitly deleted or cleared. The per-value JSON limit still applies, and the plugin owns disk growth and deletion policy. Caller-supplied namespaces keep their existing validation and length limits.
+    Retained stores use the existing shared-state table under an internal `@retained.` namespace prefix, which cannot collide with a valid caller-supplied namespace. They do not consume bounded-store row quotas. They reject `maxEntries`, `overflowPolicy`, default TTL, and per-write TTL; records remain until explicitly deleted or cleared. The per-value JSON limit still applies, and the plugin owns disk growth and deletion policy. Caller-supplied namespaces keep their existing validation and length limits.
 
     `entriesInKeyRange({ keyStartInclusive, keyEndExclusive, limit, order })` reads a lexical key range, including the lower bound and excluding the upper bound. `limit` must be a positive safe integer; `order` is `"asc"` by default or `"desc"`. Storage applies ordering and the limit before returning values. Encode sortable keys when native identifiers do not sort lexically. Use bounded pages rather than `entries()` to read a growing retained store.
 
@@ -233,7 +240,7 @@ keep the existing synchronous fallback.
     These two methods remain optional in the public store type for existing adapters. A plugin using retained storage must require the host capabilities it needs; do not silently fall back to an evicting store or retry failed reads through a different path. Retained runtime handles reject operations after their owning capability closes.
 
     <Warning>
-    Retained storage does not add a database-version fence. Older OpenClaw binaries still apply older cache and plugin-quota rules and must not write to expanded retained state. Before downgrading, restore a compatible pre-update backup; matching SQLite schema versions alone do not establish safe retention behavior.
+    Retained storage does not add a database-version fence. Older OpenClaw binaries still apply older cache and plugin-quota rules and must not write to expanded retained state. Before downgrading, restore a compatible pre-update backup; matching schema versions alone do not establish safe retention behavior.
     </Warning>
 
     `lookupMany(keys)` is an optional keyed-store capability for at most 10,000 exact keys per call. Results have the same length and order as the input, including duplicates. Each position is a `Result<T | undefined, PluginStateStoreError>`: `{ ok: true, value }` on success, including `value: undefined` for missing or expired keys, or `{ ok: false, error }` for corrupt stored JSON. An empty request returns `[]`. Keys use the same trimming and 512-byte UTF-8 limit as `lookup`; invalid keys or an oversized request fail with `PLUGIN_STATE_INVALID_INPUT` and operation `lookup` before reading. Database acquisition and query errors fail the whole call. Corrupt-JSON errors retain the `lookup` error code and operation in their per-key result. Inspect each result only when the reader reaches that position, and throw `result.error` if it is not `ok`; this lets a reader stop at an earlier missing or invalid chunk without raising a later corruption error. Each call uses one expiry cutoff and one complete resident view or SQL selection in the same plugin and namespace, without creating a missing database. Separate calls, including metadata reads, do not share a snapshot; chunked formats must retain their generation, digest, and reader-lifetime checks.
@@ -246,11 +253,11 @@ keep the existing synchronous fallback.
 
     Use `openKeyedStoreV2<T>(...)` and await its methods. `openSyncKeyedStore<T>(...)` preserves released synchronous return values and errors through 2026-12-31, the final compatibility day. Removal ships in the first January 2027 stable release without a Plugin SDK major version. See [Synchronous keyed store migration](/plugins/sdk-runtime/state-and-system#synchronous-keyed-store-migration) and the [complete migration mapping](/plugins/sdk-migration/sqlite-async#keyed-state).
 
-    `openBlobStore<TMetadata>(...)` stores bounded binary payloads in shared SQLite without base64 or file sidecars. It requires per-entry, per-namespace byte, and row limits; copies byte arrays at the API boundary; and lists metadata without loading every BLOB. `register(...)` is an explicit upsert, including for expired keys. `registerIfAbsent(...)` provides collision-safe creation: an expired key remains occupied until its owner claims it with `deleteExpiredKey(key)` or `deleteExpired()`, preserving metadata needed to remove related named artifacts after the SQLite commit. Any row with a TTL is transient and excluded from backup/restore even before it expires; omit TTL for durable, restorable state. Host fuses cap each BLOB at 100 MiB, each plugin at 512 MiB of physically stored BLOBs, and each plugin at 50,000 physically stored rows, including expired rows awaiting owner cleanup. Use `registerIfAbsent(...)` with `overflowPolicy: "reject-new"` when external materializations must not be silently orphaned by replacement or eviction.
+    `openBlobStore<TMetadata>(...)` stores bounded binary payloads in the shared state database without base64 or file sidecars. It requires per-entry, per-namespace byte, and row limits; copies byte arrays at the API boundary; and lists metadata without loading every BLOB. `register(...)` is an explicit upsert, including for expired keys. `registerIfAbsent(...)` provides collision-safe creation: an expired key remains occupied until its owner claims it with `deleteExpiredKey(key)` or `deleteExpired()`, preserving metadata needed to remove related named artifacts after the database commit. Any row with a TTL is transient and excluded from backup/restore even before it expires; omit TTL for durable, restorable state. Host fuses cap each BLOB at 100 MiB, each plugin at 512 MiB of physically stored BLOBs, and each plugin at 50,000 physically stored rows, including expired rows awaiting owner cleanup. Use `registerIfAbsent(...)` with `overflowPolicy: "reject-new"` when external materializations must not be silently orphaned by replacement or eviction.
 
     Current host blob stores return `PluginBlobStoreWithReceipts<TMetadata>`. Its `registerIfAbsentWithReceipt(...)` method returns the committed `{ createdAt, expiresAt? }` timestamps, or `undefined` when the key is occupied. Use this receipt to publish artifact timestamps without reading back the payload. `PluginBlobStore<TMetadata>` remains unchanged for existing adapters, and `registerIfAbsent(...)` still returns a boolean.
 
-    Blob mutations use the shared SQLite worker and keep quota checks and changes in one transaction. `lookup` and `entries` use the retained read-only worker path. Missing stores stay absent. Ordinary unselected reads observe independently committed data; an unrelated cached native cursor can retain an older view. An explicitly selected snapshot keeps its private source through completion. Await all methods before publishing dependent artifacts or removing their storage. Shared reader admission is bounded: process inventories sequentially or with bounded concurrency, and join every started operation before reporting a batch failure or completing shutdown. Worker errors preserve `PluginBlobStoreError` classification, operation, path, and causal errors. Byte copying, metadata serialization, and complete result materialization still use caller memory; this is not a streaming BLOB API.
+    Blob mutations use the shared-state worker and keep quota checks and changes in one transaction. `lookup` and `entries` use the retained read-only worker path. Missing stores stay absent. Ordinary unselected reads observe independently committed data; an unrelated cached native cursor can retain an older view. An explicitly selected snapshot keeps its private source through completion. Await all methods before publishing dependent artifacts or removing their storage. Shared reader admission is bounded: process inventories sequentially or with bounded concurrency, and join every started operation before reporting a batch failure or completing shutdown. Worker errors preserve `PluginBlobStoreError` classification, operation, path, and causal errors. Byte copying, metadata serialization, and complete result materialization still use caller memory; this is not a streaming BLOB API.
 
     `openChannelIngressQueue<TPayload>(...)` opens a persisted ingress queue scoped to the calling plugin, for buffering inbound events that need at-least-once processing across restarts. When stale-claim recovery uses `shouldRecover`, also provide `shouldRecoverCorrupt` if corrupt claimed payloads should be quarantined: its payload-independent claim identity lets the plugin preserve live owner and lane policy before the queue tombstones the row.
 
@@ -561,14 +568,14 @@ authority, or module-loading failure never selects a synchronous fallback.
 No schema, retention, durability, or minimum-host version change is required.
 
 `registerIfAbsent` and the optional `deleteIfEqual(key, expected)` operation use
-the shared-state SQLite worker. `deleteIfEqual` accepts a string, finite number,
+the shared-state worker. `deleteIfEqual` accepts a string, finite number,
 boolean, or `null`, and compares it with the decoded live value in the same
 transaction as deletion. Missing or expired entries return `false`; malformed
 stored JSON remains a typed store error. These operations share existing data,
 limits, and expiry rules with the legacy synchronous store.
 
 `register`, `lookup`, `lookupMany`, `consume`, `delete`, `entries`, `count`, and `clear`
-also execute SQLite in the same worker. Reads preserve missing-store behavior
+also use the selected state engine in the same worker. Reads preserve missing-store behavior
 without creating a database. `lookupMany` returns one result per input key,
 including duplicates and per-key corrupt-value errors. `consume` reads and
 deletes atomically; a decode failure rolls back the deletion. Store creation,

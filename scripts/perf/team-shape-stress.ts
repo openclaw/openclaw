@@ -76,6 +76,7 @@ export function parseStressOptions(args: string[]) {
       "knowledge-worker-heap": { type: "boolean" },
       "worktree-tool-churn": { type: "boolean" },
       "auth-availability-storm": { type: "boolean" },
+      "exec-io-storm": { type: "boolean" },
       port: { type: "string" },
       help: { type: "boolean" },
     },
@@ -141,6 +142,7 @@ export function parseStressOptions(args: string[]) {
     knowledgeWorkerHeap: values["knowledge-worker-heap"] ?? false,
     worktreeToolChurn: values["worktree-tool-churn"] ?? false,
     authAvailabilityStorm: values["auth-availability-storm"] ?? false,
+    execIoStorm: values["exec-io-storm"] ?? false,
     port,
     help: values.help,
   };
@@ -308,6 +310,7 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
             "--mixed-rpc",
             "--stress-tools",
             "--stress-subagents",
+            ...(options.execIoStorm ? ["--exec-io-storm"] : []),
             ...(options.authAvailabilityStorm ? ["--auth-availability-storm"] : []),
             ...(options.worktreeToolChurn ? ["--worktree-tool-churn"] : []),
             ...(options.operatorModelPolicy ? ["--operator-model-policy"] : []),

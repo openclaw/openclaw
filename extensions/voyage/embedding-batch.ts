@@ -43,13 +43,14 @@ const VOYAGE_BATCH_MAX_REQUESTS = 50000;
 // them at 16 MiB; non-OK diagnostics use the shared bounded provider prefix.
 const VOYAGE_BATCH_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 
-function buildVoyageBatchRequest<T>(params: {
+async function fetchVoyageBatchResource<T>(params: {
   client: RemoteEmbeddingClient;
   path: string;
+  label: string;
   signal?: AbortSignal;
-  onResponse: (res: Response, requestHeaders?: HeadersInit) => Promise<T>;
-}) {
-  return {
+  parse: (res: Response) => Promise<T>;
+}): Promise<T> {
+  return await withRemoteHttpResponse({
     url: resolveEmbeddingEndpointUrl(params.client.baseUrl, params.path),
     ssrfPolicy: params.client.ssrfPolicy,
     resolveRequestHeaders: params.client.resolveRequestHeaders,
@@ -57,8 +58,11 @@ function buildVoyageBatchRequest<T>(params: {
     init: {
       headers: buildBatchHeaders(params.client, { json: true }),
     },
-    onResponse: params.onResponse,
-  };
+    onResponse: async (res, requestHeaders) => {
+      await assertOkOrThrowProviderError(res, params.label, { requestHeaders });
+      return await params.parse(res);
+    },
+  });
 }
 
 async function readVoyageBatchError(params: {
@@ -66,29 +70,25 @@ async function readVoyageBatchError(params: {
   errorFileId: string;
 }): Promise<string | undefined> {
   try {
-    return await withRemoteHttpResponse(
-      buildVoyageBatchRequest({
-        client: params.client,
-        path: `files/${params.errorFileId}/content`,
-        onResponse: async (res, requestHeaders) => {
-          await assertOkOrThrowProviderError(res, "voyage.batch-error-file-content", {
-            requestHeaders,
-          });
-          const bytes = await readResponseWithLimit(res, VOYAGE_BATCH_RESPONSE_MAX_BYTES, {
-            onOverflow: ({ maxBytes: maxBytesLocal }) =>
-              new Error(`voyage batch error file content exceeds ${maxBytesLocal} bytes`),
-          });
-          const text = new TextDecoder().decode(bytes);
-          if (!text.trim()) {
-            return undefined;
-          }
-          const lines = normalizeStringEntries(text.split("\n")).map(
-            (line) => JSON.parse(line) as ProviderBatchOutputLine,
-          );
-          return formatBatchErrorDetail(extractBatchErrorMessage(lines));
-        },
-      }),
-    );
+    return await fetchVoyageBatchResource({
+      client: params.client,
+      path: `files/${params.errorFileId}/content`,
+      label: "voyage.batch-error-file-content",
+      parse: async (res) => {
+        const bytes = await readResponseWithLimit(res, VOYAGE_BATCH_RESPONSE_MAX_BYTES, {
+          onOverflow: ({ maxBytes: maxBytesLocal }) =>
+            new Error(`voyage batch error file content exceeds ${maxBytesLocal} bytes`),
+        });
+        const text = new TextDecoder().decode(bytes);
+        if (!text.trim()) {
+          return undefined;
+        }
+        const lines = normalizeStringEntries(text.split("\n")).map(
+          (line) => JSON.parse(line) as ProviderBatchOutputLine,
+        );
+        return formatBatchErrorDetail(extractBatchErrorMessage(lines));
+      },
+    });
   } catch (err) {
     return formatUnavailableBatchError(err);
   }
@@ -137,18 +137,12 @@ export async function runVoyageEmbeddingBatches(
     },
     readError: (errorFileId) => readVoyageBatchError({ client: params.client, errorFileId }),
     readOutput: (fileId, read) =>
-      withRemoteHttpResponse(
-        buildVoyageBatchRequest({
-          client: params.client,
-          path: `files/${fileId}/content`,
-          onResponse: async (response, requestHeaders) => {
-            await assertOkOrThrowProviderError(response, "voyage.batch-file-content", {
-              requestHeaders,
-            });
-            await read(response);
-          },
-        }),
-      ),
+      fetchVoyageBatchResource({
+        client: params.client,
+        path: `files/${fileId}/content`,
+        label: "voyage.batch-file-content",
+        parse: read,
+      }),
     waitForBatch: async (batchInfo, pollIntervalMs, timeoutMs) => {
       const batchId = batchInfo.id;
       const client = params.client;
@@ -166,22 +160,17 @@ export async function runVoyageEmbeddingBatches(
         timeoutMs,
         debug,
         initial: batchInfo,
-        fetchStatus: async (signal) =>
-          await withRemoteHttpResponse(
-            buildVoyageBatchRequest({
-              client,
-              path: `batches/${batchId}`,
-              signal,
-              onResponse: async (res, requestHeaders) => {
-                await assertOkOrThrowProviderError(res, "voyage.batch-status", { requestHeaders });
-                return await readProviderJsonResponse<EmbeddingBatchStatus>(
-                  res,
-                  "voyage-batch-status",
-                  { maxBytes: VOYAGE_BATCH_RESPONSE_MAX_BYTES },
-                );
-              },
-            }),
-          ),
+        fetchStatus: (signal) =>
+          fetchVoyageBatchResource({
+            client,
+            path: `batches/${batchId}`,
+            label: "voyage.batch-status",
+            signal,
+            parse: (res) =>
+              readProviderJsonResponse<EmbeddingBatchStatus>(res, "voyage-batch-status", {
+                maxBytes: VOYAGE_BATCH_RESPONSE_MAX_BYTES,
+              }),
+          }),
         resolveTimeoutMs: () =>
           resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: timeoutMs }),
         waitForPoll: (delayMs) =>

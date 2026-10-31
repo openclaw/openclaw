@@ -615,7 +615,7 @@ export async function executeSessionPatchMutations(params: {
                 };
                 const applyGroup = createSessionPatchGroupWriter({
                   store: groupStore,
-                  patch: first.fullPatch,
+                  targets: group,
                   project: projectGroup,
                   timing: groupTiming,
                 });

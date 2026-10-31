@@ -128,13 +128,13 @@
     }
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "0.135.0",
-    "@google/genai": "2.30.0",
+    "@anthropic-ai/sdk": "0.137.0",
+    "@google/genai": "2.31.0",
     "@opentelemetry/semantic-conventions": "1.43.0",
-    "openai": "7.39.0",
+    "openai": "7.43.0",
     "partial-json": "0.1.7",
     "proxy-from-env": "2.1.0",
-    "typebox": "1.4.2",
+    "typebox": "1.4.3",
     "zod": "4.6.7",
     "zod-to-json-schema": "3.25.2"
   },

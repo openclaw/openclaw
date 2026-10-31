@@ -333,6 +333,7 @@ it("keeps fractional observer sizes as the sole skipped-row sizing input", async
   const { container, transcript, renderRows } = await mountTestTranscript("fractional-rows", rows);
   try {
     measureRows(container, 100.375);
+    await flushDeferredRowPrune();
     renderRows(rows);
     expect(transcriptSize(container)).toBe(401.5);
     for (const row of transcriptRows(container)) {
@@ -384,6 +385,8 @@ it.each([false, true])(
       if (disconnect) {
         transcript.dispose();
       }
+      flushFrames();
+      await flushDeferredRowPrune();
       flushFrames();
       expect(readHeight).toHaveBeenCalledTimes(disconnect ? 0 : 1);
     } finally {

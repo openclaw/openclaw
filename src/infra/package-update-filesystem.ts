@@ -19,7 +19,7 @@ import { pathEntryExists as packagePathEntryExists } from "./path-existence.js";
 import { retryAsync } from "./retry.js";
 import { UPDATE_CLEANUP_BUDGET_MS } from "./update-maintenance.js";
 
-export const PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS = "allow" as const;
+const PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS = "allow" as const;
 const log = createSubsystemLogger("update/package-launchers");
 
 export function assertPackagePathIdentity(
@@ -89,24 +89,12 @@ export async function activateStagedNpmPackageRoot(
   };
   const stat = await fs.lstat(source);
   if (!stat.isSymbolicLink()) {
-    if (unjournaled && (unjournaled.platform ?? process.platform) === "win32") {
-      // The stage is a sibling of the live root, so this rename cannot cross
-      // devices. fs-safe's Windows EPERM copy fallback would instead copy the
-      // tree and then fail deleting the still-held stage after publication.
-      await renamePackageRootWithWindowsRetries(source, destination, assertCaller, {
-        operation: "activation",
-        warn: (message) => unjournaled.warnings.push(message),
-      });
-      onPublished();
-      return;
-    }
-    await movePathWithCopyFallback({
-      from: source,
-      sourceHardlinks: PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
-      to: destination,
-      assertBeforeRename: assertCaller,
-      assertBeforeMutation: assertCaller,
-      onDestinationPublished: onPublished,
+    await movePackageRoot(source, destination, {
+      operation: "activation",
+      assertCaller,
+      onPublished,
+      warnings: unjournaled?.warnings ?? [],
+      platform: unjournaled?.platform,
     });
     return;
   }
@@ -121,6 +109,41 @@ export async function activateStagedNpmPackageRoot(
     process.platform === "win32" ? "junction" : undefined,
   );
   onPublished();
+}
+
+/**
+ * Moves an unjournaled package root to a sibling path. Windows uses guarded
+ * rename retries instead of fs-safe's EPERM copy fallback, which would publish
+ * a copy and then fail deleting the still-held source after the destination is live.
+ */
+export async function movePackageRoot(
+  source: string,
+  destination: string,
+  options: {
+    operation: string;
+    assertCaller: () => void;
+    onPublished: () => void;
+    warnings: string[];
+    platform?: NodeJS.Platform;
+  },
+): Promise<void> {
+  const assertCaller = retainMutationAuthority(options.assertCaller);
+  if ((options.platform ?? process.platform) === "win32") {
+    await renamePackageRootWithWindowsRetries(source, destination, assertCaller, {
+      operation: options.operation,
+      warn: (message) => options.warnings.push(message),
+    });
+    options.onPublished();
+    return;
+  }
+  await movePathWithCopyFallback({
+    from: source,
+    sourceHardlinks: PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
+    to: destination,
+    assertBeforeRename: assertCaller,
+    assertBeforeMutation: assertCaller,
+    onDestinationPublished: options.onPublished,
+  });
 }
 
 export async function backupNpmPackageRoot(
@@ -149,7 +172,7 @@ export async function backupNpmPackageRoot(
 /**
  * Shared bounded Windows retries for guarded package-root renames: transient
  * AV/indexer denials are retried with authority and path-identity checks while
- * permanent failures stay failures. Package backup, unjournaled activation, and
+ * permanent failures stay failures. Package backup, unjournaled root moves, and
  * rollback publication/compensation renames share this one implementation;
  * callers keep their own operation-specific diagnostics through `operation` and `warn`.
  */

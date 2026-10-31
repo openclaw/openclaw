@@ -446,6 +446,8 @@ export type PluginManifest = {
   requiresPlugins?: string[];
   enabledByDefault?: boolean;
   enabledByDefaultOnPlatforms?: PluginManifestDefaultPlatform[];
+  /** Author opt-in: independent generations may coexist through admitted work and cleanup. */
+  generationOverlap?: boolean;
   /** Legacy plugin ids that should normalize to this plugin id. */
   legacyPluginIds?: string[];
   /** Provider ids that should auto-enable this plugin when referenced in auth/config/models. */

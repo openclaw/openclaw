@@ -560,10 +560,10 @@ it("exports completed SQLite request phases without inventing missing or invalid
   expectMetrics(
     rendered,
   )(`openclaw_worker_request_seconds_sum{kind="sqlite_writer",request_class="transcripts"} 28
-openclaw_worker_request_phase_seconds_bucket{kind="sqlite_writer",le="0.005",phase="dispatch",request_class="transcripts"} 1`);
+openclaw_worker_request_seconds_count{kind="sqlite_writer",request_class="transcripts"} 1`);
   expect(
     rendered
       .split("\n")
-      .filter((line) => line.startsWith("openclaw_worker_request_phase_seconds_count")),
-  ).toHaveLength(7);
+      .filter((line) => /^openclaw_worker_request(?:_phase)?_seconds_bucket/.test(line)),
+  ).toEqual(Array.from({ length: 8 }, () => expect.stringContaining('le="+Inf"')));
 });

@@ -12,7 +12,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { captureEnv } from "../test-utils/env.js";
 import { createRebindableDirectoryAlias } from "../test-utils/symlink-rebind-race.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
-import { removePathWithinRoot } from "./fs-safe-remove.js";
+import { isRemovalIoError, removePathWithinRoot } from "./fs-safe-remove.js";
 import { expectRejectCode } from "./fs-safe.test-support.js";
 
 const tempDirs = createTrackedTempDirs();
@@ -24,6 +24,30 @@ afterEach(async () => {
 });
 
 describe("removePathWithinRoot", () => {
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "preserves traversal permission errors as ordinary cleanup I/O failures",
+    async () => {
+      const rootDir = await tempDirs.make("openclaw-remove-permission-");
+      const blocked = path.join(rootDir, "blocked");
+      const leaf = path.join(blocked, "child", "leaf.txt");
+      await fs.mkdir(path.dirname(leaf), { recursive: true });
+      await fs.writeFile(leaf, "retained");
+      const root = await fsSafeRoot(rootDir);
+      await fs.chmod(blocked, 0);
+      try {
+        const denied = await root.resolve("blocked/child").catch((error: unknown) => error);
+        expect(denied).toHaveProperty("code", "permission-denied");
+        expect(isRemovalIoError(denied)).toBe(true);
+        await expect(
+          removePathWithinRoot({ rootDir, relativePath: "blocked/child/leaf.txt", force: false }),
+        ).rejects.toHaveProperty("code", "EACCES");
+      } finally {
+        await fs.chmod(blocked, 0o700);
+      }
+      expect(await fs.readFile(leaf, "utf8")).toBe("retained");
+    },
+  );
+
   it.each([
     { kind: "file", input: "relative" },
     { kind: "tree", input: "absolute" },

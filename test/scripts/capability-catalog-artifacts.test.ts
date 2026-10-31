@@ -37,20 +37,40 @@ it.each([
         ? { controlUi: { entry: "dist/control-ui/authored/index.js" } }
         : catalogs(".", ".ts")),
     };
+    const packageExports = {
+      ".": { types: "./index.d.ts", default: "./index.ts" },
+      "./nested": {
+        "types@>=5.2": "./catalog/new-types.ts",
+        types: { default: "./catalog/types.ts" },
+        default: ["./extra.mts", "./view.tsx", "./fallback.js", null],
+      },
+      "./commonjs": "./bridge.cts",
+      "./declarations": "./extra.d.mts",
+      "./data": "./schema.json",
+    };
     writeFixtureFiles(root, { "package.json": { name: "openclaw" } });
     writeFixtureFiles(plugin, {
       "openclaw.plugin.json": manifest,
       "package.json": {
         name: "@openclaw/catalog-fixture",
         version: "2026.9.1",
+        exports: packageExports,
         openclaw: {
-          extensions: ["./index.ts"],
+          extensions: ["./index.ts", "./extra.mts", "./view.tsx", "./bridge.cts"],
           ...(browser ? { controlUi: "./browser.ts" } : {}),
           release: { publishToNpm: true },
           build: { bundledDist: false, runtimeFormat },
         },
       },
-      ...emptyModules(["index.ts", "browser.ts", "catalog/voice.ts", "catalog/models.ts"]),
+      ...emptyModules([
+        "index.ts",
+        "extra.mts",
+        "view.tsx",
+        "bridge.cts",
+        "browser.ts",
+        "catalog/voice.ts",
+        "catalog/models.ts",
+      ]),
     });
 
     const [entry] = collectSourceCheckoutPluginBuildEntries({ cwd: root, env: {} });
@@ -82,5 +102,17 @@ it.each([
     const emitted = readFixtureJson(root, "dist/extensions/catalog-fixture/openclaw.plugin.json");
     expect(emitted).toMatchObject(browser ? expected : catalogs(".", extension));
     expect(JSON.parse(readManifest())).toEqual(manifest);
+    expect(readFixtureJson(root, "dist/extensions/catalog-fixture/package.json").exports).toEqual({
+      ".": { types: "./index.d.ts", default: `./index${extension}` },
+      "./nested": {
+        "types@>=5.2": "./catalog/new-types.ts",
+        types: { default: "./catalog/types.ts" },
+        default: [`./extra${extension}`, `./view${extension}`, "./fallback.js", null],
+      },
+      "./commonjs": `./bridge${extension}`,
+      "./declarations": "./extra.d.mts",
+      "./data": "./schema.json",
+    });
+    expect(readFixtureJson(plugin, "package.json").exports).toEqual(packageExports);
   },
 );

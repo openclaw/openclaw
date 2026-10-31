@@ -283,6 +283,7 @@ it.each([
 );
 
 it("grows the native range before compensating fractional row growth above a reader", async () => {
+  const flushFrames = stubAnimationFrames();
   transcriptDomState.measuredRowHeight = 120;
   const { policy, transcript, mount } = createPolicyTranscript("measurement-extent");
   const rows = numberedContentRows(12);
@@ -298,11 +299,12 @@ it("grows the native range before compensating fractional row growth above a rea
   };
   connectPolicy(policy, transcript, container);
   resize(container, 600);
+  flushFrames();
   nativeScroll(container, container.scrollHeight - container.clientHeight);
   container.dispatchEvent(new WheelEvent("wheel", { deltaY: -24 }));
   nativeScroll(container, container.scrollTop - 24);
   expectReader(policy, true);
-  vi.useFakeTimers();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   vi.advanceTimersByTime(150);
   renderRows(rows);
   await vi.advanceTimersByTimeAsync(0);
@@ -313,6 +315,9 @@ it("grows the native range before compensating fractional row growth above a rea
   const before = container.scrollTop;
   Object.defineProperty(row, "offsetHeight", { configurable: true, value: 160.375 });
   resize(row, 160.375);
+  // Row observer delivery defers its compensation to the next native frame.
+  expect(container.scrollTop).toBe(before);
+  flushFrames();
   // Observe the first compensation, before a render or retry can conceal native clamping.
   expect(container.scrollTop).toBe(before + 40.375);
   container.dispatchEvent(new Event("scroll"));
@@ -320,6 +325,7 @@ it("grows the native range before compensating fractional row growth above a rea
 });
 
 it("preserves reader policy when row measurement clamps a positive adjustment to the end", async () => {
+  const flushFrames = stubAnimationFrames();
   transcriptDomState.measuredRowHeight = 120;
   const { policy, transcript, mount } = createPolicyTranscript("measurement-reader");
   const rows: TestContentRow[] = numberedContentRows(12);
@@ -336,12 +342,13 @@ it("preserves reader policy when row measurement clamps a positive adjustment to
   policy.chatIsProgrammaticScroll = () => transcript.isProgrammaticScroll;
   container.addEventListener("scroll", (event) => handleChatScroll(policy, event));
   resize(container, 600);
+  flushFrames();
   nativeScroll(container, total + 84 - 600);
   container.dispatchEvent(new WheelEvent("wheel", { deltaY: -24 }));
   container.scrollTop -= 24;
   container.dispatchEvent(new Event("scroll"));
   expect(policy.chatReadingHistory).toBe(true);
-  vi.useFakeTimers();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   container.dispatchEvent(new Event("scroll"));
   vi.advanceTimersByTime(150);
   renderRows(rows);
@@ -352,6 +359,7 @@ it("preserves reader policy when row measurement clamps a positive adjustment to
   );
   Object.defineProperty(row, "offsetHeight", { configurable: true, value: 160 });
   resize(row, 160);
+  flushFrames();
   expect(container.scrollTop).toBe(total + 84 - 600);
   container.dispatchEvent(new Event("scroll"));
   expectReader(policy, true);

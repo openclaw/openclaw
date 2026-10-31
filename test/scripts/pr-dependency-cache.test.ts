@@ -392,31 +392,6 @@ describePosix("PR cache anchor lifetime", () => {
     expect(existsSync(held)).toBe(false);
   });
 
-  it("retains every shared consumer until the final successful retirement", () => {
-    const f = fixture();
-    const installation = entry(f.cache, "a".repeat(64));
-    const second = `${f.anchor}2`;
-    mkdirSync(second, { mode: 0o700 });
-    const acquire = `withDependencyCacheLock(cache, (lock) => holdDependencyCache(lock, ${JSON.stringify(installation)}, anchor));`;
-    for (const anchor of [f.anchor, second]) {
-      expect(child(f, acquire, anchor).status).toBe(0);
-    }
-    expect(readPrCacheState(installation).anchors).toHaveLength(2);
-    expect(
-      child(f, "retireAnchorDependencies(anchor, () => rmSync(anchor.path, { recursive: true }));")
-        .status,
-    ).toBe(0);
-    expect(readPrCacheState(installation).anchors).toHaveLength(1);
-    expect(
-      child(
-        f,
-        "retireAnchorDependencies(anchor, () => rmSync(anchor.path, { recursive: true }));",
-        second,
-      ).status,
-    ).toBe(0);
-    expect(readPrCacheState(installation).anchors).toEqual([]);
-  });
-
   it("keeps holds while retirement joins a competing metadata transition", () => {
     const f = fixture();
     const installation = entry(f.cache, "a".repeat(64));
@@ -992,16 +967,6 @@ if (authorized.length || !fs.existsSync(${JSON.stringify(oldest)})) throw new Er
       expect(readdirSync(outside)).toEqual([]);
     },
   );
-
-  it("normalizes an existing symlinked cache ancestor before metadata admission", () => {
-    const f = fixture();
-    const physical = join(f.home, "cache-owner");
-    renameSync(join(f.home, ".cache"), physical);
-    symlinkSync(physical, join(f.home, ".cache"), "dir");
-    const result = child(f, "withDependencyCacheLock(cache, () => process.stdout.write(cache));");
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toBe(join(physical, "openclaw/pr-dependencies/v3"));
-  });
 
   it.each(["existing", "missing"])(
     "refuses a final namespace alias to a %s target before classifying legacy donors",

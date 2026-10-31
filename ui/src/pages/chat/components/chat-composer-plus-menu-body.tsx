@@ -48,7 +48,7 @@ registerEnglishCatalog(registerMcpEnglish);
 
 function libraryRows(menu: ChatComposerPlusMenuContentProps, query: string): MenuEntry[] {
   const items = composerLibraryMenuItems(menu.library).filter(
-    (entry) => entry.kind === "content" || entry.label.toLocaleLowerCase().includes(query),
+    (item) => item.kind === "content" || item.label.toLowerCase().normalize("NFC").includes(query),
   );
   return items.length
     ? [
@@ -67,7 +67,7 @@ function skillRows(
   query: string,
   hasLibrary: boolean,
 ): MenuEntry[] {
-  const matches = (text: string) => text.toLocaleLowerCase().includes(query);
+  const matches = (text: string) => text.toLowerCase().normalize("NFC").includes(query);
   const entries: MenuEntry[] = [];
   const filtered = rows?.filter((skill) => matches(skill.name)) ?? [];
   for (const unavailable of [false, true]) {
@@ -417,7 +417,7 @@ export function ChatComposerPlusMenuBody(props: ChatComposerPlusMenuResolvedProp
         previous.values.every((value, index) => Object.is(value, next.values[index])),
     },
   );
-  const skillsQuery = () => query().trim().toLocaleLowerCase();
+  const skillsQuery = () => query().trim().toLowerCase().normalize("NFC");
   const libraryItems = createMemo(() => libraryRows(inputs().menu, skillsQuery()));
   const skillsOwner = createMemo(() => ({ read: inputs().menu.skillsRead }), {
     equals: (a, b) => a.read === b.read,

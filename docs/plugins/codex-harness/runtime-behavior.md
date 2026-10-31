@@ -245,6 +245,11 @@ safety buffering, a cyber-policy refusal, or a provider model reroute for
 high-risk cyber activity. These notices use structured app-server events;
 OpenClaw does not infer classifier activity from the assistant's wording.
 
+Terminal failure notices retain the provider refusal category when available and
+ask you to revise the request. Precaution stops ask you to review the findings in
+chat before continuing. Raw provider diagnostics and warnings stay out of these
+notices.
+
 Buffering means the provider is still processing the request. Its notice clears
 when assistant output starts or the turn ends. A blocked notice remains until
 the next turn or a session reset. A reroute notice reports the model selected

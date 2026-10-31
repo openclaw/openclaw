@@ -38,6 +38,7 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import * as setupMigration from "../wizard/setup.migration-snapshot.js";
 import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
+import * as providerBrowserAuth from "./provider-browser-auth.js";
 import { mcpAuthLoginHandlers } from "./server-methods/mcp-auth-login.js";
 import { whenAdmittedWizardSessionSettled } from "./server-methods/setup-admission.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
@@ -250,10 +251,8 @@ describe("registered mcp.authLogin", () => {
     });
     return registry;
   }
-  function expectPendingCleared(stored: Awaited<ReturnType<typeof store>>) {
-    expect(stored.codeVerifier).toBeUndefined();
-    expect(stored.lastAuthorizationUrl).toBeUndefined();
-  }
+  const expectPendingCleared = (stored: Awaited<ReturnType<typeof store>>) =>
+    expect([stored.codeVerifier, stored.lastAuthorizationUrl]).toEqual([undefined, undefined]);
   async function expectSettled(session: ReturnType<typeof getSession>) {
     await whenAdmittedWizardSessionSettled(session);
     expect(session.getStatus()).toBe("error");
@@ -479,13 +478,14 @@ describe("registered mcp.authLogin", () => {
   it("reports an expired attempt rather than an explicit cancellation", async () => {
     await clearMcpOAuthCredentials(identity());
     const started = await begin();
-    const now = Date.now();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(now + 10 * 60_000 + 1);
-    try {
-      expect((await callback(started.state)).status).toBe(410);
-    } finally {
-      clock.mockRestore();
-    }
+    const handleCallback = providerBrowserAuth.handleProviderOAuthCallback;
+    using callbackHandler = vi.spyOn(providerBrowserAuth, "handleProviderOAuthCallback");
+    callbackHandler.mockImplementation((...args) => {
+      using clock = vi.spyOn(Date, "now");
+      clock.mockReturnValue(Date.now() + 10 * 60_000 + 1);
+      return handleCallback(...args);
+    });
+    expect((await callback(started.state)).status).toBe(410);
     expect(await terminal(started.sessionId)).toMatchObject({
       status: "error",
       error: "This sign-in attempt expired. Close this dialog and start sign-in again.",

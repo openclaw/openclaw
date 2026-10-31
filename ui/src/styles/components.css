@@ -69,6 +69,11 @@ openclaw-session-progress-hovercard-provider {
   margin: 24px auto 0;
 }
 
+.loading-skeleton__content {
+  min-height: 0;
+  overflow: auto;
+}
+
 .loading-skeleton__message {
   display: grid;
   gap: 14px;
@@ -154,6 +159,23 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 }
 
 .sidebar-recent-session .session-glyph--circular .session-glyph__content {
+  width: 18px;
+  height: 18px;
+}
+
+/* An emoji agent owner sits on the same disc as a photo avatar. */
+.sidebar .identity-avatar--agent.is-fallback {
+  width: 100%;
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+.sidebar-recent-session .identity-avatar--agent.is-fallback {
+  font-size: 10px;
+}
+
+.sidebar-recent-session .session-glyph__content:has(> .identity-avatar--agent) {
   width: 18px;
   height: 18px;
 }
@@ -336,7 +358,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 /* With no artwork to wrap, the ring collapses to the 12px spinner the trailing
    slot used to draw; a full-size empty circle reads as a missing icon. */
 .session-glyph--bare .session-glyph__ring {
-  inset: 3px;
+  inset: 4px;
 }
 
 /* Two identities share one run: the arc traces the union outline of the owner
@@ -2997,6 +3019,16 @@ td.data-table-key-col {
 .session-run-indicator--offscreen,
 .session-glyph__trace--queued .session-glyph__trace-run {
   animation-play-state: paused;
+}
+
+.session-glyph__ring--background,
+.session-glyph__trace--background {
+  opacity: 0.6;
+}
+
+.session-glyph__ring--background,
+.session-glyph__trace--background .session-glyph__trace-run {
+  animation-duration: 3.2s;
 }
 
 @keyframes session-run-trace {

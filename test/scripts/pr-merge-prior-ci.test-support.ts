@@ -60,6 +60,16 @@ export function createPriorCiFixtureState(head: string) {
     artifactBuild: false,
     artifactFault: "",
     missingCheck: "",
+    currentGateChecks: [] as Array<{
+      id: number;
+      suiteId?: number;
+      event: string;
+      conclusion: string | null;
+      status?: string;
+      publisherId?: number;
+      name?: string;
+      startedAt?: string;
+    }>,
     reviewDecision: "APPROVED" as string | null | undefined,
     reviewCount: 1,
     requireCodeOwners: false,
@@ -155,7 +165,7 @@ const securityResponse=()=>{
     path:config.fault==="foreign-workflow"?".github/workflows/unrelated.yml":".github/workflows/security-review.yml"};
   const reply=(value)=>out(args.includes("--include")?"HTTP/2.0 200 OK\n\n"+JSON.stringify(value):args.includes("--slurp")?[value]:value);
   if(endpoint.includes("/statuses?")) {
-    config.statusReads++;save();
+    config.statusReads++;
     const statuses=securityStatuses();
     const earlier={...statuses.find(status=>status.context==="openclaw/security-sensitive-review"),id:701,context:"openclaw/security-sensitive-review",state:"failure",created_at:"2026-09-19T00:00:00Z",updated_at:"2026-09-19T00:00:00Z"};
     reply(config.fault==="missing-guard"?statuses:[...statuses,earlier]);

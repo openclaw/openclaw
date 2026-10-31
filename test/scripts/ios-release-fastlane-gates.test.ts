@@ -1298,7 +1298,13 @@ puts JSON.generate(results)
       diagnostics: {
         schemaVersion: 1,
         diagnostics: expect.arrayContaining([
-          expect.objectContaining({ phase: "boot", outcome: "succeeded", activeSimulatorCount: 1 }),
+          expect.objectContaining({
+            phase: "boot",
+            outcome: "succeeded",
+            activeSimulatorCount: 1,
+            bootstatusSeconds: expect.any(Number),
+            inventorySeconds: expect.any(Number),
+          }),
           expect.objectContaining({
             phase: "delete",
             outcome: "succeeded",

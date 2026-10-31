@@ -52,6 +52,60 @@ const noteDemand = (
   provider.notePreparedDemand!({ leaseId: lease.leaseId, profile }, { preparationKey, demandAtMs });
 
 describe("Crabbox prepared image demand and custody", () => {
+  it.each(["configured", "placement"] as const)(
+    "prepares a selected Linux Sandbox disk with %s sizing before enrollment without snapshots",
+    async (sizing) => {
+      const events: string[] = [];
+      const preparation = createPreparation("reserve");
+      const current = projectOptions(events, new AbortController(), preparation);
+      const { provider, calls } = createWarmProvider(current.observe);
+      const machineClass = sizing === "placement" ? PROFILE.class : undefined;
+      const profile = {
+        ...(sizing === "configured" ? PROFILE : CLASSLESS_PROFILE),
+        provider: "azure-sandbox",
+        azureSandboxDiskId: "synthetic-private-disk",
+        warmImage: false,
+      };
+      expect(provider.supportsProjectPreparation?.(profile, machineClass)).toBe(true);
+      expect(provider.resolvePreparationTarget?.(profile, machineClass)).toMatchObject({
+        machineClass: PROFILE.class,
+        platform: "linux",
+      });
+      expect(provider.resolvePreparedIdleTimeoutMs?.(profile)).toBe(3_600_000);
+      expect(
+        provider.resolvePreparationTarget?.(
+          { ...profile, azureSandboxDiskId: "other-disk" },
+          machineClass,
+        )?.profileKey,
+      ).not.toBe(provider.resolvePreparationTarget?.(profile, machineClass)?.profileKey);
+      for (const other of [
+        Object.fromEntries(Object.entries(profile).filter(([key]) => key !== "azureSandboxDiskId")),
+        Object.fromEntries(Object.entries(profile).filter(([key]) => key !== "class")),
+        { ...profile, target: "windows/wsl2" },
+      ]) {
+        expect(provider.supportsProjectPreparation?.(other)).toBe(false);
+        expect(provider.resolvePreparationTarget?.(other)).toBeUndefined();
+      }
+      const lease = await provider.provision(profile, "private-disk-reserve", {
+        ...current.options,
+        machineClass,
+      });
+      const allocation = calls.find(({ argv }) => argv[1] === "warmup")!.argv;
+      expect(allocation[allocation.indexOf("--azure-sandbox-disk-id") + 1]).toBe(
+        "synthetic-private-disk",
+      );
+      expect(events).toContain("project-prepared");
+      expect(events.indexOf("project-prepared")).toBeLessThan(events.indexOf("enrollment-begun"));
+      await provider.notePreparedDemand!(
+        { leaseId: lease.leaseId, profile },
+        { preparationKey: preparation.key, demandAtMs: preparation.demandAtMs },
+      );
+      await destroyAndWait(provider, { leaseId: lease.leaseId, profile });
+      expect(calls.some(({ argv }) => argv[1] === "checkpoint")).toBe(false);
+      expect(await listCrabboxWarmImages(crabboxState)).toEqual([]);
+    },
+  );
+
   it.each([0, 1] as const)(
     "keeps demand on its own generation with keepPrevious=%s",
     async (keepPrevious) => {

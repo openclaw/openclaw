@@ -619,6 +619,9 @@ export function warmReloadProbe(
         };
       }
     }
+    if (visible && caughtUp) {
+      mark("firstLiveTranscript");
+    }
     const composer = pane?.querySelector<HTMLTextAreaElement>("textarea");
     if (composer && !composer.disabled && !composer.readOnly) {
       mark("inputReady");

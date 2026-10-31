@@ -8,7 +8,7 @@ import {
   resolveCronJobLastRunStatus,
 } from "../../lib/cron-status.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
-import { formatRelativeTimestamp } from "../../lib/format.ts";
+import { formatMs, formatRelativeTimestamp } from "../../lib/format.ts";
 import { formatCronSchedule } from "../../lib/presenter.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { runStatusLabel } from "./view-runs.tsx";
@@ -23,6 +23,22 @@ export function describeJobSchedule(job: CronJob): string {
         name: typeof options.name === "string" ? options.name : "",
       })
     : `${t("cron.events.label")}: ${source}`;
+}
+
+/** Runtime facts, not the authored occurrence, decide what happens next. */
+export function describeJobNextRun(job: CronJob, absolute = false): string {
+  if (isCronJobRunning(job)) {
+    return t("cron.runs.runStatusRunning");
+  }
+  if (!job.enabled) {
+    return t("cron.list.paused");
+  }
+  const next = job.state?.nextRunAtMs;
+  return next === undefined
+    ? t("cron.form.noNextRun")
+    : absolute
+      ? t("cron.form.nextRunAt", { at: formatMs(next) })
+      : t("cron.jobState.nextRelative", { at: formatRelativeTimestamp(next) });
 }
 
 export function JobStateIndicator(props: { job: CronJob }) {

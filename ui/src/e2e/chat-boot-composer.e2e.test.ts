@@ -28,9 +28,25 @@ suite.define(() => {
       // Like the chat composer, it takes focus only from the operator; nothing covers it.
       expect(await boot.evaluate((el) => el === document.activeElement)).toBe(false);
       await boot.click();
-      const status = await page.locator(".connect-splash__status").boundingBox();
-      const frame = await page.locator(".loading-skeleton__composer").boundingBox();
-      expect(status!.y + status!.height).toBeLessThanOrEqual(frame!.y);
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const status = document
+              .querySelector(".connect-splash__status")
+              ?.getBoundingClientRect();
+            const frame = document
+              .querySelector(".loading-skeleton__composer")
+              ?.getBoundingClientRect();
+            return Boolean(
+              status &&
+              frame &&
+              status.height > 0 &&
+              frame.height > 0 &&
+              status.bottom <= frame.top,
+            );
+          }),
+        )
+        .toBe(true);
       await page.keyboard.type("Ship the boot ");
 
       // The Gateway admits the browser; the same element moves into the shell's route frame.
@@ -90,7 +106,6 @@ suite.define(() => {
         await page.keyboard.type(text);
         await page.keyboard.press(name === "phone" ? "Enter" : "Shift+Enter");
         await page.keyboard.type("second line");
-        // The caret moves into the draft; the handoff must keep it there.
         for (let index = 0; index < "line".length; index += 1) {
           await page.keyboard.press("ArrowLeft");
         }
@@ -109,7 +124,9 @@ suite.define(() => {
               origin.y + Number.parseFloat(style.paddingTop),
             ].map(Math.round);
           });
-        const before = await geometry(".loading-skeleton__composer");
+        // Module startup moves the editor out of the static frame first.
+        await page.locator("#openclaw-boot-shell").waitFor({ state: "detached" });
+        const before = await geometry(".loading-skeleton__composer:has(#openclaw-boot-composer)");
         // Record every animation frame through the handoff: each one must show one
         // composer, at one size, holding the whole draft.
         await page.evaluate(() => {
@@ -141,7 +158,6 @@ suite.define(() => {
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         const draft = `${text}\nsecond line`;
         await expect.poll(() => composer.inputValue()).toBe(draft);
-        // The chat composer takes the same frame and text origin: nothing jumps.
         expect(await geometry(".agent-chat__input")).toEqual(before);
         await page.waitForFunction(
           () => (Reflect.get(window, "__bootComposerFrames") as string[]).length >= 90,
@@ -171,12 +187,43 @@ suite.define(() => {
         waitUntil: "domcontentloaded",
       });
       await page.locator("#openclaw-boot-composer").click();
+      const original = await page.locator("#openclaw-boot-composer").elementHandle();
       await page.keyboard.type("Send this only if the session opens");
       await page.keyboard.press("Enter");
       await gateway.waitForRequest("connect");
       await gateway.resolveDeferred("connect");
       const missing = page.locator(".session-route-not-found");
       await missing.waitFor({ state: "visible" });
+      const retained = page.locator("#openclaw-boot-composer");
+      await retained.waitFor({ state: "visible" });
+      expect(
+        await retained.evaluate((element) => {
+          const frame = element.closest(".lazy-view-state--route")!.getBoundingClientRect();
+          const outlet = element.closest("openclaw-router-outlet")!.getBoundingClientRect();
+          return Math.abs(frame.width - outlet.width) < 1;
+        }),
+      ).toBe(true);
+      expect(await original?.evaluate((element) => element.isConnected)).toBe(true);
+      expect(await retained.inputValue()).toBe("Send this only if the session opens");
+      // A resolved route must not leave a loading animation intercepting the editor.
+      expect(
+        await retained.evaluate(async (element) => {
+          let intercepted = 0;
+          for (let frame = 0; frame < 120; frame += 1) {
+            await new Promise(requestAnimationFrame);
+            const box = element.getBoundingClientRect();
+            if (
+              document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2) !== element
+            ) {
+              intercepted += 1;
+            }
+          }
+          return intercepted;
+        }),
+      ).toBe(0);
+      await retained.fill("");
+      expect(await retained.inputValue()).toBe("");
+      await retained.fill("Still only for the original session");
       await missing.getByRole("button", { name: "Go to main session" }).click();
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.waitFor({ state: "visible" });

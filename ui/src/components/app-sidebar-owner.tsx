@@ -461,7 +461,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
         <LazyCatalog {...props} />
       </Boundary>
     );
-    const nativeList = (
+    const NativeList = () => (
       <SessionList
         host={host()}
         empty={visibleSessions().length === 0}
@@ -493,7 +493,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
         >
           <LoadCatalogRenderer />
         </Show>
-        <Show when={host().sidebarAgentsMode === "roster"} fallback={nativeList}>
+        <Show when={host().sidebarAgentsMode === "roster"} fallback={<NativeList />}>
           <SidebarViewBoundary>
             <SidebarAgentRoster
               host={host()}

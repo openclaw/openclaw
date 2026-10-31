@@ -129,11 +129,15 @@ async function systemdFixture(
   };
 }
 
-it("audits missing KillMode separately from effective manager policy", async () => {
-  const fixture = await systemdFixture((unit) => unit.replace("KillMode=mixed\n", ""));
+it.each([
+  ["KillMode", "mixed"],
+  ["Delegate", "yes"],
+  ["DelegateSubgroup", "gateway"],
+])("audits missing %s separately from effective manager policy", async (key, expected) => {
+  const fixture = await systemdFixture((unit) => unit.replace(`${key}=${expected}\n`, ""));
   execSystemctlUserMock.mockResolvedValue(
     nativeExit(
-      "LoadState=loaded\nAfter=network-online.target\nWants=network-online.target\nRestartUSec=5s\nKillMode=mixed\nTimeoutStopUSec=330s\n",
+      "LoadState=loaded\nAfter=network-online.target\nWants=network-online.target\nRestartUSec=5s\nKillMode=mixed\nTimeoutStopUSec=330s\nDelegate=yes\nDelegateSubgroup=gateway\n",
     ),
   );
   const result = await auditGatewayServiceConfig(fixture);
@@ -142,11 +146,11 @@ it("audits missing KillMode separately from effective manager policy", async () 
   expect(result.definitionDrift).toEqual([
     {
       kind: "outdated",
-      key: "Service.KillMode",
+      key: `Service.${key}`,
       current: null,
-      expected: "mixed",
+      expected,
       sourcePath: fixture.sourcePath,
-      message: expect.stringContaining("Service.KillMode"),
+      message: expect.stringContaining(`Service.${key}`),
     },
   ]);
   expect(await fs.readFile(fixture.sourcePath, "utf8")).toBe(fixture.content);
@@ -210,6 +214,8 @@ it.each(["base", "drop-in"])("recognizes standard systemd directives in %s", asy
     "StartLimitIntervalSec=120",
     "[Service]",
     "CPUWeight=1000",
+    "Delegate=no",
+    "DelegateSubgroup=operator-leaf",
     "KillMode=control-group",
     "ManagedOOMPreference=avoid",
     "TimeoutStartSec=60",
@@ -238,6 +244,9 @@ it.each(["base", "drop-in"])("recognizes standard systemd directives in %s", asy
     }),
   );
   expect(JSON.stringify(result.definitionDrift)).not.toContain("unrecognized");
+  expect(result.definitionDrift).toContainEqual(
+    drift(location === "base" ? "preserved" : "unknown-edit", "Service.Delegate"),
+  );
 
   await fs.appendFile(sourcePath, "\n[Service]\nRestartStpes=5\nOnFailure=wrong-section.service\n");
   const unknown = (await auditGatewayServiceConfig(fixture)).definitionDrift?.filter((fact) =>

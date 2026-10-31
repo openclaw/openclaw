@@ -74,9 +74,9 @@ const controlUiPerformanceBudgets = {
   // 308,922 B: 309,201 B. Vyctor Brzezowski approved exceeding the budget on 2026-10-30.
   // Retain 64 B build variance.
   totalCssGzipBytes: 309_265,
-  // Logs windowing adds 38 B raw / 11 B gzip for 17% lower first-render task CPU
-  // and 42% lower filter task CPU at 4x. Measured raw total plus 64 B variance.
-  totalCssRawBytes: 1_597_676,
+  // Board card containment and bounded selectors add 459 B raw / 40 B gzip
+  // for lower tab-switch task CPU. Measured raw total plus 64 B variance.
+  totalCssRawBytes: 1_598_347,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

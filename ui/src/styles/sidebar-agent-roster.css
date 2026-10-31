@@ -1,6 +1,6 @@
 openclaw-sidebar-agent-roster {
   --team-slot-gap: 4px;
-  --roster-avatar-size: 24px;
+  --roster-avatar-size: 28px;
   width: 100%;
 }
 
@@ -8,11 +8,13 @@ openclaw-sidebar-agent-roster {
   position: relative;
   display: grid;
   grid-template-columns: var(--roster-avatar-size) minmax(0, 1fr);
-  grid-template-rows: 44px;
+  grid-template-rows: 46px;
   align-items: center;
   column-gap: 8px;
-  padding-inline: 8px;
-  border-radius: var(--radius-md);
+  margin-inline: -6px;
+  padding-inline: 6px 13px;
+  border-radius: 10px;
+  corner-shape: superellipse(1.5);
   color: var(--muted);
   font-size: 12px;
   font-weight: 600;
@@ -33,6 +35,99 @@ openclaw-sidebar-agent-roster {
   width: var(--roster-avatar-size);
   height: var(--roster-avatar-size);
   font-size: 15px;
+}
+
+/* An emoji agent sits on the same disc as a photo avatar. */
+.sidebar-agent-roster__avatar .identity-avatar--agent.is-fallback {
+  font-size: 17px;
+}
+
+/* Session rows in the roster keep the list's grid and stay on one line. */
+.sidebar-recent-session.sidebar-recent-session--team {
+  gap: 0;
+}
+.sidebar-recent-session--team .sidebar-recent-session__text,
+.sidebar-recent-session--team .sidebar-recent-session__details {
+  display: contents;
+}
+.sidebar-recent-session--team .sidebar-recent-session__title-row {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0;
+}
+.sidebar-recent-session--team .sidebar-recent-session__details-endcap {
+  align-self: center;
+  height: auto;
+  overflow: visible;
+  min-height: 0;
+  margin: 0 0 0 16px;
+  padding-inline-end: 7px;
+}
+.sidebar-recent-session--team:has(> .sidebar-child-session-toggle)
+  .sidebar-recent-session__details-endcap {
+  padding-inline-end: 4px;
+}
+.sidebar-recent-session--team openclaw-viewer-facepile:not(:has(.viewer-facepile)),
+.sidebar-recent-session--team
+  .sidebar-recent-session__details-endcap:not(
+    :has(> :not(openclaw-viewer-facepile), .viewer-facepile)
+  ) {
+  display: none;
+}
+.sidebar-recent-session.sidebar-recent-session--team > .sidebar-recent-session__aside {
+  right: 8px;
+  padding-right: 0;
+}
+.sidebar-recent-session.sidebar-recent-session--team:has(> .sidebar-child-session-toggle)
+  > .sidebar-recent-session__aside {
+  right: 36px;
+}
+.sidebar-recent-session--team:is(:hover, :focus-within) .sidebar-recent-session__title-row {
+  padding-right: var(--session-row-actions-reserve);
+}
+/* The drawer menu is visible without hover, including with a mouse. */
+.shell--mobile-nav .sidebar-recent-session--team .sidebar-recent-session__title-row {
+  padding-right: var(--session-row-actions-reserve);
+}
+
+.shell--mobile-nav .sidebar-recent-session--team .sidebar-recent-session__name {
+  text-overflow: ellipsis;
+  mask-image: none;
+}
+
+.shell--mobile-nav
+  .sidebar-recent-session--team
+  .sidebar-recent-session__name
+  > .hover-marquee__text {
+  display: inline;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .sidebar-recent-session--team .sidebar-recent-session__title-row {
+    padding-right: var(--session-row-actions-reserve);
+  }
+
+  .sidebar-recent-session.sidebar-recent-session--team:has(> .sidebar-child-session-toggle)
+    > .sidebar-recent-session__aside {
+    right: calc(var(--sidebar-child-session-toggle-width) + 4px);
+  }
+}
+
+.sidebar-session-team-state .session-css-icon,
+.sidebar-session-team-state .sidebar-session-attention__icon {
+  width: 14px;
+  height: 14px;
+}
+.sidebar-agent-roster + .sidebar-recent-sessions {
+  margin-top: 12px;
+}
+
+.sidebar-agent-roster__name {
+  color: var(--text);
+}
+
+.sidebar-agent-roster__header--current .sidebar-agent-roster__name {
+  color: var(--text-strong);
 }
 
 .sidebar-agent-roster__avatar .session-glyph,
@@ -83,6 +178,7 @@ openclaw-sidebar-agent-roster {
 .sidebar-agent-roster__copy {
   display: grid;
   flex: 1;
+  gap: 1px;
   min-width: 0;
   font-size: 13px;
   font-weight: 500;
@@ -116,7 +212,9 @@ openclaw-sidebar-agent-roster {
   display: grid;
   grid-template-columns: var(--roster-avatar-size) minmax(0, 1fr);
   align-items: center;
-  column-gap: 8px;
+  gap: 10px;
+  border-radius: 10px;
+  corner-shape: superellipse(1.5);
   flex: 1;
   align-self: stretch;
   padding: 0;
@@ -232,120 +330,7 @@ openclaw-sidebar-agent-roster {
 .sidebar-session-team-state .session-glyph__ring {
   inset: 0;
 }
-.sidebar-agent-roster .sidebar-session-tree,
-.sidebar-agent-roster .sidebar-session-tree__list,
-.sidebar-agent-roster .sidebar-session-tree__children,
-.sidebar-agent-roster .sidebar-recent-sessions__list {
-  gap: 0;
-}
-.sidebar-agent-roster .sidebar-session-tree__children {
-  margin-left: 0;
-  margin-inline-start: 16px;
-  background-position: 8px 0;
-}
-.sidebar-recent-session.sidebar-recent-session--team {
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) auto;
-  gap: 4px;
-  min-height: 32px;
-  padding: 0 2px;
-}
-.sidebar-recent-session--team > .sidebar-recent-session__link {
-  grid-column: 2;
-  grid-row: 1;
-  display: flex;
-  gap: 8px;
-  min-height: 32px;
-  padding: 0;
-}
-.sidebar-recent-session--team .sidebar-session-indicator {
-  width: 20px;
-  flex-basis: 20px;
-}
-.sidebar-recent-session--team .sidebar-recent-session__text,
-.sidebar-recent-session--team .sidebar-recent-session__details {
-  display: contents;
-}
-.sidebar-recent-session--team .sidebar-recent-session__title-row {
-  padding: 0;
-  min-width: 0;
-}
-.sidebar-recent-session--team .sidebar-recent-session__details-endcap {
-  align-self: center;
-  height: auto;
-  min-height: 24px;
-  overflow: visible;
-  display: flex;
-  align-items: center;
-  gap: var(--team-slot-gap);
-  margin: 0;
-  margin-inline-end: calc(var(--radius-md) * var(--openclaw-corner-radius-scale));
-}
-.sidebar-recent-session--team openclaw-viewer-facepile:not(:has(.viewer-facepile)),
-.sidebar-recent-session--team
-  .sidebar-recent-session__details-endcap:not(
-    :has(> :not(openclaw-viewer-facepile), .viewer-facepile)
-  ) {
-  display: none;
-}
-.sidebar-recent-session--team > .sidebar-child-session-toggle {
-  grid-column: 3;
-  grid-row: 1;
-  width: 20px;
-  height: 32px;
-  padding: 0;
-  opacity: 1;
-  pointer-events: auto;
-}
-.sidebar-recent-session--team .sidebar-child-session-toggle__icon svg {
-  width: 12px;
-  height: 12px;
-}
-.sidebar-recent-session.sidebar-recent-session--team > .sidebar-recent-session__aside {
-  grid-column: 2;
-  grid-row: 1;
-  justify-self: end;
-  position: static;
-  transform: none;
-  padding: 0;
-}
-.sidebar-recent-session--team:is(:hover, :focus-within) > .sidebar-recent-session__link {
-  padding-right: var(--session-row-actions-reserve);
-}
-.sidebar-recent-session--team .sidebar-recent-session__name {
-  font-weight: 450;
-}
-.shell--mobile-nav .sidebar-recent-session.sidebar-recent-session--team {
-  grid-template-columns: 20px minmax(0, 1fr) auto 44px;
-  min-height: 44px;
-
-  > .sidebar-recent-session__aside {
-    grid-column: 4;
-  }
-
-  > .sidebar-recent-session__link {
-    padding-right: 0;
-  }
-}
-
 @media (hover: none), (pointer: coarse) {
-  .sidebar-recent-session.sidebar-recent-session--team {
-    grid-template-columns: 20px minmax(0, 1fr) var(--session-row-actions-reserve);
-
-    &:has(> .sidebar-child-session-toggle) {
-      grid-template-columns: 20px minmax(0, 1fr) auto var(--session-row-actions-reserve);
-
-      > .sidebar-recent-session__aside {
-        grid-column: 4;
-      }
-    }
-  }
-  .sidebar-recent-session.sidebar-recent-session--team > .sidebar-recent-session__aside {
-    grid-column: 3;
-  }
-  .sidebar-recent-session--team:is(:hover, :focus-within) > .sidebar-recent-session__link {
-    padding-right: 0;
-  }
   .sidebar-agent-roster__actions {
     opacity: 1;
     pointer-events: auto;
@@ -365,10 +350,6 @@ openclaw-sidebar-agent-roster {
     min-width: 32px;
     min-height: 40px;
     justify-content: center;
-  }
-  .sidebar-recent-session--team > .sidebar-recent-session__link,
-  .sidebar-recent-session--team > .sidebar-child-session-toggle {
-    min-height: 44px;
   }
 }
 

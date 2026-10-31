@@ -163,6 +163,12 @@ it("revalidates operator authority after artifact download", () => {
   ).toThrow(/qualification authority/);
 });
 
+it("accepts GitHub's empty step inventory for a successful exact producer job", () => {
+  const f = fixture();
+  expectDefined(f.jobs.jobs[0], "admission job").steps = [];
+  expect(() => f.verify()).not.toThrow();
+});
+
 it("refuses changed archive bytes and UTF-8 archive adapters", () => {
   const f = fixture();
   expect(() => f.verify(f.selected.inputs, () => Buffer.from("not the exact ZIP"))).toThrow(

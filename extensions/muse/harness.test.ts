@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Session } from "@muse-code/sdk";
 import type {
   AgentHarnessAttemptParamsV2,
   AgentHarnessAttemptResult,
@@ -520,6 +521,42 @@ describe("Muse native MSP harness", () => {
     );
     expect(terminal(result).kind).toBe("ok");
     expect(result.assistantTexts).toEqual(["started: hello"]);
+  });
+
+  it("reports SDK-rejected approval feedback and settles without granting the command", async () => {
+    const { harness, run, log } = setup(true);
+    // Inject an invalid decision at the SDK boundary to exercise its real rejection;
+    // the harness itself never attaches feedback to an approval choice.
+    const registration = vi.spyOn(Session.prototype, "onApproval").mockImplementation(function (
+      this: Session,
+      handler,
+    ) {
+      registration.mockRestore();
+      this.onApproval(async (request) => ({
+        ...(await handler(request)),
+        feedback: "Do not run this command",
+      }));
+    });
+    try {
+      const result = await run({ prompt: "approval-settle" });
+      expectFailure(
+        result,
+        "Muse approval failed (feedbackNotAccepted): choice server-allow-id does not accept feedback",
+      );
+      expect(result.assistantTexts).toEqual([]);
+      expect(result.replayMetadata?.replaySafe).toBe(false);
+      const requests = await readRequests(log);
+      expect(
+        requests
+          .filter((request) => request.method === "approval/decide")
+          .map((request) => request.params.choiceId),
+      ).toEqual(["server-deny-id"]);
+      expect(requests).toContainEqual(expect.objectContaining({ method: "turn/interrupt" }));
+      expect(requests).toContainEqual({ event: "terminal", terminal: "failed" });
+    } finally {
+      registration.mockRestore();
+      await harness.dispose?.();
+    }
   });
 
   it("interrupts the real MSP transport when the caller aborts", async () => {

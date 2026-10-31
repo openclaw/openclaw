@@ -48,6 +48,12 @@ import {
   prepareProjectionFixture,
 } from "./lib/control-ui-projection-fixtures.ts";
 import {
+  measureRendererProcessMetrics,
+  readControlUiPerformanceMetrics as metrics,
+  readRendererProcessSnapshot as rendererProcesses,
+  type RendererProcessSnapshot,
+} from "./lib/control-ui-renderer-metrics.ts";
+import {
   installControlUiResourceCounts,
   readControlUiResourceCounts,
   type ControlUiResourceCounts,
@@ -71,6 +77,7 @@ const { values } = parseArgs({
     viewport: { type: "string", default: "both" },
     pairs: { type: "string", default: "1" },
     "cpu-throttle": { type: "string", default: "1" },
+    "low-memory": { type: "boolean", default: false },
     trace: { type: "boolean", default: false },
     "selector-stats": { type: "boolean", default: false },
     theme: { type: "string", default: "light" },
@@ -163,54 +170,6 @@ async function settle(page: Page) {
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
       }),
   );
-}
-
-async function metrics(
-  cdp: CDPSession,
-): Promise<Record<string, number> & { JSHeapUsedSize: number }> {
-  const result: { metrics: Array<{ name: string; value: number }> } =
-    await cdp.send("Performance.getMetrics");
-  const measured = Object.fromEntries(result.metrics.map(({ name, value }) => [name, value]));
-  const heapUsed = measured.JSHeapUsedSize;
-  if (heapUsed === undefined) {
-    throw new Error("Chromium did not report the required JS heap metric");
-  }
-  return { ...measured, JSHeapUsedSize: heapUsed };
-}
-
-type RendererProcessSnapshot = Array<{ id: number; cpuSeconds: number; rssBytes: number }>;
-
-async function rendererProcesses(cdp: CDPSession): Promise<RendererProcessSnapshot> {
-  const { processInfo }: { processInfo: Array<{ id: number; type: string; cpuTime: number }> } =
-    await cdp.send("SystemInfo.getProcessInfo");
-  const renderers = processInfo.filter(({ type }) => type === "renderer");
-  if (
-    !renderers.length ||
-    renderers.some(
-      ({ id, cpuTime }) => !Number.isSafeInteger(id) || id <= 0 || !Number.isFinite(cpuTime),
-    )
-  ) {
-    throw new Error("The owned browser did not provide valid renderer processes");
-  }
-  // Only CDP-reported PIDs from this benchmark-owned browser reach ps.
-  const rows = execFileSync(
-    "/bin/ps",
-    ["-o", "pid=,rss=", "-p", renderers.map(({ id }) => id).join(",")],
-    {
-      encoding: "utf8",
-      timeout: 10_000,
-    },
-  )
-    .trim()
-    .split("\n")
-    .map((line) => line.trim().split(/\s+/).map(Number));
-  return renderers.map(({ id, cpuTime }) => {
-    const rss = rows.find(([pid]) => pid === id)?.[1];
-    if (rss === undefined || !Number.isFinite(rss) || rss < 0) {
-      throw new Error(`Renderer ${id} did not supply a valid RSS snapshot`);
-    }
-    return { id, cpuSeconds: cpuTime, rssBytes: rss * 1024 };
-  });
 }
 
 function distribution(numbers: number[]) {
@@ -444,8 +403,12 @@ if (values["process-wakeups"]) {
   }
 }
 const browserExecutable = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
+const memoryArgs = values["low-memory"]
+  ? ["--enable-low-end-device-mode", "--js-flags=--max-old-space-size=128"]
+  : [];
 const browser = await chromium.launch({
   executablePath: browserExecutable,
+  args: memoryArgs,
 });
 
 async function launchNativeVisibilityContext() {
@@ -461,6 +424,7 @@ async function launchNativeVisibilityContext() {
       "--use-mock-keychain",
       // Full Chrome headless still hides a natively minimized window; the headless shell does not.
       "--headless=new",
+      ...memoryArgs,
       "about:blank",
     ],
     { stdio: ["ignore", "ignore", "pipe"] },
@@ -629,6 +593,9 @@ try {
           ? "Observe-only Solid build; diagnostic counts, not production timing evidence."
           : false,
         cpuThrottle,
+        memoryProfile: values["low-memory"]
+          ? "Chromium low-end-device mode; 128 MiB V8 old-space limit, not an OS/RSS limit."
+          : "default",
         retainedHeap: values["retained-heap"]
           ? "Separate GC-controlled proof: full heap/DOM snapshots after preparation and after action metrics/tracing, including fixture request history; not a timing comparison."
           : false,
@@ -760,6 +727,7 @@ try {
                   colorScheme: theme,
                   isMobile: viewport.name === "mobile",
                   hasTouch: viewport.name === "mobile",
+                  args: memoryArgs,
                 })
               : undefined;
           const ownedBrowserPid = nativeVisibility?.processId ?? observationBrowser?.processId;
@@ -1186,29 +1154,7 @@ try {
                 observation.after = await rendererProcesses(processSession);
                 const beforeRows = observation.before!;
                 const afterRows = observation.after;
-                if (
-                  beforeRows.length !== afterRows.length ||
-                  beforeRows.some(({ id }) => !afterRows.some((row) => row.id === id))
-                ) {
-                  throw new Error("Owned renderer process set changed during the interval");
-                }
-                const cpuSeconds = afterRows.reduce(
-                  (sum, row) =>
-                    sum + row.cpuSeconds - beforeRows.find(({ id }) => id === row.id)!.cpuSeconds,
-                  0,
-                );
-                if (cpuSeconds < 0) {
-                  throw new Error("Owned renderer CPU counters moved backwards");
-                }
-                result.rendererCpuMs = cpuSeconds * 1000;
-                result.rendererRssBeforeBytes = beforeRows.reduce(
-                  (sum, row) => sum + row.rssBytes,
-                  0,
-                );
-                result.rendererRssAfterBytes = afterRows.reduce(
-                  (sum, row) => sum + row.rssBytes,
-                  0,
-                );
+                Object.assign(result, measureRendererProcessMetrics(beforeRows, afterRows));
                 observation.complete = true;
               } catch (error) {
                 observation.error = String(error);

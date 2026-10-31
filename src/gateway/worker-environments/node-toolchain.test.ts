@@ -7,7 +7,13 @@ import { runInNewContext } from "node:vm";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { snapshotNodeWorkerEnv } from "../../node-host/node-worker-environment.js";
-import { DEFAULT_NODE_TOOLCHAIN_SETUP_SH, NODE_TOOLCHAIN_INSTALL_SH } from "./node-toolchain.js";
+import {
+  DEFAULT_NODE_TOOLCHAIN_SETUP_SH,
+  BUNDLE_NODE_TOOLCHAIN_SETUP_SH,
+  NODE_TOOLCHAIN_INSTALL_SH,
+} from "./node-toolchain.js";
+import { createProjectSeedScript } from "./project-seed-script.js";
+import { createProjectSetupScript } from "./project-setup-script.js";
 import { REPOSITORY_NODE_REQUIREMENT_SOURCE } from "./repository-node-requirement.generated.js";
 import { resolveRepositoryNodeRequirement } from "./repository-node-requirement.js";
 import { PREPARE_REPOSITORY_NODE_JS } from "./repository-node-toolchain.js";
@@ -138,6 +144,48 @@ it("installs verified bytes, reuses them offline, and repairs a damaged installa
   expect(install()).toBe(bin);
 });
 
+it.each(["npm", "corepack"])(
+  "keeps bundle bootstrap offline but repairs missing %s for repository preparation",
+  (missing) => {
+    const f = fixture();
+    fs.symlinkSync(process.execPath, path.join(f.bin, "node"));
+    for (const name of ["wc", "tr", "mkdir", "mktemp", "rm", "tar", "sha256sum"]) {
+      fs.symlinkSync(
+        execFileSync("which", [name], { encoding: "utf8" }).trim(),
+        path.join(f.bin, name),
+      );
+    }
+    write(
+      path.join(f.bin, "curl"),
+      '#!/bin/sh\nprintf attempted > "$HOME/download-attempt"\nexit 17\n',
+    );
+    if (missing === "corepack") {
+      for (const name of ["npm", "npx"]) {
+        write(path.join(f.bin, name), "#!/bin/sh\nexit 0\n");
+      }
+    }
+    const env = { ...f.env, PATH: f.bin };
+    expect(run("/bin/sh", ["-s"], env, BUNDLE_NODE_TOOLCHAIN_SETUP_SH)).toBe("");
+    expect(fs.existsSync(path.join(f.root, "download-attempt"))).toBe(false);
+    const input = {
+      namespace: "gateway",
+      seedKey: "a".repeat(64),
+      baseCommit: "b".repeat(40),
+      preparationKey: "c".repeat(64),
+      cacheKey: "d".repeat(64),
+    };
+    for (const script of [
+      DEFAULT_NODE_TOOLCHAIN_SETUP_SH,
+      createProjectSeedScript(input),
+      createProjectSetupScript(input),
+    ]) {
+      fs.rmSync(path.join(f.root, "download-attempt"), { force: true });
+      expect(() => run("/bin/sh", ["-s"], env, script)).toThrow(/allow HTTPS access/);
+      expect(fs.readFileSync(path.join(f.root, "download-attempt"), "utf8")).toBe("attempted");
+    }
+  },
+);
+
 it("rejects a default-release archive whose digest differs from the source pin", () => {
   const f = fixture();
   write(path.join(f.bin, "node"), "#!/bin/sh\nexit 1\n");
@@ -153,17 +201,21 @@ it("rejects a default-release archive whose digest differs from the source pin",
   expect(fs.readdirSync(path.join(f.root, ".openclaw-worker", "toolchains", "node"))).toEqual([]);
 });
 
-it("selects the latest matching repository release and gives session commands its PATH", async () => {
-  const f = fixture();
+it("resolves a repository .nvmrc=24 declaration and gives session commands its PATH", async () => {
+  const f = fixture(
+    Object.fromEntries(
+      ["node", "npm", "npx", "corepack"].map((name) => [name, "#!/bin/sh\necho v24.22.1\n"]),
+    ),
+  );
   const fetchUrls: string[] = [];
   const { home } = f;
-  const prepare = f.checkout("22\n", ["24.22.1", "22.20.0", "22.21.1"], undefined, fetchUrls);
+  const prepare = f.checkout("24\n", ["26.12.1", "24.21.0", "24.22.1"], undefined, fetchUrls);
   const setupPath = await prepare();
   expect(fetchUrls).toEqual([
     "https://nodejs.org/dist/index.json",
-    "https://nodejs.org/dist/v22.21.1/SHASUMS256.txt",
+    "https://nodejs.org/dist/v24.22.1/SHASUMS256.txt",
   ]);
-  expect(run("node", ["--version"], { PATH: setupPath })).toBe("v22.21.1");
+  expect(run("node", ["--version"], { PATH: setupPath })).toBe("v24.22.1");
   expect(process.execPath).not.toBe(fs.realpathSync(path.join(home, ".local", "bin", "node")));
   const session = snapshotNodeWorkerEnv({ PATH: "/runtime/bin" }, home);
   expect(session.HOME).toBe(home);

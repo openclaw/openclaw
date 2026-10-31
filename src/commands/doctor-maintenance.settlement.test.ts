@@ -41,6 +41,7 @@ it.each([false, true])(
   "settles interrupted original-state capture (restart fails: %s)",
   async (restartFails) => {
     let drain: Promise<unknown> | undefined;
+    let stoppedOutput = "";
     const runtimeError = vi.fn();
     if (restartFails) {
       boundary.restart.mockRejectedValueOnce(new Error("synthetic service start failure"));
@@ -50,6 +51,7 @@ it.each([false, true])(
       options: { repair: true, nonInteractive: true },
       runtime: { log: boundary.log, error: runtimeError, exit: vi.fn() },
       beforeStateMutation: async ({ signal }) => {
+        stoppedOutput = boundary.log.mock.calls.flat().join("\n");
         drain = waitForSignalExitBarriers("SIGINT").catch((error: unknown) => error);
         signal.throwIfAborted();
       },
@@ -58,6 +60,10 @@ it.each([false, true])(
       restartFails ? "synthetic service start failure" : "Doctor interrupted by SIGINT",
     );
     await drain;
+    // Forced termination cannot print a finalizer's recovery instructions.
+    expect(stoppedOutput).toMatch(
+      /repair children have exited.*openclaw doctor --fix.*After repair succeeds.*openclaw gateway status --deep.*openclaw gateway start/s,
+    );
     expect(boundary.restart).toHaveBeenCalledOnce();
     expect(boundary.health).toHaveBeenCalledTimes(restartFails ? 0 : 1);
     if (restartFails) {
@@ -296,12 +302,17 @@ it.each(["persistent", "transient"] as const)(
   "settles %s resource close failure before restoration",
   async (mode) => {
     const failure = new Error(`${mode} resource close failure`);
+    const runtimeError = vi.fn();
     if (mode === "persistent") {
       boundary.close.mockRejectedValue(failure);
     } else {
       boundary.close.mockRejectedValueOnce(failure);
     }
-    const maintenance = await begin();
+    const maintenance = await beginDoctorMaintenance({
+      root,
+      options: { repair: true, nonInteractive: true },
+      runtime: { log: boundary.log, error: runtimeError, exit: vi.fn() },
+    });
     const finish = expect(maintenance!.finish({})).rejects;
     if (mode === "transient") {
       await finish.toBe(failure);
@@ -312,6 +323,10 @@ it.each(["persistent", "transient"] as const)(
     expectCalls(mode === "transient" ? 1 : 0, "release", "restart", "health");
     if (mode === "persistent") {
       expect(maintenance!.databaseWrites).toBeUndefined();
+      const output = runtimeError.mock.calls.flat().join("\n");
+      expect(output).toMatch(
+        /repair children have exited.*openclaw doctor --fix.*After repair succeeds.*openclaw gateway status --deep.*openclaw gateway start/s,
+      );
     }
   },
 );

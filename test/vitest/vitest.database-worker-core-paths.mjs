@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/infra/state-migrations.plugin-doctor-context.postgres.test.ts",
   "src/gateway/server-methods.workshop-contract.test.ts",
   "src/cli/skills-cli.workshop-contract.test.ts",
   "src/auto-reply/reply/commands.workshop-contract.test.ts",
@@ -818,6 +819,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/flows/doctor-health.update-schema.test.ts",
   "src/hooks/hooks-install.test.ts",
   "src/infra/state-migrations.audit-logs.windows.test.ts",
+  "src/infra/state-migrations.cold-navigation.test.ts",
   "src/infra/state-migrations.workspace-setup.windows.test.ts",
   "src/skills/library/service.test.ts",
   "src/skills/library/selection-authority.test.ts",
@@ -947,6 +949,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-agent-canonical-validation-schema.test.ts",
   "src/state/openclaw-agent-json-predicate-schema.test.ts",
   "src/state/openclaw-agent-db-maintenance.test.ts",
+  "src/state/openclaw-agent-db-maintenance.schema-renewal.test.ts",
   "src/state/openclaw-agent-db-leasehold.test.ts",
   "src/state/openclaw-agent-db-retired-lease-repair.test.ts",
   "src/state/openclaw-agent-db.storage-migration.test.ts",
@@ -960,6 +963,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-agent-trajectory-storage-migration.test.ts",
   "src/state/openclaw-agent-memory-revision-migration.test.ts",
   "src/state/openclaw-agent-cold-archive-chunks-migration.test.ts",
+  "src/state/openclaw-agent-cold-navigation-migration.test.ts",
   "src/state/openclaw-agent-vector-decoder-migration.test.ts",
   "src/state/openclaw-agent-write-layout-migration.test.ts",
   "src/state/openclaw-agent-index-retirement-migration.test.ts",

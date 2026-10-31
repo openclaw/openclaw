@@ -79,10 +79,19 @@ export function resolveIMessageRecoveryCursorDbIdentity(params: {
   return `local:cli:${cliPath}`;
 }
 
-// Composite key: one high-water per (account, database). The NUL separator
-// cannot appear in an account id or identity string, so a composite key never
-// collides with the legacy account-only key adopted below.
+// Composite key: one high-water per (account, database), hashed like the other
+// iMessage plugin-state keys. Keys must be portable to PostgreSQL (no NUL) and
+// bounded in length; a hex digest of the encoded pair is both, and does not
+// collide with the legacy account-only key adopted below.
 function recoveryCursorStoreKey(accountId: string, dbIdentity: string): string {
+  return createHash("sha256")
+    .update(JSON.stringify([accountId, dbIdentity]), "utf8")
+    .digest("hex")
+    .slice(0, 32);
+}
+
+// Composite key written before #184862. Only SQLite could store it.
+function legacyNulRecoveryCursorStoreKey(accountId: string, dbIdentity: string): string {
   return `${accountId}\u0000${dbIdentity}`;
 }
 
@@ -131,11 +140,16 @@ async function readRecoveryCursor(accountId: string, dbIdentity: string): Promis
   if (value) {
     return Number.isFinite(value.lastRowid) ? value.lastRowid : null;
   }
-  // One-time upgrade adoption: cursors written before database scoping were
-  // keyed by accountId alone. Adopt such an entry for the active database so
-  // the upgrade restart still replays downtime rows, then consume it so a
-  // later dbPath change cannot inherit this database's high-water.
-  const legacy = await store.consume(accountId);
+  // One-time upgrade adoption, newest first. SQLite installs may hold this
+  // database's cursor under the NUL-separated composite key; PostgreSQL rejects
+  // NUL in key operations, so find it by listing the namespace (bounded by
+  // maxEntries) instead of looking it up. Older cursors were keyed by accountId
+  // alone: adopt one for the active database so the upgrade restart still
+  // replays downtime rows, then consume it so a later dbPath change cannot
+  // inherit this database's high-water.
+  const nulKey = legacyNulRecoveryCursorStoreKey(accountId, dbIdentity);
+  const hasNulKey = (await store.entries()).some((entry) => entry.key === nulKey);
+  const legacy = await store.consume(hasNulKey ? nulKey : accountId);
   if (legacy && Number.isFinite(legacy.lastRowid)) {
     await store.registerIfAbsent(key, { lastRowid: legacy.lastRowid });
     const adopted = await store.lookup(key);

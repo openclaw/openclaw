@@ -68,6 +68,21 @@ export function activateGatewayAgentDatabaseStartup(params: {
   params.admission?.activate({
     isCurrent: params.isCurrent,
     preparationReady: params.preparationReady,
+    verifyIntegrity: (input) =>
+      runWithSpawnBroker(broker, async () => {
+        const { verifyAgentDatabaseStartupIntegrity } =
+          await import("../state/agent-database-startup-verification.js");
+        await verifyAgentDatabaseStartupIntegrity({
+          ...input,
+          assertCurrent: createPreparationGuard(
+            input.agentId,
+            input.paths,
+            input.env,
+            input.signal,
+            input.assertCurrent,
+          ),
+        });
+      }),
     captureReadAdmission: ({ agentId, paths, env, signal, assertCurrent }) =>
       createPreparationGuard(agentId, paths, env, signal, assertCurrent),
     openAgent: ({ agentId, paths, env, signal, assertCurrent }) =>

@@ -74,15 +74,13 @@ function ColumnCap(props: {
 // edge's gestures and geometry stay outside chat boot: idle warmup loads them.
 const ResizeEdge = lazy(() => import("./chat-composer-width-edge.tsx"), { export: "ResizeEdge" });
 const [ready, setReady] = createSignal(false);
-export const loadComposerWidthEdge = () =>
+/** Composer shell pointer/key intent loads the edge when idle warmup is skipped (Save-Data). */
+export const prepareComposerWidthEdge = () =>
   ResizeEdge.preload().then(
     () => setReady(true),
     () => undefined,
   );
-warmWhenIdle(loadComposerWidthEdge);
-
-/** Composer shell pointer/key intent loads the edge when idle warmup is skipped (Save-Data). */
-export const prepareComposerWidthEdge = () => void loadComposerWidthEdge();
+warmWhenIdle(prepareComposerWidthEdge);
 
 /**
  * Render directly after the composer input. Saved widths on writable surfaces with a

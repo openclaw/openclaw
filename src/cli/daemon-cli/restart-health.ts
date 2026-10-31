@@ -1,6 +1,7 @@
 // Restart health probes for gateway service restarts and port listener recovery.
 import type { ChildProcess } from "node:child_process";
 import { resolveGatewayStartupTiming } from "../../commands/gateway-startup-timing.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewayServiceProbeHosts } from "../../daemon/gateway-service-probe-hosts.js";
 import type { GatewayService } from "../../daemon/service.js";
 import { createConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
@@ -93,6 +94,7 @@ type GatewayRestartWaitOptions = {
   deadlineOutcome?: "throw" | "snapshot";
   phase?: string;
   env?: NodeJS.ProcessEnv;
+  config?: OpenClawConfig;
   expectedVersion?: string | null;
   expectedBuildId?: string | null;
   requireRunningService?: boolean;
@@ -234,10 +236,12 @@ export async function waitForGatewayHealthyRestart(
     const probeContext =
       params.probeContext ??
       (await read("probe-context", () =>
-        resolveGatewayRestartProbeContext(params.env, undefined, signal).catch(() => ({
-          auth: undefined,
-          config: {},
-        })),
+        resolveGatewayRestartProbeContext(params.env, undefined, signal, params.config).catch(
+          () => ({
+            auth: undefined,
+            config: {},
+          }),
+        ),
       ));
     const configuredProbe = createConfiguredGatewayLocalProbe(probeContext.config);
     const probeHosts =

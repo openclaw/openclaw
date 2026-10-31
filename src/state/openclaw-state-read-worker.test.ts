@@ -6,6 +6,8 @@ import path from "node:path";
 import { threadId } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import * as pathExistence from "../infra/path-existence.js";
+import * as sqliteIdentity from "../infra/sqlite-worker-identity.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -19,6 +21,7 @@ import {
 } from "./openclaw-state-db-readonly.js";
 import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
+import * as statePaths from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateReadSource } from "./openclaw-state-read-worker.js";
 import type {
   OpenClawStateReadCommand,
@@ -321,7 +324,7 @@ it.each(["task", "source"] as const)(
   },
 );
 
-it("reads externally created state after an absent read without allocating a worker first", async () => {
+it("reads newly created state without blocking warm reads or allocating absent-source workers", async () => {
   const root = tempDirs.make("openclaw-read-first-creation-");
   const pathname = path.join(root, "source.sqlite");
   const options = { path: pathname, env: { OPENCLAW_STATE_DIR: root } };
@@ -336,6 +339,32 @@ it("reads externally created state after an absent read without allocating a wor
   const task = queueTask();
   task.result.resolve(emptyReply);
   expect(await executeExistingOpenClawStateRead(options, command)).toEqual(emptyReply);
+
+  const warmed = queueTask();
+  void warmed.captured.then(() => warmed.result.resolve(emptyReply), warmed.result.reject);
+  using existence = vi.spyOn(statePaths, "existingPathOrUndefined");
+  using identity = vi.spyOn(sqliteIdentity, "assertExistingDatabaseIdentity");
+  expect(await executeExistingOpenClawStateRead(options, command)).toEqual(emptyReply);
+  expect(existence).not.toHaveBeenCalled();
+  expect(identity).not.toHaveBeenCalled();
+});
+
+it("refuses an absent result when its owner closes during the filesystem probe", async () => {
+  const { options, pathname } = source();
+  const probing = createDeferredCore<undefined>();
+  using probe = vi.spyOn(pathExistence, "statIfExists").mockReturnValueOnce(probing.promise);
+  const reading = executeExistingOpenClawStateRead(options, { type: "backup.runs" });
+  void reading.catch(() => {});
+  const closing = closeOpenClawStateDatabaseByPathAsync(pathname);
+  try {
+    expect(probe).toHaveBeenCalledExactlyOnceWith(pathname);
+    probing.resolve(undefined);
+    await expect(reading).rejects.toThrow(/admission.*closed/);
+    expect(mock.runTask).not.toHaveBeenCalled();
+  } finally {
+    probing.resolve(undefined);
+    await closing;
+  }
 });
 
 it("retains successful read custody until native exit", async () => {

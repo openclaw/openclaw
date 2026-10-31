@@ -75,14 +75,11 @@ Connected CLI node hosts and the macOS app report CPU count, load averages,
 memory, and home-volume disk capacity every 60 seconds, starting on connection.
 The Gateway exposes the latest snapshot as `hostStats` in `node.list` and
 `node.describe`. Connected nodes use live session stats. The first snapshot is
-saved immediately on the paired node record; later snapshots are coalesced until
-five minutes after the last saved snapshot's receipt time. Disconnect and orderly
-Gateway shutdown save the final snapshot. A crash can lose roughly the last five
-minutes of telemetry while reports continue and writes succeed; delayed writes,
-storage failures, or missing reports can leave older stats.
-The five-minute checkpoint budget uses monotonic elapsed time, so wall-clock
-corrections do not move an armed deadline. Saved `updatedAtMs` values remain
-wall-clock timestamps.
+saved immediately on the paired node record; later snapshots stay in memory until
+disconnect or orderly Gateway shutdown saves the final snapshot. After a Gateway
+crash, offline nodes show the connection's first successfully saved snapshot, or
+an older snapshot if that save never completed. Saved `updatedAtMs` values remain
+wall-clock timestamps, so clients can show how old the snapshot is.
 
 Offline nodes show the saved snapshot with its original `updatedAtMs`, including
 briefly showing the previous saved snapshot while a disconnect write completes.

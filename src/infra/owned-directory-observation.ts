@@ -244,7 +244,7 @@ export function observeOwnedDirectory(
     /** Ancestor that owns the native handle; events remain scoped to directoryPath. */
     watchRoot?: string;
   } = {},
-): { close(): void } {
+): { close(): void; isWatching(): boolean } {
   const directory = path.resolve(directoryPath);
   const watchRoot = options.watchRoot ? path.resolve(options.watchRoot) : directory;
   const recursive = options.recursive ?? false;
@@ -269,6 +269,7 @@ export function observeOwnedDirectory(
   retainEarlierFallback(selected, nextFallback(reconcileIntervalMs));
   scheduleFallback(selected);
   return {
+    isWatching: () => selected.listeners.includes(listener) && selected.source !== undefined,
     close() {
       selected.listeners = selected.listeners.filter((entry) => entry !== listener);
       if (selected.listeners.length || directories.get(key) !== selected) {
