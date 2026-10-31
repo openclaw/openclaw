@@ -1381,14 +1381,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 
 .sidebar-session-sort {
   position: relative;
-  gap: 4px;
   margin-left: auto;
-  font-size: 12px;
-}
-
-.sidebar-session-sort__status {
-  font-size: calc(12.5px * var(--control-ui-text-scale));
-  font-weight: 450;
 }
 
 .sidebar-session-sort--filtered::after {
@@ -1609,7 +1602,6 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 .sidebar-session-catalog-host__label,
 .session-menu__text,
 .sidebar-session-catalog-project__label,
-.sidebar-session-sort__status,
 .activity-feed__selected-person,
 .activity-feed__git-label,
 .activity-feed__session-headline,
