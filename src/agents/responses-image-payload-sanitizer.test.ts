@@ -95,7 +95,7 @@ it.each([
   { name: "canonical", mimeType: "image/png", data: PNG_1X1 },
   { name: "MIME normalization", mimeType: "image/jpeg", data: PNG_1X1 },
   { name: "whitespace normalization", mimeType: "image/png", data: `\n${PNG_1X1}\n` },
-  { name: "padding normalization", mimeType: "image/png", data: PNG_1X1.replace(/=+$/, "") },
+  { name: "padding normalization", mimeType: "image/png", data: PNG_1X1.replace(/[=]+$/, "") },
 ])("reuses $name image work without sharing mutable request items", ({ mimeType, data }) => {
   const image = { type: "image" as const, mimeType, data };
   const model: Model = {

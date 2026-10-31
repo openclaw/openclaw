@@ -62,7 +62,9 @@ describe("Codex collector availability", () => {
     Object.defineProperties(spawn, {
       parameters: {
         get: () => schema,
-        set: (prepared: typeof schema) => Object.assign(schema, prepared),
+        set: (prepared: typeof schema) => {
+          Object.assign(schema, prepared);
+        },
       },
       description: { get: () => description, set: () => {} },
     });

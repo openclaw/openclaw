@@ -709,11 +709,14 @@ describe("generate-npm-package-lock", () => {
     });
   });
 
-  it.each(
-    [{ name: "minimatch", version: "10.2.5", required: "10.2.6" }].flatMap((entry) =>
-      ["11.20.0", "12.1.0", "12.2.0"].map((npmVersion) => Object.assign({ npmVersion }, entry)),
+  it.each([
+    ...[{ name: "minimatch", version: "10.2.5", required: "10.2.6" }].flatMap((entry) =>
+      ["11.20.0", "12.1.0", "12.2.0", "12.2.1"].map((npmVersion) =>
+        Object.assign({ npmVersion }, entry),
+      ),
     ),
-  )(
+    { name: "ip-address", version: "10.7.2", required: "10.7.4", npmVersion: "12.2.1" },
+  ])(
     "limits the npm@$npmVersion bundled exception for $name to its approved occurrence",
     ({ name, version, required, npmVersion }) => {
       for (const change of [
@@ -724,9 +727,7 @@ describe("generate-npm-package-lock", () => {
         "unbundled",
       ] as const) {
         const installedNpmVersion =
-          change === "npm version"
-            ? `${npmVersion.slice(0, npmVersion.lastIndexOf(".") + 1)}1`
-            : npmVersion;
+          change === "npm version" ? `${npmVersion}-unreviewed` : npmVersion;
         const bundledVersion = change === "bundle version" ? "0.0.1" : version;
         const npmPath =
           change === "path" ? "node_modules/other/node_modules/npm" : "node_modules/npm";
@@ -770,7 +771,7 @@ describe("generate-npm-package-lock", () => {
     },
   );
 
-  it.each(["11.20.0", "12.1.0", "12.2.0"])(
+  it.each(["11.20.0", "12.1.0", "12.2.0", "12.2.1"])(
     "authenticates npm@%s bundled lock entries against the pnpm-locked archive",
     (npmVersion) => {
       const root = tempDirs.make("openclaw-npm-bundle-");

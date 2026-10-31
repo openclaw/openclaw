@@ -233,72 +233,70 @@ function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
           id: request.id,
           result: { inTransaction: false, rows: [], rowCount: 0, fields: [] },
         };
-      } else {
-        if (request.operation === "release") {
-          if (connectionError) {
-            throw connectionError;
-          }
-          // Server status also catches transactions opened later in a multi-statement query.
-          const reusable = client.getTransactionStatus() === "I";
-          if (!reusable) {
-            await client.end();
-          }
-          reply = { id: request.id, reusable };
-        } else if (request.operation === "recovery-generation") {
-          await useSchema(
-            request.schema,
-            request.reconnectIfIdle === true,
-            request.validateIfIdle === true,
-          );
-          if (request.lock) {
-            await lockPostgresGeneration(client, schema);
-          }
-          const anchor = { namespace: schema, storeId: request.storeId };
-          const generation = fingerprintPostgresGeneration(
-            anchor,
-            await inspectPostgresGeneration(client, anchor),
-          );
-          reply = {
-            id: request.id,
-            generation,
-            inTransaction: client.getTransactionStatus() !== "I",
-          };
-        } else {
-          await useSchema(
-            request.schema,
-            request.reconnectIfIdle === true,
-            request.validateIfIdle === true,
-          );
-          const results = await statements.query(request.sql, request.parameters);
-          const result: QueryResult = Array.isArray(results) ? results.at(-1)! : results;
-          // A trailing SELECT must not hide an earlier write in the same SQL batch.
-          const commands = (Array.isArray(results) ? results : [results]).map(
-            ({ command }) => command,
-          );
-          const mutation = commands.some((command) =>
-            /^(?:CREATE|ALTER|DROP|TRUNCATE|COMMENT|GRANT|REVOKE|COPY|CALL|DO|REFRESH)$/.test(
-              command,
-            ),
-          )
-            ? "unscoped"
-            : commands.some((command) => /^(?:INSERT|UPDATE|DELETE|MERGE)$/.test(command))
-              ? "scoped"
-              : undefined;
-          if (mutation === "unscoped") {
-            await statements.reset();
-          }
-          reply = {
-            id: request.id,
-            result: {
-              inTransaction: client.getTransactionStatus() !== "I",
-              command: result.command,
-              mutation,
-              rows: result.rows,
-              rowCount: result.rowCount ?? 0,
-              fields: result.fields.map(({ name, dataTypeID }) => ({ name, dataTypeID })),
-            },
-          };
+      } else if (request.operation === "release") {
+        if (connectionError) {
+          throw connectionError;
         }
+        // Server status also catches transactions opened later in a multi-statement query.
+        const reusable = client.getTransactionStatus() === "I";
+        if (!reusable) {
+          await client.end();
+        }
+        reply = { id: request.id, reusable };
+      } else if (request.operation === "recovery-generation") {
+        await useSchema(
+          request.schema,
+          request.reconnectIfIdle === true,
+          request.validateIfIdle === true,
+        );
+        if (request.lock) {
+          await lockPostgresGeneration(client, schema);
+        }
+        const anchor = { namespace: schema, storeId: request.storeId };
+        const generation = fingerprintPostgresGeneration(
+          anchor,
+          await inspectPostgresGeneration(client, anchor),
+        );
+        reply = {
+          id: request.id,
+          generation,
+          inTransaction: client.getTransactionStatus() !== "I",
+        };
+      } else {
+        await useSchema(
+          request.schema,
+          request.reconnectIfIdle === true,
+          request.validateIfIdle === true,
+        );
+        const results = await statements.query(request.sql, request.parameters);
+        const result: QueryResult = Array.isArray(results) ? results.at(-1)! : results;
+        // A trailing SELECT must not hide an earlier write in the same SQL batch.
+        const commands = (Array.isArray(results) ? results : [results]).map(
+          ({ command }) => command,
+        );
+        const mutation = commands.some((command) =>
+          /^(?:CREATE|ALTER|DROP|TRUNCATE|COMMENT|GRANT|REVOKE|COPY|CALL|DO|REFRESH)$/.test(
+            command,
+          ),
+        )
+          ? "unscoped"
+          : commands.some((command) => /^(?:INSERT|UPDATE|DELETE|MERGE)$/.test(command))
+            ? "scoped"
+            : undefined;
+        if (mutation === "unscoped") {
+          await statements.reset();
+        }
+        reply = {
+          id: request.id,
+          result: {
+            inTransaction: client.getTransactionStatus() !== "I",
+            command: result.command,
+            mutation,
+            rows: result.rows,
+            rowCount: result.rowCount ?? 0,
+            fields: result.fields.map(({ name, dataTypeID }) => ({ name, dataTypeID })),
+          },
+        };
       }
     } catch (error) {
       const failure = error instanceof Error ? error : new Error(String(error));

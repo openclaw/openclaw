@@ -7,7 +7,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import {
-  AgentSideConnection,
+  agent,
+  methods,
   ndJsonStream,
   PROTOCOL_VERSION,
   RequestError,
@@ -38,29 +39,28 @@ const configOptions = (state) => [
     options: availableModelIds.map((value) => ({ value, name: value })),
   },
 ];
-const connection = new AgentSideConnection(
-  (client) => ({
-    async initialize() {
-      return {
-        protocolVersion: PROTOCOL_VERSION,
-        agentCapabilities: { loadSession: true },
-        authMethods: [],
-      };
-    },
-    async newSession() {
-      const sessionId = randomUUID();
-      const state = { model: catalog.currentModelId, history: [] };
-      sessions.set(sessionId, state);
-      save(sessionId, state);
-      return { sessionId, configOptions: configOptions(state) };
-    },
-    async loadSession({ sessionId }) {
-      const state = JSON.parse(fs.readFileSync(sessionPath(sessionId), "utf8"));
-      sessions.set(sessionId, state);
-      availableModelIds = [...catalog.availableModelIds, "composer-2.5[fast=false]"];
-      return { configOptions: configOptions(state) };
-    },
-    async setSessionConfigOption({ sessionId, configId, value }) {
+agent()
+  .onRequest(methods.agent.initialize, () => ({
+    protocolVersion: PROTOCOL_VERSION,
+    agentCapabilities: { loadSession: true },
+    authMethods: [],
+  }))
+  .onRequest(methods.agent.session.new, () => {
+    const sessionId = randomUUID();
+    const state = { model: catalog.currentModelId, history: [] };
+    sessions.set(sessionId, state);
+    save(sessionId, state);
+    return { sessionId, configOptions: configOptions(state) };
+  })
+  .onRequest(methods.agent.session.load, ({ params: { sessionId } }) => {
+    const state = JSON.parse(fs.readFileSync(sessionPath(sessionId), "utf8"));
+    sessions.set(sessionId, state);
+    availableModelIds = [...catalog.availableModelIds, "composer-2.5[fast=false]"];
+    return { configOptions: configOptions(state) };
+  })
+  .onRequest(
+    methods.agent.session.setConfigOption,
+    ({ params: { sessionId, configId, value } }) => {
       const state = sessions.get(sessionId);
       if (configId !== "model" || !availableModelIds.includes(value)) {
         throw RequestError.invalidParams(undefined, `unsupported ${configId} value`);
@@ -73,21 +73,19 @@ const connection = new AgentSideConnection(
       save(sessionId, state);
       return { configOptions: configOptions(state) };
     },
-    async prompt({ sessionId, prompt }) {
-      const state = sessions.get(sessionId);
-      state.history.push(...prompt.filter((part) => part.type === "text").map((part) => part.text));
-      save(sessionId, state);
-      await client.sessionUpdate({
-        sessionId,
-        update: {
-          sessionUpdate: "agent_message_chunk",
-          content: { type: "text", text: JSON.stringify(state) },
-        },
-      });
-      return { stopReason: "end_turn" };
-    },
-    async cancel() {},
-  }),
-  ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin)),
-);
-void connection;
+  )
+  .onRequest(methods.agent.session.prompt, async ({ client, params: { sessionId, prompt } }) => {
+    const state = sessions.get(sessionId);
+    state.history.push(...prompt.filter((part) => part.type === "text").map((part) => part.text));
+    save(sessionId, state);
+    await client.notify(methods.client.session.update, {
+      sessionId,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: JSON.stringify(state) },
+      },
+    });
+    return { stopReason: "end_turn" };
+  })
+  .onNotification(methods.agent.session.cancel, () => {})
+  .connect(ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin)));

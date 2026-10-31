@@ -108,7 +108,7 @@ function attachmentBytes(attachment: ChatAttachment): number {
   const dataUrl = getChatAttachmentDataUrl(attachment);
   const payload = dataUrl?.match(/^data:[^,]*;base64,([\s\S]*)$/i)?.[1]?.replace(/\s/g, "");
   return payload
-    ? Math.max(0, Math.floor((payload.length * 3) / 4) - (payload.match(/=+$/)?.[0].length ?? 0))
+    ? Math.max(0, Math.floor((payload.length * 3) / 4) - (payload.match(/[=]+$/)?.[0].length ?? 0))
     : 0;
 }
 

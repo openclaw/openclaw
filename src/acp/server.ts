@@ -3,9 +3,11 @@ import { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import {
   AGENT_METHODS,
-  AgentSideConnection,
   PROTOCOL_VERSION,
+  agent as createAgentApp,
+  methods,
   ndJsonStream,
+  type AgentConnection,
   type AnyMessage,
 } from "@agentclientprotocol/sdk";
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
@@ -194,7 +196,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
 
   const inputLifetime = new AbortController();
   let inputClosed: Promise<void> | undefined;
-  let connection: AgentSideConnection | undefined;
+  let connection: AgentConnection | undefined;
   const onSignal = () => {
     void shutdown();
   };
@@ -318,18 +320,54 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
       .catch(onCloseFailed);
     const eventLedger = createSqliteAcpEventLedger();
 
-    connection = new AgentSideConnection(
-      (conn: AgentSideConnection) => {
-        agent = new AcpGatewayAgent(conn, gateway, {
+    // The SDK runs connect handlers before dispatching the first inbound
+    // message. Handlers keep this translator after shutdown revokes `agent`.
+    let translator: AcpGatewayAgent | undefined;
+    const connectedTranslator = () => {
+      if (!translator) {
+        throw new Error("ACP translator is not connected");
+      }
+      return translator;
+    };
+    connection = createAgentApp()
+      .onConnect(({ client }) => {
+        agent = translator = new AcpGatewayAgent(client, gateway, {
           ...opts,
           eventLedger,
           sessionStore: sessionStore ?? undefined,
         });
         agent.start();
-        return agent;
-      },
-      { writable: orderedOutbound.writable, readable },
-    );
+      })
+      .onRequest(methods.agent.initialize, ({ params }) => connectedTranslator().initialize(params))
+      .onRequest(methods.agent.authenticate, ({ params }) =>
+        connectedTranslator().authenticate(params),
+      )
+      .onRequest(methods.agent.session.new, ({ params }) =>
+        connectedTranslator().newSession(params),
+      )
+      .onRequest(methods.agent.session.load, ({ params }) =>
+        connectedTranslator().loadSession(params),
+      )
+      .onRequest(methods.agent.session.list, ({ params }) =>
+        connectedTranslator().listSessions(params),
+      )
+      .onRequest(methods.agent.session.resume, ({ params }) =>
+        connectedTranslator().resumeSession(params),
+      )
+      .onRequest(methods.agent.session.close, ({ params }) =>
+        connectedTranslator().closeSession(params),
+      )
+      .onRequest(methods.agent.session.setMode, ({ params }) =>
+        connectedTranslator().setSessionMode(params),
+      )
+      .onRequest(methods.agent.session.setConfigOption, ({ params }) =>
+        connectedTranslator().setSessionConfigOption(params),
+      )
+      .onRequest(methods.agent.session.prompt, ({ params }) => connectedTranslator().prompt(params))
+      .onNotification(methods.agent.session.cancel, ({ params }) =>
+        connectedTranslator().cancel(params),
+      )
+      .connect({ writable: orderedOutbound.writable, readable });
     // SDK EOF must also close the Gateway and database.
     void connection.closed.then(shutdown, shutdown).catch(onCloseFailed);
 

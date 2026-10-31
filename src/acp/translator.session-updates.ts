@@ -1,4 +1,4 @@
-import type { AgentSideConnection, PromptRequest, SessionUpdate } from "@agentclientprotocol/sdk";
+import type { AgentContext, PromptRequest, SessionUpdate } from "@agentclientprotocol/sdk";
 import { THINKING_LEVELS_HELP } from "../auto-reply/thinking.shared.js";
 import { enqueueKeyedTask } from "../plugin-sdk/keyed-async-queue.js";
 import { createPendingPromiseTracker } from "../shared/pending-promises.js";
@@ -54,7 +54,7 @@ type AcpTranslatorLedgerSessionRef = AcpTranslatorSessionRef & {
 };
 
 type AcpTranslatorSessionUpdatesOptions = {
-  connection: Pick<AgentSideConnection, "sessionUpdate">;
+  connection: Pick<AgentContext, "notify">;
   eventLedger: AcpEventLedger;
   log: (message: string) => void;
 };
@@ -183,7 +183,7 @@ export class AcpTranslatorSessionUpdates {
       return;
     }
     const delivery = this.track(
-      this.options.connection.sessionUpdate({
+      this.options.connection.notify("session/update", {
         sessionId: params.sessionId,
         update: params.update,
       }),

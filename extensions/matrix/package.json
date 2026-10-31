@@ -13,8 +13,8 @@
     "@openclaw/fs-safe": "0.27.0",
     "fake-indexeddb": "6.2.6",
     "markdown-it": "15.0.3",
-    "matrix-js-sdk": "43.0.0",
-    "music-metadata": "12.2.3",
+    "matrix-js-sdk": "44.0.0",
+    "music-metadata": "12.3.0",
     "typebox": "1.4.3",
     "zod": "4.6.7"
   },

@@ -27,11 +27,7 @@ export async function generateCodexValidators(options: { check?: boolean } = {})
     )
     .join("\n");
   const outputs: Array<[extension: string, source: string]> = [
-    [
-      "js",
-      standaloneValidatorHeader(command, { additionalLintRules: ["eslint/no-param-reassign"] }) +
-        runtime,
-    ],
+    ["js", standaloneValidatorHeader(command) + runtime],
     ["d.ts", standaloneValidatorHeader(command, { declaration: true }) + declarations],
     ["json", JSON.stringify({ context, schemas })],
   ];

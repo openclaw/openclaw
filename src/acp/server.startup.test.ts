@@ -2,7 +2,7 @@ import { Readable, Writable } from "node:stream";
 import { ReadableStream as NodeReadableStream } from "node:stream/web";
 import {
   PROTOCOL_VERSION,
-  type AgentSideConnection,
+  type AgentContext,
   type AnyMessage,
   type JsonRpcId,
 } from "@agentclientprotocol/sdk";
@@ -28,7 +28,7 @@ const state = vi.hoisted(() => ({
   store: undefined as AcpSessionStore | undefined,
   maxSessions: 10,
   slow: undefined as ReturnType<typeof createDeferred<void>> | undefined,
-  connection: undefined as AgentSideConnection | undefined,
+  connection: undefined as AgentContext | undefined,
   gateway: undefined as GatewayOptions | undefined,
   sinkError: undefined as Error | undefined,
   events: vi.fn(async (_event: unknown) => {}),
@@ -99,7 +99,7 @@ vi.mock("./event-ledger.js", () => ({ createSqliteAcpEventLedger: () => ({}) }))
 vi.mock("./translator.js", () => ({
   AcpGatewayAgent: class {
     constructor(
-      private connection: AgentSideConnection,
+      private connection: AgentContext,
       _gateway: unknown,
       private options: { sessionStore: AcpSessionStore },
     ) {
@@ -126,7 +126,7 @@ vi.mock("./translator.js", () => ({
         sessionKey: sessionId,
         cwd: params.cwd,
       });
-      await this.connection.sessionUpdate(sessionInfo(sessionId, "snapshot"));
+      await this.connection.notify("session/update", sessionInfo(sessionId, "snapshot"));
       if (sessionId === "slow") {
         await state.slow?.promise;
       }
@@ -141,13 +141,17 @@ vi.mock("./translator.js", () => ({
     private async restore(params: SessionLocation, method: "load" | "resume") {
       state.entered.push(`${method}:${params.sessionId}`);
       this.options.sessionStore.createSession({ ...params, sessionKey: params.sessionId });
-      await this.connection.sessionUpdate(
+      await this.connection.notify(
+        "session/update",
         sessionInfo(params.sessionId, method === "load" ? "loaded" : "resumed"),
       );
       return {};
     }
     async prompt(params: { sessionId: string }) {
-      await this.connection.sessionUpdate({ ...notification, sessionId: params.sessionId });
+      await this.connection.notify("session/update", {
+        ...notification,
+        sessionId: params.sessionId,
+      });
       return { stopReason: "end_turn" };
     }
   },
@@ -345,7 +349,8 @@ it("closes the real SQLite handle only after SDK and Gateway transport teardown"
         await ready();
         expect(handle.db.isOpen).toBe(true);
         signals.get("SIGTERM")?.();
-        await expectDefined(state.connection, "SDK connection").closed;
+        // Gateway stop starts only after the SDK connection has closed.
+        await vi.waitFor(() => expect(state.stop).toHaveBeenCalledOnce());
         expect(state.shutdown).toHaveBeenCalledOnce();
         expect(state.closeDb).not.toHaveBeenCalled();
         expect(handle.db.isOpen).toBe(true);
@@ -391,7 +396,7 @@ it("tears down the agent, Gateway, and state database when the outbound sink fai
     expect(state.closeDb).not.toHaveBeenCalled();
     state.sinkError = new Error("stdout sink failed");
     await expectDefined(state.connection, "SDK connection")
-      .sessionUpdate(notification)
+      .notify("session/update", notification)
       .catch(() => {});
     await closed;
     for (const operation of [state.stop, state.shutdown, state.closeDb]) {
@@ -466,7 +471,8 @@ it.each([
     post(message);
     await waitResponse(null);
     expect(state.entered).toEqual([]);
-    await expectDefined(state.connection, "SDK connection").sessionUpdate(
+    await expectDefined(state.connection, "SDK connection").notify(
+      "session/update",
       sessionInfo("unowned", "after rejection"),
     );
     await exchange(initialize(42));
@@ -499,7 +505,8 @@ it("forgets recognition when the actual session store evicts an idle session", a
     await beginSlow(2);
     expect(state.store?.hasSession("evicted")).toBe(false);
     const before = state.output.length;
-    await expectDefined(state.connection, "SDK connection").sessionUpdate(
+    await expectDefined(state.connection, "SDK connection").notify(
+      "session/update",
       sessionInfo("evicted", "late"),
     );
     await exchange(initialize(3));
@@ -510,9 +517,11 @@ it("forgets recognition when the actual session store evicts an idle session", a
 });
 
 it("preserves the stable SDK's rejection of NDJSON batch frames", async () => {
-  await withWire(async () => {
+  await run(async (closed) => {
+    await ready();
     post([create(1, "batched")]);
-    await expectDefined(state.connection, "SDK connection").closed;
+    // The SDK closes on the batch frame, and that closure drives server shutdown.
+    await closed;
     expect(state.entered).toEqual([]);
     expect(state.output).toEqual([]);
   });

@@ -159,7 +159,7 @@
     }
   },
   "devDependencies": {
-    "@mistralai/mistralai": "2.7.0",
+    "@mistralai/mistralai": "3.2.0",
     "@openclaw/model-catalog-core": "workspace:*",
     "@openclaw/normalization-core": "workspace:*"
   },

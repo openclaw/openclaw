@@ -202,7 +202,7 @@ export function clearDeviceAuthToken(params: {
 }
 
 function base64UrlEncode(bytes: Uint8Array): string {
-  return bytesToBase64(bytes).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
+  return bytesToBase64(bytes).replaceAll("+", "-").replaceAll("/", "_").replace(/[=]+$/g, "");
 }
 
 function base64UrlDecode(input: string): Uint8Array {

@@ -524,7 +524,7 @@ describe("secret egress proxy", () => {
       kind === "raw-basic"
         ? candidate
         : kind === "noncanonical"
-          ? encoded.replace(/=+$/u, "") + (encoded.endsWith("==") ? "=" : "==")
+          ? encoded.replace(/[=]+$/u, "") + (encoded.endsWith("==") ? "=" : "==")
           : encoded;
     const authorization = `Basic ${credential}`;
     expect(

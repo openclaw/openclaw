@@ -732,7 +732,7 @@ it("shows setup-code guidance only for a mobile setup code", async () => {
     "Gateway secret",
     btoa(
       JSON.stringify({ url: "wss://gateway.example", bootstrapToken: "synthetic-bootstrap-token" }),
-    ).replace(/=+$/g, ""),
+    ).replace(/[=]+$/g, ""),
   );
   await waitForPage(() =>
     expect(hint()?.textContent).toContain("device setup code for the OpenClaw mobile app"),

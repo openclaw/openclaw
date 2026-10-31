@@ -1033,7 +1033,8 @@ async function* walkWorkspaceFiles(
         }
         continue;
       }
-      if (entry.isFile && matcher.match(normalizedChildPath)) {
+      // Directories may match a pattern prefix; files must match the whole pattern.
+      if (entry.isFile && matcher.match(normalizedChildPath, false)) {
         yield normalizedChildPath;
       }
     }

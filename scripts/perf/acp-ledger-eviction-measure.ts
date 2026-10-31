@@ -5,7 +5,7 @@ import { createWriteStream, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { parseArgs } from "node:util";
-import { ClientSideConnection, ndJsonStream, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
+import { client, methods, ndJsonStream, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -130,21 +130,25 @@ try {
       `bridge-${sample}`,
     );
     assert(bridge.stdin && bridge.stdout);
-    const connection = new ClientSideConnection(
-      () => ({
-        sessionUpdate: async () => {},
-        requestPermission: async () => ({ outcome: { outcome: "cancelled" } }),
-      }),
-      ndJsonStream(
-        Writable.toWeb(bridge.stdin),
-        Readable.toWeb(bridge.stdout) as ReadableStream<Uint8Array>,
-      ),
-    );
-    await connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} });
+    const connection = client()
+      .onNotification(methods.client.session.update, () => {})
+      .onRequest(methods.client.session.requestPermission, () => ({
+        outcome: { outcome: "cancelled" },
+      }))
+      .connect(
+        ndJsonStream(
+          Writable.toWeb(bridge.stdin),
+          Readable.toWeb(bridge.stdout) as ReadableStream<Uint8Array>,
+        ),
+      );
+    await connection.agent.request(methods.agent.initialize, {
+      protocolVersion: PROTOCOL_VERSION,
+      clientCapabilities: {},
+    });
     for (const name of ["cold-eviction", "warm-no-eviction"]) {
       phase(`${name}-${sample}`);
       const start = performance.now();
-      const result = await connection.newSession({
+      const result = await connection.agent.request(methods.agent.session.new, {
         cwd: path.join(root, "workspace"),
         mcpServers: [],
       });

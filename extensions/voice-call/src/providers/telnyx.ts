@@ -57,7 +57,7 @@ function normalizeTelnyxDirection(
 }
 
 function normalizeBase64ForCompare(value: string): string {
-  return value.replace(/=+$/u, "").replace(/-/gu, "+").replace(/_/gu, "/");
+  return value.replace(/[=]+$/u, "").replace(/-/gu, "+").replace(/_/gu, "/");
 }
 
 function decodeClientStateBase64(value: string): string | null {

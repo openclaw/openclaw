@@ -1,5 +1,5 @@
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
-import { assert, expect, vi } from "vitest";
+import { assert, expect, vi, type Mock } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { createPromptRequest } from "./translator.bridge-test-helpers.js";
@@ -11,7 +11,7 @@ type ScenarioOptions = Pick<
 > & {
   sessions?: string[];
   sessionKey?: string;
-  requestPermission?: ReturnType<typeof vi.fn>;
+  requestPermission?: Mock;
 };
 
 export function createTranslatorScenario(

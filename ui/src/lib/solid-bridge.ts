@@ -92,7 +92,9 @@ export function defineSolidBridge<Props extends object, Methods extends object =
         Object.defineProperty(this, key, {
           configurable: true,
           get: () => this.#values.get(key),
-          set: (value: unknown) => this.#write(key, value),
+          set: (value: unknown) => {
+            this.#write(key, value);
+          },
         });
       }
       this.#host = Object.assign(this, defaults, methods);

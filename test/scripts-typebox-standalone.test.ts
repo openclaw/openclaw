@@ -85,6 +85,26 @@ const cases: Array<[name: string, schema: XSchema, accepted: unknown[], rejected
     [[{ value: 1 }, { value: 1 }]],
   ],
   [
+    "exactly-one union counts",
+    {
+      oneOf: [
+        { type: "number", minimum: 0 },
+        { type: "number", maximum: 10 },
+      ],
+    },
+    [-1, 11],
+    [5, "5"],
+  ],
+  [
+    "bounded contains counts",
+    { type: "array", contains: { const: 1 }, minContains: 2, maxContains: 3 },
+    [
+      [1, 1],
+      [1, 0, 1, 1],
+    ],
+    [[1], [1, 1, 1, 1], [0, 0]],
+  ],
+  [
     "unevaluated properties without leaking evaluation state between inputs",
     {
       allOf: [{ type: "object", properties: { value: { type: "number" } } }],
@@ -152,6 +172,33 @@ describe("standalone TypeBox checks", () => {
       }
     },
   );
+
+  it("counts matches without writing reducer parameters", async () => {
+    const schema: XSchema = {
+      type: "array",
+      contains: { oneOf: [{ const: 1 }, { type: "integer", minimum: 1 }] },
+      minContains: 1,
+      maxContains: 2,
+      uniqueItems: true,
+    };
+    for (const options of [{}, sharedOptions]) {
+      const source = await compileStandaloneValidators([{ name: "check", schema }], options);
+      expect(source).toContain("?result+1:result,0)");
+      expect(source).not.toContain("++result");
+    }
+    // An increment the rewrite does not recognize must fail instead of shipping a dead store.
+    const schemaWithCapture = Type.Refine(Type.Integer(), (value) => value >= 0);
+    await expect(
+      compileStandaloneValidators([{ name: "check", schema: schemaWithCapture }], {
+        externals: new Map([
+          [
+            schemaWithCapture["~refine"][0],
+            "{ check: value => { let result = value; return ++result > 0; } }",
+          ],
+        ]),
+      }),
+    ).rejects.toThrow("Unsupported TypeBox counting reducer shape");
+  });
 
   it("requires a static owner for refinement captures instead of dropping their constraint", async () => {
     const schema = Type.Refine(Type.Integer(), (value) => value >= 0);

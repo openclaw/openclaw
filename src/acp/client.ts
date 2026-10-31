@@ -6,10 +6,10 @@ import * as readline from "node:readline";
 import { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import {
-  ClientSideConnection,
   PROTOCOL_VERSION,
+  client as createClientApp,
+  methods,
   ndJsonStream,
-  type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SessionNotification,
 } from "@agentclientprotocol/sdk";
@@ -263,14 +263,13 @@ async function createAcpClient(opts: AcpClientOptions = {}) {
     const output = Readable.toWeb(agent.stdout) as unknown as ReadableStream<Uint8Array>;
     const stream = ndJsonStream(input, output);
 
-    const client = new ClientSideConnection(
-      () => ({
-        sessionUpdate: async (params: SessionNotification) => {
-          printSessionUpdate(params);
-        },
-        requestPermission: async (
-          params: RequestPermissionRequest,
-        ): Promise<RequestPermissionResponse> => {
+    const client = createClientApp()
+      .onNotification(methods.client.session.update, ({ params }) => {
+        printSessionUpdate(params);
+      })
+      .onRequest(
+        methods.client.session.requestPermission,
+        async ({ params }): Promise<RequestPermissionResponse> => {
           if (permissions.signal.aborted) {
             return { outcome: { outcome: "cancelled" } };
           }
@@ -325,13 +324,12 @@ async function createAcpClient(opts: AcpClientOptions = {}) {
           );
           return { outcome: { outcome: "cancelled" } };
         },
-      }),
-      stream,
-    );
+      )
+      .connect(stream);
 
     void client.closed.then(() => permissions.abort());
     log("initializing");
-    await client.initialize({
+    await client.agent.request(methods.agent.initialize, {
       protocolVersion: PROTOCOL_VERSION,
       clientCapabilities: {
         fs: { readTextFile: true, writeTextFile: true },
@@ -341,7 +339,7 @@ async function createAcpClient(opts: AcpClientOptions = {}) {
     });
 
     log("creating session");
-    const session = await client.newSession({
+    const session = await client.agent.request(methods.agent.session.new, {
       cwd,
       mcpServers: [],
     });
@@ -387,7 +385,7 @@ export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Prom
         const activePrompt = promptTask;
         if (activePrompt) {
           await settlesWithin(
-            client.cancel({ sessionId }).catch(() => {}),
+            client.agent.notify(methods.agent.session.cancel, { sessionId }).catch(() => {}),
             ACP_SERVER_KILL_GRACE_MS,
           );
           await settlesWithin(activePrompt, ACP_SERVER_KILL_GRACE_MS);
@@ -433,7 +431,10 @@ export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Prom
       }
       promptTask = (async () => {
         try {
-          const response = await client.prompt({ sessionId, prompt: [{ type: "text", text }] });
+          const response = await client.agent.request(methods.agent.session.prompt, {
+            sessionId,
+            prompt: [{ type: "text", text }],
+          });
           console.log(`\n[${response.stopReason}]\n`);
         } catch (err) {
           console.error(`\n[error] ${String(err)}\n`);

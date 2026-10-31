@@ -2,7 +2,12 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { addAbortListener } from "node:events";
 import { createServer, type ServerResponse } from "node:http";
 import { Readable, Writable } from "node:stream";
-import { ClientSideConnection, PROTOCOL_VERSION, ndJsonStream } from "@agentclientprotocol/sdk";
+import {
+  PROTOCOL_VERSION,
+  client as createClientApp,
+  methods,
+  ndJsonStream,
+} from "@agentclientprotocol/sdk";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
 import {
@@ -88,28 +93,27 @@ it(
       const timeline: string[] = [];
       // SAFETY: Node and DOM ReadableStream types describe the same runtime object here.
       const output = Readable.toWeb(acpProcess.stdout) as Parameters<typeof ndJsonStream>[1];
-      const client = new ClientSideConnection(
-        () => ({
-          sessionUpdate: async ({ update }) => {
-            if (update.sessionUpdate === "agent_message_chunk" && update.content.type === "text") {
-              timeline.push(update.content.text);
-            }
-            if (update.sessionUpdate === "tool_call_update" && update.status === "failed") {
-              failedToolUpdate = true;
-            }
-          },
-          requestPermission: async () => ({ outcome: { outcome: "cancelled" } }),
-        }),
-        ndJsonStream(Writable.toWeb(acpProcess.stdin), output),
-      );
-      await client.initialize({ protocolVersion: PROTOCOL_VERSION });
+      const { agent } = createClientApp()
+        .onNotification(methods.client.session.update, ({ params: { update } }) => {
+          if (update.sessionUpdate === "agent_message_chunk" && update.content.type === "text") {
+            timeline.push(update.content.text);
+          }
+          if (update.sessionUpdate === "tool_call_update" && update.status === "failed") {
+            failedToolUpdate = true;
+          }
+        })
+        .onRequest(methods.client.session.requestPermission, () => ({
+          outcome: { outcome: "cancelled" },
+        }))
+        .connect(ndJsonStream(Writable.toWeb(acpProcess.stdin), output));
+      await agent.request(methods.agent.initialize, { protocolVersion: PROTOCOL_VERSION });
       const sessionKey = `agent:main:acp-abort-cause-${process.pid}`;
-      const session = await client.newSession({
+      const session = await agent.request(methods.agent.session.new, {
         cwd: process.cwd(),
         mcpServers: [],
         _meta: { sessionKey },
       });
-      const prompt = client.prompt({
+      const prompt = agent.request(methods.agent.session.prompt, {
         sessionId: session.sessionId,
         prompt: [{ type: "text", text: "Call session_status now." }],
       });
