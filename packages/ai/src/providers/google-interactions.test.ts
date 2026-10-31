@@ -78,19 +78,19 @@ describe("google-interactions provider", () => {
   };
 
   it.each(
-    (["direct", "simple"] as const).flatMap((adapter) =>
-      [
-        { options: {}, processing: undefined },
-        {
-          options: { videoMetadata: { startOffset: 0, endOffset: 10, fps: 0.5 } },
-          processing: { type: "static", start_offset: 0, end_offset: 10, fps: 0.5 },
-        },
-        {
-          options: { video_metadata: { start_offset: 2, end_offset: 5 } },
-          processing: { type: "static", start_offset: 2, end_offset: 5 },
-        },
-      ].map((entry) => ({ adapter, ...entry })),
-    ),
+    (["direct", "simple"] as const).flatMap((adapter) => [
+      { adapter, options: {}, processing: undefined },
+      {
+        adapter,
+        options: { videoMetadata: { startOffset: 0, endOffset: 10, fps: 0.5 } },
+        processing: { type: "static", start_offset: 0, end_offset: 10, fps: 0.5 },
+      },
+      {
+        adapter,
+        options: { video_metadata: { start_offset: 2, end_offset: 5 } },
+        processing: { type: "static", start_offset: 2, end_offset: 5 },
+      },
+    ]),
   )(
     "sends native video from the transient provider context handoff ($adapter, $options)",
     async ({ adapter, options, processing }) => {
