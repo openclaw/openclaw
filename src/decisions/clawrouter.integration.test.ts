@@ -12,7 +12,8 @@ import { listDecisionModels } from "../gateway/server-methods/models-list-capabi
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { evaluateDecisionV2InRegistry, prepareDecisionProviderReload } from "./runtime.js";
+import { prepareDecisionProviderReload } from "./provider-reload.js";
+import { evaluateDecisionV2InRegistry } from "./runtime.js";
 import type { DecisionBatchV2 } from "./types-v2.js";
 
 const batch: DecisionBatchV2 = {

@@ -176,3 +176,105 @@ it.for(["hidden", "clipped", "animated"] as const)(
     }
   },
 );
+
+it("keeps missing, hidden, saved and live transcript witness paints distinct", async () => {
+  const iframe = document.createElement("iframe");
+  document.body.append(iframe);
+  try {
+    const target = iframe.contentWindow;
+    const doc = iframe.contentDocument;
+    if (!target || !doc) {
+      throw new Error("Paint witness realm was not created");
+    }
+    const witnesses = {
+      saved: { messageId: "cached", rowKey: "saved-row", text: "Saved witness text." },
+      live: { messageId: "latest", rowKey: "live-row", text: "Fresh witness text." },
+    };
+    const script = doc.createElement("script");
+    script.textContent = `
+      const __name = fn => fn;
+      (${warmReloadProbe.toString()})({ witnesses: ${JSON.stringify(witnesses)} });
+      const pane = document.createElement('div');
+      pane.className = 'chat-pane-cache__pane--active';
+      document.body.append(pane);
+      const frames = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const paint = identifier => new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { observer.disconnect(); reject(new Error('Missing paint: ' + identifier)); }, 3000);
+        const observer = new PerformanceObserver(list => {
+          if (!list.getEntries().some(entry => entry.identifier === identifier && entry.renderTime > 0)) return;
+          clearTimeout(timer);
+          observer.disconnect();
+          resolve();
+        });
+        observer.observe({ type: 'element', buffered: true });
+      });
+      const add = (key, text, hidden = false) => {
+        const row = document.createElement('div');
+        row.className = 'chat-virtual-row';
+        row.dataset.virtualRowKey = key;
+        row.style.opacity = hidden ? '0' : '1';
+        const root = document.createElement('div');
+        root.className = 'chat-text';
+        const paragraph = document.createElement('p');
+        paragraph.textContent = text;
+        root.append(paragraph);
+        row.append(root);
+        pane.append(row);
+        return row;
+      };
+      window.paintProof = (async () => {
+        // Matching text in another row is not provenance.
+        const unrelated = add('other-row', 'Saved witness text.');
+        await paint('openclaw-transcript');
+        const missing = window.__warmReload.witnesses();
+        unrelated.dataset.virtualRowKey = 'saved-row';
+        await frames();
+        const alreadyPainted = window.__warmReload.witnesses();
+        unrelated.remove();
+        const saved = add('saved-row', 'Saved witness text.', true);
+        await frames();
+        const hiddenSaved = window.__warmReload.witnesses();
+        const savedShownAt = performance.now();
+        saved.style.opacity = '1';
+        await paint('openclaw-transcript-saved');
+        const savedPaint = window.__warmReload.witnesses();
+        saved.remove();
+        const live = add('live-row', 'Fresh witness text.', true);
+        await frames();
+        const hiddenLive = window.__warmReload.witnesses();
+        const liveShownAt = performance.now();
+        live.style.opacity = '1';
+        await paint('openclaw-transcript-live');
+        return { missing, alreadyPainted, hiddenSaved, savedShownAt, savedPaint, hiddenLive, liveShownAt, final: window.__warmReload.read() };
+      })();
+    `;
+    doc.body.append(script);
+    const proof = await Reflect.get(target, "paintProof");
+    expect(proof.missing.saved).toEqual({ domMs: null, paintMs: null });
+    expect(proof.missing.live).toEqual({ domMs: null, paintMs: null });
+    expect(proof.alreadyPainted.saved.paintMs).toBeNull();
+    expect(proof.hiddenSaved.saved.domMs).toBeTypeOf("number");
+    expect(proof.hiddenSaved.saved.paintMs).toBeNull();
+    expect(proof.savedPaint.saved.paintMs).toBeGreaterThanOrEqual(proof.savedShownAt);
+    expect(proof.savedPaint.live.paintMs).toBeNull();
+    expect(proof.hiddenLive.live.domMs).toBeTypeOf("number");
+    expect(proof.hiddenLive.live.paintMs).toBeNull();
+    expect(proof.final.transcriptWitnesses.live.paintMs).toBeGreaterThanOrEqual(proof.liveShownAt);
+    expect(proof.final.transcriptWitnesses.saved.paintMs).toBe(proof.savedPaint.saved.paintMs);
+    expect(proof.final.transcriptWitnesses.attached).toEqual({ saved: false, live: true });
+    expect(proof.final.transcriptWitnesses.paints).toContainEqual({
+      source: "saved",
+      identifier: "openclaw-transcript-saved",
+      rowKey: "saved-row",
+      renderTime: proof.savedPaint.saved.paintMs,
+    });
+    expect(proof.final.transcriptWitnesses.paints).toContainEqual({
+      source: "live",
+      identifier: "openclaw-transcript-live",
+      rowKey: "live-row",
+      renderTime: proof.final.transcriptWitnesses.live.paintMs,
+    });
+  } finally {
+    iframe.remove();
+  }
+});

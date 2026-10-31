@@ -93,7 +93,6 @@ export class GatewayBrowserClient {
   private connectDispatch = Promise.withResolvers<boolean>();
   private readonly initialConnectDispatch = this.connectDispatch.promise.then(() => undefined);
   private readonly chatEvents = new GatewayChatEvents((reason) => this.forceReconnect(reason));
-  private maxPayloadBytes: number | undefined;
   private scopeUpgradeRuntime: Promise<GatewayScopeUpgrade> | null = null;
   private connectionHello: GatewayHelloOk | null = null;
   private lastInboundActivityAtMs: number | null = null;
@@ -145,8 +144,7 @@ export class GatewayBrowserClient {
         this.reachabilityProbe?.abort();
         this.reachabilityProbe = null;
         this.chatEvents.clear();
-        this.maxPayloadBytes = undefined;
-        return createBrowserGatewaySocket(this.opts.url, handlers, () => this.maxPayloadBytes);
+        return createBrowserGatewaySocket(this.opts.url, handlers);
       },
       createRequestId: generateUUID,
       createRequestError: (error) =>
@@ -420,7 +418,6 @@ export class GatewayBrowserClient {
     // Replace retained identity before consumers can act on a different account.
     this.opts.offlineRecoveryScope = hello.auth?.recoveryScope;
     this.offlineStorageRetired = false;
-    this.maxPayloadBytes = hello.policy?.maxPayload;
     this.initializeInboundActivity(hello);
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;

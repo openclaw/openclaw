@@ -491,6 +491,12 @@ install/update operations share this renewal behavior. Ownership checks,
 cancellation, and release still apply. The runtime holding the lease must contain
 this fix; a newer candidate cannot change an already-running lease owner.
 
+When standalone Doctor stops its managed Gateway, it reserves Gateway restoration
+before releasing database maintenance. CLI schema preparation waits while Doctor
+restores and verifies the Gateway; Gateway bootstrap keeps its normal ownership
+checks. Doctor and competing CLI processes must contain this repair. Already-running
+older processes cannot observe the reservation.
+
 After a Doctor child settles, the updater drains its retained handles for the
 affected shared-state database and revokes their schema admission, even when
 Doctor exits unsuccessfully. The next parent access admits the resulting schema

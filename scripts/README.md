@@ -341,6 +341,8 @@ matching their bundle's Workboard source. Run Chromium at `--cpu-throttle 1` and
 with `--steps page-<route>-visit,page-<route>-action,page-<route>-leave`.
 Use `--pages --page-phases visit` to validate every route's loaded state before
 the `--page-phases action,leave` sweep; the default includes all three phases.
+Virtualized inventories use their logical row count for readiness, including
+Cron's first 50 loaded jobs, rather than requiring every row to be mounted.
 The page table includes longest observed main-thread task, standard CLS, all
 layout shifts including those after input, and DOM counts. Unsupported browser
 metrics are null. DOM counts are collected after the measured interval so the
@@ -442,6 +444,14 @@ Each checkpoint drains intentional retirement timers, clears synthetic request
 history, requests two GCs and saves a heap snapshot. Each observation gets its
 own browser process. Reports include process-tree RSS, WebKit resource categories,
 heap class counts, detached DOM and active resource counters.
+
+`--steps memory-working-day` runs ten rounds of session switches, streaming,
+route/settings visits, pickers, dialogs and reconnects in one document. Use
+`--memory-soak-rounds 2` for a short census; the option accepts 1–10 and defaults
+to 10. Every complete round switches 20 sessions, streams five turns, reconnects
+once, and records a parked checkpoint. The fixture remains 200 sessions at every
+length. The manifest and scenario evidence record the selected workload; compare
+only runs with the same round count.
 
 Memory captures are excluded from the latency table. Compare warm and later
 checkpoints within each engine before attributing growth: Inspector/JIT warmup,

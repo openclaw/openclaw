@@ -241,7 +241,7 @@ it.each([
       } else {
         expect(failure).toMatchObject(refusal);
       }
-      expect(readFiles(files)).toEqual(bytes);
+      readFiles(files).forEach((data, i) => expect(data.equals(bytes[i]!), files[i]).toBe(true));
       expect(readDatabase(shared)).toEqual(before);
       expect(mocks.runContributions).not.toHaveBeenCalled();
     });
@@ -430,7 +430,7 @@ it.each([
           migrated.prepare("SELECT value_json FROM cache_entries WHERE key='retained'").get(),
         ).toEqual({ value_json: '{"keep":true}' });
       } else {
-        expect(fs.readFileSync(agent)).toEqual(before[0]);
+        expect(fs.readFileSync(agent).equals(before[0]!), agent).toBe(true);
       }
     } finally {
       observe.mockRestore();

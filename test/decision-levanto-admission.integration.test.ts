@@ -7,10 +7,8 @@ import * as modelAuthProvider from "../src/agents/model-auth-provider.js";
 import { acquireAgentRunPreparedModelRuntime } from "../src/agents/prepared-model-runtime.js";
 import { setRuntimeConfigSnapshot } from "../src/config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
-import {
-  evaluateDecisionV2InRegistry,
-  prepareDecisionProviderReload,
-} from "../src/decisions/runtime.js";
+import { prepareDecisionProviderReload } from "../src/decisions/provider-reload.js";
+import { evaluateDecisionV2InRegistry } from "../src/decisions/runtime.js";
 import type { DecisionBatchV2 } from "../src/decisions/types-v2.js";
 import { DecisionContractError } from "../src/decisions/validation.js";
 import {

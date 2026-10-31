@@ -10,10 +10,8 @@ import { withGatewayToolCallerIdentity } from "../src/agents/tools/gateway-calle
 import { resolveConfigWidePluginManifestRegistry } from "../src/config/io.plugin-metadata.js";
 import { getRuntimeConfigSnapshot } from "../src/config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
-import {
-  evaluateDecisionInRegistry,
-  prepareDecisionProviderReload,
-} from "../src/decisions/runtime.js";
+import { prepareDecisionProviderReload } from "../src/decisions/provider-reload.js";
+import { evaluateDecisionInRegistry } from "../src/decisions/runtime.js";
 import type { DecisionBatch } from "../src/decisions/types.js";
 import { validateDecisionResultV2 } from "../src/decisions/validation-v2.js";
 import { fetchWithRuntimeDispatcher } from "../src/infra/net/runtime-fetch.js";

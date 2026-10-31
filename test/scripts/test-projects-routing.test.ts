@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { globSync } from "tinyglobby";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveCanonicalNodeTestConfig } from "../../scripts/lib/ci-node-test-plan.mts";
 import { collectModuleReferencesFromSource } from "../../scripts/lib/guard-inventory-utils.mjs";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
@@ -73,6 +73,7 @@ function changedPlans(paths: string[]) {
 
 describe("test-projects args", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  afterEach(() => vi.unstubAllEnvs());
 
   const gatewayWorkerFile = "src/gateway/server-methods/cron.runs.test.ts";
   const catalogFile = "test/plugins/codex-model-catalog.gateway.test.ts";
@@ -166,15 +167,27 @@ describe("test-projects args", () => {
     });
   });
 
-  it.each([false, true])(
-    "sets native run/watch mode without leaking the sentinel (watch=%s)",
-    (watch) => {
+  it.each([
+    { watch: false, maglev: "0" },
+    { watch: true, maglev: "0" },
+    { watch: false, maglev: "1" },
+    { watch: true, maglev: "1" },
+  ])(
+    "sets native run/watch mode from the invocation environment (watch=$watch, maglev=$maglev)",
+    ({ watch, maglev }) => {
+      vi.stubEnv("OPENCLAW_VITEST_ENABLE_MAGLEV", maglev === "0" ? "1" : "0");
       const spec = expectDefined(
-        runSpecs(watch ? ["--watch", "--", "src/foo.test.ts"] : ["src/foo.test.ts"])[0],
+        runSpecs(watch ? ["--watch", "--", "src/foo.test.ts"] : ["src/foo.test.ts"], {
+          baseEnv: { ...process.env, OPENCLAW_VITEST_ENABLE_MAGLEV: maglev },
+        })[0],
         "run spec",
       );
       expect(spec.pnpmArgs).toEqual([
-        ...VITEST_NODE_PREFIX,
+        "exec",
+        "node",
+        ...(maglev === "0" ? ["--no-maglev"] : []),
+        "--no-concurrent-sparkplug",
+        resolveVitestCliEntry(),
         ...(watch ? [] : ["run"]),
         "--config",
         "test/vitest/vitest.unit.config.ts",
@@ -182,6 +195,17 @@ describe("test-projects args", () => {
       ]);
     },
   );
+
+  it("retains the focused UI E2E config loader", () => {
+    expect(runSpecs(["test/vitest/vitest.ui-e2e.config.ts"])[0]?.pnpmArgs).toEqual([
+      ...VITEST_NODE_PREFIX,
+      "run",
+      "--config",
+      "test/vitest/vitest.ui-e2e.config.ts",
+      "--configLoader",
+      "runner",
+    ]);
+  });
 
   it.each([["--watch", "false"], ["--no-watch"]])(
     "preserves native watch controls after the wrapper separator: %j",

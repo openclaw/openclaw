@@ -10,6 +10,8 @@ import { hasUncommittedSqliteWrites } from "./sqlite-schema-facts.js";
 
 export type SqliteIntegrityCheckOptions = {
   check?: "quick" | "full";
+  /** Constraint-only migration admission; never a full database verification. */
+  schemaOnly?: true;
   /** Tables rewritten or re-indexed by the migration; absent tables may be created by it. */
   tables?: readonly string[];
   /**
@@ -22,6 +24,7 @@ export type SqliteIntegrityCheckOptions = {
 };
 
 type CapturedIntegrity = {
+  schemaOnly: boolean;
   source: FileMutationFingerprint;
   tables: ReadonlySet<string>;
 };
@@ -57,7 +60,7 @@ export function captureSqliteMaintenanceIntegrity(
       receipts = new Map();
       capturedIntegrity.set(scope, receipts);
     }
-    receipts.set(key, { source, tables });
+    receipts.set(key, { source, tables, schemaOnly: options.schemaOnly === true });
   };
 }
 
@@ -90,6 +93,7 @@ export function consumeSqliteMaintenanceIntegrity(
     (suffix) => (fs.statSync(`${pathname}${suffix}`, { throwIfNoEntry: false })?.size ?? 0) > 0,
   );
   return (
+    receipt.schemaOnly === (options.schemaOnly === true) &&
     source !== undefined &&
     sameFileMutationFingerprint(receipt.source, source) &&
     !hasRecoveryData &&

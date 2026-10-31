@@ -211,7 +211,7 @@ describe("agents skills panel (browser)", () => {
     expect(view.filter()).toBe(filter);
   });
 
-  it("shows pending reads, keeps the cached report after failure, and retries through Refresh", async () => {
+  it("keeps unavailable inventories distinct from empty results and retries through Refresh", async () => {
     const initial = deferred<SkillStatusReport>();
     const refreshed = deferred<SkillStatusReport>();
     const retried = deferred<SkillStatusReport>();
@@ -221,38 +221,38 @@ describe("agents skills panel (browser)", () => {
       agentSkillsRead: { agentId: "main", result: initial.promise },
     });
     const { params } = view;
-    await view.text(["Loading"]);
-    const report: SkillStatusReport = {
+    await view.text(["Loading"], ["No skills found.", "0 shown"]);
+    initial.reject(new Error("Initial skills failure"));
+    const onRefresh = vi.fn(() =>
+      view.update({
+        ...params,
+        agentSkillsRead: { agentId: "main", result: retried.promise },
+        onRefresh,
+      }),
+    );
+    view.update({ ...params, onRefresh });
+    await view.text(["Initial skills failure"], ["No skills found.", "0 shown"]);
+    view.button("Refresh").click();
+    expect(onRefresh).toHaveBeenCalledOnce();
+    await view.text(["Loading"], ["Initial skills failure", "No skills found.", "0 shown"]);
+    const report = {
       workspaceDir: "/workspace/synthetic",
       managedSkillsDir: "/skills/synthetic",
       skills: [createSkill({ name: "Synthetic cached skill" })],
     };
-    initial.resolve(report);
-    await view.text(["Synthetic cached skill"]);
-
-    const loaded = {
+    retried.resolve(report);
+    await view.text(["Synthetic cached skill"], ["Initial skills failure", "No skills found."]);
+    view.update({
       ...params,
       agentSkillsReport: report,
       agentSkillsAgentId: "main",
       agentSkillsRead: { agentId: "main", result: refreshed.promise },
-    };
-    view.update(loaded);
+    });
     await view.text(["Synthetic cached skill", "Loading"]);
     refreshed.reject(new Error("Synthetic skills failure"));
-    const onRefresh = vi.fn(() => {
-      view.update({
-        ...loaded,
-        agentSkillsRead: { agentId: "main", result: retried.promise },
-        onRefresh,
-      });
-    });
-    view.update({ ...loaded, onRefresh });
     await view.text(["Synthetic skills failure", "Synthetic cached skill"]);
-    view.button("Refresh").click();
-    expect(onRefresh).toHaveBeenCalledOnce();
-    await view.text(["Loading", "Synthetic cached skill"], ["Synthetic skills failure"]);
-    retried.resolve({ ...report, skills: [createSkill({ name: "Synthetic fresh skill" })] });
-    await view.text(["Synthetic fresh skill"], ["Synthetic skills failure"]);
+    const empty = mountSkills([]);
+    await empty.text(["0 shown", "No skills found."]);
   });
 
   it.each(["agent", "connection"])(

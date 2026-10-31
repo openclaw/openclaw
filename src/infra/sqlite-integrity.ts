@@ -256,6 +256,11 @@ export function assertSqliteIntegrity(
     allFindings?: boolean;
   } = {},
 ): SqliteIntegrityChecks {
+  if (options.check === "quick" && options.schemaOnly) {
+    // The owner only widens a stored CHECK; unchanged payloads and FKs need no scan.
+    runSqliteCheck(database, databaseLabel, "quick_check", "schema_meta");
+    return { integrityCheck: "ok" };
+  }
   const check = options.check === "quick" ? "quick_check" : "integrity_check";
   let staleFts = false;
   try {

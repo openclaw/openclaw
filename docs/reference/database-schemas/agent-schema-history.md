@@ -114,9 +114,14 @@ exceptional imported envelopes whose native interpretation cannot be represented
 by bounded navigation keep their original inline bytes. Restoration still serves
 write-capable continuations, and full-history deletion removes both navigation
 and payload archives. No new retention setting or archive format is introduced.
-SQLite rebuilds the payload constraint without changing existing rows; PostgreSQL
-updates the equivalent constraint. Older builds refuse schema 39. Rollback needs
-the verified pre-upgrade database and archive backup with its matching binary.
+SQLite rewrites the table definition in place in `sqlite_schema`, widening only
+the payload CHECK without rewriting rows or rebuilding indexes and triggers.
+Existing rows already satisfy the stricter predecessor constraint. The backup
+still declares `transcript_events` for rollback, because older builds refuse
+schema 39; planner statistics remain unchanged. Pre-migration integrity
+verification covers schema facts only, because no rows move. PostgreSQL updates
+the equivalent constraint unchanged. Rollback needs the verified pre-upgrade
+database and archive backup with its matching binary.
 
 ### Agent schema 38
 

@@ -607,7 +607,11 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
             pending.controller.signal,
             undefined,
             step.value.timing,
-            { check: step.value.check, tables: step.value.tables },
+            {
+              check: step.value.check,
+              schemaOnly: step.value.schemaOnly,
+              tables: step.value.tables,
+            },
           );
         } catch (error) {
           failure = error;

@@ -102,6 +102,7 @@ export async function runSessionStartupMigration(params: {
   const databases = new Set<string>();
   const coldCloses = new Set<string>();
   let interruptedSessions = 0;
+  const terminalUnmatched = new Map<string, number>();
   const registeredDatabases = new Set(
     registeredDatabaseRows.map((entry) => `${entry.agentId}\0${entry.path}`),
   );
@@ -187,7 +188,7 @@ export async function runSessionStartupMigration(params: {
         );
       }
       let embeddedAcpSessionKey: string | undefined;
-      interruptedSessions += await repairLegacySessionRunOutcomes(
+      const repaired = await repairLegacySessionRunOutcomes(
         { agentId: options.agentId, env, storePath: databasePath },
         () => params.assertCurrent?.(),
         (row) => {
@@ -201,6 +202,13 @@ export async function runSessionStartupMigration(params: {
         },
         params.log.warn,
       );
+      interruptedSessions += repaired.repaired;
+      if (repaired.terminalUnmatched > 0) {
+        terminalUnmatched.set(
+          options.agentId,
+          (terminalUnmatched.get(options.agentId) ?? 0) + repaired.terminalUnmatched,
+        );
+      }
       // Canonical refusal is readiness failure. Drain before runtime visitors can
       // otherwise parse a whole migrated store on the main thread.
       const { certifySessionCanonicalValidationPending } =
@@ -265,6 +273,11 @@ export async function runSessionStartupMigration(params: {
     } catch (error) {
       errors.add(error);
     }
+  }
+  for (const [agentId, count] of terminalUnmatched) {
+    params.log.warn(
+      `session: agent ${agentId} has ${count} terminal unmatched legacy restart custody row(s); openclaw doctor --fix retires them.`,
+    );
   }
   throwSqliteLifecycleErrors([...errors], "Session startup migration and cleanup failed");
   if (interruptedSessions > 0) {
