@@ -142,3 +142,11 @@ subscription profile is eligible again.
 Chat `/status` reports the authentication mode from the selected runtime's current
 prepared account. A native login stays distinct from an OpenClaw profile; it does
 not satisfy an unavailable explicit profile pin.
+
+<a id="agents-api-mvp" />
+
+## Hosted Agents API setup and returned files
+
+The hosted Agents API runtime is separate from the native Codex app-server
+runtime described above. For setup, file uploads, and checking returned files,
+see the [Agents API guide](/plugins/agentsapi).
