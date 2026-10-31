@@ -1048,7 +1048,7 @@ export function inspectDatabaseWorkerBoundaries(
     source.forEachChild(visit);
     const symbols = symbolsAt(references);
     const pendingAccesses = new Set<ts.Expression>();
-    const bindings = new Map<ts.Node, ts.ObjectBindingPattern>();
+    const receiverBindings = new Map<ts.Node, ts.ObjectBindingPattern>();
     for (const [index, node] of references.entries()) {
       if (
         ts.isIdentifier(node) &&
@@ -1057,7 +1057,7 @@ export function inspectDatabaseWorkerBoundaries(
         !node.parent.propertyName &&
         ts.isObjectBindingPattern(node.parent.parent)
       ) {
-        bindings.set(node, node.parent.parent);
+        receiverBindings.set(node, node.parent.parent);
       }
       if (symbols[index]) {
         continue;
@@ -1086,13 +1086,13 @@ export function inspectDatabaseWorkerBoundaries(
     const accessLocations = [...pendingAccesses];
     symbolsAt(accessLocations);
     // Members of one destructuring share a receiver type; query each pattern once.
-    const patterns = [...new Set(bindings.values())];
+    const patterns = [...new Set(receiverBindings.values())];
     const receiverTypes = patterns.length ? checker.getTypeAtLocation(patterns) : [];
     const bindingTypes = new Map(
       patterns.map((pattern, index) => [pattern, receiverTypes[index]!]),
     );
     for (const [index, node] of references.entries()) {
-      const pattern = bindings.get(node);
+      const pattern = receiverBindings.get(node);
       const bindingMember =
         pattern && ts.isIdentifier(node)
           ? bindingTypes.get(pattern)!.getProperty(node.text)
