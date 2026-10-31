@@ -939,19 +939,13 @@ summary,
   :root {
     --shell-popup-inline-gutter: var(--chat-mobile-edge-inset);
   }
-
-  html.control-ui-content-canvas,
-  .control-ui-content-canvas body {
-    /* iOS Safari exposes the document canvas around its browser chrome; keep
-       that canvas on the same surface as the exposed narrow route canvas. */
-    background: var(--control-ui-system-chrome-background, var(--bg-content, var(--bg)));
-  }
 }
 
-/* The open mobile navigation drawer dims the app canvas behind its backdrop; the
-   document canvas Safari shows around its browser chrome dims with it. */
-html.control-ui-nav-scrim,
-.control-ui-nav-scrim body {
+/* iOS Safari shows the document canvas around its browser chrome. The system
+   chrome owner selects it where the exposed narrow route canvas or the open
+   navigation drawer's backdrop differs from the page surface. */
+html.control-ui-system-chrome-canvas,
+.control-ui-system-chrome-canvas body {
   background: var(--control-ui-system-chrome-background, var(--bg));
 }
 

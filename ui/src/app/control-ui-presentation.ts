@@ -76,10 +76,8 @@ export type ControlUiShellChrome = {
   navScrim: boolean;
 };
 
-const SHELL_CHROME_CLASSES = {
-  contentCanvas: "control-ui-content-canvas",
-  navScrim: "control-ui-nav-scrim",
-} as const;
+// The last committed shell; theme and breakpoint owners resync without one.
+let committedShell: ControlUiShellChrome = { contentCanvas: false, navScrim: false };
 
 // Opacity of the black `.shell--mobile-nav .shell-nav-backdrop` fill.
 const NAV_SCRIM_ALPHA = 0.44;
@@ -98,7 +96,6 @@ function behindNavScrim(color: string): string {
 }
 
 // Project the independently rendered shell into the static document's chrome and head metadata.
-// Without `shell`, the last committed shell state recorded on the root is reused.
 export function syncControlUiSystemChrome(
   paletteChanged = false,
   shell?: ControlUiShellChrome,
@@ -107,22 +104,18 @@ export function syncControlUiSystemChrome(
     return;
   }
   const root = document.documentElement;
-  const { contentCanvas, navScrim } = shell ?? {
-    contentCanvas: root.classList.contains(SHELL_CHROME_CLASSES.contentCanvas),
-    navScrim: root.classList.contains(SHELL_CHROME_CLASSES.navScrim),
-  };
-  for (const [className, active] of [
-    [SHELL_CHROME_CLASSES.contentCanvas, contentCanvas],
-    [SHELL_CHROME_CLASSES.navScrim, navScrim],
-  ] as const) {
-    if (root.classList.contains(className) !== active) {
-      root.classList.toggle(className, active);
-    }
-  }
+  committedShell = shell ?? committedShell;
+  const { contentCanvas, navScrim } = committedShell;
   const narrow = globalThis.matchMedia?.(
     "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
   ).matches;
   const narrowCanvas = narrow && contentCanvas;
+  // iOS Safari shows the document canvas around its browser chrome. Where that canvas
+  // differs from the page surface, it follows the published chrome color.
+  const documentCanvas = narrowCanvas || navScrim;
+  if (root.classList.contains("control-ui-system-chrome-canvas") !== documentCanvas) {
+    root.classList.toggle("control-ui-system-chrome-canvas", documentCanvas);
+  }
   const revision = (style: string | null) =>
     JSON.stringify([root.dataset.theme, root.dataset.themeMode, style, narrowCanvas, navScrim]);
   const source = revision(root.getAttribute("style"));
