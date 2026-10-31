@@ -59,8 +59,9 @@ administration still require `operator.admin`. Global scheduler status requires
 
 The **Owner** field under **Agent** shows the human responsible for an automation.
 Its current human owner or an administrator can select another existing profile.
-Transferring ownership pauses the automation and retires captured credentials and
-operator authority; it does not lend the previous owner's account to the recipient.
+Transferring ownership pauses the automation, cancels any active occurrence, and
+retires captured credentials and operator authority; it does not lend the previous
+owner's account to the recipient.
 The recipient must select an available inference account or recapture runtime
 authority before resuming model execution.
 Existing jobs inherit a human owner from trusted creator provenance when available.

@@ -1,9 +1,10 @@
 import { readFile, writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import type { Page } from "playwright";
 import type { ViteDevServer } from "vite";
 import { expect, it } from "vitest";
+import { writeToolCall } from "../../../src/gateway/gateway-provider-fixture.test-support.ts";
 import {
   setDisplayName,
   setUserProfileRole,
@@ -38,6 +39,7 @@ const proxies: ViteDevServer[] = [];
 const urls: string[] = [];
 const profiles: string[] = [];
 const providerAuthorizations: (string | undefined)[] = [];
+let heldProviderResponse: ServerResponse | undefined;
 const suite = createControlUiE2eSuite({
   name: "Human automation ownership through the real Gateway",
   startServerBeforeBrowser: true,
@@ -52,6 +54,17 @@ const suite = createControlUiE2eSuite({
               return;
             }
             providerAuthorizations.push(request.headers.authorization);
+            if (providerAuthorizations.length === 1) {
+              writeToolCall(response, "write", {
+                path: path.join(instance.state.workspaceDir, "before-transfer.txt"),
+                content: "Authorized before transfer.",
+              });
+              return;
+            }
+            if (providerAuthorizations.length === 3) {
+              heldProviderResponse = response;
+              return;
+            }
             writeOpenAiResponsesText(response, {
               text: "Synthetic owner execution completed.",
               messageId: "owner-message",
@@ -216,8 +229,26 @@ suite.define(() => {
     expect(
       await rpc(admin, "cron.run", { id: job.id, mode: "force", waitTimeoutMs: 30_000 }),
     ).toMatchObject({ run: { status: "ok" } });
-    expect(providerAuthorizations).toEqual(["Bearer synthetic-owner-test"]);
+    expect(providerAuthorizations).toEqual(Array(2).fill("Bearer synthetic-owner-test"));
+    expect(
+      await readFile(path.join(instance.state.workspaceDir, "before-transfer.txt"), "utf8"),
+    ).toBe("Authorized before transfer.");
+    // Hold a real provider response while an already-paused job is force-running.
+    // Transfer must retire that admitted occurrence before its next tool or model I/O.
+    const activeRun = rpc(admin, "cron.run", { id: job.id, mode: "force", waitTimeoutMs: 30_000 });
+    await expect.poll(() => heldProviderResponse !== undefined).toBe(true);
     await rpc(admin, "cron.update", { id: job.id, patch: { ownerProfileId: profiles[1] } });
+    writeToolCall(heldProviderResponse!, "write", {
+      path: path.join(instance.state.workspaceDir, "after-transfer.txt"),
+      content: "Must not be written after transfer.",
+    });
+    expect(await activeRun).toMatchObject({
+      run: { status: "error", error: expect.stringContaining("ownership transferred") },
+    });
+    await expect(
+      readFile(path.join(instance.state.workspaceDir, "after-transfer.txt"), "utf8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(providerAuthorizations).toEqual(Array(3).fill("Bearer synthetic-owner-test"));
     for (const [index, page] of pages.entries()) {
       await page.goto(new URL("automations?job=" + job.id, urls[index]).toString());
       await waitForControlUiGatewayReady(page);
@@ -274,7 +305,7 @@ suite.define(() => {
         run: { status: "error", error: expect.stringContaining("fresh execution authority") },
       });
       // Check only after the run settles: an enqueue acknowledgment cannot prove no I/O.
-      expect(providerAuthorizations).toEqual(["Bearer synthetic-owner-test"]);
+      expect(providerAuthorizations).toEqual(Array(3).fill("Bearer synthetic-owner-test"));
     }
   }, 120_000);
 });
