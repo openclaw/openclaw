@@ -74,17 +74,56 @@ struct TerminalHubScreenTests {
         #expect(script?.contains("\"gatewayUrl\":\"wss:\\/\\/gateway.example.com:8443\"") == true)
     }
 
+    @Test func `auth user script projects only the accepted Access credential`() throws {
+        let config = try Self.makeConfig(
+            url: #require(URL(string: "wss://gateway.example.com:8443")),
+            token: "secret-token",
+            password: "fallback-password")
+
+        let script = ControlUIHubPage.terminal.authUserScript(
+            config: config,
+            legacyCredentials: ["token": " accepted-token "])
+
+        #expect(script?.contains("\"nativeConnectAuth\":true") == true)
+        #expect(script?.contains("\"token\":\"accepted-token\"") == true)
+        #expect(script?.contains("secret-token") == false)
+        #expect(script?.contains("fallback-password") == false)
+    }
+
+    @Test func `Access auth user script withholds configured credentials without acceptance`() throws {
+        let config = try Self.makeConfig(
+            url: #require(URL(string: "wss://gateway.example.com:8443")),
+            token: "configured-token",
+            password: "configured-password")
+
+        let script = try #require(ControlUIHubPage.terminal.authUserScript(
+            config: config,
+            legacyCredentials: nil))
+
+        #expect(script.contains("\"nativeConnectAuth\":true"))
+        #expect(!script.contains("configured-token"))
+        #expect(!script.contains("configured-password"))
+        #expect(!script.contains("localStorage"))
+        #expect(!script.contains("privateKey"))
+        #expect(!script.contains("deviceAuthSeed"))
+    }
+
     @Test func `auth user script canonicalizes an explicit default port`() throws {
         let config = try Self.makeConfig(
             url: #require(URL(string: "wss://gateway.example.com:443")),
             token: "secret-token")
 
-        let script = ControlUIHubPage.terminal.authUserScript(
+        let genericScript = ControlUIHubPage.terminal.authUserScript(
             config: config,
-            storedOperatorToken: AuthenticatedControlUI.storedOperatorToken(config: config))
+            storedOperatorToken: nil)
+        let accessScript = ControlUIHubPage.terminal.authUserScript(
+            config: config,
+            legacyCredentials: nil)
 
-        #expect(script?.contains("\"https:\\/\\/gateway.example.com\"") == true)
-        #expect(script?.contains("\"https:\\/\\/gateway.example.com:443\"") == false)
+        #expect(genericScript?.contains("\"https:\\/\\/gateway.example.com\"") == true)
+        #expect(genericScript?.contains("\"https:\\/\\/gateway.example.com:443\"") == false)
+        #expect(accessScript?.contains("\"https:\\/\\/gateway.example.com\"") == true)
+        #expect(accessScript?.contains("\"https:\\/\\/gateway.example.com:443\"") == false)
     }
 
     @Test func `auth user script selects native signing and withholds the device grant`() throws {
@@ -391,13 +430,16 @@ struct TerminalHubScreenTests {
         #expect(!coordinator.matchesExpectedAuthority(host: "replacement.example.com", port: 443))
     }
 
-    @Test func `auth user script is omitted without credentials`() throws {
+    @Test func `auth user script selects the matching native authentication path`() throws {
         let config = try Self.makeConfig(url: #require(URL(string: "wss://gateway.example.com")), token: "   ")
 
-        #expect(
-            ControlUIHubPage.terminal.authUserScript(config: config, storedOperatorToken: nil) == nil)
-        #expect(
-            ControlUIHubPage.terminal.authUserScript(config: nil, storedOperatorToken: nil) == nil)
+        let genericScript = ControlUIHubPage.terminal.authUserScript(config: config, storedOperatorToken: nil)
+        let accessScript = ControlUIHubPage.terminal.authUserScript(config: config, legacyCredentials: nil)
+
+        #expect(genericScript == nil)
+        #expect(accessScript?.contains("\"nativeConnectAuth\":true") == true)
+        #expect(accessScript?.contains("\"token\"") == false)
+        #expect(ControlUIHubPage.terminal.authUserScript(config: nil, storedOperatorToken: nil) == nil)
     }
 
     @Test func `authenticated Control UI follows the resolved app appearance`() async throws {

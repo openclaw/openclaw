@@ -5951,9 +5951,12 @@ jobs:
             -only-testing:OpenClawTests/CloudflareAccessSessionStoreTests
             -only-testing:OpenClawTests/ChatTypingFocusTests
             -only-testing:OpenClawTests/ChatSendHydrationTests
+            -only-testing:OpenClawTests/SettingsHubTests
+            -only-testing:OpenClawTests/SettingsHubVisualProofTests/testIngressAuthorizedDashboardEntryPointsLoadTheSelectedGatewayPage
             -only-testing:OpenClawTests/ChatComposerTextViewIOSTests
             -only-testing:OpenClawTests/GatewayIngressControllerTests
             -only-testing:OpenClawTests/GatewayIngressLoginPreparationTests
+            -only-testing:OpenClawTests/GatewayAccessDeviceAuthBindingTests
             -only-testing:OpenClawTests/GatewayConnectionControllerTests
             -only-testing:OpenClawTests/LegacyManualGatewayMigrationTests
             -only-testing:OpenClawTests/GatewayOperatorFleetTests
