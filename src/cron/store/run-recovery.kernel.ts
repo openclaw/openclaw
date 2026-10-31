@@ -108,7 +108,10 @@ export function recoverCronJobInDatabase(
       });
     }
   };
-  if (!job) {
+  if (
+    !job ||
+    (receipt && job.state.runningAtMs === undefined && job.state.queuedAtMs === undefined)
+  ) {
     const task = findCronRunRecoveryInDatabase({
       database: database.db,
       storeKey,
@@ -164,8 +167,6 @@ export function recoverCronJobInDatabase(
       delete job.state.queuedAtMs;
       finishReceipt("skipped", nowMs, error);
       updateCronRuntimeRow(database.db, storeKey, job, previousEnabled);
-    } else {
-      finishReceipt("interrupted", nowMs, "cron: owner unavailable after run marker retirement");
     }
     return {};
   }
