@@ -133,7 +133,6 @@ overrides:
   path-to-regexp: 8.4.2
   proxy-addr: 2.0.8
   qs: 6.16.1
-  node-domexception: "npm:@nolyfill/domexception@1.0.28"
   typebox: 1.4.3
   tar: 7.5.22
   tough-cookie: 6.0.2
