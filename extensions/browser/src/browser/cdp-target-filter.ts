@@ -6,6 +6,7 @@
  */
 const BROWSER_INTERNAL_TARGET_URL_PREFIXES = [
   "chrome://",
+  "chrome-search://",
   "chrome-untrusted://",
   "chrome-extension://",
   "devtools://",
