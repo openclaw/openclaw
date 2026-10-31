@@ -73,7 +73,7 @@ const buildInfo = {
   buildId: "mock-artifact",
 };
 
-it("preloads CSS-gated lazy targets through Vite's real dependency hook", async () => {
+it("preloads CSS-gated route entries without promoting optional chunks", async () => {
   const config = controlUiViteConfig({ buildInfo });
   const preload = config.build?.modulePreload;
   if (!preload || typeof preload !== "object" || !preload.resolveDependencies) {
@@ -89,14 +89,17 @@ it("preloads CSS-gated lazy targets through Vite's real dependency hook", async 
   if (!owner) {
     throw new Error("Expected the Control UI preload metadata owner");
   }
+  const styledEntry = path.join(repoRoot, "ui/src/pages/config/config-page.tsx");
+  const plainEntry = path.join(repoRoot, "ui/src/pages/usage/usage-page.tsx");
   const sources = new Map([
     [
       "/preload-entry.js",
-      'globalThis.loadStyled = () => import("/styled.js"); globalThis.loadPlain = () => import("/plain.js");',
+      `globalThis.loadStyled = () => import(${JSON.stringify(styledEntry)}); globalThis.loadPlain = () => import(${JSON.stringify(plainEntry)}); globalThis.loadOptional = () => import("/optional.js");`,
     ],
-    ["/styled.js", 'import "/nested.js"; export const ready = true;'],
+    [styledEntry, 'import "/nested.js"; export const ready = true;'],
     ["/nested.js", 'import "/style.css"; globalThis.styled = true;'],
-    ["/plain.js", "export const ready = true;"],
+    [plainEntry, "export const ready = true;"],
+    ["/optional.js", 'import "/style.css"; export const ready = true;'],
     ["/style.css", ".fixture { color: red; }"],
   ]);
   const requests = new Map<string, string[]>();
@@ -107,6 +110,7 @@ it("preloads CSS-gated lazy targets through Vite's real dependency hook", async 
     plugins: [
       {
         name: "preload-fixture",
+        enforce: "pre",
         resolveId: (id) => (sources.has(id) ? id : null),
         load: (id) => sources.get(id),
       },
@@ -130,10 +134,12 @@ it("preloads CSS-gated lazy targets through Vite's real dependency hook", async 
     throw new Error("Expected one fixture build");
   }
   const chunks = result.output.filter((asset) => asset.type === "chunk");
-  const styled = chunks.find((chunk) => chunk.facadeModuleId === "/styled.js")!;
-  const plain = chunks.find((chunk) => chunk.facadeModuleId === "/plain.js")!;
+  const styled = chunks.find((chunk) => chunk.facadeModuleId === styledEntry)!;
+  const plain = chunks.find((chunk) => chunk.facadeModuleId === plainEntry)!;
+  const optional = chunks.find((chunk) => chunk.facadeModuleId === "/optional.js")!;
   expect(requests.get(styled.fileName)).toContain(styled.fileName);
   expect(requests.get(plain.fileName)).not.toContain(plain.fileName);
+  expect(requests.get(optional.fileName)).not.toContain(optional.fileName);
   expect(
     preload.resolveDependencies("assets/page.js", ["assets/shared.js"], {
       hostType: "html",
