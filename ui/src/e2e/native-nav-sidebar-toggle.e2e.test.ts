@@ -672,6 +672,11 @@ suite.define(() => {
     await attr(trigger, "aria-label", "Expand sidebar");
     await expectFocused(trigger);
 
+    const closedBackdrop = page.locator(".shell-nav-backdrop");
+    await attr(closedBackdrop, "inert", "");
+    await expectStyles(closedBackdrop, { opacity: "0", "pointer-events": "none" });
+
+    // Reopen through a real page-control click after the backdrop fades.
     await trigger.click();
     const inbox = navigation.locator(".sidebar-issues-button");
     await inbox.click();
