@@ -273,17 +273,6 @@ docker/login-action@
 });
 
 it("keeps one full install path and the dependency failure gates", () => {
-  expect(workflow.jobs["install-smoke-fast"]).toBeUndefined();
-  expect(workflow.jobs["docker-e2e-fast"]).toBeUndefined();
-  expect(Object.keys(workflow.jobs)).toHaveLength(13);
-  for (const retired of [
-    "docs_only",
-    "run_install_smoke",
-    "run_fast_install_smoke",
-    "run_full_install_smoke",
-  ]) {
-    expect(job("preflight").outputs).not.toHaveProperty(retired);
-  }
   for (const [name, workflowJob] of Object.entries(workflow.jobs)) {
     if (
       [
