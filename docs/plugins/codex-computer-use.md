@@ -146,7 +146,9 @@ server available, the turn fails before the thread starts.
 
 The legacy default plugin/server pair follows this replacement automatically,
 including an explicitly configured `pluginName: "computer-use"` with the default
-server name. Custom plugin, server, or marketplace selections remain unchanged.
+server name. Selecting `pluginName: "unified-computer-use"` without an
+`mcpServerName` defaults to `cua_repl`. Explicit server overrides and custom
+plugin or marketplace selections remain unchanged.
 An explicit native disable for `computer-use@openai-bundled` blocks automatic
 replacement before feature enablement. Automatic installation rechecks that disable
 immediately before sending the native install request, after marketplace discovery
@@ -346,23 +348,23 @@ install plugins or modify Codex configuration.
 
 ## Configuration reference
 
-| Field                           | Default        | Meaning                                                                        |
-| ------------------------------- | -------------- | ------------------------------------------------------------------------------ |
-| `enabled`                       | inferred       | Require Computer Use. Defaults to true when another Computer Use field is set. |
-| `autoInstall`                   | false          | Provision the native client and install or re-enable the plugin at turn start. |
-| `marketplaceDiscoveryTimeoutMs` | 60000          | How long install waits for Codex app-server marketplace discovery.             |
-| `liveTestTimeoutMs`             | 60000          | Timeout for the temporary readiness thread and its cleanup requests.           |
-| `toolCallTimeoutMs`             | 60000          | Timeout for the capability-matched Computer Use readiness tool call.           |
-| `healthCheckEnabled`            | false          | Run periodic readiness checks while the owning app-server client is active.    |
-| `healthCheckIntervalMinutes`    | 60             | Check cadence; accepted values are 30, 60, 120, or 240 minutes.                |
-| `pluginCacheMode`               | `independent`  | Use `shared` to refresh the Codex-home cache from the bundled desktop plugin.  |
-| `strictReadiness`               | false          | Run a live check at startup and stop startup if it fails.                      |
-| `autoRepair`                    | false          | Reload the Codex-owned MCP runtime and retry a failed check once.              |
-| `marketplaceSource`             | unset          | Source string passed to Codex app-server `marketplace/add`.                    |
-| `marketplacePath`               | unset          | Local Codex marketplace file path containing the plugin.                       |
-| `marketplaceName`               | unset          | Registered Codex marketplace name to select.                                   |
-| `pluginName`                    | `computer-use` | Codex marketplace plugin name.                                                 |
-| `mcpServerName`                 | `computer-use` | MCP server name exposed by the installed plugin.                               |
+| Field                           | Default          | Meaning                                                                                                          |
+| ------------------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `enabled`                       | inferred         | Require Computer Use. Defaults to true when another Computer Use field is set.                                   |
+| `autoInstall`                   | false            | Provision the native client and install or re-enable the plugin at turn start.                                   |
+| `marketplaceDiscoveryTimeoutMs` | 60000            | How long install waits for Codex app-server marketplace discovery.                                               |
+| `liveTestTimeoutMs`             | 60000            | Timeout for the temporary readiness thread and its cleanup requests.                                             |
+| `toolCallTimeoutMs`             | 60000            | Timeout for the capability-matched Computer Use readiness tool call.                                             |
+| `healthCheckEnabled`            | false            | Run periodic readiness checks while the owning app-server client is active.                                      |
+| `healthCheckIntervalMinutes`    | 60               | Check cadence; accepted values are 30, 60, 120, or 240 minutes.                                                  |
+| `pluginCacheMode`               | `independent`    | Use `shared` to refresh the Codex-home cache from the bundled desktop plugin.                                    |
+| `strictReadiness`               | false            | Run a live check at startup and stop startup if it fails.                                                        |
+| `autoRepair`                    | false            | Reload the Codex-owned MCP runtime and retry a failed check once.                                                |
+| `marketplaceSource`             | unset            | Source string passed to Codex app-server `marketplace/add`.                                                      |
+| `marketplacePath`               | unset            | Local Codex marketplace file path containing the plugin.                                                         |
+| `marketplaceName`               | unset            | Registered Codex marketplace name to select.                                                                     |
+| `pluginName`                    | `computer-use`   | Codex marketplace plugin name.                                                                                   |
+| `mcpServerName`                 | plugin-dependent | MCP server name: `cua_repl` for `unified-computer-use`, otherwise `computer-use`. Explicit values are preserved. |
 
 Turn-start auto-install intentionally refuses configured `marketplaceSource`
 values. Adding a new source is an explicit setup operation, so use

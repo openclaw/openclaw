@@ -778,6 +778,26 @@ describe("Codex app-server config", () => {
     }
   });
 
+  it("preserves explicit Computer Use server precedence for the unified plugin", () => {
+    const env = {
+      OPENCLAW_CODEX_COMPUTER_USE_PLUGIN_NAME: "unified-computer-use",
+      OPENCLAW_CODEX_COMPUTER_USE_MCP_SERVER_NAME: "computer-use",
+    };
+    const pluginConfig = {
+      computerUse: { pluginName: "unified-computer-use", mcpServerName: "configured-server" },
+    };
+    expect(computerUse({ env }).mcpServerName).toBe("computer-use");
+    expect(computerUse({ pluginConfig, env }).mcpServerName).toBe("configured-server");
+    expect(
+      computerUse({ pluginConfig, env, overrides: { mcpServerName: "override-server" } })
+        .mcpServerName,
+    ).toBe("override-server");
+    expect(
+      computerUse({ env: { OPENCLAW_CODEX_COMPUTER_USE_PLUGIN_NAME: "unified-computer-use" } })
+        .mcpServerName,
+    ).toBe("cua_repl");
+  });
+
   it("blocks Codex app-server local execution for normalized allowlist exec mode", () => {
     expect(() => resolveRuntimeForTest({ execMode: "allowlist" })).toThrow(
       "Codex app-server local execution is unavailable because effective tools.exec.mode=allowlist",

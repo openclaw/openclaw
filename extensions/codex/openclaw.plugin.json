@@ -263,8 +263,7 @@
             "default": "computer-use"
           },
           "mcpServerName": {
-            "type": "string",
-            "default": "computer-use"
+            "type": "string"
           }
         }
       },
@@ -618,7 +617,7 @@
     },
     "computerUse.mcpServerName": {
       "label": "MCP Server Name",
-      "help": "MCP server name exposed by the Computer Use plugin.",
+      "help": "MCP server name exposed by the Computer Use plugin. Defaults to cua_repl for unified-computer-use, otherwise computer-use. Explicit values are preserved.",
       "advanced": true
     },
     "codexPlugins": {

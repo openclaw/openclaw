@@ -93,38 +93,43 @@ describe("Codex Computer Use readiness", () => {
     },
   );
 
-  it("holds one client lease through a unified readiness probe and its cleanup", async () => {
-    const unified = { pluginName: "unified-computer-use", mcpServerName: "cua_repl" };
-    const fixture = createComputerUseRequest({ installed: true, ...unified, mcpTools: ["js"] });
-    const harness = createProbeHarness(fixture);
-    sharedClientMocks.getLeasedSharedCodexAppServerClient.mockResolvedValue(harness.client);
-    try {
-      const status = await readCodexComputerUseStatus({ pluginConfig: readinessConfig(unified) });
-      expect(status).toMatchObject({
-        ready: true,
-        reason: "ready",
-        ...unified,
-        tools: ["js"],
-        liveTest: { ok: true, attempts: 1, retried: false, repaired: false },
-      });
-      expect(requestCalls(fixture).map(([method]) => method)).toEqual(
-        expect.arrayContaining(["thread/start", "mcpServer/tool/call", "thread/unsubscribe"]),
-      );
-      expectRequestMethodNotCalled(
-        fixture,
-        "thread/archive",
-        "marketplace/add",
-        "experimentalFeature/enablement/set",
-        "plugin/install",
-      );
-      expect(sharedClientMocks.getLeasedSharedCodexAppServerClient).toHaveBeenCalledTimes(1);
-      expect(
-        sharedClientMocks.releaseLeasedSharedCodexAppServerClient,
-      ).toHaveBeenCalledExactlyOnceWith(harness.client);
-    } finally {
-      await harness.client.closeAndWait();
-    }
-  });
+  it.each([undefined, "cua_repl"])(
+    "probes unified Computer Use with server override %s",
+    async (mcpServerName) => {
+      const unified = { pluginName: "unified-computer-use", mcpServerName: "cua_repl" };
+      const fixture = createComputerUseRequest({ installed: true, ...unified, mcpTools: ["js"] });
+      const harness = createProbeHarness(fixture);
+      sharedClientMocks.getLeasedSharedCodexAppServerClient.mockResolvedValue(harness.client);
+      try {
+        const status = await readCodexComputerUseStatus({
+          pluginConfig: readinessConfig({ pluginName: "unified-computer-use", mcpServerName }),
+        });
+        expect(status).toMatchObject({
+          ready: true,
+          reason: "ready",
+          ...unified,
+          tools: ["js"],
+          liveTest: { ok: true, attempts: 1, retried: false, repaired: false },
+        });
+        expect(requestCalls(fixture).map(([method]) => method)).toEqual(
+          expect.arrayContaining(["thread/start", "mcpServer/tool/call", "thread/unsubscribe"]),
+        );
+        expectRequestMethodNotCalled(
+          fixture,
+          "thread/archive",
+          "marketplace/add",
+          "experimentalFeature/enablement/set",
+          "plugin/install",
+        );
+        expect(sharedClientMocks.getLeasedSharedCodexAppServerClient).toHaveBeenCalledTimes(1);
+        expect(
+          sharedClientMocks.releaseLeasedSharedCodexAppServerClient,
+        ).toHaveBeenCalledExactlyOnceWith(harness.client);
+      } finally {
+        await harness.client.closeAndWait();
+      }
+    },
+  );
 
   it.each([0, 1])(
     "retries through the owning runtime with %i reload failures",

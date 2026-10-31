@@ -451,7 +451,11 @@ export function resolveCodexComputerUseConfig(
     strictReadiness,
     autoRepair,
     pluginName: configuredPluginName ?? DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME,
-    mcpServerName: configuredMcpServerName ?? DEFAULT_CODEX_COMPUTER_USE_MCP_SERVER_NAME,
+    mcpServerName:
+      configuredMcpServerName ??
+      (configuredPluginName === "unified-computer-use"
+        ? "cua_repl"
+        : DEFAULT_CODEX_COMPUTER_USE_MCP_SERVER_NAME),
     ...(marketplaceSource ? { marketplaceSource } : {}),
     ...(marketplacePath ? { marketplacePath } : {}),
     ...(marketplaceName ? { marketplaceName } : {}),
