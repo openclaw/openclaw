@@ -26,7 +26,7 @@ export type ControlUiPageObservation = {
 type PageObserver = {
   reset(): number;
   finish(): number;
-  read(): ControlUiPageObservation;
+  read(actionStartedAt?: number): ControlUiPageObservation;
 };
 
 declare global {
@@ -85,12 +85,13 @@ function installPageObserverInBrowser() {
       endedAt ??= performance.now();
       return endedAt;
     },
-    read() {
+    read(actionStartedAt) {
+      const start = actionStartedAt ?? startedAt;
       const end = endedAt ?? performance.now();
       tasks.push(...(taskObserver?.takeRecords() ?? []));
       collectShifts(shiftObserver?.takeRecords() ?? []);
       const inInterval = (entry: PerformanceEntry) =>
-        entry.startTime >= startedAt && entry.startTime < end;
+        entry.startTime >= start && entry.startTime < end;
       const observedTasks = tasks.filter(inInterval);
       const observedShifts = shifts.filter(inInterval);
       let cls = 0;
@@ -116,9 +117,9 @@ function installPageObserverInBrowser() {
         cls = Math.max(cls, windowValue);
       }
       return {
-        startedAt,
+        startedAt: start,
         endedAt: end,
-        durationMs: end - startedAt,
+        durationMs: end - start,
         longTasksSupported,
         longTaskCount: longTasksSupported ? observedTasks.length : null,
         longTaskTotalMs: longTasksSupported
@@ -135,7 +136,7 @@ function installPageObserverInBrowser() {
           : null,
         nonRecentInputShiftSum: layoutShiftsSupported ? nonRecentInputShiftSum : null,
         layoutShiftSources: observedShifts.map((shift) => ({
-          at: shift.startTime - startedAt,
+          at: shift.startTime - start,
           value: shift.value,
           hadRecentInput: shift.hadRecentInput,
           nodes: shift.sources.map(({ node, previousRect: before, currentRect: after }) => ({
@@ -179,11 +180,14 @@ export async function finishControlUiPageObserver(page: Page) {
   });
 }
 
-export async function readControlUiPageObserver(page: Page): Promise<ControlUiPageObservation> {
-  return page.evaluate(() => {
+export async function readControlUiPageObserver(
+  page: Page,
+  actionStartedAt?: number,
+): Promise<ControlUiPageObservation> {
+  return page.evaluate((start) => {
     if (!window.openclawPageBenchmarkObserver) {
       throw new Error("Control UI page observer was not installed");
     }
-    return window.openclawPageBenchmarkObserver.read();
-  });
+    return window.openclawPageBenchmarkObserver.read(start);
+  }, actionStartedAt);
 }
