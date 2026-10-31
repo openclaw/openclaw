@@ -87,6 +87,13 @@
   overscroll-behavior: contain;
 }
 
+/* Typing on a phone grows the draft to three lines, then scrolls. The keyboard
+   leaves a short pane, and the short-pane step would otherwise hold the draft
+   to one line; the measured pane limit still lowers this when space runs out. */
+.agent-chat__composer-shell[data-mobile-composer="true"] .agent-chat__input {
+  --chat-composer-editor-max-lines: 3;
+}
+
 /* Only the unfocused one-line presentation overrides the native surface.
    Editing inherits composer-surface.css, including its textarea autogrow. */
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
