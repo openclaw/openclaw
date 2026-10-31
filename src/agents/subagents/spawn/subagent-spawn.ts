@@ -243,6 +243,7 @@ export async function spawnSubagentDirect(
         spawnedCwd,
         sessionPermissionPolicy: ctx.sessionPermissionPolicy,
         worktree: params.worktree ? params : undefined,
+        spawnMode,
         admissionPatch: admission.childSessionPatch,
         inheritedToolAllowlist: ctx.inheritedToolAllowlist,
         inheritedToolDenylist: ctx.inheritedToolDenylist,

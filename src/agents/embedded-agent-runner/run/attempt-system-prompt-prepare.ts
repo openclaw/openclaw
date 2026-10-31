@@ -356,27 +356,34 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   let subagentInstructions: string | undefined;
   if (subagent && attempt.sessionKey) {
     const [
-      { getSubagentDepthFromSessionStoreInWorker },
+      { getSubagentDepthFromSessionStoreInWorker, getSubagentSpawnModeFromSessionStoreInWorker },
       { getLatestSubagentRunByChildSessionKey },
     ] = await Promise.all([
       import("../../subagents/spawn/subagent-depth.js"),
       import("../../subagents/registry/subagent-registry-read.js"),
     ]);
-    const [childDepth, recordedRun] = await Promise.all([
+    const [childDepth, storedMode, recordedRun] = await Promise.all([
       preparedSessionEntry?.spawnDepth ??
         getSubagentDepthFromSessionStoreInWorker(attempt.sessionKey, {
           cfg: attempt.config,
           agentId: params.setup.sessionAgentId,
         }),
+      preparedSessionEntry?.spawnMode ??
+        getSubagentSpawnModeFromSessionStoreInWorker(attempt.sessionKey, {
+          cfg: attempt.config,
+          agentId: params.setup.sessionAgentId,
+        }),
       getLatestSubagentRunByChildSessionKey(attempt.sessionKey, params.setup.sessionAgentId),
     ]);
-    // Ordinary launches precede registry registration; their cleanup flag carries
-    // the producer's mode until the retained child record is available.
+    // The spawned entry owns mode; older entries fall back to the retained run
+    // record, then to the producer's cleanup flag before registry registration.
     subagentInstructions = buildSubagentStandingInstructions({
       childDepth,
       maxSpawnDepth: attempt.config?.agents?.defaults?.subagents?.maxSpawnDepth,
       spawnMode:
-        recordedRun?.spawnMode ?? (attempt.cleanupBundleMcpOnRunEnd === false ? "session" : "run"),
+        storedMode ??
+        recordedRun?.spawnMode ??
+        (attempt.cleanupBundleMcpOnRunEnd === false ? "session" : "run"),
     });
   }
   // The spawn envelope also serves harnesses that do not render embedded prompts.

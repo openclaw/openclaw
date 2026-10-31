@@ -113,6 +113,7 @@ const ownedChildMetadata = {
   forkedFromParent: true,
   sandbox: "required",
   spawnDepth: 2,
+  spawnMode: "session",
   subagentRole: "orchestrator",
   subagentControlScope: "children",
   elevatedLevel: "on",
