@@ -97,13 +97,18 @@ Completed core source review (runtime proof only where a landing row says so):
 | Root src suites                               | 25                                 | Retain independent entrypoint, package-export, and adapter contracts; strengthen logger absence proof later. Deep framework closure is partial. |
 | Realtime transcription                        | 1                                  | Retain 13 actual WebSocket, retry, buffer, cancellation, and admission declarations; external provider caller closure is bounded.               |
 
+Bootstrap / provider runtime / interactive / plugin state: all 21 suites read;
+retain 179 declarations. One PostgreSQL worker declaration lacks registration in
+the default conformance CI targets; repair its route rather than delete its proof.
+
 Core batch starting at `be86cd32eba`: remove two hook helper replays covered by
 actual module import/dispatch, two obsolete echo mocks, and the mocked TTS capability
 case plus its unused channel inventory. The existing real-registry delivery rows
 now exercise the public SDK helper. A wrong audio-file capability result passed the
 old mocked declaration and failed the new assertion; the fault was restored exactly.
-Untouched baseline: 76 tests across seven suites. Candidate validation and landing:
-[PR #189180](https://github.com/openclaw/openclaw/pull/189180) (in progress).
+Untouched baseline: 76 tests across seven suites; retained candidate: 73 passed.
+Focused lint and changed test-graph type checks passed. Complete removal-check
+results and landing: [PR #189180](https://github.com/openclaw/openclaw/pull/189180).
 
 Remaining: declaration-level review across remaining core, plugins, UI, native apps,
 root/script suites and shared fixtures; close owner-reading gaps and land subsequent batches.
