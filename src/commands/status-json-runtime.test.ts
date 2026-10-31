@@ -128,6 +128,7 @@ function runtimeInput(
     gatewayProbeDeadlineMs: timeoutMs,
     gatewayReachable: true,
     usage: undefined,
+    onSecretDiagnostics: expect.any(Function),
     includeSecurityAudit: false,
     suppressHealthErrors: true,
     ...overrides,

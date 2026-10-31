@@ -351,6 +351,7 @@ describe("status commands", () => {
           config: remoteConfig,
           timeoutMs: 38_000,
           gatewayProbeDeadlineMs: 60_000,
+          onSecretDiagnostics: expect.any(Function),
         });
         expect(
           mocks.callGateway.mock.calls.map(([input]) => [input.method, input.timeoutMs]),
@@ -428,6 +429,7 @@ describe("status commands", () => {
         config,
         timeoutMs: timeoutMs - elapsedMs,
         gatewayProbeDeadlineMs: timeoutMs,
+        onSecretDiagnostics: expect.any(Function),
         ...(agentId ? { agentId } : {}),
       });
     } else {
@@ -553,6 +555,32 @@ describe("status commands", () => {
     expect(text).not.toContain("Gateway: local · ws://127.0.0.1:18789");
     expect(text).not.toContain("Fix reachability first");
   });
+
+  it.each(["text", "json", "all"])(
+    "retains usage SecretRef diagnostics in %s output",
+    async (mode) => {
+      const diagnostic = "models.providers.openrouter.apiKey: secret reference was not found";
+      setScan({ secretDiagnostics: ["gateway.auth.token unavailable"] });
+      mocks.usage.mockImplementationOnce(async ({ onSecretDiagnostics }) => {
+        onSecretDiagnostics?.([diagnostic]);
+        return summaries.default;
+      });
+      const output = await runStatusOutput({
+        usage: true,
+        json: mode === "json",
+        all: mode === "all",
+      });
+      if (mode === "json") {
+        expect(JSON.parse(output).secretDiagnostics).toEqual([
+          "gateway.auth.token unavailable",
+          diagnostic,
+        ]);
+      } else {
+        expect(output).toContain("models.providers.openrouter.apiKey:");
+        expect(output).toContain("gateway.auth.token unavailable");
+      }
+    },
+  );
 
   it("reports unresolved gateway auth in JSON without crashing", async () => {
     setScan({
