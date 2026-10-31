@@ -9,19 +9,16 @@ import {
 } from "@tanstack/virtual-core";
 import { createMemo, createSignal, For, onSettled, type Accessor } from "solid-js";
 import { cancelLayout, scheduleLayout } from "../../lib/layout-frame.ts";
-import type { PluginDiscoveryEntry } from "../../lib/plugins/index.ts";
 import { observeDocumentRootAttributes } from "../../lib/reactive/document-root-attributes.ts";
 import { createLayoutMeasurement } from "../../lib/reactive/layout-measurement.ts";
 import { observeResize } from "../../lib/reactive/observers.ts";
 
 /** Keep one keyed card list while row tracks limit layout to the visible catalog. */
-export function PluginCatalogGrid(props: {
-  items: readonly PluginDiscoveryEntry[];
+export function PluginCatalogGrid<T extends { id: string }>(props: {
+  items: readonly T[];
   results?: boolean;
-  children: (
-    plugin: Accessor<PluginDiscoveryEntry>,
-    contentRef: (element: HTMLDivElement) => void,
-  ) => JSX.Element;
+  busy?: boolean;
+  children: (plugin: Accessor<T>, contentRef: (element: HTMLDivElement) => void) => JSX.Element;
 }) {
   let grid!: HTMLDivElement;
   let scroller: HTMLElement | null = null;
@@ -30,7 +27,7 @@ export function PluginCatalogGrid(props: {
   let blockInset = 0;
   let sizingRows = false;
   const rowSizeKey = {};
-  let keyInput: { items: readonly PluginDiscoveryEntry[]; columns: number } | undefined;
+  let keyInput: { items: readonly T[]; columns: number } | undefined;
   let pinnedRows: number[] = [];
   let syncScrollOffset: (() => void) | undefined;
   let measuredFocus: Element | null | undefined;
@@ -254,7 +251,7 @@ export function PluginCatalogGrid(props: {
         next?.windowed
           ? [
               grid,
-              grid.closest(".plugin-catalog-results__body") ?? grid,
+              grid.closest(".plugin-catalog-results__body, .plugin-catalog-results") ?? grid,
               ...(scroller ? [scroller] : []),
             ]
           : [],
@@ -293,7 +290,7 @@ export function PluginCatalogGrid(props: {
       .toSorted((a, b) => a - b)
       .flatMap((row) => props.items.slice(row * columnCount, (row + 1) * columnCount));
   });
-  function Card(card: { plugin: Accessor<PluginDiscoveryEntry> }) {
+  function Card(card: { plugin: Accessor<T> }) {
     let content!: HTMLDivElement;
     onSettled(() => {
       const id = card.plugin().id;
@@ -363,6 +360,7 @@ export function PluginCatalogGrid(props: {
       ref={(element) => (grid = element)}
       class={["plugin-catalog-grid", { "plugin-catalog-grid--results": props.results }]}
       role="list"
+      aria-busy={props.busy === undefined ? undefined : props.busy ? "true" : "false"}
       style={
         windowed()
           ? {
