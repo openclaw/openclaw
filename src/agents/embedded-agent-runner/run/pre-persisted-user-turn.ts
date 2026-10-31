@@ -42,6 +42,7 @@ import {
   AGENT_RUN_RESTART_ABORT_ERROR_CODE,
 } from "../../run-termination.js";
 import type { AgentSession } from "../../sessions/index.js";
+import { isOutOfTurnHistoryEntry } from "../../sessions/session-manager-codec.js";
 import { sessionManagerReloadTranscriptCohort } from "../../sessions/session-manager-core.js";
 import {
   sessionManagerPrepareCurrentTurnReplay,
@@ -70,6 +71,10 @@ function isInterruptedTurnEntry(entry: SessionEntry, runId: string): boolean {
   }
   if (entry.type !== "message") {
     return false;
+  }
+  // Finalized Talk speech and mirrored child results are history, not this turn's answer.
+  if (isOutOfTurnHistoryEntry(entry)) {
+    return true;
   }
   const message = entry.message;
   if (message.role === "custom") {

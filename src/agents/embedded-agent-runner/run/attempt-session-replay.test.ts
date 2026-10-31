@@ -9,7 +9,6 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { resolveSessionTranscriptReadFence } from "../../../config/sessions/session-transcript-read-fence.js";
 import { waitForSessionTranscriptProjection } from "../../../config/sessions/session-transcript-reconcile.js";
-import { appendAssistantMessageToSessionTranscript } from "../../../config/sessions/transcript.runtime.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import type { ImageContent } from "../../../llm/types.js";
 import { finalizeRuntimePromptImages } from "../../../media/runtime-prompt-image-provenance.js";
@@ -19,7 +18,6 @@ import {
   type PersistedUserTurnMessage,
 } from "../../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { SKILL_WORKSHOP_CHANGE_NOTICE_KIND } from "../../../shared/transcript-only-openclaw-assistant.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import { runWithModelFallback } from "../../model-fallback-runner.js";
 import { createAgentRunRestartAbortError } from "../../run-termination.js";
@@ -41,6 +39,7 @@ import { deliverSubagentAnnouncement } from "../../subagents/announce/subagent-a
 import { setSubagentAnnounceDeliveryDepsForTest } from "../../subagents/announce/subagent-announce-overrides.test-support.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import {
+  appendBackgroundHistoryRow,
   appendCompletedToolWork,
   appendOversizedCacheSnapshot,
   withInterruptedTurn,
@@ -169,28 +168,22 @@ describe("context engine bootstrap", () => {
 });
 
 describe("interrupted canonical user replay", () => {
-  it.each([false, true])(
-    "replays once across a background Workshop notice (selected reader: %s)",
-    async (selectedOwner) => {
+  it.each([
+    ["Workshop notice", false],
+    ["Workshop notice", true],
+    ["Talk user speech", false],
+    ["Talk user speech", true],
+    ["Talk assistant speech", false],
+    ["Talk assistant speech", true],
+    ["subagent result", true],
+  ] as const)(
+    "replays once across a background %s (selected reader: %s)",
+    async (row, selectedOwner) => {
       await withInterruptedTurn(
         false,
         async (fixture) => {
           const { attempt, target } = fixture;
-          const appendNotice = vi.fn(async () => {
-            const appended = await appendAssistantMessageToSessionTranscript({
-              ...target,
-              expectedSessionId: target.sessionId,
-              idempotencyKey: `skill-workshop-notice:${attempt.runId}`,
-              text: "One skill changed after review",
-              deliveryMirror: {
-                kind: SKILL_WORKSHOP_CHANGE_NOTICE_KIND,
-                agentId: target.agentId,
-                runId: "background-review",
-                skills: [{ name: "some-skill", action: "updated" }],
-              },
-            });
-            expect(appended.ok).toBe(true);
-          });
+          const appendNotice = vi.fn(() => appendBackgroundHistoryRow(target, row, attempt.runId));
           await withReplaySession(
             fixture,
             false,
@@ -888,6 +881,7 @@ describe("interrupted canonical user replay", () => {
         "excluded-user",
         "excluded-user-with-tail",
         "final",
+        "final-then-speech",
         "reset",
         "branch",
         "writer",
@@ -924,8 +918,12 @@ describe("interrupted canonical user replay", () => {
               );
             }
           }
-          if (change === "final") {
+          if (change.startsWith("final")) {
             other.appendMessage(createAssistant(testModel, "already done"));
+          }
+          if (change === "final-then-speech") {
+            // Speech records stay history; they never reopen an answered turn.
+            await appendBackgroundHistoryRow(fixture.target, "Talk user speech", "speech");
           }
           if (change === "reset") {
             other.appendResetBoundary("reset");

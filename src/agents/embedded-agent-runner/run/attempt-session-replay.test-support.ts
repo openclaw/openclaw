@@ -3,22 +3,32 @@ import {
   createFailureMessage,
   appendInterruptedTurnMessage,
 } from "../../../../packages/agent-core/src/turn-interruption.js";
-import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import {
+  appendTranscriptMessage,
+  upsertSessionEntryCore,
+} from "../../../config/sessions/session-accessor.js";
 import { loadSessionEntryForAdmission } from "../../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
+import { appendAssistantMessageToSessionTranscript } from "../../../config/sessions/transcript.runtime.js";
 import { persistInternalSourceReply } from "../../../gateway/internal-source-reply-persistence.js";
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import type { ImageContent } from "../../../llm/types.js";
+import { commitBackgroundResultToSession } from "../../../sessions/background-session-result.js";
 import { createNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import {
   createUserTurnTranscriptRecorder,
   type UserTurnInput,
 } from "../../../sessions/user-turn-transcript.js";
 import {
+  SKILL_WORKSHOP_CHANGE_NOTICE_KIND,
+  SUBAGENT_COMPLETION_RESULT_KIND,
+} from "../../../shared/transcript-only-openclaw-assistant.js";
+import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../../state/openclaw-agent-db.js";
+import { buildPersistedVoiceMessage } from "../../../talk/voice-transcript.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createAgentRunRestartAbortError } from "../../run-termination.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
@@ -100,6 +110,59 @@ export async function appendOversizedCacheSnapshot(manager: SessionManager) {
   await persistToolResultProjections(state, (type, data) =>
     manager.appendCustomEntryAsync(type, data),
   );
+}
+
+/** Rows other writers append after the persisted user turn without answering it. */
+export async function appendBackgroundHistoryRow(
+  target: NonNullable<ReturnType<SessionManager["getSessionTarget"]>>,
+  row: "Workshop notice" | "Talk user speech" | "Talk assistant speech" | "subagent result",
+  runId: string,
+) {
+  if (row === "subagent result") {
+    const committed = await commitBackgroundResultToSession({
+      agentId: target.agentId,
+      sessionKey: target.sessionKey,
+      expectedGeneration: {
+        sessionId: target.sessionId,
+        lifecycleRevision: (await loadSessionEntryForAdmission(target)).entry?.lifecycleRevision,
+      },
+      text: "Child task finished",
+      idempotencyKey: `subagent-result:${runId}`,
+      provenance: { kind: SUBAGENT_COMPLETION_RESULT_KIND },
+      config: { session: { store: target.storePath } },
+    });
+    if (!committed.ok) {
+      throw new Error(committed.reason);
+    }
+    return;
+  }
+  if (row !== "Workshop notice") {
+    // The Talk mirror appends finalized speech to the shared session.
+    await appendTranscriptMessage(target, {
+      message: buildPersistedVoiceMessage({
+        role: row === "Talk user speech" ? "user" : "assistant",
+        text: "Late finalized speech",
+        timestamp: 5,
+        provider: "realtime",
+      }),
+    });
+    return;
+  }
+  const appended = await appendAssistantMessageToSessionTranscript({
+    ...target,
+    expectedSessionId: target.sessionId,
+    idempotencyKey: `skill-workshop-notice:${runId}`,
+    text: "One skill changed after review",
+    deliveryMirror: {
+      kind: SKILL_WORKSHOP_CHANGE_NOTICE_KIND,
+      agentId: target.agentId,
+      runId: "background-review",
+      skills: [{ name: "some-skill", action: "updated" }],
+    },
+  });
+  if (!appended.ok) {
+    throw new Error("Workshop notice append failed");
+  }
 }
 
 export async function withInterruptedTurn(
