@@ -1,15 +1,11 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import { parseArgs } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 
 const ENVIRONMENTS = ["npm-release", "mac-release"] as const;
 type ReleaseEnvironment = (typeof ENVIRONMENTS)[number];
-type JsonRecord = Record<string, unknown>;
-
-function isRecord(value: unknown): value is JsonRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function ghJson(args: string[]): unknown {
   return JSON.parse(
@@ -72,19 +68,20 @@ export async function runReleaseApproval(argv: string[] = process.argv.slice(2))
   if (!isRecord(run) || positiveId(run.id, "GitHub run id") !== runId) {
     throw new Error(`GitHub returned invalid run metadata for ${runId}`);
   }
-  if (run.head_sha !== values.sha) {
-    throw new Error(`Run ${runId} head SHA ${String(run.head_sha)} does not match ${values.sha}`);
+  const headSha = typeof run.head_sha === "string" ? run.head_sha : "";
+  if (headSha !== values.sha) {
+    throw new Error(`Run ${runId} head SHA ${headSha} does not match ${values.sha}`);
   }
-  const workflowPath = String(run.path ?? "").split("@", 1)[0];
+  const workflowPath = (typeof run.path === "string" ? run.path : "").split("@", 1)[0];
   if (workflowPath !== `.github/workflows/${values.workflow}`) {
     throw new Error(`Run ${runId} workflow ${workflowPath} does not match ${values.workflow}`);
   }
-  if (run.head_branch !== values.ref) {
-    throw new Error(
-      `Run ${runId} head ref ${String(run.head_branch)} does not match ${values.ref}`,
-    );
+  const headBranch = typeof run.head_branch === "string" ? run.head_branch : "";
+  if (headBranch !== values.ref) {
+    throw new Error(`Run ${runId} head ref ${headBranch} does not match ${values.ref}`);
   }
-  const releaseIdentity = `${String(run.display_title ?? "")} ${String(run.head_branch ?? "")}`;
+  const displayTitle = typeof run.display_title === "string" ? run.display_title : "";
+  const releaseIdentity = `${displayTitle} ${headBranch}`;
   const escapedRelease = values.release.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
   if (
     !new RegExp(`(?:^|[^0-9A-Za-z.-])${escapedRelease}(?:$|[^0-9A-Za-z.-])`, "u").test(
@@ -93,8 +90,9 @@ export async function runReleaseApproval(argv: string[] = process.argv.slice(2))
   ) {
     throw new Error(`Run ${runId} metadata does not identify release ${values.release}`);
   }
-  if (!["queued", "in_progress", "waiting"].includes(String(run.status))) {
-    throw new Error(`Run ${runId} is not active (status=${String(run.status)})`);
+  const status = typeof run.status === "string" ? run.status : "";
+  if (!["queued", "in_progress", "waiting"].includes(status)) {
+    throw new Error(`Run ${runId} is not active (status=${status})`);
   }
 
   const endpoint = `repos/${values.repo}/actions/runs/${runId}/pending_deployments`;
