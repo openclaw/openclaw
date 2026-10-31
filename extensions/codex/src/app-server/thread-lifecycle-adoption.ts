@@ -61,66 +61,85 @@ export async function withCodexThreadLifecycleBinding(
     agentId: params.agentId ?? params.params.agentId,
     config: params.params.config,
   });
-  const {
-    binding: snapshot,
-    authority,
-    release,
-  } = await resolveCodexSessionBinding({
-    reclaimStale: true,
-    authority: params.authority,
-    bindingStore: params.bindingStore,
-    identity,
-    config: params.params.config,
-    storePath: params.params.sessionTarget?.storePath,
-    assertCurrent: () => {
-      params.params.hostCapabilities.assertActive();
-      params.assertCurrent?.();
-    },
-    signal: params.signal,
-    assertBinding: params.params.expectedSessionRuntimeOwnership
-      ? (binding) =>
-          assertCodexSessionRuntimeOwnership(binding, params.params.expectedSessionRuntimeOwnership)
-      : undefined,
-  });
-  using _ = { [Symbol.dispose]: release };
-  const assertCurrent = authority.assertCurrent;
-  const runWithLease = () =>
-    params.bindingStore.withLease(
+  for (let retry = true; ; retry = false) {
+    const {
+      binding: snapshot,
+      authority,
+      release,
+    } = await resolveCodexSessionBinding({
+      reclaimStale: true,
+      authority: params.authority,
+      bindingStore: params.bindingStore,
       identity,
-      async () => {
-        const binding = await params.bindingStore.readAsync(identity);
-        assertCodexSessionRuntimeOwnership(binding, params.params.expectedSessionRuntimeOwnership);
-        // Never prepare a replacement under the queue selected for an obsolete snapshot.
-        if (binding?.threadId !== snapshot?.threadId || binding?.clientId !== snapshot?.clientId) {
-          throw new CodexThreadBindingConflictError(
-            binding?.threadId ?? snapshot?.threadId ?? params.params.sessionId,
-            "acquiring thread lifecycle ownership",
-          );
-        }
-        assertCurrent();
-        return await run(identity, binding, authority);
+      config: params.params.config,
+      storePath: params.params.sessionTarget?.storePath,
+      assertCurrent: () => {
+        params.params.hostCapabilities.assertActive();
+        params.assertCurrent?.();
       },
-      { assertCurrent, authority },
-    );
-  // Ordinary resumes own their binding key even when a legacy row omits sessionId.
-  // Foreign-owner rejection belongs to adoption, not an upgrade of that same binding.
-  try {
-    return snapshot?.pendingResumeConfiguration
-      ? await withExclusiveCodexAppServerThread({
-          bindingStore: params.bindingStore,
-          identity,
-          threadId: snapshot.threadId,
-          run: runWithLease,
-        })
-      : snapshot
-        ? await withCodexAppServerThreadMutation(snapshot.threadId, runWithLease)
-        : await runWithLease();
-  } catch (error) {
-    // Failed publication still owns cleanup, including failures settling the lease.
-    if (onFailure) {
-      return await onFailure(error);
+      signal: params.signal,
+      assertBinding: params.params.expectedSessionRuntimeOwnership
+        ? (binding) =>
+            assertCodexSessionRuntimeOwnership(
+              binding,
+              params.params.expectedSessionRuntimeOwnership,
+            )
+        : undefined,
+    });
+    using _ = { [Symbol.dispose]: release };
+    const assertCurrent = authority.assertCurrent;
+    let reselect = false;
+    const runWithLease = () =>
+      params.bindingStore.withLease(
+        identity,
+        async () => {
+          const binding = await params.bindingStore.readAsync(identity);
+          assertCodexSessionRuntimeOwnership(
+            binding,
+            params.params.expectedSessionRuntimeOwnership,
+          );
+          // Never prepare a replacement under the queue selected for an obsolete snapshot.
+          if (
+            binding?.threadId !== snapshot?.threadId ||
+            binding?.clientId !== snapshot?.clientId
+          ) {
+            // Cold app preparation can publish while the first reply waits. Release
+            // this selection before taking the published thread's native queue.
+            // Preparation still owns replacement eligibility across physical clients.
+            reselect = retry && !snapshot && Boolean(binding);
+            throw new CodexThreadBindingConflictError(
+              binding?.threadId ?? snapshot?.threadId ?? params.params.sessionId,
+              "acquiring thread lifecycle ownership",
+            );
+          }
+          assertCurrent();
+          return await run(identity, binding, authority);
+        },
+        { assertCurrent, authority },
+      );
+    // Ordinary resumes own their binding key even when a legacy row omits sessionId.
+    // Foreign-owner rejection belongs to adoption, not an upgrade of that same binding.
+    try {
+      return snapshot?.pendingResumeConfiguration
+        ? await withExclusiveCodexAppServerThread({
+            bindingStore: params.bindingStore,
+            identity,
+            threadId: snapshot.threadId,
+            run: runWithLease,
+          })
+        : snapshot
+          ? await withCodexAppServerThreadMutation(snapshot.threadId, runWithLease)
+          : await runWithLease();
+    } catch (error) {
+      if (reselect && error instanceof CodexThreadBindingConflictError) {
+        continue;
+      }
+      // Failed publication still owns cleanup, including failures settling the lease.
+      if (onFailure) {
+        return await onFailure(error);
+      }
+      throw error;
     }
-    throw error;
   }
 }
 
