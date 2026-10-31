@@ -1,0 +1,173 @@
+title: Daily memory-flush payload boundary
+
+scenario:
+  id: memory-flush-daily-payload-bound
+  surface: runtime
+  objective: Exercise the daily payload bound through a real automatic Gateway memory flush.
+  successCriteria:
+    - The restricted read tool loads an existing daily note longer than 800 UTF-16 units.
+    - An exact 800-unit payload appends verbatim.
+    - 801-unit and 1200-character payloads return deterministic errors with unchanged file bytes.
+    - The foreground session still completes and replies.
+  gatewayConfigPatch:
+    agents:
+      defaults:
+        userTimezone: UTC
+        compaction:
+          memoryFlush:
+            enabled: true
+            forceFlushTranscriptBytes: 1
+  docsRefs:
+    - docs/concepts/memory.md
+    - docs/help/testing/qa-runners.md
+  codeRefs:
+    - src/auto-reply/reply/agent-runner-memory.ts
+    - src/agents/agent-tools.read.ts
+    - src/agents/memory-flush-content.ts
+  execution:
+    kind: flow
+    runtime: openclaw
+    providerMode: aimock
+    channel: qa-channel
+    suiteIsolation: isolated
+    isolationReason: The scenario owns AIMock fixtures and an existing daily-note fixture.
+    timeoutMs: 240000
+    summary: Run with --provider-mode aimock. The Gateway and flush writer are real; model replies are fixed local fixtures. This is not a live-provider or stable-package upgrade test.
+
+flow:
+  steps:
+    - name: observes legacy reads and each write result through a real automatic flush
+      actions:
+        - set: proof
+          value:
+            expr: |
+              (async () => {
+                if (env.providerMode !== "aimock" || typeof env.mock?.addFixture !== "function") {
+                  throw new Error("This fixture requires --provider-mode aimock.");
+                }
+                const { readFileSync } = await qaImport("node:fs");
+                const { createHash } = await qaImport("node:crypto");
+                const { getTextContent } = await qaImport("@copilotkit/aimock");
+                const textOf = (message) => getTextContent(message?.content) ?? "";
+                const isFlush = (body) => body.messages.some((message) =>
+                  message.role === "user" && textOf(message).startsWith("Pre-compaction memory flush."));
+                const lastTool = (body) => body.messages.findLast((message) => message.role === "tool");
+                const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
+                const check = (condition, message) => { if (!condition) throw new Error(message); };
+                const request = async (route, options) => {
+                  const response = await fetch(env.mock.baseUrl + route, { ...options, signal });
+                  check(response.ok, "AIMock observation failed: " + route + " (" + response.status + ")");
+                  return response.json();
+                };
+                const relativePath = "memory/" + new Date().toISOString().slice(0, 10) + ".md";
+                const file = path.join(env.gateway.workspaceDir, relativePath);
+                const legacy = "# Existing daily notes\r\n\r\n" + "歷史🐈".repeat(300) + "\r\nLEGACY_TAIL";
+                const accepted = "  " + "x".repeat(396) + "\r\n" + "y".repeat(399) + "\n";
+                const original = Buffer.from(legacy);
+                const expected = Buffer.from(legacy + "\n" + accepted);
+                const payloads = {
+                  qa_write_800: accepted,
+                  qa_write_801: "a".repeat(801),
+                  qa_write_1200: "b".repeat(1200),
+                };
+                check(legacy.length > 800 && accepted.length === 800, "Invalid fixture lengths");
+                await fs.mkdir(path.dirname(file), { recursive: true });
+                await fs.writeFile(file, original);
+                await request("/__aimock/reset", { method: "POST" });
+                const observations = new Map();
+                const observes = (body, id) => {
+                  const tool = lastTool(body);
+                  if (!isFlush(body) || !tool?.tool_call_id) return false;
+                  const call = body.messages.flatMap((message) => message.tool_calls ?? [])
+                    .findLast((call) => call.id === tool.tool_call_id);
+                  if (call?.function.name !== (id === "qa_read_legacy" ? "read" : "write")) return false;
+                  const args = JSON.parse(call.function.arguments);
+                  if (args.path !== relativePath || args.content !== payloads[id]) return false;
+                  if (!observations.has(id)) {
+                    observations.set(id, {
+                      toolCallId: tool.tool_call_id, output: textOf(tool), bytes: readFileSync(file),
+                    });
+                  }
+                  return true;
+                };
+                // Match real wire calls by arguments; Responses transport may reshape fixture IDs.
+                const write = (id) => ({
+                  toolCalls: [{ name: "write", arguments: JSON.stringify({ path: relativePath, content: payloads[id] }) }],
+                });
+                env.mock.addFixture({
+                  match: { predicate: (body) => !isFlush(body) },
+                  response: { content: "QA_BOUNDARY_FOREGROUND_OK" },
+                });
+                env.mock.addFixture({
+                  match: { predicate: (body) => isFlush(body) && !lastTool(body) },
+                  response: { toolCalls: [{
+                    name: "read", arguments: JSON.stringify({ path: relativePath }),
+                  }] },
+                });
+                env.mock.addFixture({
+                  match: { predicate: (body) => observes(body, "qa_read_legacy") },
+                  response: write("qa_write_800"),
+                });
+                env.mock.addFixture({
+                  match: { predicate: (body) => observes(body, "qa_write_800") },
+                  response: write("qa_write_801"),
+                });
+                env.mock.addFixture({
+                  match: { predicate: (body) => observes(body, "qa_write_801") },
+                  response: write("qa_write_1200"),
+                });
+                env.mock.addFixture({
+                  match: { predicate: (body) => observes(body, "qa_write_1200") },
+                  response: { content: "NO_REPLY" },
+                });
+                await waitForGatewayHealthy(env, 60000);
+                await waitForChannelReady(env, 60000);
+                await transport.reset();
+                const conversation = { id: "qa-boundary-" + randomUUID(), kind: "direct" };
+                for (const text of ["Remember the synthetic fixture.", "Keep that context and reply briefly."]) {
+                  const inbound = await transport.sendInbound({
+                    conversation, senderId: "qa-operator", senderName: "QA Operator", text,
+                  });
+                  // A queue acknowledgement is not the eventual model-authored reply.
+                  await waitForCondition(async () => {
+                    const reply = await transport.waitForCompletedReply({
+                      inbound, gateway: env.gateway, timeoutMs: 60000,
+                    });
+                    return reply.text.includes("QA_BOUNDARY_FOREGROUND_OK") ? reply : undefined;
+                  }, 60000, 100);
+                }
+                await waitForCondition(() => observations.size === 4 ? true : undefined, 60000, 100);
+                const entry = await waitForCondition(async () => {
+                  const entry = (await readRawQaSessionStore(env))["agent:qa:main"];
+                  return entry?.memoryFlush?.kind === "succeeded" && entry.status === "done" ? entry : undefined;
+                }, 60000, 100);
+                const read = observations.get("qa_read_legacy");
+                check(read.output.includes("歷史🐈".repeat(300)) && read.output.includes("LEGACY_TAIL"),
+                  "Real read tool did not load the legacy note");
+                check(read.bytes.equals(original), "Read changed legacy bytes");
+                const journal = await request("/debug/requests");
+                const cases = [
+                  ["qa_write_800", 800, true],
+                  ["qa_write_801", 801, false],
+                  ["qa_write_1200", 1200, false],
+                ].map(([id, units, allowed]) => {
+                  const observed = observations.get(id);
+                  check(observed.bytes.equals(expected), "Unexpected file bytes after " + id);
+                  const planned = journal.find((item) => item.plannedToolCallId === observed.toolCallId);
+                  const result = journal.find((item) => item.toolOutputCallId === observed.toolCallId);
+                  check(planned?.plannedToolName === "write" && result?.toolOutput === observed.output,
+                    "Missing correlated real tool result for " + id);
+                  const error = "Memory flush append rejected: content too large (" + units + " chars; max 800).";
+                  check(allowed ? !observed.output.includes("Memory flush append rejected:") : observed.output.includes(error),
+                    "Unexpected write result for " + id);
+                  return { units, decision: allowed ? "accepted" : "rejected",
+                    bytes: observed.bytes.length, sha256: sha256(observed.bytes) };
+                });
+                check((await fs.readFile(file)).equals(expected), "Final bytes changed");
+                check(entry.abortedLastRun !== true, "Parent session aborted");
+                return { provider: "aimock", gateway: "ephemeral-child", runtime: "openclaw",
+                  legacy: { units: legacy.length, bytes: original.length, sha256: sha256(original), read: true },
+                  cases, parentHealthy: true,
+                  scope: "Fresh isolated state with synthetic legacy notes; not a stable-package upgrade." };
+              })()
+      detailsExpr: JSON.stringify(proof)

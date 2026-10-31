@@ -643,7 +643,7 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
         assertCurrent();
         return previousContent;
       });
-      assertNewMemoryFlushContent(contentBefore, content);
+      assertNewMemoryFlushContent(contentBefore, content, options.relativePath);
       const separator =
         contentBefore.length > 0 && !contentBefore.endsWith("\n") && !content.startsWith("\n")
           ? "\n"

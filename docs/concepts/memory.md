@@ -303,6 +303,11 @@ Reusing Markdown headings with new facts is allowed. This check compares text
 with normalized line endings; it does not deduplicate paraphrases or repair
 existing notes.
 
+For `memory/YYYY-MM-DD.md` targets, each `content` payload is limited to 800 UTF-16 code
+units, including whitespace and line endings. Oversized payloads are rejected
+before writing or recording provenance; accepted payloads are appended verbatim.
+This is a per-call limit, not a cumulative limit across a flush or model fallback.
+
 A native provider's tools-based flush does not require a writable workspace;
 other flush plans are not resolved for sessions that cannot write it. It exposes
 `read`, the provider's declared persistence tools, and optional read-only lookup
