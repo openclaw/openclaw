@@ -9,7 +9,7 @@ import { renderWikiMarkdown, type WikiClaim } from "./markdown.js";
 import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
 import { registerSessionlessAgentScopeQueryTests } from "./query.session-scope.test-support.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
-import { createWikiGetTool } from "./tool.js";
+import { createWikiGetTool, createWikiSearchTool } from "./tool.js";
 
 const {
   getActiveMemorySearchManagerMock,
@@ -674,10 +674,10 @@ describe("getMemoryWikiPage", () => {
 });
 
 describe("wiki corpus bridge page agent scoping", () => {
-  async function createBridgeVisibilityVault() {
+  async function createBridgeVisibilityVault(bridge?: MemoryWikiPluginConfig["bridge"]) {
     const vault = await createQueryVault({
       initialize: true,
-      config: { vault: { scope: "global" } },
+      config: { vault: { scope: "global" }, bridge },
     });
     for (const [owner, title, agentIds] of [
       ["main", "Main", ["Main"]],
@@ -700,6 +700,38 @@ describe("wiki corpus bridge page agent scoping", () => {
     await vault.writeNote("sources/shared-note.md", "Shared Note", "wikiscope marker shared");
     return vault;
   }
+
+  it.each([undefined, "sandboxed-only", "owner"] as const)(
+    "applies bridge ownership %s through wiki tools without widening sandbox reads",
+    async (ownership) => {
+      const { config } = await createBridgeVisibilityVault({ ownership });
+      const appConfig = createAgentSessionVisibilityAppConfig();
+      for (const sandboxed of [false, true]) {
+        const caller = { agentId: "main", sandboxed };
+        const scoped = sandboxed || ownership === "owner";
+        const search = await createWikiSearchTool(config, appConfig, caller).execute("search", {
+          query: "wikiscope marker",
+        });
+        expect(search.details).toMatchObject({
+          results: expect.arrayContaining([
+            expect.objectContaining({ path: "sources/main-daily-note.md" }),
+            expect.objectContaining({ path: "sources/shared-note.md" }),
+          ]),
+        });
+        expect(search.details).toHaveProperty("results.length", scoped ? 2 : 4);
+        for (const lookup of ["secondary-daily-note", "unowned-daily-note"]) {
+          const get = await createWikiGetTool(config, appConfig, caller).execute("get", { lookup });
+          expect(get.details).toMatchObject({ found: !scoped });
+        }
+      }
+      if (ownership === "owner") {
+        expect(await readWiki(config, "secondary-daily-note")).toBeNull();
+        expect(await readWiki(config, "main-daily-note", { appConfig })).toMatchObject({
+          content: expect.stringContaining("wikiscope marker main"),
+        });
+      }
+    },
+  );
 
   it("resolves sandboxed ownership from the session key and fails closed without it", async () => {
     const { config } = await createBridgeVisibilityVault();
