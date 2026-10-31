@@ -1,5 +1,5 @@
 ---
-summary: "OpenClaw SQLite database locations, schema versions, integrity checks, and downgrade recovery"
+summary: "OpenClaw database locations, schema versions, integrity checks, and downgrade recovery"
 read_when:
   - Diagnosing a newer database schema error
   - Checking database compatibility before an update or downgrade
@@ -9,7 +9,12 @@ read_when:
 title: "Database schemas"
 ---
 
-OpenClaw stores control-plane state in the shared state database and agent data in one database per agent. SQLite is the default; agent stores also support the [PostgreSQL engine](/reference/database-engines). SQLite schema migrations run forward when a database opens. Doctor supports owner-supplied consecutive forward migrations for PostgreSQL state and agent schemas, with exact predecessor backups. Older OpenClaw builds refuse databases written by a newer schema.
+OpenClaw stores control-plane state in the shared state database and agent data in one database per agent. SQLite is the default; shared state and agent stores also support the [PostgreSQL engine](/reference/database-engines). SQLite schema migrations run forward when a database opens. Doctor supports owner-supplied consecutive forward migrations for PostgreSQL state and agent schemas, with exact predecessor backups. Older OpenClaw builds refuse databases written by a newer schema.
+
+Linux [durable background exec](/gateway/background-process) stores its restart
+ownership facts in the first-use `durable_background_processes` shared-state table.
+See [durable process storage](/reference/database-schemas/layout#durable-background-processes)
+for fields, retention, and upgrade behavior.
 
 For runtime contributors, start with
 [database access in workers](/reference/database-schemas/worker-access): execution
@@ -59,6 +64,8 @@ physical shared database's process-owned facts. Journal writers publish pending,
 completed, and removed status at commit through the existing worker fact transport;
 rollback preserves the previous status. Session admission reuses this fact and the
 deletion owner's queue closure instead of reading the journal on every turn.
+Unrelated first-use feature tables do not invalidate these per-agent row facts or
+cancel admitted runs. Journal changes and database retirement still revoke authority.
 Synchronous runtime guards reuse the same committed fact rather than copying the
 shared database for each check. Guards inside a native transaction still read
 that transaction's current journal, including its uncommitted changes.

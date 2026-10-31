@@ -4,7 +4,6 @@ import { Check } from "typebox/value";
 import { DEFAULT_HUB_PERCENTILE } from "./page-budget.js";
 import { AGENT_ID, STORE_KEY, type GrantAccess } from "./stores-contract.js";
 export const agentIdPattern = new RegExp(AGENT_ID);
-const storeKeyPattern = new RegExp(STORE_KEY);
 
 const NamedStore = Type.Object(
   {
@@ -157,7 +156,7 @@ export function parseMembership(raw: unknown): Membership {
     issues: string[] = [];
   const assigned = new Map<string, string>(),
     invalid = new Set<string>();
-  if (!Check(StoresSection, raw) || Object.keys(raw).some((key) => !storeKeyPattern.test(key))) {
+  if (!Check(StoresSection, raw)) {
     // Salvage agent names so the affected agents are reported, never defaulted.
     const entries: unknown[] = Object.values(raw && typeof raw === "object" ? raw : {});
     for (const entry of entries) {

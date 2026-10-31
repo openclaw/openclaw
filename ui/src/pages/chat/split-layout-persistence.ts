@@ -1,4 +1,5 @@
-import { expectDefined, isRecord } from "@openclaw/normalization-core";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isUiGlobalSessionKey } from "../../lib/sessions/session-key.ts";
 import type { ChatSplitColumn, ChatSplitLayout, ChatSplitPane } from "./split-layout-types.ts";
 

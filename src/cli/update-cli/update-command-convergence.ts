@@ -273,7 +273,14 @@ export async function convergeUpdatePlugins(params: {
           databaseBackup: params.databaseBackup,
           onDoctorStep: (step) => params.result.steps.push(step),
           opts: params.opts,
-          ...(params.candidateRuntime ? { doctorConfigWrites: true as const } : {}),
+          ...(params.candidateRuntime
+            ? {
+                doctorCapabilities: {
+                  doctorConfigWrites: true,
+                  doctorRetirementOnly: true,
+                } as const,
+              }
+            : {}),
           pluginUpdate: producedPluginUpdate,
           beforeDoctor: params.beforeDoctor,
           assertCurrent,

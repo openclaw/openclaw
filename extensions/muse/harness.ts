@@ -415,7 +415,9 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
             `Muse approval failed (${error.kind}): ${
               error.kind === "unofferedChoice"
                 ? `choice ${error.choiceId} was not offered`
-                : formatErrorMessage(error.error)
+                : error.kind === "feedbackNotAccepted"
+                  ? `choice ${error.choiceId} does not accept feedback`
+                  : formatErrorMessage(error.error)
             }`,
           );
           void stop().catch(() => runtime.close());

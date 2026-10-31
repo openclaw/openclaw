@@ -4,9 +4,11 @@
  *   --root /checkout --mode timing --iterations 3000 --samples 5
  * Repeat with --mode allocation, alternating base/candidate launch order. The same
  * script imports each revision's real owner. Allocation includes collected objects;
+ * --source selects a saved source beside its original module; --shape selects one workload.
  * traced timing is diagnostic only. Compare outputSha256 before comparing costs.
  * A 10k-row synthetic pool carries large skill snapshots and 40 plugin extensions.
- * Inputs are deeply frozen; full outputs from 32 evenly spaced rows per shape are
+ * Pool entries are deeply frozen; profile-switch copies a row to add its previous pin.
+ * Full outputs from 32 evenly spaced rows per shape are
  * hashed outside measurement. Date.now is fixed for byte-identical projections.
  * Explicit model switching supplies a synthetic catalog; no provider is contacted.
  * State is isolated under the invoking checkout's .local and removed on completion.
@@ -29,6 +31,8 @@ import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 const { values } = parseArgs({
   options: {
     root: { type: "string", default: fileURLToPath(new URL("../../", import.meta.url)) },
+    source: { type: "string" },
+    shape: { type: "string" },
     mode: { type: "string", default: "timing" },
     iterations: { type: "string", default: "3000" },
     samples: { type: "string", default: "5" },
@@ -40,7 +44,7 @@ const integer = (name: "iterations" | "samples") =>
 const iterations = integer("iterations");
 const samples = integer("samples");
 const root = path.resolve(values.root);
-const source = path.join(root, "src/gateway/sessions-patch.ts");
+const source = path.resolve(values.source ?? path.join(root, "src/gateway/sessions-patch.ts"));
 const sourceSha256 = createHash("sha256")
   .update(await readFile(source))
   .digest("hex");
@@ -137,7 +141,14 @@ const shapes: Array<{
     config: switchCfg,
     loadCatalog: async () => catalog,
   },
+  {
+    name: "profile-switch",
+    patch: { model: "synthetic/fixture-switch@synthetic-new" },
+    config: switchCfg,
+    loadCatalog: async () => catalog,
+  },
 ];
+assert(!values.shape || shapes.some((shape) => shape.name === values.shape), "Unknown shape");
 const fixedNow = 2_000;
 const realNow = Date.now;
 const tempRoot = path.resolve(".local/session-patch-projection-measure");
@@ -149,13 +160,19 @@ try {
     Date.now = () => fixedNow;
     try {
       for (const shape of shapes) {
+        if (values.shape && shape.name !== values.shape) {
+          continue;
+        }
         const project = async (index: number) => {
           const row = rows[index % rows.length]!;
           const result = await projectSessionsPatchEntry({
             cfg: shape.config ?? cfg,
             agentId: "main",
             storeKey: row.key,
-            existingEntry: row.entry,
+            existingEntry:
+              shape.name === "profile-switch"
+                ? { ...row.entry, authProfileOverride: "synthetic-old" }
+                : row.entry,
             patch: { key: row.key, expectedSessionId: row.entry.sessionId, ...shape.patch },
             isLabelInUse: () => false,
             loadGatewayModelCatalogSnapshot: shape.loadCatalog,
@@ -186,14 +203,18 @@ try {
           const memoryBefore = process.memoryUsage();
           const cpuStart = process.threadCpuUsage();
           const wallStart = performance.now();
+          const latencies: number[] = [];
           let checksum = 0;
           for (let index = 0; index < iterations; index++) {
+            const started = performance.now();
             const entry = await project(sample * iterations + index);
+            latencies.push(performance.now() - started);
             checksum += entry.sessionId.length + entry.updatedAt;
           }
           const wallMs = performance.now() - wallStart;
           const cpu = process.threadCpuUsage(cpuStart);
           const memoryAfter = process.memoryUsage();
+          latencies.sort((a, b) => a - b);
           const allocation = await inspector?.post("HeapProfiler.stopSampling");
           inspector?.disconnect();
           const leaves: Array<{ frame: string; bytes: number }> = [];
@@ -223,6 +244,9 @@ try {
               checksum,
               outputSha256,
               wallMs,
+              latencySamples: latencies.length,
+              latencyP50Ms: latencies[Math.floor(latencies.length * 0.5)],
+              latencyP95Ms: latencies[Math.floor(latencies.length * 0.95)],
               mainThreadCpuMs: (cpu.user + cpu.system) / 1_000,
               mainThreadCpuUsPerPatch: (cpu.user + cpu.system) / iterations,
               allocatedBytes,

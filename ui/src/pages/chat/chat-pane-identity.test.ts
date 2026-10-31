@@ -125,28 +125,28 @@ describe("chat pane assistant identity snapshots", () => {
     };
     try {
       draw();
-      expect(container.querySelector(".agent-chat__welcome")).toBeNull();
+      expect(container.querySelector(".agent-chat__empty")).toBeNull();
       expect(container.querySelector("openclaw-panel-loading-skeleton")).not.toBeNull();
 
       state.currentSessionId = "cached-session";
       state.chatMessages = [{ role: "assistant", content: "Cached mission briefing." }];
       draw();
       expect(container.textContent).toContain("Cached mission briefing.");
-      expect(container.querySelector(".agent-chat__welcome")).toBeNull();
+      expect(container.querySelector(".agent-chat__empty")).toBeNull();
 
       state.chatMessages = [];
       draw();
-      expect(container.querySelector(".agent-chat__welcome")).not.toBeNull();
+      expect(container.querySelector(".agent-chat__empty")?.textContent).toBe("No messages yet");
 
       state.currentSessionId = null;
       state.connected = true;
       state.chatLoading = true;
       draw();
-      expect(container.querySelector(".agent-chat__welcome")).toBeNull();
+      expect(container.querySelector(".agent-chat__empty")).toBeNull();
 
       state.chatLoading = false;
       draw();
-      expect(container.querySelector(".agent-chat__welcome")).not.toBeNull();
+      expect(container.querySelector(".agent-chat__empty")?.textContent).toBe("No messages yet");
     } finally {
       disposeChatView(container);
       resetTranscriptTestDom();

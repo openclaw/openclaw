@@ -89,9 +89,14 @@ function IsTime(value, strictTimeZone = !0) {
     tzM = +(matches[7] || 0);
   return (((hr * 60 + min - tzSign * (tzH * 60 + tzM)) % 1440) + 1440) % 1440 === 1439;
 }
+var DATE_TIME_SUFFIX =
+  /^(?:\[!?(?:(?!\.{1,2}[/\]])[A-Za-z._][A-Za-z._0-9+-]{0,13}(?:\/(?!\.{1,2}[/\]])[A-Za-z._][A-Za-z._0-9+-]{0,13})*|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])\](?:\[!?[a-z_][a-z_0-9-]*=[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*\])*|(?:\[!?[a-z_][a-z_0-9-]*=[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*\])*)$/;
 function IsDateTime(value) {
-  let dateTime = value.split(/T/i);
-  return dateTime.length === 2 && IsDate(dateTime[0]) && IsTime(dateTime[1]);
+  let index = value.indexOf("["),
+    datetime = index === -1 ? value : value.slice(0, index);
+  if (index !== -1 && !DATE_TIME_SUFFIX.test(value.slice(index))) return !1;
+  let split = datetime.split(/T/i);
+  return split.length === 2 && IsDate(split[0]) && IsTime(split[1]);
 }
 function CodePointCount(value) {
   let result = 0,

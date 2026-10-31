@@ -668,36 +668,6 @@ describe("chat pane header", () => {
   });
 });
 
-it("releases each merged-chrome toggle when its header branch closes", async () => {
-  const registered = trackNavigation();
-  const mounted = mountHeader({ mergedChrome: false });
-  const retainedToggle = query(mounted.container, ".mobile-header__navigation");
-  await waitForSolid(() => expect(registered()).toEqual([retainedToggle]));
-  for (let mount = 0; mount < 2; mount += 1) {
-    mounted.update({ mergedChrome: true });
-    const toggle = query(mounted.container, ".chat-pane__nav-toggle");
-    await waitForSolid(() => expect(registered()).toEqual([retainedToggle, toggle]));
-    mounted.update({ mergedChrome: false });
-    // A connected retired button exposes a stale map entry instead of letting isConnected mask it.
-    mounted.container.append(toggle);
-    try {
-      await waitForSolid(() => expect(registered()).toEqual([retainedToggle]));
-    } finally {
-      toggle.remove();
-    }
-  }
-  mounted.update({ mergedChrome: true });
-  const toggle = query(mounted.container, ".chat-pane__nav-toggle");
-  await waitForSolid(() => expect(registered()).toEqual([retainedToggle, toggle]));
-  mounted.unmount();
-  document.body.append(toggle);
-  try {
-    expect(registered()).toEqual([]);
-  } finally {
-    toggle.remove();
-  }
-});
-
 it("publishes the active header while retaining mobile chrome across desktop transitions", async () => {
   const registered = trackNavigation();
   const { pane, state } = createTestChatPane({

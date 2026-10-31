@@ -28,6 +28,7 @@ export type UpdatePostCoreInput = {
 export type UpdateDoctorInput = Omit<UpdatePostCoreInput, "opts"> & {
   configInputHash: string;
   repair: boolean;
+  retirementOnly?: true;
   fullIntegrityCheck?: boolean;
   yes?: boolean;
   workspaceSuggestions?: boolean;

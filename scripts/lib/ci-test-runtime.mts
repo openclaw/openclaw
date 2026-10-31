@@ -110,21 +110,26 @@ const nodeRequiredFiles = new Set([
   "src/gateway/session-list-history-retention.test.ts",
   "src/gateway/session-row-projection.retention.test.ts",
   "src/gateway/session-database-retention.test.ts",
-  "ui/src/components/desktop/desktop-mobile-keyboard.test.ts",
-  "ui/src/lib/reactive/session-progress-roster.test.ts",
+  "ui/src/components/desktop/desktop-mobile-keyboard-retention.test.ts",
   "ui/src/pages/chat/chat-pane-retention.test.ts",
   "ui/src/pages/chat/chat-thread-retention.test.ts",
   "ui/src/pages/chat/components/chat-transcript-layout-retention.test.ts",
   "ui/src/pages/chat/session-message-cache-retention.test.ts",
-  "ui/src/pages/chat/session-snapshot-store.test.ts",
+  "ui/src/pages/chat/session-snapshot-store-retention.test.ts",
   "ui/src/pages/usage/usage-page-retention.test.ts",
 ]);
-// Real Code Mode workers exercise both host runtimes independently of their
-// Node/QuickJS guest choice. Keep Bun coverage while qualifying Node workers.
+// Physical schema and worker lifecycle proofs exercise both host runtimes. Keep Bun coverage
+// while qualifying Node workers independently of any guest runtime choice.
 const bothHostFiles = new Set([
   "src/agents/code-mode.bridge.lifecycle.test.ts",
   "src/agents/code-mode-engine-parity.test.ts",
   "src/agents/code-mode.failure-phase.test.ts",
+  "src/infra/sqlite-database-admission.worker.test.ts",
+  "src/infra/sqlite-schema-facts.native.test.ts",
+  "src/infra/sqlite-schema-facts.physical-cache.test.ts",
+  "src/state/openclaw-agent-db-schema-refresh.test.ts",
+  "src/state/openclaw-agent-db.worker-admission.test.ts",
+  "src/state/openclaw-agent-db-maintenance.schema-renewal.test.ts",
 ]);
 const knownConfigs = new Set([
   "ui/vitest.config.ts",

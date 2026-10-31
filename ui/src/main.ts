@@ -1,4 +1,5 @@
 import "./styles.css";
+import "./styles/settings-native-controls.css";
 import { unsupportedControlUiBrowser } from "./app/boot-capabilities.ts";
 import { prepareApplicationStartup } from "./app/bootstrap-connection.ts";
 import { initializeControlUiDocumentHead } from "./app/control-ui-document-head.ts";

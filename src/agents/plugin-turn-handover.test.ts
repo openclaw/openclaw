@@ -91,6 +91,34 @@ describe("plugin turn handover", () => {
     expect(instance.retainedWorkCount).toBe(0);
   });
 
+  it("keeps admitted turns on their generation when both reload modes are declared", async () => {
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({
+      id: "overlap",
+      turnHandover: true,
+      generationOverlap: true,
+    });
+    registry.plugins.push(record);
+    const instance = new PluginInstance(record.id, { record, registry });
+    const control = createRetainedTurnControl(registry);
+    const outer = retainRuntimePluginWork(
+      [registry],
+      "unknown",
+      captureTurnHandoverRequest([registry]),
+    );
+    const callable = instance.wrap(() => "old generation");
+    const cancel = instance.reserveReplacement();
+    try {
+      await settle();
+      expect(control.isRequested()).toBe(false);
+      expect(instance.retainedWorkCount).toBe(2);
+      expect(callable()).toBe("old generation");
+    } finally {
+      cancel();
+      outer();
+    }
+  });
+
   it("keeps every hold when one reloaded plugin can't hand over", async () => {
     const { registry, instance: swap } = createRegistryWithInstance("swap", true);
     const pinned = addPlugin(registry, "pinned");

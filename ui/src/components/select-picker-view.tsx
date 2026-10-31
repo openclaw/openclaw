@@ -542,7 +542,7 @@ export function PickerContent<Option extends PickerOption>(props: {
             name={
               props.params.variant === "submenu" || props.params.sheet
                 ? "chevronRight"
-                : "chevronDown"
+                : (props.params.triggerIcon ?? "chevronDown")
             }
           />
         </span>

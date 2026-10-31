@@ -72,6 +72,7 @@ These are results for the cited workloads, not universal speedups.
 
 ### WebKit
 
+- Keep the visibility-hidden mobile host an absolutely positioned flex box through its transform exit. Adding `display: none` to `.sidebar-region--mobile-host > .chat-mobile-host[hidden]` was sufficient to hang WebKit while closing the composer's native `<details>` picker; native samples spun in `Style::TreeResolver::resetStyleForNonRenderedDescendants` and details slot assignment. A discrete display transition was not required. The flex/visibility structure from [#188810](https://github.com/openclaw/openclaw/pull/188810) avoids this reproduced combination. Close-cycle proof must reuse the document: navigating after each open skips the failing boundary.
 - Nested grid intrinsic sizing (`auto`, `min-content`, or `max-content` tracks inside grid items) can hang WebKit on large content; use explicit track sizes such as `minmax(0, 1fr)` ([#185997](https://github.com/openclaw/openclaw/pull/185997)).
 - Keep container queries and size containment on the smallest element that needs them. Moving containment from repeated Board reports to their toolbars cut WebKit opening time by 60% ([#185587](https://github.com/openclaw/openclaw/pull/185587)).
 - Avoid relational `:has()` selectors over frequently mutated elements. Derive the state in the existing owner: replacing position-rail sibling queries halved the median scroll frame gap ([#185727](https://github.com/openclaw/openclaw/pull/185727)).

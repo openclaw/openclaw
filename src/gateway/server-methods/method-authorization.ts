@@ -4,20 +4,18 @@ import {
   missingScopeErrorShape,
   type ErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
+import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import {
   resolveSessionMethodScope,
   type SessionOperatorScope,
 } from "../../shared/session-method-scopes-base.js";
-import {
-  holdsCronManagementGrant,
-  isCronModelManagementAllowed,
-} from "../cron-creator-authority-grant.js";
+import { holdsCronManagementGrant } from "../cron-creator-authority-grant.js";
 import { isInProcessSessionRun } from "../in-process-session-run.js";
 import {
   ADMIN_SCOPE,
   authorizeOperatorScopesForMethod,
   authorizeOperatorScopesForRequiredScope,
+  resolveAgentRuntimeCronScope,
   resolveLeastPrivilegeOperatorScopesForMethod,
 } from "../method-scopes.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
@@ -26,7 +24,7 @@ import {
   authorizeCurrentOperatorRoleScopes,
   resolveGatewayOperatorRoleActor,
 } from "../operator-role-policy.js";
-import { APPROVALS_SCOPE, WRITE_SCOPE, isOperatorScope } from "../operator-scopes.js";
+import { APPROVALS_SCOPE, isOperatorScope } from "../operator-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "../role-policy.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./shared-types.js";
 
@@ -106,16 +104,10 @@ export function authorizeGatewayMethod(
     ) {
       return { error: null };
     }
-    // Managed model calls lose global management grants. Let their write-scoped
-    // runtime identity reach the cron owner's job and live-authority checks.
-    if (
-      runtimeIdentity &&
-      (method === "cron.update" || method === "cron.remove" || method === "cron.run") &&
-      !isCronModelManagementAllowed(
-        (context.getCommittedRuntimeConfig ?? context.getRuntimeConfig)(),
-      ) &&
-      roleScopesAllow({ role: "operator", requestedScopes: [WRITE_SCOPE], allowedScopes: scopes })
-    ) {
+    // Only an authenticated agent runtime supplies the conversation/account boundary
+    // enforced by the cron handlers. Direct/global scheduler APIs remain admin-only.
+    const cronScope = runtimeIdentity && resolveAgentRuntimeCronScope(method);
+    if (cronScope && operatorScopeSatisfied(cronScope, scopes)) {
       return { error: null };
     }
     const resolvedRequiredScopes = isOperatorScope(registeredScope)

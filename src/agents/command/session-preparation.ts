@@ -85,7 +85,10 @@ export async function prepareEmbeddedSessionState(params: {
   const requestedThinkLevel = params.thinkOnce ?? params.thinkOverride ?? params.persistedThinking;
   const resolvedVerboseLevel =
     params.verboseOverride ?? params.persistedVerbose ?? params.verboseDefault;
-  const coordination = isSubagentCoordinationInputProvenance(params.opts.inputProvenance);
+  // Matches Gateway admission so re-registration cannot publish private intake.
+  const privateConversationWork =
+    params.opts.privateCompletion === true ||
+    isSubagentCoordinationInputProvenance(params.opts.inputProvenance);
 
   assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
   if (params.sessionKey || params.suppressVisibleSessionEffects) {
@@ -94,10 +97,10 @@ export async function prepareEmbeddedSessionState(params: {
       agentId: params.sessionAgentId,
       lifecycleGeneration: params.lifecycleGeneration,
       verboseLevel: resolvedVerboseLevel,
-      isControlUiVisible: !params.suppressVisibleSessionEffects && !coordination,
-      ...(coordination ? { projectSessionMessages: false } : {}),
+      isControlUiVisible: !params.suppressVisibleSessionEffects && !privateConversationWork,
+      ...(privateConversationWork ? { projectSessionMessages: false } : {}),
       // Node and local command ingress may not have a separate chat activity owner.
-      projectSessionActive: !params.suppressVisibleSessionEffects && !coordination,
+      projectSessionActive: !params.suppressVisibleSessionEffects && !privateConversationWork,
     });
   }
 

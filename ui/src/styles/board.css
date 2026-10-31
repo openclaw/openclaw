@@ -344,12 +344,14 @@ openclaw-board-widget-cell {
   overflow: auto;
 }
 
-/* Fixed grid tracks already reserve the report viewport. Keep distant charts
-   out of layout until they approach the board's scrollport. */
-.board-widget__body--fixed-report {
-  contain: strict;
+/* Fixed grid tracks reserve the card, including chrome, before it enters view. */
+.board-widget--fixed-report {
   content-visibility: auto;
   contain-intrinsic-block-size: auto 0px;
+}
+
+.board-widget__body--fixed-report {
+  contain: strict;
 }
 
 .board-widget__body--scrollable .board-widget__grant {
@@ -589,8 +591,19 @@ openclaw-board-widget-cell {
   .board-widget:focus-within .board-widget__resize-handle,
   .board-widget--dragging .board-widget__bar,
   .board-widget--dragging .board-widget__resize-handle,
-  .board-widget:has(.board-widget__menu-trigger[aria-expanded="true"]) .board-widget__bar,
-  .board-widget:has(.board-widget__menu-trigger[aria-expanded="true"])
+  .board-widget:has(
+      > :where(.board-widget__chrome)
+        > :where(.board-widget__bar)
+        > :where(.board-widget__menu)
+        > .board-widget__menu-trigger[aria-expanded="true"]
+    )
+    .board-widget__bar,
+  .board-widget:has(
+      > :where(.board-widget__chrome)
+        > :where(.board-widget__bar)
+        > :where(.board-widget__menu)
+        > .board-widget__menu-trigger[aria-expanded="true"]
+    )
     .board-widget__resize-handle {
     opacity: 1;
     transition-delay: 0s;
@@ -617,7 +630,13 @@ openclaw-board-widget-cell {
   .board-widget:hover .board-widget__grant-dot,
   .board-widget:focus-within .board-widget__grant-dot,
   .board-widget--dragging .board-widget__grant-dot,
-  .board-widget:has(.board-widget__menu-trigger[aria-expanded="true"]) .board-widget__grant-dot {
+  .board-widget:has(
+      > :where(.board-widget__chrome)
+        > :where(.board-widget__bar)
+        > :where(.board-widget__menu)
+        > .board-widget__menu-trigger[aria-expanded="true"]
+    )
+    .board-widget__grant-dot {
     opacity: 0;
   }
 
@@ -633,7 +652,12 @@ openclaw-board-widget-cell {
 
   .board-widget--frameless:hover,
   .board-widget--frameless:focus-within,
-  .board-widget--frameless:has(.board-widget__menu-trigger[aria-expanded="true"]) {
+  .board-widget--frameless:has(
+    > :where(.board-widget__chrome)
+      > :where(.board-widget__bar)
+      > :where(.board-widget__menu)
+      > .board-widget__menu-trigger[aria-expanded="true"]
+  ) {
     border-color: var(--board-line);
   }
 

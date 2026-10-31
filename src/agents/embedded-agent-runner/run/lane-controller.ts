@@ -286,9 +286,9 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     return laneTaskTimeoutError;
   };
   const throwIfAborted = () => {
-    // Bind only this lane's admitted claim; queued children can inherit a closed parent.
-    assertPlacementCurrent?.();
     if (!abortSignal.aborted) {
+      // Cancellation retains its original reason even after cleanup closes the claim.
+      assertPlacementCurrent?.();
       return;
     }
     const reason = resolveLaneTimeoutError() ?? abortSignal.reason;

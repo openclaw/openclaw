@@ -401,6 +401,7 @@
    surface across the pin slot so tags and multi-selection keep one owner. */
 .sidebar-pages__entry {
   --sidebar-pages-pin-width: 28px;
+  --sidebar-session-row-min-height: 30px;
 
   display: flex;
   align-items: center;
@@ -418,21 +419,36 @@
 
 .sidebar-pages__entry:has(.nav-item):where(:hover) {
   background: var(--surface-hover);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 72%, transparent);
 }
 
 .sidebar-pages__entry:has(.nav-item--active) {
   background: var(--surface-selected);
-  box-shadow: inset 0 0 0 1px var(--navigation-selected-border);
 }
 
 .sidebar-pages__entry:has(.nav-item--active):hover {
   background: var(--surface-selected-hover);
 }
 
+/* Page links take the session rows' rhythm: 30px fill, 15px muted icon, 13px title. */
 .sidebar-pages__entry .nav-item {
+  min-height: var(--sidebar-session-row-floor, 30px);
   background: transparent;
   border-color: transparent;
+}
+
+.sidebar-pages__entry .nav-item__icon {
+  color: var(--muted);
+  opacity: 1;
+}
+
+.sidebar-pages__entry .nav-item__icon svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.75px;
+}
+
+.sidebar-pages__entry .nav-item__text {
+  letter-spacing: -0.008em;
 }
 
 .sidebar-pages__entry:hover
@@ -453,17 +469,16 @@
 }
 
 .sidebar-pages__entry .sidebar-recent-session::after {
-  inset-inline-end: calc(-1px - var(--sidebar-pages-pin-width));
+  inset-block: 0;
+  inset-inline-end: calc(-1 * var(--sidebar-pages-pin-width));
 }
 
 .sidebar-pages__entry:hover .sidebar-recent-session {
   --session-row-bg: var(--session-row-hover-tint, var(--surface-hover));
-  --session-row-border: color-mix(in srgb, var(--border) 72%, transparent);
 }
 
 .sidebar-pages__entry:hover .sidebar-recent-session--active {
   --session-row-bg: var(--surface-selected-hover);
-  --session-row-border: var(--navigation-selected-border);
 }
 
 .sidebar-pages__entry:hover .sidebar-recent-session--selected {
@@ -479,7 +494,7 @@
   border: 0;
   border-radius: var(--radius-md);
   background: transparent;
-  color: var(--muted);
+  color: color-mix(in srgb, var(--muted) 82%, var(--sidebar-bg, var(--bg)));
   opacity: 0;
 }
 
@@ -668,17 +683,51 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
   min-width: 0 !important;
 }
 
+.sidebar-session-owner-filter > div,
 .sidebar-session-owner-filter .picker-select__trigger {
-  gap: 4px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.sidebar-session-owner-filter .picker-select__trigger {
+  justify-content: flex-start;
+  gap: 5px;
+  width: auto;
   min-height: 30px;
-  padding: 4px 6px;
+  padding: 4px 6px 4px 5px;
   border: 0;
+  border-radius: 6px;
+  corner-shape: superellipse(1.5);
   background: transparent;
   font-weight: 600;
 }
 
+.sidebar-session-owner-filter .picker-select__copy {
+  flex: 0 1 auto;
+}
+
+.sidebar-session-owner-filter .picker-select__label {
+  color: var(--text-strong);
+  font-size: calc(13px * var(--control-ui-text-scale));
+  font-weight: 550;
+  letter-spacing: -0.005em;
+}
+
 .sidebar-session-owner-filter .picker-select__chevron {
-  margin-inline-start: 0;
+  margin-inline-start: -2px;
+  color: var(--muted);
+}
+
+.sidebar-session-owner-filter .picker-select__chevron svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 1.75px;
+}
+
+.sidebar-session-owner-filter .picker-select__leading .viewer-avatar {
+  width: 18px;
+  height: 18px;
 }
 
 .sidebar-session-owner-filter.picker-select--sheet .picker-select__trigger .picker-select__chevron {
@@ -697,7 +746,7 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
 .sidebar--rail .sidebar-session-toolbar__button.sidebar-session-sort {
   width: auto;
   max-width: 50%;
-  gap: 2px;
+  gap: 4px;
   opacity: 1;
 }
 

@@ -125,14 +125,18 @@ export async function finalizeCompletedCronRunOutcomes(
           continue;
         }
         finalized.push(outcome);
-        if (
-          !(outcome.status === "ok" && outcome.triggerEval?.fired === false) ||
-          outcome.request?.runId
-        ) {
+        const quietTrigger = outcome.status === "ok" && outcome.triggerEval?.fired === false;
+        if (!quietTrigger || outcome.request?.runId) {
+          let eventContext = cronFailureNotificationEventContext(outcome.failureNotificationDetail);
+          if (quietTrigger) {
+            eventContext = { ...eventContext, quietTrigger: true };
+          }
           emit(
             state,
             cronRunResultEvent(plan.job, outcome),
-            cronFailureNotificationEventContext(outcome.failureNotificationDetail),
+            outcome.executionStarted === false
+              ? { ...eventContext, runNotStarted: true }
+              : eventContext,
           );
           if (outcome.request?.terminalTracker) {
             outcome.request.terminalTracker.emitted = true;

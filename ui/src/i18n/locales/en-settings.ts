@@ -2,6 +2,7 @@ import activeMemoryPresentation from "../../../../extensions/active-memory/contr
 import memoryWikiPresentation from "../../../../extensions/memory-wiki/control-ui.presentation.json" with { type: "json" };
 import type { TranslationMap } from "../lib/types.ts";
 import { registerPreferencesEnglish } from "./en-preferences.ts";
+import { registerSettingsSidebarEnglish } from "./en-settings-sidebar.ts";
 import { en } from "./en.ts";
 
 // Settings copy loads with its lazy page or search, not the startup shell.
@@ -50,7 +51,7 @@ const enSettings = {
     },
   },
   agents: {
-    createdBy: "Created by {id}",
+    createdBy: registerSettingsSidebarEnglish.catalog.agents.createdBy,
     defaults: {
       title: "Agent defaults",
       description: "Defaults every agent inherits unless overridden.",
@@ -1242,6 +1243,7 @@ const enSettings = {
       noModels: "Configure a chat provider to select a primary, utility, or fallback model.",
       discoveringMore: "Discovering more models…",
       discoverFailed: "More models could not be discovered.",
+      discoverFailedFor: "Models from {providers} could not be discovered.",
       retryDiscover: "Retry",
       thinkingHelpLabel: "About thinking defaults",
       thinkingHelp:
@@ -1989,25 +1991,25 @@ const enSettings = {
     itemCountPlural: "[{count} items]",
     open: "Open",
     fileOpenedOnGateway: en.configView.fileOpenedOnGateway,
-    applying: "Applying…",
+    applying: registerSettingsSidebarEnglish.catalog.configView.applying,
     autoSaveSaving: "Saving…",
     autoSaveSaved: "Saved",
-    autoSavePaused: "Autosave paused after reconnect",
-    saveNow: "Save",
-    autoSaveFailed: "Save failed",
-    autoSaveRejected: "Settings not applied",
-    autoSaveRejectedHint: "Current settings are unchanged.",
-    rejectionDetails: "Show reason",
+    autoSavePaused: registerSettingsSidebarEnglish.catalog.configView.autoSavePaused,
+    saveNow: registerSettingsSidebarEnglish.catalog.configView.saveNow,
+    autoSaveFailed: registerSettingsSidebarEnglish.catalog.configView.autoSaveFailed,
+    autoSaveRejected: registerSettingsSidebarEnglish.catalog.configView.autoSaveRejected,
+    autoSaveRejectedHint: registerSettingsSidebarEnglish.catalog.configView.autoSaveRejectedHint,
+    rejectionDetails: registerSettingsSidebarEnglish.catalog.configView.rejectionDetails,
     recoveryNotRestored: en.configView.recoveryNotRestored,
     recoveryUnknown: en.configView.recoveryUnknown,
     recoveryBackup: en.configView.recoveryBackup,
-    recoveryReload: "Discard draft and reload",
+    recoveryReload: registerSettingsSidebarEnglish.catalog.configView.recoveryReload,
     discardUnconfirmed: en.configView.discardUnconfirmed,
     writeGatewayChanged: en.configView.writeGatewayChanged,
     writeUnconfirmed: en.configView.writeUnconfirmed,
-    autoSaveConflict: "Settings changed elsewhere",
-    retry: "Retry",
-    applyChanges: "Apply changes",
+    autoSaveConflict: registerSettingsSidebarEnglish.catalog.configView.autoSaveConflict,
+    retry: registerSettingsSidebarEnglish.catalog.configView.retry,
+    applyChanges: registerSettingsSidebarEnglish.catalog.configView.applyChanges,
     reloadBlocked: en.configView.reloadBlocked,
     rawDraftBlocksApply: en.configView.rawDraftBlocksApply,
     rawDraftBlocksFormEdit: en.configView.rawDraftBlocksFormEdit,

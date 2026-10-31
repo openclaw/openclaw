@@ -44,6 +44,12 @@ including failures: subsequent reads back off from 500 ms to 5 seconds and honor
 longer Gateway retry hints. Reconnecting clears the retry wait so identity reads
 can resume on the new connection.
 
+The sidebar also keeps its display-only account identity during reconnects.
+Solo-owned sessions in **Involving me** or **My sessions** keep redundant owner
+avatars hidden when the live profile becomes temporarily unavailable;
+shared-session attribution remains visible. This retained identity does not
+authorize Gateway requests.
+
 ## Queued session changes
 
 While the same Gateway connection is recovering, changes to a session's name,
@@ -527,6 +533,13 @@ actions to open Main or browse sessions. A connection failure or a conversation
 missing from the current sidebar page does not count as deletion.
 
 Opening a view for the first time can fail if its interface files cannot be downloaded.
+This also covers the workspace shell in source-backed development previews.
+If the shell fails to load, text entered in its loading screen stays editable below
+the error and blocks automatic and in-app reloads. Copy it somewhere safe, clear
+it, then use **Reload**. Once the chat pane opens, normal draft handling takes over.
+If the conversation cannot open, the same early text stays editable below the
+route result. Copy it before opening another conversation; navigation discards
+that input and never sends it to the replacement conversation.
 The UI waits for reachability and reloads automatically, subject to reload protection
 and the 30-second loop guard. You can also use **Reload**. The same error can occur after an update;
 it does not by itself mean a new version was installed. If unsaved work blocks the

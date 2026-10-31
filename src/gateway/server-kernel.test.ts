@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
@@ -152,6 +153,7 @@ describe("createGatewayKernel", () => {
       const { state, port } = fixture;
       const bootId = `gateway-kernel-${entry}-close`;
       const configReloaderStop = createDeferred();
+      const reloadStarted = createDeferred();
       const recoveryStop = createDeferred();
       const updateCheckStopped = createDeferred();
       const periodicStopped = createDeferred();
@@ -221,13 +223,9 @@ describe("createGatewayKernel", () => {
           kernel.kernel.markSidecarsReady();
           kernel.kernel.setDispatchReady(true);
         }
-        if (!kernel) {
-          throw new Error("Expected the real Gateway kernel to be captured");
-        }
+        assert(kernel, "Expected the real Gateway kernel to be captured");
         const projection = getSessionRowProjection(kernel.gatewayRequestContext);
-        if (!projection) {
-          throw new Error("Expected the real session row projection");
-        }
+        assert(projection, "Expected the real session row projection");
         const projectionDispose = vi.spyOn(projection, "dispose");
         const prepareRows = projection.withPreparedExactRows.bind(projection);
         vi.spyOn(projection, "withPreparedExactRows").mockImplementationOnce(
@@ -279,9 +277,10 @@ describe("createGatewayKernel", () => {
 
         const closeFirstStop = vi.fn(async () => {});
         kernel.kernel.swapDiscovery({ update: async () => {}, stop: closeFirstStop });
-        const reloadStop = vi
-          .spyOn(kernel.runtimeState.configReloader, "stop")
-          .mockReturnValue(reloadWork);
+        vi.spyOn(kernel.runtimeState.configReloader, "stop").mockImplementation(() => {
+          reloadStarted.resolve();
+          return reloadWork;
+        });
         const stopRecovery = vi.fn(() => recoveryWork);
         kernel.kernel.setScheduledServiceHandles({
           stopScheduledServices: kernel.runtimeState.stopScheduledServices,
@@ -316,9 +315,9 @@ describe("createGatewayKernel", () => {
         await expect(boundHost.request("start", () => {})).rejects.toThrow("closed instance");
         expect(acceptRequest).not.toHaveBeenCalled();
         expect(invalidateCron).toHaveBeenCalledOnce();
-        await nextTurn();
+        await withinTest(reloadStarted.promise, signal);
         expect(startMaintenance).not.toHaveBeenCalled();
-        expect(reloadStop).toHaveBeenCalledOnce();
+        expect(kernel.runtimeState.configReloader.stop).toHaveBeenCalledOnce();
         expectCalls(0, terminalDispose, gatewayStop);
         configReloaderStop.resolve();
         await nextTurn();

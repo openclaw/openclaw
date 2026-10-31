@@ -590,7 +590,10 @@
 .chat-group-messages
   > .chat-message--reply:has(> .chat-bubble--actions-revealed)
   + :is(.chat-message-actions-row, .chat-message-footer),
-:is(.chat-message-actions-row, .chat-message-footer):focus-within {
+:is(.chat-message-actions-row, .chat-message-footer):is(
+  :focus-within,
+  :has([data-copy-state="error"])
+) {
   --chat-message-action-opacity: 0.6;
   --chat-message-action-pointer-events: auto;
   --chat-footer-disclosure-opacity: 1;
@@ -640,7 +643,7 @@
   --chat-footer-disclosure-pointer-events: auto;
 }
 
-.chat-group-footer:focus-within,
+.chat-group-footer:is(:focus-within, :has([data-copy-state="error"])),
 .chat-session-activity__message:focus-within,
 .chat-message-reactions:focus-within {
   --chat-footer-detail-position: static;
@@ -1432,14 +1435,7 @@ button.chat-reply-attribution__target:disabled {
   --chat-persistent-footer-opacity: 1;
 }
 
-.chat-group
-  :is(.chat-group-footer-actions, .chat-message-actions-row)
-  :is(
-    .chat-copy-btn,
-    .chat-reply-btn,
-    .chat-read-aloud-btn,
-    .chat-group-rewind
-  )[data-copy-state="copied"] {
+.chat-group :is(.chat-group-footer-actions, .chat-message-actions-row) [data-copy-state="copied"] {
   opacity: 1;
   border-color: var(--ok-subtle);
   background: var(--ok-subtle);
@@ -2050,7 +2046,8 @@ button.chat-reply-attribution__target:disabled {
     .chat-group-messages
     > .chat-message--reply:has(> .chat-bubble:is(:focus-within, .chat-bubble--actions-revealed))
     + .chat-message-footer,
-  .chat-group.user.chat-group--peer .chat-message-footer:focus-within {
+  .chat-group.user.chat-group--peer
+    .chat-message-footer:is(:focus-within, :has([data-copy-state="error"])) {
     --chat-footer-disclosure-opacity: 1;
     --chat-footer-disclosure-pointer-events: auto;
     --chat-footer-action-opacity: 0.6;

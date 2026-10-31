@@ -382,8 +382,8 @@ export type OpenClawPluginApi = {
   /** Register a versioned typed decision executor declared in the manifest. */
   registerDecisionProvider: (
     provider:
-      | import("../decisions/types.js").DecisionProviderV1
-      | import("../decisions/types-v2.js").DecisionProviderV2,
+      | import("../decisions/provider-types.js").DecisionProviderV1
+      | import("../decisions/provider-types.js").DecisionProviderV2,
   ) => void;
   /** Register a compaction provider (pluggable summarization backend). */
   registerCompactionProvider: (

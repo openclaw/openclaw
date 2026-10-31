@@ -44,7 +44,7 @@ import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import { safeRealpathSync } from "./path-safety.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { resolvePluginConfigEnablement } from "./plugin-config-enablement.js";
-import { inspectPluginGenerationSources } from "./plugin-generation-source-inspection.js";
+import { inspectPluginGenerationSourcesAsync } from "./plugin-generation-worker.js";
 import {
   withPluginLifecycleLeaseAsync,
   type PluginMetadataLeaseContext,
@@ -454,7 +454,7 @@ async function persistPluginInstallOwned(
       next = withoutPluginInstallRecords(next);
       const enabled = new Set(enabledPluginIds);
       const source = params.deferRuntime
-        ? inspectPluginGenerationSources(
+        ? await inspectPluginGenerationSourcesAsync(
             manifests
               .filter((manifest) => enabled.has(manifest.id) && manifest.origin !== "bundled")
               .map((manifest) => ({
@@ -464,6 +464,10 @@ async function persistPluginInstallOwned(
               })),
           )
         : undefined;
+      if (params.deferRuntime) {
+        await lease.assertOwned();
+        params.beforePersistentApply?.();
+      }
       const commit = () =>
         tracePluginLifecyclePhaseAsync(
           "config mutation",

@@ -83,7 +83,10 @@ describe("update-cli", () => {
   });
 
   it("runs updated plugin migrations for a plugin-only current-process update", async () => {
-    vi.spyOn(update.doctorChild, "inspectUpdateDoctorChildSupport").mockResolvedValue(true);
+    vi.spyOn(update.doctorChild, "inspectUpdateDoctorChildSupport").mockResolvedValue({
+      doctorConfigWrites: true,
+      doctorRetirementOnly: true,
+    });
     mocks.readPackageVersion.mockResolvedValue(VERSION);
     vi.mocked(update.updateGitCheckout).mockResolvedValue(
       runtimeRecovery.currentGitCoreFixture(process.cwd(), VERSION).outcome,

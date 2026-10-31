@@ -1,3 +1,4 @@
+import type { AcquireConfiguredProviderLocalService } from "openclaw/plugin-sdk/embedding-providers";
 import {
   normalizeExtraMemoryPathEntries,
   type MemoryExtraPath,
@@ -25,7 +26,6 @@ import {
   resolveForeignMemorySlotOwner,
 } from "./cli-memory-slot.js";
 import type { MemoryCommandOptions } from "./cli.types.js";
-import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
 import { getMemorySearchManager } from "./memory/index.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 import type { ShortTermAuditSummary } from "./short-term-promotion.js";
@@ -157,7 +157,7 @@ export async function withMemoryCommand(params: {
   allAgents?: boolean;
   purpose?: MemoryManagerPurpose;
   inspectSources?: boolean;
-  acquireLocalService?: MemoryCoreAcquireLocalService;
+  acquireLocalService?: AcquireConfiguredProviderLocalService;
   runInBackgroundContext?: MemoryCoreRuntimeHost["runInBackgroundContext"];
   /** Refuse instead of answering from the sidecar index when another plugin owns the slot. */
   requiresMemorySlot?: boolean;

@@ -434,6 +434,17 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/agents/bash-durable-process-store.ts",
+    [
+      {
+        tier: "W",
+        operations: ["writeDurableProcess", "listDurableProcesses"],
+        evidence:
+          "Only openclaw-state-worker-registry.ts loads durableProcessOperations for durableProcess.write (writeDurableProcess), and openclaw-state-read-operation-registry.ts loads durableProcessReadOperations for durableProcess.list (listDurableProcesses). The main-thread createDurableProcessStore facade only awaits those worker operations; the native store fixture forbids host SQL during its warm read/write flow.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-read.ts",
     [
       {
@@ -639,6 +650,17 @@ const reviewedOperations = new Map([
         operations: ["readSessionTranscriptSourcePageFromProjection"],
         evidence:
           "Only session-transcript-read-kernel.ts calls this source projection. Its reader is constructed only in session-history-readonly-reader.ts, whose sole production constructor is gateway/session-history-worker-reader.ts under session-transcript.worker.ts.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-cold-storage-navigation.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["backfillSessionColdNavigationInTransaction"],
+        evidence:
+          "Only state-migrations.cold-navigation.ts calls backfill under Doctor maintenance custody and its per-archive transaction; the other caller is scripts/perf/session-cold-navigation.ts preparing explicitly selected synthetic state. Runtime cold archive publication calls retainSessionColdNavigationInTransaction from the archive mutation worker, not this backfill operation.",
       },
     ],
   ],
@@ -2226,7 +2248,7 @@ const reviewedOperations = new Map([
         tier: "T2",
         operations: ["isCanonicalSqliteSessionMainKeyCurrent"],
         evidence:
-          "Only startup-migration.ts:287 calls it, through gateway/server-startup-session-migration.ts:201 and server-startup-plugins.ts:99 or deferred boot admission at server-agent-database-startup.ts:112.",
+          "Only startup-migration-runtime.ts calls it, through gateway/server-startup-session-migration.ts:201 and server-startup-plugins.ts:99 or deferred boot admission at server-agent-database-startup.ts:112.",
       },
     ],
   ],
@@ -2237,7 +2259,7 @@ const reviewedOperations = new Map([
         tier: "T2",
         operations: ["setCanonicalSqliteSessionMainKey", "markCanonicalSessionValidationPending"],
         evidence:
-          "The setter serves startup-migration.ts boot admission and commands/doctor-session-canonical-keys.ts repair. Pending validation is written only by that setter or explicit allowStoredAlias(s)/allowCanonicalRepair imports and repairs: legacy-main-session-migration-operations.ts, session-accessor.sqlite-import.ts, and Doctor projection/rewrite. Import's retained recovery path is Doctor-only via doctor-session-sqlite-retained.ts -> rebuildDeferredPluginSessionSourceIndex.",
+          "The setter serves startup-migration-runtime.ts boot admission and commands/doctor-session-canonical-keys.ts repair. Pending validation is written only by that setter or explicit allowStoredAlias(s)/allowCanonicalRepair imports and repairs: legacy-main-session-migration-operations.ts, session-accessor.sqlite-import.ts, and Doctor projection/rewrite. Import's retained recovery path is Doctor-only via doctor-session-sqlite-retained.ts -> rebuildDeferredPluginSessionSourceIndex.",
       },
     ],
   ],
@@ -3474,6 +3496,7 @@ const workerModules = new Set([
   "src/plugin-state/plugin-state.worker.ts", // Only openclaw-state.worker.ts imports and calls this command dispatcher; its nested callbacks share that worker ownership.
   "src/config/sessions/session-suggestion-store.kernel.ts", // session-sharing-store.worker.ts owns add/claim/release/finalize; session-transcript.worker.ts owns list. The host read facade imports only its type.
   "src/config/sessions/session-cold-storage-inventory.ts", // Only session-cold-storage-worker.ts calls readSessionColdStorageInventory, dispatched by session-transcript.worker.ts.
+  "src/config/sessions/session-cold-storage-payload-read.ts", // Its sole factory is constructed inside session-history-readonly-reader.ts's admitted snapshot, whose sole production constructor is session-history-worker-reader.ts under session-transcript.worker.ts. The other caller is the explicit synthetic cold-navigation benchmark; shared native projection readers never construct it.
   "src/boards/sqlite-board-store.kernel.ts", // Only sqlite-board-store.worker.ts executes boards.applyOps/putWidget/grant; session-history-read-operation.worker.ts owns board-snapshot/board-widget-document reads. Host imports are type-only.
   "src/infra/session-cost-usage-cache.kernel.ts", // Only session-cost-usage-worker.ts reads rollups; openclaw-agent-execution-operations.ts dispatches usageCache.writeRollup/prune in the agent execution worker. The host cache writer imports only types.
   "src/trajectory/runtime-retention.sqlite.ts", // SQL runs only through agent execution, session-history read, and entry-patch workers; runtime-retention.ts uses only the pure due/state helpers.
@@ -3641,6 +3664,10 @@ const exceptionModules = new Set([
   "src/infra/sqlite-staging-token.ts", // acquireSqliteStagingToken holds the private snapshot admission/retirement lock through native transactions.
 ]);
 const cliModules = new Map([
+  [
+    "scripts/perf/session-cold-navigation.ts",
+    "Explicit developer-only measurement of cold archive publication, navigation backfill and bounded reads on synthetic state; no runtime imports or Gateway callers",
+  ],
   [
     "scripts/perf/session-cold-selection.ts",
     "Explicit developer-only benchmark of cold preparation and mutation on synthetic state; no runtime imports or Gateway callers",

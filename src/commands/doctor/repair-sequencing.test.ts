@@ -11,6 +11,14 @@ import { mocks } from "./repair-sequencing-mocks.test-support.js";
 import { runDoctorRepairSequence } from "./repair-sequencing.js";
 import { registerSharedRuntimeReaderDoctorTests } from "./repair-sequencing.shared-runtime.test-support.js";
 
+const hasDeferredRetirement = vi.hoisted(() => vi.fn(() => false));
+// mock-isolation: Sequencing fixtures own the deferred receipt; never read or write the process update ledger.
+vi.mock(import("../../infra/update-deferred-model-retirement.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  hasDeferredUpdateModelRetirement: hasDeferredRetirement,
+  recordUpdateModelRetirement: vi.fn(),
+}));
+
 function runRepairs(
   cfg: OpenClawConfig = {},
   options: Omit<Parameters<typeof runDoctorRepairSequence>[0], "state" | "doctorFixCommand"> & {
@@ -88,6 +96,7 @@ function expectPreservedPlugins(params: unknown, id: string) {
 describe("doctor repair sequencing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    hasDeferredRetirement.mockReturnValue(false);
     mocks.applyPluginAutoEnable.mockImplementation(unchangedConfig);
     mocks.materializePluginAutoEnableCandidates.mockImplementation(unchangedConfig);
     mocks.ensureAuthProfileStore.mockReturnValue({ profiles: {}, usageStats: {} });
@@ -128,6 +137,33 @@ describe("doctor repair sequencing", () => {
   });
 
   registerSharedRuntimeReaderDoctorTests();
+
+  it.each(["retirement", "prior-config", "prior-state", "uncertain-retirement"])(
+    "proves retirement-only from recorded work: %s",
+    async (kind) => {
+      hasDeferredRetirement.mockReturnValue(true);
+      if (kind === "prior-config") {
+        mocks.maybeRepairStaleConfiguredAuthOrders.mockReturnValueOnce({
+          config: {},
+          changes: ["Repaired auth order"],
+        });
+      }
+      if (kind === "prior-state") {
+        mocks.migrateLegacyTailscaleProfileIdentities.mockReturnValueOnce({
+          changes: ["Repaired identity"],
+          warnings: [],
+        });
+      }
+      mocks.repairStaleAgentModelRefs.mockReturnValueOnce({
+        config: {},
+        changes: ["Retired model"],
+        warnings: kind === "uncertain-retirement" ? ["Catalog unavailable"] : [],
+      });
+      const result = await runRepairs();
+      expect(result.modelRetirementOnly).toBe(kind === "retirement");
+      expect(result.state.pendingChanges).toBe(true);
+    },
+  );
 
   it.each([
     {

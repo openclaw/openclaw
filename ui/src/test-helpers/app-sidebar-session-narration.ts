@@ -24,7 +24,6 @@ export function runningRow(key: string): SidebarRecentSession {
     loadingChildren: false,
     containsActiveDescendant: false,
     runningChildCount: 0,
-    failedChildCount: 0,
   };
 }
 

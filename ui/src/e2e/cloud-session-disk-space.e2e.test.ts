@@ -73,7 +73,7 @@ suite.define(() => {
 
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await sidebarRow.getByText("Disk monitor", { exact: true }).waitFor();
-        await expectAccessibleBadge("ok", "Placement: active");
+        await expect.poll(() => cloudBadge.count()).toBe(0);
 
         for (const [status, freeMb, title] of [
           ["warning", 247, "Cloud session disk space is low"],
@@ -89,7 +89,7 @@ suite.define(() => {
         }
 
         await refresh({ ...healthy, observedAtMs: observedAtMs + 3_000 });
-        await expectAccessibleBadge("ok", "Placement: active");
+        await expect.poll(() => cloudBadge.count()).toBe(0);
       },
     ));
 });

@@ -372,8 +372,20 @@ def with_screenshot_simulator(template = nil, watch_name: nil, diagnostics: nil)
 
   begin
     screenshot_phase(diagnostics, "boot", device: name, udid: udid) do
-      sh("xcrun", "simctl", "bootstatus", udid, "-b")
-      require_exclusive_screenshot_simulator!(udid, diagnostics)
+      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      inventory_started = nil
+      begin
+        sh("xcrun", "simctl", "bootstatus", udid, "-b")
+        inventory_started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        require_exclusive_screenshot_simulator!(udid, diagnostics)
+      ensure
+        finished = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        if diagnostics
+          event = diagnostics.events.last
+          event["bootstatusSeconds"] = ((inventory_started || finished) - started).round(2)
+          event["inventorySeconds"] = (finished - inventory_started).round(2) if inventory_started
+        end
+      end
     end
     if ENV["OPENCLAW_SNAPSHOT_STARTUP_PROBE"] == "1"
       screenshot_phase(diagnostics, "simulator-idle", device: name, udid: udid) { sleep(120) }
@@ -2454,6 +2466,7 @@ platform :ios do
           "-derivedDataPath", derived_data_path,
           "-destination", "generic/platform=iOS Simulator",
           "ARCHS=#{RbConfig::CONFIG.fetch("host_cpu")}", "ONLY_ACTIVE_ARCH=YES",
+          "COMPILER_INDEX_STORE_ENABLE=NO",
           "-allowProvisioningUpdates", "build-for-testing"
         ],
         log_path: File.join(log_directory, "build.log")

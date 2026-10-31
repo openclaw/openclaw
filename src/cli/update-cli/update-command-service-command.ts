@@ -15,6 +15,8 @@ import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { runCommandWithTimeout, type CommandOptions } from "../../process/exec.js";
+import type { DaemonActionResponse } from "../daemon-cli/response.js";
+import type { GatewayRestartSnapshot } from "../daemon-cli/restart-health.types.js";
 import { resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
 import {
   requiresRetainedUpdateCommandOwner,
@@ -154,6 +156,7 @@ export async function runUpdatedInstallGatewayCommand(
     /** Receives each completed probe or child phase with its measured wall time. */
     onTimedStep?: (step: UpdateStepResult) => void;
     onGatewayStartAttempted?: (action?: "install" | "restart") => void;
+    onReadiness?: (health: GatewayRestartSnapshot | undefined) => void;
     originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
   },
   action: "install" | "restart",
@@ -308,7 +311,10 @@ export async function runUpdatedInstallGatewayCommand(
       exitCode: 0,
     });
   }
-  const response = complete ? safeParseJsonRecord(res.stdout) : undefined;
+  // SAFETY: The admitted target owns this private response; result/identity gates below admit its facts.
+  const response = (complete ? safeParseJsonRecord(res.stdout) : undefined) as
+    | (Omit<DaemonActionResponse, "ok"> & { ok: unknown; rebind?: unknown })
+    | undefined;
   if (installing && response) {
     const warnings = filterStringEntries(response.warnings);
     if (warnings.length) {
@@ -362,12 +368,18 @@ export async function runUpdatedInstallGatewayCommand(
     }
   }
   if (exited && res.code === 0) {
-    return response?.action === action &&
+    if (
+      response?.action === action &&
       response.ok === true &&
       action === "restart" &&
       (response.result === "restarted" || response.result === "scheduled")
-      ? "accepted"
-      : "unverified";
+    ) {
+      if (response.result === "restarted") {
+        params.onReadiness?.(response.readiness);
+      }
+      return "accepted";
+    }
+    return "unverified";
   }
   const operation = installing ? "refresh" : action;
   const message = `updated install ${operation} failed: ${formatCommandFailure(res.stdout, res.stderr)} (${entrypoint})`;

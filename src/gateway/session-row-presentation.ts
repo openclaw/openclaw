@@ -56,7 +56,11 @@ import {
 } from "./session-sharing-policy.js";
 import { prepareProjectedSessionSharing } from "./session-sharing.js";
 import { sessionTitleRequests } from "./session-title-state.js";
-import { matchesSessionArchiveFilter, resolveSessionChildOwners } from "./session-utils-core.js";
+import {
+  matchesSessionArchiveFilter,
+  resolveGatewaySessionBackgroundProcessCount,
+  resolveSessionChildOwners,
+} from "./session-utils-core.js";
 import {
   applyGatewaySessionRowMode,
   projectGatewaySessionActiveRun,
@@ -421,7 +425,13 @@ export function prepareProjectedSessionPresentation(
       facts[21] = run?.runIds?.length;
       // A changed child fact retires timestamped views even when the aggregate stays equal.
       facts[22] = childActivity.revision;
-      facts.length = 23;
+      facts[23] = resolveGatewaySessionBackgroundProcessCount({
+        cfg,
+        key: record.key,
+        agentId: record.agentId,
+        sessionId: record.entry.sessionId,
+      });
+      facts.length = 24;
       if (run?.runIds) {
         for (const id of run.runIds) {
           facts.push(id);

@@ -97,7 +97,16 @@ export type ChatThreadProps = Omit<
   | "getTurnVideoMessages"
   | "onOpenWorkspaceFile"
 > &
-  ChatWelcomeIdentityProps &
+  Pick<
+    ChatWelcomeIdentityProps,
+    | "currentAgentId"
+    | "agents"
+    | "assistantName"
+    | "assistantAvatar"
+    | "assistantAvatarUrl"
+    | "assistantAvatarSource"
+    | "sessionHost"
+  > &
   ChatSendStatusActions &
   SubagentRoster & {
     applicationContext?: ApplicationContext;

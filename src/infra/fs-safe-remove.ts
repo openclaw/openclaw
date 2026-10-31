@@ -18,7 +18,8 @@ function findMappedFilesystemCause(error: unknown): NodeJS.ErrnoException | unde
     error instanceof FsSafeError &&
     error.details?.operation === "remove" &&
     (error.details.phase === "enumerate" || error.details.phase === "inspect");
-  if ((error as NodeJS.ErrnoException | undefined)?.code !== "path-alias" && !removalObservation) {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  if (code !== "path-alias" && code !== "permission-denied" && !removalObservation) {
     return undefined;
   }
   const cause = (error as Error & { cause?: unknown }).cause;
@@ -37,6 +38,7 @@ function filesystemCode(error: unknown): string | undefined {
   if (
     candidate?.code === "not-removable" ||
     candidate?.code === "not-empty" ||
+    candidate?.code === "permission-denied" ||
     candidate?.code === "path-alias"
   ) {
     // SAFETY: For these fs-safe wrappers, inspect the optional cause code and accept only errno syntax.

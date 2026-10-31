@@ -6,7 +6,6 @@ import {
   type MemoryEmbeddingProviderRuntime,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { formatErrorMessage } from "../dreaming-shared.js";
-import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 import { MemoryManagerReloadError } from "./lifecycle.js";
 import {
   MISSING_LOCAL_MEMORY_EMBEDDING_PROVIDER_MESSAGE,
@@ -30,7 +29,6 @@ type CreateEmbeddingProviderOptions = Omit<MemoryEmbeddingProviderCreateOptions,
   provider: string;
   fallback: string;
   outputDimensionality?: number;
-  acquireLocalService?: MemoryCoreAcquireLocalService;
   createProvider?: MemoryManagerProviderFactory;
 };
 

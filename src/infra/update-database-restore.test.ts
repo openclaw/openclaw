@@ -408,15 +408,15 @@ it.each([
   "leaves every current family unchanged when output $failureAt cannot allocate (cleanup failure=$cleanupFails)",
   async ({ failureAt, cleanupFails }) => {
     await withFixture(async (fixture) => {
-      const options = { env: fixture.state.env };
-      const origin = JSON.stringify({ growth: "x".repeat(8 * 1024) });
-      for (let index = 0; index < 64; index++) {
-        const historyRun = createUpdateRun({ trigger: "cli" }, options);
-        finishUpdateRun(historyRun.runId, { status: "failed", reason: "history-growth" }, options);
-        fixture.shared.db
-          .prepare("UPDATE update_runs SET origin_json=? WHERE run_id=?")
-          .run(origin, historyRun.runId);
-      }
+      // One completed row needs an overflow page in the history preserved by rollback.
+      const db = fixture.shared.db;
+      const pagesBefore = Number(db.prepare("PRAGMA page_count").get()!.page_count);
+      const origin = JSON.stringify({ growth: "x".repeat(4 * 1024) });
+      db.prepare("UPDATE update_runs SET origin_json=? WHERE run_id=?").run(
+        origin,
+        fixture.removedRun.runId,
+      );
+      expect(db.prepare("PRAGMA page_count").get()!.page_count).toBeGreaterThan(pagesBefore);
       await fixture.close();
       const assertUnchanged = await unchangedFiles(fixture);
       const snapshots = await Promise.all(

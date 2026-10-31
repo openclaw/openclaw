@@ -80,6 +80,7 @@ export type GetPublishedPreparedModelCatalogOwnerParams = Omit<
 type PreparedModelCatalogConfigPolicy = "exact" | "published";
 type PreparedModelCatalogOwner = {
   snapshot: PreparedModelRuntimeSnapshot;
+  run?: <T>(run: () => T) => T;
   release?: () => void | Promise<void>;
   refreshed?: boolean;
 };
@@ -313,7 +314,11 @@ async function resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
       await using _ = lease;
       throw new PreparedModelCatalogConfigReplacedError(activationExact.agentDir);
     }
-    return { snapshot: lease.snapshot, release: () => lease[Symbol.asyncDispose]() };
+    return {
+      snapshot: lease.snapshot,
+      run: lease.run,
+      release: () => lease[Symbol.asyncDispose](),
+    };
   }
   const persistOfflineRefresh = params.persistOfflineRefresh && params.refreshFullCatalog;
   if (!persistOfflineRefresh) {
@@ -357,7 +362,7 @@ async function resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
       `prepared model catalog owner was not published for the requested config (${activationFull.agentDir})`,
     );
   }
-  return { snapshot: lease.snapshot, release: () => lease[Symbol.asyncDispose]() };
+  return { snapshot: lease.snapshot, run: lease.run, release: () => lease[Symbol.asyncDispose]() };
 }
 
 async function withPreparedModelCatalogOwnerPolicy<T>(
@@ -377,24 +382,28 @@ async function withPreparedModelCatalogOwnerPolicy<T>(
   const publishedReadOnlyOwner = request.readOnly
     ? getPreparedModelCatalogOwnerSnapshot(request)
     : undefined;
-  const { snapshot, release, refreshed } = await resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
-    request,
-    configPolicy,
-    preparePublishedOwner,
-  );
+  const { snapshot, run, release, refreshed } =
+    await resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
+      request,
+      configPolicy,
+      preparePublishedOwner,
+    );
   try {
-    // Only published owners expose generation caches; temporary reads use their prepared facts.
-    const owner =
-      refreshed || (request.readOnly && !publishedReadOnlyOwner)
-        ? snapshot
-        : await materializeRequestedModelCatalog(
-            snapshot,
-            request.readOnly,
-            request.refreshFullCatalog,
-            request.providerDiscoveryProviderIds,
-          );
-    // Projection must finish before releasing the selected generation's resources.
-    return await read(owner);
+    const project = async () => {
+      // Only published owners expose generation caches; temporary reads use their prepared facts.
+      const owner =
+        refreshed || (request.readOnly && !publishedReadOnlyOwner)
+          ? snapshot
+          : await materializeRequestedModelCatalog(
+              snapshot,
+              request.readOnly,
+              request.refreshFullCatalog,
+              request.providerDiscoveryProviderIds,
+            );
+      // Projection must finish before releasing the selected generation's resources.
+      return await read(owner);
+    };
+    return await (run ? run(project) : project());
   } finally {
     await release?.();
   }
@@ -563,7 +572,11 @@ export async function withPreparedModelCatalogOwner<T>(
 ): Promise<T> {
   return await withPreparedModelCatalogOwnerPolicy(params, "exact", read, async (input) => {
     const lease = await acquirePreparedModelRuntimeSnapshot(input);
-    return { snapshot: lease.snapshot, release: () => lease[Symbol.asyncDispose]() };
+    return {
+      snapshot: lease.snapshot,
+      run: lease.run,
+      release: () => lease[Symbol.asyncDispose](),
+    };
   });
 }
 

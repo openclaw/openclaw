@@ -235,7 +235,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.viewers.set", "sessions-subscriptions", "operator.read", "2026.7"],
   ["sessions.preview", "sessions-read", "operator.read", "<=2026.7"],
   ["sessions.describe", "sessions-read", "operator.read", "<=2026.7", { lifetime: "observation" }],
-  ["sessions.branches.list", "sessions-rewind", "operator.read", "<=2026.7"],
+  ["sessions.branches.list", "sessions-rewind", "operator.read", "<=2026.7", OBSERVATION],
   ["sessions.branches.switch", "sessions-rewind", "operator.admin", "<=2026.7"],
   ["sessions.rewind", "sessions-rewind", "operator.admin", "<=2026.7"],
   ["sessions.fork", "sessions-rewind", "operator.write", "<=2026.7"],
