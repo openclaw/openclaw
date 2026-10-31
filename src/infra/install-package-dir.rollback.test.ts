@@ -216,7 +216,7 @@ describe("installPackageDir rollback", () => {
     },
   );
 
-  it.each(["transient", "persistent"] as const)(
+  it.each(["transient", "persistent", "rejected hardlinks"] as const)(
     "retries a Windows plugin backup rename held by a scanner: %s",
     async (scenario) => {
       const [move, runRetry] = [packageFilesystem.movePackageRoot, retry.retryAsync];
@@ -240,15 +240,19 @@ describe("installPackageDir rollback", () => {
       const result = await installPackageDir({
         ...updateOptions(sourceDir, targetDir),
         logger: { warn },
+        // Rejected hardlinks always publish fs-safe's fresh copy instead of renaming.
+        sourceHardlinks: scenario === "rejected hardlinks" ? undefined : "package-manager",
       });
       const backups = await fs.readdir(
         path.join(path.dirname(targetDir), ".openclaw-install-backups"),
       );
       expect(backups).toEqual([]);
-      if (scenario === "transient") {
+      if (scenario !== "persistent") {
         expect(result).toEqual({ ok: true });
         await expectText(targetDir, "new");
-        expect(warn).toHaveBeenCalledTimes(2);
+        expect([warn.mock.calls.length, denied]).toEqual(
+          scenario === "transient" ? [2, 2] : [0, 0],
+        );
       } else {
         expectFailure(result, "plugin backup rename failed after 16 attempts", "stop the Gateway");
         await expectText(targetDir, "old");

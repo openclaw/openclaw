@@ -118,6 +118,8 @@ export async function activateStagedNpmPackageRoot(
  * Moves an unjournaled package root to a sibling path. Windows uses guarded
  * rename retries instead of fs-safe's EPERM copy fallback, which would publish
  * a copy and then fail deleting the still-held source after the destination is live.
+ * Rejected source hardlinks always publish fs-safe's fresh copy, so a hardlink
+ * created after any preflight can never become the published tree.
  */
 export async function movePackageRoot(
   source: string,
@@ -138,7 +140,8 @@ export async function movePackageRoot(
     options.assertBeforeRename?.();
     assertCaller();
   };
-  if ((options.platform ?? process.platform) === "win32") {
+  const sourceHardlinks = options.sourceHardlinks ?? PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS;
+  if ((options.platform ?? process.platform) === "win32" && sourceHardlinks === "allow") {
     const identity = await renamePackageRootWithWindowsRetries(
       source,
       destination,
@@ -150,7 +153,7 @@ export async function movePackageRoot(
   }
   await movePathWithCopyFallback({
     from: source,
-    sourceHardlinks: options.sourceHardlinks ?? PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
+    sourceHardlinks,
     to: destination,
     assertBeforeRename,
     assertBeforeMutation: assertCaller,
