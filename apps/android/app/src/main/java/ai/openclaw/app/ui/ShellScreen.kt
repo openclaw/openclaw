@@ -412,6 +412,10 @@ private fun OverviewScreen(
   onOpenSettingsRoute: (SettingsRoute) -> Unit,
   onOpenCommand: () -> Unit,
 ) {
+  val startNewChat: () -> Unit = {
+    viewModel.startNewChat(worktree = false)
+    onSelectTab(Tab.Chat)
+  }
   val sessions by viewModel.chatSessions.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
@@ -521,6 +525,7 @@ private fun OverviewScreen(
             sessionCount = overviewSessionCount,
             cronJobCount = cronStatus.jobs,
             onOpenChat = { onSelectTab(Tab.Chat) },
+            onNewChat = startNewChat,
             onOpenAgent = { onOpenSettingsRoute(SettingsRoute.Agents) },
             onOpenGateway = { onOpenSettingsRoute(SettingsRoute.Gateway) },
           )
@@ -549,7 +554,12 @@ private fun OverviewScreen(
             ClawEmptyState(
               title = nativeString("No recent threads"),
               body = nativeString("Start a chat and your active OpenClaw conversations will appear here."),
-              action = { ClawSecondaryButton(text = nativeString("Start Chat"), onClick = { onSelectTab(Tab.Chat) }) },
+              action = {
+                ClawSecondaryButton(
+                  text = nativeString("Start Chat"),
+                  onClick = { onSelectTab(Tab.Chat) },
+                )
+              },
             )
           }
         } else {
@@ -650,6 +660,7 @@ private fun OverviewPrimaryPanel(
   sessionCount: Int,
   cronJobCount: Int,
   onOpenChat: () -> Unit,
+  onNewChat: () -> Unit,
   onOpenAgent: () -> Unit,
   onOpenGateway: () -> Unit,
 ) {
@@ -674,6 +685,7 @@ private fun OverviewPrimaryPanel(
       Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
         ClawPrimaryButton(text = nativeString("Chat"), icon = Icons.Outlined.ChatBubbleOutline, onClick = onOpenChat, modifier = Modifier.weight(1f))
         ClawSecondaryButton(text = nativeString("Talk"), icon = Icons.Outlined.MicNone, onClick = onOpenChat, modifier = Modifier.weight(1f))
+        ClawSecondaryButton(text = nativeString("New Chat"), onClick = onNewChat, modifier = Modifier.weight(1f))
       }
       if (!isConnected) {
         ClawSecondaryButton(text = nativeString("Reconnect gateway"), icon = SettingsRoute.Gateway.icon, onClick = onOpenGateway, modifier = Modifier.fillMaxWidth())
