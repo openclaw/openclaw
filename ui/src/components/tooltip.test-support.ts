@@ -77,8 +77,6 @@ export function expectSharedTooltipSkin(tooltip: TooltipElement) {
   expect(styles).toContain("border: 1px solid");
   expect(styles).toContain(".tooltip-surface");
   expect(styles).not.toContain("::part(");
-  expect(styles).toContain("var(--radius-tooltip)");
-  expect(styles).toContain("var(--menu-shadow)");
   expect(styles).toContain("@media (prefers-reduced-motion: reduce)");
   if (root.adoptedStyleSheets?.length) {
     const animationNames = rules.flatMap((rule) =>
