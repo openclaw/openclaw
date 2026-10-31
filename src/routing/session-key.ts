@@ -20,7 +20,7 @@ import {
   parseAgentSessionKey,
 } from "../sessions/session-key-utils.js";
 import "../shared/incognito-session-key.js";
-import { normalizeAccountId } from "./account-id.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "./account-id.js";
 export { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 
 export {
@@ -306,4 +306,16 @@ export function resolveThreadSessionKeys(params: {
     ? `${params.baseSessionKey}:thread:${normalizedThread}`
     : params.baseSessionKey;
   return { sessionKey, parentSessionKey: params.parentSessionKey };
+}
+
+/**
+ * Internal thread id that keeps a named account's group session apart from other accounts
+ * attending the same group. It is not a platform thread; the default account has none.
+ */
+export function resolveGroupAccountIsolationThreadId(params: {
+  channel: string;
+  accountId?: string | null;
+}): string | undefined {
+  const accountId = normalizeAccountId(params.accountId);
+  return accountId === DEFAULT_ACCOUNT_ID ? undefined : `${params.channel}-account-${accountId}`;
 }

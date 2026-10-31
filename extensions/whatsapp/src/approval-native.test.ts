@@ -1,4 +1,5 @@
 import { createNativeApprovalTestFixture } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { whatsappApprovalCapability } from "./approval-native.js";
 
@@ -171,6 +172,58 @@ describe("whatsapp approval capability", () => {
     expect(await resolveOrigin(["+15551230000"])).toEqual({
       to: "120363401234567890@g.us",
       accountId: "default",
+    });
+  });
+
+  describe("named-account group isolation thread", () => {
+    const group = "120363401234567890@g.us";
+    const isolationThread = "whatsapp-account-work";
+    const cfg: OpenClawConfig = {
+      channels: {
+        whatsapp: {
+          enabled: true,
+          accounts: {
+            work: { enabled: true, allowFrom: ["+15551230000"] },
+            other: { enabled: true, allowFrom: ["+15551230000"] },
+          },
+        },
+      },
+      approvals: { plugin: { enabled: true } },
+    };
+    const request = buildPluginRequest(group, {
+      turnSourceAccountId: "work",
+      turnSourceThreadId: isolationThread,
+      sessionKey: `agent:main:whatsapp:group:${group}:thread:${isolationThread}`,
+    });
+    const suppress = (
+      target: Partial<{ to: string; accountId: string; threadId: string; source: string }>,
+    ) =>
+      whatsappApprovalCapability.delivery?.shouldSuppressForwardingFallbackAsync?.({
+        cfg,
+        approvalKind: "plugin",
+        target: {
+          channel: "whatsapp",
+          to: group,
+          accountId: "work",
+          threadId: isolationThread,
+          source: "session",
+          ...target,
+        } as never,
+        request,
+      });
+
+    it("suppresses forwarding to the same group thread that native delivery already covers", async () => {
+      expect(await suppress({})).toBe(true);
+    });
+
+    it.each([
+      [
+        "another account's group session",
+        { accountId: "other", threadId: "whatsapp-account-other" },
+      ],
+      ["a different group", { to: "120363409999999999@g.us" }],
+    ])("keeps forwarding fallback for %s", async (_name, target) => {
+      expect(await suppress(target)).toBe(false);
     });
   });
 });
