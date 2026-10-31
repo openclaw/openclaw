@@ -1,5 +1,5 @@
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
-import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
 import {
   isAgentDatabaseInspectionPendingError,
@@ -33,7 +33,6 @@ import {
   createSessionManagedListRefresh,
   getManagedSessionList,
   publishManagedList,
-  type SessionListRefreshHost,
 } from "./session-managed-list-refresh.ts";
 import { createSessionPrimaryWindows } from "./session-primary-windows.ts";
 import { requestSessionList, sessionListQueryKey } from "./session-requests.ts";
@@ -46,20 +45,8 @@ import type {
   SessionListScope,
   SessionListSnapshot,
   SessionRefreshOptions,
-  SessionState,
+  SessionRosterRefreshHost,
 } from "./session-types.ts";
-
-type SessionRosterRefreshHost = SessionListRefreshHost & {
-  publish: (state: SessionState, errorSource?: "session-observer" | "operation" | "list") => void;
-  onWarmListsRetired: (agentIds: ReadonlySet<string>) => void;
-  observerError: () => string | null;
-  onCanonicalList: (
-    result: SessionsListResult | null,
-    requestRevision: number,
-    agentId?: string,
-    observed?: SessionsListResult | null,
-  ) => void;
-};
 
 export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
   let gatewayAvailable = isGatewayAvailable(host.snapshot());
@@ -594,7 +581,19 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     },
     refresh,
     bootstrap: (options: SessionRefreshOptions, foreground = false) =>
-      refreshInternal(options, true, undefined, "automatic", foreground),
+      refreshInternal(
+        {
+          ...options,
+          includeDerivedTitles: true,
+          includeLastMessage: true,
+          backgroundHydrate: true,
+          force: true,
+        },
+        true,
+        undefined,
+        "automatic",
+        foreground,
+      ),
     refreshAutomatic: (options: SessionRefreshOptions) =>
       refreshInternal(options, false, undefined, "automatic"),
     refreshReplacement: () =>

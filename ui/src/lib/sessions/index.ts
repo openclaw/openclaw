@@ -126,6 +126,7 @@ export function createSessionCapability(
   const thinkingClaims = createSessionThinkingClaims(gateway, () => roster.requestRevision);
   let publicationRevision = 0;
   let canonicalListRevision = 0;
+  let canonicalListScopeKey: number | undefined;
   let hydratedClient: SessionGateway["snapshot"]["client"] = null;
   let hydratedSelfUserId: string | null = null;
   let connectionClient = gateway.snapshot.client;
@@ -270,6 +271,7 @@ export function createSessionCapability(
         thinkingClaims.settle(row, requestRevision, agentId);
       }
       canonicalListRevision += 1;
+      canonicalListScopeKey = gatewayPresentationScope(gateway).key;
     },
   });
 
@@ -506,18 +508,14 @@ export function createSessionCapability(
       // Register events before delaying bulk metadata; its later read reconciles
       // anything observed while the selected transcript was loading.
       void sessionEventSubscription.ensure(scope);
-      // A retained live roster and history can recover together; first boot still favors history.
+      // A known scope can recover roster and history together, even when its client is replaced.
       void roster
         .bootstrap(
           {
             ...roster.lastOptions(), // Keep visible roster filters through reconnect hydration.
             agentId: agentSelection.state.selectedId ?? undefined,
-            includeDerivedTitles: true,
-            includeLastMessage: true,
-            backgroundHydrate: true,
-            force: true,
           },
-          Boolean(presentation.result && !presentation.resultCached && !identityChanged),
+          canonicalListScopeKey === presentationScope.key,
         )
         .then(() => {
           if (connection.isCurrent(scope)) {
