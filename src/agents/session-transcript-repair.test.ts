@@ -70,6 +70,37 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(legacyId).not.toHaveBeenCalled();
   });
 
+  it("keeps a legacy result's own error state when the repair fills in its missing id", () => {
+    // The id is the only thing missing; a recorded success must not be replayed as a failure.
+    const succeeded = castAgentMessages([
+      sparseAssistant([toolCall("call_legacy", "read")]),
+      {
+        role: "toolResult",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+    ]);
+    expect(sanitizeToolUseResultPairing(succeeded)[1]).toMatchObject({
+      toolCallId: "call_legacy",
+      isError: false,
+    });
+
+    const failed = castAgentMessages([
+      sparseAssistant([toolCall("call_legacy", "read")]),
+      {
+        role: "toolResult",
+        toolName: "read",
+        content: [{ type: "text", text: "boom" }],
+        isError: true,
+      },
+    ]);
+    expect(sanitizeToolUseResultPairing(failed)[1]).toMatchObject({
+      toolCallId: "call_legacy",
+      isError: true,
+    });
+  });
+
   it("keeps matched parallel tool results and synthesizes only missing siblings", () => {
     vi.spyOn(Date, "now").mockReturnValue(5_000);
     const input = castAgentMessages([

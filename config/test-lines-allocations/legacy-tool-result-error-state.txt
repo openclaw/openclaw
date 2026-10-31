@@ -1,0 +1,2 @@
+# Legacy tool results keep their recorded error state when the repair fills in the id.
+31
