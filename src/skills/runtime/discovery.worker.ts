@@ -57,6 +57,7 @@ function resolveInputPlan(input: SkillsSourcePlanInput, cache: PluginCache = cre
     return resolveWorkspaceSkillSourcePlan(input.workspaceDir, {
       ...options,
       pluginSkillRoots,
+      ...(input.agentSkillsDirs ? { agentSkillsDirs: input.agentSkillsDirs } : {}),
     });
   });
 }

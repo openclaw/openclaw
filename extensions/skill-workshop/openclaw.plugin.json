@@ -1,0 +1,13 @@
+{
+  "id": "skill-workshop",
+  "categories": ["agent-orchestration"],
+  "enabledByDefault": true,
+  "name": "Skill Workshop",
+  "description": "Learned skills each agent saves from its own work.",
+  "agentSkillsDir": "workshop-skills",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

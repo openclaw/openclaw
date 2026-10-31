@@ -14,6 +14,7 @@ import { VERSION } from "../version.js";
 import { getConfigValueAtPath, unsetConfigValueAtPath } from "./config-paths.js";
 import { materializeModelPolicyAllowlist } from "./model-policy-allowlist-migration.js";
 import { cloneConfigWithResolutionFacts } from "./resolution-facts.js";
+import { materializeSkillWorkshopPlugin } from "./skill-workshop-plugin-migration.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import { materializeUtilityModelSeparation } from "./utility-model-separation-migration.js";
 
@@ -22,6 +23,7 @@ export const AUTO_MANAGED_CONFIG_META_PATHS = [
   ["meta", "lastTouchedVersion"],
   ["meta", "migrations", "modelPolicyAllowlist"],
   ["meta", "migrations", "utilityModelSeparation"],
+  ["meta", "migrations", "skillWorkshopPlugin"],
 ] as const;
 
 export function hasWebhookMigrationProgress(
@@ -76,8 +78,11 @@ export function stampConfigWriteMetadata(
   const migrationStamped =
     previousConfig === undefined
       ? cfg
-      : materializeUtilityModelSeparation(
-          materializeModelPolicyAllowlist(cfg, previousConfig).config,
+      : materializeSkillWorkshopPlugin(
+          materializeUtilityModelSeparation(
+            materializeModelPolicyAllowlist(cfg, previousConfig).config,
+            previousConfig,
+          ).config,
           previousConfig,
         ).config;
   if (resolveUpdateRehearsalRoot(env)) {
@@ -89,7 +94,8 @@ export function stampConfigWriteMetadata(
       (beforeMeta?.migrations?.modelPolicyAllowlist &&
         !afterMeta?.migrations?.modelPolicyAllowlist) ||
       (beforeMeta?.migrations?.utilityModelSeparation &&
-        !afterMeta?.migrations?.utilityModelSeparation);
+        !afterMeta?.migrations?.utilityModelSeparation) ||
+      (beforeMeta?.migrations?.skillWorkshopPlugin && !afterMeta?.migrations?.skillWorkshopPlugin);
     return !removedMarker && isDeepStrictEqual(before, after) ? cfg : migrationStamped;
   }
   return {

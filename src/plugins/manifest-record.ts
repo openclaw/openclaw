@@ -426,6 +426,7 @@ export function buildPluginManifestRecord(params: {
     }),
     mcpServers: params.manifest.mcpServers,
     skills: params.manifest.skills ?? [],
+    ...(params.manifest.agentSkillsDir ? { agentSkillsDir: params.manifest.agentSkillsDir } : {}),
     settingsFiles: [],
     hooks: [],
     origin: params.candidate.origin,

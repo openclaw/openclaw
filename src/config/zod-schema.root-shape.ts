@@ -48,6 +48,7 @@ export const OpenClawSchemaShape = {
         .strictObject({
           modelPolicyAllowlist: z.literal(true).optional(),
           utilityModelSeparation: z.literal(true).optional(),
+          skillWorkshopPlugin: z.literal(true).optional(),
           webhookListeners: z
             .union([z.literal(true), z.record(z.string(), z.array(z.array(z.string())))])
             .optional(),

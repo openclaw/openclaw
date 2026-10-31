@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/skill-workshop",
+  "version": "2026.10.9",
+  "private": true,
+  "description": "OpenClaw Skill Workshop plugin",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

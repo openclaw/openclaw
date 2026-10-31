@@ -171,7 +171,8 @@ are rejected; they do not suppress validation of later options.
 
 A schema-valid but unset authorable path explains that the runtime default applies and suggests
 `openclaw config set`. For automatically managed metadata, such as `meta.lastTouchedVersion`,
-`meta.migrations.modelPolicyAllowlist`, and `meta.migrations.utilityModelSeparation`, the message
+`meta.migrations.modelPolicyAllowlist`, `meta.migrations.utilityModelSeparation`, and
+`meta.migrations.skillWorkshopPlugin`, the message
 instead explains that OpenClaw manages the values on config writes. Reading their unset parent
 paths (`meta` or `meta.migrations`) gives the same explanation, not a refused set command.
 An unknown path suggests `openclaw config schema`. With `--json`, unset and unknown paths use

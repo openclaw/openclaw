@@ -61,6 +61,22 @@ including when the update was started by an older installed update driver.
 Stored A2UI rows do not prevent the update. Runtime readers accept only the
 current widget formats; they do not retain a compatibility renderer.
 
+## Skill Workshop plugin policy
+
+Skill Workshop ships as the bundled `skill-workshop` plugin, enabled by default.
+Releases from 2026.10.1 ignored `skill-workshop` plugin policy while Workshop was
+built in. Until a config records `meta.migrations.skillWorkshopPlugin: true`, the
+runtime keeps ignoring that older policy, so Workshop keeps working before Doctor runs.
+
+Doctor and the next config write then remove the older `plugins.entries.skill-workshop`
+entry and the `skill-workshop` id in `plugins.deny`. They also add `skill-workshop` to a
+non-empty `plugins.allow`, and record the marker. After that, `skill-workshop`
+policy applies like any other plugin's. A config write keeps `skill-workshop` policy
+that it adds itself.
+
+With `plugins.enabled: false`, Doctor reports that the switch now also turns off
+learned skills. To keep them, enable plugins and limit them with `plugins.allow`.
+
 ## Group allowlist fallback
 
 For channels that support legacy DM sender fallback, Doctor copies `allowFrom`

@@ -10,7 +10,7 @@ import { hasKind } from "./slots.js";
 export function* iteratePluginRootContributions(params: {
   metadataSnapshot: Pick<PluginMetadataSnapshot, "manifestRegistry" | "normalizePluginId">;
   config?: OpenClawConfig;
-  contribution: "skills" | "hooks";
+  contribution: "skills" | "hooks" | "agentSkillsDir";
   /** Availability is checked after activation and before claiming a memory slot. */
   isAvailable?: (record: PluginManifestRecord) => boolean;
 }): IterableIterator<{ record: PluginManifestRecord; roots: string[] }> {
@@ -21,7 +21,12 @@ export function* iteratePluginRootContributions(params: {
   const memorySlot = normalizedPlugins.slots.memory;
   let selectedMemoryPluginId: string | null = null;
   for (const record of params.metadataSnapshot.manifestRegistry.plugins) {
-    const roots = record[params.contribution];
+    const roots =
+      params.contribution === "agentSkillsDir"
+        ? record.agentSkillsDir
+          ? [record.agentSkillsDir]
+          : []
+        : record[params.contribution];
     if (!roots || roots.length === 0) {
       continue;
     }
@@ -32,7 +37,7 @@ export function* iteratePluginRootContributions(params: {
       config: normalizedPlugins,
       rootConfig: params.config,
       // Skill roots honor manifest defaults; hook roots leave that activation input unset.
-      ...(params.contribution === "skills" ? { enabledByDefault: record.enabledByDefault } : {}),
+      ...(params.contribution !== "hooks" ? { enabledByDefault: record.enabledByDefault } : {}),
     });
     if (!activationState.activated || (params.isAvailable && !params.isAvailable(record))) {
       continue;

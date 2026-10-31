@@ -153,7 +153,7 @@ export async function resolveReusableWorkspaceSkillSnapshot(
         if (source) {
           return source.filePath === skill.filePath && source.fileHost === skill.fileHost;
         }
-        const location = resolveSkillReadPath(compactPromptSkills([skill], params)[0]!);
+        const location = resolveSkillReadPath(compactPromptSkills([skill])[0]!);
         return (
           skill.fileHost === undefined &&
           !isWorkspaceSkillReadPath(location) &&

@@ -1,7 +1,6 @@
 import { sanitizeTerminalText, terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import { listAgentIds } from "../agents/agent-scope-config.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { formatConsoleDiagnosticLine } from "../logging/json-console-line.js";
 import { resolvePluginControlPlaneWorkspace } from "../plugins/control-plane-workspace.js";
@@ -191,29 +190,6 @@ export async function runPluginsInspectCommand(
     snapshotReport.plugins.find((entry) => entry.name === id);
   if (!targetPlugin) {
     process.stderr.write(formatGlobalPluginDiagnostics(snapshotReport.diagnostics));
-    if (id === "skill-workshop") {
-      const { detectSkillWorkshopToolPolicyDiagnostic } =
-        await import("../skills/workshop/tool-policy-diagnostic.js");
-      // An explicit multi-agent roster has no single default diagnostic owner.
-      const agentIds = listAgentIds(cfg);
-      const lines = [
-        "Skill Workshop is built into OpenClaw, not a plugin; configure it under skills.workshop.",
-      ];
-      for (const agentId of agentIds.length > 0 ? agentIds : [undefined]) {
-        const diagnostic = detectSkillWorkshopToolPolicyDiagnostic({
-          config: cfg,
-          // Invoking the legacy inspect id is explicit Workshop intent even when
-          // autonomous capture is off; report manual-tool availability too.
-          workshopEnabled: true,
-          ...(agentId ? { agentId } : {}),
-        });
-        if (diagnostic) {
-          lines.push(diagnostic.message);
-        }
-      }
-      failPluginInspect(lines.join("\n"), opts.json);
-      return;
-    }
     failPluginInspect(formatMissingPluginMessage({ id, includeSearch: true }), opts.json);
     return;
   }
