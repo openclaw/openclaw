@@ -390,6 +390,24 @@ describe("security-sensitive guard entry point", () => {
   });
 
   it.each(["security-sensitive-guard", "dependency-guard"] as const)(
+    "%s publishes failure when initialization times out after pending",
+    (script) => {
+      const result = runGuard({
+        script,
+        files: guardFiles(script),
+        routes: {
+          [`GET ${pullPath}/files`]: { requestTimeout: true },
+        },
+      });
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.statuses).toEqual(["pending", "failure"]);
+      expect(result.stderr).toContain(
+        `GitHub API GET ${pullPath}/files?per_page=100&page=1 exceeded timeout 30000ms`,
+      );
+    },
+  );
+
+  it.each(["security-sensitive-guard", "dependency-guard"] as const)(
     "%s skips a superseded head after approval is read",
     (script) => {
       const pr = pullRequest;

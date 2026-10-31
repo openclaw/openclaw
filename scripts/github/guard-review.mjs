@@ -435,7 +435,7 @@ export async function openGuard({ context, commentMarker, approvalCommand }, pre
     return guard;
   } catch (error) {
     if (!prepared) {
-      await failGuard(guard, error);
+      await failGuard(guard, error, { terminal: true });
     }
     throw error;
   }
