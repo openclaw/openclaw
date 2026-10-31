@@ -206,6 +206,40 @@ it.each(["oversized", "read failure", "grant failure"] as const)(
   },
 );
 
+it("revalidates a refreshed file source without retiring its reader", async () => {
+  const urls = stubObjectUrls();
+  const bytes = "%PDF-1.7 original";
+  const refreshed = Promise.withResolvers<Response>();
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(new Response(bytes))
+    .mockReturnValueOnce(refreshed.promise);
+  vi.stubGlobal("fetch", fetcher);
+  const download = vi.fn(async () => ({ url: source, filename: "brief.pdf" }));
+  const panel = await mountAttachment({
+    src: undefined,
+    sourceIdentity: "session-file:brief",
+    file: { path: "brief.pdf", download },
+  });
+  await waitForSolid(() => expect(panel.querySelector("iframe")).not.toBeNull());
+  const frame = panel.querySelector("iframe")!;
+  // A metadata refresh recreates the download closure, not the file identity.
+  const renewedDownload = vi.fn(async () => ({ url: source, filename: "brief.pdf" }));
+  panel.content = {
+    ...panel.content,
+    file: { path: "brief.pdf", download: renewedDownload },
+  };
+  await waitForSolid(() => expect(renewedDownload).toHaveBeenCalledOnce());
+  expect(panel.querySelector("iframe")).toBe(frame);
+  expect(urls.revokeObjectURL).not.toHaveBeenCalled();
+  refreshed.resolve(new Response(bytes));
+  await waitForSolid(() => expect(fetcher).toHaveBeenCalledTimes(2));
+  await panel.updateComplete;
+  expect(panel.querySelector("iframe")).toBe(frame);
+  expect(urls.createObjectURL).toHaveBeenCalledOnce();
+  expect(urls.revokeObjectURL).not.toHaveBeenCalled();
+});
+
 it("retires file PDF bytes and pending grants on replacement and closure", async () => {
   const urls = stubObjectUrls();
   const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response("%PDF-1.7 original"));
