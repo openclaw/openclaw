@@ -492,7 +492,8 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     mountSurface(layout);
     position(layout);
   };
-  createResizeObserver(
+  // Parent snapshots may change while these native observation targets stay the same.
+  const resizeTargets = createMemo(
     () =>
       [
         props.elements?.pane,
@@ -501,8 +502,13 @@ export function ChatDetails(props: ChatDetailsViewProps) {
         props.elements?.footer,
         props.elements?.getComposerInput?.(),
       ].filter((element): element is HTMLElement => Boolean(element)),
-    reposition,
+    {
+      lazy: true,
+      equals: (before, after) =>
+        before.length === after.length && before.every((el, i) => el === after[i]),
+    },
   );
+  createResizeObserver(resizeTargets, reposition);
   onSettled(() => {
     props.setRef({ open: openFrom, close: () => close(true) });
     const pane = layoutElements()?.pane;

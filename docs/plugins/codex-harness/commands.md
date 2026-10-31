@@ -63,6 +63,12 @@ Common forms:
 - `/codex computer-use [status|install]` manages Codex Computer Use.
 - `/codex help` lists the full command tree.
 
+Without a thread ID, `/codex bind` creates a separate native thread on the next
+message. When transferring an existing OpenClaw Codex harness session, it copies
+bounded visible user and assistant history; it does not carry the harness tool
+catalog or developer instructions. Queued reply ownership does not block this
+transfer. Started source execution must finish or be stopped first.
+
 When `/codex resume` attaches a thread without an existing verified harness
 binding, its next turn checks the native thread's stored tool catalog and
 applies the current harness configuration before continuing. This first

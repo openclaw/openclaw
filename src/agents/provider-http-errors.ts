@@ -192,6 +192,7 @@ export async function readResponseTextLimited(
   }
   return (
     await readResponseTextPrefix(response, limitBytes, {
+      signal: options?.signal,
       chunkTimeoutMs: options?.chunkTimeoutMs ?? 10_000,
       onIdleTimeout:
         options?.onIdleTimeout ??

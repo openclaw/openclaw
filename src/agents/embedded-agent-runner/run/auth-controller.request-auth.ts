@@ -18,7 +18,12 @@ export function createEmbeddedRequestAuth(params: {
   signal?: AbortSignal;
   assertAdmission: () => void;
   assertCurrent: () => void;
-  prepare(apiKey: string): Promise<{ apiKey?: string } | undefined>;
+  withDeadline<T>(
+    step: string,
+    operation: (signal: AbortSignal) => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T>;
+  prepare(apiKey: string, signal?: AbortSignal): Promise<{ apiKey?: string } | undefined>;
   install(current: ResolvedProviderAuth, apiKey: string): void;
 }): NonNullable<ProviderCreateStreamFnContext["requestAuth"]> {
   return {
@@ -38,32 +43,38 @@ export function createEmbeddedRequestAuth(params: {
       };
       assertCurrent();
       // Omit the attempt's captured store. Canonical resolution owns refresh/rotation.
-      const current = await getApiKeyForModelCore({
-        model: params.model,
-        cfg: params.config,
-        profileId: params.profileId,
-        lockedProfile: true,
-        allowAuthProfileFallback: false,
-        agentDir: params.agentDir,
-        workspaceDir: params.workspaceDir,
-        signal: requestSignal,
-        assertRefreshAdmission: assertCurrent,
-        validateOAuthCredential: (credential) => {
-          if (
-            credential.provider !== params.selected.provider ||
-            credential.authFlow !== params.selected.authFlow ||
-            !isSafeToCopyOAuthIdentity(params.selected, credential) ||
-            (!hasOAuthIdentity(params.selected) && credential.refresh !== params.selected.refresh)
-          ) {
-            throw new Error("Provider request credentials changed account identity.");
-          }
-        },
-      });
+      const current = await params.withDeadline(
+        "credential resolution",
+        (authSignal) =>
+          getApiKeyForModelCore({
+            model: params.model,
+            cfg: params.config,
+            profileId: params.profileId,
+            lockedProfile: true,
+            allowAuthProfileFallback: false,
+            agentDir: params.agentDir,
+            workspaceDir: params.workspaceDir,
+            signal: authSignal,
+            assertRefreshAdmission: assertCurrent,
+            validateOAuthCredential: (credential) => {
+              if (
+                credential.provider !== params.selected.provider ||
+                credential.authFlow !== params.selected.authFlow ||
+                !isSafeToCopyOAuthIdentity(params.selected, credential) ||
+                (!hasOAuthIdentity(params.selected) &&
+                  credential.refresh !== params.selected.refresh)
+              ) {
+                throw new Error("Provider request credentials changed account identity.");
+              }
+            },
+          }),
+        requestSignal,
+      );
       assertCurrent();
       if (current.profileId !== params.profileId || current.mode !== "oauth" || !current.apiKey) {
         throw new Error("Provider request credentials no longer match the selected OAuth profile.");
       }
-      const prepared = await params.prepare(current.apiKey);
+      const prepared = await params.prepare(current.apiKey, requestSignal);
       const assertRequestCurrent = () => {
         assertCurrent();
         assertProviderAuthAuthority(current);

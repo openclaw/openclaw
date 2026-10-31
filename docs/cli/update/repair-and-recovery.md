@@ -194,6 +194,20 @@ The capture boundary still precedes repair discovery. A run with no reported
 repairs can still create a capture, because discovery and repair bookkeeping can
 change persisted state. When a fresh copy is needed, standalone `doctor --fix`
 snapshots databases under its own maintenance custody with a single isolated backup worker.
+Standalone Doctor allows ten minutes for original-state capture and reports
+progress while it waits. A stalled read-only plugin backup inventory observes that
+same cancellation deadline. If capture fails or times out, Doctor aborts before
+repair and restores the managed Gateway it stopped, including suspended Windows
+Scheduled Task autostart. Check the named plugin, disk space, and storage performance
+before retrying `openclaw doctor --fix`. Already admitted native capture work must
+settle before restoration; forced termination cannot run this recovery.
+
+For a closed, checkpointed SQLite source under Doctor's exclusive custody, ordinary
+original capture keeps foreign-key violations in the recovery image and reports
+a warning. Physical integrity checks still apply; Doctor separately validates and
+backs up each repair. Explicit full verification and sources with durable journal
+data retain their existing strict checks.
+
 Shared database families larger than 64 MiB keep discovery copies in an isolated process
 so a slow copy does not block Doctor's main thread from processing cancellation.
 Official image activation keeps one such copy per container: after a capture
