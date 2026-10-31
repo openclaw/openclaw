@@ -94,6 +94,42 @@ On Ubuntu/AppArmor hosts with Docker sandbox mode enabled, Codex app-server `wor
 These Codex bwrap checks run in standalone `openclaw doctor` and are omitted during `openclaw update`; run `openclaw doctor` after the update. Doctor checks the user namespace with `unshare`. When Docker sandbox egress is disabled and a local Codex runtime is configured, it also runs the configured Codex binary's own `workspace-write` sandbox with network access disabled, exercising Bubblewrap's loopback setup. Unrecognized check failures are reported as unverified rather than as a namespace diagnosis. If doctor reports a Codex bwrap namespace check failure, prefer an AppArmor profile that grants the required namespaces to the OpenClaw service process. `kernel.apparmor_restrict_unprivileged_userns=0` is a host-wide fallback with security tradeoffs; use it only when that host posture is acceptable. Do not grant broader Docker container privileges just to satisfy nested `bwrap`.
 </Warning>
 
+### Container user
+
+When `sandbox.docker.user` is unset, OpenClaw runs the container as the numeric
+`uid:gid` that owns the mounted workspace: the agent workspace with
+`workspaceAccess: "rw"`, otherwise the sandbox workspace that the Gateway
+creates under `workspaceRoot`. With a non-root Gateway this is normally the
+Gateway user, not root, so file tools keep working under `capDrop: ["ALL"]`. A
+root-owned workspace resolves to `0:0`. If the owner cannot be read, the
+image's default user applies. Set `docker.user` to choose the user explicitly,
+for example `"0:0"` for a [setup command](/gateway/sandboxing/setup-command)
+that installs packages. Podman applies the same default, except that it never
+selects UID or GID 0 automatically (see
+[Podman backend](/gateway/sandboxing/podman-backend)).
+
+### Docker daemon
+
+The backend runs the `docker` CLI with the Gateway process environment, so the
+standard Docker client settings choose the daemon: `DOCKER_HOST`,
+`DOCKER_CONTEXT`, the TLS variables, or the CLI's current context. For rootless
+Docker, set `DOCKER_HOST=unix:///run/user/<uid>/docker.sock` in the Gateway
+service environment (see [Environment variables](/help/environment)), not only
+in your interactive shell, then restart the Gateway.
+`OPENCLAW_DOCKER_SOCKET` is read only by the Docker Gateway setup script.
+
+Set only one of `DOCKER_HOST` and `DOCKER_CONTEXT` for the Gateway: when both
+are set, current builds pin the `DOCKER_CONTEXT` daemon, unlike the Docker CLI
+([#180311](https://github.com/openclaw/openclaw/issues/180311)).
+
+When that endpoint is a local Unix socket, OpenClaw records the socket and the
+daemon ID in the sandbox registry when it uses a runtime, and addresses that
+daemon explicitly from then on. If the Gateway later resolves a different
+daemon, it refuses to reuse those runtimes. Restore the original connection, or
+recreate the runtimes while their recorded daemon is still reachable. Remote
+endpoints such as `tcp://` or `ssh://` keep following the Gateway's Docker
+settings on every command.
+
 ### Sandboxed browser
 
 - The sandbox browser auto-starts and waits for CDP to become reachable when the browser tool needs it. Configure via `agents.defaults.sandbox.browser.autoStart` (default `true`) and `autoStartTimeoutMs` (default 12s).
