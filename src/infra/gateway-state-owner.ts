@@ -12,7 +12,11 @@ import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-cont
 import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-db.paths.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import type { acquireFileLockSync } from "./file-lock-manager.js";
-import { describeGatewayLockHolder, type LockPayload } from "./gateway-lock-payload.js";
+import {
+  describeGatewayLockHolder,
+  type LockPayload,
+  projectGatewayStateOwnerIdentity,
+} from "./gateway-lock-payload.js";
 import {
   resolveStateOwnerIdentity,
   resolveStateOwnerIdentityAsync,
@@ -29,6 +33,7 @@ import {
   StateDatabaseAdmissionPendingError,
   StateDatabaseMaintenanceScopeError,
 } from "./gateway-state-owner-record.js";
+import { normalizeWindowsPathForComparison } from "./path-guards.js";
 import { normalizeSqliteNonNegativeInteger } from "./sqlite-busy-timeout.js";
 import { runWithSqliteCleanup } from "./sqlite-lifecycle-errors.js";
 
@@ -85,6 +90,9 @@ export function createGatewayStateProjection(
 type StateOwnerFile = Pick<GatewayStateProjection, "lockPath" | "verifyStillHeld" | "release">;
 type ProcessOwner = {
   key: string;
+  canonicalDatabasePath: string;
+  // Preserve the admitted spelling without resolving symlinks during resource polls.
+  requestedDatabaseKey: string;
   path: string;
   kind: "process" | "schema";
   payload: LockPayload;
@@ -97,6 +105,11 @@ type ProcessOwner = {
   // Retained leases keep custody after this stops new admission.
   accepting: boolean;
 };
+
+function databasePathKey(databasePath: string): string {
+  const absolute = path.resolve(databasePath);
+  return process.platform === "win32" ? normalizeWindowsPathForComparison(absolute) : absolute;
+}
 
 function hasPhysicalOwnership(owner: ProcessOwner): boolean {
   try {
@@ -304,6 +317,8 @@ export function acquireGatewayStateOwner(params: {
     : defaultPayload(params.databasePath);
   const owner: ProcessOwner = {
     key: identity.key,
+    canonicalDatabasePath: identity.canonicalPath,
+    requestedDatabaseKey: databasePathKey(params.databasePath),
     path: pathname,
     kind: "process",
     payload,
@@ -434,6 +449,8 @@ export function acquireStateDatabaseSchemaLease(
   } else {
     owner = {
       key: identity.key,
+      canonicalDatabasePath: identity.canonicalPath,
+      requestedDatabaseKey: databasePathKey(databasePath),
       path: pathname,
       kind: "schema",
       payload,
@@ -484,6 +501,25 @@ export function hasActiveGatewayStateOwner(databasePath: string): boolean {
     (owner.payload.role ?? "gateway") === "gateway" &&
     hasPhysicalOwnership(owner)
   );
+}
+
+/** Poll lifecycle-held facts; admission and heartbeat retain physical-custody verification. */
+export function readLiveGatewayStateOwnerIdentity(databasePath: string) {
+  const key = databasePathKey(databasePath);
+  const [owner, other] = [...owners.values()].filter(
+    (candidate) =>
+      (candidate.key === key || candidate.requestedDatabaseKey === key) &&
+      candidate.canonicalDatabasePath &&
+      candidate.kind === "process" &&
+      candidate.accepting &&
+      !candidate.lost.signal.aborted &&
+      candidate.payload.pid === process.pid &&
+      (candidate.payload.role ?? "gateway") === "gateway",
+  );
+  // An old lexical alias must not select between two admitted database owners.
+  return owner && !other
+    ? (projectGatewayStateOwnerIdentity(owner.canonicalDatabasePath, owner.payload) ?? undefined)
+    : undefined;
 }
 
 /** Capture registered process custody; a PID or copied lock payload grants no authority. */

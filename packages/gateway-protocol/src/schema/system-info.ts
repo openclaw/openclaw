@@ -4,6 +4,45 @@ import { closedObject } from "./closed-object.js";
 import { GatewayCompletionRouteSchema } from "./model-runtime-options.js";
 import { GatewayEventLoopHealthSchema, GatewayProcessMemorySchema } from "./runtime-vitals.js";
 
+const text = Type.String({ minLength: 1 });
+const processNamespace = Type.Union([
+  closedObject({
+    platform: Type.Literal("linux"),
+    host: text,
+    identity: text,
+    pidNsInode: text,
+  }),
+  closedObject({
+    platform: Type.Union([Type.Literal("darwin"), Type.Literal("freebsd")]),
+    host: text,
+    identity: text,
+  }),
+  closedObject({ platform: Type.Literal("win32"), host: text, identity: Type.Optional(text) }),
+]);
+
+/** Native ownership facts, not a bearer credential or proof that the process stopped. */
+export const GatewayStateOwnerIdentitySchema = closedObject({
+  databasePath: text,
+  ownerId: Type.Union([text, Type.Null()]),
+  role: Type.Union([
+    Type.Literal("gateway"),
+    Type.Literal("agent-embedded"),
+    Type.Literal("sqlite-maintenance"),
+    Type.Literal("skill-workshop-apply"),
+  ]),
+  pid: Type.Integer({ minimum: 1 }),
+  startTime: Type.Union([Type.Number(), Type.Null()]),
+  processNamespace: Type.Union([processNamespace, Type.Null()]),
+});
+
+export type GatewayStateOwnerIdentity = Static<typeof GatewayStateOwnerIdentitySchema>;
+
+/** Every present record remains visible, including an undecodable holder. */
+export type GatewayLockRecoveryOwnerRecord = {
+  kind: "state-owner" | "state-lock" | "config-lock" | "gateway-lease";
+  owner: GatewayStateOwnerIdentity | null;
+};
+
 /** Empty request payload for Gateway host system information. */
 export const SystemInfoParamsSchema = closedObject({});
 
@@ -39,6 +78,8 @@ export const SystemInfoResultSchema = closedObject({
   pid: Type.Integer(),
   /** Process-start identity for invalidating work that cannot survive a Gateway restart. */
   processInstanceId: Type.Optional(Type.String({ minLength: 1 })),
+  /** Present only for this process's verified held native Gateway state owner. */
+  stateOwner: Type.Optional(GatewayStateOwnerIdentitySchema),
   uptimeMs: Type.Integer(),
   cpuCount: Type.Integer(),
   cpuModel: Type.Optional(Type.String()),

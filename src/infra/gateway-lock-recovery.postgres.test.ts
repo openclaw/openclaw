@@ -215,7 +215,19 @@ describe.skipIf(!connection)("confirmed PostgreSQL Gateway owner recovery", () =
     await h.run(async () => {
       const before = await h.rows();
       const inspected = await inspectGatewayLockRecovery();
-      expect(inspected.lease?.owner).toBe("old-owner");
+      expect(inspected.ownerRecords).toEqual([
+        {
+          kind: "gateway-lease",
+          owner: {
+            databasePath: fs.realpathSync(h.file),
+            ownerId: "old-owner",
+            role: "gateway",
+            pid: 2147483647,
+            startTime: 1,
+            processNamespace: { ...readGatewayLockProcessNamespace(), host: "stopped-old-pod" },
+          },
+        },
+      ]);
       await expect(recoverGatewayLock({ confirmation: inspected.confirmation })).rejects.toThrow(
         /schema version.*not supported/,
       );

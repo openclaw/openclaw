@@ -92,6 +92,7 @@ export {
   WORKER_TRANSCRIPT_MAX_CONTENT_PARTS,
   WORKER_TRANSCRIPT_MAX_JSON_DEPTH,
   WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
+  GatewayStateOwnerIdentitySchema,
   SystemInfoParamsSchema,
   SystemInfoResultSchema,
   StateVersionSchema,

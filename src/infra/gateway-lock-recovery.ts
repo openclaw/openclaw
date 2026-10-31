@@ -1,12 +1,14 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import type { GatewayLockRecoveryOwnerRecord } from "../../packages/gateway-protocol/src/schema/system-info.js";
 import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { acquireFileLockSync } from "./file-lock-manager.js";
 import {
   describeGatewayLockHolder,
   parseGatewayLockPayload,
+  projectGatewayStateOwnerIdentity,
   type LockPayload,
 } from "./gateway-lock-payload.js";
 import {
@@ -21,6 +23,7 @@ import {
 } from "./gateway-lock-recovery-postgres.js";
 import { resolveGatewayLockPaths, resolveGatewayOwnerStatus } from "./gateway-lock.js";
 import { decodeGatewayOwnerLease } from "./gateway-owner-lease.read.js";
+import { resolveStateOwnerIdentity } from "./gateway-state-owner-directory.js";
 import { defaultPayload } from "./gateway-state-owner-record.js";
 import { acquireGatewayStateOwner, type StateDatabaseSchemaLease } from "./gateway-state-owner.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
@@ -63,8 +66,12 @@ function sameObservation(actual: ObservedFile | null, expected: ObservedFile | n
 export async function inspectGatewayLockRecovery(options: { env?: NodeJS.ProcessEnv } = {}) {
   const env = options.env ?? process.env;
   const paths = resolveGatewayLockPaths(env);
-  const lockPaths = [paths.ownerLockPath, paths.stateLockPath, paths.configLockPath];
-  const files = lockPaths.map((pathname) => ({
+  const lockPaths = [
+    { kind: "state-owner", path: paths.ownerLockPath },
+    { kind: "state-lock", path: paths.stateLockPath },
+    { kind: "config-lock", path: paths.configLockPath },
+  ] as const;
+  const files = lockPaths.map(({ path: pathname }) => ({
     path: pathname,
     observed: readObservedFile(pathname),
   }));
@@ -73,6 +80,29 @@ export async function inspectGatewayLockRecovery(options: { env?: NodeJS.Process
     ? await inspectPostgresGatewayRecovery(databasePath)
     : undefined;
   const lease = postgres ? postgres.lease : await inspectGatewayRecoveryLease(databasePath);
+  const canonicalPath = resolveStateOwnerIdentity(databasePath).canonicalPath;
+  const ownerRecords: GatewayLockRecoveryOwnerRecord[] = lockPaths.flatMap(({ kind }, index) => {
+    const observed = files[index]?.observed;
+    return observed
+      ? [{ kind, owner: projectGatewayStateOwnerIdentity(canonicalPath, observed.holder) }]
+      : [];
+  });
+  // Keep the existing refusal for an undecodable lease; only file holders can project as null.
+  const leaseOwner = lease ? decodeGatewayOwnerLease(lease) : undefined;
+  if (lease) {
+    ownerRecords.push({
+      kind: "gateway-lease",
+      owner: leaseOwner
+        ? projectGatewayStateOwnerIdentity(canonicalPath, {
+            ownerId: lease.owner,
+            pid: leaseOwner.pid,
+            role: "gateway",
+            startTime: leaseOwner.startedAt ?? undefined,
+            processNamespace: leaseOwner.processNamespace,
+          })
+        : null,
+    });
+  }
   const confirmation = createHash("sha256")
     .update(JSON.stringify({ databasePath, files, lease, postgres }))
     .digest("hex");
@@ -85,7 +115,7 @@ export async function inspectGatewayLockRecovery(options: { env?: NodeJS.Process
   );
   if (lease) {
     holders.push(
-      `${postgres ? "PostgreSQL" : "SQLite"} Gateway owner lease: ${describeGatewayLockHolder(decodeGatewayOwnerLease(lease) ?? {}, undefined, "unknown")}`,
+      `${postgres ? "PostgreSQL" : "SQLite"} Gateway owner lease: ${describeGatewayLockHolder(leaseOwner ?? {}, undefined, "unknown")}`,
     );
   }
   return {
@@ -95,6 +125,7 @@ export async function inspectGatewayLockRecovery(options: { env?: NodeJS.Process
     postgres,
     confirmation,
     holders,
+    ownerRecords,
     present: holders.length > 0,
   };
 }

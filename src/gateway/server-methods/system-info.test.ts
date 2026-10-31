@@ -1,10 +1,15 @@
 /** Gateway system.info method tests. */
 
+import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { validateSystemInfoResult } from "../../../packages/gateway-protocol/src/index.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as diskSpace from "../../infra/disk-space.js";
+import { inspectGatewayLockRecovery } from "../../infra/gateway-lock-recovery.js";
+import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
@@ -61,17 +66,87 @@ vi.mock("../../infra/advertised-lan-host.js", async (importOriginal) => ({
 
 import { systemHandlers } from "./system.js";
 
+const ownerTempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+describe("system.info native state owner", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it("reports the held native owner and never adopts a copied owner record", async () => {
+    const root = ownerTempDirs.make("system-info-owner-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
+    mocks.statfs.mockResolvedValue({ blocks: 1000n, bavail: 400n, frsize: 1024n });
+    mocks.runCommandWithTimeout.mockResolvedValue(mountedVolumeOutput());
+    const respond = vi.fn();
+    const request = {
+      params: {},
+      respond,
+      context: createModelsListTestContext({ cfg: {}, catalog: [] }),
+    } as unknown as GatewayRequestHandlerOptions;
+    const handler = expectDefined(systemHandlers["system.info"], "system.info handler");
+    const lock = expectDefined(
+      await acquireGatewayLock({
+        allowInTests: true,
+        timeoutMs: 0,
+        port: 18789,
+        listenerMode: "foreground",
+      }),
+      "native Gateway owner",
+    );
+    const recorded = fs.readFileSync(lock.lockPath, "utf8");
+    try {
+      await handler(request);
+      const payload = respond.mock.calls[0]?.[1];
+      if (!validateSystemInfoResult(payload)) {
+        throw new Error("system.info returned an invalid payload");
+      }
+      expect(payload?.stateOwner).toMatchObject({
+        databasePath: path.join(fs.realpathSync(root), "state", "openclaw.sqlite"),
+        ownerId: JSON.parse(recorded).ownerId,
+        role: "gateway",
+        pid: process.pid,
+        processNamespace: { platform: process.platform, host: os.hostname() },
+      });
+      if (process.platform === "linux") {
+        expect(payload?.stateOwner?.processNamespace).toEqual({
+          platform: "linux",
+          host: os.hostname(),
+          identity: fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(),
+          pidNsInode: fs.readlinkSync("/proc/self/ns/pid").match(/^pid:\[(\d+)\]$/u)?.[1],
+        });
+        expect(payload?.stateOwner?.startTime).toBeGreaterThan(0);
+      }
+      const inspection = await inspectGatewayLockRecovery();
+      expect(inspection.ownerRecords).toEqual([
+        { kind: "state-owner", owner: payload.stateOwner },
+        { kind: "state-lock", owner: payload.stateOwner },
+        { kind: "gateway-lease", owner: payload.stateOwner },
+      ]);
+    } finally {
+      await lock.release();
+    }
+    // Even this live PID's old record does not establish current in-process custody.
+    fs.mkdirSync(path.dirname(lock.lockPath), { recursive: true });
+    fs.writeFileSync(lock.lockPath, recorded);
+    await handler(request);
+    expect(respond.mock.calls[1]?.[1]).not.toHaveProperty("stateOwner");
+  });
+});
+
 describe("system.info", () => {
   let sampleTime = Date.now();
   beforeEach(() => {
-    sampleTime += 30_001;
+    sampleTime = Math.max(sampleTime, Date.now()) + 30_001;
     vi.spyOn(Date, "now").mockReturnValue(sampleTime);
     vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     vi.spyOn(os, "platform").mockReturnValue("darwin");
     mocks.runCommandWithTimeout.mockReset().mockImplementation(mountedVolumeOutput);
-    mocks.statfs.mockReset().mockImplementation(async (path: string) => ({
-      blocks: path === "/" ? 1000n : 2000n,
-      bavail: path === "/" ? 400n : 1500n,
+    mocks.statfs.mockReset().mockImplementation(async (mountPath: string) => ({
+      blocks: mountPath === "/" ? 1000n : 2000n,
+      bavail: mountPath === "/" ? 400n : 1500n,
       frsize: 1024n,
     }));
   });

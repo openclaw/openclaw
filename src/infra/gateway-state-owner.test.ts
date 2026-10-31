@@ -31,6 +31,7 @@ import {
   captureStateDatabaseAccess,
   GatewayStateOwnerContentionError,
   hasActiveGatewayStateOwner,
+  readLiveGatewayStateOwnerIdentity,
   resolveGatewayStateOwnerPath,
   tryAcquireGatewayStateOwner,
   tryBorrowGatewayStateOwner,
@@ -126,6 +127,44 @@ describe("Gateway state ownership", () => {
     fs.symlinkSync(otherRoot, alias);
     expect(() => captured.assertCurrent()).toThrow(GatewayStateOwnerContentionError);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "observes admitted scopes without filesystem polling and rejects an ambiguous alias",
+    () => {
+      const storage = path.join(root, "storage");
+      const alias = path.join(root, "alias");
+      fs.mkdirSync(storage);
+      fs.symlinkSync(storage, alias, "dir");
+      const aliasPath = path.join(alias, "state", "openclaw.sqlite");
+      const canonicalPath = path.join(fs.realpathSync(storage), "state", "openclaw.sqlite");
+      gatewayOwner(aliasPath, storage);
+      const observation = readLiveGatewayStateOwnerIdentity(aliasPath);
+      expect(observation).toMatchObject({ databasePath: canonicalPath, pid: process.pid });
+      const reads = [
+        vi.spyOn(fs.realpathSync, "native"),
+        vi.spyOn(fs, "readFileSync"),
+        vi.spyOn(fs, "statSync"),
+        vi.spyOn(fs, "lstatSync"),
+      ];
+      try {
+        expect(readLiveGatewayStateOwnerIdentity(aliasPath)).toEqual(observation);
+        expect(readLiveGatewayStateOwnerIdentity(canonicalPath)).toEqual(observation);
+        expect(readLiveGatewayStateOwnerIdentity(path.join(root, "other.sqlite"))).toBeUndefined();
+        for (const read of reads) {
+          expect(read).not.toHaveBeenCalled();
+        }
+      } finally {
+        for (const read of reads) {
+          read.mockRestore();
+        }
+      }
+      fs.unlinkSync(alias);
+      fs.mkdirSync(alias);
+      gatewayOwner(aliasPath, alias);
+      expect(readLiveGatewayStateOwnerIdentity(aliasPath)).toBeUndefined();
+      expect(readLiveGatewayStateOwnerIdentity(canonicalPath)).toEqual(observation);
+    },
+  );
 
   it.skipIf(process.platform === "win32")(
     "acquires Gateway ownership on healthy state storage when system tmp is exhausted",
@@ -386,6 +425,12 @@ describe("Gateway state ownership", () => {
       const replacedPath = kind === "owner" ? lease.path : projectionPath(root);
       const original = kind === "owner" ? fs.readFileSync(replacedPath) : undefined;
       const retainedAccess = await captureStateDatabaseAccess(databasePath);
+      if (kind === "owner") {
+        expect(readLiveGatewayStateOwnerIdentity(databasePath)).toMatchObject({
+          pid: process.pid,
+          role: "gateway",
+        });
+      }
       const replace = () => {
         fs.writeFileSync(replacedPath, "replacement");
         if (kind === "owner") {
@@ -393,6 +438,7 @@ describe("Gateway state ownership", () => {
           expect(() => assertStateDatabaseReadAllowed(databasePath)).toThrow(
             /lock removed\/replaced; restart the Gateway\.$/u,
           );
+          expect(readLiveGatewayStateOwnerIdentity(databasePath)).toBeUndefined();
           expect(() => assertStateDatabaseAccessAllowed(databasePath)).toThrow(
             "lock removed/replaced; restart the Gateway",
           );

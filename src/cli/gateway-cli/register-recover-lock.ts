@@ -30,6 +30,7 @@ export function addGatewayLockRecoveryCommand(gateway: Command): void {
           defaultRuntime.writeJson({
             present: inspection.present,
             holders: inspection.holders,
+            ownerRecords: inspection.ownerRecords,
             confirmation: inspection.confirmation,
             command,
           });
