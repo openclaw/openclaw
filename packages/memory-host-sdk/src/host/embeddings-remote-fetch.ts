@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { extractEmbeddingUsage } from "../../../llm-core/src/usage-cost.js";
 import { resolveAzureApiVersionRequestTarget } from "./azure-api-version-request.js";
 import { readEmbeddingVectors } from "./embedding-vectors.js";
 import {
@@ -6,28 +7,10 @@ import {
   debugEmbeddingsLog,
   embeddingResponseLogMeta,
 } from "./embeddings-debug.js";
-import type { EmbeddingProviderCallOptions, EmbeddingUsage } from "./embeddings.types.js";
+import type { EmbeddingProviderCallOptions } from "./embeddings.types.js";
 import type { SsrFPolicy } from "./openclaw-runtime-network.js";
 import { postJson } from "./post-json.js";
 import type { RemoteEmbeddingRequestAuth } from "./remote-http.js";
-
-export function extractEmbeddingUsage(payload: unknown): EmbeddingUsage | undefined {
-  const usage = asOptionalRecord(asOptionalRecord(payload)?.usage);
-  const promptTokens = normalizeUsageCount(usage?.prompt_tokens);
-  const totalTokens = normalizeUsageCount(usage?.total_tokens);
-  if (promptTokens === undefined && totalTokens === undefined) {
-    return undefined;
-  }
-  // Embeddings bill input tokens only; providers may report just one of these fields.
-  return {
-    promptTokens: promptTokens ?? totalTokens ?? 0,
-    totalTokens: totalTokens ?? promptTokens ?? 0,
-  };
-}
-
-function normalizeUsageCount(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
-}
 
 /** POST an embedding request and return validated vectors in request order. */
 export async function fetchRemoteEmbeddingVectors(params: {
