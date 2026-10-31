@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { getAiTransportHost } from "@openclaw/ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installPrivateUpdateHandoffStore } from "../../test/helpers/private-update-handoff-store.js";
@@ -16,7 +17,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import "../llm/ai-transport-host.js";
 import { refreshSessionPatchQueuedSelection } from "../gateway/server-methods/sessions-patch-model-selection.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
-import { ensureGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import * as globalHooks from "../plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeSessionControllerAdmission } from "../sessions/session-controller.lifecycle.js";
 import { resetSessionControllerStateForTest } from "../sessions/session-lifecycle-admission.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -153,6 +156,7 @@ afterEach(async () => {
   await resetPreparedModelRuntimeSnapshotsForTest();
   // Each case has its own state root; a prior case's controller would make the key ambiguous.
   resetSessionControllerStateForTest();
+  resetPluginRuntimeStateForTest();
   vi.restoreAllMocks();
 });
 
@@ -169,15 +173,12 @@ describe("stored session model selections in scheduled session turns", () => {
     ["channel-defaults", "ok", 1, 2, 0],
     ["bootstrap-effect", "error", 0, 1, 1],
     ["hook-effect", "error", 0, 1, 1],
+    ["model-hook-effect", "error", 0, 1, 1],
     ["revoked", "error", 0, 1, 0],
     ["cancelled", "error", 0, 1, 0],
     ["unknown-effect", "error", 1, 1, 0],
     ["text-only", "error", 0, 1, 0],
   ] as const;
-  function expectPinnedFailure(result: Awaited<ReturnType<typeof runCronSessionTurn>> | undefined) {
-    expect(result?.status).toBe("error");
-    expect(result?.error).toContain("Couldn't sign in to the AI service");
-  }
   async function runWithFailingPinnedModel(params: {
     reload?: (typeof policyCases)[number][0];
     storedSelection?: Pick<SessionEntry, "modelOverrideSource">;
@@ -196,17 +197,23 @@ describe("stored session model selections in scheduled session turns", () => {
       const controller = new AbortController();
       let revoked = false;
       let preparations = 0;
-      const effect = vi.fn(async () => undefined);
+      const effectPath = `${state.workspaceDir}/hook-effects.txt`;
+      const effect = () => fs.appendFile(effectPath, "effect\n").then(() => undefined);
       using _ = {
         [Symbol.dispose]: () => unregisterInternalHook("agent:bootstrap", effect),
       };
-      if (params.reload === "hook-effect") {
-        const hooks = ensureGlobalHookRunner();
-        const hasHooks = hooks.hasHooks.bind(hooks);
-        vi.spyOn(hooks, "hasHooks").mockImplementation(
-          (name, ctx) => name === "before_agent_reply" || hasHooks(name, ctx),
-        );
-        vi.spyOn(hooks, "runBeforeAgentReply").mockImplementation(effect);
+      if (params.reload === "hook-effect" || params.reload === "model-hook-effect") {
+        const hookName =
+          params.reload === "hook-effect" ? "before_agent_reply" : "before_model_resolve";
+        const registry = createMockPluginRegistry([{ hookName, handler: effect }]);
+        setActivePluginRegistry(registry);
+        globalHooks.initializeGlobalHookRunner(registry);
+        if (params.reload === "hook-effect") {
+          // Native preparation replaces the synthetic registry before reply dispatch.
+          const hooks = globalHooks.ensureGlobalHookRunner();
+          vi.spyOn(hooks, "hasHooks").mockImplementation((name) => name === "before_agent_reply");
+          vi.spyOn(hooks, "runBeforeAgentReply").mockImplementation(effect);
+        }
       }
       if (params.reload === "bootstrap-effect") {
         registerInternalHook("agent:bootstrap", effect);
@@ -334,10 +341,7 @@ describe("stored session model selections in scheduled session turns", () => {
           : namedSessionKey;
       const stored: CronStoredJob = makeCronJob({
         id: "session-turn-model",
-        name: "Session turn model",
         agentId: "main",
-        createdAtMs: 1,
-        updatedAtMs: 1,
         sessionTarget: params.target === "main" ? "main" : `session:${sessionKey}`,
         wakeMode: "now",
         delivery: { mode: "none" },
@@ -388,7 +392,7 @@ describe("stored session model selections in scheduled session turns", () => {
           result: await runTurn(stored),
           requests,
           preparations,
-          externalEffects: effect.mock.calls.length,
+          hookEffects: await fs.readFile(effectPath, "utf8").catch(() => undefined),
         };
       }
       admission.whileQueuedAdmissionWaits = async (admittedSessionKey) => {
@@ -453,7 +457,8 @@ describe("stored session model selections in scheduled session turns", () => {
         payloadKind,
       });
       expect(requests).toEqual(["pinned/model-x"]);
-      expectPinnedFailure(result);
+      expect(result?.status).toBe("error");
+      expect(result?.error).toContain("Couldn't sign in to the AI service");
     },
   );
 
@@ -494,15 +499,15 @@ describe("stored session model selections in scheduled session turns", () => {
   it.each(policyCases)(
     "settles a scheduled occurrence across %s target preparation once",
     async (reload, status, calls, attempts, effects) => {
-      const { result, requests, preparations, externalEffects } = await runWithFailingPinnedModel({
+      const { result, requests, preparations, hookEffects } = await runWithFailingPinnedModel({
         storedPin: null,
         payload: { fallbacks: [] },
         reload,
       });
+      expect(hookEffects).toBe(effects ? "effect\n" : undefined);
       expect(result?.status, result?.error).toBe(status);
       expect(requests).toEqual(calls ? ["primary/model-a"] : []);
       expect(preparations).toBe(attempts);
-      expect(externalEffects).toBe(effects);
     },
   );
 
@@ -533,7 +538,8 @@ describe("stored session model selections in scheduled session turns", () => {
           retargetWhileAdmitting: { pin: pinned, blocked },
         });
         expect(requests).toEqual(["primary/model-a", "pinned/model-x"]);
-        expectPinnedFailure(result);
+        expect(result?.status).toBe("error");
+        expect(result?.error).toContain("Couldn't sign in to the AI service");
       },
     );
   });

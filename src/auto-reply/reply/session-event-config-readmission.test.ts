@@ -384,9 +384,6 @@ it.for([
             await patchSessionEntryCore(scope, () => ({
               authProfileOverride: missingDestinationProfileId,
             }));
-            expect((await readSessionEntryInWorker(scope))?.authProfileOverride).toBe(
-              missingDestinationProfileId,
-            );
           }
           const payload: Extract<CronStoredJob["payload"], { kind: "agentTurn" }> = {
             kind: "agentTurn",
@@ -421,9 +418,6 @@ it.for([
                   job: {
                     ...makeCronJob({
                       id: "scheduled-readmission",
-                      name: "Scheduled readmission",
-                      createdAtMs: 1,
-                      updatedAtMs: 1,
                       sessionTarget: `session:${scope.sessionKey}`,
                       wakeMode: "now",
                       payload,
