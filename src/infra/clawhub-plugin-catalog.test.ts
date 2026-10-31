@@ -563,3 +563,38 @@ it.each([
     ),
   ).rejects.toThrow(/identity|requested plugin release/);
 });
+
+it.each([
+  [undefined, undefined],
+  [[], []],
+  [
+    ["  Plan  my week.\nPrioritize commitments.  ", "Compare options.", "x".repeat(2048)],
+    ["Plan  my week.\nPrioritize commitments.", "Compare options.", "x".repeat(2048)],
+  ],
+  [["one", "two", "three", "four"], undefined],
+  [["valid", " "], undefined],
+  [["valid", false], undefined],
+])(
+  "transports third-party not-installed manifest recommendations without installation: %j",
+  async (recommendedPrompts, expected) => {
+    const remote = await readDetail({
+      version: {
+        version: "1.2.3",
+        pluginManifestSummary: {
+          configFields: [],
+          mcpServers: [],
+          bundledSkills: [],
+          recommendedPrompts,
+        },
+      },
+    });
+    const result = joinClawHubPluginDetail({
+      remote,
+      local: { plugins: [], diagnostics: [], mutationAllowed: true },
+    });
+    expect(result.plugin.catalog.official).toBe(false);
+    expect(result.plugin.local.installed).toBe(false);
+    expect(result.detail.recommendedPrompts).toEqual(expected);
+    expect(Value.Check(PluginDiscoveryDetailSchema, result.detail)).toBe(true);
+  },
+);

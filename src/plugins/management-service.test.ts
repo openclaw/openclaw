@@ -127,6 +127,25 @@ describe("plugin management service", () => {
     mockHostedOfficialCatalog(mocks.officialCatalog, []);
   });
 
+  it("projects third-party manifest recommendations into the cold management catalog", async () => {
+    const metadata = metadataSnapshot({
+      enabled: false,
+      id: "community-planner",
+      origin: "global",
+    });
+    const manifest = metadata.plugins[0]!;
+    manifest.recommendedPrompts = ["Plan  my week.\nPrioritize commitments."];
+    mocks.metadata.mockReturnValue(metadata);
+    const catalog = await listManagedPlugins({
+      config: {},
+      env: {},
+      officialCatalog: { entries: [] },
+    });
+    expect(catalog.plugins[0]?.recommendedPrompts).toEqual([
+      "Plan  my week.\nPrioritize commitments.",
+    ]);
+  });
+
   it.each(["batch", "cross-owner"] as const)(
     "validates current package owners before targeted reload: %s",
     async (mode) => {

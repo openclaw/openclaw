@@ -10,7 +10,10 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { validatePluginUiCapabilities } from "../../packages/gateway-protocol/src/plugin-ui-capabilities.js";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
-import { validatePluginCategories } from "../../packages/plugin-package-contract/src/index.js";
+import {
+  validatePluginCategories,
+  validatePluginRecommendedPrompts,
+} from "../../packages/plugin-package-contract/src/index.js";
 import { matchRootFileOpenFailure } from "../infra/boundary-file-read.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { isRecord } from "../utils.js";
@@ -467,6 +470,7 @@ export function loadPluginManifest(
     return fail(`invalid plugin manifest dashboard: ${dashboardResult.error}`);
   }
   const uiCapabilities = validatePluginUiCapabilities(raw.uiCapabilities);
+  const recommendedPrompts = validatePluginRecommendedPrompts(raw.recommendedPrompts);
   const controlUiResult = loadPluginControlUiDeclaration({
     rootDir,
     controlUi: raw.controlUi,
@@ -487,8 +491,17 @@ export function loadPluginManifest(
     ok: true,
     // Older readers ignored this advisory field; invalid display metadata must
     // not prevent an installed plugin from loading after an OpenClaw update.
-    ...(!uiCapabilities.ok
-      ? { warnings: [`ignoring invalid plugin manifest uiCapabilities: ${uiCapabilities.error}`] }
+    ...(!uiCapabilities.ok || !recommendedPrompts.ok
+      ? {
+          warnings: [
+            ...(!uiCapabilities.ok
+              ? [`ignoring invalid plugin manifest uiCapabilities: ${uiCapabilities.error}`]
+              : []),
+            ...(!recommendedPrompts.ok
+              ? [`ignoring invalid plugin manifest recommendedPrompts: ${recommendedPrompts.error}`]
+              : []),
+          ],
+        }
       : {}),
     manifest: {
       ...manifestBeforeDashboard,
@@ -496,6 +509,9 @@ export function loadPluginManifest(
       controlUi: controlUiResult.value,
       ...(uiCapabilities.ok && uiCapabilities.capabilities !== undefined
         ? { uiCapabilities: uiCapabilities.capabilities }
+        : {}),
+      ...(recommendedPrompts.ok && recommendedPrompts.recommendedPrompts !== undefined
+        ? { recommendedPrompts: recommendedPrompts.recommendedPrompts }
         : {}),
       themes: themesResult.themes,
       mcpServers: capabilityNormalizers.normalizeManifestMcpServers(raw.mcpServers),

@@ -1,7 +1,11 @@
 import { Compile } from "typebox/compile";
 import { describe, expect, it } from "vitest";
 import * as p from "./index.js";
-import { PluginCatalogEntrySchema } from "./schema/plugins.js";
+import {
+  PluginCatalogEntrySchema,
+  PluginDiscoveryDetailSchema,
+  PluginsInspectResultSchema,
+} from "./schema/plugins.js";
 import { validation } from "./schema/protocol-validation.test-support.js";
 
 const install = validation(p.validatePluginsInstallParams);
@@ -17,6 +21,23 @@ const consent = { reviewToken: "surface-sha256" };
 const invalidConsent = [true, {}, { reviewToken: "" }, { ...consent, unexpected: true }];
 
 describe("plugin lifecycle protocol validators", () => {
+  it("keeps optional prompt metadata to three nonempty strings without a text length cap", () => {
+    const schemas = [
+      PluginCatalogEntrySchema.properties.recommendedPrompts,
+      PluginDiscoveryDetailSchema.properties.recommendedPrompts,
+      PluginsInspectResultSchema.properties.overview.properties.recommendedPrompts,
+    ];
+    for (const schema of schemas) {
+      const validate = Compile(schema);
+      for (const prompts of [[], ["one", "two", "x".repeat(4096)]]) {
+        expect(validate.Check(prompts)).toBe(true);
+      }
+      for (const prompts of [["one", "two", "three", "four"], [""], [false], "one"]) {
+        expect(validate.Check(prompts)).toBe(false);
+      }
+    }
+  });
+
   it("keeps server-owned tool branding eligibility optional and boolean", () => {
     const catalogEntry = Compile(PluginCatalogEntrySchema);
     const plugin = {

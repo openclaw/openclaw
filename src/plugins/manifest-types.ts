@@ -541,6 +541,8 @@ export type PluginManifest = {
   skills?: string[];
   name?: string;
   description?: string;
+  /** Up to three author-written starter prompts; display and insertion preserve this text. */
+  recommendedPrompts?: string[];
   /** Optional presentation hints for plugin catalog surfaces. */
   catalog?: PluginManifestCatalog;
   version?: string;

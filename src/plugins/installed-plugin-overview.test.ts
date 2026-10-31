@@ -29,6 +29,7 @@ it("reads the full installed README and package presentation without relying on 
         contracts: { speechProviders: ["local-speech"] },
         uiCapabilities: ["link-reader"],
         controlUi: { entry: "dist/browser/index.js" },
+        recommendedPrompts: ["Summarize  the selected document.\nKeep the key details."],
       }),
     ),
   ).toEqual({
@@ -37,6 +38,7 @@ it("reads the full installed README and package presentation without relying on 
     repositoryUrl: "git+https://github.com/Acme/demo.git",
     documentationUrl: "https://example.org/docs",
     publisherName: "Acme",
+    recommendedPrompts: ["Summarize  the selected document.\nKeep the key details."],
     capabilities: {
       providers: ["local-model"],
       channels: ["local-channel"],

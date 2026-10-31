@@ -1525,3 +1525,177 @@ openclaw-plugins-page
     gap: 6px;
   }
 }
+
+/* Recommended plugin prompts and their inline composer reference. */
+.plugin-recommended-prompts {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  min-height: clamp(0px, 20vw, 250px);
+  padding: 24px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: rgb(8 8 8);
+}
+
+/* The neutral substrate stays fixed. Independent RGB intensity masks retain the
+   original grain and brightness levels while CSS follows the live primary token. */
+.plugin-recommended-prompts__art {
+  position: absolute;
+  inset: 0;
+  isolation: isolate;
+  pointer-events: none;
+  background: url("../assets/plugin-prompts-ember-substrate.png") 38% 50% / cover no-repeat;
+}
+
+.plugin-recommended-prompts__art > span {
+  position: absolute;
+  inset: 0;
+  mix-blend-mode: screen;
+  mask: var(--plugin-prompt-mask) 38% 50% / cover no-repeat;
+}
+
+.plugin-recommended-prompts__art > [data-channel="r"] {
+  --plugin-prompt-mask: url("../assets/plugin-prompts-ember-r.png");
+
+  background: rgb(from var(--primary) r 0 0);
+}
+
+.plugin-recommended-prompts__art > [data-channel="g"] {
+  --plugin-prompt-mask: url("../assets/plugin-prompts-ember-g.png");
+
+  background: rgb(from var(--primary) 0 g 0);
+}
+
+.plugin-recommended-prompts__art > [data-channel="b"] {
+  --plugin-prompt-mask: url("../assets/plugin-prompts-ember-b.png");
+
+  background: rgb(from var(--primary) 0 0 b);
+}
+
+.plugin-recommended-prompts__list {
+  position: relative;
+  display: grid;
+  gap: 12px;
+  width: min(100%, 680px);
+}
+
+.plugin-recommended-prompts__list > button.btn.plugin-recommended-prompts__prompt {
+  gap: 12px;
+  width: 100%;
+  padding: 12px 16px;
+  color: rgb(255 255 255);
+  font: inherit;
+  text-align: start;
+  background: rgb(17 19 24 / 88%);
+  border: 1px solid rgb(255 255 255 / 10%);
+  border-radius: var(--radius-lg);
+}
+
+.plugin-recommended-prompts__list
+  > button.btn.plugin-recommended-prompts__prompt:hover:not(:disabled) {
+  background: rgb(17 19 24 / 96%);
+}
+
+.plugin-recommended-prompts__prompt:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.plugin-recommended-prompts__text {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.plugin-prompt-mention {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent);
+}
+
+.plugin-prompt-mention__icon {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  overflow: hidden;
+  border-radius: 4px;
+  vertical-align: middle;
+}
+
+.plugin-prompt-mention__icon :is(img, svg) {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.plugin-recommended-prompts__prompt .plugin-prompt-mention {
+  color: color-mix(in srgb, var(--accent) 55%, white);
+}
+
+.plugin-recommended-prompts__action {
+  display: grid;
+  flex: 0 0 30px;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  background: rgb(255 255 255 / 8%);
+  border-radius: 50%;
+}
+
+/* Reference mode preserves the raw @id glyph widths, so native caret and wrapping
+   remain aligned with the advisory composer overlay. */
+.plugin-prompt-mention--reference {
+  display: inline;
+  background: var(--accent-subtle);
+  border-radius: 3px;
+}
+
+.plugin-prompt-mention--reference .plugin-prompt-mention__mark {
+  position: relative;
+}
+
+.plugin-prompt-mention--reference .plugin-prompt-mention__at {
+  visibility: hidden;
+}
+
+.plugin-prompt-mention--reference .plugin-prompt-mention__icon {
+  position: absolute;
+  inset-inline-start: 0;
+  top: 50%;
+  width: 100%;
+  height: 1em;
+  transform: translateY(-50%);
+}
+
+.agent-chat__composer-prediction.agent-chat__plugin-draft-overlay {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  max-height: none;
+  padding-inline: calc(
+      var(--chat-composer-editor-inset-inline) - var(--chat-composer-editor-scroll-inset)
+    )
+    var(--chat-composer-editor-inset-inline);
+  color: var(--text-strong);
+}
+
+.agent-chat__composer-combobox
+  > textarea:has(~ .agent-chat__plugin-draft-overlay):not(
+    [data-composer-overflow],
+    [data-composing]
+  ) {
+  color: transparent;
+  caret-color: var(--text-strong);
+}
+
+.agent-chat__composer-combobox
+  > textarea:is([data-composer-overflow], [data-composing])
+  ~ .agent-chat__plugin-draft-overlay {
+  display: none;
+}

@@ -247,6 +247,8 @@ export const PluginRuntimeStatusSchema = closedObject({
   error: Type.Optional(Type.String()),
 });
 
+const PluginRecommendedPromptsSchema = Type.Array(NonEmptyString, { maxItems: 3 });
+
 /** Catalog metadata and desired enablement, with optional observed runtime state. */
 export const PluginCatalogEntrySchema = closedObject({
   id: NonEmptyString,
@@ -257,6 +259,7 @@ export const PluginCatalogEntrySchema = closedObject({
   /** Opaque discovery identity for loading local or ClawHub presentation metadata. */
   catalogId: Type.Optional(NonEmptyString),
   description: Type.Optional(Type.String()),
+  recommendedPrompts: Type.Optional(PluginRecommendedPromptsSchema),
   version: Type.Optional(NonEmptyString),
   kind: Type.Optional(Type.Array(NonEmptyString)),
   origin: Type.Optional(NonEmptyString),
@@ -506,6 +509,7 @@ export const PluginDiscoveryDetailSchema = closedObject({
   providers: Type.Optional(Type.Array(NonEmptyString)),
   channels: Type.Optional(Type.Array(NonEmptyString)),
   uiCapabilities: Type.Optional(PluginUiCapabilitiesSchema),
+  recommendedPrompts: Type.Optional(PluginRecommendedPromptsSchema),
   configuration: Type.Array(ClawHubPluginConfigFieldSchema),
   mcpServers: Type.Array(NonEmptyString),
   mcpServerDetails: Type.Optional(Type.Array(ClawHubPluginMcpServerSchema)),
@@ -561,6 +565,7 @@ export const PluginsInspectResultSchema = closedObject({
       repositoryUrl: Type.Optional(NonEmptyString),
       documentationUrl: Type.Optional(NonEmptyString),
       publisherName: Type.Optional(NonEmptyString),
+      recommendedPrompts: Type.Optional(PluginRecommendedPromptsSchema),
       /** Selected plugin metadata; declared below remains the package-wide consent surface. */
       capabilities: Type.Optional(PluginOverviewCapabilitiesSchema),
     }),

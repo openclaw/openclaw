@@ -112,6 +112,7 @@ export function renderComposerTextarea(
         ) {
           return;
         }
+        event.currentTarget.setAttribute("data-composing", "");
         context().dismissPrediction();
         context().state.mentionMenu.close();
         context().state.emojiMenu.close();
@@ -123,8 +124,12 @@ export function renderComposerTextarea(
           value: (event.target as HTMLTextAreaElement).value,
         });
       }}
-      onCompositionEnd={(event) => context().handleCompositionEnd(event)}
+      onCompositionEnd={(event) => {
+        event.currentTarget.removeAttribute("data-composing");
+        context().handleCompositionEnd(event);
+      }}
       onBlur={(event) => {
+        event.currentTarget.removeAttribute("data-composing");
         handleTextareaOverflowInteraction(event);
         context().handleBlur(event);
       }}

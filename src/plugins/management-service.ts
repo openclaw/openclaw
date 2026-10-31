@@ -351,6 +351,9 @@ export const listManagedPlugins = withManagedPluginCache(
       if (presentation.description) {
         plugin.description = presentation.description;
       }
+      if (manifest?.recommendedPrompts !== undefined) {
+        plugin.recommendedPrompts = manifest.recommendedPrompts;
+      }
       if (presentation.version) {
         plugin.version = presentation.version;
       }

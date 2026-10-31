@@ -32,6 +32,7 @@ import {
 import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
 import type { createChatComposerContext } from "./chat-composer-frame.ts";
 import { createComposerMobileInteraction } from "./chat-composer-mobile-interaction.tsx";
+import { ComposerPluginPromptSlot } from "./chat-composer-plugin-prompt-slot.tsx";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import { ComposerQuestionDock } from "./chat-composer-question.tsx";
 import { ComposerQueue, ComposerInputScope, ComposerProgress } from "./chat-composer-regions.tsx";
@@ -575,6 +576,11 @@ export function renderChatComposerView(
                     />
                   )}
                 </Show>
+                <ComposerPluginPromptSlot
+                  text={context().visibleDraft}
+                  mentions={props.mentions}
+                  disabled={Boolean(context().dictation?.active || context().predictionText)}
+                />
                 <span
                   class="agent-chat__composer-placeholder"
                   aria-hidden="true"

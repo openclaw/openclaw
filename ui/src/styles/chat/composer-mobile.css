@@ -168,7 +168,7 @@
 
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
   .agent-chat__composer-combobox
-  > textarea {
+  > :is(textarea, .agent-chat__plugin-draft-overlay) {
   overflow: hidden;
   scrollbar-gutter: auto;
   white-space: nowrap;
