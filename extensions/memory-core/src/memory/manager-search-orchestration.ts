@@ -297,8 +297,21 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
         }
       }
       const indexIdentity = refreshSearchIdentity();
+      // Format upgrades retain keyword rows only when the identity owner confirms
+      // that every corpus constraint still matches; source/scope changes fail closed.
+      const formatUpgradePendingKeywordOnly = (state: MemoryIndexIdentityState): boolean =>
+        state.status === "mismatched" &&
+        state.owner === "openclaw" &&
+        state.versionOrder === "older" &&
+        (state.chunkingVersionOnly === true || state.lexicalCompatible === true) &&
+        this.fts.enabled &&
+        this.fts.available;
+      // A chunking-version-only mismatch can answer from the existing keyword rows, so it
+      // must not spend the search deadline rebuilding inline before that check is reached.
+      const keywordOnlyAfterFormatUpgrade = formatUpgradePendingKeywordOnly(indexIdentity);
       const shouldRepairIdentity =
         hasIndexedContent &&
+        !keywordOnlyAfterFormatUpgrade &&
         (indexIdentity.status === "missing" ||
           (searchSyncEnabled &&
             indexIdentity.status === "mismatched" &&
@@ -341,15 +354,6 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
       ) {
         repairedIndexIdentity = refreshSearchIdentity();
       }
-      // Format upgrades retain keyword rows only when the identity owner confirms
-      // that every corpus constraint still matches; source/scope changes fail closed.
-      const formatUpgradePendingKeywordOnly = (state: MemoryIndexIdentityState): boolean =>
-        state.status === "mismatched" &&
-        state.owner === "openclaw" &&
-        state.versionOrder === "older" &&
-        (state.chunkingVersionOnly === true || state.lexicalCompatible === true) &&
-        this.fts.enabled &&
-        this.fts.available;
       if (repairedIndexIdentity.status !== "valid") {
         if (!formatUpgradePendingKeywordOnly(repairedIndexIdentity)) {
           return [];

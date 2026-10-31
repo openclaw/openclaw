@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { MEMORY_CHUNKING_VERSION } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveRuntimeWorkerUrl, WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { recordMemoryEntryOrigins } from "../memory-entry-origins.js";
@@ -12,6 +13,7 @@ import * as memoryCpuWorkerRuntime from "./manager-cpu-worker-runtime.js";
 import {
   createManagerIndexFixture,
   holdMemoryTestOperation as hold,
+  memoryIndexFixtureWriter,
 } from "./manager-index.test-support.js";
 
 const memoryWarnings = vi.hoisted(() => vi.fn());
@@ -189,6 +191,26 @@ describe("memory index", () => {
     expect(await manager.search("iris publication canary", { minScore: 0 })).toEqual(
       matchingHit({ path: "memory/published.md" }),
     );
+  });
+
+  it("serves keyword rows instead of rebuilding when only the chunking version moved", async () => {
+    const manager = await syncedKeyword();
+    const db = memoryIndexFixtureWriter(manager);
+    db.exec(
+      `UPDATE memory_index_meta SET value = json_set(value, '$.chunkingVersion', ${
+        MEMORY_CHUNKING_VERSION - 1
+      }) WHERE key = 'memory_index_meta_v1'`,
+    );
+
+    memoryWarnings.mockClear();
+    const results = await manager.search("alpha");
+
+    expectFixtureHit(results);
+    expect(
+      memoryWarnings.mock.calls.some(([message]) =>
+        String(message).includes("format upgrade rebuild is pending"),
+      ),
+    ).toBe(true);
   });
 
   it("invalidates keyword snapshots before changing the fallback provider", async () => {
