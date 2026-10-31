@@ -45,7 +45,16 @@ export function ChannelConfig(params: { channelId: string; props: ChannelsProps 
       when={!params.props.config.configSchemaLoading}
       fallback={<SettingsLoadingSkeleton label={t("channels.config.loadingSchema")} rows={2} />}
     >
-      <div class="settings-row settings-row--stacked">
+      <form
+        class="settings-row settings-row--stacked"
+        novalidate
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (event.currentTarget.reportValidity()) {
+            params.props.onConfigSave();
+          }
+        }}
+      >
         <Show
           when={node()}
           fallback={
@@ -107,10 +116,10 @@ export function ChannelConfig(params: { channelId: string; props: ChannelsProps 
         <div class="settings-row__control">
           <button
             class="btn primary"
+            type="submit"
             disabled={
               !params.props.channels.connected || disabled() || !params.props.config.configFormDirty
             }
-            onClick={() => params.props.onConfigSave()}
           >
             {params.props.mutationBusy?.config || params.props.config.configSaving
               ? t("common.saving")
@@ -118,13 +127,14 @@ export function ChannelConfig(params: { channelId: string; props: ChannelsProps 
           </button>
           <button
             class="btn"
+            type="button"
             disabled={!params.props.channels.connected || disabled()}
             onClick={() => params.props.onConfigReload()}
           >
             {t("common.reload")}
           </button>
         </div>
-      </div>
+      </form>
     </Show>
   );
 }
