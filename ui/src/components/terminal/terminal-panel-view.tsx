@@ -9,6 +9,7 @@ import { Icon } from "../solid/icon.tsx";
 import { PanelEmptyState } from "../solid/panel-empty-state.tsx";
 import { PanelIconButton } from "../solid/panel-icon-button.tsx";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
+import { TerminalFind } from "./terminal-find.tsx";
 import { terminalPanelTabIcon, terminalPanelHostedTabs } from "./terminal-panel-tabs.tsx";
 import { Actions, SessionMenu, TerminalRail } from "./terminal-panel-view-chrome.tsx";
 import type { TerminalPanelViewState } from "./terminal-panel-view-types.ts";
@@ -275,6 +276,9 @@ export function TerminalPanelView(props: { view: () => TerminalPanelViewState })
             onDragLeave={(event: DragEvent) => props.view().upload.handleDragLeave(event)}
             onDrop={(event: DragEvent) => props.view().upload.handleDrop(event)}
           >
+            <Show when={props.view().activeTab} keyed>
+              {(tab) => <TerminalFind tab={tab} />}
+            </Show>
             <Show when={props.view().connecting}>
               <PanelLoadingSkeleton variant="terminal" overlay label={t("terminal.connecting")} />
             </Show>
