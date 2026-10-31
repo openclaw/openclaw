@@ -328,7 +328,7 @@ it.each<[string, LaunchctlResult[], ("absent" | "trash-denied" | keyof typeof re
     expect(unlink).toHaveBeenCalledTimes(failure === "trash-denied" ? 1 : 0);
     expectNoInstall(runtime);
   }
-  if (failure && failure in reasons) {
+  if (failure && failure !== "absent" && failure !== "trash-denied") {
     expectNoteContaining(
       `${LEGACY_MAC_LABEL} (${reasons[failure]})`,
       "Legacy gateway cleanup skipped",
