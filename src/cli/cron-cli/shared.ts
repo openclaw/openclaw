@@ -6,7 +6,10 @@ import {
   timestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import { readCronJobNotFoundError } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import { truncateToVisibleWidth, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
@@ -14,6 +17,7 @@ import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-t
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { normalizeThinkLevel, THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
+import { buildCronCommandShellArgv } from "../../cron/command-shell.js";
 import { parseAbsoluteTimeMs } from "../../cron/parse.js";
 import type { assertSupportedJobSpec } from "../../cron/service/jobs-validation.js";
 import { resolveCronStaggerMs } from "../../cron/stagger.js";
@@ -414,6 +418,29 @@ export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
   } catch {
     // Ignore status failures (older gateway, offline, etc.)
   }
+}
+
+/** Build `--command` argv for the shell of the Gateway host that will run the job. */
+export async function buildCronCommandShellArgvForGateway(
+  command: string,
+  opts: GatewayRpcOpts,
+): Promise<string[]> {
+  const unknownPlatform =
+    "The Gateway did not report its platform, so --command cannot pick its shell. Pass the exact argv with --command-argv instead.";
+  let info: Record<string, unknown>;
+  try {
+    info = await callGatewayFromCli("system.info", opts, {});
+  } catch (err) {
+    if (err instanceof GatewayClientRequestError && err.message === "unknown method: system.info") {
+      throw new CronCliError(unknownPlatform, { cause: err });
+    }
+    throw err;
+  }
+  const platform = readNonBlankString(info.platform);
+  if (!platform) {
+    throw new CronCliError(unknownPlatform);
+  }
+  return buildCronCommandShellArgv(command, platform);
 }
 
 export function parsePositiveCronDurationMs(input: string): number | null {

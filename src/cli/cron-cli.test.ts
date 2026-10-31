@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { afterEach, expect, it, vi } from "vitest";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import type { CronRunLogEntry } from "../cron/run-log-types.js";
 import type { CronDeliveryPreview, CronJob, CronJobCreate, CronJobPatch } from "../cron/types.js";
 import { ExitError } from "../runtime.js";
@@ -34,6 +35,9 @@ const defaultGatewayMock = async (method: string, _opts: unknown, params?: unkno
   }
   if (method === "cron.list") {
     return cronPage([]);
+  }
+  if (method === "system.info") {
+    return { platform: "linux" };
   }
   return { ok: true, params };
 };
@@ -625,6 +629,54 @@ it("creates a shell command with limits and environment overrides", async () => 
     },
   });
   expect(defaultRuntime.error).not.toHaveBeenCalled();
+});
+
+function answerSystemInfo(answer: () => unknown) {
+  callGatewayFromCli.mockImplementation(async (method: string, opts: unknown, params?: unknown) =>
+    method === "system.info" ? answer() : defaultGatewayMock(method, opts, params),
+  );
+}
+
+it.each([
+  ["add", [...CREATE, "--every", "10m", "--command", "echo ok"], "cron.add"],
+  ["edit", [...EDIT, "--command", "echo ok"], "cron.update"],
+] as const)("%s wraps --command in cmd.exe for a Windows Gateway", async (_label, args, method) => {
+  resetGatewayMock();
+  answerSystemInfo(() => ({ platform: "win32" }));
+  await parse([...args]);
+  const params = rpcParams<{ payload?: CronJobCreate["payload"]; patch?: CronJobPatch }>(method);
+  expect(params.payload ?? params.patch?.payload).toMatchObject({
+    kind: "command",
+    argv: ["cmd.exe", "/d", "/s", "/c", "echo ok"],
+  });
+});
+
+it.each([
+  [
+    "has no system.info",
+    () => {
+      throw new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: "unknown method: system.info",
+      });
+    },
+  ],
+  ["omits the platform", () => ({})],
+] as const)("rejects --command when the Gateway %s", async (_label, answer) => {
+  resetGatewayMock();
+  answerSystemInfo(answer);
+  await expect(parse([...CREATE, "--every", "10m", "--command", "echo ok"])).rejects.toMatchObject({
+    name: "ExitError",
+    code: 1,
+  });
+  expectRuntimeErrorContaining("--command-argv");
+  expect(rpcParams("cron.add")).toBeUndefined();
+});
+
+it("keeps explicit --command-argv without asking the Gateway platform", async () => {
+  const params = await add(...ADD.slice(2), "--command-argv", '["sh","-c","echo ok"]');
+  expect(params.payload).toMatchObject({ kind: "command", argv: ["sh", "-c", "echo ok"] });
+  expect(rpcParams("system.info")).toBeUndefined();
 });
 
 it("creates stream schedules from exact argv flags", async () => {

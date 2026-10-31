@@ -66,9 +66,12 @@ async function expectJsonFailure(args: readonly string[], message: string, root 
     process.argv = argv;
   }
 }
+// --command asks the Gateway for its platform to pick the stored shell wrapper.
+const gatewayReply = (method: string) =>
+  method === "system.info" ? { platform: "linux" } : { ok: true };
 function existing(job: Record<string, unknown>) {
   callGatewayFromCli.mockImplementation(async (method: string) =>
-    method === "cron.get" ? { id: "job-1", ...job } : { ok: true },
+    method === "cron.get" ? { id: "job-1", ...job } : gatewayReply(method),
   );
 }
 function expectPatch(patch: Record<string, unknown>, extra: Record<string, unknown> = {}) {
@@ -85,7 +88,7 @@ async function reject(args: readonly string[], message: string, reads: string[] 
 }
 
 beforeEach(() => {
-  callGatewayFromCli.mockReset().mockResolvedValue({ ok: true });
+  callGatewayFromCli.mockReset().mockImplementation(async (method: string) => gatewayReply(method));
   vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
 });
 afterEach(() => vi.restoreAllMocks());

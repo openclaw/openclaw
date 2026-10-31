@@ -72,7 +72,7 @@ openclaw automations create "*/15 * * * *" \
   --to "-1001234567890"
 ```
 
-`--command <shell>` stores `argv: ["sh", "-lc", <shell>]`. Use `--command-argv '["node","scripts/report.mjs"]'` for exact argv execution. Command jobs capture stdout/stderr, record normal run history, and route output through the same `announce`, `webhook`, or `none` delivery modes as isolated jobs. A command that prints only `NO_REPLY` is suppressed.
+`--command <shell>` stores the Gateway host's shell: `argv: ["sh", "-lc", <shell>]` on macOS and Linux, or `argv: ["cmd.exe", "/d", "/s", "/c", <shell>]` on Windows, where the command uses `cmd.exe` syntax such as `%VAR%`. The CLI asks the Gateway for its platform; when the Gateway cannot report it, the command fails and asks for `--command-argv` instead. Jobs created before this rule on a Windows Gateway keep their stored `sh -lc` argv and fail with `spawn sh ENOENT`; rerun `openclaw cron edit <job-id> --command <shell>` to store the Windows shell. Use `--command-argv '["node","scripts/report.mjs"]'` for exact argv execution. Command jobs capture stdout/stderr, record normal run history, and route output through the same `announce`, `webhook`, or `none` delivery modes as isolated jobs. A command that prints only `NO_REPLY` is suppressed.
 
 Use `--display-name <name>` when the list and detail views should show a
 human-readable label distinct from the automation's stable name. Set or update

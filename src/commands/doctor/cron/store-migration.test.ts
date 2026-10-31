@@ -4,6 +4,7 @@ import { resolveAgentHarnessPolicy } from "../../../agents/harness/policy.js";
 import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import { makeCronStreamSandboxTarget } from "../../../cron/stream-sandbox.test-support.js";
 import type { QuarantinedCronConfigJob } from "../../../cron/types-shared.js";
+import { withMockedPlatform } from "../../../test-utils/vitest-spies.js";
 import { legacyCodexProviderIdentityKey } from "../shared/codex-route-model-ref.js";
 import { TASK_SUGGESTION_TOOL_NAME_MIGRATION } from "../shared/legacy-tool-name-migration.js";
 import {
@@ -296,20 +297,22 @@ it("does not rewrite Codex refs during an ordinary cron normalization pass", () 
 it("converts legacy agent command prompts into command cron payloads", () => {
   const command =
     "cd /home/openclaw/.razor/quant && ./scripts/system/run_position_control.sh --write-card --silent-token NO_REPLY";
-  const { job, result } = normalizeLegacy({
-    sessionTarget: "isolated",
-    payload: {
-      kind: "agentTurn",
-      message: `Command to run:\n- command: ${command}\n- workdir: /home/openclaw/.razor/quant\n- timeout: 840`,
-      toolsAllow: ["group:runtime"],
-      lightContext: true,
-      timeoutSeconds: 900,
-      model: "openai/gpt-5.5",
-      deliver: true,
-      channel: "telegram",
-      to: "123",
-    },
-  });
+  const { job, result } = withMockedPlatform("linux", () =>
+    normalizeLegacy({
+      sessionTarget: "isolated",
+      payload: {
+        kind: "agentTurn",
+        message: `Command to run:\n- command: ${command}\n- workdir: /home/openclaw/.razor/quant\n- timeout: 840`,
+        toolsAllow: ["group:runtime"],
+        lightContext: true,
+        timeoutSeconds: 900,
+        model: "openai/gpt-5.5",
+        deliver: true,
+        channel: "telegram",
+        to: "123",
+      },
+    }),
+  );
 
   expect(result.issues.legacyAgentTurnCommandPayload).toBe(1);
   expectFields(job, {
@@ -320,6 +323,23 @@ it("converts legacy agent command prompts into command cron payloads", () => {
       cwd: "/home/openclaw/.razor/quant",
       timeoutSeconds: 900,
     },
+  });
+});
+
+it("converts legacy agent command prompts with the Windows Gateway shell", () => {
+  const { job } = withMockedPlatform("win32", () =>
+    normalizeLegacy({
+      sessionTarget: "isolated",
+      payload: {
+        kind: "agentTurn",
+        message: "Command to run:\n- command: echo ok",
+        toolsAllow: ["group:runtime"],
+      },
+    }),
+  );
+
+  expectFields(job, {
+    payload: { kind: "command", argv: ["cmd.exe", "/d", "/s", "/c", "echo ok"] },
   });
 });
 
