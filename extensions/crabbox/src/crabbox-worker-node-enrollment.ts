@@ -10,6 +10,22 @@ import { CRABBOX_SETUP_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 const CLOUD_SETUP_CODE_ENV = "CRABBOX_WORKER_SETUP_CODE";
 const CLOUD_BOOTSTRAP_TOKEN_ENV = "CRABBOX_WORKER_BOOTSTRAP_TOKEN";
+// Snapshot forks skip profile setup, but providers can inject fresh platform certificates.
+const LINUX_PLATFORM_TRUST_SETUP = `set -eu
+if [ -x /usr/sbin/update-ca-certificates ]; then
+  (
+    unset ${CLOUD_SETUP_CODE_ENV} ${CLOUD_BOOTSTRAP_TOKEN_ENV} CRABBOX_WORKER_CODEX_CONFIG
+    if [ "$(id -u)" = 0 ]; then
+      /usr/sbin/update-ca-certificates
+    else
+      sudo -n -- /usr/sbin/update-ca-certificates
+    fi
+  ) || {
+    echo 'Cloud worker platform trust registration failed; repair system certificate setup before enrollment' >&2
+    exit 1
+  }
+fi
+`;
 // Tolerate brief network pauses while resuming stalls well before the command deadline.
 const CLOUD_BOOTSTRAP_DOWNLOAD_IDLE_TIMEOUT_MS = 2 * 60_000;
 
@@ -537,7 +553,9 @@ setPhase("preparation");
 `;
   return {
     command:
-      ((params.target ?? "linux") === "linux" ? (linuxToolchainSetup ?? "") : "") +
+      ((params.target ?? "linux") === "linux"
+        ? (enrollment ? LINUX_PLATFORM_TRUST_SETUP : "") + (linuxToolchainSetup ?? "")
+        : "") +
       wrapCrabboxNodeScript(
         script.trimEnd(),
         params.target,
