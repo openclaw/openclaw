@@ -438,7 +438,9 @@ export async function executeSessionsSend(
           runId,
         );
       }
-      const isIsolatedCronRequester = isCronRunSessionKey(requesterSessionKey);
+      const isIsolatedCronRequester =
+        isCronRunSessionKey(requesterSessionKey) ||
+        /^cron:[^:]+:trigger$/.test(parseAgentSessionKey(requesterSessionKey)?.rest ?? "");
       let targetSession = await readSession(resolvedKey, targetAgentId);
       let targetSessionEntry = targetSession.store[targetSession.canonicalKey];
       const inputProvenance = {
