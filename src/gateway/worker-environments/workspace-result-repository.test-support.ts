@@ -224,6 +224,7 @@ export function useRepositoryWorkspaceResultFixture() {
       );
     }
     const environments: WorkerDispatchEnvironmentService = {
+      ensureRetainedRunning: vi.fn(async () => {}),
       prepareProjectIntent: async () => {
         throw new Error("unexpected local-project preparation");
       },

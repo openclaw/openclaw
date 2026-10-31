@@ -361,6 +361,7 @@ export async function createHarness(
     recordError: vi.fn((record) => record),
     supportsProviderExecutionMode: vi.fn(() => true),
     fenceWorkerTurnForRecovery: vi.fn(),
+    ensureRetainedRunning: vi.fn(async () => {}),
     assertPreparedIntentCurrent: vi.fn(),
     prepareProjectIntent: vi.fn(async (_profileId, request) => {
       const {

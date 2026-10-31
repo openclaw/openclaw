@@ -277,7 +277,13 @@ export function createWorkerRetainedLifecycle(
         if (artifact.install !== "bundle") {
           throw new Error("Retained worker bundle is unavailable");
         }
-        await options.refreshRuntime(live, options.providerFor(live.providerId), artifact, signal);
+        await options.refreshRuntime(
+          live,
+          options.providerFor(live.providerId),
+          artifact,
+          signal,
+          assertRunning,
+        );
         assertRunning();
         const installed = await options.ensureNodeWorkerBundle({
           deviceId: live.nodeDeviceId!,
