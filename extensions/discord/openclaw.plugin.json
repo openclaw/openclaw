@@ -25,6 +25,44 @@
   "channels": [
     "discord"
   ],
+  "channelConfigs": {
+    "discord": {
+      "gatewayMessageActions": [
+        "react",
+        "reactions",
+        "emoji-list",
+        "read",
+        "edit",
+        "delete",
+        "pin",
+        "unpin",
+        "list-pins",
+        "permissions",
+        "thread-create",
+        "thread-list",
+        "search",
+        "member-info",
+        "role-info",
+        "role-add",
+        "role-remove",
+        "channel-info",
+        "channel-list",
+        "channel-create",
+        "channel-edit",
+        "channel-delete",
+        "channel-move",
+        "category-create",
+        "category-edit",
+        "category-delete",
+        "voice-status",
+        "event-list",
+        "timeout",
+        "kick",
+        "ban",
+        "set-presence"
+      ]
+    }
+  },
   "contracts": {
     "transcriptSourceProviders": [
       "discord-voice"

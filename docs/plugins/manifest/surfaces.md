@@ -720,14 +720,17 @@ Non-bundled plugins that declare `channels[]` should also declare matching `chan
 
 Each channel entry can include:
 
-| Field         | Type                     | What it means                                                                                                    |
-| ------------- | ------------------------ | ---------------------------------------------------------------------------------------------------------------- |
-| `schema`      | `object`                 | JSON Schema for `channels.<id>`. Required for each declared channel config entry.                                |
-| `uiHints`     | `Record<string, object>` | Optional labels, placeholders, sensitivity, and display-only presentation hints for that channel config section. |
-| `label`       | `string`                 | Channel label merged into picker and inspect surfaces when runtime metadata is not ready.                        |
-| `description` | `string`                 | Short channel description for inspect and catalog surfaces.                                                      |
-| `commands`    | `object`                 | Static native command and native skill auto-defaults for pre-runtime config checks.                              |
-| `preferOver`  | `string[]`               | Legacy or lower-priority plugin ids this channel should outrank in selection surfaces.                           |
+| Field                   | Type                     | What it means                                                                                                    |
+| ----------------------- | ------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| `schema`                | `object`                 | JSON Schema for `channels.<id>`. Required for each declared channel config entry.                                |
+| `uiHints`               | `Record<string, object>` | Optional labels, placeholders, sensitivity, and display-only presentation hints for that channel config section. |
+| `label`                 | `string`                 | Channel label merged into picker and inspect surfaces when runtime metadata is not ready.                        |
+| `description`           | `string`                 | Short channel description for inspect and catalog surfaces.                                                      |
+| `commands`              | `object`                 | Static native command and native skill auto-defaults for pre-runtime config checks.                              |
+| `preferOver`            | `string[]`               | Legacy or lower-priority plugin ids this channel should outrank in selection surfaces.                           |
+| `gatewayMessageActions` | `string[]`               | Message actions that the runtime `actions.resolveExecutionMode` sends to the Gateway.                            |
+
+`gatewayMessageActions` mirrors the runtime plugin's execution modes. The runtime adapter still owns the decision. When the channel plugin is neither bundled nor loaded in the current process, `openclaw message <action> --channel <id>` uses this list to route a declared action to the Gateway without loading plugin code. Undeclared actions, dry-runs, and broadcasts keep local plugin preparation. Unknown action names are ignored.
 
 ### Replacing another channel plugin
 

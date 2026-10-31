@@ -5,6 +5,10 @@ import {
   normalizeTrimmedStringList,
   normalizeUniqueTrimmedStringList,
 } from "../../packages/normalization-core/src/string-normalization.js";
+import {
+  CHANNEL_MESSAGE_ACTION_NAMES,
+  type ChannelMessageActionName,
+} from "../channels/plugins/message-action-names.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import {
   normalizeCommandDescriptorName,
@@ -383,8 +387,18 @@ export function normalizeChannelConfigs(
       description: normalizeOptionalString(rawEntry.description),
       preferOver: normalizeOptionalTrimmedStringList(rawEntry.preferOver),
       commands: normalizeManifestChannelCommandDefaults(rawEntry.commands),
+      gatewayMessageActions: normalizeManifestGatewayMessageActions(rawEntry.gatewayMessageActions),
     });
   });
+}
+
+function normalizeManifestGatewayMessageActions(
+  value: unknown,
+): ChannelMessageActionName[] | undefined {
+  const actions = normalizeOptionalTrimmedStringList(value)?.flatMap(
+    (name) => CHANNEL_MESSAGE_ACTION_NAMES.find((action) => action === name) ?? [],
+  );
+  return actions?.length ? actions : undefined;
 }
 
 export function normalizeManifestChannelCommandDefaults(

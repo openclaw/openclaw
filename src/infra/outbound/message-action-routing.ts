@@ -296,17 +296,22 @@ export async function prepareMessageRoute(params: {
   const defersExternalTargetResolution =
     delegatesActionToGateway &&
     !dryRun &&
-    shouldDeferExternalMessageActionTargetResolution({
-      channel,
-      action,
-      cfg,
-      params: actionParams,
-      accountId: accountId ?? undefined,
-      conversationReadOrigin: normalizeConversationReadInvocationOrigin(
-        input.conversationReadOrigin,
-      ),
-      messageActionAuthorization: input.messageActionAuthorization,
-    });
+    // A runtime-free delegated adapter has no target grammar; for operator calls the
+    // Gateway resolves the target with its loaded plugin before dispatch.
+    ((input.conversationReadOrigin === "direct-operator" &&
+      !channelPlugin.messaging &&
+      !channelPlugin.directory) ||
+      shouldDeferExternalMessageActionTargetResolution({
+        channel,
+        action,
+        cfg,
+        params: actionParams,
+        accountId: accountId ?? undefined,
+        conversationReadOrigin: normalizeConversationReadInvocationOrigin(
+          input.conversationReadOrigin,
+        ),
+        messageActionAuthorization: input.messageActionAuthorization,
+      }));
   let assertReadAuthorityCurrent: (() => void) | undefined;
   let assertTargetAuthorityCurrent: (() => void) | undefined;
   if (!delegatesActionToGateway || dryRun) {

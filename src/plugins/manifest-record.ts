@@ -245,7 +245,14 @@ function mergeCatalogChannelConfigs(params: {
       if (catalogValue.uiHints || value.uiHints) {
         config.uiHints = { ...catalogValue.uiHints, ...value.uiHints };
       }
-      for (const field of ["runtime", "label", "description", "preferOver", "commands"] as const) {
+      for (const field of [
+        "runtime",
+        "label",
+        "description",
+        "preferOver",
+        "commands",
+        "gatewayMessageActions",
+      ] as const) {
         const fallback = value[field] ?? catalogValue[field];
         if (fallback) {
           Object.assign(config, { [field]: fallback });
