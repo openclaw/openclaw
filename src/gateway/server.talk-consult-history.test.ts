@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -11,9 +13,11 @@ import {
   vi,
   type MockInstance,
 } from "vitest";
+import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { extractText } from "../../ui/src/lib/chat/message-extract.ts";
 import { buildChatMarkdown } from "../../ui/src/pages/chat/export.ts";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import * as embeddedAgent from "../agents/embedded-agent.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
@@ -732,6 +736,69 @@ it.each(["before-final", "after-final"] as const)(
     }
   },
 );
+
+it.each([
+  ["captioned", "COMIC_189542: Here is the comic."],
+  ["media-only", ""],
+] as const)("delivers %s consult media to Talk chat as an attachment", async (_kind, caption) => {
+  const callId = expectDefined(voiceSessionId, "direct voice session");
+  const workspaceDir = resolveAgentWorkspaceDir(getRuntimeConfig(), agentId);
+  const imagePath = path.join(workspaceDir, `talk-consult-189542-${randomUUID()}.png`);
+  await fs.mkdir(workspaceDir, { recursive: true });
+  await fs.writeFile(imagePath, createSolidPngBuffer(1, 1, { r: 24, g: 64, b: 128 }));
+  const authored = caption ? `${caption}\nMEDIA:${imagePath}` : `MEDIA:${imagePath}`;
+  runEmbeddedAgent.mockImplementation(async (params) => {
+    await params.userTurnTranscriptRecorder?.persistApproved();
+    transcriptManager(params).appendMessage(assistantMessage(authored));
+    return {
+      // The embedded runner strips MEDIA directives from text and carries them as media.
+      payloads: [{ ...(caption ? { text: caption } : {}), mediaUrls: [imagePath] }],
+      meta: { durationMs: 0 },
+    };
+  });
+  const runner = createTalkClientAgentConsultRunner({
+    config: getRuntimeConfig(),
+    context,
+    sessionTarget: await prepareTalkSessionTarget(getRuntimeConfig(), sessionKey),
+    ownerConnId: connectionId,
+    getVoiceSessionId: () => callId,
+    initialItems: [],
+  });
+
+  const result = await runner.runArgs(args);
+  await waitForDispatchEnd();
+  await drainPublications();
+
+  expect(result.text).not.toContain("MEDIA:");
+  expect(result.text).not.toContain(imagePath);
+  if (caption) {
+    expect(result.text).toBe(caption);
+  } else {
+    expect(result.text).not.toBe("I need a moment to verify that before answering.");
+  }
+  expect(context.logGateway.warn).not.toHaveBeenCalledWith(
+    expect.stringContaining("no speakable text"),
+  );
+  const history = await historyMessages();
+  const finals = history.filter(
+    (message) =>
+      asOptionalRecord(message)?.role === "assistant" &&
+      JSON.stringify(message).includes("/api/chat/media/outgoing/"),
+  );
+  expect(finals).toHaveLength(1);
+  expect(asOptionalRecord(finals[0])?.content).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        type: "image",
+        url: expect.stringContaining("/api/chat/media/outgoing/"),
+      }),
+    ]),
+  );
+  expect(JSON.stringify(history)).not.toContain(imagePath);
+  if (caption) {
+    expect(matchingTexts(history, caption)).toEqual([caption]);
+  }
+});
 
 it.each([
   [undefined, false, false, false, undefined],

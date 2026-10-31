@@ -437,6 +437,48 @@ describe("realtime voice agent consult runtime", () => {
     );
   });
 
+  it("hands consult media to its delivery owner before releasing the run", async () => {
+    const warn = vi.fn();
+    const cleanup = vi.fn();
+    const media = { mediaUrls: ["/workspace/comic.png"] };
+    const { runtime } = createAgentRuntime([
+      setReplyPayloadMetadata(
+        { mediaUrl: "/workspace/earlier.png" },
+        { precedingInputAnswer: true },
+      ),
+      media,
+    ]);
+    const deliverAnswerMedia = vi.fn(async () => {
+      expect(cleanup).not.toHaveBeenCalled();
+      return true;
+    });
+
+    const mediaOnly = await runConsult(runtime, {
+      logger: { warn },
+      onRunStarted: () => ({ cleanup }),
+      deliverAnswerMedia,
+    });
+
+    expect(deliverAnswerMedia).toHaveBeenCalledOnce();
+    expect(deliverAnswerMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: expect.stringMatching(/^voice-consult-/),
+        sessionId: expect.any(String),
+        payloads: [media],
+      }),
+    );
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(mediaOnly.text).toBe("I shared it in the chat.");
+    expect(warn).not.toHaveBeenCalled();
+
+    // Channels without a chat surface keep the existing no-answer fallback.
+    const withoutOwner = await runConsult(createAgentRuntime([media]).runtime, {
+      logger: { warn },
+      fallbackText: "Let me verify that first.",
+    });
+    expect(withoutOwner).toEqual({ text: "Let me verify that first." });
+  });
+
   it("returns a yielded acknowledgement immediately without waiting for a visible final", async () => {
     const warn = vi.fn();
     const { runtime, runEmbeddedAgent } = createAgentRuntime();
