@@ -25,7 +25,13 @@ type GitPullRequestBranchFacts = {
   stats: { additions: number; deletions: number; changedFiles: number } | null;
 };
 
-export type GitCheckoutDiffInput = { cwd: string; baseCommit?: string; summaryOnly?: boolean } & (
+export type GitCheckoutDiffInput = {
+  cwd: string;
+  baseCommit?: string;
+  summaryOnly?: boolean;
+  /** The session's persisted managed-worktree binding owns index stat refreshes. */
+  refreshIndex?: boolean;
+} & (
   | {
       scope?: "all" | "uncommitted";
       commit?: never;
@@ -55,6 +61,7 @@ export type GitReadOperations = {
       branch?: string;
       defaultBranch?: string;
       summaryOnly?: boolean;
+      refreshIndex?: boolean;
       /** Previously displayed paths whose Git attributes can affect the cached diff. */
       paths?: string[];
     };

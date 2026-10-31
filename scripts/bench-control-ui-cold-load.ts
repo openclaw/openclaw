@@ -952,6 +952,8 @@ try {
         firstLiveShellMs: null as number | null,
         firstShellInteractiveMs: null as number | null,
         firstEnabledComposerMs: null as number | null,
+        firstUsableComposerMs: null as number | null,
+        firstUsableComposerKind: null as "static" | "hydrated" | "new" | null,
         firstComposerFocusMs: null as number | null,
         firstNonemptyTranscriptMs: null as number | null,
         firstRouteReadyMs: null as number | null,
@@ -1130,6 +1132,29 @@ try {
           visible(composer)
         ) {
           milestones.firstEnabledComposerMs = performance.now();
+        }
+        if (milestones.firstUsableComposerMs === null) {
+          const composers = document.querySelectorAll<HTMLTextAreaElement>(
+            "#openclaw-boot-composer, .chat-pane-cache__pane--active .agent-chat__composer-combobox textarea, .new-session-page__message",
+          );
+          for (const candidate of composers) {
+            if (
+              candidate.matches(":disabled") ||
+              candidate.readOnly ||
+              candidate.closest("[inert]") ||
+              !visible(candidate)
+            ) {
+              continue;
+            }
+            milestones.firstUsableComposerMs = performance.now();
+            milestones.firstUsableComposerKind =
+              candidate.id === "openclaw-boot-composer"
+                ? "static"
+                : candidate.matches(".new-session-page__message")
+                  ? "new"
+                  : "hydrated";
+            break;
+          }
         }
         if (
           milestones.firstNonemptyTranscriptMs === null &&
@@ -3395,6 +3420,8 @@ try {
           firstStaticShellMs: result.presentation.firstStaticShellMs,
           firstShellInteractiveMs: result.presentation.firstShellInteractiveMs,
           firstEnabledComposerMs: result.presentation.firstEnabledComposerMs,
+          firstUsableComposerMs: result.presentation.firstUsableComposerMs,
+          firstUsableComposerKind: result.presentation.firstUsableComposerKind,
           firstNonemptyTranscriptMs: result.presentation.firstNonemptyTranscriptMs,
           cls: result.presentation.cls,
         },

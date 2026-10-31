@@ -4646,7 +4646,6 @@
 ["src/gateway/server-methods/chat.abort-registry.test-support.ts","../../agents/runtime-plugins.js","e17497a1468e9f9030d7d84012606eb8c609556f99e297958edfdb6a62acfe37",1]
 ["src/gateway/server-methods/chat.abort-registry.test-support.ts","../../browser-lifecycle-cleanup.js","932978110f5fb27f9735a219708e6b01d58d1d4296e97f78171c9eff879c4ce9",1]
 ["src/gateway/server-methods/chat.directive-tags.test.ts","../../auto-reply/dispatch.js","7ebc3de8cb8d5dd7d6ed43fedfe47b55200f4af375d9e165e560cddc18b5c480",1]
-["src/gateway/server-methods/chat.directive-tags.test.ts","../../auto-reply/reply/stage-sandbox-media.js","55ee1d15cec2afbdb177abdead0d2f34fec1ef2b6a708fa6b300f22031bc1fcf",1]
 ["src/gateway/server-methods/chat.directive-tags.test.ts","../../plugins/hook-runner-global.js","71204c71e2884ea581f4b775ace80cc5e9ee3011a23d402efa962e24fabdbd9e",1]
 ["src/gateway/server-methods/chat.error-broadcast.test.ts","./chat-send-agent-dispatch.js","06628343c88820e027c737b46007ea98ff7a02872caf8f71adbc640e88ad504e",1]
 ["src/gateway/server-methods/chat.native-runtime-consent.test.ts","./chat-send-admission.js","97765fcd0efa8437ba27c77fc015f2563445aed94aafa9d5cffcfbb26abb4a49",1]
