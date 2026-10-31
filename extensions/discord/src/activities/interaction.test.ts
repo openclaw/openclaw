@@ -1,3 +1,8 @@
+import fs from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import os from "node:os";
+import path from "node:path";
 import { InteractionResponseType } from "discord-api-types/v10";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as loggingCore from "openclaw/plugin-sdk/logging-core";
@@ -336,5 +341,37 @@ it.each([true, false])("registers static routes; configured=%s", async (configur
       ok: false,
       error: { code: "unavailable" },
     });
+  }
+});
+
+it.each([
+  { layout: "source checkout and bundled dist", asset: "assets/embedded-app-sdk.mjs" },
+  { layout: "standalone npm package", asset: "dist/assets/embedded-app-sdk.mjs" },
+])("serves the generated SDK from the $layout layout", async ({ asset }) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-activity-root-"));
+  const server = createServer();
+  try {
+    await fs.mkdir(path.join(root, path.dirname(asset)), { recursive: true });
+    await fs.writeFile(path.join(root, asset), "export class DiscordSDK {}\n");
+    const { route } = createRegisteredActivityFixture(createActivityTestConfig(), (input) =>
+      path.join(root, input),
+    );
+    server.on("request", (req, res) => void route.handler(req, res));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const { port } = server.address() as AddressInfo;
+
+    const vendor = await fetch(
+      `http://127.0.0.1:${port}/discord/activity/vendor/embedded-app-sdk.mjs`,
+    );
+
+    expect(vendor.status).toBe(200);
+    await expect(vendor.text()).resolves.toBe("export class DiscordSDK {}\n");
+  } finally {
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+    await fs.rm(root, { recursive: true, force: true });
   }
 });
