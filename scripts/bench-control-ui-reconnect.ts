@@ -1,5 +1,6 @@
 // Production renderer + synthetic WebSocket transport. No live Gateway/provider timing claims.
 // Example: pnpm exec tsx scripts/bench-control-ui-reconnect.ts --bundle-dir BASE --compare-bundle-dir HEAD --pairs 10 --thread-cpu-time
+import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { cp, mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -370,6 +371,7 @@ const servers: Array<{
   name: string;
   dir: string;
   build: { buildId: string; version: string };
+  indexSha256: string;
   upgradedDir?: string;
   server: Awaited<ReturnType<typeof startControlUiBenchGatewayServer>>;
 }> = [];
@@ -465,7 +467,8 @@ async function writeSummary() {
 try {
   for (const bundle of bundles) {
     const dir = path.resolve(bundle.dir);
-    const html = await readFile(path.join(dir, "index.html"), "utf8");
+    const index = await readFile(path.join(dir, "index.html"));
+    const html = index.toString("utf8");
     const raw = html.match(
       /globalThis\.OPENCLAW_CONTROL_UI_BUILD_INFO=(\{.*?\});<\/script>/su,
     )?.[1];
@@ -489,6 +492,7 @@ try {
       dir,
       upgradedDir,
       build: JSON.parse(raw),
+      indexSha256: createHash("sha256").update(index).digest("hex"),
       server: await startControlUiBenchGatewayServer(dir, 0, assetLatencyMs),
     });
   }
@@ -496,7 +500,12 @@ try {
     path.join(output, "manifest.json"),
     JSON.stringify(
       {
-        bundles: servers.map(({ name, dir, build }) => ({ name, dir, build })),
+        bundles: servers.map(({ name, dir, build, indexSha256 }) => ({
+          name,
+          dir,
+          build,
+          indexSha256,
+        })),
         pairs,
         scenarios,
         rtts,
