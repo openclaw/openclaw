@@ -92,7 +92,9 @@ describe("Google Interactions provider parity", () => {
       ...context,
       tools: [{ name: "lookup", description: "Look up", parameters: { type: "object" } }],
     };
-    await (await streamFn(model, toolContext, { apiKey: "gemini-key-1", toolChoice })).result();
+    // Agent call options carry Google's toolChoice beyond the shared simple options.
+    const callOptions = { apiKey: "gemini-key-1", toolChoice };
+    await (await streamFn(model, toolContext, callOptions)).result();
     const body: unknown = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body ?? "{}"));
     expect(body).toMatchObject({ generation_config: { tool_choice: expected } });
   });
