@@ -3,6 +3,7 @@ import {
   readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
+import { Option } from "commander";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
@@ -61,10 +62,62 @@ export function registerCronListCommand(cron: Command) {
       .option("--all", "Include disabled jobs", false)
       .option("--agent <id>", "Filter by agent id")
       .option("--query <text>", "Filter automations by search text")
+      .addOption(
+        new Option("--enabled <state>", "Filter by enabled state").choices([
+          "all",
+          "enabled",
+          "disabled",
+        ]),
+      )
+      .addOption(
+        new Option("--schedule-kind <kind>", "Filter by schedule kind").choices([
+          "all",
+          "at",
+          "every",
+          "cron",
+          "on-exit",
+          "stream",
+          "event",
+        ]),
+      )
+      .addOption(
+        new Option("--last-run-status <status>", "Filter by last run status").choices([
+          "all",
+          "ok",
+          "error",
+          "skipped",
+          "unknown",
+        ]),
+      )
+      .addOption(
+        new Option("--trigger <trigger>", "Filter by trigger").choices([
+          "all",
+          "conditional",
+          "unconditional",
+        ]),
+      )
+      .addOption(
+        new Option("--sort-by <key>", "Sort column").choices([
+          "nextRunAtMs",
+          "updatedAtMs",
+          "name",
+        ]),
+      )
+      .addOption(new Option("--sort-dir <dir>", "Sort direction").choices(["asc", "desc"]))
       .option("--json", "Output JSON", false)
       .action(async (opts) => {
         try {
-          const listParams: { includeDisabled: boolean; agentId?: string; query?: string } = {
+          const listParams: {
+            includeDisabled: boolean;
+            agentId?: string;
+            query?: string;
+            enabled?: "all" | "enabled" | "disabled";
+            scheduleKind?: "all" | "at" | "every" | "cron" | "on-exit" | "stream" | "event";
+            lastRunStatus?: "all" | "ok" | "error" | "skipped" | "unknown";
+            trigger?: "all" | "conditional" | "unconditional";
+            sortBy?: "nextRunAtMs" | "updatedAtMs" | "name";
+            sortDir?: "asc" | "desc";
+          } = {
             includeDisabled: Boolean(opts.all),
           };
           const agentId = parseCronStringOption(opts.agent, "--agent");
@@ -74,6 +127,24 @@ export function registerCronListCommand(cron: Command) {
           const query = normalizeOptionalString(opts.query);
           if (query) {
             listParams.query = query;
+          }
+          if (opts.enabled) {
+            listParams.enabled = opts.enabled;
+          }
+          if (opts.scheduleKind) {
+            listParams.scheduleKind = opts.scheduleKind;
+          }
+          if (opts.lastRunStatus) {
+            listParams.lastRunStatus = opts.lastRunStatus;
+          }
+          if (opts.trigger) {
+            listParams.trigger = opts.trigger;
+          }
+          if (opts.sortBy) {
+            listParams.sortBy = opts.sortBy;
+          }
+          if (opts.sortDir) {
+            listParams.sortDir = opts.sortDir;
           }
           const res = await listCronJobsFromGateway(opts, listParams);
           if (opts.json) {

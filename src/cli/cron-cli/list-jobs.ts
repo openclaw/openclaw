@@ -35,7 +35,18 @@ export function isUnknownCronGetMethodError(error: unknown): error is Error {
 /** Read every bounded Gateway page from one complete cron inventory revision. */
 export async function listCronJobsFromGateway(
   opts: GatewayRpcOpts,
-  filters: Pick<CronListPageOptions, "includeDisabled" | "agentId" | "query">,
+  filters: Pick<
+    CronListPageOptions,
+    | "includeDisabled"
+    | "agentId"
+    | "query"
+    | "enabled"
+    | "scheduleKind"
+    | "lastRunStatus"
+    | "trigger"
+    | "sortBy"
+    | "sortDir"
+  >,
   options: { allowLegacyUnversionedPagination?: boolean } = {},
 ): Promise<GatewayCronJobInventory> {
   const signal = getAsyncWorkSignal();
