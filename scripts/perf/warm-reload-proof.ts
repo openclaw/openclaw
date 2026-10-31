@@ -17,6 +17,7 @@ import {
 import { createControlUiE2eArtifactDir } from "../../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../../ui/src/test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../../ui/src/test-helpers/control-ui-e2e-readiness.ts";
+import { installPaneChromeProbe } from "../lib/control-ui-pane-chrome-probe.ts";
 import { stopChild } from "../lib/gateway-bench-child.ts";
 import { freeProofPort, startWarmReloadAdmission } from "./warm-reload-admission.ts";
 import { installWarmReloadBrowserProbe, proofRegions } from "./warm-reload-browser-probe.ts";
@@ -133,7 +134,12 @@ async function readProbe(page: Page) {
       "__warmReloadProof",
     );
     data.stopped = true;
-    return { ...data, timeOrigin: performance.timeOrigin, capturedUntilMs: performance.now() };
+    return {
+      ...data,
+      paneChrome: Reflect.get(window, "__paneChrome").read(data.firstTranscriptDomMs),
+      timeOrigin: performance.timeOrigin,
+      capturedUntilMs: performance.now(),
+    };
   });
 }
 async function regionBoxes(page: Page) {
@@ -797,7 +803,7 @@ try {
           diagnosticPage = page;
           page.setDefaultTimeout(60000);
           await page.addInitScript({
-            content: `globalThis.__name = (fn) => fn; (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)}, ${values["transcript-late-paint"]});`,
+            content: `globalThis.__name = (fn) => fn; const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome); (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)}, ${values["transcript-late-paint"]});`,
           });
           const cdp = await context.newCDPSession(page);
           await cdp.send("Page.enable");

@@ -374,6 +374,7 @@ export function installWarmReloadBrowserProbe(route: string, traceIndexedDb = fa
       textObserver.disconnect();
       return;
     }
+    Reflect.get(window, "__paneChrome").sample(performance.now());
     sampleAnimations();
     const rowElements = [...document.querySelectorAll(".chat-virtual-row")];
     const rows = rowElements.length;
