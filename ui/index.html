@@ -590,14 +590,32 @@
         }
 
         @container chat-composer (width > 560px) {
-          html:not(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrome)
-            :is(
-              #openclaw-boot-composer:focus,
-              .loading-skeleton:has(.loading-skeleton__content) #openclaw-boot-composer
-            ) {
-            /* Match the live wide row's 6px + 10px top and 12px sides.
-               Preserve 62px of block padding for the reserved footer. */
-            padding: 16px 12px 46px;
+          html[data-openclaw-boot-chat]:not(
+              .openclaw-native-macos,
+              .openclaw-native-nav,
+              .openclaw-native-web-chrome
+            )
+            :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+            .loading-skeleton:has(#openclaw-boot-composer:focus, .loading-skeleton__content)
+            .loading-skeleton__composer:has(> #openclaw-boot-composer) {
+            /* Reserve the live row and footer outside the editor's scrollport. */
+            min-height: 112px;
+            padding: 6px 0 48px;
+          }
+
+          html[data-openclaw-boot-chat]:not(
+              .openclaw-native-macos,
+              .openclaw-native-nav,
+              .openclaw-native-web-chrome
+            )
+            :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+            .loading-skeleton:has(#openclaw-boot-composer:focus, .loading-skeleton__content)
+            .loading-skeleton__composer
+            > #openclaw-boot-composer {
+            min-height: 48px;
+            max-height: 56px;
+            padding: 10px 12px;
+            overflow-y: auto;
           }
         }
       }

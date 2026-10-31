@@ -87,7 +87,7 @@ suite.define(() => {
     { name: "phone landscape", options: { ...phoneOptions, viewport: landscapeViewport } },
   ])(
     "keeps an unsent draft, its focus and its frame still when the session opens ($name)",
-    async ({ options }) => {
+    async ({ name, options }) => {
       await suite.withPage(options, async ({ page }) => {
         const gateway = await bootGateway(page, ["connect"]);
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey), {
@@ -102,7 +102,10 @@ suite.define(() => {
         } else {
           await boot.click();
         }
-        const text = "Draft, not yet sent, long enough to wrap onto another line of the composer";
+        const text =
+          name === "phone landscape"
+            ? "First line\nSecond line\nThird line\nFourth line"
+            : "Draft, not yet sent, long enough to wrap onto another line of the composer";
         await page.keyboard.type(text);
         await page.keyboard.press(options.isMobile ? "Enter" : "Shift+Enter");
         await page.keyboard.type("second line");
@@ -121,13 +124,13 @@ suite.define(() => {
               box.y,
               box.width,
               box.height,
-              origin.x + Number.parseFloat(style.paddingLeft),
-              origin.y + Number.parseFloat(style.paddingTop),
+              origin.x + Number.parseFloat(style.paddingLeft) - editor.scrollLeft,
+              origin.y + Number.parseFloat(style.paddingTop) - editor.scrollTop,
+              editor.scrollTop,
             ].map(Math.round);
           });
         const before = await geometry(".loading-skeleton__composer:has(#openclaw-boot-composer)");
-        // Record every animation frame through the handoff: each one must show one
-        // composer, at one size, holding the whole draft.
+        // Every frame keeps one stationary composer, its visible draft and scroll position.
         await page.evaluate(() => {
           const frames: string[] = [];
           Reflect.set(window, "__bootComposerFrames", frames);
@@ -141,7 +144,7 @@ suite.define(() => {
             frames.push(
               editors.length === 1 && box
                 ? JSON.stringify([
-                    ...[box.x, box.y, box.width, box.height].map(Math.round),
+                    ...[box.x, box.y, box.width, box.height, editor!.scrollTop].map(Math.round),
                     editor!.value.length,
                   ])
                 : `editors:${editors.length}`,
@@ -166,7 +169,7 @@ suite.define(() => {
           (await page.evaluate(() => Reflect.get(window, "__bootComposerFrames"))) as string[],
         );
         expect([...frames]).toEqual([
-          JSON.stringify([...before.slice(0, 4), text.length + "\nsecond line".length]),
+          JSON.stringify([...before.slice(0, 4), before[6], draft.length]),
         ]);
         expect(await composer.evaluate((el) => el === document.activeElement)).toBe(true);
         await page.keyboard.type("!");
