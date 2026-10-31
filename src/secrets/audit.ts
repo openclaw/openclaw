@@ -14,10 +14,13 @@ import {
   isSecretRefHeaderValueMarker,
 } from "../agents/model-auth-markers.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
+import { normalizeSourceProviderLookup } from "../agents/models-config.providers.source-managed.js";
 import { resolveStateDir, type OpenClawConfig } from "../config/config.js";
+import { resolveConfigSecretRef } from "../config/resolution-facts.js";
 import { coerceSecretRef, resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { JsonFileReadError, readJsonSync } from "../infra/json-files.js";
+import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { resolveUserPath } from "../utils.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import {
@@ -238,6 +241,7 @@ function collectAuthStoreSecrets(
 function collectModelsJsonSecrets(params: {
   modelsJsonPath: string;
   collector: AuditCollector;
+  sourceConfig: OpenClawConfig;
 }): void {
   let parsed: unknown;
   try {
@@ -267,10 +271,22 @@ function collectModelsJsonSecrets(params: {
   if (!isRecord(parsed) || !isRecord(parsed.providers)) {
     return;
   }
+  // Select the writer's winning provider before inspecting its credential source.
+  const sourceProviders = normalizeSourceProviderLookup(params.sourceConfig.models?.providers);
   for (const [providerId, providerValue] of Object.entries(parsed.providers)) {
     if (!isRecord(providerValue)) {
       continue;
     }
+    const sourceProvider = sourceProviders.get(normalizeProviderId(providerId));
+    const sourceRef = sourceProvider
+      ? resolveConfigSecretRef({
+          config: params.sourceConfig,
+          path: `${appendConfigPathSegment("models.providers", sourceProvider.providerKey)}.apiKey`,
+          value: sourceProvider.providerConfig.apiKey,
+          defaults: params.sourceConfig.secrets?.defaults,
+          includeResolved: true,
+        })
+      : null;
     const collectValue = (value: unknown, headerKey?: string) => {
       const isHeader = headerKey !== undefined;
       const ref = coerceSecretRef(value);
@@ -278,6 +294,7 @@ function collectModelsJsonSecrets(params: {
         !ref &&
         (!isNonEmptyString(value) ||
           (isHeader ? isSecretRefHeaderValueMarker(value) : isNonSecretApiKeyMarker(value)) ||
+          (!isHeader && sourceRef?.source === "env" && value === sourceRef.id.trim()) ||
           (isHeader && !isLikelySensitiveModelProviderHeaderName(headerKey)))
       ) {
         return;
@@ -563,6 +580,7 @@ export async function runSecretsAudit(
       collectModelsJsonSecrets({
         modelsJsonPath,
         collector,
+        sourceConfig: snapshot.sourceConfig,
       });
     }
     const unresolvedRefResult = await collectUnresolvedRefFindings({
