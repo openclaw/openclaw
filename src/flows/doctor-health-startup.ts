@@ -7,7 +7,7 @@ import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import type { DoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
 import { resolveDoctorRepairMode } from "../commands/doctor-repair-mode.js";
-import { resolveIsNixMode, resolveStateDir } from "../config/paths.js";
+import { isDefaultInstallIdentity, resolveIsNixMode, resolveStateDir } from "../config/paths.js";
 import { formatDoctorProgressPhase, type DoctorProgressMeasure } from "../infra/doctor-progress.js";
 import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
 import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
@@ -137,6 +137,17 @@ export async function prepareDoctorHealthFlow(
     if (prerequisite) {
       const { note } = await import("../../packages/terminal-core/src/note.js");
       note(prerequisite, "Gateway startup prerequisite");
+    }
+    if (process.platform === "darwin" && isDefaultInstallIdentity()) {
+      const [{ noteMacGatewayPlatformWarnings }, { createDoctorPrompter }] = await Promise.all([
+        import("../commands/doctor-platform-notes.js"),
+        import("../commands/doctor-prompter.js"),
+      ]);
+      // Repair before maintenance captures the service fingerprint for restoration.
+      await noteMacGatewayPlatformWarnings(
+        config,
+        createDoctorPrompter({ runtime: effectiveRuntime, options }),
+      );
     }
   }
   return { effectiveRuntime, repairRuntime, stateDirExistedAtStart, root };
