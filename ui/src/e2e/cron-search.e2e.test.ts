@@ -41,7 +41,8 @@ suite.define(() => {
       const rows = page.locator(".cron-table__row");
       const loadMore = page.getByRole("button", { name: "Load more", exact: true });
       await loadMore.click();
-      await expect.poll(() => rows.count()).toBe(jobs.length);
+      await expect.poll(() => rows.first().getAttribute("aria-setsize")).toBe(String(jobs.length));
+      expect(await rows.count()).toBeLessThan(40);
       await page.locator(".cron-job-menu__trigger").first().click();
       await page.getByRole("menuitem", { name: "Remove", exact: true }).waitFor();
       await page.keyboard.press("Escape");
@@ -111,7 +112,8 @@ suite.define(() => {
           await client.send("Tracing.end");
           await complete;
         }
-        expect(await rows.count()).toBe(jobs.length);
+        expect(await rows.first().getAttribute("aria-setsize")).toBe(String(jobs.length));
+        expect(await rows.count()).toBeLessThan(40);
         expect(await page.locator(".cron-table").getAttribute("aria-busy")).toBe("true");
         // A loading indicator may restyle itself, not every retained row or shadow part.
         // Count work rather than wall time so the regression is independent of CPU speed.
@@ -120,13 +122,16 @@ suite.define(() => {
         await gateway.resolveDeferred("cron.list");
         // The pending read queues one replacement for the latest typed query.
         await gateway.waitForRequest("cron.list", { match: { query, offset: 0 } });
-        await expect.poll(() => rows.count()).toBe(50);
+        await expect.poll(() => rows.first().getAttribute("aria-setsize")).toBe("50");
         await expect.poll(() => page.locator(".cron-table").getAttribute("aria-busy")).toBe(null);
         expect(await search.inputValue()).toBe(query);
         expect(await search.evaluate((element) => element === document.activeElement)).toBe(true);
         await expect.poll(() => loadMore.isEnabled()).toBe(true);
         await loadMore.click();
-        await expect.poll(() => rows.count()).toBe(jobs.length);
+        await expect
+          .poll(() => rows.first().getAttribute("aria-setsize"))
+          .toBe(String(jobs.length));
+        expect(await rows.count()).toBeLessThan(40);
         expect(
           (await gateway.getRequests("cron.list"))
             .slice(requestsBefore)
@@ -139,6 +144,53 @@ suite.define(() => {
       } finally {
         await client.detach();
       }
+    });
+  });
+  it("windows jobs while preserving native Tab, menu focus, and the last loaded job", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const jobs = Array.from({ length: 500 }, (_, index) =>
+        cronJob("window-" + index, "Windowed reminder " + index),
+      );
+      await installMockGateway(page, {
+        methodResponses: {
+          "cron.list": cronList(jobs, "window-query", { total: jobs.length }),
+          "cron.status": { enabled: true, jobs: jobs.length, nextWakeAtMs: null },
+          "cron.runs": { entries: [], total: 0, offset: 0, hasMore: false },
+        },
+      });
+      await page.goto(suite.server.baseUrl + "cron");
+      const rows = page.locator(".cron-table__row");
+      await expect.poll(() => rows.first().getAttribute("aria-setsize")).toBe("500");
+      expect(await rows.count()).toBeLessThan(40);
+      // The last row is pinned as the native reverse-Tab entry from the footer.
+      const edge = rows.nth((await rows.count()) - 2);
+      const index = Number(await edge.getAttribute("data-index"));
+      await edge.locator(".cron-table__name").focus();
+      for (let step = 0; step < 4; step++) {
+        await page.keyboard.press("Tab");
+      }
+      const next = page.locator(`[data-test-id="cron-row-window-${index + 1}"]`);
+      await expect
+        .poll(() =>
+          next
+            .locator(".cron-table__name")
+            .evaluate((element) => element === document.activeElement),
+        )
+        .toBe(true);
+      const trigger = next.locator(".cron-job-menu__trigger");
+      await trigger.click();
+      await page.getByRole("menuitem", { name: "Remove", exact: true }).waitFor();
+      await page.keyboard.press("Escape");
+      await expect
+        .poll(() => trigger.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await page.locator('[data-test-id="cron-row-window-499"] .cron-table__name').focus();
+      await expect
+        .poll(() =>
+          page.locator('[data-test-id="cron-row-window-499"]').getAttribute("aria-posinset"),
+        )
+        .toBe("500");
+      expect(await rows.count()).toBeLessThan(40);
     });
   });
 });
