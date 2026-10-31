@@ -10,19 +10,17 @@ import type { Context, Model } from "@openclaw/ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 // Importing the facade installs the OpenClaw AI transport host ports.
 import "../stream.js";
+import { makeProviderModelFixture } from "../../agents/test-helpers/provider-model-fixture.js";
 
-const CLOUDFLARE_ANTHROPIC_MODEL = {
+const CLOUDFLARE_ANTHROPIC_MODEL = makeProviderModelFixture<"anthropic-messages">({
   id: "claude-sonnet-4-6",
   name: "Claude Sonnet 4.6",
   api: "anthropic-messages",
   provider: "cloudflare-ai-gateway",
   baseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway/anthropic/v1/messages",
   reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 200_000,
-  maxTokens: 4096,
-} satisfies Model<"anthropic-messages">;
+});
 
 const context = {
   messages: [{ role: "user", content: "hi", timestamp: 1 }],
@@ -52,8 +50,6 @@ describe("Anthropic Cloudflare guard-specific SSRF blocking proof", () => {
     const { streamAnthropic } = await import("@openclaw/ai/internal/anthropic");
     const stream = streamAnthropic(blockedModel, context, {
       apiKey: "sk-ant-test",
-      // Retries only repeat the same deterministic guard rejection.
-      maxRetries: 0,
     });
     const result = await stream.result();
 

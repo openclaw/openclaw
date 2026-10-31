@@ -57,6 +57,8 @@ Onboarding imports require a fresh OpenClaw setup. If you already have local Ope
     - Claude skills with a `SKILL.md` file are copied into the OpenClaw workspace skills directory.
     - Claude command Markdown files under `.claude/commands/` or `~/.claude/commands/` are converted into OpenClaw skills with `disable-model-invocation: true`.
 
+    If a discovered skills directory cannot be read, migration stops before importing anything. Fix access to the directory named in the error, then retry.
+
   </Accordion>
 </AccordionGroup>
 
@@ -124,8 +126,10 @@ When `--from` points at a project root, OpenClaw imports only that project's Cla
 Apply refuses to continue when the plan reports conflicts (a file or config value already exists at the target).
 
 <Warning>
-Rerun with `--overwrite` only when replacing the existing target is intentional. Providers may still write item-level backups for overwritten files in the migration report directory.
+Rerun with `--overwrite` only when replacing the existing target is intentional.
 </Warning>
+
+Before overwriting a skill generated from a Claude command, OpenClaw backs up its whole directory and records the path in the item's `details.backupPath` in `report.json`. That path remains available if the overwrite fails. If the command source cannot be read, migration reports an error without changing the existing skill.
 
 For a fresh OpenClaw install, conflicts are unusual. They typically appear when you re-run the import on a setup that already has user edits.
 
@@ -140,7 +144,15 @@ openclaw migrate apply claude --json --yes
 
 ## Troubleshooting
 
+Source text must be an ordinary file. Optional unreadable settings are skipped;
+instructions and commands that become special files are refused before changing
+destinations or creating backups. Restore an ordinary source file and retry.
+Symlinks to ordinary source files remain supported.
+
 <AccordionGroup>
+  <Accordion title="A Claude configuration file is not valid UTF-8">
+    Migration stops before importing when a Claude JSON source contains invalid UTF-8 bytes. Re-save or re-encode the file named in the error as UTF-8, then retry. The source file and existing OpenClaw config remain unchanged. Valid Unicode, including a literal replacement character (`�`), is preserved.
+  </Accordion>
   <Accordion title="Claude state lives outside ~/.claude">
     Pass `--from /actual/path` (CLI) or `--import-source /actual/path` (onboarding).
   </Accordion>

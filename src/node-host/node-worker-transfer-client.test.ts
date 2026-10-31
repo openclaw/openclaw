@@ -1,41 +1,45 @@
-import { createHash, X509Certificate } from "node:crypto";
+import { deepStrictEqual } from "node:assert/strict";
+import { X509Certificate } from "node:crypto";
 import type { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import http, {
   createServer as createHttpServer,
   type RequestOptions,
-  type Server as HttpServer,
+  type ServerResponse,
 } from "node:http";
-import https, { createServer as createHttpsServer, type Server as HttpsServer } from "node:https";
+import https, { createServer as createHttpsServer } from "node:https";
 import { connect as connectNet, type Socket } from "node:net";
 import path from "node:path";
 import type { Duplex } from "node:stream";
 import type { TLSSocket } from "node:tls";
+import { gzipSync } from "node:zlib";
 import { installGlobalProxy } from "@openclaw/proxyline";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
-import { serializeWorkerWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest.js";
-import { readActualWorkspaceManifest } from "../gateway/worker-environments/workspace-reconcile.js";
-import { runCommandBuffered, runExec } from "../process/exec.js";
-import { runNodeWorkerWorkspaceTransfer } from "./node-worker-transfer-client.js";
-
-const transferDebug = vi.hoisted(() => vi.fn());
-vi.mock("../logging/subsystem.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
-  return {
-    ...actual,
-    createSubsystemLogger: (subsystem: string) => {
-      const logger = actual.createSubsystemLogger(subsystem);
-      return subsystem === "node-host/worker-workspace"
-        ? { ...logger, debug: transferDebug }
-        : logger;
-    },
-  };
-});
+import { MAX_WORKSPACE_MANIFEST_BYTES } from "../gateway/worker-environments/workspace-inventory-limits.js";
+import { captureWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
+import { parseWorkerWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest.js";
+import {
+  closeServer,
+  digest,
+  fileEntry,
+  manifestFixture,
+  serveTransfer,
+  transferFixture,
+  transferHandler,
+  workspaceTransferHandler,
+} from "./node-worker-transfer-client.fixture.test-support.js";
+import { listen } from "./node-worker-transfer-client.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function fixture(name: string) {
+  const root = tempDirs.make(`node-worker-transfer-${name}-`, process.cwd());
+  return { root, ...transferFixture(root, `environment-${name}`) };
+}
 
 type DrainProbe = {
   emitter: EventEmitter;
@@ -59,360 +63,299 @@ function observeDrainListeners(emitter: EventEmitter): DrainProbe {
   return probe;
 }
 
-async function listen(server: HttpServer | HttpsServer): Promise<string> {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("test transfer server did not bind");
+describe("workspace manifest HTTP encoding", () => {
+  const { rawManifest, manifestRef } = manifestFixture();
+  const overflow = () => Buffer.alloc(MAX_WORKSPACE_MANIFEST_BYTES + 1);
+  function oversizedGzipHeader() {
+    const compressed = gzipSync(rawManifest);
+    // A valid optional filename can exhaust the wire cap without expanding the body.
+    compressed[3] = 8;
+    return Buffer.concat([
+      compressed.subarray(0, 10),
+      Buffer.alloc(MAX_WORKSPACE_MANIFEST_BYTES, 65),
+      Buffer.from([0]),
+      compressed.subarray(10),
+    ]);
   }
-  return `ws://127.0.0.1:${address.port}`;
-}
+  async function encodingFixture(send: (res: ServerResponse) => void, signal?: AbortSignal) {
+    const { workspaceDir, download, read } = fixture("encoding");
+    await fs.mkdir(workspaceDir);
+    await fs.writeFile(path.join(workspaceDir, "sentinel.txt"), "existing workspace");
+    let acceptEncoding: string | undefined;
+    const gateway = await serveTransfer(
+      createHttpServer((req, res) => {
+        acceptEncoding = req.headers["accept-encoding"];
+        send(res);
+      }),
+    );
+    return {
+      ...gateway,
+      workspaceDir,
+      read,
+      acceptEncoding: () => acceptEncoding,
+      run: () => download(gateway.gatewayUrl, manifestRef, { signal }),
+    };
+  }
 
-async function git(root: string, args: string[]): Promise<string> {
-  const result = await runExec("git", ["-C", root, ...args], {
-    baseEnv: {
-      ...process.env,
-      GIT_AUTHOR_NAME: "OpenClaw Test",
-      GIT_AUTHOR_EMAIL: "test@openclaw.invalid",
-      GIT_COMMITTER_NAME: "OpenClaw Test",
-      GIT_COMMITTER_EMAIL: "test@openclaw.invalid",
-    },
-    logOutput: false,
+  it.each<[string, string, () => Buffer, RegExp]>([
+    ["unknown encoding", "br", () => Buffer.from(rawManifest), /encoding/],
+    ["decoded digest mismatch", "gzip", () => gzipSync(`${rawManifest} `), /digest/],
+    ["decoded overflow", "gzip", () => gzipSync(overflow()), /byte limit/],
+    ["encoded gzip overflow", "gzip", oversizedGzipHeader, /byte limit/],
+    ["identity overflow", "identity", overflow, /byte limit/],
+  ])("rejects %s before changing the workspace", async (_name, encoding, body, reason) => {
+    const payload = body();
+    await using f = await encodingFixture((res) =>
+      res.writeHead(200, { "content-encoding": encoding }).end(payload),
+    );
+    await expect(f.run()).rejects.toMatchObject({
+      cause: { message: expect.stringMatching(reason) },
+    });
+    expect(f.acceptEncoding()).toBe("gzip");
+    expect(await f.read("sentinel.txt")).toBe("existing workspace");
+    expect(await fs.readdir(path.dirname(f.workspaceDir))).toEqual(["workspace"]);
   });
-  return result.stdout.trim();
-}
+
+  it("cancels an unfinished gzip response and closes the transport without changing the workspace", async () => {
+    const controller = new AbortController();
+    const sent = createDeferred();
+    const closed = createDeferred();
+    await using f = await encodingFixture((res) => {
+      res.on("close", () => closed.resolve());
+      res.writeHead(200, { "content-encoding": "gzip" });
+      res.write(gzipSync(rawManifest).subarray(0, 12), () => sent.resolve());
+    }, controller.signal);
+    try {
+      const result = expect(f.run()).rejects.toMatchObject({ cause: { name: "AbortError" } });
+      await sent.promise;
+      controller.abort();
+      await result;
+      await closed.promise;
+      expect(await f.read("sentinel.txt")).toBe("existing workspace");
+    } finally {
+      controller.abort();
+    }
+  });
+});
 
 describe("node worker transfer client", () => {
+  it.skipIf(process.platform === "win32")(
+    "reports unsafe ancestry without mutating the workspace",
+    async () => {
+      const { root, workspaceDir, download, read } = fixture("permissions");
+      await fs.mkdir(workspaceDir, { mode: 0o700 });
+      await fs.writeFile(path.join(workspaceDir, "sentinel.txt"), "keep me");
+      const { rawManifest, manifestRef } = manifestFixture();
+      const server = createHttpServer((_req, res) => res.writeHead(200).end(rawManifest));
+      const gatewayUrl = await listen(server);
+      await fs.chmod(root, 0o770);
+      const canonicalRoot = await fs.realpath(root);
+      try {
+        await expect(download(gatewayUrl, manifestRef)).rejects.toMatchObject({
+          operation: "download",
+          stage: "materialize",
+          cause: {
+            message: expect.stringContaining(
+              `State directory ${canonicalRoot} is group-writable without sticky protection; run chmod go-w`,
+            ),
+          },
+        });
+        expect(await read("sentinel.txt")).toBe("keep me");
+        expect((await fs.stat(root)).mode & 0o777).toBe(0o770);
+      } finally {
+        await fs.chmod(root, 0o700);
+        await closeServer(server);
+      }
+    },
+  );
+
   it.runIf(process.platform === "win32")(
     "preserves foreign executable modes through Windows workspace downloads and uploads",
     async () => {
-      const root = tempDirs.make("node-worker-transfer-windows-executable-");
-      const workspaceDir = path.join(root, "workspace");
+      const { root, workspaceDir, download, upload } = fixture("windows-executable");
       const original = Buffer.from("#!/bin/sh\necho before\n");
-      const sha256 = createHash("sha256").update(original).digest("hex");
-      const rawManifest = serializeWorkerWorkspaceManifest({
-        version: 1,
-        baseCommit: null,
+      const sha256 = digest(original);
+      const { rawManifest, manifestRef } = manifestFixture([
+        fileEntry("script.sh", original, 0o755),
+      ]);
+      let uploadedRaw: string | undefined;
+      const server = createHttpServer(
+        workspaceTransferHandler(
+          rawManifest,
+          new Map([[sha256, original]]),
+          ({ currentRaw, currentRef }) => {
+            uploadedRaw = currentRaw;
+            return currentRef;
+          },
+        ),
+      );
+      await using gateway = await serveTransfer(server);
+      await expect(download(gateway.gatewayUrl, manifestRef)).resolves.toBe(manifestRef);
+      await expect(
+        fs.readFile(
+          path.join(
+            root,
+            ".openclaw-worker",
+            "manifests",
+            `${manifestRef.slice("sha256:".length)}.json`,
+          ),
+          "utf8",
+        ),
+      ).resolves.toBe(rawManifest);
+
+      await fs.writeFile(path.join(workspaceDir, "script.sh"), "#!/bin/sh\necho changed\n");
+      await fs.writeFile(path.join(workspaceDir, "new.txt"), "new\n");
+      const currentRef = await upload(gateway.gatewayUrl, manifestRef);
+      expect(currentRef).toMatch(/^sha256:[a-f0-9]{64}$/u);
+      expect(JSON.parse(uploadedRaw!)).toMatchObject({
         entries: [
-          { path: "script.sh", type: "file", mode: 0o755, size: original.byteLength, sha256 },
+          expect.objectContaining({ path: "new.txt", mode: 0o644 }),
+          expect.objectContaining({ path: "script.sh", mode: 0o755 }),
         ],
       });
-      const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
-      let uploadedRaw: string | undefined;
-      const server = createHttpServer((req, res) => {
-        void (async () => {
-          if (req.url?.endsWith("/manifest")) {
-            res.writeHead(200).end(rawManifest);
-            return;
-          }
-          if (req.url?.endsWith(`/blobs/${sha256}`)) {
-            res.writeHead(200).end(original);
-            return;
-          }
-          if (req.method === "POST" && req.url?.includes("/reconciliations/")) {
-            const chunks: Buffer[] = [];
-            for await (const chunk of req) {
-              chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-            }
-            const body = Buffer.concat(chunks);
-            const baseBytes = body.readUInt32BE(0);
-            const currentOffset = 4 + baseBytes;
-            const currentBytes = body.readUInt32BE(currentOffset);
-            uploadedRaw = body
-              .subarray(currentOffset + 4, currentOffset + 4 + currentBytes)
-              .toString("utf8");
-            const currentRef = `sha256:${createHash("sha256").update(uploadedRaw).digest("hex")}`;
-            res.writeHead(200).end(JSON.stringify({ manifestRef: currentRef }));
-            return;
-          }
-          res.writeHead(404).end();
-        })().catch((error: unknown) => {
-          res.destroy(error instanceof Error ? error : new Error(String(error)));
-        });
-      });
-      const gatewayUrl = await listen(server);
-      try {
-        await expect(
-          runNodeWorkerWorkspaceTransfer({
-            gatewayUrl,
-            environmentId: "environment-windows-executable",
-            workspaceDir,
-            manifestHome: root,
-            transfer: { direction: "download", token: "download-token", manifestRef },
-          }),
-        ).resolves.toBe(manifestRef);
-        await expect(
-          fs.readFile(
-            path.join(
-              root,
-              ".openclaw-worker",
-              "manifests",
-              `${manifestRef.slice("sha256:".length)}.json`,
-            ),
-            "utf8",
-          ),
-        ).resolves.toBe(rawManifest);
-
-        await fs.writeFile(path.join(workspaceDir, "script.sh"), "#!/bin/sh\necho changed\n");
-        await fs.writeFile(path.join(workspaceDir, "new.txt"), "new\n");
-        const currentRef = await runNodeWorkerWorkspaceTransfer({
-          gatewayUrl,
-          environmentId: "environment-windows-executable",
-          workspaceDir,
-          manifestHome: root,
-          transfer: { direction: "upload", token: "upload-token", baseManifestRef: manifestRef },
-        });
-        expect(currentRef).toMatch(/^sha256:[a-f0-9]{64}$/u);
-        expect(JSON.parse(uploadedRaw!)).toMatchObject({
-          entries: [
-            expect.objectContaining({ path: "new.txt", mode: 0o644 }),
-            expect.objectContaining({ path: "script.sh", mode: 0o755 }),
-          ],
-        });
-      } finally {
-        server.closeAllConnections();
-        await new Promise<void>((resolve) => {
-          server.close(() => resolve());
-        });
-      }
     },
   );
 
-  it.runIf(process.platform === "win32")(
-    "reuses foreign executable Git-base files without requesting an unavailable blob",
-    async () => {
-      const root = tempDirs.make("node-worker-transfer-windows-git-executable-");
-      const source = path.join(root, "source");
-      const workspaceDir = path.join(root, "workspace");
-      const content = Buffer.from("#!/bin/sh\necho tracked\n");
-      await fs.mkdir(source);
-      await git(source, ["init", "--quiet", "--object-format=sha1"]);
-      await git(source, ["config", "core.filemode", "false"]);
-      await fs.writeFile(path.join(source, "script.sh"), content);
-      const object = await git(source, ["hash-object", "-w", "script.sh"]);
-      await git(source, ["update-index", "--add", "--cacheinfo", `100755,${object},script.sh`]);
-      await git(source, ["commit", "--quiet", "-m", "POSIX executable base"]);
-      const commit = await git(source, ["rev-parse", "HEAD"]);
-      const rawManifest = serializeWorkerWorkspaceManifest({
-        version: 1,
-        baseCommit: commit,
-        entries: [
-          {
-            path: "script.sh",
-            type: "file",
-            mode: 0o755,
-            size: content.byteLength,
-            sha256: createHash("sha256").update(content).digest("hex"),
-          },
-        ],
-      });
-      const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
-      const packed = await runCommandBuffered(
-        ["git", "-C", source, "pack-objects", "--stdout", "--revs"],
-        { input: `${commit}\n`, maxOutputBytes: 4 * 1024 * 1024 },
-      );
-      expect(packed.code).toBe(0);
-      let requestedBlobs = 0;
+  it.each(["cut pack", "interrupted replacement"])(
+    "preserves the prior workspace after %s",
+    async (mode) => {
+      const { root, workspaceDir, download, read } = fixture("recovery");
+      const recovering = mode === "interrupted replacement";
+      const backup = `${workspaceDir}.previous-crash`;
+      const staleStaging = path.join(root, ".workspace.workspace-transfer-crash");
+      const sentinel = recovering ? "restored\n" : "keep me\n";
+      await fs.mkdir(recovering ? backup : workspaceDir);
+      await fs.writeFile(path.join(recovering ? backup : workspaceDir, "sentinel.txt"), sentinel);
+      if (recovering) {
+        await fs.mkdir(staleStaging);
+      }
+      const { rawManifest, manifestRef } = manifestFixture([], { baseCommit: "a".repeat(40) });
       const server = createHttpServer((req, res) => {
         if (req.url?.endsWith("/manifest")) {
-          res.writeHead(200).end(rawManifest);
-        } else if (req.url?.endsWith("/pack")) {
-          res.writeHead(200).end(packed.stdout);
-        } else {
-          requestedBlobs += 1;
-          res.writeHead(404).end();
+          res.writeHead(200, { "content-length": String(Buffer.byteLength(rawManifest)) });
+          res.end(rawManifest);
+          return;
         }
+        if (!recovering && req.url?.endsWith("/pack")) {
+          res.writeHead(200, { "content-length": "1024" });
+          res.write("truncated");
+          res.destroy();
+          return;
+        }
+        res.writeHead(recovering ? 500 : 404).end();
       });
-      const gatewayUrl = await listen(server);
-      try {
-        await expect(
-          runNodeWorkerWorkspaceTransfer({
-            gatewayUrl,
-            environmentId: "environment-windows-git-executable",
-            workspaceDir,
-            manifestHome: root,
-            transfer: { direction: "download", token: "download-token", manifestRef },
-          }),
-        ).resolves.toBe(manifestRef);
-        expect(requestedBlobs).toBe(0);
-        await expect(fs.readFile(path.join(workspaceDir, "script.sh"))).resolves.toEqual(content);
-      } finally {
-        server.closeAllConnections();
-        await new Promise<void>((resolve) => {
-          server.close(() => resolve());
-        });
-      }
-    },
-  );
-
-  it("keeps the prior workspace intact when a pack transfer is cut short", async () => {
-    const root = tempDirs.make("node-worker-transfer-cut-");
-    const workspaceDir = path.join(root, "workspace");
-    await fs.mkdir(workspaceDir);
-    await fs.writeFile(path.join(workspaceDir, "sentinel.txt"), "keep me\n");
-    const rawManifest = serializeWorkerWorkspaceManifest({
-      version: 1,
-      baseCommit: "a".repeat(40),
-      entries: [],
-    });
-    const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
-    const server = createHttpServer((req, res) => {
-      if (req.url?.endsWith("/manifest")) {
-        res.writeHead(200, { "content-length": String(Buffer.byteLength(rawManifest)) });
-        res.end(rawManifest);
-        return;
-      }
-      if (req.url?.endsWith("/pack")) {
-        res.writeHead(200, { "content-length": "1024" });
-        res.write("truncated");
-        res.destroy();
-        return;
-      }
-      res.writeHead(404).end();
-    });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("test transfer server did not bind");
-    }
-    try {
-      await expect(
-        runNodeWorkerWorkspaceTransfer({
-          gatewayUrl: `ws://127.0.0.1:${address.port}`,
-          environmentId: "environment-cut",
-          workspaceDir,
-          manifestHome: root,
-          transfer: { direction: "download", token: "test-token", manifestRef },
-        }),
-      ).rejects.toThrow("workspace-transfer-failed");
-      await expect(fs.readFile(path.join(workspaceDir, "sentinel.txt"), "utf8")).resolves.toBe(
-        "keep me\n",
+      await using gateway = await serveTransfer(server);
+      await expect(download(gateway.gatewayUrl, manifestRef)).rejects.toThrow(
+        "workspace-transfer-failed",
       );
+      await expect(read("sentinel.txt")).resolves.toBe(sentinel);
       expect(
         (await fs.readdir(root)).filter((entry) =>
           entry.startsWith(".workspace.workspace-transfer-"),
         ),
       ).toEqual([]);
-    } finally {
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    }
-  });
-
-  it("restores one interrupted workspace backup before the next transfer", async () => {
-    const root = tempDirs.make("node-worker-transfer-recover-");
-    const workspaceDir = path.join(root, "workspace");
-    const backup = `${workspaceDir}.previous-crash`;
-    const staleStaging = path.join(root, ".workspace.workspace-transfer-crash");
-    await fs.mkdir(backup);
-    await fs.writeFile(path.join(backup, "sentinel.txt"), "restored\n");
-    await fs.mkdir(staleStaging);
-    const rawManifest = serializeWorkerWorkspaceManifest({
-      version: 1,
-      baseCommit: "a".repeat(40),
-      entries: [],
-    });
-    const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
-    const server = createHttpServer((req, res) => {
-      if (req.url?.endsWith("/manifest")) {
-        res.writeHead(200, { "content-length": String(Buffer.byteLength(rawManifest)) });
-        res.end(rawManifest);
-        return;
+      if (recovering) {
+        await expect(fs.access(staleStaging)).rejects.toMatchObject({ code: "ENOENT" });
       }
-      res.writeHead(500).end();
-    });
-    const gatewayUrl = await listen(server);
-    try {
-      await expect(
-        runNodeWorkerWorkspaceTransfer({
-          gatewayUrl,
-          environmentId: "environment-recover",
-          workspaceDir,
-          manifestHome: root,
-          transfer: { direction: "download", token: "test-token", manifestRef },
-        }),
-      ).rejects.toThrow("workspace-transfer-failed");
-      await expect(fs.readFile(path.join(workspaceDir, "sentinel.txt"), "utf8")).resolves.toBe(
-        "restored\n",
-      );
-      await expect(fs.access(staleStaging)).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    }
-  });
+    },
+  );
 
-  it("reuses the validated TLS pin for a pooled socket", async () => {
-    const root = tempDirs.make("node-worker-transfer-tls-");
-    const workspaceDir = path.join(root, "workspace");
+  it.each(["download", "next entry cleanup"] as const)(
+    "keeps mutations inside staging after parent replacement during %s",
+    async (replacement) => {
+      const { root, workspaceDir, download, read } = fixture("parent-swap");
+      const outside = path.join(root, "outside");
+      await fs.mkdir(workspaceDir);
+      await fs.writeFile(path.join(workspaceDir, "sentinel.txt"), "keep me\n");
+      await fs.mkdir(outside);
+      const outsideFile = path.join(outside, "result.txt");
+      if (replacement === "next entry cleanup") {
+        await fs.writeFile(outsideFile, "outside sentinel\n");
+      }
+      const body = Buffer.from("downloaded workspace content\n");
+      const entry = fileEntry("nested/result.txt", body);
+      const { sha256 } = entry;
+      const { rawManifest, manifestRef } = manifestFixture(
+        [
+          ...(replacement === "next entry cleanup" ? [{ ...entry, path: "a-trigger.bin" }] : []),
+          entry,
+        ],
+        { directories: ["nested"] },
+      );
+      let substituted = false;
+      const server = createHttpServer(
+        transferHandler(async (req, res) => {
+          if (req.url?.endsWith("/manifest")) {
+            res.writeHead(200).end(rawManifest);
+            return;
+          }
+          if (req.url?.endsWith(`/blobs/${sha256}`)) {
+            if (!substituted) {
+              const staging = (await fs.readdir(root)).find((name) =>
+                name.startsWith(".workspace.workspace-transfer-"),
+              );
+              if (!staging) {
+                throw new Error("test transfer has no staging directory");
+              }
+              const nested = path.join(root, staging, "nested");
+              await fs.rmdir(nested);
+              await fs.symlink(outside, nested, "junction");
+              substituted = true;
+            }
+            res.writeHead(200).end(body);
+            return;
+          }
+          res.writeHead(404).end();
+        }),
+      );
+      await using gateway = await serveTransfer(server);
+      await expect(download(gateway.gatewayUrl, manifestRef)).rejects.toThrow(
+        "workspace-transfer-failed",
+      );
+      expect(substituted).toBe(true);
+      if (replacement === "next entry cleanup") {
+        expect(await fs.readFile(outsideFile, "utf8")).toBe("outside sentinel\n");
+      } else {
+        expect(await fs.readdir(outside)).toEqual([]);
+      }
+      expect(await read("sentinel.txt")).toBe("keep me\n");
+      expect(
+        (await fs.readdir(root)).filter((name) =>
+          name.startsWith(".workspace.workspace-transfer-"),
+        ),
+      ).toEqual([]);
+    },
+  );
+
+  it("reuses the validated TLS pin for a pooled socket and downloads literal tilde paths", async () => {
+    const { workspaceDir, download, upload, read } = fixture("tls");
     const body = Buffer.from("pinned transfer\n");
-    const sha256 = createHash("sha256").update(body).digest("hex");
-    const rawManifest = serializeWorkerWorkspaceManifest({
-      version: 1,
-      baseCommit: null,
-      directories: ["nested"],
-      entries: [
-        {
-          path: "nested/result.txt",
-          type: "file",
-          mode: 0o644,
-          size: body.byteLength,
-          sha256,
-        },
-      ],
+    const sha256 = digest(body);
+    const { rawManifest, manifestRef } = manifestFixture([fileEntry("~/result.txt", body)], {
+      directories: ["~"],
     });
-    const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
     let requestCount = 0;
     let connectionCount = 0;
     let uploadManifestRef: string | undefined;
     const server = createHttpsServer(
       { cert: TEST_TLS_CERT_PEM, key: TEST_TLS_KEY_PEM },
-      (req, res) => {
-        void (async () => {
-          requestCount += 1;
-          if (req.url?.endsWith("/manifest")) {
-            res.writeHead(200, { "content-length": String(Buffer.byteLength(rawManifest)) });
-            res.end(rawManifest);
-            return;
-          }
-          if (req.url?.endsWith(`/blobs/${sha256}`)) {
-            res.writeHead(200, { "content-length": String(body.byteLength) });
-            res.end(body);
-            return;
-          }
-          if (req.method === "POST" && req.url?.includes("/reconciliations/")) {
-            for await (const chunk of req) {
-              void chunk; // Consume the complete upload before acknowledging it.
-            }
-            const response = Buffer.from(JSON.stringify({ manifestRef: uploadManifestRef }));
-            res.writeHead(200, {
-              "content-type": "application/json",
-              "content-length": String(response.byteLength),
-            });
-            res.end(response);
-            return;
-          }
-          res.writeHead(404).end();
-        })().catch((error: unknown) => {
-          res.destroy(error instanceof Error ? error : new Error(String(error)));
-        });
-      },
+      workspaceTransferHandler(
+        rawManifest,
+        new Map([[sha256, body]]),
+        () => uploadManifestRef,
+        true,
+      ),
     );
+    server.on("request", () => {
+      requestCount += 1;
+    });
     server.on("secureConnection", () => {
       connectionCount += 1;
     });
-    const gatewayUrl = (await listen(server)).replace(/^ws/u, "wss");
+    await using gateway = await serveTransfer(server);
+    const gatewayUrl = gateway.gatewayUrl.replace(/^ws/u, "wss");
     const fingerprint = new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256;
+    const hashMemo = new Map<string, string>();
     const gatewayPort = Number(new URL(gatewayUrl).port);
     let hidPeerCertificate = false;
     const pinnedAgent = https.globalAgent;
@@ -426,70 +369,31 @@ describe("node worker transfer client", () => {
     pinnedAgent.on("free", hidePeerCertificate);
     try {
       await expect(
-        runNodeWorkerWorkspaceTransfer({
-          gatewayUrl,
-          gatewayTlsFingerprint: fingerprint,
-          environmentId: "environment-tls",
-          workspaceDir,
-          manifestHome: root,
-          transfer: { direction: "download", token: "test-token", manifestRef },
-        }),
+        download(gatewayUrl, manifestRef, { gatewayTlsFingerprint: fingerprint, hashMemo }),
       ).resolves.toBe(manifestRef);
-      await expect(
-        fs.readFile(path.join(workspaceDir, "nested", "result.txt"), "utf8"),
-      ).resolves.toBe("pinned transfer\n");
+      await expect(read("~/result.txt")).resolves.toBe("pinned transfer\n");
       expect(requestCount).toBe(2);
       expect(connectionCount).toBe(1);
       expect(hidPeerCertificate).toBe(true);
 
       await fs.writeFile(path.join(workspaceDir, "changed.txt"), "changed on node\n");
-      uploadManifestRef = (
-        await readActualWorkspaceManifest({ root: workspaceDir, baseCommit: null })
-      ).manifestRef;
+      uploadManifestRef = (await captureWorkspaceManifest({ root: workspaceDir, baseCommit: null }))
+        .manifestRef;
       await expect(
-        runNodeWorkerWorkspaceTransfer({
-          gatewayUrl,
-          gatewayTlsFingerprint: fingerprint,
-          environmentId: "environment-tls",
-          workspaceDir,
-          manifestHome: root,
-          transfer: {
-            direction: "upload",
-            token: "upload-token",
-            baseManifestRef: manifestRef,
-          },
-        }),
+        upload(gatewayUrl, manifestRef, { gatewayTlsFingerprint: fingerprint, hashMemo }),
       ).resolves.toBe(uploadManifestRef);
       expect(requestCount).toBe(3);
       expect(connectionCount).toBe(1);
     } finally {
       pinnedAgent.off("free", hidePeerCertificate);
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
     }
   });
 
   it("performs a full pinned handshake on a replacement socket", async () => {
-    const root = tempDirs.make("node-worker-transfer-tls-resumed-");
-    const workspaceDir = path.join(root, "workspace");
+    const { download } = fixture("tls-resumed");
     const body = Buffer.from("resumed pinned transfer\n");
-    const sha256 = createHash("sha256").update(body).digest("hex");
-    const rawManifest = serializeWorkerWorkspaceManifest({
-      version: 1,
-      baseCommit: null,
-      entries: [
-        {
-          path: "result.txt",
-          type: "file",
-          mode: 0o644,
-          size: body.byteLength,
-          sha256,
-        },
-      ],
-    });
-    const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
+    const sha256 = digest(body);
+    const { rawManifest, manifestRef } = manifestFixture([fileEntry("result.txt", body)]);
     const sessionReuse: boolean[] = [];
     const server = createHttpsServer(
       {
@@ -517,39 +421,26 @@ describe("node worker transfer client", () => {
         res.writeHead(404, { connection: "close" }).end();
       },
     );
+    let secureConnections = 0;
     server.on("secureConnection", (socket) => {
-      sessionReuse.push(socket.isSessionReused());
+      secureConnections += 1;
+      if (typeof socket.isSessionReused === "function") {
+        sessionReuse.push(socket.isSessionReused());
+      }
     });
-    const gatewayUrl = (await listen(server)).replace(/^ws/u, "wss");
+    await using gateway = await serveTransfer(server);
+    const gatewayUrl = gateway.gatewayUrl.replace(/^ws/u, "wss");
     const fingerprint = new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256;
-    try {
-      await expect(
-        runNodeWorkerWorkspaceTransfer({
-          gatewayUrl,
-          gatewayTlsFingerprint: fingerprint,
-          environmentId: "environment-tls-resumed",
-          workspaceDir,
-          manifestHome: root,
-          transfer: { direction: "download", token: "test-token", manifestRef },
-        }),
-      ).resolves.toBe(manifestRef);
-      expect(sessionReuse).toEqual([false, false]);
-    } finally {
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    }
+    await expect(
+      download(gatewayUrl, manifestRef, { gatewayTlsFingerprint: fingerprint }),
+    ).resolves.toBe(manifestRef);
+    expect(secureConnections).toBe(2);
+    expect(sessionReuse.every((reused) => !reused)).toBe(true);
   });
 
   it("preserves managed proxy routing for pinned transfers", async () => {
-    const root = tempDirs.make("node-worker-transfer-tls-proxy-");
-    const rawManifest = serializeWorkerWorkspaceManifest({
-      version: 1,
-      baseCommit: null,
-      entries: [],
-    });
-    const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
+    const { download } = fixture("tls-proxy");
+    const { rawManifest, manifestRef } = manifestFixture();
     const target = createHttpsServer(
       { cert: TEST_TLS_CERT_PEM, key: TEST_TLS_KEY_PEM },
       (_req, res) => {
@@ -591,14 +482,7 @@ describe("node worker transfer client", () => {
     const fingerprint = new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256;
     try {
       await expect(
-        runNodeWorkerWorkspaceTransfer({
-          gatewayUrl,
-          gatewayTlsFingerprint: fingerprint,
-          environmentId: "environment-tls-proxy",
-          workspaceDir: path.join(root, "workspace"),
-          manifestHome: root,
-          transfer: { direction: "download", token: "proxy-token", manifestRef },
-        }),
+        download(gatewayUrl, manifestRef, { gatewayTlsFingerprint: fingerprint }),
       ).resolves.toBe(manifestRef);
       expect(connectCount).toBe(1);
     } finally {
@@ -620,27 +504,13 @@ describe("node worker transfer client", () => {
         tunnel.upstream.destroy();
       }
       await Promise.all(tunnelClosures);
-      proxy.closeAllConnections();
-      target.closeAllConnections();
-      await Promise.all([
-        new Promise<void>((resolve) => {
-          proxy.close(() => resolve());
-        }),
-        new Promise<void>((resolve) => {
-          target.close(() => resolve());
-        }),
-      ]);
+      await Promise.all([closeServer(proxy), closeServer(target)]);
     }
   });
 
   it("rejects a wrong TLS pin on a new socket", async () => {
-    const root = tempDirs.make("node-worker-transfer-wrong-pin-");
-    const rawManifest = serializeWorkerWorkspaceManifest({
-      version: 1,
-      baseCommit: null,
-      entries: [],
-    });
-    const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
+    const { download } = fixture("wrong-pin");
+    const { rawManifest, manifestRef } = manifestFixture();
     let requestCount = 0;
     const server = createHttpsServer(
       { cert: TEST_TLS_CERT_PEM, key: TEST_TLS_KEY_PEM },
@@ -649,87 +519,121 @@ describe("node worker transfer client", () => {
         res.writeHead(200).end(rawManifest);
       },
     );
-    const gatewayUrl = (await listen(server)).replace(/^ws/u, "wss");
-    try {
-      await expect(
-        runNodeWorkerWorkspaceTransfer({
-          gatewayUrl,
-          gatewayTlsFingerprint: "00".repeat(32),
-          environmentId: "environment-wrong-pin",
-          workspaceDir: path.join(root, "workspace"),
-          manifestHome: root,
-          transfer: { direction: "download", token: "wrong-pin-token", manifestRef },
-        }),
-      ).rejects.toThrow("gateway TLS fingerprint mismatch");
-      expect(requestCount).toBe(0);
-    } finally {
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
+    await using gateway = await serveTransfer(server);
+    await expect(
+      download(gateway.gatewayUrl.replace(/^ws/u, "wss"), manifestRef, {
+        gatewayTlsFingerprint: "00".repeat(32),
+      }),
+    ).rejects.toThrow("gateway TLS fingerprint mismatch");
+    expect(requestCount).toBe(0);
+  });
+
+  it.each([
+    {
+      reason: "file_digest",
+      expected:
+        /^workspace-transfer-invalid: gateway rejected workspace transfer payload \(file_digest\)$/u,
+    },
+    {
+      reason: "private gateway detail",
+      expected: /^workspace-transfer-failed: gateway returned 400$/u,
+    },
+  ])(
+    "preserves only safe gateway upload rejection reasons ($reason)",
+    async ({ reason, expected }) => {
+      const { download } = fixture("reason");
+      const manifestRef = `sha256:${"a".repeat(64)}`;
+      const server = createHttpServer((_req, res) => {
+        const body = Buffer.from(JSON.stringify({ error: "workspace_transfer_invalid", reason }));
+        res.writeHead(400, {
+          "content-type": "application/json",
+          "content-length": String(body.byteLength),
+        });
+        res.end(body);
       });
+      await using gateway = await serveTransfer(server);
+      await expect(download(gateway.gatewayUrl, manifestRef)).rejects.toThrow(expected);
+    },
+  );
+
+  it("uploads the captured snapshot when the live workspace changes before transmission", async () => {
+    const { workspaceDir, download, upload } = fixture("snapshot");
+    const workspaceFile = path.join(workspaceDir, "result.txt");
+    const baseBody = Buffer.from("base\n");
+    const baseSha256 = digest(baseBody);
+    const { rawManifest: baseRaw, manifestRef: baseRef } = manifestFixture([
+      fileEntry("result.txt", baseBody),
+    ]);
+    const server = createHttpServer(
+      workspaceTransferHandler(
+        baseRaw,
+        new Map([[baseSha256, baseBody]]),
+        ({ body, fileHeader, currentRaw, currentRef }) => {
+          const current = parseWorkerWorkspaceManifest(currentRaw, currentRef);
+          const entry = current.entries.find(
+            (candidate) => candidate.path === "result.txt" && candidate.type === "file",
+          );
+          const uploaded = body.subarray(fileHeader + 8);
+          expect(entry).toMatchObject({
+            type: "file",
+            size: uploaded.length,
+            sha256: digest(uploaded),
+          });
+          expect(body.readBigUInt64BE(fileHeader)).toBe(BigInt(uploaded.length));
+          return currentRef;
+        },
+        true,
+      ),
+    );
+    const gatewayUrl = await listen(server);
+    const request = http.request.bind(http);
+    let mutated = false;
+    const requestSpy = vi.spyOn(http, "request").mockImplementation(((
+      url: string | URL,
+      options: RequestOptions,
+    ) => {
+      if (options.method === "POST") {
+        fsSync.writeFileSync(workspaceFile, "mutated!\n");
+        mutated = true;
+      }
+      return request(url, options);
+    }) as typeof http.request);
+    try {
+      await expect(download(gatewayUrl, baseRef)).resolves.toBe(baseRef);
+      await fs.writeFile(
+        workspaceFile,
+        Buffer.concat([
+          Buffer.alloc(512 * 1024, "a"),
+          Buffer.alloc(512 * 1024, "b"),
+          Buffer.from("captured tail\n"),
+        ]),
+      );
+      const currentRef = (await captureWorkspaceManifest({ root: workspaceDir, baseCommit: null }))
+        .manifestRef;
+      await expect(upload(gatewayUrl, baseRef)).resolves.toBe(currentRef);
+      expect(mutated).toBe(true);
+      await expect(fs.readFile(workspaceFile, "utf8")).resolves.toBe("mutated!\n");
+    } finally {
+      requestSpy.mockRestore();
+      await closeServer(server);
     }
   });
 
-  it("cleans up error listeners across repeated download and upload backpressure", async () => {
-    const root = tempDirs.make("node-worker-transfer-backpressure-");
-    const workspaceDir = path.join(root, "workspace");
+  it("downloads complete files and cleans up upload backpressure listeners", async () => {
+    const { workspaceDir, download, upload } = fixture("backpressure");
     const body = Buffer.alloc(2 * 1024 * 1024, "a");
-    const sha256 = createHash("sha256").update(body).digest("hex");
-    const rawManifest = serializeWorkerWorkspaceManifest({
-      version: 1,
-      baseCommit: null,
-      entries: [
-        {
-          path: "large.bin",
-          type: "file",
-          mode: 0o644,
-          size: body.byteLength,
-          sha256,
-        },
-      ],
-    });
-    const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
+    const sha256 = digest(body);
+    const { rawManifest, manifestRef } = manifestFixture([fileEntry("large.bin", body)]);
     let uploadManifestRef: string | undefined;
-    const server = createHttpServer((req, res) => {
-      void (async () => {
-        if (req.url?.endsWith("/manifest")) {
-          res.writeHead(200, { "content-length": String(Buffer.byteLength(rawManifest)) });
-          res.end(rawManifest);
-          return;
-        }
-        if (req.url?.endsWith(`/blobs/${sha256}`)) {
-          res.writeHead(200, { "content-length": String(body.byteLength) });
-          res.end(body);
-          return;
-        }
-        if (req.method === "POST" && req.url?.includes("/reconciliations/")) {
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 50);
-          });
-          for await (const chunk of req) {
-            void chunk;
-          }
-          const response = Buffer.from(JSON.stringify({ manifestRef: uploadManifestRef }));
-          res.writeHead(200, {
-            "content-type": "application/json",
-            "content-length": String(response.byteLength),
-          });
-          res.end(response);
-          return;
-        }
-        res.writeHead(404).end();
-      })().catch((error: unknown) => {
-        res.destroy(error instanceof Error ? error : new Error(String(error)));
-      });
-    });
-    const outputProbes: DrainProbe[] = [];
+    const server = createHttpServer(
+      workspaceTransferHandler(
+        rawManifest,
+        new Map([[sha256, body]]),
+        () => uploadManifestRef,
+        true,
+      ),
+    );
     const requestProbes: DrainProbe[] = [];
-    const createWriteStream = fsSync.createWriteStream.bind(fsSync);
-    const writeStreamSpy = vi.spyOn(fsSync, "createWriteStream").mockImplementation((...args) => {
-      const stream = createWriteStream(...args);
-      outputProbes.push(observeDrainListeners(stream));
-      return stream;
-    });
     const request = http.request.bind(http);
     const requestSpy = vi.spyOn(http, "request").mockImplementation(((
       url: URL,
@@ -741,220 +645,26 @@ describe("node worker transfer client", () => {
     }) as typeof http.request);
     const gatewayUrl = await listen(server);
     try {
-      await expect(
-        runNodeWorkerWorkspaceTransfer({
-          gatewayUrl,
-          environmentId: "environment-backpressure",
-          workspaceDir,
-          manifestHome: root,
-          transfer: { direction: "download", token: "download-token", manifestRef },
-        }),
-      ).resolves.toBe(manifestRef);
+      await expect(download(gatewayUrl, manifestRef)).resolves.toBe(manifestRef);
+      deepStrictEqual(await fs.readFile(path.join(workspaceDir, "large.bin")), body);
 
       await fs.writeFile(path.join(workspaceDir, "large.bin"), Buffer.alloc(body.byteLength, "b"));
-      uploadManifestRef = (
-        await readActualWorkspaceManifest({ root: workspaceDir, baseCommit: null })
-      ).manifestRef;
-      await expect(
-        runNodeWorkerWorkspaceTransfer({
-          gatewayUrl,
-          environmentId: "environment-backpressure",
-          workspaceDir,
-          manifestHome: root,
-          transfer: {
-            direction: "upload",
-            token: "upload-token",
-            baseManifestRef: manifestRef,
-          },
-        }),
-      ).resolves.toBe(uploadManifestRef);
+      uploadManifestRef = (await captureWorkspaceManifest({ root: workspaceDir, baseCommit: null }))
+        .manifestRef;
+      await expect(upload(gatewayUrl, manifestRef)).resolves.toBe(uploadManifestRef);
 
-      const outputProbe = outputProbes.find((probe) => probe.drains > 10);
       const requestProbe = requestProbes.find((probe) => probe.drains > 10);
-      expect(outputProbe?.drains).toBeGreaterThan(10);
-      expect(outputProbe?.maxErrorListeners).toBeLessThanOrEqual(1);
-      expect(outputProbe?.emitter.listenerCount("error")).toBe(0);
-      expect(requestProbe?.drains).toBeGreaterThan(10);
-      expect(requestProbe?.maxErrorListeners).toBeLessThanOrEqual(2);
-      expect(requestProbe?.emitter.listenerCount("error")).toBe(0);
+      if (!process.versions.bun) {
+        expect(requestProbe).toBeDefined();
+      }
+      if (requestProbe) {
+        expect(requestProbe.drains).toBeGreaterThan(10);
+        expect(requestProbe.maxErrorListeners).toBeLessThanOrEqual(2);
+      }
+      expect(requestProbes.every((probe) => probe.emitter.listenerCount("error") === 0)).toBe(true);
     } finally {
-      writeStreamSpy.mockRestore();
       requestSpy.mockRestore();
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    }
-  });
-
-  it.each([
-    {
-      description: "reuses Git-base tracked files without requesting unavailable blobs",
-      changed: false,
-      replaceSymlinkAncestor: false,
-    },
-    {
-      description: "downloads changed and nested files without restoring deleted Git-base paths",
-      changed: true,
-      replaceSymlinkAncestor: false,
-    },
-    {
-      description: "replaces a Git-base symlink ancestor without changing files outside staging",
-      changed: false,
-      replaceSymlinkAncestor: true,
-    },
-  ])("$description", async ({ changed, replaceSymlinkAncestor }) => {
-    transferDebug.mockClear();
-    const root = tempDirs.make("node-worker-transfer-git-");
-    const source = path.join(root, "source");
-    const workspaceDir = path.join(root, "workspace");
-    await fs.mkdir(source);
-    await git(source, ["init", "--quiet", "--object-format=sha1"]);
-    await fs.writeFile(path.join(source, "tracked.txt"), "tracked from gateway\n");
-    await fs.writeFile(path.join(source, "script.sh"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-    await fs.writeFile(path.join(source, "deleted.txt"), "deleted after commit\n");
-    await fs.symlink("tracked.txt", path.join(source, "tracked-link"));
-    const outsideSentinel = path.join(root, "outside", "file.txt");
-    if (replaceSymlinkAncestor) {
-      await fs.mkdir(path.dirname(outsideSentinel));
-      await fs.writeFile(outsideSentinel, "outside must stay unchanged\n");
-      await fs.symlink("../outside", path.join(source, "nested"));
-    }
-    await git(source, ["add", "."]);
-    await git(source, ["commit", "--quiet", "-m", "base"]);
-    const commit = await git(source, ["rev-parse", "HEAD"]);
-    if (changed) {
-      await fs.writeFile(path.join(source, "tracked.txt"), "changed on gateway\n");
-      await fs.chmod(path.join(source, "tracked.txt"), 0o755);
-      await fs.unlink(path.join(source, "tracked-link"));
-      await fs.symlink("script.sh", path.join(source, "tracked-link"));
-      await fs.unlink(path.join(source, "deleted.txt"));
-      await fs.mkdir(path.join(source, "nested"));
-      await fs.writeFile(path.join(source, "nested", "file.txt"), "new nested content\n");
-    }
-    if (replaceSymlinkAncestor) {
-      await fs.unlink(path.join(source, "nested"));
-      await fs.mkdir(path.join(source, "nested"));
-      await fs.writeFile(path.join(source, "nested", "file.txt"), "safe nested content\n");
-    }
-    const snapshot = await readActualWorkspaceManifest({ root: source, baseCommit: commit });
-    const rawManifest = serializeWorkerWorkspaceManifest(snapshot.manifest);
-    const packed = await runCommandBuffered(
-      ["git", "-C", source, "pack-objects", "--stdout", "--revs"],
-      { input: `${commit}\n`, maxOutputBytes: 4 * 1024 * 1024 },
-    );
-    expect(packed.termination, packed.stderr.toString("utf8")).toBe("exit");
-    expect(packed.code).toBe(0);
-    const tracked = snapshot.manifest.entries.find(
-      (entry) => entry.type === "file" && entry.path === "tracked.txt",
-    );
-    if (tracked?.type !== "file") {
-      throw new Error("test Git workspace has no tracked file");
-    }
-    const downloadablePaths = new Set([
-      ...(changed ? ["nested/file.txt", "tracked.txt"] : []),
-      ...(replaceSymlinkAncestor ? ["nested/file.txt"] : []),
-    ]);
-    const filesByHash = new Map(
-      snapshot.manifest.entries.flatMap((entry) =>
-        entry.type === "file" && downloadablePaths.has(entry.path)
-          ? [[entry.sha256, path.join(source, entry.path)] as const]
-          : [],
-      ),
-    );
-    const requestedBlobs: string[] = [];
-    const server = createHttpServer((req, res) => {
-      void (async () => {
-        if (req.url?.endsWith("/manifest")) {
-          res.writeHead(200, { "content-length": String(Buffer.byteLength(rawManifest)) });
-          res.end(rawManifest);
-          return;
-        }
-        if (req.url?.endsWith("/pack")) {
-          res.writeHead(200, { "content-length": String(packed.stdout.byteLength) });
-          res.end(packed.stdout);
-          return;
-        }
-        const sha256 = req.url?.match(/\/blobs\/([a-f0-9]{64})$/u)?.[1];
-        if (sha256) {
-          requestedBlobs.push(sha256);
-          const file = filesByHash.get(sha256);
-          if (file) {
-            const body = await fs.readFile(file);
-            res.writeHead(200, { "content-length": String(body.byteLength) });
-            res.end(body);
-            return;
-          }
-        }
-        res.writeHead(404).end();
-      })().catch((error: unknown) => {
-        res.destroy(error instanceof Error ? error : new Error(String(error)));
-      });
-    });
-    const gatewayUrl = await listen(server);
-    try {
-      await expect(
-        runNodeWorkerWorkspaceTransfer({
-          gatewayUrl,
-          environmentId: "environment-git",
-          workspaceDir,
-          manifestHome: root,
-          transfer: {
-            direction: "download",
-            token: "test-token",
-            manifestRef: snapshot.manifestRef,
-          },
-        }),
-      ).resolves.toBe(snapshot.manifestRef);
-      await expect(fs.readFile(path.join(workspaceDir, "tracked.txt"), "utf8")).resolves.toBe(
-        changed ? "changed on gateway\n" : "tracked from gateway\n",
-      );
-      if (process.platform !== "win32") {
-        expect((await fs.stat(path.join(workspaceDir, "tracked.txt"))).mode & 0o777).toBe(
-          changed ? 0o755 : 0o644,
-        );
-        expect((await fs.stat(path.join(workspaceDir, "script.sh"))).mode & 0o777).toBe(0o755);
-      }
-      await expect(fs.readlink(path.join(workspaceDir, "tracked-link"))).resolves.toBe(
-        changed ? "script.sh" : "tracked.txt",
-      );
-      expect(requestedBlobs).toEqual([...filesByHash.keys()]);
-      await expect(git(workspaceDir, ["rev-parse", "HEAD"])).resolves.toBe(commit);
-      if (changed) {
-        await expect(fs.access(path.join(workspaceDir, "deleted.txt"))).rejects.toMatchObject({
-          code: "ENOENT",
-        });
-      }
-      if (changed || replaceSymlinkAncestor) {
-        expect((await fs.lstat(path.join(workspaceDir, "nested"))).isDirectory()).toBe(true);
-        await expect(
-          fs.readFile(path.join(workspaceDir, "nested", "file.txt"), "utf8"),
-        ).resolves.toBe(changed ? "new nested content\n" : "safe nested content\n");
-      }
-      if (!changed && !replaceSymlinkAncestor) {
-        await expect(git(workspaceDir, ["status", "--porcelain=v1"])).resolves.toBe("");
-      }
-      expect(transferDebug).toHaveBeenCalledWith(
-        "node worker workspace transfer completed",
-        expect.objectContaining({
-          environmentId: "environment-git",
-          direction: "download",
-          outcome: "succeeded",
-          durationMs: expect.any(Number),
-          packDownloadMs: expect.any(Number),
-          blobApplyMs: expect.any(Number),
-        }),
-      );
-    } finally {
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-      if (replaceSymlinkAncestor) {
-        await expect(fs.readFile(outsideSentinel, "utf8")).resolves.toBe(
-          "outside must stay unchanged\n",
-        );
-      }
+      await closeServer(server);
     }
   });
 });

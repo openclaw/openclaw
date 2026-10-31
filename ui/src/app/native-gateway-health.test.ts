@@ -1,0 +1,94 @@
+/* @vitest-environment jsdom */
+
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createGatewayStoreTestStore,
+  GATEWAY_STORE_TEST_HELLO,
+} from "./gateway-store.test-support.ts";
+import { startNativeGatewayHealthReporting } from "./native-gateway-health.runtime.ts";
+
+const HEALTH = "__OPENCLAW_NATIVE_GATEWAY_HEALTH__";
+const EVENT = "openclaw:native-gateway-health-changed";
+const cleanups: (() => void)[] = [];
+
+afterEach(async () => {
+  cleanups
+    .splice(0)
+    .toReversed()
+    .forEach((cleanup) => cleanup());
+  await vi.dynamicImportSettled();
+  Reflect.deleteProperty(window, HEALTH);
+  localStorage.clear();
+  sessionStorage.clear();
+  vi.restoreAllMocks();
+});
+
+function connectedStore() {
+  const store = createGatewayStoreTestStore();
+  cleanups.push(() => store.gateway.stop());
+  store.gateway.start();
+  store.current().testOptions.onHello?.(GATEWAY_STORE_TEST_HELLO);
+  return store;
+}
+
+describe("native dashboard connection health", () => {
+  it.each([false, true])(
+    "reports failure until recovery or intentional stop (admitted=%s)",
+    (admitted) => {
+      const { gateway, current } = createGatewayStoreTestStore();
+      cleanups.push(() => gateway.stop());
+      gateway.start();
+      if (admitted) {
+        current().testOptions.onHello?.(GATEWAY_STORE_TEST_HELLO);
+      }
+      const events = vi.fn();
+      window.addEventListener(EVENT, events);
+      cleanups.push(() => window.removeEventListener(EVENT, events));
+      const stop = startNativeGatewayHealthReporting(gateway);
+      cleanups.push(stop);
+      const gatewayUrl = gateway.connection.gatewayUrl;
+      if (admitted) {
+        expect(Reflect.get(window, HEALTH)).toEqual({ gatewayUrl, health: "ok" });
+        expect(events).toHaveBeenCalledOnce();
+        gateway.setSessionKey("agent:main:another");
+        expect(events).toHaveBeenCalledOnce();
+      }
+      current().testOptions.onClose?.(
+        admitted
+          ? { code: 1006, reason: "socket lost", willRetry: true }
+          : { code: 4008, reason: "connect failed", willRetry: false },
+      );
+      expect(Reflect.get(window, HEALTH)).toEqual({ gatewayUrl, health: "error" });
+      if (admitted) {
+        current().testOptions.onHello?.(GATEWAY_STORE_TEST_HELLO);
+        expect(Reflect.get(window, HEALTH)).toEqual({ gatewayUrl, health: "ok" });
+      } else {
+        expect(gateway.snapshot.phase).toBe("stopped");
+        expect(gateway.snapshot.lastError).toContain("4008");
+      }
+      gateway.stop();
+      expect(Reflect.get(window, HEALTH)).toEqual({ gatewayUrl, health: "unknown" });
+      stop();
+      events.mockClear();
+      gateway.start();
+      current().testOptions.onHello?.(GATEWAY_STORE_TEST_HELLO);
+      expect(events).not.toHaveBeenCalled();
+      expect(Reflect.get(window, HEALTH)).toEqual({ gatewayUrl, health: "unknown" });
+    },
+  );
+
+  it("reports endpoint changes and cannot be overwritten by a replaced client", () => {
+    const { gateway, current } = connectedStore();
+    const stop = startNativeGatewayHealthReporting(gateway);
+    cleanups.push(stop);
+    const oldClient = current();
+    const gatewayUrl = "wss://other.example/control";
+    gateway.connect({ gatewayUrl });
+    expect(Reflect.get(window, HEALTH)).toEqual({ gatewayUrl, health: "unknown" });
+    current().testOptions.onHello?.(GATEWAY_STORE_TEST_HELLO);
+    oldClient.testOptions.onClose?.({ code: 1006, reason: "old socket", willRetry: false });
+    expect(Reflect.get(window, HEALTH)).toEqual({ gatewayUrl, health: "ok" });
+    stop();
+    expect(Reflect.get(window, HEALTH)).toEqual({ gatewayUrl, health: "unknown" });
+  });
+});

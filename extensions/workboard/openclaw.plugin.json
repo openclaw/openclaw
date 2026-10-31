@@ -1,5 +1,21 @@
 {
   "id": "workboard",
+  "backupResources": [
+    {
+      "disposition": "include",
+      "scope": "state",
+      "relativePath": "plugins/workboard/workboard.sqlite"
+    }
+  ],
+  "uiCapabilities": [
+    "page",
+    "navigation",
+    "accessory",
+    "widget"
+  ],
+  "categories": [
+    "productivity"
+  ],
   "cliCommands": [
     {
       "name": "workboard",
@@ -8,12 +24,18 @@
     }
   ],
   "doctorContract": {
-    "stateMigrations": true
+    "stateMigrations": [
+      {
+        "id": "workboard-28-kv-to-sqlite"
+      }
+    ]
   },
   "enabledByDefault": false,
   "activation": {
     "onStartup": true,
-    "onCommands": ["workboard"]
+    "onCommands": [
+      "workboard"
+    ]
   },
   "dashboard": {
     "dataBindings": [
@@ -42,7 +64,10 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "boardId": { "type": "string", "minLength": 1 }
+            "boardId": {
+              "type": "string",
+              "minLength": 1
+            }
           }
         }
       }
@@ -50,7 +75,10 @@
   },
   "name": "Workboard",
   "description": "Dashboard workboard for agent-owned issues and sessions.",
-  "catalog": { "featured": true, "order": 10 },
+  "catalog": {
+    "featured": true,
+    "order": 10
+  },
   "contracts": {
     "tools": [
       "workboard_list",
@@ -68,6 +96,9 @@
       "workboard_board_create",
       "workboard_board_archive",
       "workboard_board_delete",
+      "workboard_sessions_board_read",
+      "workboard_sessions_board_update",
+      "workboard_sessions_board_move",
       "workboard_stats",
       "workboard_runs",
       "workboard_specify",
@@ -90,7 +121,11 @@
       "workboard_move"
     ]
   },
-  "commandAliases": [{ "name": "workboard" }],
+  "commandAliases": [
+    {
+      "name": "workboard"
+    }
+  ],
   "toolMetadata": {
     "workboard_list": {
       "optional": true
@@ -202,5 +237,11 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
+  },
+  "controlUi": {
+    "entry": "dist/control-ui/2efb22eddf2e20b1dc8056aa181f78460ecbac562653cf1d15c4387ac6626388/index.js",
+    "styles": [
+      "dist/control-ui/2efb22eddf2e20b1dc8056aa181f78460ecbac562653cf1d15c4387ac6626388/index.css"
+    ]
   }
 }

@@ -5,8 +5,25 @@
  * Runtime callers import this barrel instead of storage-specific modules.
  */
 export * from "./session-history.js";
+export {
+  listSessionTranscriptInstances,
+  listSessionTranscriptArchivesReadOnly,
+} from "./session-history-read.js";
+export { readSessionPendingInputReceiptsInWorker as listSessionPendingInputReceipts } from "./session-pending-input-receipts.js";
+export { recoverSessionTranscriptProjection } from "./session-transcript-projection-recovery.js";
+export {
+  bindSessionPendingInputSources,
+  listSessionPendingInputs,
+  readSessionPendingInput,
+  readSessionSubmittedInput,
+  stageSessionPendingInput,
+  withSessionPendingInputPersistence,
+  withSessionPendingInputRelocation,
+  type SessionPendingInput,
+  type SessionPendingInputPage,
+  type SessionPendingInputReceipt,
+} from "./session-accessor.pending-inputs.js";
 export type {
-  BranchSessionFromCompactionCheckpointParams,
   DeleteSessionEntryLifecycleParams,
   DeleteSessionEntryLifecycleResult,
   DeletedAgentSessionEntryPurgeParams,
@@ -27,17 +44,11 @@ export type {
   ResolvedSessionEntryCandidateTarget,
   ResolvedSessionEntryUpdateContext,
   ResolvedSessionEntryUpdateResult,
-  RestoreSessionFromCompactionCheckpointParams,
   SessionAbortTargetContext,
   SessionAbortTargetCutoff,
   SessionAbortTargetIdentity,
   SessionAbortTargetResult,
   SessionAccessScope,
-  SessionArchivedTranscriptCleanupRule,
-  SessionCompactionCheckpointEntryBuildContext,
-  SessionCompactionCheckpointEntryBuilder,
-  SessionCompactionCheckpointForkedTranscript,
-  SessionCompactionCheckpointMutationResult,
   SessionMessageCutMutationParams,
   SessionMessageCutMutationResult,
   SessionBranchListParams,
@@ -45,8 +56,6 @@ export type {
   SessionBranchSummary,
   SessionBranchSwitchMutationParams,
   SessionBranchSwitchMutationResult,
-  SessionCompactionCheckpointTranscriptForkResult,
-  SessionCompactionCheckpointTranscriptForker,
   SessionEntryCandidateAccessScope,
   SessionEntryCreateWithTranscriptContext,
   SessionEntryCreateWithTranscriptOptions,
@@ -59,7 +68,7 @@ export type {
   SessionEntryPatchContext,
   SessionEntryPatchOptions,
   SessionEntryPatchResult,
-  SessionEntryReadView,
+  SessionEntryReadScope,
   SessionEntryReplacement,
   SessionEntryReplacementSnapshot,
   SessionEntryReplacementUpdate,
@@ -70,11 +79,9 @@ export type {
   SessionLifecycleArtifactCleanupParams,
   SessionLifecycleArtifactCleanupResult,
   SessionLifecycleStoreTarget,
-  SessionLifecycleTranscriptInfo,
   SessionParentForkDecision,
   SessionPatchProjectionContext,
   SessionPatchProjectionFailure,
-  SessionPatchProjectionOperation,
   SessionPatchProjectionResult,
   SessionPatchProjectionSnapshot,
   SessionPatchProjectionTarget,
@@ -99,8 +106,6 @@ export type {
   SessionTranscriptVisibleMessageEventRow,
   SessionTranscriptWriteLockAccessorContext,
   SessionTranscriptWriteScope,
-  SessionTranscriptWriteTransactionContext,
-  TemporarySessionMappingPreservationResult,
   TranscriptEvent,
   TranscriptMessageAppendOptions,
   TranscriptMessageAppendResult,
@@ -124,13 +129,11 @@ export type {
 export type {
   RecordInboundSessionMetaParams,
   UpdateSessionLastRouteParams,
-} from "./session-accessor.entry-mutation.js";
+} from "./runtime-types.js";
 export {
-  countSessionEntryRowsReadOnly,
   ensureSessionEntrySync,
   copySessionOwnedStateForCanonicalRepair,
   ensureTranscriptGenerationsForCanonicalRepair,
-  hasSessionEntriesByStatusReadOnly,
   listSessionGenerationIdsForCanonicalRepair,
   clearPluginOwnedSessionState,
   listSessionChildEntriesReadOnly,
@@ -140,13 +143,16 @@ export {
   rehomeSessionDeliveryReferencesForCanonicalRepairBatch,
   listSessionEntryKeysReadOnly,
   loadExactSessionEntry,
+  loadExactSessionEntryCandidates,
+  loadExactSessionEntryFromStoreReadOnly,
   loadExactSessionEntryReadOnly,
   loadSessionEntry,
+  loadSessionEntryByIdReadOnly,
   loadSessionEntryReadOnly,
-  openSessionEntryReadView,
   patchSessionEntryCore,
   patchSessionEntryTarget,
   patchSessionEntryWithKey,
+  prepareQualifiedSessionEntryTarget,
   readSessionUpdatedAtCore,
   replaceSessionEntry,
   replaceSessionEntrySync,
@@ -155,36 +161,34 @@ export {
   resolveSessionEntrySelection,
   updateResolvedSessionEntry,
   upsertSessionEntryCore,
+  withSessionEntryReadOnlyScope,
 } from "./session-accessor.entry.js";
 export {
   readSessionIdentityEvidenceBatch,
   type SessionIdentityEvidenceResult,
 } from "./session-accessor.sqlite-entry-availability.js";
 export {
+  loadSessionEntryReadOnlyInScope,
+  updateSessionLastRouteInScope,
+} from "./session-accessor.sqlite-entry.js";
+export {
   createSessionEntryWithTranscript,
   forkSessionEntryFromParentTarget,
   forkSessionFromParentTranscript,
   markSessionAbortTarget,
+  matchesSessionAbortTargetOwner,
   recordInboundSessionMeta,
   resolveSessionAbortTarget,
   resolveSessionParentForkDecision,
   updateSessionEntry,
   updateSessionLastRoute,
 } from "./session-accessor.entry-mutation.js";
-export {
-  recoverSessionEntryFromRestartTombstone,
-  type RestartTombstoneRecoveryResult,
-} from "./session-accessor.sqlite-recovery.js";
 export { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
-export {
-  MAX_SESSION_PARTICIPANTS,
-  recordSessionParticipant,
-  type RecordSessionParticipantResult,
-} from "./session-accessor.sqlite-participants.js";
-export {
-  listSessionParticipantsReadOnly,
-  type SessionParticipantRecord,
-} from "./session-accessor.sqlite-participant-projection.js";
+export { updateSessionProfileInvolvementAsync } from "./session-involvement-store.js";
+export { MAX_SESSION_PARTICIPANTS } from "./session-entry-provenance.js";
+export type { RecordSessionParticipantResult } from "./session-accessor.sqlite-participants.native.js";
+export { recordSessionParticipantInWorker as recordSessionParticipant } from "./session-sharing-store.async.js";
+export { type SessionParticipantRecord } from "./session-accessor.sqlite-participant-projection.js";
 export {
   listCanonicalSessionRepairFacts,
   loadCanonicalSessionRepairEntries,
@@ -193,79 +197,71 @@ export {
   type CanonicalSessionRepairFact,
 } from "./session-accessor.sqlite-canonical-inventory.js";
 export {
-  iterateDoctorSessionKeyBatches,
-  rewriteDoctorSessionEntries,
-} from "./session-accessor.sqlite-doctor-rewrite.js";
-export {
   applySessionEntryLifecycleMutation,
   applySessionEntryReplacements,
   applySessionPatchProjection,
-  applySessionPatchProjections,
-  applySessionStoreProjection,
-  branchSessionFromCompactionCheckpoint,
   cleanupPluginHostSessionStore,
   cleanupSessionLifecycleArtifactsCore,
   deleteSessionEntryLifecycle,
-  preserveTemporarySessionMapping,
   purgeDeletedAgentSessionEntries,
   resetSessionEntryLifecycle,
-  restoreSessionFromCompactionCheckpoint,
   rollbackAgentHarnessSessionEntryLifecycle,
   rollbackPluginOwnedSessionEntryLifecycle,
 } from "./session-accessor.lifecycle.js";
+export { listSessionBranches } from "./session-accessor.sqlite-branch-list.js";
 export {
   forkSessionAtMessage,
-  listSessionBranches,
-  resolveSessionTranscriptActiveLeafEntryId,
   rewindSessionToMessage,
   switchSessionBranch,
 } from "./session-accessor.sqlite-message-cut.js";
 export {
   commitReplySessionInitialization,
   loadReplySessionInitializationSnapshot,
-  persistSessionResetLifecycle,
   SessionInitializationAgentScopeMismatchError,
 } from "./session-accessor.reset.js";
 export {
   appendTranscriptEvent,
-  appendTranscriptEventSync,
   appendTranscriptMessage,
   appendTranscriptMessageSync,
   findTranscriptEvent,
+  hasSessionTranscriptMessage,
   inspectTranscriptEventsSync,
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptEvents,
   loadTranscriptEventsSync,
   loadTranscriptHeaderSync,
-  loadTranscriptTailEventsSync,
+  persistCompactionBoundaryWithSessionEntryAsync,
   preflightSessionTranscriptForManualCompact,
   publishTranscriptUpdate,
   readLatestTranscriptAssistantText,
   readTranscriptEventAtSeqSync,
+  readTranscriptIdentityByEventId,
   readTranscriptRawDelta,
+  readTranscriptMutationAtSync,
+  readTranscriptExportSnapshotReadOnlySync,
+  readTranscriptStatsBatchReadOnlySync,
   readTranscriptStatsSync,
-  replaceTranscriptEvents,
-  replaceTranscriptEventsSync,
+  validatePreparedAssistantAppendSync,
+  replaceTranscriptSuffixEventsSync,
   rewriteTranscriptEventRowsExact,
   rewriteTranscriptMessageAtAnchor,
+  rewriteAssistantTranscriptMessageForRun,
   resolveTranscriptSessionKeyBySessionId,
+  resolveTranscriptSessionKeyBySessionIdAsync,
   trimSessionTranscriptForManualCompact,
   withTranscriptWriteLock,
-  withTranscriptWriteTransaction,
+  withTranscriptWriteSequence,
 } from "./session-accessor.transcript.js";
 export {
   appendTranscriptMessages,
   persistSessionTranscriptTurn,
 } from "./session-accessor.transcript-turn.js";
-export {
-  readClosedTranscriptTurn,
-  type ClosedTranscriptTurnReadResult,
-} from "./session-accessor.transcript-range.js";
-export { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
+export { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-admitted-read.js";
+export { validateSessionTranscriptContextAdmission } from "./session-accessor.sqlite-model-context.js";
 export {
   isSessionTranscriptProjectionUnavailableError,
+  readLatestSessionTranscriptMessageEvent,
   readRecentSessionTranscriptActiveEvents,
-  readSessionTranscriptActiveStats,
   readSessionTranscriptBoundedMessageTailPage,
   readRecentSessionTranscriptMessageEvents,
   readSessionTranscriptActivePathEntryRelation,
@@ -275,25 +271,24 @@ export {
   SessionTranscriptProjectionUnavailableError,
   waitForSessionTranscriptProjection,
 } from "./session-accessor.sqlite-active-events.js";
-export {
-  readSessionTranscriptTitleProbeBatch,
-  type SessionTranscriptTitleProbe,
-} from "./session-accessor.sqlite-title-probes.js";
 export type {
   SessionTranscriptBoundedMessageTailPage,
   SessionTranscriptMessageAnchorPage,
   SessionTranscriptMessageEvent,
   SessionTranscriptMessageEventPage,
-} from "./session-accessor.sqlite-active-events.js";
+} from "./session-accessor.sqlite-projection-read.js";
+export type { SessionTranscriptWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
+export { readSessionTranscriptWatermark } from "./session-accessor.sqlite-transcript-watermark.js";
 export {
-  readSessionTranscriptWatermark,
-  readSessionTranscriptWatermarkBatch,
-  type SessionTranscriptWatermark,
-} from "./session-accessor.sqlite-transcript-watermark.js";
-export {
-  resolveConcreteSessionStorePath,
+  bindSessionTranscriptStoreScope,
   resolveSessionTranscriptDatabasePath,
   resolveSessionTranscriptReadTarget,
   resolveSessionTranscriptRuntimeTarget,
-  resolveSessionTranscriptRuntimeTarget as resolveSessionTranscriptRuntimeReadTarget,
 } from "./session-accessor.transcript-target.js";
+
+export {
+  appendSessionTranscriptReport,
+  readLatestSessionTranscriptReport,
+} from "./session-accessor.sqlite-transcript-reports.js";
+export { listSessionParticipantsReadOnly } from "./session-accessor.sqlite-participant-read.js";
+export { readSessionEntriesFromStoreInWorker } from "./session-entry-read-runtime.js";

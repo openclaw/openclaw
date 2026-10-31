@@ -3,55 +3,19 @@ import Foundation
 @MainActor
 struct StatusMenuDescriptor {
     struct Snapshot {
-        var isPaused: Bool
-        var connection: Connection
-        var quickChatEnabled: Bool
-        var canvasEnabled: Bool
-        var voiceWakeSupported: Bool
-        var debugEnabled: Bool
-        var updateReady: Bool
-        var hasUsage: Bool
-        var isUsageStalled: Bool
-        var sessions: [SessionRow]
+        var isPaused = false
+        var connection: Connection = .connected
+        var quickChatEnabled = false
+        var debugEnabled = false
+        var updateReady = false
+        var hasUsage = false
+        var isUsageStalled = false
+        var sessions: [SessionRow] = []
         var sessionError: String?
-        var mainSessionKey: String
-        var approvals: [ExecApprovalQueueItem]
-        var gateways: [DashboardGatewayMenuItem]
-        var now: Date
-
-        init(
-            isPaused: Bool = false,
-            connection: Connection = .connected,
-            quickChatEnabled: Bool = false,
-            canvasEnabled: Bool = false,
-            voiceWakeSupported: Bool = true,
-            debugEnabled: Bool = false,
-            updateReady: Bool = false,
-            hasUsage: Bool = false,
-            isUsageStalled: Bool = false,
-            sessions: [SessionRow] = [],
-            sessionError: String? = nil,
-            mainSessionKey: String = "main",
-            approvals: [ExecApprovalQueueItem] = [],
-            gateways: [DashboardGatewayMenuItem] = [],
-            now: Date = Date())
-        {
-            self.isPaused = isPaused
-            self.connection = connection
-            self.quickChatEnabled = quickChatEnabled
-            self.canvasEnabled = canvasEnabled
-            self.voiceWakeSupported = voiceWakeSupported
-            self.debugEnabled = debugEnabled
-            self.updateReady = updateReady
-            self.hasUsage = hasUsage
-            self.isUsageStalled = isUsageStalled
-            self.sessions = sessions
-            self.sessionError = sessionError
-            self.mainSessionKey = mainSessionKey
-            self.approvals = approvals
-            self.gateways = gateways
-            self.now = now
-        }
+        var mainSessionKey = "main"
+        var approvals: [ExecApprovalQueueItem] = []
+        var gateways: [DashboardGatewayMenuItem] = []
+        var now = Date()
     }
 
     enum Connection {
@@ -83,7 +47,7 @@ struct StatusMenuDescriptor {
             case let .session(session):
                 "session.\(session.key)"
             case let .approval(approval):
-                "approval.\(approval.id)"
+                "approval.\(approval.idKey.base64EncodedString())"
             case .placeholder:
                 "placeholder"
             case let .action(action):
@@ -114,9 +78,9 @@ struct StatusMenuDescriptor {
         case dashboard
         case quickChat
         case talkMode
-        case canvas
         case allSessions
         case settings
+        case connection
         case debug
         case about
         case quit
@@ -186,14 +150,14 @@ struct StatusMenuDescriptor {
         let visibleKeys = Set(visibleRows.map(\.key))
         var entries = snapshot.approvals
             .filter { approval in
-                guard let sessionKey = approval.request.sessionKey else { return true }
+                guard let sessionKey = approval.sessionKey else { return true }
                 return !visibleKeys.contains(sessionKey)
             }
             .map { Entry(.approval($0)) }
 
         for row in visibleRows {
             entries.append(contentsOf: snapshot.approvals
-                .filter { $0.request.sessionKey == row.key }
+                .filter { $0.sessionKey == row.key }
                 .map { Entry(.approval($0)) })
             entries.append(Entry(.session(row)))
         }
@@ -214,9 +178,6 @@ struct StatusMenuDescriptor {
             entries.append(Entry(.action(.quickChat)))
         }
         entries.append(Entry(.action(.talkMode)))
-        if snapshot.canvasEnabled {
-            entries.append(Entry(.action(.canvas)))
-        }
         return Section(id: "actions", entries: entries)
     }
 
@@ -230,7 +191,7 @@ struct StatusMenuDescriptor {
     }
 
     private static func footerSection(from snapshot: Snapshot) -> Section {
-        var entries = [Entry(.action(.settings))]
+        var entries = [Entry(.action(.settings)), Entry(.action(.connection))]
         if snapshot.debugEnabled {
             entries.append(Entry(.action(.debug)))
         }

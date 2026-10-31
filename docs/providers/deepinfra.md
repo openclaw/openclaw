@@ -14,8 +14,10 @@ it by switching the base URL.
 
 ```bash
 openclaw plugins install @openclaw/deepinfra-provider
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## Get an API key
 
@@ -60,7 +62,7 @@ live catalog.
 | ------------------------ | ------------------------------------------------------------------------------ | ----------------------------------------------------- |
 | Chat / model provider    | `deepseek-ai/DeepSeek-V4-Flash` (live catalog adds more chat models)           | `agents.defaults.model`                               |
 | Image generation/editing | `black-forest-labs/FLUX-1-schnell` (live catalog adds more `image-gen` models) | `image_generate`, `agents.defaults.mediaModels.image` |
-| Media understanding      | `moonshotai/Kimi-K2.5` for images                                              | inbound image understanding                           |
+| Media understanding      | `moonshotai/Kimi-K2.6` for images                                              | inbound image understanding                           |
 | Speech-to-text           | `openai/whisper-large-v3-turbo`                                                | inbound audio transcription                           |
 | Text-to-speech           | `hexgrad/Kokoro-82M`                                                           | `tts.provider: "deepinfra"`                           |
 | Video generation         | `Pixverse/Pixverse-T2V` (live catalog adds more `video-gen` models)            | `video_generate`, `agents.defaults.mediaModels.video` |
@@ -83,13 +85,61 @@ Any model on [deepinfra.com](https://deepinfra.com/) works with the
 deepinfra/deepseek-ai/DeepSeek-V4-Flash
 deepinfra/deepseek-ai/DeepSeek-V4-Pro
 deepinfra/zai-org/GLM-5.2
-deepinfra/stepfun-ai/Step-3.7-Flash
-deepinfra/moonshotai/Kimi-K2.7-Code
 deepinfra/moonshotai/Kimi-K2.6
 deepinfra/nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B
 deepinfra/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B
 ...and many more
 ```
+
+## Prompt caching
+
+For the native `https://api.deepinfra.com/v1/openai` endpoint, OpenClaw sends a
+stable `prompt_cache_key` for related requests to improve automatic prefix cache
+reuse. An explicit request cache key takes precedence over the session ID.
+Setting `cacheRetention: "none"` suppresses this routing hint; it does not disable
+DeepInfra's automatic cache. Custom endpoints retain their configured behavior.
+OpenClaw does not enable paid cache retention automatically. See
+[DeepInfra prompt caching](https://docs.deepinfra.com/chat/prompt-caching).
+
+## Price estimates
+
+Chat discovery keeps model membership, order, tags, and limits from DeepInfra's
+agent projection. Prices come separately from the anonymous native
+[`/models/list`](https://docs.deepinfra.com/api-reference/models/models-list)
+catalog. The plugin converts cents per token to USD per million tokens, applies
+the advertised numeric discount once, and uses the native cached-input ratio.
+Both requests share the existing five-minute live-catalog cache and run
+concurrently only for configured chat discovery. Image and video discovery do
+not request chat prices.
+
+Schedules qualified by pricing prose, a nonempty pricing table, or a scheduled
+discount expiry remain unknown; OpenClaw does not guess context tiers or parse
+promotion dates. A declared generic cache-write rate also remains unsupported
+because its numeric semantics are not documented. Explicit 5-minute/1-hour
+retention and priority/flex rates are separate contracts and are not included in
+standard estimates. See DeepInfra's [prompt caching](https://docs.deepinfra.com/chat/prompt-caching)
+and [cache retention](https://docs.deepinfra.com/chat/prompt-cache-retention) docs.
+
+Missing or unsupported individual price schedules use the required runtime
+zero-cost placeholder, which means unknown, not verified free billing. A failed
+metadata or native pricing request marks chat discovery unavailable and retains
+the last successful catalog for the same provider configuration and credentials.
+A successful empty model response clears discovered chat models even when pricing
+is unavailable. Live discovery
+does not append bundled models absent from the response. Without credentials,
+the bundled catalog remains available without fetching. Explicitly configured
+models and costs remain authoritative; onboarding does not pin provider prices.
+
+The plugin's public `buildDeepInfraProvider` API keeps its advisory default:
+it retains bundled choices and uses unknown price estimates when discovery fails.
+OpenClaw's registered catalog hook explicitly selects `discoveryMode: "strict"`
+so failed or empty acquisitions reach the shared publication owner unchanged.
+
+Hosted publication uses the same native parser. It preserves metadata without
+cost for unsupported or absent schedules, retains declared zero prices, and
+leaves the previous hosted catalog intact if the native feed fails validation.
+These updates follow the shared
+[hosted catalog publication lifecycle](/concepts/models#hosted-catalog-updates).
 
 ## Notes
 

@@ -1,53 +1,49 @@
-// Discord plugin module dispatches inbound messages into the processing queue.
+import { Routes } from "discord-api-types/v10";
 import {
   createChannelInboundDebouncer,
+  resolveInboundDebounceMs,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { danger } from "openclaw/plugin-sdk/runtime-env";
-import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
-import type { Client } from "../internal/discord.js";
-import { buildDiscordInboundJob } from "./inbound-job.js";
-import type {
-  createDiscordIngressMonitor,
-  DiscordIngressDispatchResult,
-  DiscordIngressLifecycle,
-} from "./ingress.js";
-import type { DiscordMessageEvent } from "./listeners.js";
-import { createDiscordAvatarResolver } from "./message-avatar.js";
-import { applyImplicitReplyBatchGate } from "./message-handler.batch-gate.js";
-import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
 import {
-  createDiscordMessageRunQueue,
-  type DiscordMessageRunQueueTestingHooks,
-} from "./message-run-queue.js";
+  createChannelRunQueue,
+  resolveChannelMessageSourceReplyDeliveryMode,
+} from "openclaw/plugin-sdk/channel-outbound";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
+import type { Client } from "../internal/discord.js";
+import { withDiscordRequestAuthority } from "../internal/request-authority.js";
+import type { DiscordIngressDispatchResult, DiscordIngressLifecycle } from "./ingress.js";
+import type { DiscordMessageEvent } from "./listeners.js";
+import { createDiscordLivePolicyReader, type DiscordLivePolicyReader } from "./live-policy.js";
+import { createDiscordAvatarResolver } from "./message-avatar.js";
+import { resolveDiscordMessageChannelId } from "./message-channel-info.js";
 import {
   hasDiscordMessageStickers,
-  resolveDiscordMessageChannelId,
-  resolveDiscordMessageText,
-} from "./message-utils.js";
+  resolveDiscordReferencedReplyMessageId,
+} from "./message-forwarded.js";
+import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
+import { resolveDiscordMessageText } from "./message-text.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
-
-type PreflightDiscordMessage =
-  typeof import("./message-handler.preflight.js").preflightDiscordMessage;
 
 type DiscordMessageHandlerParams = Omit<
   DiscordMessagePreflightParams,
   "ackReactionScope" | "groupPolicy" | "data" | "client"
 > & {
+  readPolicy?: DiscordLivePolicyReader;
   setStatus?: DiscordMonitorStatusSink;
   abortSignal?: AbortSignal;
-  testing?: DiscordMessageHandlerTestingHooks;
-};
-
-type DiscordMessageHandlerTestingHooks = DiscordMessageRunQueueTestingHooks & {
-  preflightDiscordMessage?: PreflightDiscordMessage;
-  createIngressMonitor?: typeof createDiscordIngressMonitor;
 };
 
 const loadMessagePreflightRuntime = createLazyRuntimeModule(
   () => import("./message-handler.preflight.js"),
+);
+
+const loadMessageProcessRuntime = createLazyRuntimeModule(
+  () => import("./message-handler.process.js"),
 );
 
 type DiscordMessageDispatcher = (
@@ -58,33 +54,93 @@ type DiscordMessageDispatcher = (
 
 type DiscordMessageDispatcherWithLifecycle = DiscordMessageDispatcher & {
   deactivate: () => Promise<void>;
+  notifyDeadLetter: (
+    data: DiscordMessageEvent,
+    client: Client,
+    signal: AbortSignal,
+  ) => Promise<void>;
 };
-
-function isNonEmptyString(value: string | undefined): value is string {
-  return typeof value === "string" && value.length > 0;
-}
 
 export function createDiscordMessageDispatcher(
   params: DiscordMessageHandlerParams,
 ): DiscordMessageDispatcherWithLifecycle {
-  const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
-    providerConfigPresent: params.cfg.channels?.discord !== undefined,
-    groupPolicy: params.discordConfig?.groupPolicy,
-    defaultGroupPolicy: params.cfg.channels?.defaults?.groupPolicy,
-  });
-  const ackReactionScope =
-    params.discordConfig?.ackReactionScope ??
-    params.cfg.messages?.ackReactionScope ??
-    "group-mentions";
-  const preflightDiscordMessageImpl = params.testing?.preflightDiscordMessage;
-  const messageRunQueue = createDiscordMessageRunQueue({
-    runtime: params.runtime,
+  const readPolicy =
+    params.readPolicy ??
+    createDiscordLivePolicyReader({
+      ...params,
+      discordConfig: {
+        ...params.discordConfig,
+        dmPolicy: params.dmPolicy,
+        allowFrom: params.allowFrom,
+        guilds: params.guildEntries,
+        dm: {
+          ...params.discordConfig?.dm,
+          enabled: params.dmEnabled,
+          groupEnabled: params.groupDmEnabled,
+          groupChannels: params.groupDmChannels,
+        },
+      },
+      resolvedAllowlist: { guildEntries: params.guildEntries, allowFrom: params.allowFrom },
+    });
+  const readConfig = createRuntimeConfigReader(params.cfg);
+  const skippedCleanup = new Set<() => Promise<void>>();
+  const runQueue = createChannelRunQueue({
     setStatus: params.setStatus,
     abortSignal: params.abortSignal,
-    testing: params.testing,
+    onError: (error) => {
+      params.runtime.error(danger(`discord message run failed: ${String(error)}`));
+    },
   });
+  let lifecycleActive = !params.abortSignal?.aborted;
+  const pendingTasks = new Set<Promise<void>>();
+  const onAbort = () => void cleanupSkippedQueuedMessages();
+
+  async function cleanupSkippedQueuedMessages() {
+    params.abortSignal?.removeEventListener("abort", onAbort);
+    // These callbacks represent jobs accepted into the queue but not started.
+    // Running jobs remove their callback before processDiscordMessage owns cleanup.
+    if (!lifecycleActive && skippedCleanup.size === 0) {
+      return;
+    }
+    lifecycleActive = false;
+    const cleanups = [...skippedCleanup];
+    skippedCleanup.clear();
+    for (const cleanup of cleanups) {
+      await cleanup();
+    }
+  }
+
+  if (params.abortSignal?.aborted) {
+    void cleanupSkippedQueuedMessages();
+  } else {
+    params.abortSignal?.addEventListener("abort", onAbort, { once: true });
+  }
   const dispatcherShutdown = new AbortController();
   const avatarResolver = createDiscordAvatarResolver();
+  const preflightMessage = async (
+    data: DiscordMessageEvent,
+    client: Client,
+    options: Pick<
+      DiscordMessagePreflightParams,
+      "abortSignal" | "precedingMessages" | "turnAdoptionLifecycle"
+    >,
+  ) => {
+    const policy = await readPolicy();
+    const { preflightDiscordMessage } = await loadMessagePreflightRuntime();
+    return await preflightDiscordMessage({
+      ...params,
+      ...policy,
+      ...options,
+      isPolicyCurrent: policy.isCurrent,
+      avatarResolver,
+      ackReactionScope:
+        params.discordConfig?.ackReactionScope ??
+        policy.cfg.messages?.ackReactionScope ??
+        "group-mentions",
+      data,
+      client,
+    });
+  };
 
   type DiscordDebounceEntry = {
     data: DiscordMessageEvent;
@@ -105,11 +161,16 @@ export function createDiscordMessageDispatcher(
       message,
       eventChannelId: entry.data.channel_id,
     });
-    return channelId ? `discord:${params.accountId}:${channelId}:${authorId}` : null;
+    if (!channelId) {
+      return null;
+    }
+    const replyTargetId = resolveDiscordReferencedReplyMessageId(message);
+    return `discord:${params.accountId}:${channelId}:${authorId}:reply:${replyTargetId ?? "none"}`;
   };
   const { debouncer } = createChannelInboundDebouncer<DiscordDebounceEntry>({
     cfg: params.cfg,
     channel: "discord",
+    resolveDebounceMs: () => resolveInboundDebounceMs({ cfg: readConfig(), channel: "discord" }),
     buildKey: resolveDebounceKey,
     shouldDebounce: (entry) => {
       const message = entry.data.message;
@@ -145,75 +206,18 @@ export function createDiscordMessageDispatcher(
             return;
           }
           try {
-            if (entries.length === 1) {
-              const preflight =
-                preflightDiscordMessageImpl ??
-                (await loadMessagePreflightRuntime()).preflightDiscordMessage;
-              const ctx = await preflight({
-                ...params,
-                avatarResolver,
-                ackReactionScope,
-                groupPolicy,
-                abortSignal,
-                data: last.data,
-                client: last.client,
-                turnAdoptionLifecycle: admissionLifecycle,
-              });
-              if (abortSignal?.aborted) {
-                await ingress.cancel();
-                return;
-              }
-              if (!ctx) {
-                await ingress.settle();
-                return;
-              }
-              applyImplicitReplyBatchGate(ctx, params.replyToMode, false);
-              messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { ingressSettlement: ingress }));
-              return;
-            }
-            const combinedBaseText = entries
-              .map((entry) =>
-                resolveDiscordMessageText(entry.data.message, { includeForwarded: false }),
-              )
-              .filter(Boolean)
-              .join("\n");
-            const syntheticMessage = Object.create(Object.getPrototypeOf(last.data.message), {
-              ...Object.getOwnPropertyDescriptors(last.data.message),
-              content: { value: combinedBaseText, enumerable: true, configurable: true },
-              attachments: { value: [], enumerable: true, configurable: true },
-              message_snapshots: {
-                value: (last.data.message as { message_snapshots?: unknown }).message_snapshots,
-                enumerable: true,
-                configurable: true,
-              },
-              messageSnapshots: {
-                value: (last.data.message as { messageSnapshots?: unknown }).messageSnapshots,
-                enumerable: true,
-                configurable: true,
-              },
-              rawData: {
-                value: { ...(last.data.message as { rawData?: Record<string, unknown> }).rawData },
-                enumerable: true,
-                configurable: true,
-              },
-            }) as DiscordMessageEvent["message"];
-            const syntheticData: DiscordMessageEvent = {
-              ...last.data,
-              message: syntheticMessage,
-            };
-            const preflight =
-              preflightDiscordMessageImpl ??
-              (await loadMessagePreflightRuntime()).preflightDiscordMessage;
-            const ctx = await preflight({
-              ...params,
-              avatarResolver,
-              ackReactionScope,
-              groupPolicy,
+            // A retired attempt must release its debounce slot even if external I/O ignores abort.
+            const ctx = await racePromiseWithAbortSignal(
+              () =>
+                preflightMessage(last.data, last.client, {
+                  abortSignal,
+                  // Preflight hydrates each original before deriving mention facts
+                  // or rendering the batch, so neither text nor metadata is lost.
+                  precedingMessages: entries.slice(0, -1).map((entry) => entry.data.message),
+                  turnAdoptionLifecycle: admissionLifecycle,
+                }),
               abortSignal,
-              data: syntheticData,
-              client: last.client,
-              turnAdoptionLifecycle: admissionLifecycle,
-            });
+            );
             if (abortSignal?.aborted) {
               await ingress.cancel();
               return;
@@ -222,19 +226,72 @@ export function createDiscordMessageDispatcher(
               await ingress.settle();
               return;
             }
-            applyImplicitReplyBatchGate(ctx, params.replyToMode, true);
-            const ids = entries.map((entry) => entry.data.message?.id).filter(isNonEmptyString);
-            if (ids.length > 0) {
-              const ctxBatch = ctx as typeof ctx & {
-                MessageSids?: string[];
-                MessageSidFirst?: string;
-                MessageSidLast?: string;
-              };
-              ctxBatch.MessageSids = ids;
-              ctxBatch.MessageSidFirst = ids[0];
-              ctxBatch.MessageSidLast = ids[ids.length - 1];
+            const { promise: pending, resolve: resolvePending } = createDeferred();
+            pendingTasks.add(pending);
+            const settlePending = () => {
+              pendingTasks.delete(pending);
+              resolvePending();
+            };
+            const cleanupSkipped = async () => {
+              try {
+                // A skipped job never reached reply-lane adoption; reopen its durable claim.
+                await ingress.cancel();
+              } catch (error) {
+                // Durable release is best-effort during shutdown. One failed claim
+                // must not strand the remaining accepted jobs or their pending tasks.
+                try {
+                  params.runtime.error(
+                    danger(`discord queued message cleanup failed: ${String(error)}`),
+                  );
+                } catch {
+                  // Error reporting must not interrupt the remaining cleanup owners.
+                }
+              } finally {
+                settlePending();
+              }
+            };
+            if (!lifecycleActive) {
+              void cleanupSkipped();
+              return;
             }
-            messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { ingressSettlement: ingress }));
+            skippedCleanup.add(cleanupSkipped);
+            // Core reply admission owns session serialization. A transport event key
+            // lets later Discord messages reach active-run steering while this run continues.
+            runQueue.enqueue(ctx.message.id, async ({ lifecycleSignal }) => {
+              // Once the task starts, normal process/commit handling owns cleanup.
+              // Leaving it in skippedCleanup would double-release replay state.
+              skippedCleanup.delete(cleanupSkipped);
+              try {
+                const processAbortSignal =
+                  ctx.abortSignal && lifecycleSignal
+                    ? AbortSignal.any([ctx.abortSignal, lifecycleSignal])
+                    : (ctx.abortSignal ?? lifecycleSignal);
+                try {
+                  // The same event's retry also needs its message-keyed run slot back.
+                  await racePromiseWithAbortSignal(async () => {
+                    const { processDiscordMessage } = await loadMessageProcessRuntime();
+                    await processDiscordMessage({ ...ctx, abortSignal: processAbortSignal });
+                  }, processAbortSignal);
+                  if (processAbortSignal?.aborted) {
+                    // Retain prior retry facts when cancellation ends ownership before delivery.
+                    await ingress.cancel();
+                  } else {
+                    await ingress.settle();
+                  }
+                } catch (error) {
+                  if (processAbortSignal?.aborted) {
+                    await ingress.cancel();
+                  } else {
+                    await ingress.abandon(error);
+                    throw error;
+                  }
+                }
+              } finally {
+                settlePending();
+              }
+            });
+            // Adoption releases the input lane; completion retains dispatch ownership.
+            await pending;
           } catch (error) {
             if (abortSignal?.aborted) {
               await ingress.cancel();
@@ -309,10 +366,7 @@ export function createDiscordMessageDispatcher(
         pendingDebounceEntries.add(entry);
       }
       await debouncer.enqueue(entry);
-      if (options?.turnAdoptionLifecycle) {
-        return { kind: "deferred" };
-      }
-      return { kind: "completed" };
+      return { kind: options?.turnAdoptionLifecycle ? "deferred" : "completed" };
     } catch (err) {
       params.runtime.error(danger(`handler failed: ${String(err)}`));
       if (options?.turnAdoptionLifecycle) {
@@ -327,6 +381,57 @@ export function createDiscordMessageDispatcher(
     return options?.turnAdoptionLifecycle ? result : result.then(() => undefined);
   };
 
+  handler.notifyDeadLetter = async (data, client, signal) => {
+    const abortSignal = AbortSignal.any([
+      signal,
+      dispatcherShutdown.signal,
+      ...(params.abortSignal ? [params.abortSignal] : []),
+    ]);
+    const ctx = await preflightMessage(data, client, { abortSignal });
+    if (!ctx) {
+      params.runtime.error(
+        danger(
+          `discord ingress: dead-letter notice suppressed for ${data.message.id} (access or reply policy denied, or authority expired)`,
+        ),
+      );
+      return;
+    }
+    // The REST owner rechecks this assertion after queueing and on rate-limit retries.
+    const assertCurrent = () => {
+      abortSignal.throwIfAborted();
+      if (!lifecycleActive || ctx.isPolicyCurrent?.() !== true) {
+        throw new Error("discord dead-letter notice suppressed: access authority expired");
+      }
+      if (
+        resolveChannelMessageSourceReplyDeliveryMode({
+          cfg: readConfig(),
+          ctx: {
+            ChatType: ctx.isDirectMessage
+              ? "direct"
+              : ctx.isGroupDm
+                ? "group"
+                : ctx.isGuildMessage
+                  ? "channel"
+                  : undefined,
+            InboundEventKind: ctx.inboundEventKind,
+          },
+        }) === "message_tool_only"
+      ) {
+        throw new Error("discord dead-letter notice suppressed: source-reply policy");
+      }
+    };
+    assertCurrent();
+    await withDiscordRequestAuthority(assertCurrent, () =>
+      client.rest.post(Routes.channelMessages(ctx.messageChannelId), {
+        body: {
+          content: "⚠️ Couldn't process this message after repeated failures. Please try again.",
+          message_reference: { message_id: data.message.id, fail_if_not_exists: false },
+          allowed_mentions: { parse: [], replied_user: false },
+        },
+      }),
+    );
+  };
+
   handler.deactivate = async () => {
     dispatcherShutdown.abort(new Error("discord-message-handler-deactivated"));
     const pendingKeys = new Set(
@@ -339,8 +444,10 @@ export function createDiscordMessageDispatcher(
     }
     pendingDebounceEntries.clear();
     await Promise.allSettled(pendingCancellationSettlements);
+    runQueue.deactivate();
+    await cleanupSkippedQueuedMessages();
     await debouncer.drain();
-    await messageRunQueue.deactivate();
+    await Promise.allSettled(pendingTasks);
   };
 
   return handler;

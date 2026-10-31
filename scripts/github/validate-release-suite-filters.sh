@@ -26,7 +26,7 @@ validate_release_suite_filters() {
   case "$dispatch_scope" in
     controller)
       case "$rerun_group" in
-        all|ci|plugin-prerelease|install-smoke|cross-os|live-e2e|package|qa-parity|qa-live|npm-telegram|performance) ;;
+        all|ci|plugin-prerelease|install-smoke|cross-os|windows-node|live-e2e|package|qa-parity|qa-live|npm-telegram|performance) ;;
         *)
           echo "controller rerun_group is invalid: ${rerun_group}." >&2
           return 1
@@ -35,7 +35,7 @@ validate_release_suite_filters() {
       ;;
     release-checks)
       case "$rerun_group" in
-        all|install-smoke|cross-os|live-e2e|package|qa|qa-parity|qa-live) ;;
+        all|install-smoke|cross-os|windows-node|live-e2e|package|qa|qa-parity|qa-live) ;;
         *)
           echo "release-checks rerun_group is invalid: ${rerun_group}." >&2
           return 1
@@ -58,9 +58,19 @@ validate_release_suite_filters() {
     echo "cross_os_suite_filter must contain at least one suite selector." >&2
     return 1
   fi
-  if [[ -n "$cross_os_suite_filter" && "$rerun_group" != "cross-os" ]]; then
-    echo "cross_os_suite_filter requires rerun_group=cross-os; received ${rerun_group}." >&2
+  if [[ -n "$cross_os_suite_filter" && "$rerun_group" != "cross-os" && "$rerun_group" != "all" ]]; then
+    echo "cross_os_suite_filter requires rerun_group=all or cross-os; received ${rerun_group}." >&2
     return 1
+  fi
+
+  if [[ -n "$cross_os_suite_filter" && "$rerun_group" == "all" ]]; then
+    node --input-type=module - "$(dirname "${BASH_SOURCE[0]}")/../lib/cross-os-release-checks/suite-filter.mjs" "$cross_os_suite_filter" <<'NODE' || return 1
+import { pathToFileURL } from 'node:url';
+const { hasRequiredCrossOsSuites } = await import(pathToFileURL(process.argv[2]));
+if (!hasRequiredCrossOsSuites(process.argv[3])) {
+  throw new Error('all-group cross_os_suite_filter requires all Linux, Windows, and macOS cross-OS suites');
+}
+NODE
   fi
 
   if [[ -n "$live_suite_filter" ]]; then

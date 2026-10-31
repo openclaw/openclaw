@@ -1,28 +1,171 @@
 // Covers captured plugin registration behavior in test registries.
 import { describe, expect, it, vi } from "vitest";
-import { capturePluginRegistration } from "./captured-registration.js";
+import type { PluginCapabilityCatalogContext } from "./capability-catalog-context.types.js";
+import {
+  capturePluginRegistration,
+  createCapturedPluginRegistration,
+} from "./captured-registration.js";
+import { createPluginRecord } from "./loader-records.js";
+import { resolvePluginCapabilityCatalogContext } from "./loader-runtime-load.js";
+import { createPluginRegistry } from "./registry.js";
+import type { PluginRuntime } from "./runtime/types.js";
 import type { AnyAgentTool, OpenClawPluginApi } from "./types.js";
 
 describe("captured plugin registration", () => {
-  it("preserves root machine-output metadata", () => {
-    const machineOutput = ({ stdoutIsTTY }: { stdoutIsTTY: boolean }) => !stdoutIsTTY;
-    const captured = capturePluginRegistration({
-      register(api) {
-        api.registerCli(() => {}, {
-          descriptors: [
-            {
-              name: "captured-machine",
-              description: "Captured machine output",
-              hasSubcommands: true,
-              machineOutput,
-            },
-          ],
+  it.each(["captured", "registry"] as const)(
+    "materializes native capability factories without losing descriptor identity (%s)",
+    (mode) => {
+      const captured = mode === "captured" ? createCapturedPluginRegistration() : undefined;
+      const registry = createPluginRegistry({
+        logger: { info() {}, warn() {}, error() {} },
+        runtime: {} as PluginRuntime,
+        resolveCapabilityCatalogContext: resolvePluginCapabilityCatalogContext,
+        activateGlobalSideEffects: false,
+      });
+      const record = createPluginRecord({
+        id: "factory-owner",
+        source: "/fixture/index.js",
+        origin: "global",
+        enabled: true,
+        configSchema: false,
+      });
+      const api = captured?.api ?? registry.createApi(record, { config: {} });
+      const marker = Symbol("provider-owned");
+      const unused = () => {
+        throw new Error("not provider execution");
+      };
+      const factory = vi.fn((context: PluginCapabilityCatalogContext) => {
+        expect(context.formatErrorMessage(new Error("context-ready"))).toBe("context-ready");
+        const provider = {
+          id: "factory-provider",
+          label: "Factory provider",
+          isConfigured: () => context.formatErrorMessage(new Error("ready")) === "ready",
+          synthesize: unused,
+          createSession: unused,
+          createBridge: unused,
+        };
+        Object.defineProperty(provider, marker, { value: "retained" });
+        return provider;
+      });
+      api.registerSpeechProvider(factory);
+      api.registerRealtimeTranscriptionProvider(factory);
+      api.registerRealtimeVoiceProvider(factory);
+      for (const [index, family] of (
+        ["speechProviders", "realtimeTranscriptionProviders", "realtimeVoiceProviders"] as const
+      ).entries()) {
+        const providers = captured
+          ? captured[family]
+          : registry.registry[family].map((entry) => entry.provider);
+        expect(providers).toHaveLength(1);
+        expect(providers[0]).toBe(factory.mock.results[index]?.value);
+        expect(Object.getOwnPropertyDescriptor(providers[0], marker)).toMatchObject({
+          value: "retained",
+          enumerable: false,
         });
-      },
+      }
+      expect(factory).toHaveBeenCalledTimes(3);
+    },
+  );
+
+  it("rejects a direct registry factory without a host context instead of passing undefined", () => {
+    const registry = createPluginRegistry({
+      logger: { info() {}, warn() {}, error() {} },
+      runtime: {} as PluginRuntime,
+      activateGlobalSideEffects: false,
+    });
+    const record = createPluginRecord({
+      id: "factory-owner",
+      source: "/fixture/index.js",
+      origin: "global",
+      enabled: true,
+      configSchema: false,
+    });
+    const factory = vi.fn(() => {
+      throw new Error("factory must not run");
+    });
+    const api = registry.createApi(record, { config: {} });
+    expect(() => api.registerSpeechProvider(factory)).toThrow(
+      "supply resolveCapabilityCatalogContext",
+    );
+    expect(factory).not.toHaveBeenCalled();
+    expect(registry.registry.speechProviders).toEqual([]);
+  });
+
+  it("rejects asynchronous captured factories without capturing promises", async () => {
+    const captured = createCapturedPluginRegistration();
+    const invalid = (() => Promise.reject(new Error("factory rejected"))) as unknown as Parameters<
+      OpenClawPluginApi["registerSpeechProvider"]
+    >[0];
+    expect(() => captured.api.registerSpeechProvider(invalid)).toThrow("must be synchronous");
+    expect(captured.speechProviders).toEqual([]);
+    await Promise.resolve();
+  });
+
+  it.each([
+    { mode: "cli-metadata", property: "state" },
+    { mode: "cli-metadata", property: "capabilities" },
+    { mode: "setup-only", property: "capabilities" },
+  ] as const)("rejects runtime $property during $mode capture", ({ mode, property }) => {
+    expect(() =>
+      capturePluginRegistration({
+        id: "captured-cli-plugin",
+        registrationMode: mode,
+        register(api) {
+          if (property === "state") {
+            api.runtime.state.openSyncKeyedStore({ namespace: "example", maxEntries: 1 });
+          } else {
+            void api.runtime.capabilities;
+          }
+        },
+      }),
+    ).toThrow(
+      `Plugin "captured-cli-plugin" runtime is intentionally unavailable during "${mode}" registration.`,
+    );
+  });
+
+  it.each(["captured", "registry"] as const)("normalizes root CLI metadata (%s)", (mode) => {
+    const machineOutput = ({ stdoutIsTTY }: { stdoutIsTTY: boolean }) => !stdoutIsTTY;
+    const captured = createCapturedPluginRegistration();
+    const registry = createPluginRegistry({
+      logger: captured.api.logger,
+      runtime: captured.api.runtime,
+      activateGlobalSideEffects: false,
+    });
+    const record = createPluginRecord({
+      id: "cli-owner",
+      source: "/fixture/index.js",
+      origin: "global",
+      enabled: true,
+      configSchema: false,
+    });
+    const api = mode === "captured" ? captured.api : registry.createApi(record, { config: {} });
+    api.registerCli(() => {}, {
+      commands: [" captured-machine ", "captured-machine", "captured-extra", "invalid command"],
+      descriptors: [
+        {
+          name: " captured-machine ",
+          description: "\u001b[31mCaptured machine output\u001b[0m",
+          hasSubcommands: true,
+          machineOutput,
+        },
+        { name: "invalid descriptor", description: "Excluded", hasSubcommands: false },
+      ],
     });
 
-    const descriptor = captured.cliRegistrars[0]?.descriptors[0];
-    expect(descriptor?.machineOutput).toBe(machineOutput);
+    const registration = (mode === "captured" ? captured : registry.registry).cliRegistrars[0];
+    expect(registration?.commands).toEqual(["captured-machine", "captured-extra"]);
+    expect(registration?.descriptors).toEqual([
+      {
+        name: "captured-machine",
+        description: "Captured machine output",
+        hasSubcommands: true,
+        machineOutput: expect.any(Function),
+      },
+    ]);
+    const descriptor = registration?.descriptors[0];
+    if (mode === "captured") {
+      expect(descriptor?.machineOutput).toBe(machineOutput);
+    }
     expect(
       descriptor?.machineOutput?.({
         argv: ["node", "openclaw", "captured-machine"],
@@ -48,6 +191,7 @@ describe("captured plugin registration", () => {
         });
         api.registerWorkerProvider({
           id: "captured-worker",
+          resolveAllocation: async () => ({ leaseId: "captured-lease", sharedHost: false }),
           provision: async () => ({
             leaseId: "captured-lease",
             ssh: {
@@ -60,6 +204,13 @@ describe("captured plugin registration", () => {
           }),
           inspect: async () => ({ status: "active" }),
           destroy: async () => {},
+        });
+        api.registerStorageProvider({
+          id: "captured-storage",
+          label: "Captured storage",
+          open: async () => {
+            throw new Error("capture must not open storage");
+          },
         });
         api.registerModelCatalogProvider({
           provider: "captured-provider",
@@ -103,10 +254,6 @@ describe("captured plugin registration", () => {
             tracks: [],
           }),
         });
-        api.registerTextTransforms({
-          input: [{ from: /red basket/g, to: "blue basket" }],
-          output: [{ from: /blue basket/g, to: "red basket" }],
-        });
         api.registerChannel({
           plugin: {
             id: "captured-channel",
@@ -140,6 +287,7 @@ describe("captured plugin registration", () => {
     expect(captured.tools.map((tool) => tool.name)).toEqual(["captured-tool"]);
     expect(captured.providers.map((provider) => provider.id)).toEqual(["captured-provider"]);
     expect(captured.workerProviders.map((provider) => provider.id)).toEqual(["captured-worker"]);
+    expect(captured.storageProviders.map((provider) => provider.id)).toEqual(["captured-storage"]);
     expect(captured.modelCatalogProviders.map((provider) => provider.provider)).toEqual([
       "captured-provider",
     ]);
@@ -150,10 +298,9 @@ describe("captured plugin registration", () => {
     expect(captured.musicGenerationProviders.map((provider) => provider.id)).toEqual([
       "captured-music",
     ]);
-    expect(captured.textTransforms).toHaveLength(1);
-    expect(captured.textTransforms[0]?.input).toHaveLength(1);
     expect(captured.agentToolResultMiddlewares).toHaveLength(1);
     expect(captured.agentToolResultMiddlewares[0]?.runtimes).toEqual(["codex"]);
+    expect(captured.api.runtime.version).toEqual(expect.any(String));
   });
 
   it("enforces captured middleware runtime and tool scopes", async () => {
@@ -185,7 +332,9 @@ describe("captured plugin registration", () => {
   });
 
   it("returns synthetic scheduled-turn ids independent of human-readable names", async () => {
-    let scheduleSessionTurn: OpenClawPluginApi["scheduleSessionTurn"] | undefined;
+    let scheduleSessionTurn:
+      | OpenClawPluginApi["session"]["workflow"]["scheduleSessionTurn"]
+      | undefined;
     let registerSessionSchedulerJob: OpenClawPluginApi["registerSessionSchedulerJob"] | undefined;
     const captured = capturePluginRegistration({
       id: "captured-custom-plugin",

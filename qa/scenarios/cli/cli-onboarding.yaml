@@ -24,7 +24,6 @@ scenario:
   codeRefs:
     - src/commands/onboard.ts
     - src/commands/onboard-non-interactive.ts
-    - src/commands/onboard-non-interactive/remote.ts
     - src/commands/onboard-non-interactive/local/auth-choice.ts
     - src/commands/onboard-non-interactive/local/gateway-config.ts
     - src/commands/configure.commands.ts
@@ -32,6 +31,7 @@ scenario:
   execution:
     kind: script
     path: scripts/e2e/qa-cli-onboarding.mjs
+    dockerLane: onboard
     summary: Runs the executable onboarding Docker lane with only the guided, Gateway-storage, remote, reset, and skills cases selected.
     timeoutMs: 1800000
     args:

@@ -5,6 +5,7 @@ const FEATURED_PROVIDER_AUTH_GROUP_ORDER = new Map<string, number>([
   ["google", 3],
   ["anthropic", 4],
 ]);
+const providerAuthGroupCollator = new Intl.Collator(undefined, { sensitivity: "base" });
 
 /** Keep native and CLI onboarding on one first-tier provider order. */
 export function isFeaturedProviderAuthChoiceGroup(groupId: string): boolean {
@@ -19,7 +20,7 @@ export function compareProviderAuthChoiceGroups(
   const priorityB = FEATURED_PROVIDER_AUTH_GROUP_ORDER.get(b.id) ?? Number.POSITIVE_INFINITY;
   return (
     priorityA - priorityB ||
-    a.label.localeCompare(b.label, undefined, { sensitivity: "base" }) ||
-    a.id.localeCompare(b.id, undefined, { sensitivity: "base" })
+    providerAuthGroupCollator.compare(a.label, b.label) ||
+    providerAuthGroupCollator.compare(a.id, b.id)
   );
 }

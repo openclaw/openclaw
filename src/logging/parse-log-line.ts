@@ -1,8 +1,7 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-// Log line parsing helpers convert text log entries into structured records.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 
-// Parser for JSON LogTape lines emitted by the OpenClaw logger.
 export type ParsedLogLine = {
   time?: string;
   level?: string;
@@ -31,31 +30,14 @@ function extractMessage(value: Record<string, unknown>): string {
 }
 
 function parseMetaName(raw?: unknown): LogContext {
-  if (typeof raw !== "string") {
+  const parsed = typeof raw === "string" ? safeParseJsonRecord(raw) : undefined;
+  if (!parsed) {
     return {};
   }
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    return {
-      subsystem: typeof parsed.subsystem === "string" ? parsed.subsystem : undefined,
-      module: typeof parsed.module === "string" ? parsed.module : undefined,
-      plugin: typeof parsed.plugin === "string" ? parsed.plugin : undefined,
-    };
-  } catch {
-    return {};
-  }
-}
-
-function resolveContext(
-  value: Record<string, unknown>,
-  meta: Record<string, unknown> | undefined,
-): LogContext {
-  const metadataContext = parseMetaName(meta?.name);
-  const positionalContext = parseMetaName(value["0"]);
   return {
-    subsystem: metadataContext.subsystem ?? positionalContext.subsystem,
-    module: metadataContext.module ?? positionalContext.module,
-    plugin: metadataContext.plugin ?? positionalContext.plugin,
+    subsystem: typeof parsed.subsystem === "string" ? parsed.subsystem : undefined,
+    module: typeof parsed.module === "string" ? parsed.module : undefined,
+    plugin: typeof parsed.plugin === "string" ? parsed.plugin : undefined,
   };
 }
 
@@ -67,8 +49,16 @@ export function parseLogLine(raw: string): ParsedLogLine | null {
       return null;
     }
     const meta = isRecord(parsed["_meta"]) ? parsed["_meta"] : undefined;
-    const context = resolveContext(parsed, meta);
-    const levelRaw = typeof meta?.logLevelName === "string" ? meta.logLevelName : undefined;
+    let context = parseMetaName(meta?.name);
+    if (meta?.name !== parsed["0"]) {
+      const positionalContext = parseMetaName(parsed["0"]);
+      context = {
+        subsystem: context.subsystem ?? positionalContext.subsystem,
+        module: context.module ?? positionalContext.module,
+        plugin: context.plugin ?? positionalContext.plugin,
+      };
+    }
+    const levelRaw = typeof meta?.logLevelName === "string" ? meta.logLevelName : parsed.level;
     return {
       time:
         typeof parsed.time === "string"
@@ -77,7 +67,8 @@ export function parseLogLine(raw: string): ParsedLogLine | null {
             ? meta.date
             : undefined,
       level: normalizeOptionalLowercaseString(levelRaw),
-      subsystem: context.subsystem,
+      subsystem:
+        context.subsystem ?? (typeof parsed.subsystem === "string" ? parsed.subsystem : undefined),
       module: context.module,
       plugin: context.plugin,
       message: typeof parsed.message === "string" ? parsed.message : extractMessage(parsed),

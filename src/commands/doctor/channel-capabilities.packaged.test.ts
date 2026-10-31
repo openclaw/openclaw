@@ -1,11 +1,9 @@
-// Packaged doctor capability tests cover generated catalog lookup without plugin runtime loading.
-import path from "node:path";
+// Packaged doctor capability tests cover built-in official metadata without plugin runtime loading.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupTempDirs,
   makeTempDir as makeTempRepoRoot,
 } from "../../../test/helpers/temp-dir.js";
-import { writeJsonFile } from "../../../test/helpers/temp-repo.js";
 
 const packageRootMock = vi.hoisted(() => ({ value: "" }));
 const channelPluginMocks = vi.hoisted(() => ({
@@ -39,26 +37,6 @@ const tempDirs: string[] = [];
 beforeEach(() => {
   const root = makeTempRepoRoot(tempDirs, "doctor-channel-packaged-");
   packageRootMock.value = root;
-  writeJsonFile(path.join(root, "package.json"), { name: "openclaw" });
-  writeJsonFile(path.join(root, "dist", "channel-catalog.json"), {
-    entries: [
-      {
-        name: "@openclaw/discord",
-        openclaw: {
-          channel: {
-            id: "discord",
-            label: "Discord",
-            doctorCapabilities: {
-              dmAllowFromMode: "topOnly",
-              groupModel: "route",
-              groupAllowFromFallbackToAllowFrom: false,
-              warnOnEmptyGroupSenderAllowlist: false,
-            },
-          },
-        },
-      },
-    ],
-  });
   clearPluginMetadataLifecycleCaches();
   channelPluginMocks.getBundledChannelPlugin.mockReset().mockReturnValue(undefined);
   channelPluginMocks.getChannelPlugin.mockReset().mockReturnValue(undefined);
@@ -72,7 +50,7 @@ afterEach(() => {
 });
 
 describe("doctor channel capabilities in a packaged install", () => {
-  it("reads Discord semantics from the generated catalog without loading a plugin", () => {
+  it("reads Discord semantics from built-in official metadata without loading a plugin", () => {
     expect(getDoctorChannelCapabilities("discord")).toEqual({
       dmAllowFromMode: "topOnly",
       groupModel: "route",

@@ -1,4 +1,3 @@
-// Matches plugin config contracts against config paths and values.
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
@@ -24,6 +23,29 @@ function normalizePathPattern(pathPattern: string): string[] {
   return normalizeStringEntries(pathPattern.split("."));
 }
 
+/** Match declared migration sources without widening a scoped config edit. */
+export function hasPluginConfigMigrationSource(params: {
+  root: unknown;
+  pathPatterns?: readonly string[];
+  touchedPaths?: ReadonlyArray<ReadonlyArray<string>>;
+}): boolean {
+  return (
+    params.pathPatterns?.some((pathPattern) => {
+      const pattern = normalizePathPattern(pathPattern);
+      const touched =
+        !params.touchedPaths ||
+        params.touchedPaths.some((parts) =>
+          pattern
+            .slice(0, parts.length)
+            .every((segment, index) => segment === "*" || segment === parts[index]),
+        );
+      return (
+        touched && collectPluginConfigContractMatches({ root: params.root, pathPattern }).length > 0
+      );
+    }) ?? false
+  );
+}
+
 function parseCanonicalArrayIndex(segment: string, length: number): number | null {
   const index = parseConfigPathArrayIndex(segment);
   return index !== undefined && index < length ? index : null;
@@ -45,18 +67,11 @@ export function collectPluginConfigContractMatches(params: {
     for (const state of states) {
       if (segment === "*") {
         // Wildcards fan out across arrays and records so contracts can cover account maps/lists.
-        if (Array.isArray(state.value)) {
-          for (const [index, value] of state.value.entries()) {
-            nextStates.push({
-              segments: [...state.segments, index],
-              value,
-              parent: state.value,
-            });
-          }
-          continue;
-        }
-        if (isRecord(state.value)) {
-          for (const [key, value] of Object.entries(state.value)) {
+        if (Array.isArray(state.value) || isRecord(state.value)) {
+          const entries = Array.isArray(state.value)
+            ? state.value.entries()
+            : Object.entries(state.value);
+          for (const [key, value] of entries) {
             nextStates.push({
               segments: [...state.segments, key],
               value,

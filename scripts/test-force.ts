@@ -1,13 +1,12 @@
 #!/usr/bin/env -S node --import tsx
-// Test Force script supports OpenClaw repository automation.
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { forceFreePort } from "../src/cli/ports.js";
-import { resolveGatewayPort } from "../src/config/config.js";
+import { forceFreePortAndWait } from "../src/cli/ports.js";
+import { resolveGatewayPort } from "../src/config/paths.js";
 
-type PortProcess = ReturnType<typeof forceFreePort>[number];
+type PortProcess = Awaited<ReturnType<typeof forceFreePortAndWait>>["killed"][number];
 
 function usage(): string {
   return [
@@ -30,9 +29,9 @@ function parseArgs(argv: readonly string[]): { help: boolean } {
   return { help: false };
 }
 
-function killGatewayListeners(port: number): PortProcess[] {
+async function killGatewayListeners(port: number): Promise<PortProcess[]> {
   try {
-    const killed = forceFreePort(port);
+    const { killed } = await forceFreePortAndWait(port);
     if (killed.length > 0) {
       console.log(
         `freed port ${port}; terminated: ${killed
@@ -67,7 +66,7 @@ function runTests() {
   process.exit(result.status ?? 1);
 }
 
-function main(argv: readonly string[] = process.argv.slice(2)) {
+async function main(argv: readonly string[] = process.argv.slice(2)) {
   const args = parseArgs(argv);
   if (args.help) {
     console.log(usage());
@@ -77,7 +76,7 @@ function main(argv: readonly string[] = process.argv.slice(2)) {
   const port = resolveGatewayPort(undefined, process.env);
 
   console.log(`🧹 test:force - clearing gateway on port ${port}`);
-  const killed = killGatewayListeners(port);
+  const killed = await killGatewayListeners(port);
   if (killed.length === 0) {
     console.log("no listeners to kill");
   }
@@ -88,7 +87,7 @@ function main(argv: readonly string[] = process.argv.slice(2)) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    main();
+    await main();
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(2);

@@ -1,0 +1,249 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { expectDefined, isRecord } from "@openclaw/normalization-core";
+import type { Page, Response } from "playwright";
+import { expect, it } from "vitest";
+import type { GatewayClient } from "../../../src/gateway/client.ts";
+import { racePromiseWithAbortSignal } from "../../../src/infra/abort-signal.ts";
+import { acquireGatewayTestClient } from "../../../test/helpers/gateway-client.ts";
+import { createDeferred } from "../../../test/helpers/promise.ts";
+import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import type { ModelAuthStatusResult, ModelCatalogResult } from "../api/types.ts";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  loginHistoryMarker,
+  loginOrigin,
+  loginSessionKey,
+  type ProviderBrowserLoginOptions,
+  loginProvider,
+  startProviderBrowserLoginFixture,
+} from "./provider-browser-login.test-support.ts";
+
+let fixture: Awaited<ReturnType<typeof startProviderBrowserLoginFixture>>;
+let readback: { client: GatewayClient; nextPublication: () => Promise<void> };
+async function connectReadbackClient() {
+  let publication = createDeferred();
+  const client = await acquireGatewayTestClient(
+    {
+      url: fixture.instance.url,
+      token: fixture.instance.gatewayToken,
+      env: fixture.instance.env,
+      clientName: "cli",
+      mode: "cli",
+      scopes: ["operator.read", "operator.write"],
+      deviceIdentity: null,
+      deviceAuthScope: fixture.instance.url,
+      sharedStateMode: "read-only",
+      requestTimeoutMs: 10_000,
+      onEvent: ({ event }) => {
+        if (event === "chat.metadata.changed") {
+          publication.resolve();
+          publication = createDeferred();
+        }
+      },
+    },
+    {
+      timeoutMs: 10_000,
+      timeoutMessage: "Browser login readback client did not connect",
+      closeMessage: "Browser login readback client closed during connect",
+    },
+  );
+  return { client, nextPublication: () => publication.promise };
+}
+const browserArgs: string[] = [];
+const suite = createControlUiE2eSuite({
+  name: "Provider browser login through real HTTPS Gateway",
+  startServerBeforeBrowser: true,
+  browserLaunchOptions: { args: browserArgs },
+  async startServer() {
+    const optionsPath = process.env.OPENCLAW_UI_E2E_PROVIDER_LOGIN_OPTIONS;
+    const options: ProviderBrowserLoginOptions = optionsPath
+      ? (await import(pathToFileURL(optionsPath).href)).default
+      : {};
+    fixture = await startProviderBrowserLoginFixture(options);
+    try {
+      readback = await connectReadbackClient();
+    } catch (error) {
+      return await runQaGatewayFixture(
+        async (): Promise<never> => {
+          throw error;
+        },
+        () => fixture.close(),
+      );
+    }
+    browserArgs.push(
+      `--host-resolver-rules=MAP files.proxy.test:443 127.0.0.1:${fixture.edgePort}`,
+      "--no-proxy-server",
+    );
+    return {
+      baseUrl: fixture.baseUrl,
+      close: () =>
+        runQaGatewayFixture(
+          () => fs.writeFile(path.join(suite.artifactDir, "gateway.log"), fixture.instance.logs()),
+          () => readback.client.stopAndWait(),
+          () => fixture.close(),
+        ),
+    };
+  },
+});
+
+suite.define(() => {
+  it("rejects cancelled and stale callbacks, then saves a fresh sign-in and serves an existing session", async () => {
+    const call = <T = unknown>(method: string, params: Record<string, unknown>) =>
+      readback.client.request<T>(method, params);
+    const sessionKey = loginSessionKey;
+    const history = async () => JSON.stringify(await call("chat.history", { sessionKey }));
+    const loginLabel = "Fixture browser sign-in";
+    const authStatus = () => call<ModelAuthStatusResult>("models.authStatus", { agentId: "main" });
+    const profile = async () => {
+      const status = await authStatus();
+      return status.providers
+        .flatMap((provider) => provider.profiles)
+        .find((entry) => entry.profileId === `${loginProvider}:default`);
+    };
+    const initialAuthStatus = await authStatus();
+    expect(
+      initialAuthStatus.providerCapabilities?.flatMap((provider) => provider.loginOptions ?? []),
+    ).toMatchObject([
+      {
+        id: `${loginProvider}/browser`,
+        label: loginLabel,
+        kind: "oauth",
+      },
+    ]);
+    const savedProfile = { type: "api_key", profileId: `${loginProvider}:default` };
+    const approve = async (page: Page) => {
+      const callback = page.waitForResponse(
+        (response) => new URL(response.url()).pathname === "/oauth/provider/callback",
+      );
+      await page.getByRole("button", { name: "Approve sign-in" }).click();
+      return await callback;
+    };
+    const expectRejected = async (response: Response) => {
+      expect(response.status()).toBe(410);
+      expect(await profile()).toBeUndefined();
+      expect(fixture.requests).not.toContain("/token");
+    };
+    expect(await history()).toContain(loginHistoryMarker);
+    await suite.withPage(
+      {
+        ignoreHTTPSErrors: true,
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { width: 1280, height: 900 },
+      },
+      async ({ page, context }) => {
+        let pagePreviewRequests = 0;
+        page.on("websocket", (socket) =>
+          socket.on("framesent", (frame) => {
+            const request: unknown = JSON.parse(String(frame.payload));
+            if (isRecord(request) && request.method === "controlUi.linkPreview") {
+              pagePreviewRequests++;
+            }
+          }),
+        );
+        await page.goto(`${loginOrigin}/settings/model-providers`);
+        // Read the login document only after its UI is ready, not during document replacement.
+        const secret = page.getByLabel("Gateway secret", { exact: true });
+        await secret.waitFor();
+        expect(await page.evaluate(() => window.isSecureContext)).toBe(true);
+        await secret.fill(fixture.instance.gatewayToken);
+        await page.locator(".login-gate__connect").click();
+        await page.locator('[data-kind="pairing-required"]').waitFor();
+        const devices = await fixture.instance.cli(["devices", "list", "--json"]);
+        expect(devices.code, devices.stderr).toBe(0);
+        const pending = JSON.parse(devices.stdout).pending;
+        expect(pending).toHaveLength(1);
+        const approved = await fixture.instance.cli(["devices", "approve", pending[0].requestId]);
+        expect(approved.code, approved.stderr).toBe(0);
+        await waitForControlUiGatewayReady(page);
+        const modal = page.locator("openclaw-modal-dialog");
+        const modalButton = (name: string) => modal.getByRole("button", { name, exact: true });
+        const closeModal = async (name: string) => {
+          await modalButton(name).click();
+          await expect.poll(() => modal.count()).toBe(0);
+        };
+        const begin = async () => {
+          await page.locator("[data-models-connect]").click();
+          await page.locator(`[data-models-login-provider="${loginProvider}"]`).click();
+          await modalButton(loginLabel).click();
+          const link = page.locator(".wizard-step__external-link");
+          await link.waitFor();
+          const popup = context.waitForEvent("page");
+          await link.click();
+          const providerPage = await popup;
+          await providerPage.getByRole("heading", { name: "Authorize fixture account" }).waitFor();
+          return providerPage;
+        };
+        const cancelledPage = await begin();
+        expect(pagePreviewRequests).toBe(0);
+        expect(await page.locator(".link-hovercard").count()).toBe(0);
+        await closeModal("Cancel sign-in");
+        const cancelledResponse = await approve(cancelledPage);
+        await expectRejected(cancelledResponse);
+        await cancelledPage.waitForURL(cancelledResponse.url());
+        const staleUrl = cancelledResponse.url();
+        expect(new URL(staleUrl).origin).toBe(loginOrigin);
+        const freshPage = await begin();
+        const replay = expectDefined(await cancelledPage.goto(staleUrl), "callback response");
+        await expectRejected(replay);
+        const freshResponse = await approve(freshPage);
+        expect(freshResponse.status()).toBe(200);
+        await freshPage.waitForURL(freshResponse.url());
+        expect(new URL(freshResponse.url()).origin).toBe(loginOrigin);
+        await expect.poll(profile).toMatchObject(savedProfile);
+        await modal
+          .getByRole("heading", { name: `${loginLabel} is connected`, exact: true })
+          .waitFor();
+        await page
+          .getByText(`${loginLabel}: Provider credentials saved.`, { exact: true })
+          .waitFor();
+        await closeModal("Close");
+        await readback.client.stopAndWait();
+        await fixture.instance.stopGateway();
+        await fixture.instance.startGateway();
+        readback = await connectReadbackClient();
+        // The browser may still be in its 15-second reconnect backoff.
+        await waitForControlUiGatewayReady(page, 30_000);
+        expect(await profile()).toMatchObject(savedProfile);
+        expect(await history()).toContain(loginHistoryMarker);
+        const catalog = await (async () => {
+          const signal = AbortSignal.timeout(10_000);
+          for (;;) {
+            signal.throwIfAborted();
+            // Subscribe before reading so publication during the RPC is not missed.
+            const publication = readback.nextPublication();
+            const result = await racePromiseWithAbortSignal(
+              call<ModelCatalogResult>("models.list", {
+                agentId: "main",
+                sessionKey,
+                view: "configured",
+                includeDetails: true,
+              }),
+              signal,
+            );
+            if (!result.pendingProviders?.length) {
+              return result;
+            }
+            await racePromiseWithAbortSignal(publication, signal);
+          }
+        })();
+        expect(catalog.models).toContainEqual(
+          expect.objectContaining({ provider: loginProvider, id: "ready", available: true }),
+        );
+        await call("sessions.patch", { key: sessionKey, model: `${loginProvider}/ready` });
+        await call("chat.send", {
+          sessionKey,
+          message: "Confirm this signed-in fixture works.",
+          idempotencyKey: "browser-login-existing-session",
+        });
+        await expect.poll(history).toContain("Signed-in fixture reply");
+        expect(fixture.requests).toContain("/models");
+        expect(fixture.requests).toContain("/chat/completions");
+        expect(pagePreviewRequests).toBe(0);
+      },
+    );
+  }, 120_000);
+});

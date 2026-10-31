@@ -244,7 +244,6 @@ class VoiceWakeManagerTest {
   ) : VoiceWakeRecognizer {
     var startCount = 0
     var stopCount = 0
-    var destroyCount = 0
     var stopCallbackCompleted = false
     private var onEvent: ((VoiceWakeRecognitionEvent) -> Unit)? = null
 
@@ -257,19 +256,17 @@ class VoiceWakeManagerTest {
     }
 
     override fun stop(operationId: Long) {
+      val callback = onEvent ?: return
+      onEvent = null
       stopCount += 1
       if (callbackDuringStop) {
         val completed = CountDownLatch(1)
         Thread {
-          onEvent?.invoke(VoiceWakeRecognitionEvent.Error(android.speech.SpeechRecognizer.ERROR_CLIENT))
+          callback(VoiceWakeRecognitionEvent.Error(android.speech.SpeechRecognizer.ERROR_CLIENT))
           completed.countDown()
         }.start()
         stopCallbackCompleted = completed.await(1, TimeUnit.SECONDS)
       }
-    }
-
-    override fun destroy(operationId: Long) {
-      destroyCount += 1
     }
 
     fun emit(event: VoiceWakeRecognitionEvent) {

@@ -87,6 +87,16 @@ type AgentRunAuditEventInput = AuditEventInputBase &
   AgentAuditAttribution &
   AgentRunAuditLifecycle & { kind: "agent_run" };
 
+export type AgentRunStartedAuditEventInput = Extract<
+  AgentRunAuditEventInput,
+  { action: "agent.run.started" }
+>;
+
+export type AgentRunFinishedAuditEventInput = Extract<
+  AgentRunAuditEventInput,
+  { action: "agent.run.finished" }
+>;
+
 type ToolActionFinishedAuditTerminal =
   | { status: "succeeded"; errorCode?: never }
   | { status: "failed"; errorCode: "tool_failed" }
@@ -338,7 +348,7 @@ export type AuditEventRecord =
   | InboundMessageAuditEventRecord
   | OutboundMessageAuditEventRecord;
 
-export type AuditEventListFilters = {
+type AuditEventListFilters = {
   agentId?: string;
   sessionKey?: string;
   runId?: string;
@@ -354,4 +364,11 @@ export type AuditEventListFilters = {
 export type AuditEventListPage = {
   events: AuditEventRecord[];
   nextCursor?: number;
+};
+
+export type AuditEventListQuery = {
+  filters?: AuditEventListFilters;
+  cursor?: number;
+  limit: number;
+  now: number;
 };

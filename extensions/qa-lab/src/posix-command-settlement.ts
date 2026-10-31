@@ -14,14 +14,12 @@ type QaPosixCommandSettlementParams = {
   executionTimeoutMs?: number;
   forceKillAfterMs: number;
   forwardParentSignals?: boolean;
-  initialSignal: NodeJS.Signals;
   onStderrData?: (chunk: Buffer) => void;
   onSettled: (outcome: { primary: QaPosixCommandPrimary; settlementFailure?: Error }) => void;
   onStdoutData?: (chunk: Buffer) => void;
   processGroupId: number | undefined;
   verifyAfterMs: number;
   windowsCleanup?: {
-    alive?: () => boolean;
     closeCompletesCleanup?: boolean;
     signal: (signal: NodeJS.Signals) => Error | undefined;
   };
@@ -37,28 +35,21 @@ export function createQaPosixCommandSettlement(params: QaPosixCommandSettlementP
   let drainIdle: NodeJS.Timeout | undefined;
   let drainTimedOut = false;
   let executionTimer: NodeJS.Timeout | undefined;
+  let parentSignal: "SIGINT" | "SIGTERM" | undefined;
   let primary: QaPosixCommandPrimary | undefined;
   let stdioDrained = false;
   const windows = params.windowsCleanup;
 
   const schedule = (fn: () => void, delay: number) => {
-    const timer = setTimeout(() => {
-      fn();
-    }, delay);
+    const timer = setTimeout(fn, delay);
     timers.push(timer);
     return timer;
   };
-  const cancel = (timer: NodeJS.Timeout | undefined) => {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  };
   // Cleanup owns only the original PGID; a descendant that calls setsid can escape it.
   const alive = () =>
-    windows?.alive?.() ??
-    (windows
+    windows
       ? true
-      : params.processGroupId !== undefined && isQaPosixProcessGroupAlive(params.processGroupId));
+      : params.processGroupId !== undefined && isQaPosixProcessGroupAlive(params.processGroupId);
   const signal = (nextSignal: NodeJS.Signals) => {
     const error = windows
       ? windows.signal(nextSignal)
@@ -92,7 +83,6 @@ export function createQaPosixCommandSettlement(params: QaPosixCommandSettlementP
     if (disposed || !primary || !cleanupDone || !stdioDrained) {
       return;
     }
-    const parentSignal = primary.type === "parent-signal" ? primary.signal : undefined;
     const settlementFailure =
       errors.length > 1 ? new AggregateError(errors, params.settlementFailureMessage) : errors[0];
     dispose();
@@ -104,6 +94,10 @@ export function createQaPosixCommandSettlement(params: QaPosixCommandSettlementP
   const finishCleanup = () => {
     cleanupDone = true;
     if (drainTimedOut && !stdioDrained) {
+      // The drain deadline can expire while the process group is still in TERM grace.
+      if (!windows) {
+        errors.push(new Error("stdio-drain-timeout"));
+      }
       params.child.stdout?.destroy();
       params.child.stderr?.destroy();
       stdioDrained = true;
@@ -118,9 +112,6 @@ export function createQaPosixCommandSettlement(params: QaPosixCommandSettlementP
     }
     if (!stdioDrained) {
       drainTimedOut = true;
-      if (!windows && !errors.some((error) => error.message === "stdio-drain-timeout")) {
-        errors.push(new Error("stdio-drain-timeout"));
-      }
     }
     finishCleanup();
   };
@@ -132,7 +123,7 @@ export function createQaPosixCommandSettlement(params: QaPosixCommandSettlementP
     signal("SIGKILL");
     schedule(verify, params.verifyAfterMs);
   };
-  const startCleanup = (initialSignal = params.initialSignal) => {
+  const startCleanup = (initialSignal: "SIGINT" | "SIGTERM" = "SIGTERM") => {
     if (cleanupStarted) {
       return;
     }
@@ -142,14 +133,13 @@ export function createQaPosixCommandSettlement(params: QaPosixCommandSettlementP
       return;
     }
     signal(initialSignal);
-    schedule(
-      initialSignal === "SIGKILL" ? verify : forceKill,
-      initialSignal === "SIGKILL" ? params.verifyAfterMs : params.forceKillAfterMs,
-    );
+    schedule(forceKill, params.forceKillAfterMs);
   };
   const onDrainDeadline = () => {
     drainTimedOut = true;
-    errors.push(new Error("stdio-drain-timeout"));
+    if (windows) {
+      errors.push(new Error("stdio-drain-timeout"));
+    }
     startCleanup();
     if (cleanupDone) {
       finishCleanup();
@@ -160,9 +150,9 @@ export function createQaPosixCommandSettlement(params: QaPosixCommandSettlementP
       drainDeadline = schedule(onDrainDeadline, 1_000);
     }
   };
-  const freeze = (nextPrimary: QaPosixCommandPrimary, initialSignal = params.initialSignal) => {
+  const freeze = (nextPrimary: QaPosixCommandPrimary, initialSignal?: "SIGINT" | "SIGTERM") => {
     primary ??= nextPrimary;
-    cancel(executionTimer);
+    clearTimeout(executionTimer);
     // Every terminal path needs a drain bound: an escaped descendant can retain
     // inherited stdio even after the original process group is gone.
     armDrainDeadline();
@@ -170,7 +160,7 @@ export function createQaPosixCommandSettlement(params: QaPosixCommandSettlementP
     settle();
   };
   const armIdle = () => {
-    cancel(drainIdle);
+    clearTimeout(drainIdle);
     drainIdle = schedule(startCleanup, 100);
   };
   const onOutput = () => {
@@ -204,7 +194,7 @@ export function createQaPosixCommandSettlement(params: QaPosixCommandSettlementP
   // `exit` freezes the leader tuple; only `close` can prove stdio drained.
   function onExit(exitCode: number | null, nextSignal: NodeJS.Signals | null) {
     primary ??= { type: "exit", exitCode, signal: nextSignal };
-    cancel(executionTimer);
+    clearTimeout(executionTimer);
     armDrainDeadline();
     armIdle();
     if (cleanupStarted && !cleanupDone && !alive()) {
@@ -213,8 +203,8 @@ export function createQaPosixCommandSettlement(params: QaPosixCommandSettlementP
   }
   function onClose() {
     stdioDrained = true;
-    cancel(drainIdle);
-    cancel(drainDeadline);
+    clearTimeout(drainIdle);
+    clearTimeout(drainDeadline);
     if (!cleanupStarted && windows) {
       cleanupDone = true;
     } else if (cleanupStarted && windows?.closeCompletesCleanup) {
@@ -238,6 +228,9 @@ export function createQaPosixCommandSettlement(params: QaPosixCommandSettlementP
       process.kill(process.pid, nextSignal);
       return;
     }
+    // The command outcome may already be frozen while descendants drain.
+    // Parent cancellation still has to be re-raised after cleanup.
+    parentSignal ??= nextSignal;
     freeze({ type: "parent-signal", signal: nextSignal }, nextSignal);
   };
   function onParentSigint() {

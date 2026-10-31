@@ -17,11 +17,25 @@ export const warnedFutureTouchedVersions = createDedupeCache({
   maxSize: CONFIG_IO_WARNING_CACHE_MAX_SIZE,
 });
 
-export const autoOwnerDisplaySecretByPath = new Map<string, string>();
-
 /** Retains a warning fingerprint as most-recently used while enforcing the shared bound. */
 export function setBoundedConfigIoWarningEntry<K, V>(map: Map<K, V>, key: K, value: V): void {
   map.delete(key);
   map.set(key, value);
   pruneMapToMaxSize(map, CONFIG_IO_WARNING_CACHE_MAX_SIZE);
+}
+
+/** Rolls the logged-config warning fingerprint back to its pre-write state. */
+export function restoreLoggedConfigWarningFingerprint(
+  configPath: string,
+  previousWarningFingerprint: string | undefined,
+): void {
+  if (previousWarningFingerprint === undefined) {
+    loggedConfigWarningFingerprints.delete(configPath);
+  } else {
+    setBoundedConfigIoWarningEntry(
+      loggedConfigWarningFingerprints,
+      configPath,
+      previousWarningFingerprint,
+    );
+  }
 }

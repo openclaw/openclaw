@@ -1,47 +1,329 @@
 import { setImmediate as setImmediatePromise } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
+import {
+  beginSessionEffect,
+  closeSessionControllerAdmission,
+} from "../../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
+import {
+  ACTIVE_PLACEMENT,
+  createCoordinatorTestService,
+  LOCAL_PLACEMENT,
+  MOVE_REQUEST,
+  REQUEST,
+} from "./placement-dispatch-coordinator.test-support.js";
 import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
-import type {
-  WorkerPlacementDispatchRequest,
-  WorkerPlacementMoveRequest,
-} from "./service-contract.js";
+import type { WorkerPlacementDispatchRequest } from "./service-contract.js";
 
 type DispatchService = WorkerPlacementDispatchService;
 
-const REQUEST: WorkerPlacementDispatchRequest = {
-  sessionId: "session-1",
-  sessionKey: "agent:main:session-1",
-  agentId: "main",
-  profileId: "test",
-  executionMode: "worker-turn",
-};
-
-const MOVE_REQUEST: WorkerPlacementMoveRequest = {
-  sessionId: REQUEST.sessionId,
-  sessionKey: REQUEST.sessionKey,
-  agentId: REQUEST.agentId,
-  source: { generation: 4, environmentId: "worker-source", ownerEpoch: 7 },
-  target: { kind: "gateway" },
-};
-
 describe("worker placement dispatch coordinator", () => {
+  it.each(["dispatch", "move"] as const)(
+    "rejects admission-cancelled %s after its same-session predecessor settles",
+    async (kind) => {
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const controller = new AbortController();
+      const dispatch = vi.fn(async () => ACTIVE_PLACEMENT);
+      const move = vi.fn(async () => LOCAL_PLACEMENT);
+      const coordinated = coordinateWorkerPlacementDispatch(
+        createCoordinatorTestService({
+          dispatch,
+          move,
+          reconcileActive: async (_environmentId, admit) => {
+            await admit!([REQUEST.sessionId], async () => {
+              entered.resolve();
+              await release.promise;
+            });
+          },
+        }),
+        (_request, run) => run(controller.signal),
+      );
+      const blocking = coordinated.reconcileActive("worker-active");
+      await entered.promise;
+      const queued =
+        kind === "dispatch" ? coordinated.dispatch(REQUEST) : coordinated.move(MOVE_REQUEST);
+      const result = queued.catch((error: unknown) => error);
+      controller.abort(new DOMException("Stop queued work", "AbortError"));
+      release.resolve();
+      await blocking;
+      expect(await result).toMatchObject({ name: "AbortError" });
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(move).not.toHaveBeenCalled();
+    },
+  );
+
+  it("cancels a queued dispatch without releasing its same-session predecessor", async () => {
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const controller = new AbortController();
+    const dispatch = vi.fn(async () => ACTIVE_PLACEMENT);
+    const coordinated = coordinateWorkerPlacementDispatch(
+      createCoordinatorTestService({
+        dispatch,
+        move: async () => {
+          entered.resolve();
+          await release.promise;
+          return LOCAL_PLACEMENT;
+        },
+      }),
+      (_request, run, _authorize, signal) => run(signal),
+    );
+    const moving = coordinated.move(MOVE_REQUEST);
+    await entered.promise;
+    const cancelled = coordinated.dispatch(REQUEST, undefined, undefined, controller.signal);
+    controller.abort(new DOMException("Stop queued work", "AbortError"));
+    await expect(cancelled).rejects.toMatchObject({ name: "AbortError" });
+    const later = coordinated.dispatch(REQUEST);
+    await coordinated.dispatch({ ...REQUEST, sessionId: "unrelated" });
+    expect(dispatch).toHaveBeenCalledOnce();
+    release.resolve();
+    await Promise.all([moving, later]);
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("retains both a dispatch and a queued Move until their exact operations settle", async () => {
+    const dispatchEntered = createDeferredCore();
+    const dispatchRelease = createDeferredCore();
+    const moveAdmission = createDeferredCore();
+    let admissions = 0;
+    let stopped = false;
+    const service = {
+      dispatch: async () => {
+        dispatchEntered.resolve();
+        await dispatchRelease.promise;
+        return { state: "active" };
+      },
+      move: async () => ({ state: "local" }),
+      reclaim: async (
+        ...[_request, _authorize, _beforeDrain, serialize, pending]: Parameters<
+          DispatchService["reclaim"]
+        >
+      ) => {
+        expect(pending?.isCurrent()).toBe(true);
+        await pending!.settled;
+        return await serialize!(async () => ({ state: "reclaimed" }) as never);
+      },
+    } as unknown as DispatchService;
+    const coordinated = coordinateWorkerPlacementDispatch(service, async (_request, run) => {
+      if (++admissions === 2) {
+        await moveAdmission.promise;
+      }
+      return await run();
+    });
+    const dispatch = coordinated.dispatch(REQUEST);
+    await dispatchEntered.promise;
+    const moving = coordinated.move(MOVE_REQUEST);
+    const stop = coordinated.reclaim(REQUEST).then(() => {
+      stopped = true;
+    });
+    dispatchRelease.resolve();
+    try {
+      await dispatch;
+      await setImmediatePromise();
+      expect(stopped).toBe(false);
+    } finally {
+      moveAdmission.resolve();
+      await Promise.all([moving, stop]);
+    }
+    expect(stopped).toBe(true);
+  });
+
+  it("admits a genuinely later dispatch only after the earlier Stop releases its admission closure", async () => {
+    const stopping = createDeferredCore();
+    const finishStop = createDeferredCore();
+    const scope = "/tmp/openclaw-coordinator-predecessor-admission.sqlite";
+    const identities = [REQUEST.sessionKey, REQUEST.sessionId];
+    const dispatch = vi.fn(async () => ({ state: "active" }));
+    const service = {
+      dispatch,
+      reclaim: async (
+        ...[_request, _authorize, _beforeDrain, serialize]: Parameters<DispatchService["reclaim"]>
+      ) => {
+        const release = closeSessionControllerAdmission({
+          scope,
+          identities,
+          reason: new Error("older Stop"),
+        });
+        try {
+          stopping.resolve();
+          await finishStop.promise;
+          return await serialize!(async () => ({ state: "reclaimed" }) as never);
+        } finally {
+          release();
+        }
+      },
+    } as unknown as DispatchService;
+    const coordinated = coordinateWorkerPlacementDispatch(service, async (_request, run) => {
+      const controller = new AbortController();
+      const admission = await beginSessionEffect({
+        scope,
+        identities,
+        assertAllowed: () => {},
+        onInterrupt: (reason) => controller.abort(reason),
+      });
+      try {
+        return await admission.run(() => run(controller.signal));
+      } finally {
+        admission.release();
+      }
+    });
+    const previous = coordinated.reclaim(REQUEST);
+    await stopping.promise;
+    const later = coordinated.dispatch(REQUEST);
+    try {
+      await setImmediatePromise();
+      expect(dispatch).not.toHaveBeenCalled();
+    } finally {
+      finishStop.resolve();
+      await previous;
+    }
+    await expect(later).resolves.toMatchObject({ state: "active" });
+    expect(dispatch).toHaveBeenCalledOnce();
+  });
+
+  it.each(["dispatch", "move"] as const)(
+    "does not make a later Stop a predecessor of an admission-delayed %s",
+    async (kind) => {
+      const admitted = createDeferredCore();
+      const controller = new AbortController();
+      const dispatch = vi.fn(async () => ({ state: "active" }));
+      const move = vi.fn(async () => ({ state: "local" }));
+      const service = {
+        dispatch,
+        move,
+        reclaim: async (
+          ...[_request, _authorize, _beforeDrain, serialize, pending]: Parameters<
+            DispatchService["reclaim"]
+          >
+        ) => {
+          expect(pending?.isCurrent()).toBe(true);
+          controller.abort(new Error("Stop"));
+          await pending!.settled.catch(() => undefined);
+          return await serialize!(async () => ({ state: "reclaimed" }) as never);
+        },
+      } as unknown as DispatchService;
+      const coordinated = coordinateWorkerPlacementDispatch(service, async (_request, run) => {
+        await admitted.promise;
+        return await run(controller.signal);
+      });
+      let operationFinished = false;
+      let stopFinished = false;
+      const operation =
+        kind === "dispatch" ? coordinated.dispatch(REQUEST) : coordinated.move(MOVE_REQUEST);
+      void operation.then(
+        () => {
+          operationFinished = true;
+        },
+        () => {
+          operationFinished = true;
+        },
+      );
+      const stopping = coordinated.reclaim(REQUEST);
+      void stopping.then(() => {
+        stopFinished = true;
+      });
+      admitted.resolve();
+      for (let turn = 0; turn < 10; turn++) {
+        await setImmediatePromise();
+      }
+      expect(operationFinished).toBe(true);
+      expect(stopFinished).toBe(true);
+      await stopping;
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(move).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["dispatch", "move"] as const)(
+    "later %s waits for every same-session Stop while environment bookkeeping can run",
+    async (kind) => {
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const events: string[] = [];
+      let stops = 0;
+      const service = {
+        dispatch: vi.fn(async (request: WorkerPlacementDispatchRequest) => {
+          events.push(`dispatch:${request.sessionId}`);
+          return { state: "active" };
+        }),
+        move: vi.fn(async () => {
+          events.push("move");
+          return { state: "local" };
+        }),
+        reclaim: async (
+          ...[_request, _authorize, _beforeDrain, serialize]: Parameters<DispatchService["reclaim"]>
+        ) => {
+          if (++stops > 1) {
+            throw new Error("second Stop failed");
+          }
+          entered.resolve();
+          await release.promise;
+          await coordinated.reconcileActive();
+          return await serialize!(async () => {
+            events.push("stop");
+            return { state: "reclaimed" } as never;
+          });
+        },
+        reconcileActive: vi.fn(async () => {
+          events.push("recovery");
+        }),
+      } as unknown as DispatchService;
+      const coordinated = coordinateWorkerPlacementDispatch(service, (_request, run) => run());
+      const stopping = coordinated.reclaim(REQUEST);
+      await entered.promise;
+      await expect(coordinated.reclaim(REQUEST)).rejects.toThrow("second Stop failed");
+      const later =
+        kind === "move" ? coordinated.move(MOVE_REQUEST) : coordinated.dispatch(REQUEST);
+      await coordinated.dispatch({ ...REQUEST, sessionId: "unrelated" });
+      await setImmediatePromise();
+      const beforeRelease = [...events];
+      release.resolve();
+      await Promise.all([stopping, later]);
+      expect(beforeRelease).toEqual(["dispatch:unrelated"]);
+      expect(events).toEqual([
+        "dispatch:unrelated",
+        "recovery",
+        "stop",
+        kind === "move" ? "move" : `dispatch:${REQUEST.sessionId}`,
+      ]);
+      expect(coordinated.isPlacementOperationInFlight(REQUEST.sessionId)).toBe(false);
+    },
+  );
+
   it("forwards in-process transition and authorization hooks outside request equality", async () => {
     const observer = vi.fn();
     const authorize = vi.fn();
-    const dispatch = vi.fn().mockResolvedValue({ state: "active" });
+    const sessionCurrent = vi.fn();
+    const placement = { state: "active" };
+    const dispatch = vi.fn(async (_request, report, assertCurrent) => {
+      assertCurrent?.();
+      report?.(placement);
+      return placement;
+    });
     const service = {
       dispatch,
       forceDestroyEnvironment: vi.fn(),
       reclaim: vi.fn(),
-      reconcile: vi.fn(),
-      reconcileActive: vi.fn(),
+      reconcile: vi.fn(async () => {}),
+      reconcileActive: vi.fn(async () => {}),
     } as unknown as DispatchService;
 
-    await coordinateWorkerPlacementDispatch(service).dispatch(REQUEST, observer, authorize);
+    await coordinateWorkerPlacementDispatch(service, (_request, run) =>
+      run(undefined, sessionCurrent),
+    ).dispatch(REQUEST, observer, authorize);
 
-    expect(dispatch).toHaveBeenCalledWith(REQUEST, observer, authorize);
+    expect(dispatch).toHaveBeenCalledWith(
+      REQUEST,
+      expect.any(Function),
+      expect.any(Function),
+      undefined,
+      undefined,
+    );
+    expect(sessionCurrent).toHaveBeenCalledOnce();
+    expect(authorize).toHaveBeenCalledOnce();
+    expect(observer).toHaveBeenCalledExactlyOnceWith(placement);
   });
 
   it("coalesces an identical dispatch and rejects a conflicting in-flight request", async () => {
@@ -57,10 +339,10 @@ describe("worker placement dispatch coordinator", () => {
       dispatch,
       forceDestroyEnvironment: vi.fn(),
       reclaim: vi.fn(),
-      reconcile: vi.fn(),
-      reconcileActive: vi.fn(),
+      reconcile: vi.fn(async () => {}),
+      reconcileActive: vi.fn(async () => {}),
     } as unknown as DispatchService;
-    const coordinated = coordinateWorkerPlacementDispatch(service);
+    const coordinated = coordinateWorkerPlacementDispatch(service, (_request, run) => run());
 
     const first = coordinated.dispatch(REQUEST);
     await dispatchStarted.promise;
@@ -68,6 +350,9 @@ describe("worker placement dispatch coordinator", () => {
       coordinated.dispatch({ ...REQUEST, profileId: "another-profile" }),
     ).rejects.toThrow(`Session ${REQUEST.sessionKey} is already dispatching another request`);
     await expect(coordinated.dispatch({ ...REQUEST, machineClass: "beast" })).rejects.toThrow(
+      `Session ${REQUEST.sessionKey} is already dispatching another request`,
+    );
+    await expect(coordinated.dispatch({ ...REQUEST, os: "os-a" })).rejects.toThrow(
       `Session ${REQUEST.sessionKey} is already dispatching another request`,
     );
     await expect(
@@ -121,10 +406,10 @@ describe("worker placement dispatch coordinator", () => {
         forceDestroyEnvironment: vi.fn(),
         move: kind === "move" ? operation : vi.fn(),
         reclaim: vi.fn(),
-        reconcile: vi.fn(),
-        reconcileActive: vi.fn(),
+        reconcile: vi.fn(async () => {}),
+        reconcileActive: vi.fn(async () => {}),
       } as unknown as DispatchService;
-      const coordinated = coordinateWorkerPlacementDispatch(service);
+      const coordinated = coordinateWorkerPlacementDispatch(service, (_request, run) => run());
       const invoke = (authorize?: () => void) =>
         kind === "dispatch"
           ? coordinated.dispatch(REQUEST, undefined, authorize)
@@ -163,15 +448,15 @@ describe("worker placement dispatch coordinator", () => {
       await releaseDispatch.promise;
       throw dispatchError;
     });
-    const reconcileActive = vi.fn();
+    const reconcileActive = vi.fn(async () => {});
     const service = {
       dispatch,
       forceDestroyEnvironment: vi.fn(),
       reclaim: vi.fn(),
-      reconcile: vi.fn(),
+      reconcile: vi.fn(async () => {}),
       reconcileActive,
     } as unknown as DispatchService;
-    const coordinated = coordinateWorkerPlacementDispatch(service);
+    const coordinated = coordinateWorkerPlacementDispatch(service, (_request, run) => run());
 
     const first = coordinated.dispatch(REQUEST);
     await dispatchStarted.promise;
@@ -208,10 +493,10 @@ describe("worker placement dispatch coordinator", () => {
       forceDestroyEnvironment: vi.fn(),
       move,
       reclaim: vi.fn(),
-      reconcile: vi.fn(),
-      reconcileActive: vi.fn(),
+      reconcile: vi.fn(async () => {}),
+      reconcileActive: vi.fn(async () => {}),
     } as unknown as DispatchService;
-    const coordinated = coordinateWorkerPlacementDispatch(service);
+    const coordinated = coordinateWorkerPlacementDispatch(service, (_request, run) => run());
 
     const moving = coordinated.move(MOVE_REQUEST);
     await moveStarted.promise;
@@ -230,23 +515,26 @@ describe("worker placement dispatch coordinator", () => {
     expect(dispatch).toHaveBeenCalledOnce();
   });
 
-  it("serializes reclaim behind an in-flight dispatch", async () => {
+  it("waits for same-session preparation before reclaim", async () => {
     const dispatchStarted = createDeferredCore();
     const releaseDispatch = createDeferredCore();
     const dispatch = vi.fn(async () => {
       dispatchStarted.resolve();
       await releaseDispatch.promise;
-      return { state: "active" };
+      return ACTIVE_PLACEMENT;
     });
-    const reclaim = vi.fn().mockResolvedValue({ state: "reclaimed" });
-    const service = {
+    const reclaim = vi.fn(async () => ({ ...ACTIVE_PLACEMENT, state: "reclaimed" as const }));
+    const service = createCoordinatorTestService({
       dispatch,
-      forceDestroyEnvironment: vi.fn(),
-      reclaim,
-      reconcile: vi.fn(),
-      reconcileActive: vi.fn(),
-    } as unknown as DispatchService;
-    const coordinated = coordinateWorkerPlacementDispatch(service);
+      reclaim: async (_request, _authorize, _beforeDrain, serialize, pendingOperations) => {
+        await pendingOperations?.settled;
+        if (!serialize) {
+          throw new Error("Reclaim fixture requires session admission");
+        }
+        return await serialize(reclaim);
+      },
+    });
+    const coordinated = coordinateWorkerPlacementDispatch(service, (_request, run) => run());
 
     const dispatching = coordinated.dispatch(REQUEST);
     await dispatchStarted.promise;
@@ -256,402 +544,41 @@ describe("worker placement dispatch coordinator", () => {
       agentId: REQUEST.agentId,
     });
 
-    expect(reclaim).not.toHaveBeenCalled();
-    releaseDispatch.resolve();
-    await dispatching;
-    await reclaiming;
+    try {
+      await setImmediatePromise();
+      expect(reclaim).not.toHaveBeenCalled();
+    } finally {
+      releaseDispatch.resolve();
+      await Promise.all([dispatching, reclaiming]);
+    }
     expect(reclaim).toHaveBeenCalledOnce();
   });
 
-  it("coalesces full sweeps but runs a fresh targeted pass with its environment id", async () => {
-    const fullSweepStarted = createDeferredCore();
-    const releaseFullSweep = createDeferredCore();
-    const reconcileActive = vi.fn(async (environmentId?: string) => {
-      if (environmentId === undefined) {
-        fullSweepStarted.resolve();
-        await releaseFullSweep.promise;
-      }
+  it("coalesces full sweeps while unrelated targeted sweeps run independently", async () => {
+    const fullEntered = createDeferredCore();
+    const releaseFull = createDeferredCore();
+    const targets: (string | undefined)[] = [];
+    const service = createCoordinatorTestService({
+      reconcileActive: async (environmentId) => {
+        targets.push(environmentId);
+        if (environmentId === undefined) {
+          fullEntered.resolve();
+          await releaseFull.promise;
+        }
+      },
     });
-    const service = {
-      dispatch: vi.fn(),
-      forceDestroyEnvironment: vi.fn(),
-      reclaim: vi.fn(),
-      reconcile: vi.fn(),
-      reconcileActive,
-    } as unknown as DispatchService;
-    const coordinated = coordinateWorkerPlacementDispatch(service);
-
-    const firstFullSweep = coordinated.reconcileActive();
-    const secondFullSweep = coordinated.reconcileActive();
-    await fullSweepStarted.promise;
-    const targetedSweep = coordinated.reconcileActive("worker-target");
-
-    expect(reconcileActive).toHaveBeenCalledTimes(1);
-    releaseFullSweep.resolve();
-    await Promise.all([firstFullSweep, secondFullSweep, targetedSweep]);
-
-    expect(reconcileActive.mock.calls).toEqual([[], ["worker-target"]]);
+    const coordinated = coordinateWorkerPlacementDispatch(service, (_request, run) => run());
+    const first = coordinated.reconcileActive();
+    await fullEntered.promise;
+    const joined = coordinated.reconcileActive();
+    await Promise.all([
+      coordinated.reconcileActive("worker-target"),
+      coordinated.reconcileActive("worker-other"),
+    ]);
+    expect(targets).toEqual([undefined, "worker-target", "worker-other"]);
+    releaseFull.resolve();
+    await Promise.all([first, joined]);
+    await coordinated.reconcileActive();
+    expect(targets).toEqual([undefined, "worker-target", "worker-other", undefined]);
   });
-
-  it("fences external provisioning recovery behind fresh dispatch without self-deadlocking", async () => {
-    const dispatchStarted = createDeferredCore();
-    const releaseDispatch = createDeferredCore();
-    const dispatch = vi.fn(async () => {
-      dispatchStarted.resolve();
-      await releaseDispatch.promise;
-      return { state: "active" };
-    });
-    const resumeProvisioning = vi.fn(async (_placement, reconcileCore) => {
-      await reconcileCore();
-    });
-    const reconcile = vi.fn();
-    const service = {
-      dispatch,
-      forceDestroyEnvironment: vi.fn(),
-      reclaim: vi.fn(),
-      reconcile,
-      reconcileActive: vi.fn(),
-      resumeProvisioning,
-    } as unknown as DispatchService;
-    const coordinated = coordinateWorkerPlacementDispatch(service);
-    reconcile.mockImplementation(async () => {
-      await coordinated.resumeProvisioning({} as never, async () => {});
-    });
-
-    const dispatching = coordinated.dispatch(REQUEST);
-    await dispatchStarted.promise;
-    const recoveryCore = vi.fn(async () => {});
-    const recovering = coordinated.resumeProvisioning({} as never, recoveryCore);
-    await Promise.resolve();
-    expect(resumeProvisioning).not.toHaveBeenCalled();
-    releaseDispatch.resolve();
-    await Promise.all([dispatching, recovering]);
-    expect(resumeProvisioning).toHaveBeenCalledWith({}, recoveryCore);
-
-    await coordinated.reconcile();
-    expect(resumeProvisioning).toHaveBeenCalledTimes(2);
-  });
-
-  it("lets a full sweep own and join a preexisting environment recovery pass", async () => {
-    const dispatchStarted = createDeferredCore();
-    const releaseDispatch = createDeferredCore();
-    const environmentPassStarted = createDeferredCore();
-    const releaseEnvironmentGuard = createDeferredCore();
-    const environmentGuardEntered = createDeferredCore();
-    const fullSweepJoinedEnvironmentPass = createDeferredCore();
-    const recoveryCore = vi.fn(async () => {});
-    const resumeProvisioning = vi.fn(async (_placement, reconcileCore) => {
-      await reconcileCore();
-    });
-    const dispatch = vi.fn(async () => {
-      dispatchStarted.resolve();
-      await releaseDispatch.promise;
-      return { state: "active" };
-    });
-    let environmentPass: Promise<void> | undefined;
-    const reconcileEnvironmentOnce = () =>
-      (environmentPass ??= (async () => {
-        environmentPassStarted.resolve();
-        await releaseEnvironmentGuard.promise;
-        environmentGuardEntered.resolve();
-        await coordinated.resumeProvisioning({} as never, recoveryCore);
-      })().finally(() => {
-        environmentPass = undefined;
-      }));
-    const reconcile = vi.fn(async () => {
-      fullSweepJoinedEnvironmentPass.resolve();
-      await reconcileEnvironmentOnce();
-    });
-    const service = {
-      dispatch,
-      forceDestroyEnvironment: vi.fn(),
-      reclaim: vi.fn(),
-      reconcile,
-      reconcileActive: vi.fn(),
-      resumeProvisioning,
-    } as unknown as DispatchService;
-    const coordinated = coordinateWorkerPlacementDispatch(service);
-
-    const dispatching = coordinated.dispatch(REQUEST);
-    await dispatchStarted.promise;
-    const externalEnvironmentPass = reconcileEnvironmentOnce();
-    await environmentPassStarted.promise;
-    const fullSweep = coordinated.reconcile();
-    releaseEnvironmentGuard.resolve();
-    await environmentGuardEntered.promise;
-    await Promise.resolve();
-    expect(resumeProvisioning).not.toHaveBeenCalled();
-    releaseDispatch.resolve();
-    await dispatching;
-    await fullSweepJoinedEnvironmentPass.promise;
-    await Promise.resolve();
-
-    expect(resumeProvisioning).toHaveBeenCalledOnce();
-    await Promise.all([externalEnvironmentPass, fullSweep]);
-    expect(recoveryCore).toHaveBeenCalledOnce();
-    expect(reconcile).toHaveBeenCalledOnce();
-  });
-
-  it("lets environment recovery created by a full sweep join that sweep", async () => {
-    const environmentPassStarted = createDeferredCore();
-    const releaseEnvironmentGuard = createDeferredCore();
-    const resumeProvisioning = vi.fn(async (_placement, reconcileCore) => {
-      await reconcileCore();
-    });
-    const recoveryCore = vi.fn(async () => {});
-    const reconcile = vi.fn(async () => {
-      environmentPassStarted.resolve();
-      await releaseEnvironmentGuard.promise;
-      await coordinated.resumeProvisioning({} as never, recoveryCore);
-    });
-    const service = {
-      dispatch: vi.fn(),
-      forceDestroyEnvironment: vi.fn(),
-      reclaim: vi.fn(),
-      reconcile,
-      reconcileActive: vi.fn(),
-      resumeProvisioning,
-    } as unknown as DispatchService;
-    const coordinated = coordinateWorkerPlacementDispatch(service);
-
-    const fullSweep = coordinated.reconcile();
-    await environmentPassStarted.promise;
-    releaseEnvironmentGuard.resolve();
-    await fullSweep;
-
-    expect(resumeProvisioning).toHaveBeenCalledOnce();
-    expect(recoveryCore).toHaveBeenCalledOnce();
-  });
-
-  it("runs a full sweep requested behind external recovery", async () => {
-    const recoveryStarted = createDeferredCore();
-    const releaseRecovery = createDeferredCore();
-    const resumeProvisioning = vi.fn(async (_placement, reconcileCore) => {
-      recoveryStarted.resolve();
-      await releaseRecovery.promise;
-      await reconcileCore();
-    });
-    const reconcile = vi.fn(async () => {});
-    const service = {
-      dispatch: vi.fn(),
-      forceDestroyEnvironment: vi.fn(),
-      reclaim: vi.fn(),
-      reconcile,
-      reconcileActive: vi.fn(),
-      resumeProvisioning,
-    } as unknown as DispatchService;
-    const coordinated = coordinateWorkerPlacementDispatch(service);
-
-    const recovering = coordinated.resumeProvisioning({} as never, async () => {});
-    await recoveryStarted.promise;
-    const fullSweep = coordinated.reconcile();
-    expect(reconcile).not.toHaveBeenCalled();
-    releaseRecovery.resolve();
-    await Promise.all([recovering, fullSweep]);
-
-    expect(resumeProvisioning).toHaveBeenCalledOnce();
-    expect(reconcile).toHaveBeenCalledOnce();
-  });
-
-  it("finishes sweep-owned recovery before an exclusive barrier queued behind the sweep", async () => {
-    const environmentPassStarted = createDeferredCore();
-    const releaseEnvironmentGuard = createDeferredCore();
-    const recoveryStarted = createDeferredCore();
-    const releaseRecovery = createDeferredCore();
-    const exclusiveStarted = createDeferredCore();
-    const releaseExclusive = createDeferredCore();
-    const resumeProvisioning = vi.fn(async (_placement, reconcileCore) => {
-      recoveryStarted.resolve();
-      await reconcileCore();
-      await releaseRecovery.promise;
-    });
-    const forceDestroyEnvironment = vi.fn(async () => {
-      exclusiveStarted.resolve();
-      await releaseExclusive.promise;
-    });
-    const reconcile = vi.fn(async () => {
-      environmentPassStarted.resolve();
-      await releaseEnvironmentGuard.promise;
-      await coordinated.resumeProvisioning({} as never, async () => {});
-    });
-    const service = {
-      dispatch: vi.fn(),
-      forceDestroyEnvironment,
-      reclaim: vi.fn(),
-      reconcile,
-      reconcileActive: vi.fn(),
-      resumeProvisioning,
-    } as unknown as DispatchService;
-    const coordinated = coordinateWorkerPlacementDispatch(service);
-
-    const fullSweep = coordinated.reconcile();
-    await environmentPassStarted.promise;
-    const destroying = coordinated.forceDestroyEnvironment("worker-exclusive");
-    releaseEnvironmentGuard.resolve();
-    await recoveryStarted.promise;
-    expect(forceDestroyEnvironment).not.toHaveBeenCalled();
-    releaseRecovery.resolve();
-    await fullSweep;
-    await exclusiveStarted.promise;
-    releaseExclusive.resolve();
-    await destroying;
-
-    expect(resumeProvisioning).toHaveBeenCalledOnce();
-    expect(forceDestroyEnvironment).toHaveBeenCalledOnce();
-  });
-
-  it.each(["fulfilled", "rejected"] as const)(
-    "holds an exclusive fence until an independently joined late recovery settles (%s)",
-    async (outcome) => {
-      const sweepStarted = createDeferredCore();
-      const releaseSweep = createDeferredCore();
-      const recoveryStarted = createDeferredCore();
-      const releaseRecovery = createDeferredCore();
-      const recoveryError = new Error("joined recovery failed");
-      const reconcile = vi.fn(async () => {
-        sweepStarted.resolve();
-        await releaseSweep.promise;
-      });
-      const resumeProvisioning = vi.fn(async (_placement, reconcileCore) => {
-        recoveryStarted.resolve();
-        await reconcileCore();
-        await releaseRecovery.promise;
-      });
-      const forceDestroyEnvironment = vi.fn(async () => {});
-      const service = {
-        dispatch: vi.fn(),
-        forceDestroyEnvironment,
-        reclaim: vi.fn(),
-        reconcile,
-        reconcileActive: vi.fn(),
-        resumeProvisioning,
-      } as unknown as DispatchService;
-      const coordinated = coordinateWorkerPlacementDispatch(service);
-
-      const fullSweep = coordinated.reconcile();
-      await sweepStarted.promise;
-      const destroying = coordinated.forceDestroyEnvironment("worker-exclusive");
-      const recoveryOutcome = coordinated
-        .resumeProvisioning({} as never, async () => {})
-        .then(
-          () => undefined,
-          (error: unknown) => error,
-        );
-      await recoveryStarted.promise;
-      releaseSweep.resolve();
-      await setImmediatePromise();
-
-      expect(forceDestroyEnvironment).not.toHaveBeenCalled();
-      if (outcome === "rejected") {
-        releaseRecovery.reject(recoveryError);
-      } else {
-        releaseRecovery.resolve();
-      }
-      await Promise.all([fullSweep, destroying]);
-
-      expect(await recoveryOutcome).toBe(outcome === "rejected" ? recoveryError : undefined);
-      expect(resumeProvisioning).toHaveBeenCalledOnce();
-      expect(forceDestroyEnvironment).toHaveBeenCalledOnce();
-    },
-  );
-
-  it("queues recovery arriving after sweep join admission closes behind the exclusive fence", async () => {
-    const sweepStarted = createDeferredCore();
-    const releaseSweep = createDeferredCore();
-    const joinedRecoveryStarted = createDeferredCore();
-    const releaseJoinedRecovery = createDeferredCore();
-    const exclusiveStarted = createDeferredCore();
-    const releaseExclusive = createDeferredCore();
-    const reconcile = vi.fn(async () => {
-      sweepStarted.resolve();
-      await releaseSweep.promise;
-    });
-    const resumeProvisioning = vi.fn(async (_placement, reconcileCore) => {
-      await reconcileCore();
-    });
-    const forceDestroyEnvironment = vi.fn(async () => {
-      exclusiveStarted.resolve();
-      await releaseExclusive.promise;
-    });
-    const service = {
-      dispatch: vi.fn(),
-      forceDestroyEnvironment,
-      reclaim: vi.fn(),
-      reconcile,
-      reconcileActive: vi.fn(),
-      resumeProvisioning,
-    } as unknown as DispatchService;
-    const coordinated = coordinateWorkerPlacementDispatch(service);
-
-    const fullSweep = coordinated.reconcile();
-    await sweepStarted.promise;
-    const destroying = coordinated.forceDestroyEnvironment("worker-exclusive");
-    const joinedRecovery = coordinated.resumeProvisioning({} as never, async () => {
-      joinedRecoveryStarted.resolve();
-      await releaseJoinedRecovery.promise;
-    });
-    await joinedRecoveryStarted.promise;
-    releaseSweep.resolve();
-    await setImmediatePromise();
-
-    const lateRecovery = coordinated.resumeProvisioning({} as never, async () => {});
-    await setImmediatePromise();
-    expect(resumeProvisioning).toHaveBeenCalledOnce();
-    expect(forceDestroyEnvironment).not.toHaveBeenCalled();
-
-    releaseJoinedRecovery.resolve();
-    await Promise.all([fullSweep, joinedRecovery, exclusiveStarted.promise]);
-    expect(resumeProvisioning).toHaveBeenCalledOnce();
-    releaseExclusive.resolve();
-    await Promise.all([destroying, lateRecovery]);
-
-    expect(resumeProvisioning).toHaveBeenCalledTimes(2);
-    expect(forceDestroyEnvironment).toHaveBeenCalledOnce();
-  });
-
-  it.each(["move", "reclaim", "forceDestroyEnvironment"] as const)(
-    "keeps recovery behind an active exclusive %s barrier",
-    async (barrierKind) => {
-      const barrierStarted = createDeferredCore();
-      const releaseBarrier = createDeferredCore();
-      const exclusiveOperation = vi.fn(async () => {
-        barrierStarted.resolve();
-        await releaseBarrier.promise;
-        return {};
-      });
-      const resumeProvisioning = vi.fn(async (_placement, reconcileCore) => {
-        await reconcileCore();
-      });
-      const service = {
-        dispatch: vi.fn(),
-        forceDestroyEnvironment: exclusiveOperation,
-        move: exclusiveOperation,
-        reclaim: exclusiveOperation,
-        reconcile: vi.fn(),
-        reconcileActive: vi.fn(),
-        resumeProvisioning,
-      } as unknown as DispatchService;
-      const coordinated = coordinateWorkerPlacementDispatch(service);
-      const barrier =
-        barrierKind === "move"
-          ? coordinated.move(MOVE_REQUEST)
-          : barrierKind === "reclaim"
-            ? coordinated.reclaim({
-                sessionId: REQUEST.sessionId,
-                sessionKey: REQUEST.sessionKey,
-                agentId: REQUEST.agentId,
-              })
-            : coordinated.forceDestroyEnvironment("worker-exclusive");
-      await barrierStarted.promise;
-
-      const recovering = coordinated.resumeProvisioning({} as never, async () => {});
-      await Promise.resolve();
-      expect(resumeProvisioning).not.toHaveBeenCalled();
-      releaseBarrier.resolve();
-      await Promise.all([barrier, recovering]);
-
-      expect(exclusiveOperation).toHaveBeenCalledOnce();
-      expect(resumeProvisioning).toHaveBeenCalledOnce();
-    },
-  );
 });

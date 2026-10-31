@@ -1,5 +1,3 @@
-// Alias normalization for model config command inputs.
-/** Validates and normalizes a user-facing model alias. */
 export function normalizeAlias(alias: string): string {
   const trimmed = alias.trim();
   if (!trimmed) {

@@ -1,7 +1,6 @@
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type {
-  MeetingBrowserRequestCaller,
   MeetingBrowserRequestParams,
   MeetingPlatformAdapter,
 } from "./platform-adapter-contract.js";
@@ -22,16 +21,6 @@ type NodeAdapter = Pick<
   MeetingPlatformAdapter<unknown, string, MeetingBrowserHealth, MeetingTranscriptSnapshot>,
   "displayName" | "nodeCommandName" | "nodeConfigPath"
 >;
-
-function isMeetingBrowserNode(node: MeetingBrowserNodeInfo, adapter: NodeAdapter) {
-  const commands = Array.isArray(node.commands) ? node.commands : [];
-  const caps = Array.isArray(node.caps) ? node.caps : [];
-  return (
-    node.connected === true &&
-    commands.includes(adapter.nodeCommandName) &&
-    (commands.includes("browser.proxy") || caps.includes("browser"))
-  );
-}
 
 function matchesRequestedNode(node: MeetingBrowserNodeInfo, requested: string): boolean {
   return [node.nodeId, node.displayName, node.remoteIp].some((value) => value === requested);
@@ -90,16 +79,19 @@ export async function resolveMeetingBrowserNodeInfo(params: {
         `Configured ${params.adapter.displayName} node ${requested} was not found. Run \`openclaw nodes status\` and start or approve the Chrome node.`,
       );
     }
-    if (isMeetingBrowserNode(node, params.adapter)) {
+    const issues = describeNodeUsabilityIssues(node, params.adapter);
+    if (issues.length === 0) {
       return node;
     }
     throw new Error(
-      `Configured ${params.adapter.displayName} node ${requested} is not usable (${formatNodeLabel(node)}): ${describeNodeUsabilityIssues(node, params.adapter).join("; ")}. Start or reinstall \`openclaw node run\` on that Chrome host, approve pairing, and allow ${params.adapter.nodeCommandName} plus browser.proxy.`,
+      `Configured ${params.adapter.displayName} node ${requested} is not usable (${formatNodeLabel(node)}): ${issues.join("; ")}. Start or reinstall \`openclaw node run\` on that Chrome host, approve pairing, and allow ${params.adapter.nodeCommandName} plus browser.proxy.`,
     );
   }
 
   const list = await listMeetingNodes(params.runtime, params.adapter, { connected: true });
-  const nodes = list.nodes.filter((node) => isMeetingBrowserNode(node, params.adapter));
+  const nodes = list.nodes.filter(
+    (node) => describeNodeUsabilityIssues(node, params.adapter).length === 0,
+  );
   const [node] = nodes;
   if (!node) {
     throw new Error(
@@ -173,18 +165,4 @@ export async function callMeetingBrowserProxyOnNode(
     scopes: ["operator.admin"],
   });
   return parseBrowserProxyResult(raw, params.adapter);
-}
-
-export function createMeetingBrowserNodeCaller(params: {
-  runtime: PluginRuntime;
-  adapter: NodeAdapter;
-  nodeId: string;
-}): MeetingBrowserRequestCaller {
-  return async (request) =>
-    await callMeetingBrowserProxyOnNode({
-      runtime: params.runtime,
-      adapter: params.adapter,
-      nodeId: params.nodeId,
-      ...request,
-    });
 }

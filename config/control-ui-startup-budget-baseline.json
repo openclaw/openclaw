@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 340810,
-  "reason": "sidebar gateway status pill rebased onto the composer-queue main: combined tree measures 340754-340770 B; pinned with jitter headroom",
-  "updatedAt": "2026-08-26"
+  "startupJsGzipBytes": 89354,
+  "reason": "New Session socket preconnect: 20 paired observations per profile improve 100 ms RTT composer readiness by 8.1%; accept measured startup 89354 B (+219 B vs exact base), with unchanged request counts and CPU/tail caveats recorded in PR evidence.",
+  "updatedAt": "2026-10-31"
 }

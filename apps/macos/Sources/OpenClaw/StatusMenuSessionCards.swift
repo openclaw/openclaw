@@ -1,9 +1,15 @@
 import Foundation
+import OpenClawChatUI
 import SwiftUI
 
 @MainActor
 struct StatusSessionCard: View {
     let row: SessionRow
+    @Environment(\.menuItemHighlighted) private var isHighlighted
+
+    private var palette: MenuItemHighlightColors.Palette {
+        MenuItemHighlightColors.palette(self.isHighlighted)
+    }
 
     private var isWorking: Bool {
         WorkActivityStore.shared.current?.sessionKey == self.row.key
@@ -26,7 +32,7 @@ struct StatusSessionCard: View {
                     ProgressView().controlSize(.small)
                 } else {
                     Image(systemName: self.symbolName)
-                        .foregroundStyle(self.row.kind.tint)
+                        .foregroundStyle(self.palette.secondary)
                 }
             }
             .frame(width: 16, height: 16)
@@ -34,6 +40,7 @@ struct StatusSessionCard: View {
             Text(self.row.label)
                 .font(.callout.weight(
                     self.row.key == WorkActivityStore.shared.mainSessionKey ? .semibold : .regular))
+                .foregroundStyle(self.palette.primary)
                 .lineLimit(1)
                 .truncationMode(.middle)
 
@@ -45,11 +52,15 @@ struct StatusSessionCard: View {
 
             Image(systemName: "chevron.right")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(self.palette.secondary)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
-        .frame(width: StatusMenuRenderer.cardWidth, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .leading) {
+            OpenClawSessionColorStripe(color: self.row.color)
+                .padding(.leading, 4)
+        }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(self.row.label)
     }
@@ -58,9 +69,10 @@ struct StatusSessionCard: View {
 @MainActor
 struct StatusApprovalCard: View {
     let request: ExecApprovalQueueItem
+    let approvalQueue: ExecApprovalQueueStore
 
     private var sessionLabel: String {
-        self.request.request.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+        self.request.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
             ?? String(localized: "Session approval")
     }
 
@@ -80,14 +92,14 @@ struct StatusApprovalCard: View {
                 Spacer(minLength: 4)
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     let seconds = max(0, Int(ceil(self.expirationDate.timeIntervalSince(context.date))))
-                    Text(String(localized: "\(seconds)s"))
+                    Text(String(format: String(localized: "%llds"), seconds))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: 48, alignment: .trailing)
                 }
             }
 
-            Text(ExecApprovalCommandDisplaySanitizer.sanitize(self.request.request.command))
+            Text(self.request.preview)
                 .font(.caption.monospaced())
                 .lineLimit(3)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -117,13 +129,13 @@ struct StatusApprovalCard: View {
         .background(.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
-        .frame(width: StatusMenuRenderer.cardWidth, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func resolve(_ decision: ExecApprovalDecision) {
         guard self.request.allowedDecisions.contains(decision) else { return }
         Task {
-            await ExecApprovalQueueStore.shared.resolve(request: self.request, decision: decision)
+            await self.approvalQueue.resolve(request: self.request, decision: decision)
         }
     }
 }

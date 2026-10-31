@@ -1,46 +1,51 @@
 import { expect, it } from "vitest";
+import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
+import { createPageOpener } from "./new-session-page.scenario.test-support.ts";
 import {
   SESSION_LIST_DEFAULTS,
+  LOCAL_GIT_WORKSPACE_RESPONSES,
   WORKSPACE,
-  captureProjectUiProof,
   createNewSessionPageE2eSuite,
   installMockGateway,
   pollLocatorText,
-  prepareProjectUiProof,
   replaceGatewayClient,
+  waitForGatewayRecoveryScope,
+  pollAttribute,
+  pollDisabled,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
+const openPage = createPageOpener(suite);
 const gatewayEnvironment = {
   id: "gateway",
   type: "local",
   status: "available",
 };
+const startupFeatures = (...methods: string[]) => [
+  "chat.metadata",
+  "chat.startup",
+  "sessions.create",
+  ...methods,
+];
 suite.define(() => {
   it("registers a Git checkout from Browse and selects the refreshed project", async () => {
-    await prepareProjectUiProof();
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
+    const page = await openPage();
     const repoRoot = "/recorded/openclaw";
     const registeredProject = {
       id: "recorded-openclaw",
       displayName: "openclaw",
       repoRoot,
-      originUrl: "https://github.com/openclaw/openclaw.git",
       source: "registered",
     };
     const gateway = await installMockGateway(page, {
       workspace: WORKSPACE,
       workspaceGit: true,
-      featureMethods: [
-        "chat.metadata",
-        "chat.startup",
+      featureMethods: startupFeatures(
         "fs.listDir",
         "projects.list",
         "projects.register",
-        "sessions.create",
         "worktrees.branches",
-      ],
+      ),
       methodResponses: {
         "projects.list": {
           sequence: [{ projects: [] }, { projects: [registeredProject] }],
@@ -58,145 +63,135 @@ suite.define(() => {
             },
           ],
         },
-        "worktrees.branches": {
-          branches: [{ kind: "local", name: "main" }],
-          defaultBranch: "main",
-          repositoryStatus: "git",
-        },
+        "worktrees.branches": LOCAL_GIT_WORKSPACE_RESPONSES["worktrees.branches"],
       },
     });
 
-    try {
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("projects.list");
-      const trigger = page.locator("#new-session-project-trigger");
-      const place = page.locator("wa-popover.new-session-page__project-popover");
-      await trigger.click();
-      await place.getByRole("button", { name: "Browse folders" }).click();
-      const pathInput = page.locator("input.new-session-page__browser-path");
-      await pathInput.fill(repoRoot);
-      await pathInput.press("Enter");
-      const register = place.getByRole("button", { name: "Register as project" });
-      await register.waitFor();
-      await captureProjectUiProof(page, "project-register-action.png");
-      await register.click();
+    await page.goto(`${suite.server.baseUrl}new`);
+    await gateway.waitForRequest("projects.list");
+    const trigger = page.locator("#new-session-project-trigger");
+    const place = page.locator(".oc-popover.new-session-page__project-popover");
+    await trigger.click();
+    await place.getByRole("button", { name: "Browse folders" }).click();
+    const pathInput = page.locator("input.new-session-page__browser-path");
+    await pathInput.fill(repoRoot);
+    await pathInput.press("Enter");
+    const register = place.getByRole("button", { name: "Register as project" });
+    await register.waitFor();
 
-      const request = await gateway.waitForRequest("projects.register");
-      expect(request.params).toEqual({ path: repoRoot });
-      await expect.poll(async () => (await gateway.getRequests("projects.list")).length).toBe(2);
-      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("openclaw");
-      expect(await trigger.getAttribute("data-project-id")).toBe("recorded-openclaw");
-    } finally {
-      await context.close();
-    }
+    await register.click();
+
+    const request = await gateway.waitForRequest("projects.register");
+    expect(request.params).toEqual({ path: repoRoot });
+    await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("openclaw");
+    await pollAttribute(trigger, "data-project-id").toBe("recorded-openclaw");
   });
 
   it("handles a legacy projects-only response for write-scoped operators", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
+    const page = await openPage();
     const gateway = await installMockGateway(page, {
       workspace: WORKSPACE,
       workspaceGit: true,
       operatorScopes: ["operator.read", "operator.write"],
-      featureMethods: ["chat.metadata", "chat.startup", "projects.list", "sessions.create"],
+      featureMethods: startupFeatures("projects.list"),
       methodResponses: { "projects.list": { projects: [] } },
     });
 
-    try {
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("projects.list");
-      const place = page.locator("wa-popover.new-session-page__project-popover");
-      await page.locator("#new-session-project-trigger").click();
-      await place
-        .getByText("Admins can register projects from Browse folders", { exact: true })
-        .waitFor();
-      expect(await place.getByRole("button", { name: "Register as project" }).count()).toBe(0);
-    } finally {
-      await context.close();
-    }
+    await page.goto(`${suite.server.baseUrl}new`);
+    await gateway.waitForRequest("projects.list");
+    const place = page.locator(".oc-popover.new-session-page__project-popover");
+    await page.locator("#new-session-project-trigger").click();
+    await place
+      .getByText("Admins can register projects from Browse folders", { exact: true })
+      .waitFor();
+    expect(await place.getByRole("button", { name: "Register as project" }).count()).toBe(0);
   });
 
-  it("keeps the Local destination visible when the Gateway is the only place", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      workspace: WORKSPACE,
-      workspaceGit: true,
-      methodResponses: {
-        "environments.list": {
-          environments: [gatewayEnvironment],
-          profiles: [],
+  it.each(["recovery scope", "system info"] as const)(
+    "updates Gateway place labels after late %s",
+    async (late) => {
+      const page = await openPage({
+        locale: "en-US",
+        serviceWorkers: "block",
+      });
+      if (late === "recovery scope") {
+        // Resolve auth recovery after name discovery to exercise their independent lifetimes.
+        await page.addInitScript(() => {
+          const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
+          const delayed = new Promise<void>((resolve) => {
+            window.addEventListener("test-release-recovery-scope", () => resolve(), { once: true });
+          });
+          crypto.subtle.digest = async (algorithm, data) => {
+            if (new TextDecoder().decode(data) === "e2e-device-token") {
+              await delayed;
+            }
+            return originalDigest(algorithm, data);
+          };
+        });
+      }
+      const systemInfo = {
+        machineName: "QA-Gateway",
+        hostname: "qa-gateway.local",
+        platform: "darwin",
+      };
+      const gateway = await installMockGateway(page, {
+        workspace: WORKSPACE,
+        workspaceGit: true,
+        featureMethods: startupFeatures("system.info", "fs.listDir"),
+        heldMethods: late === "system info" ? ["system.info"] : [],
+        methodResponses: {
+          "system.info": systemInfo,
+          "fs.listDir": { path: WORKSPACE, home: "/home/peter", entries: [] },
+          "environments.list": {
+            environments: [gatewayEnvironment],
+            profiles: [],
+          },
         },
-      },
-    });
+      });
 
-    try {
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("environments.list");
-      const trigger = page.locator("#new-session-where-trigger");
-      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("Local");
-      await trigger.click();
-      const place = page.locator("wa-popover.new-session-page__where-popover");
-      await place.getByRole("button", { name: "Local" }).waitFor();
-      expect(await place.getByText("Your devices", { exact: true }).count()).toBe(0);
-      expect(await place.getByText("Cloud", { exact: true }).count()).toBe(0);
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("uses advertised system info for Gateway place labels", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      workspace: WORKSPACE,
-      workspaceGit: true,
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.create", "system.info"],
-      methodResponses: {
-        "system.info": {
-          machineName: "Peters-Mac-Studio",
-          hostname: "peters-mac-studio.local",
-          platform: "darwin",
-        },
-        "environments.list": {
-          environments: [gatewayEnvironment],
-          profiles: [],
-        },
-      },
-    });
-
-    try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("system.info");
       const trigger = page.locator("#new-session-where-trigger");
-      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("Local");
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe(
+        late === "system info" ? "Local" : "QA-Gateway",
+      );
+      const place = page.locator(".oc-popover.new-session-page__where-popover");
+      const local = place.locator('[data-value="gateway"]');
       await trigger.click();
-      const place = page.locator("wa-popover.new-session-page__where-popover");
-      await place.getByRole("button", { name: /Local/u }).waitFor();
+      await local.waitFor();
+      if (late === "recovery scope") {
+        await expect.poll(() => tooltipTitleText(local)).toBe("QA-Gateway Runs on your gateway");
+        const catalogRequests = (await gateway.getRequests("environments.list")).length;
+        await page.evaluate(() => window.dispatchEvent(new Event("test-release-recovery-scope")));
+        await waitForGatewayRecoveryScope(page);
+        expect(await gateway.getRequests("environments.list")).toHaveLength(catalogRequests);
+      }
       await page.keyboard.press("Escape");
       await page.locator("#new-session-project-trigger").click();
       await page
-        .locator("wa-popover.new-session-page__project-popover")
+        .locator(".oc-popover.new-session-page__project-popover")
         .getByRole("button", { name: "Browse folders" })
         .click();
-      await expect
-        .poll(() =>
-          page.locator("input.new-session-page__browser-path").getAttribute("placeholder"),
-        )
-        .toBe("Gateway · Peters-Mac-Studio");
+      const pathInput = page.locator("input.new-session-page__browser-path");
+      await pathInput.fill("");
+      if (late === "system info") {
+        await pollAttribute(pathInput, "placeholder").toBe("Gateway · local");
+        await gateway.resolveDeferred("system.info", systemInfo);
+        await expect.poll(() => tooltipTitleText(local)).toBe("QA-Gateway Runs on your gateway");
+      }
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("QA-Gateway");
+      await pollAttribute(pathInput, "placeholder").toBe("Gateway · QA-Gateway");
 
+      await page.keyboard.press("Escape");
       await replaceGatewayClient(page);
-      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("Local");
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("QA-Gateway");
       await trigger.click();
-      await place.getByRole("button", { name: /Local/u }).waitFor();
-    } finally {
-      await context.close();
-    }
-  });
+      await expect.poll(() => tooltipTitleText(local)).toBe("QA-Gateway Runs on your gateway");
+    },
+  );
 
   it("keeps and disambiguates recent locations with the same basename", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
+    const page = await openPage();
     const gateway = await installMockGateway(page, {
       workspace: WORKSPACE,
       workspaceGit: true,
@@ -216,54 +211,36 @@ suite.define(() => {
       },
     });
 
-    try {
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("environments.list");
-      const trigger = page.locator("#new-session-project-trigger");
-      await trigger.click();
-      const first = page.locator('[data-value="recent:/a/openclaw"]');
-      const second = page.locator('[data-value="recent:/b/openclaw"]');
-      await first.waitFor();
-      await second.waitFor();
-      await pollLocatorText(first.locator(".session-menu__sub")).toBe("a");
-      await pollLocatorText(second.locator(".session-menu__sub")).toBe("b");
-      const recentValues = await page
-        .locator('[data-value^="recent:"]')
-        .evaluateAll((items) => items.map((item) => item.getAttribute("data-value")));
-      expect(recentValues).toEqual(["recent:/a/openclaw", "recent:/b/openclaw"]);
-      await second.click();
-      await page.locator(".new-session-page__message").fill("continue in work checkout");
-      await page.getByRole("button", { name: "Start session" }).click();
-      const create = await gateway.waitForRequest("sessions.create");
-      expect(create.params).toMatchObject({
-        cwd: "/b/openclaw",
-        message: "continue in work checkout",
-      });
-    } finally {
-      await context.close();
-    }
+    await page.goto(`${suite.server.baseUrl}new`);
+    await gateway.waitForRequest("environments.list");
+    const trigger = page.locator("#new-session-project-trigger");
+    await trigger.click();
+    const first = page.locator('[data-value="recent:/a/openclaw"]');
+    const second = page.locator('[data-value="recent:/b/openclaw"]');
+    await first.waitFor();
+    await second.waitFor();
+    await pollLocatorText(first.locator(".session-menu__sub")).toBe("a");
+    await pollLocatorText(second.locator(".session-menu__sub")).toBe("b");
+    const recentValues = await page
+      .locator('[data-value^="recent:"]')
+      .evaluateAll((items) => items.map((item) => item.getAttribute("data-value")));
+    expect(recentValues).toEqual(["recent:/a/openclaw", "recent:/b/openclaw"]);
+    await second.click();
+    await page.locator(".new-session-page__message").fill("continue in work checkout");
+    await page.getByRole("button", { name: "Start session" }).click();
+    const create = await gateway.waitForRequest("sessions.create");
+    expect(create.params).toMatchObject({
+      cwd: "/b/openclaw",
+      message: "continue in work checkout",
+    });
   });
 
   it("runs directly in a custom non-Git Gateway folder", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
+    const page = await openPage();
     const gateway = await installMockGateway(page, {
       workspaceGit: true,
       methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "main",
-              identity: { name: "Main" },
-              name: "Main",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "main",
-          mainKey: "main",
-          scope: "agent",
-        },
+        "agents.list": LOCAL_GIT_WORKSPACE_RESPONSES["agents.list"],
         "environments.list": {
           environments: [gatewayEnvironment],
           profiles: [{ id: "aws", providerId: "crabbox" }],
@@ -273,11 +250,7 @@ suite.define(() => {
           cases: [
             {
               match: { repoRoot: WORKSPACE },
-              response: {
-                branches: [{ kind: "local", name: "main" }],
-                defaultBranch: "main",
-                repositoryStatus: "git",
-              },
+              response: LOCAL_GIT_WORKSPACE_RESPONSES["worktrees.branches"],
             },
             {
               match: { repoRoot: "/home" },
@@ -289,41 +262,46 @@ suite.define(() => {
       },
     });
 
-    try {
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("environments.list");
-      const trigger = page.locator("#new-session-project-trigger");
-      const place = page.locator("wa-popover.new-session-page__project-popover");
-      await trigger.click();
-      await place.getByRole("button", { name: "Browse folders" }).click();
-      await page.locator("input.new-session-page__browser-path").fill("/home");
-      await page.getByRole("button", { name: "Use this folder" }).click();
-      await expect
-        .poll(async () => (await gateway.getRequests("worktrees.branches")).at(-1)?.params)
-        .toEqual({ repoRoot: "/home", includeRepositoryStatus: true });
-      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("home");
+    await page.goto(`${suite.server.baseUrl}new`);
+    await gateway.waitForRequest("environments.list");
+    const trigger = page.locator("#new-session-project-trigger");
+    const place = page.locator(".oc-popover.new-session-page__project-popover");
+    await trigger.click();
+    await place.getByRole("button", { name: "Browse folders" }).click();
+    await page.locator("input.new-session-page__browser-path").fill("/home");
+    await page.getByRole("button", { name: "Use this folder" }).click();
+    await expect
+      .poll(async () => (await gateway.getRequests("worktrees.branches")).at(-1)?.params)
+      .toEqual({ repoRoot: "/home", includeRepositoryStatus: true });
+    await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("home");
 
-      expect(await page.locator("#new-session-detail-trigger").count()).toBe(0);
-      await page.locator("#new-session-where-trigger").click();
-      const where = page.locator("wa-popover.new-session-page__where-popover");
-      await where.getByText("Cloud", { exact: true }).waitFor();
-      const cloud = where.getByRole("button", { name: "Cloud · aws" });
-      expect(await cloud.isDisabled()).toBe(true);
-      expect(await cloud.getAttribute("title")).toBe("Cloud needs a Git checkout");
-      await page.keyboard.press("Escape");
-
-      await page.locator(".new-session-page__message").fill("clone and inspect this project");
-      await page.getByRole("button", { name: "Start session" }).click();
-      const create = await gateway.waitForRequest("sessions.create");
-      expect(create.params).toMatchObject({
-        agentId: "main",
-        cwd: "/home",
-        message: "clone and inspect this project",
-      });
-      expect(create.params).not.toHaveProperty("worktree");
-      expect(create.params).not.toHaveProperty("worktreeBaseRef");
-    } finally {
-      await context.close();
-    }
+    expect(await page.locator("#new-session-checkout-trigger").count()).toBe(0);
+    await page.locator("#new-session-where-trigger").click();
+    const where = page.locator(".oc-popover.new-session-page__where-popover");
+    const cloud = where.getByRole("button", { name: "aws", exact: true });
+    await cloud.waitFor();
+    expect(await cloud.isEnabled()).toBe(true);
+    await cloud.click();
+    await pollAttribute(page.locator("#new-session-where-trigger"), "data-cloud-profile").toBe(
+      "aws",
+    );
+    await page.keyboard.press("Escape");
+    await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("home");
+    await page.locator(".new-session-page__message").fill("clone and inspect this project");
+    await pollDisabled(page.getByRole("button", { name: "Start session" })).toBe(true);
+    expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+    await page.locator("#new-session-where-trigger").click();
+    await where.locator('[data-value="gateway"]').click();
+    await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("home");
+    await page.getByRole("button", { name: "Start session" }).click();
+    const create = await gateway.waitForRequest("sessions.create");
+    expect(create.params).toMatchObject({
+      agentId: "main",
+      cwd: "/home",
+      message: "clone and inspect this project",
+    });
+    expect(create.params).not.toHaveProperty("worktree");
+    expect(create.params).not.toHaveProperty("worktreeBaseRef");
+    expect(create.params).not.toHaveProperty("worktreeSource");
   });
 });

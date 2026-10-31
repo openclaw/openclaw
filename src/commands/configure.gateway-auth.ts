@@ -1,30 +1,29 @@
-// Configure wizard model/auth selection and gateway auth config helpers.
 import { resolveMutableAgentEntry } from "../agents/agent-scope-config.js";
-import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
-import { formatCliCommand } from "../cli/command-format.js";
-import type { OpenClawConfig, GatewayAuthConfig } from "../config/config.js";
-import { isSecretRef, type SecretInput } from "../config/types.secrets.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
-import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
-import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
+import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import {
   applyModelAllowlist,
   applyModelFallbacksFromSelection,
   promptDefaultModel,
   promptModelAllowlist,
-} from "./model-picker.js";
+} from "../flows/model-picker.js";
+import { resolvePreferredProviderForAuthChoice } from "../plugins/provider-auth-choice-preference.js";
+import { resolveManifestProviderAuthChoice } from "../plugins/provider-auth-choices.js";
+import type { RuntimeEnv } from "../runtime.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
+import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
+import { applyAuthChoice } from "./auth-choice.apply.js";
 import { loadStaticManifestCatalogRowsForList } from "./models/list.manifest-catalog.js";
 import {
   applyAgentModelDefaults,
   applyOnboardingPrimaryModel,
+  applyOnboardingUtilityModel,
   resolveOnboardingAgentTarget,
 } from "./onboard-agent-target.js";
 import type { OnboardingAgentTarget } from "./onboard-agent-target.js";
 import { promptCustomApiConfig } from "./onboard-custom.js";
-import { randomToken } from "./random-token.js";
 
-type GatewayAuthChoice = "token" | "password" | "trusted-proxy";
 type ProviderChoiceModelPrompt = {
   provider?: string;
   allowedKeys?: string[];
@@ -32,47 +31,6 @@ type ProviderChoiceModelPrompt = {
   message?: string;
   loadCatalog?: boolean;
 };
-
-/** Reject undefined, empty, and common JS string-coercion artifacts for token auth. */
-function sanitizeTokenValue(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  if (!trimmed || trimmed === "undefined" || trimmed === "null") {
-    return undefined;
-  }
-  return trimmed;
-}
-
-async function resolveProviderChoiceModelPrompt(params: {
-  authChoice: string;
-  config: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): Promise<ProviderChoiceModelPrompt | undefined> {
-  const { resolvePluginProviders, resolveProviderPluginChoice } =
-    await import("../plugins/provider-auth-choice.runtime.js");
-  const providers = resolvePluginProviders({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    mode: "setup",
-  });
-  const resolved = resolveProviderPluginChoice({
-    providers,
-    choice: params.authChoice,
-  });
-  const wizard = resolved?.provider.wizard?.setup;
-  if (!wizard) {
-    return resolved?.provider.id ? { provider: resolved.provider.id } : undefined;
-  }
-  return {
-    provider: resolved.provider.id,
-    ...wizard.modelAllowlist,
-    ...(wizard.modelSelection?.promptWhenAuthChoiceProvided === true ? { loadCatalog: true } : {}),
-  };
-}
 
 function hasConfiguredProviderModels(cfg: OpenClawConfig, provider: string | undefined): boolean {
   if (!provider) {
@@ -84,18 +42,6 @@ function hasConfiguredProviderModels(cfg: OpenClawConfig, provider: string | und
   const providerPrefix = `${provider}/`;
   return Object.keys(cfg.agents?.defaults?.models ?? {}).some((key) =>
     key.trim().startsWith(providerPrefix),
-  );
-}
-
-function hasStaticManifestCatalogRows(cfg: OpenClawConfig, provider: string | undefined): boolean {
-  if (!provider) {
-    return false;
-  }
-  return (
-    loadStaticManifestCatalogRowsForList({
-      cfg,
-      providerFilter: provider,
-    }).length > 0
   );
 }
 
@@ -121,88 +67,15 @@ function resolveCanonicalOpenAISelectionForLegacyCodexPrimary(
   target: OnboardingAgentTarget,
   selectedModels: readonly string[],
 ): string | undefined {
-  const currentModel =
-    resolveMutableAgentEntry(cfg, target.agentId)?.model ?? cfg.agents?.defaults?.model;
-  const primary =
-    typeof currentModel === "string"
-      ? currentModel.trim()
-      : currentModel && typeof currentModel === "object" && typeof currentModel.primary === "string"
-        ? currentModel.primary.trim()
-        : undefined;
+  const primary = resolveAgentModelPrimaryValue(
+    resolveMutableAgentEntry(cfg, target.agentId)?.model ?? cfg.agents?.defaults?.model,
+  );
   const modelId = primary?.startsWith("codex/") ? primary.slice("codex/".length).trim() : "";
   if (!modelId) {
     return undefined;
   }
   const canonical = `openai/${modelId}`;
   return selectedModels.find((model) => model.trim() === canonical);
-}
-
-function resolveConfiguredProviderFromAuthChange(params: {
-  before: OpenClawConfig;
-  after: OpenClawConfig;
-  preferredProvider?: string;
-}): string | undefined {
-  if (hasConfiguredProviderModels(params.after, params.preferredProvider)) {
-    return params.preferredProvider;
-  }
-
-  const beforeProviders = params.before.models?.providers ?? {};
-  const configuredProviders = listConfiguredModelProviders(params.after);
-  const changedProviders = configuredProviders.filter((provider) => {
-    const beforeCount = beforeProviders[provider]?.models?.length ?? 0;
-    const afterCount = params.after.models?.providers?.[provider]?.models?.length ?? 0;
-    return afterCount > beforeCount;
-  });
-
-  if (changedProviders.length === 1) {
-    return changedProviders[0];
-  }
-
-  return (
-    params.preferredProvider ??
-    (configuredProviders.length === 1 ? configuredProviders[0] : undefined)
-  );
-}
-
-/** Build gateway auth config, preserving Tailscale allowance and generating missing tokens. */
-export function buildGatewayAuthConfig(params: {
-  existing?: GatewayAuthConfig;
-  mode: GatewayAuthChoice;
-  token?: SecretInput;
-  password?: string;
-  trustedProxy?: {
-    userHeader: string;
-    requiredHeaders?: string[];
-    allowUsers?: string[];
-  };
-}): GatewayAuthConfig | undefined {
-  const allowTailscale = params.existing?.allowTailscale;
-  const base: GatewayAuthConfig = {};
-  if (typeof allowTailscale === "boolean") {
-    base.allowTailscale = allowTailscale;
-  }
-
-  if (params.mode === "token") {
-    if (isSecretRef(params.token)) {
-      return { ...base, mode: "token", token: params.token };
-    }
-    // Keep token mode always valid: treat empty/undefined/"undefined"/"null" as missing and generate a token.
-    const token = sanitizeTokenValue(params.token) ?? randomToken();
-    return { ...base, mode: "token", token };
-  }
-  if (params.mode === "password") {
-    const password = params.password?.trim();
-    return { ...base, mode: "password", ...(password && { password }) };
-  }
-  if (params.mode === "trusted-proxy") {
-    if (!params.trustedProxy) {
-      throw new Error(
-        `trustedProxy config is required when mode is trusted-proxy. Run ${formatCliCommand("openclaw configure --section gateway")} to configure Gateway auth interactively.`,
-      );
-    }
-    return { ...base, mode: "trusted-proxy", trustedProxy: params.trustedProxy };
-  }
-  return base;
 }
 
 /** Prompt for model provider credentials and explicit default model policy settings. */
@@ -218,9 +91,6 @@ export async function promptAuthConfig(
   while (true) {
     authChoice = await promptAuthChoiceGrouped({
       prompter,
-      store: ensureAuthProfileStore(target.agentDir, {
-        allowKeychainPrompt: false,
-      }),
       includeSkip: true,
       config: next,
     });
@@ -234,7 +104,13 @@ export async function promptAuthConfig(
           });
 
     if (authChoice === "custom-api-key") {
-      const customResult = await promptCustomApiConfig({ prompter, runtime, config: next, target });
+      const customResult = await promptCustomApiConfig({
+        prompter,
+        runtime,
+        config: next,
+        target,
+        setAsPrimary: !resolveAgentEffectiveModelPrimary(next, target.agentId),
+      });
       next = customResult.config;
       break;
     }
@@ -244,7 +120,6 @@ export async function promptAuthConfig(
         config: next,
         prompter,
         allowKeep: true,
-        ignoreAllowlist: true,
         includeProviderPluginSetups: false,
         loadCatalog: true,
         browseCatalogOnDemand: true,
@@ -276,23 +151,31 @@ export async function promptAuthConfig(
       preserveExistingDefaultModel: true,
     });
     next = applied.config;
-    if (applied.agentModelOverride) {
-      const targeted = applyOnboardingPrimaryModel(next, target, applied.agentModelOverride);
-      next = {
-        ...targeted,
-        agents: {
-          ...targeted.agents,
-          ...(beforeAuthConfig.agents?.defaults === undefined
-            ? { defaults: undefined }
-            : { defaults: beforeAuthConfig.agents.defaults }),
-        },
-      };
+    if (applied.utilityModelOverride) {
+      return applyOnboardingUtilityModel(next, target, applied.utilityModelOverride);
     }
-    preferredProvider = resolveConfiguredProviderFromAuthChange({
-      before: beforeAuthConfig,
-      after: next,
-      preferredProvider,
-    });
+    // Auth recommendations initialize an unset primary; reauth must not replace
+    // the target's explicit or inherited model.
+    if (
+      applied.agentModelOverride &&
+      !resolveAgentEffectiveModelPrimary(beforeAuthConfig, target.agentId)
+    ) {
+      next = applyOnboardingPrimaryModel(next, target, applied.agentModelOverride);
+    }
+    if (!hasConfiguredProviderModels(next, preferredProvider)) {
+      const beforeProviders = beforeAuthConfig.models?.providers ?? {};
+      const configuredProviders = listConfiguredModelProviders(next);
+      const changedProviders = configuredProviders.filter((provider) => {
+        const beforeCount = beforeProviders[provider]?.models?.length ?? 0;
+        const afterCount = next.models?.providers?.[provider]?.models?.length ?? 0;
+        return afterCount > beforeCount;
+      });
+      preferredProvider =
+        changedProviders.length === 1
+          ? changedProviders[0]
+          : (preferredProvider ??
+            (configuredProviders.length === 1 ? configuredProviders[0] : undefined));
+    }
     if (applied.retrySelection) {
       continue;
     }
@@ -300,16 +183,43 @@ export async function promptAuthConfig(
   }
 
   if (authChoice !== "custom-api-key") {
-    const modelPrompt = await resolveProviderChoiceModelPrompt({
-      authChoice,
-      config: next,
-      workspaceDir: target.workspaceDir,
-      env: process.env,
+    const config = next;
+    const workspaceDir = target.workspaceDir;
+    const env = process.env;
+    let modelPrompt: ProviderChoiceModelPrompt | undefined;
+    const { resolvePluginProviders, resolveProviderPluginChoice } =
+      await import("../plugins/provider-auth-choice.runtime.js");
+    const providers = resolvePluginProviders({ config, workspaceDir, env, mode: "setup" });
+    const resolved = resolveProviderPluginChoice({
+      providers,
+      choice: authChoice,
+      manifestChoice: resolveManifestProviderAuthChoice(authChoice, {
+        config,
+        workspaceDir,
+        env,
+        includeUntrustedWorkspacePlugins: false,
+      }),
     });
+    const wizard = resolved?.provider.wizard?.setup;
+    if (!wizard) {
+      modelPrompt = resolved?.provider.id ? { provider: resolved.provider.id } : undefined;
+    } else {
+      modelPrompt = {
+        provider: resolved.provider.id,
+        ...wizard.modelAllowlist,
+        ...(wizard.modelSelection?.promptWhenAuthChoiceProvided === true
+          ? { loadCatalog: true }
+          : {}),
+      };
+    }
     const promptProvider =
       modelPrompt?.provider ?? preferredProvider ?? resolveSingleConfiguredProvider(next);
     const hasPromptProviderConfiguredModels = hasConfiguredProviderModels(next, promptProvider);
-    const hasPromptProviderStaticManifestRows = hasStaticManifestCatalogRows(next, promptProvider);
+    const hasPromptProviderStaticManifestRows = Boolean(
+      promptProvider &&
+      loadStaticManifestCatalogRowsForList({ cfg: next, providerFilter: promptProvider }).length >
+        0,
+    );
     const shouldLoadModelCatalog =
       modelPrompt?.loadCatalog ??
       (hasPromptProviderConfiguredModels || hasPromptProviderStaticManifestRows);

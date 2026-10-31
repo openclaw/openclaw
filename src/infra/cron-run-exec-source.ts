@@ -2,11 +2,15 @@
 // The cron run owner records the fact at run start and clears it at run end;
 // exec-approval creation and gateway allowlist evaluation read it so cron
 // standing grants never infer job identity from session keys or run ids.
+import type { CronStandingGrantAuthority } from "../cron/standing-grant-authority.types.js";
 
 export type CronRunExecSource = {
   agentId: string;
   jobId: string;
   jobConfigRevision: string;
+  /** Display name for operator surfaces (approval cards); not identity. */
+  jobName: string;
+  standingGrantAuthority?: CronStandingGrantAuthority;
 };
 
 // Bounded by live cron-run concurrency; the cap only guards a leaked

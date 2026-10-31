@@ -6,6 +6,7 @@ type ClaudeSessionSource = "claude-cli" | "claude-desktop";
 export type ClaudeSessionCatalogSession = {
   threadId: string;
   name?: string | null;
+  color?: string;
   cwd?: string;
   status: "stored";
   createdAt?: number;
@@ -23,6 +24,7 @@ export type ClaudeSessionCatalogSession = {
 export type ClaudeSessionCatalogPage = {
   sessions: ClaudeSessionCatalogSession[];
   nextCursor?: string;
+  error?: { code: string; message: string };
 };
 
 export type ClaudeSessionCatalogHost = ClaudeSessionCatalogPage & {
@@ -33,7 +35,7 @@ export type ClaudeSessionCatalogHost = ClaudeSessionCatalogPage & {
   nodeId?: string;
   canContinueClaude?: boolean;
   canOpenTerminalClaude?: boolean;
-  error?: { code: string; message: string };
+  canStartTerminal?: boolean;
 };
 
 export type ClaudeSessionCatalogResult = {

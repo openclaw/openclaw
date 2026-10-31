@@ -1,27 +1,13 @@
 import Foundation
 import OpenClawChatUI
-import SwiftUI
 
 struct SessionTokenStats {
-    let input: Int
-    let output: Int
     let total: Int
     let contextTokens: Int
 
-    var contextSummaryShort: String {
-        "\(Self.formatKTokens(self.total))/\(Self.formatKTokens(self.contextTokens))"
-    }
-
     var percentUsed: Int? {
         guard self.contextTokens > 0, self.total > 0 else { return nil }
-        return min(100, Int(round((Double(self.total) / Double(self.contextTokens)) * 100)))
-    }
-
-    static func formatKTokens(_ value: Int) -> String {
-        if value < 1000 { return "\(value)" }
-        let thousands = Double(value) / 1000
-        let decimals = value >= 10000 ? 0 : 1
-        return String(format: "%.\(decimals)fk", thousands)
+        return Int(min(100, round((Double(self.total) / Double(self.contextTokens)) * 100)))
     }
 }
 
@@ -34,26 +20,11 @@ struct SessionRow: Identifiable {
     let sessionId: String?
     let thinkingLevel: String?
     let verboseLevel: String?
-    let systemSent: Bool
-    let abortedLastRun: Bool
     let tokens: SessionTokenStats
-    let model: String?
-
-    var ageText: String {
-        relativeAge(from: self.updatedAt)
-    }
+    var color: String?
 
     var label: String {
         self.displayName ?? self.key
-    }
-
-    var flagLabels: [String] {
-        var flags: [String] = []
-        if let thinkingLevel { flags.append("think \(thinkingLevel)") }
-        if let verboseLevel { flags.append("verbose \(verboseLevel)") }
-        if self.systemSent { flags.append("system sent") }
-        if self.abortedLastRun { flags.append("aborted") }
-        return flags
     }
 }
 
@@ -64,77 +35,11 @@ enum SessionKind: String {
         if entry.classification == cron.rawValue { return .cron }
         return entry.kind.flatMap(Self.init(rawValue:)) ?? .unknown
     }
-
-    var label: String {
-        switch self {
-        case .cron: "Cron"
-        case .direct: "Direct"
-        case .group: "Group"
-        case .global: "Global"
-        case .unknown: "Unknown"
-        }
-    }
-
-    var tint: Color {
-        switch self {
-        case .cron: .green
-        case .direct: .accentColor
-        case .group: .orange
-        case .global: .purple
-        case .unknown: .gray
-        }
-    }
 }
 
 struct SessionDefaults {
     let model: String
     let contextTokens: Int
-}
-
-extension SessionRow {
-    static var previewRows: [SessionRow] {
-        [
-            SessionRow(
-                id: "direct-1",
-                key: "user@example.com",
-                kind: .direct,
-                displayName: nil,
-                updatedAt: Date().addingTimeInterval(-90),
-                sessionId: "sess-direct-1234",
-                thinkingLevel: "low",
-                verboseLevel: "info",
-                systemSent: false,
-                abortedLastRun: false,
-                tokens: SessionTokenStats(input: 320, output: 680, total: 1000, contextTokens: 200_000),
-                model: "claude-3.5-sonnet"),
-            SessionRow(
-                id: "group-1",
-                key: "discord:channel:release-squad",
-                kind: .group,
-                displayName: "discord:#release-squad",
-                updatedAt: Date().addingTimeInterval(-3600),
-                sessionId: "sess-group-4321",
-                thinkingLevel: "medium",
-                verboseLevel: nil,
-                systemSent: true,
-                abortedLastRun: true,
-                tokens: SessionTokenStats(input: 5000, output: 1200, total: 6200, contextTokens: 200_000),
-                model: "claude-opus-4-6"),
-            SessionRow(
-                id: "global",
-                key: "global",
-                kind: .global,
-                displayName: nil,
-                updatedAt: Date().addingTimeInterval(-86400),
-                sessionId: nil,
-                thinkingLevel: nil,
-                verboseLevel: nil,
-                systemSent: false,
-                abortedLastRun: false,
-                tokens: SessionTokenStats(input: 150, output: 220, total: 370, contextTokens: 200_000),
-                model: "gpt-4.1-mini"),
-        ]
-    }
 }
 
 enum SessionLoadError: LocalizedError {
@@ -163,15 +68,13 @@ enum SessionLoader {
     static let fallbackModel = "claude-opus-4-6"
     static let fallbackContextTokens = 200_000
 
-    static let defaultStorePath = standardize(
-        OpenClawPaths.stateDirURL
-            .appendingPathComponent("sessions/sessions.json").path)
+    static let defaultStorePath = (OpenClawPaths.stateDirURL
+        .appendingPathComponent("sessions/sessions.json").path as NSString)
+        .expandingTildeInPath.replacingOccurrences(of: "//", with: "/")
 
     static func loadSnapshot(
-        activeMinutes: Int? = nil,
         limit: Int? = nil,
-        includeGlobal: Bool = true,
-        includeUnknown: Bool = true) async throws -> SessionStoreSnapshot
+        control: ControlChannel = .shared) async throws -> SessionStoreSnapshot
     {
         let data: Data
         do {
@@ -179,10 +82,8 @@ enum SessionLoader {
                 limit: limit,
                 search: nil,
                 archived: false,
-                includeGlobal: includeGlobal,
-                includeUnknown: includeUnknown,
-                activeMinutes: activeMinutes)
-            data = try await ControlChannel.shared.request(request)
+                includeUnknown: true)
+            data = try await control.request(request)
         } catch {
             let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             if msg.localizedCaseInsensitiveContains("unknown method: sessions.list") {
@@ -207,37 +108,22 @@ enum SessionLoader {
             contextTokens: decoded.defaults?.contextTokens ?? self.fallbackContextTokens)
 
         let rows = decoded.sessions.map { entry -> SessionRow in
-            let updated = entry.updatedAt.map { Date(timeIntervalSince1970: $0 / 1000) }
-            let input = entry.inputTokens ?? 0
-            let output = entry.outputTokens ?? 0
-            let total = entry.totalTokens ?? input + output
-            let context = entry.contextTokens ?? defaults.contextTokens
-            let model = entry.model ?? defaults.model
-
-            return SessionRow(
+            SessionRow(
                 id: entry.key,
                 key: entry.key,
                 kind: SessionKind.from(entry),
                 displayName: entry.displayName,
-                updatedAt: updated,
+                updatedAt: entry.updatedAt.map { Date(timeIntervalSince1970: $0 / 1000) },
                 sessionId: entry.sessionId,
                 thinkingLevel: entry.thinkingLevel,
                 verboseLevel: entry.verboseLevel,
-                systemSent: entry.systemSent ?? false,
-                abortedLastRun: entry.abortedLastRun ?? false,
                 tokens: SessionTokenStats(
-                    input: input,
-                    output: output,
-                    total: total,
-                    contextTokens: context),
-                model: model)
+                    total: entry.totalTokens ?? (entry.inputTokens ?? 0) + (entry.outputTokens ?? 0),
+                    contextTokens: entry.contextTokens ?? defaults.contextTokens),
+                color: entry.color)
         }.sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
 
         return SessionStoreSnapshot(storePath: storePath, defaults: defaults, rows: rows)
-    }
-
-    private static func standardize(_ path: String) -> String {
-        (path as NSString).expandingTildeInPath.replacingOccurrences(of: "//", with: "/")
     }
 }
 

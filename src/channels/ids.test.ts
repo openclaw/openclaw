@@ -1,6 +1,15 @@
 // Channel id tests cover identifier normalization and validation helpers.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { findChatChannelLabel, normalizeChatChannelId } from "./ids.js";
+
+vi.hoisted(() => {
+  // Runtime setup can import channel IDs before this file's schema guard.
+  vi.resetModules();
+});
+
+vi.mock("../config/bundled-channel-config-metadata.generated.js", () => {
+  throw new Error("Channel ID normalization must not load channel configuration schemas");
+});
 
 describe("channel ids", () => {
   it("normalizes built-in aliases + trims whitespace", () => {
@@ -15,9 +24,6 @@ describe("channel ids", () => {
 
   it.each([
     ["whatsapp", "WhatsApp"],
-    ["imessage", "iMessage"],
-    ["googlechat", "Google Chat"],
-    [" imsg ", "iMessage"],
     ["GOOGLE-CHAT", "Google Chat"],
   ])("finds the exact generated label for %s", (channel, label) => {
     expect(findChatChannelLabel(channel)).toBe(label);

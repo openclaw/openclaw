@@ -1,16 +1,131 @@
-import { html, nothing } from "lit";
-import type { NavigationRouteId } from "../app-navigation.ts";
-import type { ApplicationContext } from "./context.ts";
-import type { UpdateProgress } from "./update-confirmation.ts";
+import type { AppSidebarElement } from "../components/app-sidebar.tsx";
+import { isCommandPaletteShortcut } from "../components/command-palette-contract.ts";
+import { activeElement, tabbableElements } from "../components/focus-navigation.ts";
+import { containsComposed } from "../components/overlay-registry.ts";
+import { isTerminalPanelShortcut } from "../components/panel-toggle-contract.ts";
+import {
+  KEYBOARD_SHORTCUT_COMBOS,
+  matchesShortcutCombo,
+} from "../lib/keyboard-shortcut-contract.ts";
+import type { RouteElements } from "./route-elements.ts";
+
+export const NAVIGATION_RAIL_WIDTH = 52;
+export const NAV_DRAWER_TOGGLE_REGISTRATION = "nav-drawer-toggle";
+
+export type ShellNavigationElements = {
+  shellElement?: HTMLElement;
+  navDrawerElement?: HTMLElement;
+  navBackdropElement?: HTMLElement;
+  contentElement?: HTMLElement;
+  toastElement?: HTMLElement;
+};
+
+export type ShellNavigationSurfaces = {
+  readonly element: HTMLElement;
+  readonly navigationSidebar: HTMLElement &
+    Partial<Pick<AppSidebarElement, "dismissTransientMenus" | "activeNavigationViewElement">>;
+  readonly queryRenderedElements: RouteElements["renderedElements"];
+};
+
+export function dismissNavigationTransientSurfaces(host: ShellNavigationSurfaces): boolean {
+  const dismissedPanel = host
+    .queryRenderedElements("openclaw-sidebar-attention")
+    .map((attention) => attention.dismissPanel())
+    .some((dismissed) => dismissed);
+  const sidebar = host.navigationSidebar;
+  const dismissedMenu = host.element.contains(sidebar) && sidebar.dismissTransientMenus?.();
+  return dismissedMenu === true || dismissedPanel;
+}
+
+function trapNavDrawerFocus(drawer: HTMLElement | undefined, event: KeyboardEvent): void {
+  if (!drawer) {
+    return;
+  }
+  if (
+    event
+      .composedPath()
+      .some(
+        (target) =>
+          target instanceof Element &&
+          target !== drawer &&
+          target.matches("dialog, [role='dialog']"),
+      )
+  ) {
+    return;
+  }
+  const focusable = [...tabbableElements(drawer.children)];
+  const active = activeElement(drawer);
+  const target = event.shiftKey ? focusable.at(-1) : focusable[0];
+  const boundary = event.shiftKey ? focusable[0] : focusable.at(-1);
+  if (
+    !active ||
+    !containsComposed(drawer, active) ||
+    active === boundary ||
+    (event.shiftKey && active === drawer)
+  ) {
+    event.preventDefault();
+    (target ?? drawer).focus({ preventScroll: true });
+  }
+}
+
+export function handleNavDrawerKeydown(
+  host: Pick<ShellNavigationElements, "navDrawerElement"> & {
+    closeNavDrawer(options?: { restoreFocus?: boolean }): void;
+  },
+  event: KeyboardEvent,
+): void {
+  if (event.defaultPrevented) {
+    return;
+  }
+  if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.escape, event)) {
+    return;
+  }
+  if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar, event)) {
+    event.preventDefault();
+    host.closeNavDrawer({ restoreFocus: true });
+  } else if (event.key === "Tab") {
+    trapNavDrawerFocus(host.navDrawerElement, event);
+  } else if (
+    isCommandPaletteShortcut(event) ||
+    isTerminalPanelShortcut(event) ||
+    matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles, event) ||
+    matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.sideChat, event)
+  ) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+}
+
+export function setToastInNavDrawer(host: ShellNavigationElements, inDrawer: boolean): void {
+  const toast = host.toastElement;
+  const source = toast?.parentElement;
+  const target = inDrawer ? host.navDrawerElement : host.shellElement;
+  if (toast && target && source !== target && (inDrawer || source === host.navDrawerElement)) {
+    target.append(toast);
+  }
+}
+
+export function visibleNavDrawerToggle(
+  host: Pick<ShellNavigationSurfaces, "queryRenderedElements">,
+): HTMLElement | undefined {
+  return host
+    .queryRenderedElements(NAV_DRAWER_TOGGLE_REGISTRATION)
+    .toSorted((left, right) =>
+      left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+    )
+    .find((candidate) => candidate.checkVisibility());
+}
 
 export function navigationSurfaceIsHidden(params: {
   onboarding: boolean;
   navCollapsed: boolean;
   navDrawerOpen: boolean;
   mobileNavLayout: boolean;
+  railAvailable?: boolean;
 }): boolean {
   return (
-    params.onboarding || (params.mobileNavLayout ? !params.navDrawerOpen : params.navCollapsed)
+    params.onboarding ||
+    (params.mobileNavLayout ? !params.navDrawerOpen : params.navCollapsed && !params.railAvailable)
   );
 }
 
@@ -18,66 +133,9 @@ export function floatingSidebarAttentionVisible(params: {
   navigationSurfaceHidden: boolean;
   mobileNavLayout: boolean;
   onboarding: boolean;
-  settingsTakeover?: boolean;
   compact?: boolean;
 }): boolean {
-  // Mobile keeps attention in its drawer except during onboarding. Settings
-  // replaces that drawer/sidebar entirely, so both need the floating copy.
   const attentionNeedsFloating =
-    params.settingsTakeover ||
-    (params.navigationSurfaceHidden && (!params.mobileNavLayout || params.onboarding));
+    params.navigationSurfaceHidden && !params.mobileNavLayout && !params.onboarding;
   return attentionNeedsFloating && !params.compact;
-}
-
-export function renderFloatingUpdateCard(params: {
-  navigationSurfaceHidden: boolean;
-  mobileNavLayout: boolean;
-  onboarding: boolean;
-  settingsTakeover?: boolean;
-  compact?: boolean;
-  updateAvailable: ApplicationContext["overlays"]["snapshot"]["updateAvailable"];
-  updateSchedule?: ApplicationContext["overlays"]["snapshot"]["updateSchedule"];
-  heldUpdateCampaignId?: string | null;
-  updateBusy: boolean;
-  statusBanner?: ApplicationContext["overlays"]["snapshot"]["updateStatusBanner"];
-  watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
-  canUpdate?: boolean;
-  canHoldUpdate?: boolean;
-  onUpdate: () => void;
-  refreshRequired: boolean;
-  onRefresh: () => void;
-  onHoldUpdate?: () => Promise<boolean>;
-  onReviewUpdate?: () => void;
-  onNavigate?: (routeId: NavigationRouteId) => void;
-  onOpenApprovals?: () => void;
-}) {
-  const showAttention = floatingSidebarAttentionVisible(params);
-  const showUpdateCard = !params.compact && params.refreshRequired;
-  if (!showAttention && !showUpdateCard) {
-    return nothing;
-  }
-  return html`${showAttention
-    ? html`<openclaw-sidebar-attention
-        class="sidebar-attention--floating"
-        .onNavigate=${params.onNavigate}
-        .onOpenApprovals=${params.onOpenApprovals}
-      ></openclaw-sidebar-attention>`
-    : nothing}${showUpdateCard
-    ? html`<openclaw-sidebar-update-card
-        class="sidebar-update-card--floating"
-        .updateAvailable=${params.updateAvailable}
-        .updateSchedule=${params.updateSchedule ?? null}
-        .heldUpdateCampaignId=${params.heldUpdateCampaignId ?? null}
-        .updateBusy=${params.updateBusy}
-        .statusBanner=${params.statusBanner ?? null}
-        .watchUpdateProgress=${params.watchUpdateProgress}
-        .canUpdate=${params.canUpdate ?? false}
-        .canHoldUpdate=${params.canHoldUpdate ?? false}
-        .onUpdate=${params.onUpdate}
-        .refreshRequired=${params.refreshRequired}
-        .onRefresh=${params.onRefresh}
-        .onHoldUpdate=${params.onHoldUpdate ?? (async () => false)}
-        .onReviewUpdate=${params.onReviewUpdate ?? (() => undefined)}
-      ></openclaw-sidebar-update-card>`
-    : nothing}`;
 }

@@ -27,7 +27,9 @@ export type ToolErrorSummary = {
   timedOut?: boolean;
   middlewareError?: boolean;
   mutatingAction?: boolean;
-  terminalDiagnostic?: ProcessTerminalDiagnostic;
+  terminalDiagnostic?:
+    | ProcessTerminalDiagnostic
+    | { kind: "timeout"; timeoutMs: number; partialResults?: number };
 };
 
 const EXEC_LIKE_TOOL_NAMES = new Set(["exec", "bash"]);
@@ -39,14 +41,8 @@ export function isExecLikeToolName(toolName: string): boolean {
 
 const MAX_ABORT_SUMMARY_LENGTH = 160;
 
-function hasUnsafeSummaryCharacter(value: string): boolean {
-  for (const char of value) {
-    const code = char.charCodeAt(0);
-    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) {
-      return true;
-    }
-  }
-  return false;
+export function hasTerminalControlCharacter(value: string): boolean {
+  return /\p{Cc}/u.test(value);
 }
 
 /** Accepts only the compact single-line diagnostic produced below. */
@@ -55,7 +51,11 @@ export function readToolValidationErrorSummary(value: unknown): string | undefin
     return undefined;
   }
   const summary = value.trim();
-  if (!summary || summary.length > MAX_ABORT_SUMMARY_LENGTH || hasUnsafeSummaryCharacter(summary)) {
+  if (
+    !summary ||
+    summary.length > MAX_ABORT_SUMMARY_LENGTH ||
+    hasTerminalControlCharacter(summary)
+  ) {
     return undefined;
   }
   return summary;
@@ -63,7 +63,7 @@ export function readToolValidationErrorSummary(value: unknown): string | undefin
 
 /** Builds a static diagnostic from typed pre-execution validation provenance. */
 export function createToolValidationErrorSummary(toolName: string): string | undefined {
-  if (hasUnsafeSummaryCharacter(toolName)) {
+  if (hasTerminalControlCharacter(toolName)) {
     return undefined;
   }
   const normalizedToolName = toolName.replace(/\s+/g, " ").trim();
@@ -81,4 +81,29 @@ export function createToolValidationErrorSummary(toolName: string): string | und
  */
 export function summarizeToolValidationError(summary: ToolErrorSummary): string | undefined {
   return readToolValidationErrorSummary(summary.validationErrorSummary);
+}
+
+/** Class-only diagnostics: never carry arguments, validator text or service output. */
+export function createRepeatedToolErrorMessages(
+  toolName: string,
+  errorClass: "invalid arguments" | "unknown tool" | "tool error",
+): { reason: string; recoveryMessage: string } {
+  const label = /^[A-Za-z0-9_.-]{1,64}$/.test(toolName) ? toolName : "tool";
+  const failure = `the same ${label} call failed 3 times (${errorClass}).`;
+  return {
+    reason: `OpenClaw stopped this turn: ${failure} Check the tool inputs or service, then use a changed request.`,
+    recoveryMessage: `Tool-loop recovery: ${failure} Check the tool inputs or service before choosing a changed request.`,
+  };
+}
+
+/** Accept only the bounded class-only template, not arbitrary provider error text. */
+export function readRepeatedToolErrorSummary(value: unknown): string | undefined {
+  return typeof value === "string" &&
+    value.length <= 240 &&
+    !hasTerminalControlCharacter(value) &&
+    /^OpenClaw stopped this turn: the same [A-Za-z0-9_.-]{1,64} call failed 3 times \((?:invalid arguments|unknown tool|tool error)\)\. Check the tool inputs or service, then use a changed request\.$/.test(
+      value,
+    )
+    ? value
+    : undefined;
 }

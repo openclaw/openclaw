@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../../../agents/glob-pattern.js";
 import { normalizeToolPolicyName } from "../../../agents/tool-policy-shared.js";
+import { isToolPolicyPath } from "./legacy-tool-policy-scopes.js";
 
 type LegacyToolNameMigration = {
   legacyName: string;
@@ -47,29 +48,18 @@ export function migrateLegacyToolNameList(
   if (!state || !Array.isArray(value)) {
     return false;
   }
-  let mutated = false;
   if (state.exactLegacy) {
     const legacyName = normalizeToolPolicyName(migration.legacyName);
     for (const [index, entry] of value.entries()) {
       if (typeof entry === "string" && normalizeToolPolicyName(entry) === legacyName) {
         value[index] = migration.canonicalName;
-        mutated = true;
       }
     }
   }
   if (state.appendCanonical) {
     value.push(migration.canonicalName);
-    mutated = true;
   }
-  return mutated;
-}
-
-function isToolPolicyPath(path: readonly string[]): boolean {
-  if (path.at(-1) === "tools" || path.includes("toolsBySender")) {
-    return true;
-  }
-  const byProviderIndex = path.lastIndexOf("byProvider");
-  return byProviderIndex >= 0 && path.slice(0, byProviderIndex).includes("tools");
+  return state.exactLegacy || state.appendCanonical;
 }
 
 function visitLegacyToolName(
@@ -95,13 +85,14 @@ function visitLegacyToolName(
   }
   for (const key of listKeys) {
     const list = value[key];
-    if (!hasLegacyToolNameList(list, migration)) {
+    if (
+      !(migrate
+        ? migrateLegacyToolNameList(list, migration)
+        : hasLegacyToolNameList(list, migration))
+    ) {
       continue;
     }
     matchedPaths.push([...path, key].join("."));
-    if (migrate) {
-      migrateLegacyToolNameList(list, migration);
-    }
   }
 
   for (const [key, entry] of Object.entries(value)) {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { formatGoogleChatTextChunks, GOOGLE_CHAT_FORMAT_PROFILE } from "./format.js";
+import { formatGoogleChatTextChunks } from "./format.js";
 
 const formatGoogleChatText = (text: string) => formatGoogleChatTextChunks(text).join("");
 
@@ -99,11 +99,6 @@ describe("formatGoogleChatText", () => {
     expect(formatGoogleChatText("\\`one\\` and \\`two\\`")).toBe("｀one｀ and ｀two｀");
   });
 
-  it("uses semantic list depth instead of authored indentation width", () => {
-    expect(formatGoogleChatText("- parent\n    - child")).toBe("* parent\n    * child");
-    expect(formatGoogleChatText("   - top-level")).toBe("* top-level");
-  });
-
   it("keeps dense bullet-list formatting work bounded", () => {
     const input = Array.from({ length: 1_000 }, (_, index) => `- row ${index}`).join("\n");
     const expected = input.replace(/^- /gmu, "* ");
@@ -150,9 +145,14 @@ describe("formatGoogleChatText", () => {
     expect(formatGoogleChatText("https://example.com/a_b_c")).toBe("https://example.com/a_b_c");
   });
 
-  it("handles newline-heavy messages without changing their content", () => {
-    const text = "a\n".repeat(16_000);
-    expect(formatGoogleChatText(text)).toBe(text.trimEnd());
+  it("counts terminal link text when chunking a crossed label", () => {
+    const chunks = formatGoogleChatTextChunks(
+      "**a**[**b** c](https://example.com) trailing text",
+      40,
+    );
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => new TextEncoder().encode(chunk).byteLength <= 40)).toBe(true);
+    expect(chunks.join(" ").match(/https:\/\/example\.com/g)).toHaveLength(1);
   });
 
   it("falls back to visually equivalent plain text for unsupported code delimiters", () => {
@@ -166,33 +166,18 @@ describe("formatGoogleChatText", () => {
     ).join("");
     expect(formatGoogleChatText(`${privateUse}\n- item`)).toBe(`${privateUse}\n\n* item`);
   });
+});
 
-  it("strips email-alias mentions unsupported by app authentication", () => {
-    expect(formatGoogleChatText("Hello <users/alice@example.com>")).toBe("Hello");
-  });
-
-  it("chunks against the rendered UTF-8 byte size", () => {
-    const input = `| ${"H".repeat(30)} | Value |\n| --- | --- |\n${Array.from(
-      { length: 8 },
-      (_, index) => `| row-${index} | ${index} |`,
-    ).join("\n")}`;
-    const chunks = formatGoogleChatTextChunks(input, 80);
-
-    expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((chunk) => new TextEncoder().encode(chunk).byteLength <= 80)).toBe(true);
-  });
-
-  it("declares the Google Chat app-message capability profile", () => {
-    expect(GOOGLE_CHAT_FORMAT_PROFILE).toMatchObject({
-      mechanism: "markdown",
-      chunk: { limit: 32_000, unit: "bytes" },
-      constructs: {
-        bold: "native",
-        bulletList: "native",
-        heading: "fallback",
-        orderedList: "fallback",
-        table: "fallback",
-      },
-    });
+describe("Google Chat semantic whitespace", () => {
+  it.each([
+    {
+      name: "fenced block after a full default-limit paragraph",
+      prefix: "A".repeat(32_000) + "\n\n",
+      expected: ["A".repeat(32_000), "\n\n```\n \n```"],
+    },
+  ])("preserves semantic whitespace: $name", ({ prefix, expected }) => {
+    const chunks = formatGoogleChatTextChunks(prefix + "```\n \n```");
+    expect(chunks).toEqual(expected);
+    expect(chunks.every((chunk) => Buffer.byteLength(chunk, "utf8") <= 32_000)).toBe(true);
   });
 });

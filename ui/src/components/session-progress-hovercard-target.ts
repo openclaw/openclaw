@@ -1,4 +1,5 @@
-export const SESSION_PROGRESS_HOVER_LINK_SELECTOR = "a.markdown-session-link[data-session-key]";
+const SESSION_PROGRESS_HOVER_LINK_SELECTOR = "a.markdown-session-link, [data-session-href]";
+export const SESSION_TITLE_TARGET_SELECTOR = `${SESSION_PROGRESS_HOVER_LINK_SELECTOR}, [data-session-title-only]`;
 const SESSION_PROGRESS_HOVER_SIDEBAR_SELECTOR = ".sidebar-recent-session[data-session-key]";
 export const SESSION_MENU_OPEN_EVENT = "openclaw-session-menu-open";
 const SESSION_PROGRESS_HOVER_TARGET_SELECTOR = `${SESSION_PROGRESS_HOVER_LINK_SELECTOR}, ${SESSION_PROGRESS_HOVER_SIDEBAR_SELECTOR}`;

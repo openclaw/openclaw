@@ -1,20 +1,39 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { scanInstalledApps } from "./installed-apps.js";
 
-const tempRoots: string[] = [];
+const redirectedRoots = vi.hoisted(() => new Map<string, string>());
+vi.mock("@openclaw/fs-safe/walk", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/fs-safe/walk")>();
+  return {
+    ...actual,
+    walkDirectory: ((root, options) => {
+      const target = redirectedRoots.get(root);
+      if (!target) {
+        throw new Error(`Unowned installed-app fixture root: ${root}`);
+      }
+      return actual.walkDirectory(target, options);
+    }) satisfies typeof actual.walkDirectory,
+  };
+});
 
-async function makeFixtureRoot(): Promise<{
-  root: string;
-  applications: string;
-  userApplications: string;
-  systemApplications: string;
-}> {
-  const raw = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-installed-apps-"));
-  const root = await fs.realpath(raw);
-  tempRoots.push(root);
+beforeEach(() => {
+  mockProcessPlatform("darwin");
+});
+afterEach(() => {
+  redirectedRoots.clear();
+  vi.restoreAllMocks();
+});
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+async function makeFixtureRoot() {
+  const root = await fs.realpath(tempDirs.make("openclaw-installed-apps-"));
   const applications = path.join(root, "Applications");
   const userApplications = path.join(root, "UserApplications");
   const systemApplications = path.join(root, "SystemApplications");
@@ -23,105 +42,121 @@ async function makeFixtureRoot(): Promise<{
       fs.mkdir(directory, { recursive: true }),
     ),
   );
+  redirectedRoots.set("/Applications", applications);
+  redirectedRoots.set(path.join(os.homedir(), "Applications"), userApplications);
+  redirectedRoots.set("/System/Applications", systemApplications);
   return { root, applications, userApplications, systemApplications };
 }
 
-async function createApp(root: string, name: string, bundleId?: string): Promise<void> {
+async function createApp(root: string, name: string, plist?: string): Promise<string> {
   const contents = path.join(root, `${name}.app`, "Contents");
   await fs.mkdir(contents, { recursive: true });
-  if (!bundleId) {
-    return;
+  const plistPath = path.join(contents, "Info.plist");
+  if (plist !== undefined) {
+    await fs.writeFile(plistPath, plist);
   }
-  await fs.writeFile(
-    path.join(contents, "Info.plist"),
-    `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>${bundleId}</string></dict></plist>`,
-  );
+  return plistPath;
 }
 
-afterEach(async () => {
-  await Promise.all(
-    tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
-  );
-});
+function expectedApp(root: string, label: string, system = false, bundleId?: string) {
+  return {
+    label,
+    path: path.join(root, `${label}.app`),
+    system,
+    ...(bundleId ? { bundleId } : {}),
+  };
+}
 
 describe("scanInstalledApps", () => {
   it("scans app roots, filters copies and system apps, and sorts deterministically", async () => {
     const roots = await makeFixtureRoot();
     await Promise.all([
-      createApp(roots.applications, "Zulu", "com.example.zulu"),
-      createApp(roots.applications, "Alpha", "com.example.alpha"),
-      createApp(roots.applications, "Alpha previous", "com.example.previous"),
-      createApp(roots.applications, "Zulu-pre-update", "com.example.pre"),
+      createApp(roots.applications, "Zulu"),
+      createApp(roots.applications, "Alpha"),
+      createApp(roots.applications, "Alpha previous"),
+      createApp(roots.applications, "Zulu-pre-update"),
       createApp(roots.userApplications, "No Plist"),
-      createApp(roots.systemApplications, "Mail", "com.apple.mail"),
-      createApp(roots.systemApplications, "Calculator", "com.apple.calculator"),
+      createApp(roots.systemApplications, "Mail"),
+      createApp(roots.systemApplications, "Calculator"),
       fs.mkdir(path.join(roots.applications, "Not An App")),
     ]);
-
-    // The production reader shells out to macOS plutil; parse the XML fixture
-    // directly so this test also runs on Linux CI.
-    const readBundleId = async (appPath: string): Promise<string | undefined> => {
-      try {
-        const plist = await fs.readFile(path.join(appPath, "Contents", "Info.plist"), "utf8");
-        return /<key>CFBundleIdentifier<\/key>\s*<string>([^<]+)<\/string>/.exec(plist)?.[1];
-      } catch {
-        return undefined;
-      }
-    };
-    const result = await scanInstalledApps({ platform: "darwin", roots, readBundleId });
+    await fs.symlink(
+      path.join(roots.applications, "Alpha.app"),
+      path.join(roots.userApplications, "Linked.app"),
+    );
+    const result = await scanInstalledApps();
 
     expect(result).toEqual({
       status: "ok",
       apps: [
-        {
-          label: "Alpha",
-          bundleId: "com.example.alpha",
-          path: path.join(roots.applications, "Alpha.app"),
-          system: false,
-        },
-        {
-          label: "Mail",
-          bundleId: "com.apple.mail",
-          path: path.join(roots.systemApplications, "Mail.app"),
-          system: true,
-        },
-        {
-          label: "No Plist",
-          path: path.join(roots.userApplications, "No Plist.app"),
-          system: false,
-        },
-        {
-          label: "Zulu",
-          bundleId: "com.example.zulu",
-          path: path.join(roots.applications, "Zulu.app"),
-          system: false,
-        },
+        expectedApp(roots.applications, "Alpha"),
+        expectedApp(roots.userApplications, "Linked"),
+        expectedApp(roots.systemApplications, "Mail", true),
+        expectedApp(roots.userApplications, "No Plist"),
+        expectedApp(roots.applications, "Zulu"),
       ],
     });
   });
 
-  it("includes symlinked app bundles", async () => {
-    const roots = await makeFixtureRoot();
-    await createApp(roots.applications, "RealTarget", "com.example.symlinked");
-    await fs.symlink(
-      path.join(roots.applications, "RealTarget.app"),
-      path.join(roots.userApplications, "Linked.app"),
-    );
-    const readBundleId = async () => "com.example.symlinked";
-    const result = await scanInstalledApps({ platform: "darwin", roots, readBundleId });
-    expect(result.status).toBe("ok");
-    if (result.status === "ok") {
-      expect(result.apps.map((app) => app.label)).toContain("Linked");
-    }
-  });
-
   it("returns a typed unsupported result off macOS", async () => {
-    await expect(scanInstalledApps({ platform: "linux" })).resolves.toEqual({
+    mockProcessPlatform("linux");
+    await expect(scanInstalledApps()).resolves.toEqual({
       status: "unsupported",
-      platform: "linux",
       apps: [],
     });
   });
+
+  it.runIf(process.platform === "darwin")(
+    "reads only nonempty string identifiers from native plists and retains apps with invalid metadata",
+    async () => {
+      const roots = await makeFixtureRoot();
+      const fixtures: Array<[name: string, value?: string, bundleId?: string, extra?: string]> = [
+        [
+          "XML",
+          "<string> \tcom.example.xml\n </string>",
+          "com.example.xml",
+          `<key>BuildDate</key><date>2026-01-01T00:00:00Z</date><key>Unrelated</key><string>${"x".repeat(2 * 1024 * 1024)}</string>`,
+        ],
+        ["Binary", "<string>42</string>", "42"],
+        ["Whitespace", "<string> \t\n </string>"],
+        ["Missing Identifier"],
+        ["Integer", "<integer>42</integer>"],
+        ["Oversized Identifier", `<string>${"x".repeat(2 * 1024 * 1024)}</string>`],
+      ];
+      for (const [name, value, , extra] of fixtures) {
+        const identifier = value === undefined ? "" : `<key>CFBundleIdentifier</key>${value}`;
+        const plistPath = await createApp(
+          roots.applications,
+          name,
+          `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>${identifier}${extra ?? ""}</dict></plist>`,
+        );
+        if (name === "Binary") {
+          execFileSync("/usr/bin/plutil", ["-convert", "binary1", plistPath], { timeout: 2_000 });
+          expect((await fs.readFile(plistPath)).subarray(0, 8).toString()).toBe("bplist00");
+        }
+      }
+      await createApp(roots.applications, "Malformed", "not a property list");
+      const linkedPath = path.join(roots.userApplications, "Linked.app");
+      await fs.symlink(path.join(roots.applications, "XML.app"), linkedPath);
+
+      const result = await scanInstalledApps();
+
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") {
+        return;
+      }
+      expect(result.apps).toHaveLength(fixtures.length + 2);
+      expect(Object.fromEntries(result.apps.map((app) => [app.label, app.bundleId]))).toEqual({
+        XML: "com.example.xml",
+        Binary: "42",
+        Whitespace: undefined,
+        "Missing Identifier": undefined,
+        Integer: undefined,
+        "Oversized Identifier": undefined,
+        Malformed: undefined,
+        Linked: "com.example.xml",
+      });
+    },
+  );
 });

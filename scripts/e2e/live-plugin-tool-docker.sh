@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # Installs a packed plugin with a real npm dependency, exposes its tool to a
 # live OpenAI agent turn, and verifies the model received the dependency-made string.
 set -euo pipefail
@@ -6,7 +10,6 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/openclaw-e2e-instance.sh"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
-source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-live-plugin-tool-e2e" OPENCLAW_LIVE_PLUGIN_TOOL_E2E_IMAGE)"
 DOCKER_TARGET="${OPENCLAW_LIVE_PLUGIN_TOOL_DOCKER_TARGET:-bare}"
@@ -19,15 +22,7 @@ AGENT_OUTPUT_DUMP_BYTES="$(openclaw_e2e_read_nonnegative_int_env OPENCLAW_LIVE_P
 SESSION_SCAN_MAX_ENTRIES="$(openclaw_e2e_read_positive_int_env OPENCLAW_LIVE_PLUGIN_TOOL_SESSION_SCAN_MAX_ENTRIES 50000)"
 run_log=""
 
-cleanup() {
-  if [ -n "${PACKAGE_TGZ:-}" ]; then
-    docker_e2e_cleanup_package_tgz "$PACKAGE_TGZ"
-  fi
-  if [ -n "${run_log:-}" ]; then
-    rm -f "$run_log"
-  fi
-}
-trap cleanup EXIT
+trap 'docker_e2e_cleanup_package_run "${PACKAGE_TGZ:-}" "${run_log:-}"' EXIT
 
 if [ ! -f "$PROFILE_FILE" ] && [ -f "$HOME/.profile" ]; then
   PROFILE_FILE="$HOME/.profile"
@@ -35,19 +30,11 @@ fi
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" live-plugin-tool "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "$DOCKER_TARGET"
 
-prepare_package_tgz() {
-  if [ -n "$PACKAGE_TGZ" ]; then
-    PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz live-plugin-tool "$PACKAGE_TGZ")"
-    return 0
-  fi
-  if [ "$HOST_BUILD" = "0" ] && [ -z "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ]; then
-    echo "OPENCLAW_LIVE_PLUGIN_TOOL_HOST_BUILD=0 requires OPENCLAW_CURRENT_PACKAGE_TGZ" >&2
-    exit 1
-  fi
-  PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz live-plugin-tool)"
-}
-
-prepare_package_tgz
+if [ -z "$PACKAGE_TGZ" ] && [ "$HOST_BUILD" = "0" ] && [ -z "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ]; then
+  echo "OPENCLAW_LIVE_PLUGIN_TOOL_HOST_BUILD=0 requires OPENCLAW_CURRENT_PACKAGE_TGZ" >&2
+  exit 1
+fi
+PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz live-plugin-tool "$PACKAGE_TGZ")"
 
 PROFILE_MOUNT=()
 PROFILE_STATUS="none"
@@ -80,7 +67,7 @@ if ! docker_e2e_run_with_harness \
   -e "OPENCLAW_E2E_COMMAND_TIMEOUT=$COMMAND_TIMEOUT" \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
-  "${PROFILE_MOUNT[@]}" \
+  ${PROFILE_MOUNT[@]+"${PROFILE_MOUNT[@]}"} \
   -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'; then
 set -euo pipefail
 
@@ -165,7 +152,7 @@ fi
 plugin_tgz="${plugin_tgzs[0]}"
 
 echo "Installing fixture plugin from npm-pack: $plugin_tgz"
-openclaw plugins install "npm-pack:$plugin_tgz" --force >/tmp/openclaw-plugin-install.log 2>&1
+openclaw_e2e_fixture_plugin_command openclaw -- plugins install "npm-pack:$plugin_tgz" --force >/tmp/openclaw-plugin-install.log 2>&1
 node --disable-warning=ExperimentalWarning scripts/e2e/lib/live-plugin-tool/assertions.mjs configure
 openclaw plugins enable "$PLUGIN_ID" >/tmp/openclaw-plugin-enable.log 2>&1
 openclaw plugins list --json >/tmp/openclaw-plugins-list.json

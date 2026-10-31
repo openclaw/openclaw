@@ -1,0 +1,484 @@
+import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import {
+  persistSessionTranscriptTurn,
+  replaceSessionEntry,
+  type SessionTranscriptRuntimeTarget,
+} from "../../config/sessions/session-accessor.js";
+import * as reconciliation from "../../config/sessions/session-transcript-reconcile.js";
+import { useReconcileWorkerObserver } from "../../config/sessions/session-transcript-reconcile.test-support.js";
+import type { SessionTranscriptReconcileWorkerMessage } from "../../config/sessions/session-transcript-reconcile.worker.js";
+import { computeBackoff } from "../../infra/backoff.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
+import { SessionManager } from "../sessions/session-manager.js";
+import {
+  buildEmbeddedRunnerAssistant,
+  createEmbeddedAgentRunnerOpenAiConfig,
+  createResolvedEmbeddedRunnerModel,
+  createMockUsage,
+  immediateEnqueue,
+  makeEmbeddedRunnerAttempt,
+} from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import {
+  installEmbeddedRunnerBaseE2eMocks,
+  installEmbeddedRunnerBackoffE2eMocks,
+  installEmbeddedRunnerFastRunE2eMocks,
+} from "../test-helpers/embedded-agent-runner-e2e-mocks.js";
+import { withTestAdmission } from "./run-orchestrator.test-support.js";
+import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./run/types.js";
+
+vi.mock("node:worker_threads", async () =>
+  (
+    await import("../../config/sessions/session-transcript-reconcile.test-support.js")
+  ).createObservedWorkerThreads(),
+);
+
+const observer = useReconcileWorkerObserver();
+const tempRoots = createTempDirTracker();
+const runAttempt = vi.fn<(params: EmbeddedRunAttemptParams) => Promise<EmbeddedRunAttemptResult>>();
+type ProductionRun = typeof import("./run.js").runEmbeddedAgent;
+let runEmbeddedAgent: ProductionRun;
+
+beforeAll(async () => {
+  installEmbeddedRunnerBaseE2eMocks();
+  installEmbeddedRunnerBackoffE2eMocks({ computeBackoff, sleepWithAbort: async () => {} });
+  installEmbeddedRunnerFastRunE2eMocks({ runEmbeddedAttempt: runAttempt });
+  vi.doMock("../models-config.js", () => ({ ensureOpenClawModelsJson: vi.fn() }));
+  vi.doMock("./model.js", () => ({
+    resolveModelAsync: async (provider: string, modelId: string) =>
+      createResolvedEmbeddedRunnerModel(provider, modelId),
+  }));
+  const { runEmbeddedAgent: run } = await import("./run.js");
+  const { prepareSystemAgentRunAdmission } = await import("../admitted-run-context.js");
+  runEmbeddedAgent = withTestAdmission(
+    run,
+    prepareSystemAgentRunAdmission,
+    "retry-projection-test",
+  );
+  // Preserve the embedded project's cold-import budget after moving to host-process tests.
+}, 600_000);
+
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
+  closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  tempRoots.cleanup();
+  runAttempt.mockReset();
+});
+
+function fenceProjection(target: SessionTranscriptRuntimeTarget) {
+  const databaseOptions = { agentId: target.agentId };
+  const database = openOpenClawAgentDatabase(databaseOptions);
+  // Existing fault-injection pattern: the real owner must rebuild this projection.
+  database.db
+    .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
+    .run(target.sessionId);
+  const held = createDeferred();
+  let releaseAcknowledgement: (() => void) | undefined;
+  let released = false;
+  observer.onTask = ({ input, port, observeMessage }) => {
+    if (input.mode !== "disk" || input.path !== database.path) {
+      return;
+    }
+    const postMessage = port.postMessage.bind(port);
+    let startingTarget = false;
+    observeMessage((message: SessionTranscriptReconcileWorkerMessage) => {
+      startingTarget = message.type === "plan-start" && message.plan.sessionId === target.sessionId;
+    });
+    // Hold after the owner's claim, before any rebuilt projection is committed.
+    port.postMessage = (message: unknown, transferList) => {
+      const options = Array.isArray(transferList) ? { transfer: transferList } : transferList;
+      if (startingTarget && !released) {
+        startingTarget = false;
+        releaseAcknowledgement = () => postMessage(message, options);
+        held.resolve();
+        return;
+      }
+      postMessage(message, options);
+    };
+  };
+  reconciliation.startSessionTranscriptIndexReconcile({
+    ...databaseOptions,
+    preferredSessionId: target.sessionId,
+  });
+  const joined = reconciliation.waitForSessionTranscriptIndexReconcile(databaseOptions);
+  return {
+    held: Promise.race([
+      held.promise,
+      joined.then(() => {
+        throw new Error("projection owner exited before its plan-start acknowledgement");
+      }),
+    ]),
+    joined,
+    expectDirty() {
+      expect(reconciliation.isSessionTranscriptIndexReconcileRunning(databaseOptions)).toBe(true);
+      expect(
+        database.db
+          .prepare("SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = ?")
+          .get(target.sessionId),
+      ).toEqual({ needs_rebuild: 1 });
+    },
+    release() {
+      released = true;
+      releaseAcknowledgement?.();
+      releaseAcknowledgement = undefined;
+    },
+  };
+}
+
+async function createRun(sessionId: string, model: string, staged = false) {
+  const root = tempRoots.make("openclaw-projection-");
+  const stateDir = path.join(root, "state");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  const workspaceDir = path.join(root, "workspace");
+  const agentDir = staged ? path.join(root, "staged", "agent") : path.join(root, "agent");
+  await fs.mkdir(workspaceDir, { recursive: true });
+  await fs.mkdir(agentDir, { recursive: true });
+  const config = createEmbeddedAgentRunnerOpenAiConfig([model]);
+  setRuntimeConfigSnapshot(config);
+  const target = {
+    agentId: "main",
+    sessionId,
+    sessionKey: `agent:main:${sessionId}`,
+    storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+  };
+  const params = {
+    ...target,
+    agentDir,
+    workspaceDir,
+    config,
+    model,
+    provider: "openai",
+    prompt: "Check the results.",
+    timeoutMs: 5_000,
+    runId: `${sessionId}-run`,
+    enqueue: immediateEnqueue,
+  };
+  return {
+    stateDir,
+    workspaceDir,
+    target,
+    run: (overrides: Partial<Parameters<ProductionRun>[0]> = {}) =>
+      runEmbeddedAgent({ ...params, ...overrides }).then(
+        (result) => ({ result }),
+        (error: unknown) => ({ error }),
+      ),
+    seed: async (history: NonNullable<EmbeddedRunAttemptResult["messagesSnapshot"]>) => {
+      await replaceSessionEntry(target, { sessionId, updatedAt: 1 });
+      await persistSessionTranscriptTurn(target, {
+        messages: history.map((message, index) => ({ eventId: `seed-${index}`, message })),
+        touchSessionEntry: false,
+      });
+      await reconciliation.waitForSessionTranscriptIndexReconcile({ agentId: target.agentId });
+    },
+  };
+}
+
+function observeProjectionWait(onWait: () => void) {
+  const wait = reconciliation.waitForSessionTranscriptProjection.bind(reconciliation);
+  return vi
+    .spyOn(reconciliation, "waitForSessionTranscriptProjection")
+    .mockImplementation((...args) => {
+      const pending = wait(...args);
+      onWait();
+      return pending;
+    });
+}
+
+describe("embedded retry transcript ownership", () => {
+  it("waits for an earlier transcript rewrite before starting a foreground attempt", async () => {
+    const { stateDir, workspaceDir, target, run, seed } = await createRun(
+      "foreground-projection",
+      "gpt-5.4-mini",
+    );
+    const history = [{ role: "user" as const, content: "Retain this fact.", timestamp: 1 }];
+    await seed(history);
+    const fence = fenceProjection(target);
+    await fence.held;
+    const waiting = createDeferred();
+    observeProjectionWait(() => waiting.resolve());
+    runAttempt.mockImplementationOnce(async () => {
+      const manager = await SessionManager.openAsync(target, workspaceDir, {
+        maxBytes: 4096,
+        maxEvents: 20,
+      });
+      expect(manager.buildSessionContext().messages).toEqual(history);
+      return makeEmbeddedRunnerAttempt({
+        sessionIdUsed: target.sessionId,
+        assistantTexts: ["Retained."],
+      });
+    });
+    const outcome = run({ prompt: "Recall the fact.", timeoutMs: 30_000 });
+    try {
+      expect(await Promise.race([waiting.promise.then(() => "projection-wait"), outcome])).toBe(
+        "projection-wait",
+      );
+      fence.expectDirty();
+      expect(runAttempt).not.toHaveBeenCalled();
+      fence.release();
+      await expect(outcome).resolves.toMatchObject({
+        result: { payloads: [{ text: "Retained." }] },
+      });
+    } finally {
+      fence.release();
+      await outcome;
+      await fence.joined;
+      await reconciliation.waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
+    }
+  });
+
+  it.each([
+    ["detached", false, "active", false, "disconnect"],
+    ["durable", true, "active", false, "disconnect"],
+    ["durable", false, "active", false, "disconnect"],
+    ["durable", false, "active", true, "disconnect"],
+    ["detached", false, "absent", false, "output-limit"],
+    ["durable", false, "active", false, "output-limit"],
+    ["detached", false, "absent", false, "output-limit-empty"],
+  ] as const)(
+    "%s metadata, caller manager=%s, projection=%s, abort=%s, failure=%s",
+    async (sessionPersistence, suppliedManager, projection, abort, failure) => {
+      const { stateDir, workspaceDir, target, run, seed } = await createRun(
+        "retry-projection",
+        "gpt-5.6-luna",
+        true,
+      );
+      const callerOwned = suppliedManager || sessionPersistence === "detached";
+      const callerManager = suppliedManager ? SessionManager.inMemory(workspaceDir) : undefined;
+      const toolCalls = ["call_1", "call_2"];
+      const model = {
+        ...createResolvedEmbeddedRunnerModel("openai", "gpt-5.6-luna").model,
+        api: "openai-responses" as const,
+        input: ["text" as const],
+      };
+      const outputLimited = failure.startsWith("output-limit");
+      const emptyOutput = failure === "output-limit-empty";
+      // Transport terminal normalization is owned by openai-responses-client.terminal-error.test.ts.
+      const erroredAssistant = buildEmbeddedRunnerAssistant({
+        model: model.id,
+        stopReason: emptyOutput ? "length" : "error",
+        ...(outputLimited
+          ? emptyOutput
+            ? {}
+            : {
+                errorCode: "incomplete_tool_call",
+                errorMessage: "Responses stream completed with an incomplete terminal tool call",
+              }
+          : { errorMessage: "socket hang up" }),
+        usage: createMockUsage(outputLimited ? 440_445 : 0, outputLimited ? 128_000 : 0),
+        diagnostics: outputLimited
+          ? [
+              {
+                type: "openai_responses_terminal",
+                timestamp: 1,
+                details: {
+                  eventType: "response.incomplete",
+                  stopReason: "length",
+                  incompleteReason: "max_output_tokens",
+                  ...(!emptyOutput ? { incompleteToolCallId: "unfinished|fc_unfinished" } : {}),
+                },
+              },
+            ]
+          : [
+              {
+                type: "provider_transport_failure",
+                timestamp: 1,
+                error: { message: "socket hang up" },
+                details: { phase: "after_message_stream_start" },
+              },
+            ],
+      });
+      const history = [
+        { role: "user", content: "Check the results.", timestamp: 1 },
+        buildEmbeddedRunnerAssistant({
+          model: model.id,
+          stopReason: "toolUse",
+          content: toolCalls.map((id) => ({ type: "toolCall", id, name: "exec", arguments: {} })),
+        }),
+        ...toolCalls.map((id) => ({
+          role: "toolResult" as const,
+          toolCallId: id,
+          toolName: "exec",
+          content: [{ type: "text" as const, text: "completed" }],
+          isError: false,
+          timestamp: 2,
+        })),
+      ] satisfies EmbeddedRunAttemptResult["messagesSnapshot"];
+      history.push(erroredAssistant);
+      const waiting = createDeferred();
+      const secondAttempt = createDeferred();
+      let fence: ReturnType<typeof fenceProjection> | undefined;
+      const waitSpy = observeProjectionWait(() => {
+        if (fence) {
+          waiting.resolve();
+        }
+      });
+      let firstManager: EmbeddedRunAttemptParams["sessionManager"];
+      let nextRequestNumber = 0;
+      const controller = new AbortController();
+      runAttempt
+        .mockImplementationOnce(async (attempt) => {
+          expect(attempt).toMatchObject({ provider: model.provider, modelId: model.id });
+          assert(attempt.modelCallSequence, "The run must carry its model request sequence");
+          nextRequestNumber = ++attempt.modelCallSequence.value;
+          firstManager = attempt.sessionManager;
+          if (callerOwned) {
+            expect(firstManager).toBeDefined();
+            expect(attempt.sessionTarget).toBeUndefined();
+            if (callerManager) {
+              expect(firstManager).toBe(callerManager);
+            }
+            for (const message of history) {
+              firstManager!.appendMessage(message);
+            }
+          } else {
+            expect(firstManager).toBeUndefined();
+            expect(attempt.sessionTarget).toMatchObject(target);
+          }
+          if (projection === "active") {
+            fence = fenceProjection(target);
+            await fence.held;
+            fence.expectDirty();
+          }
+          return makeEmbeddedRunnerAttempt({
+            sessionIdUsed: target.sessionId,
+            messagesSnapshot: history,
+            lastAssistant: erroredAssistant,
+            currentAttemptAssistant: erroredAssistant,
+            toolMetas: toolCalls.map((toolCallId) => ({
+              toolCallId,
+              toolName: "exec",
+              replaySafe: false,
+            })),
+            itemLifecycle: { startedCount: 2, completedCount: 2, activeCount: 0 },
+          });
+        })
+        .mockImplementationOnce(async (attempt) => {
+          secondAttempt.resolve();
+          expect(attempt).toMatchObject({
+            provider: model.provider,
+            modelId: model.id,
+            prompt: expect.stringContaining(
+              "Continue the current task from the existing transcript",
+            ),
+            suppressNextUserMessagePersistence: true,
+            skipPreparedUserTurnMessage: true,
+          });
+          expect(attempt.modelCallSequence).toEqual({ value: nextRequestNumber });
+          if (callerOwned) {
+            expect(attempt.sessionManager).toBe(firstManager);
+            expect(attempt.sessionTarget).toBeUndefined();
+            fence?.expectDirty();
+          } else {
+            expect(attempt.sessionManager).toBeUndefined();
+            expect(attempt.sessionTarget).toMatchObject(target);
+          }
+          const resumedHistory = (
+            attempt.sessionManager ?? (await SessionManager.openAsync(target))
+          ).buildSessionContext().messages;
+          expect(resumedHistory.slice(0, history.length)).toEqual(history);
+          if (failure.startsWith("output-limit")) {
+            expect(resumedHistory.slice(history.length)).toEqual([
+              expect.objectContaining({
+                role: "custom",
+                customType: "incomplete-tool-call",
+                content: expect.stringContaining(
+                  failure === "output-limit-empty"
+                    ? "The model response reached the provider's output limit"
+                    : "Split the remaining work into smaller tool calls",
+                ),
+                details: {
+                  reason: "max_output_tokens",
+                  ...(failure === "output-limit-empty"
+                    ? {}
+                    : { toolCallId: "unfinished|fc_unfinished" }),
+                },
+              }),
+            ]);
+            expect(JSON.stringify(resumedHistory.at(-1))).toContain("provider's output limit");
+          } else {
+            expect(resumedHistory).toEqual(history);
+          }
+          return makeEmbeddedRunnerAttempt({
+            sessionIdUsed: target.sessionId,
+            assistantTexts: ["Verified."],
+            lastAssistant: buildEmbeddedRunnerAssistant({
+              model: model.id,
+              content: [{ type: "text", text: "Verified." }],
+            }),
+          });
+        });
+      let outcome: Promise<unknown> | undefined;
+      try {
+        if (projection !== "absent") {
+          await seed(history);
+        }
+        outcome = run({
+          sessionPersistence,
+          sessionManager: callerManager,
+          abortSignal: controller.signal,
+        });
+        if (projection === "active") {
+          const boundary = await Promise.race([
+            waiting.promise.then(() => "projection-wait"),
+            secondAttempt.promise.then(() => "second-attempt"),
+            outcome.then(() => "run-ended"),
+          ]);
+          expect(boundary).toBe(callerOwned ? "second-attempt" : "projection-wait");
+          fence!.expectDirty();
+          if (!callerOwned) {
+            expect(runAttempt).toHaveBeenCalledOnce();
+            expect(waitSpy).toHaveBeenCalledTimes(2);
+            if (abort) {
+              controller.abort();
+              await expect(outcome).resolves.toMatchObject({ error: { name: "AbortError" } });
+              expect(runAttempt).toHaveBeenCalledOnce();
+              fence!.expectDirty();
+              return;
+            }
+            fence!.release();
+          }
+        }
+        await expect(outcome).resolves.toMatchObject({
+          result: {
+            payloads: [{ text: "Verified." }],
+          },
+        });
+        expect(runAttempt).toHaveBeenCalledTimes(2);
+        if (projection === "absent") {
+          await expect(fs.access(path.join(stateDir, "agents"))).rejects.toThrow();
+        }
+      } finally {
+        fence?.release();
+        await outcome;
+        await fence?.joined;
+        await reconciliation.waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
+        expect(
+          reconciliation.isSessionTranscriptIndexReconcileRunning({ agentId: target.agentId }),
+        ).toBe(false);
+        waitSpy.mockRestore();
+      }
+    },
+  );
+});

@@ -1,4 +1,22 @@
-/* Apps & extensions promo page — hero, card grid, and community pills. */
+/* Discovery must not push the platform cards away after the page appears. */
+openclaw-apps-page openclaw-mcp-app-catalog:not([surface]):not(:empty) {
+  display: block;
+  block-size: clamp(18rem, 45dvh, 28rem);
+  margin-bottom: 16px;
+}
+
+openclaw-apps-page openclaw-mcp-app-catalog:not([surface]) .mcp-app-catalog {
+  display: flex;
+  flex-direction: column;
+  block-size: 100%;
+  margin-bottom: 0;
+}
+
+openclaw-apps-page openclaw-mcp-app-catalog:not([surface]) .mcp-app-catalog__entries {
+  flex: 1;
+  min-block-size: 0;
+  overflow-y: auto;
+}
 
 .apps-hero {
   display: flex;
@@ -153,18 +171,21 @@
 }
 
 .apps-card__cta {
+  padding: 6px 13px;
+  font: inherit;
+  cursor: var(--cursor-action);
+}
+
+.apps-card__cta,
+.apps-pill {
   display: inline-flex;
   align-items: center;
-  padding: 6px 13px;
   border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--card);
   color: var(--text);
-  font: inherit;
   font-size: var(--control-ui-text-sm);
   font-weight: 550;
-  text-decoration: none;
-  cursor: var(--cursor-action);
   transition:
     transform 140ms ease,
     background 140ms ease,
@@ -177,11 +198,11 @@
   color: var(--bg);
 }
 
-.apps-card__cta:hover {
+.apps-card__cta:hover,
+.apps-pill:hover {
   transform: translateY(-1px);
   border-color: color-mix(in srgb, var(--border) 40%, var(--text) 60%);
   background: var(--bg-hover);
-  text-decoration: none;
 }
 
 .apps-card__cta--primary:hover {
@@ -189,7 +210,8 @@
   color: var(--bg);
 }
 
-.apps-card__cta:focus-visible {
+.apps-card__cta:focus-visible,
+.apps-pill:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -200,27 +222,6 @@
   font-size: var(--control-ui-text-sm);
 }
 
-.apps-pair-hint button {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--text);
-  font: inherit;
-  cursor: var(--cursor-action);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.apps-pair-hint button:hover {
-  color: var(--text-strong);
-}
-
-.apps-pair-hint button:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-  border-radius: 4px;
-}
-
 .apps-community {
   display: flex;
   flex-wrap: wrap;
@@ -228,33 +229,8 @@
 }
 
 .apps-pill {
-  display: inline-flex;
-  align-items: center;
   gap: 8px;
   padding: 8px 15px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--card);
-  color: var(--text);
-  font-size: var(--control-ui-text-sm);
-  font-weight: 550;
-  text-decoration: none;
-  transition:
-    transform 140ms ease,
-    background 140ms ease,
-    border-color 140ms ease;
-}
-
-.apps-pill:hover {
-  transform: translateY(-1px);
-  border-color: color-mix(in srgb, var(--border) 40%, var(--text) 60%);
-  background: var(--bg-hover);
-  text-decoration: none;
-}
-
-.apps-pill:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .apps-pill__icon {

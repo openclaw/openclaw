@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { listAgentEntries, tryResolveSoleAgentId } from "../agents/agent-scope-config.js";
+import { tryResolveSoleAgentId } from "../agents/agent-scope-config.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import { isChannelConfigMetadataKey } from "../channels/config-metadata.js";
 import { normalizeRouteBindingChannelId } from "../routing/binding-scope.js";
@@ -18,8 +18,8 @@ function isChannelWideBinding(binding: AgentRouteBinding, channelId: string): bo
     ) === channelId &&
     (typeof match.accountId === "string" ? match.accountId.trim() : undefined) === "*" &&
     match.peer === undefined &&
-    !normalizeOptionalString(typeof match.guildId === "string" ? match.guildId : undefined) &&
-    !normalizeOptionalString(typeof match.teamId === "string" ? match.teamId : undefined) &&
+    !normalizeOptionalString(match.guildId) &&
+    !normalizeOptionalString(match.teamId) &&
     (!Array.isArray(match.roles) || match.roles.length === 0)
   );
 }
@@ -54,12 +54,46 @@ function listUnboundAmbientChannelIds(
     .filter((channelId) => !bindings.some((binding) => isChannelWideBinding(binding, channelId)));
 }
 
+/** Preserve a legacy workspace locator without assigning any runtime ownership. */
+function resolveLegacyAgentWorkspacePin(
+  defaultWorkspace: unknown,
+  entry: { workspace?: unknown },
+  options: { env?: NodeJS.ProcessEnv; homedir?: () => string } = {},
+): string | undefined {
+  const needsPin =
+    !Object.hasOwn(entry, "workspace") ||
+    (typeof entry.workspace === "string" && entry.workspace.trim().length === 0);
+  return needsPin
+    ? (normalizeOptionalString(defaultWorkspace) ??
+        resolveDefaultAgentWorkspaceDir(options.env, options.homedir))
+    : undefined;
+}
+
+export function resolveLegacyFirstAgentWorkspacePin(
+  agents: Record<string, unknown>,
+  entries: readonly Record<string, unknown>[],
+  options: { env?: NodeJS.ProcessEnv; homedir?: () => string } = {},
+): string | undefined {
+  // Shipped markerless lists gave their first agent the shared workspace. Keep
+  // source array order here; integer-like keys reorder after conversion to entries.
+  return agents.ownership === undefined &&
+    entries.length > 1 &&
+    entries.every((entry) => !Object.hasOwn(entry, "default") || entry.default === false)
+    ? resolveLegacyAgentWorkspacePin(
+        isRecord(agents.defaults) ? agents.defaults.workspace : undefined,
+        entries[0]!,
+        options,
+      )
+    : undefined;
+}
+
 export function materializeLegacyDefaultAgentRoles(
   cfg: OpenClawConfig,
   legacyDefaultAgentId: string,
   options: {
     ambientChannelIds?: readonly string[];
     env?: NodeJS.ProcessEnv;
+    homedir?: () => string;
     materializeSessionStore?: boolean;
     materializeWorkspace?: boolean;
   } = {},
@@ -73,17 +107,11 @@ export function materializeLegacyDefaultAgentRoles(
       (candidate) => normalizeAgentId(candidate) === agentId,
     );
     const entry = entryKey ? entries[entryKey] : undefined;
-    const workspaceNeedsPin =
-      entry !== undefined &&
-      (!Object.hasOwn(entry, "workspace") ||
-        (typeof entry.workspace === "string" && entry.workspace.trim().length === 0));
-    if (entryKey && entry && workspaceNeedsPin) {
-      entries[entryKey] = {
-        ...entry,
-        workspace:
-          normalizeOptionalString(next.agents?.defaults?.workspace) ??
-          resolveDefaultAgentWorkspaceDir(options.env),
-      };
+    const workspace = entry
+      ? resolveLegacyAgentWorkspacePin(next.agents?.defaults?.workspace, entry, options)
+      : undefined;
+    if (entryKey && entry && workspace !== undefined) {
+      entries[entryKey] = { ...entry, workspace };
       next = { ...next, agents: { ...next.agents, entries } };
       insertedPaths.push(["agents", "entries", entryKey, "workspace"]);
     }
@@ -120,10 +148,6 @@ export function materializeLegacyDefaultAgentRoles(
       insertedPaths.push(["agents", "defaults", key, "agentId"]);
       changed = true;
     };
-    materialize(
-      "heartbeat",
-      !listAgentEntries(cfg).some((entry) => entry.heartbeat) && defaults?.heartbeat === undefined,
-    );
     materialize("systemAgent", unset("systemAgent"));
     // Auth transitions are pinned or refused by the roster write guard; fixed-store rows need
     // their owner recorded immediately because a later restart loses the migration sidecar.

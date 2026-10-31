@@ -1,8 +1,8 @@
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveSessionEntryAccessTarget } from "../../config/sessions/session-accessor.js";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { readResolvedSessionEntryInWorker } from "../../config/sessions/session-accessor.entry.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
@@ -15,8 +15,8 @@ import {
   createMcpAttachGrantServerConfig,
   getActiveMcpLoopbackRuntime,
 } from "../mcp-http.loopback-runtime.js";
-import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { resolveSessionStoreKey } from "../session-utils.js";
+import { resolveRequestedSessionStoreTarget } from "../session-store-key.js";
+import { respondError } from "./response.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const attachHandlers: GatewayRequestHandlers = {
@@ -24,7 +24,7 @@ export const attachHandlers: GatewayRequestHandlers = {
     const grantParams = asRecord(params);
     const cfg = context.getRuntimeConfig();
     const requestedSessionKey = normalizeOptionalString(grantParams.sessionKey) ?? "main";
-    const requestedAgent = resolveRequestedSessionAgentId(
+    const requestedAgent = resolveRequestedSessionStoreTarget(
       cfg,
       requestedSessionKey,
       normalizeOptionalString(grantParams.agentId),
@@ -33,36 +33,24 @@ export const attachHandlers: GatewayRequestHandlers = {
       respond(false, undefined, requestedAgent.error);
       return;
     }
-    const storageSessionKey = resolveSessionStoreKey({
-      cfg,
-      sessionKey: requestedSessionKey,
-      storeAgentId: requestedAgent.agentId,
-    });
+    const { sessionKey: storageSessionKey, agentId } = requestedAgent.value;
     const sessionKey = parseAgentSessionKey(storageSessionKey)
       ? storageSessionKey
-      : `agent:${requestedAgent.agentId}:${storageSessionKey}`;
+      : `agent:${agentId}:${storageSessionKey}`;
+    await ensureMcpLoopbackServer();
     const harnessEntry = isAgentHarnessSessionKey(storageSessionKey)
-      ? resolveSessionEntryAccessTarget({ cfg, sessionKey: storageSessionKey }).entry
+      ? await readResolvedSessionEntryInWorker({ cfg, sessionKey: storageSessionKey })
       : undefined;
     if (
       isAgentHarnessSessionKey(storageSessionKey) &&
       (!harnessEntry || isAgentHarnessSessionStoreEntryProtected(storageSessionKey, harnessEntry))
     ) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE),
-      );
+      respondError(respond, ErrorCodes.INVALID_REQUEST, AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
       return;
     }
-    await ensureMcpLoopbackServer();
     const runtime = getActiveMcpLoopbackRuntime();
     if (!runtime) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "mcp loopback server unavailable"),
-      );
+      respondError(respond, ErrorCodes.UNAVAILABLE, "mcp loopback server unavailable");
       return;
     }
     const grant = mintAttachGrant({
@@ -82,7 +70,7 @@ export const attachHandlers: GatewayRequestHandlers = {
   "attach.revoke": async ({ params, respond }) => {
     const token = normalizeOptionalString(asRecord(params).token);
     if (!token) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "token is required"));
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "token is required");
       return;
     }
     respond(true, { revoked: revokeAttachGrant(token) });

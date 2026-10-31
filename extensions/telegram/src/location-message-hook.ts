@@ -15,16 +15,16 @@ import {
   resolveTelegramMessageThreadSpec,
 } from "./bot/helpers.js";
 
-function buildTelegramLocationMessageHook(params: {
+export function emitTelegramLiveLocationMessageHook(params: {
   accountId: string;
   msg: Message;
   updateId: number;
   updateKind: "message" | "edited_message" | "channel_post" | "edited_channel_post";
   isForum: boolean;
-}) {
+}): void {
   const location = extractTelegramLocation(params.msg);
   if (!location) {
-    return null;
+    return;
   }
   const msg = params.msg;
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
@@ -33,6 +33,9 @@ function buildTelegramLocationMessageHook(params: {
   const from = isGroup
     ? buildTelegramGroupFrom(msg.chat.id, threadSpec)
     : `telegram:${msg.chat.id}`;
+  const body = formatLocationText(location);
+  const messageTimestamp = msg.date ? msg.date * 1000 : undefined;
+  const editTimestamp = msg.edit_date ? msg.edit_date * 1000 : undefined;
   const canonical = deriveInboundMessageHookContext({
     From: from,
     To: originatingTo,
@@ -47,14 +50,10 @@ function buildTelegramLocationMessageHook(params: {
     SenderName: [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ") || undefined,
     SenderUsername: msg.from?.username,
     Timestamp:
-      params.updateKind.startsWith("edited_") && msg.edit_date
-        ? msg.edit_date * 1000
-        : msg.date
-          ? msg.date * 1000
-          : undefined,
-    Body: formatLocationText(location),
-    RawBody: formatLocationText(location),
-    BodyForAgent: formatLocationText(location),
+      params.updateKind.startsWith("edited_") && msg.edit_date ? editTimestamp : messageTimestamp,
+    Body: body,
+    RawBody: body,
+    BodyForAgent: body,
     MessageThreadId: threadSpec.id,
     GroupSubject: isGroup ? msg.chat.title : undefined,
     LocationLat: location.latitude,
@@ -68,26 +67,17 @@ function buildTelegramLocationMessageHook(params: {
     LocationCaption: location.caption,
     ProviderUpdateId: String(params.updateId),
     ProviderUpdateKind: params.updateKind,
-    ProviderMessageTimestamp: msg.date ? msg.date * 1000 : undefined,
-    ProviderEditTimestamp: msg.edit_date ? msg.edit_date * 1000 : undefined,
+    ProviderMessageTimestamp: messageTimestamp,
+    ProviderEditTimestamp: editTimestamp,
     CommandAuthorized: false,
   });
-  return {
-    event: toPluginMessageReceivedEvent(canonical),
-    context: toPluginMessageContext(canonical),
-  };
-}
-
-export function emitTelegramLiveLocationMessageHook(
-  params: Parameters<typeof buildTelegramLocationMessageHook>[0],
-): void {
-  const pair = buildTelegramLocationMessageHook(params);
+  const context = toPluginMessageContext(canonical);
   const runner = getGlobalHookRunner();
-  if (!pair || !runner?.hasHooks("message_received", pair.context)) {
+  if (!runner?.hasHooks("message_received", context)) {
     return;
   }
   fireAndForgetHook(
-    runner.runMessageReceived(pair.event, pair.context),
+    runner.runMessageReceived(toPluginMessageReceivedEvent(canonical), context),
     "message_received plugin hook failed",
   );
 }

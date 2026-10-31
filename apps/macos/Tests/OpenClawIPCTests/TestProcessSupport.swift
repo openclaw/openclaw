@@ -11,14 +11,14 @@ enum TestProcessSupport {
         return pid_t(value)
     }
 
-    static func waitForPID(in file: URL, timeout: Duration = .seconds(2)) async throws -> pid_t {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: timeout)
-        while clock.now < deadline {
-            if let pid = self.pollPID(in: file) { return pid }
-            try await Task.sleep(for: .milliseconds(10))
+    static func waitForPID(
+        in file: URL,
+        sourceLocation: SourceLocation = #_sourceLocation) async throws -> pid_t
+    {
+        try await TestWait.state("PID file \(file.lastPathComponent)", sourceLocation: sourceLocation) {
+            self.pollPID(in: file) != nil
         }
-        return try #require(self.pollPID(in: file))
+        return try #require(self.pollPID(in: file), sourceLocation: sourceLocation)
     }
 
     static func processIsGone(_ pid: pid_t) -> Bool {
@@ -26,12 +26,11 @@ enum TestProcessSupport {
         return kill(pid, 0) == -1 && errno == ESRCH
     }
 
-    static func waitUntilGone(_ pid: pid_t, timeout: Duration = .seconds(2)) async -> Bool {
-        let deadline = ContinuousClock.now.advanced(by: timeout)
-        while ContinuousClock.now < deadline {
-            if self.processIsGone(pid) { return true }
-            try? await Task.sleep(for: .milliseconds(10))
-        }
+    static func waitUntilGone(
+        _ pid: pid_t,
+        sourceLocation: SourceLocation = #_sourceLocation) async throws -> Bool
+    {
+        try await TestWait.state("exit of \(pid)", sourceLocation: sourceLocation) { self.processIsGone(pid) }
         return self.processIsGone(pid)
     }
 

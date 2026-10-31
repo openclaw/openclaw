@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 REMOTE_URL="${OPENCLAW_REF_REMOTE:-https://github.com/openclaw/openclaw.git}"
@@ -113,19 +117,16 @@ resolve_unique_remote_ref() {
   return 1
 }
 
-read_remote_matches() {
-  local output_name="$1"
-  shift
+read_remote_match() {
   local output=""
   local status=0
-  eval "$output_name=()"
   set +e
   output="$(resolve_unique_remote_ref "$@")"
   status="$?"
   set -e
   case "$status" in
     0)
-      eval "$output_name=(\"\$output\")"
+      printf '%s\n' "$output"
       ;;
     1)
       ;;
@@ -162,33 +163,28 @@ if [[ "$REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
   exit 0
 fi
 
-declare -a matches=()
-if [[ "$REF" == refs/heads/* ]]; then
-  read_remote_matches matches "$REF"
-elif [[ "$REF" == refs/tags/* ]]; then
-  read_remote_matches matches "${REF}^{}" "$REF"
+match=""
+if [[ "$REF" == refs/tags/* ]]; then
+  match="$(read_remote_match "${REF}^{}" "$REF")"
 elif [[ "$REF" == refs/* ]]; then
-  read_remote_matches matches "$REF"
+  match="$(read_remote_match "$REF")"
 else
-  read_remote_matches branch_matches "refs/heads/${REF}"
-  read_remote_matches tag_matches "refs/tags/${REF}^{}" "refs/tags/${REF}"
-  match_count=$(( ${#branch_matches[@]} + ${#tag_matches[@]} ))
-  if [[ "$match_count" -eq 1 ]]; then
-    if [[ "${#branch_matches[@]}" -eq 1 ]]; then
-      matches=("${branch_matches[0]}")
-      ref_kind=branch
-    else
-      matches=("${tag_matches[0]}")
-      ref_kind=tag
-    fi
-  elif [[ "$match_count" -gt 1 ]]; then
+  branch_match="$(read_remote_match "refs/heads/${REF}")"
+  tag_match="$(read_remote_match "refs/tags/${REF}^{}" "refs/tags/${REF}")"
+  if [[ -n "$branch_match" && -n "$tag_match" ]]; then
     echo "Ref resolved ambiguously as both branch and tag: ${REF}" >&2
     exit 1
+  elif [[ -n "$branch_match" ]]; then
+    match="$branch_match"
+    ref_kind=branch
+  elif [[ -n "$tag_match" ]]; then
+    match="$tag_match"
+    ref_kind=tag
   fi
 fi
 
-if [[ "${#matches[@]}" -eq 1 ]]; then
-  resolved="$(lower_sha "${matches[0]}")"
+if [[ -n "$match" ]]; then
+  resolved="$(lower_sha "$match")"
   if [[ -n "$EXPECTED_SHA" ]] && [[ "$resolved" != "$(lower_sha "$EXPECTED_SHA")" ]]; then
     echo "Ref ${REF} resolved to ${resolved}, expected ${EXPECTED_SHA}." >&2
     exit 1

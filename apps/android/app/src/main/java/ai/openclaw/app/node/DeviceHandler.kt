@@ -18,19 +18,32 @@ import android.os.Environment
 import android.os.PowerManager
 import android.os.StatFs
 import android.os.SystemClock
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonObject
 import java.util.Locale
+import kotlin.math.roundToInt
 
 private const val DEFAULT_DEVICE_APPS_LIMIT = 100
 private const val MAX_DEVICE_APPS_LIMIT = 200
 private const val DEVICE_APPS_SYSTEM_FLAGS =
   ApplicationInfo.FLAG_SYSTEM or ApplicationInfo.FLAG_UPDATED_SYSTEM_APP
+private val NETWORK_TRANSPORTS =
+  listOf(
+    NetworkCapabilities.TRANSPORT_WIFI to "wifi",
+    NetworkCapabilities.TRANSPORT_CELLULAR to "cellular",
+    NetworkCapabilities.TRANSPORT_ETHERNET to "wired",
+  )
 
 internal fun isSystemDeviceApp(appInfo: ApplicationInfo): Boolean = (appInfo.flags and DEVICE_APPS_SYSTEM_FLAGS) != 0
 
+@Serializable
 internal data class DeviceAppEntry(
   val label: String,
   val packageName: String,
@@ -98,113 +111,23 @@ private class AndroidDeviceAppSource(
   }
 }
 
-private data class DeviceAppsRequest(
-  val includeSystem: Boolean,
-  val includeDisabled: Boolean,
-  val includeNonLaunchable: Boolean,
-  val query: String?,
-  val limit: Int,
-)
-
-/**
- * Gateway device command adapter for Android status, info, permission, and health snapshots.
- */
-class DeviceHandler private constructor(
+class DeviceHandler internal constructor(
   private val appContext: Context,
   private val smsEnabled: Boolean = SensitiveFeatureConfig.smsEnabled,
   private val callLogEnabled: Boolean = SensitiveFeatureConfig.callLogEnabled,
   private val photosEnabled: Boolean = SensitiveFeatureConfig.photosEnabled,
+  backgroundLocationEnabled: Boolean = SensitiveFeatureConfig.backgroundLocationEnabled,
   private val appSource: DeviceAppSource = AndroidDeviceAppSource(appContext),
-  private val permissionSnapshot: () -> AndroidPermissionSnapshot,
+  private val permissionSnapshot: () -> AndroidPermissionSnapshot = {
+    readAndroidPermissionSnapshot(
+      context = appContext,
+      smsEnabled = smsEnabled,
+      callLogEnabled = callLogEnabled,
+      photosEnabled = photosEnabled,
+      backgroundLocationEnabled = backgroundLocationEnabled,
+    )
+  },
 ) {
-  constructor(
-    appContext: Context,
-    smsEnabled: Boolean = SensitiveFeatureConfig.smsEnabled,
-    callLogEnabled: Boolean = SensitiveFeatureConfig.callLogEnabled,
-    photosEnabled: Boolean = SensitiveFeatureConfig.photosEnabled,
-    backgroundLocationEnabled: Boolean = SensitiveFeatureConfig.backgroundLocationEnabled,
-  ) : this(
-    appContext = appContext,
-    smsEnabled = smsEnabled,
-    callLogEnabled = callLogEnabled,
-    photosEnabled = photosEnabled,
-    appSource = AndroidDeviceAppSource(appContext),
-    permissionSnapshot = {
-      readAndroidPermissionSnapshot(
-        context = appContext,
-        smsEnabled = smsEnabled,
-        callLogEnabled = callLogEnabled,
-        photosEnabled = photosEnabled,
-        backgroundLocationEnabled = backgroundLocationEnabled,
-      )
-    },
-  )
-
-  companion object {
-    internal fun withPermissionSnapshot(
-      appContext: Context,
-      smsEnabled: Boolean,
-      callLogEnabled: Boolean,
-      photosEnabled: Boolean,
-      permissionSnapshot: () -> AndroidPermissionSnapshot,
-    ): DeviceHandler =
-      DeviceHandler(
-        appContext = appContext,
-        smsEnabled = smsEnabled,
-        callLogEnabled = callLogEnabled,
-        photosEnabled = photosEnabled,
-        appSource = AndroidDeviceAppSource(appContext),
-        permissionSnapshot = permissionSnapshot,
-      )
-
-    internal fun forTesting(
-      appContext: Context,
-      appSource: DeviceAppSource,
-      smsEnabled: Boolean = SensitiveFeatureConfig.smsEnabled,
-      callLogEnabled: Boolean = SensitiveFeatureConfig.callLogEnabled,
-      photosEnabled: Boolean = SensitiveFeatureConfig.photosEnabled,
-      backgroundLocationEnabled: Boolean = SensitiveFeatureConfig.backgroundLocationEnabled,
-      permissionSnapshot: (() -> AndroidPermissionSnapshot)? = null,
-    ): DeviceHandler =
-      DeviceHandler(
-        appContext = appContext,
-        smsEnabled = smsEnabled,
-        callLogEnabled = callLogEnabled,
-        photosEnabled = photosEnabled,
-        appSource = appSource,
-        permissionSnapshot =
-          permissionSnapshot ?: {
-            readAndroidPermissionSnapshot(
-              context = appContext,
-              smsEnabled = smsEnabled,
-              callLogEnabled = callLogEnabled,
-              photosEnabled = photosEnabled,
-              backgroundLocationEnabled = backgroundLocationEnabled,
-            )
-          },
-      )
-
-    /**
-     * SMS is available only when the feature flag, telephony hardware, and at least one SMS permission align.
-     */
-    internal fun hasAnySmsCapability(
-      smsEnabled: Boolean,
-      telephonyAvailable: Boolean,
-      smsSendGranted: Boolean,
-      smsReadGranted: Boolean,
-    ): Boolean = smsEnabled && telephonyAvailable && (smsSendGranted || smsReadGranted)
-
-    /**
-     * Prompt only when Android can grant a missing SMS permission that this build can use.
-     */
-    internal fun isSmsPromptable(
-      smsEnabled: Boolean,
-      telephonyAvailable: Boolean,
-      smsSendGranted: Boolean,
-      smsReadGranted: Boolean,
-    ): Boolean = smsEnabled && telephonyAvailable && (!smsSendGranted || !smsReadGranted)
-  }
-
   private data class BatterySnapshot(
     val status: Int,
     val plugged: Int,
@@ -212,56 +135,41 @@ class DeviceHandler private constructor(
     val temperatureC: Double?,
   )
 
-  /** Returns battery, storage, network, and uptime state for device.status. */
   fun handleDeviceStatus(_paramsJson: String?): GatewaySession.InvokeResult = GatewaySession.InvokeResult.ok(statusPayloadJson())
 
-  /** Returns stable Android hardware, OS, app, and locale metadata for device.info. */
   fun handleDeviceInfo(_paramsJson: String?): GatewaySession.InvokeResult = GatewaySession.InvokeResult.ok(infoPayloadJson())
 
-  /** Returns permission and promptability state for Android capabilities exposed to the gateway. */
   fun handleDevicePermissions(_paramsJson: String?): GatewaySession.InvokeResult = GatewaySession.InvokeResult.ok(permissionsPayloadJson())
 
-  /** Returns coarse device health for memory, power, thermal, battery, and security patch state. */
   fun handleDeviceHealth(_paramsJson: String?): GatewaySession.InvokeResult = GatewaySession.InvokeResult.ok(healthPayloadJson())
 
   fun handleDeviceApps(paramsJson: String?): GatewaySession.InvokeResult {
-    val request = parseDeviceAppsRequest(paramsJson)
+    val params = parseJsonParamsObject(paramsJson)
+    val includeSystem = parseJsonBooleanFlag(params, "includeSystem") ?: false
+    val includeDisabled = parseJsonBooleanFlag(params, "includeDisabled") ?: false
+    val includeNonLaunchable = parseJsonBooleanFlag(params, "includeNonLaunchable") ?: false
+    val query = parseJsonString(params, "query")?.trim()?.takeIf { it.isNotEmpty() }
+    val limit = (parseJsonInt(params, "limit") ?: DEFAULT_DEVICE_APPS_LIMIT).coerceIn(1, MAX_DEVICE_APPS_LIMIT)
     val matchingApps =
       appSource
-        .listApps(includeNonLaunchable = request.includeNonLaunchable)
+        .listApps(includeNonLaunchable = includeNonLaunchable)
         .asSequence()
-        .filter { request.includeSystem || !it.system }
-        .filter { request.includeDisabled || it.enabled }
+        .filter { includeSystem || !it.system }
+        .filter { includeDisabled || it.enabled }
         .filter { app ->
-          val query = request.query ?: return@filter true
-          app.label.contains(query, ignoreCase = true) || app.packageName.contains(query, ignoreCase = true)
+          query == null || app.label.contains(query, ignoreCase = true) || app.packageName.contains(query, ignoreCase = true)
         }.toList()
-    val limitedApps = matchingApps.take(request.limit)
+    val limitedApps = matchingApps.take(limit)
 
     return GatewaySession.InvokeResult.ok(
       buildJsonObject {
         put("count", JsonPrimitive(limitedApps.size))
         put("totalMatched", JsonPrimitive(matchingApps.size))
         put("truncated", JsonPrimitive(matchingApps.size > limitedApps.size))
-        put("visibility", JsonPrimitive(if (request.includeNonLaunchable) "android-visible" else "launcher"))
-        put("includeSystem", JsonPrimitive(request.includeSystem))
-        put("includeDisabled", JsonPrimitive(request.includeDisabled))
-        put(
-          "apps",
-          buildJsonArray {
-            for (app in limitedApps) {
-              add(
-                buildJsonObject {
-                  put("label", JsonPrimitive(app.label))
-                  put("packageName", JsonPrimitive(app.packageName))
-                  put("system", JsonPrimitive(app.system))
-                  put("enabled", JsonPrimitive(app.enabled))
-                  put("launchable", JsonPrimitive(app.launchable))
-                },
-              )
-            }
-          },
-        )
+        put("visibility", JsonPrimitive(if (includeNonLaunchable) "android-visible" else "launcher"))
+        put("includeSystem", JsonPrimitive(includeSystem))
+        put("includeDisabled", JsonPrimitive(includeDisabled))
+        put("apps", Json.encodeToJsonElement(limitedApps))
       }.toString(),
     )
   }
@@ -280,47 +188,29 @@ class DeviceHandler private constructor(
     val uptimeSeconds = SystemClock.elapsedRealtime() / 1_000.0
 
     return buildJsonObject {
-      put(
-        "battery",
-        buildJsonObject {
-          battery.levelFraction?.let { put("level", JsonPrimitive(it)) }
-          put("state", JsonPrimitive(mapBatteryState(battery.status)))
-          put("lowPowerModeEnabled", JsonPrimitive(powerManager?.isPowerSaveMode == true))
-        },
-      )
-      put(
-        "thermal",
-        buildJsonObject {
-          put("state", JsonPrimitive(mapThermalState(powerManager)))
-        },
-      )
-      put(
-        "storage",
-        buildJsonObject {
-          put("totalBytes", JsonPrimitive(totalBytes))
-          put("freeBytes", JsonPrimitive(freeBytes))
-          put("usedBytes", JsonPrimitive(usedBytes))
-        },
-      )
-      put(
-        "network",
-        buildJsonObject {
-          put("status", JsonPrimitive(mapNetworkStatus(caps)))
-          put(
-            "isExpensive",
-            JsonPrimitive(
-              caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)?.not() ?: false,
-            ),
-          )
-          put(
-            "isConstrained",
-            JsonPrimitive(
-              caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)?.not() ?: false,
-            ),
-          )
-          put("interfaces", networkInterfacesJson(caps))
-        },
-      )
+      putJsonObject("battery") {
+        // The shared battery contract uses a 0.0–1.0 fraction; levelPercent mirrors it as 0–100.
+        battery.levelFraction?.let {
+          put("level", it)
+          put("levelPercent", (it * 100.0).roundToInt())
+        }
+        put("state", mapBatteryState(battery.status))
+        put("lowPowerModeEnabled", powerManager?.isPowerSaveMode == true)
+      }
+      putJsonObject("thermal") {
+        put("state", mapThermalState(powerManager))
+      }
+      putJsonObject("storage") {
+        put("totalBytes", totalBytes)
+        put("freeBytes", freeBytes)
+        put("usedBytes", usedBytes)
+      }
+      putJsonObject("network") {
+        put("status", mapNetworkStatus(caps))
+        put("isExpensive", caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)?.not() ?: false)
+        put("isConstrained", caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)?.not() ?: false)
+        put("interfaces", networkInterfacesJson(caps))
+      }
       put("uptimeSeconds", JsonPrimitive(uptimeSeconds))
     }.toString()
   }
@@ -335,7 +225,6 @@ class DeviceHandler private constructor(
         .orEmpty()
     val locale = Locale.getDefault().toLanguageTag().trim()
     val appVersion = BuildConfig.VERSION_NAME.trim()
-    val appBuild = BuildConfig.VERSION_CODE.toString()
 
     return buildJsonObject {
       put("deviceName", JsonPrimitive(model.ifEmpty { "Android" }))
@@ -346,7 +235,7 @@ class DeviceHandler private constructor(
       put("systemName", JsonPrimitive("Android"))
       put("systemVersion", JsonPrimitive(systemVersion.ifEmpty { Build.VERSION.SDK_INT.toString() }))
       put("appVersion", JsonPrimitive(appVersion.ifEmpty { "dev" }))
-      put("appBuild", JsonPrimitive(appBuild.ifEmpty { "0" }))
+      put("appBuild", JsonPrimitive(BuildConfig.VERSION_CODE.toString()))
       put("locale", JsonPrimitive(locale.ifEmpty { Locale.getDefault().toString() }))
     }.toString()
   }
@@ -354,133 +243,30 @@ class DeviceHandler private constructor(
   private fun permissionsPayloadJson(): String {
     val snapshot = permissionSnapshot()
     val canSendSms = appContext.packageManager.hasSystemFeature(PackageManager.FEATURE_TELEPHONY)
+    val smsAvailable = smsEnabled && canSendSms
     return buildJsonObject {
-      put(
-        "permissions",
-        buildJsonObject {
-          put(
-            "camera",
-            permissionStateJson(
-              granted = snapshot.camera,
-              promptableWhenDenied = true,
-            ),
-          )
-          put(
-            "microphone",
-            permissionStateJson(
-              granted = snapshot.microphone,
-              promptableWhenDenied = true,
-            ),
-          )
-          put(
-            "location",
-            permissionStateJson(
-              granted = snapshot.location,
-              promptableWhenDenied = true,
-            ),
-          )
-          put(
-            "sms",
-            buildJsonObject {
-              put(
-                "status",
-                JsonPrimitive(
-                  if (hasAnySmsCapability(
-                      smsEnabled,
-                      canSendSms,
-                      snapshot.smsSend,
-                      snapshot.smsRead,
-                    )
-                  ) {
-                    "granted"
-                  } else {
-                    "denied"
-                  },
-                ),
-              )
-              put(
-                "promptable",
-                JsonPrimitive(
-                  isSmsPromptable(
-                    smsEnabled,
-                    canSendSms,
-                    snapshot.smsSend,
-                    snapshot.smsRead,
-                  ),
-                ),
-              )
-              put(
-                "capabilities",
-                buildJsonObject {
-                  put(
-                    "send",
-                    permissionStateJson(
-                      granted = snapshot.smsSend,
-                      promptableWhenDenied = smsEnabled && canSendSms,
-                    ),
-                  )
-                  put(
-                    "read",
-                    permissionStateJson(
-                      granted = snapshot.smsRead,
-                      promptableWhenDenied = smsEnabled && canSendSms,
-                    ),
-                  )
-                },
-              )
-            },
-          )
-          put(
-            "notificationListener",
-            permissionStateJson(
-              granted = snapshot.notificationListener,
-              promptableWhenDenied = true,
-            ),
-          )
-          put(
-            "notifications",
-            permissionStateJson(
-              granted = snapshot.notifications,
-              promptableWhenDenied = true,
-            ),
-          )
-          put(
-            "photos",
-            permissionStateJson(
-              granted = snapshot.photos,
-              promptableWhenDenied = photosEnabled,
-            ),
-          )
-          put(
-            "contacts",
-            permissionStateJson(
-              granted = snapshot.contactsRead && snapshot.contactsWrite,
-              promptableWhenDenied = true,
-            ),
-          )
-          put(
-            "calendar",
-            permissionStateJson(
-              granted = snapshot.calendarRead && snapshot.calendarWrite,
-              promptableWhenDenied = true,
-            ),
-          )
-          put(
-            "callLog",
-            permissionStateJson(
-              granted = snapshot.callLog,
-              promptableWhenDenied = callLogEnabled,
-            ),
-          )
-          put(
-            "motion",
-            permissionStateJson(
-              granted = snapshot.motion,
-              promptableWhenDenied = true,
-            ),
-          )
-        },
-      )
+      putJsonObject("permissions") {
+        putPermission("camera", snapshot.camera)
+        putPermission("microphone", snapshot.microphone)
+        putPermission("location", snapshot.location)
+        putJsonObject("sms") {
+          // A partial grant is usable, but the other SMS permission can still be requested.
+          val granted = smsAvailable && (snapshot.smsSend || snapshot.smsRead)
+          put("status", if (granted) "granted" else "denied")
+          put("promptable", smsAvailable && (!snapshot.smsSend || !snapshot.smsRead))
+          putJsonObject("capabilities") {
+            putPermission("send", snapshot.smsSend, smsAvailable)
+            putPermission("read", snapshot.smsRead, smsAvailable)
+          }
+        }
+        putPermission("notificationListener", snapshot.notificationListener)
+        putPermission("notifications", snapshot.notifications)
+        putPermission("photos", snapshot.photos, photosEnabled)
+        putPermission("contacts", snapshot.contactsRead && snapshot.contactsWrite)
+        putPermission("calendar", snapshot.calendarRead && snapshot.calendarWrite)
+        putPermission("callLog", snapshot.callLog, callLogEnabled)
+        putPermission("motion", snapshot.motion)
+      }
     }.toString()
   }
 
@@ -507,61 +293,31 @@ class DeviceHandler private constructor(
     val memoryPressure = mapMemoryPressure(totalRamBytes, availableRamBytes, lowMemory)
 
     return buildJsonObject {
-      put(
-        "memory",
-        buildJsonObject {
-          put("pressure", JsonPrimitive(memoryPressure))
-          put("totalRamBytes", JsonPrimitive(totalRamBytes))
-          put("availableRamBytes", JsonPrimitive(availableRamBytes))
-          put("usedRamBytes", JsonPrimitive(usedRamBytes))
-          put("thresholdBytes", JsonPrimitive(memoryInfo.threshold.coerceAtLeast(0L)))
-          put("lowMemory", JsonPrimitive(lowMemory))
-        },
-      )
-      put(
-        "battery",
-        buildJsonObject {
-          put("state", JsonPrimitive(mapBatteryState(battery.status)))
-          put("chargingType", JsonPrimitive(mapChargingType(battery.plugged)))
-          battery.temperatureC?.let { put("temperatureC", JsonPrimitive(it)) }
-          currentNowMa?.let { put("currentMa", JsonPrimitive(it)) }
-        },
-      )
-      put(
-        "power",
-        buildJsonObject {
-          put("dozeModeEnabled", JsonPrimitive(powerManager?.isDeviceIdleMode == true))
-          put("lowPowerModeEnabled", JsonPrimitive(powerManager?.isPowerSaveMode == true))
-        },
-      )
-      put(
-        "system",
-        buildJsonObject {
-          Build.VERSION.SECURITY_PATCH
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
-            ?.let { put("securityPatchLevel", JsonPrimitive(it)) }
-        },
-      )
+      putJsonObject("memory") {
+        put("pressure", memoryPressure)
+        put("totalRamBytes", totalRamBytes)
+        put("availableRamBytes", availableRamBytes)
+        put("usedRamBytes", usedRamBytes)
+        put("thresholdBytes", memoryInfo.threshold.coerceAtLeast(0L))
+        put("lowMemory", lowMemory)
+      }
+      putJsonObject("battery") {
+        put("state", mapBatteryState(battery.status))
+        put("chargingType", mapChargingType(battery.plugged))
+        battery.temperatureC?.let { put("temperatureC", it) }
+        currentNowMa?.let { put("currentMa", it) }
+      }
+      putJsonObject("power") {
+        put("dozeModeEnabled", powerManager?.isDeviceIdleMode == true)
+        put("lowPowerModeEnabled", powerManager?.isPowerSaveMode == true)
+      }
+      putJsonObject("system") {
+        Build.VERSION.SECURITY_PATCH
+          ?.trim()
+          ?.takeIf { it.isNotEmpty() }
+          ?.let { put("securityPatchLevel", it) }
+      }
     }.toString()
-  }
-
-  private fun parseDeviceAppsRequest(paramsJson: String?): DeviceAppsRequest {
-    val params = parseJsonParamsObject(paramsJson)
-    val includeSystem = parseJsonBooleanFlag(params, "includeSystem") ?: false
-    val includeDisabled = parseJsonBooleanFlag(params, "includeDisabled") ?: false
-    val includeNonLaunchable = parseJsonBooleanFlag(params, "includeNonLaunchable") ?: false
-    val query = parseJsonString(params, "query")?.trim()?.takeIf { it.isNotEmpty() }
-    val limit =
-      (parseJsonInt(params, "limit") ?: DEFAULT_DEVICE_APPS_LIMIT)
-        .coerceIn(1, MAX_DEVICE_APPS_LIMIT)
-    return DeviceAppsRequest(
-      includeSystem = includeSystem,
-      includeDisabled = includeDisabled,
-      includeNonLaunchable = includeNonLaunchable,
-      query = query,
-      limit = limit,
-    )
   }
 
   private fun readBatterySnapshot(): BatterySnapshot {
@@ -613,12 +369,16 @@ class DeviceHandler private constructor(
     val thermal = powerManager?.currentThermalStatus ?: return "nominal"
     return when (thermal) {
       PowerManager.THERMAL_STATUS_NONE, PowerManager.THERMAL_STATUS_LIGHT -> "nominal"
+
       PowerManager.THERMAL_STATUS_MODERATE -> "fair"
+
       PowerManager.THERMAL_STATUS_SEVERE -> "serious"
+
       PowerManager.THERMAL_STATUS_CRITICAL,
       PowerManager.THERMAL_STATUS_EMERGENCY,
       PowerManager.THERMAL_STATUS_SHUTDOWN,
       -> "critical"
+
       else -> "nominal"
     }
   }
@@ -627,18 +387,23 @@ class DeviceHandler private constructor(
     if (caps == null) return "unsatisfied"
     return when {
       caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) -> "satisfied"
+
       // Internet without validation mirrors iOS "requiresConnection" for captive or unproven networks.
       caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) -> "requiresConnection"
+
       else -> "unsatisfied"
     }
   }
 
-  private fun permissionStateJson(
+  private fun JsonObjectBuilder.putPermission(
+    key: String,
     granted: Boolean,
-    promptableWhenDenied: Boolean,
-  ) = buildJsonObject {
-    put("status", JsonPrimitive(if (granted) "granted" else "denied"))
-    put("promptable", JsonPrimitive(!granted && promptableWhenDenied))
+    promptableWhenDenied: Boolean = true,
+  ) {
+    putJsonObject(key) {
+      put("status", if (granted) "granted" else "denied")
+      put("promptable", !granted && promptableWhenDenied)
+    }
   }
 
   private fun mapMemoryPressure(
@@ -661,19 +426,8 @@ class DeviceHandler private constructor(
   private fun networkInterfacesJson(caps: NetworkCapabilities?) =
     buildJsonArray {
       if (caps == null) return@buildJsonArray
-      var hasKnownTransport = false
-      if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
-        hasKnownTransport = true
-        add(JsonPrimitive("wifi"))
-      }
-      if (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) {
-        hasKnownTransport = true
-        add(JsonPrimitive("cellular"))
-      }
-      if (caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) {
-        hasKnownTransport = true
-        add(JsonPrimitive("wired"))
-      }
-      if (!hasKnownTransport) add(JsonPrimitive("other"))
+      val interfaces = NETWORK_TRANSPORTS.filter { (transport, _) -> caps.hasTransport(transport) }
+      if (interfaces.isEmpty()) add(JsonPrimitive("other"))
+      interfaces.forEach { (_, name) -> add(JsonPrimitive(name)) }
     }
 }

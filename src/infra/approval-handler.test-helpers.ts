@@ -1,6 +1,7 @@
 // Provides native approval runtime stubs for approval tests.
 import { vi } from "vitest";
 import type { ChannelApprovalNativeRuntimeAdapter } from "./approval-handler-runtime.js";
+import type { SystemAgentApprovalRequestPayload } from "./system-agent-approvals.js";
 
 // Shared approval-runtime stubs keep channel approval tests focused on route
 // behavior instead of rebuilding the native adapter shape.
@@ -16,6 +17,7 @@ export type ApprovalNativeRuntimeAdapterStubParams = {
   prepareTarget?: ChannelApprovalNativeRuntimeAdapter["transport"]["prepareTarget"];
   deliverPending?: ChannelApprovalNativeRuntimeAdapter["transport"]["deliverPending"];
   bindPending?: NonNullable<ChannelApprovalNativeRuntimeAdapter["interactions"]>["bindPending"];
+  onFinalized?: NonNullable<ChannelApprovalNativeRuntimeAdapter["observe"]>["onFinalized"];
 };
 
 /** Build a complete native approval adapter stub with per-test overrides. */
@@ -48,5 +50,30 @@ export function createApprovalNativeRuntimeAdapterStubs(
       unbindPending: params.unbindPending,
       cancelDelivered: params.cancelDelivered,
     },
+    observe: {
+      onFinalized: params.onFinalized,
+    },
   };
+}
+
+export function createSystemAgentChangeRequest(
+  sessionId: string,
+): SystemAgentApprovalRequestPayload {
+  return {
+    title: "OpenClaw change",
+    description: "restart the Gateway",
+    command: "restart the Gateway",
+    proposalHash: "a".repeat(64),
+    allowedDecisions: ["allow-once", "deny"],
+    sessionId,
+  };
+}
+
+export function createExecRequest(
+  id: string,
+  command: string,
+  createdAtMs: number,
+  expiresAtMs: number,
+) {
+  return { id, request: { command }, createdAtMs, expiresAtMs };
 }

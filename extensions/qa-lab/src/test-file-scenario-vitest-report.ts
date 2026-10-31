@@ -1,42 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
+import type { QaTestFileScenario } from "./scenario-catalog.js";
 import { readJsonFileIfExists } from "./test-file-scenario-script-evidence.js";
 
-type NativeTestFileScenario = Pick<QaSeedScenarioWithSource, "id"> & {
-  execution: Extract<
-    QaSeedScenarioWithSource["execution"],
-    { kind: "script" | "vitest" | "playwright" }
-  >;
-};
+type NativeTestFileScenario = Pick<QaTestFileScenario, "id" | "execution">;
 
 export function resolveNativeVitestReportPath(
   scenario: Pick<NativeTestFileScenario, "id">,
   outputDir: string,
 ): string {
   return path.join(outputDir, `${scenario.id}.vitest-report.json`);
-}
-
-async function canonicalizeNativeTestFilePath(params: {
-  canonicalRepoRoot: string;
-  repoRoot: string;
-  testPath: string;
-}) {
-  const absoluteTestPath = path.resolve(params.repoRoot, params.testPath);
-  const canonicalTestPath = await fs.realpath(absoluteTestPath).catch(() => undefined);
-  if (canonicalTestPath) {
-    return canonicalTestPath;
-  }
-
-  const repoRelativePath = path.relative(params.repoRoot, absoluteTestPath);
-  if (
-    repoRelativePath !== ".." &&
-    !repoRelativePath.startsWith(`..${path.sep}`) &&
-    !path.isAbsolute(repoRelativePath)
-  ) {
-    return path.resolve(params.canonicalRepoRoot, repoRelativePath);
-  }
-  return absoluteTestPath;
 }
 
 export async function readNativeVitestExecutionFailure(params: {
@@ -55,7 +29,7 @@ export async function readNativeVitestExecutionFailure(params: {
     success?: unknown;
     testResults?: Array<{
       name?: unknown;
-      assertionResults?: Array<{ fullName?: unknown; status?: unknown; title?: unknown }>;
+      assertionResults?: Array<{ ancestorTitles?: unknown; status?: unknown; title?: unknown }>;
     }>;
   };
   if (
@@ -80,11 +54,17 @@ export async function readNativeVitestExecutionFailure(params: {
         if (!result || typeof result.name !== "string") {
           return undefined;
         }
-        const reportedTestPath = await canonicalizeNativeTestFilePath({
-          canonicalRepoRoot,
-          repoRoot: params.repoRoot,
-          testPath: result.name,
-        });
+        const absoluteTestPath = path.resolve(params.repoRoot, result.name);
+        let reportedTestPath = await fs.realpath(absoluteTestPath).catch(() => undefined);
+        if (!reportedTestPath) {
+          const repoRelativePath = path.relative(params.repoRoot, absoluteTestPath);
+          reportedTestPath =
+            repoRelativePath !== ".." &&
+            !repoRelativePath.startsWith(`..${path.sep}`) &&
+            !path.isAbsolute(repoRelativePath)
+              ? path.resolve(canonicalRepoRoot, repoRelativePath)
+              : absoluteTestPath;
+        }
         return reportedTestPath === expectedTestPath ? result : undefined;
       }),
     )
@@ -109,9 +89,12 @@ export async function readNativeVitestExecutionFailure(params: {
     }
     if (
       !passedAssertions.some((assertion) => {
-        const assertionName =
-          typeof assertion.fullName === "string" ? assertion.fullName : assertion.title;
-        return typeof assertionName === "string" && requestedTestName.test(assertionName);
+        // Native JSON fullName uses spaces; v5 selection joins the title chain with >.
+        return (
+          typeof assertion.title === "string" &&
+          isStringArray(assertion.ancestorTitles) &&
+          requestedTestName.test([...assertion.ancestorTitles, assertion.title].join(" > "))
+        );
       })
     ) {
       return `Vitest exited successfully without a passed assertion for the requested test name pattern ${JSON.stringify(testNamePattern)}.`;

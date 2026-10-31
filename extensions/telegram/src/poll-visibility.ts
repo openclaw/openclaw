@@ -1,4 +1,3 @@
-// Telegram plugin module implements poll visibility behavior.
 export function resolveTelegramPollVisibility(params: {
   pollAnonymous?: boolean;
   pollPublic?: boolean;
@@ -6,11 +5,5 @@ export function resolveTelegramPollVisibility(params: {
   if (params.pollAnonymous && params.pollPublic) {
     throw new Error("pollAnonymous and pollPublic are mutually exclusive");
   }
-  if (params.pollAnonymous) {
-    return true;
-  }
-  if (params.pollPublic) {
-    return false;
-  }
-  return undefined;
+  return params.pollAnonymous ? true : params.pollPublic ? false : undefined;
 }

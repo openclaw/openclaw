@@ -3,7 +3,11 @@
  * Provides complete session objects so tests can focus on the field under
  * inspection without repeating registry defaults.
  */
-import type { ProcessSession } from "./bash-process-registry.js";
+import {
+  createProcessSession,
+  type ProcessSession,
+  resolveProcessCleanupMs,
+} from "./bash-process-registry.js";
 
 /** Build a process-session fixture with safe defaults for registry tests. */
 export function createProcessSessionFixture(params: {
@@ -13,31 +17,30 @@ export function createProcessSessionFixture(params: {
   cwd?: string;
   maxOutputChars?: number;
   pendingMaxOutputChars?: number;
+  cleanupMs?: number;
   backgrounded?: boolean;
   pid?: number;
   cursorKeyMode?: ProcessSession["cursorKeyMode"];
 }): ProcessSession {
-  const session: ProcessSession = {
+  const session = createProcessSession({
     id: params.id,
     command: params.command ?? "test",
+    cleanupMs: resolveProcessCleanupMs(params.cleanupMs),
     startedAt: params.startedAt ?? Date.now(),
     cwd: params.cwd ?? "/tmp",
     maxOutputChars: params.maxOutputChars ?? 10_000,
     pendingMaxOutputChars: params.pendingMaxOutputChars ?? 30_000,
     totalOutputChars: 0,
-    pendingOutput: [],
     pendingStdoutChars: 0,
     pendingStderrChars: 0,
     pendingOutputDropped: false,
-    aggregated: "",
-    tail: "",
     exited: false,
     exitCode: undefined,
     exitSignal: undefined,
     truncated: false,
     backgrounded: params.backgrounded ?? false,
     cursorKeyMode: params.cursorKeyMode ?? "normal",
-  };
+  });
   if (params.pid !== undefined) {
     session.pid = params.pid;
   }

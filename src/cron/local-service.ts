@@ -1,11 +1,11 @@
-import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
 import { listAgentIds, tryResolveAmbientOwnerAgentId } from "../agents/agent-scope.js";
-import { tryGetLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import { DEFAULT_CRON_ENABLED } from "../config/cron-limits.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getChildLogger } from "../logging/logger.js";
+import { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { getChildLogger, getResolvedLoggerSettings, toPinoLikeLogger } from "../logging/logger.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { CronService } from "./service.js";
-import { resolveCronJobsStorePath } from "./store.js";
+import { resolveCronJobsStorePathAsync } from "./store.js";
 
 export async function withLocalAgentCronJobsRemoved<T>(
   agentId: string,
@@ -13,22 +13,25 @@ export async function withLocalAgentCronJobsRemoved<T>(
   commit: () => Promise<T>,
 ): Promise<T> {
   const cfg = getRuntimeConfig();
-  const storePath = resolveCronJobsStorePath();
+  const storePath = await resolveCronJobsStorePathAsync();
+  const scheduler = new GatewayScheduler();
   const service = new CronService({
+    scheduler,
     storePath,
-    cronEnabled: cfg.cron?.enabled !== false,
+    cronEnabled: cfg.cron?.enabled ?? DEFAULT_CRON_ENABLED,
     cronConfig: cfg.cron,
-    log: getChildLogger({ module: "cron", storeKey: storePath }),
+    log: toPinoLikeLogger(
+      getChildLogger({ module: "cron", storeKey: storePath }),
+      getResolvedLoggerSettings().level,
+    ),
     defaultAgentId: tryResolveAmbientOwnerAgentId(cfg),
-    legacyDefaultAgentId: tryGetLegacyDefaultAgentId(cfg),
     resolveDefaultAgentId: () => tryResolveAmbientOwnerAgentId(getRuntimeConfig()),
-    isAgentAvailable: (id) =>
-      !isAgentDeletionBlocked(id) &&
+    isAgentAvailable: (id, facts) =>
+      !facts.deletionBlocked &&
       listAgentIds(getRuntimeConfig()).some(
         (configuredId) => normalizeAgentId(configuredId) === id,
       ),
     enqueueSystemEvent: () => false,
-    requestHeartbeat: () => {},
     runIsolatedAgentJob: async () => {
       throw new Error("Cron execution is unavailable in local service context.");
     },
@@ -37,5 +40,6 @@ export async function withLocalAgentCronJobsRemoved<T>(
     return await service.removeAgentJobsTransactional(agentId, commit);
   } finally {
     service.stop();
+    await scheduler.stop();
   }
 }

@@ -1,7 +1,13 @@
-// Android Version script supports OpenClaw repository automation.
+import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { parseReleaseVersion } from "./release-version.mjs";
+import { validateAndroidStorePlan } from "./android-store-version.ts";
+import { extractChangelogSection } from "./mobile-changelog.ts";
+import {
+  normalizeGatewayVersionToPinnedMobileVersion,
+  readRootPackageVersion,
+} from "./mobile-version.ts";
+import { parsePinnedReleaseVersion } from "./release-version.mjs";
 
 const ANDROID_VERSION_FILE = "apps/android/version.json";
 const ANDROID_CHANGELOG_FILE = "apps/android/CHANGELOG.md";
@@ -14,28 +20,9 @@ type AndroidVersionManifest = {
   versionCode: number;
 };
 
-type ResolvedAndroidVersion = {
-  canonicalVersion: string;
-  changelogPath: string;
-  releaseNotesPath: string;
-  versionCode: number;
-  versionFilePath: string;
-  versionPropertiesPath: string;
-};
+type ResolvedAndroidVersion = ReturnType<typeof resolveAndroidVersion>;
 
 type SyncAndroidVersioningMode = "check" | "write";
-
-function normalizeTrailingNewline(value: string): string {
-  return value.endsWith("\n") ? value : `${value}\n`;
-}
-
-function parsePinnedReleaseVersion(rawVersion: string): string | null {
-  const parsed = parseReleaseVersion(rawVersion.trim());
-  if (!parsed || parsed.version !== parsed.baseVersion) {
-    return null;
-  }
-  return parsed.baseVersion;
-}
 
 export function normalizePinnedAndroidVersion(rawVersion: string): string {
   const trimmed = rawVersion.trim();
@@ -51,22 +38,6 @@ export function normalizePinnedAndroidVersion(rawVersion: string): string {
   }
 
   return pinnedVersion;
-}
-
-export function normalizeGatewayVersionToPinnedAndroidVersion(rawVersion: string): string {
-  const trimmed = rawVersion.trim().replace(/^v/u, "");
-  if (!trimmed) {
-    throw new Error("Missing root package.json version.");
-  }
-
-  const parsed = parseReleaseVersion(trimmed);
-  if (!parsed) {
-    throw new Error(
-      `Invalid gateway version '${rawVersion}'. Expected YYYY.M.PATCH, YYYY.M.PATCH-alpha.N, YYYY.M.PATCH-beta.N, or YYYY.M.PATCH-N.`,
-    );
-  }
-
-  return parsed.baseVersion;
 }
 
 export function canonicalAndroidVersionCode(version: string): number {
@@ -104,43 +75,24 @@ export function normalizeAndroidVersionCode(rawVersionCode: number, version: str
     raw.length !== prefix.length + 2 ||
     !Number.isInteger(suffix) ||
     suffix < 1 ||
-    suffix > 99
+    suffix > 49
   ) {
     throw new Error(
-      `Invalid Android versionCode '${rawVersionCode}'. Expected ${prefix}01 through ${prefix}99 for version ${version}.`,
+      `Invalid Android versionCode '${rawVersionCode}'. Expected ${prefix}01 through ${prefix}49 for version ${version}.`,
     );
   }
 
   return rawVersionCode;
 }
 
-function readRootPackageVersion(rootDir = path.resolve(".")): string {
-  const packageJsonPath = path.join(rootDir, "package.json");
-  const parsed = JSON.parse(readFileSync(packageJsonPath, "utf8")) as { version?: unknown };
-  const version = typeof parsed.version === "string" ? parsed.version.trim() : "";
-  if (!version) {
-    throw new Error(`Missing package.json version in ${packageJsonPath}.`);
-  }
-  return version;
-}
-
-export function resolveGatewayVersionForAndroidRelease(rootDir = path.resolve(".")): {
-  packageVersion: string;
-  pinnedAndroidVersion: string;
-  versionCode: number;
-} {
+export function resolveGatewayVersionForAndroidRelease(rootDir = path.resolve(".")) {
   const packageVersion = readRootPackageVersion(rootDir);
-  const pinnedAndroidVersion = normalizeGatewayVersionToPinnedAndroidVersion(packageVersion);
+  const pinnedAndroidVersion = normalizeGatewayVersionToPinnedMobileVersion(packageVersion);
   return {
     packageVersion,
     pinnedAndroidVersion,
     versionCode: canonicalAndroidVersionCode(pinnedAndroidVersion),
   };
-}
-
-function readAndroidVersionManifest(rootDir = path.resolve(".")): AndroidVersionManifest {
-  const versionFilePath = path.join(rootDir, ANDROID_VERSION_FILE);
-  return JSON.parse(readFileSync(versionFilePath, "utf8")) as AndroidVersionManifest;
 }
 
 export function writeAndroidVersionManifest(
@@ -163,12 +115,12 @@ export function writeAndroidVersionManifest(
   return versionFilePath;
 }
 
-export function resolveAndroidVersion(rootDir = path.resolve(".")): ResolvedAndroidVersion {
+export function resolveAndroidVersion(rootDir = path.resolve(".")) {
   const versionFilePath = path.join(rootDir, ANDROID_VERSION_FILE);
   const changelogPath = path.join(rootDir, ANDROID_CHANGELOG_FILE);
   const versionPropertiesPath = path.join(rootDir, ANDROID_VERSION_PROPERTIES_FILE);
   const releaseNotesPath = path.join(rootDir, ANDROID_RELEASE_NOTES_FILE);
-  const manifest = readAndroidVersionManifest(rootDir);
+  const manifest = JSON.parse(readFileSync(versionFilePath, "utf8")) as AndroidVersionManifest;
   const canonicalVersion = normalizePinnedAndroidVersion(manifest.version ?? "");
   const versionCode = normalizeAndroidVersionCode(manifest.versionCode, canonicalVersion);
 
@@ -177,9 +129,51 @@ export function resolveAndroidVersion(rootDir = path.resolve(".")): ResolvedAndr
     changelogPath,
     releaseNotesPath,
     versionCode,
+    wearVersionCode: versionCode + 50,
     versionFilePath,
     versionPropertiesPath,
   };
+}
+
+export function resolveAndroidBuildVersion(
+  rootDir = path.resolve("."),
+  planPath = process.env.OPENCLAW_ANDROID_RELEASE_PLAN,
+): ResolvedAndroidVersion {
+  const pinned = resolveAndroidVersion(rootDir);
+  if (!planPath) {
+    return pinned;
+  }
+  const plan = JSON.parse(readFileSync(planPath, "utf8")) as {
+    schemaVersion?: number;
+    version: string;
+    versionCode: number;
+    wearVersionCode: number;
+    sourceSha: string;
+  };
+  let canonicalVersion: string;
+  let versionCode: number;
+  if (plan.schemaVersion === 2) {
+    const storePlan = validateAndroidStorePlan(plan);
+    canonicalVersion = storePlan.version;
+    versionCode = storePlan.versionCode;
+  } else if (plan.schemaVersion === undefined) {
+    // Retained pre-cutover plans must still reproduce their original artifacts.
+    canonicalVersion = normalizePinnedAndroidVersion(plan.version);
+    versionCode = normalizeAndroidVersionCode(plan.versionCode, canonicalVersion);
+    if (plan.wearVersionCode !== versionCode + 50) {
+      throw new Error("Android release plan Wear versionCode must equal the phone code plus 50.");
+    }
+  } else {
+    throw new Error(`Unsupported Android release plan schema ${plan.schemaVersion}.`);
+  }
+  const head = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: rootDir,
+    encoding: "utf8",
+  }).trim();
+  if (!/^[a-f0-9]{40}$/u.test(plan.sourceSha) || plan.sourceSha !== head) {
+    throw new Error("Android release plan sourceSha must match the checked-out commit.");
+  }
+  return { ...pinned, canonicalVersion, versionCode, wearVersionCode: plan.wearVersionCode };
 }
 
 export function renderAndroidVersionProperties(
@@ -188,40 +182,11 @@ export function renderAndroidVersionProperties(
   return `# Shared Android version defaults.\n# Source of truth: apps/android/version.json\n# Generated by scripts/android-sync-versioning.ts.\n\nOPENCLAW_ANDROID_VERSION_NAME=${version.canonicalVersion}\nOPENCLAW_ANDROID_VERSION_CODE=${version.versionCode}\n`;
 }
 
-function matchChangelogHeading(line: string, heading: string): boolean {
-  const normalized = line.trim();
-  return normalized === `## ${heading}` || normalized.startsWith(`## ${heading} - `);
-}
-
-export function extractChangelogSection(content: string, heading: string): string | null {
-  const lines = content.split(/\r?\n/u);
-  const startIndex = lines.findIndex((line) => matchChangelogHeading(line, heading));
-  if (startIndex === -1) {
-    return null;
-  }
-
-  let endIndex = lines.length;
-  for (let index = startIndex + 1; index < lines.length; index += 1) {
-    if (lines[index]?.startsWith("## ")) {
-      endIndex = index;
-      break;
-    }
-  }
-
-  const body = lines
-    .slice(startIndex + 1, endIndex)
-    .join("\n")
-    .trim();
-  return body || null;
-}
-
 export function renderAndroidReleaseNotes(
   version: Pick<ResolvedAndroidVersion, "canonicalVersion">,
   changelogContent: string,
 ): string {
-  const candidateHeadings = [version.canonicalVersion, "Unreleased"];
-
-  for (const heading of candidateHeadings) {
+  for (const heading of [version.canonicalVersion, "Unreleased"]) {
     const body = extractChangelogSection(changelogContent, heading);
     if (body) {
       return `${body}\n`;
@@ -239,7 +204,9 @@ function syncFile(params: {
   nextContent: string;
   label: string;
 }): boolean {
-  const nextContent = normalizeTrailingNewline(params.nextContent);
+  const nextContent = params.nextContent.endsWith("\n")
+    ? params.nextContent
+    : `${params.nextContent}\n`;
   const currentContent = readFileSync(params.path, "utf8");
   if (currentContent === nextContent) {
     return false;
@@ -256,9 +223,7 @@ function syncFile(params: {
 export function syncAndroidVersioning(params?: {
   mode?: SyncAndroidVersioningMode;
   rootDir?: string;
-}): {
-  updatedPaths: string[];
-} {
+}) {
   const mode = params?.mode ?? "write";
   const rootDir = path.resolve(params?.rootDir ?? ".");
   const version = resolveAndroidVersion(rootDir);
@@ -267,26 +232,21 @@ export function syncAndroidVersioning(params?: {
   const nextReleaseNotes = renderAndroidReleaseNotes(version, changelogContent);
   const updatedPaths: string[] = [];
 
-  if (
-    syncFile({
-      mode,
+  for (const file of [
+    {
       path: version.versionPropertiesPath,
       nextContent: nextVersionProperties,
       label: "Android version properties",
-    })
-  ) {
-    updatedPaths.push(version.versionPropertiesPath);
-  }
-
-  if (
-    syncFile({
-      mode,
+    },
+    {
       path: version.releaseNotesPath,
       nextContent: nextReleaseNotes,
       label: "Android release notes",
-    })
-  ) {
-    updatedPaths.push(version.releaseNotesPath);
+    },
+  ]) {
+    if (syncFile({ mode, ...file })) {
+      updatedPaths.push(file.path);
+    }
   }
 
   return { updatedPaths };

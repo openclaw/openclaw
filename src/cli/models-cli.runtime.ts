@@ -1,4 +1,3 @@
-// Runtime helpers for model CLI commands and shared agent option handling.
 import type { Command } from "commander";
 import { defaultRuntime } from "../runtime.js";
 import { resolveOptionFromCommand, runCommandWithRuntime } from "./cli-utils.js";
@@ -10,24 +9,20 @@ export function runModelsCommand(action: () => Promise<void>) {
   return runCommandWithRuntime(defaultRuntime, action);
 }
 
-export function resolveModelAgentOption(
-  command: Command | undefined,
-  opts?: { agent?: unknown },
-): string | undefined {
-  return (
-    resolveOptionFromCommand<string>(command, "agent") ??
-    (typeof opts?.agent === "string" ? opts.agent : undefined)
-  );
+export function resolveModelAgentOption(command: Command): string | undefined {
+  return resolveOptionFromCommand<string>(command, "agent");
 }
 
 /** `models` subcommands that operate on global state only, never per-agent. */
-export type GlobalOnlyModelCommandName =
+type GlobalOnlyModelCommandName =
   | "set"
   | "set-image"
   | "scan"
   | "aliases list"
   | "aliases add"
-  | "aliases remove";
+  | "aliases remove"
+  | "refresh"
+  | `${"fallbacks" | "image-fallbacks"} ${"add" | "remove" | "clear"}`;
 
 export function rejectAgentScopedModelCommand(
   command: Command,
@@ -37,7 +32,7 @@ export function rejectAgentScopedModelCommand(
   // does not exist. Kept scope-neutral: `scan --no-probe` returns after printing
   // the catalog without writing config at all.
   const agent = resolveOptionFromCommand<string>(command, "agent");
-  if (!agent) {
+  if (agent === undefined) {
     return;
   }
   throw new Error(

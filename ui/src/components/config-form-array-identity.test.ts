@@ -1,33 +1,105 @@
-// @vitest-environment node
-import { describe, expect, it } from "vitest";
-import {
-  appendArrayRowIdentities,
-  discardArrayRowIdentities,
-  preserveArrayRowIdentities,
-  rowIdentitiesForArray,
-} from "./config-form-array-identity.ts";
+// @vitest-environment jsdom
+import { expectDefined } from "@openclaw/normalization-core";
+import { expect, it } from "vitest";
+import { renderArrayFixture } from "../test-helpers/config-form-fixtures.tsx";
+import type { JsonSchema } from "./config-form.shared.ts";
 
-describe("config form array row identity", () => {
-  it("keeps appended primitive identities unique after an equal row is removed", () => {
-    const initial = ["same", "same"];
-    const initialIdentities = rowIdentitiesForArray(initial);
-    const afterRemoval = ["same"];
-    preserveArrayRowIdentities(afterRemoval, initialIdentities.slice(1));
+function arrayFixture(
+  schema: JsonSchema,
+  value: unknown[],
+  onPatch?: (next: unknown[], render: (value: unknown[]) => void) => boolean | void,
+) {
+  const container = document.createElement("div");
+  const render = (next: unknown[]): void =>
+    renderArrayFixture(container, {
+      schema,
+      value: next,
+      path: ["values"],
+      onPatch: (_path, candidate) => {
+        if (!Array.isArray(candidate)) {
+          throw new Error("Expected an array patch");
+        }
+        return onPatch ? onPatch(candidate, render) : render(candidate);
+      },
+    });
+  render(value);
+  return {
+    container,
+    render,
+    inputs: () =>
+      Array.from(container.querySelectorAll<HTMLInputElement>(".settings-subrows input")),
+    click: (label: string) =>
+      expectDefined(
+        container.querySelector<HTMLButtonElement>(`button[aria-label='${label}']`),
+        label,
+      ).click(),
+  };
+}
 
-    const afterAppend = ["same", "same"];
-    appendArrayRowIdentities(afterAppend, rowIdentitiesForArray(afterRemoval), 1);
-    const appendedIdentities = rowIdentitiesForArray(afterAppend);
+const strings: JsonSchema = { type: "array", items: { type: "string", default: "same" } };
+function expectRows(actual: HTMLInputElement[], expected: (HTMLInputElement | undefined)[]) {
+  expect(actual).toHaveLength(expected.length);
+  expected.forEach((node, index) => expect(actual[index]).toBe(node));
+}
 
-    expect(new Set(appendedIdentities).size).toBe(appendedIdentities.length);
-    expect(appendedIdentities[0]).toBe(initialIdentities[1]);
+it("keeps appended primitive identities unique after an equal row is removed", () => {
+  const { click, inputs } = arrayFixture(strings, ["same", "same"]);
+  const [first, second] = inputs();
+  click("Remove item");
+  expectRows(inputs(), [second]);
+  click("Add");
+  const appended = inputs();
+  expect(appended.map((input) => input.value)).toEqual(["same", "same"]);
+  expect(appended[0]).toBe(second);
+  expect(appended[1]).not.toBe(first);
+  expect(appended[1]).not.toBe(second);
+});
+
+it("removes row metadata from rejected candidate arrays", () => {
+  const original = ["same", "same"];
+  let rejected: unknown[] | undefined;
+  const { click, inputs, render } = arrayFixture(strings, original, (candidate, update) => {
+    rejected = candidate;
+    update(candidate);
+    return false;
   });
+  const [, second] = inputs();
+  click("Remove item");
+  expectRows(inputs(), [second]);
+  render(structuredClone(original));
+  expect(inputs()).toHaveLength(2);
+  const [restoredFirst, restoredSecond] = inputs();
+  expect(restoredSecond).toBe(second);
+  expect(restoredFirst).not.toBe(second);
+  render(expectDefined(rejected, "rejected candidate"));
+  expectRows(inputs(), [restoredFirst]);
+});
 
-  it("removes row metadata from rejected candidate arrays", () => {
-    const candidate = ["same"];
-    const rejectedIdentity = Symbol("rejected-row");
-    preserveArrayRowIdentities(candidate, [rejectedIdentity]);
-    discardArrayRowIdentities(candidate);
+it("matches cloned and reordered rows once, including equal occurrences", () => {
+  const first = [{ name: "first" }, { name: "same" }, { name: "same" }];
+  const { inputs, render } = arrayFixture(
+    {
+      type: "array",
+      items: { type: "object", properties: { name: { type: "string" } } },
+    },
+    first,
+  );
+  const nodes = inputs();
+  const reordered = structuredClone([first[1], first[0], first[2]]);
+  for (const snapshot of [reordered, structuredClone(reordered)]) {
+    render(snapshot);
+    const current = inputs();
+    expectRows(current, [nodes[1], nodes[0], nodes[2]]);
+    expect(current.map((input) => input.value)).toEqual(["same", "first", "same"]);
+  }
+});
 
-    expect(rowIdentitiesForArray(candidate)[0]).not.toBe(rejectedIdentity);
-  });
+it("does not give an unchanged row's identity to a new equal value", () => {
+  const { inputs, render } = arrayFixture(strings, ["first", "same"]);
+  const [, survivor] = inputs();
+  render(["same", "same"]);
+  const next = inputs();
+  expect(next[1]).toBe(survivor);
+  expect(next[0]).not.toBe(survivor);
+  expect(next.map((input) => input.value)).toEqual(["same", "same"]);
 });

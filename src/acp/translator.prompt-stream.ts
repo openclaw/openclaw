@@ -1,4 +1,3 @@
-/** ACP prompt submission, Gateway chat streaming, and prompt settlement. */
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import type {
@@ -11,16 +10,23 @@ import type {
 import { readBool, readMetadataString, readNonNegativeInteger } from "@openclaw/acp-core/meta";
 import type { AcpSessionStore } from "@openclaw/acp-core/session";
 import type { AcpServerOptions } from "@openclaw/acp-core/types";
-import { normalizeLowercaseStringOrEmpty as normalizedChatSendAckStatus } from "@openclaw/normalization-core/string-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { mergeChatStreamMessage } from "../../packages/gateway-client/src/chat-stream-message.js";
+import { recoverTerminalReply } from "../../packages/gateway-client/src/run-recovery-text.js";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
+import { normalizeTerminalChatSendAckStatus } from "../shared/chat-send-ack-status.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { shortenHomePath } from "../utils.js";
 import { extractAttachmentsFromPrompt, extractTextFromPrompt } from "./event-mapper.js";
 import { parseSessionMeta } from "./session-mapper.js";
 import { AcpTranslatorAgentEvents } from "./translator.agent-events.js";
 import { AcpTranslatorDisconnects } from "./translator.disconnects.js";
-import type { AcpPendingApprovalRelay, AcpPendingPrompt } from "./translator.prompt-state.js";
+import type {
+  AcpAgentWaitResult,
+  AcpPendingApprovalRelay,
+  AcpPendingPrompt,
+} from "./translator.prompt-state.js";
 import type { GatewayChatContentBlock } from "./translator.replay.js";
 import type { AcpTranslatorSessionState } from "./translator.session-state.js";
 import type { AcpTranslatorSessionUpdates } from "./translator.session-updates.js";
@@ -44,26 +50,12 @@ type AcpPendingPromptAdmission = {
   settled: Deferred;
 };
 
-function isTerminalChatSendAckFailure(status: unknown): boolean {
-  const normalized = normalizedChatSendAckStatus(status);
-  return normalized === "timeout" || normalized === "error";
-}
-
-function isTerminalChatSendAckSuccess(status: unknown): boolean {
-  return normalizedChatSendAckStatus(status) === "ok";
-}
-
 function isAdminScopeProvenanceRejection(err: unknown): boolean {
-  if (!(err instanceof Error)) {
-    return false;
-  }
-  const gatewayCode =
-    typeof (err as { gatewayCode?: unknown }).gatewayCode === "string"
-      ? (err as { gatewayCode?: string }).gatewayCode
-      : undefined;
   return (
+    err instanceof Error &&
     err.name === "GatewayClientRequestError" &&
-    gatewayCode === "INVALID_REQUEST" &&
+    "gatewayCode" in err &&
+    err.gatewayCode === "INVALID_REQUEST" &&
     err.message.includes("system provenance fields require admin scope")
   );
 }
@@ -71,32 +63,6 @@ function isAdminScopeProvenanceRejection(err: unknown): boolean {
 function isGatewayCloseError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
   return message.startsWith("gateway closed (");
-}
-
-function buildSystemInputProvenance(originSessionId: string) {
-  return {
-    kind: "external_user" as const,
-    originSessionId,
-    sourceChannel: "acp",
-    sourceTool: "openclaw_acp",
-  };
-}
-
-function buildSystemProvenanceReceipt(params: {
-  cwd: string;
-  sessionId: string;
-  sessionKey: string;
-}) {
-  return [
-    "[Source Receipt]",
-    "bridge=openclaw-acp",
-    `originHost=${os.hostname()}`,
-    `originCwd=${shortenHomePath(params.cwd)}`,
-    `acpSessionId=${params.sessionId}`,
-    `originSessionId=${params.sessionId}`,
-    `targetSession=${params.sessionKey}`,
-    "[/Source Receipt]",
-  ].join("\n");
 }
 
 export class AcpTranslatorPromptStream {
@@ -123,7 +89,6 @@ export class AcpTranslatorPromptStream {
       sessionUpdates,
       this.pendingPrompts,
       this.approvalRelays,
-      (sessionId, runId) => this.getPendingPrompt(sessionId, runId),
       (sessionKey, runId) => this.findPendingBySessionKey(sessionKey, runId),
       log,
     );
@@ -131,7 +96,7 @@ export class AcpTranslatorPromptStream {
       gateway,
       this.pendingPrompts,
       (sessionId, runId) => this.getPendingPrompt(sessionId, runId),
-      (sessionId, pending, stopReason) => this.finishPrompt(sessionId, pending, stopReason),
+      (sessionId, pending, result) => this.settleRecoveredPrompt(sessionId, pending, result),
       (pending, error, options) => this.rejectPendingPrompt(pending, error, options),
       log,
     );
@@ -162,6 +127,7 @@ export class AcpTranslatorPromptStream {
   }
 
   handleGatewayReconnect(): void {
+    void this.agentEvents.replayApprovalDecisionsOnReconnect();
     this.disconnects.handleGatewayReconnect();
   }
 
@@ -171,7 +137,84 @@ export class AcpTranslatorPromptStream {
 
   async handleGatewayEvent(evt: EventFrame): Promise<void> {
     if (evt.event === "chat") {
-      await this.handleChatEvent(evt);
+      const payload = evt.payload as Record<string, unknown> | undefined;
+      if (!payload) {
+        return;
+      }
+
+      const sessionKey = payload.sessionKey as string | undefined;
+      const state = payload.state as string | undefined;
+      const runId = payload.runId as string | undefined;
+      if (!sessionKey || !state) {
+        return;
+      }
+
+      const pending = this.findPendingBySessionKey(sessionKey, runId);
+      if (!pending) {
+        return;
+      }
+
+      const messageData =
+        state === "delta"
+          ? mergeChatStreamMessage(pending.streamMessage, payload)
+          : payload.message;
+      if (isRecord(messageData) && (state === "delta" || state === "final")) {
+        pending.streamMessage = messageData;
+        // Consume the terminal snapshot before settling the append-only ACP stream.
+        const content = messageData.content as GatewayChatContentBlock[] | undefined;
+        const sessionId = pending.sessionId;
+        if (this.getPendingPrompt(sessionId, pending.idempotencyKey) !== pending) {
+          return;
+        }
+
+        for (const [blockType, field, sentField, kind] of [
+          ["thinking", "thinking", "sentThought", "agent_thought_chunk"],
+          ["text", "text", "sentText", "agent_message_chunk"],
+        ] as const) {
+          const fullText = content
+            ?.filter((block) => block?.type === blockType)
+            .map((block) => block[field] ?? "")
+            .join("\n")
+            .trimEnd();
+          const sent = pending[sentField] ?? "";
+          if (!fullText || fullText.length <= sent.length || !fullText.startsWith(sent)) {
+            continue;
+          }
+          pending[sentField] = fullText;
+          await this.emitPromptChunk(pending, kind, fullText.slice(sent.length));
+          if (this.getPendingPrompt(sessionId, pending.idempotencyKey) !== pending) {
+            return;
+          }
+        }
+
+        if (
+          this.getPendingPrompt(pending.sessionId, pending.idempotencyKey) !== pending ||
+          state === "delta"
+        ) {
+          return;
+        }
+      }
+
+      const atTokenLimit = payload.stopReason === "length" || payload.stopReason === "max_tokens";
+      if (state === "final") {
+        const stopReason: StopReason = atTokenLimit ? "max_tokens" : "end_turn";
+        await this.finishPrompt(pending.sessionId, pending, stopReason);
+        return;
+      }
+      const interruption =
+        typeof payload.errorMessage === "string" ? payload.errorMessage : undefined;
+      if (state === "aborted") {
+        await this.finishPrompt(pending.sessionId, pending, "cancelled", { interruption });
+        return;
+      }
+      if (state === "error") {
+        const stopReason: StopReason = atTokenLimit
+          ? "max_tokens"
+          : payload.errorKind === "refusal"
+            ? "refusal"
+            : "end_turn";
+        await this.finishPrompt(pending.sessionId, pending, stopReason, { interruption });
+      }
       return;
     }
     if (evt.event === "exec.approval.requested") {
@@ -225,8 +268,156 @@ export class AcpTranslatorPromptStream {
         // Closure traversal no longer needs a settled predecessor or its retained ancestors.
         admission.previous = undefined;
       }
+      const meta = parseSessionMeta(params["_meta"]);
+      const userText = extractTextFromPrompt(params.prompt, MAX_PROMPT_BYTES);
+      const attachments = extractAttachmentsFromPrompt(params.prompt);
+      const prefixCwd = meta.prefixCwd ?? this.opts.prefixCwd ?? true;
+      const displayCwd = shortenHomePath(session.cwd);
+      const message = prefixCwd ? `[Working directory: ${displayCwd}]\n\n${userText}` : userText;
+      const provenanceMode = this.opts.provenanceMode ?? "off";
+      const systemInputProvenance =
+        provenanceMode === "off"
+          ? undefined
+          : {
+              kind: "external_user" as const,
+              originSessionId: params.sessionId,
+              sourceChannel: "acp",
+              sourceTool: "openclaw_acp",
+            };
+      const systemProvenanceReceipt =
+        provenanceMode === "meta+receipt"
+          ? [
+              "[Source Receipt]",
+              "bridge=openclaw-acp",
+              `originHost=${os.hostname()}`,
+              `originCwd=${displayCwd}`,
+              `acpSessionId=${params.sessionId}`,
+              `originSessionId=${params.sessionId}`,
+              `targetSession=${session.sessionKey}`,
+              "[/Source Receipt]",
+            ].join("\n")
+          : undefined;
+
+      // The cwd prefix also counts against the prompt budget.
+      if (Buffer.byteLength(message, "utf-8") > MAX_PROMPT_BYTES) {
+        throw new Error(`Prompt exceeds maximum allowed size of ${MAX_PROMPT_BYTES} bytes`);
+      }
+
+      const abortController = new AbortController();
+      const runId = randomUUID();
+      this.sessionStore.setActiveRun(params.sessionId, runId, abortController);
+      const requestParams = {
+        sessionKey: session.sessionKey,
+        message,
+        attachments: attachments.length > 0 ? attachments : undefined,
+        idempotencyKey: runId,
+        thinking: readMetadataString(params["_meta"], ["thinking", "thinkingLevel"]),
+        deliver: readBool(params["_meta"], ["deliver"]),
+        timeoutMs: readNonNegativeInteger(params["_meta"], ["timeoutMs"]),
+      };
+
+      const submitted = new Promise<PromptResponse>((resolve, reject) => {
+        this.pendingPrompts.set(params.sessionId, {
+          sessionId: params.sessionId,
+          sessionKey: session.sessionKey,
+          ...(session.ledgerSessionId ? { ledgerSessionId: session.ledgerSessionId } : {}),
+          idempotencyKey: runId,
+          disconnectContext: this.disconnects.activeContext ?? undefined,
+          resolve,
+          reject,
+        });
+        this.disconnects.armForActiveContext();
+
+        const sendWithProvenanceFallback = async () => {
+          const markSendAccepted = (): boolean => {
+            const pending = this.getPendingPrompt(params.sessionId, runId);
+            if (!pending) {
+              return false;
+            }
+            pending.sendAccepted = true;
+            return true;
+          };
+          const applyTerminalAck = async (ack: ChatSendAck | undefined): Promise<boolean> => {
+            const status = normalizeTerminalChatSendAckStatus(ack?.status);
+            const pending = () => this.getPendingPrompt(params.sessionId, runId);
+            if (status === "timeout") {
+              const current = pending();
+              if (current) {
+                await this.finishPrompt(params.sessionId, current, "cancelled");
+              }
+              return true;
+            }
+            if (status === "error") {
+              const current = pending();
+              if (current) {
+                await this.rejectPendingPrompt(
+                  current,
+                  new Error("Chat failed before the run started; try again."),
+                );
+              }
+              return true;
+            }
+            if (status === "ok") {
+              if (!markSendAccepted()) {
+                return true;
+              }
+              await this.sessionUpdates.recordUserPrompt(session, runId, params.prompt);
+              const current = pending();
+              if (current) {
+                await this.finishPrompt(params.sessionId, current, "end_turn");
+              }
+              return true;
+            }
+            return false;
+          };
+
+          const sendChat = async (payload: Record<string, unknown>): Promise<void> => {
+            const ack = await this.gateway.request<ChatSendAck>("chat.send", payload, {
+              timeoutMs: null,
+            });
+            if (!(await applyTerminalAck(ack)) && markSendAccepted()) {
+              await this.sessionUpdates.recordUserPrompt(session, runId, params.prompt);
+            }
+          };
+
+          try {
+            await sendChat({
+              ...requestParams,
+              systemInputProvenance,
+              systemProvenanceReceipt,
+            });
+          } catch (err) {
+            if (
+              (systemInputProvenance || systemProvenanceReceipt) &&
+              isAdminScopeProvenanceRejection(err)
+            ) {
+              if (!this.getPendingPrompt(params.sessionId, runId)) {
+                return;
+              }
+              await sendChat(requestParams);
+              return;
+            }
+            throw err;
+          }
+        };
+
+        void sendWithProvenanceFallback().catch(async (err: unknown) => {
+          const promptKey = this.pendingPromptKey(params.sessionId, runId);
+          if (this.settlingPromptKeys.has(promptKey)) {
+            return;
+          }
+          if (isGatewayCloseError(err) && this.getPendingPrompt(params.sessionId, runId)) {
+            return;
+          }
+          const error = err instanceof Error ? err : new Error(String(err));
+          const current = this.getPendingPrompt(params.sessionId, runId);
+          if (current) {
+            await this.rejectPendingPrompt(current, error);
+          }
+        });
+      });
       return await Promise.race([
-        this.submitPrompt(params, session),
+        submitted,
         admission.closure.promise.then(() => ({ stopReason: "cancelled" as const })),
       ]);
     } finally {
@@ -235,162 +426,6 @@ export class AcpTranslatorPromptStream {
         this.pendingPromptAdmissions.delete(params.sessionId);
       }
     }
-  }
-
-  private submitPrompt(
-    params: PromptRequest,
-    session: AcpPendingPromptAdmission["session"],
-  ): Promise<PromptResponse> {
-    const meta = parseSessionMeta(params["_meta"]);
-    // Pass MAX_PROMPT_BYTES so extractTextFromPrompt rejects oversized content
-    // block-by-block, before the full string is ever assembled in memory (CWE-400)
-    const userText = extractTextFromPrompt(params.prompt, MAX_PROMPT_BYTES);
-    const attachments = extractAttachmentsFromPrompt(params.prompt);
-    const prefixCwd = meta.prefixCwd ?? this.opts.prefixCwd ?? true;
-    const displayCwd = shortenHomePath(session.cwd);
-    const message = prefixCwd ? `[Working directory: ${displayCwd}]\n\n${userText}` : userText;
-    const provenanceMode = this.opts.provenanceMode ?? "off";
-    const systemInputProvenance =
-      provenanceMode === "off" ? undefined : buildSystemInputProvenance(params.sessionId);
-    const systemProvenanceReceipt =
-      provenanceMode === "meta+receipt"
-        ? buildSystemProvenanceReceipt({
-            cwd: session.cwd,
-            sessionId: params.sessionId,
-            sessionKey: session.sessionKey,
-          })
-        : undefined;
-
-    // Defense-in-depth: also check the final assembled message (includes cwd prefix)
-    if (Buffer.byteLength(message, "utf-8") > MAX_PROMPT_BYTES) {
-      throw new Error(`Prompt exceeds maximum allowed size of ${MAX_PROMPT_BYTES} bytes`);
-    }
-
-    const abortController = new AbortController();
-    const runId = randomUUID();
-    this.sessionStore.setActiveRun(params.sessionId, runId, abortController);
-    const requestParams = {
-      sessionKey: session.sessionKey,
-      message,
-      attachments: attachments.length > 0 ? attachments : undefined,
-      idempotencyKey: runId,
-      thinking: readMetadataString(params["_meta"], ["thinking", "thinkingLevel"]),
-      deliver: readBool(params["_meta"], ["deliver"]),
-      timeoutMs: readNonNegativeInteger(params["_meta"], ["timeoutMs"]),
-    };
-
-    return new Promise<PromptResponse>((resolve, reject) => {
-      this.pendingPrompts.set(params.sessionId, {
-        sessionId: params.sessionId,
-        sessionKey: session.sessionKey,
-        ...(session.ledgerSessionId ? { ledgerSessionId: session.ledgerSessionId } : {}),
-        idempotencyKey: runId,
-        disconnectContext: this.disconnects.activeContext ?? undefined,
-        resolve,
-        reject,
-      });
-      this.disconnects.armForActiveContext();
-
-      const sendWithProvenanceFallback = async () => {
-        const markSendAccepted = (): boolean => {
-          const pending = this.getPendingPrompt(params.sessionId, runId);
-          if (!pending) {
-            return false;
-          }
-          pending.sendAccepted = true;
-          return true;
-        };
-        const applyTerminalAck = async (ack: ChatSendAck | undefined): Promise<boolean> => {
-          const status = normalizedChatSendAckStatus(ack?.status);
-          const pending = () => this.getPendingPrompt(params.sessionId, runId);
-          if (status === "timeout") {
-            const current = pending();
-            if (current) {
-              await this.finishPrompt(params.sessionId, current, "cancelled");
-            }
-            return true;
-          }
-          if (status === "error") {
-            const current = pending();
-            if (current) {
-              await this.rejectPendingPrompt(
-                current,
-                new Error("Chat failed before the run started; try again."),
-              );
-            }
-            return true;
-          }
-          if (status === "ok") {
-            if (!markSendAccepted()) {
-              return true;
-            }
-            await this.sessionUpdates.recordUserPrompt(session, runId, params.prompt);
-            const current = pending();
-            if (current) {
-              await this.finishPrompt(params.sessionId, current, "end_turn");
-            }
-            return true;
-          }
-          return isTerminalChatSendAckFailure(status) || isTerminalChatSendAckSuccess(status);
-        };
-
-        const sendChat = async (payload: Record<string, unknown>): Promise<boolean> => {
-          const ack = await this.gateway.request<ChatSendAck>("chat.send", payload, {
-            timeoutMs: null,
-          });
-          return await applyTerminalAck(ack);
-        };
-
-        try {
-          const terminal = await sendChat({
-            ...requestParams,
-            systemInputProvenance,
-            systemProvenanceReceipt,
-          });
-          if (terminal) {
-            return;
-          }
-          if (!markSendAccepted()) {
-            return;
-          }
-          await this.sessionUpdates.recordUserPrompt(session, runId, params.prompt);
-        } catch (err) {
-          if (
-            (systemInputProvenance || systemProvenanceReceipt) &&
-            isAdminScopeProvenanceRejection(err)
-          ) {
-            if (!this.getPendingPrompt(params.sessionId, runId)) {
-              return;
-            }
-            const terminal = await sendChat(requestParams);
-            if (terminal) {
-              return;
-            }
-            if (!markSendAccepted()) {
-              return;
-            }
-            await this.sessionUpdates.recordUserPrompt(session, runId, params.prompt);
-            return;
-          }
-          throw err;
-        }
-      };
-
-      void sendWithProvenanceFallback().catch(async (err: unknown) => {
-        const promptKey = this.pendingPromptKey(params.sessionId, runId);
-        if (this.settlingPromptKeys.has(promptKey)) {
-          return;
-        }
-        if (isGatewayCloseError(err) && this.getPendingPrompt(params.sessionId, runId)) {
-          return;
-        }
-        const error = err instanceof Error ? err : new Error(String(err));
-        const current = this.getPendingPrompt(params.sessionId, runId);
-        if (current) {
-          await this.rejectPendingPrompt(current, error);
-        }
-      });
-    });
   }
 
   async cancel(params: CancelNotification): Promise<void> {
@@ -473,136 +508,30 @@ export class AcpTranslatorPromptStream {
     if (this.getPendingPrompt(pending.sessionId, pending.idempotencyKey) !== pending) {
       return false;
     }
-    this.agentEvents.clearApprovalRelaysForPrompt(pending.sessionId, pending.idempotencyKey, {
-      denyActive: true,
-    });
+    this.agentEvents.clearApprovalRelaysForPrompt(pending.sessionId, pending.idempotencyKey);
     this.pendingPrompts.delete(pending.sessionId);
     this.sessionStore.clearActiveRun(pending.sessionId, pending.idempotencyKey);
     this.disconnects.clearWhenIdle();
     return true;
   }
 
-  private async handleChatEvent(evt: EventFrame): Promise<void> {
-    const payload = evt.payload as Record<string, unknown> | undefined;
-    if (!payload) {
-      return;
-    }
-
-    const sessionKey = payload.sessionKey as string | undefined;
-    const state = payload.state as string | undefined;
-    const runId = payload.runId as string | undefined;
-    const messageData = payload.message as Record<string, unknown> | undefined;
-    if (!sessionKey || !state) {
-      return;
-    }
-
-    const pending = this.findPendingBySessionKey(sessionKey, runId);
-    if (!pending) {
-      return;
-    }
-
-    const shouldHandleMessageSnapshot = messageData && (state === "delta" || state === "final");
-    if (shouldHandleMessageSnapshot) {
-      // Gateway chat events can carry the latest full assistant snapshot on both
-      // incremental updates and the terminal final event. Process the snapshot
-      // first so ACP clients never drop the last visible assistant text.
-      const ownsSnapshot = await this.handleDeltaEvent(pending, messageData);
-      if (
-        !ownsSnapshot ||
-        this.getPendingPrompt(pending.sessionId, pending.idempotencyKey) !== pending ||
-        state === "delta"
-      ) {
-        return;
-      }
-    }
-
-    if (state === "final") {
-      const rawStopReason = payload.stopReason as string | undefined;
-      const stopReason: StopReason = rawStopReason === "max_tokens" ? "max_tokens" : "end_turn";
-      await this.finishPrompt(pending.sessionId, pending, stopReason);
-      return;
-    }
-    if (state === "aborted") {
-      await this.finishPrompt(pending.sessionId, pending, "cancelled");
-      return;
-    }
-    if (state === "error") {
-      const errorKind = payload.errorKind as string | undefined;
-      const stopReason: StopReason = errorKind === "refusal" ? "refusal" : "end_turn";
-      void this.finishPrompt(pending.sessionId, pending, stopReason);
-    }
-  }
-
-  private async handleDeltaEvent(
-    pending: AcpPendingPrompt,
-    messageData: Record<string, unknown>,
-  ): Promise<boolean> {
-    const content = messageData.content as GatewayChatContentBlock[] | undefined;
-    const sessionId = pending.sessionId;
-    if (this.getPendingPrompt(sessionId, pending.idempotencyKey) !== pending) {
-      return false;
-    }
-
-    const fullThought = content
-      ?.filter((block) => block?.type === "thinking")
-      .map((block) => block.thinking ?? "")
-      .join("\n")
-      .trimEnd();
-    const sentThoughtSoFar = pending.sentThoughtLength ?? 0;
-    if (fullThought && fullThought.length > sentThoughtSoFar) {
-      const newThought = fullThought.slice(sentThoughtSoFar);
-      pending.sentThoughtLength = fullThought.length;
-      pending.sentThought = fullThought;
-      await this.sessionUpdates.emit({
-        sessionId,
-        sessionKey: pending.sessionKey,
-        ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
-        runId: pending.idempotencyKey,
-        record: true,
-        update: {
-          sessionUpdate: "agent_thought_chunk",
-          content: { type: "text", text: newThought },
-        },
-      });
-      if (this.getPendingPrompt(sessionId, pending.idempotencyKey) !== pending) {
-        return false;
-      }
-    }
-
-    const fullText = content
-      ?.filter((block) => block?.type === "text")
-      .map((block) => block.text ?? "")
-      .join("\n")
-      .trimEnd();
-    const sentSoFar = pending.sentTextLength ?? 0;
-    if (!fullText || fullText.length <= sentSoFar) {
-      return true;
-    }
-
-    const newText = fullText.slice(sentSoFar);
-    pending.sentTextLength = fullText.length;
-    pending.sentText = fullText;
-    await this.sessionUpdates.emit({
-      sessionId,
-      sessionKey: pending.sessionKey,
-      ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
-      runId: pending.idempotencyKey,
-      record: true,
-      update: {
-        sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: newText },
-      },
-    });
-    return this.getPendingPrompt(sessionId, pending.idempotencyKey) === pending;
-  }
-
   private async finishPrompt(
     sessionId: string,
     pending: AcpPendingPrompt,
     stopReason: StopReason,
+    options: { claimed?: boolean; interruption?: string } = {},
   ): Promise<void> {
-    if (!this.claimPendingPrompt(pending)) {
+    if (!options.claimed && !this.claimPendingPrompt(pending)) {
       return;
+    }
+    if (options.interruption) {
+      // Persist the visible reason before settlement without waiting for client delivery.
+      await this.emitPromptChunk(
+        pending,
+        "agent_message_chunk",
+        `[OpenClaw interruption] ${options.interruption}`,
+        false,
+      );
     }
     const promptKey = this.pendingPromptKey(sessionId, pending.idempotencyKey);
     this.settlingPromptKeys.add(promptKey);
@@ -631,6 +560,84 @@ export class AcpTranslatorPromptStream {
     }
   }
 
+  private async emitPromptChunk(
+    pending: AcpPendingPrompt,
+    kind: "agent_message_chunk" | "agent_thought_chunk",
+    text: string,
+    waitForDelivery = true,
+  ): Promise<void> {
+    await this.sessionUpdates.emit({
+      sessionId: pending.sessionId,
+      sessionKey: pending.sessionKey,
+      ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
+      runId: pending.idempotencyKey,
+      record: true,
+      ...(waitForDelivery ? {} : { waitForDelivery: false }),
+      update: {
+        sessionUpdate: kind,
+        content: { type: "text", text },
+      },
+    });
+  }
+
+  private async settleRecoveredPrompt(
+    sessionId: string,
+    pending: AcpPendingPrompt,
+    result: AcpAgentWaitResult,
+  ): Promise<void> {
+    const signal =
+      this.sessionStore.getSession(sessionId)?.abortController?.signal ??
+      new AbortController().signal;
+    const reply = await recoverTerminalReply({
+      runId: pending.idempotencyKey,
+      scope: { sessionKey: pending.sessionKey },
+      result,
+      request: (method, params, requestSignal) =>
+        this.gateway.request(method, params, { signal: requestSignal }),
+      signal,
+    }).catch(() => ({ outputText: undefined, unavailable: "recovery-cancelled" }));
+    // A live final or cancellation can win while history is being read.
+    if (!this.claimPendingPrompt(pending)) {
+      return;
+    }
+    const sentText = pending.sentText ?? "";
+    const outputText = reply.outputText;
+    const unavailable =
+      reply.unavailable ??
+      (outputText?.startsWith(sentText) === false ? "reply-rewritten" : undefined);
+    if (unavailable) {
+      const message = `Full reply recovery unavailable (${unavailable}). Check the session history.`;
+      await this.emitPromptChunk(
+        pending,
+        "agent_message_chunk",
+        `[OpenClaw interruption] ${message}`,
+        false,
+      );
+      await this.rejectPendingPrompt(pending, new Error(message), { claimed: true });
+      return;
+    }
+    const recoveredText = outputText?.slice(sentText.length);
+    if (recoveredText) {
+      await this.emitPromptChunk(pending, "agent_message_chunk", recoveredText, false);
+    }
+    if (result.status !== "error") {
+      await this.finishPrompt(sessionId, pending, "end_turn", { claimed: true });
+      return;
+    }
+    const message = result.error?.trim() || "run failed";
+    await this.emitPromptChunk(
+      pending,
+      "agent_message_chunk",
+      `[OpenClaw interruption] ${message}`,
+      false,
+    );
+    if (result.stopReason === "length" || result.stopReason === "max_tokens") {
+      await this.finishPrompt(sessionId, pending, "max_tokens", { claimed: true });
+      return;
+    }
+    await this.rejectPendingPrompt(pending, new Error(message), { claimed: true });
+  }
+
   private findPendingBySessionKey(
     sessionKey: string,
     runId?: string,
@@ -649,31 +656,27 @@ export class AcpTranslatorPromptStream {
         if (pending.idempotencyKey !== runId) {
           continue;
         }
-        this.reconcilePendingSessionKey(pending, sessionKey);
+        if (pending.sessionKey === sessionKey) {
+          return pending;
+        }
+        this.log(`session key reconciled: ${pending.sessionKey} -> ${sessionKey}`);
+        pending.sessionKey = sessionKey;
+        const session = this.sessionStore.getSession(pending.sessionId);
+        if (session?.activeRunId === pending.idempotencyKey) {
+          session.sessionKey = sessionKey;
+        }
         return pending;
       }
     }
     return undefined;
   }
 
-  private reconcilePendingSessionKey(pending: AcpPendingPrompt, sessionKey: string): void {
-    if (pending.sessionKey === sessionKey) {
-      return;
-    }
-    this.log(`session key reconciled: ${pending.sessionKey} -> ${sessionKey}`);
-    pending.sessionKey = sessionKey;
-    const session = this.sessionStore.getSession(pending.sessionId);
-    if (session?.activeRunId === pending.idempotencyKey) {
-      session.sessionKey = sessionKey;
-    }
-  }
-
   private async rejectPendingPrompt(
     pending: AcpPendingPrompt,
     error: Error,
-    options: { recordDisconnectNotice?: boolean } = {},
+    options: { claimed?: boolean; recordDisconnectNotice?: boolean } = {},
   ): Promise<void> {
-    if (!this.claimPendingPrompt(pending)) {
+    if (!options.claimed && !this.claimPendingPrompt(pending)) {
       return;
     }
 
@@ -685,20 +688,7 @@ export class AcpTranslatorPromptStream {
         const text = pending.sendAccepted
           ? "[OpenClaw interruption] The Gateway disconnected after accepting this message, so its final outcome is unknown. Check the session before retrying."
           : "[OpenClaw interruption] The Gateway disconnected before OpenClaw could confirm whether this message was accepted, so its final outcome is unknown. Check the session before retrying.";
-        // Make replay durable before rejecting, but do not let ACP client backpressure
-        // extend the disconnect deadline indefinitely.
-        await this.sessionUpdates.emit({
-          sessionId: pending.sessionId,
-          sessionKey: pending.sessionKey,
-          ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
-          runId: pending.idempotencyKey,
-          record: true,
-          waitForDelivery: false,
-          update: {
-            sessionUpdate: "agent_message_chunk",
-            content: { type: "text", text },
-          },
-        });
+        await this.emitPromptChunk(pending, "agent_message_chunk", text, false);
       }
     } catch (noticeError) {
       this.log(`disconnect notice failed for ${pending.idempotencyKey}: ${String(noticeError)}`);

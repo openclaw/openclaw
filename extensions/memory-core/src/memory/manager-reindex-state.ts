@@ -1,11 +1,18 @@
-// Memory Core plugin module implements manager reindex state behavior.
+import { resolveEmbeddingInputFormatVersion } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
 import {
   hashText,
   MEMORY_CHUNKING_VERSION,
   normalizeExtraMemoryPathEntries,
   type MemoryExtraPath,
+  type MemoryIndexIdentityState as HostMemoryIndexIdentityState,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+
+export type MemoryIndexIdentityState =
+  | Exclude<HostMemoryIndexIdentityState, { status: "mismatched"; owner: "openclaw" }>
+  | (Extract<HostMemoryIndexIdentityState, { status: "mismatched"; owner: "openclaw" }> & {
+      versionOrder: "older" | "newer";
+    });
 
 export type MemoryIndexMeta = {
   model: string;
@@ -16,6 +23,7 @@ export type MemoryIndexMeta = {
   chunkTokens: number;
   chunkOverlap: number;
   chunkingVersion?: number;
+  embeddingInputFormatVersion?: number;
   vectorDims?: number;
   ftsTokenizer?: string;
   provenanceVersion?: number;
@@ -23,29 +31,50 @@ export type MemoryIndexMeta = {
 
 export const MEMORY_INDEX_PROVENANCE_VERSION = 1;
 
-export type MemoryIndexIdentityState =
-  | {
-      status: "valid";
-    }
-  | {
-      status: "missing";
-      reason: string;
-    }
-  | {
-      status: "mismatched";
-      reason: string;
-    };
-
 export type MemoryIndexProviderIdentity = {
   provider: string;
   model: string;
   providerKey: string;
 };
 
+export function canUpgradeMemoryIndexProviderKey(
+  state: MemoryIndexIdentityState,
+  meta: MemoryIndexMeta,
+  identities: MemoryIndexProviderIdentity[],
+): boolean {
+  const [canonical, ...aliases] = identities;
+  if (
+    !canonical ||
+    meta.provider !== canonical.provider ||
+    meta.model !== canonical.model ||
+    !meta.providerKey ||
+    meta.providerKey === canonical.providerKey ||
+    !aliases.some(
+      (alias) =>
+        alias.provider === meta.provider &&
+        alias.model === meta.model &&
+        alias.providerKey === meta.providerKey,
+    )
+  ) {
+    return false;
+  }
+  return (
+    state.status === "valid" ||
+    (state.status === "mismatched" &&
+      state.owner === "openclaw" &&
+      state.code === "chunking_version" &&
+      state.versionOrder === "older" &&
+      state.chunkingVersionOnly === true &&
+      (meta.embeddingInputFormatVersion ?? 0) ===
+        resolveEmbeddingInputFormatVersion(canonical.model))
+  );
+}
+
 export function resolveMemoryIndexProviderIdentities(params: {
   provider: { id: string; model: string } | null;
   cacheKeyData?: Record<string, unknown>;
   aliases?: Array<{ model: string; cacheKeyData: Record<string, unknown> }>;
+  documentPrefix?: string;
 }): MemoryIndexProviderIdentity[] {
   const provider = params.provider ?? { id: "none", model: "fts-only" };
   const candidates = [
@@ -55,10 +84,21 @@ export function resolveMemoryIndexProviderIdentities(params: {
     },
     ...(params.provider ? (params.aliases ?? []) : []),
   ];
+  const embeddingInputFormatVersion = resolveEmbeddingInputFormatVersion(provider.model);
+  // Explicit formatting also disables provider-owned templates, including an empty prefix.
+  const documentPrefix = params.provider ? params.documentPrefix : undefined;
   const seen = new Set<string>();
   const identities: MemoryIndexProviderIdentity[] = [];
   for (const [index, candidate] of candidates.entries()) {
-    const providerKey = hashText(JSON.stringify(candidate.cacheKeyData));
+    const cacheKeyData =
+      embeddingInputFormatVersion || documentPrefix !== undefined
+        ? {
+            provider: candidate.cacheKeyData,
+            embeddingInputFormatVersion,
+            ...(documentPrefix !== undefined ? { documentPrefix } : {}),
+          }
+        : candidate.cacheKeyData;
+    const providerKey = hashText(JSON.stringify(cacheKeyData));
     const key = `${candidate.model}\u0000${providerKey}`;
     if ((index > 0 && !candidate.model) || seen.has(key)) {
       continue;
@@ -81,18 +121,8 @@ export function resolveConfiguredSourcesForMeta(sources: Iterable<MemorySource>)
 }
 
 function normalizeMetaSources(meta: MemoryIndexMeta): MemorySource[] {
-  if (!Array.isArray(meta.sources)) {
-    // Backward compatibility for older indexes that did not persist sources.
-    return ["memory"];
-  }
-  const normalized = Array.from(
-    new Set(
-      meta.sources.filter(
-        (source): source is MemorySource => source === "memory" || source === "sessions",
-      ),
-    ),
-  ).toSorted((left, right) => left.localeCompare(right));
-  return normalized.length > 0 ? normalized : ["memory"];
+  // Older indexes without sources retain the same default as empty configuration.
+  return resolveConfiguredSourcesForMeta(new Set(Array.isArray(meta.sources) ? meta.sources : []));
 }
 
 function configuredMetaSourcesDiffer(params: {
@@ -104,6 +134,29 @@ function configuredMetaSourcesDiffer(params: {
     return true;
   }
   return metaSources.some((source, index) => source !== params.configuredSources[index]);
+}
+
+function openClawIndexMismatch(
+  code: "provenance_version" | "chunking_version" | "embedding_input_format",
+  reason: string,
+  versionOrder: "older" | "newer",
+): MemoryIndexIdentityState {
+  return { status: "mismatched", reason, code, owner: "openclaw", versionOrder };
+}
+
+function configuredIndexMismatch(
+  code:
+    | "model"
+    | "provider"
+    | "provider_settings"
+    | "sources"
+    | "scope"
+    | "chunking"
+    | "vector_dims"
+    | "fts_tokenizer",
+  reason: string,
+): MemoryIndexIdentityState {
+  return { status: "mismatched", reason, code, owner: "configuration" };
 }
 
 export function resolveConfiguredScopeHash(params: {
@@ -133,9 +186,9 @@ export function resolveConfiguredScopeHash(params: {
   );
 }
 
-export function resolveMemoryIndexIdentityState(params: {
+type MemoryIndexIdentityParams = {
   meta: MemoryIndexMeta | null;
-  provider: { id: string; model: string } | null;
+  provider: { id: string; model?: string } | null;
   providerKey?: string;
   providerAliases?: Array<Pick<MemoryIndexProviderIdentity, "model" | "providerKey">>;
   providerKeyKnown?: boolean;
@@ -146,84 +199,137 @@ export function resolveMemoryIndexIdentityState(params: {
   vectorReady: boolean;
   hasIndexedChunks?: boolean;
   ftsTokenizer: string;
-}): MemoryIndexIdentityState {
-  const { meta } = params;
-  if (!meta) {
-    return { status: "missing", reason: "index metadata is missing" };
-  }
-  if (meta.provenanceVersion !== MEMORY_INDEX_PROVENANCE_VERSION) {
-    return {
-      status: "mismatched",
-      reason: "index provenance classifier changed",
-    };
-  }
-  if (meta.chunkingVersion !== MEMORY_CHUNKING_VERSION) {
-    return {
-      status: "mismatched",
-      reason: "index chunking implementation changed",
-    };
-  }
-  const expectedModel = params.provider?.model?.trim() || "fts-only";
+};
+
+function resolveConfigurationIndexIdentityState(
+  params: Omit<MemoryIndexIdentityParams, "meta">,
+  meta: MemoryIndexMeta,
+): MemoryIndexIdentityState {
+  const expectedModel =
+    params.provider && params.provider.model === undefined
+      ? undefined
+      : params.provider?.model?.trim() || "fts-only";
   const matchingModelIdentities = [
     { model: expectedModel, providerKey: params.providerKey },
     ...(params.providerAliases ?? []),
   ].filter((identity) => identity.model === meta.model);
-  if (matchingModelIdentities.length === 0) {
-    return {
-      status: "mismatched",
-      reason: `index was built for model ${meta.model}, expected ${expectedModel}`,
-    };
+  if (expectedModel !== undefined && matchingModelIdentities.length === 0) {
+    return configuredIndexMismatch(
+      "model",
+      `index was built for model ${meta.model}, expected ${expectedModel}`,
+    );
   }
   const expectedProvider = params.provider ? params.provider.id : "none";
   if (meta.provider !== expectedProvider) {
-    return {
-      status: "mismatched",
-      reason: `index was built for provider ${meta.provider}, expected ${expectedProvider}`,
-    };
+    return configuredIndexMismatch(
+      "provider",
+      `index was built for provider ${meta.provider}, expected ${expectedProvider}`,
+    );
   }
   if (
+    expectedModel !== undefined &&
     params.providerKeyKnown !== false &&
     !matchingModelIdentities.some((identity) => identity.providerKey === meta.providerKey)
   ) {
-    return {
-      status: "mismatched",
-      reason: "index provider settings changed",
-    };
+    return configuredIndexMismatch("provider_settings", "index provider settings changed");
   }
-  if (
-    configuredMetaSourcesDiffer({
-      meta,
-      configuredSources: params.configuredSources,
-    })
-  ) {
-    return {
-      status: "mismatched",
-      reason: "index sources changed",
-    };
-  }
-  if (meta.scopeHash !== params.configuredScopeHash) {
-    return {
-      status: "mismatched",
-      reason: "index scope changed",
-    };
-  }
-  if (meta.chunkTokens !== params.chunkTokens || meta.chunkOverlap !== params.chunkOverlap) {
-    return {
-      status: "mismatched",
-      reason: "index chunking changed",
-    };
+  const contentIdentity = resolveContentScopeIdentityState(params, meta);
+  if (contentIdentity.status !== "valid") {
+    return contentIdentity;
   }
   if (params.vectorReady && params.hasIndexedChunks !== false && !meta.vectorDims) {
-    return {
-      status: "mismatched",
-      reason: "index vector dimensions are missing",
-    };
-  }
-  if ((meta.ftsTokenizer ?? "unicode61") !== params.ftsTokenizer) {
-    return {
-      status: "mismatched",
-      reason: "index FTS tokenizer changed",
-    };
+    return configuredIndexMismatch("vector_dims", "index vector dimensions are missing");
   }
   return { status: "valid" };
+}
+
+// The constraints that decide whether stored keyword rows still describe the
+// configured corpus. Embedding identity is deliberately absent: keyword reads
+// never consume embeddings, so a changed model or an unavailable provider must
+// not lock the last published keyword index away.
+function resolveContentScopeIdentityState(
+  params: Omit<MemoryIndexIdentityParams, "meta">,
+  meta: MemoryIndexMeta,
+): MemoryIndexIdentityState {
+  if (configuredMetaSourcesDiffer({ meta, configuredSources: params.configuredSources })) {
+    return configuredIndexMismatch("sources", "index sources changed");
+  }
+  if (meta.scopeHash !== params.configuredScopeHash) {
+    return configuredIndexMismatch("scope", "index scope changed");
+  }
+  if (meta.chunkTokens !== params.chunkTokens || meta.chunkOverlap !== params.chunkOverlap) {
+    return configuredIndexMismatch("chunking", "index chunking changed");
+  }
+  if ((meta.ftsTokenizer ?? "unicode61") !== params.ftsTokenizer) {
+    return configuredIndexMismatch("fts_tokenizer", "index FTS tokenizer changed");
+  }
+  return { status: "valid" };
+}
+
+export function resolveMemoryIndexIdentityState(
+  params: MemoryIndexIdentityParams,
+): MemoryIndexIdentityState {
+  const { meta } = params;
+  if (!meta) {
+    return {
+      status: "missing",
+      reason: "index metadata is missing",
+      code: "metadata_missing",
+      owner: "openclaw",
+    };
+  }
+  // Interpret format revisions against the model that produced the stored vectors.
+  const indexedModel =
+    meta.provider === params.provider?.id &&
+    params.providerAliases?.some(({ model }) => model === meta.model)
+      ? (params.provider?.model ?? meta.model)
+      : meta.model;
+  const embeddingInputFormatVersion = resolveEmbeddingInputFormatVersion(indexedModel);
+  // A newer dimension wins over an older one: a rollback cannot rewrite that index.
+  const newerVersion =
+    (meta.provenanceVersion ?? 0) > MEMORY_INDEX_PROVENANCE_VERSION
+      ? "provenance_version"
+      : (meta.chunkingVersion ?? 0) > MEMORY_CHUNKING_VERSION
+        ? "chunking_version"
+        : (meta.embeddingInputFormatVersion ?? 0) > embeddingInputFormatVersion
+          ? "embedding_input_format"
+          : undefined;
+  if (newerVersion) {
+    return openClawIndexMismatch(
+      newerVersion,
+      "the index was written by a newer OpenClaw version; upgrade OpenClaw or reindex explicitly",
+      "newer",
+    );
+  }
+  if ((meta.provenanceVersion ?? 0) < MEMORY_INDEX_PROVENANCE_VERSION) {
+    return openClawIndexMismatch(
+      "provenance_version",
+      "index provenance classifier changed",
+      "older",
+    );
+  }
+  const olderFormat =
+    (meta.chunkingVersion ?? 0) < MEMORY_CHUNKING_VERSION
+      ? "chunking_version"
+      : (meta.embeddingInputFormatVersion ?? 0) < embeddingInputFormatVersion
+        ? "embedding_input_format"
+        : undefined;
+  if (olderFormat) {
+    // These upgrades preserve lexical rows only while source/scope identity still matches.
+    return {
+      ...openClawIndexMismatch(
+        olderFormat,
+        olderFormat === "chunking_version"
+          ? "index chunking implementation changed"
+          : "index embedding input format changed",
+        "older",
+      ),
+      ...(resolveContentScopeIdentityState(params, meta).status === "valid"
+        ? olderFormat === "chunking_version"
+          ? { chunkingVersionOnly: true }
+          : { lexicalCompatible: true }
+        : {}),
+    };
+  }
+  return resolveConfigurationIndexIdentityState(params, meta);
 }

@@ -7,30 +7,33 @@
 # The dependency manifest stages extract only package.json files, so the main
 # build layer is not invalidated by unrelated source changes.
 #
-# Build stages use full bookworm; the runtime image is always bookworm-slim.
+# Build stages use full trixie; the runtime image is always trixie-slim.
+ARG OPENCLAW_RUNTIME_ASSETS=runtime-assets
+ARG OPENCLAW_INSTALLED_RUNTIME_INPUT=installed-runtime-directory-input
 ARG OPENCLAW_EXTENSIONS=""
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR=extensions
 ARG OPENCLAW_DOCKER_BUILD_NODE_OPTIONS="--max-old-space-size=8192"
 ARG OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB=""
 ARG OPENCLAW_DOCKER_BUILD_SKIP_DTS=1
-ARG OPENCLAW_NODE_BOOKWORM_IMAGE="docker.io/library/node:24-bookworm@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584"
-ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="docker.io/library/node:24-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03"
-ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST="sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03"
-# Keep in sync with .github/actions/setup-node-env/action.yml bun-version.
+ARG OPENCLAW_NODE_TRIXIE_IMAGE="docker.io/library/node:24.22.1-trixie@sha256:e8bc2eedd0e82fb45a4d9a68aff03d1fbe478fc5794a67d7dc06b72a2caaa2ec"
+ARG OPENCLAW_NODE_TRIXIE_SLIM_IMAGE="docker.io/library/node:24.22.1-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea"
+ARG OPENCLAW_NODE_TRIXIE_SLIM_DIGEST="sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea"
+# Keep in sync with .github/actions/setup-node-env/action.yml and seed-bun-from-image.mjs.
 # To update: docker buildx imagetools inspect docker.io/oven/bun:<version> and use the manifest-list digest.
-ARG OPENCLAW_BUN_IMAGE="docker.io/oven/bun:1.4.0@sha256:5ff609364c049b54eb0ff560ec96319729a972078ef2c755d758f0c6ef89c2d6"
+ARG OPENCLAW_BUN_IMAGE="docker.io/oven/bun:1.4.4@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d"
 
 # Base images are pinned to SHA256 digests for reproducible builds.
-# Dependabot refreshes these blessed digests; release builds consume the
-# reviewed base snapshot instead of mutating distro state on every build.
-# To update, run: docker buildx imagetools inspect docker.io/library/node:24-bookworm and
-# docker.io/library/node:24-bookworm-slim (or podman) and replace the digests below with the
+# Dependabot refreshes these reviewed base snapshots; runtime stages apply
+# current Debian security updates separately.
+# To update, run: docker buildx imagetools inspect docker.io/library/node:24-trixie and
+# docker.io/library/node:24-trixie-slim (or podman) and replace the digests above with the
 # current multi-arch manifest list entries.
 
-FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS workspace-deps
+FROM ${OPENCLAW_NODE_TRIXIE_IMAGE} AS workspace-deps
 ARG OPENCLAW_EXTENSIONS
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
-# Copy package.json files for workspace packages used by the install layer.
+# Frozen installs validate every lockfile importer's manifest, including unselected plugins.
+# Stage all workspace manifests, then filter dependency installation separately.
 # Manifest-only bundled plugins remain valid selections but need no workspace metadata.
 # Use COPY because build-context bind mounts are unreliable across supported
 # Podman/Buildah hosts. Full trees stay in this disposable stage; later stages
@@ -39,39 +42,26 @@ COPY scripts/lib/docker-plugin-selection.mjs /tmp/docker-plugin-selection.mjs
 COPY scripts/lib/root-package-bundled-plugin-excludes.mjs /tmp/root-package-bundled-plugin-excludes.mjs
 COPY package.json /tmp/package.json
 COPY packages /tmp/packages
+COPY examples /tmp/examples
 COPY ${OPENCLAW_BUNDLED_PLUGIN_DIR} /tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}
-RUN mkdir -p /out/packages "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}" && \
-    for manifest in /tmp/packages/*/package.json; do \
+RUN mkdir -p /out/packages /out/examples "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}" && \
+    for manifest in /tmp/packages/*/package.json /tmp/examples/*/package.json "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}"/*/package.json; do \
       [ -f "$manifest" ] || continue; \
-      pkg_dir="${manifest%/package.json}"; \
-      pkg_name="${pkg_dir##*/}"; \
-      mkdir -p "/out/packages/$pkg_name" && \
-      cp "$manifest" "/out/packages/$pkg_name/package.json"; \
+      manifest_path="${manifest#/tmp/}"; \
+      mkdir -p "/out/${manifest_path%/package.json}" && \
+      cp "$manifest" "/out/$manifest_path"; \
     done && \
     node /tmp/docker-plugin-selection.mjs "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}" "$OPENCLAW_EXTENSIONS" \
       > /out/openclaw-selected-plugin-dirs && \
     node /tmp/docker-plugin-selection.mjs "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}" "$OPENCLAW_EXTENSIONS" \
       --required-platform-packages > /out/openclaw-required-platform-packages && \
     node /tmp/docker-plugin-selection.mjs "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}" "$OPENCLAW_EXTENSIONS" \
-      --required-bundled /tmp/package.json > /tmp/openclaw-workspace-plugin-dirs && \
-    while IFS= read -r ext; do \
-      ext_dir="/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext"; \
-      if [ -f "$ext_dir/package.json" ]; then \
-        mkdir -p "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext" && \
-        cp "$ext_dir/package.json" "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext/package.json"; \
-      fi; \
-    done < /tmp/openclaw-workspace-plugin-dirs
+      --required-bundled /tmp/package.json > /out/openclaw-workspace-plugin-dirs
 
-# ── Stage 2: Build ──────────────────────────────────────────────
-FROM ${OPENCLAW_BUN_IMAGE} AS bun-binary
-FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build
+# Shared manifest-only inputs. Both installs start without node_modules so pnpm
+# never has to rename a dependency directory inherited from an OverlayFS layer.
+FROM ${OPENCLAW_NODE_TRIXIE_IMAGE} AS dependency-inputs
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
-ARG OPENCLAW_DOCKER_BUILD_NODE_OPTIONS
-ARG OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB
-ARG OPENCLAW_DOCKER_BUILD_SKIP_DTS
-
-# Copy pinned Bun binary from the official image instead of fetching via curl.
-COPY --from=bun-binary /usr/local/bin/bun /usr/local/bin/bun
 
 RUN corepack enable
 
@@ -79,51 +69,82 @@ WORKDIR /app
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY node-version.mjs ./
+COPY node-sqlite.mjs ./
+COPY node-sqlite-capabilities.mjs ./
+COPY runtime-process-bootstrap.generated.mjs ./
+COPY runtime-process-scripts.generated.mjs ./
+COPY node-runtime-update.mjs ./
+COPY node-runtime-recovery.mjs ./
+COPY cli-parent-lifetime.mjs ./
+COPY node-runtime-env.mjs ./
+COPY cli-invocation.mjs ./
+COPY cli-root-options.mjs gateway-run-argv.mjs gateway-shutdown-budget.mjs ./
+COPY node-host-launcher.mjs ./
+COPY node-compile-cache.mjs ./
+COPY docker-entrypoint.mjs ./
 COPY openclaw.mjs ./
 COPY ui/package.json ./ui/package.json
+COPY tools/solid-lint/package.json ./tools/solid-lint/package.json
 COPY patches ./patches
-COPY scripts/postinstall-bundled-plugins.mjs scripts/preinstall-package-manager-warning.mjs scripts/windows-cmd-helpers.mjs scripts/prepare-git-hooks.mjs ./scripts/
-COPY scripts/lib/guard-inventory-utils.mjs ./scripts/lib/guard-inventory-utils.mjs
+COPY scripts/postinstall-bundled-plugins.mjs scripts/preinstall-package-manager-warning.mjs scripts/windows-cmd-helpers.mjs scripts/prepare-git-hooks.mjs scripts/check-install-dependency-ownership.mjs ./scripts/
 COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs
+COPY scripts/lib/javascript-statements.mjs ./scripts/lib/javascript-statements.mjs
+COPY scripts/lib/package-lifecycle-marker.mjs ./scripts/lib/package-lifecycle-marker.mjs
+COPY scripts/lib/fs-safe-prebuild.mjs ./scripts/lib/fs-safe-prebuild.mjs
+COPY scripts/lib/fs-safe-npm-cli-preload.generated.mjs ./scripts/lib/fs-safe-npm-cli-preload.generated.mjs
+COPY scripts/lib/fs-safe-npm-cli-protocol.mjs ./scripts/lib/fs-safe-npm-cli-protocol.mjs
+COPY scripts/docker/verify-fs-safe-native.mjs ./scripts/docker/verify-fs-safe-native.mjs
+COPY scripts/docker/verify-native-addons.sh ./scripts/docker/verify-native-addons.sh
 
 COPY --from=workspace-deps /out/packages/ ./packages/
+COPY --from=workspace-deps /out/examples/ ./examples/
 COPY --from=workspace-deps /out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/ ./${OPENCLAW_BUNDLED_PLUGIN_DIR}/
+COPY --from=workspace-deps /out/openclaw-workspace-plugin-dirs /tmp/openclaw-workspace-plugin-dirs
 COPY --from=workspace-deps /out/openclaw-selected-plugin-dirs /tmp/openclaw-selected-plugin-dirs
 COPY --from=workspace-deps /out/openclaw-required-platform-packages /tmp/openclaw-required-platform-packages
 
+# ── Production dependencies ────────────────────────────────────
+FROM dependency-inputs AS production-deps
+RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
+    set -eu; set -- --filter . --filter ./ui --filter './packages/*'; \
+    while IFS= read -r ext; do \
+      set -- "$@" --filter "./${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext"; \
+    done < /tmp/openclaw-workspace-plugin-dirs; \
+    NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile --prod "$@" \
+      --config.supportedArchitectures.os=linux \
+      --config.supportedArchitectures.cpu="$(node -p 'process.arch')" \
+      --config.supportedArchitectures.libc=glibc
+RUN sh scripts/docker/verify-native-addons.sh
+
+# ── Build ──────────────────────────────────────────────────────
+FROM ${OPENCLAW_BUN_IMAGE} AS bun-binary
+FROM dependency-inputs AS build
+ARG OPENCLAW_DOCKER_BUILD_NODE_OPTIONS
+ARG OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB
+ARG OPENCLAW_DOCKER_BUILD_SKIP_DTS
+# Build checks inherit CI severity without changing the runtime image environment.
+ARG GITHUB_ACTIONS=false
+
+# Copy pinned Bun binary from the official image instead of fetching via curl.
+COPY --from=bun-binary /usr/local/bin/bun /usr/local/bin/bun
+
 # Reduce OOM risk on low-memory hosts during dependency installation.
 # Docker builds on small VMs may otherwise fail with "Killed" (exit 137).
+# Source asset preparation builds external plugins before runtime pruning.
+# Its build dependencies stay in this disposable stage; production remains filtered.
 RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
     NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile \
       --config.supportedArchitectures.os=linux \
       --config.supportedArchitectures.cpu="$(node -p 'process.arch')" \
       --config.supportedArchitectures.libc=glibc
 
-# pnpm v10+ may append peer-resolution hashes to virtual-store folder names; do not hardcode `.pnpm/...`
-# paths. Matrix's native downloader can hit transient release CDN errors while
-# still exiting successfully, so retry the package downloader before failing.
-# Skip the entire check when matrix is not a bundled extension (e.g. msteams-only builds).
-RUN set -eux; \
-    if ! grep -qx 'matrix' /tmp/openclaw-selected-plugin-dirs; then \
-      echo "==> matrix not bundled, skipping matrix-sdk-crypto check"; \
-      exit 0; \
-    fi; \
-    echo "==> Verifying critical native addons..."; \
-    for attempt in 1 2 3 4 5; do \
-      if find /app/node_modules -name "matrix-sdk-crypto*.node" 2>/dev/null | grep -q .; then \
-        exit 0; \
-      fi; \
-      echo "matrix-sdk-crypto native addon missing; retrying download (${attempt}/5)"; \
-      node /app/node_modules/@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js || true; \
-      sleep $((attempt * 2)); \
-    done; \
-    find /app/node_modules -name "matrix-sdk-crypto*.node" 2>/dev/null | grep -q . || \
-      (echo "ERROR: matrix-sdk-crypto native addon missing after retries" >&2 && exit 1)
+RUN sh scripts/docker/verify-native-addons.sh
 
 # Public source provenance supplied by release automation or local setup. Keep
 # these after the dependency layer so a new timestamp does not invalidate install.
 ARG GIT_COMMIT=""
 ARG OPENCLAW_BUILD_TIMESTAMP=""
+ARG OPENCLAW_DOCKER_BUILD_VERSION=""
 ENV GIT_COMMIT=${GIT_COMMIT} \
     OPENCLAW_BUILD_TIMESTAMP=${OPENCLAW_BUILD_TIMESTAMP}
 
@@ -142,19 +163,15 @@ RUN for dir in /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} /app/.agent /app/.agents; do 
       fi; \
     done
 
-# A2UI bundle may fail under QEMU cross-compilation (e.g. building amd64
-# on Apple Silicon). CI builds natively per-arch so this is a no-op there.
-# Stub it so local cross-arch builds still succeed.
-RUN pnpm_config_verify_deps_before_run=false pnpm canvas:a2ui:bundle || \
-    (echo "A2UI bundle: creating stub (non-fatal)" && \
-     mkdir -p extensions/canvas/src/host/a2ui && \
-     echo "/* A2UI bundle unavailable in this build */" > extensions/canvas/src/host/a2ui/a2ui.bundle.js && \
-     echo "stub" > extensions/canvas/src/host/a2ui/.bundle.hash && \
-     rm -rf vendor/a2ui apps/shared/OpenClawKit/Tools/CanvasA2UI)
 # Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV OPENCLAW_PREFER_PNPM=1
+# Correction-release sources keep the base package version; official images
+# stamp the complete release version before generating their build metadata.
 RUN set -eu; \
     selected_plugin_dirs="$(cat /tmp/openclaw-selected-plugin-dirs)"; \
+    if [ -n "$OPENCLAW_DOCKER_BUILD_VERSION" ]; then \
+      pnpm pkg set "version=$OPENCLAW_DOCKER_BUILD_VERSION"; \
+    fi; \
     if [ -z "$OPENCLAW_BUILD_TIMESTAMP" ]; then \
       OPENCLAW_BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
       export OPENCLAW_BUILD_TIMESTAMP; \
@@ -171,22 +188,25 @@ RUN if grep -qx 'qa-lab' /tmp/openclaw-selected-plugin-dirs; then \
       cp -R extensions/qa-lab/web/dist dist/extensions/qa-lab/web/dist; \
     fi
 
-# Prune dev dependencies, omitted plugin runtime packages, and build-only
-# metadata before copying runtime assets into the final image.
-FROM build AS runtime-assets
+# Keep compiled workspaces and generated plugin assets, but omit development
+# dependency trees before merging the build output into the production install.
+FROM build AS runtime-build-output
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
-# BuildKit cache mounts are not part of cached layers; seed tarballs for the
-# installed prod graph in the same step that runs offline prune.
-# Keep SDK-native binaries only for selected plugins that explicitly require them.
-RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
-    node scripts/list-prod-store-packages.mjs | xargs -r pnpm store add && \
-    CI=true pnpm prune --prod \
-      --config.offline=true \
-      --config.supportedArchitectures.os=linux \
-      --config.supportedArchitectures.cpu="$(node -p 'process.arch')" \
-      --config.supportedArchitectures.libc=glibc && \
+RUN rm -rf node_modules ui/node_modules && \
+    find packages "${OPENCLAW_BUNDLED_PLUGIN_DIR}" -name node_modules -prune -exec rm -rf {} +
+
+# Inherit production dependencies instead of copying their full tree again.
+# The build overlay also carries the stamped release package.json.
+FROM production-deps AS runtime-assets
+ARG OPENCLAW_BUNDLED_PLUGIN_DIR
+COPY --from=runtime-build-output /app/ ./
+
+# Prune omitted plugins and build metadata, then link the selected plugins'
+# plugin-local dependencies under dist/extensions/<id> after package lifecycle
+# cleanup so the packaged roots keep them. Keep SDK-native binaries only for
+# selected plugins that explicitly require them.
+RUN node scripts/postinstall-bundled-plugins.mjs && \
     OPENCLAW_EXTENSIONS="$(cat /tmp/openclaw-selected-plugin-dirs)" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs && \
-    node scripts/postinstall-bundled-plugins.mjs && \
     find dist -type f \( -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -name '*.map' \) -delete && \
     if [ -L /app/node_modules/@openclaw/ai ]; then \
       ai_runtime_target="$(readlink -f /app/node_modules/@openclaw/ai)" && \
@@ -205,21 +225,49 @@ RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/sto
         -name 'claude-agent-sdk-linux-*' -exec rm -rf {} +; \
     fi && \
     node --input-type=module -e 'await import("grammy")' && \
-    node scripts/check-package-dist-imports.mjs /app
+    node scripts/check-package-dist-imports.mjs /app && \
+    node scripts/docker/copy-bootstrap-scripts.mjs /app/.runtime-bootstrap && \
+    mkdir -p /app/.runtime-bootstrap/scripts/docker && \
+    cp scripts/docker/verify-fs-safe-native.mjs /app/.runtime-bootstrap/scripts/docker/ && \
+    cp scripts/lib/guard-inventory-utils.mjs /app/.runtime-bootstrap/scripts/lib/
+
+# Only installed assets and pinned helpers feed this route, never source builds.
+FROM ${OPENCLAW_NODE_TRIXIE_IMAGE} AS installed-runtime-directory-input
+WORKDIR /app
+COPY --from=openclaw_installed_runtime /app/ /app/
+
+# Archive recipes admit the exact artifact here, after Docker snapshots the context.
+FROM ${OPENCLAW_NODE_TRIXIE_IMAGE} AS installed-runtime-archive-input
+ARG OPENCLAW_INSTALLED_RUNTIME_SHA256
+WORKDIR /app
+COPY --from=openclaw_installed_runtime /installed-runtime.tgz /tmp/installed-runtime.tgz
+RUN --network=none test "${#OPENCLAW_INSTALLED_RUNTIME_SHA256}" -eq 64 && \
+    case "$OPENCLAW_INSTALLED_RUNTIME_SHA256" in *[!0-9a-f]*) exit 1;; esac && \
+    printf "%s  /tmp/installed-runtime.tgz\n" "$OPENCLAW_INSTALLED_RUNTIME_SHA256" | sha256sum -c - && \
+    tar -xzf /tmp/installed-runtime.tgz -C / && rm /tmp/installed-runtime.tgz
+
+FROM ${OPENCLAW_INSTALLED_RUNTIME_INPUT} AS installed-runtime-assets
+ARG OPENCLAW_EXTENSIONS
+COPY pnpm-lock.yaml docker-entrypoint.mjs /app/
+RUN --network=none cp -R .runtime-bootstrap/scripts/. scripts/ && \
+    mkdir -p qa && \
+    node .runtime-bootstrap/scripts/finalize-installed-runtime.mjs /app
+
+FROM ${OPENCLAW_RUNTIME_ASSETS} AS selected-runtime-assets
 
 # ── Runtime base image ──────────────────────────────────────────
-FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime
-ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST
-LABEL org.opencontainers.image.base.name="docker.io/library/node:24-bookworm-slim" \
-  org.opencontainers.image.base.digest="${OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST}"
+FROM ${OPENCLAW_NODE_TRIXIE_SLIM_IMAGE} AS base-runtime
+ARG OPENCLAW_NODE_TRIXIE_SLIM_DIGEST
+LABEL org.opencontainers.image.base.name="docker.io/library/node:24.22.1-trixie-slim" \
+  org.opencontainers.image.base.digest="${OPENCLAW_NODE_TRIXIE_SLIM_DIGEST}"
 
 # ── Stage 3: Runtime ────────────────────────────────────────────
-FROM base-runtime
+FROM base-runtime AS openclaw-runtime
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 
 # OCI base-image metadata for downstream image consumers.
 # If you change these annotations, also update:
-# - docs/install/docker.md ("Base image metadata" section)
+# - docs/install/docker/compose-operations.md ("Base image metadata" section)
 # - https://docs.openclaw.ai/install/docker
 LABEL org.opencontainers.image.source="https://github.com/openclaw/openclaw" \
   org.opencontainers.image.url="https://openclaw.ai" \
@@ -230,19 +278,21 @@ LABEL org.opencontainers.image.source="https://github.com/openclaw/openclaw" \
 
 WORKDIR /app
 
-# Install runtime system utilities missing from bookworm-slim.
-# `ca-certificates` ships in `bookworm` (full) but not in `bookworm-slim`,
+# Install runtime utilities, SQLite NOCOW repair tools, and llama-server OpenMP.
+# `ca-certificates` ships in `trixie` (full) but not in `trixie-slim`,
 # so it must be installed explicitly here. Without it `/etc/ssl/certs/`
 # stays empty and every HTTPS outbound dies at TLS handshake with
 # `error setting certificate file`.
+# The runtime image must include the SSH client because the sandbox backend
+# spawns `ssh` directly, and trixie-slim does not provide it.
 # Apply current Debian point-release security fixes even when the pinned base
 # digest predates them, without waiting for a base-digest refresh.
-RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
+RUN --mount=type=cache,id=openclaw-trixie-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=openclaw-trixie-apt-lists,target=/var/lib/apt,sharing=locked \
     apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      ca-certificates curl git hostname lsof openssl procps python3 tini && \
+      acl ca-certificates curl e2fsprogs git hostname libgomp1 lsof openssh-client openssl procps psmisc python3 tini && \
     update-ca-certificates
 
 # Keep npm as an operator-facing capability while replacing the base image's
@@ -258,26 +308,52 @@ RUN npm install --global npm@latest && \
 
 RUN chown node:node /app
 
-COPY --from=runtime-assets --chown=node:node /app/dist ./dist
-COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules
-COPY --from=runtime-assets --chown=node:node /app/package.json .
-COPY --from=runtime-assets --chown=node:node /app/pnpm-workspace.yaml .
-COPY --from=runtime-assets --chown=node:node /app/patches ./patches
-COPY --from=runtime-assets --chown=node:node /app/node-version.mjs .
-COPY --from=runtime-assets --chown=node:node /app/openclaw.mjs .
-COPY --from=runtime-assets --chown=node:node /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} ./${OPENCLAW_BUNDLED_PLUGIN_DIR}
-COPY --from=runtime-assets --chown=node:node /app/skills ./skills
-COPY --from=runtime-assets --chown=node:node /app/docs ./docs
-COPY --from=runtime-assets --chown=node:node /app/qa ./qa
+COPY --from=selected-runtime-assets --chown=node:node /app/dist ./dist
+COPY --from=selected-runtime-assets --chown=node:node /app/node_modules ./node_modules
+COPY --from=selected-runtime-assets --chown=node:node /app/package.json .
+COPY --from=selected-runtime-assets --chown=node:node /app/pnpm-lock.yaml .
+COPY --from=selected-runtime-assets --chown=node:node /app/pnpm-workspace.yaml .
+COPY --from=selected-runtime-assets --chown=node:node /app/patches ./patches
+COPY --from=selected-runtime-assets --chown=node:node /app/node-version.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/node-sqlite.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/node-sqlite-capabilities.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/runtime-process-bootstrap.generated.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/runtime-process-scripts.generated.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/node-runtime-update.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/node-runtime-recovery.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/cli-parent-lifetime.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/node-runtime-env.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/cli-invocation.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/cli-root-options.mjs /app/gateway-run-argv.mjs /app/gateway-shutdown-budget.mjs ./
+COPY --from=selected-runtime-assets --chown=node:node /app/node-host-launcher.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/node-compile-cache.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/docker-entrypoint.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/openclaw.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/.runtime-bootstrap/scripts ./scripts
+COPY --from=selected-runtime-assets --chown=node:node /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} ./${OPENCLAW_BUNDLED_PLUGIN_DIR}
+COPY --from=selected-runtime-assets --chown=node:node /app/skills ./skills
+COPY --from=selected-runtime-assets --chown=node:node /app/docs ./docs
+COPY --from=selected-runtime-assets --chown=node:node /app/qa ./qa
+RUN node /app/scripts/docker/verify-fs-safe-native.mjs --package-root /app --mode require
+
+# Validate the three version surfaces in every release-built runtime variant.
+ARG OPENCLAW_DOCKER_BUILD_VERSION
+RUN if [ -n "$OPENCLAW_DOCKER_BUILD_VERSION" ]; then \
+      test "$(node -p "require(\"/app/package.json\").version")" = "$OPENCLAW_DOCKER_BUILD_VERSION"; \
+      test "$(node -p "require(\"/app/dist/build-info.json\").version")" = "$OPENCLAW_DOCKER_BUILD_VERSION"; \
+      test "$(node /app/openclaw.mjs --version | cut -d ' ' -f 2)" = "$OPENCLAW_DOCKER_BUILD_VERSION"; \
+    fi
 
 # Keep pnpm available in the runtime image for container-local workflows.
 # Use a shared Corepack home so the non-root `node` user does not need a
-# first-run network fetch when invoking pnpm.
+# first-run network fetch when invoking pnpm. Warm in /app to also record
+# its pinned toolchain metadata before offline runtime use.
 ENV COREPACK_HOME=/usr/local/share/corepack
 RUN install -d -m 0755 "$COREPACK_HOME" && \
     corepack enable && \
+    pnpm_spec="$(node -p "require('./package.json').packageManager")" && \
     for attempt in 1 2 3 4 5; do \
-      if corepack prepare "$(node -p "require('./package.json').packageManager")" --activate; then \
+      if corepack prepare "$pnpm_spec" --activate; then \
         break; \
       fi; \
       if [ "$attempt" -eq 5 ]; then \
@@ -285,6 +361,8 @@ RUN install -d -m 0755 "$COREPACK_HOME" && \
       fi; \
       sleep $((attempt * 2)); \
     done && \
+    corepack "$pnpm_spec" --version && \
+    chmod a+r /app/pnpm-lock.yaml && \
     chmod -R a+rX "$COREPACK_HOME"
 
 # Install additional system packages needed by your skills or extensions.
@@ -293,8 +371,8 @@ RUN install -d -m 0755 "$COREPACK_HOME" && \
 ARG OPENCLAW_IMAGE_APT_PACKAGES
 ARG OPENCLAW_DOCKER_APT_PACKAGES=""
 ENV PATH="/home/node/.local/bin:${PATH}"
-RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
+RUN --mount=type=cache,id=openclaw-trixie-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=openclaw-trixie-apt-lists,target=/var/lib/apt,sharing=locked \
     packages="${OPENCLAW_IMAGE_APT_PACKAGES:-$OPENCLAW_DOCKER_APT_PACKAGES}"; \
     if [ -n "$packages" ]; then \
       apt-get update && \
@@ -304,8 +382,8 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
 # Install additional Python packages needed by your plugins or skills.
 # Example: docker build --build-arg OPENCLAW_IMAGE_PIP_PACKAGES="requests humanize" .
 ARG OPENCLAW_IMAGE_PIP_PACKAGES=""
-RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
+RUN --mount=type=cache,id=openclaw-trixie-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=openclaw-trixie-apt-lists,target=/var/lib/apt,sharing=locked \
     if [ -n "$OPENCLAW_IMAGE_PIP_PACKAGES" ]; then \
       if ! python3 -m pip --version >/dev/null 2>&1; then \
         apt-get update && \
@@ -314,21 +392,27 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       python3 -m pip install --no-cache-dir --break-system-packages $OPENCLAW_IMAGE_PIP_PACKAGES; \
     fi
 
-# Optionally install Chromium and Xvfb for browser automation.
-# Build with: docker build --build-arg OPENCLAW_INSTALL_BROWSER=1 ...
-# Adds ~300MB but eliminates the 60-90s Playwright install on every container start.
+# Optionally install Chromium distributions for browser automation.
+# Legacy 1 keeps full Chromium and headless shell; explicit chromium or
+# headless-shell installs only that distribution; managed shell use requires an
+# explicit executablePath on a separate headless browser profile.
 # Must run after node_modules COPY so playwright-core is available.
 ARG OPENCLAW_INSTALL_BROWSER=""
 ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
-RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
-    if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \
-      apt-get update && \
-      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb && \
-      mkdir -p "$PLAYWRIGHT_BROWSERS_PATH" && \
-      node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
-      chown -R node:node "$PLAYWRIGHT_BROWSERS_PATH"; \
-    fi
+RUN --mount=type=cache,id=openclaw-trixie-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=openclaw-trixie-apt-lists,target=/var/lib/apt,sharing=locked \
+    set -eu; \
+    case "$OPENCLAW_INSTALL_BROWSER" in \
+      ""|0) exit 0 ;; \
+      1) set -- ;; \
+      chromium) set -- --no-shell ;; \
+      headless-shell) set -- --only-shell ;; \
+      *) echo 'OPENCLAW_INSTALL_BROWSER must be empty, 0, 1, chromium, or headless-shell' >&2; exit 1 ;; \
+    esac; \
+    install -d -m 0755 -o node -g node "$(dirname "$PLAYWRIGHT_BROWSERS_PATH")" && \
+    mkdir -p "$PLAYWRIGHT_BROWSERS_PATH" && \
+    node /app/node_modules/playwright-core/cli.js install --with-deps "$@" chromium && \
+    chown -R node:node "$PLAYWRIGHT_BROWSERS_PATH"
 
 # Optionally install Docker CLI for sandbox container management.
 # Build with: docker build --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1 ...
@@ -336,8 +420,8 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
 # Required for agents.defaults.sandbox to function in Docker deployments.
 ARG OPENCLAW_INSTALL_DOCKER_CLI=""
 ARG OPENCLAW_DOCKER_GPG_FINGERPRINT="9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
-RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
+RUN --mount=type=cache,id=openclaw-trixie-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=openclaw-trixie-apt-lists,target=/var/lib/apt,sharing=locked \
     if [ -n "$OPENCLAW_INSTALL_DOCKER_CLI" ]; then \
       apt-get update && \
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -363,7 +447,7 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       gpg --dearmor -o /etc/apt/keyrings/docker.gpg /tmp/docker.gpg.asc && \
       rm -f /tmp/docker.gpg.asc && \
       chmod a+r /etc/apt/keyrings/docker.gpg && \
-      printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian bookworm stable\n' \
+      printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian trixie stable\n' \
         "$(dpkg --print-architecture)" > /etc/apt/sources.list.d/docker.list && \
       apt-get update && \
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -392,24 +476,28 @@ RUN install -d -m 0755 -o node -g node /home/node/.config && \
 ENV NODE_ENV=production
 
 # Security hardening: Run as non-root user
-# The node:24-bookworm image includes a 'node' user (uid 1000)
+# The node:24-trixie image includes a 'node' user (uid 1000)
 # This reduces the attack surface by preventing container escape via root privileges
 USER node
 
+# Verify the shipped toolchain needs no privileged writes or first-run downloads.
+RUN COREPACK_ENABLE_NETWORK=0 PNPM_CONFIG_OFFLINE=true pnpm --version
+
 # Start gateway server with default config.
-# Binds to loopback (127.0.0.1) by default for security.
-#
-# IMPORTANT: With Docker bridge networking (-p 18789:18789), loopback bind
-# makes the gateway unreachable from the host. Either:
-#   - Use --network host, OR
-#   - Override --bind to "lan" (0.0.0.0) and set auth credentials
+# In a detected container, an unset gateway.bind defaults to auto (0.0.0.0)
+# so port forwarding and container-network ingress can reach it; Tailscale
+# Serve/Funnel instead forces loopback. Non-loopback startup still requires
+# configured authentication. The image defines no host port publication;
+# actual reachability depends on the runtime and network
+# topology. Peers on the same container network and hosts with a route to its
+# address can reach the listener. Set gateway.bind to loopback explicitly for a
+# loopback-only listener; host networking changes what that interface represents.
 #
 # Built-in probe endpoints for container health checks:
 #   - GET /healthz (liveness), GET /startupz (startup/traffic admission),
 #     and GET /readyz (channel-aware readiness)
 #   - aliases: /health, /startup, and /ready
-# For external access from host/ingress, override bind to "lan" and set auth.
 HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
   CMD ["node", "dist/docker-healthcheck.js"]
-ENTRYPOINT ["tini", "-s", "--"]
+ENTRYPOINT ["tini", "-s", "--", "node", "/app/docker-entrypoint.mjs"]
 CMD ["node", "openclaw.mjs", "gateway"]

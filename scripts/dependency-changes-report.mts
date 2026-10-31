@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 
-// Builds dependency change reports from lockfile and manifest diffs.
 import { execFileSync } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
+import { REPORT_CLI_PARSE_OPTIONS, writeReportArtifact } from "./lib/report-cli-helpers.mts";
 import {
   collectAllResolvedPackagesFromLockfile,
   createBulkAdvisoryPayload,
@@ -31,20 +32,12 @@ const DEPENDENCY_DIFF_PATHS = [
 
 type DependencyPayload = Record<string, string[]>;
 type DependencyFileChange = { oldPath: string | null; path: string; status: string };
-const nullableString = (value: string | null) => value;
 
 function payloadFromLockfile(lockfileText: string): DependencyPayload {
   const packages = collectAllResolvedPackagesFromLockfile(lockfileText);
   return createBulkAdvisoryPayload(packages) satisfies DependencyPayload;
 }
 
-function versionsFor(payload: DependencyPayload, packageName: string) {
-  return new Set(payload[packageName] ?? []);
-}
-
-/**
- * Creates a structured dependency diff report from base/head payloads.
- */
 export function createDependencyChangesReport({
   basePayload,
   headPayload,
@@ -72,8 +65,8 @@ export function createDependencyChangesReport({
   }> = [];
 
   for (const packageName of packageNames) {
-    const baseVersions = versionsFor(basePayload, packageName);
-    const headVersions = versionsFor(headPayload, packageName);
+    const baseVersions = new Set(basePayload[packageName] ?? []);
+    const headVersions = new Set(headPayload[packageName] ?? []);
     if (baseVersions.size === 0) {
       addedPackages.push({
         packageName,
@@ -164,16 +157,15 @@ function renderMarkdownReport(report: ReturnType<typeof createDependencyChangesR
     lines.push("");
   }
 
-  if (report.addedPackages.length > 0) {
-    lines.push("## Added Resolved Packages", "");
-    for (const item of report.addedPackages) {
-      lines.push(`- ${markdownCode(item.packageName)}: ${item.versions.join(", ")}`);
+  for (const [title, packages] of [
+    ["Added", report.addedPackages],
+    ["Removed", report.removedPackages],
+  ] as const) {
+    if (packages.length === 0) {
+      continue;
     }
-    lines.push("");
-  }
-  if (report.removedPackages.length > 0) {
-    lines.push("## Removed Resolved Packages", "");
-    for (const item of report.removedPackages) {
+    lines.push(`## ${title} Resolved Packages`, "");
+    for (const item of packages) {
       lines.push(`- ${markdownCode(item.packageName)}: ${item.versions.join(", ")}`);
     }
     lines.push("");
@@ -199,9 +191,6 @@ function readGitFile(ref: string, filePath: string, cwd: string) {
   });
 }
 
-/**
- * Reports whether a path is a dependency-related file.
- */
 export function isDependencyFile(filePath: unknown) {
   if (typeof filePath !== "string") {
     return false;
@@ -209,9 +198,6 @@ export function isDependencyFile(filePath: unknown) {
   return DEPENDENCY_FILE_PATTERNS.some((pattern) => pattern.test(filePath));
 }
 
-/**
- * Returns git pathspecs used for dependency diff collection.
- */
 export function dependencyDiffPathspecs() {
   return [...DEPENDENCY_DIFF_PATHS];
 }
@@ -251,68 +237,42 @@ function gitDiffDependencyFiles(baseRef: string, cwd: string) {
     });
 }
 
-function readRequiredValue(argv: string[], index: number, flag: string) {
-  const value = argv[index + 1];
-  if (!value || value.startsWith("-")) {
-    throw new Error(`${flag} requires a value`);
-  }
-  return value;
-}
-
 export function parseArgs(argv: string[]) {
-  const options = {
+  const options: {
+    rootDir: string;
+    baseRef: string | null;
+    baseLockfile: string | null;
+    headLockfile: string;
+    jsonPath: string | null;
+    markdownPath: string | null;
+  } = {
     rootDir: process.cwd(),
-    baseRef: nullableString(null),
-    baseLockfile: nullableString(null),
+    baseRef: null,
+    baseLockfile: null,
     headLockfile: "pnpm-lock.yaml",
-    jsonPath: nullableString(null),
-    markdownPath: nullableString(null),
+    jsonPath: null,
+    markdownPath: null,
   };
-  const seen = new Set<string>();
-  const setOnce = (flag: string, key: keyof typeof options, value: string) => {
-    if (seen.has(flag)) {
-      throw new Error(`${flag} was provided more than once.`);
-    }
-    seen.add(flag);
-    Object.assign(options, { [key]: value });
-  };
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--") {
-      continue;
-    }
-    if (arg === "--root") {
-      setOnce(arg, "rootDir", readRequiredValue(argv, index, "--root"));
-      index += 1;
-      continue;
-    }
-    if (arg === "--base-ref") {
-      setOnce(arg, "baseRef", readRequiredValue(argv, index, "--base-ref"));
-      index += 1;
-      continue;
-    }
-    if (arg === "--base-lockfile") {
-      setOnce(arg, "baseLockfile", readRequiredValue(argv, index, "--base-lockfile"));
-      index += 1;
-      continue;
-    }
-    if (arg === "--head-lockfile") {
-      setOnce(arg, "headLockfile", readRequiredValue(argv, index, "--head-lockfile"));
-      index += 1;
-      continue;
-    }
-    if (arg === "--json") {
-      setOnce(arg, "jsonPath", readRequiredValue(argv, index, "--json"));
-      index += 1;
-      continue;
-    }
-    if (arg === "--markdown") {
-      setOnce(arg, "markdownPath", readRequiredValue(argv, index, "--markdown"));
-      index += 1;
-      continue;
-    }
-    throw new Error(`Unsupported argument: ${arg}`);
-  }
+  const flagEntries = [
+    ["--root", "rootDir"],
+    ["--base-ref", "baseRef"],
+    ["--base-lockfile", "baseLockfile"],
+    ["--head-lockfile", "headLockfile"],
+    ["--json", "jsonPath"],
+    ["--markdown", "markdownPath"],
+  ] satisfies Array<[string, keyof typeof options]>;
+  parseFlagArgs(
+    argv,
+    options,
+    flagEntries.map(([flag, key]) =>
+      stringFlag<typeof options>(flag, key, {
+        allowInline: false,
+        missingValueMessage: `${flag} requires a value`,
+        rejectShortOptions: true,
+      }),
+    ),
+    REPORT_CLI_PARSE_OPTIONS,
+  );
   const { baseRef, baseLockfile } = options;
   if (baseRef && baseLockfile) {
     throw new Error("Use either --base-ref or --base-lockfile, not both.");
@@ -326,17 +286,6 @@ export function parseArgs(argv: string[]) {
   throw new Error("Expected --base-ref <git-ref> or --base-lockfile <path>.");
 }
 
-async function writeArtifact(filePath: string | null, content: string) {
-  if (!filePath) {
-    return;
-  }
-  await mkdir(path.dirname(filePath), { recursive: true });
-  await writeFile(filePath, content, "utf8");
-}
-
-/**
- * Generates and writes dependency change report artifacts.
- */
 async function runDependencyChangesReport(options: ReturnType<typeof parseArgs>) {
   const headLockfileText = await readFile(path.join(options.rootDir, options.headLockfile), "utf8");
   const baseLockfileText =
@@ -354,14 +303,11 @@ async function runDependencyChangesReport(options: ReturnType<typeof parseArgs>)
   });
 }
 
-/**
- * Runs the dependency changes report CLI.
- */
 export async function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
   const report = await runDependencyChangesReport(options);
-  await writeArtifact(options.jsonPath, `${JSON.stringify(report, null, 2)}\n`);
-  await writeArtifact(options.markdownPath, renderMarkdownReport(report));
+  await writeReportArtifact(options.jsonPath, `${JSON.stringify(report, null, 2)}\n`);
+  await writeReportArtifact(options.markdownPath, renderMarkdownReport(report));
   const artifactHint =
     typeof options.markdownPath === "string" ? " See ".concat(options.markdownPath, ".") : "";
   process.stdout.write(

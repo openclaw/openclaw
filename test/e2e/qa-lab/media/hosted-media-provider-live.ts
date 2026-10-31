@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
-} from "../../../../extensions/qa-lab/api.js";
+} from "../../../../extensions/qa-lab/test-api.js";
 import { coerceErrorMessage as formatErrorMessage } from "../../../../scripts/lib/error-format.mts";
 import { spawnPnpmRunner as _spawnPnpmRunner } from "../../../../scripts/pnpm-runner.mts";
 import {
@@ -51,28 +51,34 @@ export const MEDIA_SUITES: Record<MediaSuiteId, MediaSuiteConfig> = {
       "deepinfra",
       "fal",
       "google",
+      "kie",
       "minimax",
-      "openai",
+      "novita",
       "openrouter",
+      "pixverse",
       "qwen",
       "runway",
       "together",
       "vydra",
       "xai",
+      "zai",
     ],
     defaultProviders: [
       "alibaba",
       "byteplus",
       "deepinfra",
       "google",
+      "kie",
       "minimax",
-      "openai",
+      "novita",
       "openrouter",
+      "pixverse",
       "qwen",
       "runway",
       "together",
       "vydra",
       "xai",
+      "zai",
     ],
   },
 };
@@ -100,7 +106,6 @@ export type BuildRunPlanDeps = {
   collectProviderApiKeysImpl?: (provider: string) => Promise<unknown[]> | unknown[];
   getProviderEnvVarsImpl?: (provider: string) => Promise<string[]> | string[];
   loadShellEnvFallbackImpl?: (params: {
-    enabled: true;
     env: NodeJS.ProcessEnv;
     expectedKeys: string[];
     logger: { warn: (message: string) => void };
@@ -185,12 +190,11 @@ async function collectProviderApiKeysForLiveMedia(provider: string): Promise<unk
 }
 
 async function getProviderEnvVarsForLiveMedia(provider: string): Promise<string[]> {
-  const { getProviderEnvVars } = await import("../../../../src/secrets/provider-env-vars.js");
-  return getProviderEnvVars(provider);
+  const { getProviderEnvVarsCore } = await import("../../../../src/secrets/provider-env-vars.js");
+  return getProviderEnvVarsCore(provider);
 }
 
 async function loadShellEnvFallbackForLiveMedia(params: {
-  enabled: true;
   env: NodeJS.ProcessEnv;
   expectedKeys: string[];
   logger: { warn: (message: string) => void };
@@ -438,7 +442,6 @@ export async function buildRunPlan(
   ];
   if (expectedKeys.length) {
     await (deps.loadShellEnvFallbackImpl ?? loadShellEnvFallbackForLiveMedia)({
-      enabled: true,
       env: process.env,
       expectedKeys,
       logger: { warn: (message: string) => console.warn(message) },
@@ -470,14 +473,14 @@ export async function buildRunPlan(
   );
 }
 
-export function formatHelp(): string {
+function formatHelp(): string {
   return `Media live harness
 
 Usage:
   pnpm test:live:media
   pnpm test:live:media image
-  pnpm test:live:media image video --providers openai,google,minimax
-  pnpm test:live:media video --video-providers openai,runway --all-providers
+  pnpm test:live:media image video --providers google,minimax,xai
+  pnpm test:live:media video --video-providers runway,xai --all-providers
 
 QA evidence mode:
   node --import tsx ${SOURCE_PATH} --qa-evidence --suite image --artifact-base <dir>

@@ -1,127 +1,87 @@
-// Account lookup tests cover account matching by id, alias, and chat metadata.
 import { describe, expect, it } from "vitest";
+import { resolveAccountKey as key } from "../plugin-sdk/account-resolution.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { normalizeAccountId as normalizeRoutingAccountId } from "./account-id.js";
 import { resolveAccountEntry, resolveNormalizedAccountEntry } from "./account-lookup.js";
 
-function createAccountsWithPrototypePollution() {
-  const inherited = { default: { id: "polluted" } };
-  return Object.create(inherited) as Record<string, { id: string }>;
-}
-
-function expectResolvedAccountLookupCase(
-  actual: { id: string } | undefined,
-  expected: { id: string } | undefined,
-) {
-  expect(actual).toEqual(expected);
-}
-
-function expectPrototypePollutionIgnoredCase(
-  resolve: (accounts: Record<string, { id: string }>) => { id: string } | undefined,
-) {
-  const pollutedAccounts = createAccountsWithPrototypePollution();
-  expect(resolve(pollutedAccounts)).toBeUndefined();
-}
-
-function expectAccountLookupCase(params: {
-  accounts?: Record<string, { id: string }>;
-  resolve: (accounts: Record<string, { id: string }>) => { id: string } | undefined;
-  expected: { id: string } | undefined;
-}) {
-  expectResolvedAccountLookupCase(params.resolve(params.accounts ?? {}), params.expected);
-}
-
-describe("resolveAccountEntry", () => {
-  const accounts = {
-    default: { id: "default" },
-    Business: { id: "business" },
-  };
-
-  it.each([
-    {
-      name: "resolves the default account key",
-      resolve: (localAccounts: Record<string, { id: string }>) =>
-        resolveAccountEntry(localAccounts, "default"),
-      expected: { id: "default" },
-    },
-    {
-      name: "resolves a normalized business account key",
-      resolve: (localAccounts: Record<string, { id: string }>) =>
-        resolveAccountEntry(localAccounts, "business"),
-      expected: { id: "business" },
-    },
-  ] as const)("$name", ({ resolve, expected }) => {
-    expectAccountLookupCase({ accounts, resolve, expected });
+describe("SDK resolveAccountKey channel context", () => {
+  const accounts = { "Work Phone": { account: "+12025550103" } };
+  const phone = { channelId: "phone" };
+  const snapshot = createPluginMetadataSnapshotFixture({
+    plugins: [
+      {
+        id: "phone-owner",
+        channels: ["phone"],
+        channelAccountKeyPolicies: { phone: { canonicalAliasesRequireOwnField: "account" } },
+      },
+    ],
   });
 
-  it("ignores prototype-chain values", () => {
-    expectPrototypePollutionIgnoredCase((localAccounts) =>
-      resolveAccountEntry(localAccounts, "default"),
-    );
+  it("selects the prepared policy without changing plain or explicit-policy lookups", () => {
+    withPluginMetadataSnapshotScope(snapshot, () => {
+      expect(key(accounts, "work-phone")).toBeUndefined();
+      expect(key(accounts, "WORK PHONE")).toBe("Work Phone");
+      expect(key(accounts, "work-phone", undefined, undefined, phone)).toBe("Work Phone");
+      expect(
+        key(accounts, "work-phone", undefined, undefined, {
+          channelId: "other",
+        }),
+      ).toBeUndefined();
+      expect(
+        key(accounts, "work-phone", undefined, { canonicalAliasesRequireOwnField: "token" }, phone),
+      ).toBeUndefined();
+      expect(key(accounts, "work-phone", normalizeRoutingAccountId)).toBe("Work Phone");
+      expect(key(accounts, "work-phone", () => "different", undefined, phone)).toBe("Work Phone");
+    });
+  });
+
+  it("uses channel policy for missing targets and rejects reserved creation through the public entry", () => {
+    withPluginMetadataSnapshotScope(snapshot, () => {
+      const missing = { ...phone, allowMissing: true };
+      expect(key(undefined, "New Phone", undefined, undefined, missing)).toBe("new-phone");
+      expect(
+        key(undefined, "New Phone", undefined, undefined, {
+          allowMissing: true,
+        }),
+      ).toBe("New Phone");
+      for (const accountId of ["constructor", "__proto__", "prototype"]) {
+        expect(() => key(accounts, accountId, undefined, undefined, missing)).toThrow(
+          `Account id "${accountId}" is reserved`,
+        );
+      }
+    });
   });
 });
 
-describe("resolveNormalizedAccountEntry", () => {
-  const normalizeAccountId = (accountId: string) =>
-    accountId.trim().toLowerCase().replaceAll(" ", "-");
+it("resolves an exact account key", () => {
+  expect(resolveAccountEntry({ default: { id: "default" } }, "default")).toEqual({ id: "default" });
+});
 
-  it.each([
-    {
-      name: "resolves normalized account keys with a custom normalizer",
-      accounts: {
-        "Ops Team": { id: "ops" },
-      },
-      resolve: (accounts: Record<string, { id: string }>) =>
-        resolveNormalizedAccountEntry(accounts, "ops-team", normalizeAccountId),
-      expected: {
-        id: "ops",
-      },
-    },
-    {
-      name: "does not resolve blocked raw keys as the default account",
-      accounts: JSON.parse('{"__proto__":{"id":"blocked"}}') as Record<string, { id: string }>,
-      resolve: (accounts: Record<string, { id: string }>) =>
-        resolveNormalizedAccountEntry(accounts, "default", normalizeRoutingAccountId),
-      expected: undefined,
-    },
-    {
-      name: "does not resolve keys that normalize to blocked object keys",
-      accounts: {
-        "constructor ": { id: "blocked" },
-      } as Record<string, { id: string }>,
-      resolve: (accounts: Record<string, { id: string }>) =>
-        resolveNormalizedAccountEntry(accounts, "constructor", (accountId) =>
-          accountId.trim().toLowerCase(),
-        ),
-      expected: undefined,
-    },
-    {
-      name: "does not resolve invalid raw keys through the default account fallback",
-      accounts: {
-        "constructor ": { id: "blocked" },
-      } as Record<string, { id: string }>,
-      resolve: (accounts: Record<string, { id: string }>) =>
-        resolveNormalizedAccountEntry(accounts, "default", normalizeRoutingAccountId),
-      expected: undefined,
-    },
-    {
-      name: "ignores prototype-chain values",
-      resolve: () => undefined,
-      expected: undefined,
-      assert: () =>
-        expectPrototypePollutionIgnoredCase((accounts) =>
-          resolveNormalizedAccountEntry(accounts, "default", (accountId) => accountId),
-        ),
-    },
-  ] as const)("$name", ({ accounts, resolve, expected, assert }) => {
-    if (assert) {
-      assert();
-      return;
-    }
+it("ignores prototype-chain values", () => {
+  expect(
+    resolveAccountEntry(Object.create({ default: { id: "polluted" } }), "default"),
+  ).toBeUndefined();
+});
+it("resolves normalized account keys with a custom normalizer", () => {
+  expect(
+    resolveNormalizedAccountEntry({ "Ops Team": { id: "ops" } }, "ops-team", (id) =>
+      id.trim().toLowerCase().replaceAll(" ", "-"),
+    ),
+  ).toEqual({ id: "ops" });
+});
 
-    expectAccountLookupCase({
-      accounts,
-      resolve,
-      expected,
-    });
-  });
+it.each([
+  ["blocked raw keys", "__proto__", "default", normalizeRoutingAccountId],
+  [
+    "keys normalizing to blocked keys",
+    "constructor ",
+    "constructor",
+    (id: string) => id.trim().toLowerCase(),
+  ],
+  ["invalid raw keys via default fallback", "constructor ", "default", normalizeRoutingAccountId],
+] as const)("does not resolve %s", (_name, rawKey, accountId, normalize) => {
+  expect(
+    resolveNormalizedAccountEntry({ [rawKey]: { id: "blocked" } }, accountId, normalize),
+  ).toBeUndefined();
 });

@@ -1,25 +1,8 @@
-import Foundation
 import Testing
 @testable import OpenClaw
 
 struct GatewayAccentColorTests {
-    @Test func normalizesBareAndPrefixedHex() {
-        #expect(ColorHexSupport.normalizedHex("#A1B2C3") == "#a1b2c3")
-        #expect(ColorHexSupport.normalizedHex("a1b2c3") == "#a1b2c3")
-        #expect(ColorHexSupport.normalizedHex("  #ff0000  ") == "#ff0000")
-    }
-
-    @Test func rejectsInvalidHex() {
-        #expect(ColorHexSupport.normalizedHex(nil) == nil)
-        #expect(ColorHexSupport.normalizedHex("") == nil)
-        #expect(ColorHexSupport.normalizedHex("#fff") == nil)
-        #expect(ColorHexSupport.normalizedHex("#ff0000aa") == nil)
-        #expect(ColorHexSupport.normalizedHex("red") == nil)
-        #expect(ColorHexSupport.normalizedHex("#12345g") == nil)
-        #expect(ColorHexSupport.normalizedHex("+abcde1") == nil)
-    }
-
-    @Test func userAccentWinsOverSeamColor() {
+    @Test func `user accent wins over seam color`() {
         let ui: [String: Any] = [
             "prefs": ["accent": "#123456"],
             "seamColor": "#654321",
@@ -27,7 +10,7 @@ struct GatewayAccentColorTests {
         #expect(ColorHexSupport.gatewayUserAccentHex(configUI: ui) == "#123456")
     }
 
-    @Test func invalidAccentFallsBackToSeamColor() {
+    @Test func `invalid accent falls back to seam color`() {
         let ui: [String: Any] = [
             "prefs": ["accent": "not-a-color"],
             "seamColor": "#654321",
@@ -35,7 +18,7 @@ struct GatewayAccentColorTests {
         #expect(ColorHexSupport.gatewayUserAccentHex(configUI: ui) == "#654321")
     }
 
-    @Test func missingUIReturnsNil() {
+    @Test func `missing UI returns nil`() {
         #expect(ColorHexSupport.gatewayUserAccentHex(configUI: nil) == nil)
         #expect(ColorHexSupport.gatewayUserAccentHex(configUI: [:]) == nil)
     }

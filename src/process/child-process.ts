@@ -3,79 +3,87 @@
  */
 import type { ChildProcess } from "node:child_process";
 
-const EXIT_STDIO_GRACE_MS = 100;
+export const EXIT_STDIO_GRACE_MS = 100;
 const EXIT_STDIO_MAX_DRAIN_MS = 1_000;
 
-/**
- * Execa waits for stdout/stderr after the direct child exits. Bound that wait
- * when detached descendants keep inherited pipes open, while still draining
- * short output tails. The returned cleanup must run after awaiting the child.
- */
-export function releaseChildProcessOutputAfterExit(child: ChildProcess): () => void {
-  let exited = false;
-  let idleTimer: NodeJS.Timeout | undefined;
-  let idleReleaseImmediate: NodeJS.Immediate | undefined;
-  let deadlineTimer: NodeJS.Timeout | undefined;
+/** Native and broker exit notifications can precede output EOF. */
+export function hasChildProcessExited(child: ChildProcess): boolean {
+  return child.exitCode != null || child.signalCode != null;
+}
 
-  const clearTimers = () => {
-    if (idleTimer) {
-      clearTimeout(idleTimer);
-      idleTimer = undefined;
-    }
-    if (idleReleaseImmediate) {
-      clearImmediate(idleReleaseImmediate);
-      idleReleaseImmediate = undefined;
-    }
-    if (deadlineTimer) {
-      clearTimeout(deadlineTimer);
-      deadlineTimer = undefined;
-    }
-  };
+/** Bound output draining after an authentic root exit, independently of the transport. */
+export function createChildProcessOutputRelease(releaseOutput: () => void) {
+  let idleTimer: NodeJS.Timeout | undefined;
+  let releaseTimer: NodeJS.Timeout | undefined;
+  let deadlineTimer: NodeJS.Timeout | undefined;
+  let disposed = false;
+
   const cleanup = () => {
-    clearTimers();
-    child.removeListener("exit", onExit);
-    child.stdout?.removeListener("data", onData);
-    child.stderr?.removeListener("data", onData);
+    disposed = true;
+    clearTimeout(idleTimer);
+    clearTimeout(releaseTimer);
+    clearTimeout(deadlineTimer);
+    deadlineTimer = undefined;
   };
   const release = () => {
     cleanup();
-    child.stdout?.destroy();
-    child.stderr?.destroy();
+    releaseOutput();
+  };
+  const scheduleRelease = () => {
+    // Either timer may run before already-buffered pipe data on a loaded loop.
+    // Defer to the next timers phase so both Node and Bun poll the pipes first.
+    releaseTimer ??= setTimeout(release, 0);
+    releaseTimer.unref();
   };
   const armIdleTimer = () => {
-    if (idleTimer) {
-      clearTimeout(idleTimer);
-    }
-    if (idleReleaseImmediate) {
-      clearImmediate(idleReleaseImmediate);
-      idleReleaseImmediate = undefined;
-    }
-    idleTimer = setTimeout(() => {
-      idleTimer = undefined;
-      // A loaded event loop can observe the idle timer before already-buffered
-      // pipe data. Give the poll phase one turn so that data can rearm the grace.
-      idleReleaseImmediate = setImmediate(() => {
-        idleReleaseImmediate = undefined;
-        release();
-      });
-      idleReleaseImmediate.unref();
-    }, EXIT_STDIO_GRACE_MS);
+    clearTimeout(idleTimer);
+    clearTimeout(releaseTimer);
+    releaseTimer = undefined;
+    idleTimer = setTimeout(scheduleRelease, EXIT_STDIO_GRACE_MS);
     idleTimer.unref();
   };
   const onData = () => {
-    if (exited) {
+    if (deadlineTimer) {
       armIdleTimer();
     }
   };
   const onExit = () => {
-    exited = true;
-    armIdleTimer();
-    deadlineTimer = setTimeout(release, EXIT_STDIO_MAX_DRAIN_MS);
+    if (disposed) {
+      return;
+    }
+    deadlineTimer = setTimeout(() => {
+      // Post-deadline data must not cancel release and extend the hard bound.
+      deadlineTimer = undefined;
+      scheduleRelease();
+    }, EXIT_STDIO_MAX_DRAIN_MS);
     deadlineTimer.unref();
+    armIdleTimer();
   };
 
+  return { onData, onExit, dispose: cleanup };
+}
+
+/** Execa may retain pipes inherited by detached descendants after its direct child exits. */
+export function releaseChildProcessOutputAfterExit(child: ChildProcess): () => void {
+  const release = createChildProcessOutputRelease(() => {
+    cleanup();
+    child.stdout?.destroy();
+    child.stderr?.destroy();
+  });
+  const { onData, onExit } = release;
+  const cleanup = () => {
+    release.dispose();
+    child.removeListener("exit", onExit);
+    child.stdout?.removeListener("data", onData);
+    child.stderr?.removeListener("data", onData);
+  };
   child.stdout?.on("data", onData);
   child.stderr?.on("data", onData);
-  child.once("exit", onExit);
+  // A command deadline can transfer output here after the root has already exited.
+  if (hasChildProcessExited(child)) {
+    onExit();
+  } else {
+    child.once("exit", onExit);
+  }
   return cleanup;
 }

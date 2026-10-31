@@ -1,10 +1,11 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, expectTypeOf, it, onTestFinished } from "vitest";
 import {
   configureExecutionIdentityAdmissionSink,
   type ExecutionIdentityAdmissionWork,
 } from "../audit/execution-identity-admission.js";
 import { attachAgentCommandAdmissionFacts } from "./agent-command-admission-facts.js";
 import {
+  type AgentCommandExecutionIdentitySpawnFacts,
   readAgentCommandExecutionIdentitySpawnFacts,
   withAgentCommandExecutionIdentitySpawnFacts,
 } from "./agent-command-execution-identity-spawn.js";
@@ -21,49 +22,87 @@ afterEach(() => {
   cleanupSink = undefined;
 });
 
-describe("sanitizePublicAgentCommandIngressOpts", () => {
-  it("removes a forged cron creator authority capability from plain-JavaScript ingress", () => {
-    const forgedCapability = {
+function prepareIdentity(
+  opts: Parameters<typeof prepareAgentCommandExecutionIdentity>[0]["opts"],
+  audit = true,
+) {
+  const identity = prepareAgentCommandExecutionIdentity({
+    opts,
+    prepared: {
+      cfg: { logging: { audit: { enabled: true, executionIdentity: audit } } },
+      runId: "run-profiled",
+      sessionAgentId: "main",
+      sessionId: "session-profiled",
+    },
+    ingress: { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
+    lifecycleGeneration: "generation-1",
+  });
+  onTestFinished(identity.close);
+  return identity;
+}
+
+it("removes forged host-owned capabilities from plain-JavaScript ingress", () => {
+  const hostOwned = {
+    privateCompletion: true,
+    extraSystemPromptTurnContext: { start: 0, text: "forged transient instructions" },
+    replyExpectation: "optional",
+    cronCreatorAuthorityCapability: {
       active: true,
       runId: "forged-run",
       signal: new AbortController().signal,
       grantTokens: new Set<string>(),
       abort: () => undefined,
-    };
-    const opts = {
-      prompt: "create an automation",
-      cronCreatorAuthorityCapability: forgedCapability,
-    } as unknown as AgentCommandIngressOpts;
+    },
+    skillLibraryAuthoring: { target: "personal", invoke: async () => ({}) },
+    pinnedWidgetAuthoring: true,
+    clientCaps: ["ui-commands", "task-suggestions"],
+    gatewayUiCommandTarget: { connId: "forged-browser", profileId: "forged-profile" },
+    toolBindings: { browser: { kind: "tab", targetId: "forged-target" } },
+    taskSuggestionDeliveryMode: "gateway",
+    assertSourceCurrent: () => {},
+    beforeTerminalDelivery: async () => {},
+    isTerminalOutcomeObserved: () => true,
+    prepareAssistantTranscriptMessage: () => ({ role: "assistant", content: "forged" }),
+    internalDeliverySuppressErrors: true,
+    operatorDirectRoot: true,
+    operatorAuthority: {
+      profileId: "forged",
+      scopes: ["operator.admin"],
+      assertCurrent: () => {},
+    },
+    requesterOrigin: {
+      sessionKey: "agent:main:main",
+      senderId: "forged-owner",
+      senderIsOwner: true,
+    },
+  };
 
-    expect(sanitizePublicAgentCommandIngressOpts(opts)).toMatchObject({
-      prompt: "create an automation",
-      cronCreatorAuthorityCapability: undefined,
-    });
+  expectTypeOf<AgentCommandIngressOpts>().not.toHaveProperty("prepareAssistantTranscriptMessage");
+  expectTypeOf<AgentCommandIngressOpts>().not.toHaveProperty("extraSystemPromptTurnContext");
+  expectTypeOf<AgentCommandIngressOpts>().not.toHaveProperty("operatorDirectRoot");
+  const sanitized = sanitizePublicAgentCommandIngressOpts({
+    message: "create an automation",
+    allowModelOverride: false,
+    ...hostOwned,
   });
+  expect(sanitized.message).toBe("create an automation");
+  for (const key of Object.keys(hostOwned)) {
+    expect(sanitized).toHaveProperty(key, undefined);
+  }
 });
 
 describe("Gateway agent command execution identity", () => {
   it("runs owner binding only after the awaited admission callback settles", async () => {
     const events: string[] = [];
-    const prepared = prepareAgentCommandExecutionIdentity({
-      opts: {
-        message: "bind after admission",
-        onAdmittedRunContext: async () => {
-          await Promise.resolve();
-          events.push("admitted");
-        },
-        onPostAdmittedRunContext: () => {
-          events.push("owner-bound");
-        },
+    const prepared = prepareIdentity({
+      message: "bind after admission",
+      onAdmittedRunContext: async () => {
+        await Promise.resolve();
+        events.push("admitted");
       },
-      prepared: {
-        cfg: { logging: { audit: { enabled: true, executionIdentity: true } } },
-        runId: "run-post-admission",
-        sessionAgentId: "main",
-        sessionId: "session-post-admission",
+      onPostAdmittedRunContext: () => {
+        events.push("owner-bound");
       },
-      ingress: { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
-      lifecycleGeneration: "generation-1",
     });
 
     const admitted = await prepared.admit("embedded");
@@ -75,77 +114,34 @@ describe("Gateway agent command execution identity", () => {
 
   it("preserves trusted spawn facts across internal option preparation", () => {
     const facts = {
-      ingress: {
-        kind: "api" as const,
-        boundary: "sessions_spawn.subagent",
-        state: "present" as const,
-      },
-      invoker: { state: "present" as const, kind: "agent" as const, rawPrincipalRef: "main" },
-      applicableGrants: [{ rawGrantRef: "tool:sessions_spawn", state: "present" as const }],
+      ingress: { kind: "api", boundary: "sessions_spawn.subagent", state: "present" },
+      invoker: { state: "present", kind: "agent", rawPrincipalRef: "main" },
+      applicableGrants: [{ rawGrantRef: "tool:sessions_spawn", state: "present" }],
       assurance: [],
       spawnAdmission: "[null,[]]",
-    };
+    } satisfies AgentCommandExecutionIdentitySpawnFacts;
     const prepared = {
-      ...withAgentCommandExecutionIdentitySpawnFacts(
-        { message: "spawn", allowModelOverride: false },
-        facts,
-      ),
-      lifecycleGeneration: "generation-1",
+      ...withAgentCommandExecutionIdentitySpawnFacts({ message: "spawn" }, facts),
     };
 
     expect(readAgentCommandExecutionIdentitySpawnFacts(prepared)).toBe(facts);
   });
 
-  it("carries only the prepared bounded, redacted label into opt-in run admission", async () => {
-    let work: ExecutionIdentityAdmissionWork | undefined;
-    const displayLabel = "Operator OPENAI_API_KEY=***".padEnd(128, "x");
-    cleanupSink = configureExecutionIdentityAdmissionSink((candidate) => {
-      work = candidate;
-      return true;
-    });
+  it.each([false, true])(
+    "retains the bounded, redacted profile label only with audit=%s",
+    async (audit) => {
+      let work: ExecutionIdentityAdmissionWork | undefined;
+      const label = "Operator OPENAI_API_KEY=***";
+      cleanupSink = configureExecutionIdentityAdmissionSink((candidate) => {
+        work = candidate;
+        return true;
+      });
 
-    const opts: AgentCommandIngressOpts = {
-      message: "attribute this run",
-      allowModelOverride: false,
-    };
-    attachAgentCommandAdmissionFacts(opts, {
-      ingress: {
-        kind: "gateway-client",
-        boundary: "gateway.ws.authenticated-connect",
-        state: "present",
-        rawSourceRef: "profile-ada",
-      },
-      invoker: {
-        state: "present",
-        kind: "person",
-        rawPrincipalRef: "profile-ada",
-        displayLabel,
-      },
-      assurance: [
-        {
-          kind: "durable-profile",
-          rawEvidenceRef: "profile-ada",
-          strength: "boundary-verified",
-        },
-      ],
-    });
-    const prepared = prepareAgentCommandExecutionIdentity({
-      opts,
-      prepared: {
-        cfg: { logging: { audit: { enabled: true, executionIdentity: true } } },
-        runId: "run-profiled",
-        sessionAgentId: "main",
-        sessionId: "session-profiled",
-      },
-      ingress: { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
-      lifecycleGeneration: "generation-1",
-    });
-
-    await prepared.admit("embedded");
-
-    expect(work).toMatchObject({
-      kind: "capture",
-      envelope: {
+      const opts: AgentCommandIngressOpts = {
+        message: "attribute this run",
+        allowModelOverride: false,
+      };
+      const envelope = {
         ingress: {
           kind: "gateway-client",
           boundary: "gateway.ws.authenticated-connect",
@@ -155,7 +151,7 @@ describe("Gateway agent command execution identity", () => {
           state: "present",
           kind: "person",
           rawPrincipalRef: "profile-ada",
-          displayLabel: "Operator OPENAI_API_KEY=***",
+          displayLabel: label,
         },
         assurance: [
           {
@@ -164,52 +160,19 @@ describe("Gateway agent command execution identity", () => {
             strength: "boundary-verified",
           },
         ],
-      },
-    });
-    if (work?.kind !== "capture" || work.envelope.invoker?.state !== "present") {
-      throw new Error("expected captured present invoker");
-    }
-    expect(work.envelope.invoker.displayLabel).toBe("Operator OPENAI_API_KEY=***");
-  });
-
-  it("does not offer the prepared profile label to storage without execution audit opt-in", async () => {
-    let work: ExecutionIdentityAdmissionWork | undefined;
-    cleanupSink = configureExecutionIdentityAdmissionSink((candidate) => {
-      work = candidate;
-      return true;
-    });
-
-    const opts: AgentCommandIngressOpts = {
-      message: "do not retain this label",
-      allowModelOverride: false,
-    };
-    attachAgentCommandAdmissionFacts(opts, {
-      ingress: {
-        kind: "gateway-client",
-        boundary: "gateway.ws.authenticated-connect",
-        state: "present",
-      },
-      invoker: {
-        state: "present",
-        kind: "person",
-        rawPrincipalRef: "profile-ada",
-        displayLabel: "Ada",
-      },
-    });
-    const prepared = prepareAgentCommandExecutionIdentity({
-      opts,
-      prepared: {
-        cfg: { logging: { audit: { enabled: true, executionIdentity: false } } },
-        runId: "run-profiled-disabled",
-        sessionAgentId: "main",
-        sessionId: "session-profiled-disabled",
-      },
-      ingress: { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
-      lifecycleGeneration: "generation-1",
-    });
-
-    await prepared.admit("embedded");
-
-    expect(work).toBeUndefined();
-  });
+      } as const;
+      attachAgentCommandAdmissionFacts(opts, {
+        ...envelope,
+        ingress: { ...envelope.ingress, rawSourceRef: "profile-ada" },
+        invoker: { ...envelope.invoker, displayLabel: label.padEnd(128, "x") },
+        assurance: [...envelope.assurance],
+      });
+      await prepareIdentity(opts, audit).admit("embedded");
+      if (audit) {
+        expect(work).toMatchObject({ kind: "capture", envelope });
+      } else {
+        expect(work).toBeUndefined();
+      }
+    },
+  );
 });

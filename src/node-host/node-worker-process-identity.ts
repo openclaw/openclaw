@@ -1,5 +1,20 @@
-import { readWindowsProcessStartTimeSync } from "../infra/windows-port-pids.js";
+import { createManagedHandoffBootIdentityReader } from "../infra/update-managed-service-handoff-boot.js";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
+
+let bootIdentity: string | null | undefined;
+
+export function getNodeWorkerBootIdentity(): string | null {
+  if (bootIdentity === undefined) {
+    try {
+      const boot = createManagedHandoffBootIdentityReader(process.env)();
+      bootIdentity = `${boot.platform}:${boot.identity}`;
+    } catch {
+      // Unavailable OS identity retains the existing conservative recovery contract.
+      bootIdentity = null;
+    }
+  }
+  return bootIdentity;
+}
 
 export type NodeWorkerProcessIdentity = {
   pid: number;
@@ -8,14 +23,8 @@ export type NodeWorkerProcessIdentity = {
 
 type NodeWorkerProcessIdentityState = "live" | "dead" | "reused" | "unknown";
 
-function readNodeWorkerProcessStartTime(pid: number): number | null {
-  return process.platform === "win32"
-    ? readWindowsProcessStartTimeSync(pid)
-    : getFileLockProcessStartTime(pid);
-}
-
 export function requireNodeWorkerProcessIdentity(pid: number): NodeWorkerProcessIdentity {
-  const startTime = readNodeWorkerProcessStartTime(pid);
+  const startTime = getFileLockProcessStartTime(pid);
   if (startTime === null) {
     throw new Error(`cannot establish PID-reuse-safe identity for process ${pid}`);
   }
@@ -25,7 +34,7 @@ export function requireNodeWorkerProcessIdentity(pid: number): NodeWorkerProcess
 export function inspectNodeWorkerProcessIdentity(
   identity: NodeWorkerProcessIdentity,
 ): NodeWorkerProcessIdentityState {
-  const observedStartTime = readNodeWorkerProcessStartTime(identity.pid);
+  const observedStartTime = getFileLockProcessStartTime(identity.pid);
   if (observedStartTime !== null) {
     if (observedStartTime !== identity.startTime) {
       return "reused";

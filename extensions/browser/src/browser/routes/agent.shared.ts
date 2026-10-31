@@ -1,19 +1,11 @@
-/**
- * Shared browser route helpers.
- *
- * Centralizes body/query parsing, profile resolution, error mapping, Playwright
- * availability checks, and tab-context guards for route modules.
- */
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveBrowserNavigationProxyMode } from "../browser-proxy-mode.js";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { redactCdpErrorText } from "../cdp.helpers.js";
 import { toBrowserErrorResponse } from "../errors.js";
-import {
-  assertBrowserNavigationResultAllowed,
-  withBrowserNavigationPolicy,
-} from "../navigation-guard.js";
+import { assertBrowserNavigationResultAllowed } from "../navigation-guard.js";
+import { resolveBrowserNavigationPolicy } from "../navigation-policy.js";
 import type { PwAiModule } from "../pw-ai-module.js";
-import { getPwAiModule as getPwAiModuleBase } from "../pw-ai-module.js";
+import { getPwAiModule } from "../pw-ai-module.js";
+import type { InteractionTargetOptions } from "../pw-tools-core.interactions.navigation.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { isProfileRestartRequiredError } from "../server-context.lifecycle.js";
 import type { BrowserRequest, BrowserResponse } from "./types.js";
@@ -34,44 +26,30 @@ export const SELECTOR_UNSUPPORTED_MESSAGE = [
   "This is more reliable for modern SPAs.",
 ].join("\n");
 
-/** Return a safe object body for routes that accept JSON payloads. */
 export function readBody(req: BrowserRequest): Record<string, unknown> {
-  const body = req.body as Record<string, unknown> | undefined;
-  if (!body || typeof body !== "object" || Array.isArray(body)) {
-    return {};
-  }
-  return body;
+  return asNonArrayRecord(req.body);
 }
 
-/** Read an optional targetId from a request body. */
-export function resolveTargetIdFromBody(body: Record<string, unknown>): string | undefined {
-  const targetId = normalizeOptionalString(body.targetId) ?? "";
-  return targetId || undefined;
-}
-
-/** Read an optional targetId from a query object. */
-export function resolveTargetIdFromQuery(query: Record<string, unknown>): string | undefined {
-  const targetId = normalizeOptionalString(query.targetId) ?? "";
-  return targetId || undefined;
-}
-
-/** Map route-level browser errors to HTTP JSON responses. */
-export function handleRouteError(ctx: BrowserRouteContext, res: BrowserResponse, err: unknown) {
+export function handleRouteError(
+  res: BrowserResponse,
+  err: unknown,
+  options?: { formatMessage?: (err: unknown) => string; mapBrowserError?: boolean },
+) {
   if (isProfileRestartRequiredError(err)) {
     throw err;
   }
-  const mapped = ctx.mapTabError(err);
-  if (mapped) {
-    return jsonBrowserError(res, mapped);
-  }
-  const browserMapped = toBrowserErrorResponse(err);
+  const browserMapped =
+    options?.mapBrowserError === false ? undefined : toBrowserErrorResponse(err);
   if (browserMapped) {
     return jsonBrowserError(res, browserMapped);
   }
-  jsonError(res, 500, redactCdpErrorText(String(err)));
+  jsonError(
+    res,
+    500,
+    options?.formatMessage ? options.formatMessage(err) : redactCdpErrorText(String(err)),
+  );
 }
 
-/** Resolve the requested browser profile and respond with JSON on failure. */
 export function resolveProfileContext(
   req: BrowserRequest,
   res: BrowserResponse,
@@ -85,22 +63,11 @@ export function resolveProfileContext(
   return profileCtx;
 }
 
-/** Build navigation guard policy for a profile and current resolved config. */
 export function browserNavigationPolicyForProfile(
   ctx: BrowserRouteContext,
   profileCtx: ProfileContext,
 ) {
-  return withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy, {
-    browserProxyMode: resolveBrowserNavigationProxyMode({
-      resolved: ctx.state().resolved,
-      profile: profileCtx.profile,
-    }),
-  });
-}
-
-/** Load the optional Playwright bridge module in soft-fail mode. */
-export async function getPwAiModule(): Promise<PwAiModule | null> {
-  return await getPwAiModuleBase({ mode: "soft" });
+  return resolveBrowserNavigationPolicy(ctx.state(), profileCtx.profile);
 }
 
 /** Require Playwright support for a route feature, returning a 501 when absent. */
@@ -108,7 +75,7 @@ export async function requirePwAi(
   res: BrowserResponse,
   feature: string,
 ): Promise<PwAiModule | null> {
-  const mod = await getPwAiModule();
+  const mod = await getPwAiModule({ mode: "soft" });
   if (mod) {
     return mod;
   }
@@ -124,11 +91,12 @@ export async function requirePwAi(
   return null;
 }
 
-type RouteTabContext = {
+export type RouteTabContext = {
   profileCtx: ProfileContext;
   tab: Awaited<ReturnType<ProfileContext["ensureTabAvailable"]>>;
   cdpUrl: string;
   signal: AbortSignal;
+  assertCurrent?: InteractionTargetOptions["assertCurrent"];
   resolveTabUrl: (fallbackUrl?: string) => Promise<string | undefined>;
 };
 
@@ -150,7 +118,6 @@ type RouteWithTabParams<T> = {
   run: (ctx: RouteTabContext) => Promise<T>;
 };
 
-/** Resolve profile and tab context, optionally enforcing current URL policy. */
 export async function withRouteTabContext<T>(
   params: RouteWithTabParams<T>,
 ): Promise<T | undefined> {
@@ -158,10 +125,15 @@ export async function withRouteTabContext<T>(
   if (!profileCtx) {
     return undefined;
   }
+  const requestAssertCurrent = params.req.assertCurrent;
+  const assertCurrent = requestAssertCurrent
+    ? () => requestAssertCurrent(profileCtx.profile)
+    : undefined;
   try {
     return await runProfileRouteOperation({
       profileCtx,
       signal: params.req.signal,
+      assertCurrent: params.req.assertCurrent,
       run: async (signal) => {
         // Agent routes can address local-managed tabs through Playwright when per-tab WS discovery lags.
         const tab = await profileCtx.ensureTabAvailable(params.targetId, {
@@ -172,14 +144,19 @@ export async function withRouteTabContext<T>(
         if (params.enforceCurrentUrlAllowed) {
           await assertBrowserNavigationResultAllowed({
             url: tab.url,
+            signal,
             ...browserNavigationPolicyForProfile(params.ctx, profileCtx),
           });
+        }
+        if (assertCurrent) {
+          await assertCurrent();
         }
         return await params.run({
           profileCtx,
           tab,
           cdpUrl: profileCtx.profile.cdpUrl,
           signal,
+          ...(assertCurrent ? { assertCurrent } : {}),
           resolveTabUrl: (fallbackUrl?: string) =>
             resolveSafeRouteTabUrl({
               ctx: params.ctx,
@@ -193,10 +170,7 @@ export async function withRouteTabContext<T>(
       },
     });
   } catch (err) {
-    if (isProfileRestartRequiredError(err)) {
-      throw err;
-    }
-    handleRouteError(params.ctx, params.res, err);
+    handleRouteError(params.res, err);
     return undefined;
   }
 }
@@ -228,46 +202,33 @@ export async function resolveSafeRouteTabUrl(params: {
   try {
     await assertBrowserNavigationResultAllowed({
       url: candidateUrl,
+      signal: params.signal,
       ...browserNavigationPolicyForProfile(params.ctx, params.profileCtx),
     });
     return candidateUrl;
   } catch {
+    params.signal?.throwIfAborted();
     return undefined;
   }
 }
 
-type RouteWithPwParams<T> = {
-  req: BrowserRequest;
-  res: BrowserResponse;
-  ctx: BrowserRouteContext;
-  profileCtx?: ProfileContext;
-  targetId?: string;
+type RouteWithPwParams<T> = Omit<RouteWithTabParams<T>, "run"> & {
   feature: string;
-  /**
-   * Set for routes that read from or return data scoped to the selected tab.
-   * Leave false only for routes that navigate, activate, close, or otherwise manage the tab.
-   */
-  enforceCurrentUrlAllowed?: boolean;
   run: (ctx: RouteTabPwContext) => Promise<T>;
 };
 
-/** Resolve profile, tab, and Playwright context for Playwright-only routes. */
 export async function withPlaywrightRouteContext<T>(
   params: RouteWithPwParams<T>,
 ): Promise<T | undefined> {
+  const { run, feature, ...tabParams } = params;
   return await withRouteTabContext({
-    req: params.req,
-    res: params.res,
-    ctx: params.ctx,
-    ...(params.profileCtx ? { profileCtx: params.profileCtx } : {}),
-    targetId: params.targetId,
-    enforceCurrentUrlAllowed: params.enforceCurrentUrlAllowed,
-    run: async ({ profileCtx, tab, cdpUrl, signal, resolveTabUrl }) => {
-      const pw = await requirePwAi(params.res, params.feature);
+    ...tabParams,
+    run: async (routeCtx) => {
+      const pw = await requirePwAi(params.res, feature);
       if (!pw) {
-        return undefined as T | undefined;
+        return undefined;
       }
-      return await params.run({ profileCtx, tab, cdpUrl, signal, resolveTabUrl, pw });
+      return await run({ ...routeCtx, pw });
     },
   });
 }

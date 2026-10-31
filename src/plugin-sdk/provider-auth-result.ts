@@ -6,45 +6,17 @@ import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-s
 import {
   normalizeAgentModelMapForConfig,
   normalizeAgentModelRefForConfig,
+  normalizeAgentModelSelectionForConfig,
 } from "../config/model-input.js";
-import type { ModelProviderConfig } from "../config/types.models.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 
-function normalizeAgentModelConfigForAuthResult(value: unknown): unknown {
-  if (typeof value === "string") {
-    return normalizeAgentModelRefForConfig(value);
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return value;
-  }
-
-  let mutated = false;
-  const next: Record<string, unknown> = { ...(value as Record<string, unknown>) };
-  if (typeof next.primary === "string") {
-    const primary = normalizeAgentModelRefForConfig(next.primary);
-    if (primary !== next.primary) {
-      next.primary = primary;
-      mutated = true;
-    }
-  }
-  if (Array.isArray(next.fallbacks)) {
-    const originalFallbacks = next.fallbacks;
-    const fallbacks = originalFallbacks.map((fallback) =>
-      typeof fallback === "string" ? normalizeAgentModelRefForConfig(fallback) : fallback,
-    );
-    if (fallbacks.some((fallback, index) => fallback !== originalFallbacks[index])) {
-      next.fallbacks = fallbacks;
-      mutated = true;
-    }
-  }
-  return mutated ? next : value;
-}
+type AuthConfigPatch = NonNullable<ProviderAuthResult["configPatch"]>;
+type AuthProviderConfig = NonNullable<NonNullable<AuthConfigPatch["models"]>["providers"]>[string];
 
 function normalizeProviderConfigModelIdsForAuthResult(
   provider: string,
-  providerConfig: ModelProviderConfig,
-): ModelProviderConfig {
+  providerConfig: AuthProviderConfig,
+): AuthProviderConfig {
   const models = providerConfig.models;
   if (!Array.isArray(models) || models.length === 0) {
     return providerConfig;
@@ -62,9 +34,7 @@ function normalizeProviderConfigModelIdsForAuthResult(
   return mutated ? { ...providerConfig, models: nextModels } : providerConfig;
 }
 
-function normalizeProviderAuthConfigPatchModelRefs(
-  patch: Partial<OpenClawConfig>,
-): Partial<OpenClawConfig> {
+function normalizeProviderAuthConfigPatchModelRefs(patch: AuthConfigPatch): AuthConfigPatch {
   let next = patch;
   const defaults = patch.agents?.defaults;
   if (defaults) {
@@ -72,7 +42,7 @@ function normalizeProviderAuthConfigPatchModelRefs(
     // legacy model refs here instead of letting retired ids leak into persisted defaults.
     let nextDefaults = defaults;
     if (defaults.model !== undefined) {
-      const model = normalizeAgentModelConfigForAuthResult(defaults.model);
+      const model = normalizeAgentModelSelectionForConfig(defaults.model);
       if (model !== defaults.model) {
         nextDefaults = { ...nextDefaults, model: model as typeof defaults.model };
       }
@@ -151,7 +121,7 @@ export function buildOauthProviderAuthResult(params: {
   /** Provider-specific credential fields merged into the OAuth credential. */
   credentialExtra?: Record<string, unknown>;
   /** Explicit config patch to emit after model-ref normalization. */
-  configPatch?: Partial<OpenClawConfig>;
+  configPatch?: AuthConfigPatch;
   /** Optional setup notes forwarded to provider login callers. */
   notes?: string[];
 }): ProviderAuthResult {
@@ -179,16 +149,15 @@ export function buildOauthProviderAuthResult(params: {
   return {
     profiles: [{ profileId, credential }],
     configPatch: normalizeProviderAuthConfigPatchModelRefs(
-      params.configPatch ??
-        ({
-          agents: {
-            defaults: {
-              models: {
-                [defaultModel]: {},
-              },
+      params.configPatch ?? {
+        agents: {
+          defaults: {
+            models: {
+              [defaultModel]: {},
             },
           },
-        } as Partial<OpenClawConfig>),
+        },
+      },
     ),
     defaultModel,
     notes: params.notes,

@@ -30,18 +30,7 @@ async function main() {
           },
         },
       },
-      agents: {
-        defaults: {
-          heartbeat: {
-            every: "0m",
-          },
-        },
-      },
-      memory: {
-        search: {
-          enabled: false,
-        },
-      },
+      memory: { search: { enabled: false } },
       plugins: {
         slots: {
           memory: "none",

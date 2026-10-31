@@ -3,21 +3,16 @@ import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
+import { assertGatewayAuthNotKnownWeak } from "../gateway/known-weak-gateway-secrets.js";
 import { defaultRuntime, type OutputRuntimeEnv } from "../runtime.js";
-
-type GatewayAuthTokenOptions = {
-  env?: NodeJS.ProcessEnv;
-  interactive?: boolean;
-};
 
 /** Reveal the configured shared Gateway token only to an explicitly interactive operator. */
 export async function gatewayAuthTokenCommand(
   runtime: OutputRuntimeEnv = defaultRuntime,
-  options: GatewayAuthTokenOptions = {},
 ): Promise<void> {
   // Keep bearer credentials out of pipes and captured command logs. Operators must
   // explicitly own both sides of the terminal before the token reaches stdout.
-  if (!(options.interactive ?? isTerminalInteractive())) {
+  if (!isTerminalInteractive()) {
     throw new Error(
       "Refusing to print the Gateway token outside an interactive terminal. Run `openclaw gateway auth-token --show` directly in a terminal on the Gateway host.",
     );
@@ -34,7 +29,7 @@ export async function gatewayAuthTokenCommand(
       "This command must run on the Gateway host; the current config is in remote mode.",
     );
   }
-  const env = options.env ?? process.env;
+  const env = process.env;
   assertExplicitGatewayAuthModeWhenBothConfigured(cfg);
   const configuredAuth = resolveGatewayAuth({
     authConfig: cfg.gateway?.auth,
@@ -65,5 +60,6 @@ export async function gatewayAuthTokenCommand(
     );
   }
 
+  assertGatewayAuthNotKnownWeak(resolvedAuth);
   runtime.writeStdout(`${resolvedAuth.token}\n`);
 }

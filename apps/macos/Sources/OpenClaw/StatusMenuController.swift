@@ -7,20 +7,20 @@ import SwiftUI
 final class StatusMenuController: NSObject, NSMenuDelegate {
     private let state: AppState
     private let updater: UpdaterProviding
-    private let menu = NSMenu()
-    private let gatewayManager = GatewayProcessManager.shared
-    private let controlChannel = ControlChannel.shared
-    private let activityStore = WorkActivityStore.shared
-    private let sessions = StatusMenuSessions.shared
-    private let approvals = ExecApprovalQueueStore.shared
-    private let summaries = StatusMenuSummaries.shared
-    private let nodes = NodesStore.shared
-    private let cron = CronJobsStore.shared
-    private let dashboard = DashboardManager.shared
+    private let hotkey: VoicePushToTalkHotkey
+    private lazy var menu = NSMenu()
+    private lazy var gatewayManager = GatewayProcessManager.shared
+    private lazy var controlChannel = ControlChannel.shared
+    private lazy var activityStore = WorkActivityStore.shared
+    private lazy var sessions = StatusMenuSessions.shared
+    private lazy var approvals = ExecApprovalQueueStore.shared
+    private lazy var summaries = StatusMenuSummaries.shared
+    private lazy var nodes = NodesStore.shared
+    private lazy var cron = CronJobsStore.shared
+    private lazy var dashboard = DashboardManager.shared
 
     private var statusItem: NSStatusItem?
     private var clickMonitor: Any?
-    private var hostingView: NSHostingView<StatusMenuIconView>?
     private var renderer: StatusMenuRenderer?
     private var refreshTask: Task<Void, Never>?
     private var observationGeneration: UInt64 = 0
@@ -28,14 +28,17 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private var isChatWindowVisible = false
     private var observedPaused: Bool
     private var observedConnectionMode: AppState.ConnectionMode
-    private var observedPushToTalk: Bool
+    private var observedHostsLocalGateway: Bool
+    private var voiceObservationGeneration: UInt64 = 0
+    private var observingVoice = false
 
     init(state: AppState, updater: UpdaterProviding) {
         self.state = state
         self.updater = updater
+        self.hotkey = state.voiceRuntime.hotkey
         self.observedPaused = state.isPaused
         self.observedConnectionMode = state.connectionMode
-        self.observedPushToTalk = state.voicePushToTalkEnabled
+        self.observedHostsLocalGateway = state.hostsLocalGatewayWithRemotePrimary
         super.init()
     }
 
@@ -46,10 +49,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         self.menu.delegate = self
         StatusMenuAppearance.pin(self.menu)
 
-        let renderer = StatusMenuRenderer(menu: self.menu, state: self.state)
-        renderer.onInstallUpdate = { [weak self] in
-            self?.updater.checkForUpdates(nil)
-        }
+        let renderer = StatusMenuRenderer(menu: self.menu, state: self.state, approvalQueue: self.approvals)
         self.renderer = renderer
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -57,7 +57,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         self.installButton(in: item)
         self.installWindowCallbacks()
         self.approvals.start()
-        VoicePushToTalkHotkey.shared.setEnabled(voiceWakeSupported && self.state.voicePushToTalkEnabled)
+        self.startVoiceObservation()
 
         self.renderCachedMenu()
         self.updateStatusAppearance()
@@ -66,19 +66,44 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     }
 
     func stop() {
+        self.stopVoiceObservation()
         self.observationGeneration &+= 1
+        guard let statusItem else { return }
         self.refreshTask?.cancel()
         self.refreshTask = nil
         self.sessions.cancelPreviewTasks()
         self.summaries.menuDidClose()
-        self.approvals.stop()
         if let clickMonitor = self.clickMonitor {
             NSEvent.removeMonitor(clickMonitor)
             self.clickMonitor = nil
         }
-        guard let statusItem else { return }
         self.statusItem = nil
         NSStatusBar.system.removeStatusItem(statusItem)
+    }
+
+    func startVoiceObservation() {
+        guard !self.observingVoice else { return }
+        self.observingVoice = true
+        self.observeVoiceChanges()
+    }
+
+    func stopVoiceObservation() {
+        self.observingVoice = false
+        self.voiceObservationGeneration &+= 1
+        self.hotkey.setEnabled(false)
+    }
+
+    private func observeVoiceChanges() {
+        let generation = self.voiceObservationGeneration
+        let enabled = withObservationTracking {
+            self.state.voicePushToTalkEnabled
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, self.observingVoice, self.voiceObservationGeneration == generation else { return }
+                self.observeVoiceChanges()
+            }
+        }
+        self.hotkey.setEnabled(enabled)
     }
 
     func menuWillOpen(_ menu: NSMenu) {
@@ -91,9 +116,12 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         // Cache projection must precede network work: AppKit begins tracking immediately.
         self.renderCachedMenu()
         self.isMenuOpen = true
+        let previousTask = self.refreshTask
         self.refreshTask?.cancel()
         self.refreshTask = Task { [weak self] in
-            guard let self else { return }
+            // Reopening must wait for canceled store refreshes to release their loading state.
+            await previousTask?.value
+            guard let self, !Task.isCancelled else { return }
             async let sessionRefresh: Void = self.sessions.refresh(force: true)
             async let approvalRefresh: Void = self.approvals.refresh()
             async let healthRefresh: Void = HealthStore.shared.refresh(onDemand: true)
@@ -107,12 +135,18 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
     func menuDidClose(_ menu: NSMenu) {
         guard menu === self.menu else { return }
+        StatusMenuHighlightDelegate.shared.menu(menu, willHighlight: nil)
         self.isMenuOpen = false
+        self.refreshTask?.cancel()
         self.sessions.cancelPreviewTasks()
         self.summaries.menuDidClose()
         // Leaving the menu attached makes subsequent left clicks open AppKit's menu.
         self.statusItem?.menu = nil
         self.statusItem?.button?.highlight(self.isChatWindowVisible)
+    }
+
+    func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
+        StatusMenuHighlightDelegate.shared.menu(menu, willHighlight: item)
     }
 
     /// Accessibility/keyboard activation path; pointer clicks are consumed by the
@@ -124,7 +158,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
     private func installButton(in item: NSStatusItem) {
         guard let button = item.button else { return }
-        let host = NSHostingView(rootView: self.makeIconView())
+        let host = NSHostingView(rootView: StatusMenuIconView(state: self.state))
+        // The constraints below own sizing; animation must not remeasure the status item.
+        host.sizingOptions = []
         host.translatesAutoresizingMaskIntoConstraints = false
         button.addSubview(host)
         NSLayoutConstraint.activate([
@@ -133,7 +169,6 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             host.widthAnchor.constraint(equalToConstant: 18),
             host.heightAnchor.constraint(equalToConstant: 18),
         ])
-        self.hostingView = host
         button.target = self
         button.action = #selector(self.handleStatusClick(_:))
         self.installClickMonitor()
@@ -151,16 +186,12 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             else { return event }
             let point = button.convert(event.locationInWindow, from: nil)
             guard button.bounds.contains(point) else { return event }
-            switch event.type {
-            case .leftMouseDown:
-                AppNavigationActions.openDashboard()
-                return nil
-            case .rightMouseDown:
+            if event.type == .rightMouseDown || event.modifierFlags.contains(.control) {
                 self.presentMenu()
-                return nil
-            default:
-                return event
+            } else {
+                AppNavigationActions.openDashboard()
             }
+            return nil
         }
     }
 
@@ -186,23 +217,6 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         }
     }
 
-    private func makeIconView() -> StatusMenuIconView {
-        let sleeping = self.isGatewaySleeping
-        return StatusMenuIconView(label: CritterStatusLabel(
-            isPaused: self.state.isPaused,
-            isSleeping: sleeping,
-            isWorking: self.state.isWorking,
-            earBoostActive: self.state.earBoostActive,
-            blinkTick: self.state.blinkTick,
-            sendCelebrationTick: self.state.sendCelebrationTick,
-            gatewayStatus: self.gatewayManager.status,
-            connectionMode: self.state.connectionMode,
-            controlChannelState: self.controlChannel.state,
-            animationsEnabled: self.state.iconAnimationsEnabled && !sleeping,
-            iconState: self.effectiveIconState,
-            voiceWakeMeterActive: self.state.voiceWakeMeterActive))
-    }
-
     private func renderCachedMenu() {
         let connection: StatusMenuDescriptor.Connection = if self.state.connectionMode == .unconfigured {
             .unconfigured
@@ -218,8 +232,6 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             isPaused: self.state.isPaused,
             connection: connection,
             quickChatEnabled: self.state.quickChatEnabled,
-            canvasEnabled: self.state.canvasEnabled,
-            voiceWakeSupported: voiceWakeSupported,
             debugEnabled: self.state.debugPaneEnabled,
             updateReady: self.updater.isAvailable && self.updater.updateStatus.isUpdateReady,
             hasUsage: self.summaries.hasUsage,
@@ -229,15 +241,27 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             mainSessionKey: self.activityStore.mainSessionKey,
             approvals: self.approvals.requests,
             gateways: DashboardGatewayMenuModel.items(from: self.dashboard.gatewayEntries))
-        self.renderer?.isSleeping = self.isGatewaySleeping
+        if self.updater.isAvailable {
+            self.renderer?.onInstallUpdate = { [weak self] in
+                guard let self, self.updater.isAvailable else { return }
+                self.updater.checkForUpdates(nil)
+            }
+        } else {
+            self.renderer?.onInstallUpdate = nil
+        }
+        self.renderer?.isSleeping = statusMenuGatewayIsSleeping(state: self.state)
         self.renderer?.reconcile(StatusMenuDescriptor.build(from: snapshot))
     }
 
     private func observeChanges() {
         let generation = self.observationGeneration
         withObservationTracking {
-            _ = self.makeIconView()
-            _ = self.state.voicePushToTalkEnabled
+            _ = self.state.isPaused
+            _ = self.state.connectionMode
+            _ = self.state.hostsLocalGatewayWithRemotePrimary
+            _ = self.gatewayManager.status
+            _ = self.controlChannel.state
+            _ = self.state.voiceWakeMeterActive
             _ = self.state.quickChatEnabled
             _ = self.state.canvasEnabled
             _ = self.state.canvasPanelVisible
@@ -247,16 +271,13 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             _ = self.activityStore.current
             _ = self.activityStore.mainSessionKey
             _ = HealthStore.shared.state
-            _ = HealthStore.shared.isRefreshing
-            _ = HealthStore.shared.lastSuccess
             _ = HealthStore.shared.degradedSummary
             _ = MacNodeChannelStatusStore.shared.state
             _ = self.nodes.nodes
             _ = self.nodes.isLoading
             _ = self.nodes.lastError
             _ = self.nodes.localNodeIdentityState
-            _ = self.cron.jobs
-            _ = self.cron.schedulerNextWakeAtMs
+            _ = self.cron.summary
             _ = self.dashboard.gatewayEntries
             _ = self.sessions.rows
             _ = self.sessions.errorText
@@ -267,7 +288,6 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             Task { @MainActor [weak self] in
                 guard let self, self.observationGeneration == generation else { return }
                 self.applyStateSideEffects()
-                self.hostingView?.rootView = self.makeIconView()
                 self.updateStatusAppearance()
                 if self.isMenuOpen {
                     self.renderCachedMenu()
@@ -279,29 +299,26 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
     private func applyStateSideEffects() {
         let paused = self.state.isPaused
-        if paused != self.observedPaused {
-            self.observedPaused = paused
-            if self.state.connectionMode == .local {
-                self.gatewayManager.setActive(!paused)
-            } else {
-                self.gatewayManager.stop()
-            }
-        }
-
         let mode = self.state.connectionMode
-        if mode != self.observedConnectionMode {
+        let hostsLocalGateway = self.state.hostsLocalGatewayWithRemotePrimary
+        let modeChanged = mode != self.observedConnectionMode
+        if modeChanged || paused != self.observedPaused || hostsLocalGateway != self.observedHostsLocalGateway {
+            self.observedPaused = paused
             self.observedConnectionMode = mode
-            Task { await ConnectionModeCoordinator.shared.apply(mode: mode, paused: self.state.isPaused) }
-            if AppLaunchRuntimePlan.current.allowsAutomaticPresentation {
-                CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "connection-mode")
+            self.observedHostsLocalGateway = hostsLocalGateway
+            Task {
+                guard self.state.connectionMode == mode, self.state.isPaused == paused,
+                      self.state.hostsLocalGatewayWithRemotePrimary == hostsLocalGateway else { return }
+                await ConnectionModeCoordinator.shared.apply(mode: mode, paused: paused)
+                if modeChanged, self.state.connectionMode == mode,
+                   AppLaunchRuntimePlan.current.allowsAutomaticPresentation
+                {
+                    CLIInstallPrompter.shared.checkAndPromptIfNeeded()
+                }
             }
-            BrowserProfileImportModel.shared.handleConnectionModeChange()
-        }
-
-        let pushToTalk = self.state.voicePushToTalkEnabled
-        if pushToTalk != self.observedPushToTalk {
-            self.observedPushToTalk = pushToTalk
-            VoicePushToTalkHotkey.shared.setEnabled(voiceWakeSupported && pushToTalk)
+            if modeChanged {
+                BrowserProfileImportModel.shared.handleConnectionModeChange()
+            }
         }
     }
 
@@ -313,45 +330,25 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             : String(localized: "OpenClaw")
     }
 
-    private var isGatewaySleeping: Bool {
-        guard !self.state.isPaused else { return false }
-        return switch self.state.connectionMode {
-        case .unconfigured:
-            true
-        case .remote:
-            self.controlChannel.state != .connected
-        case .local:
-            switch self.gatewayManager.status {
-            case .running, .starting, .attachedExisting:
-                self.controlChannel.state != .connected
-            case .failed, .stopped:
-                true
-            }
-        }
-    }
-
-    private var effectiveIconState: IconState {
-        let selection = self.state.iconOverride
-        guard selection != .system else { return self.activityStore.iconState }
-        return switch selection.toIconState() {
-        case let .workingMain(kind), let .workingOther(kind), let .overridden(kind):
-            .overridden(kind)
-        case .idle:
-            .idle
-        }
-    }
-
     private func scheduleDebugMenuOpen() {
         #if DEBUG
+        // launchctl setenv races `open`; arguments are reliable for captures.
+        let arguments = CommandLine.arguments
         let environment = ProcessInfo.processInfo.environment
-        if environment["OPENCLAW_DEBUG_OPEN_MENU"] == "1" {
+        func flag(_ env: String, _ arg: String) -> Bool {
+            environment[env] == "1" || arguments.contains(arg)
+        }
+        // Screenshot/demo helper: seed synthetic menu content so UI proof
+        // captures show populated rows without a configured gateway.
+        if flag("OPENCLAW_DEBUG_MENU_FIXTURES", "--debug-menu-fixtures") {
+            CronJobsStore.shared.seedDebugFixtureJobs()
+        }
+        if flag("OPENCLAW_DEBUG_OPEN_MENU", "--debug-open-menu") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                guard let self, let button = self.statusItem?.button else { return }
-                self.statusItem?.menu = self.menu
-                button.performClick(nil)
+                self?.presentMenu()
             }
         }
-        if environment["OPENCLAW_DEBUG_PROBE_RIGHTCLICK"] == "1" {
+        if flag("OPENCLAW_DEBUG_PROBE_RIGHTCLICK", "--debug-probe-rightclick") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 guard let self, let button = self.statusItem?.button,
                       let window = button.window else { return }
@@ -375,10 +372,48 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     }
 }
 
+@MainActor
+private func statusMenuGatewayIsSleeping(state: AppState) -> Bool {
+    guard !state.isPaused else { return false }
+    return switch state.connectionMode {
+    case .unconfigured:
+        true
+    case .remote:
+        ControlChannel.shared.state != .connected
+    case .local:
+        switch GatewayProcessManager.shared.status {
+        case .running, .starting, .attachedExisting:
+            ControlChannel.shared.state != .connected
+        case .failed, .stopped:
+            true
+        }
+    }
+}
+
+@MainActor
 private struct StatusMenuIconView: View {
-    let label: CritterStatusLabel
+    let state: AppState
 
     var body: some View {
-        self.label.background(SettingsWindowOpenRegistrar())
+        // SwiftUI tracks icon inputs here, independently of menu-only updates.
+        let sleeping = statusMenuGatewayIsSleeping(state: self.state)
+        CritterStatusLabel(
+            isPaused: self.state.isPaused,
+            isSleeping: sleeping,
+            isWorking: self.state.isWorking,
+            earBoostActive: self.state.earBoostActive,
+            blinkTick: self.state.blinkTick,
+            sendCelebrationTick: self.state.sendCelebrationTick,
+            gatewayStatus: self.state.connectionMode == .local ? GatewayProcessManager.shared.status : .stopped,
+            connectionMode: self.state.connectionMode,
+            controlChannelState: ControlChannel.shared.state,
+            animationsEnabled: self.state.iconAnimationsEnabled && !sleeping,
+            iconState: self.effectiveIconState,
+            voiceWakeMeterActive: self.state.voiceWakeMeterActive)
+    }
+
+    private var effectiveIconState: IconState {
+        let selection = self.state.iconOverride
+        return selection.fixedIconState() ?? WorkActivityStore.shared.iconState
     }
 }

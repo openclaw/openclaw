@@ -26,7 +26,7 @@ scenario:
     - src/gateway/server-cron-notifications.ts
     - src/cron/service/failure-alerts.ts
     - src/cron/delivery-preview.ts
-    - src/cron/task-run-history.ts
+    - src/cron/run-history.ts
     - src/cron/cron-delivery-outcomes.e2e.test.ts
   execution:
     kind: vitest

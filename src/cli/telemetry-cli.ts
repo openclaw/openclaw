@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { getRuntimeConfig, transformConfigFileWithRetry } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader, transformConfigFileWithRetry } from "../config/config.js";
 import {
   buildTelemetryPayload,
   buildTelemetryUserAgent,
@@ -7,6 +7,7 @@ import {
 } from "../infra/telemetry.js";
 import { defaultRuntime } from "../runtime.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
+import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 const TELEMETRY_REASON_LABELS = {
   enabled: "enabled in configuration",
@@ -15,54 +16,7 @@ const TELEMETRY_REASON_LABELS = {
   "config-disabled": "disabled in configuration",
   "never-asked": "consent has not been requested",
   "update-disabled": "update checks are disabled",
-} satisfies Record<ReturnType<typeof resolveTelemetryStatus>["reason"], string>;
-
-async function showTelemetry(options: { json?: boolean }): Promise<void> {
-  const config = getRuntimeConfig({ skipPluginValidation: true });
-  const telemetry = resolveTelemetryStatus(config);
-  const userAgent = buildTelemetryUserAgent("gateway");
-  const requestSent = telemetry.reason !== "update-disabled";
-  const payload = telemetry.enabled
-    ? buildTelemetryPayload(config, { surface: "gateway" })
-    : undefined;
-
-  if (options.json) {
-    defaultRuntime.writeJson(
-      {
-        featureStatsEnabled: telemetry.enabled,
-        reason: telemetry.reason,
-        endpoint: telemetry.endpoint,
-        lastPingAt: telemetry.lastPingAt ? new Date(telemetry.lastPingAt).toISOString() : null,
-        request: requestSent
-          ? {
-              method: telemetry.enabled ? "POST" : "GET",
-              userAgent,
-              ...(payload ? { payload } : {}),
-            }
-          : null,
-      },
-      0,
-    );
-    return;
-  }
-
-  defaultRuntime.log(`Feature stats: ${telemetry.enabled ? "enabled" : "disabled"}`);
-  defaultRuntime.log(`Reason: ${TELEMETRY_REASON_LABELS[telemetry.reason]}`);
-  defaultRuntime.log(`Endpoint: ${telemetry.endpoint}`);
-  defaultRuntime.log(
-    `Last ping: ${telemetry.lastPingAt ? new Date(telemetry.lastPingAt).toISOString() : "never"}`,
-  );
-  if (telemetry.reason === "update-disabled") {
-    defaultRuntime.log("Request: none (update checks are disabled)");
-    return;
-  }
-  defaultRuntime.log(`Request: ${telemetry.enabled ? "POST" : "GET"} ${telemetry.endpoint}`);
-  defaultRuntime.log(`User-Agent: ${userAgent}`);
-  if (payload) {
-    defaultRuntime.log("Payload:");
-    defaultRuntime.log(JSON.stringify(payload));
-  }
-}
+} satisfies Record<Awaited<ReturnType<typeof resolveTelemetryStatus>>["reason"], string>;
 
 async function setTelemetryEnabled(enabled: boolean): Promise<void> {
   await transformConfigFileWithRetry({
@@ -81,25 +35,77 @@ async function setTelemetryEnabled(enabled: boolean): Promise<void> {
 }
 
 export function registerTelemetryCli(program: Command): void {
-  const telemetry = program
+  const telemetryCommand = program
     .command("telemetry")
     .description("Inspect and manage anonymous usage telemetry");
 
-  telemetry
+  telemetryCommand
     .command("show")
-    .description("Show exactly what the daily update request sends")
+    .description("Preview the daily update request from this CLI process")
     .option("--json", "Print the request and payload as JSON")
     .action(async (options: { json?: boolean }) =>
-      runCommandWithRuntime(defaultRuntime, () => showTelemetry(options)),
+      runCommandWithRuntime(defaultRuntime, async () => {
+        const config = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
+        const telemetry = await resolveTelemetryStatus(config);
+        const request =
+          telemetry.reason === "update-disabled" || telemetry.reason === "automated-environment"
+            ? null
+            : {
+                method: telemetry.enabled ? "POST" : "GET",
+                userAgent: buildTelemetryUserAgent(),
+                ...(telemetry.enabled
+                  ? { payload: await buildTelemetryPayload(config, { surface: "gateway" }) }
+                  : {}),
+              };
+
+        if (options.json) {
+          defaultRuntime.writeJson(
+            {
+              featureStatsEnabled: telemetry.enabled,
+              installationCountEnabled: telemetry.installationCountEnabled,
+              reason: telemetry.reason,
+              endpoint: telemetry.endpoint,
+              lastPingAt: telemetry.lastPingAt
+                ? new Date(telemetry.lastPingAt).toISOString()
+                : null,
+              request,
+            },
+            0,
+          );
+          return;
+        }
+
+        defaultRuntime.log(`Feature stats: ${telemetry.enabled ? "enabled" : "disabled"}`);
+        defaultRuntime.log(
+          "Installation counting: " +
+            (telemetry.installationCountEnabled
+              ? "eligible after a fresh receiver capability"
+              : "disabled"),
+        );
+        defaultRuntime.log(`Reason: ${TELEMETRY_REASON_LABELS[telemetry.reason]}`);
+        defaultRuntime.log(`Endpoint: ${telemetry.endpoint}`);
+        defaultRuntime.log(
+          `Last ping: ${telemetry.lastPingAt ? new Date(telemetry.lastPingAt).toISOString() : "never"}`,
+        );
+        if (!request) {
+          defaultRuntime.log(`Request: none (${TELEMETRY_REASON_LABELS[telemetry.reason]})`);
+          return;
+        }
+        defaultRuntime.log(`Request: ${request.method} ${telemetry.endpoint}`);
+        defaultRuntime.log(`User-Agent: ${request.userAgent}`);
+        if (request.payload) {
+          defaultRuntime.log("Payload:");
+          defaultRuntime.log(JSON.stringify(request.payload));
+        }
+      }),
     );
 
-  telemetry
-    .command("on")
-    .description("Enable anonymous feature statistics")
-    .action(async () => runCommandWithRuntime(defaultRuntime, () => setTelemetryEnabled(true)));
-
-  telemetry
-    .command("off")
-    .description("Disable anonymous feature statistics")
-    .action(async () => runCommandWithRuntime(defaultRuntime, () => setTelemetryEnabled(false)));
+  for (const [name, enabled] of Object.entries({ on: true, off: false })) {
+    telemetryCommand
+      .command(name)
+      .description(`${enabled ? "Enable" : "Disable"} anonymous feature statistics`)
+      .action(() => runCommandWithRuntime(defaultRuntime, () => setTelemetryEnabled(enabled)));
+  }
+  // Preserve the shipped help subcommand when adding a parent action.
+  applyParentDefaultHelpAction(telemetryCommand.helpCommand(true));
 }

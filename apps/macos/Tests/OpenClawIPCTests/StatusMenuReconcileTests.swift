@@ -4,10 +4,54 @@ import Testing
 
 @MainActor
 struct StatusMenuReconcileTests {
+    @Test func `AppKit selection highlights only the selected hosted session row`() throws {
+        // Highlighting needs real hosted rows, not live session submenus that fetch previews.
+        let menu = NSMenu()
+        menu.delegate = StatusMenuHighlightDelegate.shared
+        let first = self.hostedSessionItem("first")
+        let second = self.hostedSessionItem("second")
+        menu.addItem(first)
+        menu.addItem(second)
+        let firstHosted = try #require(first.view as? HostedMenuRowView)
+        let secondHosted = try #require(second.view as? HostedMenuRowView)
+
+        menu.delegate?.menu?(menu, willHighlight: first)
+        #expect(firstHosted.isHighlighted)
+        #expect(!secondHosted.isHighlighted)
+
+        menu.delegate?.menu?(menu, willHighlight: second)
+        #expect(!firstHosted.isHighlighted)
+        #expect(secondHosted.isHighlighted)
+
+        menu.delegate?.menu?(menu, willHighlight: nil)
+        #expect(!firstHosted.isHighlighted)
+        #expect(!secondHosted.isHighlighted)
+
+        let submenu = NSMenu()
+        submenu.delegate = StatusMenuHighlightDelegate.shared
+        first.submenu = submenu
+        let nested = self.hostedSessionItem("nested")
+        submenu.addItem(nested)
+        let nestedHosted = try #require(nested.view as? HostedMenuRowView)
+
+        submenu.delegate?.menu?(submenu, willHighlight: nested)
+        #expect(nestedHosted.isHighlighted)
+        submenu.delegate?.menuDidClose?(submenu)
+        #expect(!nestedHosted.isHighlighted)
+
+        menu.delegate?.menu?(menu, willHighlight: second)
+        #expect(secondHosted.isHighlighted)
+        // A closing submenu never receives willHighlight(nil); the delegate's
+        // close callback must clear the lingering hosted selection itself.
+        StatusMenuHighlightDelegate.shared.menuDidClose(menu)
+        #expect(!secondHosted.isHighlighted)
+        #expect(!firstHosted.isHighlighted)
+    }
+
     @Test func `matching rows update titles without replacing tracked items`() throws {
         let menu = NSMenu()
         let renderer = StatusMenuRenderer(menu: menu)
-        renderer.render(self.descriptor(
+        renderer.reconcile(self.descriptor(
             actions: [.placeholder(String(localized: "Connecting…"))],
             footer: [.action(.settings)]))
 
@@ -28,7 +72,7 @@ struct StatusMenuReconcileTests {
     @Test func `structural changes replace only the differing middle span`() throws {
         let menu = NSMenu()
         let renderer = StatusMenuRenderer(menu: menu)
-        renderer.render(self.descriptor(
+        renderer.reconcile(self.descriptor(
             actions: [.action(.dashboard), .placeholder(String(localized: "Connecting…"))],
             footer: [.action(.settings), .action(.about), .action(.quit)]))
 
@@ -38,13 +82,13 @@ struct StatusMenuReconcileTests {
         let footer = Array(menu.items.suffix(3))
 
         renderer.reconcile(self.descriptor(
-            actions: [.action(.dashboard), .action(.quickChat), .action(.canvas)],
+            actions: [.action(.dashboard), .action(.quickChat), .action(.talkMode)],
             footer: [.action(.settings), .action(.about), .action(.quit)]))
 
         #expect(menu.items.map { $0.representedObject as? String } == [
             "action.dashboard",
             "action.quickChat",
-            "action.canvas",
+            "action.talkMode",
             "separator.footer",
             "action.settings",
             "action.about",
@@ -59,9 +103,9 @@ struct StatusMenuReconcileTests {
     @Test func `removing a middle section preserves later separator identity`() throws {
         let menu = NSMenu()
         let renderer = StatusMenuRenderer(menu: menu)
-        renderer.render(StatusMenuDescriptor(sections: [
+        renderer.reconcile(StatusMenuDescriptor(sections: [
             .init(id: "actions", entries: [.init(.action(.dashboard))]),
-            .init(id: "middle", entries: [.init(.action(.canvas))]),
+            .init(id: "middle", entries: [.init(.action(.talkMode))]),
             .init(id: "footer", entries: [.init(.action(.settings)), .init(.action(.quit))]),
         ]))
 
@@ -81,6 +125,41 @@ struct StatusMenuReconcileTests {
         #expect(!menu.items.contains { $0.representedObject as? String == "separator.middle" })
     }
 
+    @Test func `debug tunnel action follows the selected SSH transport`() async throws {
+        let configPath = TestIsolation.tempConfigPath()
+        try await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            let state = AppState(preview: true)
+            let menu = NSMenu()
+            let renderer = StatusMenuRenderer(menu: menu, state: state)
+            let descriptor = self.descriptor(actions: [], footer: [.action(.debug)])
+            state.connectionMode = .remote
+            state.remoteTransport = .ssh
+            renderer.reconcile(descriptor)
+            let debug = try #require(menu.items.first { $0.representedObject as? String == "action.debug" })
+            let submenu = try #require(debug.submenu)
+            let tunnel = try #require(submenu.items.first { $0.representedObject as? String == "debug.tunnel" })
+            #expect(tunnel.isEnabled)
+            #expect(tunnel.action != nil)
+
+            state.remoteTransport = .direct
+            renderer.reconcile(descriptor)
+            #expect(debug.submenu === submenu)
+            #expect(!submenu.items.contains { $0.representedObject as? String == "debug.tunnel" })
+            #expect(!submenu.items.contains { $0.representedObject as? String == "debug.gateway" })
+
+            state.connectionMode = .local
+            renderer.reconcile(descriptor)
+            #expect(!submenu.items.contains { $0.representedObject as? String == "debug.tunnel" })
+            #expect(submenu.items.contains { $0.representedObject as? String == "debug.gateway" })
+
+            state.connectionMode = .remote
+            state.remoteTransport = .ssh
+            renderer.reconcile(descriptor)
+            #expect(submenu.items.contains { $0.representedObject as? String == "debug.tunnel" })
+            #expect(!submenu.items.contains { $0.representedObject as? String == "debug.gateway" })
+        }
+    }
+
     private func descriptor(
         actions: [StatusMenuDescriptor.Kind],
         footer: [StatusMenuDescriptor.Kind]) -> StatusMenuDescriptor
@@ -89,5 +168,27 @@ struct StatusMenuReconcileTests {
             .init(id: "actions", entries: actions.map(StatusMenuDescriptor.Entry.init)),
             .init(id: "footer", entries: footer.map(StatusMenuDescriptor.Entry.init)),
         ])
+    }
+
+    private func hostedSessionItem(_ key: String) -> NSMenuItem {
+        let item = NSMenuItem()
+        StatusMenuRenderer.configureHostedView(
+            item,
+            rootView: StatusSessionCard(row: self.session(key)),
+            highlights: true)
+        return item
+    }
+
+    private func session(_ key: String) -> SessionRow {
+        SessionRow(
+            id: key,
+            key: key,
+            kind: .direct,
+            displayName: nil,
+            updatedAt: Date(),
+            sessionId: nil,
+            thinkingLevel: nil,
+            verboseLevel: nil,
+            tokens: SessionTokenStats(total: 0, contextTokens: 200_000))
     }
 }

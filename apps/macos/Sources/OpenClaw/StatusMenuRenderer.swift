@@ -6,9 +6,86 @@ import QuartzCore
 import SwiftUI
 
 @MainActor
-final class StatusMenuRenderer: NSObject {
-    static let cardWidth: CGFloat = 330
+final class HostedMenuRowView: NSView {
+    private var content: AnyView
+    private let hosting: NSHostingView<AnyView>
+    private let selection = NSVisualEffectView()
 
+    var isHighlighted = false {
+        didSet {
+            guard self.isHighlighted != oldValue else { return }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            self.selection.isHidden = !self.isHighlighted
+            self.hosting.rootView = AnyView(self.content.environment(\.menuItemHighlighted, self.isHighlighted))
+            CATransaction.commit()
+        }
+    }
+
+    init(rootView: AnyView) {
+        self.content = rootView
+        self.hosting = NSHostingView(rootView: AnyView(rootView.environment(\.menuItemHighlighted, false)))
+        super.init(frame: .zero)
+
+        self.selection.material = .selection
+        self.selection.blendingMode = .behindWindow
+        self.selection.isEmphasized = true
+        self.selection.state = .active
+        self.selection.wantsLayer = true
+        self.selection.layer?.cornerRadius = 5
+        self.selection.layer?.masksToBounds = true
+        self.selection.isHidden = true
+        self.addSubview(self.selection)
+        self.addSubview(self.hosting)
+        self.update(rootView: rootView)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: StatusMenuMetrics.width, height: self.hosting.fittingSize.height)
+    }
+
+    override func layout() {
+        super.layout()
+        self.selection.frame = self.bounds.insetBy(dx: 5, dy: 1)
+        self.hosting.frame = self.bounds
+    }
+
+    func update(rootView: AnyView) {
+        self.content = rootView
+        self.hosting.rootView = AnyView(rootView.environment(\.menuItemHighlighted, self.isHighlighted))
+        self.hosting.invalidateIntrinsicContentSize()
+        self.frame = NSRect(
+            origin: .zero,
+            size: NSSize(width: StatusMenuMetrics.width, height: self.hosting.fittingSize.height))
+        self.invalidateIntrinsicContentSize()
+        self.needsLayout = true
+    }
+}
+
+@MainActor
+final class StatusMenuHighlightDelegate: NSObject, NSMenuDelegate {
+    static let shared = StatusMenuHighlightDelegate()
+
+    func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
+        for candidate in menu.items {
+            (candidate.view as? HostedMenuRowView)?.isHighlighted = candidate === item && candidate.isEnabled
+        }
+    }
+
+    /// AppKit does not send willHighlight(nil) when a submenu closes, so a
+    /// hosted row selected there would reopen still lit without this reset.
+    func menuDidClose(_ menu: NSMenu) {
+        self.menu(menu, willHighlight: nil)
+    }
+}
+
+@MainActor
+final class StatusMenuRenderer: NSObject {
     private enum RenderEntry {
         case content(StatusMenuDescriptor.Entry)
         case separator(String)
@@ -30,24 +107,33 @@ final class StatusMenuRenderer: NSObject {
 
     private let menu: NSMenu
     private let state: AppState
+    private let approvalQueue: ExecApprovalQueueStore
     private var testNotificationPending = false
     var isSleeping = false
     var onInstallUpdate: (@MainActor () -> Void)?
 
-    init(menu: NSMenu, state: AppState = AppStateStore.shared) {
+    init(
+        menu: NSMenu,
+        state: AppState = AppStateStore.shared,
+        approvalQueue: ExecApprovalQueueStore = .shared)
+    {
         self.menu = menu
         self.state = state
+        self.approvalQueue = approvalQueue
         super.init()
         menu.autoenablesItems = false
+        menu.minimumWidth = StatusMenuMetrics.width
         StatusMenuAppearance.pin(menu)
     }
 
-    func render(_ descriptor: StatusMenuDescriptor) {
-        self.reconcile(descriptor)
-    }
-
     func reconcile(_ descriptor: StatusMenuDescriptor) {
-        let entries = self.flatten(descriptor)
+        var entries: [RenderEntry] = []
+        for section in descriptor.sections where !section.entries.isEmpty {
+            if !entries.isEmpty {
+                entries.append(.separator("separator.\(section.id)"))
+            }
+            entries.append(contentsOf: section.entries.map(RenderEntry.content))
+        }
         let liveItems = self.menu.items
 
         func matches(_ item: NSMenuItem, _ entry: RenderEntry) -> Bool {
@@ -88,17 +174,6 @@ final class StatusMenuRenderer: NSObject {
         }
     }
 
-    private func flatten(_ descriptor: StatusMenuDescriptor) -> [RenderEntry] {
-        var entries: [RenderEntry] = []
-        for section in descriptor.sections where !section.entries.isEmpty {
-            if !entries.isEmpty {
-                entries.append(.separator("separator.\(section.id)"))
-            }
-            entries.append(contentsOf: section.entries.map(RenderEntry.content))
-        }
-        return entries
-    }
-
     private func makeItem(for entry: RenderEntry) -> NSMenuItem {
         let item = switch entry {
         case .separator:
@@ -121,13 +196,19 @@ final class StatusMenuRenderer: NSObject {
 
         switch content.kind {
         case .header:
-            self.configureHeader(item)
+            Self.configureHostedView(
+                item,
+                rootView: StatusMenuHeaderView(
+                    state: self.state,
+                    isSleeping: self.isSleeping,
+                    onCheckForUpdates: self.onInstallUpdate))
         case let .session(row):
             StatusMenuSessions.shared.configureSessionItem(item, row: row)
         case let .approval(request):
-            StatusMenuSessions.shared.configureApprovalItem(item, request: request)
+            StatusMenuSessions.shared.configureApprovalItem(
+                item, request: request, approvalQueue: self.approvalQueue)
         case let .placeholder(title):
-            item.title = title
+            item.title = StatusMenuMetrics.fittedTitle(title)
             item.isEnabled = false
         case let .action(action):
             self.configureAction(item, action: action)
@@ -138,7 +219,7 @@ final class StatusMenuRenderer: NSObject {
             case .devices: StatusMenuSummaries.shared.configureDevices(item)
             }
         case let .gateway(gateway, isAlternate):
-            StatusMenuSummaries.shared.configureGateway(item, gatewayID: gateway.id, isAlternate: isAlternate)
+            StatusMenuSummaries.shared.configureGateway(item, gateway: gateway, isAlternate: isAlternate)
         case .gatewayHeader:
             item.title = String(localized: "Gateways")
         case .updateReady:
@@ -150,72 +231,62 @@ final class StatusMenuRenderer: NSObject {
         }
     }
 
-    private func configureHeader(_ item: NSMenuItem) {
-        let rootView = StatusMenuHeaderView(state: state, isSleeping: isSleeping)
-        if let hosting = item.view as? NSHostingView<StatusMenuHeaderView> {
-            // Replacing rootView leaves the live AppKit view attached during tracking.
-            hosting.rootView = rootView
-            self.sizeHostingView(hosting)
+    static func configureHostedView(_ item: NSMenuItem, rootView: some View, highlights: Bool = false) {
+        let rootView = AnyView(rootView.frame(width: StatusMenuMetrics.width, alignment: .leading))
+        if highlights {
+            if let existing = item.view as? HostedMenuRowView {
+                existing.update(rootView: rootView)
+            } else {
+                item.view = HostedMenuRowView(rootView: rootView)
+            }
             return
         }
 
-        let hosting = NSHostingView(rootView: rootView)
-        self.sizeHostingView(hosting)
-        item.view = hosting
-    }
-
-    private func sizeHostingView(_ hosting: NSHostingView<StatusMenuHeaderView>) {
-        hosting.frame = NSRect(x: 0, y: 0, width: Self.cardWidth, height: hosting.fittingSize.height)
+        let hosting: NSHostingView<AnyView>
+        if let existing = item.view as? NSHostingView<AnyView> {
+            // Keep the attached view stable while AppKit tracks an open menu.
+            existing.rootView = rootView
+            existing.invalidateIntrinsicContentSize()
+            hosting = existing
+        } else {
+            hosting = NSHostingView(rootView: rootView)
+            item.view = hosting
+        }
+        hosting.frame = NSRect(
+            origin: .zero,
+            size: NSSize(width: StatusMenuMetrics.width, height: hosting.fittingSize.height))
     }
 
     private func configureAction(_ item: NSMenuItem, action: StatusMenuDescriptor.Action) {
-        let title: String
-        let symbol: String
-
-        switch action {
+        let (title, symbol) = switch action {
         case .dashboard:
-            title = String(localized: "Open Dashboard")
-            symbol = "gauge"
+            (String(localized: "Open Dashboard"), "gauge")
         case .quickChat:
-            title = String(localized: "Quick Chat")
-            symbol = "text.bubble"
+            (String(localized: "Quick Chat"), "text.bubble")
         case .talkMode:
-            title = self.state.talkEnabled
-                ? String(localized: "Stop Talk Mode")
-                : String(localized: "Start Talk Mode")
-            symbol = "waveform.circle.fill"
-        case .canvas:
-            title = self.state.canvasPanelVisible
-                ? String(localized: "Close Canvas")
-                : String(localized: "Open Canvas")
-            symbol = "rectangle.inset.filled.on.rectangle"
+            (
+                self.state.talkEnabled ? String(localized: "Stop Talk Mode") : String(localized: "Start Talk Mode"),
+                "waveform.circle.fill")
         case .allSessions:
-            title = String(localized: "All Sessions…")
-            symbol = "rectangle.stack"
+            (String(localized: "All Sessions…"), "rectangle.stack")
         case .settings:
-            title = String(localized: "Settings…")
-            symbol = "gearshape"
+            (String(localized: "Settings…"), "gearshape")
+        case .connection:
+            (String(localized: "Connection…"), "point.3.connected.trianglepath.dotted")
         case .debug:
-            title = String(localized: "Debug")
-            symbol = "ladybug"
+            (String(localized: "Debug"), "ladybug")
         case .about:
-            title = String(localized: "About OpenClaw")
-            symbol = "info.circle"
+            (String(localized: "About OpenClaw"), "info.circle")
         case .quit:
-            title = String(localized: "Quit")
-            symbol = "power"
+            (String(localized: "Quit"), "power")
         }
 
         self.configureNative(item, title: title, symbol: symbol, action: #selector(self.performAction(_:)))
-        item.isEnabled = action != .talkMode || voiceWakeSupported
         item.keyEquivalent = ""
 
         switch action {
-        case .settings:
-            item.keyEquivalent = ","
-            item.keyEquivalentModifierMask = [.command]
-        case .quit:
-            item.keyEquivalent = "q"
+        case .settings, .quit:
+            item.keyEquivalent = action == .settings ? "," : "q"
             item.keyEquivalentModifierMask = [.command]
         case .quickChat:
             if let shortcut = KeyboardShortcuts.getShortcut(for: .toggleQuickChat),
@@ -232,8 +303,8 @@ final class StatusMenuRenderer: NSObject {
     }
 
     private func configureNative(_ item: NSMenuItem, title: String, symbol: String, action: Selector) {
-        item.title = title
         item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
+        item.title = StatusMenuMetrics.fittedTitle(title)
         item.target = self
         item.action = action
         item.isEnabled = true
@@ -251,16 +322,16 @@ final class StatusMenuRenderer: NSObject {
             QuickChatController.shared.toggle()
         case .talkMode:
             Task { await self.state.setTalkEnabled(!self.state.talkEnabled) }
-        case .canvas:
-            AppNavigationActions.toggleCanvas()
         case .allSessions:
-            Task { await DashboardManager.shared.show(atPath: DashboardRouteMap.sessionsPagePath) }
+            AppNavigationActions.openPrimaryWebRoute(DashboardRouteMap.sessionsPagePath)
         case .settings:
             AppNavigationActions.openSettings()
+        case .connection:
+            AppNavigationActions.openConnection()
         case .about:
-            AppNavigationActions.openSettings(tab: .about)
+            AppNavigationActions.openAbout()
         case .quit:
-            NSApplication.shared.terminate(nil)
+            AppDelegate.requestTermination()
         case .debug:
             break
         }
@@ -288,7 +359,7 @@ final class StatusMenuRenderer: NSObject {
             "checkmark.shield"))
         #endif
 
-        if self.state.connectionMode == .remote {
+        if self.state.connectionMode == .remote, self.state.remoteTransport == .ssh {
             entries.append(self.debugItem(
                 "tunnel",
                 String(localized: "Reset Remote Tunnel"),
@@ -339,7 +410,7 @@ final class StatusMenuRenderer: NSObject {
         }
 
         entries.append(self.debugSeparator("logging"))
-        let enabled = AppLogSettings.fileLoggingEnabled()
+        let enabled = DiagnosticsFileLog.isEnabled()
         let title = enabled ? String(localized: "File Logging: On") : String(localized: "File Logging: Off")
         let fileLogging = self.debugItem("fileLogging", title, "doc.text.magnifyingglass")
         fileLogging.state = enabled ? .on : .off
@@ -421,7 +492,7 @@ final class StatusMenuRenderer: NSObject {
 
         switch id {
         case "config": DebugActions.openConfigFolder()
-        case "health": Task { await DebugActions.runHealthCheckNow() }
+        case "health": Task { await HealthStore.shared.refresh(onDemand: true) }
         case "heartbeat": Task { _ = await DebugActions.sendTestHeartbeat() }
         case "pairing":
             #if DEBUG
@@ -432,7 +503,7 @@ final class StatusMenuRenderer: NSObject {
         case "verbose":
             Task { _ = await DebugActions.toggleVerboseLoggingMain() }
         case "fileLogging":
-            let enabled = !AppLogSettings.fileLoggingEnabled()
+            let enabled = !DiagnosticsFileLog.isEnabled()
             AppDefaults.standard.set(enabled, forKey: debugFileLogEnabledKey)
             sender.state = enabled ? .on : .off
             sender.title = enabled ? String(localized: "File Logging: On") : String(localized: "File Logging: Off")
@@ -460,14 +531,14 @@ final class StatusMenuRenderer: NSObject {
             alert.informativeText = error.localizedDescription
             alert.alertStyle = .warning
         }
-        alert.runModal()
+        AppActivation.shared.presentAlert(alert)
     }
 
     private func sendTestNotification(_ sender: NSMenuItem) async {
         guard !self.testNotificationPending else { return }
         self.testNotificationPending = true
         sender.isEnabled = false
-        let outcome = await DebugActions.sendTestNotification()
+        let outcome = await TestNotificationAction.send()
         self.testNotificationPending = false
         sender.isEnabled = true
 
@@ -482,6 +553,6 @@ final class StatusMenuRenderer: NSObject {
             alert.informativeText = message
             alert.alertStyle = .warning
         }
-        alert.runModal()
+        AppActivation.shared.presentAlert(alert)
     }
 }

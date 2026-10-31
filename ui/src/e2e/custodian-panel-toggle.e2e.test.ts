@@ -1,172 +1,86 @@
-// Control UI tests cover the global Ask OpenClaw panel toggle and persisted session identity.
-import { mkdir } from "node:fs/promises";
-import path from "node:path";
-import { chromium, type Browser } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { Page } from "playwright";
+import { expect, it } from "vitest";
 import {
-  canRunPlaywrightChromium,
+  controlUiSessionUrl,
   installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
+  type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
+import {
+  createControlUiE2eSuite,
+  createControlUiE2eContextOptions,
+} from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-const artifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "custodian-panel-toggle",
-);
-
-const CUSTODIAN_SESSION_STORAGE_KEY = "openclaw.custodian.session.v1";
+const suite = createControlUiE2eSuite({
+  name: "Control UI Ask OpenClaw panel toggle mocked Gateway E2E",
+  startServerBeforeBrowser: true,
+});
 const MOCK_SESSION_ID = "e2e-custodian-panel";
+const WORK_SESSION_KEY = "agent:main:work";
+const chatMethods = ["chat.metadata", "chat.startup", "chat.history", "chat.send"];
+const contextOptions = { colorScheme: "dark", ...createControlUiE2eContextOptions() } as const;
 
-let browser: Browser;
-let server: ControlUiE2eServer;
-
-function custodianGatewayScenario() {
-  return {
-    featureMethods: ["chat.metadata", "chat.startup", "openclaw.chat", "openclaw.chat.history"],
-    methodResponses: {
-      "openclaw.chat": {
-        sessionId: MOCK_SESSION_ID,
-        reply: "Machine is healthy. Ask me anything.",
-        action: "none",
-      },
-      "openclaw.chat.history": {
-        turns: [
-          { role: "user", text: "Fix my channel", at: 1_700_000_100_000 },
-          { role: "assistant", text: "Channel repaired.", at: 1_700_000_101_000 },
-        ],
-      },
-    },
-  };
+async function openHome(page: Page, scenario: ControlUiMockGatewayScenario) {
+  const gateway = await installMockGateway(page, { sessionKey: WORK_SESSION_KEY, ...scenario });
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, WORK_SESSION_KEY));
+  await page.locator(".sidebar-footer-bar__home").click();
+  return { gateway, panel: page.locator("openclaw-assistant-panel") };
 }
 
-describeControlUiE2e("Control UI Ask OpenClaw panel toggle mocked Gateway E2E", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
-    }
-    await mkdir(artifactDir, { recursive: true });
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
+const custodianScenario: ControlUiMockGatewayScenario = {
+  sessionKey: WORK_SESSION_KEY,
+  sessions: [{ key: WORK_SESSION_KEY, label: "Main", kind: "direct", updatedAt: Date.now() }],
+  featureMethods: [...chatMethods, "openclaw.chat", "openclaw.chat.history"],
+  methodResponses: {
+    "sessions.list": {
+      cases: [
+        // The work session does not match the Ask OpenClaw palette query.
+        {
+          match: { search: "Ask OpenClaw" },
+          response: { count: 0, sessions: [] },
+        },
+      ],
+    },
+    "openclaw.chat": {
+      sessionId: MOCK_SESSION_ID,
+      reply: "Machine is healthy. Ask me anything.",
+      action: "none",
+    },
+    "openclaw.chat.history": {
+      turns: [{ role: "assistant", text: "Channel repaired.", at: 1_700_000_101_000 }],
+    },
+  },
+};
 
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
-  it("hides the sidebar footer toggle when openclaw.chat is not advertised", async () => {
-    const context = await browser.newContext({
-      colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
+suite.define(() => {
+  it("keeps Home available without an OpenClaw tab when openclaw.chat is not advertised", async () => {
+    await suite.withPage(contextOptions, async ({ page }) => {
+      const { gateway, panel } = await openHome(page, { featureMethods: chatMethods });
+      await panel.getByRole("button", { name: "Home", exact: true }).waitFor();
+      expect(await panel.getByRole("button", { name: "Ask OpenClaw", exact: true }).count()).toBe(
+        0,
+      );
+      expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
     });
-    const page = await context.newPage();
-    await installMockGateway(page, { featureMethods: ["chat.metadata", "chat.startup"] });
-
-    try {
-      const response = await page.goto(`${server.baseUrl}chat`);
-      expect(response?.status()).toBe(200);
-      await page.locator(".shell-chrome-controls__search").waitFor();
-      await page.locator(".sidebar-identity-card").waitFor();
-      await expect.poll(() => page.locator(".sidebar-footer-bar__custodian").count()).toBe(0);
-      await page.screenshot({
-        animations: "disabled",
-        path: path.join(artifactDir, "00-gated-off-no-button.png"),
-      });
-    } finally {
-      await context.close();
-    }
   });
 
-  it("toggles the panel from the sidebar and palette and reuses the persisted session id", async () => {
-    const context = await browser.newContext({
-      colorScheme: "dark",
-      locale: "en-US",
-      recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, custodianGatewayScenario());
-
-    try {
-      const response = await page.goto(`${server.baseUrl}chat`);
-      expect(response?.status()).toBe(200);
-
-      // Ask OpenClaw lives in the Inbox header and renders only while
-      // openclaw.chat is advertised.
-      await page.locator(".sidebar-issues-button").click();
-      const footerToggle = page.locator(".sidebar-issues-panel__ask");
-      await footerToggle.waitFor();
-      await page.screenshot({
-        animations: "disabled",
-        path: path.join(artifactDir, "01-sidebar-footer-button.png"),
-      });
-
-      // Opening the panel renders the durable machine-wide history from the Gateway.
-      await footerToggle.click();
-      const panel = page.locator("openclaw-custodian-panel");
+  it("opens the same OpenClaw conversation from Home and the palette", async () => {
+    await suite.withPage(contextOptions, async ({ page }) => {
+      const { panel } = await openHome(page, custodianScenario);
+      const openClawTab = panel.getByRole("button", { name: "Ask OpenClaw", exact: true });
+      await openClawTab.click();
       await panel.getByText("Channel repaired.").waitFor();
-      const chatRequest = await gateway.waitForRequest("openclaw.chat");
-      const firstSessionId = (chatRequest.params as { sessionId?: string }).sessionId;
-      expect(typeof firstSessionId).toBe("string");
-      await page.screenshot({
-        animations: "disabled",
-        path: path.join(artifactDir, "02-panel-open-history.png"),
-      });
 
-      // The same Inbox action closes it again.
-      await footerToggle.click();
+      await panel.getByRole("button", { name: "Close assistant sidebar", exact: true }).click();
       await panel.getByText("Channel repaired.").waitFor({ state: "hidden" });
 
-      // The command palette exposes the same toggle from anywhere. Its action
-      // dispatches the identical toggle event the Inbox action uses (pinned by
-      // the palette unit test), so this asserts the gated entry exists and
-      // reopens through the Inbox path — the palette click-through composition
-      // proved timing-flaky on loaded CI runners without adding coverage.
-      await page.locator(".shell-chrome-controls__search").click();
-      await page.getByPlaceholder("Search chats and commands…").fill("Ask OpenClaw");
-      const paletteItem = page.locator(".cmd-palette__item--active", { hasText: "Ask OpenClaw" });
-      await paletteItem.waitFor();
-      await page.screenshot({
-        animations: "disabled",
-        path: path.join(artifactDir, "03-palette-item.png"),
-      });
-      await page.keyboard.press("Escape");
-      await page.locator(".sidebar-issues-button").click();
-      await page.locator(".sidebar-issues-panel__ask").click();
+      await page.locator(".sidebar-brand__search").click();
+      await page
+        .locator("openclaw-command-palette")
+        .getByPlaceholder("Search or start a task…")
+        .fill("Ask OpenClaw");
+      const paletteItem = page.getByRole("option", { name: "Ask OpenClaw", exact: true });
+      await paletteItem.click();
       await panel.getByText("Channel repaired.").waitFor();
-
-      // The server-confirmed session id persists and is reused after a full reload.
-      const storedSessionId = await page.evaluate(
-        (key) => window.localStorage.getItem(key),
-        CUSTODIAN_SESSION_STORAGE_KEY,
-      );
-      expect(storedSessionId).toBe(MOCK_SESSION_ID);
-
-      // Reload: the dock restores its open state on its own and rerenders the
-      // durable history with the persisted session id — no clicks required.
-      // The reload replaces the page context and restarts the request ring, so
-      // the plain wait matches only post-reload openclaw.chat traffic.
-      await page.reload();
-      await page.locator("openclaw-custodian-panel").getByText("Channel repaired.").waitFor();
-      const reloadedRequest = await gateway.waitForRequest("openclaw.chat");
-      expect((reloadedRequest.params as { sessionId?: string }).sessionId).toBe(MOCK_SESSION_ID);
-      await page.screenshot({
-        animations: "disabled",
-        path: path.join(artifactDir, "04-after-reload-same-session.png"),
-      });
-    } finally {
-      await context.close();
-    }
+    });
   });
 });

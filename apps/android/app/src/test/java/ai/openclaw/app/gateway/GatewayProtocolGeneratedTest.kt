@@ -56,23 +56,21 @@ class GatewayProtocolGeneratedTest {
 
   @Test
   fun legacyFramesDecodePrincipalLessSharingErrorsAndRefreshEvents() {
-    for (id in listOf("unknown", "absent")) {
-      val response =
-        json.decodeFromString(
-          GatewayResponseFrame.serializer(),
-          """{"type":"res","id":"$id","ok":false,"error":{"code":"INVALID_REQUEST","message":"session membership includes actor evidence this client cannot represent","details":{"code":"SESSION_MEMBER_ACTOR_EVIDENCE_UNSUPPORTED","recommendedMethod":"session.members.listEvidence"}}}""",
-        )
-      assertEquals("INVALID_REQUEST", response.error?.code)
-      assertEquals(
-        "session.members.listEvidence",
-        response.error
-          ?.details
-          ?.jsonObject
-          ?.get("recommendedMethod")
-          ?.jsonPrimitive
-          ?.content,
+    val response =
+      json.decodeFromString(
+        GatewayResponseFrame.serializer(),
+        """{"type":"res","id":"unknown","ok":false,"error":{"code":"INVALID_REQUEST","message":"session membership includes actor evidence this client cannot represent","details":{"code":"SESSION_MEMBER_ACTOR_EVIDENCE_UNSUPPORTED","recommendedMethod":"session.members.listEvidence"}}}""",
       )
-    }
+    assertEquals("INVALID_REQUEST", response.error?.code)
+    assertEquals(
+      "session.members.listEvidence",
+      response.error
+        ?.details
+        ?.jsonObject
+        ?.get("recommendedMethod")
+        ?.jsonPrimitive
+        ?.content,
+    )
 
     val ignoredEvidence =
       json.decodeFromString(
@@ -109,7 +107,7 @@ class GatewayProtocolGeneratedTest {
   }
 
   @Test
-  fun githubPublicationResultsDecodeAsATypedUnion() {
+  fun githubPublicationResultsRoundTripAsATypedUnion() {
     val cases =
       listOf(
         """{"requestId":"request-1","status":"requested","message":"Accepted."}""" to
@@ -120,11 +118,17 @@ class GatewayProtocolGeneratedTest {
           SessionGitHubPublicationPublished::class,
         """{"requestId":"request-1","status":"failed","code":"push_rejected","message":"Failed.","nextAction":"Check access."}""" to
           SessionGitHubPublicationFailed::class,
+        """{"requestId":"request-1","status":"needs_confirmation","publisher":{"source":"personal","accountId":42,"login":"octocat"},"message":"Confirm publication."}""" to
+          SessionGitHubPublicationNeedsConfirmation::class,
       )
 
     for ((payload, expectedType) in cases) {
       val decoded = json.decodeFromString(SessionGitHubPublicationResult.serializer(), payload)
       assertEquals(expectedType, decoded::class)
+      assertEquals(
+        json.parseToJsonElement(payload),
+        json.encodeToJsonElement(SessionGitHubPublicationResult.serializer(), decoded),
+      )
     }
   }
 

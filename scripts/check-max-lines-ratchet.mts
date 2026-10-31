@@ -2,19 +2,26 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import ts from "typescript";
-import { main as checkEnvVarCount } from "./check-env-var-count.mts";
+import type * as ts from "typescript/ast";
+import {
+  addEnvVarNames,
+  isCountedSourcePath,
+  main as checkEnvVarCount,
+} from "./check-env-var-count.mts";
+import { reportLimitViolations } from "./lib/check-limits.mts";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import {
   compareRatchetSets,
   listRatchetRenames,
   loadRatchetReference,
   loadRatchetSnapshot,
   loadRatchetSources,
+  parseRatchetArgs,
   parseRatchetPaths,
   reportRatchetFailures,
-  reportRatchetSuccess,
   resolveRatchetBase,
 } from "./lib/shrink-ratchet.mts";
+import { collectTypeScriptCommentRanges } from "./lib/ts-guard-utils.mts";
 
 const BASELINE_PATH = "config/max-lines-baseline.txt";
 const GIT_MAX_BUFFER = 256 * 1024 * 1024;
@@ -27,6 +34,46 @@ const BASELINE_HEADER = [
   "",
 ].join("\n");
 const compareStrings = (left: string, right: string) => left.localeCompare(right);
+
+function listWorktreeAdditionalCandidates(root: string) {
+  // Git grep trusts index kinds/flags and skips symlinks. Read those paths and
+  // non-ignored untracked sources ourselves to preserve the whole-worktree check.
+  const entries = execFileSync(
+    "git",
+    [
+      "ls-files",
+      "-v",
+      "--stage",
+      "-z",
+      "--cached",
+      "--others",
+      "--exclude-standard",
+      "--",
+      ...SOURCE_ROOTS,
+    ],
+    { cwd: root, maxBuffer: GIT_MAX_BUFFER },
+  )
+    .toString("utf8")
+    .split("\0");
+  const candidates: string[] = [];
+  for (const entry of entries) {
+    const indexed = entry.slice(2);
+    const untracked = isGovernedSourcePath(indexed);
+    const file = untracked ? indexed : indexed.slice(indexed.indexOf("\t") + 1);
+    if (!isGovernedSourcePath(file)) {
+      continue;
+    }
+    if (
+      untracked ||
+      entry[0] !== "H" ||
+      indexed.startsWith("120000 ") ||
+      fs.lstatSync(path.join(root, file), { throwIfNoEntry: false })?.isSymbolicLink()
+    ) {
+      candidates.push(file);
+    }
+  }
+  return candidates;
+}
 
 export function isGovernedSourcePath(filePath: string) {
   const normalized = filePath.replaceAll("\\", "/");
@@ -44,38 +91,18 @@ export function isGovernedSourcePath(filePath: string) {
   );
 }
 
-export function collectLintDisableDirectives(source: string, filePath = "source.ts") {
+export function collectLintDisableDirectives(
+  source: string,
+  _filePath: string,
+  sourceFile: ts.SourceFile,
+) {
   if (!source.includes("oxlint-disable") && !source.includes("eslint-disable")) {
     return [];
   }
   const directive = /^(?:eslint|oxlint)-disable(?:-next-line|-line)?(?=$|\s)([\s\S]*)$/u;
-  const scriptKind = /\.[cm]?[jt]sx$/u.test(filePath) ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
-  const sourceFile = ts.createSourceFile(
-    filePath,
-    source,
-    ts.ScriptTarget.Latest,
-    false,
-    scriptKind,
-  );
-  const comments = new Map<number, string>();
-  const addComments = (ranges: readonly ts.CommentRange[] | undefined) => {
-    for (const range of ranges ?? []) {
-      comments.set(range.pos, source.slice(range.pos, range.end));
-    }
-  };
-  const visit = (node: ts.Node) => {
-    addComments(ts.getLeadingCommentRanges(source, node.pos));
-    addComments(ts.getTrailingCommentRanges(source, node.end));
-    // getChildren includes delimiter tokens; forEachChild misses directives before closing tokens.
-    for (const child of node.getChildren(sourceFile)) {
-      visit(child);
-    }
-  };
-  visit(sourceFile);
-  addComments(ts.getLeadingCommentRanges(source, sourceFile.endOfFileToken.pos));
-
   const directives: string[][] = [];
-  for (const text of comments.values()) {
+  for (const range of collectTypeScriptCommentRanges(sourceFile)) {
+    const text = source.slice(range.pos, range.end);
     const comment = text.slice(2, text.startsWith("/*") ? -2 : undefined);
     const match = directive.exec(comment.trim());
     if (!match) {
@@ -91,14 +118,6 @@ export function collectLintDisableDirectives(source: string, filePath = "source.
 
 export function isMaxLinesRule(rule: string) {
   return rule === "max-lines" || rule.endsWith("/max-lines");
-}
-
-export function hasMaxLinesDisable(source: string, filePath = "source.ts") {
-  return collectLintDisableDirectives(source, filePath).some((rules) => rules.some(isMaxLinesRule));
-}
-
-export function hasAllRuleDisable(source: string, filePath = "source.ts") {
-  return collectLintDisableDirectives(source, filePath).some((rules) => rules.length === 0);
 }
 
 function baselineWithVerifiedRenames(
@@ -118,14 +137,15 @@ function baselineWithVerifiedRenames(
   return allowed;
 }
 
-function listStagedSuppressionCandidates(root: string) {
-  // The staged policy covers the whole index. Narrow candidates once so a one-file
-  // check does not spawn a Git process for every governed source.
+function listSuppressionCandidates(root: string, staged: boolean) {
+  // Search tracked sources in the selected snapshot before reading and parsing them.
+  // Bound parallel reads so this small guard does not oversubscribe other local checks.
   const result = spawnSync(
     "git",
     [
       "grep",
-      "--cached",
+      "--threads=4",
+      ...(staged ? ["--cached"] : []),
       "-z",
       "-l",
       "-e",
@@ -148,37 +168,52 @@ function listStagedSuppressionCandidates(root: string) {
 
 export function collectCurrentSuppressionState(
   root = process.cwd(),
-  options: { staged?: boolean } = {},
+  options: { staged?: boolean; envVarNames?: Map<string, ReadonlySet<string>> } = {},
 ) {
+  using parser = createNativeTypeScriptParser({ cwd: root });
   const staged = options.staged === true;
+  const candidates = listSuppressionCandidates(root, staged);
   const filePaths = staged
-    ? listStagedSuppressionCandidates(root)
-    : execFileSync(
-        "git",
-        ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", ...SOURCE_ROOTS],
-        { cwd: root, maxBuffer: GIT_MAX_BUFFER },
-      )
-        .toString("utf8")
-        .split("\0");
+    ? candidates
+    : [...new Set([...candidates, ...listWorktreeAdditionalCandidates(root)])];
   const governedPaths = filePaths
     .filter(Boolean)
     .filter(isGovernedSourcePath)
     .filter((filePath) => staged || fs.existsSync(path.join(root, filePath)));
-  const sources = staged
-    ? [...loadRatchetSources(root, governedPaths)]
-    : governedPaths.map((filePath): [string, string] => [
-        filePath,
-        fs.readFileSync(path.join(root, filePath), "utf8"),
-      ]);
+  const stagedSources = staged ? loadRatchetSources(root, governedPaths) : undefined;
+  const allRules: string[] = [];
+  const explicit: string[] = [];
+  // Small batches amortize native snapshot reloads while keeping peak RSS near a one-file scan.
+  const batchSize = 2;
+  for (let offset = 0; offset < governedPaths.length; offset += batchSize) {
+    const sources = governedPaths
+      .slice(offset, offset + batchSize)
+      .map((fileName) => {
+        const text = stagedSources
+          ? stagedSources.get(fileName)!
+          : fs.readFileSync(path.join(root, fileName), "utf8");
+        if (!staged && options.envVarNames && isCountedSourcePath(fileName)) {
+          const names = new Set<string>();
+          addEnvVarNames(text, names);
+          options.envVarNames.set(fileName, names);
+        }
+        return { fileName, text };
+      })
+      .filter(({ text }) => text.includes("oxlint-disable") || text.includes("eslint-disable"));
+    for (const [index, sourceFile] of parser.parseSourceFiles(sources).entries()) {
+      const { fileName, text } = sources[index]!;
+      const directives = collectLintDisableDirectives(text, fileName, sourceFile);
+      if (directives.some((rules) => rules.length === 0)) {
+        allRules.push(fileName);
+      }
+      if (directives.some((rules) => rules.some(isMaxLinesRule))) {
+        explicit.push(fileName);
+      }
+    }
+  }
   return {
-    allRules: sources
-      .filter(([filePath, source]) => hasAllRuleDisable(source, filePath))
-      .map(([filePath]) => filePath)
-      .toSorted(compareStrings),
-    explicit: sources
-      .filter(([filePath, source]) => hasMaxLinesDisable(source, filePath))
-      .map(([filePath]) => filePath)
-      .toSorted(compareStrings),
+    allRules: allRules.toSorted(compareStrings),
+    explicit: explicit.toSorted(compareStrings),
   };
 }
 
@@ -186,52 +221,38 @@ function writeBaseline(root: string, entries: string[]) {
   fs.writeFileSync(path.join(root, BASELINE_PATH), BASELINE_HEADER + entries.join("\n") + "\n");
 }
 
-function parseArgs(argv: string[]) {
-  const args: { base?: string; prune: boolean; staged: boolean } = { prune: false, staged: false };
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--prune") {
-      args.prune = true;
-      continue;
-    }
-    if (arg === "--staged") {
-      args.staged = true;
-      continue;
-    }
-    if (arg === "--base" && argv[index + 1]) {
-      args.base = argv[index + 1];
-      index += 1;
-      continue;
-    }
-    throw new Error("Unknown or incomplete argument: " + arg);
-  }
-  return args;
-}
-
 function envVarCountArgs(argv: string[]) {
-  const args = parseArgs(argv);
-  return [...(args.staged ? ["--staged"] : []), ...(args.base ? ["--base", args.base] : [])];
+  const args = parseRatchetArgs(argv);
+  return [
+    ...(args.staged ? ["--staged"] : []),
+    ...(args.base ? ["--base", args.base] : []),
+    ...(!args.mergeBase ? ["--no-merge-base"] : []),
+  ];
 }
 
-export function main(root = process.cwd(), argv: string[] = process.argv.slice(2)) {
+export function main(
+  root = process.cwd(),
+  argv: string[] = process.argv.slice(2),
+  envVarNames?: Map<string, ReadonlySet<string>>,
+) {
   try {
-    const args = parseArgs(argv);
+    const args = parseRatchetArgs(argv);
     if (args.staged && args.prune) {
       throw new Error("--prune cannot be combined with --staged");
     }
 
-    let baselineSource;
+    let baseline;
     try {
-      baselineSource = loadRatchetSnapshot(root, BASELINE_PATH, args.staged, parseRatchetPaths);
+      baseline = loadRatchetSnapshot(root, BASELINE_PATH, args.staged, parseRatchetPaths);
     } catch {
       throw new Error("Missing " + BASELINE_PATH + (args.staged ? " in the index" : ""));
     }
-    const baseline = baselineSource;
     const { allRules, explicit: current } = collectCurrentSuppressionState(root, {
       staged: args.staged,
+      envVarNames,
     });
     const { added, removed: stale } = compareRatchetSets(current, baseline, compareStrings);
-    const baseRef = resolveRatchetBase(root, { base: args.base, staged: args.staged });
+    const baseRef = resolveRatchetBase(root, args);
     const baseBaseline = baseRef
       ? loadRatchetReference(root, baseRef, BASELINE_PATH, parseRatchetPaths)
       : null;
@@ -243,19 +264,27 @@ export function main(root = process.cwd(), argv: string[] = process.argv.slice(2
       ? compareRatchetSets(baseline, allowedBaseline, compareStrings).added
       : [];
 
-    if (
-      reportRatchetFailures([
-        { entries: added, title: "New max-lines suppressions are forbidden; split these files:" },
-        {
-          entries: expanded,
-          title: "The max-lines baseline may only shrink; remove these entries:",
-        },
-        {
-          entries: allRules,
-          title: "All-rule lint disables are forbidden; name only the required rules:",
-        },
-      ])
-    ) {
+    // The baseline must describe the tree in CI too: advisory drift on main turns every
+    // later local run red. Only baseline growth follows the limit severity policy.
+    const unlisted = reportRatchetFailures([
+      {
+        entries: allRules,
+        title: "All-rule lint disables are forbidden; name only the required rules:",
+      },
+      {
+        entries: added,
+        title:
+          "New max-lines suppressions are forbidden; split these files (renames move their baseline entry):",
+      },
+    ]);
+    const grown = reportLimitViolations(
+      expanded.map((file) => ({
+        file: BASELINE_PATH,
+        title: "The max-lines baseline may only shrink; remove these entries:",
+        message: file,
+      })),
+    );
+    if (unlisted || grown) {
       return 1;
     }
 
@@ -264,9 +293,7 @@ export function main(root = process.cwd(), argv: string[] = process.argv.slice(2
         .filter((entry) => current.includes(entry))
         .toSorted(compareStrings);
       writeBaseline(root, kept);
-      reportRatchetSuccess(
-        "Pruned " + BASELINE_PATH + ": " + baseline.size + " -> " + kept.length + ".",
-      );
+      console.log("Pruned " + BASELINE_PATH + ": " + baseline.size + " -> " + kept.length + ".");
       return 0;
     }
     if (
@@ -280,9 +307,9 @@ export function main(root = process.cwd(), argv: string[] = process.argv.slice(2
       return 1;
     }
 
-    reportRatchetSuccess(
-      "max-lines ratchet OK: " + current.length + " grandfathered suppressions.",
-    );
+    if (added.length + expanded.length + stale.length === 0) {
+      console.log("max-lines ratchet OK: " + current.length + " grandfathered suppressions.");
+    }
     return 0;
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
@@ -291,14 +318,18 @@ export function main(root = process.cwd(), argv: string[] = process.argv.slice(2
 }
 
 function runBaselineRatchets(root = process.cwd(), argv: string[] = process.argv.slice(2)) {
-  const maxLinesStatus = main(root, argv);
+  // Reuse names from suppression candidates; the env guard reads remaining files.
+  const envVarNames = argv.includes("--staged")
+    ? undefined
+    : new Map<string, ReadonlySet<string>>();
+  const maxLinesStatus = main(root, argv, envVarNames);
   if (maxLinesStatus !== 0) {
     return maxLinesStatus;
   }
   try {
     // CI invokes this entry with its frozen fork-point ref. Carry the same snapshot
     // into the env budget so every baseline ratchet judges one tested tree.
-    checkEnvVarCount(envVarCountArgs(argv), root);
+    checkEnvVarCount(envVarCountArgs(argv), root, envVarNames);
     return 0;
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

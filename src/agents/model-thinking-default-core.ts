@@ -1,21 +1,18 @@
-import { resolveClaudeOpus5ModelIdentity } from "@openclaw/llm-core";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "@openclaw/normalization-core/string-coerce";
-import {
-  resolveSupportedThinkingLevel,
   resolveThinkingDefaultForModel,
-  resolveThinkingProfile,
+  resolveThinkingSelectionForModel,
+  type ThinkingCatalogResolver,
 } from "../auto-reply/thinking.js";
-import {
-  resolveThinkingDefaultForModelCore,
-  type ThinkLevel,
-} from "../auto-reply/thinking.shared.js";
+import { normalizeThinkLevel, type ThinkLevel } from "../auto-reply/thinking.shared.js";
+import { MODEL_APIS } from "../config/model-config-vocabulary.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ProviderThinkingPolicySource } from "../plugins/provider-thinking.types.js";
+import { resolveAgentEntry } from "./agent-scope-config.js";
+import { createBundledStaticCatalogModelResolver } from "./embedded-agent-runner/model.static-catalog.js";
+import { mergeConfiguredThinkingLevelMap } from "./model-catalog-metadata.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
-import { legacyModelKey, modelKey, normalizeProviderId } from "./model-ref-shared.js";
-import { normalizeModelSelection } from "./model-selection-resolve.js";
+import { withoutOverriddenThinkingProfile } from "./model-compat-catalog.js";
+import { resolveModelExtraParamSources } from "./model-extra-params.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
 
 type ThinkingDefaultParams = {
@@ -24,124 +21,103 @@ type ThinkingDefaultParams = {
   model: string;
   catalog?: ModelCatalogEntry[];
   agentRuntime?: string | null;
+  agentId?: string;
+  providerPolicySource?: ProviderThinkingPolicySource;
+  catalogResolver?: ThinkingCatalogResolver;
 };
+
+/**
+ * Catalog for callers that pass none: configured rows, with the selected model's bundled row
+ * supplying thinking facts. A listed model keeps every value config states and only gains the
+ * facts it omits; an unlisted model gets the bundled row itself.
+ */
+export function buildThinkingCatalog(params: {
+  cfg: OpenClawConfig;
+  provider?: string | null;
+  model?: string | null;
+}): ModelCatalogEntry[] {
+  const configured = buildConfiguredModelCatalog({ cfg: params.cfg });
+  const { provider, model } = params;
+  if (!provider || !model) {
+    return configured;
+  }
+  // Thinking facts describe the model, so a configured endpoint override (a proxy base URL)
+  // does not hide the provider's bundled row here.
+  const row = createBundledStaticCatalogModelResolver({ includeRuntimeDiscovery: true })({
+    provider,
+    modelId: model,
+  });
+  if (!row) {
+    return configured;
+  }
+  const index = configured.findIndex((e) => e.provider === provider && e.id === model);
+  const listed = configured[index];
+  if (listed) {
+    return configured.with(index, {
+      ...listed,
+      thinkingLevelMap: mergeConfiguredThinkingLevelMap(row, listed),
+      compat: { ...withoutOverriddenThinkingProfile(row.compat, listed.compat), ...listed.compat },
+    });
+  }
+  const entry: ModelCatalogEntry = {
+    provider,
+    id: row.id,
+    name: row.name,
+    api: MODEL_APIS.find((api) => api === row.api),
+    baseUrl: row.baseUrl,
+    reasoning: row.reasoning,
+    ...(row.thinkingLevelMap ? { thinkingLevelMap: row.thinkingLevelMap } : {}),
+    compat: row.compat,
+  };
+  return [...configured, entry];
+}
 
 export function resolveConfiguredThinkingDefaultCore(params: {
   cfg: OpenClawConfig;
   provider: string;
   model: string;
+  agentId?: string;
 }): ThinkLevel | undefined {
-  const configuredModels = params.cfg.agents?.defaults?.models;
-  const canonicalKey = modelKey(params.provider, params.model);
-  const legacyKey = legacyModelKey(params.provider, params.model);
-  const perModelThinking =
-    configuredModels?.[canonicalKey]?.params?.thinking ??
-    (legacyKey ? configuredModels?.[legacyKey]?.params?.thinking : undefined);
-  if (
-    perModelThinking === false ||
-    perModelThinking === "disabled" ||
-    perModelThinking === "none"
-  ) {
+  const agentThinking = params.agentId
+    ? resolveAgentEntry(params.cfg, params.agentId)?.thinkingDefault
+    : undefined;
+  if (agentThinking) {
+    return agentThinking;
+  }
+  const { modelParams, agentModelParams } = resolveModelExtraParamSources({
+    config: params.cfg,
+    provider: params.provider,
+    modelId: params.model,
+    agentId: params.agentId,
+  });
+  const perModelThinking = agentModelParams?.thinking ?? modelParams?.thinking;
+  if (perModelThinking === false || perModelThinking === "disabled") {
     return "off";
   }
-  if (
-    perModelThinking === "off" ||
-    perModelThinking === "minimal" ||
-    perModelThinking === "low" ||
-    perModelThinking === "medium" ||
-    perModelThinking === "high" ||
-    perModelThinking === "xhigh" ||
-    perModelThinking === "adaptive" ||
-    perModelThinking === "max" ||
-    perModelThinking === "ultra"
-  ) {
-    return perModelThinking;
-  }
-  return params.cfg.agents?.defaults?.thinkingDefault;
+  return (
+    (typeof perModelThinking === "string" ? normalizeThinkLevel(perModelThinking) : undefined) ??
+    params.cfg.agents?.defaults?.thinkingDefault
+  );
 }
 
-export function resolveThinkingDefaultCore(
-  params: ThinkingDefaultParams & {
-    providerPolicySource?: "active" | "active-or-bundled";
-  },
-): ThinkLevel {
-  const normalizedProvider = normalizeProviderId(params.provider);
-  const normalizedModel = normalizeLowercaseStringOrEmpty(params.model).replace(/\./g, "-");
-  const catalog = Array.isArray(params.catalog)
-    ? params.catalog
-    : buildConfiguredModelCatalog({ cfg: params.cfg });
-  const catalogCandidate = catalog.find(
-    (entry) => entry.provider === params.provider && entry.id === params.model,
-  );
-  const configuredModels = params.cfg.agents?.defaults?.models;
-  const canonicalKey = modelKey(params.provider, params.model);
-  const legacyKey = legacyModelKey(params.provider, params.model);
-  const normalizedCanonicalKey = normalizeLowercaseStringOrEmpty(canonicalKey);
-  const normalizedLegacyKey = normalizeOptionalLowercaseString(legacyKey);
-  const primarySelection = normalizeModelSelection(params.cfg.agents?.defaults?.model);
-  const normalizedPrimarySelection = normalizeOptionalLowercaseString(primarySelection);
-  const explicitModelConfigured =
-    (configuredModels ? canonicalKey in configuredModels : false) ||
-    Boolean(legacyKey && configuredModels && legacyKey in configuredModels) ||
-    normalizedPrimarySelection === normalizedCanonicalKey ||
-    Boolean(normalizedLegacyKey && normalizedPrimarySelection === normalizedLegacyKey) ||
-    normalizedPrimarySelection === normalizeLowercaseStringOrEmpty(params.model);
+export function resolveThinkingDefaultCore(params: ThinkingDefaultParams): ThinkLevel {
   const configured = resolveConfiguredThinkingDefaultCore(params);
   if (configured) {
     return configured;
   }
-  const isClaudeProvider =
-    normalizedProvider === "anthropic" ||
-    normalizedProvider === "anthropic-vertex" ||
-    normalizedProvider === "claude-cli";
-  if (isClaudeProvider && resolveClaudeOpus5ModelIdentity({ id: normalizedModel })) {
-    return "high";
-  }
-  if (
-    isClaudeProvider &&
-    (normalizedModel.startsWith("claude-opus-4-8") || normalizedModel.startsWith("claude-opus-4.8"))
-  ) {
-    return "off";
-  }
-  if (
-    isClaudeProvider &&
-    (normalizedModel.startsWith("claude-opus-4-7") || normalizedModel.startsWith("claude-opus-4.7"))
-  ) {
-    return "off";
-  }
-  if (
-    normalizedProvider === "anthropic" &&
-    explicitModelConfigured &&
-    typeof catalogCandidate?.name === "string" &&
-    /4\.6\b/.test(catalogCandidate.name) &&
-    (normalizedModel.startsWith("claude-opus-4-6") ||
-      normalizedModel.startsWith("claude-sonnet-4-6"))
-  ) {
-    return "adaptive";
-  }
-  const fallbackParams = {
-    provider: params.provider,
-    model: params.model,
-    catalog,
-    agentRuntime: params.agentRuntime,
-  };
-  if (!params.providerPolicySource) {
-    return resolveThinkingDefaultForModel(fallbackParams);
-  }
-  const profile = resolveThinkingProfile({
-    ...fallbackParams,
-    providerPolicySource: params.providerPolicySource,
+  return resolveThinkingDefaultForModel({
+    ...params,
+    catalog: params.catalog ?? buildThinkingCatalog(params),
   });
-  if (profile.defaultLevel) {
-    return profile.defaultLevel;
-  }
-  const fallback = resolveThinkingDefaultForModelCore(fallbackParams);
-  if (fallback === "off") {
-    return "off";
-  }
-  return resolveSupportedThinkingLevel({
-    ...fallbackParams,
-    level: "medium",
-    providerPolicySource: params.providerPolicySource,
+}
+
+/** Resolves configured intent and its execution level for the caller-selected runtime. */
+export function resolveThinkingSelectionCore(
+  params: ThinkingDefaultParams & { level?: ThinkLevel; agentRuntime: string | null | undefined },
+) {
+  return resolveThinkingSelectionForModel({
+    ...params,
+    level: params.level ?? resolveConfiguredThinkingDefaultCore(params),
+    catalog: params.catalog ?? buildThinkingCatalog(params),
   });
 }

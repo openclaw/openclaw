@@ -1,30 +1,31 @@
 ---
-summary: "What OpenClaw sends: a daily update check by default, optional anonymous feature statistics, and every privacy control"
+summary: "Daily update requests, update-outcome reports, approximate location, optional anonymous feature statistics, and privacy controls"
 title: "Usage telemetry and update checks"
 read_when:
-  - Checking what information OpenClaw sends and what it never collects
+  - Checking what OpenClaw sends and what the receiver stores
   - Deciding whether to share anonymous feature statistics
   - Enabling or disabling anonymous feature statistics
   - Disabling all automatic update-check requests
 ---
 
-**The only thing OpenClaw sends on its own is a daily update check.** It asks
-whether a newer version exists, and the request carries nothing but the version,
-operating system, and CPU architecture already visible to any package registry.
-Everything else on this page is opt-in.
+**Automatic update checks send a daily request by default.** It asks whether a
+newer version exists and includes the OpenClaw version, operating system, Node.js
+version, CPU architecture, and request surface.
+An identifier-free count-only request can follow a successful daily update check
+by default when its receiver explicitly supports counting. Settled update outcomes also send a bounded report by default, subject to the
+same automatic-request opt-outs. Anonymous feature statistics are opt-in.
+This page describes update-check telemetry, not requests made by configured
+providers, channels, or other services.
 
-Anonymous feature statistics — which channels and providers you have configured
-— are **off by default** and never turn themselves on. When you do enable them,
-they ride along with that same daily update check instead of adding a second
-request.
+Anonymous feature statistics describe configured channels and providers, plugin
+inventory, and a retained session-creation count. They are **off by default**.
+When you enable them, they ride along with that same daily update check instead
+of adding a second request.
 
-If you turn them on: thank you. Feature statistics are the only way we learn
-which channels, providers, and plugins people actually use, and they decide what
-gets improved, what gets fixed first, and what can safely be retired. A handful
-of Discord anecdotes is otherwise the entire evidence base. We publish what we
-learn back to everyone at
-[telemetry.openclaw.ai](https://telemetry.openclaw.ai), so the data you
-contribute stays visible to you.
+These reports help inform maintenance priorities. They do not measure individual
+plugin invocations, messages, model requests, or active users. Anonymous usage aggregates
+are available at
+[telemetry.openclaw.ai](https://telemetry.openclaw.ai).
 
 Declining is a completely normal choice and changes nothing about how OpenClaw
 works for you.
@@ -40,11 +41,23 @@ openclaw telemetry show
 Add `--json` to get the same state and payload as one machine-readable
 document.
 
-The output shows whether feature statistics are enabled, why they are enabled
-or disabled, the request endpoint, and the last successful check. When feature
-statistics are enabled, it prints the exact JSON payload the next request would
-send. When they are disabled, it shows the update-only request and its
-`User-Agent` header instead.
+The output shows whether anonymous feature statistics are enabled, why they are
+enabled or disabled, the request endpoint, and the last successful check. When
+anonymous feature statistics are enabled, it prints a JSON payload preview built
+in the CLI process. It does not retrieve a payload from the running Gateway or preview
+update-outcome reports; see [Update outcomes](#update-outcomes) for that payload.
+When only anonymous feature statistics are disabled, it shows the update-only request
+and its `User-Agent` header instead. When automation or update-check policy
+disables all requests, it shows `Request: none` with the reason (`request: null`
+in JSON).
+The output also shows whether installation counting is eligible under current
+policy (`installationCountEnabled` in JSON). Inspection sends no requests,
+claims no count, and does not initialize a missing database. It cannot know a
+receiver's authoritative day or capability without a fresh update response, so
+it does not invent or preview an exact count header. A later count request
+requires that fresh response and another policy check.
+The preview describes the client request only. It cannot show server-derived
+location information.
 
 ## Daily update check
 
@@ -62,27 +75,121 @@ tracking identifier.
 
 The service responds with the latest version and, optionally, a short
 operator-facing note. OpenClaw displays an available update and its note through
-the existing update notice. Unreachable services, timeouts, invalid responses,
+the existing update notice. Unreachable services, timeouts, oversized or invalid responses,
 and other failed checks do not interrupt startup or normal operation.
 
 A successful response and its timestamp are cached in the existing shared state
 database. Startup reuses the cached result for the next 24 hours, and a running
 Gateway checks again during normal maintenance with a small random delay. Failed
-checks do not count as successful daily checks.
+checks do not count as successful daily checks. On the `stable` channel without
+automatic updates, the Gateway update notice reads this cached result hourly, so
+a newer release appears within an hour of the daily check that found it.
 
 For testing or self-hosting, set `OPENCLAW_TELEMETRY_ENDPOINT` to your complete
 replacement endpoint URL. The public server source is available at
 [openclaw/telemetry](https://github.com/openclaw/telemetry).
 
+## Identifier-free installation counting
+
+The daily GET and schema-1 feature POST carry **no installation-count metadata**.
+A configured receiver advertises support only on a successful update response:
+
+```http
+OpenClaw-Installation-Count: 1;20688
+Cache-Control: no-store
+```
+
+The two integers are the protocol version and the receiver's authoritative UTC
+ordinal day. A legacy or unconfigured receiver advertises nothing: the client
+neither claims a local count nor sends count metadata. No permanent capability
+state or extra capability probe is needed.
+
+After validating a fresh HTTP 200 version answer, an eligible client can send
+one separate request to the same endpoint:
+
+```http
+POST https://telemetry.openclaw.ai/api/latest-version
+User-Agent: openclaw-installation-count/1
+OpenClaw-Installation-Count: 1;20688;31
+```
+
+This POST has **no body**. It sends no OpenClaw version, platform, feature
+inventory, identifier, UUID, nonce, exact client timestamp, or IP fingerprint.
+Its header contains the protocol version, the advertised receiver day, and the
+days since this endpoint's previous locally claimed receiver day, capped at 31.
+The first attempt uses 31. The client does not derive its counting day from its
+own clock. The receiver accepts only its current or previous day, preserving the
+original advertised day as the bucket.
+
+This adds at most one count-only POST per successful uncached daily update check;
+it does not add an update check or change the existing 24-hour success cache.
+The count request never follows redirects and has an independent three-second
+timeout. Its failure cannot discard an accepted version answer. Redirected update
+answers remain valid, but never authorize a count upload to the original endpoint.
+
+Counting is allowed before feature consent has been requested; feature statistics
+remain opt-in. `telemetry.enabled: false`, a recorded decline, and
+`DO_NOT_TRACK=1` or `DO_NOT_TRACK=true` suppress the count request without disabling
+the update-only GET. Explicit `telemetry.enabled: true` enables both counting and
+optional feature statistics. The whole-update opt-outs below suppress all requests.
+CI's production-host suppression and test-receiver exception remain unchanged.
+
+The existing `config_machine_state` table in the selected state database holds only the last attempted
+receiver day per endpoint and physical installation-state root. An endpoint-only
+hash scopes that state key; it is identical for everyone using that endpoint and
+is never transmitted. After receiving support, the worker atomically claims the
+advertised day **before the count POST**, then the client rechecks policy.
+A lost response, HTTP failure, crash, revoked policy, or process exit can lose
+that count. It is never retried for the same receiver day, including after a
+restart. Unavailable storage omits counting while leaving updates available.
+Invalid or future stored days fail closed. No new database schema, local file,
+or config flag is introduced; old versions ignore the extra machine-state keys.
+
+The receiver routes count requests separately from raw update-check analytics
+and location processing. It retains only aggregate `(day, gap, reports)` totals,
+not per-install histories. Those totals support deduplicated estimates of
+**observed reporting installation-state roots** over bounded windows. They do
+not measure human daily activity, people, physical machines, or all active
+installations. Infrequent checks, cache reuse, opted-out installations, receiver
+outages or pre-activation periods, lost attempts, cloned/restored state, and
+deleted local state affect the estimate. Collection requires separately
+authorized storage configuration and deployment; without that binding it stays
+off. Neither this client change nor a capability response establishes that a
+subsequent count was stored.
+
+<a id="cloudflare-derived-request-geography" />
+
+## Approximate location
+
+Cloudflare provides approximate location: country, region code, city, and timezone.
+We store no raw IP addresses or precise coordinates in analytics.
+
+Recorded update checks include these fields even when anonymous feature statistics
+are off or `DO_NOT_TRACK` is set. Missing or invalid fields stay empty.
+No additional client payload or prompt is needed.
+
+Analytics Engine retains records for **three months**. Public aggregates exclude
+location information. Disabling requests does not erase existing records.
+
+This section describes the hosted service at
+[telemetry.openclaw.ai](https://telemetry.openclaw.ai). A replacement endpoint
+configured with `OPENCLAW_TELEMETRY_ENDPOINT` can use different infrastructure
+and processing or storage policies.
+
+<a id="optional-feature-statistics" />
+
 ## Optional anonymous feature statistics
 
-Feature statistics are **off by default**. Interactive setup offers a one-time
-opt-in with **No thanks** selected by default. Non-interactive and scripted
-installations never opt in automatically. OpenClaw records when you accepted or
-declined so it does not ask again.
+Anonymous feature statistics are **off by default**. Interactive setup can offer a one-time
+opt-in with **No thanks** selected by default; guided Quick Start skips that
+prompt. OpenClaw records a prompt response so setup does not ask again.
+Non-interactive and scripted installations do not opt in automatically, but
+operators can explicitly enable anonymous feature statistics with `openclaw telemetry on` or
+`telemetry.enabled: true`. The enabled setting, not the presence of a prompt
+response, controls whether anonymous feature statistics are included.
 
-When you explicitly enable feature statistics, the same daily request becomes a
-`POST` with this complete JSON payload:
+When you explicitly enable anonymous feature statistics, the same daily request becomes a
+`POST` with a JSON payload in this shape (values are illustrative):
 
 ```json
 {
@@ -101,47 +208,66 @@ When you explicitly enable feature statistics, the same daily request becomes a
 }
 ```
 
-| Field                       | Meaning                                                                   |
-| --------------------------- | ------------------------------------------------------------------------- |
-| `schema`                    | Payload format version, currently `1`.                                    |
-| `version`                   | Installed OpenClaw version.                                               |
-| `platform`                  | Operating system and CPU architecture.                                    |
-| `node`                      | Running Node.js version.                                                  |
-| `surface`                   | Request origin: `gateway` or `cli`.                                       |
-| `features.channels`         | Publicly known enabled channel plugin names, sorted alphabetically.       |
-| `features.providerFamilies` | Publicly known configured provider names; never model names.              |
-| `features.plugins`          | Publicly known enabled plugin names, sorted alphabetically.               |
-| `features.pluginsEnabled`   | Total enabled plugins, including privately developed plugins never named. |
-| `features.sessionsLast24h`  | Number of sessions observed during the preceding 24 hours.                |
+| Field                       | Meaning                                                                                           |
+| --------------------------- | ------------------------------------------------------------------------------------------------- |
+| `schema`                    | Payload format version, currently `1`.                                                            |
+| `version`                   | Installed OpenClaw version.                                                                       |
+| `platform`                  | Operating system and CPU architecture.                                                            |
+| `node`                      | Running Node.js version.                                                                          |
+| `surface`                   | Request surface: `gateway` or `cli`; the CLI preview uses `gateway`.                              |
+| `features.channels`         | Configured, not explicitly disabled channel IDs backed by public plugins in the inventory.        |
+| `features.providerFamilies` | Public provider IDs from configuration, auth profiles, and configured model references.           |
+| `features.plugins`          | Public plugin IDs from the enabled inventory, sorted alphabetically.                              |
+| `features.pluginsEnabled`   | Total plugins in that inventory, including plugins not named in `features.plugins`.               |
+| `features.sessionsLast24h`  | Retained session-creation events timestamped within the preceding 24 hours, not session activity. |
 
-OpenClaw names only plugins and channels that are bundled with OpenClaw or
-already appear in its official plugin catalog. Privately developed plugins are
-counted but never named because a private plugin name could identify its
-organization. Subtract `features.plugins.length` from `features.pluginsEnabled`
-to find the number of unnamed private plugins.
+With an active plugin registry, the inventory includes enabled, loaded plugins
+whose code was imported, plus loaded bundle-format plugins. Without that
+registry, it falls back to configured manifest enablement. Neither path records
+whether a plugin was invoked or a configured channel or provider handled work.
 
-The sender and `openclaw telemetry show` use the same payload builder, so the
-JSON displayed by the CLI is the same payload the sender would use at that
-moment.
+Named plugins must be bundled, trusted official installs, or match the official
+plugin catalog. Private plugin identities are not named. Names are also filtered
+and deduplicated, and the service validates them independently. The difference
+between `features.pluginsEnabled` and the number of reported names is therefore
+not a reliable count of private plugins.
 
-Reports carry no identifier of any kind, which means they cannot be linked to
-each other. We can see that some install runs Telegram with Anthropic models; we
-cannot see that it is the same install as yesterday, and we cannot build a
-history of any single machine. That costs us retention analysis, and we consider
-it worth paying.
+The session count depends on locally recorded creation events that remain in
+the bounded event store. Missing or unreadable state produces zero. It is not
+a count of active sessions, messages, or all sessions that existed that day.
 
-### What is never collected
+The sender and `openclaw telemetry show` use the same payload builder, but their
+plugin registry, configuration, and collection time can differ. The CLI preview
+is not a guarantee of the exact next Gateway payload.
 
-Neither request tier includes message content, prompts, model names, API keys,
-credentials, secret references, file paths, hostnames, account identifiers,
-user identifiers, or installation and machine identifiers. OpenClaw does not
-create a random UUID or other persistent request identifier, so daily requests
-cannot be linked through an OpenClaw-issued identifier.
+Reports contain no user, account, install, or device identifier. Repeated reports
+are not unique installations or users. The service does not maintain a per-install
+history; the separate count header supports only aggregate observed-installation
+estimates, not identifiable retention histories.
+
+<a id="what-is-never-collected" />
+
+### What is not sent or stored
+
+Neither the update-check `User-Agent` nor the body containing anonymous feature
+statistics includes message content, prompts, model names, API keys, credentials, secret references,
+file paths, hostnames, account identifiers, user identifiers, or installation
+and machine identifiers. OpenClaw does not create a random UUID or other
+persistent client identifier for these requests.
+
+The hosted service's Analytics Engine rows exclude those direct identifiers and raw
+client IP addresses, coordinates, postal codes, and physical-device hardware
+details. Cloudflare processes connection IP addresses, and the Worker uses them
+transiently for rate limiting without storing them in Analytics Engine. Worker
+logs are disabled; Cloudflare's separate infrastructure processing is outside
+those settings.
 
 Anonymous feature statistics are separate from optional, operator-configured
 [OpenTelemetry export](/gateway/opentelemetry).
 
-## Turn feature statistics on or off
+<a id="turn-feature-statistics-on-or-off" />
+
+## Turn anonymous feature statistics on or off
 
 Enable or disable anonymous feature statistics at any time:
 
@@ -160,10 +286,93 @@ You can also configure the same preference directly:
 }
 ```
 
-Set `DO_NOT_TRACK=1` or `DO_NOT_TRACK=true` to force feature statistics off,
+Set `DO_NOT_TRACK=1` or `DO_NOT_TRACK=true` to force anonymous feature statistics and
+identifier-free installation counting off,
 even when `telemetry.enabled` is `true`. `DO_NOT_TRACK` does not disable the
 daily update check: OpenClaw sends the update-only `GET` request without a
-feature-statistics body.
+body containing anonymous feature statistics.
+
+## Update outcomes
+
+Update-outcome reporting is **on by default**, like the daily update check.
+It is controlled by the existing automatic update-request policy, not by
+`telemetry.enabled` or a separate outcome opt-in. Optional feature statistics
+remain off by default. `openclaw telemetry off` and `DO_NOT_TRACK` suppress
+feature statistics and installation counting, not the daily check or update outcomes.
+
+Set `update.checkOnStart: false` or `OPENCLAW_NO_AUTO_UPDATE=1` to stop both
+daily checks and outcome reports. CI and Nix mode also suppress outcomes. Unlike
+the daily-check test exception, a custom endpoint does **not** override CI
+suppression for outcomes. Current update-request policy is checked when a new
+update run is admitted, again before the capability probe, and again before the
+outcome POST. Unreadable or invalid configuration fails closed.
+
+One outcome attempt can follow a settled success, failure, or rollback. It first
+sends a payload-free `HEAD` to the configured endpoint. Only `204` with
+`OpenClaw-Update-Results: 2` permits a schema-2 `update_result` POST. Legacy
+receivers reject the probe without receiving outcome data; unconfigured receivers
+do not advertise support. The probe and POST share one three-second deadline.
+It uses the same complete `OPENCLAW_TELEMETRY_ENDPOINT` URL (the Foundation endpoint
+by default), without falling back to another server. The daily GET and schema-1
+feature POST remain unchanged. The outcome request has a fixed
+`User-Agent: openclaw-update-result/1` and does not follow redirects.
+
+The closed payload contains public release-shaped from/target/resulting/running
+versions, fixed OS and architecture, install method and channel, a coarse duration
+bucket, post-check status, terminal failed stage, fixed error category/code, and
+rollback/recovery enums. Unknown values stay `unknown`. Release versions keep the
+sequential release-train patch number (for example `2026.8.33` or `2026.8.123`);
+arbitrary prereleases, build metadata, private refs, and Git SHAs are not
+transmitted. Resulting installed version and observed running version remain
+distinct; installation success does not establish readiness. Intermediate warnings
+and retries are not separate reports. No update trigger is claimed to prove manual
+versus automatic initiation.
+
+Outcomes contain no identifiers, exact client timestamps, geography, logs, paths,
+commands, configuration, plugin/provider/model inventory, exception text, or output
+streams. The companion receiver validates the closed schema and writes a separate
+outcome dataset, without the daily-check geography columns or public individual
+report access. The compatible receiver and outcome dataset need a separately
+authorized deployment before reports can be collected. The capability probe
+prevents outcome POSTs from reaching legacy or unconfigured receivers, so a client
+can safely precede receiver activation. This client change does not deploy or
+configure the receiver, and a successful capability response is not proof of a
+subsequent analytics write.
+
+Delivery is **at-most-once best effort, not exactly once**. The existing machine-state
+table in the state database (SQLite or PostgreSQL) retains one bounded local-only record: up to 16 eligible
+new-run IDs, the last 16 attempted IDs, and the last attempt time. No new database
+or schema version is needed. Only runs created while automatic update requests are
+allowed are eligible: there is no historic scan or backfill of runs created while
+disabled. The terminal write removes eligibility and claims at most one attempt per
+hour before dispatch; skipped and rate-limited results are dropped, and a report
+whose policy was revoked before dispatch is not sent. Chat update requests refused
+for missing owner authority never attempted an update, so they are neither reported
+nor counted against the hourly attempt. Clock rollback conservatively suppresses
+attempts. A failed bookkeeping write loses only that report; it never fails the
+update. IDs and exact times never leave the host.
+
+There is no durable retry outbox, response/payload logging, or startup replay.
+A crash after claiming, process exit, timeout (three seconds), storage failure,
+or network failure can lose the report. Delivery is not awaited by update,
+recovery, or startup, but an in-flight report can keep a CLI process running for
+up to three seconds after the update finishes. Restoring an older state backup also restores its local
+suppression state, so deduplication is not a guarantee across independent restored
+copies. Aggregates count accepted reports, not unique installations or all attempts.
+The receiver's Analytics Engine retention is three months; infrastructure may
+process IP addresses transiently, but outcome rows do not store them or geography.
+Replacement endpoints have their own processing policy.
+
+An installed old updater cannot be retrofitted by candidate code. The first
+upgrade into this implementation has no admission receipt and is not reported;
+subsequent updates driven by this implementation can report even when the Gateway
+is unhealthy. A run killed before a settled terminal result can be missing, rather
+than guessed as failed. Stopping `openclaw update` (for example with Ctrl-C) before
+activation settles the run as failed, and that outcome is reported. An automatic
+update campaign retired after its run was recorded but before the updater started
+also settles as a failure and can be reported. Interrupted completion can report
+when the existing owner independently verifies the installed and serving candidate.
+Abandonment diagnoses are not submitted because they can subsequently be repaired.
 
 ## Automated environments
 
@@ -173,10 +382,13 @@ are not installations: they would outnumber real operators by orders of
 magnitude and make version and platform counts meaningless, and your pipeline
 should not report to us on every job.
 
-This applies to both tiers, so a CI job sends no update check and no feature
-statistics. Setting `OPENCLAW_TELEMETRY_ENDPOINT` overrides the suppression,
-because a configured endpoint means the run is deliberately exercising this
-path.
+This applies to both tiers, so a CI job sends no update check and no anonymous
+feature statistics. A custom `OPENCLAW_TELEMETRY_ENDPOINT` can exercise daily
+checks against a test receiver in CI, but explicitly pointing it at
+`telemetry.openclaw.ai` does not override suppression. CI requests to test
+receivers do not follow redirects, so a receiver cannot redirect them to
+production. [Update outcomes](#update-outcomes) stay suppressed in CI even with a
+custom endpoint.
 
 ## Disable every automatic update request
 
@@ -190,13 +402,13 @@ To go fully dark, disable the existing startup update check:
 }
 ```
 
-This stops both tiers and every automatic update request: no update request, no
-feature statistics, and no update notice, even when `update.auto.enabled` is
-`true`. Setting `OPENCLAW_NO_AUTO_UPDATE=1` also prevents automatic update
-requests and applies. Explicit update commands remain available when you choose
-to run them.
+This stops every automatic update request, including outcome reports: no daily check,
+update-outcome report, anonymous feature statistics, or update notice, even when
+`update.auto.enabled` is `true`.
+Setting `OPENCLAW_NO_AUTO_UPDATE=1` also prevents automatic update requests.
+Explicit update commands remain available when you choose to run them.
 
-See [Configuration reference](/gateway/configuration-reference#telemetry) for
+See [Configuration reference](/gateway/config-observability#telemetry) for
 the full `telemetry` configuration and
-[Update configuration](/gateway/configuration-reference#update) for the
+[Update configuration](/gateway/config-runtime#update) for the
 automatic update-check controls.

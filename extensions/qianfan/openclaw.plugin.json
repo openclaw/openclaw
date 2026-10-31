@@ -1,11 +1,12 @@
 {
   "id": "qianfan",
-  "icon": "https://cdn.simpleicons.org/baidu",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
   "providers": ["qianfan"],
+  "contracts": { "embeddingProviders": ["qianfan"] },
   "setup": {
     "providers": [
       {

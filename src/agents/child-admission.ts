@@ -1,3 +1,4 @@
+import { isSubagentSpawnDepthAllowed } from "../config/agent-limits.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 
 export type ChildAdmissionCap =
@@ -56,13 +57,19 @@ export function reserveChildAdmissionSlot(
   const reservation = params.childSessionKey ?? Symbol("pending child admission");
   pending.add(reservation);
   pendingChildAdmissions.set(params.controllerSessionKey, pending);
+  let released = false;
   return {
     ...admission,
     release() {
-      if (!pending.delete(reservation)) {
+      if (released) {
         return;
       }
-      if (pending.size === 0) {
+      released = true;
+      pending.delete(reservation);
+      if (
+        pending.size === 0 &&
+        pendingChildAdmissions.get(params.controllerSessionKey) === pending
+      ) {
         pendingChildAdmissions.delete(params.controllerSessionKey);
       }
     },
@@ -75,7 +82,7 @@ const rejectChildAdmission = (
 ): ChildAdmissionResult => ({ ok: false, governingCap, error });
 
 export function resolveChildAdmission(params: ChildAdmissionParams): ChildAdmissionResult {
-  if (params.callerDepth >= params.maxSpawnDepth) {
+  if (!isSubagentSpawnDepthAllowed(params.callerDepth, params.maxSpawnDepth)) {
     return rejectChildAdmission(
       "subagents.maxSpawnDepth",
       `sessions_spawn is not allowed at this depth (current depth: ${params.callerDepth}, max: ${params.maxSpawnDepth}; agents.defaults.subagents.maxSpawnDepth).`,

@@ -18,7 +18,7 @@ describe("createPollCommentFolder", () => {
   });
 
   it("does NOT fold a deliberate later inline reply to the poll", () => {
-    const folder = createPollCommentFolder({ windowMs: 15_000 });
+    const folder = createPollCommentFolder();
     folder.rememberPoll(POLL_GUID, T0, "+15551110000");
     // A real "I can't make it" reply a minute later must be delivered.
     expect(folder.isPollComment(POLL_GUID, T0 + 60_000, "+15551110000")).toBe(false);
@@ -49,6 +49,12 @@ describe("createPollCommentFolder", () => {
     const folder = createPollCommentFolder();
     folder.rememberPoll(POLL_GUID, T0, "+15551110000");
     expect(folder.isPollComment("SOME-OTHER-GUID", T0, "+15551110000")).toBe(false);
+  });
+
+  it("keeps part-prefixed and raw GUIDs distinct", () => {
+    const folder = createPollCommentFolder();
+    folder.rememberPoll(`p:0/${POLL_GUID}`, T0, "+15551110000");
+    expect(folder.isPollComment(POLL_GUID, T0 + 500, "+15551110000")).toBe(false);
   });
 
   it("does not fold a non-reply or a reply with no usable timestamp", () => {

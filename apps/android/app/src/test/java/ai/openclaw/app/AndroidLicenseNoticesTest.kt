@@ -36,19 +36,35 @@ class AndroidLicenseNoticesTest {
 
     assertEquals(
       listOf(
+        "Accompanist Drawable Painter",
+        "AndroidSVG",
+        "AndroidX CameraX",
         "AndroidX Compose",
         "AndroidX Media3",
         "AndroidX Room",
+        "AndroidX SQLite",
         "AndroidX Wear",
+        "AndroidX WebKit",
+        "AndroidX WindowManager",
         "Bouncy Castle Provider",
+        "CodexBar",
         "Coil",
         "CommonMark Java",
         "dnsjava",
+        "DOMPurify",
+        "JNA",
         "KaTeX",
         "Kotlin Libraries",
+        "libffi",
+        "libsodium",
+        "llama.cpp",
+        "Lobe Icons",
+        "Lucide",
         "Manrope",
+        "Markdown",
         "nibor autolink",
         "OkHttp and Okio",
+        "Pele",
         "SLF4J API",
       ),
       licenses.map { license -> license.title },
@@ -59,7 +75,14 @@ class AndroidLicenseNoticesTest {
     assertTrue(licenses.any { license -> license.text.contains("BSD 2-Clause") })
     assertTrue(licenses.any { license -> license.text.contains("BSD 3-Clause") })
     assertTrue(licenses.any { license -> license.text.contains("MIT License") })
+    val pele = licenses.single { license -> license.title == "Pele" }.text
+    assertTrue(pele.contains("Copyright (c) 2026 kepano"))
+    assertTrue(pele.contains("Copyright (c) 2026 Lucide Icons and Contributors"))
+    assertTrue(pele.contains("Permission to use, copy, modify, and/or distribute"))
     assertTrue(licenses.any { license -> license.text.contains("Bouncy Castle Licence") })
     assertTrue(licenses.any { license -> license.title == "Coil" && license.text.contains("Coil Contributors") })
+    assertTrue(licenses.any { license -> license.title == "CodexBar" && license.text.contains("Peter Steinberger") })
+    assertTrue(licenses.any { license -> license.title == "Lobe Icons" && license.text.contains("LobeHub") })
+    assertTrue(licenses.any { license -> license.title == "llama.cpp" && license.text.contains("ggml authors") })
   }
 }

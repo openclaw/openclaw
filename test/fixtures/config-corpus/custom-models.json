@@ -1,0 +1,49 @@
+{
+  "gateway": {
+    "mode": "local",
+    "auth": {
+      "mode": "token",
+      "token": "FAKE_CONFIG_CORPUS_CREDENTIAL"
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": "openai/fixture-model"
+    },
+    "entries": {
+      "main": {}
+    }
+  },
+  "plugins": {
+    "entries": {
+      "openai": {
+        "enabled": true
+      }
+    }
+  },
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "openai": {
+        "models": [
+          {
+            "id": "fixture-model",
+            "name": "Fixture Model",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 8192,
+            "maxTokens": 1024
+          }
+        ]
+      }
+    }
+  }
+}

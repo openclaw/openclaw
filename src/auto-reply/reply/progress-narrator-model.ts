@@ -1,18 +1,13 @@
-// Utility-model preparation and completion for progress narration.
 import {
-  completeWithPreparedSimpleCompletionModel,
-  prepareSimpleCompletionModelForAgent,
-} from "../../agents/simple-completion-runtime.js";
+  prepareUtilityCompletionForAgent,
+  runUtilityCompletion,
+} from "../../agents/utility-completion.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import type { TextContent } from "../../llm/types.js";
+import { compactProgressText } from "../../shared/text-truncate.js";
 
-const NARRATION_TIMEOUT_MS = 10_000;
 const NOTES_IN_PROMPT = 15;
 const USER_MESSAGE_PROMPT_CHARS = 500;
-// Reasoning-capable utility models spend output tokens before the short
-// visible text; a tiny cap can leave no text (same budget as label generation).
-const NARRATION_MAX_TOKENS = 4_096;
 
 const NARRATION_SYSTEM_PROMPT = [
   "You write the live status line for an AI assistant that is working on a chat request.",
@@ -29,28 +24,8 @@ export type ProgressNarrationInput = {
   previousText: string;
 };
 
-function isTextContentBlock(block: { type: string }): block is TextContent {
-  return block.type === "text";
-}
-
-export function truncateAtWordBoundary(text: string, maxChars: number): string {
-  const chars = Array.from(text);
-  if (chars.length <= maxChars) {
-    return text;
-  }
-  const head = chars
-    .slice(0, maxChars - 1)
-    .join("")
-    .trimEnd();
-  const boundary = head.search(/\s+\S*$/u);
-  if (boundary > Math.floor(maxChars * 0.6)) {
-    return `${head.slice(0, boundary).trimEnd()}…`;
-  }
-  return `${head}…`;
-}
-
 function buildNarrationUserPrompt(input: ProgressNarrationInput): string {
-  const request = truncateAtWordBoundary(
+  const request = compactProgressText(
     input.userMessage.replace(/\s+/g, " ").trim(),
     USER_MESSAGE_PROMPT_CHARS,
   );
@@ -64,17 +39,11 @@ function buildNarrationUserPrompt(input: ProgressNarrationInput): string {
 
 export async function prepareNarrationModel(params: { cfg: OpenClawConfig; agentId: string }) {
   try {
-    const prepared = await prepareSimpleCompletionModelForAgent({
+    return await prepareUtilityCompletionForAgent({
       cfg: params.cfg,
       agentId: params.agentId,
       useUtilityModel: true,
-      allowMissingApiKeyModes: ["aws-sdk"],
     });
-    if ("error" in prepared) {
-      logVerbose(`progress-narrator: ${prepared.error}`);
-      return null;
-    }
-    return prepared;
   } catch (err) {
     logVerbose(`progress-narrator: model preparation failed: ${String(err)}`);
     return null;
@@ -85,49 +54,26 @@ export async function generateNarrationWithUtilityModel(params: {
   cfg: OpenClawConfig;
   prepared: NonNullable<Awaited<ReturnType<typeof prepareNarrationModel>>>;
   input: ProgressNarrationInput;
-  abortSignal?: AbortSignal;
+  abortSignal: AbortSignal;
+  timeoutMs: number;
 }): Promise<{ text: string | null; error?: string }> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), NARRATION_TIMEOUT_MS);
-  const onOuterAbort = () => controller.abort();
-  params.abortSignal?.addEventListener("abort", onOuterAbort, { once: true });
   try {
-    const result = await completeWithPreparedSimpleCompletionModel({
-      model: params.prepared.model,
-      auth: params.prepared.auth,
-      cfg: params.cfg,
-      context: {
-        systemPrompt: NARRATION_SYSTEM_PROMPT,
-        messages: [
-          {
-            role: "user",
-            content: buildNarrationUserPrompt(params.input),
-            timestamp: Date.now(),
-          },
-        ],
-      },
-      options: {
-        maxTokens: Math.min(NARRATION_MAX_TOKENS, Math.floor(params.prepared.model.maxTokens)),
-        temperature: 0.3,
-        signal: controller.signal,
-      },
+    params.abortSignal.throwIfAborted();
+    const result = await runUtilityCompletion({
+      ...params.prepared,
+      purpose: "progress-narration",
+      config: params.cfg,
+      systemPrompt: NARRATION_SYSTEM_PROMPT,
+      prompt: buildNarrationUserPrompt(params.input),
+      timeoutMs: params.timeoutMs,
+      abortSignal: params.abortSignal,
+      answerTokenBudget: 4_096,
+      streamParams: { temperature: 0.3 },
     });
-    if (result.stopReason === "error") {
-      const error = result.errorMessage?.trim() || "unknown error";
-      logVerbose(`progress-narrator: completion failed: ${error}`);
-      return { text: null, error };
-    }
-    const text = result.content
-      .filter(isTextContentBlock)
-      .map((block) => block.text)
-      .join("")
-      .trim();
+    const text = result.text.trim();
     return { text: text || null };
   } catch (err) {
     logVerbose(`progress-narrator: completion failed: ${String(err)}`);
     return { text: null, error: String(err) };
-  } finally {
-    clearTimeout(timeout);
-    params.abortSignal?.removeEventListener("abort", onOuterAbort);
   }
 }

@@ -3,28 +3,66 @@ import Foundation
 import Observation
 import OpenClawKit
 import QuartzCore
-import SwiftUI
 
 @MainActor
 @Observable
 final class StatusMenuSummaries: NSObject {
     static let shared = StatusMenuSummaries()
 
-    @ObservationIgnored private let nodes = NodesStore.shared
-    @ObservationIgnored private let cron = CronJobsStore.shared
-    private var cachedUsage: GatewayUsageSummary?
-    private var cachedCost: GatewayCostUsageSummary?
-    private var costError: String?
-    @ObservationIgnored private var usageUpdatedAt: Date?
-    @ObservationIgnored private var costUpdatedAt: Date?
-    @ObservationIgnored private var usageRetry: Task<Void, Never>?
-    @ObservationIgnored private var refreshTask: Task<Void, Never>?
+    @ObservationIgnored private let nodes: NodesStore
+    @ObservationIgnored private let cron: CronJobsStore
+    @ObservationIgnored private let control: ControlChannel
+    private struct UsageState {
+        let revision: UInt64?
+        var lease: GatewayConnection.ServerLease?
+        var usage: GatewayUsageSummary?
+        var cost: (summary: GatewayCostUsageSummary, dates: CostUsageMenuDateParser)?
+        var costError: String?
+        var usageUpdatedAt: Date?
+        var costUpdatedAt: Date?
+        var retryAttempts = 0
+        var pending = false
+    }
+
+    private var usageState: UsageState?
+    @ObservationIgnored private var refreshOperation: GatewayStoreRefresh?
+    @ObservationIgnored private var eventTask: Task<Void, Never>?
     @ObservationIgnored private var updateHandler: (@MainActor () -> Void)?
     @ObservationIgnored private var copiedValues: [String: String] = [:]
-    @ObservationIgnored private var usageGeneration = 0
-    private var usageRetryAttempts = 0
-    private var usageRefreshPending = false
-    @ObservationIgnored private let usageRetryLimit = 3
+    private let usageRetryLimit = 3
+
+    /// AppKit projects the cache before starting network work. Keep its TTL only
+    /// for the selected logical Gateway, including reconnects to that same route.
+    private var currentUsageState: UsageState? {
+        guard let state = self.usageState,
+              state.revision == self.control.gateway.selectedEndpointRevision,
+              state.lease.map(self.control.gateway.serverLeaseMatchesCurrentRoute) != false
+        else { return nil }
+        return state
+    }
+
+    private var cachedUsage: GatewayUsageSummary? {
+        self.currentUsageState?.usage
+    }
+
+    private var cachedCost: (summary: GatewayCostUsageSummary, dates: CostUsageMenuDateParser)? {
+        self.currentUsageState?.cost
+    }
+
+    private var costError: String? {
+        self.currentUsageState?.costError
+    }
+
+    private var usageRefreshPending: Bool {
+        self.currentUsageState?.pending == true
+    }
+
+    init(control: ControlChannel = .shared, nodes: NodesStore = .shared, cron: CronJobsStore = .shared) {
+        self.control = control
+        self.nodes = nodes
+        self.cron = cron
+        super.init()
+    }
 
     var hasUsage: Bool {
         !self.usageRows.isEmpty || self.cachedCost != nil || self.cachedUsage?.refreshing == true
@@ -32,7 +70,8 @@ final class StatusMenuSummaries: NSObject {
     }
 
     var isUsageStalled: Bool {
-        self.isConnected && self.cachedUsage?.refreshing == true && self.usageRetryAttempts >= self.usageRetryLimit
+        guard let state = self.currentUsageState else { return false }
+        return self.isConnected && state.usage?.refreshing == true && state.retryAttempts >= self.usageRetryLimit
     }
 
     var usageSummary: String? {
@@ -42,51 +81,88 @@ final class StatusMenuSummaries: NSObject {
         return "\(row.titleText) · \(row.detailText())"
     }
 
-    var connectedDeviceCount: Int {
-        self.nodes.nodes.filter(\.isConnected).count
-    }
-
     func refresh(onUpdate: @escaping @MainActor () -> Void) {
         self.updateHandler = onUpdate
         self.nodes.start()
         self.cron.start()
-        guard self.refreshTask == nil else { return }
-
-        self.refreshTask = Task { [weak self] in
-            guard let self else { return }
-            async let jobs: Void = self.refreshAutomations()
-            async let devices: Void = self.refreshDevices()
-            async let usage: Void = self.refreshUsage()
-            async let cost: Void = self.refreshCost()
-            _ = await (jobs, devices, usage, cost)
-            self.refreshTask = nil
+        if self.eventTask == nil {
+            GatewayPushSubscription.restartTask(
+                task: &self.eventTask,
+                connection: self.control.gateway)
+            { [weak self] delivery in
+                self?.handle(delivery)
+            }
         }
+        if self.isConnected { self.beginRefresh() }
     }
 
     func menuDidClose() {
         self.updateHandler = nil
-        self.usageRetry?.cancel()
-        self.usageRetry = nil
-        self.usageRetryAttempts = 0
-        self.usageGeneration += 1
+        self.nodes.stop()
+        self.cron.stop()
+        SimpleTaskSupport.stop(task: &self.eventTask)
+        self.cancelRefresh()
+        self.usageState?.retryAttempts = 0
+    }
+
+    isolated deinit {
+        self.eventTask?.cancel()
+        self.refreshOperation?.task?.cancel()
+    }
+
+    private func handle(_ delivery: GatewayConnection.PushDelivery) {
+        // Discard retired data at the delivery boundary while keeping the cache
+        // across reconnects to the same logical Gateway.
+        if self.usageState != nil, self.currentUsageState == nil {
+            self.usageState = nil
+        }
+        guard let push = delivery.push else {
+            if self.refreshOperation?.lease == delivery.serverLease { self.cancelRefresh() }
+            return
+        }
+        guard case .snapshot = push else { return }
+        // Our own admission receives a hello before dispatching the reads.
+        if let refresh = self.refreshOperation, self.isCurrent(refresh),
+           refresh.lease == nil || refresh.lease == delivery.serverLease { return }
+        if self.currentUsageState?.lease == delivery.serverLease { return }
+        self.beginRefresh()
+    }
+
+    private func configureSummary(_ item: NSMenuItem, title: String, symbol: String, detail: String?) {
+        item.title = title
+        item.image = nil
+        StatusMenuRenderer.configureHostedView(
+            item,
+            rootView: StatusSummaryCard(symbolName: symbol, title: title, detail: detail),
+            highlights: true)
     }
 
     func configureAutomations(_ item: NSMenuItem) {
-        let jobs = self.enabledJobs
-        let count = jobs.count
+        let summary = self.cron.summary
+        let jobs = summary.jobs
         let detail = if let next = jobs.compactMap(\.nextRunDate).min() {
-            String(localized: "\(count) jobs · next \(Self.relativeRun(next))")
+            "\(summary.total) · \(Self.relativeRun(next))"
         } else {
-            String(localized: "\(count) jobs")
+            String(summary.total)
         }
-        item.title = String(localized: "Automations · \(detail)")
-        item.image = NSImage(systemSymbolName: "clock.badge.checkmark", accessibilityDescription: nil)
+        self.configureSummary(
+            item,
+            title: String(localized: "Automations"),
+            symbol: "clock.badge.checkmark",
+            detail: detail)
 
-        var entries = jobs.prefix(8).map { job in
-            MenuEntry(id: "cron.job.\(job.id)") { item in
-                let next = job.nextRunDate.map(Self.relativeRun)
-                item.title = next.map { "\(job.displayName) · \($0)" } ?? job.displayName
-                item.isEnabled = false
+        var entries = jobs.prefix(CronJobsSummary.previewLimit).map { job in
+            MenuEntry(id: "cron.job.\(job.id)") { [weak self] item in
+                item.title = job.displayName
+                item.target = self
+                item.action = #selector(Self.openAutomations(_:))
+                item.isEnabled = true
+                StatusMenuRenderer.configureHostedView(
+                    item,
+                    rootView: StatusJobRow(
+                        name: job.displayName,
+                        nextRun: job.nextRunDate.map(Self.relativeRun)),
+                    highlights: true)
             }
         }
         if !entries.isEmpty {
@@ -102,19 +178,17 @@ final class StatusMenuSummaries: NSObject {
     }
 
     func configureUsage(_ item: NSMenuItem) {
-        item.title = if let summary = self.usageSummary {
-            String(localized: "Usage · \(summary)")
-        } else {
-            String(localized: "Usage")
-        }
-        item.image = NSImage(systemSymbolName: "chart.bar.xaxis", accessibilityDescription: nil)
+        self.configureSummary(
+            item,
+            title: String(localized: "Usage"),
+            symbol: "chart.bar.xaxis",
+            detail: self.usageSummary)
 
         var entries = self.orderedUsageRows.map { row in
             MenuEntry(id: "usage.provider.\(row.id)") { item in
-                item.title = row.titleText
+                item.title = StatusMenuMetrics.fittedTitle(row.titleText)
                 item.isEnabled = false
-                Self.updateHostedView(item, rootView: AnyView(
-                    UsageMenuLabelView(row: row, width: StatusMenuRenderer.cardWidth)))
+                StatusMenuRenderer.configureHostedView(item, rootView: UsageMenuLabelView(row: row))
             }
         }
 
@@ -126,15 +200,15 @@ final class StatusMenuSummaries: NSObject {
             entries.append(.info(id: "usage.loading", title: String(localized: "Loading usage…")))
         }
 
-        if let summary = self.cachedCost, !summary.daily.isEmpty {
+        if let cost = self.cachedCost, !cost.summary.daily.isEmpty {
             if !entries.isEmpty {
                 entries.append(.separator(id: "usage.cost.separator"))
             }
             entries.append(MenuEntry(id: "usage.cost.chart") { item in
                 item.title = String(localized: "Usage cost (30 days)")
                 item.isEnabled = false
-                Self.updateHostedView(item, rootView: AnyView(
-                    CostUsageHistoryMenuView(summary: summary, width: StatusMenuRenderer.cardWidth)))
+                StatusMenuRenderer.configureHostedView(
+                    item, rootView: CostUsageHistoryMenuView(summary: cost.summary, dates: cost.dates))
             })
         } else if let error = self.costError {
             if !entries.isEmpty {
@@ -146,23 +220,23 @@ final class StatusMenuSummaries: NSObject {
     }
 
     func configureDevices(_ item: NSMenuItem) {
-        let count = self.connectedDeviceCount
-        item.title = String(localized: "Devices · \(count) connected")
-        item.image = NSImage(systemSymbolName: "laptopcomputer.and.iphone", accessibilityDescription: nil)
+        let count = self.nodes.nodes.filter(\.isConnected).count
+        self.configureSummary(
+            item,
+            title: String(localized: "Devices"),
+            symbol: "laptopcomputer.and.iphone",
+            detail: String(format: String(localized: "%lld connected"), count))
 
-        var entries: [MenuEntry] = []
-        if let gateway = self.gatewayEntry() {
-            entries.append(self.nodeEntry(gateway))
-        }
+        var entries = [self.nodeEntry(self.gatewayEntry())]
         if let notice = self.nodes.persistentServiceNotice {
             entries.append(.info(id: "devices.service.notice", title: notice))
         }
 
-        if case .connecting = ControlChannel.shared.state {
+        if case .connecting = self.control.state {
             entries.append(.info(id: "devices.connecting", title: String(localized: "Connecting…")))
         } else if self.isConnected {
             if let error = self.nodes.lastError?.nonEmpty {
-                entries.append(.info(id: "devices.error", title: String(localized: "Error: \(error)")))
+                entries.append(.info(id: "devices.error", title: String(format: String(localized: "Error: %@"), error)))
             } else if let message = self.nodes.statusMessage?.nonEmpty {
                 entries.append(.info(id: "devices.status", title: message))
             }
@@ -189,17 +263,12 @@ final class StatusMenuSummaries: NSObject {
         self.reconcileSubmenu(for: item, entries: entries)
     }
 
-    func configureGateway(_ item: NSMenuItem, gatewayID: String, isAlternate: Bool) {
-        guard let gateway = DashboardGatewayMenuModel
-            .items(from: DashboardManager.shared.gatewayEntries)
-            .first(where: { $0.id == gatewayID })
-        else { return }
-
-        item.identifier = NSUserInterfaceItemIdentifier(gatewayID)
+    func configureGateway(_ item: NSMenuItem, gateway: DashboardGatewayMenuItem, isAlternate: Bool) {
+        item.identifier = NSUserInterfaceItemIdentifier(gateway.id)
         item.target = self
         item.isAlternate = isAlternate
         if isAlternate {
-            item.title = String(localized: "Set \(gateway.name) as Primary…")
+            item.title = String(format: String(localized: "Set %@ as Primary…"), gateway.name)
             item.action = #selector(Self.setPrimary(_:))
             item.keyEquivalentModifierMask = [.option]
             item.image = nil
@@ -211,12 +280,7 @@ final class StatusMenuSummaries: NSObject {
             item.image = Self.gatewayImage(health: gateway.health, name: gateway.name)
             item.state = gateway.isPrimary ? .on : .off
         }
-    }
-
-    private var enabledJobs: [CronJob] {
-        self.cron.jobs.filter(\.enabled).sorted { lhs, rhs in
-            (lhs.nextRunDate ?? .distantFuture) < (rhs.nextRunDate ?? .distantFuture)
-        }
+        item.title = StatusMenuMetrics.fittedTitle(item.title)
     }
 
     private var usageRows: [UsageRow] {
@@ -239,92 +303,120 @@ final class StatusMenuSummaries: NSObject {
     }
 
     private var isConnected: Bool {
-        if case .connected = ControlChannel.shared.state { return true }
+        if case .connected = self.control.state { return true }
         return false
     }
 
-    private func refreshAutomations() async {
-        guard self.isConnected else { return }
-        await self.cron.refreshJobs()
-        self.updateHandler?()
+    private func beginRefresh() {
+        if let refresh = self.refreshOperation, self.isCurrent(refresh) { return }
+        self.cancelRefresh()
+        var state = self.currentUsageState ?? UsageState(revision: self.control.gateway.selectedEndpointRevision)
+        let loadUsage = state.usageUpdatedAt.map { Date().timeIntervalSince($0) >= 30 } ?? true
+        let loadCost = state.costUpdatedAt.map { Date().timeIntervalSince($0) >= 45 } ?? true
+        guard loadUsage || loadCost else { return }
+        state.pending = loadUsage
+        state.retryAttempts = 0
+        self.usageState = state
+        let refresh = GatewayStoreRefresh(revision: state.revision)
+        refresh.task = Task { [weak self] in
+            await self?.performRefresh(refresh, loadUsage: loadUsage, loadCost: loadCost)
+        }
+        self.refreshOperation = refresh
     }
 
-    private func refreshDevices() async {
-        guard self.isConnected else { return }
-        await self.nodes.refresh()
-        self.updateHandler?()
+    private func cancelRefresh() {
+        self.refreshOperation?.task?.cancel()
+        self.refreshOperation = nil
+        self.usageState?.pending = false
     }
 
-    private func refreshUsage() async {
-        guard self.isConnected,
-              self.usageUpdatedAt.map({ Date().timeIntervalSince($0) >= 30 }) ?? true
-        else { return }
-
-        self.usageGeneration += 1
-        let generation = self.usageGeneration
-        self.usageRetry?.cancel()
-        self.usageRetry = nil
-        self.usageRetryAttempts = 0
-        self.usageRefreshPending = true
-        await self.loadUsage(generation: generation)
+    private func isCurrent(_ refresh: GatewayStoreRefresh) -> Bool {
+        self.refreshOperation === refresh && refresh.isCurrent(on: self.control.gateway)
     }
 
-    private func loadUsage(generation: Int) async {
+    private func performRefresh(_ refresh: GatewayStoreRefresh, loadUsage: Bool, loadCost: Bool) async {
+        defer {
+            if self.refreshOperation === refresh {
+                self.refreshOperation = nil
+                self.usageState?.pending = false
+            }
+        }
+        guard self.isCurrent(refresh) else { return }
         do {
-            let summary = try await UsageLoader.loadSummary()
-            guard generation == self.usageGeneration else { return }
-            self.cachedUsage = summary
-            if summary.refreshing == true {
-                self.usageUpdatedAt = nil
-                self.scheduleUsageRetry(generation: generation)
-            } else {
-                self.usageRefreshPending = false
-                self.usageUpdatedAt = Date()
-            }
+            let lease = try await self.control.acquireServerLease()
+            guard self.isCurrent(refresh), self.control.gateway.serverLeaseMatchesCurrentState(lease) else { return }
+            refresh.lease = lease
+            self.usageState?.lease = lease
+            async let usage: Void = self.loadUsage(refresh, enabled: loadUsage)
+            async let cost: Void = self.loadCost(refresh, enabled: loadCost)
+            _ = await (usage, cost)
         } catch {
-            guard generation == self.usageGeneration else { return }
-            if self.cachedUsage?.refreshing == true {
-                self.usageUpdatedAt = nil
-                self.scheduleUsageRetry(generation: generation)
-            } else {
-                self.cachedUsage = nil
-                self.usageRefreshPending = false
-                self.usageUpdatedAt = Date()
+            guard self.isCurrent(refresh), !(error is CancellationError) else { return }
+            if loadUsage {
+                self.usageState?.usage = nil
+                self.usageState?.usageUpdatedAt = Date()
             }
+            if loadCost { self.recordCostFailure(error) }
+            self.updateHandler?()
         }
-        self.updateHandler?()
     }
 
-    private func scheduleUsageRetry(generation: Int) {
-        guard self.usageRetryAttempts < self.usageRetryLimit else {
-            self.usageRefreshPending = false
-            return
-        }
-        self.usageRetryAttempts += 1
-        self.usageRetry = Task { [weak self] in
+    private func loadUsage(_ refresh: GatewayStoreRefresh, enabled: Bool) async {
+        guard enabled, let lease = refresh.lease else { return }
+        while self.isCurrent(refresh) {
+            do {
+                let data = try await self.control.request(
+                    method: "usage.status", timeoutMs: 5000, ifCurrentServerLease: lease)
+                guard self.isCurrent(refresh) else { return }
+                self.usageState?.usage = try JSONDecoder().decode(GatewayUsageSummary.self, from: data)
+            } catch {
+                guard self.isCurrent(refresh) else { return }
+                if self.cachedUsage?.refreshing != true { self.usageState?.usage = nil }
+            }
+            guard self.cachedUsage?.refreshing == true else {
+                self.usageState?.pending = false
+                self.usageState?.usageUpdatedAt = Date()
+                self.updateHandler?()
+                return
+            }
+            self.usageState?.usageUpdatedAt = nil
+            guard (self.usageState?.retryAttempts ?? 0) < self.usageRetryLimit else {
+                self.usageState?.pending = false
+                self.updateHandler?()
+                return
+            }
+            self.usageState?.retryAttempts += 1
+            self.updateHandler?()
             try? await Task.sleep(for: .seconds(5))
-            guard let self, !Task.isCancelled, self.isConnected, generation == self.usageGeneration else { return }
-            await self.loadUsage(generation: generation)
+            guard self.isConnected else { return }
         }
     }
 
-    private func refreshCost() async {
-        guard self.isConnected,
-              self.costUpdatedAt.map({ Date().timeIntervalSince($0) >= 45 }) ?? true
-        else { return }
-
+    private func loadCost(_ refresh: GatewayStoreRefresh, enabled: Bool) async {
+        guard enabled, self.isCurrent(refresh), let lease = refresh.lease else { return }
         do {
-            self.cachedCost = try await CostUsageLoader.loadSummary()
-            self.costError = nil
+            let dates = CostUsageMenuDateParser(timeZone: .current)
+            let data = try await self.control.request(
+                method: "usage.cost", params: dates.requestParameters, timeoutMs: 7000, ifCurrentServerLease: lease)
+            guard self.isCurrent(refresh) else { return }
+            // Cached buckets retain the request's day boundaries if the Mac changes time zones.
+            self.usageState?.cost = try (JSONDecoder().decode(GatewayCostUsageSummary.self, from: data), dates)
+            self.usageState?.costError = nil
+            self.usageState?.costUpdatedAt = Date()
         } catch {
-            self.cachedCost = nil
-            let message = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
-            self.costError = message.isEmpty
-                ? String(localized: "Usage unavailable")
-                : (message.count > 90 ? "\(message.prefix(87))…" : message)
+            guard self.isCurrent(refresh) else { return }
+            self.recordCostFailure(error)
         }
-        self.costUpdatedAt = Date()
         self.updateHandler?()
+    }
+
+    private func recordCostFailure(_ error: Error) {
+        self.usageState?.cost = nil
+        let message = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.usageState?.costError = message.isEmpty
+            ? String(localized: "Usage unavailable")
+            : (message.count > 90 ? "\(message.prefix(87))…" : message)
+        self.usageState?.costUpdatedAt = Date()
     }
 
     private static func relativeRun(_ date: Date) -> String {
@@ -332,21 +424,21 @@ final class StatusMenuSummaries: NSObject {
         if delta <= 0 { return String(localized: "due") }
         if delta < 60 { return String(localized: "in <1m") }
         let minutes = Int(round(delta / 60))
-        if minutes < 60 { return String(localized: "in \(minutes)m") }
+        if minutes < 60 { return String(format: String(localized: "in %lldm"), minutes) }
         let hours = Int(round(Double(minutes) / 60))
-        if hours < 48 { return String(localized: "in \(hours)h") }
-        return String(localized: "in \(Int(round(Double(hours) / 24)))d")
+        if hours < 48 { return String(format: String(localized: "in %lldh"), hours) }
+        return String(format: String(localized: "in %lldd"), Int(round(Double(hours) / 24)))
     }
 
     @objc
     private func openAutomations(_: NSMenuItem) {
-        Task { await DashboardManager.shared.show(atPath: DashboardRouteMap.cronJobsPagePath) }
+        AppNavigationActions.openPrimaryWebRoute(DashboardRouteMap.cronJobsPagePath)
     }
 
     @objc
     private func openGateway(_ sender: NSMenuItem) {
         guard let id = sender.identifier?.rawValue, let target = DashboardGatewayTarget(bridgeID: id) else { return }
-        DashboardManager.shared.openOrFocusDashboard(for: target)
+        AppNavigationActions.openGateway(target)
     }
 
     @objc
@@ -355,14 +447,14 @@ final class StatusMenuSummaries: NSObject {
         DashboardManager.shared.confirmSetPrimary(target)
     }
 
-    private static func gatewayImage(health: DashboardGatewayHealth, name: String) -> NSImage? {
+    static func gatewayImage(health: DashboardGatewayHealth, name: String) -> NSImage? {
         let (symbol, color, accessibility): (String, NSColor, String) = switch health {
         case .ok:
-            ("circle.fill", .systemGreen, String(localized: "\(name), healthy"))
+            ("circle.fill", .systemGreen, String(format: String(localized: "%@, healthy"), name))
         case .error:
-            ("exclamationmark.circle.fill", .systemRed, String(localized: "\(name), health error"))
+            ("exclamationmark.circle.fill", .systemRed, String(format: String(localized: "%@, health error"), name))
         case .unknown:
-            ("circle", .tertiaryLabelColor, String(localized: "\(name), health unknown"))
+            ("circle", .tertiaryLabelColor, String(format: String(localized: "%@, health unknown"), name))
         }
         return NSImage(systemSymbolName: symbol, accessibilityDescription: accessibility)?
             .withSymbolConfiguration(.init(paletteColors: [color]))
@@ -380,7 +472,7 @@ extension StatusMenuSummaries {
         }
     }
 
-    private func gatewayEntry() -> NodeInfo? {
+    private func gatewayEntry() -> NodeInfo {
         let mode = AppStateStore.shared.connectionMode
         var host: String?
         let platform: String?
@@ -431,63 +523,44 @@ extension StatusMenuSummaries {
 
     private func nodeEntry(_ node: NodeInfo) -> MenuEntry {
         MenuEntry(id: "devices.node.\(node.nodeId)") { [weak self] item in
-            item.title = NodeMenuEntryFormatter.primaryName(node)
+            item.title = StatusMenuMetrics.fittedTitle(NodeMenuEntryFormatter.primaryName(node))
             item.target = self
             item.action = #selector(Self.copyNodeValue(_:))
+            item.isEnabled = true
             if let id = item.representedObject as? String {
                 self?.copiedValues[id] = NodeMenuEntryFormatter.summaryText(node)
             }
-            Self.updateHostedView(item, rootView: AnyView(
-                NodeMenuRowView(entry: node, width: StatusMenuRenderer.cardWidth)))
+            StatusMenuRenderer.configureHostedView(item, rootView: NodeMenuRowView(entry: node), highlights: true)
             self?.configureNodeSubmenu(for: item, node: node)
         }
     }
 
     private func configureNodeSubmenu(for item: NSMenuItem, node: NodeInfo) {
-        var entries = [self.copyEntry(node: node, id: "id", label: String(localized: "Node ID"), value: node.nodeId)]
-        if let name = node.displayName?.nonEmpty {
-            entries.append(self.copyEntry(node: node, id: "name", label: String(localized: "Name"), value: name))
-        }
-        if let ip = node.remoteIp?.nonEmpty {
-            entries.append(self.copyEntry(node: node, id: "ip", label: String(localized: "IP"), value: ip))
-        }
-        entries.append(self.copyEntry(
-            node: node,
-            id: "status",
-            label: String(localized: "Status"),
-            value: NodeMenuEntryFormatter.roleText(node)))
-        if let platform = NodeMenuEntryFormatter.platformText(node) {
-            entries.append(self.copyEntry(
-                node: node, id: "platform", label: String(localized: "Platform"), value: platform))
-        }
-        if let version = NodeMenuEntryFormatter.detailRightVersion(node)?.nonEmpty {
-            entries.append(self.copyEntry(
-                node: node, id: "version", label: String(localized: "Version"), value: version))
+        let fields: [(id: String, label: String, value: String?)] = [
+            ("id", String(localized: "Node ID"), node.nodeId),
+            ("name", String(localized: "Name"), node.displayName?.nonEmpty),
+            ("ip", String(localized: "IP"), node.remoteIp?.nonEmpty),
+            ("status", String(localized: "Status"), NodeMenuEntryFormatter.roleText(node)),
+            ("platform", String(localized: "Platform"), NodeMenuEntryFormatter.platformText(node)),
+            ("version", String(localized: "Version"), NodeMenuEntryFormatter.detailRightVersion(node)?.nonEmpty),
+        ]
+        var entries = fields.compactMap { field in
+            field.value.map { self.copyEntry(node: node, id: field.id, label: field.label, value: $0) }
         }
         entries.append(.info(
             id: "devices.node.\(node.nodeId).connected",
-            title: String(localized: "Connected: \(node.isConnected ? "Yes" : "No")")))
+            title: node.isConnected ? String(localized: "Connected: Yes") : String(localized: "Connected: No")))
         entries.append(.info(
             id: "devices.node.\(node.nodeId).paired",
-            title: String(localized: "Paired: \(node.isPaired ? "Yes" : "No")")))
+            title: node.isPaired ? String(localized: "Paired: Yes") : String(localized: "Paired: No")))
 
-        if let capabilities = node.caps?.filter({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
-           !capabilities.isEmpty
-        {
-            entries.append(self.copyEntry(
-                node: node,
-                id: "capabilities",
-                label: String(localized: "Caps"),
-                value: capabilities.joined(separator: ", ")))
-        }
-        if let commands = node.commands?.filter({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
-           !commands.isEmpty
-        {
-            entries.append(self.copyEntry(
-                node: node,
-                id: "commands",
-                label: String(localized: "Commands"),
-                value: commands.joined(separator: ", ")))
+        for (id, label, values) in [
+            ("capabilities", String(localized: "Caps"), node.caps),
+            ("commands", String(localized: "Commands"), node.commands),
+        ] {
+            guard let values = values?.filter({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
+                  !values.isEmpty else { continue }
+            entries.append(self.copyEntry(node: node, id: id, label: label, value: values.joined(separator: ", ")))
         }
         self.reconcileSubmenu(for: item, entries: entries)
     }
@@ -496,7 +569,7 @@ extension StatusMenuSummaries {
         let entryID = "devices.node.\(node.nodeId).\(id)"
         self.copiedValues[entryID] = value
         return MenuEntry(id: entryID) { [weak self] item in
-            item.title = "\(label): \(value)"
+            item.title = StatusMenuMetrics.fittedTitle("\(label): \(value)")
             item.target = self
             item.action = #selector(Self.copyNodeValue(_:))
             item.isEnabled = true
@@ -523,7 +596,7 @@ extension StatusMenuSummaries {
 
         static func info(id: String, title: String) -> Self {
             Self(id: id) { item in
-                item.title = title
+                item.title = StatusMenuMetrics.fittedTitle(title)
                 item.isEnabled = false
             }
         }
@@ -536,6 +609,7 @@ extension StatusMenuSummaries {
         } else {
             menu = NSMenu()
             menu.autoenablesItems = false
+            menu.delegate = StatusMenuHighlightDelegate.shared
             StatusMenuAppearance.pin(menu)
             parent.submenu = menu
         }
@@ -573,19 +647,5 @@ extension StatusMenuSummaries {
             entries[index].update(menu.item(at: index)!)
         }
         CATransaction.commit()
-    }
-
-    private static func updateHostedView(_ item: NSMenuItem, rootView: AnyView) {
-        let hosting: NSHostingView<AnyView>
-        if let existing = item.view as? NSHostingView<AnyView> {
-            existing.rootView = rootView
-            hosting = existing
-        } else {
-            hosting = NSHostingView(rootView: rootView)
-            item.view = hosting
-        }
-        let width = StatusMenuRenderer.cardWidth
-        hosting.frame.size.width = width
-        hosting.frame = NSRect(origin: .zero, size: NSSize(width: width, height: hosting.fittingSize.height))
     }
 }

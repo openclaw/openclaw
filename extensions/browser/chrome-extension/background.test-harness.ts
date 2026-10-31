@@ -7,7 +7,11 @@ import {
   FakeWebSocket,
 } from "./background.test-support.js";
 import type { RuntimeMessageListener } from "./background.test-support.js";
-import { computeRelayAuthProof } from "./modules/relay-auth-v2-crypto.js";
+import {
+  computeRelayAuthProof,
+  type RelayAuthProofFields,
+} from "./modules/relay-auth-v2-crypto.js";
+import type { BrowserTabSnapshot } from "./modules/tab-eligibility.js";
 import { relayTestKey } from "./relay-key.test-support.js";
 
 export const TEST_RELAY_KEY = relayTestKey(1);
@@ -42,6 +46,8 @@ export async function loadBackground({
   sessionConfig,
   storedConfig,
   initialTabs = [],
+  emitTabEvents = false,
+  fileAccessAllowed = false,
 }: {
   deferTabAccessInitialization?: boolean;
   deferRetiredStatePreparation?: boolean;
@@ -54,6 +60,8 @@ export async function loadBackground({
   sessionConfig?: Record<string, unknown>;
   storedConfig?: Record<string, unknown>;
   initialTabs?: Array<Record<string, unknown> & { id: number }>;
+  emitTabEvents?: boolean;
+  fileAccessAllowed?: boolean;
 } = {}) {
   const sockets: FakeWebSocket[] = [];
   let alarmListener: ((alarm: { name: string }) => void) | undefined;
@@ -68,11 +76,11 @@ export async function loadBackground({
     | undefined;
   let tabsRemovedListener: ((tabId: number) => void) | undefined;
   let tabsReplacedListener: ((addedTabId: number, removedTabId: number) => void) | undefined;
-  let tabGroupUpdatedListener: (() => void) | undefined;
-  let tabGroupRemovedListener: (() => void) | undefined;
-  let tabsUpdatedListener: ((tabId: number, changeInfo: { groupId?: number }) => void) | undefined;
-  let nextStorageGet: Promise<void> | null = null;
-  let nextStorageRemove: Promise<void> | null = null;
+  let tabGroupUpdatedListener: ((group?: { id: number; title?: string }) => void) | undefined;
+  let tabGroupRemovedListener: ((group?: { id: number; title?: string }) => void) | undefined;
+  let tabsUpdatedListener:
+    | ((tabId: number, changeInfo: Partial<BrowserTabSnapshot>, tab?: BrowserTabSnapshot) => void)
+    | undefined;
   let nextStorageSet: Promise<void> | null = null;
   let nextSessionStorageSet: Promise<void> | null = null;
   let currentRetiredStorageFailureStage = retiredStorageFailureStage;
@@ -117,9 +125,6 @@ export async function loadBackground({
     if (keys.includes("copilotSessionRegistryV1")) {
       await retiredStatePreparation;
     }
-    const pending = nextStorageGet;
-    nextStorageGet = null;
-    await pending;
     return Object.fromEntries(
       keys
         .filter((key) => Object.hasOwn(storageValues, key))
@@ -139,9 +144,6 @@ export async function loadBackground({
     Object.assign(storageValues, values);
   });
   const storageRemove = vi.fn(async (keys: string[]) => {
-    const pending = nextStorageRemove;
-    nextStorageRemove = null;
-    await pending;
     if (
       rejectStorageRemove &&
       !keys.some((key) => key.startsWith("copilot") || key === RETIRED_CUSTODY_BLOCKED_KEY)
@@ -172,8 +174,19 @@ export async function loadBackground({
     }
     throw new Error("Specified native messaging host not found.");
   });
+  const debuggerGetTargetInfo = vi.fn(async (source: { tabId: number }) => ({
+    targetInfo: { targetId: `tab-${source.tabId}` },
+  }));
+  const debuggerSendCommand = vi.fn(
+    async (
+      _source: { tabId: number; sessionId?: string },
+      _method: string,
+      _params?: Record<string, unknown>,
+    ): Promise<Record<string, unknown>> => ({}),
+  );
   let runtimeLastError: { message?: string } | undefined;
   const chromeMock = {
+    extension: { isAllowedFileSchemeAccess: vi.fn(async () => fileAccessAllowed) },
     action: { setBadgeText, setBadgeBackgroundColor },
     alarms: {
       create: createAlarm,
@@ -210,13 +223,20 @@ export async function loadBackground({
           },
         ),
       },
-      attach: vi.fn(async () => undefined),
-      detach: vi.fn(async (_source: { tabId: number }) => undefined),
+      attach: vi.fn(async (_source: { tabId: number }, _version: string) => undefined),
+      detach: vi.fn(async (_source: { tabId?: number; targetId?: string }) => undefined),
       getTargets: vi.fn(
         async (): Promise<Array<{ id?: string; tabId?: number; attached?: boolean }>> =>
           inheritedDebuggerTabIds.map((tabId) => ({ id: `tab-${tabId}`, tabId, attached: true })),
       ),
-      sendCommand: vi.fn(async () => ({})),
+      sendCommand: (
+        source: { tabId: number; sessionId?: string },
+        method: string,
+        params?: Record<string, unknown>,
+      ) =>
+        method === "Target.getTargetInfo"
+          ? debuggerGetTargetInfo(source)
+          : debuggerSendCommand(source, method, params),
     },
     runtime: {
       get lastError() {
@@ -316,14 +336,18 @@ export async function loadBackground({
         title: groupId === 7 ? "OpenClaw" : "Other",
         windowId: 1,
       })),
-      update: vi.fn(async () => undefined),
+      update: vi.fn(async (id: number, properties: { title: string; color?: string }) => {
+        if (emitTabEvents) {
+          tabGroupUpdatedListener?.({ id, ...properties });
+        }
+      }),
       onUpdated: {
-        addListener: vi.fn((listener: () => void) => {
+        addListener: vi.fn((listener: typeof tabGroupUpdatedListener) => {
           tabGroupUpdatedListener = listener;
         }),
       },
       onRemoved: {
-        addListener: vi.fn((listener: () => void) => {
+        addListener: vi.fn((listener: typeof tabGroupRemovedListener) => {
           tabGroupRemovedListener = listener;
         }),
       },
@@ -346,6 +370,13 @@ export async function loadBackground({
       group: vi.fn(async ({ tabIds }: { tabIds: number[] }) => {
         for (const tabId of tabIds) {
           sharedTabIds.add(tabId);
+          if (emitTabEvents) {
+            tabsUpdatedListener?.(
+              tabId,
+              { groupId: 7 },
+              { ...tabsById.get(tabId), id: tabId, groupId: 7 },
+            );
+          }
         }
         return 7;
       }),
@@ -362,6 +393,9 @@ export async function loadBackground({
       }),
       remove: vi.fn(async (tabId: number) => {
         tabsById.delete(tabId);
+        if (emitTabEvents) {
+          tabsRemovedListener?.(tabId);
+        }
       }),
       update: vi.fn(async () => undefined),
       onRemoved: {
@@ -375,11 +409,9 @@ export async function loadBackground({
         }),
       },
       onUpdated: {
-        addListener: vi.fn(
-          (listener: (tabId: number, changeInfo: { groupId?: number }) => void) => {
-            tabsUpdatedListener = listener;
-          },
-        ),
+        addListener: vi.fn((listener: typeof tabsUpdatedListener) => {
+          tabsUpdatedListener = listener;
+        }),
       },
     },
     windows: { update: vi.fn(async () => undefined) },
@@ -436,43 +468,22 @@ export async function loadBackground({
   return {
     alarmListener,
     clearAlarm,
-    createAlarm,
     debuggerAttach: chromeMock.debugger.attach,
     debuggerDetach: chromeMock.debugger.detach,
     debuggerDetachListener,
     debuggerEventListener,
     debuggerGetTargets: chromeMock.debugger.getTargets,
-    debuggerSendCommand: chromeMock.debugger.sendCommand,
-    deferNextStorageGet: () => {
-      let release = () => {};
-      nextStorageGet = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      return release;
-    },
-    deferNextStorageRemove: () => {
-      let release = () => {};
-      nextStorageRemove = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      return release;
-    },
+    debuggerSendCommand,
+    debuggerGetTargetInfo,
     deferNextSessionStorageSet: () => {
-      let release = () => {};
-      nextSessionStorageSet = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      return release;
+      const { promise, resolve } = Promise.withResolvers<void>();
+      nextSessionStorageSet = promise;
+      return resolve;
     },
     deferNextStorageSet: () => {
-      let release = () => {};
-      nextStorageSet = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      return release;
-    },
-    get gatewaySockets() {
-      return sockets.filter((socket) => !socket.protocols.includes("openclaw-extension-relay.v2"));
+      const { promise, resolve } = Promise.withResolvers<void>();
+      nextStorageSet = promise;
+      return resolve;
     },
     installedListener,
     messageListener,
@@ -495,7 +506,7 @@ export async function loadBackground({
       }
       const hello = JSON.parse(helloRaw) as { keyId: string; clientNonce: string };
       const issuedAtMs = Date.now();
-      const fields = {
+      const fields: RelayAuthProofFields = {
         keyId: hello.keyId,
         instanceId: AUTH_INSTANCE_ID,
         sessionId: AUTH_SESSION_ID,
@@ -542,9 +553,9 @@ export async function loadBackground({
         expect(socket.send.mock.calls.some(([raw]) => JSON.parse(raw).type === "hello")).toBe(true);
       });
     },
-    setBadgeText,
     sockets,
     storageRemove,
+    storageGet,
     storageSet,
     storageValues,
     setRetiredStorageFailureStage: (stage?: RetiredStorageFailureStage) => {
@@ -556,6 +567,8 @@ export async function loadBackground({
     shareTab: (tabId: number) => sharedTabIds.add(tabId),
     unshareTab: (tabId: number) => sharedTabIds.delete(tabId),
     tabGroupsQuery: chromeMock.tabGroups.query,
+    tabGroupsGet: chromeMock.tabGroups.get,
+    tabGroupsUpdate: chromeMock.tabGroups.update,
     tabGroupUpdatedListener,
     tabGroupRemovedListener,
     tabsCreate: chromeMock.tabs.create,
@@ -563,12 +576,25 @@ export async function loadBackground({
     tabsGroup: chromeMock.tabs.group,
     tabsQuery: chromeMock.tabs.query,
     tabsRemove: chromeMock.tabs.remove,
-    tabsUngroup: chromeMock.tabs.ungroup,
     tabsUpdate: chromeMock.tabs.update,
     tabsUpdatedListener,
     tabsRemovedListener,
     tabsReplacedListener,
     windowsUpdate: chromeMock.windows.update,
+    updateTab: (tabId: number, change: Partial<BrowserTabSnapshot>, notify = true) => {
+      const tab = { ...tabsById.get(tabId), ...change, id: tabId };
+      tabsById.set(tabId, tab);
+      if (typeof change.groupId === "number") {
+        if (change.groupId === 7) {
+          sharedTabIds.add(tabId);
+        } else {
+          sharedTabIds.delete(tabId);
+        }
+      }
+      if (notify) {
+        tabsUpdatedListener?.(tabId, change, { ...tab, groupId: sharedTabIds.has(tabId) ? 7 : -1 });
+      }
+    },
   };
 }
 
@@ -581,4 +607,31 @@ export async function sendRuntimeMessage(
       resolve(response as Record<string, unknown>);
     });
   });
+}
+
+export async function loadRelayCommandHarness(accessMode: "all" | "selected") {
+  const harness = await loadBackground({
+    emitTabEvents: true,
+    storedConfig: {
+      relayUrl: "ws://127.0.0.1:18797/extension",
+      token: TEST_RELAY_KEY,
+      authVersion: 2,
+      accessMode,
+    },
+    initialTabs: [{ id: 100, url: "about:blank", groupId: 7 }],
+  });
+  const socket = harness.relaySockets[0]!;
+  await harness.authenticate(socket);
+  let seq = 0;
+  const frames = () => socket.send.mock.calls.map(([raw]) => JSON.parse(raw));
+  const command = async (message: Record<string, unknown>) => {
+    const id = ++seq;
+    socket.receive({ ...message, seq: id });
+    return await waitForBackgroundState(() => {
+      const response = frames().find((frame) => frame.seq === id);
+      expect(response).toBeDefined();
+      return response;
+    });
+  };
+  return { ...harness, socket, frames, command };
 }

@@ -1,8 +1,16 @@
 import { CODEX_APP_SERVER_AUTH_MARKER } from "openclaw/plugin-sdk/agent-runtime";
 // Codex usage tests cover the harness-owned provider-usage contribution.
 import type { ProviderFetchUsageSnapshotContext } from "openclaw/plugin-sdk/plugin-entry";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { readCodexAppServerUsage } from "./request.js";
 import { fetchCodexAppServerUsageSnapshot } from "./usage.js";
+
+vi.mock("./request.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./request.js")>()),
+  readCodexAppServerUsage: vi.fn(),
+}));
+const readUsage = vi.mocked(readCodexAppServerUsage);
+beforeEach(() => readUsage.mockReset());
 
 function usageContext(
   overrides: Partial<ProviderFetchUsageSnapshotContext> = {},
@@ -20,7 +28,8 @@ function usageContext(
 
 describe("Codex app-server provider usage", () => {
   it("contributes OpenAI usage windows for the synthetic app-server credential", async () => {
-    const readUsage = vi.fn(async () => ({
+    const signal = new AbortController().signal;
+    readUsage.mockResolvedValue({
       rateLimits: {
         rateLimitsByLimitId: {
           codex: {
@@ -34,9 +43,9 @@ describe("Codex app-server provider usage", () => {
         },
       },
       accountEmail: "codex-account@example.com",
-    }));
+    });
 
-    await expect(fetchCodexAppServerUsageSnapshot(usageContext(), { readUsage })).resolves.toEqual({
+    await expect(fetchCodexAppServerUsageSnapshot(usageContext({ signal }))).resolves.toEqual({
       provider: "openai",
       displayName: "OpenAI",
       windows: [{ label: "5h", usedPercent: 9, resetAt: 1_700_003_600_000 }],
@@ -45,6 +54,7 @@ describe("Codex app-server provider usage", () => {
     });
     expect(readUsage).toHaveBeenCalledWith({
       timeoutMs: 3_500,
+      signal,
       agentDir: undefined,
       config: {},
       startOptions: expect.objectContaining({
@@ -55,12 +65,8 @@ describe("Codex app-server provider usage", () => {
   });
 
   it("ignores ordinary OpenAI credentials", async () => {
-    const readUsage = vi.fn();
-
     await expect(
-      fetchCodexAppServerUsageSnapshot(usageContext({ token: "test-token-placeholder" }), {
-        readUsage,
-      }),
+      fetchCodexAppServerUsageSnapshot(usageContext({ token: "test-token-placeholder" })),
     ).resolves.toBeNull();
     expect(readUsage).not.toHaveBeenCalled();
   });

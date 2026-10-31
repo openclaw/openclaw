@@ -1,12 +1,23 @@
-import { parseRetryAfterHttpDateMs } from "@openclaw/ai/internal/retry-after";
-import milliseconds from "ms";
+import {
+  RETRY_AFTER_TEXT_RE,
+  parseGoogleRetryDelaySeconds,
+  parseRetryAfterErrorTiming,
+  parseRetryAfterTextSeconds,
+} from "@openclaw/ai/internal/retry-after";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isTransientNetworkError } from "../../infra/retryable-network-errors.js";
 import {
   extractErrorHttpStatus,
   extractLeadingHttpStatus,
   extractProviderWrappedHttpStatus,
+  parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
-import { INCOMPLETE_ASSISTANT_STREAM_RE } from "./message-patterns.js";
+import { classifyFailoverReasonFromCode } from "./classification-rules.js";
+import {
+  INCOMPLETE_ASSISTANT_STREAM_RE,
+  MALFORMED_SSE_MESSAGE_RE,
+  isPeriodicUsageLimitErrorMessage,
+} from "./message-patterns.js";
 import type { FailoverClassification, FailoverSignal } from "./signal.js";
 
 type RateLimitWindow =
@@ -20,14 +31,18 @@ const RATE_LIMIT_RETRY_CONTEXT_RE =
 const TRANSIENT_RETRY_EVIDENCE_RE =
   /overloaded|rate.?limit|too many requests|service.?unavailable|server.?error|internal.?error|provider.?returned.?error|network.?error|connection.?error|connection.?refused|connection.?lost|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|socket connection was closed|timed? out|timeout|terminated|websocket.?closed|websocket.?error|ended without|http2 request did not get a response|retry delay|you can retry your request|try your request again|please retry your request|resource[_ -]?exhausted/i;
 const LONG_WINDOW_RATE_LIMIT_RE =
-  /\b(?:daily|weekly|monthly|tokens per day|requests per day|usage limit|subscription|insufficient[_ -]?quota|current quota|quota[_ -]?exceeded|(?:go|free)usagelimiterror|available balance|out of budget)\b/i;
+  /\b(?:daily|weekly|monthly|tokens per day|requests per day|per[- ](?:day|week|month)|usage limits?|subscription|insufficient[_ -]?quota|current quota|quota[_ -]?exceeded|(?:go|free)usagelimiterror|available balance|out of budget)\b/i;
 const SHORT_RATE_LIMIT_UNIT_RE =
   /\b(?:requests per minute|tokens per minute|per-minute|rpm|tpm)\b/i;
 const SHORT_WINDOW_RATE_LIMIT_RE =
   /\b(?:requests per minute|tokens per minute|per-minute|rpm|tpm|model_cooldown)\b|请求过于频繁|调用频率|频率限制/i;
-const RETRY_AFTER_VALUE_RE = /\bretry[- ]after\b\s*:?\s*(?:in\s*)?([^\r\n;]+)/i;
-const RETRY_AFTER_NUMBER_RE = /^(\d+(?:\.\d+)?)\s*([a-z]+)?\b/i;
+const RETRY_AFTER_VALUE_RE = RETRY_AFTER_TEXT_RE;
 const MAX_SHORT_WINDOW_RETRY_AFTER_SECONDS = 60;
+
+/** HTTP statuses the provider SDK transport permits retrying. */
+export function isRetryableProviderHttpStatus(status: number): boolean {
+  return status === 408 || status === 409 || status === 429 || status >= 500;
+}
 
 /** Extract guarded HTTP status evidence for retry and diagnostic consumers. */
 export function extractFailoverHttpStatus(
@@ -49,13 +64,14 @@ function resolveRetrySignalStatus(signal: Pick<FailoverSignal, "message" | "stat
 }
 
 /** Narrow evidence that replaying the same assistant request may succeed within this session. */
-export function hasTransientRetryEvidence(
+function hasTransientRetryEvidence(
   signal: Pick<FailoverSignal, "code" | "message" | "status">,
 ): boolean {
   const status = resolveRetrySignalStatus(signal);
   return (
     (status !== undefined && RETRYABLE_HTTP_STATUS_CODES.has(status)) ||
     INCOMPLETE_ASSISTANT_STREAM_RE.test(signal.message ?? "") ||
+    MALFORMED_SSE_MESSAGE_RE.test(signal.message ?? "") ||
     TRANSIENT_RETRY_EVIDENCE_RE.test(signal.message ?? "") ||
     isTransientNetworkError({ code: signal.code })
   );
@@ -68,27 +84,63 @@ function hasRateLimitRetryContext(signal: Pick<FailoverSignal, "message" | "stat
   );
 }
 
-function parseRetryAfterSeconds(valueText: string, nowMs: number): number | undefined {
-  const secondsMatch = RETRY_AFTER_NUMBER_RE.exec(valueText);
-  if (secondsMatch?.[1]) {
-    const value = Number(secondsMatch[1]);
-    if (!Number.isFinite(value) || value < 0) {
-      return undefined;
+function proseRetrySeconds(message: string | undefined, nowMs: number): number | undefined {
+  let floor: number | undefined;
+  for (const match of message?.matchAll(new RegExp(RETRY_AFTER_VALUE_RE, "gi")) ?? []) {
+    const seconds = parseRetryAfterTextSeconds(match[1]?.trim() ?? "", nowMs);
+    if (seconds !== undefined) {
+      floor = Math.max(floor ?? 0, seconds);
     }
-    const unit = secondsMatch[2]?.toLowerCase();
-    if (
-      unit &&
-      !/^(?:milliseconds?|msecs?|ms|seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d)$/.test(
-        unit,
-      )
-    ) {
-      return undefined;
-    }
-    const unitMilliseconds = milliseconds(`1${unit ?? "s"}` as Parameters<typeof milliseconds>[0]);
-    return unitMilliseconds === 1 ? value / 1000 : value * (unitMilliseconds / 1000);
   }
-  const retryAtMs = parseRetryAfterHttpDateMs(valueText, nowMs);
-  return retryAtMs === undefined ? undefined : Math.max(0, (retryAtMs - nowMs) / 1000);
+  return floor;
+}
+
+function maxDefined(...values: Array<number | undefined>): number | undefined {
+  const defined = values.filter((value): value is number => value !== undefined);
+  return defined.length > 0 ? Math.max(...defined) : undefined;
+}
+
+/** Explicit retry time in error text: prose hints and serialized google.rpc.RetryInfo. */
+function retryTextSeconds(message: string | undefined, nowMs: number): number | undefined {
+  return maxDefined(parseGoogleRetryDelaySeconds(message), proseRetrySeconds(message, nowMs));
+}
+
+/**
+ * Extracts the provider retry floor from error text and response headers. The greatest
+ * explicit instruction (Retry-After headers, RetryInfo, retry prose) wins; an exhausted
+ * bucket's full-refill reset applies only when the provider gave no explicit time.
+ */
+export function resolveRetryAfterMs(
+  message: string | undefined,
+  nowMs = Date.now(),
+  errorBody?: unknown,
+): number | undefined {
+  const body = typeof errorBody === "string" ? safeParseJsonRecord(errorBody) : errorBody;
+  const headers = parseRetryAfterErrorTiming(body, nowMs);
+  const seconds =
+    maxDefined(
+      headers?.explicitSeconds,
+      retryTextSeconds(message, nowMs),
+      parseGoogleRetryDelaySeconds(errorBody),
+    ) ?? headers?.resetSeconds;
+  return seconds === undefined ? undefined : Math.ceil(seconds * 1000);
+}
+
+/** Usage-window evidence is distinct from a temporary throttle's retry floor. */
+export function hasLongWindowRateLimitEvidence(message: string | undefined): boolean {
+  return Boolean(
+    message &&
+    (LONG_WINDOW_RATE_LIMIT_RE.test(message) || isPeriodicUsageLimitErrorMessage(message)) &&
+    !SHORT_RATE_LIMIT_UNIT_RE.test(message),
+  );
+}
+
+/** Explicit shared token-bucket exhaustion, distinct from per-request throttling. */
+export function hasOrganizationTpmRateLimitEvidence(message: string | undefined): boolean {
+  const unit = message?.match(
+    /\brate limit reached\b[^\r\n]*?\bin organization\b[^:\r\n]*?\bon (tokens|requests) per min(?:ute)?\b/i,
+  )?.[1];
+  return unit?.toLowerCase() === "tokens";
 }
 
 /** Classify provider rate-limit text without deciding a caller's retry policy. */
@@ -101,20 +153,17 @@ export function classifyRateLimitWindow(
     return { kind: "unknown" };
   }
   const hasShortRateLimitUnit = SHORT_RATE_LIMIT_UNIT_RE.test(raw);
-  const retryAfterValue = RETRY_AFTER_VALUE_RE.exec(raw)?.[1]?.trim();
-  const retryAfterSeconds = retryAfterValue
-    ? parseRetryAfterSeconds(retryAfterValue, nowMs)
-    : undefined;
+  const retryAfterSeconds = retryTextSeconds(raw, nowMs);
 
   if (retryAfterSeconds !== undefined) {
     return retryAfterSeconds > MAX_SHORT_WINDOW_RETRY_AFTER_SECONDS
       ? { kind: "long" }
       : { kind: "short", retryAfterSeconds };
   }
-  if (retryAfterValue && !hasShortRateLimitUnit) {
+  if (RETRY_AFTER_VALUE_RE.test(raw) && !hasShortRateLimitUnit) {
     return { kind: "long" };
   }
-  if (LONG_WINDOW_RATE_LIMIT_RE.test(raw) && !hasShortRateLimitUnit) {
+  if (hasLongWindowRateLimitEvidence(raw)) {
     return { kind: "long" };
   }
   if (SHORT_WINDOW_RATE_LIMIT_RE.test(raw) || extractLeadingHttpStatus(raw)?.code === 429) {
@@ -126,20 +175,28 @@ export function classifyRateLimitWindow(
 /** Apply the intra-attempt replay policy to one already-classified failover signal. */
 export function shouldRetryFailoverSignal(params: {
   classification: FailoverClassification | null;
-  hasTransientEvidence: boolean;
-  signal: Pick<FailoverSignal, "message" | "status">;
+  signal: Pick<FailoverSignal, "code" | "message" | "status">;
 }): boolean {
-  if (!params.hasTransientEvidence) {
+  if (!hasTransientRetryEvidence(params.signal)) {
     return false;
   }
   const reason =
     params.classification?.kind === "reason" ? params.classification.reason : undefined;
-  const hasLongLimitWindow = classifyRateLimitWindow(params.signal.message).kind === "long";
+  const status = resolveRetrySignalStatus(params.signal);
+  // Preserve 4xx server-error retries unless a validation code proves rejection.
   if (
-    hasLongLimitWindow &&
-    (reason === "billing" || reason === "rate_limit" || hasRateLimitRetryContext(params.signal))
+    reason === "format" &&
+    (status === undefined ||
+      (status >= 500 && status < 600) ||
+      (classifyFailoverReasonFromCode(params.signal.code) ??
+        classifyFailoverReasonFromCode(parseApiErrorInfo(params.signal.message)?.code)) ===
+        "format")
   ) {
     return false;
   }
-  return true;
+  const hasLongLimitWindow = classifyRateLimitWindow(params.signal.message).kind === "long";
+  return !(
+    hasLongLimitWindow &&
+    (reason === "billing" || reason === "rate_limit" || hasRateLimitRetryContext(params.signal))
+  );
 }

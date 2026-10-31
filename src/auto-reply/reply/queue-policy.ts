@@ -1,33 +1,18 @@
-// Resolves queue mode and admission policy for a reply turn.
-import type { QueueSettings } from "./queue.js";
+export type FollowupQueueDisposition = "queue-cap" | "queue-cap-old" | "queue-cap-new";
 
-/** Queue decisions for messages that arrive while an agent run is active. */
-export type ActiveRunQueueAction = "run-now" | "enqueue-followup" | "drop";
-
-/** Resolves whether an active session should run, queue, or drop a new inbound turn. */
+/** Resolves whether an active session should run or queue a new inbound turn. */
 export function resolveActiveRunQueueAction(params: {
-  queueAdmissionState?: "empty" | "steering" | "ready";
+  hasQueuedFollowups?: boolean;
   isActive: boolean;
-  isHeartbeat: boolean;
   shouldFollowup: boolean;
-  queueMode: QueueSettings["mode"];
   resetTriggered?: boolean;
-}): ActiveRunQueueAction {
-  if (!params.isActive && (!params.queueAdmissionState || params.queueAdmissionState === "empty")) {
+  interrupt?: boolean;
+}): "run-now" | "enqueue-followup" {
+  if (!params.isActive && !params.hasQueuedFollowups) {
     return "run-now";
   }
-  if (params.isHeartbeat) {
-    return "drop";
-  }
-  if (params.resetTriggered) {
+  if (params.resetTriggered || params.interrupt) {
     return "run-now";
   }
-  if (params.queueAdmissionState && params.queueAdmissionState !== "empty") {
-    return "enqueue-followup";
-  }
-  // Follow-up queueing is only meaningful for non-heartbeat user turns.
-  if (params.shouldFollowup) {
-    return "enqueue-followup";
-  }
-  return "run-now";
+  return params.hasQueuedFollowups || params.shouldFollowup ? "enqueue-followup" : "run-now";
 }

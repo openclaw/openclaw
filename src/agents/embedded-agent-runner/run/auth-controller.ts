@@ -1,237 +1,175 @@
-/**
- * Coordinates provider auth, profile rotation, and runtime auth refresh.
- */
-import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { Model } from "../../../llm/types.js";
-import type { ProviderModelRouteAuthRequirement } from "../../../plugin-sdk/provider-model-types.js";
-import { prepareProviderRuntimeAuth } from "../../../plugins/provider-runtime.js";
-import { SecretSurfaceUnavailableError } from "../../../secrets/runtime-degraded-state.js";
 import {
-  type AuthProfileStore,
+  attachProviderAuthAuthority,
+  attachProviderRequestAuth,
+  assertProviderAuthAuthority,
+  getProviderAuthAuthority,
+} from "../../../plugins/provider-auth-authority.js";
+import { prepareProviderRuntimeAuth } from "../../../plugins/provider-runtime.js";
+import type { ProviderCreateStreamFnContext } from "../../../plugins/provider-transport.types.js";
+import { SecretSurfaceUnavailableError } from "../../../secrets/runtime-degraded-state.js";
+import { resolveSafeTimeoutDelayMs } from "../../../utils/timer-delay.js";
+import {
   isProfileInCooldown,
   markAuthProfileFailure,
   resolveProfilesUnavailableReason,
   resolveSubscriptionAuthModeForProfiles,
 } from "../../auth-profiles.js";
+import { advanceAuthProfileCandidate } from "../../auth-profiles/advance.js";
+import {
+  captureAuthProfileAuthorization,
+  type AuthProfileAuthorization,
+} from "../../auth-profiles/authorization.js";
+import { hasOAuthIdentity, isSafeToCopyOAuthIdentity } from "../../auth-profiles/oauth-identity.js";
 import { OAuthRefreshFailureError } from "../../auth-profiles/oauth-refresh-failure.js";
 import {
-  classifyFailoverReason,
-  isFailoverErrorMessage,
-  type FailoverReason,
-} from "../../embedded-agent-helpers.js";
+  getScopedSharedAuthStore,
+  isEnvOnlyAuthProfileRuntime,
+} from "../../auth-profiles/runtime-scope.js";
+import { isSetupCredentialAccessible } from "../../auth-profiles/setup-access.js";
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
-import { shouldUseTransientCooldownProbeSlot } from "../../failover-policy.js";
+import { classifyFailoverReason } from "../../failover/classify.js";
+import { getFailoverErrorCode } from "../../failover/error.js";
+import { resolveRetryAfterMs } from "../../failover/retry-evidence.js";
+import type { FailoverReason } from "../../failover/signal.js";
 import { renderAuthProfileFailoverCopy } from "../../failover/user-copy.js";
-import {
-  getApiKeyForModelCore,
-  MissingProviderAuthError,
-  type ResolvedProviderAuth,
-} from "../../model-auth.js";
+import { resolveProviderModelAuthPolicy } from "../../model-auth-policy.js";
+import { getApiKeyForModelCore, MissingProviderAuthError } from "../../model-auth.js";
 import { buildProviderAuthRecoveryHint } from "../../provider-auth-recovery-hint.js";
 import { providerModelRouteAcceptsAuthMode } from "../../provider-model-route-auth.js";
+import { applyPreparedRuntimeAuthToModel } from "../../provider-request-config.js";
+import { protectPreparedProviderRuntimeAuth } from "../../provider-runtime-auth-protection.js";
+import { unwrapSecretSentinelsForProviderEgress } from "../../provider-secret-egress.js";
+import { createRuntimeAuthDeadline } from "../../runtime-auth-refresh.js";
+import { resolveAgentTimeoutMs } from "../../timeout.js";
+import type { EmbeddedRunAuthControllerParams, LogLike } from "./auth-controller.types.js";
 import {
-  applyPreparedRuntimeAuthToModel,
-  type ModelProviderRequestTransportOverrides,
-} from "../../provider-request-config.js";
-import {
-  protectPreparedProviderRuntimeAuth,
-  unwrapSecretSentinelsForProviderEgress,
-} from "../../provider-secret-egress.js";
-import { clampRuntimeAuthRefreshDelayMs } from "../../runtime-auth-refresh.js";
-import { resolveAuthProfileFailureReason } from "./auth-profile-failure-policy.js";
-import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
+  resolveAuthProfileFailureReason,
+  resolveEmbeddedAuthCooldownProbePolicy,
+} from "./auth-profile-failure-policy.js";
 import {
   RUNTIME_AUTH_REFRESH_MARGIN_MS,
   RUNTIME_AUTH_REFRESH_MIN_DELAY_MS,
   RUNTIME_AUTH_REFRESH_RETRY_MS,
-  type RuntimeAuthState,
 } from "./helpers.js";
-import type { RunEmbeddedAgentParams } from "./params.js";
 
-type ApiKeyInfo = ResolvedProviderAuth;
+export { resolveEmbeddedAuthCooldownProbePolicy } from "./auth-profile-failure-policy.js";
+export type { EmbeddedRunAuthState } from "./auth-controller.types.js";
 
-type RuntimeApiKeySink = {
-  setRuntimeApiKey(provider: string, apiKey: string): void;
-};
-
-type LogLike = {
-  debug(message: string): void;
-  info(message: string): void;
-  warn(message: string): void;
-};
-
-/** Decides whether one automatic profile may bypass its current cooldown. */
-export function resolveEmbeddedAuthCooldownProbePolicy(params: {
-  authStore: AuthProfileStore;
-  profileCandidates: Array<string | undefined>;
-  lockedProfileId?: string;
-  modelId: string;
-  allowTransientCooldownProbe: boolean;
-}): { probeProfileIds: ReadonlySet<string>; unavailableReason: FailoverReason | null } {
-  const autoProfileCandidates = params.profileCandidates.filter(
-    (candidate): candidate is string =>
-      typeof candidate === "string" && candidate.length > 0 && candidate !== params.lockedProfileId,
-  );
-  const allAutoProfilesInCooldown =
-    autoProfileCandidates.length > 0 &&
-    autoProfileCandidates.every((candidate) =>
-      isProfileInCooldown(params.authStore, candidate, undefined, params.modelId),
-    );
-  const unavailableReason = allAutoProfilesInCooldown
-    ? (resolveProfilesUnavailableReason({
-        store: params.authStore,
-        profileIds: autoProfileCandidates,
-      }) ?? "unknown")
-    : null;
-  const probeProfileIds = new Set<string>();
-  if (
-    params.allowTransientCooldownProbe &&
-    allAutoProfilesInCooldown &&
-    shouldUseTransientCooldownProbeSlot(unavailableReason)
-  ) {
-    for (const candidate of autoProfileCandidates) {
-      const candidateReason =
-        resolveProfilesUnavailableReason({
-          store: params.authStore,
-          profileIds: [candidate],
-        }) ?? "unknown";
-      if (shouldUseTransientCooldownProbeSlot(candidateReason)) {
-        probeProfileIds.add(candidate);
-      }
+/** Shares one transient probe across the selected owner's initial and later candidates. */
+export function createEmbeddedAuthProfileAdmission(
+  params: Parameters<typeof resolveEmbeddedAuthCooldownProbePolicy>[0] & {
+    provider: string;
+    log: Pick<LogLike, "warn">;
+  },
+): (candidate: string | undefined) => boolean {
+  const policy = resolveEmbeddedAuthCooldownProbePolicy(params);
+  let probed = false;
+  return (candidate) => {
+    if (
+      !candidate ||
+      !isProfileInCooldown(params.authStore, candidate, undefined, params.modelId)
+    ) {
+      return true;
     }
-  }
-  return { probeProfileIds, unavailableReason };
+    if (probed || !policy.probeProfileIds.has(candidate)) {
+      return false;
+    }
+    probed = true;
+    params.log.warn(
+      `checking cooldowned auth profile for ${params.provider}/${params.modelId} due to ${policy.unavailableReason ?? "transient"} unavailability`,
+    );
+    return true;
+  };
 }
 
 /**
- * Coordinates auth profile selection, runtime auth preparation/refresh, and
- * profile failover for one embedded run. State is injected through accessors so
- * the runner can keep provider/model/auth snapshots in sync across retries.
+ * Own profile selection, runtime auth refresh and failover for one run's shared snapshots.
  */
-export function createEmbeddedRunAuthController(params: {
-  config: RunEmbeddedAgentParams["config"];
-  agentDir: string;
-  workspaceDir: string;
-  authStore: AuthProfileStore;
-  authStorage: RuntimeApiKeySink;
-  profileCandidates: Array<string | undefined>;
-  lockedProfileId?: string;
-  initialThinkLevel: ThinkLevel;
-  attemptedThinking: Set<ThinkLevel>;
-  fallbackConfigured: boolean;
-  allowTransientCooldownProbe: boolean;
-  authProfileFailurePolicy?: AuthProfileFailurePolicy;
-  authProfileStateMode?: "read-write" | "read-only";
-  runId?: string;
-  getProvider(): string;
-  getModelId(): string;
-  getRuntimeModel(): Model;
-  setRuntimeModel(next: Model): void;
-  getEffectiveModel(): Model;
-  setEffectiveModel(next: Model): void;
-  getApiKeyInfo(): ApiKeyInfo | null;
-  setApiKeyInfo(next: ApiKeyInfo | null): void;
-  getLastProfileId(): string | undefined;
-  setLastProfileId(next: string | undefined): void;
-  getRuntimeAuthState(): RuntimeAuthState | null;
-  setRuntimeAuthState(next: RuntimeAuthState | null): void;
-  getRuntimeAuthRefreshCancelled(): boolean;
-  setRuntimeAuthRefreshCancelled(next: boolean): void;
-  getProfileIndex(): number;
-  setProfileIndex(next: number): void;
-  prepareModelForAuthProfile?(
-    profileId: string | undefined,
-    attemptIndex?: number,
-  ): Promise<{
-    runtimeModel: Model;
-    authRequirement?: ProviderModelRouteAuthRequirement;
-    allowAuthProfileFallback?: boolean;
-    commit(): void;
-  }>;
-  setThinkLevel(next: ThinkLevel): void;
-  log: LogLike;
-}) {
+export function createEmbeddedRunAuthController(params: EmbeddedRunAuthControllerParams) {
+  const { state } = params;
+  const {
+    run: withAuthDeadline,
+    signal: authSignal,
+    cancel: cancelAuth,
+  } = createRuntimeAuthDeadline({
+    provider: params.provider,
+    timeoutMs: resolveAgentTimeoutMs({ cfg: params.config, overrideMs: params.timeoutMs }),
+    signal: params.signal,
+    getDeadline: params.getDeadline,
+  });
+  let requestAuthGeneration: object | undefined;
+  let requestAuthAuthorization: AuthProfileAuthorization | undefined;
   // Runtime auth overlays are profile-scoped. Keep the pre-auth model so a
   // later profile cannot inherit an earlier profile's endpoint or headers.
-  const baseRuntimeModel = params.getRuntimeModel();
-  const baseEffectiveModel = params.getEffectiveModel();
+  const baseRuntimeModel = state.models.runtime;
+  const baseEffectiveModel = state.models.effective;
 
-  const commitPreparedModel = (
-    preparedModel:
-      | Awaited<ReturnType<NonNullable<typeof params.prepareModelForAuthProfile>>>
-      | undefined,
-  ) => {
-    preparedModel?.commit();
-    if (preparedModel?.authRequirement) {
-      return;
-    }
-    params.setRuntimeModel(baseRuntimeModel);
-    params.setEffectiveModel(baseEffectiveModel);
-  };
-
-  const applyPreparedRuntimeRequestOverrides = (paramsForApply: {
-    runtimeModel: Model;
-    preparedAuth: {
-      baseUrl?: string;
-      request?: ModelProviderRequestTransportOverrides;
-    };
-  }): void => {
-    const runtimeModel = applyPreparedRuntimeAuthToModel(
-      paramsForApply.runtimeModel,
-      paramsForApply.preparedAuth,
-    );
-    if (runtimeModel === paramsForApply.runtimeModel) {
+  const applyPreparedRuntimeRequestOverrides = (
+    model: Model,
+    preparedAuth: Parameters<typeof applyPreparedRuntimeAuthToModel>[1],
+  ): void => {
+    const runtimeModel = applyPreparedRuntimeAuthToModel(model, preparedAuth);
+    if (runtimeModel === model) {
       return;
     }
     // Runtime auth plugins may override baseUrl and safe request auth headers,
     // while the shared applier strips privileged transport knobs.
-    params.setRuntimeModel(runtimeModel);
-    params.setEffectiveModel(
-      applyPreparedRuntimeAuthToModel(params.getEffectiveModel(), paramsForApply.preparedAuth),
-    );
+    state.models.runtime = runtimeModel;
+    state.models.effective = applyPreparedRuntimeAuthToModel(state.models.effective, preparedAuth);
   };
 
-  const hasRefreshableRuntimeAuth = () =>
-    Boolean(params.getRuntimeAuthState()?.sourceApiKey.trim());
-
-  const nextRuntimeAuthGeneration = () => (params.getRuntimeAuthState()?.generation ?? 0) + 1;
-
-  const prepareRuntimeAuthForModel = async (prepareParams: {
+  const prepareRuntimeAuthForModel = (prepareParams: {
     runtimeModel: Model;
     apiKey: string;
     authMode: string;
     profileId?: string;
-  }) => {
-    const preparedAuth = await prepareProviderRuntimeAuth({
-      provider: prepareParams.runtimeModel.provider,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: process.env,
-      context: {
-        config: params.config,
-        agentDir: params.agentDir,
-        workspaceDir: params.workspaceDir,
-        env: process.env,
-        provider: prepareParams.runtimeModel.provider,
-        modelId: params.getModelId(),
-        model: prepareParams.runtimeModel,
-        apiKey: unwrapSecretSentinelsForProviderEgress(
-          prepareParams.apiKey,
-          "provider runtime auth exchange",
-        ),
-        authMode: prepareParams.authMode,
-        profileId: prepareParams.profileId,
+    signal?: AbortSignal;
+  }) =>
+    withAuthDeadline(
+      "runtime auth exchange",
+      async (signal) => {
+        // Canonical observation follows credential resolution and precedes provider egress.
+        // It catches another process replacing a profile that retained the same ID.
+        await params.authProfileBinding?.revalidate();
+        signal.throwIfAborted();
+        params.assertCurrent?.();
+        params.authProfileBinding?.assertCurrent();
+        const preparedAuth = await prepareProviderRuntimeAuth({
+          assertCurrent: () => {
+            signal.throwIfAborted();
+            params.assertCurrent?.();
+          },
+          provider: prepareParams.runtimeModel.provider,
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+          env: process.env,
+          context: {
+            config: params.config,
+            agentDir: params.agentDir,
+            workspaceDir: params.workspaceDir,
+            env: process.env,
+            provider: prepareParams.runtimeModel.provider,
+            modelId: params.modelId,
+            model: prepareParams.runtimeModel,
+            apiKey: prepareParams.apiKey,
+            authMode: prepareParams.authMode,
+            profileId: prepareParams.profileId,
+            signal,
+          },
+        });
+        signal.throwIfAborted();
+        return protectPreparedProviderRuntimeAuth({
+          provider: prepareParams.runtimeModel.provider,
+          preparedAuth,
+        });
       },
-    });
-    return protectPreparedProviderRuntimeAuth({
-      provider: prepareParams.runtimeModel.provider,
-      preparedAuth,
-    });
-  };
+      prepareParams.signal,
+    );
 
   const clearRuntimeAuthRefreshTimer = () => {
-    const runtimeAuthState = params.getRuntimeAuthState();
+    const runtimeAuthState = state.runtimeAuthState;
     if (!runtimeAuthState?.refreshTimer) {
       return;
     }
@@ -240,84 +178,62 @@ export function createEmbeddedRunAuthController(params: {
   };
 
   const stopRuntimeAuthRefreshTimer = () => {
-    if (!params.getRuntimeAuthState()) {
-      return;
-    }
-    params.setRuntimeAuthRefreshCancelled(true);
+    state.runtimeAuthRefreshCancelled = true;
+    requestAuthAuthorization?.dispose();
+    requestAuthAuthorization = undefined;
     clearRuntimeAuthRefreshTimer();
   };
 
   const refreshRuntimeAuth = async (reason: string): Promise<void> => {
-    const runtimeAuthState = params.getRuntimeAuthState();
+    const runtimeAuthState = state.runtimeAuthState;
     if (!runtimeAuthState) {
       return;
     }
     if (runtimeAuthState.refreshInFlight) {
-      await runtimeAuthState.refreshInFlight;
-      return;
+      return runtimeAuthState.refreshInFlight;
     }
-    // Generation/profile/source checks below discard refreshes that complete
-    // after another profile or credential has already become active.
-    const refreshGeneration = runtimeAuthState.generation;
-    const refreshProfileId = runtimeAuthState.profileId;
+    // Publish only while the captured credential state is still active.
     const refreshPromise: Promise<void> = (async () => {
-      const currentRuntimeAuthState = params.getRuntimeAuthState();
-      const sourceApiKey = currentRuntimeAuthState?.sourceApiKey.trim() ?? "";
+      const sourceApiKey = runtimeAuthState.sourceApiKey.trim();
       if (!sourceApiKey) {
         throw new Error(`Runtime auth refresh requires a source credential.`);
       }
-      const runtimeModel = params.getRuntimeModel();
-      params.log.debug(`Refreshing runtime auth for ${runtimeModel.provider} (${reason})...`);
+      const runtimeModel = state.models.runtime;
       const preparedAuth = await prepareRuntimeAuthForModel({
         runtimeModel,
         apiKey: sourceApiKey,
-        authMode: currentRuntimeAuthState?.authMode ?? "unknown",
-        profileId: currentRuntimeAuthState?.profileId,
+        authMode: runtimeAuthState.authMode,
+        profileId: runtimeAuthState.profileId,
       });
       if (!preparedAuth?.apiKey) {
         throw new Error(
           `Provider "${runtimeModel.provider}" does not support runtime auth refresh.`,
         );
       }
-      const activeRuntimeAuthState = params.getRuntimeAuthState();
-      if (
-        !activeRuntimeAuthState ||
-        activeRuntimeAuthState.generation !== refreshGeneration ||
-        activeRuntimeAuthState.profileId !== refreshProfileId ||
-        activeRuntimeAuthState.sourceApiKey.trim() !== sourceApiKey
-      ) {
+      if (state.runtimeAuthState !== runtimeAuthState) {
         params.log.debug(
           `Ignoring stale runtime auth refresh for ${runtimeModel.provider}; auth state advanced before ${reason} refresh completed.`,
         );
         return;
       }
       params.authStorage.setRuntimeApiKey(runtimeModel.provider, preparedAuth.apiKey);
-      applyPreparedRuntimeRequestOverrides({ runtimeModel, preparedAuth });
-      params.setRuntimeAuthState({
-        ...activeRuntimeAuthState,
+      applyPreparedRuntimeRequestOverrides(runtimeModel, preparedAuth);
+      state.runtimeAuthState = {
+        ...runtimeAuthState,
+        apiKey: preparedAuth.apiKey,
         expiresAt: preparedAuth.expiresAt,
-      } as RuntimeAuthState);
-      if (preparedAuth.expiresAt) {
-        const remaining = preparedAuth.expiresAt - Date.now();
-        params.log.debug(
-          `Runtime auth refreshed for ${runtimeModel.provider}; expires in ${Math.max(0, Math.floor(remaining / 1000))}s.`,
-        );
-      }
+      };
     })()
       .catch((err: unknown) => {
-        const runtimeModel = params.getRuntimeModel();
+        const runtimeModel = state.models.runtime;
         params.log.warn(
           `Runtime auth refresh failed for ${runtimeModel.provider}: ${formatErrorMessage(err)}`,
         );
         throw err;
       })
       .finally(() => {
-        const activeState = params.getRuntimeAuthState();
-        if (
-          activeState &&
-          activeState.generation === refreshGeneration &&
-          activeState.refreshInFlight === refreshPromise
-        ) {
+        const activeState = state.runtimeAuthState;
+        if (activeState?.refreshInFlight === refreshPromise) {
           activeState.refreshInFlight = undefined;
         }
       });
@@ -326,12 +242,12 @@ export function createEmbeddedRunAuthController(params: {
   };
 
   const scheduleRuntimeAuthRefresh = (): void => {
-    const runtimeAuthState = params.getRuntimeAuthState();
-    if (!runtimeAuthState || params.getRuntimeAuthRefreshCancelled()) {
+    const runtimeAuthState = state.runtimeAuthState;
+    if (!runtimeAuthState || state.runtimeAuthRefreshCancelled) {
       return;
     }
-    const runtimeModel = params.getRuntimeModel();
-    if (!hasRefreshableRuntimeAuth()) {
+    const runtimeModel = state.models.runtime;
+    if (!runtimeAuthState.sourceApiKey.trim()) {
       params.log.warn(
         `Skipping runtime auth refresh scheduling for ${runtimeModel.provider}; source credential missing.`,
       );
@@ -343,66 +259,43 @@ export function createEmbeddedRunAuthController(params: {
     clearRuntimeAuthRefreshTimer();
     const now = Date.now();
     const refreshAt = runtimeAuthState.expiresAt - RUNTIME_AUTH_REFRESH_MARGIN_MS;
-    const delayMs = clampRuntimeAuthRefreshDelayMs({
-      refreshAt,
-      now,
-      minDelayMs: RUNTIME_AUTH_REFRESH_MIN_DELAY_MS,
+    const delayMs = resolveSafeTimeoutDelayMs(refreshAt - now, {
+      minMs: RUNTIME_AUTH_REFRESH_MIN_DELAY_MS,
     });
-    const timer = setTimeout(() => {
-      if (params.getRuntimeAuthRefreshCancelled()) {
+    const refresh = (reason: "scheduled" | "scheduled-retry") => {
+      if (state.runtimeAuthRefreshCancelled) {
         return;
       }
-      refreshRuntimeAuth("scheduled")
-        .then(() => scheduleRuntimeAuthRefresh())
+      refreshRuntimeAuth(reason)
+        .then(scheduleRuntimeAuthRefresh)
         .catch(() => {
-          if (params.getRuntimeAuthRefreshCancelled()) {
+          if (reason === "scheduled-retry" || state.runtimeAuthRefreshCancelled) {
             return;
           }
-          const retryTimer = setTimeout(() => {
-            if (params.getRuntimeAuthRefreshCancelled()) {
-              return;
-            }
-            refreshRuntimeAuth("scheduled-retry")
-              .then(() => scheduleRuntimeAuthRefresh())
-              .catch(() => undefined);
-          }, RUNTIME_AUTH_REFRESH_RETRY_MS);
-          const activeRuntimeAuthState = params.getRuntimeAuthState();
+          const retryTimer = setTimeout(
+            () => refresh("scheduled-retry"),
+            RUNTIME_AUTH_REFRESH_RETRY_MS,
+          );
+          const activeRuntimeAuthState = state.runtimeAuthState;
           if (activeRuntimeAuthState) {
             activeRuntimeAuthState.refreshTimer = retryTimer;
           }
-          if (params.getRuntimeAuthRefreshCancelled() && activeRuntimeAuthState) {
-            clearTimeout(retryTimer);
-            activeRuntimeAuthState.refreshTimer = undefined;
-          }
         });
-    }, delayMs);
-    runtimeAuthState.refreshTimer = timer;
-    if (params.getRuntimeAuthRefreshCancelled()) {
-      clearTimeout(timer);
-      runtimeAuthState.refreshTimer = undefined;
-    }
+    };
+    runtimeAuthState.refreshTimer = setTimeout(() => refresh("scheduled"), delayMs);
   };
 
   const resolveAuthProfileFailoverReason = (failoverParams: {
     allInCooldown: boolean;
     message: string;
-    profileIds?: Array<string | undefined>;
   }): FailoverReason => {
     if (failoverParams.allInCooldown) {
-      const profileIds = (failoverParams.profileIds ?? params.profileCandidates).filter(
+      const profileIds = params.profileCandidates.filter(
         (id): id is string => typeof id === "string" && id.length > 0,
       );
-      return (
-        resolveProfilesUnavailableReason({
-          store: params.authStore,
-          profileIds,
-        }) ?? "unknown"
-      );
+      return resolveProfilesUnavailableReason({ store: params.authStore, profileIds }) ?? "unknown";
     }
-    const classified = classifyFailoverReason(failoverParams.message, {
-      provider: params.getProvider(),
-    });
-    return classified ?? "auth";
+    return classifyFailoverReason(failoverParams.message, { provider: params.provider }) ?? "auth";
   };
 
   const recordOAuthRefreshFailure = async (
@@ -413,7 +306,7 @@ export function createEmbeddedRunAuthController(params: {
       return;
     }
     const profileId = error.profileId ?? candidate;
-    const provider = error.provider || params.getProvider();
+    const provider = error.provider || params.provider;
     const errorText = formatErrorMessage(error);
     params.log.warn(
       `auth profile "${profileId ?? "(unknown)"}" failed for provider "${provider}": ${errorText}`,
@@ -421,13 +314,16 @@ export function createEmbeddedRunAuthController(params: {
     if (!profileId || params.authProfileStateMode === "read-only") {
       return;
     }
-    const reason = resolveAuthProfileFailureReason({
-      failoverReason: resolveAuthProfileFailoverReason({
-        allInCooldown: false,
-        message: errorText,
-      }),
-      policy: params.authProfileFailurePolicy,
-    });
+    const reason =
+      error.retryable && params.authProfileFailurePolicy !== "local"
+        ? "timeout"
+        : resolveAuthProfileFailureReason({
+            failoverReason: resolveAuthProfileFailoverReason({
+              allInCooldown: false,
+              message: errorText,
+            }),
+            policy: params.authProfileFailurePolicy,
+          });
     if (!reason) {
       return;
     }
@@ -439,7 +335,8 @@ export function createEmbeddedRunAuthController(params: {
         cfg: params.config,
         agentDir: params.agentDir,
         runId: params.runId,
-        modelId: params.getModelId(),
+        modelId: params.modelId,
+        retryAfterMs: resolveRetryAfterMs(errorText, Date.now(), error),
       });
     } catch (markError) {
       params.log.warn(
@@ -450,28 +347,24 @@ export function createEmbeddedRunAuthController(params: {
 
   const throwAuthProfileFailover = (failoverParams: {
     allInCooldown: boolean;
-    message?: string;
     error?: unknown;
   }): never => {
-    const provider = params.getProvider();
-    const modelId = params.getModelId();
-    const messageForReason =
-      failoverParams.message?.trim() ||
-      (failoverParams.error ? formatErrorMessage(failoverParams.error).trim() : "");
+    const provider = params.provider;
+    const modelId = params.modelId;
+    const messageForReason = failoverParams.error
+      ? formatErrorMessage(failoverParams.error).trim()
+      : "";
+    const code = failoverParams.error ? getFailoverErrorCode(failoverParams.error) : undefined;
     const reason = resolveAuthProfileFailoverReason({
       allInCooldown: failoverParams.allInCooldown,
       message: messageForReason,
-      profileIds: params.profileCandidates,
     });
     const message =
-      failoverParams.message?.trim() ||
+      (code === "selected_auth_profile_unavailable" ? messageForReason : undefined) ||
       renderAuthProfileFailoverCopy({
         reason,
         provider,
         allInCooldown: failoverParams.allInCooldown,
-        causeText: failoverParams.error
-          ? formatErrorMessage(failoverParams.error).trim()
-          : undefined,
         recoveryHint: buildProviderAuthRecoveryHint({
           provider,
           config: params.config,
@@ -481,12 +374,15 @@ export function createEmbeddedRunAuthController(params: {
       });
     if (params.fallbackConfigured) {
       const authMode =
-        reason === "billing"
+        reason === "billing" ||
+        reason === "auth" ||
+        reason === "auth_permanent" ||
+        reason === "session_expired"
           ? resolveSubscriptionAuthModeForProfiles({
               store: params.authStore,
               profileIds: failoverParams.allInCooldown
                 ? params.profileCandidates
-                : [params.profileCandidates[params.getProfileIndex()]],
+                : [params.profileCandidates[state.profileIndex]],
             })
           : undefined;
       throw new FailoverError(message, {
@@ -494,7 +390,8 @@ export function createEmbeddedRunAuthController(params: {
         provider,
         model: modelId,
         authMode,
-        status: resolveFailoverStatus(reason),
+        status: resolveFailoverStatus(reason, code),
+        code,
         authProfileFailure: { allInCooldown: failoverParams.allInCooldown },
         cause: failoverParams.error,
       });
@@ -505,205 +402,266 @@ export function createEmbeddedRunAuthController(params: {
     throw new Error(message);
   };
 
-  const resolveApiKeyForCandidate = async (
+  const applyApiKeyInfo = async (
     candidate?: string,
-    model = params.getRuntimeModel(),
-    allowAuthProfileFallback?: boolean,
-  ) => {
-    return getApiKeyForModelCore({
-      model,
-      cfg: params.config,
-      profileId: candidate,
-      store: params.authStore,
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
-      lockedProfile: candidate != null && candidate === params.lockedProfileId,
-      allowAuthProfileFallback,
-      secretSentinels: true,
-    });
-  };
-
-  const applyApiKeyInfo = async (candidate?: string, attemptIndex?: number): Promise<void> => {
+    attemptIndex?: number,
+    forceRefresh = false,
+  ): Promise<void> => {
+    requestAuthGeneration = undefined;
+    requestAuthAuthorization?.dispose();
+    requestAuthAuthorization = undefined;
     const preparedModel = await params.prepareModelForAuthProfile?.(candidate, attemptIndex);
-    const apiKeyInfo = await resolveApiKeyForCandidate(
-      candidate,
-      preparedModel?.runtimeModel,
-      preparedModel?.allowAuthProfileFallback,
+    const apiKeyInfo = await withAuthDeadline("credential resolution", (signal) =>
+      getApiKeyForModelCore({
+        model: preparedModel?.runtimeModel ?? state.models.runtime,
+        cfg: params.config,
+        profileId: candidate,
+        store: params.authStore,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+        lockedProfile: forceRefresh || (candidate != null && candidate === params.lockedProfileId),
+        forceRefresh,
+        allowAuthProfileFallback: preparedModel?.allowAuthProfileFallback,
+        secretSentinels: true,
+        signal,
+      }),
     );
     if (
       preparedModel?.authRequirement &&
       !providerModelRouteAcceptsAuthMode({
         requirement: preparedModel.authRequirement,
         mode: apiKeyInfo.mode ?? (apiKeyInfo.apiKey ? "api-key" : undefined),
+        authRequirement: resolveProviderModelAuthPolicy({
+          provider: preparedModel.runtimeModel.provider,
+          mode: apiKeyInfo.mode,
+          authFlow: apiKeyInfo.authFlow,
+          api: preparedModel.runtimeModel.api,
+          baseUrl: preparedModel.runtimeModel.baseUrl,
+        }).authRequirement,
       })
     ) {
       throw new Error(
         `Resolved ${apiKeyInfo.mode ?? "unknown"} credentials are incompatible with the selected ${preparedModel.authRequirement} route for ${preparedModel.runtimeModel.provider}.`,
       );
     }
-    // Preserve the checked source even when resolution fails before route commit.
-    params.setApiKeyInfo(apiKeyInfo);
-    const resolvedProfileId = apiKeyInfo.profileId ?? candidate;
-    if (!apiKeyInfo.apiKey) {
-      if (apiKeyInfo.mode !== "aws-sdk") {
-        const runtimeModel = preparedModel?.runtimeModel ?? params.getRuntimeModel();
-        throw new MissingProviderAuthError(runtimeModel.provider, apiKeyInfo);
-      }
-      commitPreparedModel(preparedModel);
-      // AWS SDK auth via IMDS / instance role / ECS task role: no explicit API
-      // key is available but the SDK default credential chain can resolve
-      // credentials at runtime.  We must still call setRuntimeApiKey so that
-      // OpenClaw runtime's authStorage considers the provider authenticated.  Try
-      // prepareProviderRuntimeAuth first (it can sign requests and return a
-      // short-lived token); fall back to a sentinel value when the provider
-      // plugin does not implement runtime auth preparation.
-      const runtimeModel = params.getRuntimeModel();
-      const AWS_SDK_AUTH_SENTINEL = "__aws_sdk_auth__";
-      try {
-        const preparedAuth = await prepareRuntimeAuthForModel({
-          runtimeModel,
-          apiKey: AWS_SDK_AUTH_SENTINEL,
-          authMode: apiKeyInfo.mode,
-          profileId: apiKeyInfo.profileId,
-        });
-        applyPreparedRuntimeRequestOverrides({ runtimeModel, preparedAuth: preparedAuth ?? {} });
-        if (preparedAuth?.apiKey) {
-          clearRuntimeAuthRefreshTimer();
-          params.authStorage.setRuntimeApiKey(runtimeModel.provider, preparedAuth.apiKey);
-          params.setRuntimeAuthState({
-            generation: nextRuntimeAuthGeneration(),
-            sourceApiKey: AWS_SDK_AUTH_SENTINEL,
-            authMode: apiKeyInfo.mode,
-            profileId: resolvedProfileId,
-            expiresAt: preparedAuth.expiresAt,
-          });
-          if (preparedAuth.expiresAt) {
-            scheduleRuntimeAuthRefresh();
-          }
-          params.setLastProfileId(resolvedProfileId);
-          return;
-        }
-      } catch (error) {
-        params.log.warn(
-          `prepareProviderRuntimeAuth failed for ${runtimeModel.provider}, falling back to sentinel: ${formatErrorMessage(error)}`,
-        );
-      }
-      // No runtime auth plugin resolved a real credential.  Inject the
-      // sentinel so OpenClaw runtime's hasConfiguredAuth() passes and the AWS SDK default
-      // credential chain handles actual request signing.
-      clearRuntimeAuthRefreshTimer();
-      params.authStorage.setRuntimeApiKey(runtimeModel.provider, AWS_SDK_AUTH_SENTINEL);
-      params.setRuntimeAuthState(null);
-      params.setLastProfileId(resolvedProfileId);
-      return;
+    params.authProfileBinding?.assertCurrent();
+    if (params.authProfileBinding && apiKeyInfo.profileId !== params.authProfileBinding.profileId) {
+      throw new Error("Resolved credentials do not belong to the automation inference owner.");
     }
-    commitPreparedModel(preparedModel);
+    // Preserve the checked source even when resolution fails before route commit.
+    state.apiKeyInfo = apiKeyInfo;
+    const usesAwsSdkChain = !apiKeyInfo.apiKey && apiKeyInfo.mode === "aws-sdk";
+    if (!apiKeyInfo.apiKey && !usesAwsSdkChain) {
+      const runtimeModel = preparedModel?.runtimeModel ?? state.models.runtime;
+      throw new MissingProviderAuthError(runtimeModel.provider, apiKeyInfo);
+    }
+    preparedModel?.commit();
+    if (!preparedModel?.authRequirement) {
+      state.models.runtime = baseRuntimeModel;
+      state.models.effective = baseEffectiveModel;
+    }
+    const authAuthority = getProviderAuthAuthority(apiKeyInfo);
+    state.models.runtime = attachProviderAuthAuthority(state.models.runtime, authAuthority);
+    state.models.effective = attachProviderAuthAuthority(state.models.effective, authAuthority);
+    const runtimeModel = state.models.runtime;
+    // AWS's default credential chain has no explicit key. The sentinel admits
+    // runtime auth preparation or, without a plugin token, SDK request signing.
+    const sourceApiKey = apiKeyInfo.apiKey || "__aws_sdk_auth__";
+    const profileId = usesAwsSdkChain ? (apiKeyInfo.profileId ?? candidate) : apiKeyInfo.profileId;
+    const generation = {};
+    requestAuthGeneration = generation;
+    const selected = profileId ? params.authStore.profiles[profileId] : undefined;
+    const assertSelectionCurrent = () => {
+      authSignal.throwIfAborted();
+      params.assertCurrent?.();
+      if (state.runtimeAuthRefreshCancelled || requestAuthGeneration !== generation) {
+        throw new Error("Provider request auth capability is closed.");
+      }
+      params.authProfileBinding?.assertCurrent();
+      assertProviderAuthAuthority(runtimeModel);
+    };
+    // Canonical writers retire account authorization on reconnect/removal; overlays keep their owner.
+    const setupVerification =
+      profileId &&
+      selected?.setup?.replacement &&
+      isSetupCredentialAccessible({ profileId, credential: selected, agentDir: params.agentDir });
+    const requestAuthSupported =
+      !isEnvOnlyAuthProfileRuntime() &&
+      !getScopedSharedAuthStore() &&
+      !setupVerification &&
+      !params.authStore.runtimeExternalProfileIds?.includes(profileId ?? "");
+    const authorization =
+      requestAuthSupported && apiKeyInfo.mode === "oauth" && profileId && selected?.type === "oauth"
+        ? await captureAuthProfileAuthorization({
+            profileId,
+            agentDir: params.agentDir,
+            cfg: params.config,
+            assertCurrent: assertSelectionCurrent,
+          })
+        : undefined;
+    requestAuthAuthorization = authorization;
     let runtimeAuthHandled = false;
-    const runtimeModel = params.getRuntimeModel();
-    const preparedAuth = await prepareRuntimeAuthForModel({
-      runtimeModel,
-      apiKey: apiKeyInfo.apiKey,
-      authMode: apiKeyInfo.mode,
-      profileId: apiKeyInfo.profileId,
-    });
-    applyPreparedRuntimeRequestOverrides({ runtimeModel, preparedAuth: preparedAuth ?? {} });
-    if (preparedAuth?.apiKey) {
-      clearRuntimeAuthRefreshTimer();
-      params.authStorage.setRuntimeApiKey(runtimeModel.provider, preparedAuth.apiKey);
-      params.setRuntimeAuthState({
-        generation: nextRuntimeAuthGeneration(),
-        sourceApiKey: apiKeyInfo.apiKey,
+    try {
+      const preparedAuth = await prepareRuntimeAuthForModel({
+        runtimeModel,
+        apiKey: sourceApiKey,
         authMode: apiKeyInfo.mode,
         profileId: apiKeyInfo.profileId,
-        expiresAt: preparedAuth.expiresAt,
       });
-      if (preparedAuth.expiresAt) {
-        scheduleRuntimeAuthRefresh();
+      if (authorization) {
+        assertSelectionCurrent();
+        authorization.assertCurrent();
       }
-      runtimeAuthHandled = true;
+      applyPreparedRuntimeRequestOverrides(runtimeModel, preparedAuth);
+      if (preparedAuth?.apiKey) {
+        clearRuntimeAuthRefreshTimer();
+        params.authStorage.setRuntimeApiKey(runtimeModel.provider, preparedAuth.apiKey);
+        state.runtimeAuthState = {
+          apiKey: preparedAuth.apiKey,
+          sourceApiKey,
+          authMode: apiKeyInfo.mode,
+          profileId,
+          expiresAt: preparedAuth.expiresAt,
+        };
+        if (preparedAuth.expiresAt) {
+          scheduleRuntimeAuthRefresh();
+        }
+        runtimeAuthHandled = true;
+      }
+    } catch (error) {
+      if (authSignal.aborted || params.authProfileBinding || !usesAwsSdkChain) {
+        throw error;
+      }
+      params.log.warn(
+        `prepareProviderRuntimeAuth failed for ${runtimeModel.provider}, falling back to sentinel: ${formatErrorMessage(error)}`,
+      );
     }
     if (!runtimeAuthHandled) {
       clearRuntimeAuthRefreshTimer();
-      params.authStorage.setRuntimeApiKey(runtimeModel.provider, apiKeyInfo.apiKey);
-      params.setRuntimeAuthState(null);
+      params.authStorage.setRuntimeApiKey(runtimeModel.provider, sourceApiKey);
+      state.runtimeAuthState = null;
     }
-    params.setLastProfileId(apiKeyInfo.profileId);
+    state.lastProfileId = profileId;
+    const requestAuth: ProviderCreateStreamFnContext["requestAuth"] =
+      authorization && apiKeyInfo.mode === "oauth" && profileId && selected?.type === "oauth"
+        ? {
+            version: 1,
+            async resolve({ signal }) {
+              const requestSignal = signal ? AbortSignal.any([authSignal, signal]) : authSignal;
+              const assertCurrent = () => {
+                requestSignal.throwIfAborted();
+                assertSelectionCurrent();
+                authorization.assertCurrent();
+              };
+              assertCurrent();
+              // Omit the attempt's captured store. Canonical resolution owns refresh/rotation.
+              const current = await withAuthDeadline(
+                "credential resolution",
+                (credentialSignal) =>
+                  getApiKeyForModelCore({
+                    model: runtimeModel,
+                    cfg: params.config,
+                    profileId,
+                    lockedProfile: true,
+                    allowAuthProfileFallback: false,
+                    agentDir: params.agentDir,
+                    workspaceDir: params.workspaceDir,
+                    signal: credentialSignal,
+                    assertRefreshAdmission: assertCurrent,
+                    validateOAuthCredential: (credential) => {
+                      if (
+                        credential.provider !== selected.provider ||
+                        credential.authFlow !== selected.authFlow ||
+                        !isSafeToCopyOAuthIdentity(selected, credential) ||
+                        (!hasOAuthIdentity(selected) && credential.refresh !== selected.refresh)
+                      ) {
+                        throw new Error("Provider request credentials changed account identity.");
+                      }
+                    },
+                  }),
+                requestSignal,
+              );
+              assertCurrent();
+              if (current.profileId !== profileId || current.mode !== "oauth" || !current.apiKey) {
+                throw new Error(
+                  "Provider request credentials no longer match the selected OAuth profile.",
+                );
+              }
+              const prepared = await prepareRuntimeAuthForModel({
+                runtimeModel,
+                apiKey: current.apiKey,
+                authMode: "oauth",
+                profileId,
+                signal: requestSignal,
+              });
+              const assertRequestCurrent = () => {
+                assertCurrent();
+                assertProviderAuthAuthority(current);
+              };
+              assertRequestCurrent();
+              const apiKey = prepared?.apiKey ?? current.apiKey;
+              params.authStorage.setRuntimeApiKey(runtimeModel.provider, apiKey);
+              state.apiKeyInfo = current;
+              return {
+                apiKey: unwrapSecretSentinelsForProviderEgress(apiKey, "provider request auth"),
+                assertCurrent: assertRequestCurrent,
+              };
+            },
+          }
+        : undefined;
+    state.models.runtime = attachProviderRequestAuth(state.models.runtime, requestAuth);
+    state.models.effective = attachProviderRequestAuth(state.models.effective, requestAuth);
   };
 
   const advanceAuthProfile = async (): Promise<boolean> => {
-    let nextIndex = params.getProfileIndex() + 1;
-    while (nextIndex < params.profileCandidates.length) {
-      const candidateIndex = nextIndex++;
-      const candidate = params.profileCandidates[candidateIndex];
-      // Candidate exhaustion is run-local and never depends on a cooldown write.
-      params.setProfileIndex(candidateIndex);
-      if (
-        candidate &&
-        isProfileInCooldown(params.authStore, candidate, undefined, params.getModelId())
-      ) {
-        continue;
-      }
-      try {
-        await applyApiKeyInfo(candidate, candidateIndex);
-        params.setThinkLevel(params.initialThinkLevel);
-        params.attemptedThinking.clear();
-        return true;
-      } catch (err) {
-        if (err instanceof SecretSurfaceUnavailableError) {
-          throw err;
+    const advanced = await advanceAuthProfileCandidate({
+      candidates: params.profileCandidates,
+      state,
+      isAvailable: (candidate) =>
+        !candidate || !isProfileInCooldown(params.authStore, candidate, undefined, params.modelId),
+      tryPrepare: async (candidate, index) => {
+        try {
+          await applyApiKeyInfo(candidate, index);
+          return true;
+        } catch (error) {
+          if (authSignal.aborted || error instanceof SecretSurfaceUnavailableError) {
+            throw error;
+          }
+          await recordOAuthRefreshFailure(candidate, error);
+          return false;
         }
-        await recordOAuthRefreshFailure(candidate, err);
-      }
+      },
+    });
+    if (advanced) {
+      state.thinkLevel = params.initialThinkLevel;
+      params.attemptedThinking.clear();
     }
-    params.setProfileIndex(params.profileCandidates.length);
-    return false;
+    return advanced;
   };
 
   const initializeAuthProfile = async () => {
     try {
-      const modelId = params.getModelId();
-      const cooldownProbePolicy = resolveEmbeddedAuthCooldownProbePolicy({
-        authStore: params.authStore,
-        profileCandidates: params.profileCandidates,
-        lockedProfileId: params.lockedProfileId,
-        modelId,
-        allowTransientCooldownProbe: params.allowTransientCooldownProbe,
-      });
-      let didTransientCooldownProbe = false;
-
-      while (params.getProfileIndex() < params.profileCandidates.length) {
-        const candidate = params.profileCandidates[params.getProfileIndex()];
-        const inCooldown =
-          candidate && isProfileInCooldown(params.authStore, candidate, undefined, modelId);
-        if (inCooldown) {
-          const canProbeCandidate =
-            !didTransientCooldownProbe && cooldownProbePolicy.probeProfileIds.has(candidate);
-          // Spend the single probe slot only on a transiently cooled candidate;
-          // persistent failures must leave it available for later profiles.
-          if (canProbeCandidate) {
-            didTransientCooldownProbe = true;
-            params.log.warn(
-              `probing cooldowned auth profile for ${params.getProvider()}/${modelId} due to ${cooldownProbePolicy.unavailableReason ?? "transient"} unavailability`,
-            );
-          } else {
-            params.setProfileIndex(params.getProfileIndex() + 1);
-            continue;
-          }
+      const admitCandidate = createEmbeddedAuthProfileAdmission(params);
+      while (state.profileIndex < params.profileCandidates.length) {
+        if (!admitCandidate(params.profileCandidates[state.profileIndex])) {
+          state.profileIndex += 1;
+          continue;
         }
-        await applyApiKeyInfo(
-          params.profileCandidates[params.getProfileIndex()],
-          params.getProfileIndex(),
-        );
+        await applyApiKeyInfo(params.profileCandidates[state.profileIndex], state.profileIndex);
         break;
       }
-      if (params.getProfileIndex() >= params.profileCandidates.length) {
+      if (state.profileIndex >= params.profileCandidates.length) {
         throwAuthProfileFailover({ allInCooldown: true });
       }
     } catch (err) {
-      if (err instanceof FailoverError || err instanceof SecretSurfaceUnavailableError) {
+      if (
+        authSignal.aborted ||
+        err instanceof FailoverError ||
+        err instanceof SecretSurfaceUnavailableError
+      ) {
         throw err;
       }
-      await recordOAuthRefreshFailure(params.profileCandidates[params.getProfileIndex()], err);
+      await recordOAuthRefreshFailure(params.profileCandidates[state.profileIndex], err);
       const advanced = await advanceAuthProfile();
       if (!advanced) {
         throwAuthProfileFailover({ allInCooldown: false, error: err });
@@ -715,25 +673,38 @@ export function createEmbeddedRunAuthController(params: {
     errorText: string,
     retried: boolean,
   ): Promise<boolean> => {
-    if (!params.getRuntimeAuthState() || retried) {
-      return false;
-    }
-    if (!isFailoverErrorMessage(errorText, { provider: params.getProvider() })) {
-      return false;
-    }
-    if (classifyFailoverReason(errorText, { provider: params.getProvider() }) !== "auth") {
+    if (retried || classifyFailoverReason(errorText, { provider: params.provider }) !== "auth") {
       return false;
     }
     try {
-      await refreshRuntimeAuth("auth-error");
-      scheduleRuntimeAuthRefresh();
+      if (state.runtimeAuthState) {
+        await refreshRuntimeAuth("auth-error");
+        scheduleRuntimeAuthRefresh();
+      } else if (
+        params.provider === "openai" &&
+        state.lastProfileId &&
+        state.apiKeyInfo?.mode === "oauth" &&
+        state.apiKeyInfo.authFlow === "chatgpt-token-sharing" &&
+        /\btoken_expired\b|\bauthentication token is expired\b/iu.test(errorText)
+      ) {
+        await applyApiKeyInfo(state.lastProfileId, state.profileIndex, true);
+      } else {
+        return false;
+      }
       return true;
-    } catch {
+    } catch (error) {
+      if (authSignal.aborted) {
+        throw error;
+      }
       return false;
     }
   };
 
   return {
+    close: () => {
+      stopRuntimeAuthRefreshTimer();
+      cancelAuth();
+    },
     applyAuthProfileCandidate: applyApiKeyInfo,
     advanceAuthProfile,
     initializeAuthProfile,

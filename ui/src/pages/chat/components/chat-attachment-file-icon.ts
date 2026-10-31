@@ -1,28 +1,7 @@
-import { html } from "lit";
-import { styleMap } from "lit/directives/style-map.js";
 import { inferControlUiPublicAssetPath } from "../../../app/public-assets.ts";
 import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
-
 // The icon owns its CSS so composer and transcript call sites cannot render it unstyled.
-let attachmentIconStyles: Promise<unknown> | undefined;
-
-type AttachmentFileIconFamily =
-  | "unknown"
-  | "pdf"
-  | "document"
-  | "spreadsheet"
-  | "image"
-  | "video"
-  | "audio"
-  | "archive"
-  | "text"
-  | "markdown"
-  | "code"
-  | "javascript"
-  | "json"
-  | "python"
-  | "svg"
-  | "yaml";
+import "../../../styles/chat/attachments.css";
 
 export type AttachmentFileVisualMode = "preview-with-favicon" | "large-placeholder";
 
@@ -61,7 +40,7 @@ type FileIconFamilyDefinition = {
   compactByExtension?: Readonly<Record<string, CompactFileIcon>>;
 };
 
-const FILE_ICON_FAMILIES: readonly FileIconFamilyDefinition[] = [
+const FILE_ICON_FAMILIES = [
   {
     family: "unknown",
     accent: "#929292",
@@ -219,28 +198,23 @@ const FILE_ICON_FAMILIES: readonly FileIconFamilyDefinition[] = [
   },
 ] as const;
 
-const UNKNOWN_FILE_ICON = FILE_ICON_FAMILIES[0]!;
+type AttachmentFileIconFamily = (typeof FILE_ICON_FAMILIES)[number]["family"];
 
-export type ResolvedAttachmentFileIcon = {
-  family: AttachmentFileIconFamily;
-  accent: string;
-  extension?: string;
-  extensionLabel: string;
-  compact?: CompactFileIcon;
-};
+const UNKNOWN_FILE_ICON = FILE_ICON_FAMILIES[0];
 
-export function resolveAttachmentFileIcon(
-  filename: string,
-  mimeType?: string,
-): ResolvedAttachmentFileIcon {
+export function resolveAttachmentFileIcon(filename: string, mimeType?: string) {
   const extension = getMediaFileExtension(filename);
   const normalizedMimeType = mimeType?.split(";", 1)[0]?.trim().toLowerCase();
-  const definition =
+  const definition: FileIconFamilyDefinition =
     (extension
-      ? FILE_ICON_FAMILIES.find((candidate) => candidate.extensions.includes(extension))
+      ? FILE_ICON_FAMILIES.find((candidate: FileIconFamilyDefinition) =>
+          candidate.extensions.includes(extension),
+        )
       : undefined) ??
     (normalizedMimeType
-      ? FILE_ICON_FAMILIES.find((candidate) => candidate.mimeTypes.includes(normalizedMimeType))
+      ? FILE_ICON_FAMILIES.find((candidate: FileIconFamilyDefinition) =>
+          candidate.mimeTypes.includes(normalizedMimeType),
+        )
       : undefined) ??
     UNKNOWN_FILE_ICON;
   const compact = extension
@@ -253,7 +227,6 @@ export function resolveAttachmentFileIcon(
   return {
     family: definition.family,
     accent,
-    extension,
     extensionLabel:
       extension?.toUpperCase() ??
       (definition.family === "unknown" ? "FILE" : definition.family.toUpperCase()),
@@ -265,40 +238,36 @@ function fileIconAssetPath(path: string): string {
   return inferControlUiPublicAssetPath(`file-icons/${path}.svg`);
 }
 
-export function renderAttachmentFileIcon(options: {
+export type AttachmentFileIconOptions = {
   filename: string;
   mimeType?: string;
   mode: AttachmentFileVisualMode;
   unavailable?: boolean;
-}) {
-  attachmentIconStyles ??= import("../../../styles/chat/attachments.css");
-  void attachmentIconStyles;
+  loading?: boolean;
+};
+
+export function prepareAttachmentFileIcon(options: AttachmentFileIconOptions) {
   const resolved = resolveAttachmentFileIcon(options.filename, options.mimeType);
-  const compactLight = resolved.compact
-    ? fileIconAssetPath(`compact/light/${resolved.compact}`)
-    : fileIconAssetPath("compact/unknown-light");
-  const compactDark = resolved.compact
-    ? fileIconAssetPath(`compact/dark/${resolved.compact}`)
-    : fileIconAssetPath("compact/unknown-dark");
-  return html`<span
-    class="chat-attachment-file-icon ${options.unavailable
-      ? "chat-attachment-file-icon--unavailable"
-      : ""}"
-    data-family=${resolved.family}
-    data-mode=${options.mode}
-    aria-hidden="true"
-    style=${styleMap({
-      "--chat-file-icon-shell-light": `url("${fileIconAssetPath("large/shell-light")}")`,
-      "--chat-file-icon-shell-dark": `url("${fileIconAssetPath("large/shell-dark")}")`,
+  const large = options.mode === "large-placeholder";
+  const size = large ? "44px" : "20px";
+  const assetPath = (theme: "light" | "dark") =>
+    fileIconAssetPath(
+      large
+        ? `large/shell-${theme}`
+        : resolved.compact
+          ? `compact/${theme}/${resolved.compact}`
+          : `compact/unknown-${theme}`,
+    );
+  return {
+    family: resolved.family,
+    large,
+    style: {
+      width: size,
+      height: size,
+      "--chat-file-icon-light": `url("${assetPath("light")}")`,
+      "--chat-file-icon-dark": `url("${assetPath("dark")}")`,
       "--chat-file-icon-overlay": `url("${fileIconAssetPath(`overlays/${resolved.family}`)}")`,
       "--chat-file-icon-accent": resolved.accent,
-      "--chat-file-icon-compact-light": `url("${compactLight}")`,
-      "--chat-file-icon-compact-dark": `url("${compactDark}")`,
-    })}
-  >
-    <span class="chat-attachment-file-icon__large">
-      <span class="chat-attachment-file-icon__overlay"></span>
-    </span>
-    <span class="chat-attachment-file-icon__compact"></span>
-  </span>`;
+    },
+  };
 }

@@ -1,5 +1,6 @@
 {
   "id": "microsoft-foundry",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },

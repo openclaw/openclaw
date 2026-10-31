@@ -1,0 +1,63 @@
+{
+  "release": "2026.9.2",
+  "source": "3928bad9badfcb6c7d140530435e806fb8092190",
+  "sessions": [
+    {
+      "agentId": "main",
+      "sessionKey": "agent:main:corpus-one",
+      "sessionId": "00000000-0000-4000-8000-000000000001",
+      "transcriptText": "Synthetic upgrade-state message one"
+    },
+    {
+      "agentId": "main",
+      "sessionKey": "agent:main:corpus-two",
+      "sessionId": "00000000-0000-4000-8000-000000000002",
+      "transcriptText": "Synthetic upgrade-state message two"
+    }
+  ],
+  "profiles": {
+    "openai:corpus-api": {
+      "type": "api_key",
+      "provider": "openai",
+      "key": "fixture-api-key"
+    },
+    "openai:corpus-oauth": {
+      "type": "oauth",
+      "provider": "openai",
+      "access": "fixture-oauth-access",
+      "refresh": "fixture-oauth-refresh",
+      "expires": 4102444800000
+    },
+    "anthropic:claude-cli": {
+      "type": "oauth",
+      "provider": "anthropic",
+      "access": "fixture-cli-access",
+      "refresh": "fixture-cli-refresh",
+      "expires": 4102444800000,
+      "subscriptionType": "pro",
+      "rateLimitTier": "default"
+    }
+  },
+  "cronJob": {
+    "id": "corpus-disabled-job",
+    "name": "Corpus disabled reminder",
+    "enabled": false,
+    "schedule": {
+      "kind": "every",
+      "everyMs": 86400000
+    },
+    "sessionTarget": "main",
+    "wakeMode": "next-heartbeat",
+    "payload": {
+      "kind": "systemEvent",
+      "text": "Synthetic upgrade reminder"
+    }
+  },
+  "cronStorePath": "/home/fixture/.openclaw/cron/jobs.json",
+  "controlUi": {
+    "userId": "38163a91-15f9-48d2-960d-50f778fb39d2",
+    "settings": {
+      "ui.themeMode": "dark"
+    }
+  }
+}

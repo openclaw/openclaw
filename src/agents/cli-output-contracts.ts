@@ -2,7 +2,10 @@ import type {
   CliBackendConfig,
   CliBackendJsonlUsage,
   CliBackendParseJsonlEvent,
+  CliBackendParseJsonlLifecycleEvent,
 } from "../plugins/cli-backend.types.js";
+import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
+import type { LiveEditDiffProgress } from "./embedded-agent-live-edit-diff.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -11,25 +14,16 @@ import type { ToolSummaryTrace } from "./embedded-agent-runner/types.js";
 
 export type CliUsage = CliBackendJsonlUsage;
 
-type CliProcessDiagnostics = {
-  backendId: string;
-  processReason: string;
-  exitCode: number | null;
-  exitSignal: NodeJS.Signals | number | null;
-  durationMs: number;
-  stdoutBytes: number;
-  stdoutHash: string;
-  stderrBytes: number;
-  stderrHash: string;
-  useResume: boolean;
-};
-
 export type CliTerminalFailure =
   | {
       reason: "max_turns";
       limit?: number;
     }
-  | { reason: "synthetic_no_response" };
+  | { reason: "synthetic_no_response" }
+  // The backend ended the turn on purpose without a reply (hook stop, aborted
+  // tools, budget). Keeping the CLI's own `terminal_reason` here is what lets
+  // consumers name the cause instead of reporting a transport-shaped failure.
+  | { reason: "turn_stopped"; terminalReason: string; stopReason?: string };
 
 export type CliTerminalInterruption = {
   reason: "aborted" | "timeout";
@@ -38,12 +32,23 @@ export type CliTerminalInterruption = {
 /** Normalized result from a CLI-backed model provider turn. */
 export type CliOutput = {
   text: string;
+  /** Completed result boundaries, retained for independent delivery and retry. */
+  textParts?: string[];
   rawText?: string;
+  /**
+   * Raw text of the model's final message when it differs from the cumulative
+   * `text` (earlier results or pre-tool narration); empty when the final message
+   * had no text. Never plugin-transformed.
+   */
+  rawFinalText?: string;
   sessionId?: string;
   /** Backend-owned assistant boundary that can safely anchor a later resumed fork. */
   resumeCheckpointId?: string;
   usage?: CliUsage;
-  /** Terminal cumulative turn usage for diagnostics; reply accounting keeps using `usage`. */
+  /**
+   * Terminal cumulative turn usage for persisted transcript accounting and turn diagnostics;
+   * live reply and context accounting keep using `usage`.
+   */
   diagnosticUsage?: CliUsage;
   toolSummary?: ToolSummaryTrace;
   errorText?: string;
@@ -51,11 +56,23 @@ export type CliOutput = {
   /** A caller interruption that ended the turn after usable assistant text was streamed. */
   terminalInterruption?: CliTerminalInterruption;
   diagnostics?: {
-    process?: CliProcessDiagnostics;
+    process?: {
+      backendId: string;
+      processReason: string;
+      exitCode: number | null;
+      exitSignal: NodeJS.Signals | number | null;
+      durationMs: number;
+      stdoutBytes: number;
+      stdoutHash: string;
+      stderrBytes: number;
+      stderrHash: string;
+      useResume: boolean;
+    };
   };
   finalPromptText?: string;
   didSendViaMessagingTool?: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
+  sourceReplyDelivered?: true;
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: MessagingToolSend[];
@@ -64,33 +81,30 @@ export type CliOutput = {
   toolMediaUrls?: string[];
   toolAudioAsVoice?: boolean;
   toolTrustedLocalMedia?: boolean;
+  /** Child sessions accepted by the turn-scoped loopback tool capture. */
+  acceptedSessionSpawns?: AcceptedSessionSpawn[];
   yielded?: true;
   yieldAcknowledgment?: string;
 };
 
-export type CliStreamingDelta = {
-  text: string;
+export type CliStreamingDelta = Pick<CliOutput, "text" | "sessionId" | "usage"> & {
   delta: string;
-  sessionId?: string;
-  usage?: CliUsage;
-};
-
-export type CliStreamJsonOutputLimits = {
-  maxTurnRawChars: number;
-  maxPendingLineChars: number;
-  maxTurnLines: number;
 };
 
 /** Incremental thinking text emitted while parsing a streaming CLI response. */
-export type CliThinkingDelta = {
-  text: string;
-  delta: string;
+export type CliThinkingDelta = Pick<CliStreamingDelta, "text" | "delta"> & {
   isReasoningSnapshot?: boolean;
+  /** New parser-owned content, not a replay; absence permits display but no watchdog credit. */
+  modelProgress?: true;
 };
 
 export type CliThinkingProgress = {
   progressTokens: number;
+  /** Positive parser-owned token evidence; absence permits display but no watchdog credit. */
+  modelProgress?: true;
 };
+
+export type CliCompactionDelta = { phase: "start" } | { phase: "end"; completed: boolean };
 
 /** Tool-call start event reconstructed from CLI stream output. */
 export type CliToolUseStartDelta = {
@@ -101,10 +115,11 @@ export type CliToolUseStartDelta = {
   args: Record<string, unknown>;
 };
 
+/** Counts-only progress while CLI tool arguments are still being generated. */
+export type CliToolInputDelta = LiveEditDiffProgress;
+
 /** Tool-call result event reconstructed from CLI stream output. */
-export type CliToolResultDelta = {
-  toolCallId: string;
-  name: string;
+export type CliToolResultDelta = Pick<CliToolUseStartDelta, "toolCallId" | "name"> & {
   isError: boolean;
   result?: unknown;
 };
@@ -113,15 +128,23 @@ export type CliJsonlStreamingParserOptions = {
   backend: CliBackendConfig;
   providerId: string;
   parseJsonlEvent?: CliBackendParseJsonlEvent;
+  parseJsonlLifecycleEvent?: CliBackendParseJsonlLifecycleEvent;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
+  onCompletedReply?: (text: string, assistantMessageIndex: number) => void;
   onThinkingDelta?: (delta: CliThinkingDelta) => void;
   onThinkingProgress?: (progress: CliThinkingProgress) => void;
+  onCompaction?: (delta: CliCompactionDelta) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
+  onToolInputDelta?: (delta: CliToolInputDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
   onDisplayToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onDisplayToolResult?: (delta: CliToolResultDelta) => void;
   onCommentaryText?: (text: string) => void;
   onSessionId?: (sessionId: string) => void;
+  /** Parent initialization fact; its authority owner validates the raw tool list. */
+  onNativeTools?: (tools: unknown) => void;
   onAssistantMessage?: (message: unknown) => void;
   onUsage?: (usage: CliUsage, terminal: boolean) => void;
+  /** Semantic subagent work for an active parent Agent call. Not a parent-lane event. */
+  onAttributedSubagentProgress?: (parentToolUseId: string) => void;
 };

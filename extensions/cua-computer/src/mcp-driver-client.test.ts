@@ -1,110 +1,85 @@
+import { createHash } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { ClickButton, EscalationReason } from "./driver-client.js";
+import { createInterface } from "node:readline";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { execution } from "./commands.test-helpers.js";
+import { CUA_DRIVER_CONTRACT_FIXTURES } from "./cua-driver-contract.test-fixtures.js";
+import { ClickButton } from "./driver-client.js";
+import { projectedToolDetails } from "./driver-result.js";
 import { createCuaMcpDriver } from "./mcp-driver-client.js";
+
+// Load the real transport before timing socket behavior, including its cold module graph.
+if (process.platform !== "win32") {
+  const { mcpStdioRuntime } = await import("openclaw/plugin-sdk/agent-harness-runtime");
+  await mcpStdioRuntime.load();
+}
 
 type RpcRequest = {
   id?: number;
   method: string;
   params?: { name?: string; arguments?: Record<string, unknown> };
+  reply: (result: unknown) => void;
+  write: (value: string | Buffer) => void;
+  stream: (chunks: Iterable<Buffer>) => Promise<void>;
 };
 
-type FakeEndpoint = {
-  binaryPath: string;
-  socketPath: string;
-  requests: RpcRequest[];
-  respond: (request: RpcRequest, result: unknown) => void;
-  writeRaw: (request: RpcRequest, value: string) => void;
-  close: () => Promise<void>;
-};
-
-async function createFakeEndpoint(
-  handle: (request: RpcRequest, endpoint: FakeEndpoint) => void,
-): Promise<FakeEndpoint> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cua-mcp-test-"));
+async function createFakeEndpoint(handle: (request: RpcRequest) => void) {
+  // macOS sockaddr_un cannot hold the test runner's nested temporary path.
+  const directory = await fs.mkdtemp(path.join(await fs.realpath("/tmp"), "oc-cua-mcp-"));
+  onTestFinished(async () => await fs.rm(directory, { recursive: true, force: true }));
   const socketPath = path.join(directory, "daemon.sock");
-  const binaryPath = path.join(directory, "cua-driver");
-  await fs.writeFile(
-    binaryPath,
-    `#!/usr/bin/env node
-const net = require("node:net");
-const args = process.argv.slice(2);
-if (args.length !== 4 || args[0] !== "mcp" || args[1] !== "--embedded" || args[2] !== "--socket") process.exit(64);
-if (process.env.CUA_DRIVER_EMBEDDED !== undefined || process.env.CUA_DRIVER_PERMISSION_MODE !== undefined || process.env.CUA_DRIVER_DANGEROUSLY_BYPASS_APPROVALS !== undefined || process.env.CUA_DRIVER_RS_TELEMETRY_ENABLED !== "false" || process.env.CUA_DRIVER_RS_UPDATE_CHECK !== "false") process.exit(65);
-const socket = net.createConnection(args[3]);
-process.stdin.pipe(socket);
-socket.pipe(process.stdout);
-socket.on("error", (error) => { process.stderr.write(error.message); process.exit(66); });
-socket.on("close", () => process.exit(0));
-`,
-    { mode: 0o700 },
-  );
-
   const requests: RpcRequest[] = [];
   const connections = new Set<net.Socket>();
-  const writers = new Map<number, net.Socket>();
-  const endpoint = {} as FakeEndpoint;
   const server = net.createServer((socket) => {
     connections.add(socket);
     socket.once("close", () => connections.delete(socket));
-    let buffer = Buffer.alloc(0);
-    socket.on("data", (chunk: Buffer) => {
-      buffer = Buffer.concat([buffer, chunk]);
-      while (true) {
-        const newline = buffer.indexOf(0x0a);
-        if (newline < 0) {
-          break;
-        }
-        const line = buffer.subarray(0, newline);
-        buffer = buffer.subarray(newline + 1);
-        if (line.length === 0) {
-          continue;
-        }
-        const request = JSON.parse(line.toString("utf8")) as RpcRequest;
-        requests.push(request);
-        if (typeof request.id === "number") {
-          writers.set(request.id, socket);
-        }
-        handle(request, endpoint);
+    createInterface({ input: socket }).on("line", (line) => {
+      if (!line) {
+        return;
       }
+      const wire = JSON.parse(line) as Pick<RpcRequest, "id" | "method" | "params">;
+      const request: RpcRequest = {
+        ...wire,
+        reply: (result) => {
+          socket.write(frame(wire.id, result));
+        },
+        write: (value) => {
+          socket.write(value);
+        },
+        stream: async (chunks) => {
+          await pipeline(Readable.from(chunks), socket, { end: false });
+        },
+      };
+      requests.push(request);
+      handle(request);
     });
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(socketPath, () => {
-      resolve();
+    server.listen(socketPath, resolve);
+  });
+  // Later driver hooks dispose before socket cleanup, even when a test fails.
+  onTestFinished(async () => {
+    for (const connection of connections) {
+      connection.destroy();
+    }
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
     });
   });
-
-  Object.assign(endpoint, {
-    binaryPath,
+  return {
+    binaryPath: fileURLToPath(new URL("../test/fixtures/mcp-proxy.cjs", import.meta.url)),
     socketPath,
     requests,
-    respond: (request: RpcRequest, result: unknown) => {
-      const writer = request.id === undefined ? undefined : writers.get(request.id);
-      writer?.write(`${JSON.stringify({ jsonrpc: "2.0", id: request.id, result })}\n`);
-    },
-    writeRaw: (request: RpcRequest, value: string) => {
-      const writer = request.id === undefined ? undefined : writers.get(request.id);
-      writer?.write(value);
-    },
-    close: async () => {
-      for (const connection of connections) {
-        connection.destroy();
-      }
-      await new Promise<void>((resolve) => {
-        server.close(() => {
-          resolve();
-        });
-      });
-      await fs.rm(directory, { recursive: true, force: true });
-    },
-  });
-  return endpoint;
+  };
 }
+type FakeEndpoint = Awaited<ReturnType<typeof createFakeEndpoint>>;
 
 function toolResult(structuredContent: Record<string, unknown>, image = false) {
   return {
@@ -121,222 +96,423 @@ function toolResult(structuredContent: Record<string, unknown>, image = false) {
 
 function sessionState(scope: "window" | "desktop") {
   return toolResult({
-    session: "openclaw-test",
     capture_scope: scope,
     effective_scope: scope,
     desktop_unlocked: scope === "desktop",
-    escalation_reason: null,
-    escalation_detail: null,
   });
 }
 
+function createSessionEndpoint(
+  handle: Parameters<typeof createFakeEndpoint>[0],
+  scope: "window" | "desktop" = "window",
+) {
+  return createFakeEndpoint((request) => {
+    if (request.method === "initialize") {
+      expect(request.params).toEqual({
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "openclaw-cua-computer", version: "1" },
+      });
+      request.reply({ protocolVersion: "2025-06-18" });
+    } else if (request.method === "tools/call" && request.params?.name === "start_session") {
+      request.reply(sessionState(scope));
+    } else {
+      handle(request);
+    }
+  });
+}
+
+function managedDriver(options: Parameters<typeof createCuaMcpDriver>[0]) {
+  const driver = createCuaMcpDriver(options);
+  onTestFinished(() => driver.dispose());
+  return driver;
+}
+
+function toolCalls(endpoint: FakeEndpoint, name: string) {
+  return endpoint.requests.filter(
+    (request) => request.method === "tools/call" && request.params?.name === name,
+  );
+}
+
+function received(endpoint: FakeEndpoint, method: string) {
+  return endpoint.requests.some((request) => request.method === method);
+}
+
+function replyWith(results: Record<string, unknown>) {
+  return (request: RpcRequest) => {
+    const name = request.params?.name;
+    if (request.method === "tools/call" && name && Object.hasOwn(results, name)) {
+      request.reply(results[name]);
+    }
+  };
+}
+
+function frame(id: number | undefined, value: unknown, kind: "result" | "error" = "result") {
+  return `${JSON.stringify({ jsonrpc: "2.0", id, [kind]: value })}\n`;
+}
+
+function rejectedPair(message: unknown) {
+  const rejected = { status: "rejected", reason: expect.objectContaining({ message }) };
+  return [rejected, rejected];
+}
+
 describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
-  it("initializes the bundled proxy and translates tool results through CuaDriverSession", async () => {
-    let closed = false;
-    const endpoint = await createFakeEndpoint((request, fake) => {
-      if (request.method === "initialize") {
-        fake.respond(request, {
-          protocolVersion: "2025-06-18",
-          capabilities: { tools: {} },
-          serverInfo: { name: "fake-cua-driver", version: "0.20.0" },
-        });
-        return;
-      }
-      if (request.method !== "tools/call") {
-        return;
-      }
-      switch (request.params?.name) {
-        case "start_session":
-          fake.respond(request, sessionState("desktop"));
-          break;
-        case "get_desktop_state":
-          fake.respond(
-            request,
-            toolResult(
-              {
-                platform: "macos",
-                display: "primary",
-                screenshot_width: 200,
-                screenshot_height: 100,
-                screen_width: 100,
-                screen_height: 50,
-                scale_factor: 2,
-              },
-              true,
-            ),
-          );
-          break;
-        case "get_cursor_position":
-          fake.respond(request, toolResult({ x: 11, y: 12, source: "core_graphics" }));
-          break;
-        case "click":
-          fake.respond(
-            request,
-            toolResult({
-              effect: "confirmed",
-              route: "accessibility",
-              delivery: { mode: "background", delivered_count: 1 },
-              evidence: [{ kind: "value_readback" }],
-            }),
-          );
-          break;
-        case "list_windows":
-          fake.respond(request, toolResult({ windows: [] }));
-          break;
-        case "get_session_state":
-          fake.respond(request, sessionState("desktop"));
-          break;
-        case "end_session":
-          fake.respond(request, toolResult({ session: "openclaw-test", active: false }));
-          break;
-        default:
-          break;
-      }
-    });
-    try {
-      const driver = createCuaMcpDriver({
-        ...endpoint,
-        env: {
-          ...process.env,
-          CUA_DRIVER_EMBEDDED: "1",
-          CUA_DRIVER_PERMISSION_MODE: "unrestricted",
-          CUA_DRIVER_DANGEROUSLY_BYPASS_APPROVALS: "1",
-        },
-      });
-      await vi.waitFor(() => expect(driver.isAvailable()).toBe(true));
-
-      const desktop = await driver.getDesktopState();
-      expect(JSON.parse(desktop.structuredJson!)).toMatchObject({
-        platform: "macos",
-        screenshot_width: 200,
-      });
-      expect(desktop.images).toHaveLength(1);
-      const cursor = await driver.getCursorPosition();
-      expect(JSON.parse(cursor.structuredJson!)).toMatchObject({ x: 11, y: 12 });
-      const click = await driver.click({ x: 20, y: 30, button: ClickButton.Left, count: 1 });
-      expect(click.action).toEqual({
-        effect: 0,
-        route: 0,
-        delivery: { mode: 0, deliveredCount: 1 },
-        evidence: [{ kind: 0 }],
-      });
-      await expect(driver.callTool("list_windows", {})).resolves.toMatchObject({
-        isError: false,
-      });
-      await driver.escalateScope(EscalationReason.Other);
-      await expect(driver.callTool("list_windows", {})).resolves.toMatchObject({
-        isError: false,
-      });
-
-      const startCalls = endpoint.requests.filter(
-        (request) => request.method === "tools/call" && request.params?.name === "start_session",
-      );
-      expect(startCalls).toHaveLength(1);
-      expect(startCalls[0]?.params?.arguments).not.toHaveProperty("capture_scope");
-      const session = startCalls[0]?.params?.arguments?.session;
-      expect(session).toEqual(expect.stringMatching(/^openclaw-/));
-      expect(
-        endpoint.requests.find(
-          (request) =>
-            request.method === "tools/call" && request.params?.name === "get_session_state",
-        )?.params?.arguments?.session,
-      ).toBe(session);
-      expect(
-        endpoint.requests
-          .filter(
-            (request) => request.method === "tools/call" && request.params?.name === "list_windows",
-          )
-          .map((request) => request.params?.arguments?.session),
-      ).toEqual([session, session]);
-      expect(
-        endpoint.requests.find(
-          (request) =>
-            request.method === "tools/call" && request.params?.name === "get_cursor_position",
-        )?.params?.arguments,
-      ).toEqual({ session });
-
-      await driver.dispose();
-      await vi.waitFor(() => {
-        closed = endpoint.requests.some(
-          (request) => request.method === "tools/call" && request.params?.name === "end_session",
-        );
-        expect(closed).toBe(true);
-      });
-      expect(endpoint.requests.map((request) => request.method)).toContain(
-        "notifications/initialized",
-      );
-      expect(
-        endpoint.requests.find(
-          (request) => request.method === "tools/call" && request.params?.name === "click",
-        )?.params?.arguments,
-      ).toMatchObject({
-        x: 20,
-        y: 30,
-        button: "left",
-        count: 1,
-        target: { kind: "desktop", display_id: "primary" },
-      });
-    } finally {
-      await endpoint.close();
+  const refusal = { status: "refused", refusal: { code: "permission_denied" } };
+  it.each([
+    [{ status: "activated", code: "bring_to_front_exact_window_verified" }, false, undefined],
+    [
+      { status: "partial", code: "bring_to_front_exact_window_unverified" },
+      true,
+      "COMPUTER_REFUSED_bring_to_front_exact_window_unverified",
+    ],
+    [refusal, false, "COMPUTER_REFUSED_permission_denied"],
+  ] as const)("projects activation/refusal %#", async (structured, isError, error) => {
+    const endpoint = await createSessionEndpoint(
+      replyWith({
+        list_windows: toolResult(CUA_DRIVER_CONTRACT_FIXTURES.listWindows),
+        bring_to_front: { ...toolResult({ pid: 4242, window_id: 99, ...structured }), isError },
+        end_session: toolResult({ session: "openclaw-test", active: false }),
+      }),
+    );
+    const driver = managedDriver({ ...endpoint, env: process.env });
+    const computer = await execution(driver, "darwin");
+    const windowRef = await computer.window();
+    const result = computer.send("bring_to_front", { windowRef });
+    if (error) {
+      await expect(result).rejects.toThrow(error);
+    } else {
+      expect(JSON.parse(await result)).toEqual({ ok: true });
     }
   });
 
-  it("fails closed on invalid proxy JSON", async () => {
-    const endpoint = await createFakeEndpoint((request, fake) => {
-      if (request.method === "initialize" && request.id !== undefined) {
-        fake.writeRaw(request, "not-json\n");
+  it("initializes the bundled proxy and translates tool results through CuaDriverSession", async () => {
+    const endpoint = await createSessionEndpoint(
+      replyWith({
+        get_desktop_state: toolResult({ platform: "macos", screenshot_width: 200 }, true),
+        get_cursor_position: toolResult({ x: 11, y: 12 }),
+        click: toolResult({
+          effect: "confirmed",
+          route: "accessibility",
+          delivery: { mode: "background", delivered_count: 1 },
+          evidence: [{ kind: "value_readback" }],
+        }),
+        list_windows: toolResult({ windows: [] }),
+        get_session_state: sessionState("desktop"),
+        end_session: toolResult({ session: "openclaw-test", active: false }),
+      }),
+      "desktop",
+    );
+    const driver = managedDriver({
+      ...endpoint,
+      env: {
+        ...process.env,
+        CUA_DRIVER_EMBEDDED: "1",
+        CUA_DRIVER_PERMISSION_MODE: "unrestricted",
+        CUA_DRIVER_DANGEROUSLY_BYPASS_APPROVALS: "1",
+      },
+    });
+
+    const desktop = await driver.getDesktopState();
+    expect(driver.isAvailable()).toBe(true);
+    expect(projectedToolDetails(desktop, "get_desktop_state")).toMatchObject({
+      platform: "macos",
+      screenshot_width: 200,
+    });
+    expect(desktop.images).toHaveLength(1);
+    const cursor = await driver.getCursorPosition();
+    expect(projectedToolDetails(cursor, "get_cursor_position")).toMatchObject({ x: 11, y: 12 });
+    const click = await driver.click({ x: 20, y: 30, button: ClickButton.Left, count: 1 });
+    expect(click.action).toEqual({
+      effect: 0,
+      route: 0,
+      delivery: { mode: 0, deliveredCount: 1 },
+      evidence: [{ kind: 0 }],
+    });
+    expect([
+      await driver.callTool("list_windows", {}),
+      await driver.getSessionState(),
+      await driver.callTool("list_windows", {}),
+    ]).toMatchObject([{ isError: false }, { desktopUnlocked: true }, { isError: false }]);
+
+    const startCalls = toolCalls(endpoint, "start_session");
+    expect(startCalls).toHaveLength(1);
+    expect(startCalls[0]?.params?.arguments).not.toHaveProperty("capture_scope");
+    const session = startCalls[0]?.params?.arguments?.session;
+    expect(session).toEqual(expect.stringMatching(/^openclaw-/));
+    expect(toolCalls(endpoint, "get_session_state")[0]?.params?.arguments?.session).toBe(session);
+    expect(
+      toolCalls(endpoint, "list_windows").map((call) => call.params?.arguments?.session),
+    ).toEqual([session, session]);
+    expect(toolCalls(endpoint, "get_cursor_position")[0]?.params?.arguments).toEqual({ session });
+
+    await driver.dispose();
+    await vi.waitFor(() => expect(toolCalls(endpoint, "end_session").length > 0).toBe(true));
+    expect(received(endpoint, "notifications/initialized")).toBe(true);
+    expect(toolCalls(endpoint, "click")[0]?.params?.arguments).toMatchObject({
+      x: 20,
+      y: 30,
+      button: "left",
+      count: 1,
+      target: { kind: "desktop", display_id: "primary" },
+    });
+  });
+
+  it("retries a rejected session startup before dispatching tools", async () => {
+    let starts = 0;
+    const endpoint = await createFakeEndpoint((request) => {
+      if (request.method === "initialize") {
+        request.reply({ protocolVersion: "2025-06-18" });
+      } else if (request.params?.name === "start_session") {
+        request.reply(
+          starts++ === 0
+            ? { isError: true, content: [{ type: "text", text: "fixture startup failed" }] }
+            : sessionState("desktop"),
+        );
+      } else if (request.method === "tools/call") {
+        request.reply(toolResult({ windows: [] }));
       }
     });
-    try {
-      const driver = createCuaMcpDriver(endpoint);
-      await expect(driver.getDesktopState()).rejects.toThrow("COMPUTER_DRIVER_ERROR");
-      expect(driver.isAvailable()).toBe(false);
-      await driver.dispose();
-    } finally {
-      await endpoint.close();
+    const driver = managedDriver(endpoint);
+    await expect(driver.callTool("list_windows", {})).rejects.toThrow("fixture startup failed");
+    await expect(driver.callTool("list_windows", {})).resolves.toMatchObject({ isError: false });
+    expect(toolCalls(endpoint, "start_session")).toHaveLength(2);
+    expect(toolCalls(endpoint, "list_windows")).toHaveLength(1);
+  });
+
+  it.each(["out-of-order", "fatal-frame"] as const)(
+    "settles multiplexed responses across %s",
+    async (mode) => {
+      const held: RpcRequest[] = [];
+      const endpoint = await createSessionEndpoint((request) => {
+        if (request.params?.name === "end_session" && mode === "out-of-order") {
+          request.reply(toolResult({ active: false }));
+        } else if (request.params?.name === "list_windows") {
+          held.push(request);
+          if (held.length !== 2) {
+            return;
+          }
+          const first = held.find((call) => call.params?.arguments?.marker === "first")!;
+          const second = held.find((call) => call.params?.arguments?.marker === "second")!;
+          if (mode === "fatal-frame") {
+            first.write(
+              frame(-5, {}) +
+                "\n" +
+                frame(first.id, toolResult({ marker: "completed" })) +
+                "not-json\n" +
+                frame(second.id, toolResult({ marker: "too-late" })),
+            );
+          } else {
+            const bytes = Buffer.from(
+              frame(second.id, toolResult({ marker: "second", text: "β雪" })) +
+                "\n" +
+                frame(first.id, toolResult({ marker: "first" })),
+            );
+            const split = bytes.indexOf(Buffer.from("雪")) + 1;
+            expect(split).toBeGreaterThan(0);
+            second.write(bytes.subarray(0, split));
+            setImmediate(() => second.write(bytes.subarray(split)));
+          }
+        }
+      });
+      const driver = managedDriver(endpoint);
+      const settlement: string[] = [];
+      const results = await Promise.allSettled(
+        ["first", "second"].map(async (marker) => {
+          const result = await driver.callTool("list_windows", { marker });
+          settlement.push(marker);
+          return projectedToolDetails(result, "list_windows");
+        }),
+      );
+      if (mode === "out-of-order") {
+        expect(results).toEqual([
+          { status: "fulfilled", value: { marker: "first" } },
+          { status: "fulfilled", value: { marker: "second", text: "β雪" } },
+        ]);
+        expect(settlement).toEqual(["second", "first"]);
+      } else {
+        expect(results).toMatchObject([
+          { status: "fulfilled", value: { marker: "completed" } },
+          { status: "rejected", reason: { message: expect.stringContaining("invalid JSON") } },
+        ]);
+        expect(driver.isAvailable()).toBe(false);
+        await driver.dispose();
+        const probe = net.createConnection(endpoint.socketPath);
+        try {
+          await once(probe, "connect");
+        } finally {
+          probe.destroy();
+        }
+      }
+    },
+  );
+
+  it("keeps JSON-RPC request errors local and preserves their CUA error text", async () => {
+    const endpoint = await createSessionEndpoint((request) => {
+      if (request.params?.arguments?.fail) {
+        request.write(frame(request.id, { code: -32000, message: "fixture refusal" }, "error"));
+      } else if (request.method === "tools/call") {
+        request.reply(toolResult({ windows: [] }));
+      }
+    });
+    const driver = managedDriver(endpoint);
+    await expect(driver.callTool("list_windows", { fail: true })).rejects.toThrow(
+      "COMPUTER_DRIVER_ERROR: CUA MCP request failed: MCP error -32000: fixture refusal",
+    );
+    expect(driver.isAvailable()).toBe(true);
+    await expect(driver.callTool("list_windows", {})).resolves.toMatchObject({ isError: false });
+  });
+
+  it("accepts a CUA screenshot larger than the default MCP buffer", async () => {
+    const image = "A".repeat(11 * 1024 * 1024);
+    const endpoint = await createSessionEndpoint((request) => {
+      if (request.params?.name === "get_desktop_state") {
+        request.reply({ content: [{ type: "image", data: image, mimeType: "image/png" }] });
+      } else if (request.params?.name === "end_session") {
+        request.reply(toolResult({ active: false }));
+      }
+    });
+    const driver = managedDriver(endpoint);
+    const result = await driver.getDesktopState();
+    const actual = result.images[0]?.dataBase64;
+    if (typeof actual !== "string") {
+      throw new Error("expected CUA image data");
     }
+    expect(createHash("sha256").update(actual).digest("hex")).toBe(
+      createHash("sha256").update(image).digest("hex"),
+    );
+  });
+
+  it("rejects an unfinished CUA frame beyond 256 MiB as a line-size overflow", async () => {
+    function* overflowChunks(): Iterable<Buffer> {
+      const chunk = Buffer.alloc(64 * 1024, 0x20);
+      for (let index = 0; index < 4096; index += 1) {
+        yield chunk;
+      }
+      yield Buffer.from([0x20]);
+    }
+    let streaming: Promise<void> | undefined;
+    const endpoint = await createSessionEndpoint((request) => {
+      if (request.params?.name === "get_desktop_state") {
+        streaming = request.stream(overflowChunks());
+        // Observe producer errors until the test checks them after the expected proxy retirement.
+        void streaming.catch(() => {});
+      }
+    });
+    const driver = managedDriver(endpoint);
+    await expect(driver.getDesktopState()).rejects.toThrow(
+      "COMPUTER_DRIVER_ERROR: CUA MCP response exceeded the line-size limit",
+    );
+    expect(driver.isAvailable()).toBe(false);
+    if (!streaming) {
+      throw new Error("expected overflow stream to start");
+    }
+    await streaming.catch((error: unknown) => {
+      expect(error).toMatchObject({
+        code: expect.stringMatching(/^(?:EPIPE|ECONNRESET|ERR_STREAM_PREMATURE_CLOSE)$/),
+      });
+    });
+    await driver.dispose();
+  });
+
+  it("retires a pending initialize at the shared startup deadline", async () => {
+    const deadline = new AbortController();
+    const endpoint = await createFakeEndpoint((request) => {
+      if (request.method === "initialize") {
+        deadline.abort(new Error("fixture startup deadline"));
+      }
+    });
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+    const driver = managedDriver(endpoint);
+    try {
+      await expect(driver.getDesktopState()).rejects.toThrow(
+        "COMPUTER_DRIVER_UNAVAILABLE: CUA MCP initialize timed out after 10000ms",
+      );
+      expect(received(endpoint, "initialize")).toBe(true);
+      expect(driver.isAvailable()).toBe(false);
+      expect(received(endpoint, "notifications/initialized")).toBe(false);
+    } finally {
+      timeout.mockRestore();
+      await driver.dispose();
+    }
+  });
+
+  it.each([
+    ["disposal", "COMPUTER_DRIVER_UNAVAILABLE: CUA MCP proxy is stopping"],
+    ["timeout", "COMPUTER_DRIVER_UNAVAILABLE: CUA MCP tools/call timed out after 120000ms"],
+  ])("%s rejects pending calls without cancellation", async (trigger, message) => {
+    const held: RpcRequest[] = [];
+    const endpoint = await createSessionEndpoint((request) => {
+      if (request.params?.arguments?.hold) {
+        held.push(request);
+      } else if (request.method === "tools/call") {
+        request.reply(toolResult({ windows: [] }));
+      }
+    });
+    const driver = managedDriver(endpoint);
+    await driver.callTool("list_windows", {});
+    if (trigger === "timeout") {
+      vi.useFakeTimers();
+    }
+    try {
+      const settled = Promise.allSettled([
+        driver.callTool("list_windows", { hold: true }),
+        driver.callTool("list_windows", { hold: true }),
+      ]);
+      await vi.waitFor(() => expect(held).toHaveLength(2));
+      if (trigger === "timeout") {
+        await vi.advanceTimersByTimeAsync(120_000);
+      } else {
+        await driver.dispose();
+      }
+      expect(await settled).toEqual(rejectedPair(message));
+      expect(driver.isAvailable()).toBe(false);
+    } finally {
+      if (trigger === "timeout") {
+        vi.useRealTimers();
+      }
+    }
+    await driver.dispose();
+    expect(received(endpoint, "notifications/cancelled")).toBe(false);
   });
 
   it("bounds pending calls and tears down the proxy on cancellation", async () => {
     const held: RpcRequest[] = [];
-    const endpoint = await createFakeEndpoint((request, fake) => {
-      if (request.method === "initialize") {
-        fake.respond(request, {
-          protocolVersion: "2025-06-18",
-          capabilities: { tools: {} },
-          serverInfo: { name: "fake-cua-driver", version: "0.20.0" },
-        });
-      } else if (request.method === "tools/call" && request.params?.name === "start_session") {
-        fake.respond(request, sessionState("window"));
-      } else if (request.method === "tools/call" && request.params?.name === "list_windows") {
+    const endpoint = await createSessionEndpoint((request) => {
+      if (request.method === "tools/call" && request.params?.name === "list_windows") {
         held.push(request);
       } else if (request.method === "tools/call" && request.params?.name === "end_session") {
-        fake.respond(request, toolResult({ session: "openclaw-test", active: false }));
+        request.reply(toolResult({ session: "openclaw-test", active: false }));
       }
     });
-    try {
-      const driver = createCuaMcpDriver(endpoint);
-      await vi.waitFor(() => expect(driver.isAvailable()).toBe(true));
-      const calls = Array.from({ length: 65 }, () => driver.callTool("list_windows", {}));
-      await expect(calls[64]).rejects.toThrow("too many pending requests");
-      await vi.waitFor(() => expect(held).toHaveLength(64));
-      expect(held[0]?.params?.arguments).toMatchObject({
-        session: expect.stringMatching(/^openclaw-/),
-      });
-      for (const request of held) {
-        endpoint.respond(request, toolResult({ windows: [] }));
-      }
-      await Promise.all(calls.slice(0, 64));
-
-      const controller = new AbortController();
-      const cancelled = driver.callTool("list_windows", {}, controller.signal);
-      await vi.waitFor(() => expect(held).toHaveLength(65));
-      controller.abort(new Error("test cancellation"));
-      await expect(cancelled).rejects.toThrow("request was cancelled");
-      expect(driver.isAvailable()).toBe(false);
-      await driver.dispose();
-    } finally {
-      await endpoint.close();
+    const driver = managedDriver(endpoint);
+    const calls = Array.from({ length: 65 }, () => driver.callTool("list_windows", {}));
+    await expect(calls[64]).rejects.toThrow("too many pending requests");
+    expect(driver.isAvailable()).toBe(true);
+    await vi.waitFor(() => expect(held).toHaveLength(64));
+    expect(held[0]?.params?.arguments).toMatchObject({
+      session: expect.stringMatching(/^openclaw-/),
+    });
+    for (const request of held) {
+      request.reply(toolResult({ windows: [] }));
     }
+    await Promise.all(calls.slice(0, 64));
+
+    const alreadyAborted = new AbortController();
+    alreadyAborted.abort(new Error("pre-admission cancellation"));
+    await expect(driver.callTool("list_windows", {}, alreadyAborted.signal)).rejects.toThrow(
+      "request was cancelled",
+    );
+    expect(driver.isAvailable()).toBe(true);
+    expect(held).toHaveLength(64);
+    const controller = new AbortController();
+    const cancelled = driver.callTool("list_windows", {}, controller.signal);
+    const sibling = driver.callTool("list_windows", {});
+    const settled = Promise.allSettled([cancelled, sibling]);
+    await vi.waitFor(() => expect(held).toHaveLength(66));
+    controller.abort(new Error("test cancellation"));
+    expect(await settled).toEqual(rejectedPair(expect.stringContaining("request was cancelled")));
+    expect(received(endpoint, "notifications/cancelled")).toBe(false);
+    expect(driver.isAvailable()).toBe(false);
+    await driver.dispose();
   });
 });

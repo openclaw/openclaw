@@ -1,0 +1,599 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import type { ErrorShape } from "../../packages/gateway-protocol/src/schema/frames.js";
+import {
+  listAgentIds,
+  tryResolveAmbientOwnerAgentId,
+  tryResolveLegacyCompatibilityAgentId,
+} from "../agents/agent-scope-config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { runWithSqliteDatabaseAdmissionTurn } from "../infra/sqlite-database-admission-turn.js";
+import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
+import {
+  formatAgentDatabaseCorruptionRepairHint,
+  formatAgentDatabaseOwnershipRepairHint,
+} from "../infra/state-migrations.agent-owner-guidance.js";
+import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { normalizeAgentId } from "../routing/session-key.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
+import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
+import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+
+export type AgentDatabaseAdmissionRefusal = {
+  agentId: string;
+  paths: string[];
+  reason: string;
+  repairHint: string;
+} & (
+  | { code: "agent-database-ownership-mismatch"; embeddedOwnerId: string }
+  | {
+      code: "agent-database-inspection-pending" | "agent-database-inspection-failed";
+      embeddedOwnerId?: undefined;
+    }
+);
+
+type AdmissionOptions = { env?: NodeJS.ProcessEnv };
+
+export function createAgentDatabaseAdmissionErrorShape(
+  refusal: AgentDatabaseAdmissionRefusal,
+): ErrorShape {
+  const retryable = refusal.code === "agent-database-inspection-pending";
+  return {
+    code: "UNAVAILABLE",
+    message: `${refusal.reason}\n${refusal.repairHint}`,
+    details: refusal,
+    retryable,
+    ...(retryable ? { retryAfterMs: 250 } : {}),
+  };
+}
+
+// Refusals are public protocol objects. Keep inspection causes private to the admission owner.
+const refusalCauses = new WeakMap<AgentDatabaseAdmissionRefusal, unknown>();
+const readAdmissions = new Map<
+  AgentDatabaseAdmissionRefusal,
+  { key: string; paths: readonly string[]; assertCurrent: () => void }
+>();
+
+const refusalsByState = new Map<
+  string,
+  {
+    source: "startup" | "diagnostic";
+    refusals: ReadonlyMap<string, AgentDatabaseAdmissionRefusal>;
+  }
+>();
+
+// Attempts outlive native worker generations; failures use the existing admission refusal.
+const startupFtsRepairs = new Map<string, { statePath: string; message?: string }>();
+
+export function recordAgentDatabaseStartupFtsRepair(
+  key: string,
+  statePath: string,
+  message?: string,
+): void {
+  if (message === undefined && startupFtsRepairs.has(key)) {
+    throw new Error("Startup FTS repair was already attempted. Run openclaw doctor --fix.");
+  }
+  startupFtsRepairs.set(key, { statePath, message });
+  if (message) {
+    createSubsystemLogger("state/agent-db").warn(message);
+  }
+}
+
+export function listAgentDatabaseStartupFtsRepairs(): string[] {
+  const key = stateKey({});
+  return [...startupFtsRepairs.values()].flatMap((entry) =>
+    entry.statePath === key && entry.message ? [entry.message] : [],
+  );
+}
+
+const preparation = new AsyncLocalStorage<{
+  refusal: AgentDatabaseAdmissionRefusal;
+  key: string;
+  access: "read" | "write";
+  active: boolean;
+  assertCurrent: () => void;
+  workers: AsyncDisposableStack;
+}>();
+
+/** Startup owns isolated native workers until preparation settles, including failed admission. */
+export function retainAgentDatabaseStartupWorker(
+  agentId: string,
+  options: AdmissionOptions,
+  close: () => Promise<void>,
+): boolean {
+  const scope = preparation.getStore();
+  if (
+    scope?.access !== "write" ||
+    scope.refusal.agentId !== agentId ||
+    scope.key !== stateKey(options)
+  ) {
+    return false;
+  }
+  scope.assertCurrent();
+  scope.workers.defer(close);
+  return true;
+}
+
+export function createAgentDatabaseInspectionRefusal(params: {
+  agentId: string;
+  paths: string[];
+  reason: string;
+  pending?: boolean;
+  cause?: unknown;
+}): AgentDatabaseAdmissionRefusal {
+  // The worker retains these native codes when flattening its snapshot error.
+  const candidateSnapshotCapacity =
+    resolveUpdateRehearsalRoot(process.env) &&
+    params.reason.includes("creating its private snapshot:") &&
+    /(?:code=(?:ENOSPC|EDQUOT)\b|errcode=13\b)/u.test(params.reason);
+  const serializationFailure = collectNestedErrorCandidates(params.cause).some(
+    (error) => error instanceof Error && error.name === "DataCloneError",
+  );
+  const locked = !params.pending && isSqliteLockError(params.cause);
+  const refusal: AgentDatabaseAdmissionRefusal = {
+    agentId: params.agentId,
+    paths: params.paths,
+    code: params.pending ? "agent-database-inspection-pending" : "agent-database-inspection-failed",
+    reason: locked ? "database locked by another process" : params.reason,
+    repairHint: locked
+      ? "Close other processes accessing this database, then restart the Gateway to retry admission. Lock contention does not require database repair."
+      : candidateSnapshotCapacity
+        ? "Free space in the reported snapshot cache, then retry the update. This candidate snapshot failure does not require repairing the serving database."
+        : serializationFailure
+          ? "A worker request could not be serialized. Update OpenClaw and restart the Gateway; repeating database migration will not repair this request."
+          : params.pending
+            ? 'Sessions remain unavailable until background inspection and preparation finish. If they cannot complete, stop the Gateway, run "openclaw doctor --fix", and restart.'
+            : `Sessions remain unavailable. ${formatAgentDatabaseCorruptionRepairHint(params.agentId, params.cause) ?? 'Stop the Gateway, run "openclaw doctor --fix" to inspect and repair this agent database, and restart.'}`,
+  };
+  refusalCauses.set(refusal, params.cause);
+  return refusal;
+}
+
+function stateKey(options: AdmissionOptions): string {
+  return resolveOpenClawStateSqlitePath(options.env ?? process.env);
+}
+
+function sameKnownState(left: string, right: string): boolean {
+  if (left === right) {
+    return true;
+  }
+  const leftIdentity = openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity(left);
+  const rightIdentity = openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity(right);
+  return Boolean(leftIdentity && rightIdentity && leftIdentity.key === rightIdentity.key);
+}
+
+/** Capture existing pending decisions; a later commit must never revoke their successors. */
+export function captureAgentDatabasePreparationDeletionForIdentity(
+  agentId: string,
+  { identityKey, databasePath }: { identityKey: string; databasePath: string },
+): () => void {
+  const id = normalizeAgentId(agentId);
+  const captured = [...refusalsByState].flatMap(([key, owner]) => {
+    const known = openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity(key);
+    const refusal = owner.refusals.get(id);
+    return (key === databasePath || known?.key === identityKey) &&
+      refusal?.code === "agent-database-inspection-pending"
+      ? [{ key, owner, refusal }]
+      : [];
+  });
+  return () => {
+    if (
+      openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity(databasePath)?.key !==
+      identityKey
+    ) {
+      return;
+    }
+    for (const { key, owner, refusal } of captured) {
+      if (
+        refusalsByState.get(key) !== owner ||
+        owner.refusals.get(id) !== refusal ||
+        !sameKnownState(key, databasePath)
+      ) {
+        continue;
+      }
+      const refusals = new Map(owner.refusals);
+      refusals.set(
+        id,
+        createAgentDatabaseInspectionRefusal({
+          ...refusal,
+          reason: `Agent ${id} was deleted during startup inspection`,
+        }),
+      );
+      owner.refusals = refusals;
+    }
+  };
+}
+
+/** Capture only the live preparation whose native command must report fresh journal facts. */
+export function captureAgentDatabasePreparationJournal(
+  agentId: string,
+  options: AdmissionOptions = {},
+): ((present: unknown) => void) | undefined {
+  const scope = preparation.getStore();
+  if (
+    !scope ||
+    scope.refusal.agentId !== normalizeAgentId(agentId) ||
+    !sameKnownState(scope.key, stateKey(options))
+  ) {
+    return undefined;
+  }
+  const assertCurrent = () => {
+    if (!scope.active) {
+      throw new Error(`Agent database preparation has ended: ${agentId}`);
+    }
+    scope.assertCurrent();
+  };
+  assertCurrent();
+  return (present) => {
+    assertCurrent();
+    if (present !== false) {
+      throw new Error(`Agent ${scope.refusal.agentId} was deleted during startup inspection`);
+    }
+  };
+}
+
+/** Ownership is derived from the inspected file; missing or corrupt metadata keeps normal refusal. */
+export function inspectAgentDatabaseAdmission(params: {
+  agentId: string;
+  path: string;
+  metadata: { role: string | null; agentId: string | null } | null;
+}): AgentDatabaseAdmissionRefusal | undefined {
+  const agentId = normalizeAgentId(params.agentId);
+  const owner = params.metadata;
+  if (owner?.role !== "agent" || !owner.agentId || owner.agentId === agentId) {
+    return undefined;
+  }
+  return {
+    agentId,
+    paths: [params.path],
+    embeddedOwnerId: owner.agentId,
+    code: "agent-database-ownership-mismatch",
+    reason: `Refused agent ${agentId}: database ${params.path} belongs to agent ${owner.agentId}; requested agent ${agentId}.`,
+    repairHint: formatAgentDatabaseOwnershipRepairHint(params.path),
+  };
+}
+
+export function canIsolateAgentDatabase(config: OpenClawConfig, agentId: string): boolean {
+  return (
+    listAgentIds(config).includes(agentId) &&
+    !isReservedSystemAgentId(agentId) &&
+    agentId !== tryResolveAmbientOwnerAgentId(config) &&
+    agentId !== tryResolveLegacyCompatibilityAgentId(config)
+  );
+}
+
+/** Only a new admission pass replaces this boot's decisions; file edits never clear a live refusal. */
+export function recordAgentDatabaseAdmissions(
+  refusals: readonly AgentDatabaseAdmissionRefusal[],
+  options: AdmissionOptions & { source?: "startup" | "diagnostic" } = {},
+): void {
+  const key = stateKey(options);
+  const source = options.source ?? "diagnostic";
+  if (source === "diagnostic" && refusalsByState.get(key)?.source === "startup") {
+    return;
+  }
+  const byAgent = new Map<string, AgentDatabaseAdmissionRefusal>();
+  for (const refusal of refusals) {
+    const previous = byAgent.get(refusal.agentId);
+    if (previous === refusal) {
+      continue;
+    }
+    const merged = previous
+      ? {
+          ...previous,
+          paths: [...new Set([...previous.paths, ...refusal.paths])],
+          reason: `${previous.reason}\n${refusal.reason}`,
+          repairHint: `${previous.repairHint}\n${refusal.repairHint}`,
+        }
+      : refusal;
+    if (previous) {
+      refusalCauses.set(
+        merged,
+        new AggregateError([
+          new AgentDatabaseAdmissionError(previous),
+          new AgentDatabaseAdmissionError(refusal),
+        ]),
+      );
+    }
+    byAgent.set(refusal.agentId, merged);
+  }
+  refusalsByState.set(key, { source, refusals: byAgent });
+}
+
+export function hasAgentDatabaseAdmissions(options: AdmissionOptions = {}): boolean {
+  return refusalsByState.has(stateKey(options));
+}
+
+export function readAgentDatabaseAdmissionRefusal(
+  agentId: string,
+  options: AdmissionOptions = {},
+): AgentDatabaseAdmissionRefusal | undefined {
+  return readSelectedAgentDatabaseAdmissionRefusal(
+    stateKey(options),
+    normalizeAgentId(agentId),
+    agentId,
+  );
+}
+
+/** Read readiness never releases writable admission or certifies unchecked database pages. */
+export function readAgentDatabaseReadAdmissionRefusal(
+  agentId: string,
+  options: AdmissionOptions = {},
+): AgentDatabaseAdmissionRefusal | undefined {
+  const key = stateKey(options);
+  const refusal = readSelectedAgentDatabaseAdmissionRefusal(
+    key,
+    normalizeAgentId(agentId),
+    agentId,
+    "read",
+  );
+  const admitted = refusal && readAdmissions.get(refusal);
+  if (refusal?.code === "agent-database-inspection-pending" && admitted?.key === key) {
+    try {
+      admitted.assertCurrent();
+      return undefined;
+    } catch {
+      // A retired owner or changed configuration must not retain read access.
+    }
+  }
+  return refusal;
+}
+
+/** The startup owner publishes only inspected schemas, and revokes them when its work settles. */
+export function publishPendingAgentDatabaseReadAdmission(
+  refusal: AgentDatabaseAdmissionRefusal,
+  options: AdmissionOptions & { paths: readonly string[]; assertCurrent: () => void },
+): () => void {
+  options.assertCurrent();
+  const key = stateKey(options);
+  if (
+    refusal.code !== "agent-database-inspection-pending" ||
+    refusalsByState.get(key)?.refusals.get(refusal.agentId) !== refusal
+  ) {
+    throw new Error(`Agent database admission changed before read preparation: ${refusal.agentId}`);
+  }
+  const admission = { key, paths: options.paths, assertCurrent: options.assertCurrent };
+  readAdmissions.set(refusal, admission);
+  runWithAgentDatabaseReadAdmissionTurn = runWithInspectionReadAdmissionTurn;
+  isAgentDatabaseStartupReadReady = inspectAgentDatabaseStartupReadReady;
+  return () => {
+    if (readAdmissions.get(refusal) === admission) {
+      readAdmissions.delete(refusal);
+      if (readAdmissions.size === 0) {
+        runWithAgentDatabaseReadAdmissionTurn = runWithSqliteDatabaseAdmissionTurn;
+        isAgentDatabaseStartupReadReady = noStartupReadAdmission;
+      }
+      if (refusalsByState.get(key)?.refusals.has(refusal.agentId)) {
+        sessionChanges.invalidate({
+          all: true,
+          scope: { agentId: refusal.agentId, topology: true },
+        });
+      }
+    }
+  };
+}
+
+/** Only an exact inspected physical path may bypass its pending writable preparation. */
+const noStartupReadAdmission = () => false;
+export let isAgentDatabaseStartupReadReady: typeof inspectAgentDatabaseStartupReadReady =
+  noStartupReadAdmission;
+
+function inspectAgentDatabaseStartupReadReady(
+  pathname: string,
+  options: AdmissionOptions = {},
+): boolean {
+  for (const refusal of refusalsByState.get(stateKey(options))?.refusals.values() ?? []) {
+    if (
+      readAdmissions.get(refusal)?.paths.includes(pathname) &&
+      !readAgentDatabaseReadAdmissionRefusal(refusal.agentId, options)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Inspected files can serve snapshots while their writable integrity scan holds its turn. */
+export let runWithAgentDatabaseReadAdmissionTurn: typeof runWithInspectionReadAdmissionTurn =
+  runWithSqliteDatabaseAdmissionTurn;
+
+function runWithInspectionReadAdmissionTurn<T>(
+  paths: readonly string[],
+  operation: () => Promise<T>,
+  families: readonly string[] = [],
+  signal?: AbortSignal,
+  options: AdmissionOptions &
+    import("../infra/sqlite-database-admission-turn.js").PreparedSqliteReadAdmission = {},
+): Promise<T> {
+  // Unknown siblings and first creation retain their family ordering and native checks.
+  const pendingPaths = refusalsByState.get(stateKey(options))?.refusals.size
+    ? paths.filter((pathname) => !isAgentDatabaseStartupReadReady(pathname, options))
+    : paths;
+  return runWithSqliteDatabaseAdmissionTurn(pendingPaths, operation, families, signal, options);
+}
+
+export function assertAgentDatabaseReadAdmitted(
+  agentId: string,
+  options: AdmissionOptions = {},
+): void {
+  const refusal = readAgentDatabaseReadAdmissionRefusal(agentId, options);
+  if (refusal) {
+    throw new AgentDatabaseAdmissionError(refusal);
+  }
+}
+
+function readSelectedAgentDatabaseAdmissionRefusal(
+  key: string,
+  agentId: string,
+  requestedAgentId: string,
+  access: "read" | "write" = "write",
+): AgentDatabaseAdmissionRefusal | undefined {
+  const refusal = refusalsByState.get(key)?.refusals.get(agentId);
+  const scope = preparation.getStore();
+  if (scope && scope.key === key && scope.refusal.agentId === agentId) {
+    // Publication listeners inherit this scope; none may borrow writable admission.
+    if (scope.access === "read" && (access === "write" || !scope.active)) {
+      return refusal;
+    }
+    if (!scope.active) {
+      throw new Error(`Agent database preparation has ended: ${requestedAgentId}`);
+    }
+    scope.assertCurrent();
+    if (scope.refusal === refusal) {
+      return undefined;
+    }
+  }
+  return refusal;
+}
+
+/** Preparation borrows only its own pending admission; public callers remain refused. */
+export async function preparePendingAgentDatabase(
+  refusal: AgentDatabaseAdmissionRefusal,
+  options: AdmissionOptions & { assertCurrent: () => void },
+  run: () => Promise<void>,
+): Promise<void> {
+  await withPendingAgentDatabasePreparation(refusal, options, "write", run);
+  sessionChanges.emit({ all: true, scope: { agentId: refusal.agentId, topology: true } });
+}
+
+/** Early publication and its descendants can inspect secrets/models, never write the database. */
+export async function preparePendingAgentDatabaseRead(
+  refusal: AgentDatabaseAdmissionRefusal,
+  options: AdmissionOptions & { assertCurrent: () => void },
+  run: () => Promise<void>,
+): Promise<void> {
+  await withPendingAgentDatabasePreparation(refusal, options, "read", run);
+}
+
+async function withPendingAgentDatabasePreparation(
+  refusal: AgentDatabaseAdmissionRefusal,
+  options: AdmissionOptions & { assertCurrent: () => void },
+  access: "read" | "write",
+  run: () => Promise<void>,
+): Promise<void> {
+  const key = stateKey(options);
+  const assertCurrent = () => {
+    options.assertCurrent();
+    if (
+      refusal.code !== "agent-database-inspection-pending" ||
+      refusalsByState.get(key)?.refusals.get(refusal.agentId) !== refusal
+    ) {
+      throw new Error(`Agent database admission changed during preparation: ${refusal.agentId}`);
+    }
+  };
+  assertCurrent();
+  const scope = {
+    key,
+    refusal,
+    assertCurrent,
+    access,
+    active: true,
+    workers: new AsyncDisposableStack(),
+  };
+  try {
+    await preparation.run(scope, async () => {
+      await using _ = scope.workers;
+      await run();
+    });
+    scope.assertCurrent();
+    if (access === "write") {
+      const current = refusalsByState.get(key)!;
+      const refusals = new Map(current.refusals);
+      refusals.delete(refusal.agentId);
+      current.refusals = refusals;
+    }
+  } finally {
+    scope.active = false;
+  }
+}
+
+export function failPendingAgentDatabase(
+  refusal: AgentDatabaseAdmissionRefusal,
+  cause: unknown,
+  options: AdmissionOptions,
+): void {
+  const key = stateKey(options);
+  const current = refusalsByState.get(key);
+  if (current?.refusals.get(refusal.agentId) !== refusal) {
+    return;
+  }
+  const refusals = new Map(current.refusals);
+  refusals.set(
+    refusal.agentId,
+    createAgentDatabaseInspectionRefusal({ ...refusal, reason: formatErrorMessage(cause), cause }),
+  );
+  current.refusals = refusals;
+}
+
+export function listAgentDatabaseAdmissionRefusals(
+  options: AdmissionOptions = {},
+): AgentDatabaseAdmissionRefusal[] {
+  return [...(refusalsByState.get(stateKey(options))?.refusals.values() ?? [])];
+}
+
+export class AgentDatabaseAdmissionError extends Error {
+  constructor(readonly refusal: AgentDatabaseAdmissionRefusal) {
+    super(
+      `Agent ${refusal.agentId} (${refusal.paths.join(", ")}): ${refusal.reason}\n${refusal.repairHint}`,
+      { cause: refusalCauses.get(refusal) },
+    );
+    this.name = "AgentDatabaseAdmissionError";
+  }
+}
+
+/** A proven owner mismatch needs operator action; unavailable inspections prove no mismatch. */
+export function isAgentDatabaseOwnershipMismatchError(error: unknown): boolean {
+  return collectNestedErrorCandidates(error).some(
+    (candidate) =>
+      candidate instanceof AgentDatabaseAdmissionError &&
+      candidate.refusal.code === "agent-database-ownership-mismatch",
+  );
+}
+
+export function assertAgentDatabaseAdmitted(agentId: string, options: AdmissionOptions = {}): void {
+  const refusal = readAgentDatabaseAdmissionRefusal(agentId, options);
+  if (refusal) {
+    throw new AgentDatabaseAdmissionError(refusal);
+  }
+}
+
+/** Capture only the selector; refusal decisions and the caller's preparation remain live. */
+export function captureAgentDatabaseAdmission(
+  agentId: string,
+  options: AdmissionOptions = {},
+): () => void {
+  const key = stateKey(options);
+  const normalizedAgentId = normalizeAgentId(agentId);
+  return () => {
+    const refusal = readSelectedAgentDatabaseAdmissionRefusal(key, normalizedAgentId, agentId);
+    if (refusal) {
+      throw new AgentDatabaseAdmissionError(refusal);
+    }
+  };
+}
+
+/** Standalone diagnostics derive the same facts without borrowing another process's decision. */
+export async function evaluateAgentDatabaseAdmissions(
+  config: OpenClawConfig,
+  options: AdmissionOptions = {},
+): Promise<AgentDatabaseAdmissionRefusal[]> {
+  const { preflightOpenClawDatabaseSchemas } = await import("./openclaw-database-preflight.js");
+  const { resolveConfiguredAgentDatabaseCandidatePaths } =
+    await import("../config/sessions/targets.js");
+  const env = options.env ?? process.env;
+  const result = await preflightOpenClawDatabaseSchemas(
+    {
+      env,
+      configuredAgentDatabaseTargets: [],
+      configuredAgentDatabaseCandidatePaths: resolveConfiguredAgentDatabaseCandidatePaths(config, {
+        env,
+      }),
+      agentAdmissionConfig: config,
+    },
+    "runtime",
+  );
+  return result.agentRefusals ?? [];
+}

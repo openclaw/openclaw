@@ -1,38 +1,45 @@
 // QA Lab producer proves exact-run identity inspection through a real local turn and Gateway.
+import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { WebSocket, type ClientOptions, type RawData } from "ws";
+import { WebSocket, type ClientOptions } from "ws";
+import { identityRepeatedTurnEntrypoint } from "../../../../extensions/qa-lab/src/agent-run-identity-runtime.test-support.js";
 import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
 } from "../../../../extensions/qa-lab/src/evidence-summary.js";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/src/gateway-child.js";
-import { startQaMockOpenAiServer } from "../../../../extensions/qa-lab/src/providers/mock-openai/server.js";
-import { buildDeviceAuthPayloadV3 } from "../../../../packages/gateway-client/src/device-auth.js";
 import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../../../../packages/gateway-protocol/src/client-info.js";
+  createQaGatewayChild,
+  type QaGatewayChild,
+} from "../../../../extensions/qa-lab/src/gateway-child.js";
+import { startQaGatewayRpcClient } from "../../../../extensions/qa-lab/src/gateway-rpc-client.js";
+import { startQaMockOpenAiServer } from "../../../../extensions/qa-lab/src/providers/mock-openai/server.js";
 import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/index.js";
 import {
-  MIN_CLIENT_PROTOCOL_VERSION,
-  PROTOCOL_VERSION,
-} from "../../../../packages/gateway-protocol/src/index.js";
-import {
-  loadOrCreateDeviceIdentity,
-  publicKeyRawBase64UrlFromPem,
-  signDevicePayload,
-  type DeviceIdentity,
-} from "../../../../src/infra/device-identity.js";
+  GATEWAY_OWNER_PROFILE_ID,
+  type UsersSelfResult,
+} from "../../../../packages/gateway-protocol/src/schema/users.js";
+import { createVitestWorkerRun } from "../../../../scripts/lib/vitest-worker-run.mts";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../../../src/infra/runtime-worker-url.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import {
+  proveHotExecutionIdentity,
+  patchExecutionIdentity,
+  runIdentityGatewayTurn,
+  waitForIdentityAuditFence,
+} from "./agent-run-identity-hot-reload.js";
+import { connectHotReloadClient } from "./gateway-config-hot-reload-fixtures.js";
 import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.js";
+import { parseQaProducerOptions, type QaProducerOptions } from "./script-options.js";
 
 const SCENARIO_ID = "agent-run-identity-inspection";
 const SNAPSHOT_FILE = `${SCENARIO_ID}-summary.json`;
@@ -57,17 +64,6 @@ const IDENTITY_FIELDS = [
   "Assurance",
 ] as const;
 const FRAME_TIMEOUT_MS = 20_000;
-const GATEWAY_SCOPES = [
-  "operator.admin",
-  "operator.pairing",
-  "operator.read",
-  "operator.write",
-] as const;
-
-type ProducerOptions = {
-  artifactBase: string;
-  repoRoot: string;
-};
 
 type ProofResult = {
   artifacts?: Array<{ filePath: string; kind: string }>;
@@ -76,242 +72,70 @@ type ProofResult = {
   status: QaScriptEvidenceStatus;
 };
 
-type RawGatewayClient = {
-  frames: unknown[];
-  socket: WebSocket;
-};
-
-function rawDataText(data: RawData): string {
-  if (Array.isArray(data)) {
-    return Buffer.concat(data.map((chunk) => Buffer.from(chunk))).toString("utf8");
-  }
-  return Buffer.isBuffer(data) ? data.toString("utf8") : Buffer.from(data).toString("utf8");
-}
-
-async function openRawGatewayClient(
+async function assertUntrustedProxyHeadersRejected(
   url: string,
-  headers?: Record<string, string>,
-): Promise<RawGatewayClient> {
-  const socket = new WebSocket(url, headers ? ({ headers } satisfies ClientOptions) : undefined);
-  const frames: unknown[] = [];
-  socket.on("message", (data) => frames.push(parseJson(rawDataText(data), "Gateway frame")));
-  await new Promise<void>((resolve, reject) => {
-    socket.once("open", resolve);
-    socket.once("error", reject);
-  });
-  return { frames, socket };
-}
-
-async function waitForFrame(
-  client: RawGatewayClient,
-  predicate: (frame: unknown) => boolean,
-  startIndex = 0,
-): Promise<Record<string, unknown>> {
-  const deadline = Date.now() + FRAME_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    const frame = client.frames.slice(startIndex).find(predicate);
-    if (isRecord(frame)) {
-      return frame;
-    }
-    await sleep(20);
-  }
-  throw new Error(`timed out waiting for Gateway frame: ${JSON.stringify(client.frames)}`);
-}
-
-function responseFor(id: string) {
-  return (frame: unknown) => isRecord(frame) && frame.type === "res" && frame.id === id;
-}
-
-async function closeRawGatewayClient(client: RawGatewayClient): Promise<void> {
-  if (client.socket.readyState === WebSocket.CLOSED) {
-    return;
-  }
-  await new Promise<void>((resolve) => {
-    client.socket.once("close", () => resolve());
-    client.socket.close();
-    setTimeout(resolve, 1_000).unref();
-  });
-}
-
-async function connectRawDevice(params: {
-  device: DeviceIdentity;
-  headers?: Record<string, string>;
-  token?: string;
-  wsUrl: string;
-}): Promise<{ client: RawGatewayClient; connected: boolean }> {
-  const client = await openRawGatewayClient(params.wsUrl, params.headers);
-  const challenge = await waitForFrame(
-    client,
-    (frame) => isRecord(frame) && frame.type === "event" && frame.event === "connect.challenge",
-  );
-  const challengePayload = challenge.payload;
-  if (!isRecord(challengePayload) || typeof challengePayload.nonce !== "string") {
-    throw new Error("Gateway connect challenge omitted its nonce");
-  }
-  const clientInfo = {
-    id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
-    mode: GATEWAY_CLIENT_MODES.BACKEND,
-    platform: "linux",
-    version: "qa-local-user-ingress",
-  } as const;
-  const signedAt = Date.now();
-  const devicePayload = buildDeviceAuthPayloadV3({
-    deviceId: params.device.deviceId,
-    clientId: clientInfo.id,
-    clientMode: clientInfo.mode,
-    role: "operator",
-    scopes: [...GATEWAY_SCOPES],
-    signedAtMs: signedAt,
-    token: params.token,
-    nonce: challengePayload.nonce,
-    platform: clientInfo.platform,
-  });
-  const requestId = `connect-${randomUUID()}`;
-  const startIndex = client.frames.length;
-  client.socket.send(
-    JSON.stringify({
-      type: "req",
-      id: requestId,
-      method: "connect",
-      params: {
-        minProtocol: MIN_CLIENT_PROTOCOL_VERSION,
-        maxProtocol: PROTOCOL_VERSION,
-        client: clientInfo,
-        role: "operator",
-        scopes: [...GATEWAY_SCOPES],
-        caps: [],
-        ...(params.token ? { auth: { token: params.token } } : {}),
-        device: {
-          id: params.device.deviceId,
-          publicKey: publicKeyRawBase64UrlFromPem(params.device.publicKeyPem),
-          signature: signDevicePayload(params.device.privateKeyPem, devicePayload),
-          signedAt,
-          nonce: challengePayload.nonce,
-        },
-      },
-    }),
-  );
-  const response = await waitForFrame(client, responseFor(requestId), startIndex);
-  return { client, connected: response.ok === true };
-}
-
-async function rawGatewayRequest<T>(
-  client: RawGatewayClient,
-  method: string,
-  params: unknown,
-): Promise<T> {
-  const requestId = `request-${randomUUID()}`;
-  const startIndex = client.frames.length;
-  client.socket.send(JSON.stringify({ type: "req", id: requestId, method, params }));
-  const response = await waitForFrame(client, responseFor(requestId), startIndex);
-  if (response.ok !== true) {
-    throw new Error(`${method} failed: ${JSON.stringify(response.error)}`);
-  }
-  return response.payload as T;
-}
-
-async function approveDeviceIfNeeded(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
-  deviceId: string,
+  headers: Record<string, string>,
 ): Promise<void> {
-  const deadline = Date.now() + FRAME_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    const pairings = (await gateway.call("device.pair.list", {})) as {
-      pending?: Array<{ deviceId?: string; requestId?: string }>;
-    };
-    const pending = pairings.pending?.find((candidate) => candidate.deviceId === deviceId);
-    if (pending?.requestId) {
-      await gateway.call("device.pair.approve", { requestId: pending.requestId });
-      return;
-    }
-    await sleep(50);
-  }
-  throw new Error(`device pairing request was not visible for ${deviceId}`);
+  await new Promise<void>((resolve, reject) => {
+    const socket = new WebSocket(url, { headers } satisfies ClientOptions);
+    const timeout = setTimeout(() => {
+      socket.terminate();
+      reject(new Error("timed out waiting for spoofed proxy-header rejection"));
+    }, FRAME_TIMEOUT_MS);
+    socket.once("open", () => {
+      clearTimeout(timeout);
+      socket.terminate();
+      reject(new Error("Gateway accepted proxy-shaped headers from an untrusted peer"));
+    });
+    socket.once("unexpected-response", (_request, response) => {
+      clearTimeout(timeout);
+      response.resume();
+      if (response.statusCode === 403) {
+        resolve();
+      } else {
+        reject(new Error(`spoofed proxy headers returned HTTP ${response.statusCode}`));
+      }
+    });
+    socket.once("error", () => undefined);
+  });
 }
 
-async function createFakeTailscaleBinary(): Promise<{
-  binaryDir: string;
-  cleanup: () => Promise<void>;
-}> {
-  const binaryDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-i1-tailscale-"));
+async function assertSharedOwnerReadOnlyScope(gateway: QaGatewayChild, sessionKey: string) {
+  const reader = await startQaGatewayRpcClient({
+    wsUrl: gateway.wsUrl,
+    token: gateway.token,
+    scopes: ["operator.read"],
+    logs: () => "",
+  });
   try {
-    const binaryPath = path.join(binaryDir, "tailscale");
-    await fs.writeFile(
-      binaryPath,
-      `#!/bin/sh
-if [ "$1" = "--version" ]; then
-  echo "qa-tailscale 1.0"
-  exit 0
-fi
-echo '{"UserProfile":{"LoginName":"operator@example.com","DisplayName":"Operator"}}'
-`,
-      { encoding: "utf8", mode: 0o755 },
+    const self = (await reader.request(
+      "users.self",
+      {},
+      {
+        timeoutMs: FRAME_TIMEOUT_MS,
+      },
+    )) as UsersSelfResult;
+    if (self.profile.id !== GATEWAY_OWNER_PROFILE_ID) {
+      throw new Error("read-only Gateway client did not retain the shared owner profile");
+    }
+    await assert.rejects(
+      reader.request(
+        "sessions.patch",
+        { key: sessionKey, label: "READ-ONLY-WRITE-MUST-BE-REJECTED" },
+        { timeoutMs: FRAME_TIMEOUT_MS },
+      ),
+      (error: unknown) =>
+        error instanceof Error &&
+        isRecord(error.cause) &&
+        error.cause.code === "FORBIDDEN" &&
+        isRecord(error.cause.details) &&
+        error.cause.details.code === "MISSING_SCOPE" &&
+        error.cause.details.missingScope === "operator.write",
+      "shared-owner attribution must not authorize a read-only client to write",
     );
-    return {
-      binaryDir,
-      cleanup: async () => await fs.rm(binaryDir, { force: true, recursive: true }),
-    };
-  } catch (error) {
-    await fs.rm(binaryDir, { force: true, recursive: true });
-    throw error;
+  } finally {
+    await reader.stop();
   }
-}
-
-async function runGatewayTurn(
-  client: RawGatewayClient,
-  message: string,
-  sessionKey: string,
-): Promise<string> {
-  const started = await rawGatewayRequest<{ runId?: unknown; status?: unknown }>(client, "agent", {
-    sessionKey,
-    message,
-    deliver: false,
-    idempotencyKey: randomUUID(),
-  });
-  if (started.status !== "accepted" || typeof started.runId !== "string") {
-    throw new Error(`profiled Gateway run did not start: ${JSON.stringify(started)}`);
-  }
-  const terminal = await rawGatewayRequest<{ status?: unknown }>(client, "agent.wait", {
-    runId: started.runId,
-    timeoutMs: 60_000,
-  });
-  if (terminal.status !== "ok") {
-    throw new Error(`profiled Gateway run did not finish: ${JSON.stringify(terminal)}`);
-  }
-  return started.runId;
-}
-
-async function updateExecutionIdentityConfig(
-  configPath: string,
-  values: { enabled?: boolean; executionIdentity: boolean },
-) {
-  const raw = await fs.readFile(configPath, "utf8");
-  const config = parseJson(raw || "{}", "QA Gateway config") as Record<string, unknown>;
-  const logging =
-    config.logging && typeof config.logging === "object"
-      ? (config.logging as Record<string, unknown>)
-      : {};
-  const audit =
-    logging.audit && typeof logging.audit === "object"
-      ? (logging.audit as Record<string, unknown>)
-      : {};
-  config.logging = { ...logging, audit: { ...audit, ...values } };
-  await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
-}
-
-function parseOptions(argv: readonly string[]): ProducerOptions {
-  const readValue = (name: string) => {
-    const index = argv.indexOf(name);
-    return index >= 0 ? argv[index + 1] : undefined;
-  };
-  const artifactBase = readValue("--artifact-base");
-  if (!artifactBase) {
-    throw new Error("--artifact-base is required");
-  }
-  return {
-    artifactBase: path.resolve(artifactBase),
-    repoRoot: path.resolve(readValue("--repo-root") ?? process.cwd()),
-  };
 }
 
 function parseJson(raw: string, label: string): unknown {
@@ -352,8 +176,15 @@ function assertTextProjection(text: string) {
 
 function assertJsonProjection(result: AuditRunInspectResult, runId: string) {
   const context = requireIdentityContext(result);
-  if (result.run.runId !== runId || result.coverage.state !== context.coverageState) {
-    throw new Error(`audit JSON projection did not preserve exact-run coverage: ${runId}`);
+  if (result.run.runId !== runId) {
+    throw new Error(`audit JSON projection selected the wrong run: ${runId}`);
+  }
+  if (
+    result.coverage.state !== "unknown" ||
+    !result.coverage.missingEvidence.includes("decision.display_provenance") ||
+    !result.decisionDisplays.some((receipt) => receipt.provenance.state === "unverified")
+  ) {
+    throw new Error(`audit JSON projection overstated generic decision coverage: ${runId}`);
   }
   if (
     context.ingress.kind !== "local-cli" ||
@@ -375,10 +206,7 @@ function assertJsonProjection(result: AuditRunInspectResult, runId: string) {
   }
 }
 
-function assertGatewayIdentityProjection(
-  result: AuditRunInspectResult,
-  expected: { coverage: "attribution-only" | "unattributed"; invoker: "absent" | "present" },
-) {
+function assertSharedOwnerGatewayIdentityProjection(result: AuditRunInspectResult) {
   const context = requireIdentityContext(result);
   if (
     context.ingress.kind !== "gateway-client" ||
@@ -388,29 +216,32 @@ function assertGatewayIdentityProjection(
     throw new Error("Gateway run did not retain its authenticated connection ingress");
   }
   if (
-    context.invoker.state !== expected.invoker ||
-    context.coverageState !== expected.coverage ||
-    context.representedSubject !== undefined
+    context.invoker.state !== "present" ||
+    context.invoker.principal?.kind !== "person" ||
+    context.coverageState !== "attribution-only" ||
+    context.representedSubject !== undefined ||
+    context.applicableGrants.length !== 0
   ) {
     throw new Error(
-      `Gateway identity projection fabricated or lost a subject: ${JSON.stringify(context)}`,
+      "shared-owner Gateway identity lost attribution or implied delegated authority",
     );
   }
-  if (expected.invoker === "present") {
-    if (
-      context.invoker.principal?.kind !== "person" ||
-      context.invoker.principal.displayLabel !== "Operator" ||
-      !context.assurance.some((item) => item.kind === "durable-profile") ||
-      !context.assurance.some((item) => item.kind === "tailscale-whois")
-    ) {
-      throw new Error("profiled Gateway run omitted its durable Tailscale attribution");
-    }
-  } else if (context.assurance.some((item) => item.kind === "durable-profile")) {
-    throw new Error("profileless Gateway run fabricated durable profile assurance");
+  if (
+    !context.assurance.some(
+      (item) => item.kind === "durable-profile" && item.strength === "boundary-verified",
+    ) ||
+    !context.assurance.some(
+      (item) => item.kind === "local-process" && item.strength === "boundary-verified",
+    ) ||
+    context.assurance.some(
+      (item) => item.kind === "trusted-proxy" || item.kind === "tailscale-whois",
+    )
+  ) {
+    throw new Error("shared-owner Gateway assurance lost its profile or claimed a verified login");
   }
 }
 
-function findLocalRunId(gateway: Awaited<ReturnType<typeof startQaGatewayChild>>) {
+function findLocalRunId(gateway: QaGatewayChild) {
   const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
   if (!stateDir) {
     throw new Error("QA Gateway did not expose its isolated state directory");
@@ -441,7 +272,7 @@ function findLocalRunId(gateway: Awaited<ReturnType<typeof startQaGatewayChild>>
   }
 }
 
-function inspectExecutionIdentityStorage(gateway: Awaited<ReturnType<typeof startQaGatewayChild>>) {
+function inspectExecutionIdentityStorage(gateway: QaGatewayChild) {
   const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
   if (!stateDir) {
     throw new Error("QA Gateway did not expose its isolated state directory");
@@ -465,10 +296,7 @@ function inspectExecutionIdentityStorage(gateway: Awaited<ReturnType<typeof star
   }
 }
 
-function inspectPersistedSessionCreator(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
-  sessionKey: string,
-) {
+function inspectPersistedSessionCreator(gateway: QaGatewayChild, sessionKey: string) {
   const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
   const agentId = sessionKey.split(":")[1];
   if (!stateDir || !agentId) {
@@ -494,6 +322,7 @@ function inspectPersistedSessionCreator(
     return {
       id: row.created_actor_id,
       labelPersisted: actor ? Object.hasOwn(actor, "label") : false,
+      source: actor?.source,
       type: row.created_actor_type,
     };
   } finally {
@@ -501,10 +330,7 @@ function inspectPersistedSessionCreator(
   }
 }
 
-async function runLocalTurn(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
-  message: string,
-) {
+async function runLocalTurn(gateway: QaGatewayChild, message: string) {
   await gateway.runCli([
     "agent",
     "--local",
@@ -522,10 +348,7 @@ async function runLocalTurn(
   ]);
 }
 
-function findRunExecutions(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
-  runId: string,
-) {
+function findRunExecutions(gateway: QaGatewayChild, runId: string) {
   const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
   if (!stateDir) {
     throw new Error("QA Gateway did not expose its isolated state directory");
@@ -550,7 +373,7 @@ function findRunExecutions(
 }
 
 function assertPersistedContextBytes(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
+  gateway: QaGatewayChild,
   runId: string,
   expectedContext: string,
 ): void {
@@ -561,57 +384,75 @@ function assertPersistedContextBytes(
 }
 
 async function runRepeatedIngressTurns(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
+  gateway: QaGatewayChild,
   repoRoot: string,
   sessionId: string,
 ): Promise<void> {
-  const script = path.join(
-    repoRoot,
-    "test/e2e/qa-lab/runtime/agent-run-identity-repeated-turn-child.ts",
-  );
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(process.execPath, ["--import", "tsx", script, sessionId], {
+  const workers = createVitestWorkerRun(process.env);
+  try {
+    // Compile the maintained child before its fixed cold-process execution deadline.
+    await workers.prepare();
+    const childUrl = resolveRuntimeWorkerUrl({
+      ...identityRepeatedTurnEntrypoint,
+      root: workers.descriptor.directory,
+    });
+    const env = { ...process.env, ...gateway.runtimeEnv };
+    delete env.NODE_OPTIONS;
+    delete env.NODE_PATH;
+    delete env.NODE_V8_COVERAGE;
+    delete env.OPENCLAW_DEV_SOURCE_ROOT;
+    const child = spawn(process.execPath, [...resolveRuntimeWorkerArgv(childUrl), sessionId], {
       cwd: repoRoot,
-      env: { ...process.env, ...gateway.runtimeEnv },
+      env,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    let output = "";
-    const collect = (chunk: Buffer) => {
-      if (output.length < 8_192) {
-        output += chunk.toString("utf8").slice(0, 8_192 - output.length);
-      }
-    };
-    child.stdout?.on("data", collect);
-    child.stderr?.on("data", collect);
-    const timer = setTimeout(() => child.kill("SIGTERM"), 120_000);
-    child.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
+    const completion = new Promise<void>((resolve, reject) => {
+      let output = "";
+      const collect = (chunk: Buffer) => {
+        if (output.length < 8_192) {
+          output += chunk.toString("utf8").slice(0, 8_192 - output.length);
+        }
+      };
+      child.stdout?.on("data", collect);
+      child.stderr?.on("data", collect);
+      const timer = setTimeout(() => child.kill("SIGTERM"), 120_000);
+      child.once("error", (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+      child.once("exit", (code, signal) => {
+        clearTimeout(timer);
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(
+            new Error(
+              `repeated ingress child failed code=${String(code)} signal=${String(signal)}: ${output}`,
+            ),
+          );
+        }
+      });
     });
-    child.once("exit", (code, signal) => {
-      clearTimeout(timer);
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(
-          new Error(
-            `repeated ingress child failed code=${String(code)} signal=${String(signal)}: ${output}`,
-          ),
-        );
-      }
-    });
-  });
+    await workers.borrow(child, completion);
+  } finally {
+    await workers.dispose();
+  }
 }
 
-async function runProof(options: ProducerOptions): Promise<string> {
+async function runProof(options: QaProducerOptions): Promise<string> {
   const mock = await startQaMockOpenAiServer();
-  let fakeTailscale: Awaited<ReturnType<typeof createFakeTailscaleBinary>> | undefined;
-  let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+  const gatewayOwner = createQaGatewayChild();
+  let gateway: QaGatewayChild | undefined;
   try {
-    fakeTailscale = await createFakeTailscaleBinary();
-    gateway = await startQaGatewayChild({
+    gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
-      useRepoCli: true,
+      initializeCurrentRuntimeState: true,
+      command: {
+        executablePath: process.execPath,
+        argsPrefix: [path.join(options.repoRoot, "dist/index.js")],
+        cwd: options.repoRoot,
+        usePackagedPlugins: true,
+      },
       providerBaseUrl: `${mock.baseUrl}/v1`,
       providerMode: "mock-openai",
       transportBaseUrl: "http://127.0.0.1",
@@ -623,9 +464,6 @@ async function runProof(options: ProducerOptions): Promise<string> {
           auth: { ...cfg.gateway?.auth, allowTailscale: true },
         },
       }),
-      runtimeEnvPatch: {
-        PATH: `${fakeTailscale.binaryDir}${path.delimiter}${process.env.PATH ?? ""}`,
-      },
     });
     await gateway.restartAfterStateMutation(async () => {
       await runLocalTurn(gateway!, "Reply exactly: IDENTITY-DISABLED-FRESH");
@@ -639,8 +477,8 @@ async function runProof(options: ProducerOptions): Promise<string> {
     if (inspectExecutionIdentityStorage(gateway).tablePresent) {
       throw new Error("existing-install restart unexpectedly created execution identity storage");
     }
-    await gateway.restartAfterStateMutation(async ({ configPath }) => {
-      await updateExecutionIdentityConfig(configPath, { executionIdentity: true });
+    const hotReload = await proveHotExecutionIdentity(gateway);
+    await gateway.restartAfterStateMutation(async () => {
       await runLocalTurn(gateway!, "Reply exactly: IDENTITY-INSPECTION-OK");
     });
     const runId = findLocalRunId(gateway);
@@ -654,105 +492,54 @@ async function runProof(options: ProducerOptions): Promise<string> {
     const beforeContext = normalizedContextJson(before);
     assertPersistedContextBytes(gateway, runId, beforeContext);
 
-    const profilelessSessionKey = `agent:qa:i1-profileless-${randomUUID()}`;
-    const profilelessStarted = (await gateway.call("agent", {
-      sessionKey: profilelessSessionKey,
-      message: "Reply exactly: I1-PROFILELESS",
+    const sharedOwnerSessionKey = `agent:qa:i1-shared-owner-${randomUUID()}`;
+    const sharedOwnerStarted = (await gateway.call("agent", {
+      sessionKey: sharedOwnerSessionKey,
+      message: "Reply exactly: I1-SHARED-OWNER",
       deliver: false,
       idempotencyKey: randomUUID(),
     })) as { runId?: unknown; status?: unknown };
-    if (profilelessStarted.status !== "accepted" || typeof profilelessStarted.runId !== "string") {
+    if (sharedOwnerStarted.status !== "accepted" || typeof sharedOwnerStarted.runId !== "string") {
       throw new Error(
-        `profileless Gateway run did not start: ${JSON.stringify(profilelessStarted)}`,
+        `shared-owner Gateway run did not start: ${JSON.stringify(sharedOwnerStarted)}`,
       );
     }
-    const profilelessTerminal = (await gateway.call("agent.wait", {
-      runId: profilelessStarted.runId,
+    const sharedOwnerTerminal = (await gateway.call("agent.wait", {
+      runId: sharedOwnerStarted.runId,
       timeoutMs: 60_000,
     })) as { status?: unknown };
-    if (profilelessTerminal.status !== "ok") {
+    if (sharedOwnerTerminal.status !== "ok") {
       throw new Error(
-        `profileless Gateway run did not finish: ${JSON.stringify(profilelessTerminal)}`,
+        `shared-owner Gateway run did not finish: ${JSON.stringify(sharedOwnerTerminal)}`,
       );
     }
-    const profilelessRunId = profilelessStarted.runId;
+    const sharedOwnerRunId = sharedOwnerStarted.runId;
 
-    const device = loadOrCreateDeviceIdentity({
-      path: path.join(gateway.tempRoot, "i1-profiled-device.sqlite"),
-    });
-    const tailscaleHeaders = {
+    await assertUntrustedProxyHeadersRejected(gateway.wsUrl, {
       "tailscale-user-login": "operator@example.com",
       "tailscale-user-name": "Operator",
       "x-forwarded-for": "100.64.0.11",
       "x-forwarded-host": "gateway.qa.test",
       "x-forwarded-proto": "https",
-    };
-    let profiled = await connectRawDevice({
-      device,
-      headers: tailscaleHeaders,
-      wsUrl: gateway.wsUrl,
     });
-    if (!profiled.connected) {
-      await approveDeviceIfNeeded(gateway, device.deviceId);
-      await closeRawGatewayClient(profiled.client);
-      profiled = await connectRawDevice({
-        device,
-        headers: tailscaleHeaders,
-        wsUrl: gateway.wsUrl,
-      });
-    }
-    if (!profiled.connected) {
-      throw new Error(
-        `Tailscale-profiled Gateway client failed: ${JSON.stringify(profiled.client.frames)}`,
-      );
-    }
-    const profiledSessionKey = `agent:qa:i1-profiled-${randomUUID()}`;
-    const profiledRunId = await runGatewayTurn(
-      profiled.client,
-      "Reply exactly: I1-PROFILED",
-      profiledSessionKey,
-    );
-    await closeRawGatewayClient(profiled.client);
 
-    const profilelessText = await gateway.runCli(["audit", "--run", profilelessRunId, "--explain"]);
-    const profiledText = await gateway.runCli(["audit", "--run", profiledRunId, "--explain"]);
-    assertTextProjection(profilelessText);
-    assertTextProjection(profiledText);
+    const sharedOwnerText = await gateway.runCli(["audit", "--run", sharedOwnerRunId, "--explain"]);
+    assertTextProjection(sharedOwnerText);
     if (
-      !profilelessText.includes("Invoker [absent]") ||
-      !profilelessText.includes("Represented subject [absent]") ||
-      profilelessText.includes("Operator")
-    ) {
-      throw new Error("profileless text inspection fabricated an operator subject");
-    }
-    if (
-      !profiledText.includes("Invoker [present]") ||
-      !profiledText.includes("Represented subject [absent]")
+      !sharedOwnerText.includes("Invoker [present]") ||
+      !sharedOwnerText.includes("Represented subject [absent]")
     ) {
       throw new Error(
-        `profiled text inspection omitted durable operator attribution: ${profiledText}`,
+        "shared-owner text inspection lost its invoker or fabricated a represented subject",
       );
     }
-    const profilelessBefore = parseJson(
-      await gateway.runCli(["audit", "--run", profilelessRunId, "--explain", "--json"]),
-      "profileless Gateway inspection",
+    const sharedOwnerBefore = parseJson(
+      await gateway.runCli(["audit", "--run", sharedOwnerRunId, "--explain", "--json"]),
+      "shared-owner Gateway inspection",
     ) as AuditRunInspectResult;
-    const profiledBefore = parseJson(
-      await gateway.runCli(["audit", "--run", profiledRunId, "--explain", "--json"]),
-      "profiled Gateway inspection",
-    ) as AuditRunInspectResult;
-    assertGatewayIdentityProjection(profilelessBefore, {
-      coverage: "unattributed",
-      invoker: "absent",
-    });
-    assertGatewayIdentityProjection(profiledBefore, {
-      coverage: "attribution-only",
-      invoker: "present",
-    });
-    const profilelessContext = normalizedContextJson(profilelessBefore);
-    const profiledContext = normalizedContextJson(profiledBefore);
-    assertPersistedContextBytes(gateway, profilelessRunId, profilelessContext);
-    assertPersistedContextBytes(gateway, profiledRunId, profiledContext);
+    assertSharedOwnerGatewayIdentityProjection(sharedOwnerBefore);
+    const sharedOwnerContext = normalizedContextJson(sharedOwnerBefore);
+    assertPersistedContextBytes(gateway, sharedOwnerRunId, sharedOwnerContext);
 
     const listed = (await gateway.call("sessions.list", {})) as {
       sessions?: Array<{
@@ -760,36 +547,25 @@ async function runProof(options: ProducerOptions): Promise<string> {
         createdActor?: { id?: string; label?: string; type?: string };
       }>;
     };
-    const profilelessSession = listed.sessions?.find(
-      (session) => session.key === profilelessSessionKey,
+    const sharedOwnerSession = listed.sessions?.find(
+      (session) => session.key === sharedOwnerSessionKey,
     );
-    const profiledSession = listed.sessions?.find((session) => session.key === profiledSessionKey);
-    if (profilelessSession?.createdActor !== undefined) {
-      throw new Error("profileless Gateway session fabricated a human creator");
-    }
-    const profilelessCreator = inspectPersistedSessionCreator(gateway, profilelessSessionKey);
     if (
-      profilelessCreator.type !== null ||
-      profilelessCreator.id !== null ||
-      profilelessCreator.labelPersisted
+      sharedOwnerSession?.createdActor?.type !== "human" ||
+      sharedOwnerSession.createdActor.id !== GATEWAY_OWNER_PROFILE_ID
     ) {
-      throw new Error("profileless Gateway session persisted a fabricated creator");
+      throw new Error("shared-owner Gateway session did not project its canonical creator");
     }
+    const sharedOwnerCreator = inspectPersistedSessionCreator(gateway, sharedOwnerSessionKey);
     if (
-      profiledSession?.createdActor?.type !== "human" ||
-      !profiledSession.createdActor.id ||
-      profiledSession.createdActor.label !== "Operator"
+      sharedOwnerCreator.type !== "human" ||
+      sharedOwnerCreator.id !== GATEWAY_OWNER_PROFILE_ID ||
+      sharedOwnerCreator.source !== "profile" ||
+      sharedOwnerCreator.labelPersisted
     ) {
-      throw new Error("profiled Gateway session lost its current profile display projection");
+      throw new Error("shared-owner Gateway session lost creator provenance or persisted a label");
     }
-    const profiledCreator = inspectPersistedSessionCreator(gateway, profiledSessionKey);
-    if (
-      profiledCreator.type !== "human" ||
-      profiledCreator.id !== profiledSession.createdActor.id ||
-      profiledCreator.labelPersisted
-    ) {
-      throw new Error("profiled Gateway session did not persist only its authenticated profile id");
-    }
+    await assertSharedOwnerReadOnlyScope(gateway, sharedOwnerSessionKey);
 
     const repeatedRunId = `identity-repeated-${randomUUID()}`;
     let repeatedRows: ReturnType<typeof findRunExecutions> = [];
@@ -857,18 +633,19 @@ async function runProof(options: ProducerOptions): Promise<string> {
     if (afterContext !== beforeContext) {
       throw new Error("normalized execution identity context bytes changed across Gateway restart");
     }
-    for (const [gatewayRunId, expectedContext, expectedIdentity] of [
-      [profilelessRunId, profilelessContext, { coverage: "unattributed", invoker: "absent" }],
-      [profiledRunId, profiledContext, { coverage: "attribution-only", invoker: "present" }],
-    ] as const) {
-      const afterGateway = parseJson(
-        await gateway.runCli(["audit", "--run", gatewayRunId, "--explain", "--json"]),
-        `post-restart Gateway run ${gatewayRunId}`,
-      ) as AuditRunInspectResult;
-      assertGatewayIdentityProjection(afterGateway, expectedIdentity);
-      if (normalizedContextJson(afterGateway) !== expectedContext) {
-        throw new Error(`Gateway execution changed across restart: ${gatewayRunId}`);
-      }
+    const sharedOwnerAfter = parseJson(
+      await gateway.runCli(["audit", "--run", sharedOwnerRunId, "--explain", "--json"]),
+      `post-restart Gateway run ${sharedOwnerRunId}`,
+    ) as AuditRunInspectResult;
+    assertSharedOwnerGatewayIdentityProjection(sharedOwnerAfter);
+    if (normalizedContextJson(sharedOwnerAfter) !== sharedOwnerContext) {
+      throw new Error(`Gateway execution changed across restart: ${sharedOwnerRunId}`);
+    }
+    if (
+      JSON.stringify(inspectPersistedSessionCreator(gateway, sharedOwnerSessionKey)) !==
+      JSON.stringify(sharedOwnerCreator)
+    ) {
+      throw new Error("shared-owner session creator changed across Gateway restart");
     }
     for (const [executionId, expectedContext] of repeatedBeforeRestart) {
       const afterExact = parseJson(
@@ -880,22 +657,42 @@ async function runProof(options: ProducerOptions): Promise<string> {
       }
     }
     const retainedBeforeGlobalDisable = inspectExecutionIdentityStorage(gateway).rowCount;
-    await gateway.restartAfterStateMutation(async ({ configPath }) => {
-      await updateExecutionIdentityConfig(configPath, {
+    const globalDisableConnection = await connectHotReloadClient(gateway);
+    let globalDisabledRunId: string;
+    try {
+      await patchExecutionIdentity(gateway, globalDisableConnection, {
         enabled: false,
         executionIdentity: true,
       });
-      await runLocalTurn(gateway!, "Reply exactly: IDENTITY-DISABLED-GLOBAL");
-    });
-    if (inspectExecutionIdentityStorage(gateway).rowCount !== retainedBeforeGlobalDisable) {
-      throw new Error("global audit disable unexpectedly retained a new execution context");
+      globalDisabledRunId = await runIdentityGatewayTurn(gateway, "IDENTITY-DISABLED-GLOBAL");
+      const afterGlobalDisable = parseJson(
+        await gateway.runCli(["audit", "--run", runId, "--explain", "--json"]),
+        "global-disabled retained inspection",
+      ) as AuditRunInspectResult;
+      if (normalizedContextJson(afterGlobalDisable) !== beforeContext) {
+        throw new Error("global audit disable hid or changed retained identity evidence");
+      }
+      await patchExecutionIdentity(gateway, globalDisableConnection, {
+        enabled: true,
+        executionIdentity: true,
+      });
+      const fenceRunId = await runIdentityGatewayTurn(gateway, "IDENTITY-GLOBAL-REENABLED");
+      await waitForIdentityAuditFence(gateway, fenceRunId);
+    } finally {
+      await globalDisableConnection.client.stopAndWait({ timeoutMs: 2_000 });
     }
-    const afterGlobalDisable = parseJson(
-      await gateway.runCli(["audit", "--run", runId, "--explain", "--json"]),
-      "global-disabled retained inspection",
-    ) as AuditRunInspectResult;
-    if (normalizedContextJson(afterGlobalDisable) !== beforeContext) {
-      throw new Error("global audit disable hid or changed retained identity evidence");
+    // A later identity and terminal event have crossed the same writer FIFO;
+    // agent.wait alone does not settle queued audit persistence.
+    if (inspectExecutionIdentityStorage(gateway).rowCount !== retainedBeforeGlobalDisable + 1) {
+      throw new Error(
+        "global audit disable unexpectedly retained or backfilled an execution context",
+      );
+    }
+    const disabledActivity = (await gateway.call("audit.activity.list", {
+      runId: globalDisabledRunId,
+    })) as { events: unknown[] };
+    if (disabledActivity.events.length !== 0) {
+      throw new Error("hot global audit disable recorded activity for a subsequent run");
     }
 
     const snapshotPath = path.join(options.artifactBase, SNAPSHOT_FILE);
@@ -906,11 +703,12 @@ async function runProof(options: ProducerOptions): Promise<string> {
         {
           runId,
           gatewayRuns: {
-            profiled: { runId: profiledRunId, contextSha256: sha256(profiledContext) },
-            profileless: {
-              runId: profilelessRunId,
-              contextSha256: sha256(profilelessContext),
+            sharedOwner: {
+              runId: sharedOwnerRunId,
+              contextSha256: sha256(sharedOwnerContext),
+              readOnlyWriteRejected: true,
             },
+            spoofedProxyHeadersRejected: true,
           },
           repeatedRunId,
           repeatedExecutions: repeatedRows.map((row) => ({
@@ -922,6 +720,7 @@ async function runProof(options: ProducerOptions): Promise<string> {
           contextSha256: sha256(beforeContext),
           byteEquivalentAfterRestart: true,
           byteEquivalentPersistedReadback: true,
+          hotReload,
           optIn: {
             explicitEnablement: true,
             freshInstallDisabled: true,
@@ -939,15 +738,14 @@ async function runProof(options: ProducerOptions): Promise<string> {
       "utf8",
     );
     const repeatedDetails = `repeated run=${repeatedRunId} executions=${repeatedRows.map((row) => row.execution_id).join(",")}; exact selection passed`;
-    return `local run=${runId}; profiled Gateway run=${profiledRunId}; profileless Gateway run=${profilelessRunId}; ${repeatedDetails}; Gateway pid=${gateway.pid ?? "unknown"}; text+JSON and persisted bytes passed before/after replacement; normalized context sha256=${sha256(beforeContext)}`;
+    return `local run=${runId}; shared-owner Gateway run=${sharedOwnerRunId}; spoofed proxy headers rejected; ${repeatedDetails}; Gateway pid=${gateway.pid ?? "unknown"}; text+JSON and persisted bytes passed before/after replacement; normalized context sha256=${sha256(beforeContext)}`;
   } finally {
-    await gateway?.stop().catch(() => undefined);
+    await stopQaGatewayFixture(gatewayOwner).catch(() => undefined);
     await mock.stop();
-    await fakeTailscale?.cleanup();
   }
 }
 
-async function produceProof(options: ProducerOptions): Promise<ProofResult> {
+async function produceProof(options: QaProducerOptions): Promise<ProofResult> {
   const startedAt = Date.now();
   try {
     const details = await runProof(options);
@@ -966,7 +764,7 @@ async function produceProof(options: ProducerOptions): Promise<ProofResult> {
   }
 }
 
-async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJson> {
+async function runProducer(options: QaProducerOptions): Promise<QaEvidenceSummaryJson> {
   const writer = createQaScriptEvidenceWriter({
     artifactBase: options.artifactBase,
     logFileName: `${SCENARIO_ID}.log`,
@@ -995,7 +793,7 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
 }
 
 async function main(argv: readonly string[]) {
-  const evidence = await runProducer(parseOptions(argv));
+  const evidence = await runProducer(parseQaProducerOptions(argv));
   const status = evidence.entries[0]?.result.status;
   console.log(`Agent-run identity evidence: ${QA_EVIDENCE_FILENAME}`);
   console.log(`Agent-run identity status: ${status}`);

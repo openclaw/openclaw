@@ -1,14 +1,23 @@
+import { createHash } from "node:crypto";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readResponseWithLimit } from "../infra/http-body.js";
+import { createStaleWhileRevalidateCache } from "../infra/stale-while-revalidate-cache.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import {
+  createOAuthRefreshError,
+  createOAuthRefreshResponseError,
+} from "../shared/oauth-refresh-outcome.js";
+import { resolveConfiguredGitHubApiBaseUrl } from "./github-host.js";
+import { clearNativeGitHubTokenCache } from "./github-read-identity.js";
+import type { GitHubToolAccount } from "./github-tool-account.js";
 
 const GITHUB_OAUTH_CLIENT_ID = "Ov23liUjOXHi28w2fDlH";
 const GITHUB_OAUTH_DEVICE_CODE_URL = "https://github.com/login/device/code";
 const GITHUB_OAUTH_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token";
 const GITHUB_OAUTH_VERIFICATION_URL = "https://github.com/login/device";
 
-// gh auth login --with-token requires repo, read:org, and gist. workflow is
-// additionally required to publish branches that modify workflow files.
+// Request repository/workflow publication and the existing device-flow scopes.
 const GITHUB_OAUTH_SCOPE = "repo workflow read:org gist offline_access";
 const GITHUB_OAUTH_REQUEST_TIMEOUT_MS = 30_000;
 const GITHUB_OAUTH_RESPONSE_MAX_BYTES = 16 * 1024;
@@ -16,21 +25,32 @@ const GITHUB_OAUTH_STRING_MAX_CHARS = 2 * 1024;
 const GITHUB_OAUTH_SCOPE_MAX_CHARS = 4 * 1024;
 const GITHUB_OAUTH_SCOPE_MAX_COUNT = 32;
 const GITHUB_OAUTH_SCOPE_MAX_LENGTH = 64;
-const GITHUB_OAUTH_ERROR_TEXT_MAX_CHARS = 2 * 1024;
 const GITHUB_OAUTH_MAX_DURATION_SECONDS = 366 * 24 * 60 * 60;
 const GITHUB_OAUTH_MAX_INTERVAL_SECONDS = 60 * 60;
+
+// Writes wait for expired verification. Display reads may reuse account facts while
+// the bounded probe refreshes; token rotation and profile retirement stay live.
+const GITHUB_CREDENTIAL_VERIFICATION_TTL_MS = 60_000;
+const GITHUB_CREDENTIAL_VERIFICATION_MAX_ENTRIES = 32;
+type GitHubCredentialVerificationResult =
+  | { status: "available"; account: GitHubToolAccount; scopes: string[]; stale?: true }
+  | { status: "unavailable" | "rate_limited" | "unverified" };
+const verifiedCredentials = createStaleWhileRevalidateCache<GitHubCredentialVerificationResult>({
+  maxEntries: GITHUB_CREDENTIAL_VERIFICATION_MAX_ENTRIES,
+  ttlMs: GITHUB_CREDENTIAL_VERIFICATION_TTL_MS,
+  cacheable: (result) => result.status === "available",
+});
+
+export function clearGitHubCredentialVerificationCache(): void {
+  clearNativeGitHubTokenCache();
+  verifiedCredentials.clear();
+}
 
 type GitHubOAuthRequestOptions = {
   signal?: AbortSignal;
   timeoutMs?: number;
-};
-
-type GitHubOAuthDeviceAuthorization = {
-  deviceCode: string;
-  userCode: string;
-  verificationUri: typeof GITHUB_OAUTH_VERIFICATION_URL;
-  expiresInSeconds: number;
-  intervalSeconds: number;
+  apiBaseUrl?: string;
+  assertCurrent?: () => void | Promise<void>;
 };
 
 export type GitHubOAuthTokenPair = {
@@ -42,41 +62,21 @@ export type GitHubOAuthTokenPair = {
   refreshTokenExpiresInSeconds: number;
 };
 
-type GitHubOAuthErrorCode =
-  | "authorization_pending"
-  | "slow_down"
-  | "expired_token"
-  | "unsupported_grant_type"
-  | "incorrect_client_credentials"
-  | "incorrect_device_code"
-  | "bad_verification_code"
-  | "access_denied"
-  | "device_flow_disabled"
-  | "unverified_user_email"
-  | "bad_refresh_token";
-
-type GitHubOAuthErrorDetails = {
-  errorDescription?: string;
-  errorUri?: string;
-};
-
-type GitHubOAuthDevicePollResult =
-  | { status: "authorized"; tokens: GitHubOAuthTokenPair }
-  | ({ status: "authorization_pending" } & GitHubOAuthErrorDetails)
-  | ({ status: "slow_down"; intervalSeconds?: number } & GitHubOAuthErrorDetails)
-  | ({ status: "expired_token" } & GitHubOAuthErrorDetails)
-  | ({ status: "access_denied" } & GitHubOAuthErrorDetails)
-  | ({
-      status: "error";
-      code: Exclude<
-        GitHubOAuthErrorCode,
-        "authorization_pending" | "slow_down" | "expired_token" | "access_denied"
-      >;
-    } & GitHubOAuthErrorDetails);
-
-type GitHubOAuthRefreshResult =
-  | { status: "refreshed"; tokens: GitHubOAuthTokenPair }
-  | ({ status: "error"; code: GitHubOAuthErrorCode } & GitHubOAuthErrorDetails);
+const GITHUB_OAUTH_ERROR_CODES = [
+  "authorization_pending",
+  "slow_down",
+  "expired_token",
+  "unsupported_grant_type",
+  "incorrect_client_credentials",
+  "incorrect_device_code",
+  "bad_verification_code",
+  "access_denied",
+  "device_flow_disabled",
+  "unverified_user_email",
+  "bad_refresh_token",
+] as const;
+type GitHubOAuthErrorCode = (typeof GITHUB_OAUTH_ERROR_CODES)[number];
+const GITHUB_OAUTH_ERROR_CODE_SET: ReadonlySet<string> = new Set(GITHUB_OAUTH_ERROR_CODES);
 
 function githubOAuthProtocolError(surface: string): Error {
   return new Error(`GitHub OAuth ${surface} response was invalid`);
@@ -98,39 +98,11 @@ function readBoundedString(
   return value;
 }
 
-function readOptionalBoundedString(
-  value: unknown,
-  surface: string,
-  maxChars: number,
-): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  return readBoundedString(value, surface, maxChars);
-}
-
 function readPositiveInteger(value: unknown, surface: string, max: number): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0 || value > max) {
     throw githubOAuthProtocolError(surface);
   }
   return value;
-}
-
-function readOptionalErrorUri(value: unknown, surface: string): string | undefined {
-  const raw = readOptionalBoundedString(value, surface, GITHUB_OAUTH_ERROR_TEXT_MAX_CHARS);
-  if (raw === undefined) {
-    return undefined;
-  }
-  let parsed: URL;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    throw githubOAuthProtocolError(surface);
-  }
-  if (parsed.protocol !== "https:" || parsed.username || parsed.password) {
-    throw githubOAuthProtocolError(surface);
-  }
-  return raw;
 }
 
 function normalizeGitHubScopes(value: unknown, surface: string): string[] {
@@ -161,16 +133,15 @@ function parseGitHubOAuthTokenPair(
     throw githubOAuthProtocolError(surface);
   }
   const scopes = normalizeGitHubScopes(record.scope, surface);
-  if (
-    !scopes.includes("repo") ||
-    !scopes.includes("workflow") ||
-    !scopes.includes("read:org") ||
-    !scopes.includes("gist")
-  ) {
+  if (!["repo", "workflow", "read:org", "gist"].every((scope) => scopes.includes(scope))) {
     throw githubOAuthProtocolError(surface);
   }
+  const accessToken = readBoundedString(record.access_token, surface);
+  const refreshToken = readBoundedString(record.refresh_token, surface);
+  registerSecretValueForRedaction(accessToken);
+  registerSecretValueForRedaction(refreshToken);
   return {
-    accessToken: readBoundedString(record.access_token, surface),
+    accessToken,
     tokenType: "bearer",
     scopes,
     expiresInSeconds: readPositiveInteger(
@@ -178,7 +149,7 @@ function parseGitHubOAuthTokenPair(
       surface,
       GITHUB_OAUTH_MAX_DURATION_SECONDS,
     ),
-    refreshToken: readBoundedString(record.refresh_token, surface),
+    refreshToken,
     refreshTokenExpiresInSeconds: readPositiveInteger(
       record.refresh_token_expires_in,
       surface,
@@ -187,28 +158,14 @@ function parseGitHubOAuthTokenPair(
   };
 }
 
-const GITHUB_OAUTH_ERROR_CODES = new Set<string>([
-  "authorization_pending",
-  "slow_down",
-  "expired_token",
-  "unsupported_grant_type",
-  "incorrect_client_credentials",
-  "incorrect_device_code",
-  "bad_verification_code",
-  "access_denied",
-  "device_flow_disabled",
-  "unverified_user_email",
-  "bad_refresh_token",
-]);
-
 function isGitHubOAuthErrorCode(value: unknown): value is GitHubOAuthErrorCode {
-  return typeof value === "string" && GITHUB_OAUTH_ERROR_CODES.has(value);
+  return typeof value === "string" && GITHUB_OAUTH_ERROR_CODE_SET.has(value);
 }
 
 function parseGitHubOAuthError(
   record: Record<string, unknown>,
   surface: string,
-): { code: GitHubOAuthErrorCode; intervalSeconds?: number } & GitHubOAuthErrorDetails {
+): { code: GitHubOAuthErrorCode; intervalSeconds?: number } {
   const code = record.error;
   if (!isGitHubOAuthErrorCode(code)) {
     throw githubOAuthProtocolError(surface);
@@ -217,16 +174,8 @@ function parseGitHubOAuthError(
     record.interval === undefined
       ? undefined
       : readPositiveInteger(record.interval, surface, GITHUB_OAUTH_MAX_INTERVAL_SECONDS);
-  const errorDescription = readOptionalBoundedString(
-    record.error_description,
-    surface,
-    GITHUB_OAUTH_ERROR_TEXT_MAX_CHARS,
-  );
-  const errorUri = readOptionalErrorUri(record.error_uri, surface);
   return {
     code,
-    ...(errorDescription !== undefined ? { errorDescription } : {}),
-    ...(errorUri !== undefined ? { errorUri } : {}),
     ...(intervalSeconds !== undefined ? { intervalSeconds } : {}),
   };
 }
@@ -254,16 +203,47 @@ async function postGitHubOAuthForm(
   const timeoutMs = resolveTimerTimeoutMs(options.timeoutMs, GITHUB_OAUTH_REQUEST_TIMEOUT_MS, 1);
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
-  const response = await fetch(url, {
-    method: "POST",
-    redirect: "error",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: form,
-    signal,
-  });
+  let dispatched = false;
+  let received = false;
+  try {
+    await options.assertCurrent?.();
+    signal.throwIfAborted();
+    dispatched = true;
+    const response = await fetch(url, {
+      method: "POST",
+      redirect: "error",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: form,
+      signal,
+    });
+    received = true;
+    return { response, body: await readGitHubResponse(response, surface, timeoutMs) };
+  } catch (error) {
+    if (surface !== "token refresh") {
+      throw error;
+    }
+    throw createOAuthRefreshError(
+      "GitHub OAuth token refresh failed",
+      dispatched
+        ? {
+            version: 1,
+            phase: received ? "after-token-response" : "token-response",
+            outcome: "unknown",
+          }
+        : {
+            version: 1,
+            phase: "before-dispatch",
+            outcome: "not-attempted",
+            recovery: { kind: "later", evidence: "dispatch-not-started" },
+          },
+    );
+  }
+}
+
+async function readGitHubResponse(response: Response, surface: string, timeoutMs: number) {
   const bytes = await readResponseWithLimit(response, GITHUB_OAUTH_RESPONSE_MAX_BYTES, {
     chunkTimeoutMs: timeoutMs,
     timeoutMs,
@@ -271,16 +251,141 @@ async function postGitHubOAuthForm(
     onIdleTimeout: () => githubOAuthProtocolError(surface),
     onTimeout: () => githubOAuthProtocolError(surface),
   });
-  return { response, body: parseJsonObject(bytes, surface) };
+  return parseJsonObject(bytes, surface);
+}
+
+/** Public credentials use their fixed issuer; other issuers require an explicit endpoint. */
+export async function verifyGitHubCredential(
+  token: string,
+  options: GitHubOAuthRequestOptions & { allowStale?: boolean } = {},
+): Promise<GitHubCredentialVerificationResult> {
+  registerSecretValueForRedaction(token);
+  try {
+    readBoundedString(token, "account");
+    if (/\s/u.test(token)) {
+      return { status: "unavailable" };
+    }
+    const apiBaseUrl = options.apiBaseUrl ?? resolveConfiguredGitHubApiBaseUrl();
+    const key = createHash("sha256").update(`${apiBaseUrl}\0${token}`).digest("hex");
+    const create = async (): Promise<GitHubCredentialVerificationResult> => {
+      const timeoutMs = resolveTimerTimeoutMs(
+        options.timeoutMs,
+        GITHUB_OAUTH_REQUEST_TIMEOUT_MS,
+        1,
+      );
+      const timeout = AbortSignal.timeout(timeoutMs);
+      const response = await fetch(`${apiBaseUrl}/user`, {
+        method: "GET",
+        redirect: "error",
+        headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}` },
+        signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout,
+      });
+      if (response.status !== 200) {
+        void response.body?.cancel().catch(() => undefined);
+        const rateLimited =
+          response.status === 429 ||
+          (response.status === 403 &&
+            (response.headers.get("x-ratelimit-remaining") === "0" ||
+              response.headers.has("retry-after")));
+        return {
+          status:
+            response.status === 401 ? "unavailable" : rateLimited ? "rate_limited" : "unverified",
+        };
+      }
+      const body = await readGitHubResponse(response, "account", timeoutMs);
+      const accountId = readPositiveInteger(body.id, "account", Number.MAX_SAFE_INTEGER);
+      const login = readBoundedString(body.login, "account", 100);
+      const avatarUrl =
+        body.avatar_url == null ? null : readBoundedString(body.avatar_url, "account");
+      const scopes = normalizeGitHubScopes(response.headers.get("x-oauth-scopes") ?? "", "account");
+      const result = {
+        status: "available" as const,
+        account: { accountId, login, avatarUrl },
+        scopes,
+      };
+      Object.freeze(result.account);
+      Object.freeze(result.scopes);
+      Object.freeze(result);
+      return result;
+    };
+    // Caller-owned deadlines cannot cancel another reader's shared verification.
+    if (options.signal || options.timeoutMs !== undefined) {
+      return await create();
+    }
+    const { value, stale } = await verifiedCredentials.read(key, create, {
+      allowStale: options.allowStale === true,
+    });
+    return stale && value.status === "available" ? { ...value, stale: true } : value;
+  } catch {
+    // Network errors, response bodies, and abort reasons can contain credentials.
+    return { status: "unverified" };
+  }
 }
 
 function throwGitHubOAuthHttpError(response: Response, surface: string): never {
   throw new Error(`GitHub OAuth ${surface} request failed (HTTP ${response.status})`);
 }
 
+async function exchangeGitHubOAuthToken(
+  form: Record<string, string>,
+  surface: string,
+  options: GitHubOAuthRequestOptions,
+): Promise<
+  | { tokens: GitHubOAuthTokenPair; error?: never }
+  | {
+      error: { code: GitHubOAuthErrorCode; intervalSeconds?: number; failure?: Error };
+      tokens?: never;
+    }
+> {
+  const { response, body } = await postGitHubOAuthForm(
+    GITHUB_OAUTH_ACCESS_TOKEN_URL,
+    new URLSearchParams({ client_id: GITHUB_OAUTH_CLIENT_ID, ...form }),
+    surface,
+    options,
+  );
+  if (surface === "token refresh" && (!response.ok || body.error !== undefined)) {
+    const failure = createOAuthRefreshResponseError(
+      "GitHub OAuth token refresh",
+      response.status,
+      body,
+    );
+    if (body.access_token !== undefined || !isGitHubOAuthErrorCode(body.error)) {
+      throw failure;
+    }
+    return { error: { ...parseGitHubOAuthError(body, surface), failure } };
+  }
+  if (body.error !== undefined && body.access_token !== undefined) {
+    throw githubOAuthProtocolError(surface);
+  }
+  if (body.error !== undefined) {
+    return { error: parseGitHubOAuthError(body, surface) };
+  }
+  if (!response.ok) {
+    throwGitHubOAuthHttpError(response, surface);
+  }
+  try {
+    return { tokens: parseGitHubOAuthTokenPair(body, surface) };
+  } catch (error) {
+    if (surface !== "token refresh") {
+      throw error;
+    }
+    throw createOAuthRefreshError("GitHub OAuth token refresh response was invalid", {
+      version: 1,
+      phase: "after-token-response",
+      outcome: "unknown",
+    });
+  }
+}
+
 export async function requestGitHubOAuthDeviceCode(
   options: GitHubOAuthRequestOptions = {},
-): Promise<GitHubOAuthDeviceAuthorization> {
+): Promise<{
+  deviceCode: string;
+  userCode: string;
+  verificationUri: typeof GITHUB_OAUTH_VERIFICATION_URL;
+  expiresInSeconds: number;
+  intervalSeconds: number;
+}> {
   const { response, body } = await postGitHubOAuthForm(
     GITHUB_OAUTH_DEVICE_CODE_URL,
     new URLSearchParams({
@@ -322,84 +427,70 @@ export async function requestGitHubOAuthDeviceCode(
 // applies GitHub's cumulative slow_down floor using the returned interval.
 export async function pollGitHubOAuthDeviceToken(
   params: GitHubOAuthRequestOptions & { deviceCode: string },
-): Promise<GitHubOAuthDevicePollResult> {
+): Promise<
+  | { status: "authorized"; tokens: GitHubOAuthTokenPair }
+  | { status: "authorization_pending" }
+  | { status: "slow_down"; intervalSeconds?: number }
+  | { status: "expired_token" }
+  | { status: "access_denied" }
+  | {
+      status: "error";
+      code: Exclude<
+        GitHubOAuthErrorCode,
+        "authorization_pending" | "slow_down" | "expired_token" | "access_denied"
+      >;
+    }
+> {
   const deviceCode = readBoundedString(params.deviceCode, "device token");
   if (!/^[A-Za-z0-9_-]{40}$/u.test(deviceCode)) {
     throw githubOAuthProtocolError("device token");
   }
-  const { response, body } = await postGitHubOAuthForm(
-    GITHUB_OAUTH_ACCESS_TOKEN_URL,
-    new URLSearchParams({
-      client_id: GITHUB_OAUTH_CLIENT_ID,
+  const result = await exchangeGitHubOAuthToken(
+    {
       device_code: deviceCode,
       grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-    }),
+    },
     "device token",
     params,
   );
-  if (body.error !== undefined && body.access_token !== undefined) {
-    throw githubOAuthProtocolError("device token");
-  }
-  if (body.error !== undefined) {
-    const { code, intervalSeconds, ...details } = parseGitHubOAuthError(body, "device token");
+  if (result.error) {
+    const { code, intervalSeconds } = result.error;
     switch (code) {
       case "authorization_pending":
-        return { status: code, ...details };
+      case "expired_token":
+      case "access_denied":
+        return { status: code };
       case "slow_down":
         return {
           status: code,
-          ...details,
           ...(intervalSeconds !== undefined ? { intervalSeconds } : {}),
         };
-      case "expired_token":
-      case "access_denied":
-        return { status: code, ...details };
       default:
-        return { status: "error", code, ...details };
+        return { status: "error", code };
     }
   }
-  if (!response.ok) {
-    throwGitHubOAuthHttpError(response, "device token");
-  }
-  return {
-    status: "authorized",
-    tokens: parseGitHubOAuthTokenPair(body, "device token"),
-  };
+  return { status: "authorized", tokens: result.tokens };
 }
 
 export async function refreshGitHubOAuthToken(
   params: GitHubOAuthRequestOptions & { refreshToken: string },
-): Promise<GitHubOAuthRefreshResult> {
+): Promise<
+  | { status: "refreshed"; tokens: GitHubOAuthTokenPair }
+  | { status: "error"; code: GitHubOAuthErrorCode; failure?: Error }
+> {
   const refreshToken = readBoundedString(params.refreshToken, "token refresh");
   // Device-flow refresh is a public-client exchange. Sending a bundled client
   // secret would not make it confidential and is not required by GitHub.
-  const { response, body } = await postGitHubOAuthForm(
-    GITHUB_OAUTH_ACCESS_TOKEN_URL,
-    new URLSearchParams({
-      client_id: GITHUB_OAUTH_CLIENT_ID,
+  const result = await exchangeGitHubOAuthToken(
+    {
       grant_type: "refresh_token",
       refresh_token: refreshToken,
-    }),
+    },
     "token refresh",
     params,
   );
-  if (body.error !== undefined && body.access_token !== undefined) {
-    throw githubOAuthProtocolError("token refresh");
+  if (result.error) {
+    return { status: "error", code: result.error.code, failure: result.error.failure };
   }
-  if (body.error !== undefined) {
-    const { code, errorDescription, errorUri } = parseGitHubOAuthError(body, "token refresh");
-    return {
-      status: "error",
-      code,
-      ...(errorDescription !== undefined ? { errorDescription } : {}),
-      ...(errorUri !== undefined ? { errorUri } : {}),
-    };
-  }
-  if (!response.ok) {
-    throwGitHubOAuthHttpError(response, "token refresh");
-  }
-  return {
-    status: "refreshed",
-    tokens: parseGitHubOAuthTokenPair(body, "token refresh"),
-  };
+  return { status: "refreshed", tokens: result.tokens };
 }

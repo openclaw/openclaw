@@ -1,7 +1,10 @@
 // Pure deterministic mascot motion model. Times are seconds.
 import {
   clampMascotPose,
+  clampMascotValue as clamp,
   createMascotPose,
+  mascotBell as bell,
+  mascotEaseInOut as easeInOut,
   type MascotMood,
   type MascotPose,
 } from "./mascot-pose.ts";
@@ -21,25 +24,10 @@ const NONZERO_SEED = 0x9e37_79b9_7f4a_7c15n;
 const XORSHIFT_MULTIPLIER = 2_685_821_657_736_338_717n;
 const TAU = Math.PI * 2;
 const BLINK_DURATION = 0.16;
-const CATCH_DURATION = 0.8;
-
-function clamp(value: number, min = 0, max = 1): number {
-  return Math.min(Math.max(value, min), max);
-}
 
 function cyclePhase(time: number, period: number): number {
   const normalized = (time / period) % 1;
   return normalized < 0 ? normalized + 1 : normalized;
-}
-
-function easeInOut(value: number): number {
-  const t = clamp(value);
-  return t * t * (3 - 2 * t);
-}
-
-function bell(value: number): number {
-  const t = clamp(value);
-  return easeInOut(t < 0.5 ? t * 2 : (1 - t) * 2);
 }
 
 function plateau(value: number, attack: number, release: number): number {
@@ -53,26 +41,28 @@ function plateau(value: number, attack: number, release: number): number {
   return 1;
 }
 
-function gestureDuration(gesture: Gesture): number {
-  switch (gesture) {
-    case "wave":
-      return 1.5;
-    case "hop":
-      return 0.7;
-    case "celebrate":
-      return 2.4;
-    case "sigh":
-      return 1.8;
-    case "yawn":
-    case "wipeBrow":
-      return 2;
-    case "clawSnap":
-      return 0.6;
-    case "donHardHat":
-      return 1;
-  }
-  return 0;
-}
+const GESTURE_DURATION: Record<Gesture, number> = {
+  wave: 1.5,
+  hop: 0.7,
+  celebrate: 2.4,
+  sigh: 1.8,
+  yawn: 2,
+  wipeBrow: 2,
+  clawSnap: 0.6,
+  donHardHat: 1,
+};
+
+const ENTRANCE_GESTURE: Record<MascotMood, Gesture | null> = {
+  idle: null,
+  curious: null,
+  thinking: null,
+  attentive: null,
+  happy: "hop",
+  celebrating: "celebrate",
+  sad: "sigh",
+  sleepy: "yawn",
+  working: "donHardHat",
+};
 
 class SeededGenerator {
   private state: bigint;
@@ -97,9 +87,8 @@ class SeededGenerator {
   }
 }
 
-/** Mood loops plus randomized blink, gaze, claw-snap, and mood-beat schedules. */
 export class MascotAnimator {
-  private readonly rng: SeededGenerator;
+  private readonly rng = new SeededGenerator(BigInt(Date.now()));
   private currentMood: MascotMood = "idle";
   private startTime: number | null = null;
   private lastPoseTime = 0;
@@ -118,11 +107,6 @@ export class MascotAnimator {
   private nextMoodBeatAt = 0;
   private teaseActive = false;
   private teaseChangedAt = 0;
-  private catchStartedAt: number | null = null;
-
-  constructor(seed: bigint | number = BigInt(Date.now())) {
-    this.rng = new SeededGenerator(seed);
-  }
 
   setMood(mood: MascotMood, time: number): void {
     if (mood === this.currentMood) {
@@ -134,7 +118,7 @@ export class MascotAnimator {
     this.pendingGesture = null;
     this.activeGesture = null;
     this.rescheduleMoodBeat(time);
-    const entrance = this.entranceGesture(mood);
+    const entrance = ENTRANCE_GESTURE[mood];
     if (entrance) {
       this.startGesture(entrance, time);
     }
@@ -145,13 +129,22 @@ export class MascotAnimator {
     this.teaseChangedAt = time;
   }
 
-  playCatch(time: number): void {
-    this.catchStartedAt = time;
-  }
-
   poseAt(time: number): MascotPose {
     if (this.startTime === null) {
-      this.begin(time);
+      this.startTime = time;
+      this.lastPoseTime = time;
+      this.nextBlinkAt = time + this.random(0.8, 2.4);
+      this.nextGlanceAt = time + this.random(1.5, 4);
+      this.nextClawSnapAt = time + this.random(2, 5);
+      this.rescheduleMoodBeat(time);
+      if (
+        this.currentMood === "idle" ||
+        this.currentMood === "curious" ||
+        this.currentMood === "happy"
+      ) {
+        this.pendingGesture = "wave";
+        this.pendingGestureAt = time + 0.9;
+      }
     }
     const dt = clamp(time - this.lastPoseTime, 0, 0.1);
     this.lastPoseTime = time;
@@ -162,7 +155,7 @@ export class MascotAnimator {
     this.applyBlinks(pose, time);
 
     if (this.activeGesture) {
-      const progress = (time - this.activeGestureStart) / gestureDuration(this.activeGesture);
+      const progress = (time - this.activeGestureStart) / GESTURE_DURATION[this.activeGesture];
       if (progress >= 1) {
         this.activeGesture = null;
       } else {
@@ -174,37 +167,7 @@ export class MascotAnimator {
       pose.mouthRound = Math.max(pose.mouthRound, 0.5);
       pose.gaze = { x: 0, y: 0.6 };
     }
-    if (this.catchStartedAt !== null) {
-      const progress = (time - this.catchStartedAt) / CATCH_DURATION;
-      if (progress >= 1) {
-        this.catchStartedAt = null;
-      } else if (progress >= 0) {
-        const flash = bell(progress);
-        this.applyGesture("clawSnap", pose, clamp(progress / 0.75));
-        pose.happyEyes = Math.max(pose.happyEyes, 0.9 * flash);
-        pose.mouthCurve = Math.max(pose.mouthCurve, 0.7 * flash);
-        pose.blush = Math.max(pose.blush, 0.65 * flash);
-      }
-    }
-
     return clampMascotPose(pose);
-  }
-
-  private begin(time: number): void {
-    this.startTime = time;
-    this.lastPoseTime = time;
-    this.nextBlinkAt = time + this.random(0.8, 2.4);
-    this.nextGlanceAt = time + this.random(1.5, 4);
-    this.nextClawSnapAt = time + this.random(2, 5);
-    this.rescheduleMoodBeat(time);
-    if (
-      this.currentMood === "idle" ||
-      this.currentMood === "curious" ||
-      this.currentMood === "happy"
-    ) {
-      this.pendingGesture = "wave";
-      this.pendingGestureAt = time + 0.9;
-    }
   }
 
   private advanceSchedules(time: number): void {
@@ -223,7 +186,9 @@ export class MascotAnimator {
     this.blinkStarts = this.blinkStarts.filter((start) => time - start <= BLINK_DURATION);
 
     if (time >= this.nextGlanceAt) {
-      this.gazeTarget = this.randomGlanceTarget();
+      const magnitude = this.random(0.5, 1);
+      const angle = this.random(0, TAU);
+      this.gazeTarget = { x: Math.cos(angle) * magnitude, y: Math.sin(angle) * magnitude * 0.6 };
       this.gazeHoldUntil = time + this.random(0.7, 1.9);
       this.nextGlanceAt = this.gazeHoldUntil + this.glanceInterval();
     } else if (time >= this.gazeHoldUntil) {
@@ -491,27 +456,6 @@ export class MascotAnimator {
     }
   }
 
-  private entranceGesture(mood: MascotMood): Gesture | null {
-    switch (mood) {
-      case "happy":
-        return "hop";
-      case "celebrating":
-        return "celebrate";
-      case "sad":
-        return "sigh";
-      case "sleepy":
-        return "yawn";
-      case "working":
-        return "donHardHat";
-      case "idle":
-      case "curious":
-      case "thinking":
-      case "attentive":
-        return null;
-    }
-    return null;
-  }
-
   private startGesture(gesture: Gesture, time: number): void {
     this.activeGesture = gesture;
     this.activeGestureStart = time;
@@ -533,12 +477,6 @@ export class MascotAnimator {
       return this.random(1.2, 3);
     }
     return this.random(3, 8);
-  }
-
-  private randomGlanceTarget(): { x: number; y: number } {
-    const magnitude = this.random(0.5, 1);
-    const angle = this.random(0, TAU);
-    return { x: Math.cos(angle) * magnitude, y: Math.sin(angle) * magnitude * 0.6 };
   }
 
   private rescheduleMoodBeat(time: number): void {

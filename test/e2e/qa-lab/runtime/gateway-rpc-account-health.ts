@@ -3,10 +3,13 @@ import { fileURLToPath } from "node:url";
 import {
   createQaBusState,
   startQaBusServer,
-  startQaGatewayChild,
+  createQaGatewayChild,
+  type QaGatewayChild,
 } from "../../../../extensions/qa-lab/api.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
+import { parseQaArtifactBase } from "./script-options.js";
 
 const SOURCE_PATH = "test/e2e/qa-lab/runtime/gateway-rpc-account-health.ts";
 const SCENARIO_PATH = "qa/scenarios/observability/gateway-rpc-account-health.yaml";
@@ -105,7 +108,7 @@ export function statusSummaryMentions(payload: unknown, ...needles: string[]) {
 }
 
 async function waitForAccounts(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
+  gateway: QaGatewayChild,
   predicate: (accounts: Record<string, AccountState>) => boolean,
   label: string,
 ) {
@@ -131,10 +134,7 @@ function readChannelConfig(payload: unknown) {
   return structuredClone(assertRecord(assertRecord(config.channels)[CHANNEL_ID]));
 }
 
-async function waitForAppliedConfig(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
-  hash: string,
-) {
+async function waitForAppliedConfig(gateway: QaGatewayChild, hash: string) {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     const payload = assertRecord(await gateway.call("config.get", {}));
@@ -155,10 +155,12 @@ export async function runGatewayRpcAccountHealthProof(
 ): Promise<GatewayAccountHealthProof> {
   const state = createQaBusState();
   const bus = await startQaBusServer({ state });
-  let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+  const gatewayOwner = createQaGatewayChild();
+  let gateway: QaGatewayChild | undefined;
   try {
-    gateway = await startQaGatewayChild({
+    gateway = await gatewayOwner.start({
       repoRoot,
+      initializeCurrentRuntimeState: true,
       useRepoCli: true,
       transportBaseUrl: bus.baseUrl,
       providerMode: "mock-openai",
@@ -236,22 +238,13 @@ export async function runGatewayRpcAccountHealthProof(
         finalChannelAccounts.default?.running === true,
     };
   } finally {
-    await gateway?.stop().catch(() => undefined);
+    await stopQaGatewayFixture(gatewayOwner).catch(() => undefined);
     await bus.stop().catch(() => undefined);
   }
 }
 
-function parseArtifactBase(argv: readonly string[]) {
-  const index = argv.indexOf("--artifact-base");
-  const value = index >= 0 ? argv[index + 1] : undefined;
-  if (!value) {
-    throw new Error("--artifact-base is required");
-  }
-  return path.resolve(value);
-}
-
 export async function main(argv = process.argv.slice(2)) {
-  const artifactBase = parseArtifactBase(argv);
+  const artifactBase = parseQaArtifactBase(argv);
   const repoRoot = path.resolve(import.meta.dirname, "../../../..");
   const writer = createQaScriptEvidenceWriter({
     artifactBase,

@@ -1,38 +1,25 @@
 // Control UI tests prove trusted-proxy and browser-origin auth through real transports.
-import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage } from "node:http";
 import net from "node:net";
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import type { Page } from "playwright";
+import { expect, it } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
-import type { GatewayServer } from "../../../src/gateway/server.js";
-import { getActiveGatewayRootWorkCount } from "../../../src/process/gateway-work-admission.js";
 import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../../src/test-utils/openclaw-test-state.js";
+  createOpenClawTestInstance,
+  type OpenClawTestInstance,
+} from "../../../test/helpers/openclaw-test-instance.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
-  canRunPlaywrightChromium,
   controlUiE2eWaitTimeoutMs,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { verifyGatewayServedControlUiBundle } from "./control-ui-auth-proof.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const artifactDir = path.resolve(
-  process.cwd(),
-  process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim() ||
-    ".artifacts/control-ui-e2e/control-ui-auth-transports",
-);
 const viewport = { height: 900, width: 1280 };
 const trustedProxyUser = "qa-operator";
 const configProofIdentifier = "9223372036854775807";
@@ -53,61 +40,28 @@ type BrowserConnectEvidence = {
   clientId: string | null;
   clientMode: string | null;
   hasDevice: boolean;
-  scopes: string[];
-};
-
-type GatewayResultEvidence = {
-  errorCode: string | null;
-  errorReason: string | null;
-  helloType: string | null;
-  message: string | null;
-  ok: boolean;
-  recoveryScope: string | null;
 };
 
 type ProxyConnectionEvidence = {
   browserConnect?: BrowserConnectEvidence;
   browserOrigin: string | null;
-  gatewayResult?: GatewayResultEvidence;
-  identityInjected: boolean;
+  gatewayResult?: ReturnType<typeof readGatewayResult>;
+  requestTarget: string;
   requestMethods: string[];
-  requiredHeaderInjected: boolean;
   route: ProxyRoute;
   upstreamHandshakeStatus?: number;
 };
 
-type RealTransportProxy = {
-  close: () => Promise<void>;
-  evidence: ProxyConnectionEvidence[];
-  port: number;
-  trustedUrl: string;
-  untrustedUrl: string;
-};
-
-type RealGateway = {
-  cleanup: () => Promise<void>;
-  httpUrl: string;
-  port: number;
-  server: GatewayServer;
-  state: OpenClawTestState;
-  url: string;
-};
-
-let browser: Browser;
 let allowedUi: ControlUiE2eServer;
 let rejectedUi: ControlUiE2eServer;
-let gateway: RealGateway;
-let proxy: RealTransportProxy;
-const openContexts = new Set<BrowserContext>();
+let gateway: Awaited<ReturnType<typeof startRealGateway>>;
+let proxy: Awaited<ReturnType<typeof startRealTransportProxy>>;
+let gatewayInstance: OpenClawTestInstance | undefined;
+// Register producers before awaiting startup so partial setup still owns their closes.
+const closeProducers: Array<() => Promise<void>> = [];
 
 function stringValue(value: unknown): string | null {
   return typeof value === "string" ? value : null;
-}
-
-function stringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((entry): entry is string => typeof entry === "string")
-    : [];
 }
 
 function parseJsonFrame(data: RawData): Record<string, unknown> | null {
@@ -138,43 +92,22 @@ function captureBrowserConnect(
     clientId: stringValue(client?.id),
     clientMode: stringValue(client?.mode),
     hasDevice: asNullableRecord(params?.device) !== null,
-    scopes: stringArray(params?.scopes).toSorted(),
   };
   return stringValue(frame.id);
 }
 
-function captureGatewayResult(
-  evidence: ProxyConnectionEvidence,
-  frame: Record<string, unknown>,
-  connectRequestId: string | null,
-): void {
-  if (frame.type !== "res" || stringValue(frame.id) !== connectRequestId) {
-    return;
-  }
+function readGatewayResult(frame: Record<string, unknown>) {
   const error = asNullableRecord(frame.error);
   const details = asNullableRecord(error?.details);
   const payload = asNullableRecord(frame.payload);
   const auth = asNullableRecord(payload?.auth);
-  evidence.gatewayResult = {
+  return {
     errorCode: stringValue(details?.code) ?? stringValue(error?.code),
     errorReason: stringValue(details?.authReason) ?? stringValue(details?.reason),
     helloType: stringValue(payload?.type),
     message: stringValue(error?.message),
     ok: frame.ok === true,
     recoveryScope: stringValue(auth?.recoveryScope),
-  };
-}
-
-function sanitizeProxyEvidence(evidence: ProxyConnectionEvidence) {
-  return {
-    browserConnect: evidence.browserConnect,
-    browserOriginPresent: Boolean(evidence.browserOrigin),
-    gatewayResult: evidence.gatewayResult,
-    identityInjected: evidence.identityInjected,
-    requestMethods: evidence.requestMethods,
-    requiredHeaderInjected: evidence.requiredHeaderInjected,
-    route: evidence.route,
-    upstreamHandshakeStatus: evidence.upstreamHandshakeStatus,
   };
 }
 
@@ -201,6 +134,11 @@ function startProxyConnection(
   activeSockets.add(upstream);
   const pendingBrowserFrames: Array<{ data: RawData; isBinary: boolean }> = [];
   let connectRequestId: string | null = null;
+  const closeBrowser = (code: number, reason: string) => {
+    if (browserSocket.readyState === WebSocket.OPEN) {
+      browserSocket.close(code, reason.slice(0, 120));
+    }
+  };
 
   browserSocket.on("message", (data, isBinary) => {
     const frame = parseJsonFrame(data);
@@ -224,8 +162,8 @@ function startProxyConnection(
   });
   upstream.on("message", (data, isBinary) => {
     const frame = parseJsonFrame(data);
-    if (frame) {
-      captureGatewayResult(evidence, frame, connectRequestId);
+    if (frame?.type === "res" && stringValue(frame.id) === connectRequestId) {
+      evidence.gatewayResult = readGatewayResult(frame);
     }
     if (browserSocket.readyState === WebSocket.OPEN) {
       browserSocket.send(data, { binary: isBinary });
@@ -237,22 +175,14 @@ function startProxyConnection(
     response.on("data", (chunk) => body.push(Buffer.from(chunk)));
     response.on("end", () => {
       const reason = Buffer.concat(body).toString("utf8").trim() || "gateway rejected websocket";
-      if (browserSocket.readyState === WebSocket.OPEN) {
-        browserSocket.close(1008, reason.slice(0, 120));
-      }
+      closeBrowser(1008, reason);
     });
   });
   upstream.on("close", (code, reason) => {
     activeSockets.delete(upstream);
-    if (browserSocket.readyState === WebSocket.OPEN) {
-      browserSocket.close(code, reason.toString().slice(0, 120));
-    }
+    closeBrowser(code, reason.toString());
   });
-  upstream.on("error", () => {
-    if (browserSocket.readyState === WebSocket.OPEN) {
-      browserSocket.close(1011, "gateway transport error");
-    }
-  });
+  upstream.on("error", () => closeBrowser(1011, "gateway transport error"));
   browserSocket.on("close", () => {
     activeSockets.delete(browserSocket);
     if (upstream.readyState === WebSocket.OPEN || upstream.readyState === WebSocket.CONNECTING) {
@@ -271,7 +201,28 @@ function startProxyConnection(
   });
 }
 
-async function startRealTransportProxy(gatewayUrl: string): Promise<RealTransportProxy> {
+function closeHttpServer(server: ReturnType<typeof createServer>): Promise<void> {
+  if (!server.listening) {
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+}
+
+async function listenOnLoopback(server: ReturnType<typeof createServer>): Promise<number> {
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Control UI proxy did not bind a TCP port");
+  }
+  return address.port;
+}
+
+async function startRealTransportProxy(gatewayUrl: string) {
   const evidence: ProxyConnectionEvidence[] = [];
   const activeSockets = new Set<WebSocket>();
   const websocketServer = new WebSocketServer({ noServer: true });
@@ -280,6 +231,10 @@ async function startRealTransportProxy(gatewayUrl: string): Promise<RealTranspor
   });
 
   server.on("upgrade", (request, socket, head) => {
+    if (!server.listening) {
+      socket.destroy();
+      return;
+    }
     const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
     const route =
       pathname === "/trusted" ? "trusted" : pathname === "/untrusted" ? "untrusted" : null;
@@ -290,9 +245,8 @@ async function startRealTransportProxy(gatewayUrl: string): Promise<RealTranspor
     websocketServer.handleUpgrade(request, socket, head, (browserSocket) => {
       const connectionEvidence: ProxyConnectionEvidence = {
         browserOrigin: stringValue(request.headers.origin),
-        identityInjected: route === "trusted",
+        requestTarget: request.url ?? "",
         requestMethods: [],
-        requiredHeaderInjected: route === "trusted",
         route,
       };
       evidence.push(connectionEvidence);
@@ -300,41 +254,53 @@ async function startRealTransportProxy(gatewayUrl: string): Promise<RealTranspor
     });
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("real-transport proxy did not bind a TCP port");
-  }
-  const baseUrl = `ws://localhost:${address.port}`;
+  const close = async () => {
+    const httpClosed = closeHttpServer(server);
+    const socketsClosed = [...activeSockets].map(
+      (socket) =>
+        new Promise<void>((resolve) => {
+          if (socket.readyState === WebSocket.CLOSED) {
+            resolve();
+            return;
+          }
+          socket.once("close", () => resolve());
+          socket.terminate();
+        }),
+    );
+    await Promise.all([
+      httpClosed,
+      ...socketsClosed,
+      new Promise<void>((resolve, reject) => {
+        websocketServer.close((error) => (error ? reject(error) : resolve()));
+      }),
+    ]);
+  };
+  closeProducers.push(close);
+  const port = await listenOnLoopback(server);
+  const baseUrl = `ws://localhost:${port}`;
   return {
-    close: async () => {
-      for (const socket of activeSockets) {
-        socket.terminate();
-      }
-      activeSockets.clear();
-      await new Promise<void>((resolve, reject) => {
-        websocketServer.close(() => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
-      });
-    },
     evidence,
-    port: address.port,
+    ipv4TrustedUrl: `ws://127.0.0.1:${port}/trusted`,
+    port,
     trustedUrl: `${baseUrl}/trusted`,
     untrustedUrl: `${baseUrl}/untrusted`,
   };
 }
 
 async function startControlUiOriginProxy(upstreamBaseUrl: string): Promise<ControlUiE2eServer> {
+  const lifetime = new AbortController();
+  const requests = new Set<Promise<void>>();
   const server = createServer((request, response) => {
-    void (async () => {
+    if (lifetime.signal.aborted) {
+      response.destroy();
+      return;
+    }
+    const work = (async () => {
       const upstream = await fetch(new URL(request.url ?? "/", upstreamBaseUrl), {
         headers: { Accept: request.headers.accept ?? "*/*" },
         method: request.method,
         redirect: "manual",
+        signal: lifetime.signal,
       });
       response.statusCode = upstream.status;
       for (const [name, value] of upstream.headers) {
@@ -351,61 +317,38 @@ async function startControlUiOriginProxy(upstreamBaseUrl: string): Promise<Contr
       }
       response.end("Control UI origin proxy failed");
     });
+    requests.add(work);
+    void work.then(
+      () => requests.delete(work),
+      () => requests.delete(work),
+    );
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Control UI origin proxy did not bind a TCP port");
-  }
+  const close = async () => {
+    // Socket closure alone does not join an upstream fetch whose browser disconnected.
+    lifetime.abort();
+    await Promise.all([closeHttpServer(server), ...requests]);
+  };
+  closeProducers.push(close);
+  const port = await listenOnLoopback(server);
   return {
-    baseUrl: `http://127.0.0.1:${address.port}/`,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      }),
+    baseUrl: `http://127.0.0.1:${port}/`,
+    close,
   };
 }
 
-async function getFreePort(): Promise<number> {
-  const server = net.createServer();
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
+async function startRealGateway(allowedOrigin: string, signal: AbortSignal) {
+  const instance = await createOpenClawTestInstance({
+    name: "control-ui-auth-transports",
+    // Keep the stopped socket closed for the transport cleanup assertions.
+    reserveIdlePort: false,
+    signal,
   });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    server.close();
-    throw new Error("failed to allocate a Gateway port");
-  }
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-  return address.port;
-}
-
-async function startRealGateway(allowedOrigin: string): Promise<RealGateway> {
-  const port = await getFreePort();
+  gatewayInstance = instance;
+  closeProducers.push(() => instance.stopGateway());
+  const { port, state } = instance;
   const httpUrl = `http://127.0.0.1:${port}/`;
-  const state = await createOpenClawTestState({
-    label: "control-ui-auth-transports",
-    layout: "home",
-    env: {
-      OPENCLAW_GATEWAY_PASSWORD: undefined,
-      OPENCLAW_GATEWAY_TOKEN: undefined,
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-      VITEST: "1",
-    },
-  });
+  signal.throwIfAborted();
   const trustedProxy = {
     allowLoopback: true,
     allowUsers: [trustedProxyUser],
@@ -422,18 +365,12 @@ async function startRealGateway(allowedOrigin: string): Promise<RealGateway> {
     requiredHeaders: ["x-forwarded-proto"],
     userHeader: "x-forwarded-user",
   };
+  const auth = { mode: "trusted-proxy" as const, trustedProxy };
   await state.writeConfig({
     messages: { responsePrefix: configProofPrefixBefore },
-    tools: {
-      elevated: {
-        allowFrom: { discord: [configProofIdentifier] },
-      },
-    },
+    tools: { elevated: { allowFrom: { discord: [configProofIdentifier] } } },
     gateway: {
-      auth: {
-        mode: "trusted-proxy",
-        trustedProxy,
-      },
+      auth,
       controlUi: {
         allowedOrigins: [allowedOrigin, new URL(httpUrl).origin],
         enabled: true,
@@ -443,33 +380,14 @@ async function startRealGateway(allowedOrigin: string): Promise<RealGateway> {
       trustedProxies: ["127.0.0.1", "::1"],
     },
   });
-  state.applyEnv();
-  try {
-    const { startGatewayServer } = await import("../../../src/gateway/server.js");
-    const server = await startGatewayServer(port, {
-      auth: {
-        mode: "trusted-proxy",
-        trustedProxy,
-      },
-      bind: "loopback",
-      controlUiEnabled: true,
-      sidecarStartup: "defer",
-    });
-    return {
-      cleanup: async () => {
-        await server.close({ reason: "control ui auth transports test cleanup" });
-        await state.cleanup();
-      },
-      httpUrl,
-      port,
-      server,
-      state,
-      url: `ws://127.0.0.1:${port}`,
-    };
-  } catch (error) {
-    await state.cleanup();
-    throw error;
-  }
+  signal.throwIfAborted();
+  await instance.startGateway();
+  return {
+    httpUrl,
+    port,
+    state,
+    url: instance.url,
+  };
 }
 
 function withGatewayUrl(baseUrl: string, gatewayUrl: string): string {
@@ -478,23 +396,12 @@ function withGatewayUrl(baseUrl: string, gatewayUrl: string): string {
   return url.toString();
 }
 
-async function createBrowserPage(
-  baseUrl: string,
-  gatewayUrl: string,
-): Promise<{
-  context: BrowserContext;
-  evidenceStartIndex: number;
-  errors: string[];
-  page: Page;
-}> {
-  await mkdir(artifactDir, { recursive: true });
-  const context = await browser.newContext({
+async function createBrowserPage(baseUrl: string, gatewayUrl: string) {
+  const context = await suite.newBrowserContext({
     locale: "en-US",
-    recordVideo: captureUiProofEnabled ? { dir: artifactDir, size: viewport } : undefined,
     serviceWorkers: "block",
     viewport,
   });
-  openContexts.add(context);
   const page = await context.newPage();
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(String(error)));
@@ -508,11 +415,11 @@ async function createBrowserPage(
   // Browser startup shares CI shard CPU. Bound navigation and the first
   // rendered interaction separately; transport assertions stay narrow.
   const confirmation = page.locator("openclaw-gateway-url-confirmation");
-  await confirmation.waitFor({ timeout: controlUiSettleTimeoutMs });
+  await confirmation.getByRole("dialog").waitFor({ timeout: controlUiSettleTimeoutMs });
   expect(await confirmation.textContent()).toContain(gatewayUrl);
   expect(proxy.evidence).toHaveLength(evidenceStartIndex);
   await confirmation
-    .getByRole("button", { name: "Confirm", exact: true })
+    .getByRole("button", { name: `Switch to ${new URL(gatewayUrl).host}`, exact: true })
     .click({ timeout: controlUiSettleTimeoutMs });
   await expect
     .poll(() => proxy.evidence.length, { timeout: 15_000 })
@@ -520,58 +427,15 @@ async function createBrowserPage(
   return { context, errors, evidenceStartIndex, page };
 }
 
-async function closeContext(context: BrowserContext): Promise<void> {
-  openContexts.delete(context);
-  await context.close();
+type BrowserFlow = Awaited<ReturnType<typeof createBrowserPage>>;
+
+async function waitForShell(page: Page): Promise<void> {
+  await page.locator("openclaw-app-shell").waitFor({ timeout: controlUiSettleTimeoutMs });
 }
 
-async function closeConnectedContext(context: BrowserContext): Promise<void> {
-  await closeContext(context);
-  // UI requests intentionally outlive socket teardown. Drain their admitted work
-  // before another browser interaction so lazy handler imports cannot starve it.
-  await expect.poll(() => getActiveGatewayRootWorkCount()).toBe(0);
-}
-
-async function captureChromiumScreenshot(page: Page, fileName: string): Promise<void> {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  const session = await page.context().newCDPSession(page);
-  try {
-    // The live dashboard keeps rendering while RPCs settle. Capture the current
-    // Chromium surface directly so proof does not wait on unrelated UI activity.
-    const result = await session.send("Page.captureScreenshot", {
-      captureBeyondViewport: false,
-      format: "png",
-      fromSurface: true,
-    });
-    await writeFile(path.join(artifactDir, fileName), Buffer.from(result.data, "base64"));
-  } finally {
-    await session.detach();
-  }
-}
-
-async function verifyGatewayServedControlUiBundle(httpUrl: string): Promise<{
-  assetPath: string;
-  assetSha256: string;
-}> {
-  const distRoot = path.resolve("dist/control-ui");
-  const builtIndex = await readFile(path.join(distRoot, "index.html"), "utf8");
-  const assetPath = builtIndex.match(/<script[^>]+src="\.\/(assets\/[^"]+\.js)"/u)?.[1];
-  if (!assetPath) {
-    throw new Error("built Control UI index has no JavaScript asset path");
-  }
-  const servedIndexResponse = await fetch(httpUrl);
-  expect(servedIndexResponse.status).toBe(200);
-  expect(await servedIndexResponse.text()).toContain(`src="/${assetPath}"`);
-  const servedAssetResponse = await fetch(new URL(assetPath, httpUrl));
-  expect(servedAssetResponse.status).toBe(200);
-  const servedAsset = Buffer.from(await servedAssetResponse.arrayBuffer());
-  const builtAsset = await readFile(path.join(distRoot, assetPath));
-  const hash = (value: Buffer) => createHash("sha256").update(value).digest("hex");
-  const assetSha256 = hash(builtAsset);
-  expect(hash(servedAsset)).toBe(assetSha256);
-  return { assetPath, assetSha256 };
+async function finishBrowser({ context, errors }: BrowserFlow): Promise<void> {
+  expect(errors).toEqual([]);
+  await suite.closeBrowserContext(context);
 }
 
 async function readConfigProofSnapshot(): Promise<{ identifier: unknown; prefix: string | null }> {
@@ -600,15 +464,38 @@ async function waitForConnectionEvidence(
   return entry;
 }
 
-async function waitForVisibleFailure(page: Page, expectedText: string): Promise<string> {
+async function reconnect(
+  page: Page,
+  params: { gatewayUrl: string; token?: string; password?: string; bootstrapToken?: string },
+  matches: (entry: ProxyConnectionEvidence) => boolean,
+) {
+  const start = proxy.evidence.length;
+  await evaluateControlUiContext(
+    page,
+    (app, options) => {
+      app.gateway.connect(options);
+    },
+    params,
+  );
+  return waitForConnectionEvidence(matches, start);
+}
+
+async function expectRawConfig(page: Page, prefix: string) {
+  const editor = page.locator(".config-raw-field textarea");
+  await editor.waitFor();
+  await expect.poll(() => editor.inputValue()).toContain(`"${configProofIdentifier}"`);
+  await expect.poll(() => editor.inputValue()).toContain(prefix);
+}
+
+async function waitForVisibleFailure(page: Page, expectedText: string): Promise<void> {
   const failure = page.locator(".login-gate__failure");
   await failure.waitFor();
-  expect(await failure.getAttribute("role")).toBe("alert");
+  expect(await failure.getAttribute("role")).toBe("status");
+  expect(await failure.getAttribute("aria-live")).toBe("polite");
   const raw = (await failure.locator(".login-gate__failure-raw").textContent()) ?? "";
   expect(raw.toLowerCase()).toContain(expectedText.toLowerCase());
   expect(await failure.locator(".login-gate__failure-steps").isVisible()).toBe(true);
   expect(await page.locator("openclaw-app-shell").count()).toBe(0);
-  return raw;
 }
 
 async function isPortClosed(host: string, port: number): Promise<boolean> {
@@ -624,253 +511,230 @@ async function isPortClosed(host: string, port: number): Promise<boolean> {
   });
 }
 
-describeControlUiE2e("Control UI real auth transports E2E", () => {
-  beforeAll(async () => {
-    console.info("[real-config-id-proof] setup-start");
-    if (!chromiumAvailable) {
-      throw new Error(
-        `Playwright Chromium is not installed or cannot start at ${chromiumExecutablePath}.`,
+const suite = createControlUiE2eSuite({
+  name: "Control UI real auth transports E2E",
+  setupTimeoutMs: 120_000,
+  teardownTimeoutMs: 30_000,
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) =>
+    `Playwright Chromium is not installed or cannot start at ${executablePath}.`,
+  resources: {
+    async run(signal) {
+      allowedUi = suite.server;
+      signal.throwIfAborted();
+      // A lightweight proxy supplies the distinct rejected Origin without starting
+      // a second Vite compiler in the already resource-intensive browser shard.
+      rejectedUi = await startControlUiOriginProxy(allowedUi.baseUrl);
+      signal.throwIfAborted();
+      gateway = await startRealGateway(new URL(allowedUi.baseUrl).origin, signal);
+      signal.throwIfAborted();
+      proxy = await startRealTransportProxy(gateway.url);
+      signal.throwIfAborted();
+    },
+    async close() {
+      const cleanupResults = await Promise.allSettled(
+        closeProducers.map((close) => Promise.resolve().then(close)),
       );
-    }
-    await mkdir(artifactDir, { recursive: true });
-    allowedUi = await startControlUiE2eServer();
-    // A lightweight proxy supplies the distinct rejected Origin without starting
-    // a second Vite compiler in the already resource-intensive browser shard.
-    rejectedUi = await startControlUiOriginProxy(allowedUi.baseUrl);
-    gateway = await startRealGateway(new URL(allowedUi.baseUrl).origin);
-    proxy = await startRealTransportProxy(gateway.url);
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-    console.info("[real-config-id-proof] setup-ready");
-  }, 120_000);
+      expect(
+        cleanupResults
+          .filter((result) => result.status === "rejected")
+          .map((result) => String(result.reason)),
+      ).toEqual([]);
 
-  afterAll(async () => {
-    await Promise.all([...openContexts].map((context) => context.close().catch(() => {})));
-    openContexts.clear();
-    const cleanupResults = await Promise.allSettled([
-      browser?.close(),
-      proxy?.close(),
-      gateway?.cleanup(),
-      allowedUi?.close(),
-      rejectedUi?.close(),
-    ]);
-    expect(
-      cleanupResults
-        .filter((result) => result.status === "rejected")
-        .map((result) => String(result.reason)),
-    ).toEqual([]);
+      const cleanup = {
+        gatewayPortClosed: gateway ? await isPortClosed("127.0.0.1", gateway.port) : true,
+        proxyPortClosed: proxy ? await isPortClosed("127.0.0.1", proxy.port) : true,
+      };
+      expect(cleanup).toEqual({
+        gatewayPortClosed: true,
+        proxyPortClosed: true,
+      });
+    },
+    async release() {
+      await gatewayInstance?.cleanup();
+    },
+    retainedState: () => gatewayInstance?.state.root,
+  },
+});
 
-    const cleanup = {
-      gatewayPortClosed: gateway ? await isPortClosed("127.0.0.1", gateway.port) : true,
-      proxyPortClosed: proxy ? await isPortClosed("127.0.0.1", proxy.port) : true,
-    };
-    await writeFile(
-      path.join(artifactDir, "cleanup-summary.json"),
-      `${JSON.stringify(cleanup, null, 2)}\n`,
-      "utf8",
-    );
-    expect(cleanup).toEqual({
-      gatewayPortClosed: true,
-      proxyPortClosed: true,
+suite.define(() => {
+  it("preserves a 64-bit identifier through a real Gateway form save", async (context) => {
+    await suite.runScenario(context, {
+      async run() {
+        const servedBundle = await verifyGatewayServedControlUiBundle(gateway.httpUrl);
+        const connected = await createBrowserPage(gateway.httpUrl, proxy.trustedUrl);
+        await waitForShell(connected.page);
+        const servedAssetLoaded = await connected.page.evaluate(
+          (assetPath) =>
+            performance
+              .getEntriesByType("resource")
+              .some((entry) => new URL(entry.name).pathname.endsWith(`/${assetPath}`)),
+          servedBundle.assetPath,
+        );
+        expect(servedAssetLoaded).toBe(true);
+
+        const rawSettingsUrl = new URL("settings/advanced", gateway.httpUrl);
+        rawSettingsUrl.searchParams.set("section", "env");
+        expect((await connected.page.goto(rawSettingsUrl.toString()))?.status()).toBe(200);
+        await connected.page.getByRole("button", { name: "Raw", exact: true }).click();
+        await expectRawConfig(connected.page, configProofPrefixBefore);
+
+        const settingsUrl = new URL("settings/communications", gateway.httpUrl);
+        settingsUrl.searchParams.set("section", "messages");
+        expect((await connected.page.goto(settingsUrl.toString()))?.status()).toBe(200);
+        const prefix = connected.page.getByRole("textbox", {
+          name: "Outbound Response Prefix",
+          exact: true,
+        });
+        await expect.poll(() => prefix.inputValue()).toBe(configProofPrefixBefore);
+        const configSetCount = () =>
+          proxy.evidence
+            .slice(connected.evidenceStartIndex)
+            .flatMap((entry) => entry.requestMethods)
+            .filter((method) => method === "config.set").length;
+        const configSetCountBefore = configSetCount();
+        await prefix.fill(configProofPrefixAfter);
+
+        await expect
+          .poll(configSetCount, { timeout: 15_000 })
+          .toBeGreaterThan(configSetCountBefore);
+        await expect
+          .poll(async () => (await readConfigProofSnapshot()).prefix)
+          .toBe(configProofPrefixAfter);
+        const persisted = await readConfigProofSnapshot();
+        expect(persisted.identifier).toBe(configProofIdentifier);
+
+        await connected.page.reload({ waitUntil: "domcontentloaded" });
+        await waitForShell(connected.page);
+        expect((await connected.page.goto(rawSettingsUrl.toString()))?.status()).toBe(200);
+        await connected.page.getByRole("button", { name: "Raw", exact: true }).click();
+        await expectRawConfig(connected.page, configProofPrefixAfter);
+        await finishBrowser(connected);
+      },
     });
-  }, 30_000);
-
-  afterEach(async () => {
-    await Promise.all([...openContexts].map((context) => context.close().catch(() => {})));
-    openContexts.clear();
   });
 
-  it("preserves a 64-bit identifier through a real Gateway form save", async () => {
-    const servedBundle = await verifyGatewayServedControlUiBundle(gateway.httpUrl);
-    const connected = await createBrowserPage(gateway.httpUrl, proxy.trustedUrl);
-    await connected.page
-      .locator("openclaw-app-shell")
-      .waitFor({ timeout: controlUiSettleTimeoutMs });
-    const servedAssetLoaded = await connected.page.evaluate(
-      (assetPath) =>
-        performance
-          .getEntriesByType("resource")
-          .some((entry) => new URL(entry.name).pathname.endsWith(`/${assetPath}`)),
-      servedBundle.assetPath,
-    );
-    expect(servedAssetLoaded).toBe(true);
+  it("connects through the trusted path and rejects the untrusted proxy path", async (context) => {
+    await suite.runScenario(context, {
+      async run() {
+        const rejected = await createBrowserPage(allowedUi.baseUrl, proxy.untrustedUrl);
+        const expectedReason = "trusted_proxy_missing_header_x-forwarded-proto";
+        await waitForVisibleFailure(rejected.page, "unauthorized");
+        const untrustedEvidence = await waitForConnectionEvidence(
+          (entry) => entry.route === "untrusted" && entry.gatewayResult?.ok === false,
+          rejected.evidenceStartIndex,
+        );
+        expect(untrustedEvidence.gatewayResult).toMatchObject({
+          message: expect.stringContaining("unauthorized"),
+          errorReason: expectedReason,
+          errorCode: ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED,
+        });
+        const failure = rejected.page.locator(".login-gate__failure");
+        expect(await failure.getAttribute("data-kind")).toBe("trusted-proxy");
+        expect(await failure.locator(".login-gate__failure-steps").textContent()).toContain("SSO");
+        expect(await failure.locator(".login-gate__failure-steps").textContent()).toContain(
+          "WebSocket upgrade",
+        );
+        expect(await failure.locator(".login-gate__command").count()).toBe(0);
+        await finishBrowser(rejected);
 
-    const rawSettingsUrl = new URL("settings/advanced", gateway.httpUrl);
-    rawSettingsUrl.searchParams.set("section", "env");
-    expect((await connected.page.goto(rawSettingsUrl.toString()))?.status()).toBe(200);
-    await connected.page.getByRole("button", { name: "Raw", exact: true }).click();
-    const rawEditorBefore = connected.page.locator(".config-raw-field textarea");
-    await rawEditorBefore.waitFor();
-    await expect.poll(() => rawEditorBefore.inputValue()).toContain(`"${configProofIdentifier}"`);
-    await expect.poll(() => rawEditorBefore.inputValue()).toContain(configProofPrefixBefore);
-    await rawEditorBefore.scrollIntoViewIfNeeded();
-    await captureChromiumScreenshot(connected.page, "01-real-config-id-before.png");
-
-    const settingsUrl = new URL("settings/communications", gateway.httpUrl);
-    settingsUrl.searchParams.set("section", "messages");
-    expect((await connected.page.goto(settingsUrl.toString()))?.status()).toBe(200);
-    const prefix = connected.page.getByRole("textbox", {
-      name: "Outbound Response Prefix",
-      exact: true,
-    });
-    await expect.poll(() => prefix.inputValue()).toBe(configProofPrefixBefore);
-    const configSetCount = () =>
-      proxy.evidence
-        .slice(connected.evidenceStartIndex)
-        .flatMap((entry) => entry.requestMethods)
-        .filter((method) => method === "config.set").length;
-    const configSetCountBefore = configSetCount();
-    await prefix.fill(configProofPrefixAfter);
-
-    await expect.poll(configSetCount, { timeout: 15_000 }).toBeGreaterThan(configSetCountBefore);
-    await expect
-      .poll(async () => (await readConfigProofSnapshot()).prefix)
-      .toBe(configProofPrefixAfter);
-    const persisted = await readConfigProofSnapshot();
-    expect(persisted.identifier).toBe(configProofIdentifier);
-    expect(typeof persisted.identifier).toBe("string");
-
-    await connected.page.reload({ waitUntil: "domcontentloaded" });
-    await connected.page
-      .locator("openclaw-app-shell")
-      .waitFor({ timeout: controlUiSettleTimeoutMs });
-    expect((await connected.page.goto(rawSettingsUrl.toString()))?.status()).toBe(200);
-    await connected.page.getByRole("button", { name: "Raw", exact: true }).click();
-    const rawEditor = connected.page.locator(".config-raw-field textarea");
-    await rawEditor.waitFor();
-    await expect.poll(() => rawEditor.inputValue()).toContain(`"${configProofIdentifier}"`);
-    await expect.poll(() => rawEditor.inputValue()).toContain(configProofPrefixAfter);
-    await rawEditor.scrollIntoViewIfNeeded();
-
-    const proof = {
-      configSetRequests: configSetCount() - configSetCountBefore,
-      identifierMatches: persisted.identifier === configProofIdentifier,
-      identifierType: typeof persisted.identifier,
-      method: "config.set",
-      persistedPrefix: persisted.prefix,
-      rawReadbackQuoted: true,
-      servedAssetLoaded,
-      servedAssetPath: servedBundle.assetPath,
-      servedAssetSha256: servedBundle.assetSha256,
-      uiSource: "gateway-dist-control-ui",
-    };
-    await writeFile(
-      path.join(artifactDir, "real-gateway-config-id-proof.json"),
-      `${JSON.stringify(proof, null, 2)}\n`,
-      "utf8",
-    );
-    console.info(`[real-config-id-proof] ${JSON.stringify(proof)}`);
-    await captureChromiumScreenshot(connected.page, "02-real-config-id-after.png");
-    expect(connected.errors).toEqual([]);
-    await closeConnectedContext(connected.context);
-  });
-
-  it("connects through the trusted path and rejects the untrusted proxy path", async () => {
-    // A connected shell starts bootstrap RPCs that can outlive context teardown.
-    // Keep it last so those requests cannot starve the next browser interaction.
-    const rejected = await createBrowserPage(allowedUi.baseUrl, proxy.untrustedUrl);
-    const expectedReason = "trusted_proxy_missing_header_x-forwarded-proto";
-    await waitForVisibleFailure(rejected.page, "unauthorized");
-    const untrustedEvidence = await waitForConnectionEvidence(
-      (entry) => entry.route === "untrusted" && entry.gatewayResult?.ok === false,
-      rejected.evidenceStartIndex,
-    );
-    expect(untrustedEvidence.gatewayResult?.message).toContain("unauthorized");
-    expect(untrustedEvidence.gatewayResult?.errorReason).toBe(expectedReason);
-    expect(untrustedEvidence.identityInjected).toBe(false);
-    expect(untrustedEvidence.requiredHeaderInjected).toBe(false);
-    await captureChromiumScreenshot(rejected.page, "02-untrusted-proxy-rejected.png");
-    expect(rejected.errors).toEqual([]);
-    await closeContext(rejected.context);
-
-    const connected = await createBrowserPage(allowedUi.baseUrl, proxy.trustedUrl);
-    await connected.page
-      .locator("openclaw-app-shell")
-      .waitFor({ timeout: controlUiSettleTimeoutMs });
-    const trustedEvidence = await waitForConnectionEvidence(
-      (entry) =>
-        entry.route === "trusted" &&
-        entry.gatewayResult?.ok === true &&
-        entry.gatewayResult.helloType === "hello-ok",
-      connected.evidenceStartIndex,
-    );
-    expect(trustedEvidence.browserConnect).toMatchObject({
-      authFields: [],
-      clientId: "openclaw-control-ui",
-      clientMode: "webchat",
-      hasDevice: true,
-    });
-    expect(trustedEvidence.identityInjected).toBe(true);
-    expect(trustedEvidence.requiredHeaderInjected).toBe(true);
-    expect(trustedEvidence.gatewayResult?.recoveryScope).toMatch(/^[A-Za-z0-9_-]+$/u);
-    expect(trustedEvidence.gatewayResult?.recoveryScope).not.toContain(trustedProxyUser);
-    await captureChromiumScreenshot(connected.page, "01-trusted-proxy-connected.png");
-    expect(connected.errors).toEqual([]);
-    await closeConnectedContext(connected.context);
-
-    await writeFile(
-      path.join(artifactDir, "trusted-proxy-behavior.json"),
-      `${JSON.stringify(
-        {
-          connected: sanitizeProxyEvidence(trustedEvidence),
-          rejected: sanitizeProxyEvidence(untrustedEvidence),
-          visibleOutcomes: {
-            connectedShell: true,
-            rejectedRecovery: true,
+        const connected = await createBrowserPage(allowedUi.baseUrl, proxy.trustedUrl);
+        await waitForShell(connected.page);
+        const trustedEvidence = await waitForConnectionEvidence(
+          (entry) =>
+            entry.route === "trusted" &&
+            entry.gatewayResult?.ok === true &&
+            entry.gatewayResult.helloType === "hello-ok",
+          connected.evidenceStartIndex,
+        );
+        expect(trustedEvidence).toMatchObject({
+          browserConnect: {
+            authFields: [],
+            clientId: "openclaw-control-ui",
+            clientMode: "webchat",
+            hasDevice: true,
           },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
+          gatewayResult: { recoveryScope: expect.stringMatching(/^[A-Za-z0-9_-]+$/u) },
+        });
+        expect(trustedEvidence.gatewayResult?.recoveryScope).not.toContain(trustedProxyUser);
+        await finishBrowser(connected);
+      },
+    });
   });
 
-  it("confirms gatewayUrl, accepts the allowed origin, and rejects an unlisted origin", async () => {
-    const rejected = await createBrowserPage(rejectedUi.baseUrl, proxy.trustedUrl);
-    await waitForVisibleFailure(rejected.page, "origin not allowed");
-    const rejectedOrigin = new URL(rejectedUi.baseUrl).origin;
-    const rejectedEvidence = await waitForConnectionEvidence(
-      (entry) =>
-        entry.route === "trusted" &&
-        entry.browserOrigin === rejectedOrigin &&
-        (entry.gatewayResult?.errorCode === ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED ||
-          entry.upstreamHandshakeStatus === 403),
-      rejected.evidenceStartIndex,
-    );
-    await captureChromiumScreenshot(rejected.page, "04-rejected-origin-recovery.png");
-    expect(rejected.errors).toEqual([]);
-    await closeContext(rejected.context);
+  it("does not forward prior Gateway credentials across URL scopes", async (context) => {
+    await suite.runScenario(context, {
+      async run() {
+        const connected = await createBrowserPage(gateway.httpUrl, proxy.trustedUrl);
+        await waitForShell(connected.page);
 
-    const allowed = await createBrowserPage(allowedUi.baseUrl, proxy.trustedUrl);
-    await allowed.page.locator("openclaw-app-shell").waitFor({ timeout: controlUiSettleTimeoutMs });
-    const allowedOrigin = new URL(allowedUi.baseUrl).origin;
-    const allowedEvidence = await waitForConnectionEvidence(
-      (entry) =>
-        entry.route === "trusted" &&
-        entry.browserOrigin === allowedOrigin &&
-        entry.gatewayResult?.ok === true,
-      allowed.evidenceStartIndex,
-    );
-    await captureChromiumScreenshot(allowed.page, "03-allowed-origin-connected.png");
-    expect(allowed.errors).toEqual([]);
-    await closeConnectedContext(allowed.context);
-
-    await writeFile(
-      path.join(artifactDir, "allowed-origins-behavior.json"),
-      `${JSON.stringify(
-        {
-          allowed: sanitizeProxyEvidence(allowedEvidence),
-          rejected: sanitizeProxyEvidence(rejectedEvidence),
-          visibleOutcomes: {
-            explicitGatewayUrlConfirmed: true,
-            allowedOriginConnected: true,
-            rejectedOriginRecovery: true,
+        await reconnect(
+          connected.page,
+          {
+            gatewayUrl: proxy.trustedUrl,
+            token: "prior-gateway-token",
+            password: "prior-gateway-password",
+            bootstrapToken: "prior-gateway-bootstrap",
           },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
+          (entry) =>
+            entry.requestTarget === "/trusted" &&
+            entry.browserConnect?.authFields.includes("bootstrapToken") === true,
+        );
+
+        const queryEvidence = await reconnect(
+          connected.page,
+          { gatewayUrl: `${proxy.trustedUrl}?credential-scope=next` },
+          (entry) =>
+            entry.requestTarget === "/trusted?credential-scope=next" &&
+            entry.browserConnect !== undefined,
+        );
+        // The shared secret travels in both connect fields since the single secret field.
+        expect(queryEvidence.browserConnect?.authFields).toEqual(["password", "token"]);
+
+        const originEvidence = await reconnect(
+          connected.page,
+          { gatewayUrl: proxy.ipv4TrustedUrl },
+          (entry) => entry.requestTarget === "/trusted" && entry.gatewayResult?.ok === true,
+        );
+        expect(originEvidence.browserConnect?.authFields).toEqual([]);
+
+        await finishBrowser(connected);
+      },
+    });
+  });
+
+  it("confirms gatewayUrl, accepts the allowed origin, and rejects an unlisted origin", async (context) => {
+    await suite.runScenario(context, {
+      async run() {
+        const rejected = await createBrowserPage(rejectedUi.baseUrl, proxy.trustedUrl);
+        await waitForVisibleFailure(rejected.page, "origin not allowed");
+        const originFailure = rejected.page.locator(".login-gate__failure");
+        expect(await originFailure.getAttribute("data-kind")).toBe("origin-not-allowed");
+        expect(await originFailure.locator(".login-gate__command").count()).toBe(0);
+        const rejectedOrigin = new URL(rejectedUi.baseUrl).origin;
+        await waitForConnectionEvidence(
+          (entry) =>
+            entry.route === "trusted" &&
+            entry.browserOrigin === rejectedOrigin &&
+            (entry.gatewayResult?.errorCode ===
+              ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED ||
+              entry.upstreamHandshakeStatus === 403),
+          rejected.evidenceStartIndex,
+        );
+        await finishBrowser(rejected);
+
+        const allowed = await createBrowserPage(allowedUi.baseUrl, proxy.trustedUrl);
+        await waitForShell(allowed.page);
+        const allowedOrigin = new URL(allowedUi.baseUrl).origin;
+        await waitForConnectionEvidence(
+          (entry) =>
+            entry.route === "trusted" &&
+            entry.browserOrigin === allowedOrigin &&
+            entry.gatewayResult?.ok === true,
+          allowed.evidenceStartIndex,
+        );
+        await finishBrowser(allowed);
+      },
+    });
   });
 });

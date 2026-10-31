@@ -2,10 +2,16 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createAuditEventWriter } from "./audit-event-writer.js";
-import { pageExecutionDecisionFactsForContext } from "./execution-decision-facts.js";
-import type { ExecutionDecisionWork } from "./execution-decision-work.js";
+import { pageExecutionDecisionFactsForContextInDatabase } from "./execution-decision-facts.js";
+import { parseExecutionDecisionWork } from "./execution-decision-work.js";
+import type { ExecutionDecisionWork } from "./execution-decision-work.types.js";
 import {
   configureExecutionIdentityAdmissionSink,
   createExecutionIdentityAdmissionToken,
@@ -17,6 +23,7 @@ function decisionWork(params: {
   receiptId: string;
   rawResource: string;
   rawTarget: string;
+  representedProfileId?: string;
   targetNamespace?: "model-route" | "session";
 }): ExecutionDecisionWork {
   return {
@@ -47,24 +54,63 @@ function decisionWork(params: {
       remediation: [],
     },
     refs: {
+      ...(params.representedProfileId
+        ? {
+            representedSubject: {
+              state: "present" as const,
+              kind: "person" as const,
+              rawPrincipalRef: params.representedProfileId,
+            },
+          }
+        : {}),
       resource: { namespace: "credential-profile", value: params.rawResource },
       target: { namespace: params.targetNamespace ?? "model-route", value: params.rawTarget },
     },
   };
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("private execution decision work", () => {
-  it.each(["raw ref", "complete envelope"] as const)(
+  it("accepts subject facts only through the closed private ref contract", () => {
+    const work = decisionWork({
+      token: createExecutionIdentityAdmissionToken("closed-subject-run"),
+      receiptId: "closed-subject",
+      rawResource: "resource",
+      rawTarget: "target",
+    });
+    const subject = { state: "present", kind: "person", rawPrincipalRef: "selected-person" };
+    expect(() =>
+      parseExecutionDecisionWork({
+        ...work,
+        receipt: { ...work.receipt, representedSubject: subject },
+      }),
+    ).toThrow();
+    for (const representedSubject of [
+      { ...subject, displayLabel: "Private name" },
+      { ...subject, kind: "agent" },
+      { ...subject, state: "unknown" },
+    ]) {
+      expect(() =>
+        parseExecutionDecisionWork({ ...work, refs: { ...work.refs, representedSubject } }),
+      ).toThrow();
+    }
+  });
+
+  it.each(["raw ref", "represented subject", "complete envelope"] as const)(
     "rejects an oversized %s before the FIFO clone boundary",
     async (oversizedPart) => {
       const stateDir = tempDirs.make("openclaw-audit-private-decision-bounds-");
       const errors: string[] = [];
-      const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
+      const writer = createAuditEventWriter({
+        scheduler: createTestGatewayScheduler(),
+        stateDir,
+        onError: (error) => errors.push(error),
+      });
       const token = createExecutionIdentityAdmissionToken("bounded-private-decision-run", {
         contextId: "bounded-private-decision-context",
         executionId: "bounded-private-decision-execution",
@@ -75,6 +121,9 @@ describe("private execution decision work", () => {
         receiptId: "bounded-private-decision",
         rawResource: oversizedPart === "raw ref" ? "r".repeat(4_097) : "resource",
         rawTarget: "target",
+        ...(oversizedPart === "represented subject"
+          ? { representedProfileId: "r".repeat(4_097) }
+          : {}),
       });
       if (oversizedPart === "complete envelope") {
         const refs = Array.from({ length: 16 }, (_, index) => `${index}:`.padEnd(256, "p"));
@@ -103,7 +152,11 @@ describe("private execution decision work", () => {
     const stateDir = tempDirs.make("openclaw-audit-private-decision-");
     const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const errors: string[] = [];
-    const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
+    const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
+      stateDir,
+      onError: (error) => errors.push(error),
+    });
     const admittedAt = Date.now();
     const token = createExecutionIdentityAdmissionToken("private-decision-run", {
       contextId: "private-decision-context",
@@ -112,6 +165,7 @@ describe("private execution decision work", () => {
     });
     const rawCredentialProfile = "openai:user@example.test";
     const rawModelTarget = "openai\0gpt-5.6-sol";
+    const representedProfileId = "selected-private-profile";
     const clearAdmissionSink = configureExecutionIdentityAdmissionSink(
       writer.recordExecutionIdentity,
     );
@@ -135,6 +189,7 @@ describe("private execution decision work", () => {
           receiptId: "private-model-route",
           rawResource: rawCredentialProfile,
           rawTarget: rawModelTarget,
+          representedProfileId,
         }),
       ),
     ).toBe(true);
@@ -142,16 +197,22 @@ describe("private execution decision work", () => {
     await writer.stop();
 
     expect(errors).toEqual([]);
-    const [receipt] = pageExecutionDecisionFactsForContext({
-      context: token,
-      limit: 10,
-      now: admittedAt + 1,
-      database,
-    }).receipts;
+    const [receipt] = pageExecutionDecisionFactsForContextInDatabase(
+      openOpenClawStateDatabase(database).db,
+      { context: token, limit: 10, now: admittedAt + 1 },
+    ).receipts;
     expect(receipt).toMatchObject({
       contextId: token.contextId,
       executionId: token.executionId,
       runId: token.runId,
+      representedSubject: {
+        state: "present",
+        principal: {
+          kind: "person",
+          domainRef: expect.stringMatching(/^hmac-sha256:v1:/u),
+          principalRef: expect.stringMatching(/^hmac-sha256:v1:/u),
+        },
+      },
       action: {
         family: "model-routing",
         resourceRef: expect.stringMatching(/^hmac-sha256:v1:/u),
@@ -170,6 +231,7 @@ describe("private execution decision work", () => {
       );
       expect(persisted).not.toContain(rawCredentialProfile);
       expect(persisted).not.toContain(rawModelTarget);
+      expect(persisted).not.toContain(representedProfileId);
     } finally {
       sqlite.close();
     }
@@ -190,7 +252,10 @@ describe("private execution decision work", () => {
         now,
       });
       const database = { env: { OPENCLAW_STATE_DIR: params.stateDir } };
-      const writer = createAuditEventWriter({ stateDir: params.stateDir });
+      const writer = createAuditEventWriter({
+        scheduler: createTestGatewayScheduler(),
+        stateDir: params.stateDir,
+      });
       const clearAdmissionSink = configureExecutionIdentityAdmissionSink(
         writer.recordExecutionIdentity,
       );
@@ -213,21 +278,21 @@ describe("private execution decision work", () => {
             receiptId: `receipt-${params.suffix}`,
             rawResource: rawRef,
             rawTarget: rawRef,
+            representedProfileId: rawRef,
             ...(params.targetNamespace ? { targetNamespace: params.targetNamespace } : {}),
           }),
         ),
       ).toBe(true);
       clearAdmissionSink();
       await writer.stop();
-      return pageExecutionDecisionFactsForContext({
-        context: token,
-        limit: 1,
-        now: now + 1,
-        database,
-      }).receipts[0]!;
+      return pageExecutionDecisionFactsForContextInDatabase(
+        openOpenClawStateDatabase(database).db,
+        { context: token, limit: 1, now: now + 1 },
+      ).receipts[0]!;
     };
 
     const first = await write({ stateDir: firstStateDir, suffix: "first" });
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const restarted = await write({ stateDir: firstStateDir, suffix: "restart" });
     const sessionScoped = await write({
@@ -235,12 +300,16 @@ describe("private execution decision work", () => {
       suffix: "session",
       targetNamespace: "session",
     });
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const otherInstallation = await write({
       stateDir: tempDirs.make("openclaw-audit-private-other-installation-"),
       suffix: "other",
     });
 
+    expect(restarted.representedSubject).toEqual(first.representedSubject);
+    expect(otherInstallation.representedSubject).not.toEqual(first.representedSubject);
+    expect(first.representedSubject?.principal.principalRef).not.toBe(first.action.resourceRef);
     expect(restarted.action.resourceRef).toBe(first.action.resourceRef);
     expect(restarted.action.targetRef).toBe(first.action.targetRef);
     expect(first.action.resourceRef).not.toBe(first.action.targetRef);

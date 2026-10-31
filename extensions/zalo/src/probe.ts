@@ -1,4 +1,3 @@
-// Zalo plugin module implements probe behavior.
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import { runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getMe, ZaloApiError, type ZaloBotInfo, type ZaloFetch } from "./api.js";

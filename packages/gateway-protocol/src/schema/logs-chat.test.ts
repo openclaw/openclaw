@@ -1,21 +1,11 @@
-// Gateway Protocol tests cover typed chat stream events.
-import type { Static } from "typebox";
-import { Value } from "typebox/value";
-import { describe, expect, expectTypeOf, it } from "vitest";
-import {
-  ChatEventSchema,
-  ChatHistoryCursorResultSchema,
-  ChatHistoryDeltaResultSchema,
-  ChatHistoryParamsSchema,
-  ChatHistoryResetResultSchema,
-  ChatSendParamsSchema,
-  ChatStatusEventSchema,
-  type ChatHistoryCursorResult,
-  type ChatHistoryDeltaResult,
-  type ChatHistoryParams,
-  type ChatHistoryResetResult,
-} from "./logs-chat.js";
+import { it } from "vitest";
+import * as S from "./logs-chat.js";
+import { schemaValidation } from "./protocol-validation.test-support.js";
 
+const startup = schemaValidation(S.ChatStartupParamsSchema);
+const history = schemaValidation(S.ChatHistoryCursorResultSchema);
+const chat = schemaValidation(S.ChatEventSchema);
+const send = schemaValidation(S.ChatSendParamsSchema);
 const statusEvent = {
   runId: "run-1",
   sessionKey: "agent:main:main",
@@ -24,83 +14,131 @@ const statusEvent = {
   phase: "preparing_context",
 } as const;
 
-describe("ChatHistoryParamsSchema", () => {
-  it("accepts the history boundary and rejects larger requests", () => {
-    const request = { sessionKey: "agent:main:main" };
-
-    expect(Value.Check(ChatHistoryParamsSchema, { ...request, limit: 1000 })).toBe(true);
-    expect(Value.Check(ChatHistoryParamsSchema, { ...request, limit: 1001 })).toBe(false);
-    expect(Value.Check(ChatHistoryParamsSchema, { ...request, cursor: "" })).toBe(true);
+it("ChatStartupParamsSchema: accepts one canonical or short selector while history remains canonical", () => {
+  const short = { shortId: "12345678", agentId: "main", slugHint: "selected-chat" };
+  const canonical = { sessionKey: "agent:main:main", cursor: "cursor" };
+  startup.accepts(short, canonical, {
+    ...canonical,
+    knownState: { pendingInputs: "pending-revision", sessionInfo: "session-revision" },
   });
+  schemaValidation(S.ChatHistoryParamsSchema).rejects(short);
+  startup.rejects(
+    { ...short, sessionKey: canonical.sessionKey },
+    { ...short, cursor: "cursor" },
+    { shortId: "12345678" },
+    { sessionKey: canonical.sessionKey, knownState: { pendingInputs: "x".repeat(65) } },
+  );
 });
 
-describe("ChatHistoryCursorResultSchema", () => {
-  const sessionInfo = { key: "agent:main:main" };
-
-  it("derives the public request and cursor result types from their schemas", () => {
-    expectTypeOf<ChatHistoryParams>().toEqualTypeOf<Static<typeof ChatHistoryParamsSchema>>();
-    expectTypeOf<ChatHistoryDeltaResult>().toEqualTypeOf<
-      Static<typeof ChatHistoryDeltaResultSchema>
-    >();
-    expectTypeOf<ChatHistoryResetResult>().toEqualTypeOf<
-      Static<typeof ChatHistoryResetResultSchema>
-    >();
-    expectTypeOf<ChatHistoryCursorResult>().toEqualTypeOf<
-      Static<typeof ChatHistoryCursorResultSchema>
-    >();
+it("ChatHistoryCursorResultSchema: accepts only the closed delta and reset outcomes", () => {
+  const delta = { kind: "delta", messages: [], deltaCursor: "cursor-2" };
+  history.accepts(delta, {
+    ...delta,
+    sessionInfo: { key: "agent:main:main" },
+    stateRevision: { pendingInputs: "pending-revision", sessionInfo: "session-revision" },
+    inFlightRun: { runId: "run-live", text: "still working" },
+    inputReceipts: [{ runId: "retained-run", state: "pending" }],
+    inputConsumptions: [{ runId: "consumed-run", consumedByEventId: "event-1" }],
   });
-
-  it("accepts only the closed delta and reset outcomes", () => {
-    const delta = {
-      kind: "delta",
-      messages: [],
-      deltaCursor: "cursor-2",
-      sessionInfo,
-    };
-    expect(Value.Check(ChatHistoryCursorResultSchema, delta)).toBe(true);
-    expect(
-      Value.Check(ChatHistoryCursorResultSchema, {
-        ...delta,
-        inFlightRun: { runId: "run-live", text: "still working" },
-      }),
-    ).toBe(true);
-    expect(Value.Check(ChatHistoryCursorResultSchema, { kind: "reset" })).toBe(true);
-    expect(Value.Check(ChatHistoryCursorResultSchema, { ...delta, extra: true })).toBe(false);
-    expect(Value.Check(ChatHistoryCursorResultSchema, { kind: "reset", messages: [] })).toBe(false);
+  const item = { itemId: "tool:work", kind: "tool", phase: "end", title: "Read" };
+  const statuses = ["running", "completed", "failed", "blocked", "skipped"];
+  const items = [item, ...statuses.map((status) => Object.assign({}, item, { status }))];
+  history.accepts({
+    ...delta,
+    activity: [
+      { messageId: "quiet", items: [] },
+      { messageId: "work", items },
+    ],
   });
+  history.rejects(
+    ...[
+      [{ items: [] }],
+      [{ messageId: "work", items: [{ ...item, itemId: "work", status: "unknown" }] }],
+      [{ messageId: "work", items: [], raw: "private" }],
+    ].map((activity) => Object.assign({}, delta, { activity })),
+    { ...delta, extra: true },
+    { kind: "reset", messages: [] },
+  );
+  history.accepts({ kind: "reset" });
 });
 
-describe("ChatStatusEventSchema", () => {
-  it("accepts closed startup phases through the chat event union", () => {
-    expect(Value.Check(ChatStatusEventSchema, statusEvent)).toBe(true);
-    expect(Value.Check(ChatEventSchema, statusEvent)).toBe(true);
-  });
-
-  it("rejects unknown phases and extra fields", () => {
-    expect(Value.Check(ChatStatusEventSchema, { ...statusEvent, phase: "thinking" })).toBe(false);
-    expect(Value.Check(ChatStatusEventSchema, { ...statusEvent, detail: "Loading" })).toBe(false);
-  });
+it("ChatStatusEventSchema: accepts optional local model wait reasons and rejects unsupported claims", () => {
+  schemaValidation(S.ChatStatusEventSchema).accepts(statusEvent);
+  chat.accepts(statusEvent);
+  const event = { ...statusEvent, phase: "waiting_for_model" };
+  chat.accepts(event, { ...event, waitReason: "response" }, { ...event, waitReason: "slot" });
+  chat.rejects({ ...event, waitReason: "busy" });
 });
 
-describe("ChatSendParamsSchema", () => {
-  const send = {
-    sessionKey: "agent:main:main",
-    message: "hello",
-    idempotencyKey: "run-1",
+it("ChatStatusEventSchema: accepts bounded retry details while preserving the required coarse phase", () => {
+  const event = { ...statusEvent, sessionKey: "session-1", seq: 2, phase: "starting_model" };
+  const retry = { attempt: 2, maxAttempts: 10, reason: "rate_limit" };
+  const withRetry = (override: object) => ({ ...event, retry: { ...retry, ...override } });
+  chat.accepts(
+    ...["rate_limit", "overloaded", "server_error", "timeout", "output_limit"].map((reason) =>
+      withRetry({ reason, retryAt: 1_800_000_000_000 }),
+    ),
+    ...[2, 10].map((maxAttempts) => withRetry({ maxAttempts })),
+  );
+  chat.rejects(
+    ...[
+      { attempt: 0 },
+      { attempt: 11 },
+      { attempt: 1.5 },
+      { maxAttempts: 0 },
+      { maxAttempts: 2.5 },
+      { maxAttempts: 11 },
+      { reason: "unknown" },
+      { retryAt: -1 },
+      { retryAt: Infinity },
+      { errorBody: "provider data" },
+    ].map(withRetry),
+    { ...event, phase: undefined, retry },
+  );
+});
+
+it("ChatErrorEventSchema: accepts optional closed provider error details", () => {
+  const event = { runId: "run-1", sessionKey: "agent:main:main", seq: 1, state: "error" };
+  const detail = {
+    provider: "openai",
+    model: "gpt-5.6-luna",
+    failoverReason: "server_error",
+    providerRuntimeFailureKind: "timeout",
+    providerErrorCode: "server_error",
+    providerErrorType: "server_error",
+    httpStatus: 502,
+    providerErrorMessagePreview: "Upstream unavailable",
   };
+  chat.accepts(event, { ...event, errorDetail: {} }, { ...event, errorDetail: detail });
+  chat.rejects(
+    { ...event, errorDetail: { ...detail, rawErrorPreview: "raw" } },
+    { ...event, state: "final", errorDetail: detail },
+  );
+});
 
-  it("accepts an expected active leaf while remaining closed", () => {
-    expect(Value.Check(ChatSendParamsSchema, { ...send, expectedLeafEntryId: "leaf-1" })).toBe(
-      true,
-    );
-    expect(Value.Check(ChatSendParamsSchema, { ...send, expectedLeafEntryId: null })).toBe(true);
-    expect(
-      Value.Check(ChatSendParamsSchema, {
-        ...send,
-        queueMode: "steer",
-        expectedLeafEntryId: "leaf-1",
-      }),
-    ).toBe(true);
-    expect(Value.Check(ChatSendParamsSchema, { ...send, unknown: true })).toBe(false);
+it("ChatSendParamsSchema: admits bounded plugin page details while keeping ambient context closed", () => {
+  const request = { sessionKey: "agent:main:main", message: "hello", idempotencyKey: "run-1" };
+  const withContext = (override: object) => ({
+    ...request,
+    workContext: { page: "plugin:example:sessions", ...override },
   });
+  send.accepts(
+    withContext({ detail: { board: "board-1", view: "stuck sessions" } }),
+    withContext({ detail: { "line\nbreak": "reference" } }),
+    withContext({ detail: { ["x".repeat(32)]: "x".repeat(128) } }),
+  );
+  send.rejects(
+    ...[
+      null,
+      [],
+      { board: 42 },
+      { board: { id: "nested" } },
+      { "line\nbreak": { id: "nested" } },
+      { "": "empty key" },
+      { ["x".repeat(33)]: "long key" },
+      { board: "x".repeat(129) },
+      { a: "1", b: "2", c: "3", d: "4", e: "5" },
+    ].map((detail) => withContext({ detail })),
+    withContext({ permission: "admin" }),
+  );
 });

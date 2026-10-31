@@ -1,18 +1,20 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  attachInternalToolExecutionPreparer,
+  getInternalToolExecutionPreparer,
+} from "../../packages/agent-core/src/internal-hooks.js";
 import { createAbortError } from "../infra/abort-signal.js";
 /**
- * Abort-signal wrapping for agent tools.
  * Combines per-call cancellation with run-level aborts while preserving
  * identity-backed metadata on wrapped tools.
  */
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
-import {
-  attachInternalToolExecutionPreparer,
-  getInternalToolExecutionPreparer,
-} from "./runtime/internal-hooks.js";
+import { isCodeModeControlTool } from "./code-mode-control-tools.js";
+import { registerTrustedToolNoStartError } from "./tool-result-error.js";
 
 function throwAbortError(): never {
-  throw createAbortError("Aborted");
+  throw registerTrustedToolNoStartError(createAbortError("Aborted"));
 }
 
 /**
@@ -66,7 +68,17 @@ export function raceWithAbortSignal<T>(
   });
 }
 
-/** Wrap a tool so every execute call observes the supplied run abort signal. */
+function isTurnYieldCall(tool: AnyAgentTool, args: unknown): boolean {
+  const input = asOptionalObjectRecord(args);
+  return (
+    tool.name === "sessions_yield" ||
+    (tool.name === "plugins" && input?.action === "reloadAndResume") ||
+    (tool.name === "github_publish" &&
+      (input?.action === "prepare_pr" ||
+        ((input?.action ?? "publish") === "publish" && typeof input?.workspacePath === "string")))
+  );
+}
+
 export function wrapToolWithAbortSignal(
   tool: AnyAgentTool,
   abortSignal?: AbortSignal,
@@ -78,6 +90,7 @@ export function wrapToolWithAbortSignal(
   if (!execute) {
     return tool;
   }
+  const ownsCancellationOutcome = isCodeModeControlTool(tool);
   const wrappedTool: AnyAgentTool = {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
@@ -85,14 +98,21 @@ export function wrapToolWithAbortSignal(
       if (combinedSignal.aborted) {
         throwAbortError();
       }
-      return await raceWithAbortSignal(
-        execute(toolCallId, params, combinedSignal, onUpdate),
-        combinedSignal,
-        tool.name === "sessions_yield" ? abortSignal : undefined,
-      );
+      const execution = execute(toolCallId, params, combinedSignal, onUpdate);
+      // Code Mode cancels its worker and bridges itself. Racing that owner loses
+      // completed output and turns an intentional permission change into unknown dispatch.
+      return ownsCancellationOutcome
+        ? await execution
+        : await raceWithAbortSignal(
+            execution,
+            combinedSignal,
+            isTurnYieldCall(tool, params) ? abortSignal : undefined,
+          );
     },
   };
-  copyAgentToolMetadata(tool, wrappedTool);
+  copyAgentToolMetadata(tool, wrappedTool, (source) =>
+    wrapToolWithAbortSignal(source, abortSignal),
+  );
   const sourcePreparer = getInternalToolExecutionPreparer(tool);
   if (sourcePreparer) {
     attachInternalToolExecutionPreparer(wrappedTool, async (params) => {
@@ -124,11 +144,14 @@ export function wrapToolWithAbortSignal(
           if (combinedSignal.aborted) {
             throwAbortError();
           }
-          return raceWithAbortSignal(
-            prepared.execute(onImplementationStart),
-            combinedSignal,
-            yieldRunSignal,
-          );
+          const execution = prepared.execute(onImplementationStart);
+          return ownsCancellationOutcome
+            ? execution
+            : raceWithAbortSignal(
+                execution,
+                combinedSignal,
+                isTurnYieldCall(tool, prepared.args) ? abortSignal : undefined,
+              );
         },
         dispose: prepared.dispose,
       };

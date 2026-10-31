@@ -1,6 +1,8 @@
-// Cron turns must hydrate runtime-only model thinking through the provider-scoped helper,
-// never through a full live catalog build.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { resolveCronThinkingSelection } from "./model-selection.js";
+type SelectionParams = Parameters<typeof resolveCronThinkingSelection>[0];
 
 const scopedThinkingCatalogMock = vi.fn(
   async (..._args: unknown[]): Promise<Array<Record<string, unknown>>> => [],
@@ -14,57 +16,64 @@ vi.mock("./run-model-selection.runtime.js", async (importOriginal) => {
   };
 });
 
-const owner = {
+const owner: SelectionParams["owner"] = {
   agentId: "main",
   agentDir: "/tmp/cron-agent",
   workspaceDir: "/tmp/cron-workspace",
   config: {},
   modelCatalog: { entries: [], routeVariants: [] },
-} as never;
+  metadataSnapshot: createPluginMetadataSnapshotFixture(),
+};
+const carried = { provider: "openai", id: "gpt-5.6-luna", name: "Selected", reasoning: false };
 
-describe("resolveCronThinkingSelection scoped hydration", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    scopedThinkingCatalogMock.mockResolvedValue([]);
+function selectThinking(
+  agentRuntime: string,
+  entries: SelectionParams["owner"]["modelCatalog"]["entries"] = [carried],
+  jobThinking = "medium",
+) {
+  return resolveCronThinkingSelection({
+    cfg: {},
+    owner: { ...owner, modelCatalog: { entries, routeVariants: [] } },
+    provider: carried.provider,
+    model: carried.id,
+    agentRuntime,
+    jobThinking,
   });
+}
 
-  it("hydrates a runtime-only model through the provider-scoped helper", async () => {
-    scopedThinkingCatalogMock.mockResolvedValue([
-      { provider: "ollama", id: "minimax-m3:cloud", reasoning: true },
-    ]);
-    const { resolveCronThinkingSelection } = await import("./model-selection.js");
-    const selection = await resolveCronThinkingSelection({
-      cfg: {},
-      owner,
-      provider: "ollama",
-      model: "minimax-m3:cloud",
-      jobThinking: "medium",
+const refreshed = { ...carried, reasoning: true };
+const unrelated = { ...carried, id: "unrelated" };
+it.each([
+  ["off", [refreshed], [refreshed]],
+  ["medium", [], [carried]],
+  ["medium", [unrelated], [carried]],
+] as const)(
+  "selects native thinking=%s with refreshed=%j",
+  async (thinking, hydration, expected) => {
+    scopedThinkingCatalogMock.mockResolvedValue([...hydration]);
+    const selection = await selectThinking("codex", [carried], thinking);
+    expect(selection).toMatchObject({
+      requestedThinkLevel: thinking,
+      catalog: expected,
     });
-    expect(selection.requestedThinkLevel).toBe("medium");
-    expect(selection.catalog).toEqual([
-      expect.objectContaining({ provider: "ollama", id: "minimax-m3:cloud", reasoning: true }),
-    ]);
-    expect(scopedThinkingCatalogMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "ollama",
-        model: "minimax-m3:cloud",
-        agentId: "main",
-        agentDir: "/tmp/cron-agent",
-        workspaceDir: "/tmp/cron-workspace",
-      }),
-    );
-  });
+  },
+);
 
-  it("keeps the owner catalog and skips hydration when thinking is off", async () => {
-    const { resolveCronThinkingSelection } = await import("./model-selection.js");
-    const selection = await resolveCronThinkingSelection({
-      cfg: {},
-      owner,
-      provider: "ollama",
-      model: "minimax-m3:cloud",
-      jobThinking: "off",
-    });
-    expect(selection.requestedThinkLevel).toBe("off");
-    expect(scopedThinkingCatalogMock).not.toHaveBeenCalled();
-  });
+it("keeps the admitted catalog when native hydration outlasts the foreground wait", async () => {
+  const held = createDeferred<Array<Record<string, unknown>>>();
+  vi.useFakeTimers();
+  try {
+    scopedThinkingCatalogMock.mockReturnValue(held.promise);
+    const pending = selectThinking("codex");
+    await vi.advanceTimersByTimeAsync(5_000);
+    const selection = await pending;
+    expect(selection).toMatchObject({ catalog: [carried], requestedThinkLevel: "medium" });
+    held.resolve([refreshed]);
+    await expect(
+      selection.loadThinkingCatalog(carried.provider, carried.id, "codex"),
+    ).resolves.toEqual([refreshed]);
+  } finally {
+    held.resolve([]);
+    vi.useRealTimers();
+  }
 });

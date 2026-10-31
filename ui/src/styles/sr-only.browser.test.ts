@@ -1,36 +1,22 @@
-import { chromium, type Browser } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
-import {
-  canRunPlaywrightChromium,
-  resolvePlaywrightChromiumExecutablePath,
-} from "../test-helpers/control-ui-e2e.ts";
+import { expect, it } from "vitest";
+import { withBrowserPage } from "../test-helpers/browser-page.ts";
+import { readStyles, styleDocument, styleFixture } from "./style-fixture.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const describeSrOnly = canRunPlaywrightChromium(chromiumExecutablePath) ? describe : describe.skip;
+const fixture = styleFixture("sr-only-", { ignoreCloseErrors: true });
 
-let browser: Browser;
-
-beforeAll(async () => {
-  if (!canRunPlaywrightChromium(chromiumExecutablePath)) {
-    return;
-  }
-  browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
-});
-
-afterAll(async () => {
-  await browser?.close().catch(() => {});
-});
-
-describeSrOnly("screen-reader-only utility", () => {
-  it("visually hides content while preserving its accessible status", async () => {
-    const page = await browser.newPage();
-    try {
-      await page.setContent(`<!doctype html>
-        <html>
-          <head><style>${readStyleSheet("ui/src/styles/base.css")}</style></head>
-          <body><span class="sr-only" role="status">Background task active</span></body>
-        </html>`);
+fixture.describe("screen-reader-only utility", () => {
+  it.each([
+    ["sr-only", "inset(50%)"],
+    ["settings-control__sr-label", "none"],
+    ["cron-required-sr", "none"],
+  ])("visually hides %s while preserving its accessible status", async (className, clipPath) => {
+    await withBrowserPage(fixture.page(), async (page) => {
+      await page.setContent(
+        styleDocument(
+          readStyles("styles/base", "styles/settings-controls", "styles/cron"),
+          `<span class="${className}" role="status">Background task active</span>`,
+        ),
+      );
 
       const status = page.getByRole("status");
       await expect
@@ -54,7 +40,7 @@ describeSrOnly("screen-reader-only utility", () => {
         .toEqual({
           borderWidth: "0px",
           clip: "rect(0px, 0px, 0px, 0px)",
-          clipPath: "inset(50%)",
+          clipPath,
           height: "1px",
           margin: "-1px",
           overflow: "hidden",
@@ -64,8 +50,6 @@ describeSrOnly("screen-reader-only utility", () => {
           width: "1px",
         });
       expect(await status.ariaSnapshot()).toContain("Background task active");
-    } finally {
-      await page.close().catch(() => {});
-    }
+    });
   });
 });

@@ -11,6 +11,14 @@ openclaw gateway restart
 
 See <https://docs.openclaw.ai/providers/moonshot> for setup and configuration.
 
+## Quota errors
+
+Kimi can return HTTP 403 when a weekly usage limit is exhausted. OpenClaw treats
+explicit weekly, seven-day, or quota-reset errors as rate limits. Wait for the
+provider's quota window to reset or use another configured provider; replacing a
+valid API key does not restore quota. Invalid keys and access restrictions keep
+their authentication error handling.
+
 ## Catalog notes
 
 Model rows live in `openclaw.plugin.json` under `modelCatalog.providers.kimi`.
@@ -21,5 +29,8 @@ Model rows live in `openclaw.plugin.json` under `modelCatalog.providers.kimi`.
   `moonshot` catalog for the same model.
 - Legacy `k3[1m]` was retired upstream and normalizes to `k3` for shipped
   configurations.
-- `KIMI_K3_MODEL_IDS` in `provider-policy-api.ts` must cover exactly the catalog
-  rows that carry a K3 `thinkingLevelMap`; `provider-catalog.test.ts` asserts it.
+- A row with `compat.supportedReasoningEfforts` uses the K3 thinking policy; a
+  row whose `thinkingLevelMap` maps `off` to null cannot disable thinking. The
+  self-hosted wire ID `kimi-k3` (case-insensitive) has no row, keeps the K3
+  policy and stays off by default. OpenAI-compatible requests use the same
+  low/high/max effort mapping as hosted K3, sent as `reasoning_effort`.

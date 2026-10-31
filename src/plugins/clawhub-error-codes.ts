@@ -16,10 +16,44 @@ export const CLAWHUB_INSTALL_ERROR_CODE = {
   ARTIFACT_DOWNLOAD_UNAVAILABLE: "artifact_download_unavailable",
   ARCHIVE_INTEGRITY_MISMATCH: "archive_integrity_mismatch",
   CLAWHUB_SECURITY_UNAVAILABLE: "clawhub_security_unavailable",
-  CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED: "clawhub_risk_acknowledgement_required",
   CLAWHUB_DOWNLOAD_BLOCKED: "clawhub_download_blocked",
 } as const;
 
 /** Union of stable ClawHub install error code values. */
 export type ClawHubInstallErrorCode =
   (typeof CLAWHUB_INSTALL_ERROR_CODE)[keyof typeof CLAWHUB_INSTALL_ERROR_CODE];
+
+export type ClawHubInstallFailure = {
+  ok: false;
+  error: string;
+  code?: ClawHubInstallErrorCode;
+  warning?: string;
+  version?: string;
+};
+
+export function buildClawHubInstallFailure(
+  error: string,
+  code?: ClawHubInstallErrorCode,
+  warning?: string,
+  version?: string,
+): ClawHubInstallFailure {
+  return {
+    ok: false,
+    error,
+    ...(code ? { code } : {}),
+    ...(warning ? { warning } : {}),
+    ...(version ? { version } : {}),
+  };
+}
+
+/**
+ * Detects ClawHub failures caused by a target that is not published, as opposed
+ * to a broken install. Channel-aware installs use this to widen the selector
+ * instead of failing when the requested release has no artifact.
+ */
+export function isUnavailableClawHubTarget(result: { ok: false; code?: string }): boolean {
+  return (
+    result.code === CLAWHUB_INSTALL_ERROR_CODE.PACKAGE_NOT_FOUND ||
+    result.code === CLAWHUB_INSTALL_ERROR_CODE.VERSION_NOT_FOUND
+  );
+}

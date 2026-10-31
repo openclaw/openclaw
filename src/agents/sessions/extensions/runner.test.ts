@@ -1,38 +1,52 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
+import {
+  IncognitoSessionEndedError,
+  IncognitoSessionSyncAccessError,
+} from "../../../state/incognito-session-error.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { createEventBus } from "../event-bus.js";
 import type { ModelRegistry } from "../model-registry.js";
+import { SessionMetadataCommittedError } from "../session-manager-metadata-error.js";
 import type { SessionManager } from "../session-manager.js";
-import { createExtensionRuntime } from "./loader.js";
+import { createExtensionRuntime, loadExtensionFromFactory } from "./loader.js";
 import { ExtensionRunner } from "./runner.js";
 import type {
   Extension,
-  ExtensionActions,
+  ExtensionAPI,
   ExtensionContext,
   ExtensionContextActions,
+  ExtensionError,
 } from "./types.js";
 
 type TestHandler = (...args: unknown[]) => Promise<unknown>;
 type TestHandlers = Record<string, TestHandler[]>;
+type Invoke = (runner: ExtensionRunner) => Promise<unknown>;
+type Spy = ReturnType<typeof vi.fn>;
+const toolCall = { toolName: "custom", toolCallId: "call-1", input: {} };
+const coreActions = {
+  ...createExtensionRuntime(),
+  appendEntryAsync: async () => "entry-fixture",
+  setSessionNameAsync: async () => {},
+  setLabelAsync: async () => {},
+};
 
-async function reject(error: Error): Promise<never> {
-  throw error;
+const contextActions: ExtensionContextActions = {
+  getModel: () => undefined,
+  isIdle: () => true,
+  getSignal: () => undefined,
+  abort: () => {},
+  hasPendingMessages: () => false,
+  shutdown: () => {},
+  getContextUsage: () => undefined,
+  compact: () => {},
+  getSystemPrompt: () => "system",
+};
+
+function buildExtension(handlers: TestHandlers, path = "/tmp/test-extension.ts"): Extension {
+  return { path, handlers: new Map(Object.entries(handlers)) } as Extension;
 }
 
-function buildExtension(handlers?: TestHandlers, path = "/tmp/test-extension.ts"): Extension {
-  return {
-    path,
-    resolvedPath: path,
-    sourceInfo: { path, source: "test", scope: "temporary", origin: "top-level" },
-    handlers: new Map(Object.entries(handlers ?? {})),
-    tools: new Map(),
-    messageRenderers: new Map(),
-    commands: new Map(),
-    flags: new Map(),
-    shortcuts: new Map(),
-  } as Extension;
-}
-
-function buildRunner(extensions: Extension[]): ExtensionRunner {
+function buildRunner(...extensions: Extension[]): ExtensionRunner {
   return new ExtensionRunner(
     extensions,
     createExtensionRuntime(),
@@ -42,342 +56,295 @@ function buildRunner(extensions: Extension[]): ExtensionRunner {
   );
 }
 
-function buildMessages(): [AgentMessage, AgentMessage] {
-  return [
+function buildHandlerRunner(event: string, ...groups: TestHandler[][]) {
+  return buildRunner(
+    ...groups.map((handlers, i) => buildExtension({ [event]: handlers }, `/tmp/${i}.ts`)),
+  );
+}
+
+async function reject(error: Error): Promise<never> {
+  throw error;
+}
+
+async function expectFatal(runner: ExtensionRunner, invoke: Invoke, failure: Error, later: Spy) {
+  const report = vi.fn();
+  runner.onError(report);
+  await expect(invoke(runner)).rejects.toBe(failure);
+  expect(later).not.toHaveBeenCalled();
+  expect(report).not.toHaveBeenCalled();
+}
+
+const buildMessages = (): [AgentMessage, AgentMessage] =>
+  [
     { role: "user", content: [{ type: "text", text: "hello" }] },
     { role: "assistant", content: [{ type: "text", text: "hi" }] },
   ] as [AgentMessage, AgentMessage];
-}
 
-describe("ExtensionRunner.emitContext", () => {
-  it("returns the original array without cloning when no context handlers are registered", async () => {
-    const messages = buildMessages();
-
-    const noExtensions = buildRunner([]);
-    expect(await noExtensions.emitContext(messages)).toBe(messages);
-
-    const otherHandlersOnly = buildRunner([buildExtension({ user_bash: [async () => undefined] })]);
-    expect(await otherHandlersOnly.emitContext(messages)).toBe(messages);
-  });
-
-  it("keeps handler mutations isolated from the caller's messages", async () => {
-    const messages = buildMessages();
-    const handler: TestHandler = async (event) => {
-      const contextEvent = event as { messages: AgentMessage[] };
-      contextEvent.messages.push({
-        role: "user",
-        content: [{ type: "text", text: "injected" }],
-      } as AgentMessage);
-      return undefined;
-    };
-    const runner = buildRunner([buildExtension({ context: [handler] })]);
-
-    const result = await runner.emitContext(messages);
-
-    expect(result).not.toBe(messages);
-    expect(result).toHaveLength(3);
-    expect(messages).toHaveLength(2);
-  });
-
-  it("chains replacement messages through later context handlers", async () => {
-    const [user, assistant] = buildMessages();
-    const replacement = [user];
-    const final = [assistant];
-    const runner = buildRunner([
-      buildExtension({
-        context: [
-          async () => ({ messages: replacement }),
-          async (event) => {
-            expect((event as { messages: AgentMessage[] }).messages).toBe(replacement);
-            return { messages: final };
-          },
-        ],
-      }),
-    ]);
-
-    expect(await runner.emitContext(buildMessages())).toBe(final);
-  });
-});
-
-const catchAndContinueCases: Array<
-  [event: string, invoke: (runner: ExtensionRunner) => Promise<unknown>]
-> = [
-  [
-    "session_before_switch",
-    (runner) => runner.emit({ type: "session_before_switch", reason: "new" }),
-  ],
-  [
-    "message_end",
-    (runner) => runner.emitMessageEnd({ type: "message_end", message: buildMessages()[0] }),
-  ],
-  [
-    "tool_result",
-    (runner) =>
-      runner.emitToolResult({
-        type: "tool_result",
-        toolName: "custom",
-        toolCallId: "call-1",
-        input: {},
-        content: [],
-        details: undefined,
-        isError: false,
-      }),
-  ],
-  [
-    "user_bash",
-    (runner) =>
-      runner.emitUserBash({
-        type: "user_bash",
-        command: "pwd",
-        cwd: "/tmp",
-        excludeFromContext: false,
-      }),
-  ],
-  ["context", (runner) => runner.emitContext(buildMessages())],
-  ["before_provider_request", (runner) => runner.emitBeforeProviderRequest({})],
-  [
-    "before_agent_start",
-    (runner) => runner.emitBeforeAgentStart("hello", undefined, "system", { cwd: "/tmp" }),
-  ],
-  ["resources_discover", (runner) => runner.emitResourcesDiscover("/tmp", "startup")],
-  ["input", (runner) => runner.emitInput("hello", undefined, "interactive")],
-];
-
-describe("ExtensionRunner handler dispatch", () => {
-  it.each(catchAndContinueCases)(
-    "isolates %s handler failures and reports their extension",
-    async (event, invoke) => {
-      const failure = new Error(`${event} failed`);
-      const continued: string[] = [];
-      const continueHandler = async () => {
-        continued.push(event);
-        if (event === "session_before_switch") {
-          return { cancel: true };
-        }
-        if (event === "input") {
-          return { action: "transform", text: "transformed" };
-        }
-        if (event === "message_end") {
-          return { message: buildMessages()[1] };
-        }
-        return undefined;
-      };
-      const nextHandlers: TestHandler[] = [continueHandler];
-      if (event === "input") {
-        nextHandlers.push(
-          async (input) => {
-            continued.push((input as { text: string }).text);
-            return { action: "handled" };
-          },
-          async () => void continued.push("unreachable"),
-        );
-      } else if (event === "message_end") {
-        nextHandlers.push(
-          async (input) => void continued.push((input as { message: AgentMessage }).message.role),
-        );
-      } else if (event === "session_before_switch") {
-        nextHandlers.push(async () => void continued.push("unreachable"));
-      }
-      const runner = buildRunner([
-        buildExtension({ [event]: [() => reject(failure)] }, "/tmp/failing.ts"),
-        buildExtension({ [event]: nextHandlers }, "/tmp/next.ts"),
-      ]);
-      const errors: unknown[] = [];
-      runner.onError((error) => errors.push(error));
-
-      await invoke(runner);
-
-      expect(continued).toEqual(
-        event === "input"
-          ? [event, "transformed"]
-          : event === "message_end"
-            ? [event, "user"]
-            : [event],
-      );
-      const expectedErrors: unknown[] = [
-        {
-          extensionPath: "/tmp/failing.ts",
-          event,
-          error: failure.message,
-          stack: failure.stack,
-        },
-      ];
-      if (event === "message_end") {
-        expectedErrors.push({
-          extensionPath: "/tmp/next.ts",
-          event,
-          error: "message_end handlers must return a message with the same role",
-        });
-      }
-      expect(errors).toEqual(expectedErrors);
-    },
+it("ExtensionRunner warns once for legacy binding; async binding stays silent", () => {
+  const runner = buildRunner();
+  using warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+  runner.bindCoreAsync(coreActions, contextActions);
+  expect(warning).not.toHaveBeenCalled();
+  runner.bindCore(coreActions, contextActions);
+  runner.bindCore(coreActions, contextActions);
+  expect(warning).toHaveBeenCalledExactlyOnceWith(
+    expect.stringContaining("bindCoreAsync"),
+    expect.objectContaining({ type: "DeprecationWarning" }),
   );
+});
 
-  it("lets tool_call handler failures escape and blocks later handlers", async () => {
-    const failure = new Error("block tool execution");
-    const laterHandler = vi.fn(async () => undefined);
-    const runner = buildRunner([
-      buildExtension({
-        tool_call: [() => reject(failure), laterHandler],
-      }),
-    ]);
+it("isolates caller messages while chaining replacements through a shared handler context", async () => {
+  const messages = buildMessages();
+  const replacement = [messages[0]];
+  const final = [messages[1]];
+  const contexts: unknown[] = [];
+  const record: TestHandler = async (event, context) => {
+    contexts.push(context);
+    const current = (event as { messages: AgentMessage[] }).messages;
+    if (contexts.length === 1) {
+      current.push(messages[0]);
+      expect(messages).toHaveLength(2);
+      return undefined;
+    }
+    if (contexts.length === 2) {
+      expect(current).toHaveLength(3);
+      return { messages: replacement };
+    }
+    expect(current).toBe(replacement);
+    return { messages: final };
+  };
+  const runner = buildHandlerRunner("context", [record], [record, record]);
+  expect(await runner.emitContext(messages)).toBe(final);
+  expect(contexts[0]).toBe(contexts[1]);
+});
 
-    await expect(
-      runner.emitToolCall({
-        type: "tool_call",
-        toolName: "custom",
-        toolCallId: "call-1",
-        input: {},
-      }),
-    ).rejects.toBe(failure);
-    expect(laterHandler).not.toHaveBeenCalled();
+it("detaches frozen context containers without serializing their transcript text", async () => {
+  const block = Object.freeze({ type: "text" as const, text: "history".repeat(8192) });
+  const message = { role: "user" as const, content: [block], timestamp: 1 };
+  const messages: AgentMessage[] = [message];
+  Object.freeze(message.content);
+  Object.freeze(message);
+  Object.freeze(messages);
+  const runner = buildHandlerRunner("context", [async () => undefined]);
+  using nativeClone = vi.spyOn(globalThis, "structuredClone");
+  const projected = await runner.emitContext(messages);
+  expect(projected).toEqual(messages);
+  expect(nativeClone).not.toHaveBeenCalled();
+  const projectedMessage = projected[0];
+  if (projectedMessage?.role !== "user" || !Array.isArray(projectedMessage.content)) {
+    throw new Error("Expected the projected user message");
+  }
+  const content = projectedMessage.content;
+  if (content[0]?.type !== "text") {
+    throw new Error("Expected the projected text block");
+  }
+  content[0].text = "hook edit";
+  content.push({ type: "text", text: "hook addition" });
+  projected.push({ role: "user", content: "next", timestamp: 2 });
+  expect(messages).toHaveLength(1);
+  expect(message.content).toEqual([block]);
+  expect(block.text).toBe("history".repeat(8192));
+});
+
+// Other adapters share dispatchHandlers; retain each distinct stop/continue path here.
+const emitters = {
+  tool_call: (runner) => runner.emitToolCall({ type: "tool_call", ...toolCall }),
+  session_before_switch: (runner) => runner.emit({ type: "session_before_switch", reason: "new" }),
+  message_end: (runner) =>
+    runner.emitMessageEnd({ type: "message_end", message: buildMessages()[0] }),
+  input: (runner) => runner.emitInput("hello", undefined, "interactive"),
+} satisfies Record<string, Invoke>;
+
+it.each([
+  { method: "appendEntry", invoke: (api: ExtensionAPI) => api.appendEntry("fixture", {}) },
+  { method: "setSessionName", invoke: (api: ExtensionAPI) => api.setSessionName("fixture") },
+  { method: "setLabel", invoke: (api: ExtensionAPI) => api.setLabel("fixture", "label") },
+] as const)("stops dispatch on legacy $method incognito errors", async ({ method, invoke }) => {
+  for (const failure of [
+    new IncognitoSessionSyncAccessError(method, `${method}Async`),
+    new IncognitoSessionEndedError(),
+  ]) {
+    const runtime = createExtensionRuntime();
+    runtime[method] = () => {
+      throw failure;
+    };
+    const extension = await loadExtensionFromFactory(
+      (api) => api.on("session_before_switch", () => invoke(api)),
+      "/tmp",
+      createEventBus(),
+      runtime,
+    );
+    const later = vi.fn(async () => undefined);
+    const runner = buildRunner(extension, buildExtension({ session_before_switch: [later] }));
+    await expectFatal(runner, emitters.session_before_switch, failure, later);
+  }
+});
+
+it("preserves discovery order and source ownership across partial resource contributions", async () => {
+  const runner = buildHandlerRunner(
+    "resources_discover",
+    [async () => ({ skillPaths: ["one", "two"], themePaths: [] })],
+    [
+      async () => undefined,
+      async () => ({ skillPaths: ["three"], promptPaths: ["prompt"], themePaths: ["theme"] }),
+    ],
+  );
+  expect(await runner.emitResourcesDiscover("/tmp", "reload")).toEqual({
+    skillPaths: [
+      { path: "one", extensionPath: "/tmp/0.ts" },
+      { path: "two", extensionPath: "/tmp/0.ts" },
+      { path: "three", extensionPath: "/tmp/1.ts" },
+    ],
+    promptPaths: [{ path: "prompt", extensionPath: "/tmp/1.ts" }],
+    themePaths: [{ path: "theme", extensionPath: "/tmp/1.ts" }],
   });
 });
 
-describe("ExtensionRunner context construction", () => {
-  function messageUpdateEvent() {
-    return {
-      type: "message_update",
-      message: buildMessages()[1],
-      assistantMessageEvent: { type: "text_delta", delta: "hi", contentIndex: 0 },
-    } as Parameters<ExtensionRunner["emit"]>[0];
+const metadataFailure = new SessionMetadataCommittedError(
+  {
+    type: "thinking_level_change",
+    id: "committed-thinking",
+    parentId: null,
+    timestamp: "2026-01-01T00:00:00.000Z",
+    thinkingLevel: "high",
+  },
+  { generation: "fixture", rawSeq: 1, updatedAt: 1 },
+  new Error("view read failed"),
+);
+it.each(
+  Object.entries(emitters).flatMap(([event, invoke]) =>
+    (event === "tool_call" ? [true] : [false, true]).map((fatal) => ({ event, invoke, fatal })),
+  ),
+)("$event fault dispatch (fatal=$fatal)", async ({ event, invoke, fatal }) => {
+  const failure = fatal && event !== "tool_call" ? metadataFailure : new Error(`${event} failed`);
+  const results = new Map<string, unknown>([
+    ["session_before_switch", { cancel: true }],
+    ["input", { action: "transform", text: "transformed" }],
+    ["message_end", { message: buildMessages()[1] }],
+  ]);
+  const next = vi
+    .fn()
+    .mockImplementationOnce(async () => results.get(event))
+    .mockImplementation(async (value: unknown) => {
+      expect(value).toMatchObject(
+        event === "input" ? { text: "transformed" } : { message: { role: "user" } },
+      );
+      return event === "input" ? { action: "handled" } : undefined;
+    });
+  const hasTail = event === "input" || event === "message_end";
+  const nextHandlers: TestHandler[] = hasTail ? [next, next] : [next];
+  if (event === "input" || event === "session_before_switch") {
+    nextHandlers.push(() => reject(new Error("handler ran after cancellation")));
   }
+  const runner = buildHandlerRunner(event, [() => reject(failure)], nextHandlers);
+  const errors: ExtensionError[] = [];
+  runner.onError((error) => errors.push(error));
+  if (fatal) {
+    await expectFatal(runner, invoke, failure, next);
+    return;
+  }
+  await invoke(runner);
+  expect(next).toHaveBeenCalledTimes(hasTail ? 2 : 1);
+  expect(errors.map((error) => [error.extensionPath, error.event, error.error])).toEqual([
+    ["/tmp/0.ts", event, failure.message],
+    ...(event === "message_end"
+      ? [["/tmp/1.ts", event, "message_end handlers must return a message with the same role"]]
+      : []),
+  ]);
+});
+const messageUpdate = {
+  type: "message_update",
+  message: buildMessages()[1],
+  assistantMessageEvent: { type: "text_delta", delta: "hi", contentIndex: 0 },
+} satisfies Parameters<ExtensionRunner["emit"]>[0];
 
-  it.each([
-    { name: "no extensions", extensions: [] },
-    {
-      name: "unrelated handlers",
-      extensions: [buildExtension({ user_bash: [async () => undefined] })],
-    },
-  ])("skips streaming contexts with $name", async ({ extensions }) => {
-    const runner = buildRunner(extensions);
-    const createContext = vi.spyOn(runner, "createContext");
+it("observes live handler changes without allocating a predicate for each lookup", () => {
+  const first = buildExtension({ message_update: [] });
+  const second = buildExtension({});
+  const extensions = [first, second];
+  const runner = new ExtensionRunner(
+    extensions,
+    createExtensionRuntime(),
+    "/tmp",
+    {} as SessionManager,
+    {} as ModelRegistry,
+  );
+  using predicates = vi.spyOn(extensions, "some");
+  using laterLookups = vi.spyOn(second.handlers, "get");
+  expect(runner.hasHandlers("message_update")).toBe(false);
+  first.handlers.set("message_update", [async () => undefined]);
+  laterLookups.mockClear();
+  expect(runner.hasHandlers("message_update")).toBe(true);
+  expect(laterLookups).not.toHaveBeenCalled();
+  first.handlers.get("message_update")!.length = 0;
+  expect(runner.hasHandlers("message_update")).toBe(false);
+  second.handlers.set("message_update", [async () => undefined]);
+  expect(runner.hasHandlers("message_update")).toBe(true);
+  second.handlers.delete("message_update");
+  expect(runner.hasHandlers("message_update")).toBe(false);
+  expect(predicates).not.toHaveBeenCalled();
+});
 
-    await runner.emit(messageUpdateEvent());
-    await runner.emit({
-      type: "tool_execution_update",
-      toolCallId: "call-1",
-      toolName: "custom",
-      args: {},
-      partialResult: {},
-    });
+it.each([false, true])("constructs context only for matching handlers=%s", async (matching) => {
+  const failure = new Error("context construction failed");
+  const runner = buildHandlerRunner(matching ? "message_update" : "user_bash", [
+    async () => undefined,
+  ]);
+  vi.spyOn(runner, "createContext").mockImplementation(() => {
+    throw failure;
+  });
+  const errors: unknown[] = [];
+  runner.onError((error) => errors.push(error));
+  const messages = buildMessages();
+  expect(await runner.emitContext(messages)).toBe(messages);
+  await runner.emitToolCall({ type: "tool_call", ...toolCall });
+  if (matching) {
+    await expect(runner.emit(messageUpdate)).rejects.toBe(failure);
+  } else {
+    await runner.emit(messageUpdate);
+  }
+  expect(errors).toEqual([]);
+});
 
-    expect(createContext).not.toHaveBeenCalled();
+it("preserves supplied context identity and its evolving system prompt", async () => {
+  const contexts: unknown[] = [];
+  const prompts: string[] = [];
+  const record: TestHandler = async (_event, value) => {
+    const context = value as ExtensionContext;
+    contexts.push(context);
+    prompts.push(context.getSystemPrompt());
+    return contexts.length === 1 ? { systemPrompt: "updated" } : undefined;
+  };
+  const runner = buildHandlerRunner("before_agent_start", [record, record]);
+  await expect(
+    runner.emitBeforeAgentStart("hello", undefined, "original", { cwd: "/tmp" }),
+  ).resolves.toMatchObject({ systemPrompt: "updated" });
+
+  expect(contexts[0]).toBe(contexts[1]);
+  expect(prompts).toEqual(["original", "updated"]);
+});
+
+it("keeps lazy live context guards while retaining its captured model getter", () => {
+  const runner = buildRunner();
+  const secondGetModel = vi.fn(() => undefined);
+  const context = runner.createContext();
+  const commandContext = runner.createCommandContext();
+
+  const updatedUi = { ...runner.getUIContext() };
+  runner.setUIContext(updatedUi);
+  runner.bindCore(coreActions, {
+    ...contextActions,
+    getModel: secondGetModel,
+    isIdle: () => false,
   });
 
-  it("shares one context across matching streaming handlers", async () => {
-    const contexts: unknown[] = [];
-    const record: TestHandler = async (_event, context) => void contexts.push(context);
-    const runner = buildRunner([
-      buildExtension({ message_update: [record] }, "/tmp/first.ts"),
-      buildExtension({ message_update: [record] }, "/tmp/second.ts"),
-    ]);
-    const createContext = vi.spyOn(runner, "createContext");
+  expect(context.ui).toBe(updatedUi);
+  expect(context).toMatchObject({ hasUI: true, model: undefined });
+  expect(context.isIdle()).toBe(false);
+  expect(secondGetModel).not.toHaveBeenCalled();
 
-    await runner.emit(messageUpdateEvent());
-
-    expect(createContext).toHaveBeenCalledOnce();
-    expect(contexts).toHaveLength(2);
-    expect(contexts[0]).toBe(contexts[1]);
-  });
-
-  it("propagates context construction failures outside extension handler isolation", async () => {
-    const failure = new Error("context construction failed");
-    const runner = buildRunner([buildExtension({ message_update: [async () => undefined] })]);
-    vi.spyOn(runner, "createContext").mockImplementation(() => {
-      throw failure;
-    });
-    const errors: unknown[] = [];
-    runner.onError((error) => errors.push(error));
-
-    await expect(runner.emit(messageUpdateEvent())).rejects.toBe(failure);
-    expect(errors).toEqual([]);
-  });
-
-  it("skips tool-call context construction without a matching handler", async () => {
-    const runner = buildRunner([buildExtension({ user_bash: [async () => undefined] })]);
-    const createContext = vi.spyOn(runner, "createContext");
-
-    await runner.emitToolCall({
-      type: "tool_call",
-      toolName: "custom",
-      toolCallId: "call-1",
-      input: {},
-    });
-
-    expect(createContext).not.toHaveBeenCalled();
-  });
-
-  it("preserves supplied context identity and its evolving system prompt", async () => {
-    const contexts: ExtensionContext[] = [];
-    const prompts: string[] = [];
-    const runner = buildRunner([
-      buildExtension({
-        before_agent_start: [
-          async (_event, value) => {
-            const context = value as ExtensionContext;
-            contexts.push(context);
-            prompts.push(context.getSystemPrompt());
-            return { systemPrompt: "updated" };
-          },
-          async (_event, value) => {
-            const context = value as ExtensionContext;
-            contexts.push(context);
-            prompts.push(context.getSystemPrompt());
-          },
-        ],
-      }),
-    ]);
-    const createContext = vi.spyOn(runner, "createContext");
-
-    await expect(
-      runner.emitBeforeAgentStart("hello", undefined, "original", { cwd: "/tmp" }),
-    ).resolves.toMatchObject({ systemPrompt: "updated" });
-
-    expect(createContext).toHaveBeenCalledOnce();
-    expect(contexts[0]).toBe(contexts[1]);
-    expect(prompts).toEqual(["original", "updated"]);
-  });
-
-  it("keeps lazy live context guards while retaining its captured model getter", () => {
-    const runner = buildRunner([]);
-    const firstGetModel = vi.fn(() => undefined);
-    const secondGetModel = vi.fn(() => undefined);
-    const buildActions = (
-      getModel: ExtensionContextActions["getModel"],
-      idle: boolean,
-    ): ExtensionContextActions => ({
-      getModel,
-      isIdle: () => idle,
-      getSignal: () => undefined,
-      abort: () => {},
-      hasPendingMessages: () => false,
-      shutdown: () => {},
-      getContextUsage: () => undefined,
-      compact: () => {},
-      getSystemPrompt: () => "system",
-    });
-
-    runner.bindCore({} as ExtensionActions, buildActions(firstGetModel, true));
-    const context = runner.createContext();
-    const commandContext = runner.createCommandContext();
-    expect(typeof Object.getOwnPropertyDescriptor(context, "ui")?.get).toBe("function");
-    expect(typeof Object.getOwnPropertyDescriptor(commandContext, "ui")?.get).toBe("function");
-
-    const updatedUi = { ...runner.getUIContext() };
-    runner.setUIContext(updatedUi);
-    runner.bindCore({} as ExtensionActions, buildActions(secondGetModel, false));
-
-    expect(context.ui).toBe(updatedUi);
-    expect(context.hasUI).toBe(true);
-    expect(context.isIdle()).toBe(false);
-    expect(context.model).toBeUndefined();
-    expect(firstGetModel).toHaveBeenCalledOnce();
-    expect(secondGetModel).not.toHaveBeenCalled();
-
-    runner.invalidate("session replaced");
-    expect(() => context.ui).toThrow("session replaced");
-    expect(() => context.isIdle()).toThrow("session replaced");
-    expect(() => commandContext.cwd).toThrow("session replaced");
-  });
+  runner.invalidate("session replaced");
+  expect(() => context.ui).toThrow("session replaced");
+  expect(() => context.isIdle()).toThrow("session replaced");
+  expect(() => commandContext.cwd).toThrow("session replaced");
 });

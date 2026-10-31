@@ -1,6 +1,23 @@
-// Tier-eval config compatibility migration and its scoped traversal helpers.
 import { ensureRecord, getRecord } from "../../../config/legacy.shared.js";
-import { deleteRetiredPath, visitChannelEntries } from "./legacy-config-record-shared.js";
+import { resolveExactExecModeFromPolicy } from "../../../infra/exec-approvals-core.js";
+import {
+  deleteRetiredPath,
+  visitAgentConfigScopes,
+  visitChannelEntries,
+} from "./legacy-config-record-shared.js";
+
+const TIER_EVAL_RETIRED_MEMORY_PATHS = [
+  ["memory", "search", "remote", "nonBatchConcurrency"],
+  ["memory", "search", "remote", "batch", "wait"],
+  ["memory", "search", "remote", "batch", "concurrency"],
+  ["memory", "search", "remote", "batch", "pollIntervalMs"],
+  ["memory", "search", "remote", "batch", "timeoutMinutes"],
+  ["memory", "search", "local", "contextSize"],
+  ["memory", "search", "local", "modelCacheDir"],
+  ["memory", "search", "store", "driver"],
+  ["memory", "search", "sync"],
+  ["memory", "search", "query", "hybrid"],
+] as const;
 
 const TIER_EVAL_RETIRED_ROOT_PATHS = [
   ["cloudWorkers", "profiles", "*", "lifetime"],
@@ -12,64 +29,18 @@ const TIER_EVAL_RETIRED_ROOT_PATHS = [
   ["logging", "redactSensitive"],
   ["commands", "useAccessGroups"],
   ["gateway", "controlUi", "allowInsecureAuth"],
-  ["memory", "search", "remote", "nonBatchConcurrency"],
-  ["memory", "search", "remote", "batch", "wait"],
-  ["memory", "search", "remote", "batch", "concurrency"],
-  ["memory", "search", "remote", "batch", "pollIntervalMs"],
-  ["memory", "search", "remote", "batch", "timeoutMinutes"],
-  ["memory", "search", "local", "contextSize"],
-  ["memory", "search", "local", "modelCacheDir"],
-  ["memory", "search", "store", "driver"],
-  ["memory", "search", "sync"],
-  ["memory", "search", "query", "hybrid"],
+  ...TIER_EVAL_RETIRED_MEMORY_PATHS,
 ] as const;
 
 const TIER_EVAL_RETIRED_AGENT_PATHS = [
   ["groupChat", "visibleReplies"],
-  ["memory", "search", "remote", "nonBatchConcurrency"],
-  ["memory", "search", "remote", "batch", "wait"],
-  ["memory", "search", "remote", "batch", "concurrency"],
-  ["memory", "search", "remote", "batch", "pollIntervalMs"],
-  ["memory", "search", "remote", "batch", "timeoutMinutes"],
-  ["memory", "search", "local", "contextSize"],
-  ["memory", "search", "local", "modelCacheDir"],
-  ["memory", "search", "store", "driver"],
-  ["memory", "search", "sync"],
-  ["memory", "search", "query", "hybrid"],
+  ...TIER_EVAL_RETIRED_MEMORY_PATHS,
   ["heartbeat", "ackMaxChars"],
   ["heartbeat", "includeReasoning"],
   ["heartbeat", "includeSystemPromptSection"],
   ["heartbeat", "skipWhenBusy"],
   ["heartbeat", "suppressToolErrorWarnings"],
 ] as const;
-
-export function visitAgentConfigScopes(
-  raw: Record<string, unknown>,
-  visitor: (scope: Record<string, unknown>, path: string) => void,
-): void {
-  const agents = getRecord(raw.agents);
-  const defaults = getRecord(agents?.defaults);
-  if (defaults) {
-    visitor(defaults, "agents.defaults");
-  }
-  const entries = getRecord(agents?.entries);
-  if (entries) {
-    for (const [agentId, value] of Object.entries(entries)) {
-      const entry = getRecord(value);
-      if (entry) {
-        visitor(entry, `agents.entries.${agentId}`);
-      }
-    }
-  }
-  if (Array.isArray(agents?.list)) {
-    agents.list.forEach((value, index) => {
-      const entry = getRecord(value);
-      if (entry) {
-        visitor(entry, `agents.list[${index}]`);
-      }
-    });
-  }
-}
 
 type LegacyExecPolicy = {
   security: "deny" | "allowlist" | "full";
@@ -117,62 +88,31 @@ function migrateExecMode(
     delete exec.ask;
     return;
   }
-  const securityValid =
-    exec.security === "deny" || exec.security === "allowlist" || exec.security === "full";
-  const askValid = exec.ask === "on-miss" || exec.ask === "always" || exec.ask === "off";
+  const ownSecurity =
+    exec.security === "deny" || exec.security === "allowlist" || exec.security === "full"
+      ? exec.security
+      : undefined;
+  const ownAsk =
+    exec.ask === "on-miss" || exec.ask === "always" || exec.ask === "off" ? exec.ask : undefined;
   if (
-    (Object.hasOwn(exec, "security") && !securityValid) ||
-    (Object.hasOwn(exec, "ask") && !askValid)
+    (Object.hasOwn(exec, "security") && !ownSecurity) ||
+    (Object.hasOwn(exec, "ask") && !ownAsk)
   ) {
     return;
   }
-  const security = securityValid ? exec.security : inheritedPolicy?.security;
-  const ask = askValid ? exec.ask : inheritedPolicy?.ask;
+  const security = ownSecurity ?? inheritedPolicy?.security;
+  const ask = ownAsk ?? inheritedPolicy?.ask;
   if (!security || !ask) {
     return;
   }
-  if (ask === "always" || (security === "full" && ask === "on-miss")) {
+  const mode = resolveExactExecModeFromPolicy({ security, ask });
+  if (!mode) {
     return;
   }
-  exec.mode =
-    security === "deny"
-      ? "deny"
-      : security === "allowlist" && ask === "off"
-        ? "allowlist"
-        : security === "full"
-          ? "full"
-          : "ask";
+  exec.mode = mode;
   changes.push(`Moved ${path}.tools.exec.security/ask → ${path}.tools.exec.mode.`);
   delete exec.security;
   delete exec.ask;
-}
-
-function migrateCliBackendSessionArgs(
-  scope: Record<string, unknown>,
-  path: string,
-  changes: string[],
-): void {
-  const backends = getRecord(scope.cliBackends);
-  if (!backends) {
-    return;
-  }
-  for (const [backendId, value] of Object.entries(backends)) {
-    const backend = getRecord(value);
-    if (!backend || !Object.hasOwn(backend, "sessionArg")) {
-      continue;
-    }
-    if (backend.sessionArgs === undefined && typeof backend.sessionArg === "string") {
-      backend.sessionArgs = [backend.sessionArg, "{sessionId}"];
-      changes.push(
-        `Moved ${path}.cliBackends.${backendId}.sessionArg → ${path}.cliBackends.${backendId}.sessionArgs.`,
-      );
-    } else {
-      changes.push(
-        `Removed ${path}.cliBackends.${backendId}.sessionArg (sessionArgs already set).`,
-      );
-    }
-    delete backend.sessionArg;
-  }
 }
 
 function migrateSignalEndpoint(
@@ -191,10 +131,10 @@ function migrateSignalEndpoint(
     return;
   }
   if (entry.httpUrl === undefined) {
+    const configuredHost = entry.httpHost ?? inherited?.httpHost;
     const rawHost =
-      typeof (entry.httpHost ?? inherited?.httpHost) === "string" &&
-      String(entry.httpHost ?? inherited?.httpHost).trim()
-        ? String(entry.httpHost ?? inherited?.httpHost).trim()
+      typeof configuredHost === "string" && configuredHost.trim()
+        ? configuredHost.trim()
         : "127.0.0.1";
     const host = rawHost.includes(":") && !rawHost.startsWith("[") ? `[${rawHost}]` : rawHost;
     const effectivePort = entry.httpPort ?? inherited?.httpPort;
@@ -221,41 +161,28 @@ function migrateChannelAliases(raw: Record<string, unknown>, changes: string[]):
       httpHost: signal.httpHost,
       httpPort: signal.httpPort,
     };
-    migrateSignalEndpoint(signal, "channels.signal", changes);
-    const accounts = getRecord(signal.accounts);
-    if (accounts) {
-      for (const [accountId, value] of Object.entries(accounts)) {
-        const account = getRecord(value);
-        if (account) {
-          migrateSignalEndpoint(
-            account,
-            `channels.signal.accounts.${accountId}`,
-            changes,
-            inherited,
-          );
-        }
-      }
-    }
+    visitChannelEntries(raw, "signal", (entry, path) => {
+      migrateSignalEndpoint(entry, path, changes, inherited);
+    });
   }
   visitChannelEntries(raw, "googlechat", (entry, path) => {
     if (!Object.hasOwn(entry, "serviceAccountRef")) {
       return;
     }
-    if (entry.serviceAccount !== undefined) {
-      changes.push(
-        `Moved ${path}.serviceAccountRef → ${path}.serviceAccount (SecretRef precedence preserved).`,
-      );
-      entry.serviceAccount = entry.serviceAccountRef;
-      delete entry.serviceAccountRef;
-      return;
-    }
+    const hadServiceAccount = entry.serviceAccount !== undefined;
     entry.serviceAccount = entry.serviceAccountRef;
     delete entry.serviceAccountRef;
-    changes.push(`Moved ${path}.serviceAccountRef → ${path}.serviceAccount.`);
+    changes.push(
+      hadServiceAccount
+        ? `Moved ${path}.serviceAccountRef → ${path}.serviceAccount (SecretRef precedence preserved).`
+        : `Moved ${path}.serviceAccountRef → ${path}.serviceAccount.`,
+    );
   });
 }
 
 const RESPONSE_PREFIX_CHANNELS = new Set([
+  "buzz",
+  "clickclack",
   "discord",
   "feishu",
   "googlechat",
@@ -265,6 +192,7 @@ const RESPONSE_PREFIX_CHANNELS = new Set([
   "mattermost",
   "msteams",
   "nextcloud-talk",
+  "qa-channel",
   "signal",
   "slack",
   "telegram",
@@ -281,22 +209,16 @@ function migrateMessagesResponsePrefix(raw: Record<string, unknown>, changes: st
   if (!messages || !Object.hasOwn(messages, "responsePrefix")) {
     return;
   }
-  const channels = getRecord(raw.channels);
-  const configuredChannels = channels
-    ? Object.entries(channels).filter(
-        (entry): entry is [string, Record<string, unknown>] =>
-          entry[0] !== "defaults" && Boolean(getRecord(entry[1])),
-      )
-    : [];
-  const supported = configuredChannels.filter(([channelId]) =>
-    RESPONSE_PREFIX_CHANNELS.has(channelId),
-  );
-  const unsupported = configuredChannels
-    .map(([channelId]) => channelId)
-    .filter((channelId) => !RESPONSE_PREFIX_CHANNELS.has(channelId));
+  const unsupported: string[] = [];
   let copied = false;
-  for (const [, channel] of supported) {
-    if (channel.responsePrefix === undefined) {
+  for (const [channelId, value] of Object.entries(getRecord(raw.channels) ?? {})) {
+    const channel = getRecord(value);
+    if (channelId === "defaults" || !channel) {
+      continue;
+    }
+    if (!RESPONSE_PREFIX_CHANNELS.has(channelId)) {
+      unsupported.push(channelId);
+    } else if (channel.responsePrefix === undefined) {
       channel.responsePrefix = messages.responsePrefix;
       copied = true;
     }
@@ -309,26 +231,18 @@ function migrateMessagesResponsePrefix(raw: Record<string, unknown>, changes: st
 }
 
 function migratePresenceEnabled(raw: Record<string, unknown>, changes: string[]): boolean {
-  let changed = false;
   const wideArea = getRecord(getRecord(raw.discovery)?.wideArea);
-  if (wideArea && Object.hasOwn(wideArea, "enabled")) {
-    if (
-      wideArea.enabled === false &&
-      typeof wideArea.domain === "string" &&
-      wideArea.domain.trim()
-    ) {
-      delete wideArea.enabled;
-      delete wideArea.domain;
-      changes.push(
-        "Removed disabled discovery.wideArea activation fields; domain presence now enables wide-area discovery.",
-      );
-      changed = true;
-    } else {
-      delete wideArea.enabled;
-      changed = true;
-    }
+  if (!wideArea || !Object.hasOwn(wideArea, "enabled")) {
+    return false;
   }
-  return changed;
+  if (wideArea.enabled === false && typeof wideArea.domain === "string" && wideArea.domain.trim()) {
+    delete wideArea.domain;
+    changes.push(
+      "Removed disabled discovery.wideArea activation fields; domain presence now enables wide-area discovery.",
+    );
+  }
+  delete wideArea.enabled;
+  return true;
 }
 
 function migrateWebEnabled(raw: Record<string, unknown>, changes: string[]): boolean {
@@ -351,17 +265,13 @@ function migrateWebEnabled(raw: Record<string, unknown>, changes: string[]): boo
 }
 
 function stripPromptsFromTtsConfig(ttsValue: unknown, path: string, changes: string[]): void {
-  const tts = getRecord(ttsValue);
-  const personas = getRecord(tts?.personas);
-  if (personas) {
-    for (const [personaId, personaValue] of Object.entries(personas)) {
-      const persona = getRecord(personaValue);
-      if (persona && Object.hasOwn(persona, "prompt")) {
-        delete persona.prompt;
-        changes.push(
-          `Removed ${path}.personas.${personaId}.prompt; move custom shaping into a speech provider prepareSynthesis implementation.`,
-        );
-      }
+  for (const [personaId, persona] of Object.entries(
+    getRecord(getRecord(ttsValue)?.personas) ?? {},
+  )) {
+    if (deleteRetiredPath(persona, ["prompt"])) {
+      changes.push(
+        `Removed ${path}.personas.${personaId}.prompt; move custom shaping into a speech provider prepareSynthesis implementation.`,
+      );
     }
   }
 }
@@ -371,11 +281,7 @@ function stripTtsPersonaPrompts(raw: Record<string, unknown>, changes: string[])
   visitAgentConfigScopes(raw, (scope, path) => {
     stripPromptsFromTtsConfig(scope.tts, `${path}.tts`, changes);
   });
-  const channels = getRecord(raw.channels);
-  if (!channels) {
-    return;
-  }
-  for (const channelId of Object.keys(channels)) {
+  for (const channelId of Object.keys(getRecord(raw.channels) ?? {})) {
     visitChannelEntries(raw, channelId, (entry, path) => {
       stripPromptsFromTtsConfig(entry.tts, `${path}.tts`, changes);
       stripPromptsFromTtsConfig(getRecord(entry.voice)?.tts, `${path}.voice.tts`, changes);
@@ -393,19 +299,12 @@ function stripCompactionInstructionConfig(
     return;
   }
   let stripped = false;
-  for (const key of ["customInstructions", "identifierInstructions"]) {
-    if (Object.hasOwn(compaction, key)) {
-      delete compaction[key];
-      stripped = true;
-    }
-  }
-  const memoryFlush = getRecord(compaction.memoryFlush);
-  if (memoryFlush) {
-    for (const key of ["prompt", "systemPrompt"]) {
-      if (Object.hasOwn(memoryFlush, key)) {
-        delete memoryFlush[key];
-        stripped = true;
-      }
+  for (const [owner, keys] of [
+    [compaction, ["customInstructions", "identifierInstructions"]],
+    [compaction.memoryFlush, ["prompt", "systemPrompt"]],
+  ] as const) {
+    for (const key of keys) {
+      stripped = deleteRetiredPath(owner, [key]) || stripped;
     }
   }
   if (compaction.identifierPolicy === "custom") {
@@ -446,7 +345,6 @@ export function migrateTierEvalTranche(raw: Record<string, unknown>, changes: st
     if (path !== "agents.defaults") {
       migrateExecMode(scope, path, changes, inheritedExecPolicy);
     }
-    migrateCliBackendSessionArgs(scope, path, changes);
     for (const retiredPath of TIER_EVAL_RETIRED_AGENT_PATHS) {
       stripped = deleteRetiredPath(scope, retiredPath) || stripped;
     }
@@ -456,33 +354,17 @@ export function migrateTierEvalTranche(raw: Record<string, unknown>, changes: st
   for (const retiredPath of TIER_EVAL_RETIRED_ROOT_PATHS) {
     stripped = deleteRetiredPath(raw, retiredPath) || stripped;
   }
-  const secrets = getRecord(raw.secrets);
-  const providers = getRecord(secrets?.providers);
-  if (providers) {
-    for (const provider of Object.values(providers)) {
-      const entry = getRecord(provider);
-      if (entry) {
-        stripped =
-          Object.hasOwn(entry, "allowInsecurePath") ||
-          Object.hasOwn(entry, "allowSymlinkCommand") ||
-          stripped;
-        delete entry.allowInsecurePath;
-        delete entry.allowSymlinkCommand;
-      }
+  for (const owner of [
+    ...Object.values(getRecord(getRecord(raw.secrets)?.providers) ?? {}),
+    getRecord(getRecord(raw.security)?.installPolicy)?.exec,
+  ]) {
+    for (const key of ["allowInsecurePath", "allowSymlinkCommand"]) {
+      stripped = deleteRetiredPath(owner, [key]) || stripped;
     }
-  }
-  const installExec = getRecord(getRecord(getRecord(raw.security)?.installPolicy)?.exec);
-  if (installExec) {
-    stripped =
-      Object.hasOwn(installExec, "allowInsecurePath") ||
-      Object.hasOwn(installExec, "allowSymlinkCommand") ||
-      stripped;
-    delete installExec.allowInsecurePath;
-    delete installExec.allowSymlinkCommand;
   }
   if (stripped || changes.length > initialChangeCount) {
     changes.push(
-      "Applied tier-eval tranche retirements; canonical settings and built-in defaults now apply.",
+      "Applied tier-eval tranche retirements; current settings and built-in defaults now apply.",
     );
   }
 }

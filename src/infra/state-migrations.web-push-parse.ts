@@ -4,14 +4,14 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
-  createWebPushVapidKeyPair,
   hashWebPushEndpoint,
   isValidWebPushEndpoint,
   isValidWebPushKey,
   DEFAULT_WEB_PUSH_VAPID_SUBJECT,
   type VapidKeyPair,
   type WebPushSubscription,
-} from "./push-web-store.js";
+} from "./push-web-store.records.js";
+import { assertAllowedJsonFields } from "./state-migrations.json-fields.js";
 
 const SUBSCRIPTION_STORE_KEYS = new Set(["subscriptionsByEndpointHash"]);
 const SUBSCRIPTION_KEYS = new Set([
@@ -25,23 +25,12 @@ const PUSH_KEYS = new Set(["p256dh", "auth"]);
 const VAPID_KEYS = new Set(["publicKey", "privateKey", "subject"]);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-function assertOnlyKeys(
-  value: Record<string, unknown>,
-  allowed: ReadonlySet<string>,
-  label: string,
-) {
-  const unexpected = Object.keys(value).find((key) => !allowed.has(key));
-  if (unexpected) {
-    throw new Error(`${label} has unexpected field ${unexpected}`);
-  }
-}
-
 export function parseLegacySubscriptions(raw: string): Map<string, WebPushSubscription> {
   const parsed = JSON.parse(raw) as unknown;
   if (!isRecord(parsed) || !isRecord(parsed.subscriptionsByEndpointHash)) {
     throw new Error("legacy Web Push subscriptions must be an object");
   }
-  assertOnlyKeys(parsed, SUBSCRIPTION_STORE_KEYS, "legacy Web Push subscriptions store");
+  assertAllowedJsonFields(parsed, SUBSCRIPTION_STORE_KEYS, "legacy Web Push subscriptions store");
 
   const subscriptions = new Map<string, WebPushSubscription>();
   const subscriptionIds = new Set<string>();
@@ -51,8 +40,8 @@ export function parseLegacySubscriptions(raw: string): Map<string, WebPushSubscr
     if (!isRecord(rawSubscription) || !isRecord(rawSubscription.keys)) {
       throw new Error("legacy Web Push subscription is not an object");
     }
-    assertOnlyKeys(rawSubscription, SUBSCRIPTION_KEYS, "legacy Web Push subscription");
-    assertOnlyKeys(rawSubscription.keys, PUSH_KEYS, "legacy Web Push subscription keys");
+    assertAllowedJsonFields(rawSubscription, SUBSCRIPTION_KEYS, "legacy Web Push subscription");
+    assertAllowedJsonFields(rawSubscription.keys, PUSH_KEYS, "legacy Web Push subscription keys");
     const { subscriptionId, endpoint, createdAtMs, updatedAtMs } = rawSubscription;
     const p256dh = rawSubscription.keys.p256dh;
     const auth = rawSubscription.keys.auth;
@@ -93,7 +82,7 @@ export function parseLegacyVapidKeys(raw: string, env: NodeJS.ProcessEnv): Vapid
   if (!isRecord(parsed)) {
     throw new Error("legacy Web Push VAPID keys must be an object");
   }
-  assertOnlyKeys(parsed, VAPID_KEYS, "legacy Web Push VAPID keys");
+  assertAllowedJsonFields(parsed, VAPID_KEYS, "legacy Web Push VAPID keys");
   if (parsed.subject !== undefined && typeof parsed.subject !== "string") {
     throw new Error("legacy Web Push VAPID keys are invalid");
   }
@@ -108,5 +97,5 @@ export function parseLegacyVapidKeys(raw: string, env: NodeJS.ProcessEnv): Vapid
   ) {
     throw new Error("legacy Web Push VAPID keys are invalid");
   }
-  return createWebPushVapidKeyPair(parsed.publicKey, parsed.privateKey, subject);
+  return { publicKey: parsed.publicKey, privateKey: parsed.privateKey, subject };
 }

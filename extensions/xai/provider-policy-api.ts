@@ -1,30 +1,56 @@
-// Xai API module exposes the plugin public contract.
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,
 } from "openclaw/plugin-sdk/plugin-entry";
+import type { ProviderFastModePolicyContext } from "openclaw/plugin-sdk/provider-model-types";
+import { resolveXaiFastModelId } from "./fast-mode.js";
 import { resolveXaiCatalogEntry } from "./model-definitions.js";
 import {
   isXaiFrontierModelId,
-  isXaiGrok46ModelId,
+  isXaiGrok43ModelId,
+  isXaiXhighModelId,
   normalizeXaiModelId,
-  resolveXaiOAuthAutoModelId,
+  normalizeXaiReasoningEfforts,
+  resolveXaiIdReasoningEfforts,
 } from "./model-id.js";
 import { isXaiProviderId } from "./provider-id.js";
+
+export function resolveFastModeSupport(ctx: ProviderFastModePolicyContext): boolean | undefined {
+  if (!ctx.api || ctx.runtimeId !== "openclaw") {
+    return undefined;
+  }
+  return (
+    resolveXaiFastModelId({ id: ctx.modelId, provider: ctx.provider, api: ctx.api }) !== undefined
+  );
+}
 
 export function resolveThinkingProfile(
   ctx: ProviderDefaultThinkingPolicyContext,
 ): ProviderThinkingProfile {
-  // OAuth catalog rows keep the "auto" alias id and carry the provider-selected
-  // target in params.canonicalModelId. Judge that concrete target here too.
-  const rawModelId = resolveXaiOAuthAutoModelId(ctx.modelId, ctx.params);
-  const modelId = normalizeXaiModelId(rawModelId.trim().toLowerCase());
-  const reasoning = ctx.reasoning ?? resolveXaiCatalogEntry(modelId)?.reasoning;
+  const modelId = normalizeXaiModelId(ctx.modelId.trim().toLowerCase());
+  const isGrok43 = isXaiGrok43ModelId(modelId);
+  const reasoning = ctx.reasoning ?? resolveXaiCatalogEntry(modelId)?.reasoning ?? isGrok43;
   if (!isXaiProviderId(ctx.provider) || !reasoning) {
     return { levels: [{ id: "off" }], defaultLevel: "off" };
   }
+  // Listed efforts (projected from the Grok subscription listing) replace the ID rules.
+  // Runtime normalization stamps ID-ruled rows with their own effort list; an identical
+  // list keeps the established ladder below.
+  const listedEfforts = normalizeXaiReasoningEfforts(ctx.compat?.supportedReasoningEfforts ?? []);
+  if (
+    listedEfforts.length > 0 &&
+    listedEfforts.join(",") !== resolveXaiIdReasoningEfforts(modelId).join(",")
+  ) {
+    const levels: ProviderThinkingProfile["levels"] = listedEfforts.map((effort) => ({
+      id: effort === "none" ? "off" : effort,
+    }));
+    return {
+      levels,
+      defaultLevel: listedEfforts.includes("high") ? "high" : levels.at(-1)?.id,
+    };
+  }
   if (isXaiFrontierModelId(modelId)) {
-    const levels: ProviderThinkingProfile["levels"] = isXaiGrok46ModelId(modelId)
+    const levels: ProviderThinkingProfile["levels"] = isXaiXhighModelId(modelId)
       ? [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }]
       : [{ id: "low" }, { id: "medium" }, { id: "high" }];
     return {
@@ -32,8 +58,6 @@ export function resolveThinkingProfile(
       defaultLevel: "high",
     };
   }
-  const isGrok43 =
-    modelId === "grok-latest" || modelId === "grok-4.3" || modelId.startsWith("grok-4.3-");
   if (!isGrok43) {
     return { levels: [{ id: "off" }], defaultLevel: "off" };
   }

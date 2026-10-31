@@ -1,41 +1,34 @@
 import type { CronJob } from "../types.js";
 import type { CronJobsSortBy, CronSortDir } from "./list-page-types.js";
 
-export function sortCronJobs(
-  jobs: CronJob[],
-  sortBy: CronJobsSortBy,
-  sortDir: CronSortDir,
-): CronJob[] {
+export function sortCronJobs<
+  Job extends Pick<CronJob, "id" | "name" | "updatedAtMs"> & { state: { nextRunAtMs?: number } },
+>(jobs: Job[], sortBy: CronJobsSortBy, sortDir: CronSortDir): Job[] {
   const dir = sortDir === "desc" ? -1 : 1;
-  return jobs.toSorted((a, b) => {
-    let cmp;
+  // Explicit options bypass native localeCompare caching; keep collation local to this sort.
+  let compareNames: Intl.Collator["compare"] | undefined;
+  jobs.sort((a, b) => {
+    let cmp = 0;
     if (sortBy === "name") {
-      const aName = typeof a.name === "string" ? a.name : "";
-      const bName = typeof b.name === "string" ? b.name : "";
-      cmp = aName.localeCompare(bName, undefined, { sensitivity: "base" });
+      compareNames ??= new Intl.Collator(undefined, { sensitivity: "base" }).compare;
+      cmp = compareNames(a.name, b.name);
     } else if (sortBy === "updatedAtMs") {
       cmp = a.updatedAtMs - b.updatedAtMs;
     } else {
       const aNext = a.state.nextRunAtMs;
       const bNext = b.state.nextRunAtMs;
-      if (typeof aNext === "number" && typeof bNext === "number") {
+      if (aNext !== undefined && bNext !== undefined) {
         cmp = aNext - bNext;
-      } else if (typeof aNext === "number") {
-        // Missing run times are not directional sort keys. Keep paused jobs
-        // after runnable jobs so descending pages do not hide scheduled work.
-        return -1;
-      } else if (typeof bNext === "number") {
-        return 1;
-      } else {
-        cmp = 0;
+      } else if (aNext !== undefined || bNext !== undefined) {
+        // Missing run times stay last in either direction so paused jobs cannot hide scheduled work.
+        return aNext !== undefined ? -1 : 1;
       }
     }
     if (cmp !== 0) {
       return cmp * dir;
     }
     // Stable id tiebreaker keeps pagination deterministic when sort keys match.
-    const aId = typeof a.id === "string" ? a.id : "";
-    const bId = typeof b.id === "string" ? b.id : "";
-    return aId.localeCompare(bId);
+    return a.id.localeCompare(b.id);
   });
+  return jobs;
 }

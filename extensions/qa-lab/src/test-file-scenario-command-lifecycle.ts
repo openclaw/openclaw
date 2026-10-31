@@ -1,5 +1,15 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
+import {
+  appendQaChildOutput,
+  appendQaChildOutputTail,
+  createQaChildOutputCapture,
+  createQaChildOutputTail,
+  QA_CHILD_STDERR_TAIL_BYTES,
+  QA_CHILD_STDOUT_MAX_BYTES,
+  readQaChildOutput,
+  readQaChildOutputTail,
+} from "./child-output.js";
 import { createQaPosixCommandSettlement } from "./posix-command-settlement.js";
 import { runQaWindowsTaskkill } from "./windows-system-tools.js";
 
@@ -18,6 +28,8 @@ export type QaScenarioCommandResult = {
   signal?: NodeJS.Signals | null;
   stdout: string;
   stderr: string;
+  stdoutTruncated?: true;
+  stderrTruncated?: true;
 };
 
 type QaScenarioCommandTerminalResult = Pick<
@@ -27,8 +39,6 @@ type QaScenarioCommandTerminalResult = Pick<
 
 const QA_SCENARIO_COMMAND_TIMEOUT_KILL_GRACE_MS = 2_000;
 const QA_SCENARIO_COMMAND_TIMEOUT_FORCE_SETTLE_MS = 500;
-let timeoutKillGraceMs = QA_SCENARIO_COMMAND_TIMEOUT_KILL_GRACE_MS;
-let timeoutForceSettleMs = QA_SCENARIO_COMMAND_TIMEOUT_FORCE_SETTLE_MS;
 
 export function runQaScenarioCommandLifecycle(
   execution: QaScenarioCommandExecution,
@@ -41,13 +51,15 @@ export function runQaScenarioCommandLifecycle(
       env: execution.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
+    // Logs are diagnostics, not native test verdicts: bound retention without
+    // failing noisy commands or truncating their live onOutput stream.
+    const stdout = createQaChildOutputCapture();
+    const stderr = createQaChildOutputTail();
     const commandLabel = path.basename(execution.command);
     createQaPosixCommandSettlement({
       child,
       settlementFailureMessage: `${commandLabel} settlement failed`,
-      forceKillAfterMs: timeoutKillGraceMs,
+      forceKillAfterMs: QA_SCENARIO_COMMAND_TIMEOUT_KILL_GRACE_MS,
       ...(isWindows
         ? {
             windowsCleanup: {
@@ -69,7 +81,6 @@ export function runQaScenarioCommandLifecycle(
         : {}),
       executionTimeoutMs: execution.timeoutMs,
       forwardParentSignals: true,
-      initialSignal: "SIGTERM",
       onSettled: (outcome) => {
         const primary = outcome.primary;
         if (primary.type === "spawn-error" || primary.type === "stream-error") {
@@ -104,8 +115,10 @@ export function runQaScenarioCommandLifecycle(
         resolve({
           ...result,
           ...(settlementFailure && result.exitCode === 0 ? { exitCode: 1 } : {}),
-          stdout: Buffer.concat(stdout).toString("utf8"),
-          stderr: Buffer.concat(stderr).toString("utf8"),
+          stdout: readQaChildOutput(stdout),
+          stderr: readQaChildOutputTail(stderr),
+          ...(stdout.exceeded ? { stdoutTruncated: true } : {}),
+          ...(stderr.truncated ? { stderrTruncated: true } : {}),
           ...(settlementFailure
             ? result.failureMessage
               ? { failureMessage: `${result.failureMessage}; settlement: ${settlementFailure}` }
@@ -115,29 +128,29 @@ export function runQaScenarioCommandLifecycle(
       },
       onStderrData: (chunk) => {
         const buffered = Buffer.from(chunk);
-        stderr.push(buffered);
+        appendQaChildOutputTail(stderr, buffered);
         execution.onOutput?.("stderr", buffered);
       },
       onStdoutData: (chunk) => {
         const buffered = Buffer.from(chunk);
-        stdout.push(buffered);
+        appendQaChildOutput(stdout, buffered);
         execution.onOutput?.("stdout", buffered);
       },
       processGroupId: isWindows ? undefined : child.pid,
-      verifyAfterMs: timeoutForceSettleMs,
+      verifyAfterMs: QA_SCENARIO_COMMAND_TIMEOUT_FORCE_SETTLE_MS,
     });
   });
 }
 
-export function resetQaScenarioCommandCleanupTimings() {
-  timeoutKillGraceMs = QA_SCENARIO_COMMAND_TIMEOUT_KILL_GRACE_MS;
-  timeoutForceSettleMs = QA_SCENARIO_COMMAND_TIMEOUT_FORCE_SETTLE_MS;
-}
-
-export function setQaScenarioCommandCleanupTimings(params: {
-  forceSettleMs: number;
-  killGraceMs: number;
-}) {
-  timeoutKillGraceMs = params.killGraceMs;
-  timeoutForceSettleMs = params.forceSettleMs;
+export function formatQaScenarioCommandOutput(result: QaScenarioCommandResult): string {
+  return [
+    result.stdoutTruncated
+      ? `[stdout truncated to first ${QA_CHILD_STDOUT_MAX_BYTES} bytes]\n`
+      : "",
+    result.stdout,
+    result.stderrTruncated
+      ? `\n[stderr truncated to last ${QA_CHILD_STDERR_TAIL_BYTES} bytes]\n`
+      : "",
+    result.stderr,
+  ].join("");
 }

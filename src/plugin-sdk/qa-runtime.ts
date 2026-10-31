@@ -1,10 +1,15 @@
 import { createServer } from "node:net";
-// QA runtime helpers register and execute plugin QA scenarios from local files.
+import path from "node:path";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import { runExec } from "./process-runtime.js";
 import { loadQaRuntimeModule as loadQaRunnerRuntimeModule } from "./qa-runner-runtime.js";
 import { fetchWithSsrFGuard } from "./ssrf-runtime.js";
 import { normalizeStringEntries } from "./string-coerce-runtime.js";
 
+export { mergeAttemptToolMediaPayloads } from "../agents/embedded-agent-runner/run/tool-media-payloads.js";
+export { wrapPromptDataBlock } from "../agents/sanitize-for-prompt.js";
+export { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 export { writeGatewayRestartIntentSync } from "../infra/restart-intent.js";
 export {
   createLazyCliRuntimeLoader,
@@ -19,7 +24,79 @@ export type {
   LiveTransportQaSuiteCommandOptions,
 } from "./qa-runner-runtime.js";
 
-type QaRuntimeSurface = {
+/** Inspect hot transcript evidence without admitting a writer or restoring cold sessions. */
+export async function visitQaSqliteTranscriptEvents(
+  databasePath: string,
+  visit: (eventJson: string) => void,
+): Promise<void> {
+  const [{ openNodeSqliteDatabase }, { tableExists, tableHasColumn }, queries, payload] =
+    await Promise.all([
+      import("../infra/node-sqlite.js"),
+      import("../state/openclaw-state-db-schema-helpers.js"),
+      import("../infra/kysely-sync.js"),
+      import("../config/sessions/transcript-payload.js"),
+    ]);
+  const database = openNodeSqliteDatabase(databasePath, { readOnly: true });
+  try {
+    if (!tableExists(database, "transcript_events")) {
+      return;
+    }
+    const db = queries.getNodeSqliteKysely<{
+      transcript_events: { session_id: string; seq: number; event_json: string };
+    }>(database);
+    // QA release fixtures can belong to a published pre-compression schema.
+    const eventJson = tableHasColumn(database, "transcript_events", "event_zstd")
+      ? payload.transcriptEventJsonSql(database).as("event_json")
+      : "event_json";
+    for (const row of queries.iterateSqliteQuerySync(
+      database,
+      db.selectFrom("transcript_events").select(eventJson).orderBy("session_id").orderBy("seq"),
+    )) {
+      if (typeof row.event_json === "string") {
+        visit(row.event_json);
+      }
+    }
+  } finally {
+    database.close();
+  }
+}
+
+/** Release only this QA root's parent stores before its files are removed. */
+export async function closeQaRuntimeStores(tempRoot: string): Promise<void> {
+  const [auth, { closeOpenClawAgentDatabasesAsync }, state, { openClawStateDatabaseCache }, paths] =
+    await Promise.all([
+      import("../agents/auth-profiles/sqlite.js"),
+      import("../state/openclaw-agent-db.js"),
+      import("../state/openclaw-state-db.js"),
+      import("../state/openclaw-state-db-cache.js"),
+      import("../state/openclaw-state-db.paths.js"),
+    ]);
+  // Agent close releases leases through shared state. Keep that owner alive
+  // until every scoped handle closes, or exit-time release can recreate the root.
+  auth.closeAuthProfileReadPool({ kind: "root", rootPath: tempRoot });
+  await closeOpenClawAgentDatabasesAsync(tempRoot);
+  const statePath = paths.resolveOpenClawStateSqlitePath({
+    OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
+  });
+  // Packaged auth can hand this tree to a different UID before Gateway startup.
+  // Close only admitted parent state, never discover a child-private database.
+  if (openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity(statePath)) {
+    await state.closeOpenClawStateDatabaseByPathAsync(statePath);
+  }
+}
+
+export { initializeQaRuntimeState } from "./qa-state-initializer.js";
+
+/** Read startup facts through the same packaged owners as the QA initializer. */
+export async function snapshotQaStartupState(env: NodeJS.ProcessEnv) {
+  const { collectQaStartupState } = await import("./qa-startup-state.js");
+  return collectQaStartupState(env);
+}
+
+type QaRuntimeSurface = Pick<
+  ReturnType<typeof loadQaRunnerRuntimeModule>,
+  "defaultQaRuntimeModelForMode" | "createQaLiveLaneGateway"
+> & {
   acquireQaCredentialLease: <TPayload>(options: {
     env?: NodeJS.ProcessEnv;
     kind: string;
@@ -34,14 +111,6 @@ type QaRuntimeSurface = {
     release(): Promise<void>;
     source: "convex" | "env";
   }>;
-  defaultQaRuntimeModelForMode: (
-    mode: string,
-    options?: {
-      alternate?: boolean;
-      preferredLiveModel?: string;
-    },
-  ) => string;
-  startQaLiveLaneGateway: (...args: unknown[]) => Promise<unknown>;
   startQaCredentialLeaseHeartbeat: (lease: {
     heartbeat(): Promise<void>;
     heartbeatIntervalMs: number;
@@ -53,14 +122,6 @@ type QaRuntimeSurface = {
   };
 };
 
-function isMissingQaRuntimeError(error: unknown) {
-  return (
-    error instanceof Error &&
-    (error.message === "Unable to resolve bundled plugin public surface qa-lab/runtime-api.js" ||
-      error.message.startsWith("Unable to open bundled plugin public surface "))
-  );
-}
-
 const loadQaLabRuntimeModule = loadQaRunnerRuntimeModule as unknown as () => QaRuntimeSurface;
 export { loadQaLabRuntimeModule as loadQaRuntimeModule };
 
@@ -69,7 +130,11 @@ function isQaRuntimeAvailableStrict(): boolean {
     loadQaLabRuntimeModule();
     return true;
   } catch (error) {
-    if (isMissingQaRuntimeError(error)) {
+    if (
+      error instanceof Error &&
+      (error.message === "Unable to resolve bundled plugin public surface qa-lab/runtime-api.js" ||
+        error.message.startsWith("Unable to open bundled plugin public surface "))
+    ) {
       return false;
     }
     throw error;
@@ -149,12 +214,7 @@ export async function resolveQaDockerHostPort(preferredPort: number, pinned: boo
 }
 
 function trimQaDockerCommandOutput(output: string) {
-  const trimmed = output.trim();
-  if (!trimmed) {
-    return "";
-  }
-  const lines = trimmed.split("\n");
-  return lines.length <= 120 ? trimmed : lines.slice(-120).join("\n");
+  return output.trim().split("\n").slice(-120).join("\n");
 }
 
 function renderQaDockerCommandFailure(command: string, args: string[], error: unknown) {
@@ -173,18 +233,6 @@ function renderQaDockerCommandFailure(command: string, args: string[], error: un
   );
 }
 
-function normalizeDockerServiceStatus(row?: { Health?: string; State?: string }) {
-  const health = row?.Health?.trim();
-  if (health) {
-    return health;
-  }
-  const state = row?.State?.trim();
-  if (state) {
-    return state;
-  }
-  return "unknown";
-}
-
 function firstDockerOutputLine(stdout: string) {
   return normalizeStringEntries(stdout.split("\n"))[0] ?? "";
 }
@@ -199,10 +247,7 @@ function parseDockerComposePsRows(stdout: string) {
     const parsed = JSON.parse(trimmed) as
       | Array<{ Health?: string; State?: string }>
       | { Health?: string; State?: string };
-    if (Array.isArray(parsed)) {
-      return parsed;
-    }
-    return [parsed];
+    return Array.isArray(parsed) ? parsed : [parsed];
   } catch {
     return normalizeStringEntries(trimmed.split("\n")).map(
       (line) => JSON.parse(line) as { Health?: string; State?: string },
@@ -285,19 +330,21 @@ export function createQaDockerRuntime(params: {
   ) => {
     const timeoutMs = deps.timeoutMs ?? 360_000;
     const pollMs = deps.pollMs ?? 1_000;
-    const startMs = Date.now();
+    const startMs = monotonicNow();
     const deadline = startMs + timeoutMs;
     let lastError: unknown = null;
 
-    while (Date.now() < deadline) {
-      const remainingMs = deadline - Date.now();
+    while (monotonicNow() < deadline) {
+      const remainingMs = deadline - monotonicNow();
       if (remainingMs <= 0) {
         break;
       }
       let response: QaDockerFetchResponse | undefined;
-      const requestTimeoutMs = Math.max(
-        1,
+      // Rounding the timer delay must not lose the final probe's deadline ownership.
+      const isFinalProbe = remainingMs <= DEFAULT_QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS;
+      const requestTimeoutMs = resolveTimerTimeoutMs(
         Math.min(DEFAULT_QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS, remainingMs),
+        DEFAULT_QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS,
       );
       const requestSignal = AbortSignal.timeout(requestTimeoutMs);
       try {
@@ -310,19 +357,19 @@ export function createQaDockerRuntime(params: {
         lastError = new Error(`Health check returned non-OK for ${url}`);
       } catch (error) {
         lastError = error;
-        if (requestSignal.aborted && requestTimeoutMs === remainingMs) {
+        if (requestSignal.aborted && isFinalProbe) {
           break;
         }
       } finally {
         await releaseQaDockerFetchResponse(response);
       }
-      const remainingSleepMs = deadline - Date.now();
+      const remainingSleepMs = deadline - monotonicNow();
       if (remainingSleepMs > 0) {
         await deps.sleepImpl(Math.min(pollMs, remainingSleepMs));
       }
     }
 
-    const elapsedSec = Math.round((Date.now() - startMs) / 1000);
+    const elapsedSec = Math.round((monotonicNow() - startMs) / 1000);
     const service = deps.label ?? url;
     const lines = [
       `${service} did not become healthy within ${elapsedSec}s (limit ${Math.round(timeoutMs / 1000)}s).`,
@@ -341,11 +388,11 @@ export function createQaDockerRuntime(params: {
     timeoutMs = 360_000,
     pollMs = 1_000,
   ) => {
-    const startMs = Date.now();
+    const startMs = monotonicNow();
     const deadline = startMs + timeoutMs;
     let lastStatus = "unknown";
 
-    while (Date.now() < deadline) {
+    while (monotonicNow() < deadline) {
       try {
         const { stdout } = await runCommand(
           "docker",
@@ -353,7 +400,7 @@ export function createQaDockerRuntime(params: {
           repoRoot,
         );
         const row = parseDockerComposePsRows(stdout)[0];
-        lastStatus = normalizeDockerServiceStatus(row);
+        lastStatus = row?.Health?.trim() || row?.State?.trim() || "unknown";
         if (lastStatus === "healthy" || lastStatus === "running") {
           return;
         }
@@ -363,7 +410,7 @@ export function createQaDockerRuntime(params: {
       await sleepImpl(pollMs);
     }
 
-    const elapsedSec = Math.round((Date.now() - startMs) / 1000);
+    const elapsedSec = Math.round((monotonicNow() - startMs) / 1000);
     throw new Error(
       [
         `${service} did not become healthy within ${elapsedSec}s (limit ${Math.round(timeoutMs / 1000)}s).`,

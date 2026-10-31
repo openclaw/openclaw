@@ -1,4 +1,3 @@
-// Runs a Vitest config and enforces wall-time regression budgets.
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -6,53 +5,12 @@ import {
   isStrictAffirmativeValue,
   parseFlagArgs,
   stringFlag,
-  type FlagSpec,
 } from "./lib/arg-utils.mts";
-import {
-  budgetFloatFlag,
-  parseBudgetNumber,
-  readBudgetEnvNumber,
-} from "./lib/budget-number-args.mts";
+import { budgetFloatFlag, readBudgetEnvNumber } from "./lib/budget-number-args.mts";
+import { reportLimitViolations } from "./lib/check-limits.mts";
 import { coerceErrorMessage } from "./lib/error-format.mts";
 import { formatMs } from "./lib/vitest-report-cli-utils.mts";
-import { readJsonFile, runVitestJsonReport } from "./test-report-utils.mts";
-
-type PerfBudgetOptions = {
-  baselineWallMs: number | null;
-  config: string;
-  maxRegressionPct: number;
-  maxWallMs: number | null;
-  reportOnly: boolean;
-};
-
-function nullableBudgetFloatFlag(
-  flag: string,
-  key: "baselineWallMs" | "maxWallMs",
-): FlagSpec<PerfBudgetOptions> {
-  return {
-    consume(argv, index) {
-      if (argv[index] !== flag) {
-        return null;
-      }
-      const value = argv[index + 1];
-      if (!value || value.startsWith("-")) {
-        throw new Error(`${flag} requires a value`);
-      }
-      return {
-        flag,
-        nextIndex: index + 1,
-        repeatable: false,
-        apply(target) {
-          const parsed = parseBudgetNumber(value, flag);
-          if (parsed === null) {
-            throw new Error(`${flag} requires a value`);
-          }
-          target[key] = parsed;
-        },
-      };
-    },
-  };
-}
+import { runVitestJsonReport } from "./test-report-utils.mts";
 
 function parseArgs(argv: readonly string[], env = process.env) {
   const opts = parseFlagArgs(
@@ -66,8 +24,8 @@ function parseArgs(argv: readonly string[], env = process.env) {
     },
     [
       stringFlag("--config", "config"),
-      nullableBudgetFloatFlag("--max-wall-ms", "maxWallMs"),
-      nullableBudgetFloatFlag("--baseline-wall-ms", "baselineWallMs"),
+      budgetFloatFlag("--max-wall-ms", "maxWallMs"),
+      budgetFloatFlag("--baseline-wall-ms", "baselineWallMs"),
       budgetFloatFlag("--max-regression-pct", "maxRegressionPct"),
       booleanFlag("--report-only", "reportOnly", true),
     ],
@@ -80,19 +38,7 @@ function parseArgs(argv: readonly string[], env = process.env) {
   return opts;
 }
 
-function collectPerfReportStats(reportPath: string) {
-  let report: unknown;
-  try {
-    report = readJsonFile(reportPath);
-  } catch (error) {
-    throw new Error(
-      `[test-perf-budget] failed to read Vitest JSON report ${reportPath}: ${coerceErrorMessage(
-        error,
-      )}`,
-      { cause: error },
-    );
-  }
-
+function collectPerfReportStats(report: unknown) {
   let totalFileDurationMs = 0;
   let fileCount = 0;
   const testResults =
@@ -119,7 +65,7 @@ function main() {
   }
 
   const startedAt = process.hrtime.bigint();
-  const reportPath = runVitestJsonReport({
+  const report = runVitestJsonReport({
     config: opts.config,
     prefix: "openclaw-vitest-perf",
   });
@@ -127,7 +73,7 @@ function main() {
 
   let reportStats;
   try {
-    reportStats = collectPerfReportStats(reportPath);
+    reportStats = collectPerfReportStats(report);
   } catch (error) {
     console.error(coerceErrorMessage(error));
     process.exit(1);
@@ -138,22 +84,20 @@ function main() {
       ? opts.baselineWallMs * (1 + (opts.maxRegressionPct ?? 0) / 100)
       : null;
 
-  let failed = false;
+  const violations: string[] = [];
   if (opts.maxWallMs !== null && elapsedMs > opts.maxWallMs) {
-    console.error(
+    violations.push(
       `[test-perf-budget] wall time ${formatMs(elapsedMs)} exceeded max ${formatMs(
         opts.maxWallMs,
       )}.`,
     );
-    failed = true;
   }
   if (allowedByBaseline !== null && elapsedMs > allowedByBaseline) {
-    console.error(
+    violations.push(
       `[test-perf-budget] wall time ${formatMs(elapsedMs)} exceeded baseline budget ${formatMs(
         allowedByBaseline,
       )} (baseline ${formatMs(opts.baselineWallMs ?? 0)}, +${String(opts.maxRegressionPct)}%).`,
     );
-    failed = true;
   }
 
   console.log(
@@ -162,7 +106,11 @@ function main() {
     )} files=${String(reportStats.fileCount)}`,
   );
 
-  if (failed) {
+  if (
+    reportLimitViolations(
+      violations.map((message) => ({ file: opts.config, title: "Test wall-time budget", message })),
+    )
+  ) {
     process.exit(1);
   }
 }

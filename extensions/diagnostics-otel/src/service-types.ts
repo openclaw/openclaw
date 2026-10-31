@@ -1,11 +1,7 @@
 import type { Agent as HttpAgent } from "node:http";
 import type { Agent as HttpsAgent, AgentOptions as HttpsAgentOptions } from "node:https";
-import type { LogRecord } from "@opentelemetry/api-logs";
-import type {
-  DiagnosticEventPayload,
-  DiagnosticTraceContext,
-  OpenClawPluginServiceContext,
-} from "../api.js";
+import type { DiagnosticEventPayload } from "openclaw/plugin-sdk/diagnostic-runtime";
+import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk/plugin-entry";
 
 export type OtelLogsExporter = "otlp" | "stdout" | "both";
 type OtelHttpAgent = HttpAgent | HttpsAgent;
@@ -16,11 +12,6 @@ export type OtelHttpAgentOptions = HttpsAgentOptions & {
 };
 export type OtelLogger = OpenClawPluginServiceContext["logger"];
 
-export type BuiltOtelLogRecord = {
-  logRecord: LogRecord;
-  traceContext?: DiagnosticTraceContext;
-};
-
 export type MessageDeliveryDiagnosticEvent = Extract<
   DiagnosticEventPayload,
   {
@@ -30,10 +21,6 @@ export type MessageDeliveryDiagnosticEvent = Extract<
 export type ModelCallLifecycleDiagnosticEvent = Extract<
   DiagnosticEventPayload,
   { type: "model.call.completed" | "model.call.error" }
->;
-export type ModelFailoverDiagnosticEvent = Extract<
-  DiagnosticEventPayload,
-  { type: "model.failover" }
 >;
 export type HarnessRunDiagnosticEvent = Extract<
   DiagnosticEventPayload,
@@ -47,6 +34,4 @@ export type SessionRecoveryDiagnosticEvent = Extract<
   DiagnosticEventPayload,
   { type: "session.recovery.requested" | "session.recovery.completed" }
 >;
-export type TalkDiagnosticEvent = Extract<DiagnosticEventPayload, { type: "talk.event" }>;
 export type SecuritySeverityText = "FATAL" | "ERROR" | "WARN" | "INFO";
-export type TrustedSpanAliasOwner = { kind: "run"; id: string };

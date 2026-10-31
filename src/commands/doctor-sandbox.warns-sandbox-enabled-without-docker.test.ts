@@ -1,185 +1,96 @@
-// Doctor sandbox tests cover warnings when sandbox mode is enabled without Docker availability.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { DEFAULT_SANDBOX_IMAGE } from "../agents/sandbox/constants.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
+import { withMockedPlatform as onPlatform } from "../test-utils/vitest-spies.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
-import type { DoctorRepairMode } from "./doctor-repair-mode.js";
 
 const runExec = vi.fn();
+const runCommandWithTimeout = vi.fn<typeof import("../process/exec.js").runCommandWithTimeout>();
 const note = vi.fn();
-const inspectLegacySandboxRegistryFiles = vi.fn();
-const migrateLegacySandboxRegistryFiles = vi.fn();
 const validateSandboxContainerEngineTarget = vi.fn();
+const resolveCodexHealthApi = vi.fn();
+const probeCodexWorkspaceWriteSandbox = vi.fn();
+const codexSandboxCommand = `codex sandbox -c 'sandbox_mode="workspace-write"' -c sandbox_workspace_write.network_access=false -- true`;
 
-vi.mock("../process/exec.js", () => ({
-  runExec,
-  runCommandWithTimeout: vi.fn(),
-}));
+// mock-isolation: Doctor receives a synthetic health API without loading bundled runtimes.
+vi.mock("../flows/bundled-health-checks.js", () => ({ resolveCodexHealthApi }));
 
-vi.mock("../agents/sandbox.js", () => ({
-  DEFAULT_SANDBOX_BROWSER_IMAGE: "browser-image",
-  DEFAULT_SANDBOX_COMMON_IMAGE: "common-image",
-  DEFAULT_SANDBOX_IMAGE: "default-image",
-  resolveSandboxScope: vi.fn(() => "shared"),
-}));
+// mock-isolation: Sandbox probes must not launch commands on the test host.
+vi.mock("../process/exec.js", () => ({ runExec, runCommandWithTimeout }));
 
+// mock-isolation: Synthetic engine descriptors keep probes independent of installed containers.
 vi.mock("../agents/sandbox/docker.js", () => ({
-  DOCKER_SANDBOX_ENGINE: {
-    id: "docker",
-    command: "docker",
-    displayName: "Docker",
-  },
-  PODMAN_SANDBOX_ENGINE: {
-    id: "podman",
-    command: "podman",
-    displayName: "Podman",
-  },
+  DOCKER_SANDBOX_ENGINE: { id: "docker", command: "docker", displayName: "Docker" },
+  PODMAN_SANDBOX_ENGINE: { id: "podman", command: "podman", displayName: "Podman" },
   validateSandboxContainerEngineTarget,
 }));
 
-vi.mock("./doctor-sandbox-legacy-registry.js", () => ({
-  inspectLegacySandboxRegistryFiles,
-  migrateLegacySandboxRegistryFiles,
-}));
+// mock-isolation: Capture Doctor notices without writing to the real terminal.
+vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({
-  note,
-}));
+const { maybeRepairSandboxImages, noteCodexBwrapNamespaceWarnings } =
+  await import("./doctor-sandbox.js");
 
-const {
-  legacySandboxRegistryInspectionToHealthFinding,
-  legacySandboxRegistryInspectionToRepairEffect,
-  maybeRepairSandboxImages,
-  maybeRepairSandboxRegistryFiles,
-} = await import("./doctor-sandbox.js");
-
-describe("maybeRepairSandboxImages", () => {
-  const mockRuntime: RuntimeEnv = {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  };
+describe("sandbox health", () => {
+  const mockRuntime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
   const mockPrompter: DoctorPrompter = {
     confirmRuntimeRepair: vi.fn().mockResolvedValue(false),
-    repairMode: {
-      shouldRepair: false,
-      shouldForce: false,
-      nonInteractive: false,
-      canPrompt: true,
-      updateInProgress: false,
-    } satisfies DoctorRepairMode,
   } as unknown as DoctorPrompter;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(mockPrompter.confirmRuntimeRepair).mockResolvedValue(false);
+    runExec.mockResolvedValue({ stdout: "", stderr: "" });
     validateSandboxContainerEngineTarget.mockResolvedValue(undefined);
-    inspectLegacySandboxRegistryFiles.mockResolvedValue([]);
-    migrateLegacySandboxRegistryFiles.mockResolvedValue([]);
+    resolveCodexHealthApi.mockReturnValue({
+      status: "available",
+      api: { probeCodexWorkspaceWriteSandbox },
+    });
+    probeCodexWorkspaceWriteSandbox.mockResolvedValue({
+      status: "ok",
+      command: codexSandboxCommand,
+    });
   });
 
-  function createSandboxConfig(mode: "off" | "all" | "non-main"): OpenClawConfig {
+  function createSandboxConfig(mode: "off" | "all" | "non-main", network?: string): OpenClawConfig {
     return {
-      agents: {
-        defaults: {
-          sandbox: {
-            mode,
-          },
-        },
-      },
+      agents: { defaults: { sandbox: { mode, ...(network ? { docker: { network } } : {}) } } },
     };
   }
+  const probeOnLinux = (cfg = createSandboxConfig("all")) =>
+    onPlatform("linux", () => noteCodexBwrapNamespaceWarnings(cfg));
+  const expectNoCodexProbe = () => {
+    expect(resolveCodexHealthApi).not.toHaveBeenCalled();
+    expect(probeCodexWorkspaceWriteSandbox).not.toHaveBeenCalled();
+  };
+  const expectNote = (message: string) =>
+    expect(note).toHaveBeenCalledWith(expect.stringContaining(message), "Sandbox");
 
-  function createSandboxConfigWithDockerNetwork(network: string): OpenClawConfig {
-    return {
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-            docker: {
-              network,
-            },
-          },
-        },
-      },
-    };
-  }
-
-  async function runSandboxRepair(params: {
-    mode: "off" | "all" | "non-main";
-    dockerAvailable: boolean;
-  }) {
-    if (params.dockerAvailable) {
-      runExec.mockResolvedValue({ stdout: "24.0.0", stderr: "" });
-    } else {
+  it.each(["non-main", "off"] as const)(
+    "reports unavailable Docker with sandbox mode %s",
+    async (mode) => {
       runExec.mockRejectedValue(new Error("Docker not installed"));
-    }
-    await maybeRepairSandboxImages(createSandboxConfig(params.mode), mockRuntime, mockPrompter);
-  }
-
-  function firstNoteCall() {
-    const noteCall = note.mock.calls[0];
-    if (noteCall === undefined) {
-      throw new Error("expected sandbox warning note");
-    }
-    return noteCall;
-  }
-
-  it("warns when sandbox mode is enabled but Docker is not available", async () => {
-    await runSandboxRepair({ mode: "non-main", dockerAvailable: false });
-
-    const noteCall = firstNoteCall();
-    expect(noteCall).toEqual([
-      [
-        'Sandbox mode is enabled (mode: "non-main") but Docker is not available.',
-        "Docker is required for sandbox mode to function.",
-        "Isolated sessions (automations, sub-agents) will fail without Docker.",
-        "",
-        "Options:",
-        "- Install Docker and restart the gateway",
-        "- Disable sandbox mode: openclaw config set agents.defaults.sandbox.mode off",
-      ].join("\n"),
-      "Sandbox",
-    ]);
-  });
-
-  it("warns when sandbox mode is 'all' but Docker is not available", async () => {
-    await runSandboxRepair({ mode: "all", dockerAvailable: false });
-
-    expect(note).toHaveBeenCalled();
-    const noteCall = firstNoteCall();
-    const message = noteCall[0] as string;
-
-    // Should warn about the impact on sandbox functionality
-    expect(message).toMatch(/sandbox|docker/i);
-  });
-
-  it("does not warn when sandbox mode is off", async () => {
-    await runSandboxRepair({ mode: "off", dockerAvailable: false });
-
-    // No warning needed when sandbox is off
-    expect(note).not.toHaveBeenCalled();
-  });
-
-  it("does not warn when Docker is available", async () => {
-    await runSandboxRepair({ mode: "non-main", dockerAvailable: true });
-
-    // May have other notes about images, but not the Docker unavailable warning
-    const dockerUnavailableWarning = note.mock.calls.find(
-      (call) =>
-        typeof call[0] === "string" && call[0].toLowerCase().includes("docker not available"),
-    );
-    expect(dockerUnavailableWarning).toBeUndefined();
-  });
+      await maybeRepairSandboxImages(createSandboxConfig(mode), mockRuntime, mockPrompter);
+      if (mode === "off") {
+        expect(note).not.toHaveBeenCalled();
+      } else {
+        expectNote('mode: "non-main") but Docker is not available');
+        expectNote("openclaw config set agents.defaults.sandbox.mode off");
+      }
+    },
+  );
 
   it("validates the explicit Podman target before checking images", async () => {
     const cfg = createSandboxConfig("all");
     cfg.agents!.defaults!.sandbox!.backend = "podman";
-    runExec.mockResolvedValue({ stdout: "", stderr: "" });
     validateSandboxContainerEngineTarget.mockRejectedValue(
-      Object.assign(new Error("unsupported remote Podman connection"), {
-        code: "INVALID_CONFIG",
-      }),
+      Object.assign(new Error("unsupported remote Podman connection"), { code: "INVALID_CONFIG" }),
     );
 
     await expect(maybeRepairSandboxImages(cfg, mockRuntime, mockPrompter)).rejects.toThrow(
@@ -194,243 +105,188 @@ describe("maybeRepairSandboxImages", () => {
     });
   });
 
-  it("warns when Codex bwrap namespaces are blocked on a sandboxed Linux host", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    runExec.mockImplementation(async (command: string, args: string[]) => {
-      if (command === "docker" && args[0] === "version") {
-        return { stdout: "24.0.0", stderr: "" };
-      }
-      if (command === "unshare") {
-        throw Object.assign(new Error("unshare failed"), {
-          stderr: "unshare: write failed /proc/self/uid_map: Operation not permitted",
-        });
-      }
-      return { stdout: "", stderr: "" };
-    });
-
-    try {
+  it("repairs sandbox images without running Codex namespace diagnostics", async () => {
+    await onPlatform("linux", async () => {
       await maybeRepairSandboxImages(createSandboxConfig("all"), mockRuntime, mockPrompter);
-    } finally {
-      platformSpy.mockRestore();
-    }
-
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("Codex bwrap user namespace probe failed"),
-      "Sandbox",
-    );
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("kernel.apparmor_restrict_unprivileged_userns=0"),
-      "Sandbox",
-    );
+    });
+    expect(runExec).toHaveBeenCalledWith("docker", ["image", "inspect", DEFAULT_SANDBOX_IMAGE], {
+      timeoutMs: 5_000,
+    });
+    expect(runExec.mock.calls.some(([command]) => command === "unshare")).toBe(false);
+    expectNoCodexProbe();
   });
 
-  it("checks Codex bwrap network namespaces only when Docker sandbox egress is offline", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    runExec.mockImplementation(async (command: string, args: string[]) => {
-      if (command === "docker" && args[0] === "version") {
-        return { stdout: "24.0.0", stderr: "" };
-      }
-      if (command === "unshare") {
-        if (args.includes("--net")) {
-          throw Object.assign(new Error("unshare failed"), {
-            stderr: "unshare: unshare failed: Operation not permitted",
-          });
+  it.each([
+    ["unavailable engine", "linux", createSandboxConfig("all"), false],
+    ["non-Linux host", "darwin", createSandboxConfig("all"), true],
+    ["disabled sandbox", "linux", createSandboxConfig("off"), true],
+    ["unconfigured sandbox", "linux", {}, true],
+    [
+      "non-container backend",
+      "linux",
+      { agents: { defaults: { sandbox: { mode: "all", backend: "ssh" } } } },
+      true,
+    ],
+  ] as const)("skips Codex diagnostics for %s", async (_name, platform, cfg, engine) => {
+    if (!engine) {
+      runExec.mockRejectedValue(new Error("Docker not installed"));
+    }
+    await onPlatform(platform, () => noteCodexBwrapNamespaceWarnings(cfg));
+    expect(runExec.mock.calls.some(([command]) => command === "unshare")).toBe(false);
+    expectNoCodexProbe();
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["unshare", "user", "unshare: write failed /proc/self/uid_map: Operation not permitted"],
+    ["Codex", "network", "bwrap: loopback: Failed RTM_NEWADDR: No child processes"],
+    ["Codex", "user", "bwrap: setting up uid map: Permission denied"],
+  ] as const)("reports %s %s namespace failures", async (stage, kind, denial) => {
+    if (stage === "unshare") {
+      runExec.mockImplementation(async (command: string) => {
+        if (command === "unshare") {
+          throw Object.assign(new Error("unshare failed"), { stderr: denial });
         }
         return { stdout: "", stderr: "" };
+      });
+    } else {
+      probeCodexWorkspaceWriteSandbox.mockResolvedValue({
+        status: "denied",
+        command: codexSandboxCommand,
+        denial,
+      });
+    }
+    await probeOnLinux();
+    expectNote(`Codex bwrap ${kind} namespace check failed`);
+    if (stage === "unshare") {
+      expectNote("kernel.apparmor_restrict_unprivileged_userns=0");
+      expect(probeCodexWorkspaceWriteSandbox).not.toHaveBeenCalled();
+    } else {
+      expectNote(`Check result: ${denial}`);
+      expectNote(`Check command: ${codexSandboxCommand}`);
+    }
+  });
+
+  it.each([
+    ["inconclusive", "Codex sandbox probe timed out."],
+    ["unavailable", "The selected Codex health API could not be loaded."],
+    ["older", "The selected Codex plugin does not provide a workspace-write sandbox check."],
+    ["not-configured", undefined],
+    ["ok", undefined],
+    ["skipped", undefined],
+    ["egress-enabled", undefined],
+  ] as const)("reports a %s Codex probe", async (scenario, reason) => {
+    if (scenario === "unavailable") {
+      resolveCodexHealthApi.mockReturnValue({ status: scenario, reason, reportAvailability: true });
+    } else if (scenario === "older") {
+      resolveCodexHealthApi.mockReturnValue({ status: "available", api: {} });
+    } else if (scenario === "not-configured") {
+      resolveCodexHealthApi.mockReturnValue({ status: scenario });
+    } else if (scenario === "inconclusive" || scenario === "skipped") {
+      probeCodexWorkspaceWriteSandbox.mockResolvedValue({
+        status: scenario,
+        command: codexSandboxCommand,
+        reason: reason ?? "A remote Codex transport is configured.",
+      });
+    }
+    await probeOnLinux(
+      createSandboxConfig("all", scenario === "egress-enabled" ? "bridge" : undefined),
+    );
+    if (!reason) {
+      expect(note).not.toHaveBeenCalled();
+      if (scenario === "not-configured" || scenario === "egress-enabled") {
+        expect(probeCodexWorkspaceWriteSandbox).not.toHaveBeenCalled();
       }
-      return { stdout: "", stderr: "" };
+      if (scenario === "egress-enabled") {
+        expect(resolveCodexHealthApi).not.toHaveBeenCalled();
+      }
+      return;
+    }
+    const message = note.mock.calls[0]![0];
+    expect(message).toContain("Doctor could not verify the Codex bwrap network sandbox.");
+    expect(message).toContain(`Check result: ${reason}`);
+    expect(message).not.toContain("namespace check failed");
+    expect(message).not.toContain("AppArmor");
+    if (scenario === "inconclusive") {
+      expect(message).toContain(`Check command: ${codexSandboxCommand}`);
+    } else {
+      expect(probeCodexWorkspaceWriteSandbox).not.toHaveBeenCalled();
+    }
+  });
+
+  describe("sandbox setup script execution", () => {
+    const dirs = useAutoCleanupTempDirTracker(afterEach);
+    const scriptRel = path.join("scripts", "sandbox-setup.sh");
+
+    beforeEach(() => {
+      runExec.mockImplementation(async (command: string, args: string[]) => {
+        if (command === "docker" && args[0] === "image") {
+          throw Object.assign(new Error("missing image"), { stderr: "No such image" });
+        }
+        if ((command === "docker" && args[0] === "version") || command === "unshare") {
+          return { stdout: "", stderr: "" };
+        }
+        throw new Error(`Unexpected sandbox probe: ${command} ${args.join(" ")}`);
+      });
+      runCommandWithTimeout.mockResolvedValue(createCommandResult());
+      vi.mocked(mockPrompter.confirmRuntimeRepair).mockResolvedValue(true);
     });
 
-    try {
-      await maybeRepairSandboxImages(createSandboxConfig("all"), mockRuntime, mockPrompter);
-    } finally {
-      platformSpy.mockRestore();
+    function mkPackage(script = false): string {
+      const root = fs.realpathSync(dirs.make("ocsbx-"));
+      fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
+      if (script) {
+        fs.mkdirSync(path.join(root, "scripts"));
+        fs.writeFileSync(path.join(root, scriptRel), "#!/bin/sh\n");
+      }
+      return root;
     }
 
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("Codex bwrap network namespace probe failed"),
-      "Sandbox",
-    );
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("bwrap: loopback: Failed RTM_NEWADDR"),
-      "Sandbox",
-    );
-  });
-
-  it("skips the Codex bwrap network namespace probe when Docker sandbox egress is enabled", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    runExec.mockImplementation(async (command: string, args: string[]) => {
-      if (command === "docker" && args[0] === "version") {
-        return { stdout: "24.0.0", stderr: "" };
-      }
-      if (command === "unshare") {
-        return { stdout: "", stderr: "" };
-      }
-      return { stdout: "", stderr: "" };
-    });
-
-    try {
-      await maybeRepairSandboxImages(
-        createSandboxConfigWithDockerNetwork("bridge"),
-        mockRuntime,
-        mockPrompter,
-      );
-    } finally {
-      platformSpy.mockRestore();
-    }
-
-    expect(
-      runExec.mock.calls.some(
-        ([command, args]) => command === "unshare" && Array.isArray(args) && args.includes("--net"),
-      ),
-    ).toBe(false);
-  });
-});
-
-describe("maybeRepairSandboxRegistryFiles", () => {
-  const mockPrompter = {
-    shouldRepair: false,
-  } as DoctorPrompter;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    inspectLegacySandboxRegistryFiles.mockResolvedValue([]);
-    migrateLegacySandboxRegistryFiles.mockResolvedValue([]);
-  });
-
-  it("warns about legacy registry files without migrating outside doctor --fix", async () => {
-    inspectLegacySandboxRegistryFiles.mockResolvedValue([
-      {
-        kind: "containers",
-        path: "/tmp/openclaw/sandbox/containers.json",
-        source: "monolithic",
-        exists: true,
-        valid: true,
-        entries: 2,
+    it.each([false, true])(
+      "locates setup scripts (installed package=%s)",
+      async (installedPackage) => {
+        let argv1: string, cwd: string, expectedRoot: string | null;
+        if (installedPackage) {
+          argv1 = path.join(mkPackage(), "openclaw.mjs");
+          cwd = expectedRoot = mkPackage(true);
+        } else {
+          // Keep an enclosing checkout above TMPDIR outside package discovery.
+          cwd = path.join(fs.realpathSync(dirs.make("ocsbx-none-")), "node_modules", ".bin");
+          fs.mkdirSync(cwd, { recursive: true });
+          argv1 = path.join(cwd, "openclaw");
+          expectedRoot = null;
+        }
+        fs.writeFileSync(argv1, "");
+        const originalArgv = process.argv;
+        const argv = [...originalArgv];
+        argv[1] = argv1;
+        const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cwd);
+        try {
+          process.argv = argv;
+          await maybeRepairSandboxImages(createSandboxConfig("all"), mockRuntime, mockPrompter);
+        } finally {
+          process.argv = originalArgv;
+          cwdSpy.mockRestore();
+        }
+        if (expectedRoot === null) {
+          expect(runCommandWithTimeout).not.toHaveBeenCalled();
+          expect(note).toHaveBeenCalledWith(
+            "Unable to locate scripts/sandbox-setup.sh. Run it from the repo root.",
+            "Sandbox",
+          );
+          expect(mockRuntime.log).not.toHaveBeenCalled();
+        } else {
+          expect(runCommandWithTimeout).toHaveBeenCalledExactlyOnceWith(
+            ["bash", path.join(expectedRoot, scriptRel)],
+            { timeoutMs: 20 * 60 * 1000, cwd: expectedRoot },
+          );
+          expect(vi.mocked(mockRuntime.log).mock.calls).toEqual([
+            ["Running scripts/sandbox-setup.sh..."],
+            ["Completed scripts/sandbox-setup.sh."],
+          ]);
+        }
+        expect(mockRuntime.error).not.toHaveBeenCalled();
       },
-    ]);
-
-    await maybeRepairSandboxRegistryFiles(mockPrompter);
-
-    expect(migrateLegacySandboxRegistryFiles).not.toHaveBeenCalled();
-    expect(note).toHaveBeenCalledWith(
-      [
-        "Legacy sandbox registry files detected.",
-        "- containers monolithic: /tmp/openclaw/sandbox/containers.json (2 entries)",
-        "Run openclaw doctor --fix to migrate them to SQLite.",
-      ].join("\n"),
-      "Sandbox",
-    );
-  });
-
-  it("migrates legacy registry files during doctor --fix", async () => {
-    inspectLegacySandboxRegistryFiles.mockResolvedValue([
-      {
-        kind: "containers",
-        path: "/tmp/openclaw/sandbox/containers.json",
-        source: "monolithic",
-        exists: true,
-        valid: true,
-        entries: 2,
-      },
-    ]);
-    migrateLegacySandboxRegistryFiles.mockResolvedValue([
-      {
-        kind: "containers",
-        status: "migrated",
-        entries: 2,
-      },
-    ]);
-
-    await maybeRepairSandboxRegistryFiles({
-      ...mockPrompter,
-      shouldRepair: true,
-    } as DoctorPrompter);
-
-    expect(migrateLegacySandboxRegistryFiles).toHaveBeenCalledTimes(1);
-    expect(note).toHaveBeenCalledWith(
-      "- Migrated containers registry into 2 SQLite rows.",
-      "Doctor changes",
-    );
-  });
-
-  it("maps legacy registry files to structured findings and dry-run effects", () => {
-    const monolithicFile = {
-      kind: "containers",
-      path: "/tmp/openclaw/sandbox/containers.json",
-      source: "monolithic",
-      exists: true,
-      valid: true,
-      entries: 2,
-    } as const;
-    const shardedFile = {
-      ...monolithicFile,
-      path: "/tmp/openclaw/sandbox/containers",
-      source: "sharded",
-    } as const;
-
-    expect(legacySandboxRegistryInspectionToHealthFinding(monolithicFile)).toEqual(
-      expect.objectContaining({
-        checkId: "core/doctor/sandbox/registry-files",
-        severity: "warning",
-        path: "/tmp/openclaw/sandbox/containers.json",
-        fixHint: expect.stringContaining("openclaw doctor --fix"),
-      }),
-    );
-    expect(legacySandboxRegistryInspectionToRepairEffect(monolithicFile)).toEqual({
-      kind: "state",
-      action: "would-migrate-legacy-sandbox-registry",
-      target: "/tmp/openclaw/sandbox/containers.json",
-      dryRunSafe: false,
-    });
-    expect(legacySandboxRegistryInspectionToHealthFinding(shardedFile)).toEqual(
-      expect.objectContaining({
-        path: "/tmp/openclaw/sandbox/containers",
-        message: expect.stringContaining(
-          "- containers sharded: /tmp/openclaw/sandbox/containers (2 entries)",
-        ),
-      }),
-    );
-    expect(legacySandboxRegistryInspectionToRepairEffect(shardedFile)).toEqual(
-      expect.objectContaining({
-        target: "/tmp/openclaw/sandbox/containers",
-      }),
-    );
-  });
-
-  it("maps invalid legacy registry files to quarantine effects", () => {
-    expect(
-      legacySandboxRegistryInspectionToRepairEffect({
-        kind: "browsers",
-        path: "/tmp/openclaw/sandbox/browsers.json",
-        source: "monolithic",
-        exists: true,
-        valid: false,
-        entries: 0,
-      }),
-    ).toEqual(
-      expect.objectContaining({
-        action: "would-quarantine-legacy-sandbox-registry",
-        target: "/tmp/openclaw/sandbox/browsers.json",
-      }),
-    );
-  });
-
-  it("maps empty legacy registry files to removal effects", () => {
-    expect(
-      legacySandboxRegistryInspectionToRepairEffect({
-        kind: "containers",
-        path: "/tmp/openclaw/sandbox/containers.json",
-        source: "monolithic",
-        exists: true,
-        valid: true,
-        entries: 0,
-      }),
-    ).toEqual(
-      expect.objectContaining({
-        action: "would-remove-empty-legacy-sandbox-registry",
-        target: "/tmp/openclaw/sandbox/containers.json",
-      }),
     );
   });
 });

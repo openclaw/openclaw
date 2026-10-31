@@ -1,0 +1,105 @@
+/* Phosphor palette; selected by index.html and app/theme.ts. */
+
+:root[data-theme="phosphor"] {
+  /*
+   * Accent — phosphor green on green-cast black
+   */
+  --ring: #4ade80;
+  --accent: #4ade80;
+  --accent-hover: #6ee79b;
+  --accent-muted: #4ade80;
+  --accent-subtle: rgba(74, 222, 128, 0.12);
+  --accent-glow: rgba(74, 222, 128, 0.22);
+  --primary: #4ade80;
+  --primary-hover: #6ee79b;
+  --primary-foreground: #07120a;
+  --accent-foreground: #07120a;
+
+  --destructive: #d32f2f;
+  --destructive-hover: #bc2a2a;
+
+  --focus: rgba(74, 222, 128, 0.2);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 75%, transparent);
+  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
+
+  --bg-content: #0a0f0a;
+
+  --card-foreground: #e8f5e9;
+  --card-highlight: rgba(200, 255, 210, 0.04);
+  --popover-foreground: #e8f5e9;
+
+  --text: #cfe0cf;
+  --text-strong: #e8f5e9;
+  --chat-text: #cfe0cf;
+  --muted: #93ac95;
+  --muted-strong: #a4bba6;
+  --muted-foreground: #93ac95;
+
+  --secondary-foreground: #e8f5e9;
+  --accent-2: #8fd6a5;
+  --accent-2-muted: rgba(143, 214, 165, 0.7);
+  --accent-2-subtle: rgba(143, 214, 165, 0.12);
+
+  --shadow-sm: 0 1px 2px rgba(0, 6, 2, 0.4);
+  --shadow-lg: 0 12px 32px rgba(0, 6, 2, 0.6);
+
+  --grid-line: rgba(200, 255, 210, 0.04);
+
+  /* The whole surface is one face, prose included. Mono is a deliberate
+     character choice for an operator console, not a readability claim; it is
+     why this theme is opt-in. --mono already named JetBrains Mono, but nothing
+     shipped it until this theme did. */
+  --mono:
+    "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
+  --font-body: var(--mono);
+  --font-chat: var(--mono);
+  --link: var(--accent);
+  --link-on-tint: var(--link);
+}
+
+:root[data-theme="phosphor-light"] {
+  /*
+   * Accent — deep green on cool paper
+   */
+  --ring: #10693a;
+  --accent: #10693a;
+  --accent-hover: #0b512c;
+  --accent-muted: #10693a;
+  --accent-subtle: rgba(16, 105, 58, 0.1);
+  --accent-glow: rgba(16, 105, 58, 0.14);
+  --primary: #10693a;
+  --primary-hover: var(--accent-hover);
+  --primary-foreground: #ffffff;
+  --accent-foreground: #ffffff;
+
+  --bg-content: #f1f4f1;
+
+  --card-foreground: #16201a;
+  --card-highlight: rgba(20, 50, 30, 0.02);
+  --popover-foreground: #16201a;
+  --session-hovercard-surface: var(--card);
+
+  --text: #2a352b;
+  --text-strong: #16201a;
+  --chat-text: #2a352b;
+  --muted: #566b58;
+  --muted-strong: #455947;
+  --muted-foreground: #566b58;
+
+  --secondary-foreground: #2a352b;
+  --accent-2: #2f6b47;
+  --accent-2-muted: rgba(47, 107, 71, 0.75);
+  --accent-2-subtle: rgba(47, 107, 71, 0.1);
+
+  --shadow-sm: 0 1px 2px rgba(20, 50, 30, 0.05);
+  --shadow-lg: 0 12px 28px rgba(20, 50, 30, 0.09);
+
+  --grid-line: rgba(20, 50, 30, 0.04);
+
+  --mono:
+    "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
+  --font-body: var(--mono);
+  --font-chat: var(--mono);
+  --link: var(--accent);
+  --link-on-tint: #006133;
+}

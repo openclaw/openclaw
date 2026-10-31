@@ -1,23 +1,23 @@
 /** Registry-bound plugin command selection and execution for native/channel surfaces. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { redactToolPayloadTextWithConfig } from "../logging/redact.js";
 import type { RegisteredPluginCommand } from "./command-registry-state.js";
-import { retainPluginCommandCatalogForCurrentAccount } from "./plugin-command-account-start-scope.js";
+import { resolveManifestCommandAliasOwnerInRegistry } from "./manifest-command-aliases.js";
 import {
   PLUGIN_COMMAND_DISPATCH,
   type PluginCommandReplyOptions,
 } from "./plugin-command-dispatch-contract.js";
-import { matchRegisteredPluginCommand } from "./plugin-command-matcher.js";
+import { matchRegisteredPluginCommand, parsePluginInvocation } from "./plugin-command-matcher.js";
 import {
   pluginCommandSupportsChannel,
   projectPluginCommandNativeMetadata,
 } from "./plugin-command-metadata.js";
-import {
-  listRegisteredPluginCommands,
-  resolveSelectedPluginCommandRegistry,
-} from "./plugin-command-registry.js";
+import { listRegisteredPluginCommands } from "./plugin-command-registry.js";
 import { isPluginRegistryRetired } from "./registry-lifecycle.js";
-import type { PluginRegistry } from "./registry-types.js";
+import type { PluginRecord, PluginRegistry } from "./registry-types.js";
+import { getPluginRegistryForContext } from "./runtime/gateway-request-scope.js";
 import type { PluginCommandContext, PluginCommandResult } from "./types.js";
 
 export { PLUGIN_COMMAND_DISPATCH };
@@ -31,7 +31,9 @@ export type PluginCommandDispatchContext = Readonly<{
   channelId?: PluginCommandContext["channelId"];
   isAuthorizedSender: boolean;
   senderIsOwner?: boolean;
+  assertOwnerCurrent?: () => void;
   gatewayClientScopes?: PluginCommandContext["gatewayClientScopes"];
+  /** Host-resolved agent authority for plugin-owned or non-agent-shaped session keys. */
   agentId?: string;
   sessionKey?: PluginCommandContext["sessionKey"];
   sessionId?: PluginCommandContext["sessionId"];
@@ -51,8 +53,16 @@ export type PluginCommandDispatchContext = Readonly<{
   diagnosticsPreviewOnly?: PluginCommandContext["diagnosticsPreviewOnly"];
   diagnosticsPrivateRouted?: PluginCommandContext["diagnosticsPrivateRouted"];
   runtimeContext?: {
+    /** Host-only factory, bound to the command invocation before the reader is exposed. */
+    createModels?: (params: {
+      signal: AbortSignal;
+      assertCurrent: () => void;
+    }) => NonNullable<PluginCommandContext["runtimeContext"]>["models"];
+    /** Core-only factory; requester authority is captured by the dispatch owner. */
+    createSubagents?: import("./runtime/native-subagent-context.js").NativeSubagentCommandFactory;
     compactCurrent?: (
       signal?: AbortSignal,
+      assertOwnerCurrent?: () => void,
     ) => ReturnType<
       NonNullable<NonNullable<PluginCommandContext["runtimeContext"]>["compactCurrent"]>
     >;
@@ -73,15 +83,9 @@ export type PluginCommandExecutionReplyOptions = Readonly<{
   [PLUGIN_COMMAND_DISPATCH]?: PluginCommandCatalogDecision;
 }>;
 
-export type PluginCommandNativeCandidate = Readonly<{
-  name: string;
-  description: string;
-  descriptionLocalizations?: Readonly<Record<string, string>>;
-  acceptsArgs: boolean;
-  requireAuth: boolean;
-  progressMessage?: string;
-  prepareDispatch: (rawArgs?: string) => PluginCommandCatalogDecision;
-}>;
+export type PluginCommandNativeCandidate = ReturnType<typeof projectPluginCommandNativeMetadata> & {
+  readonly prepareDispatch: (rawArgs?: string) => PluginCommandCatalogDecision;
+};
 
 type PluginCommandInvocationMatch = Readonly<{
   dispatch: PluginCommandDispatch;
@@ -92,6 +96,7 @@ type PluginCommandInvocationMatch = Readonly<{
 
 export type PluginCommandRuntime = Readonly<{
   listNativeCandidates: (provider: string) => readonly PluginCommandNativeCandidate[];
+  /** @deprecated Accounts reload automatically; retained for v2026.9.1 callers until the next breaking SDK. */
   retainNativeCatalog: (provider: string) => void;
 }>;
 
@@ -101,11 +106,11 @@ type PluginCommandRuntimeState = Readonly<{
 }>;
 
 type SelectedCommand = {
-  runtime: PluginCommandRuntime;
   registry: PluginRegistry;
   channel: string;
-  command: RegisteredPluginCommand;
-  args?: string;
+  selection:
+    | { availability: "loaded"; command: RegisteredPluginCommand; args?: string }
+    | { availability: "manifest-only"; plugin: PluginRecord };
 };
 
 const dispatchSelections = new WeakMap<object, SelectedCommand>();
@@ -119,11 +124,9 @@ const RETIRED_SELECTION_REPLY = {
 } as const;
 
 function createSelectedPluginCommandDispatch(
-  runtime: PluginCommandRuntime,
   state: PluginCommandRuntimeState,
-  command: RegisteredPluginCommand,
+  selection: SelectedCommand["selection"],
   channel: string,
-  args?: string,
 ): PluginCommandDispatch {
   const dispatch = Object.freeze({
     kind: "plugin" as const,
@@ -131,44 +134,15 @@ function createSelectedPluginCommandDispatch(
       if (this !== dispatch) {
         return { ...INVALID_SELECTION_REPLY };
       }
-      return await executeSelectedPluginCommand(runtime, dispatch, context);
+      return await executePluginCommandDispatch(dispatch, context);
     },
   }) as PluginCommandDispatch;
-  dispatchSelections.set(dispatch as object, {
-    runtime,
+  dispatchSelections.set(dispatch, {
     registry: state.registry,
-    command,
+    selection,
     channel: normalizeOptionalLowercaseString(channel) ?? "",
-    ...(args?.trim() ? { args: args.trim() } : {}),
   });
   return dispatch;
-}
-
-async function executeSelectedPluginCommand(
-  runtime: PluginCommandRuntime | undefined,
-  dispatch: PluginCommandDispatch,
-  context: PluginCommandDispatchContext,
-): Promise<PluginCommandResult> {
-  const selected = dispatchSelections.get(dispatch as object);
-  if (!selected || (runtime && selected.runtime !== runtime)) {
-    return { ...INVALID_SELECTION_REPLY };
-  }
-  if (isPluginRegistryRetired(selected.registry)) {
-    return { ...RETIRED_SELECTION_REPLY };
-  }
-  const channel = normalizeOptionalLowercaseString(context.channel) ?? "";
-  if (selected.channel !== channel) {
-    return { ...INVALID_SELECTION_REPLY };
-  }
-  const { executeRegisteredPluginCommand } = await import("./plugin-command-execution.js");
-  if (isPluginRegistryRetired(selected.registry)) {
-    return { ...RETIRED_SELECTION_REPLY };
-  }
-  return await executeRegisteredPluginCommand(selected.registry, {
-    ...context,
-    args: selected.args,
-    command: selected.command,
-  });
 }
 
 /** Validates and executes a dispatch carried through the core reply pipeline. */
@@ -176,19 +150,88 @@ export async function executePluginCommandDispatch(
   dispatch: PluginCommandDispatch,
   context: PluginCommandDispatchContext,
 ): Promise<PluginCommandResult> {
-  return await executeSelectedPluginCommand(undefined, dispatch, context);
+  const input = { ...context };
+  const selected = dispatchSelections.get(dispatch);
+  if (!selected) {
+    return { ...INVALID_SELECTION_REPLY };
+  }
+  if (isPluginRegistryRetired(selected.registry)) {
+    return { ...RETIRED_SELECTION_REPLY };
+  }
+  const channel = normalizeOptionalLowercaseString(input.channel) ?? "";
+  if (selected.channel !== channel) {
+    return { ...INVALID_SELECTION_REPLY };
+  }
+  const { selection } = selected;
+  if (selection.availability === "manifest-only") {
+    if (!input.isAuthorizedSender) {
+      return { text: "⚠️ This command requires authorization." };
+    }
+    // Registration diagnostics may include stacks or secrets; chat gets a bounded summary.
+    const reason = truncateUtf16Safe(
+      redactToolPayloadTextWithConfig(
+        selection.plugin.error?.split(/[\r\n]/, 1)[0]?.trim() || "reason not recorded",
+        input.config.logging,
+      ),
+      240,
+    );
+    return {
+      text: `⚠️ Plugin "${selection.plugin.id}" failed to load: ${reason}. Run \`openclaw doctor\` and check the gateway logs.`,
+    };
+  }
+  const { executeRegisteredPluginCommand } = await import("./plugin-command-execution.js");
+  if (isPluginRegistryRetired(selected.registry)) {
+    return { ...RETIRED_SELECTION_REPLY };
+  }
+  return await executeRegisteredPluginCommand(selected.registry, {
+    ...input,
+    args: selection.args,
+    command: selection.command,
+  });
+}
+
+/** Core-only cron adapter: no ambient completion, agent fallback or chat-error conversion. */
+export async function executeScheduledPluginCommandDispatch(
+  dispatch: PluginCommandDispatch,
+  context: PluginCommandDispatchContext & { abortSignal: AbortSignal },
+): Promise<PluginCommandResult> {
+  context.abortSignal.throwIfAborted();
+  context.assertOwnerCurrent?.();
+  const selected = dispatchSelections.get(dispatch);
+  if (
+    !selected ||
+    selected.selection.availability !== "loaded" ||
+    isPluginRegistryRetired(selected.registry) ||
+    selected.channel !== normalizeOptionalLowercaseString(context.channel) ||
+    selected.selection.command.requireAuth !== true ||
+    !selected.selection.command.runtimeCapabilities?.includes("subagents")
+  ) {
+    throw new Error("Scheduled command selection is no longer eligible.");
+  }
+  const { executeRegisteredPluginCommand } = await import("./plugin-command-execution.js");
+  context.abortSignal.throwIfAborted();
+  context.assertOwnerCurrent?.();
+  return await executeRegisteredPluginCommand(
+    selected.registry,
+    {
+      ...context,
+      command: selected.selection.command,
+      args: selected.selection.args,
+    },
+    { abortSignal: context.abortSignal },
+  );
 }
 
 /** Creates one command runtime bound permanently to the current scoped registry generation. */
 export function createPluginCommandRuntime(): PluginCommandRuntime {
-  const registry = resolveSelectedPluginCommandRegistry();
+  const registry = getPluginRegistryForContext();
   if (!registry) {
     throw new Error("Plugin command runtime requires an active or request-scoped registry.");
   }
-  const state: PluginCommandRuntimeState = Object.freeze({
+  const state: PluginCommandRuntimeState = {
     registry,
-    commands: Object.freeze(listRegisteredPluginCommands(registry)),
-  });
+    commands: listRegisteredPluginCommands(registry),
+  };
 
   const assertCurrent = () => {
     if (isPluginRegistryRetired(state.registry)) {
@@ -212,20 +255,17 @@ export function createPluginCommandRuntime(): PluginCommandRuntime {
                 if (args && !command.acceptsArgs) {
                   return Object.freeze({ kind: "non-plugin" as const });
                 }
-                return createSelectedPluginCommandDispatch(runtime, state, command, channel, args);
+                return createSelectedPluginCommandDispatch(
+                  state,
+                  { availability: "loaded", command, args },
+                  channel,
+                );
               },
             });
           }),
       );
     },
-    retainNativeCatalog(provider: string): void {
-      assertCurrent();
-      const channel = normalizeOptionalLowercaseString(provider) ?? "";
-      if (!state.commands.some((command) => pluginCommandSupportsChannel(command, channel))) {
-        return;
-      }
-      retainPluginCommandCatalogForCurrentAccount(channel);
-    },
+    retainNativeCatalog: assertCurrent,
   });
   runtimeStates.set(runtime, state);
   return runtime;
@@ -253,19 +293,40 @@ export function matchPluginCommandInvocation(
     aliasScope: { kind: "provider", provider },
   });
   if (!match) {
-    return null;
+    const owner = parsePluginInvocation(commandBody)
+      ?.keys.map((key) =>
+        resolveManifestCommandAliasOwnerInRegistry({
+          command: key.slice(1),
+          registry: state.registry,
+        }),
+      )
+      .find((candidate) => candidate !== undefined);
+    const plugin =
+      owner?.kind === "runtime-slash"
+        ? state.registry.plugins.find((entry) => entry.id === owner.pluginId)
+        : undefined;
+    if (plugin?.status !== "error" || !plugin.enabled) {
+      return null;
+    }
+    return {
+      dispatch: createSelectedPluginCommandDispatch(
+        state,
+        { availability: "manifest-only", plugin },
+        channel,
+      ),
+      acceptsArgs: true,
+      requireAuth: true,
+    };
   }
   const metadata = projectPluginCommandNativeMetadata(match.command, provider);
-  return Object.freeze({
+  return {
     dispatch: createSelectedPluginCommandDispatch(
-      runtime,
       state,
-      match.command,
+      { availability: "loaded", command: match.command, args: match.args },
       channel,
-      match.args,
     ),
     acceptsArgs: metadata.acceptsArgs,
     requireAuth: metadata.requireAuth,
     ...(metadata.progressMessage ? { progressMessage: metadata.progressMessage } : {}),
-  });
+  };
 }

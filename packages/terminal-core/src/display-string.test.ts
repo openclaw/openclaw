@@ -1,9 +1,8 @@
-// Terminal Core tests cover display-safe path shortening.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { displayString } from "./display-string.js";
+import { renderTable } from "./table.js";
 
 function stubHome(home: string, openclawHome = ""): void {
   vi.stubEnv("HOME", home);
@@ -11,7 +10,17 @@ function stubHome(home: string, openclawHome = ""): void {
   vi.stubEnv("OPENCLAW_HOME", openclawHome);
 }
 
-describe("displayString", () => {
+function displayString(input: string): string | undefined {
+  return renderTable({
+    columns: [{ key: "value", header: "Path" }],
+    rows: [{ value: input }],
+  })
+    .split("\n")[3]
+    ?.slice(2, -2)
+    .trimEnd();
+}
+
+describe("renderTable home display", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
@@ -47,8 +56,8 @@ describe("displayString", () => {
     expect(displayString(`${openclawHome}2/state`)).toBe(`${openclawHome}2/state`);
   });
 
-  it.each(["$&", "$`", "$'", "$$"])("keeps %s literal when expanding OPENCLAW_HOME", (pattern) => {
-    const home = path.resolve("test-home", `${pattern}user`);
+  it("keeps replacement syntax literal when expanding OPENCLAW_HOME", () => {
+    const home = path.resolve("test-home", "$&user");
     stubHome(home, "~/state");
 
     expect(displayString(path.join(home, "state", "project"))).toBe(

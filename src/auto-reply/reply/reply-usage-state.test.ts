@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeConfiguredModel } from "../../agents/test-helpers/provider-model-fixture.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   buildReplyUsageState,
@@ -11,7 +12,7 @@ afterEach(() => {
 });
 
 describe("reply usage state handoff", () => {
-  it("prices the selected agent in an explicit fleet", () => {
+  it("reports flat-price runtime cost for the selected agent in an explicit fleet", () => {
     const snapshot = buildReplyUsageState({
       config: {
         agents: {
@@ -23,15 +24,19 @@ describe("reply usage state handoff", () => {
             fixture: {
               baseUrl: "https://fixture.invalid",
               models: [
-                {
+                makeConfiguredModel({
                   id: "priced",
                   name: "Priced",
                   reasoning: false,
-                  input: ["text"],
-                  cost: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  cost: {
+                    input: 1,
+                    output: 0,
+                    cacheRead: 0,
+                    cacheWrite: 0,
+                  },
                   contextWindow: 1,
                   maxTokens: 1,
-                },
+                }),
               ],
             },
           },

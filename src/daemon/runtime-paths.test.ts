@@ -1,5 +1,13 @@
-// Daemon runtime path tests cover executable and config path resolution.
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+// Platform fixtures do not create host files; the generated bootstrap has separate process proof.
+vi.mock("../../runtime-process-scripts.generated.mjs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime-process-scripts.generated.mjs")>()),
+  createRuntimeProcessScriptFile: () => ({
+    url: new URL("file:///qa/daemon-runtime-probe.mjs"),
+    dispose() {},
+  }),
+}));
 
 const fsMocks = vi.hoisted(() => ({
   access: vi.fn(),
@@ -8,19 +16,12 @@ const fsMocks = vi.hoisted(() => ({
 
 vi.mock("node:fs/promises", async () => {
   const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-  return {
-    ...actual,
-    default: {
-      ...actual,
-      access: fsMocks.access,
-      realpath: fsMocks.realpath,
-    },
-    access: fsMocks.access,
-    realpath: fsMocks.realpath,
-  };
+  const mocked = { ...actual, ...fsMocks };
+  return { ...mocked, default: mocked };
 });
 
-import { resolveStableNodePath } from "../infra/stable-node-path.js";
+import * as processExec from "../process/exec.js";
+import { resolveNodeProgramArguments } from "./program-args.js";
 import {
   renderSystemNodeWarning,
   resolveBunRuntimeInfo,
@@ -30,6 +31,7 @@ import {
 } from "./runtime-paths.js";
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.resetAllMocks();
 });
 
@@ -43,7 +45,7 @@ function mockNodePathPresent(...nodePaths: string[]) {
     if (nodePaths.includes(target)) {
       return;
     }
-    throw new Error("missing");
+    throw Object.assign(new Error("missing"), { code: "ENOENT" });
   });
 }
 
@@ -51,9 +53,12 @@ function nodeRuntime(
   nodeVersion: string,
   sqliteVersion: string | null = "3.51.3",
   nodeSharedSqlite = false,
+  text = !["22.", "24.14.", "24.15.", "25.", "26.0."].some((prefix) =>
+    nodeVersion.startsWith(prefix),
+  ),
 ) {
   return {
-    stdout: `${JSON.stringify({ nodeVersion, sqliteVersion, nodeSharedSqlite })}\n`,
+    stdout: `${JSON.stringify({ nodeVersion, sqliteVersion, nodeSharedSqlite, sqliteProbe: { available: sqliteVersion !== null, version: sqliteVersion, text, blob: true, json: true } })}\n`,
     stderr: "",
   };
 }
@@ -62,220 +67,172 @@ function bunRuntime(
   bunVersion: string | null,
   hasNodeSqlite = true,
   sqliteVersion: string | null = hasNodeSqlite ? "3.51.3" : null,
+  sqliteSelectionError: string | null = null,
+  sqliteLibraryPath: string | null = null,
 ) {
+  const available = hasNodeSqlite && !sqliteSelectionError;
   return {
-    stdout: `${JSON.stringify({ bunVersion, hasNodeSqlite, sqliteVersion })}\n`,
+    stdout: `${JSON.stringify({ bunVersion, hasNodeSqlite, sqliteVersion, sqliteSelectionError, sqliteLibraryPath, sqliteProbe: { available, version: sqliteVersion, text: available, blob: available, json: available } })}\n`,
     stderr: "",
   };
 }
 
+function preferredNode(options: Parameters<typeof resolvePreferredNodePath>[0]) {
+  return resolvePreferredNodePath({ env: {}, runtime: "node", platform: "darwin", ...options });
+}
+
+const INVALID_SQLITE_OVERRIDE =
+  "Cannot use SQLite library /opt/broken/libsqlite3.dylib: missing file. Fix or unset OPENCLAW_SQLITE_LIBRARY; install a supported library with brew install sqlite.";
+
+it("keeps missing Bun metadata distinct from unsupported", async () => {
+  vi.spyOn(processExec, "runExec").mockResolvedValue({ stdout: "{}", stderr: "" });
+  const result = await resolveBunRuntimeInfo("/usr/bin/bun");
+  expect(result).toMatchObject({ status: "probe-failed", error: expect.any(Error) });
+  expect(result).not.toHaveProperty("version");
+});
+
+describe.each(["node", "bun"] as const)("%s probe failures", (runtime) => {
+  it("retains failed-probe evidence when another candidate is unsupported", async () => {
+    mockNodePathPresent(
+      "/usr/local/bin/node",
+      "/usr/bin/node",
+      "/usr/local/bin/bun",
+      "/usr/bin/bun",
+    );
+    vi.spyOn(processExec, "runExec")
+      .mockResolvedValueOnce(
+        runtime === "node" ? nodeRuntime("20.0.0", null) : bunRuntime("1.3.0", false),
+      )
+      .mockRejectedValue(new Error("EACCES"));
+    const resolve = runtime === "node" ? resolvePreferredNodePath : resolvePreferredBunPath;
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.spyOn(process, "execPath", "get").mockReturnValue("/fixture/other");
+    await expect(resolve({ env: {}, runtime })).rejects.toThrow(/check failed.*EACCES/s);
+  });
+});
+
+it("rejects a Bun node shim even when its emulated Node and SQLite versions are supported", async () => {
+  mockNodePathPresent("/usr/bin/node");
+  const metadata = JSON.parse(nodeRuntime("26.12.1").stdout);
+  vi.spyOn(processExec, "runExec").mockResolvedValue({
+    stdout: JSON.stringify({ ...metadata, bunVersion: "1.4.4" }),
+    stderr: "",
+  });
+  const result = await resolveSystemNodeInfo({ env: {}, platform: "linux" });
+  expect(result).toMatchObject({
+    status: "unsupported",
+    capabilityError: "The executable is Bun, not Node.",
+  });
+});
+
 describe("resolvePreferredNodePath", () => {
-  const darwinNode = "/opt/homebrew/bin/node";
-  const fnmNode = "/Users/test/.fnm/node-versions/v24.15.0/installation/bin/node";
-  const linuxSystemNode = "/usr/bin/node";
-  const nvmNode = "/home/test/.nvm/versions/node/v24.15.0/bin/node";
-
-  it("prefers supported system node over version-manager execPath", async () => {
-    mockNodePathPresent(darwinNode);
-
-    const execFile = vi
-      .fn()
-      .mockResolvedValueOnce(nodeRuntime("24.15.0"))
-      .mockResolvedValueOnce(nodeRuntime("24.15.0"));
-
-    const result = await resolvePreferredNodePath({
-      env: {},
-      runtime: "node",
-      platform: "darwin",
-      execFile,
-      execPath: fnmNode,
-    });
-
-    expect(result).toBe(darwinNode);
-    expect(execFile).toHaveBeenCalledTimes(2);
-  });
-
-  it("uses system node for Linux service installs instead of nvm execPath", async () => {
-    mockNodePathPresent(linuxSystemNode);
-
-    const execFile = vi
-      .fn()
-      .mockResolvedValueOnce(nodeRuntime("24.15.0"))
-      .mockResolvedValueOnce(nodeRuntime("24.15.0"));
-
-    const result = await resolvePreferredNodePath({
-      env: {},
-      runtime: "node",
-      platform: "linux",
-      execFile,
-      execPath: nvmNode,
-    });
-
-    expect(result).toBe(linuxSystemNode);
-    expect(execFile).toHaveBeenCalledTimes(2);
-  });
-
-  it("uses system node for Linux service installs instead of default fnm execPath", async () => {
-    const linuxFnmNode = "/home/test/.local/share/fnm/aliases/default/bin/node";
-    mockNodePathPresent(linuxSystemNode);
-
-    const execFile = vi
-      .fn()
-      .mockResolvedValueOnce(nodeRuntime("24.15.0"))
-      .mockResolvedValueOnce(nodeRuntime("24.15.0"));
-
-    const result = await resolvePreferredNodePath({
-      env: {},
-      runtime: "node",
-      platform: "linux",
-      execFile,
-      execPath: linuxFnmNode,
-    });
-
-    expect(result).toBe(linuxSystemNode);
-    expect(execFile).toHaveBeenCalledTimes(2);
-  });
-
-  it("uses system node for macOS service installs instead of default fnm execPath", async () => {
-    const darwinFnmNode = "/Users/test/Library/Application Support/fnm/aliases/default/bin/node";
-    mockNodePathPresent(darwinNode);
-
-    const execFile = vi
-      .fn()
-      .mockResolvedValueOnce(nodeRuntime("24.15.0"))
-      .mockResolvedValueOnce(nodeRuntime("24.15.0"));
-
-    const result = await resolvePreferredNodePath({
-      env: {},
-      runtime: "node",
-      platform: "darwin",
-      execFile,
-      execPath: darwinFnmNode,
-    });
-
-    expect(result).toBe(darwinNode);
-    expect(execFile).toHaveBeenCalledTimes(2);
-  });
-
-  it("uses Homebrew opt Node when a version-manager execPath is active", async () => {
-    const homebrewOptNode = "/opt/homebrew/opt/node@22/bin/node";
-    mockNodePathPresent(homebrewOptNode);
-
-    const execFile = vi
-      .fn()
-      .mockResolvedValueOnce(nodeRuntime("24.15.0"))
-      .mockResolvedValueOnce(nodeRuntime("22.22.3"));
-
-    const result = await resolvePreferredNodePath({
-      env: {},
-      runtime: "node",
-      platform: "darwin",
-      execFile,
-      execPath: fnmNode,
-    });
-
-    expect(result).toBe(homebrewOptNode);
-    expect(execFile).toHaveBeenCalledTimes(2);
-  });
-
-  it("falls back to version-manager execPath when no supported system node exists", async () => {
-    mockNodePathPresent(darwinNode);
-
-    const execFile = vi
-      .fn()
-      .mockResolvedValueOnce(nodeRuntime("24.15.0"))
-      .mockResolvedValueOnce(nodeRuntime("18.0.0", null));
-
-    const result = await resolvePreferredNodePath({
-      env: {},
-      runtime: "node",
-      platform: "darwin",
-      execFile,
-      execPath: fnmNode,
-    });
-
-    expect(result).toBe(fnmNode);
-    expect(execFile).toHaveBeenCalledTimes(2);
-  });
-
-  it("falls back to system node when execPath version is unsupported", async () => {
-    mockNodePathPresent(darwinNode);
-
-    const execFile = vi
-      .fn()
-      .mockResolvedValueOnce(nodeRuntime("18.0.0", null)) // execPath too old
-      .mockResolvedValueOnce(nodeRuntime("22.22.3")); // system node ok
-
-    const result = await resolvePreferredNodePath({
-      env: {},
-      runtime: "node",
-      platform: "darwin",
-      execFile,
-      execPath: "/some/old/node",
-    });
-
-    expect(result).toBe(darwinNode);
-    expect(execFile).toHaveBeenCalledTimes(2);
-  });
-
-  it("ignores execPath when it is not node", async () => {
-    mockNodePathPresent(darwinNode);
-
-    const execFile = vi.fn().mockResolvedValue(nodeRuntime("22.22.3"));
-
-    const result = await resolvePreferredNodePath({
-      env: {},
-      runtime: "node",
-      platform: "darwin",
-      execFile,
-      execPath: "/Users/test/.bun/bin/bun",
-    });
-
-    expect(result).toBe(darwinNode);
-    expect(execFile).toHaveBeenCalledTimes(1);
-    expect(execFile).toHaveBeenCalledWith(
-      darwinNode,
-      ["-e", expect.stringContaining("SELECT sqlite_version() AS version")],
-      { encoding: "utf8", timeoutMs: 5_000 },
-    );
-  });
-
-  it("uses system node when it meets the minimum version", async () => {
-    mockNodePathPresent(darwinNode);
-
-    // Node 22.22.3+ is the minimum required version
-    const execFile = vi.fn().mockResolvedValue(nodeRuntime("22.22.3"));
-
-    const result = await resolvePreferredNodePath({
-      env: {},
-      runtime: "node",
-      platform: "darwin",
-      execFile,
-      execPath: darwinNode,
-    });
-
-    expect(result).toBe(darwinNode);
-    expect(execFile).toHaveBeenCalledTimes(1);
-  });
-
   it.each([
-    {
-      reason: "its version is unsupported",
-      runtime: nodeRuntime("22.22.2", null),
+    ["24.22.1", false, "unsupported"],
+    ["24.15.0+vendor.1", true, "unsupported"],
+  ] as const)(
+    "uses the selected runtime's reported SQLite TEXT capability on Node %s",
+    async (version, lossless, expected) => {
+      mockNodePathPresent("/usr/bin/node");
+      vi.spyOn(processExec, "runExec").mockResolvedValue(
+        nodeRuntime(version, "3.51.3", false, lossless),
+      );
+      const result = await resolveSystemNodeInfo({ env: {}, platform: "linux" });
+      expect(result).toMatchObject({
+        status: expected,
+        version,
+        sqliteProbe: { text: lossless, blob: true, json: true },
+      });
     },
-    {
-      reason: "its SQLite version is unsafe",
-      runtime: nodeRuntime("24.17.0", "3.51.2"),
-    },
-  ])("returns undefined from Bun when the only system Node $reason", async ({ runtime }) => {
-    mockNodePathPresent(darwinNode);
-    const execFile = vi.fn().mockResolvedValue(runtime);
+  );
+
+  const darwinNode = "/opt/homebrew/bin/node";
+  const fnmNode = "/Users/test/.fnm/node-versions/v24.22.1/installation/bin/node";
+  const linuxSystemNode = "/usr/bin/node";
+  const nvmNode = "/home/test/.nvm/versions/node/v24.22.1/bin/node";
+
+  it("reports an exec failure instead of advising a Node upgrade during install", async () => {
+    mockNodePathPresent(linuxSystemNode);
+    vi.spyOn(processExec, "runExec").mockRejectedValue(new Error("spawn EACCES"));
+    const install = async () => {
+      const runtimePath = await preferredNode({
+        platform: "linux",
+        execPath: linuxSystemNode,
+      });
+      return resolveNodeProgramArguments({
+        host: "gateway.example",
+        port: 18789,
+        runtime: "node",
+        runtimePath,
+      });
+    };
+    await expect(install()).rejects.toThrow(
+      /Node runtime check failed.*\/usr\/bin\/node.*cwd.*EACCES/s,
+    );
+  });
+
+  it("selects a supported current versioned Node executable on Windows", async () => {
+    const execPath = "D:\\Tools\\node24.exe";
+    mockNodePathPresent();
+    const execFile = vi.spyOn(processExec, "runExec").mockResolvedValue(nodeRuntime("24.22.1"));
 
     const result = await resolvePreferredNodePath({
       env: {},
       runtime: "node",
+      platform: "win32",
+      execPath,
+    });
+
+    expect(result).toBe(execPath);
+    expect(execFile).toHaveBeenCalledTimes(1);
+  });
+
+  const upperNvm = "/home/test/.NVM/versions/node/v24/bin/node";
+  it.each([
+    ["darwin", darwinNode, fnmNode, true, "3.51.3", fnmNode, 1],
+    ["linux", linuxSystemNode, nvmNode, false, "3.51.2", nvmNode, 2],
+    ["linux", linuxSystemNode, upperNvm, false, "3.51.3", linuxSystemNode, 2],
+  ] as const)(
+    "selects Node on %s from %s for %s (prefer current=%s, SQLite=%s)",
+    async (platform, system, current, prefer, systemSqlite, selected, probes) => {
+      mockNodePathPresent(system);
+      const execFile = vi
+        .spyOn(processExec, "runExec")
+        .mockResolvedValueOnce(nodeRuntime(prefer ? "26.12.1" : "24.22.1"))
+        .mockResolvedValueOnce(nodeRuntime("24.22.1", systemSqlite));
+      expect(
+        await preferredNode({ platform, execPath: current, preferCurrentExecPath: prefer }),
+      ).toBe(selected);
+      expect(execFile).toHaveBeenCalledTimes(probes);
+    },
+  );
+
+  it("finds a later system Node accepted by the target engine", async () => {
+    const targetCompatibleNode = "/opt/homebrew/opt/node/bin/node";
+    mockNodePathPresent(darwinNode, targetCompatibleNode);
+    vi.spyOn(processExec, "runExec")
+      .mockResolvedValueOnce(nodeRuntime("24.22.1"))
+      .mockResolvedValueOnce(nodeRuntime("26.12.1"));
+
+    const result = await resolveSystemNodeInfo({
+      env: {},
       platform: "darwin",
-      execFile,
+      acceptNodeVersion: (version) => version?.startsWith("26.") === true,
+    });
+
+    expect(result).toMatchObject({
+      path: targetCompatibleNode,
+      version: "26.12.1",
+      status: "supported",
+    });
+  });
+
+  it("returns undefined from Bun when the only system Node is unsupported", async () => {
+    mockNodePathPresent(darwinNode);
+    const execFile = vi
+      .spyOn(processExec, "runExec")
+      .mockResolvedValue(nodeRuntime("22.22.2", null));
+
+    const result = await preferredNode({
       execPath: "/Users/test/.bun/bin/bun",
     });
 
@@ -283,449 +240,226 @@ describe("resolvePreferredNodePath", () => {
     expect(execFile).toHaveBeenCalledTimes(1);
     expect(execFile).toHaveBeenCalledWith(
       darwinNode,
-      ["-e", expect.stringContaining("SELECT sqlite_version() AS version")],
-      { encoding: "utf8", timeoutMs: 5_000 },
+      [expect.stringMatching(/daemon-runtime-probe\.mjs$/), "node", ""],
+      { logOutput: false, timeoutMs: 5_000, baseEnv: expect.any(Object) },
     );
-  });
-
-  it("keeps a safe version-manager runtime when system SQLite is unsafe", async () => {
-    mockNodePathPresent(linuxSystemNode);
-
-    const execFile = vi
-      .fn()
-      .mockResolvedValueOnce(nodeRuntime("24.15.0", "3.51.3"))
-      .mockResolvedValueOnce(nodeRuntime("24.17.0", "3.51.2"));
-
-    const result = await resolvePreferredNodePath({
-      env: {},
-      runtime: "node",
-      platform: "linux",
-      execFile,
-      execPath: nvmNode,
-    });
-
-    expect(result).toBe(nvmNode);
-  });
-
-  it("falls back to safe system SQLite when the current runtime is unsafe", async () => {
-    mockNodePathPresent(linuxSystemNode);
-
-    const execFile = vi
-      .fn()
-      .mockResolvedValueOnce(nodeRuntime("24.17.0", "3.51.2"))
-      .mockResolvedValueOnce(nodeRuntime("24.15.0", "3.51.3"));
-
-    const result = await resolvePreferredNodePath({
-      env: {},
-      runtime: "node",
-      platform: "linux",
-      execFile,
-      execPath: nvmNode,
-    });
-
-    expect(result).toBe(linuxSystemNode);
-  });
-
-  it("returns undefined when no system node is found", async () => {
-    fsMocks.access.mockRejectedValue(new Error("missing"));
-
-    const execFile = vi.fn().mockRejectedValue(new Error("not found"));
-
-    const result = await resolvePreferredNodePath({
-      env: {},
-      runtime: "node",
-      platform: "darwin",
-      execFile,
-      execPath: "",
-    });
-
-    expect(result).toBeUndefined();
   });
 });
 
 describe("resolvePreferredBunPath", () => {
-  it("uses the stable BUN_INSTALL executable when Bun 1.4 provides WAL-safe node:sqlite", async () => {
-    const bunPath = "/home/test/.bun/bin/bun";
-    const execFile = vi.fn().mockResolvedValue(bunRuntime("1.4.0"));
-
-    const result = await resolvePreferredBunPath({
-      env: { BUN_INSTALL: "/home/test/.bun", HOME: "/home/test" },
+  it("returns undefined without probing missing Bun candidates", async () => {
+    fsMocks.access.mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+    const execFile = vi.spyOn(processExec, "runExec").mockRejectedValue(new Error("spawn EACCES"));
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.spyOn(process, "execPath", "get").mockReturnValue("/fixture/other");
+    const result = resolvePreferredBunPath({
+      env: {},
       runtime: "bun",
-      platform: "linux",
-      execFile,
-      execPath: "/usr/bin/node",
     });
+    await expect(result).resolves.toBeUndefined();
+    expect(execFile).not.toHaveBeenCalled();
+  });
 
-    expect(result).toBe(bunPath);
+  const windowsHome = "C:\\Users\\test";
+  it.each([
+    [
+      "linux",
+      "/usr/bin/node",
+      { BUN_INSTALL: "/home/test/.bun", HOME: "/home/test" },
+      "/home/test/.bun/bin/bun",
+      "1.4.4",
+    ],
+    [
+      "win32",
+      "C:\\Program Files\\nodejs\\node.exe",
+      { USERPROFILE: windowsHome },
+      windowsHome + "\\.bun\\bin\\bun.exe",
+      "1.4.4",
+    ],
+    ["freebsd", "/opt/custom/bun", {}, "/opt/custom/bun", "2.0.0"],
+  ] as const)(
+    "resolves Bun on %s from current %s and env %j",
+    async (platform, current, env, path, version) => {
+      const execFile = vi.spyOn(processExec, "runExec").mockResolvedValue(bunRuntime(version));
+      vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+      vi.spyOn(process, "execPath", "get").mockReturnValue(current);
+      expect(await resolvePreferredBunPath({ env, runtime: "bun" })).toBe(path);
+      expect(execFile).toHaveBeenCalledWith(
+        path,
+        [expect.stringMatching(/daemon-runtime-probe\.mjs$/), "bun", ""],
+        { logOutput: false, timeoutMs: 5_000, baseEnv: expect.any(Object) },
+      );
+    },
+  );
+
+  it("probes Bun through the Gateway's SQLite library selection with a minimal env", async () => {
+    const bunPath = "/opt/homebrew/bin/bun";
+    const sqliteLibraryPath = "/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib";
+    // Apple's SQLite would report 3.54.0 here; the selected Homebrew library is what the Gateway opens.
+    const execFile = vi
+      .spyOn(processExec, "runExec")
+      .mockResolvedValue(bunRuntime("1.4.4", true, "3.53.4", null, sqliteLibraryPath));
+    const env = {
+      PATH: "/opt/homebrew/bin",
+      HOMEBREW_PREFIX: "/opt/homebrew",
+      OPENCLAW_SQLITE_LIBRARY: sqliteLibraryPath,
+      OPENCLAW_GATEWAY_TOKEN: "secret",
+      NODE_OPTIONS: "--require /unrelated/preload.cjs",
+    };
+
+    await expect(resolveBunRuntimeInfo(bunPath, env)).resolves.toEqual({
+      status: "supported",
+      version: "1.4.4",
+      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+      sqliteVersion: "3.53.4",
+      sqliteLibraryPath,
+      nodeSharedSqlite: false,
+    });
     expect(execFile).toHaveBeenCalledWith(
       bunPath,
-      ["-e", expect.stringContaining("SELECT sqlite_version() AS version")],
-      { encoding: "utf8", timeoutMs: 5_000 },
+      [expect.stringMatching(/daemon-runtime-probe\.mjs$/), "bun", ""],
+      {
+        logOutput: false,
+        timeoutMs: 5_000,
+        baseEnv: {
+          PATH: env.PATH,
+          HOMEBREW_PREFIX: env.HOMEBREW_PREFIX,
+          OPENCLAW_SQLITE_LIBRARY: env.OPENCLAW_SQLITE_LIBRARY,
+        },
+      },
     );
   });
 
-  it("continues to PATH when BUN_INSTALL points at an unsupported Bun", async () => {
-    const oldBun = "/home/test/old-bun/bin/bun";
-    const pathBun = "/opt/bun/bin/bun";
-    const execFile = vi.fn(async (file: string) =>
-      file === oldBun ? bunRuntime("1.3.14", true) : bunRuntime("1.4.0", true),
+  it("reports an invalid SQLite library override instead of advising a Bun upgrade", async () => {
+    vi.spyOn(processExec, "runExec").mockResolvedValue(
+      bunRuntime("1.4.4", true, null, INVALID_SQLITE_OVERRIDE),
     );
 
-    const result = await resolvePreferredBunPath({
-      env: { BUN_INSTALL: "/home/test/old-bun", PATH: "/opt/bun/bin" },
-      runtime: "bun",
-      platform: "linux",
-      execFile,
-      execPath: "/usr/bin/node",
-    });
-
-    expect(result).toBe(pathBun);
-    expect(execFile).toHaveBeenCalledTimes(2);
-  });
-
-  it("resolves the default Windows Bun executable", async () => {
-    const bunPath = "C:\\Users\\test\\.bun\\bin\\bun.exe";
-    const execFile = vi.fn().mockResolvedValue(bunRuntime("1.4.0"));
-
-    const result = await resolvePreferredBunPath({
-      env: { USERPROFILE: "C:\\Users\\test" },
-      runtime: "bun",
-      platform: "win32",
-      execFile,
-      execPath: "C:\\Program Files\\nodejs\\node.exe",
-    });
-
-    expect(result).toBe(bunPath);
-  });
-
-  it("uses the current Bun executable when no stable install path is available", async () => {
-    const bunPath = "/opt/custom/bun";
-    const execFile = vi.fn().mockResolvedValue(bunRuntime("2.0.0"));
-
-    const result = await resolvePreferredBunPath({
-      env: {},
-      runtime: "bun",
-      platform: "freebsd",
-      execFile,
-      execPath: bunPath,
-    });
-
-    expect(result).toBe(bunPath);
-  });
-
-  it.each([
-    ["Bun is older than 1.4", bunRuntime("1.3.14", true)],
-    ["node:sqlite is unavailable", bunRuntime("1.4.0", false)],
-    ["its SQLite version is not WAL-reset-safe", bunRuntime("1.4.0", true, "3.51.2")],
-  ])("rejects a Bun executable when %s", async (_reason, probe) => {
-    const info = await resolveBunRuntimeInfo("/opt/bun", vi.fn().mockResolvedValue(probe));
-
-    expect(info.supported).toBe(false);
-  });
-});
-
-describe("resolveStableNodePath", () => {
-  it("resolves Homebrew Cellar path to opt symlink", async () => {
-    mockNodePathPresent("/opt/homebrew/opt/node/bin/node");
-
-    const result = await resolveStableNodePath("/opt/homebrew/Cellar/node/25.9.0/bin/node");
-    expect(result).toBe("/opt/homebrew/opt/node/bin/node");
-  });
-
-  it("falls back to bin symlink for default node formula", async () => {
-    mockNodePathPresent("/opt/homebrew/bin/node");
-
-    const result = await resolveStableNodePath("/opt/homebrew/Cellar/node/25.9.0/bin/node");
-    expect(result).toBe("/opt/homebrew/bin/node");
-  });
-
-  it("resolves Intel Mac Cellar path to opt symlink", async () => {
-    mockNodePathPresent("/usr/local/opt/node/bin/node");
-
-    const result = await resolveStableNodePath("/usr/local/Cellar/node/25.9.0/bin/node");
-    expect(result).toBe("/usr/local/opt/node/bin/node");
-  });
-
-  it("resolves versioned node@22 formula to opt symlink", async () => {
-    mockNodePathPresent("/opt/homebrew/opt/node@22/bin/node");
-
-    const result = await resolveStableNodePath("/opt/homebrew/Cellar/node@22/22.22.3/bin/node");
-    expect(result).toBe("/opt/homebrew/opt/node@22/bin/node");
-  });
-
-  it("returns original path when no stable symlink exists", async () => {
-    fsMocks.access.mockRejectedValue(new Error("missing"));
-
-    const cellarPath = "/opt/homebrew/Cellar/node/25.9.0/bin/node";
-    const result = await resolveStableNodePath(cellarPath);
-    expect(result).toBe(cellarPath);
-  });
-
-  it("returns non-Cellar paths unchanged", async () => {
-    const fnmPath = "/Users/test/.fnm/node-versions/v24.15.0/installation/bin/node";
-    const result = await resolveStableNodePath(fnmPath);
-    expect(result).toBe(fnmPath);
-  });
-
-  it("returns system paths unchanged", async () => {
-    const result = await resolveStableNodePath("/opt/homebrew/bin/node");
-    expect(result).toBe("/opt/homebrew/bin/node");
-  });
-});
-
-describe("resolvePreferredNodePath — Homebrew Cellar", () => {
-  it("resolves Cellar execPath to stable Homebrew symlink", async () => {
-    const cellarNode = "/opt/homebrew/Cellar/node/25.9.0/bin/node";
-    const stableNode = "/opt/homebrew/opt/node/bin/node";
-    mockNodePathPresent(stableNode);
-
-    const execFile = vi.fn().mockResolvedValue(nodeRuntime("25.9.0"));
-
-    const result = await resolvePreferredNodePath({
-      env: {},
-      runtime: "node",
-      platform: "darwin",
-      execFile,
-      execPath: cellarNode,
-    });
-
-    expect(result).toBe(stableNode);
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    vi.spyOn(process, "execPath", "get").mockReturnValue("/fixture/other");
+    await expect(
+      resolvePreferredBunPath({
+        env: { PATH: "/opt/homebrew/bin:/usr/local/bin" },
+        runtime: "bun",
+      }),
+    ).rejects.toThrow(INVALID_SQLITE_OVERRIDE);
   });
 });
 
 describe("resolveSystemNodeInfo", () => {
   const darwinNode = "/opt/homebrew/bin/node";
 
-  it("returns supported info when version is new enough", async () => {
+  it("warns about the failed probe without declaring the runtime unsupported", async () => {
     mockNodePathPresent(darwinNode);
-
-    // Node 22.22.3+ is the minimum required version
-    const execFile = vi.fn().mockResolvedValue(nodeRuntime("22.22.3"));
-
-    const result = await resolveSystemNodeInfo({
+    const cause = new Error("spawn EACCES");
+    vi.spyOn(processExec, "runExec").mockRejectedValue(cause);
+    const info = await resolveSystemNodeInfo({
       env: {},
       platform: "darwin",
-      execFile,
     });
-
-    expect(result).toEqual({
-      path: darwinNode,
-      sqliteVersion: "3.51.3",
-      version: "22.22.3",
-      nodeSharedSqlite: false,
-      supported: true,
-    });
-  });
-
-  it.each(["24.15.0-rc.1", "25.9.1-nightly.20260714", "garbage24.15.0suffix"])(
-    "does not persist a non-release system Node version %s",
-    async (version) => {
-      mockNodePathPresent(darwinNode);
-      const execFile = vi.fn().mockResolvedValue(nodeRuntime(version));
-
-      const result = await resolveSystemNodeInfo({
-        env: {},
-        platform: "darwin",
-        execFile,
-      });
-
-      expect(result).toMatchObject({ version, supported: false });
-    },
-  );
-
-  it("returns undefined when system node is missing", async () => {
-    fsMocks.access.mockRejectedValue(new Error("missing"));
-    const execFile = vi.fn();
-    const result = await resolveSystemNodeInfo({ env: {}, platform: "darwin", execFile });
-    expect(result).toBeNull();
-  });
-
-  it("continues past an old system node to find a supported candidate", async () => {
-    const homebrewOptNode = "/opt/homebrew/opt/node@22/bin/node";
-    mockNodePathPresent(darwinNode, homebrewOptNode);
-
-    const execFile = vi
-      .fn()
-      .mockResolvedValueOnce(nodeRuntime("18.0.0", null))
-      .mockResolvedValueOnce(nodeRuntime("22.22.3"));
-
-    const result = await resolveSystemNodeInfo({
-      env: {},
-      platform: "darwin",
-      execFile,
-    });
-
-    expect(result).toEqual({
-      path: homebrewOptNode,
-      sqliteVersion: "3.51.3",
-      version: "22.22.3",
-      nodeSharedSqlite: false,
-      supported: true,
-    });
+    const warning = renderSystemNodeWarning(info, "/selected/node");
+    expect(warning).toContain("check failed");
+    expect(warning).toContain("EACCES");
+    expect(warning).toContain(darwinNode);
+    expect(warning).not.toContain("Install Node");
   });
 
   it("skips system-node candidates that resolve into version-manager paths", async () => {
-    const homebrewOptNode = "/opt/homebrew/opt/node@22/bin/node";
+    const homebrewOptNode = "/opt/homebrew/opt/node@24/bin/node";
     mockNodePathPresent(darwinNode, homebrewOptNode);
     mockNodeRealpath({
       [darwinNode]: "/Users/test/.nvm/versions/node/v24.14.1/bin/node",
       [homebrewOptNode]: homebrewOptNode,
     });
 
-    const execFile = vi.fn().mockResolvedValue(nodeRuntime("24.15.0"));
+    const execFile = vi.spyOn(processExec, "runExec").mockResolvedValue(nodeRuntime("24.22.1"));
 
     const result = await resolveSystemNodeInfo({
       env: {},
       platform: "darwin",
-      execFile,
     });
 
     expect(result).toEqual({
       path: homebrewOptNode,
+      sqliteProbe: { available: true, version: "3.51.3", text: true, blob: true, json: true },
       sqliteVersion: "3.51.3",
-      version: "24.15.0",
+      version: "24.22.1",
       nodeSharedSqlite: false,
-      supported: true,
+      status: "supported",
     });
     expect(execFile).toHaveBeenCalledTimes(1);
     expect(execFile).toHaveBeenCalledWith(
       homebrewOptNode,
-      ["-e", expect.stringContaining("SELECT sqlite_version() AS version")],
-      { encoding: "utf8", timeoutMs: 5_000 },
+      [expect.stringMatching(/daemon-runtime-probe\.mjs$/), "node", ""],
+      { logOutput: false, timeoutMs: 5_000, baseEnv: expect.any(Object) },
     );
   });
 
-  it("returns null when every system-node candidate resolves into a version manager", async () => {
-    mockNodePathPresent(darwinNode);
-    mockNodeRealpath({
-      [darwinNode]: "/Users/test/Library/Application Support/fnm/aliases/default/bin/node",
-    });
-
-    const execFile = vi.fn();
-
-    const result = await resolveSystemNodeInfo({
-      env: {},
-      platform: "darwin",
-      execFile,
-    });
-
-    expect(result).toBeNull();
-    expect(execFile).not.toHaveBeenCalled();
-  });
-
-  it("reports an unavailable system Node version while preserving the selected runtime", () => {
-    const selectedNode = "/Users/me/.fnm/node-22/bin/node";
-    const warning = renderSystemNodeWarning(
-      {
-        path: darwinNode,
-        sqliteVersion: null,
-        version: null,
-        nodeSharedSqlite: false,
-        supported: false,
-      },
-      selectedNode,
-    );
-
-    expect(warning).toBe(
-      `System Node at ${darwinNode} is available, but its version could not be determined. Using ${selectedNode} for the daemon. Install Node 24.15+ (recommended) or Node 22.22.3+ from nodejs.org or Homebrew.`,
-    );
-  });
-
-  it("reports a known unsupported system Node version", () => {
-    const selectedNode = "/Users/me/.fnm/node-22/bin/node";
-    const warning = renderSystemNodeWarning(
-      {
-        path: darwinNode,
-        sqliteVersion: null,
-        version: "18.19.0",
-        nodeSharedSqlite: false,
-        supported: false,
-      },
-      selectedNode,
-    );
-
-    expect(warning).toBe(
-      `System Node 18.19.0 at ${darwinNode} is outside the supported range. Using ${selectedNode} for the daemon. Install Node 24.15+ (recommended) or Node 22.22.3+ from nodejs.org or Homebrew.`,
-    );
-  });
-
-  it("does not warn for a supported system Node version", () => {
-    const warning = renderSystemNodeWarning(
-      {
-        path: darwinNode,
-        sqliteVersion: "3.51.3",
-        version: "24.15.0",
-        nodeSharedSqlite: false,
-        supported: true,
-      },
-      "/Users/me/.fnm/node-22/bin/node",
-    );
-
-    expect(warning).toBeNull();
-  });
-
-  it("renders a WAL safety warning for supported Node with unsafe SQLite", () => {
-    const warning = renderSystemNodeWarning({
-      path: darwinNode,
-      sqliteVersion: "3.51.2",
-      version: "24.17.0",
-      nodeSharedSqlite: false,
-      supported: false,
-    });
-
-    expect(warning).toContain("uses SQLite 3.51.2");
-    expect(warning).toContain("not WAL-reset-safe");
-    expect(warning).toContain("Install Node 24.15+");
-  });
-
-  it("renders a shared-system-SQLite remediation when Node is supported but the system library is unsafe", () => {
-    const warning = renderSystemNodeWarning({
-      path: "/usr/bin/node",
-      sqliteVersion: "3.51.2",
-      version: "24.17.0",
-      nodeSharedSqlite: true,
-      supported: false,
-    });
-
-    expect(warning).toContain("uses shared system SQLite 3.51.2");
-    expect(warning).toContain("not WAL-reset-safe");
-    expect(warning).toContain("Upgrade the system SQLite library");
-    expect(warning).not.toContain("Install Node 24.15+");
-  });
+  it.each([
+    ["22.23.3", "3.51.3", false, false, false, "node:sqlite truncates TEXT at embedded NUL"],
+    ["18.19.0", null, true, false, false, undefined],
+    ["24.22.1", "3.51.3", true, false, true, undefined],
+    ["24.22.1", "3.51.2", true, false, false, undefined],
+    ["24.22.1", "3.51.2", true, true, false, undefined],
+  ] as const)(
+    "warns for Node %s SQLite %s (TEXT=%s, shared=%s, supported=%s)",
+    (version, sqlite, text, shared, supported, error) => {
+      const selected = "/Users/me/.fnm/node-22/bin/node";
+      const warning = renderSystemNodeWarning(
+        {
+          path: error || shared ? "/usr/bin/node" : darwinNode,
+          version,
+          sqliteVersion: sqlite,
+          nodeSharedSqlite: shared,
+          sqliteProbe: {
+            available: sqlite !== null,
+            version: sqlite,
+            text,
+            blob: true,
+            json: true,
+          },
+          status: supported ? "supported" : "unsupported",
+          capabilityError: error,
+        },
+        selected,
+      );
+      if (supported) {
+        expect(warning).toBeNull();
+      } else if (error) {
+        expect(warning).toContain("System Node 22.23.3 at /usr/bin/node");
+        expect(warning).toContain(error);
+      } else if (!sqlite) {
+        expect(warning).toBe(
+          `System Node 18.19.0 at ${darwinNode} is outside the supported range. Using ${selected} for the daemon. Install Node >=24.16.0 <25, or >=26.1.0 (Node 26 recommended) from nodejs.org or Homebrew.`,
+        );
+      } else {
+        expect(warning).toContain(
+          shared ? "uses shared system SQLite 3.51.2" : "uses SQLite 3.51.2",
+        );
+        expect(warning).toContain("not WAL-reset-safe");
+        if (shared) {
+          expect(warning).toContain("Upgrade the system SQLite library");
+          expect(warning).not.toContain("Install Node >=24.16.0");
+        } else {
+          expect(warning).toContain("Install Node >=24.16.0");
+        }
+      }
+    },
+  );
 
   it("uses validated custom Program Files roots on Windows", async () => {
     const customNode = "D:\\Programs\\nodejs\\node.exe";
     mockNodePathPresent(customNode);
 
-    const execFile = vi.fn().mockResolvedValue(nodeRuntime("24.15.0"));
+    vi.spyOn(processExec, "runExec").mockResolvedValue(nodeRuntime("24.22.1"));
     const result = await resolveSystemNodeInfo({
       env: {
         ProgramFiles: "D:\\Programs",
         "ProgramFiles(x86)": "E:\\Programs (x86)",
       },
       platform: "win32",
-      execFile,
     });
 
     expect(result?.path).toBe(customNode);
-  });
-
-  it("prefers ProgramW6432 over ProgramFiles on Windows", async () => {
-    const preferredNode = "D:\\Programs\\nodejs\\node.exe";
-    const x86Node = "E:\\Programs (x86)\\nodejs\\node.exe";
-    mockNodePathPresent(preferredNode, x86Node);
-
-    const execFile = vi.fn().mockResolvedValue(nodeRuntime("24.15.0"));
-    const result = await resolveSystemNodeInfo({
-      env: {
-        ProgramFiles: "E:\\Programs (x86)",
-        "ProgramFiles(x86)": "E:\\Programs (x86)",
-        ProgramW6432: "D:\\Programs",
-      },
-      platform: "win32",
-      execFile,
-    });
-
-    expect(result?.path).toBe(preferredNode);
   });
 });

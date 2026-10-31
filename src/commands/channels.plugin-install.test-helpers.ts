@@ -3,6 +3,7 @@ import { vi } from "vitest";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelsConfig } from "../config/types.channels.js";
+import { makeCatalogEntry, makeMeta } from "../flows/channel-setup.test-helpers.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 
 export function createMockChannelSetupPluginInstallModule(
@@ -11,25 +12,20 @@ export function createMockChannelSetupPluginInstallModule(
   return {
     ...actual,
     ensureChannelSetupPluginInstalled: vi.fn(async ({ cfg }) => ({ cfg, installed: true })),
-    loadChannelSetupPluginRegistrySnapshotForChannel: vi.fn(() => createTestRegistry()),
+    loadChannelSetupPluginRegistrySnapshotForChannel: vi.fn(async () => createTestRegistry()),
   };
 }
 
 export function createExternalChatCatalogEntry(): ChannelPluginCatalogEntry {
-  return {
-    id: "external-chat",
+  return makeCatalogEntry("external-chat", "External Chat", {
     pluginId: "@vendor/external-chat-plugin",
-    meta: {
-      id: "external-chat",
-      label: "External Chat",
-      selectionLabel: "External Chat",
-      docsPath: "/channels/external-chat",
+    meta: makeMeta("external-chat", "External Chat", {
       blurb: "external chat channel",
-    },
+    }),
     install: {
       npmSpec: "@vendor/external-chat",
     },
-  };
+  });
 }
 
 export function createExternalChatSetupPlugin(): ChannelPlugin {

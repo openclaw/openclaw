@@ -1,180 +1,114 @@
 /* @vitest-environment jsdom */
+import { afterEach, expect, it, vi } from "vitest";
+import { t } from "../../i18n/index.ts";
+import {
+  createComposerContainer,
+  createComposerProps,
+  findComposerButton,
+  renderComposerInto,
+  resetComposerFixture,
+} from "./chat-composer.test-support.ts";
 
-import { render } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { i18n, t } from "../../i18n/index.ts";
-import { createComposerProps } from "./chat-composer.test-support.ts";
-import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.ts";
-
-type ComposerProps = Parameters<typeof renderChatComposer>[0];
-
-function renderComposer(overrides: Partial<ComposerProps> = {}): HTMLElement {
-  const container = document.createElement("div");
-  document.body.append(container);
-  render(renderChatComposer(createComposerProps(overrides)), container);
-  return container;
+function pointerDown(target: HTMLElement) {
+  const event = new MouseEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 });
+  target.dispatchEvent(event);
+  return event;
 }
-
-function button(container: Element, label: string): HTMLButtonElement {
-  const result = container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
-  if (!result) {
-    throw new Error(`expected button ${label}`);
-  }
-  return result;
+function mount(overrides: Parameters<typeof createComposerProps>[0] = {}) {
+  const container = document.body.appendChild(createComposerContainer());
+  renderComposerInto(container, createComposerProps(overrides));
+  const input = container.querySelector<HTMLTextAreaElement>("textarea")!;
+  expect(input).not.toBeNull();
+  const button = (stop = false) =>
+    findComposerButton(
+      container,
+      t(stop ? "chat.runControls.stopGenerating" : "chat.runControls.sendMessage"),
+    );
+  return { container, input, button };
 }
-
-function textarea(container: Element): HTMLTextAreaElement {
-  const result = container.querySelector<HTMLTextAreaElement>("textarea");
-  if (!result) {
-    throw new Error("expected composer textarea");
-  }
-  return result;
-}
-
-function primaryPointerDown(): MouseEvent {
-  return new MouseEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 });
-}
-
-function markComposerAtFocusInset(container: HTMLElement): void {
-  const shell = container.querySelector<HTMLElement>(".agent-chat__composer-shell");
-  expect(shell).not.toBeNull();
-  shell?.style.setProperty("margin-bottom", "0px");
-}
-
-afterEach(async () => {
-  resetChatComposerState();
-  document.body.replaceChildren();
-  await i18n.setLocale("en");
-  vi.restoreAllMocks();
-});
-
-describe("chat composer pointer activation", () => {
-  it("preserves only its own textarea focus during primary pointer actions", () => {
-    const sendContainer = renderComposer({
-      canAbort: true,
-      draft: "Follow up",
-      onAbort: vi.fn(),
-      onSend: vi.fn(),
-    });
-    const sendInput = textarea(sendContainer);
-    const send = button(sendContainer, t("chat.runControls.sendMessage"));
-    markComposerAtFocusInset(sendContainer);
-
-    sendInput.focus();
-    const sendPointerDown = primaryPointerDown();
-    send.dispatchEvent(sendPointerDown);
-    expect(sendPointerDown.defaultPrevented).toBe(true);
-
-    const stopContainer = renderComposer({ canAbort: true, onAbort: vi.fn() });
-    const stopInput = textarea(stopContainer);
-    const stop = button(stopContainer, t("chat.runControls.stopGenerating"));
-    markComposerAtFocusInset(stopContainer);
-    stopInput.focus();
-    const stopPointerDown = primaryPointerDown();
-    stop.dispatchEvent(stopPointerDown);
-    expect(stopPointerDown.defaultPrevented).toBe(true);
-
-    const unrelatedInput = document.createElement("input");
-    document.body.append(unrelatedInput);
-    unrelatedInput.focus();
-    const unrelatedPointerDown = primaryPointerDown();
-    send.dispatchEvent(unrelatedPointerDown);
-    expect(unrelatedPointerDown.defaultPrevented).toBe(false);
+function editable(initial: string, trackTyping = false) {
+  let draft = initial;
+  const onSend = vi.fn(() => {
+    draft = "";
   });
-
-  it("retains focus while Send clears the draft and Stop preserves it", () => {
-    let sendDraft = "Send this";
-    const onSend = vi.fn(() => {
-      sendDraft = "";
-    });
-    const onSendTypingChange = vi.fn();
-    const sendContainer = renderComposer({
-      draft: sendDraft,
-      getDraft: () => sendDraft,
-      onDraftChange: (value) => {
-        sendDraft = value;
-      },
-      onSend,
-      onTypingChange: onSendTypingChange,
-    });
-    const sendTextarea = textarea(sendContainer);
-    const send = button(sendContainer, t("chat.runControls.sendMessage"));
-    markComposerAtFocusInset(sendContainer);
-    sendTextarea.focus();
-    send.dispatchEvent(primaryPointerDown());
-    send.click();
-
-    expect(onSend).toHaveBeenCalledOnce();
-    expect(onSendTypingChange).toHaveBeenLastCalledWith(false);
-    expect(sendTextarea.value).toBe("");
-    expect(document.activeElement).toBe(sendTextarea);
-
-    const onAbort = vi.fn();
-    const onStopTypingChange = vi.fn();
-    const stopContainer = renderComposer({
-      canAbort: true,
-      onAbort,
-      onTypingChange: onStopTypingChange,
-    });
-    const stopTextarea = textarea(stopContainer);
-    const stop = button(stopContainer, t("chat.runControls.stopGenerating"));
-    markComposerAtFocusInset(stopContainer);
-    stopTextarea.focus();
-    stop.dispatchEvent(primaryPointerDown());
-    stop.click();
-
-    expect(onAbort).toHaveBeenCalledOnce();
-    expect(stopTextarea.value).toBe("");
-    expect(document.activeElement).toBe(stopTextarea);
-    expect(onStopTypingChange).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["queue", t("chat.runControls.queueMessage")],
-    ["steer", t("chat.followUpModeSteer")],
-    ["interrupt", t("chat.runControls.sendMessage")],
-  ] as const)("preserves focus for the %s active-run action", (followUpMode, label) => {
-    const container = renderComposer({
-      canAbort: true,
-      draft: "Follow up",
-      followUpMode,
-      onAbort: vi.fn(),
-      onSend: vi.fn(),
-    });
-    const input = textarea(container);
-    markComposerAtFocusInset(container);
-    input.focus();
-    const event = primaryPointerDown();
-    button(container, label).dispatchEvent(event);
-    expect(event.defaultPrevented).toBe(true);
-  });
-
-  it("does not leave composition state stuck after pointer Send", () => {
-    let draft = "構成中";
-    const onSend = vi.fn(() => {
-      draft = "";
-    });
-    const container = renderComposer({
+  const onTypingChange = vi.fn();
+  return {
+    ...mount({
       draft,
       getDraft: () => draft,
       onDraftChange: (value) => {
         draft = value;
       },
       onSend,
-    });
-    const input = textarea(container);
-    input.focus();
-    input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
-    const send = button(container, t("chat.runControls.sendMessage"));
-    send.dispatchEvent(primaryPointerDown());
-    send.click();
-    expect(onSend).toHaveBeenCalledOnce();
+      onTypingChange: trackTyping ? onTypingChange : undefined,
+    }),
+    onSend,
+    onTypingChange,
+  };
+}
+afterEach(() => resetComposerFixture());
 
-    input.value = "next";
-    input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
-    input.dispatchEvent(
-      new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }),
-    );
-    expect(onSend).toHaveBeenCalledTimes(2);
-  });
+it("does not steal focus when a menu replaces the clicked content", () => {
+  const { container, input } = mount({ draft: "Keep this draft" });
+  const focus = vi.spyOn(input, "focus");
+  const menu = container.querySelector(".agent-chat__capability-menu .oc-menu")!;
+  const label = menu.appendChild(document.createElement("span"));
+  label.addEventListener("click", () => label.remove());
+  label.click();
+  expect(label.isConnected).toBe(false);
+  expect(focus).not.toHaveBeenCalled();
+  expect(input.value).toBe("Keep this draft");
+  container.querySelector<HTMLElement>(".agent-chat__input")!.click();
+  expect(document.activeElement).toBe(input);
+});
+
+it("preserves only its own textarea focus during primary pointer actions", () => {
+  const send = mount({ canAbort: true, draft: "Follow up", onAbort: vi.fn(), onSend: vi.fn() });
+  send.input.focus();
+  // Native target listeners precede Solid's delegated bubble handler.
+  send.button().addEventListener("pointerdown", () => send.input.blur(), { once: true });
+  expect(pointerDown(send.button()).defaultPrevented).toBe(true);
+  const stop = mount({ canAbort: true, onAbort: vi.fn() });
+  stop.input.focus();
+  expect(pointerDown(stop.button(true)).defaultPrevented).toBe(true);
+  document.body.appendChild(document.createElement("input")).focus();
+  expect(pointerDown(send.button()).defaultPrevented).toBe(false);
+});
+
+it.each([false, true])("retains focus after activation (stop=%s)", (stop) => {
+  const onAbort = vi.fn();
+  const stoppedTyping = vi.fn();
+  const view = stop
+    ? {
+        ...mount({ canAbort: true, onAbort, onTypingChange: stoppedTyping }),
+        onSend: onAbort,
+        onTypingChange: stoppedTyping,
+      }
+    : editable("Send this", true);
+  view.input.focus();
+  pointerDown(view.button(stop));
+  view.button(stop).click();
+  expect(view.onSend).toHaveBeenCalledOnce();
+  expect(view.input.value).toBe("");
+  expect(document.activeElement).toBe(view.input);
+  if (stop) {
+    expect(view.onTypingChange).not.toHaveBeenCalled();
+  } else {
+    expect(view.onTypingChange).toHaveBeenLastCalledWith(false);
+  }
+});
+
+it("does not leave composition state stuck after pointer Send", () => {
+  const { input, button, onSend } = editable("構成中");
+  input.focus();
+  input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+  pointerDown(button());
+  button().click();
+  expect(onSend).toHaveBeenCalledOnce();
+  input.value = "next";
+  input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+  input.dispatchEvent(
+    new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }),
+  );
+  expect(onSend).toHaveBeenCalledTimes(2);
 });

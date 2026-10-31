@@ -40,7 +40,7 @@ struct TerminalHubScreenTests {
             url: #require(URL(string: "wss://gateway.example.com:8443/openclaw/")),
             token: "secret-token")
 
-        let url = TerminalHubScreen.terminalURL(config: config)
+        let url = ControlUIHubPage.terminal.url(config: config)
 
         #expect(url?.absoluteString == "https://gateway.example.com:8443/openclaw/focus/terminal")
         // Credentials must never ride in the page URL; they travel via the
@@ -51,7 +51,7 @@ struct TerminalHubScreenTests {
     @Test func `terminal URL uses plain HTTP for insecure endpoints`() throws {
         let config = try Self.makeConfig(url: #require(URL(string: "ws://192.168.1.10:18789")))
 
-        let url = TerminalHubScreen.terminalURL(config: config)
+        let url = ControlUIHubPage.terminal.url(config: config)
 
         #expect(url?.absoluteString == "http://192.168.1.10:18789/focus/terminal")
     }
@@ -62,7 +62,9 @@ struct TerminalHubScreenTests {
             token: " secret-token ",
             password: "fallback-password")
 
-        let script = TerminalHubScreen.terminalAuthUserScript(config: config)
+        let script = ControlUIHubPage.terminal.authUserScript(
+            config: config,
+            storedOperatorToken: AuthenticatedControlUI.storedOperatorToken(config: config))
 
         #expect(script?.contains("__OPENCLAW_NATIVE_CONTROL_AUTH__") == true)
         // JSONSerialization escapes forward slashes, hence the `\/` literals.
@@ -77,26 +79,15 @@ struct TerminalHubScreenTests {
             url: #require(URL(string: "wss://gateway.example.com:443")),
             token: "secret-token")
 
-        let script = TerminalHubScreen.terminalAuthUserScript(config: config)
+        let script = ControlUIHubPage.terminal.authUserScript(
+            config: config,
+            storedOperatorToken: AuthenticatedControlUI.storedOperatorToken(config: config))
 
         #expect(script?.contains("\"https:\\/\\/gateway.example.com\"") == true)
         #expect(script?.contains("\"https:\\/\\/gateway.example.com:443\"") == false)
     }
 
-    @Test func `auth user script falls back to stored operator token`() throws {
-        let config = try Self.makeConfig(
-            url: #require(URL(string: "wss://gateway.example.com:8443")),
-            token: nil,
-            password: nil)
-
-        let script = TerminalHubScreen.terminalAuthUserScript(
-            config: config,
-            storedOperatorToken: " stored-token ")
-
-        #expect(script?.contains("\"token\":\"stored-token\"") == true)
-    }
-
-    @Test func `auth user script loads the active gateway scoped operator token`() throws {
+    @Test func `auth user script selects native signing and withholds the device grant`() throws {
         let gatewayID = "manual|terminal-\(UUID().uuidString)|443"
         let identity = DeviceIdentityStore.loadOrCreate()
         defer {
@@ -109,14 +100,137 @@ struct TerminalHubScreenTests {
             deviceId: identity.deviceId,
             role: "operator",
             token: "scoped-terminal-token",
+            scopes: ["operator.read", "operator.write"],
             gatewayID: gatewayID).token == "scoped-terminal-token")
         let config = try Self.makeConfig(
             url: #require(URL(string: "wss://gateway.example.com:8443")),
+            token: "configured-token",
+            password: "configured-password",
             deviceAuthGatewayID: gatewayID)
 
-        let script = TerminalHubScreen.terminalAuthUserScript(config: config)
+        let script = ControlUIHubPage.terminal.authUserScript(
+            config: config,
+            storedOperatorToken: AuthenticatedControlUI.storedOperatorToken(config: config))
 
-        #expect(script?.contains("\"token\":\"scoped-terminal-token\"") == true)
+        #expect(script?.contains("\"nativeConnectAuth\":true") == true)
+        #expect(script?.contains("\"password\":\"configured-password\"") == true)
+        #expect(script?.contains("\"token\":\"configured-token\"") == true)
+        #expect(script?.contains("configured-token") == true)
+        #expect(script?.contains("scoped-terminal-token") == false)
+        #expect(script?.contains("privateKey") == false)
+        #expect(script?.contains("openclaw-device-identity-v1") == false)
+        #expect(script?.contains(identity.privateKey) == false)
+    }
+
+    @Test func `embedded page signs only while its native operator is connected`() async throws {
+        let server = try await NativeGatewayWebSocketFixture.start(issuedDeviceTokens: ["synthetic-device-token"])
+        server.httpResponse = { _ in
+            .init(headers: ["Content-Type": "text/html"], body: Data("<!doctype html><main>Fixture</main>".utf8))
+        }
+        defer { server.stop() }
+        let gatewayID = "native-webview-\(UUID().uuidString)"
+        let identity = DeviceIdentityStore.loadOrCreate()
+        _ = DeviceAuthStore.storeToken(
+            deviceId: identity.deviceId,
+            role: "operator",
+            token: "synthetic-device-token",
+            scopes: ["operator.read"],
+            gatewayID: gatewayID)
+        defer { DeviceAuthStore.clearToken(deviceId: identity.deviceId, role: "operator", gatewayID: gatewayID) }
+        let config = Self.makeConfig(url: server.url(), deviceAuthGatewayID: gatewayID)
+        let model = NodeAppModel(audioAdmissionInitiallyAllowed: false)
+        model.activeGatewayConnectConfig = config
+        var options = config.nodeOptions
+        options.role = "operator"
+        options.scopes = ["operator.read"]
+        try await model.operatorSession.connect(
+            url: config.url,
+            credentials: .init(token: nil, bootstrapToken: nil, password: nil),
+            connectOptions: options,
+            sessionBox: nil,
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { request in .init(id: request.id, ok: true) })
+        model.setOperatorConnected(true)
+        defer {
+            model.setOperatorConnected(false)
+            Task { await model.operatorSession.disconnect() }
+        }
+        let token = AuthenticatedControlUI.storedOperatorToken(config: config)
+        let pageURL = try #require(ControlUIHubPage.terminal.url(config: config))
+        let content = AuthenticatedControlUIWebView(
+            url: pageURL,
+            authScript: ControlUIHubPage.terminal.authUserScript(config: config, storedOperatorToken: token),
+            tls: nil,
+            nativeAuth: AuthenticatedControlUI.nativeAuthHandler(
+                config: config, storedOperatorToken: token, appModel: model))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = UIHostingController(rootView: content)
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        let webView = try await Self.webView(in: window)
+        defer { webView.stopLoading() }
+        try await TestWait.state("native auth document committed") {
+            webView.url == pageURL && !webView.isLoading
+        }
+        #expect(try await webView.evaluateJavaScript(
+            "localStorage.getItem('openclaw-device-identity-v1') === null && localStorage.length === 0") as? Bool ==
+            true)
+        let challenge = """
+        try {
+          const reply = await window.webkit.messageHandlers.OpenClawNativeGatewayAuth.postMessage({
+            id: 'fixture', nonce: 'fixture-nonce', signedAt: 1700000000000
+          });
+          return Boolean(reply.result?.device?.signature);
+        } catch { return false; }
+        """
+        #expect(try await webView.callAsyncJavaScript(
+            challenge, arguments: [:], in: nil, contentWorld: .page) as? Bool == true)
+        model.setOperatorConnected(false)
+        #expect(try await webView.callAsyncJavaScript(
+            challenge, arguments: [:], in: nil, contentWorld: .page) as? Bool == false)
+        model.setOperatorConnected(true)
+        model.activeGatewayConnectConfig = try Self.makeConfig(
+            url: #require(URL(string: "ws://replacement.example:18789")), deviceAuthGatewayID: gatewayID)
+        #expect(try await webView.callAsyncJavaScript(
+            challenge, arguments: [:], in: nil, contentWorld: .page) as? Bool == false)
+        model.activeGatewayConnectConfig = config
+        await model.operatorSession.disconnect()
+        #expect(try await webView.callAsyncJavaScript(
+            challenge, arguments: [:], in: nil, contentWorld: .page) as? Bool == false)
+    }
+
+    @Test func `auth user script selects native signing for an empty-scope grant`() throws {
+        let gatewayID = "manual|terminal-empty-scope-\(UUID().uuidString)|443"
+        let identity = DeviceIdentityStore.loadOrCreate()
+        defer {
+            DeviceAuthStore.clearToken(
+                deviceId: identity.deviceId,
+                role: "operator",
+                gatewayID: gatewayID)
+        }
+        #expect(DeviceAuthStore.storeToken(
+            deviceId: identity.deviceId,
+            role: "operator",
+            token: "empty-scope-token",
+            scopes: [],
+            gatewayID: gatewayID).token == "empty-scope-token")
+        let config = try Self.makeConfig(
+            url: #require(URL(string: "wss://gateway.example.com:8443")),
+            token: "configured-token",
+            password: "configured-password",
+            deviceAuthGatewayID: gatewayID)
+
+        let script = ControlUIHubPage.terminal.authUserScript(
+            config: config,
+            storedOperatorToken: AuthenticatedControlUI.storedOperatorToken(config: config))
+
+        #expect(script?.contains("\"nativeConnectAuth\":true") == true)
+        #expect(script?.contains("empty-scope-token") == false)
+        #expect(script?.contains("\"password\":\"configured-password\"") == true)
     }
 
     @Test func `auth user script honors stored device auth suppression`() throws {
@@ -139,9 +253,12 @@ struct TerminalHubScreenTests {
             allowStoredDeviceAuth: false,
             deviceAuthGatewayID: gatewayID)
 
-        let script = TerminalHubScreen.terminalAuthUserScript(config: config)
+        let script = ControlUIHubPage.terminal.authUserScript(
+            config: config,
+            storedOperatorToken: AuthenticatedControlUI.storedOperatorToken(config: config))
 
         #expect(script?.contains("stale-terminal-token") == false)
+        #expect(script?.contains("nativeConnectAuth") == false)
         #expect(script?.contains("\"password\":\"replacement-password\"") == true)
     }
 
@@ -149,8 +266,8 @@ struct TerminalHubScreenTests {
         let config = try Self.makeConfig(url: #require(URL(string: "wss://gateway.example.com")))
 
         #expect(
-            TerminalHubScreen.webContentIdentity(config: config, storedOperatorToken: "token-a") !=
-                TerminalHubScreen.webContentIdentity(config: config, storedOperatorToken: "token-b"))
+            ControlUIHubPage.terminal.webContentIdentity(config: config, storedOperatorToken: "token-a") !=
+                ControlUIHubPage.terminal.webContentIdentity(config: config, storedOperatorToken: "token-b"))
     }
 
     @Test func `web content identity changes with the accepted TLS pin`() throws {
@@ -171,8 +288,8 @@ struct TerminalHubScreenTests {
                 storeKey: "gateway"))
 
         #expect(
-            TerminalHubScreen.webContentIdentity(config: first, storedOperatorToken: nil) !=
-                TerminalHubScreen.webContentIdentity(config: second, storedOperatorToken: nil))
+            ControlUIHubPage.terminal.webContentIdentity(config: first, storedOperatorToken: nil) !=
+                ControlUIHubPage.terminal.webContentIdentity(config: second, storedOperatorToken: nil))
     }
 
     @Test func `authenticated Control UI origin rejects authority changes`() throws {
@@ -211,11 +328,55 @@ struct TerminalHubScreenTests {
             url: controlURL,
             tls: nil)
 
-        #expect(coordinator.allowsNavigation(to: sameOriginURL, isMainFrame: true))
-        #expect(!coordinator.allowsNavigation(to: alternateHostURL, isMainFrame: true))
-        #expect(!coordinator.allowsNavigation(to: alternatePortURL, isMainFrame: true))
-        #expect(coordinator.allowsNavigation(to: embeddedURL, isMainFrame: false))
-        #expect(!coordinator.allowsNavigation(to: unknownFrameURL, isMainFrame: nil))
+        #expect(coordinator.navigationDecision(to: sameOriginURL, isMainFrame: true) == .allow)
+        #expect(coordinator.navigationDecision(to: alternateHostURL, isMainFrame: true) == .cancel)
+        #expect(coordinator.navigationDecision(to: alternatePortURL, isMainFrame: true) == .cancel)
+        #expect(coordinator.navigationDecision(to: embeddedURL, isMainFrame: false) == .allow)
+        #expect(coordinator.navigationDecision(to: unknownFrameURL, isMainFrame: nil) == .cancel)
+    }
+
+    @Test func `authenticated dashboard navigation cannot leave its document scope`() throws {
+        let dashboardURL = try #require(URL(
+            string: "https://gateway.example.com/rosita/focus/dashboard/main/nightly-cleanup"))
+        let canonicalDashboardURL = try #require(URL(
+            string: "https://gateway.example.com/rosita/focus/dashboard/main/nightly-cleanup-v2"))
+        let dashboardRootURL = try #require(URL(
+            string: "https://gateway.example.com/rosita/focus/dashboard"))
+        let siblingURL = try #require(URL(
+            string: "https://gateway.example.com/rosita/focus/dashboard-archive/main/nightly-cleanup"))
+        let escapedScopeURL = try #require(URL(
+            string: "https://gateway.example.com/rosita/focus/dashboard/%2e%2e/%2e%2e/chat"))
+        let ordinaryControlUIURL = try #require(URL(
+            string: "https://gateway.example.com/rosita/chat?session=agent:main:nightly-cleanup"))
+        let alternateOriginURL = try #require(URL(
+            string: "https://replacement.example.com/rosita/focus/dashboard/main/nightly-cleanup"))
+        let embeddedURL = try #require(URL(string: "https://widgets.example.com/report"))
+        let coordinator = AuthenticatedControlUIWebViewCoordinator(
+            url: dashboardURL,
+            tls: nil,
+            allowedMainFramePathPrefix: "/rosita/focus/dashboard/")
+
+        #expect(coordinator.navigationDecision(
+            to: canonicalDashboardURL,
+            isMainFrame: true) == .allow)
+        #expect(coordinator.navigationDecision(
+            to: dashboardRootURL,
+            isMainFrame: true) == .allow)
+        #expect(coordinator.navigationDecision(
+            to: ordinaryControlUIURL,
+            isMainFrame: true) == .cancelAndExitScope)
+        #expect(coordinator.navigationDecision(
+            to: siblingURL,
+            isMainFrame: true) == .cancelAndExitScope)
+        #expect(coordinator.navigationDecision(
+            to: escapedScopeURL,
+            isMainFrame: true) == .cancelAndExitScope)
+        #expect(coordinator.navigationDecision(
+            to: alternateOriginURL,
+            isMainFrame: true) == .cancel)
+        #expect(coordinator.navigationDecision(
+            to: embeddedURL,
+            isMainFrame: false) == .allow)
     }
 
     @Test func `authenticated Control UI TLS authority uses the normalized page authority`() throws {
@@ -234,9 +395,9 @@ struct TerminalHubScreenTests {
         let config = try Self.makeConfig(url: #require(URL(string: "wss://gateway.example.com")), token: "   ")
 
         #expect(
-            TerminalHubScreen.terminalAuthUserScript(config: config, storedOperatorToken: nil) == nil)
+            ControlUIHubPage.terminal.authUserScript(config: config, storedOperatorToken: nil) == nil)
         #expect(
-            TerminalHubScreen.terminalAuthUserScript(config: nil, storedOperatorToken: nil) == nil)
+            ControlUIHubPage.terminal.authUserScript(config: nil, storedOperatorToken: nil) == nil)
     }
 
     @Test func `authenticated Control UI follows the resolved app appearance`() async throws {
@@ -274,7 +435,7 @@ struct TerminalHubScreenTests {
 
     private static func webView(in window: UIWindow) async throws -> WKWebView {
         for _ in 0..<50 {
-            if let webView = self.findWebView(in: window) {
+            if let webView = findWebView(in: window) {
                 return webView
             }
             try await Task.sleep(for: .milliseconds(10))
