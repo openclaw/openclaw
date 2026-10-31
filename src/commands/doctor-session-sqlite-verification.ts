@@ -43,7 +43,11 @@ import type { DoctorSessionSqliteTargetReport } from "./doctor-session-sqlite-ty
 import { assertDoctorSqliteMaintenancePathsNotAliased } from "./doctor-sqlite-maintenance-lock.js";
 
 /** Keep one owner proof per database; fence in-place writes and sidecar changes after awaits. */
-export function createRecoveryDestinationVerifier(stateDir: string, assertCurrent: () => void) {
+export function createRecoveryDestinationVerifier(
+  stateDir: string,
+  assertCurrent: () => void,
+  options: { allowOwnedMutation?: boolean } = {},
+) {
   const destinations = new Map<
     string,
     { agentId?: string; files: (fs.BigIntStats | undefined)[]; generation: SqliteFileGeneration }
@@ -71,6 +75,7 @@ export function createRecoveryDestinationVerifier(stateDir: string, assertCurren
         (target.databaseIdentity && String(files[0]?.ino) !== target.databaseIdentity.ino) ||
         files.some((file) => file && (!file.isFile() || file.nlink !== 1n)) ||
         (expected &&
+          !options.allowOwnedMutation &&
           files.some((file, index) =>
             (index === 0
               ? (["ino", "ctimeNs", "mtimeNs", "size"] as const)
@@ -95,7 +100,9 @@ export function createRecoveryDestinationVerifier(stateDir: string, assertCurren
             generation[key]?.dev !== files[index]?.dev ||
             generation[key]?.ino !== files[index]?.ino ||
             generation[key]?.size !== files[index]?.size ||
-            (expected && generation[key]?.sha256 !== expected.generation[key]?.sha256),
+            (expected &&
+              !options.allowOwnedMutation &&
+              generation[key]?.sha256 !== expected.generation[key]?.sha256),
         )
       ) {
         throw new Error("Recovery destination database changed; preview cleanup again.");

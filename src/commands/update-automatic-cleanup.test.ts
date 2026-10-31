@@ -326,6 +326,57 @@ it("runs retirement in the owning Gateway worker while retaining pending recover
   }
 });
 
+it("allows its current Gateway owner to mutate a recovery destination during retirement", async () => {
+  const fixture = await recoveryFixture();
+  const originals = new Map(
+    fixture.target.completedMoves
+      .filter((move) => move.artifact?.classification !== "protected")
+      .map((move) => [move.archivePath, fs.readFileSync(move.archivePath)]),
+  );
+  const { runId } = capturedRun(now, "succeeded");
+  await closeOpenClawStateDatabaseAsync();
+  const owner = acquireGatewayStateOwner({
+    databasePath: resolveOpenClawStateSqlitePath(env),
+    payload: {
+      pid: process.pid,
+      createdAt: new Date().toISOString(),
+      configPath: env.OPENCLAW_CONFIG_PATH!,
+      role: "gateway",
+      processNamespace: readGatewayLockProcessNamespace(),
+    },
+  });
+  let mutated = false;
+  try {
+    const result = await cleanupGatewayUpdateRecovery(runId, env, () => {
+      const claimed = fixture.target.completedMoves.some((move) => {
+        const disposal = readSessionSqliteMigrationManifest(
+          fixture.manifestPath,
+        )!.targets[0]!.completedMoves.find((current) => current.archivePath === move.archivePath)
+          ?.artifact?.disposal;
+        return disposal?.state === "pending-disposal" && fs.existsSync(disposal.claimPath);
+      });
+      if (!mutated && claimed) {
+        using database = new DatabaseSync(fixture.target.sqlitePath);
+        database.exec(
+          "CREATE TABLE live_gateway_write(value TEXT); INSERT INTO live_gateway_write VALUES ('current owner')",
+        );
+        mutated = true;
+      }
+    });
+    expect(mutated).toBe(true);
+    expect(result?.advisory).toBeUndefined();
+    for (const file of originals.keys()) {
+      expect(fs.existsSync(file), file).toBe(false);
+    }
+    using database = new DatabaseSync(fixture.target.sqlitePath, { readOnly: true });
+    expect(database.prepare("SELECT value FROM live_gateway_write").get()).toEqual({
+      value: "current owner",
+    });
+  } finally {
+    owner.release();
+  }
+});
+
 it.each(["before-first-effect", "claim-publication", "first-unlink"] as const)(
   "stops migration-original retirement when its physical owner is replaced after %s",
   async (phase) => {
