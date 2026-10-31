@@ -193,6 +193,42 @@ describe("ManagedWorktreeService branch discovery", () => {
     },
   );
 
+  it.each([false, true])(
+    "checks linked reservations without rejected missing-file reads (unreadable: %s)",
+    async (unreadable) => {
+      const localHead = await git(repo, "rev-parse", "HEAD");
+      const remoteHead = await createChildCommit();
+      await createRemote(remoteHead);
+      const linked = path.join(root, "idle-linked");
+      await git(repo, "worktree", "add", "--detach", linked);
+      const gitDir = await git(linked, "rev-parse", "--absolute-git-dir");
+      if (unreadable) {
+        // A directory produces EISDIR, which must not be treated as an absent reservation.
+        await fs.mkdir(path.join(gitDir, "BISECT_START"));
+      }
+      const reads = vi.spyOn(fs, "readFile");
+      const selected = await resolveWorktreeBase(
+        repo,
+        undefined,
+        undefined,
+        undefined,
+        "fast-forward",
+      );
+      expect(selected.commit).toBe(remoteHead);
+      expect(await git(repo, "rev-parse", "main")).toBe(unreadable ? localHead : remoteHead);
+      if (unreadable) {
+        expect(selected.warning).toContain("Git worktree operation state could not be checked");
+      } else {
+        expect(selected.warning).toBeUndefined();
+        expect(
+          reads.mock.calls.filter(
+            ([file]) => typeof file === "string" && file.startsWith(`${gitDir}${path.sep}`),
+          ),
+        ).toHaveLength(0);
+      }
+    },
+  );
+
   it("discovers a renamed remote default without substituting local HEAD", async () => {
     useInProcessWorktreeCapacityTransport();
     const disk = fsSync.statfsSync(root);

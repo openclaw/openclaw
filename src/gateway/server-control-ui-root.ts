@@ -97,7 +97,7 @@ export function readControlUiRootAsset(
   owner.controller.signal.throwIfAborted();
   const preferences =
     root.kind === "bundled" &&
-    fileRel.startsWith("assets/") &&
+    (fileRel === "sw.js" || fileRel.startsWith("assets/")) &&
     isControlUiCompressibleAsset(fileRel)
       ? encodings
       : (["identity"] as const);

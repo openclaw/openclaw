@@ -326,6 +326,142 @@ it("runs retirement in the owning Gateway worker while retaining pending recover
   }
 });
 
+it("allows its current Gateway owner to mutate a recovery destination during retirement", async () => {
+  const fixture = await recoveryFixture();
+  const originals = new Map(
+    fixture.target.completedMoves
+      .filter((move) => move.artifact?.classification !== "protected")
+      .map((move) => [move.archivePath, fs.readFileSync(move.archivePath)]),
+  );
+  const protectedOriginals = new Map(
+    fixture.target.completedMoves
+      .filter((move) => move.artifact?.classification === "protected")
+      .map((move) => [move.archivePath, fs.readFileSync(move.archivePath)]),
+  );
+  fs.writeFileSync(
+    fixture.store.configPath,
+    `${JSON.stringify({ agents: { defaults: { workspace: "/existing-workspace" } } })}\n`,
+  );
+  const configBefore = fs.readFileSync(fixture.store.configPath);
+  let sessionsBefore: Record<string, unknown>[];
+  let transcriptBefore: Record<string, unknown>[];
+  {
+    using database = new DatabaseSync(fixture.target.sqlitePath, { readOnly: true });
+    sessionsBefore = database.prepare("SELECT * FROM session_nodes ORDER BY session_key").all();
+    transcriptBefore = database
+      .prepare("SELECT * FROM transcript_events ORDER BY session_id, seq")
+      .all();
+  }
+  const { runId } = capturedRun(now, "succeeded");
+  await closeOpenClawStateDatabaseAsync();
+  const owner = acquireGatewayStateOwner({
+    databasePath: resolveOpenClawStateSqlitePath(env),
+    payload: {
+      pid: process.pid,
+      createdAt: new Date().toISOString(),
+      configPath: env.OPENCLAW_CONFIG_PATH!,
+      role: "gateway",
+      processNamespace: readGatewayLockProcessNamespace(),
+    },
+  });
+  let mutated = false;
+  try {
+    const result = await cleanupGatewayUpdateRecovery(runId, env, () => {
+      const claimed = fixture.target.completedMoves.some((move) => {
+        const disposal = readSessionSqliteMigrationManifest(
+          fixture.manifestPath,
+        )!.targets[0]!.completedMoves.find((current) => current.archivePath === move.archivePath)
+          ?.artifact?.disposal;
+        return disposal?.state === "pending-disposal" && fs.existsSync(disposal.claimPath);
+      });
+      if (!mutated && claimed) {
+        using database = new DatabaseSync(fixture.target.sqlitePath);
+        database.exec(
+          "CREATE TABLE live_gateway_write(value TEXT); INSERT INTO live_gateway_write VALUES ('current owner')",
+        );
+        mutated = true;
+      }
+    });
+    expect(mutated).toBe(true);
+    expect(result?.advisory).toBeUndefined();
+    for (const file of originals.keys()) {
+      expect(fs.existsSync(file), file).toBe(false);
+    }
+    for (const [file, contents] of protectedOriginals) {
+      expect(fs.readFileSync(file), file).toEqual(contents);
+    }
+    expect(fs.readFileSync(fixture.store.configPath)).toEqual(configBefore);
+    using database = new DatabaseSync(fixture.target.sqlitePath, { readOnly: true });
+    expect(database.prepare("SELECT * FROM session_nodes ORDER BY session_key").all()).toEqual(
+      sessionsBefore,
+    );
+    expect(
+      database.prepare("SELECT * FROM transcript_events ORDER BY session_id, seq").all(),
+    ).toEqual(transcriptBefore);
+    expect(database.prepare("SELECT value FROM live_gateway_write").get()).toEqual({
+      value: "current owner",
+    });
+  } finally {
+    owner.release();
+  }
+});
+
+it("stops owned retirement when its recovery destination file is replaced", async () => {
+  const fixture = await recoveryFixture();
+  const originals = new Map(
+    fixture.target.completedMoves
+      .filter((move) => move.artifact?.classification !== "protected")
+      .map((move) => [move.archivePath, fs.readFileSync(move.archivePath)]),
+  );
+  const { runId } = capturedRun(now, "succeeded");
+  await closeOpenClawStateDatabaseAsync();
+  const owner = acquireGatewayStateOwner({
+    databasePath: resolveOpenClawStateSqlitePath(env),
+    payload: {
+      pid: process.pid,
+      createdAt: new Date().toISOString(),
+      configPath: env.OPENCLAW_CONFIG_PATH!,
+      role: "gateway",
+      processNamespace: readGatewayLockProcessNamespace(),
+    },
+  });
+  let replaced = false;
+  try {
+    const result = await cleanupGatewayUpdateRecovery(runId, env, () => {
+      const claimed = fixture.target.completedMoves.some((move) => {
+        const disposal = readSessionSqliteMigrationManifest(
+          fixture.manifestPath,
+        )!.targets[0]!.completedMoves.find((current) => current.archivePath === move.archivePath)
+          ?.artifact?.disposal;
+        return disposal?.state === "pending-disposal" && fs.existsSync(disposal.claimPath);
+      });
+      if (!replaced && claimed) {
+        const replacement = `${fixture.target.sqlitePath}.replacement`;
+        fs.copyFileSync(fixture.target.sqlitePath, replacement);
+        fs.renameSync(replacement, fixture.target.sqlitePath);
+        replaced = true;
+      }
+    });
+    expect(replaced).toBe(true);
+    expect(result?.advisory?.message).toContain("Recovery destination database changed");
+    for (const [file, contents] of originals) {
+      const move = readSessionSqliteMigrationManifest(
+        fixture.manifestPath,
+      )!.targets[0]!.completedMoves.find((current) => current.archivePath === file)!;
+      const disposal = move.artifact!.disposal;
+      const retained = fs.existsSync(file)
+        ? file
+        : disposal.state === "pending-disposal" && fs.existsSync(disposal.claimPath)
+          ? disposal.claimPath
+          : undefined;
+      expect(retained, file).toBeDefined();
+      expect(fs.readFileSync(retained!)).toEqual(contents);
+    }
+  } finally {
+    owner.release();
+  }
+});
+
 it.each(["before-first-effect", "claim-publication", "first-unlink"] as const)(
   "stops migration-original retirement when its physical owner is replaced after %s",
   async (phase) => {

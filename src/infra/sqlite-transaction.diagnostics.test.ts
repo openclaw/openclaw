@@ -46,8 +46,12 @@ function fixture(mode: "immediate" | "deferred" = "immediate") {
   return { db, logger, advance, run, warning };
 }
 
-function asWorker(operation: string, run: () => unknown) {
-  return withSqliteReaderOwner({ operation, ownerKind: "worker" }, run);
+function asWorker(
+  operation: string,
+  run: () => unknown,
+  holdContext?: Parameters<typeof withSqliteReaderOwner>[2],
+) {
+  return withSqliteReaderOwner({ operation, ownerKind: "worker" }, run, holdContext);
 }
 
 const thread = { isMainThread, pid: process.pid, threadId };
@@ -287,19 +291,25 @@ it.each([
     spySqliteExec(db, undefined, () => advance(elapsedMs));
 
     const diagnosticContext = { sessionId: "session-diagnostics", rows: 0 };
-    asWorker("worker.entries", () =>
-      run(
-        () => {
-          db.prepare("INSERT INTO entries VALUES ('committed', 'value')").run();
-          diagnosticContext.rows = 1;
-          advance(elapsedMs);
-        },
-        {
-          busyTimeoutMs,
-          diagnosticContext,
-          ...(elapsedMs === 5 ? {} : { slowTransactionHoldMs: 0 }),
-        },
-      ),
+    const holdContext = { selector: "idempotency", outcome: "incomplete", rowsVisited: 0 };
+    asWorker(
+      "worker.entries",
+      () =>
+        run(
+          () => {
+            db.prepare("INSERT INTO entries VALUES ('committed', 'value')").run();
+            diagnosticContext.rows = 1;
+            holdContext.rowsVisited = 1;
+            holdContext.outcome = "hit";
+            advance(elapsedMs);
+          },
+          {
+            busyTimeoutMs,
+            diagnosticContext,
+            ...(elapsedMs === 5 ? {} : { slowTransactionHoldMs: 0 }),
+          },
+        ),
+      holdContext,
     );
     expect(readEntries(db)).toEqual(["committed"]);
     if (elapsedMs === 5) {
@@ -327,7 +337,7 @@ it.each([
       ...labels,
       elapsedMs: 3_000,
       mode,
-      context: { sessionId: "session-diagnostics", rows: 1 },
+      context: { sessionId: "session-diagnostics", rows: 1, ...holdContext },
     });
   },
 );

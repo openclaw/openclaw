@@ -114,7 +114,12 @@ export async function readSubagentRunFinalAnswerUsing(
     const scope = { agentId, storePath: sourcePath, sessionKey };
     const found =
       sessionId && (source || !isIncognitoSessionKey(sessionKey))
-        ? await deps.findTranscriptEvent({ ...scope, sessionId }, { kind: "visible-final", runId })
+        ? await deps.findTranscriptEvent(
+            { ...scope, sessionId },
+            { kind: "visible-final", runId },
+            undefined,
+            "subagent-final-answer",
+          )
         : undefined;
     let event: unknown = found?.event;
     if (!event && !isIncognitoSessionKey(sessionKey)) {

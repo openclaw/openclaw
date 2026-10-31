@@ -51,7 +51,7 @@ function collectProviderRequestCredentialValues(
   params: ProviderRequestCredentialContext,
 ): string[] {
   const auth = params.request?.auth;
-  const headers = new Headers();
+  const headers: [string, string][] = [];
   const names = new Set(
     [
       params.defaultAuthHeader,
@@ -65,7 +65,7 @@ function collectProviderRequestCredentialValues(
   for (const name of names) {
     const value = params.headers.get(name);
     if (value) {
-      headers.set(name, value);
+      headers.push([name, value]);
     }
   }
   return [
@@ -74,9 +74,7 @@ function collectProviderRequestCredentialValues(
     auth?.mode === "header"
       ? extractHeaderCredential(params.headers, auth.headerName, auth.prefix ?? "")
       : "",
-  ]
-    .filter(Boolean)
-    .toSorted((left, right) => right.length - left.length);
+  ];
 }
 
 /** Successful provider results must match actual credentials, not diagnostic redaction patterns. */

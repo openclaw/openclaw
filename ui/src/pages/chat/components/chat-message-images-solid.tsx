@@ -24,7 +24,7 @@ import {
   readCachedManagedImageUrl,
   resolveManagedImageResource,
 } from "./chat-message-image-loading.ts";
-import { openMessageImage } from "./chat-message-image-open.ts";
+import { openMessageImage, withMessageImageGallery } from "./chat-message-image-open.ts";
 import {
   buildAssistantAttachmentUrl,
   isCanonicalInboundMediaSource,
@@ -626,7 +626,7 @@ export function MessageImages(props: MessageImagesProps): JSX.Element {
       previousImages.map((image, index) => [image.factIndex, slots[index]?.key]),
     );
     // Publish options with the slot key so retiring images keep their previous policy.
-    const imageOptions = { ...options, galleryImages: options?.galleryImages ?? images };
+    const imageOptions = withMessageImageGallery(options, images);
     slots = images.map((image, index) => {
       const slot = slots[index];
       const displayKey = row && chatImageDisplayKey(image, chatImageRenditionWidth("inline"));

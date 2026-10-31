@@ -537,6 +537,9 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 modules.add("ui/src/pages/new-session/preferences.ts");
                 // Opened person cards share labels with New Session, not its composer chunk.
                 modules.add("ui/src/lib/platform-label.ts");
+                // Cross-route labels must not pull the New Session or Chat renderers.
+                modules.add("ui/src/i18n/locales/en-chat-welcome.ts");
+                modules.add("ui/src/i18n/locales/en-session-people.ts");
                 // Placement and delivery share retries without importing either route's bundle.
                 modules.add("ui/src/pages/chat/chat-outbox-retry.ts");
                 // Creation still uses the catalog; Chat constructs its capability owner on demand.

@@ -82,15 +82,9 @@ export function resolveSessionRowBadges(
     : undefined;
   const pullRequestState = params.pullRequest?.state;
   const placementState = params.isChild ? undefined : params.placementState;
-  // A healthy or settling worker is the expected state; the row shows placement
-  // only when it failed, runs low on disk, or holds workspace conflicts.
-  const cloudPlacementState =
-    isCloudWorkerPlacementState(placementState) &&
-    (placementState === "failed" ||
-      params.diskSpaceStatus === "warning" ||
-      params.diskSpaceStatus === "critical")
-      ? placementState
-      : undefined;
+  const cloudPlacementState = isCloudWorkerPlacementState(placementState)
+    ? placementState
+    : undefined;
   const workspaceConflictCount = Math.max(0, Math.floor(params.workspaceConflictCount ?? 0));
   // Child rows suppress ordinary placement chrome, but a retained conflict must stay discoverable.
   const conflictPlacementState = workspaceConflictCount > 0 ? params.placementState : undefined;
@@ -209,7 +203,8 @@ export function resolveSessionRowBadges(
 }
 
 // The trailing column holds two context signals at most. Badges asking for action
-// outrank passive context; the survivors keep their reading order.
+// outrank passive context, and a healthy placement yields to the pull request; the
+// survivors keep their reading order.
 const SESSION_ROW_BADGE_LIMIT = 2;
 const SESSION_ROW_BADGE_PRIORITY = [
   "attention",
@@ -217,19 +212,27 @@ const SESSION_ROW_BADGE_PRIORITY = [
   "cloud",
   "draft",
   "pull-request",
+  "placement",
   "incognito",
 ];
 const SESSION_ROW_COUNT_LIMIT = 99;
 
+function sessionRowBadgeRank(badge: SessionRowBadge): number {
+  const healthyPlacement =
+    badge.modifier === "cloud" &&
+    badge.placementState !== "failed" &&
+    !badge.workspaceConflictCount &&
+    (badge.diskSpaceStatus === undefined || badge.diskSpaceStatus === "ok");
+  return SESSION_ROW_BADGE_PRIORITY.indexOf(healthyPlacement ? "placement" : badge.modifier);
+}
+
 function trimSessionRowBadges(badges: SessionRowBadge[]): SessionRowBadge[] {
-  const rank = (modifier: string) => SESSION_ROW_BADGE_PRIORITY.indexOf(modifier);
   const kept = new Set(
     badges
-      .map((badge) => badge.modifier)
-      .toSorted((a, b) => rank(a) - rank(b))
+      .toSorted((a, b) => sessionRowBadgeRank(a) - sessionRowBadgeRank(b))
       .slice(0, SESSION_ROW_BADGE_LIMIT),
   );
-  const visible = badges.filter((badge) => kept.has(badge.modifier));
+  const visible = badges.filter((badge) => kept.has(badge));
   for (const badge of visible) {
     if ((badge.count ?? 0) > SESSION_ROW_COUNT_LIMIT) {
       badge.count = undefined;

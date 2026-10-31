@@ -367,7 +367,7 @@ export function PickerContent<Option extends PickerOption>(props: {
           overlay.request(false, overlay.containsFocus() ? "return" : "none");
         }
       },
-      enter ? 120 : 150,
+      enter ? 200 : 100,
     );
   }
   createScrollPosition(

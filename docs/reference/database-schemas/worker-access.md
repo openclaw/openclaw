@@ -168,7 +168,9 @@ check and rechecks live authority after that wait; no successful check is cached
 across requests.
 
 Local workspace reconciliation releases the shared state reader after capturing
-its database snapshot. The existing workspace computation pool scans files and
+its database snapshot. Immutable record JSON crosses the worker boundary without
+first expanding a tree in the shared reader. The computation pool decodes it once
+and releases the transferred text before scanning files. The existing pool
 prepares manifest results from that compressed snapshot; the Gateway forwards it
 without expanding the tree. The reconciliation lease still checks authority before
 accepting results, and the state writer retains atomic manifest publication.
@@ -662,6 +664,14 @@ the UTF-8 size of the primary prepared event or message payload (summed message
 bodies for turn appends). This count excludes optional initialization headers.
 The reported `phases.sqlMs` includes synchronous JavaScript work inside the
 transaction; it is not a sum of SQLite statement timings.
+
+Transcript-match slow holds include a fixed caller category, selector, outcome,
+and visited-row counts. `projectedRows` counts hot rows with navigation projections;
+`identityRows` counts hot rows using inline canonical text, not identity-index hits.
+`coldRows` counts decoded archive event rows, including required verification after
+a match. These counters appear only on the existing slow-hold warning; they do not
+count fast requests or provide a complete traffic census. Matching, schemas,
+storage layout, and retention are unchanged.
 
 Bounded model-context reads retain only the selectable request suffix and current
 model, thinking, and context-boundary markers. Discarded requests contribute exact

@@ -311,7 +311,6 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
 }
 
 .oc-input {
-  box-sizing: border-box;
   width: 100%;
   min-height: var(--oc-control-min-height);
   padding: var(--oc-space-2) var(--oc-space-3);
@@ -353,7 +352,6 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
 
 .oc-banner {
   display: grid;
-  box-sizing: border-box;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: start;
   gap: var(--oc-space-3);
@@ -373,7 +371,6 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
 
 .oc-empty {
   display: grid;
-  box-sizing: border-box;
   min-height: 12rem;
   place-items: center;
   padding: var(--oc-space-5);

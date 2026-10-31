@@ -84,7 +84,6 @@ openclaw-chat-details[mobile] {
 .chat-details {
   position: fixed;
   inset: auto;
-  box-sizing: border-box;
   margin: 0;
   padding: 16px;
   border: 1px solid var(--border);
@@ -623,17 +622,6 @@ button.chat-details__process:is(:hover, :focus-visible) {
 .chat-details .chat-pr__actions {
   flex: none;
   margin-inline-start: auto;
-}
-.chat-details .chat-pr__actions-trigger {
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  padding: 4px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--muted);
 }
 .chat-details .chat-pr__actions-trigger > .oc-menu-item__label {
   display: flex;
