@@ -1,0 +1,2 @@
+# Real Vite build regression: compress small boot chunks but keep optional chunks excluded.
+61

@@ -94,7 +94,7 @@ function isControlUiPrecompressedAsset(fileName: string) {
 export async function createControlUiPrecompressedAssetVariants(
   fileName: string,
   source: string | Uint8Array,
-  startupAssets: ReadonlySet<string> = new Set(),
+  bootAssets: ReadonlySet<string> = new Set(),
 ): Promise<Array<{ fileName: string; source: Buffer }>> {
   if (!isControlUiPrecompressedAsset(fileName)) {
     return [];
@@ -103,7 +103,7 @@ export async function createControlUiPrecompressedAssetVariants(
   if (
     body.byteLength < CONTROL_UI_PRECOMPRESS_MIN_BYTES &&
     path.extname(fileName).toLowerCase() !== ".css" &&
-    !startupAssets.has(fileName)
+    !bootAssets.has(fileName)
   ) {
     return [];
   }
@@ -111,7 +111,7 @@ export async function createControlUiPrecompressedAssetVariants(
     {
       fileName: `${fileName}.br`,
       source: await compressBrotli(body, {
-        params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 10 },
+        params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 11 },
       }),
     },
     {
@@ -593,14 +593,20 @@ function controlUiPrecompressedAssetsPlugin(): Plugin {
       if (!buildOutDir) {
         this.error("Control UI build requires an output directory");
       }
-      const startupAssets = new Set(
-        extractControlUiStartupAssetPaths(
+      const routes = collectControlUiBootAssets(bundle);
+      // Small route chunks cost real transfer time too. Reuse the preload graph
+      // without creating sidecars for every optional chunk in the installation.
+      const bootAssets = new Set([
+        ...extractControlUiStartupAssetPaths(
           selectControlUiRoutePreloads(
             fs.readFileSync(path.join(buildOutDir, "index.html"), "utf8"),
             null,
           ),
         ),
-      );
+        ...routes.chat,
+        ...routes.new,
+        ...routes.login,
+      ]);
       const logger = this.environment.logger;
       let completed = 0;
       let sidecars = 0;
@@ -614,7 +620,7 @@ function controlUiPrecompressedAssetsPlugin(): Plugin {
         const variants = await createControlUiPrecompressedAssetVariants(
           output.fileName,
           source,
-          startupAssets,
+          bootAssets,
         );
         if (variants.length === 0) {
           return;
