@@ -421,37 +421,41 @@ describe("sidebar snapshot lifecycle", () => {
   });
 
   it.each(["incomplete-roster", "transcript", "scope-change"] as const)(
-    "bounds a stalled handoff and retires it on %s",
+    "retains a stalled %s handoff until readiness or scope retirement",
     async (boundary) => {
       const test = await warmFixture();
-      test.foreground.foregroundReady = false;
+      test.foreground.foregroundReady = boundary !== "transcript";
       test.publish();
-      if (boundary !== "incomplete-roster") {
+      if (boundary === "transcript") {
         void test.settle();
       }
       test.snapshotOwner.synchronize();
-      await vi.advanceTimersByTimeAsync(2999);
+      await vi.advanceTimersByTimeAsync(4000);
       expect(test.host.sidebarSnapshot).toEqual(model);
       if (boundary === "scope-change") {
         test.publish({ selfUser: { id: "profile-b" } });
+      } else {
+        void test.settle();
+        test.foreground.foregroundReady = true;
+        test.snapshotOwner.synchronize();
       }
-      await vi.advanceTimersByTimeAsync(1);
       expect(test.host.sidebarSnapshot).toBeNull();
       expect(test.capture).not.toHaveBeenCalled();
     },
   );
 
-  it("starts a new handoff deadline after reconnecting", async () => {
+  it("keeps cached rows through reconnect until the fresh roster settles", async () => {
     const test = await warmFixture();
     test.publish();
-    await vi.advanceTimersByTimeAsync(2999);
+    await vi.advanceTimersByTimeAsync(4000);
     test.publish({ phase: "reconnecting" });
-    await vi.advanceTimersByTimeAsync(3001);
+    await vi.advanceTimersByTimeAsync(4000);
     test.publish();
     expect(test.host.sidebarSnapshot).toEqual(model);
-    await vi.advanceTimersByTimeAsync(2999);
+    await vi.advanceTimersByTimeAsync(4000);
     expect(test.host.sidebarSnapshot).toEqual(model);
-    await vi.advanceTimersByTimeAsync(1);
+    void test.settle();
+    test.snapshotOwner.synchronize();
     expect(test.host.sidebarSnapshot).toBeNull();
     expect(test.capture).not.toHaveBeenCalled();
   });

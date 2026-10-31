@@ -194,6 +194,24 @@ async function readWarmCache(page: Page, sessionKey: string) {
         });
       const snapshots = await readKeys("snapshots");
       const sidebar = await readKeys("sidebarSnapshots");
+      const sidebarRecords = await Promise.all(
+        sidebar.map(
+          (value) =>
+            new Promise<unknown>((resolve, reject) => {
+              const request = database
+                .transaction("sidebarSnapshots", "readonly")
+                .objectStore("sidebarSnapshots")
+                .get(value);
+              request.addEventListener("success", () => resolve(request.result), { once: true });
+              request.addEventListener(
+                "error",
+                () =>
+                  reject(new Error("Unable to read sidebar snapshot", { cause: request.error })),
+                { once: true },
+              );
+            }),
+        ),
+      );
       const targetKeys = snapshots.filter(
         (value) =>
           typeof value === "string" &&
@@ -225,6 +243,18 @@ async function readWarmCache(page: Page, sessionKey: string) {
         ),
         snapshots: snapshots.length,
         sidebarSnapshots: sidebar.length,
+        sidebarRecordBytes: sidebarRecords.map(
+          (value) => new TextEncoder().encode(JSON.stringify(value)).length,
+        ),
+        sidebarHost: {
+          state: document.querySelector("aside.sidebar")?.getAttribute("data-snapshot-state"),
+          saved: document.querySelector("aside.sidebar")?.getAttribute("data-snapshot-saved"),
+          rows: new Set(
+            [...document.querySelectorAll("openclaw-app-sidebar [data-session-key]")].map((row) =>
+              row.getAttribute("data-session-key"),
+            ),
+          ).size,
+        },
       };
     } finally {
       database.close();
@@ -403,6 +433,7 @@ async function captureReload(
       ...probe.shifts,
       ...probe.domStates,
       ...probe.animationSamples,
+      ...probe.sidebarFrames,
     ]) {
       entry.atMs += documentOffsetMs;
     }
@@ -818,6 +849,33 @@ try {
             storageTypes: "indexeddb,cache_storage",
           });
           await cdp.send("Network.clearBrowserCache");
+          await page.evaluate(
+            ({ viewerId, groups }) => {
+              const gatewayUrl = `ws://${location.host}`;
+              localStorage.setItem("openclaw:sidebar:sessions:grouping", "category");
+              localStorage.setItem("openclaw:sidebar:sessions:sort-mode", "created");
+              localStorage.setItem("openclaw:sidebar:sessions:show-preview", "false");
+              localStorage.setItem(
+                "openclaw:sidebar:sessions:collapsed-sections",
+                JSON.stringify(groups.slice(0, 5).map((group) => `category:${group}`)),
+              );
+              localStorage.setItem(
+                `openclaw.control.sidebarSessionOwnerFilter.v1:${gatewayUrl}:${encodeURIComponent(viewerId)}`,
+                "involving-me",
+              );
+              localStorage.setItem(
+                `openclaw.control.sidebarEmptyGroups.v1:${gatewayUrl}:user:${encodeURIComponent(viewerId)}`,
+                "always",
+              );
+            },
+            {
+              viewerId: fixture.fixtureSummary.viewerId,
+              groups: Array.from(
+                { length: 97 },
+                (_, index) => `Synthetic group ${String(index + 1).padStart(2, "0")}`,
+              ),
+            },
+          );
           const url = `${baseUrl}${routePath}`;
           results.push({
             arm: arm.name,
@@ -835,6 +893,21 @@ try {
               ),
             ],
           });
+          // Persist actual disclosure choices, not hand-authored snapshot fields.
+          for (const parent of fixture.fixtureSummary.sidebarParents) {
+            const toggle = page.locator(
+              `[data-child-session-toggle=${JSON.stringify(parent.key)}]`,
+            );
+            await toggle.waitFor({ state: "visible" });
+            if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+              await toggle.click();
+            }
+            for (const key of parent.childKeys) {
+              await page
+                .locator(`.sidebar-session-content [data-session-key=${JSON.stringify(key)}]`)
+                .waitFor({ state: "visible" });
+            }
+          }
           const details = page.locator(".chat-details-toggle:visible");
           if (
             route === "chat" &&
