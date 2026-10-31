@@ -312,7 +312,7 @@
   --overlay-shadow: 0 1px 2px rgb(0 0 0 / 0.18), 0 8px 24px rgb(0 0 0 / 0.24);
   --overlay-modal-backdrop: color-mix(in oklab, black 60%, transparent);
   --overlay-palette-backdrop: color-mix(in oklab, black 12%, transparent);
-  --overlay-modal-radius: calc(var(--radius-lg) * var(--openclaw-corner-radius-scale));
+  --overlay-modal-radius: calc(var(--radius-xl) * var(--openclaw-corner-radius-scale));
   --overlay-modal-surface: var(--popover);
   --overlay-modal-padding: 20px;
   --overlay-modal-title-size: var(--control-ui-text-md);

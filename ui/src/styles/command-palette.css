@@ -107,7 +107,7 @@
   gap: 12px;
   margin: 2px 0;
   padding: 10px 12px;
-  border-radius: var(--radius-md);
+  border-radius: var(--menu-item-radius);
   font-size: 14px;
   transition: background var(--duration-fast) ease;
 }
