@@ -536,7 +536,7 @@ export function createChatMessageScenarios(): readonly EngineScenario[] {
             await toggle(page).press("Space");
           }
         };
-        scenarios.push({
+        const scenario: EngineScenario = {
           id: `chat-actions-${kind}-${action}-${length}`,
           route: controlUiSessionPath(workSessionKey),
           fixtureOverrides: (sandbox, base) => ({
@@ -569,7 +569,24 @@ export function createChatMessageScenarios(): readonly EngineScenario[] {
               transcriptMessages: length === "short" ? 15 : 400,
             };
           },
-        });
+        };
+        scenarios.push(scenario);
+        if (kind === "tool" && action === "expand") {
+          scenarios.push({
+            ...scenario,
+            id: `chat-actions-tool-reopen-${length}`,
+            expected: `Reopening loaded tool content in a ${length} transcript without a request.`,
+            prepare: async (page, gateway) => {
+              await scenario.prepare(page, gateway);
+              await activate(page);
+              await expectExpanded(toggle(page), true);
+              await output(page).waitFor({ state: "visible" });
+              await activate(page);
+              await expectExpanded(toggle(page), false);
+              await output(page).waitFor({ state: "hidden" });
+            },
+          });
+        }
       }
     }
   }

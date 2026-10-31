@@ -35,6 +35,7 @@ selected artifact directory and are not committed.
 | Long-message or grouped-tool context menu              | `context-long`, `context-tool`                    |
 | Reasoning/work and tool disclosure                     | `reasoning-toggle`, `tool-toggle`                 |
 | One disclosure action, with 15 or 400 messages         | `{reasoning,tool}-{expand,collapse}-{short,long}` |
+| Reopen already-loaded tool content                     | `tool-reopen-{short,long}`                        |
 | Open and close terminal, review diff, split pane       | `terminal`, `diff`, `split-view`                  |
 | Keyboard session selection through the command palette | `keyboard-session-navigation`                     |
 
@@ -66,7 +67,9 @@ then sends one native activation and checks both the expanded state and content
 visibility. Tool rows use Space; completed-work summaries use a pointer click.
 The short fixture retains the same work, tool output, and final answer as the
 long fixture, removing only its 385 preceding messages. Expansion includes the
-first lazy content load; collapse starts with that content loaded. Add the same
+first lazy content load; collapse starts with that content loaded. The tool
+`reopen` cases also open and close once during preparation, then measure a single
+expansion with the lazy module already loaded. Add the same
 bundle as `--compare-bundle-dir` for an interleaved A/A control.
 
 Chromium reports main-thread task/script CPU, long tasks (50 ms or longer), and
