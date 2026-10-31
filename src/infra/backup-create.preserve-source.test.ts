@@ -4,16 +4,25 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import * as tar from "tar";
-import { expect, it } from "vitest";
+import { beforeAll, expect, it } from "vitest";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { retireIdleOpenClawStateReadWorkers } from "../state/openclaw-state-read-worker.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { inspectDatabase } from "./backup-create-family.test-support.js";
 import { createBackupArchive } from "./backup-create.js";
 import { isolatedBackupCase } from "./backup-create.test-support.js";
 import { ignoreMissingPath } from "./errno.js";
+import { captureRetainedNativeWorkerSource } from "./worker-native-lifecycle.js";
+
+beforeAll(async () => {
+  // A warm broker outside the case root would hide the removed-socket regression.
+  const source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+  expect(await retireIdleOpenClawStateReadWorkers(source)).toBe(true);
+  expect(await source.retireIdleBroker()).toBe(true);
+});
 
 async function readFamily(filename: string) {
   return Promise.all(
@@ -38,7 +47,8 @@ async function readFamily(filename: string) {
 
 it.each(["WAL", "DELETE"] as const)(
   "preserves the active %s source family and row IDs while sanitizing the archive",
-  isolatedBackupCase({})(async (state, mode) => {
+  // Keep native socket paths below the fallback limit so they live in case scratch.
+  isolatedBackupCase({ prefix: "bk-" })(async (state, mode) => {
     await state.writeConfig({ plugins: { enabled: false } });
     const sourcePath = state.statePath("state/openclaw.sqlite");
     const source = openOpenClawStateDatabase({ env: state.env });
