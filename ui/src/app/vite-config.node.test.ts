@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
-import { createServer, type Alias } from "vite";
+import { build, createServer, type Alias } from "vite";
 import { expect, it, onTestFinished, vi } from "vitest";
 import {
   hashControlUiTranslationText,
@@ -72,6 +72,76 @@ const buildInfo = {
   release: false,
   buildId: "mock-artifact",
 };
+
+it("preloads CSS-gated lazy targets through Vite's real dependency hook", async () => {
+  const config = controlUiViteConfig({ buildInfo });
+  const preload = config.build?.modulePreload;
+  if (!preload || typeof preload !== "object" || !preload.resolveDependencies) {
+    throw new Error("Expected the Control UI module preload resolver");
+  }
+  const owner = config.plugins?.find(
+    (plugin) =>
+      plugin &&
+      typeof plugin === "object" &&
+      "name" in plugin &&
+      plugin.name === "control-ui-static-import-preloads",
+  );
+  if (!owner) {
+    throw new Error("Expected the Control UI preload metadata owner");
+  }
+  const sources = new Map([
+    [
+      "/preload-entry.js",
+      'globalThis.loadStyled = () => import("/styled.js"); globalThis.loadPlain = () => import("/plain.js");',
+    ],
+    ["/styled.js", 'import "/nested.js"; export const ready = true;'],
+    ["/nested.js", 'import "/style.css"; globalThis.styled = true;'],
+    ["/plain.js", "export const ready = true;"],
+    ["/style.css", ".fixture { color: red; }"],
+  ]);
+  const requests = new Map<string, string[]>();
+  const result = await build({
+    configFile: false,
+    publicDir: false,
+    logLevel: "silent",
+    plugins: [
+      {
+        name: "preload-fixture",
+        resolveId: (id) => (sources.has(id) ? id : null),
+        load: (id) => sources.get(id),
+      },
+      owner,
+    ],
+    build: {
+      write: false,
+      minify: false,
+      rolldownOptions: { input: "/preload-entry.js" },
+      modulePreload: {
+        ...preload,
+        resolveDependencies: (filename, deps, context) => {
+          const resolved = preload.resolveDependencies!(filename, deps, context);
+          requests.set(filename, resolved);
+          return resolved;
+        },
+      },
+    },
+  });
+  if (Array.isArray(result) || !("output" in result)) {
+    throw new Error("Expected one fixture build");
+  }
+  const chunks = result.output.filter((asset) => asset.type === "chunk");
+  const styled = chunks.find((chunk) => chunk.facadeModuleId === "/styled.js")!;
+  const plain = chunks.find((chunk) => chunk.facadeModuleId === "/plain.js")!;
+  expect(requests.get(styled.fileName)).toContain(styled.fileName);
+  expect(requests.get(plain.fileName)).not.toContain(plain.fileName);
+  expect(
+    preload.resolveDependencies("assets/page.js", ["assets/shared.js"], {
+      hostType: "html",
+      hostId: "index.html",
+    }),
+  ).toEqual(["assets/shared.js"]);
+});
+
 type Catalog = TranslationMap & { common: TranslationMap };
 const labeledCatalog = (label: string): Catalog => ({
   common: { health: label },

@@ -773,6 +773,7 @@ export default function controlUiViteConfig(
       ? createControlUiDevGateway(process.env.OPENCLAW_UI_DEV_GATEWAY_URL)
       : undefined;
   const staticImports = new Map<string, readonly string[]>();
+  const styledChunks = new Set<string>();
   const copiedInputs = new Set<string>();
   const resolveModulePreloadDependencies: ResolveModulePreloadDependenciesFn = (
     filename,
@@ -792,10 +793,11 @@ export default function controlUiViteConfig(
         imports.push(...(staticImports.get(dependency) ?? []));
       }
     }
-    // Without stylesheet waits, import() immediately fetches its own target.
-    // Keep the target preload when CSS would otherwise delay that request.
-    const waitsForStyles = deps.some((dep) => dep.endsWith(".css"));
-    return deps.filter((dep) => !loaded.has(dep) && (waitsForStyles || dep !== filename));
+    // Vite removes CSS before calling this hook. Chunk metadata tells us when
+    // its stylesheet wait would otherwise delay fetching the target script.
+    const waitsForStyles = deps.some((dep) => styledChunks.has(dep));
+    const dependencies = deps.filter((dep) => !loaded.has(dep) && dep !== filename);
+    return waitsForStyles && !loaded.has(filename) ? [filename, ...dependencies] : dependencies;
   };
   return {
     base,
@@ -878,9 +880,13 @@ export default function controlUiViteConfig(
         name: "control-ui-static-import-preloads",
         generateBundle(_options, bundle) {
           staticImports.clear();
+          styledChunks.clear();
           for (const chunk of Object.values(bundle)) {
             if (chunk.type === "chunk") {
               staticImports.set(chunk.fileName, chunk.imports);
+              if (chunk.viteMetadata?.importedCss.size) {
+                styledChunks.add(chunk.fileName);
+              }
             }
           }
         },

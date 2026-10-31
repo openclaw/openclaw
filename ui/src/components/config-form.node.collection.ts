@@ -1,13 +1,12 @@
 import { asNonArrayRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { copyWithPathPatch } from "../lib/config-form-utils.ts";
 import {
-  canApplyObjectCandidate,
-  isObjectPropertyNameValid,
   objectAdditionalPropertiesSchema,
   objectPropertyKeys,
   objectPropertySchema,
   requiredPropertyKeys,
-} from "./config-form.constraints.ts";
+} from "./config-form.array-items.ts";
+import { canApplyObjectCandidate, isObjectPropertyNameValid } from "./config-form.constraints.ts";
 import { configChildRenderOptions } from "./config-form.node.shared.ts";
 import type { ConfigNodeRenderParams } from "./config-form.node.shared.ts";
 import {
