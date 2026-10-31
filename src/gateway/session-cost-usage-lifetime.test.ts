@@ -15,6 +15,7 @@ import { sessionCostUsageNotifications } from "../infra/session-cost-usage-event
 import * as pricing from "../infra/session-cost-usage-pricing-context.js";
 import { acquireSqliteDatabaseAdmissionTurn } from "../infra/sqlite-database-admission-turn.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
+import * as modelPricing from "../model-catalog/pricing.js";
 import { closeAgentWorkAdmissions } from "../sessions/session-controller.lifecycle.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
@@ -128,7 +129,7 @@ function costWindow(config: Parameters<typeof loadCostUsageSummaryCached>[0]["co
   return { config, startMs: timestamp - 1, endMs: timestamp + 1 };
 }
 
-it.for(["discovery", "scan admission"])(
+it.for(["discovery", "pricing", "scan admission"])(
   "aborts in-flight %s before joining the usage sidecar",
   async (phase, { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -146,6 +147,11 @@ it.for(["discovery", "scan admission"])(
             return read(...args);
           },
         );
+      } else if (phase === "pricing") {
+        vi.spyOn(modelPricing, "prepareModelPricingContext").mockImplementationOnce(async () => {
+          entered.resolve();
+          await release.promise;
+        });
       } else {
         seedUsage("stop-during-scan");
         const prepare = pricing.prepareUsageCostPricing;
