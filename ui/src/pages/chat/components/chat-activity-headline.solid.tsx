@@ -126,7 +126,12 @@ export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
           }
         >
           {(title) => (
-            <span class="chat-activity-group__label chat-activity-group__label--live">
+            <span
+              class={[
+                "chat-activity-group__label chat-activity-group__label--live",
+                { "chat-activity-group__label--running": shown()?.status === "running" },
+              ]}
+            >
               {title}
               {!props.bubbleMode && shown()?.status === "running" ? "…" : ""}
             </span>

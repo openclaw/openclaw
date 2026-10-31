@@ -155,7 +155,7 @@ describe.runIf(browserMode)("chat disclosure activation", () => {
                 key: "search",
                 name: "tool_search",
                 title: "Find available tools",
-                status: "running",
+                status: "completed",
               }}
               summary="5 other operations"
             />

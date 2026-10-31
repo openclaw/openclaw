@@ -65,7 +65,7 @@ Opt-in decorative motion that should vanish entirely, such as text shimmers, bel
 | Name                   | File                       | Duration                              | Purpose                                                                                                          |
 | ---------------------- | -------------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `shimmer`              | `base.css`                 | 1500ms, infinite                      | `.skeleton::after` transform; compositor-only, locked by `ui/src/styles/shimmer.browser.test.ts`                 |
-| `text-shimmer`         | `base.css`                 | 2.2s tool row; 2s dictation, infinite | Background-position sweep on a text-clipped gradient: running tool-row verb/command and dictation listening text |
+| `text-shimmer`         | `base.css`                 | 2.2s tool row; 2s dictation, infinite | Background-position sweep on a text-clipped gradient: running tool rows, live headline, dictation listening text |
 | `compaction-shimmer`   | `chat/composer-status.css` | 3.2s, infinite                        | Text-clipped gradient sweep with hold frames                                                                     |
 | Composer border/shadow | `chat/layout.css`          | 100ms (`--duration-fast`)             | Focus ring on input area                                                                                         |
 | Workboard card glass   | `workboard.css`            | —                                     | Static (no animation)                                                                                            |

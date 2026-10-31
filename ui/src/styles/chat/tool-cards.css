@@ -349,13 +349,22 @@
 /* Active-task text wave: a subtle left-to-right color sweep across the
    running row's primary text (same shimmer language as the skeleton/usage
    loaders, clipped to glyphs). The band fades text toward --bg so it stays
-   correct in both themes. Scoped to no-preference so reduced-motion users
+   correct in both themes. Scoped so reduced-motion and forced-colors users
    keep plain static text and syntax colors. */
-@media (prefers-reduced-motion: no-preference) {
+@media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
   /* Whichever element names the work in progress: the action verb on file rows,
-     the command itself on terminal rows. Syntax tokens inherit `color`, so the
+     the command itself on terminal rows, the stated purpose or tool name
+     elsewhere, and the group headline. Syntax tokens inherit `color`, so the
      clipped gradient paints their glyphs too. */
-  .chat-tool-row--running :is(.chat-tool-row__verb, .chat-tool-row__cmd) {
+  .chat-tool-row--running
+    :is(
+      .chat-tool-row__verb,
+      .chat-tool-row__cmd,
+      .chat-tool-row__title,
+      .chat-tool-msg-summary__label,
+      .chat-tool-msg-summary__names
+    ),
+  .chat-activity-group__summary .chat-activity-group__label.chat-activity-group__label--running {
     background-image: linear-gradient(
       90deg,
       var(--text) 0%,
@@ -367,7 +376,15 @@
     background-size: 200% 100%;
     background-clip: text;
     color: transparent;
+    -webkit-text-fill-color: transparent;
     animation: text-shimmer 2.2s ease-in-out infinite;
+  }
+
+  /* The headline's enter motion shares this element's animation list. */
+  .chat-activity-group__summary .chat-activity-group__label.chat-activity-group__label--running {
+    animation:
+      chat-activity-headline-enter 160ms ease-out,
+      text-shimmer 2.2s ease-in-out infinite;
   }
 }
 
