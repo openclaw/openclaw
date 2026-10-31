@@ -112,6 +112,35 @@ export function ChatPullRequestsContent(props: ChatPullRequestsProps) {
     props.publishedOnly || props.branchDismissed ? undefined : props.branch;
   const workRow = () => !props.publishedOnly && showWorkRow(props);
   const visible = createMemo(() => chatPullRequestRows(props));
+  // Preserve each PR's identity and check counts: aggregate buckets can stay unchanged while
+  // PRs exchange states or checks make progress. Stable URL order keeps row reordering and
+  // identical polling snapshots from changing the announced text.
+  const ciNotice = createMemo(() => {
+    const parts = visible()
+      .toSorted((left, right) => left.url.localeCompare(right.url))
+      .flatMap((entry) => {
+        const checks = entry.details?.checks;
+        return checks
+          ? [
+              t("chat.pullRequests.ciSummaryItem", {
+                reference: entry.reference,
+                state: t(CHECK_LABEL_KEYS[checks.state]),
+                passed: String(checks.passed),
+                failed: String(checks.failed),
+                running: String(checks.running),
+                skipped: String(checks.skipped),
+              }),
+            ]
+          : [];
+      });
+    if (parts.length === 0) {
+      return undefined;
+    }
+    return t(
+      parts.length === 1 ? "chat.pullRequests.ciSummaryOne" : "chat.pullRequests.ciSummaryMany",
+      { count: String(parts.length), parts: parts.join("; ") },
+    );
+  });
   const recovery = () =>
     !props.publishedOnly && retained() && (!published() || props.publication?.error)
       ? props.publication
@@ -204,7 +233,21 @@ export function ChatPullRequestsContent(props: ChatPullRequestsProps) {
 
   return (
     <Show when={hasChatPullRequests(props)}>
-      <div class="chat-prs" aria-live="polite">
+      {/* Keep interactive rows outside live regions. The count and per-PR CI snapshots have
+          separate regions, and identical polling snapshots leave their text unchanged. */}
+      <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {visible().length > 0
+          ? t(
+              visible().length === 1 ? "chat.pullRequests.countOne" : "chat.pullRequests.countMany",
+              { count: String(visible().length) },
+            )
+          : undefined}
+      </span>
+      {/* A genuine CI transition still deserves one announcement; identical polls do not. */}
+      <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {ciNotice()}
+      </span>
+      <div class="chat-prs">
         <Show
           when={workRow()}
           fallback={
