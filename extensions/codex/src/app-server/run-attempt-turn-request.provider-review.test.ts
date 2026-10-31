@@ -43,10 +43,6 @@ vi.mock("./run-attempt-lifecycle.js", () => ({
   emitCodexAppServerEvent: vi.fn(),
   withCodexAppServerFastModeServiceTier: (value: unknown) => value,
 }));
-vi.mock("./developer-instruction-sections.js", () => ({
-  joinPresentSections: (...sections: Array<string | undefined>) =>
-    sections.filter((section): section is string => Boolean(section)).join("\n\n"),
-}));
 vi.mock("./turn-params.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./turn-params.js")>()),
   buildCodexParentLocalInstructions: vi.fn(),
