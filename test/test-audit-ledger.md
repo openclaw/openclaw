@@ -337,5 +337,9 @@ exports; the same three production and three full-tree export findings remain.
 No suppression was added. Review and landing:
 [PR #189313](https://github.com/openclaw/openclaw/pull/189313).
 
+Plugin boundary qualification starts at `3a9578d82d5`: File Transfer command
+metadata and Diffs loopback rows have stronger existing keepers. Runtime baseline,
+keeper fault controls and removal checks are pending; no deletion is yet applied.
+
 Remaining: declaration-level review across remaining core, plugins, UI, native apps,
 root/script suites and shared fixtures; close owner-reading gaps and land subsequent batches.
