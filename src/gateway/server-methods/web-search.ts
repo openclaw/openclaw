@@ -36,6 +36,7 @@ import type { PluginWebSearchProviderEntry } from "../../plugins/web-provider-ty
 import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import { runtimeWebSecretOwnerId } from "../../secrets/runtime-web-secret-owner.js";
 import { parseConcreteConfigPathTokens } from "../../shared/dot-path.js";
+import { monotonicNow } from "../../shared/monotonic-time.js";
 import {
   isWebSearchProviderConfigured,
   listConfiguredWebSearchProviders,
@@ -486,7 +487,7 @@ export const webSearchHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      const startedAt = Date.now();
+      const startedAt = monotonicNow();
       let result: WebSearchTestResult;
       try {
         assertSecretOwnerAvailable("capability", runtimeWebSecretOwnerId("search", provider));
@@ -519,7 +520,7 @@ export const webSearchHandlers: GatewayRequestHandlers = {
           },
         });
         const normalized = normalizeWebSearchOutput({ ...executed, query });
-        const latencyMs = Date.now() - startedAt;
+        const latencyMs = monotonicNow() - startedAt;
         if (normalized.kind === "results" || normalized.kind === "answer") {
           result = {
             provider: executed.provider,
@@ -556,7 +557,7 @@ export const webSearchHandlers: GatewayRequestHandlers = {
       } catch (error) {
         result = {
           provider,
-          latencyMs: Date.now() - startedAt,
+          latencyMs: monotonicNow() - startedAt,
           status: "error",
           error: searchTestError(error),
         };
