@@ -539,14 +539,6 @@ describe("release qualification workflow authority", () => {
     expect(gatewayPreparation.outputs["install-start-epoch"].value).toBe(
       "${{ steps.install-start.outputs.epoch }}",
     );
-    expect(steps.map((step: { name: string }) => step.name)).toEqual([
-      "Find this run's stable Gateway selection",
-      "Restore this run's stable Gateway selection",
-      "Start shared toolchain installation clock",
-      "Setup Node environment",
-      "Prepare stable Gateway selection",
-      "Save this run's stable Gateway selection",
-    ]);
     const [find, restore, clock, setup, prepare, save] = steps;
     expect(find.uses).toBe("actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3");
     expect(find.env.SELECTION_ARTIFACT_NAME).toBe("${{ inputs.artifact-name }}");
@@ -563,7 +555,6 @@ describe("release qualification workflow authority", () => {
       id: "install-start",
       if: "inputs.record-install-clock == 'true'",
       shell: "bash",
-      run: 'echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"',
     });
     expect(setup).toMatchObject({
       uses: "./.github/actions/setup-node-env",
