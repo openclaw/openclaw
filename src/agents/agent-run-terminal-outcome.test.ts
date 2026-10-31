@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { extractAgentRunTerminalError } from "./agent-run-result.js";
 import {
   buildAgentRunTerminalOutcome as buildOutcome,
+  buildAgentRunTerminalOutcomeFromAttempt as fromAttempt,
   buildAgentRunTerminalOutcomeFromWaitResult as fromWait,
   isStickyAgentRunTerminalOutcome as isSticky,
   mergeAgentRunAttemptTerminal as mergeAttempt,
@@ -51,6 +52,23 @@ const assertAttemptOrderings = (
 };
 
 describe("agent run terminal outcome", () => {
+  it("preserves a tool execution timeout as a hard timeout phase", () => {
+    expect(
+      fromAttempt({
+        terminal: {
+          kind: "timeout",
+          phase: "tool_execution",
+          source: "runtime",
+          aborted: true,
+        },
+      }),
+    ).toMatchObject({
+      reason: "hard_timeout",
+      status: "timeout",
+      timeoutPhase: "tool_execution",
+    });
+  });
+
   it.each([
     { metadata: { livenessState: "abandoned" }, reason: "aborted", sticky: false },
     { metadata: { livenessState: "blocked" }, reason: "blocked", sticky: false },

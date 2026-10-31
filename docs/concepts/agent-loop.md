@@ -339,6 +339,10 @@ replace that explanation or restart an already-final timed-out turn.
 This includes a timeout during tool execution when no final payload or accepted
 continuation remains. A compaction failure label does not turn that unfinished
 tool timeout into a paused run; completed tool results remain in the transcript.
+Tool execution deadlines retain `timeoutPhase: "tool_execution"` through terminal
+settlement. The error identifies the outcome as unknown: inspect current state
+before repeating the operation. Continuing is an ordinary new input, not an
+automatic replay of the timed-out tool.
 Earlier tool warnings and reasoning output do not count as a completed reply.
 Quiet or collect-mode children do not suppress a timeout unless another
 continuation owns the reply; accepting a child alone does not promise delivery.
