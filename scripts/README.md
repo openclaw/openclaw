@@ -605,6 +605,27 @@ use `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to select the installed matching
 Playwright headless shell for both arms. The manifest records the executable;
 compare only against the same browser configuration.
 
+### Media cache and layout
+
+`bench-control-ui-media.ts` serves synthetic media and bootstrap data through the
+local benchmark HTTP server, with browser caching enabled. Thumbnail URLs receive
+bounded WebP renditions from the production thumbnail encoder; full-image URLs
+retain the original PNG. Media responses remain held until the load/CLS interval
+starts. `--profiles remote` applies one server-side 100 ms/shared 10 Mbps media
+schedule in both engines; static assets are unthrottled and outside that interval.
+
+Browser request events include cache hits. `cacheProbe.serverRequests` records
+actual HTTP admissions separately from `fetchAttempts.cacheOnly`, whose
+`only-if-cached` reads must never reach the server. These are request counts, not
+completed-download byte measurements. Earlier routed-media reports disabled HTTP
+caching and returned full-image bytes for thumbnails; compare the corrected
+workload only against runs using the same HTTP fixture and rendition metadata.
+Raw browser errors remain in `errors`, `consoleErrors`, and `failedRequests`.
+`unexpectedErrors` determines failure: WebKit cache-only misses are expected only
+when same-origin media GET rejections match the native fetch failures and console
+errors exactly, including duplicate counts. Page errors and HTTP failures always
+fail the sample; expected misses remain visible in `expectedCacheMisses`.
+
 ## Control UI route dependency probes
 
 `bench-control-ui-route-leaks.ts` compares cold direct navigation using separate

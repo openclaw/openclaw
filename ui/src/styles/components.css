@@ -30,7 +30,6 @@ openclaw-session-progress-hovercard-provider {
   /* Generic lazy views retain their shimmer; the critical connection frame is static. */
   --skeleton-highlight: color-mix(in srgb, var(--text) 18%, transparent);
   --skeleton-duration: 2s;
-  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   gap: 32px;
@@ -348,7 +347,6 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 .session-glyph__ring {
   position: absolute;
   inset: -2px;
-  box-sizing: border-box;
   border: 1.5px solid color-mix(in srgb, var(--accent) 20%, transparent);
   border-top-color: var(--accent);
   border-radius: var(--radius-full);
@@ -1112,6 +1110,110 @@ select.settings-select:not([multiple]) {
   }
 }
 
+/* Native selects join the Select family where the engine can style their popup. */
+@supports (appearance: base-select) {
+  @media not (forced-colors: active) {
+    .field select:not([multiple], [size]),
+    select.settings-select:not([multiple], [size]) {
+      appearance: base-select;
+      display: inline-flex;
+      align-items: center;
+      padding-right: 10px;
+      background-image: none;
+
+      &::picker-icon {
+        content: "";
+        width: 16px;
+        height: 16px;
+        margin-inline-start: auto;
+        background: var(--text-tertiary);
+        mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")
+          center / contain no-repeat;
+        transition: none;
+      }
+
+      &::picker(select) {
+        appearance: base-select;
+        box-sizing: border-box;
+        min-width: anchor-size(width);
+        max-width: calc(100dvw - 16px);
+        max-height: min(400px, calc(100dvh - 16px));
+        margin-block: 4px;
+        padding: var(--menu-padding);
+        border: 0;
+        border-radius: var(--menu-radius);
+        background: var(--menu-surface);
+        box-shadow: var(--menu-shadow);
+        backdrop-filter: var(--menu-backdrop);
+        color: var(--text);
+        corner-shape: superellipse(1.5);
+        opacity: 0;
+        scale: 0.95;
+        transition:
+          opacity var(--select-exit-duration) var(--overlay-ease-exit),
+          scale var(--select-exit-duration) var(--overlay-ease-exit),
+          display var(--select-exit-duration) allow-discrete,
+          overlay var(--select-exit-duration) allow-discrete;
+      }
+
+      &:open::picker(select) {
+        opacity: 1;
+        scale: 1;
+        transition-duration: var(--select-enter-duration);
+        transition-timing-function: var(--overlay-ease-enter);
+      }
+
+      & option {
+        gap: 8px;
+        min-height: 32px;
+        padding: 6px 8px;
+        border-radius: var(--menu-item-radius);
+        font-size: calc(13px * var(--control-ui-text-scale));
+        line-height: calc(1.25 / 0.875);
+      }
+
+      & option:is(:hover, :focus-visible):not(:disabled) {
+        outline: 0;
+        background: var(--surface-hover);
+      }
+
+      & option:checked {
+        background: transparent;
+        font-weight: var(--control-ui-font-weight-semibold);
+      }
+
+      & option:checked:is(:hover, :focus-visible) {
+        background: var(--surface-hover);
+      }
+
+      & option::checkmark {
+        order: 1;
+        margin-inline-start: auto;
+        color: var(--accent);
+      }
+
+      & option:disabled {
+        opacity: 0.5;
+      }
+    }
+
+    @starting-style {
+      .field select:not([multiple], [size]):open::picker(select),
+      select.settings-select:not([multiple], [size]):open::picker(select) {
+        opacity: 0;
+        scale: 0.95;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .field select:not([multiple], [size])::picker(select),
+      select.settings-select:not([multiple], [size])::picker(select) {
+        transition: none;
+      }
+    }
+  }
+}
+
 .field textarea {
   font-family: var(--mono);
   min-height: 160px;
@@ -1535,7 +1637,6 @@ select.settings-select:not([multiple]) {
 
 .code-block-wrapper {
   position: relative;
-  box-sizing: border-box;
   width: 100%;
   margin-block: 1em;
   overflow: hidden;
@@ -2077,7 +2178,6 @@ select.settings-select:not([multiple]) {
   width: var(--data-table-checkbox-col-width);
   min-width: var(--data-table-checkbox-col-width);
   max-width: var(--data-table-checkbox-col-width);
-  box-sizing: border-box;
   padding-left: 12px !important;
   padding-right: 4px !important;
   text-align: center;
@@ -2308,7 +2408,7 @@ td.data-table-key-col {
   padding: 4px 8px 2px;
   color: var(--muted);
   font-size: 11px;
-  font-weight: 650;
+  font-weight: var(--control-ui-font-weight-semibold);
   letter-spacing: 0.05em;
   text-transform: uppercase;
 }
@@ -2316,8 +2416,6 @@ td.data-table-key-col {
 .agent-select__menu.oc-menu {
   width: min(320px, calc(100vw - 24px));
   max-height: 320px;
-  border: 1px solid var(--overlay-border);
-  box-shadow: var(--overlay-shadow);
 }
 
 @starting-style {
@@ -2458,8 +2556,6 @@ td.data-table-key-col {
 }
 
 .agent-select__option {
-  padding: 6px 8px;
-  border-radius: var(--menu-item-radius);
   color: var(--text);
   font: inherit;
   font-size: 13px;
@@ -2467,10 +2563,6 @@ td.data-table-key-col {
 
 .agent-select__option > .oc-menu-item__check {
   display: none;
-}
-
-.agent-select__option[data-selected] {
-  background: var(--menu-selected);
 }
 
 .agent-select__option-state {
@@ -2553,7 +2645,6 @@ td.data-table-key-col {
 
 .cmd-palette__input {
   display: block;
-  box-sizing: border-box;
   width: 100%;
   min-width: 0;
   height: 24px;
@@ -2874,9 +2965,8 @@ td.data-table-key-col {
   font-variant-numeric: tabular-nums;
 }
 
-/* Trailing signals stay quieter than secondary text; only action or live state adds color. */
+/* Trailing signals stay quieter than secondary text unless their state adds color. */
 .session-row-trail,
-.session-row-badge,
 .session-row-badges,
 .sidebar-child-session-toggle {
   color: color-mix(in srgb, var(--muted) 82%, var(--sidebar-bg, var(--bg)));
@@ -2887,14 +2977,27 @@ td.data-table-key-col {
   color: var(--warn);
 }
 
-/* A pull request's icon already carries its state; color is reserved for what needs action. */
-.session-row-badge--cloud[data-placement-state="failed"],
-.session-row-badge--cloud[data-disk-space-status="critical"] {
+/* Later rules win: a placement's failure or warning overrides its healthy color. */
+[data-pull-request-state="open"] {
+  color: var(--ok);
+}
+
+[data-pull-request-state="merged"] {
+  color: var(--pr-merged);
+}
+
+[data-placement-state] {
+  color: var(--accent);
+}
+
+[data-pull-request-state="closed"],
+[data-placement-state="failed"],
+[data-disk-space-status="critical"] {
   color: var(--danger);
 }
 
-.session-row-badge--cloud[data-workspace-conflicts],
-.session-row-badge--cloud[data-disk-space-status="warning"] {
+[data-workspace-conflicts],
+[data-disk-space-status="warning"] {
   color: var(--warn);
 }
 
@@ -3000,7 +3103,6 @@ td.data-table-key-col {
 }
 
 .session-run-spinner {
-  box-sizing: border-box;
   display: inline-block;
   width: 12px;
   height: 12px;

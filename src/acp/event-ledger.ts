@@ -33,6 +33,7 @@ export function createSqliteAcpEventLedger(
         events: [{ update: structuredClone(update), createdAt: Date.now(), at: Date.now() }],
       }),
     markIncomplete: (session) => execute("acpReplay.incomplete", { ...session, now: Date.now() }),
+    readSessionKey: (session) => execute("acpReplay.sessionKey", session),
     readReplay: ({ sessionId, sessionKey }) =>
       execute("acpReplay.read", { kind: "bound", sessionId, sessionKey }),
     readReplayBySessionId: ({ sessionId }) => execute("acpReplay.read", { kind: "id", sessionId }),

@@ -27,26 +27,22 @@ const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const describeStandaloneMockServer =
   chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 
-function colorChannelToLinear(channel: number): number {
-  const value = channel / 255;
-  return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
-}
-
-function colorLuminance(color: RenderedColor): number {
-  if (color.alpha !== 1) {
-    throw new Error(`transparent computed color requires compositing: ${JSON.stringify(color)}`);
-  }
-  return (
-    0.2126 * colorChannelToLinear(color.red) +
-    0.7152 * colorChannelToLinear(color.green) +
-    0.0722 * colorChannelToLinear(color.blue)
-  );
-}
-
 function colorContrast(foreground: RenderedColor, background: RenderedColor): number {
-  const lighter = Math.max(colorLuminance(foreground), colorLuminance(background));
-  const darker = Math.min(colorLuminance(foreground), colorLuminance(background));
-  return (lighter + 0.05) / (darker + 0.05);
+  if (foreground.alpha !== 1) {
+    throw new Error(`transparent foreground requires compositing: ${JSON.stringify(foreground)}`);
+  }
+  const luminance = (color: RenderedColor, backdrop = 0) => {
+    const linear = (channel: number) => {
+      const value = (channel * color.alpha + backdrop * (1 - color.alpha)) / 255;
+      return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+    };
+    return 0.2126 * linear(color.red) + 0.7152 * linear(color.green) + 0.0722 * linear(color.blue);
+  };
+  const front = luminance(foreground);
+  // Black and white bound every RGB backdrop behind the translucent menu. The
+  // closest background luminance gives the minimum contrast across that range.
+  const back = Math.min(Math.max(front, luminance(background)), luminance(background, 255));
+  return (Math.max(front, back) + 0.05) / (Math.min(front, back) + 0.05);
 }
 
 async function openWidgetMenu(page: Page): Promise<void> {

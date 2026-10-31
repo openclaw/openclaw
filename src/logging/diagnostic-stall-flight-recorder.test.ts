@@ -74,7 +74,7 @@ function fixture(firstProfile?: string) {
   recorders.push(recorder);
   const sampleAt = (
     value: number,
-    stall: { startedAt: number; endedAt: number } | null = {
+    stall: { startedAt: number; endedAt: number; task?: string } | null = {
       startedAt: value - 1_500,
       endedAt: value,
     },
@@ -88,6 +88,22 @@ function capture(json: string) {
   const fixtureState = fixture(json);
   return { ...fixtureState, result: fixtureState.sampleAt(1_500) };
 }
+it("retains the recorded async task when the sampled stack ends in a dependency", () => {
+  const dependencyUrl = new URL(
+    "../../node_modules/@openclaw/fs-safe/dist/write.js",
+    import.meta.url,
+  ).href;
+  const { sampleAt } = fixture(profile(0, "runPinnedWriteNative", dependencyUrl));
+  const result = sampleAt(1_500, {
+    startedAt: 0,
+    endedAt: 1_500,
+    task: "schema-store:write",
+  });
+  expect(result).toContain("[async task:schema-store:write]");
+  expect(result).toContain("runPinnedWriteNative@node_modules/@openclaw/fs-safe");
+  expect(Buffer.byteLength(result!)).toBeLessThanOrEqual(2_048);
+});
+
 it.each([false, true])(
   "identifies sampled leaves below shared ancestors within the log cap (long=%s)",
   (long) => {

@@ -153,16 +153,6 @@
   object-fit: cover;
 }
 
-.cmd-palette__plugin-icon--fallback {
-  background: linear-gradient(135deg, var(--plugins-art-a), var(--plugins-art-b));
-  color: var(--text-strong);
-}
-
-.cmd-palette__plugin-icon--fallback svg {
-  width: 18px;
-  height: 18px;
-}
-
 .cmd-palette__avatar {
   position: relative;
   flex: 0 0 38px;

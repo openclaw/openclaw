@@ -1013,7 +1013,7 @@ var External = [
     /(^channel$|^force$|^timeoutMs$|^verbose$|^accountId$)/u,
     /(^channel$|^sessionKey$|^timeoutMs$|^accountId$|^currentQrDataUrl$)/u,
     /^data:image\/png;base64,/u,
-    /(^sessionKey$|^agentId$|^provider$|^scope$|^includeArgs$)/u,
+    /(^sessionKey$|^agentId$|^projectId$|^provider$|^scope$|^includeArgs$)/u,
     /(^expectedOwnerId$|^outcome$)/u,
     /(^createdAt$|^archivePath$|^status$|^kind$|^target$|^namespace$|^error$|^pushFailed$|^bytes$|^location$|^retention$)/u,
     /(^name$|^provider$|^locationId$|^key$|^namespace$|^plaintextBytes$|^storedBytes$)/u,
@@ -1452,7 +1452,7 @@ var External = [
     /(^action$|^pullRequestUrl$|^conflictsResolved$|^expectedHeadCommit$|^sessionKey$|^agentId$)/u,
     /^[a-f0-9]{40}$/u,
     /(^action$|^pullRequestUrl$|^sessionKey$|^agentId$)/u,
-    /(^action$|^requestId$|^expectedHeadCommit$|^sessionKey$|^agentId$)/u,
+    /(^action$|^pullRequestUrl$|^requestId$|^expectedHeadCommit$|^sessionKey$|^agentId$)/u,
     IsUuid,
     /(^action$|^requestId$|^expectedHeadCommit$|^evidence$|^sessionKey$|^agentId$)/u,
     /(^path$|^sha256$|^sizeBytes$)/u,
@@ -8560,6 +8560,7 @@ var External = [
     ) &&
     (value.sessionKey === void 0 || !("sessionKey" in value) || check_63(value.sessionKey)) &&
     (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)) &&
+    (value.projectId === void 0 || !("projectId" in value) || check_63(value.projectId)) &&
     (value.provider === void 0 || !("provider" in value) || check_63(value.provider)) &&
     (value.scope === void 0 || !("scope" in value) || check_1217(value.scope)) &&
     (value.includeArgs === void 0 || !("includeArgs" in value) || check_181(value.includeArgs)),
@@ -16647,6 +16648,9 @@ var External = [
       (unique_1642, unique_1643) => External[832].test(unique_1642) || check_2(value[unique_1642]),
     ) &&
     check_2498(value.action) &&
+    (value.pullRequestUrl === void 0 ||
+      !("pullRequestUrl" in value) ||
+      check_619(value.pullRequestUrl)) &&
     (value.requestId === void 0 || !("requestId" in value) || check_2499(value.requestId)) &&
     check_1989(value.expectedHeadCommit) &&
     check_6(value.sessionKey) &&
