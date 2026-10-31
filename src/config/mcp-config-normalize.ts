@@ -16,11 +16,6 @@ const CLI_MCP_TYPE_TO_OPENCLAW_TRANSPORT: Record<string, OpenClawMcpHttpTranspor
   stdio: "stdio",
 };
 
-/** Non-empty launch fields together would silently select stdio over HTTP. */
-export function hasMixedMcpServerTransports(server: Record<string, unknown>): boolean {
-  return Boolean(readNonBlankString(server.command) && readNonBlankString(server.url));
-}
-
 /** Strict writes reject ambiguity; runtime reads retain legacy behavior with a warning. */
 export function collectMcpTransportIssues(
   config: OpenClawConfig,
@@ -33,12 +28,18 @@ export function collectMcpTransportIssues(
     ] as const
   ).flatMap(([path, servers, previous]) =>
     Object.entries(servers ?? {}).flatMap(([name, server]) =>
-      hasMixedMcpServerTransports(server) && !isDeepStrictEqual(server, previous?.[name])
+      readNonBlankString(server.command) &&
+      readNonBlankString(server.url) &&
+      (!previous?.[name] ||
+        !isDeepStrictEqual(
+          canonicalizeConfiguredMcpServer(server),
+          canonicalizeConfiguredMcpServer(previous[name]),
+        ))
         ? [
             {
               path: `${path}.${name}`,
               message:
-                'MCP server cannot combine "command" and "url"; choose stdio or HTTP. Existing shared configs use stdio; run "openclaw doctor --fix" to remove ignored HTTP fields.',
+                'MCP server cannot combine "command" and "url"; remove "command" and stdio options for HTTP, or remove "url" and HTTP/auth options for stdio. Doctor will not choose a transport.',
             },
           ]
         : [],
@@ -48,10 +49,7 @@ export function collectMcpTransportIssues(
 
 /** Reads the canonical transport prepared by config migration or bundle ingestion. */
 export function resolveConfiguredMcpTransport(server: unknown): string | undefined {
-  if (!isRecord(server)) {
-    return undefined;
-  }
-  return normalizeMcpString(server.transport) || undefined;
+  return isRecord(server) ? normalizeMcpString(server.transport) || undefined : undefined;
 }
 
 /** Maps CLI-native MCP type aliases to OpenClaw HTTP transport names. */

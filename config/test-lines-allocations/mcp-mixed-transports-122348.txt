@@ -1,2 +1,2 @@
-106
-# CLI validation, saved-config startup/write safety, update-channel persistence, and identity-preserving Doctor repair.
+198
+# Config CLI/update/MCP mutation regressions and real MCP process/registration proof after explicit repair.

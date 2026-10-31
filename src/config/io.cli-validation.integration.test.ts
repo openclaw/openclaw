@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { Command } from "commander";
 import { afterEach, expect, it, vi } from "vitest";
+import { setConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
 import { registerConfigCli } from "../cli/config-cli.js";
 import { persistRequestedUpdateChannel } from "../cli/update-cli/update-command-config.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -153,6 +154,24 @@ it("warns for saved mixed config, rejects edits, and lets updates persist their 
       update: { channel: "beta" },
       mcp: { servers: { docs: { command: "node", url: "https://example.com/mcp" } } },
     });
+  });
+});
+
+it("repairs one mixed server without blocking on another and rejects new or edited ambiguity", async () => {
+  await withOpenClawTestState({ prefix: "mixed-mcp-mutation-" }, async (state) => {
+    const mixed = { command: "old-server", url: "https://example.com/mcp" };
+    await state.writeConfig({ mcp: { servers: { first: mixed, second: mixed } } });
+    expect(
+      await setConfiguredMcpServer({ name: "first", server: { command: "first-server" } }),
+    ).toMatchObject({ ok: true });
+    expect(JSON.parse(fs.readFileSync(state.configPath, "utf8"))).toMatchObject({
+      mcp: { servers: { first: { command: "first-server" }, second: mixed } },
+    });
+    for (const name of ["second", "new"]) {
+      expect(
+        await setConfiguredMcpServer({ name, server: { ...mixed, command: "changed-server" } }),
+      ).toMatchObject({ ok: false, error: expect.stringMatching(/command.*url/) });
+    }
   });
 });
 

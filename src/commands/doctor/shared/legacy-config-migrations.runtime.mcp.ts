@@ -6,7 +6,6 @@ import {
 import {
   canonicalizeConfiguredMcpServer,
   isKnownCliMcpTypeAlias,
-  hasMixedMcpServerTransports,
 } from "../../../config/mcp-config-normalize.js";
 import { isRecord } from "./legacy-config-record-shared.js";
 
@@ -32,15 +31,12 @@ function mcpServerRules(
 }
 
 function hasMcpServerLegacyAliases(server: Record<string, unknown>): boolean {
-  const codex = getRecord(server.codex);
+  const codex = isRecord(server.codex) ? server.codex : undefined;
   return (
-    [
-      "workingDirectory",
-      "supports_parallel_tool_calls",
-      "ssl_verify",
-      "client_cert",
-      "client_key",
-    ].some((key) => Object.hasOwn(server, key)) ||
+    Object.hasOwn(server, "workingDirectory") ||
+    ["supports_parallel_tool_calls", "ssl_verify", "client_cert", "client_key"].some((key) =>
+      Object.hasOwn(server, key),
+    ) ||
     Boolean(codex && Object.hasOwn(codex, "default_tools_approval_mode"))
   );
 }
@@ -98,28 +94,6 @@ function migrateMcpServers(servers: unknown, pathPrefix: string, changes: string
       records[serverName] = server;
       changes.push(`Canonicalized legacy aliases in ${pathPrefix}.${serverName}.`);
     }
-    // Requester-scoped definitions must never become shared stdio execution,
-    // including malformed records whose auth field is missing.
-    if (
-      hasMixedMcpServerTransports(server) &&
-      getRecord(server.oauth)?.identity !== "per-requester"
-    ) {
-      for (const field of [
-        "url",
-        "headers",
-        "auth",
-        "oauth",
-        "sslVerify",
-        "clientCert",
-        "clientKey",
-      ]) {
-        delete server[field];
-      }
-      delete server.transport;
-      changes.push(
-        `Preserved historical stdio behavior for ${pathPrefix}.${serverName} by removing ignored HTTP fields.`,
-      );
-    }
   }
 }
 
@@ -127,10 +101,6 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MCP: LegacyConfigMigrationSpec[] =
   {
     id: "mcp.servers.canonicalize",
     legacyRules: [
-      ...mcpServerRules(
-        'entries combine "command" and "url". Run "openclaw doctor --fix" to preserve shared stdio behavior; for requester identity, choose HTTP-only access or a separate stdio server explicitly.',
-        hasMixedMcpServerTransports,
-      ),
       ...mcpServerRules(
         'entries use the unsupported "disabled" key; use "enabled" with the inverse boolean value. Run "openclaw doctor --fix" to migrate it.',
         (server) => typeof server.disabled === "boolean",
