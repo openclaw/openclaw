@@ -165,13 +165,40 @@ export function decodeWindowsOutputBuffer(params: {
 export function decodeWindowsTextFileBuffer(
   params: Parameters<typeof decodeWindowsOutputBuffer>[0],
 ): string {
-  return (
-    decodeUtf16BomBuffer(params.buffer) ??
-    decodeWindowsBufferWithFallback({
-      ...params,
-      resolveFallbackEncoding: () => params.windowsEncoding ?? resolveWindowsSystemEncoding(),
-    })
-  );
+  return createWindowsTextFileDecoder({ ...params, prefix: params.buffer }).decode(params.buffer);
+}
+
+/** Select once from the leading window; later pages keep the same file encoding. */
+export function createWindowsTextFileDecoder(params: {
+  prefix: Buffer;
+  complete?: boolean;
+  platform?: NodeJS.Platform;
+  windowsEncoding?: string | null;
+}): TextDecoder {
+  const [first, second] = params.prefix;
+  if ((first === 0xff && second === 0xfe) || (first === 0xfe && second === 0xff)) {
+    return new TextDecoder(first === 0xff ? "utf-16le" : "utf-16be");
+  }
+  if ((params.platform ?? process.platform) !== "win32") {
+    return new TextDecoder("utf-8", { ignoreBOM: true });
+  }
+  try {
+    // A fixed window can end inside a valid multibyte character.
+    new TextDecoder("utf-8", { fatal: true }).decode(params.prefix, {
+      stream: params.complete === false,
+    });
+    return new TextDecoder("utf-8");
+  } catch {
+    const encoding = params.windowsEncoding ?? resolveWindowsSystemEncoding();
+    if (encoding && normalizeLowercaseStringOrEmpty(encoding) !== "utf-8") {
+      try {
+        return new TextDecoder(encoding);
+      } catch {
+        // Unsupported system encodings retain the existing UTF-8 replacement behavior.
+      }
+    }
+    return new TextDecoder("utf-8", { ignoreBOM: true });
+  }
 }
 
 function decodeUtf16BomBuffer(buffer: Buffer): string | undefined {

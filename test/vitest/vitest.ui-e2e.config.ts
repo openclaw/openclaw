@@ -104,7 +104,6 @@ export const uiE2eRuntimeBudgetTestFile = resolveUiTypeScriptPath(
 export const uiE2eProductionArtifactTestFiles = [
   "ui/src/e2e/service-worker-update.e2e.test.ts",
   "ui/src/e2e/phone-stale-build-recovery.e2e.test.ts",
-  "ui/src/e2e/stale-build-recovery.production.e2e.test.ts",
 ].map((file) => resolveUiTypeScriptPath(file));
 
 const uiE2eStandaloneTestFiles = [

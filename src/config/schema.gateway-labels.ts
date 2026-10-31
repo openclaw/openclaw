@@ -1,4 +1,5 @@
 export const GATEWAY_FIELD_LABELS: Record<string, string> = {
+  "gateway.repositoryIntegration": "Repository Integration",
   gateway: "Gateway",
   "gateway.port": "Gateway Port",
   "gateway.mode": "Gateway Mode",

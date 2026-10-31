@@ -663,7 +663,7 @@ CREATE TABLE "transcript_events" (
   "navigation_valid" bigint NOT NULL DEFAULT 1,
   PRIMARY KEY ("session_id", "seq"),
   CHECK ("event_utf8_bytes" IS NULL OR ("event_utf8_bytes" >= 0)),
-  CHECK (("event_json" IS NOT NULL AND "event_zstd" IS NULL) OR ("event_json" IS NULL AND "event_zstd" IS NOT NULL AND "event_utf8_bytes" IS NOT NULL AND ("event_utf8_bytes" BETWEEN 1 AND 4194304) AND (octet_length("event_zstd") BETWEEN 1 AND 4194304) AND "navigation_json" IS NOT NULL)),
+  CHECK (("event_json" IS NOT NULL AND "event_zstd" IS NULL) OR ("event_json" IS NULL AND "event_zstd" IS NOT NULL AND "event_utf8_bytes" IS NOT NULL AND ("event_utf8_bytes" BETWEEN 1 AND 4194304) AND (octet_length("event_zstd") BETWEEN 1 AND 4194304) AND "navigation_json" IS NOT NULL) OR ("event_json" IS NULL AND "event_zstd" IS NULL AND "event_utf8_bytes" IS NOT NULL AND ("event_utf8_bytes" BETWEEN 1 AND 4194304) AND "navigation_json" IS NOT NULL)),
   CHECK ("openclaw_transcript_navigation_check"("navigation_json"))
 );
 

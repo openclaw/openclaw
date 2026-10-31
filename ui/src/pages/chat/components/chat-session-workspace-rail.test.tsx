@@ -538,6 +538,37 @@ function setupDesktopLayout() {
   });
 }
 
+it.each(["mobile", undefined] as const)(
+  "matches sigma forms in local Files groups (%s)",
+  async (presentation) => {
+    setupDesktopLayout();
+    const path = "ΕΛΕΓΧΟΣ/A  B.md";
+    const workspace = createWorkspace({
+      presentation,
+      list: {
+        files: [file(path)],
+        artifacts: [artifact("report", "ΕΛΕΓΧΟΣ")],
+      },
+      browserSearch: "Σ",
+      mobileNavigation: {
+        expandedGroups: { changed: true, read: true, artifacts: true, workspace: true },
+        scrollTop: 0,
+      },
+    });
+    const mounted = await mountWorkspace(workspace);
+    for (const query of ["Σ", "σ", "ς", "  Σ  "]) {
+      mounted.update({ ...workspace, browserSearch: query });
+      await waitForSolid(() => expect(button(mounted.container, path)).not.toBeNull());
+      expect(button(mounted.container, "ΕΛΕΓΧΟΣ")).not.toBeNull();
+    }
+    mounted.update({ ...workspace, browserSearch: "A  B.md" });
+    expect(button(mounted.container, path)).not.toBeNull();
+    mounted.update({ ...workspace, browserSearch: "A B.md" });
+    expect(button(mounted.container, path)).toBeNull();
+    mounted.unmount();
+  },
+);
+
 it("desktop browses lazy directories and restores activity after an incomplete search", async () => {
   setupDesktopLayout();
   const incompleteNotice = "Search is incomplete. Some files may not appear in these results.";

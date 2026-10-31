@@ -12,6 +12,7 @@ import type {
 } from "./backend.types.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { SANDBOX_GITHUB_CONFIG_DIR } from "./constants.js";
+import { buildSandboxContainerEngineArgv } from "./container-engine.js";
 import { containerHasTerminated } from "./container-inspect.js";
 import {
   captureSandboxContainerTermination,
@@ -148,7 +149,7 @@ async function createContainerSandboxBackend(
       const envFile = await createContainerEnvFile(containerEnv);
       try {
         assertCurrent();
-        const argv = [boundEngine.command, ...(boundEngine.globalArgs ?? []), "exec", "-i"];
+        const argv = buildSandboxContainerEngineArgv(boundEngine, ["exec", "-i"]);
         if (usePty) {
           argv.push("-t");
         }

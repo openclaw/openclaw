@@ -55,12 +55,14 @@ import {
   waitForCommandSpawn,
 } from "./exec-spawn.js";
 import { createCommandTerminationController } from "./exec-termination.js";
+import type { ProcessExecutionIntent } from "./linux-exec-cgroup.js";
 import { setProcessTimeout } from "./process-deadline.js";
 import { BrokerChild } from "./spawn-broker/child.js";
 
 type CommandTerminationReason = SpawnResult["termination"] | "output-limit";
 
 export type CommandOptions = {
+  executionIntent?: ProcessExecutionIntent;
   timeoutMs?: number;
   cwd?: string;
   input?: string | Uint8Array;
@@ -239,6 +241,7 @@ async function runCommandWithOutputEncoding(
   let terminatingOutputError: Error | undefined;
 
   const { child, invocation } = spawnCommandWithInvocation(argv, {
+    executionIntent: options.executionIntent,
     buffer: false,
     cancelSignal: cancelController.signal,
     inheritScopeCancellation: false,

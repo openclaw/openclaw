@@ -738,6 +738,15 @@ process.exitCode = 23;
           : ["ios:screenshots"],
       );
       if (flow === "screenshots") {
+        const hostPreparation = requiredWorkflowStep(
+          release.jobs.screenshots.steps,
+          "Reserve host CPU for screenshots",
+        );
+        expect(
+          evaluateWorkflow(hostPreparation.if ?? "${{ true }}", {
+            inputs: { startup_probe: startupProbe },
+          }),
+        ).toBe(!startupProbe);
         expect(observed.snapshots).toBe("1");
         expect(observed.startupProbe).toBe(startupProbe ? "1" : "0");
         expect(observed.deviceFamily).toBe(startupProbe ? "iphone" : "");

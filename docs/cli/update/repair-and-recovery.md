@@ -194,6 +194,20 @@ The capture boundary still precedes repair discovery. A run with no reported
 repairs can still create a capture, because discovery and repair bookkeeping can
 change persisted state. When a fresh copy is needed, standalone `doctor --fix`
 snapshots databases under its own maintenance custody with a single isolated backup worker.
+Standalone Doctor allows ten minutes for original-state capture and reports
+progress while it waits. A stalled read-only plugin backup inventory observes that
+same cancellation deadline. If capture fails or times out, Doctor aborts before
+repair and restores the managed Gateway it stopped, including suspended Windows
+Scheduled Task autostart. Check the named plugin, disk space, and storage performance
+before retrying `openclaw doctor --fix`. Already admitted native capture work must
+settle before restoration; forced termination cannot run this recovery.
+
+For a closed, checkpointed SQLite source under Doctor's exclusive custody, ordinary
+original capture keeps foreign-key violations in the recovery image and reports
+a warning. Physical integrity checks still apply; Doctor separately validates and
+backs up each repair. Explicit full verification and sources with durable journal
+data retain their existing strict checks.
+
 Shared database families larger than 64 MiB keep discovery copies in an isolated process
 so a slow copy does not block Doctor's main thread from processing cancellation.
 Official image activation keeps one such copy per container: after a capture
@@ -221,8 +235,9 @@ invalidate those chosen bytes or authorize restoring them over current data.
 The backup's existing database warnings remain available when a stable source
 generation could not be recorded. Unsafe source acquisition or file changes during
 copying can still leave a capture incomplete. Capture is best effort: when it fails,
-the update warns that it continues without the original-state capture, names the
-step and source paths that failed, and proceeds.
+the update reports **NO ORIGINAL-STATE SNAPSHOT** in its warning, retains the
+warning in JSON and the update run record, names the step and source paths that
+failed, and proceeds.
 If measured free space is insufficient, the warning explicitly says **this update
 has no original-state snapshot to restore from**, with needed and available bytes.
 The same warning is retained in JSON and the update run record. The update does

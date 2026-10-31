@@ -144,6 +144,7 @@ describe("terminal PTY spawn diagnostics", () => {
     "bun-native",
     "node-helper",
     "cgroup-helper",
+    "gateway-cgroup",
     "bun-native-no-node",
   ] as const)("counts an admitted %s PTY once with the agent owner", async (backend) => {
     const bunDescriptor = Object.getOwnPropertyDescriptor(process.versions, "bun");
@@ -156,7 +157,10 @@ describe("terminal PTY spawn diagnostics", () => {
       value: backend === "node-pty" ? undefined : "synthetic-bun",
     });
     const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    const isolation = backend === "cgroup-helper" || backend === "bun-native-no-node";
+    const isolation =
+      backend === "cgroup-helper" ||
+      backend === "gateway-cgroup" ||
+      backend === "bun-native-no-node";
     vi.spyOn(execCgroup, "getAgentExecCgroup").mockReturnValue(
       isolation ? "/synthetic/agent-exec" : undefined,
     );
@@ -188,7 +192,13 @@ describe("terminal PTY spawn diagnostics", () => {
       expect(mocks.spawnBunTerminalPty).not.toHaveBeenCalled();
       expect(mocks.spawnNodeTerminalPty).not.toHaveBeenCalled();
       await withChildProcessOperation("agent.exec", () =>
-        spawnTerminalPty({ file: "/bin/bash", args: ["-c", "synthetic"], cols: 80, rows: 24 }),
+        spawnTerminalPty({
+          executionIntent: backend === "gateway-cgroup" ? "gateway-internal" : "agent-tool",
+          file: "/bin/bash",
+          args: ["-c", "synthetic"],
+          cols: 80,
+          rows: 24,
+        }),
       );
       if (backend === "bun-native-no-node") {
         expect(mocks.spawnBunTerminalPty).toHaveBeenCalledOnce();
@@ -197,6 +207,10 @@ describe("terminal PTY spawn diagnostics", () => {
       } else if (backend === "cgroup-helper") {
         expect(mocks.spawnNodeTerminalPty).toHaveBeenCalledOnce();
         expect(mocks.spawnBunTerminalPty).not.toHaveBeenCalled();
+        expect(warning).not.toHaveBeenCalled();
+      } else if (backend === "gateway-cgroup") {
+        expect(mocks.spawnBunTerminalPty).toHaveBeenCalledOnce();
+        expect(mocks.spawnNodeTerminalPty).not.toHaveBeenCalled();
         expect(warning).not.toHaveBeenCalled();
       }
     } finally {

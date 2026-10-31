@@ -11,7 +11,7 @@ import {
 import { canCallGatewayMethod } from "./gateway-methods.ts";
 import { createGatewayRetryOwner } from "./gateway-retry.ts";
 import { listen } from "./reactive/listener.ts";
-import { areUiSessionKeysEquivalent, scopedSessionArtifactKey } from "./sessions/session-key.ts";
+import { areUiSessionKeysEquivalent } from "./sessions/session-key.ts";
 import { requestSessionUsage } from "./sessions/usage.ts";
 
 type SessionContextReportTarget = {
@@ -41,7 +41,7 @@ type Entry = {
 const stores = new WeakMap<ApplicationGateway, ReturnType<typeof createSessionContextReports>>();
 const keyFor = (target: SessionContextReportTarget) =>
   JSON.stringify([
-    scopedSessionArtifactKey(target.sessionKey, target.agentId),
+    target.sessionKey.trim(),
     target.agentId,
     target.sessionId,
     target.model,
@@ -99,7 +99,8 @@ function createSessionContextReports(gateway: ApplicationGateway) {
       canRead() &&
       gatewayPresentationScope(gateway).key === requestScope;
     const target = entry.target;
-    const sessionKey = scopedSessionArtifactKey(target.sessionKey, target.agentId);
+    // Usage accepts the stored key and agent separately; raw and literal rows can coexist.
+    const sessionKey = target.sessionKey.trim();
     const today = new Date().toISOString().slice(0, 10);
     const promise = requestSessionUsage(
       receipt.client,

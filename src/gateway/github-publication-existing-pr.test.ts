@@ -22,7 +22,7 @@ import {
 
 const mocks = githubPublicationTestMocks();
 
-async function fixture(fork = false, linked = true) {
+async function fixture(fork = false, linked = true, maintainer = false, sameBranch = false) {
   const f = await createRequesterPublicationFixture(checkpoint, "local");
   const local = f.local!;
   if (linked) {
@@ -52,6 +52,9 @@ async function fixture(fork = false, linked = true) {
   const scope = { agentId: "main", sessionKey: f.session.sessionKey };
   const entry = loadSessionEntryReadOnly(scope)!;
   const publicationSession = { ...scope, sessionId: f.session.sessionId };
+  if (sameBranch) {
+    pr.head.ref = entry.worktree!.branch;
+  }
   const updateBinding = async (binding: SessionGitHubPullRequestBinding) => {
     const current = loadSessionEntryReadOnly(scope)!;
     await upsertSessionEntryCore(scope, {
@@ -75,6 +78,7 @@ async function fixture(fork = false, linked = true) {
       branch: pr.head.ref,
       commit: originalHead,
     },
+    origin: "external-pr",
     preparedHeadCommit: originalHead,
   });
   await fs.writeFile(path.join(local.cwd, "continued.txt"), "Guest continuation\n");
@@ -91,9 +95,9 @@ async function fixture(fork = false, linked = true) {
       pushes.push(argv);
       const refspec = argv.at(-1)!;
       const [commit, ref] = refspec.split(":");
-      expect(ref).toBe("refs/heads/topic/original");
+      expect(ref).toBe(`refs/heads/${pr.head.ref}`);
       expect(argv.at(-2)).toBe(`https://github.com/${headRepo.full_name}.git`);
-      expect(argv).toContain(`--force-with-lease=refs/heads/topic/original:${branchHead}`);
+      expect(argv).toContain(`--force-with-lease=refs/heads/${pr.head.ref}:${branchHead}`);
       expect(await local.git("merge-base", branchHead, commit!)).toBe(branchHead);
       branchHead = commit!;
       pr.head.sha = commit!;
@@ -106,7 +110,7 @@ async function fixture(fork = false, linked = true) {
       return commandResult();
     }
     if (argv.includes("ls-remote")) {
-      return commandResult(`${branchHead}\trefs/heads/topic/original\n`);
+      return commandResult(`${branchHead}\trefs/heads/${pr.head.ref}\n`);
     }
     if (argv[0] === "gh") {
       if (argv.includes("POST") || argv.includes("PATCH") || argv.includes("DELETE")) {
@@ -136,7 +140,8 @@ async function fixture(fork = false, linked = true) {
                     baseRepositoryId: baseRepo.id,
                   }
                 : pr
-              : endpoint === `repos/${headRepo.full_name}/branches/topic%2Foriginal`
+              : endpoint ===
+                  `repos/${headRepo.full_name}/branches/${encodeURIComponent(pr.head.ref)}`
                 ? { name: pr.head.ref, commit: { sha: branchHead }, protected: false }
                 : undefined;
       if (value) {
@@ -179,7 +184,8 @@ async function fixture(fork = false, linked = true) {
     mutations,
     entry,
     publicationSession,
-    publish: (key: string) => f.coordinator.requestForSessionV2(f.request(key, f.guest)),
+    publish: (key: string) =>
+      f.coordinator.requestForSessionV2(f.request(key, maintainer ? f.maintainer : f.guest)),
     expectWrites(count: number) {
       expect(pushes).toHaveLength(count);
       expect(mutations).toEqual([]);
@@ -241,10 +247,14 @@ describe("shared publication to a prepared original PR", () => {
     realWorktree: true,
   });
 
-  it.each([false, true])(
-    "appends to the original PR and retains local branch custody across repeat publication (fork=%s)",
-    async (fork) => {
-      const f = await fixture(fork);
+  it.each([
+    { fork: false, maintainer: false },
+    { fork: true, maintainer: false },
+    { fork: true, maintainer: true },
+  ])(
+    "appends to the original PR and retains local branch custody across repeat publication (fork=$fork, maintainer=$maintainer)",
+    async ({ fork, maintainer }) => {
+      const f = await fixture(fork, true, maintainer);
       const result = await f.publish("first-update");
       expect(result).toMatchObject({
         status: "published",
@@ -316,6 +326,35 @@ describe("shared publication to a prepared original PR", () => {
     f.expectWrites(0);
     expect(await f.local.git("rev-parse", "HEAD")).toBe(f.originalHead);
   });
+
+  it.each([false, true])(
+    "does not grant guest authorship from a maintainer's imported-PR update receipt (same branch=%s)",
+    async (sameBranch) => {
+      const f = await fixture(false, false, true, sameBranch);
+      f.pr.user = { id: 42, login: "roboclaw-bot" };
+      const { inspectOwnGitHubPullRequest } = await import("./github-publication-inspect.js");
+      await expect(
+        inspectOwnGitHubPullRequest({
+          pullRequestUrl: f.pr.html_url,
+          session: f.publicationSession,
+          requester: f.guest,
+          assertCurrent: () => f.guest.assertCurrent(),
+        }),
+      ).rejects.toThrow("Link a verified");
+      f.expectPublished(await f.publish("maintainer-assistance"));
+      expect(
+        await f.coordinator.latestPublishedShared(f.publicationSession, undefined),
+      ).toMatchObject({
+        result: { status: "published", url: f.pr.html_url },
+      });
+      await fs.writeFile(path.join(f.local.cwd, "after-assistance.txt"), "guest change");
+      const result = await f
+        .restart()
+        .requestForSessionV2(f.request("guest-after-assistance", f.guest));
+      expect(result.status).toBe("failed");
+      f.expectWrites(1);
+    },
+  );
 
   it("publishes a full revert to the original PR and reuses its unchanged head", async () => {
     const f = await fixture(true);

@@ -52,6 +52,7 @@ afterEach(async () => {
   const stops = [...registeredServiceStops];
   registeredServiceStops.clear();
   await Promise.all(stops.map((stop) => stop()));
+  vi.restoreAllMocks();
   vi.useRealTimers();
   resetSystemEventsForTest();
 });
@@ -795,6 +796,7 @@ describe("dreaming service reconciliation", () => {
     "reports bounded rejection counts through the cron hook: $label",
     async ({ rejected, promoted }) => {
       const workspaceDir = await createTempWorkspace("openclaw-dreaming-rejections-");
+      vi.spyOn(process, "umask").mockReturnValue(0o022);
       const nowMs = Date.now();
       const sourcePath = `memory/.dreams/session-corpus/${new Date(nowMs).toISOString().slice(0, 10)}.txt`;
       const snippets = Array.from(
@@ -839,7 +841,7 @@ describe("dreaming service reconciliation", () => {
               deep: { limit: 50, minScore: 0, minRecallCount: 0, minUniqueQueries: 0 },
             },
           },
-          { agents: { defaults: { workspace: workspaceDir } } },
+          { agents: { defaults: { workspace: workspaceDir, workspaceFileMode: "0660" } } },
         ),
       });
       await startDreaming(api, harness);
@@ -850,6 +852,11 @@ describe("dreaming service reconciliation", () => {
       );
       expect(logger.error).not.toHaveBeenCalled();
       const report = await readDeepReport(workspaceDir);
+      if (process.platform !== "win32") {
+        const reports = path.join(workspaceDir, "memory", "dreaming", "deep");
+        const [name] = await fs.readdir(reports);
+        expect((await fs.stat(path.join(reports, name!))).mode & 0o777).toBe(0o640);
+      }
       expect(report).toContain(
         `- Ranked ${rejected + promoted} candidate(s) for durable promotion.`,
       );

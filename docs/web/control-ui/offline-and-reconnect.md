@@ -532,6 +532,21 @@ conversation after a Gateway restart, the page shows **Session not found** with
 actions to open Main or browse sessions. A connection failure or a conversation
 missing from the current sidebar page does not count as deletion.
 
+Offline cache downloads yield while conversations, routes, and plugin interfaces
+load, including during the service worker's first installation. Downloads run in
+bounded batches at low priority. Interrupted downloads retain completed assets
+and resume after foreground imports and Gateway requests settle.
+
+Menu bodies load when opened instead of downloading speculatively while the page
+is idle. First open can briefly show a loading row; later opens reuse the loaded
+body. Declared next-route preloads still run after the current page is ready.
+
+When reconnecting to the same Gateway and account, the existing conversation
+history requests changes since its last cursor. The sidebar refresh runs alongside
+that history recovery instead of waiting for it. Its retained labels stay visible
+until the fresh authorized roster arrives; first loads still prioritize the open
+conversation before loading the roster.
+
 Opening a view for the first time can fail if its interface files cannot be downloaded.
 This also covers the workspace shell in source-backed development previews.
 If the shell fails to load, text entered in its loading screen stays editable below

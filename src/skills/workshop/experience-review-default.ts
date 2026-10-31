@@ -21,13 +21,13 @@ const defaultScheduler = createSkillExperienceReviewScheduler({
       await import("../../sessions/session-controller.queries.js");
     return getActiveSessionRunCount() > 0;
   },
-  runReview: async (candidate) => {
+  runReview: async (candidate, signal) => {
     const { getRuntimeConfig } = await import("../../config/config.js");
     const { prepareSkillExperienceReviewCandidate, runSkillExperienceReview } =
       await import("./experience-review.js");
     const prepared = await prepareSkillExperienceReviewCandidate(candidate, getRuntimeConfig());
     if (prepared) {
-      await runSkillExperienceReview(prepared);
+      await runSkillExperienceReview(prepared, { abortSignal: signal });
     }
   },
 });
@@ -53,6 +53,36 @@ export function scheduleSkillExperienceReview(
     .catch((error: unknown) => {
       log.warn(`skill experience review scheduling failed: ${formatErrorMessage(error)}`);
     });
+}
+
+/**
+ * Explicit Stop bridge: drops every stopped session's queued review, aborts its in-flight
+ * review, and suppresses the stopped runs until their own aborted completions arrive.
+ * Best-effort so review bookkeeping never fails Stop; callers apply it only after the Stop's
+ * live authority is confirmed, so a rejected Stop leaves review state untouched.
+ */
+export function stopSkillExperienceReview(params: {
+  sessions: readonly { agentId?: string; sessionKey?: string }[];
+  runIds: Iterable<string>;
+}): void {
+  for (const session of params.sessions) {
+    if (!session.agentId || !session.sessionKey) {
+      continue;
+    }
+    try {
+      defaultScheduler.cancelSession({
+        agentId: session.agentId,
+        sessionKey: session.sessionKey,
+      });
+    } catch (error) {
+      log.warn(`skill experience review cancellation failed: ${formatErrorMessage(error)}`);
+    }
+  }
+  try {
+    defaultScheduler.suppressRuns(params.runIds);
+  } catch (error) {
+    log.warn(`skill experience review suppression failed: ${formatErrorMessage(error)}`);
+  }
 }
 
 /**

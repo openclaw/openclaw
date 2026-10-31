@@ -4,12 +4,13 @@ import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { makeMenu } from "./chat-composer-menu.test-support.ts";
+import { makeCapabilities, makeMenu } from "./chat-composer-menu.test-support.ts";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import type { ChatComposerPlusMenuProps } from "./chat-composer-plus-menu.types.ts";
 
 afterEach(() => {
   vi.doUnmock("./chat-composer-plus-menu-content.tsx");
+  vi.doUnmock("./chat-composer-plus-menu-subview.tsx");
 });
 
 const toggle = (label: string, onChange: (checked: boolean) => void, checked = false) => ({
@@ -160,4 +161,68 @@ it("keeps the menu open and retries a failed content load", async () => {
   await waitForSolid(() => expect(view.item("Original toggle")).toBeTruthy());
   view.expectTrigger();
   expect(view.panel.matches(":popover-open")).toBe(true);
+});
+
+it("keeps root actions current after closing a pending capability view", async () => {
+  const entered = createDeferred();
+  const imported = createDeferred();
+  const ready = createDeferred();
+  onTestFinished(() => ready.resolve());
+  // Hold the real chunk boundary so closing the menu races actual lazy settlement.
+  vi.doMock("./chat-composer-plus-menu-subview.tsx", async () => {
+    entered.resolve();
+    await ready.promise;
+    try {
+      return await vi.importActual<typeof import("./chat-composer-plus-menu-subview.tsx")>(
+        "./chat-composer-plus-menu-subview.tsx",
+      );
+    } finally {
+      imported.resolve();
+    }
+  });
+  const changed = vi.fn();
+  let setMenu!: Setter<ChatComposerPlusMenuProps>;
+  const view = mountSolid(() => {
+    const [menu, update] = createSignal<ChatComposerPlusMenuProps>(
+      makeMenu({
+        capabilityMenu: makeCapabilities(),
+        rootToggles: [toggle("Original toggle", vi.fn())],
+        onOpenChange: (open) => update((current) => ({ ...current, open, view: "root" })),
+        onViewChange: (next) => update((current) => ({ ...current, view: next })),
+      }),
+    );
+    setMenu = update;
+    return <ChatComposerPlusMenu menu={menu()} />;
+  });
+  const trigger = view.container.querySelector<HTMLButtonElement>(
+    ".agent-chat__input-btn--attach",
+  )!;
+  const panel = view.container.querySelector(".agent-chat__capability-menu-panel")!;
+  trigger.click();
+  await waitForSolid(() =>
+    expect(
+      view.getByRole("menuitemcheckbox", { name: "Original toggle", hidden: true }),
+    ).toBeTruthy(),
+  );
+  view.getByRole("menuitem", { name: "Skills", hidden: true }).click();
+  await entered.promise;
+  setMenu((current) => ({
+    ...current,
+    open: false,
+    view: "root",
+    rootToggles: [toggle("Updated toggle", changed, true)],
+  }));
+  await waitForSolid(() => expect(panel.matches(":popover-open")).toBe(false));
+  ready.resolve();
+  await imported.promise;
+  flush();
+  trigger.click();
+  await waitForSolid(() =>
+    expect(
+      view.getByRole("menuitemcheckbox", { name: "Updated toggle", hidden: true }),
+    ).toBeTruthy(),
+  );
+  expect(view.queryByRole("menuitem", { name: "Manage skills", hidden: true })).toBeNull();
+  view.getByRole("menuitemcheckbox", { name: "Updated toggle", hidden: true }).click();
+  expect(changed).toHaveBeenCalledExactlyOnceWith(false);
 });

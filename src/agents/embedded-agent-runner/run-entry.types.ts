@@ -24,6 +24,7 @@ import type { EmbeddedAgentRunResult } from "./types.js";
 
 export type RunEntryModelResolve = {
   prompt: string;
+  onDispatch?: () => void;
   awaitSessionDiffBaseline?: () => Promise<void>;
   images?: readonly { mimeType?: string }[];
   cwd?: string;

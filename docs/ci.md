@@ -119,8 +119,10 @@ not compared. See
 
 Add `ci:full` before a PR run to select every `checks-ui` unit shard, all
 `checks-ui-e2e` shards (Control UI and browser extension), and every
-`checks-ui-e2e-real-gateway` shard, including desktop resize proof. These use the
-same UI inventories and shard budgets as scheduled `main` CI. Unlabeled PRs keep
+`checks-ui-e2e-real-gateway` shard. These use the same UI inventories and shard
+budgets as scheduled `main` CI, including the release-only exclusions. Editing
+a release-only test selects that test; full manual/release runs retain the
+complete inventory, including desktop resize proof. Unlabeled PRs keep
 change-selected UI coverage; the label does not expand unrelated platform lanes.
 
 Current UI unit/browser CI retains three native shards with three workers each,
@@ -148,18 +150,18 @@ browser cases do not load backend stores or Gateway policy. The shared E2E
 cleanup hook reads the canonical admission state through its thin state module;
 policy and logging remain owned by the Gateway admission module.
 
-When artifact reuse is enabled, service-worker-update, phone stale-build, and
-real protocol-mismatch recovery fixtures run in `build-artifacts`. Each copies
+When artifact reuse is enabled, service-worker-update and phone stale-build
+fixtures run in `build-artifacts`. Each copies
 the verified production UI artifact and refreshes its own build identity before
-serving it. Protocol recovery also uses the producer’s built Gateway and retains
-its incompatible-protocol UI build. Local, compatibility, and frozen targets
+serving it. Local, compatibility, and frozen targets
 retain their ordinary preparation path.
 
-When the selected mocked Control UI shard includes production stale-build recovery,
-its workflow step prepares the Gateway runtime before starting Vitest. This moves
-the existing cold build outside the fixture's subprocess budget without adding a
-job or building on shards that do not select that fixture. Production-artifact
-reuse still omits the delegated fixture from the mocked shards.
+Real protocol-mismatch recovery runs in the prebuilt real-Gateway pool, sharing
+that job's Gateway and current UI artifacts while retaining its incompatible
+protocol UI build. It no longer makes a mocked browser shard prepare a Gateway.
+Isolated child-Gateway fixtures share the existing two-worker parallel pool;
+in-process global Gateway fixtures remain serial. Both parallel phases start
+their longest measured files first without crossing the serial phase barrier.
 
 The exact Doctor plugin-index and SQLite sessions/transcripts built-CLI proofs
 use the runtime-only compiled-worker registry. The local TUI file does the same

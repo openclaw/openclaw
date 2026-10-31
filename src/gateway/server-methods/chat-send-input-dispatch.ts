@@ -119,7 +119,6 @@ export async function handleChatSendWithStorage(
   const phase = diagnostics.scope("attachments");
   const preparedAttachments = await prepareChatSendAttachments({
     ...setup,
-    client,
     respond,
     context,
   });

@@ -22,7 +22,7 @@ import { UsageCreatorFilter, UsageCreators } from "./view-creators.tsx";
 import { SessionDetailPanel } from "./view-details.tsx";
 import { UsageHeatmap } from "./view-heatmap.tsx";
 import {
-  renderCostWindowComparison,
+  CostWindowComparison,
   renderFilterChips,
   renderProviderUsage,
   UsageInsights,
@@ -69,6 +69,18 @@ function UsageView(props: UsageProps & { loading: boolean; read: UsageRead }) {
   // A text query hides the old charts, but keeps their date-keyed DOM alive.
   // The owner's calendar policy separately keeps day-selection controls live.
   const retainedChartSnapshot = createMemo(() => props.data.readChartSnapshot("filterOptions"));
+  // Retain presentation only within the owner's strict scope while its text query changes.
+  const analyticsData = createMemo(() => retainedChartSnapshot() ?? props.data);
+  const analyticsTotals = () => analyticsData().totals;
+  const analyticsSessionCount = () =>
+    analyticsData().overview?.selectedSessionCount ??
+    analyticsData().overview?.total ??
+    analyticsData().aggregates?.sessionCount ??
+    analyticsData().sessions.length;
+  const analyticsTotalSessions = () =>
+    analyticsData().overview?.unfilteredSessionCount ??
+    analyticsData().aggregates?.sessionCount ??
+    analyticsData().sessions.length;
   const calendarSnapshot = createMemo(() => props.data.readChartSnapshot("calendar"));
   const chartSnapshot = createMemo(() => calendarSnapshot() ?? retainedChartSnapshot());
   const retainedCharts = createMemo(() => {
@@ -135,7 +147,7 @@ function UsageView(props: UsageProps & { loading: boolean; read: UsageRead }) {
     props.data.sessions.length;
   const activeAggregates = createMemo(
     () =>
-      props.data.aggregates ?? {
+      analyticsData().aggregates ?? {
         messages: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
         tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
         byModel: [],
@@ -164,9 +176,9 @@ function UsageView(props: UsageProps & { loading: boolean; read: UsageRead }) {
   });
   const exportSessionCount = () => props.data.overview?.selectedRowCount ?? displaySessionCount();
   const insightStats = createMemo(() => {
-    const durationMs = props.data.overview?.durationMs ?? 0;
-    const durationCount = props.data.overview?.durationCount ?? 0;
-    const totals = displayTotals();
+    const durationMs = analyticsData().overview?.durationMs ?? 0;
+    const durationCount = analyticsData().overview?.durationCount ?? 0;
+    const totals = analyticsTotals();
     const messages = activeAggregates().messages;
     return {
       durationCount,
@@ -181,6 +193,8 @@ function UsageView(props: UsageProps & { loading: boolean; read: UsageRead }) {
   // Zero totals are normal while idle; an error must keep its own explanation.
   const isEmpty = () => overview().isEmpty && !loading() && !props.data.error;
   const showAnalytics = () => overview().hasOverviewData && !isEmpty();
+  const keepAnalytics = () =>
+    showAnalytics() || (retainedCharts() && Boolean(retainedChartSnapshot()));
   const datePresets = [
     { labelKey: "usage.presets.today", days: 1 },
     { labelKey: "usage.presets.last7d", days: 7 },
@@ -574,25 +588,23 @@ function UsageView(props: UsageProps & { loading: boolean; read: UsageRead }) {
               inert={!showAnalytics()}
               style={{ display: showAnalytics() ? undefined : "none" }}
             >
-              {
-                <DailyChartCompact
-                  dailyEntries={chartDaily()}
-                  selectedDays={props.filters.selectedDays}
-                  chartMode={props.display.chartMode}
-                  dailyChartMode={props.display.dailyChartMode}
-                  onDailyChartModeChange={(dailyChartMode) =>
-                    props.callbacks.display.onChange({ dailyChartMode })
-                  }
-                  onSelectDay={props.callbacks.filters.onSelectDay}
-                  providerSeries={providerSeries()}
-                  range={{
-                    startDate: props.filters.startDate,
-                    endDate: props.filters.endDate,
-                    complete: chartComplete(),
-                  }}
-                />
-              }
-              <Show when={showAnalytics() && displayTotals()}>
+              <DailyChartCompact
+                dailyEntries={chartDaily()}
+                selectedDays={props.filters.selectedDays}
+                chartMode={props.display.chartMode}
+                dailyChartMode={props.display.dailyChartMode}
+                onDailyChartModeChange={(dailyChartMode) =>
+                  props.callbacks.display.onChange({ dailyChartMode })
+                }
+                onSelectDay={props.callbacks.filters.onSelectDay}
+                providerSeries={providerSeries()}
+                range={{
+                  startDate: props.filters.startDate,
+                  endDate: props.filters.endDate,
+                  complete: chartComplete(),
+                }}
+              />
+              <Show when={keepAnalytics() && analyticsTotals()}>
                 {(totals) => (
                   <CostBreakdownCompact totals={totals()} mode={props.display.chartMode} />
                 )}
@@ -600,31 +612,37 @@ function UsageView(props: UsageProps & { loading: boolean; read: UsageRead }) {
             </div>
           )}
         </Show>
-        <Show when={showAnalytics()}>
-          <UsageCreators
-            groups={activeAggregates().byCreator ?? []}
-            selectedKey={props.filters.creatorKey}
-            mode={props.display.chartMode}
-            onSelect={(creatorKey) => props.callbacks.filters.onScopeChange({ creatorKey })}
-          />
-          <UsageInsights
-            totals={displayTotals()}
-            aggregates={activeAggregates()}
-            stats={insightStats()}
-            showCostHint={(displayTotals()?.missingCostEntries ?? 0) > 0}
-            errorHours={buildPeakErrorHours(
-              props.data.overview?.hourlyMessages ?? [],
-              props.data.overview?.hourlyErrors ?? [],
-            )}
-            sessionCount={displaySessionCount()}
-            totalSessions={totalSessions()}
-          />
-          {renderCostWindowComparison(
-            props.data.costDaily,
-            props.filters.startDate,
-            props.filters.endDate,
-            props.filters.timeZone,
-          )}
+        <Show when={keepAnalytics()}>
+          <div
+            hidden={!showAnalytics()}
+            inert={!showAnalytics()}
+            style={{ display: showAnalytics() ? "contents" : "none" }}
+          >
+            <UsageCreators
+              groups={activeAggregates().byCreator ?? []}
+              selectedKey={props.filters.creatorKey}
+              mode={props.display.chartMode}
+              onSelect={(creatorKey) => props.callbacks.filters.onScopeChange({ creatorKey })}
+            />
+            <UsageInsights
+              totals={analyticsTotals()}
+              aggregates={activeAggregates()}
+              stats={insightStats()}
+              showCostHint={(analyticsTotals()?.missingCostEntries ?? 0) > 0}
+              errorHours={buildPeakErrorHours(
+                analyticsData().overview?.hourlyMessages ?? [],
+                analyticsData().overview?.hourlyErrors ?? [],
+              )}
+              sessionCount={analyticsSessionCount()}
+              totalSessions={analyticsTotalSessions()}
+            />
+            <CostWindowComparison
+              daily={analyticsData().aggregates?.costDaily ?? props.data.costDaily}
+              rangeStartDate={props.filters.startDate}
+              rangeEndDate={props.filters.endDate}
+              timeZone={props.filters.timeZone}
+            />
+          </div>
         </Show>
         <Show when={showAnalytics() || retainedCharts()}>
           {(_shown) => (
@@ -641,41 +659,50 @@ function UsageView(props: UsageProps & { loading: boolean; read: UsageRead }) {
             </div>
           )}
         </Show>
-        <Show when={showAnalytics()}>
-          {
+        <Show when={keepAnalytics()}>
+          <div
+            hidden={!showAnalytics()}
+            inert={!showAnalytics()}
+            style={{ display: showAnalytics() ? "contents" : "none" }}
+          >
             <UsageMosaic
-              overview={props.data.overview}
+              overview={analyticsData().overview}
               timeZone={props.filters.timeZone}
               selectedHours={props.filters.selectedHours}
               onSelectHour={props.callbacks.filters.onSelectHour}
             />
-          }
 
-          <div class="usage-grid">
-            <div class="usage-grid-column">
-              <SessionsCard
-                sessions={props.data.sessions}
-                usage={props}
-                totalSessions={props.data.overview?.total ?? totalSessions()}
-                overview={props.data.sessionPage ?? props.data.overview}
-                loading={loading()}
-              />
+            <div class="usage-grid">
+              <div class="usage-grid-column">
+                <SessionsCard
+                  sessions={analyticsData().sessions}
+                  selectedRows={analyticsData().overview?.selectedRows ?? []}
+                  usage={props}
+                  totalSessions={analyticsData().overview?.total ?? analyticsTotalSessions()}
+                  overview={
+                    retainedChartSnapshot()?.overview ??
+                    props.data.sessionPage ??
+                    props.data.overview
+                  }
+                  loading={loading()}
+                />
+              </div>
+              <Show when={showAnalytics() && primarySelectedEntry()}>
+                {(selectedSession) => (
+                  // Details stack under the session list so the page stays one column.
+                  <aside class="usage-grid-column" aria-label={t("usage.sessions.details")}>
+                    <SessionDetailPanel
+                      session={selectedSession()}
+                      detail={props.detail}
+                      callbacks={props.callbacks.details}
+                      range={props.filters}
+                      contextExpanded={props.display.contextExpanded}
+                      onClose={() => props.callbacks.filters.onClearSessions()}
+                    />
+                  </aside>
+                )}
+              </Show>
             </div>
-            <Show when={primarySelectedEntry()}>
-              {(selectedSession) => (
-                // Details stack under the session list so the page stays one column.
-                <aside class="usage-grid-column" aria-label={t("usage.sessions.details")}>
-                  <SessionDetailPanel
-                    session={selectedSession()}
-                    detail={props.detail}
-                    callbacks={props.callbacks.details}
-                    range={props.filters}
-                    contextExpanded={props.display.contextExpanded}
-                    onClose={() => props.callbacks.filters.onClearSessions()}
-                  />
-                </aside>
-              )}
-            </Show>
           </div>
         </Show>
         {renderProviderUsage(

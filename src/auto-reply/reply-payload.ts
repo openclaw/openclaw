@@ -23,6 +23,7 @@ export type {
 
 export type ReplyMediaFailureCode =
   | "file-not-found"
+  | "file-too-large"
   | "unsupported-format"
   | "delivery-failed"
   | "invalid-reference";
@@ -106,6 +107,7 @@ export type ReplyDeliveryContext = {
 
 const REPLY_MEDIA_FAILURE_MESSAGES: Record<ReplyMediaFailureCode, string> = {
   "file-not-found": "File not found. Check the path and try again.",
+  "file-too-large": "Too large to attach. Look for this file in Files.",
   "unsupported-format": "Rejected by the local attachment allowlist. Send a supported file type.",
   "delivery-failed": "Delivery failed. Try sending this file again.",
   "invalid-reference":

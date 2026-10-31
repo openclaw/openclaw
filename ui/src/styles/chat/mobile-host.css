@@ -25,6 +25,8 @@
     );
   background: var(--bg);
   grid-template-areas: "main-header" "main" "mobile-host";
+  /* The exiting sheet must not give focus scrolling an off-screen destination. */
+  overflow: clip;
   /* The conversation edge rides the same spring as the sheet it reveals. */
   transition: grid-template-rows var(--motion-sheet);
 }
@@ -62,15 +64,14 @@
   transform: none;
   /* Only a sheet pulled below its minimum translates; none keeps fixed descendants intact. */
   translate: var(--mobile-live-translate, none);
-  /* One spring presents, resizes and dismisses the sheet; a gesture release overrides
-     --motion-sheet with a curve that starts at the finger's speed. A hidden sheet stays
-     displayed until it slides out, and above the conversation until it docks. */
+  /* Keep the sheet out of the grid while it exits. Transitioning display from
+     desktop's contents to none leaves its children in implicit grid rows. */
   transition:
     height var(--motion-sheet),
     transform var(--motion-sheet),
     translate var(--motion-sheet),
     border-radius var(--motion-sheet),
-    display var(--motion-sheet) allow-discrete,
+    visibility var(--motion-sheet),
     z-index 0s var(--motion-sheet-duration);
   @starting-style {
     transform: translateY(100%);
@@ -78,6 +79,10 @@
 }
 
 .sidebar-region--mobile-host > .chat-mobile-host[hidden] {
+  /* Keep its box through picker dismissal: display:none here can spin WebKit's
+     style resolver when a composer's native details closes. */
+  display: flex;
+  visibility: hidden;
   transform: translateY(100%);
 }
 
@@ -307,7 +312,6 @@
   box-shadow: none;
 }
 
-.sidebar-region--mobile-host > .chat-mobile-host[hidden],
 .sidebar-region--mobile-host > .chat-mobile-host > .chat-mobile-host__panels[hidden],
 .sidebar-region--mobile-host > .chat-mobile-host > .chat-mobile-host__details[hidden],
 .sidebar-region--mobile-host

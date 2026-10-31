@@ -44,7 +44,7 @@ function assertPreservedPublicationFooter(before: string, after: string) {
   }
 }
 
-/** Execute one explicit operation against the session's bound original PR or shared publication. */
+/** Execute an authorized action against an explicitly verified PR or the session's PR. */
 export async function performSessionGitHubAction(options: Options): Promise<void> {
   const { params, context } = options;
   const caller = getGatewayToolCallerIdentity();
@@ -59,6 +59,10 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     throw new Error("GitHub action session does not match the current conversation.");
   }
   const edit = params.action === "edit" ? params : undefined;
+  const explicitPullRequestUrl = edit?.pullRequestUrl;
+  if (explicitPullRequestUrl && params.requestId) {
+    throw new Error("An explicit PR URL accepts no publication requestId; read that PR with edit.");
+  }
   const evidenceUpload = params.action === "upload_evidence" ? params : undefined;
   const requestReview = params.action === "request_review";
   const ownPublicationAction = Boolean(edit || requestReview || evidenceUpload);
@@ -125,20 +129,45 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     }
   };
   assertRequester();
-  const binding = entry.worktree?.githubPullRequest;
+  const explicit = explicitPullRequestUrl
+    ? await inspectOwnGitHubPullRequest({
+        pullRequestUrl: explicitPullRequestUrl,
+        session,
+        requester: admitted.requester,
+        assertCurrent: assertRequester,
+      })
+    : undefined;
+  let explicitPullRequest: Parameters<typeof pullRequestState>[1] | undefined;
+  if (explicit) {
+    const head = explicit.details.head;
+    if (!isRecord(head) || typeof head.ref !== "string" || !head.ref) {
+      throw new Error(
+        "GitHub returned an invalid PR head reference; inspect the PR before retrying.",
+      );
+    }
+    explicitPullRequest = {
+      url: explicit.result.url,
+      repository: explicit.result.base.repository,
+      branch: head.ref,
+    };
+  }
+  let inspection = explicit;
+  const binding = explicit ? undefined : entry.worktree?.githubPullRequest;
+  const originalTarget = explicit?.result ?? binding;
   const readCurrent = () => target.selected.readCurrent();
-  let receipt = binding
-    ? undefined
-    : ownPublicationAction
-      ? await service.latestPublishedShared(session, readCurrent)
-      : await service.latestShared(session, undefined, undefined, readCurrent);
+  let receipt =
+    explicit || binding
+      ? undefined
+      : ownPublicationAction
+        ? await service.latestPublishedShared(session, readCurrent)
+        : await service.latestShared(session, undefined, undefined, readCurrent);
   // A failed later push leaves the published PR as it was; an in-flight one still refuses.
   if (receipt?.result.status === "failed") {
     receipt = await service.latestPublishedShared(session, readCurrent);
   }
   assertRequester();
   const publication = receipt?.result.status === "published" ? receipt.result : undefined;
-  if (!binding && !publication) {
+  if (!explicit && !binding && !publication) {
     throw new Error(
       edit
         ? "This session has no completed shared publication to edit."
@@ -162,9 +191,11 @@ export async function performSessionGitHubAction(options: Options): Promise<void
       "The publication changed; inspect the current PR and review its head before retrying.",
     );
   }
-  const pullRequest = binding
-    ? { url: binding.url, repository: binding.base.repository, branch: binding.head.branch }
-    : publication!;
+  const pullRequest =
+    explicitPullRequest ??
+    (binding
+      ? { url: binding.url, repository: binding.base.repository, branch: binding.head.branch }
+      : publication!);
   const identity = await prepareCurrentGitHubPublicationIdentity(session.agentId);
   assertRequester();
   if (publication) {
@@ -178,7 +209,6 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     requestedScopes: ["operator.write"],
     allowedScopes: admitted.requester.snapshot.scopes,
   });
-  let inspection: Awaited<ReturnType<typeof inspectOwnGitHubPullRequest>> | undefined;
   const assertIdentity = () => {
     assertRequester();
     if (!matchesCurrentGitHubPublicationIdentity({ agentId: session.agentId, identity })) {
@@ -199,7 +229,7 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     !url ||
     url.protocol !== "https:" ||
     url.host !== host ||
-    (binding && binding.host !== host) ||
+    (originalTarget && originalTarget.host !== host) ||
     url.username ||
     url.password ||
     !url.pathname.startsWith(expectedPath) ||
@@ -213,6 +243,21 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   const endpoint = `repos/${pullRequest.repository}/pulls/${number}`;
   const read = async () => {
     assertCurrent();
+    if (explicitPullRequestUrl) {
+      inspection = await inspectOwnGitHubPullRequest({
+        pullRequestUrl: explicitPullRequestUrl,
+        session,
+        requester: admitted.requester,
+        assertCurrent: assertIdentity,
+      });
+      assertCurrent();
+      return pullRequestState(
+        inspection.details,
+        pullRequest,
+        originalTarget,
+        explicit?.result.author.accountId,
+      );
+    }
     if (binding && !fullWrite) {
       inspection = await inspectOwnGitHubPullRequest({
         pullRequestUrl: binding.url,
@@ -253,7 +298,14 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     assertCurrent();
     options.respond(true, result);
   };
-  let before = await read();
+  let before = explicit
+    ? pullRequestState(
+        explicit.details,
+        pullRequest,
+        originalTarget,
+        explicit.result.author.accountId,
+      )
+    : await read();
   if (params.action === "inspect" || (edit && !editsMetadata)) {
     return present(before);
   }
@@ -266,6 +318,15 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   };
   assertHead(before);
   const prepareImportedEffect = async () => {
+    if (explicitPullRequestUrl) {
+      // Metadata does not require permission to push source or an unprotected head branch.
+      const current = await read();
+      assertHead(current);
+      if (current.state === "closed" || current.state === "merged") {
+        throw new Error("The PR is closed; no metadata action was performed.");
+      }
+      return current;
+    }
     if (inspection) {
       const current = await assertExistingPullRequestWriteAccess({
         pullRequest: inspection.result,

@@ -1,5 +1,6 @@
 import { spawn, execFileSync } from "node:child_process";
 import { createHash, createPrivateKey, createPublicKey } from "node:crypto";
+import { channel } from "node:diagnostics_channel";
 // Real-Gateway wire benchmark. Run with node --import ./scripts/tsx.mjs.
 // Example: --bundle-dir dist/control-ui --pairs 10 --profile remote --output /absolute/proof
 // --compare-source-dir interleaves the frozen source and this checkout; same source is A/A.
@@ -14,9 +15,11 @@ import {
   unlink,
   lstat,
   copyFile,
+  mkdtemp,
+  rm,
 } from "node:fs/promises";
 import { createServer, connect, type Socket } from "node:net";
-import { loadavg } from "node:os";
+import { loadavg, tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { createInterface } from "node:readline";
@@ -48,16 +51,19 @@ const { values } = parseArgs({
     worker: { type: "boolean", default: false },
     "controlled-worker": { type: "boolean", default: false },
     screenshots: { type: "boolean", default: false },
+    "extended-flows": { type: "boolean", default: false },
+    timeline: { type: "boolean", default: false },
+    "proxy-nagle": { type: "boolean", default: false },
   },
 });
 if (
   !values["bundle-dir"] ||
   !values.output ||
-  !["local", "remote"].includes(values.profile) ||
+  !["local", "remote", "mobile"].includes(values.profile) ||
   !["none", "token"].includes(values.auth)
 ) {
   throw new Error(
-    "Required: --bundle-dir <built UI> --output <directory> [--profile local|remote] [--auth none|token] [--pairs N] [--compare-source-dir <checkout>] [--compare-bundle-dir <base UI>]",
+    "Required: --bundle-dir <built UI> --output <directory> [--profile local|remote|mobile] [--auth none|token] [--pairs N] [--extended-flows] [--compare-source-dir <checkout>] [--compare-bundle-dir <base UI>]",
   );
 }
 if (values["compare-bundle-dir"] && !values["compare-source-dir"]) {
@@ -85,7 +91,13 @@ if (outputInsideRepository) {
   );
 }
 const bundle = path.resolve(values["bundle-dir"]);
-const remote = values.profile === "remote";
+const remote = values.profile !== "local";
+const networkProfile =
+  values.profile === "local"
+    ? { roundTripMs: 0, megabitsPerSecond: null, latencyMs: 0 }
+    : values.profile === "mobile"
+      ? { roundTripMs: 250, megabitsPerSecond: 3, latencyMs: 125 }
+      : { roundTripMs: 100, megabitsPerSecond: 10, latencyMs: 50 };
 const SYNTHETIC_GATEWAY_TOKEN = "synthetic-wire-benchmark-gateway-token";
 const sessionKeys = ["agent:main:wire-fixture-a", "agent:main:wire-fixture-b"];
 const workerMessagePrefix = "OPENCLAW_WIRE_WORKER ";
@@ -102,7 +114,10 @@ type WireFrame = {
   name?: string;
   requestId?: string;
   type?: string;
+  ok?: boolean;
   digest?: string;
+  streamStart: number;
+  streamEnd: number;
 };
 
 // Observe RFC6455 bytes before forwarding. CDP exposes decompressed messages, so its
@@ -112,12 +127,14 @@ function frameReader(
   connection: number,
   frames: WireFrame[],
   methods: Map<string, string>,
+  requests: Map<number, { method: string; pathname: string }>,
 ) {
   let pending = Buffer.alloc(0);
   let headers = true;
   let upgraded = false;
   let message: WireFrame | undefined;
   let parts: Buffer[] = [];
+  let consumed = 0;
   return (chunk: Buffer, deliveredAtMs: number, receivedAtMs = performance.now()) => {
     pending = Buffer.concat([pending, chunk]);
     if (headers) {
@@ -126,13 +143,26 @@ function frameReader(
         return;
       }
       const header = pending.subarray(0, end).toString("latin1");
+      if (direction === "sent") {
+        const [method, target] = header.split("\r\n", 1)[0]!.split(" ");
+        if (method && target) {
+          // Path only: authentication headers and query values never enter evidence.
+          requests.set(connection, {
+            method,
+            pathname: new URL(target, "http://localhost").pathname,
+          });
+        }
+      }
       upgraded = /upgrade:\s*websocket/iu.test(header);
       headers = false;
       if (!upgraded) {
+        // Browser HTTP traffic here is GET-only; keep observing reused connections.
+        headers = direction === "sent" && header.startsWith("GET ");
         pending = Buffer.alloc(0);
         return;
       }
       pending = pending.subarray(end + 4);
+      consumed += end + 4;
     }
     if (!upgraded) {
       pending = Buffer.alloc(0);
@@ -174,6 +204,8 @@ function frameReader(
           compressed: Boolean(first & 64),
           payloadBytes: 0,
           wireBytes: 0,
+          streamStart: consumed,
+          streamEnd: consumed,
         };
       }
       if (message) {
@@ -187,6 +219,7 @@ function frameReader(
         parts.push(body);
         message.payloadBytes += length;
         message.wireBytes += headerBytes + length;
+        message.streamEnd = consumed + headerBytes + length;
         message.deliveredAtMs = deliveredAtMs;
         if (first & 128) {
           if (message.opcode === 1 || message.opcode === 2) {
@@ -201,6 +234,7 @@ function frameReader(
               method?: string;
               type?: string;
               event?: string;
+              ok?: boolean;
             };
             if (value.id && value.method) {
               methods.set(value.id, value.method);
@@ -212,6 +246,7 @@ function frameReader(
               value.type;
             message.requestId = value.id;
             message.type = value.type;
+            message.ok = value.ok;
             message.decodedBytes = payload.length;
             message.digest = createHash("sha256").update(payload).digest("hex");
           }
@@ -220,18 +255,47 @@ function frameReader(
         }
       }
       pending = pending.subarray(headerBytes + length);
+      consumed += headerBytes + length;
     }
   };
 }
 
 async function startProxy(upstreamPort: number, listenPort: number) {
   const frames: WireFrame[] = [];
+  const packets: Array<{
+    direction: WireFrame["direction"];
+    connection: number;
+    streamStart: number;
+    streamEnd: number;
+    receivedAtMs: number;
+    serialStartMs: number;
+    scheduledWriteMs: number;
+    actualWriteMs?: number;
+    request?: { method: string; pathname: string };
+  }> = [];
   const sockets = new Set<Socket>();
-  const links = { sent: createControlUiWireLink(), received: createControlUiWireLink() };
+  const linkOptions = {
+    latencyMs: networkProfile.latencyMs,
+    megabitsPerSecond: networkProfile.megabitsPerSecond ?? 10,
+  };
+  const links = {
+    sent: createControlUiWireLink(linkOptions),
+    received: createControlUiWireLink(linkOptions),
+  };
+  let offline = false;
   let connection = 0;
   const methods = new Map<string, string>();
+  const requests = new Map<number, { method: string; pathname: string }>();
   const server = createServer({ allowHalfOpen: true }, (client) => {
+    if (offline) {
+      client.destroy();
+      return;
+    }
     const upstream = connect({ port: upstreamPort, host: "127.0.0.1", allowHalfOpen: true });
+    // The profile supplies latency/bandwidth; loopback delayed ACKs must not add
+    // a second, platform-dependent queue to interactive WebSocket traffic.
+    client.setNoDelay(!values["proxy-nagle"]);
+    upstream.setNoDelay(!values["proxy-nagle"]);
     sockets.add(client);
     sockets.add(upstream);
     client.on("close", () => sockets.delete(client));
@@ -241,9 +305,39 @@ async function startProxy(upstreamPort: number, listenPort: number) {
       [client, upstream, "sent"],
       [upstream, client, "received"],
     ] as const) {
-      const inspect = frameReader(direction, id, frames, methods);
+      const inspect = frameReader(direction, id, frames, methods, requests);
       if (remote) {
-        links[direction].connect(source, target, inspect);
+        let offset = 0;
+        const pendingPackets = new WeakMap<Buffer, (typeof packets)[number]>();
+        links[direction].connect(
+          source,
+          target,
+          (chunk, deliveredAtMs, receivedAtMs) => {
+            inspect(chunk, deliveredAtMs, receivedAtMs);
+            const packet = {
+              direction,
+              connection: id,
+              streamStart: offset,
+              streamEnd: offset + chunk.length,
+              receivedAtMs,
+              serialStartMs:
+                deliveredAtMs -
+                networkProfile.latencyMs -
+                (chunk.length * 8) / (networkProfile.megabitsPerSecond! * 1000),
+              scheduledWriteMs: deliveredAtMs,
+              request: requests.get(id),
+            };
+            offset += chunk.length;
+            packets.push(packet);
+            pendingPackets.set(chunk, packet);
+          },
+          (chunk, atMs) => {
+            const packet = pendingPackets.get(chunk);
+            if (packet) {
+              packet.actualWriteMs = atMs;
+            }
+          },
+        );
       } else {
         source.on("data", (chunk: Buffer) => inspect(chunk, performance.now()));
         source.pipe(target);
@@ -266,7 +360,16 @@ async function startProxy(upstreamPort: number, listenPort: number) {
   }
   return {
     frames,
+    packets,
     url: `http://127.0.0.1:${address.port}`,
+    setOffline(value: boolean) {
+      offline = value;
+      if (offline) {
+        for (const socket of sockets) {
+          socket.destroy();
+        }
+      }
+    },
     async close() {
       links.sent.close();
       links.received.close();
@@ -280,30 +383,47 @@ async function startProxy(upstreamPort: number, listenPort: number) {
   };
 }
 
+type ReadinessKind = "chat" | "new-session" | "board" | "usage" | "settings" | "reconnect";
+
 function installReadiness() {
   type Readiness = {
     startMs: number;
     transcriptMs: number | null;
+    transcriptVisibleMs: number | null;
     composerMs: number | null;
     newSessionMs: number | null;
+    pageMs: number | null;
   };
-  const state: Readiness = { startMs: 0, transcriptMs: null, composerMs: null, newSessionMs: null };
+  const state: Readiness = {
+    startMs: 0,
+    transcriptMs: null,
+    transcriptVisibleMs: null,
+    composerMs: null,
+    newSessionMs: null,
+    pageMs: null,
+  };
   const visible = (selector: string) => {
     const element = document.querySelector<HTMLElement>(selector);
     return element?.checkVisibility() ? element : null;
   };
   let expectedKey: string | undefined = "agent:main:wire-fixture-a";
+  let kind: ReadinessKind = "chat";
   const sample = () => {
+    const snapshot =
+      kind === "chat" || kind === "new-session" ? undefined : window.openclawControlUi?.snapshot();
+    const recovered =
+      kind !== "reconnect" || (snapshot?.gatewayPhase === "connected" && snapshot.rosterReady);
     const pane = visible(".chat-pane-cache__pane--active");
     const correctPane = pane && (!expectedKey || Reflect.get(pane, "sessionKey") === expectedKey);
-    if (
-      correctPane &&
-      Reflect.get(pane, "transcriptReady") === true &&
-      visible(".chat-pane-cache__pane--active .chat-virtual-row")
-    ) {
+    const transcript = correctPane && visible(".chat-pane-cache__pane--active .chat-virtual-row");
+    if (transcript && transcript.textContent?.trim()) {
+      state.transcriptVisibleMs ??= performance.now() - state.startMs;
+    }
+    if (recovered && correctPane && Reflect.get(pane, "transcriptReady") === true && transcript) {
       state.transcriptMs ??= performance.now() - state.startMs;
     }
     const composer =
+      recovered &&
       correctPane &&
       visible(".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea");
     const model = Array.from(
@@ -317,16 +437,37 @@ function installReadiness() {
     if (newSession && modelReady && !newSession.matches(":disabled, [aria-disabled='true']")) {
       state.newSessionMs ??= performance.now() - state.startMs;
     }
+    const route = kind === "board" ? "dashboard" : kind === "settings" ? "appearance" : kind;
+    if (
+      snapshot?.routeReady &&
+      snapshot.route?.status === "success" &&
+      snapshot.route.matches[0]?.routeId === route
+    ) {
+      const control =
+        kind === "board"
+          ? visible('.board-session-surface .board-view[aria-busy="false"] .board-empty')
+          : kind === "usage"
+            ? visible('openclaw-usage-page button[aria-label="Refresh"]:not(:disabled)')
+            : kind === "settings"
+              ? visible(".settings-theme-grid [data-theme-id]:not(:disabled)")
+              : null;
+      if (control) {
+        state.pageMs ??= performance.now() - state.startMs;
+      }
+    }
     requestAnimationFrame(sample);
   };
   Reflect.set(window, "__wireReadiness", {
     state,
-    reset(key?: string) {
+    reset(key?: string, nextKind: ReadinessKind = "chat") {
       expectedKey = key;
+      kind = nextKind;
       state.startMs = performance.now();
       state.transcriptMs = null;
+      state.transcriptVisibleMs = null;
       state.composerMs = null;
       state.newSessionMs = null;
+      state.pageMs = null;
     },
   });
   requestAnimationFrame(sample);
@@ -377,6 +518,7 @@ async function runWorker() {
         "SYSTEMROOT",
         "LANG",
         "TMPDIR",
+        "XDG_CACHE_HOME",
       ].includes(name),
     ),
   );
@@ -507,10 +649,12 @@ async function runWorker() {
     { agentId: "main" },
   );
   await closeOpenClawAgentDatabasesAsync();
-  const [{ startGatewayServer }, { controlUiSessionPath }] = await Promise.all([
-    import("../src/gateway/server.js"),
-    import("../ui/src/test-helpers/control-ui-e2e-session-urls.ts"),
-  ]);
+  const [{ startGatewayServer }, { controlUiSessionPath, controlUiSessionUrl }] = await Promise.all(
+    [
+      import("../src/gateway/server.js"),
+      import("../ui/src/test-helpers/control-ui-e2e-session-urls.ts"),
+    ],
+  );
   const { ensureCanonicalGatewayOwnerProfile, setCanonicalUserProfileAvatar } =
     await import("../src/state/user-profile-writes.js");
   const owner = await ensureCanonicalGatewayOwnerProfile("Synthetic benchmark operator", {
@@ -527,6 +671,14 @@ async function runWorker() {
     { env: process.env },
   );
   const gatewayPort = await getFreePort();
+  const gatewayTimeline: Array<Record<string, unknown> & { atMs: number }> = [];
+  const rpcChannel = channel("openclaw.gateway.rpc");
+  const stageChannel = channel("openclaw.gateway.request.stages");
+  const observeGateway = (event: unknown) => {
+    gatewayTimeline.push({ ...(event as Record<string, unknown>), atMs: performance.now() });
+  };
+  rpcChannel.subscribe(observeGateway);
+  stageChannel.subscribe(observeGateway);
   process.chdir(path.join(stateRoot, "workspace"));
   const gateway = await startGatewayServer(gatewayPort, {
     bind: "loopback",
@@ -626,6 +778,8 @@ async function runWorker() {
           }
           // A closed context has no remaining sample to attribute these frames to.
           proxy.frames.length = 0;
+          proxy.packets.length = 0;
+          gatewayTimeline.length = 0;
           const sampleOutput = path.join(output, String(pair + 1).padStart(2, "0"));
           await mkdir(sampleOutput, { recursive: true });
           const context = await browser.newContext({
@@ -655,6 +809,30 @@ async function runWorker() {
           await page.addInitScript({
             content: `const __name = (fn) => fn; (${installReadiness.toString()})();`,
           });
+          if (values.timeline) {
+            await page.addInitScript(() => {
+              const parse = JSON.parse;
+              const samples: Array<{ startedAtMs: number; durationMs: number; bytes: number }> = [];
+              Reflect.set(window, "__wireJsonParses", samples);
+              JSON.parse = (text, reviver) => {
+                const startedAtMs = performance.now();
+                const result = parse(text, reviver);
+                const finishedAtMs = performance.now();
+                if (typeof text === "string" && text.includes('"initialHistory"')) {
+                  samples.push({
+                    startedAtMs,
+                    durationMs: finishedAtMs - startedAtMs,
+                    bytes: new TextEncoder().encode(text).length,
+                  });
+                  performance.measure("wire.history.parse", {
+                    start: startedAtMs,
+                    end: finishedAtMs,
+                  });
+                }
+                return result;
+              };
+            });
+          }
           const cdp = await context.newCDPSession(page);
           await cdp.send("Network.enable");
           type HttpRecord = {
@@ -670,6 +848,7 @@ async function runWorker() {
             bytes: number;
             status?: number;
             cached?: boolean;
+            fromServiceWorker?: boolean;
             failed?: boolean;
             headers?: Record<string, string>;
           };
@@ -681,6 +860,7 @@ async function runWorker() {
             name: string;
             requestId?: string;
             digest: string;
+            shape?: unknown;
           };
           const requests = new Map<string, HttpRecord>();
           const decoded: Decoded[] = [];
@@ -690,6 +870,36 @@ async function runWorker() {
             string,
             { startedAtMs: number; browserStartedAtMs: number }
           >();
+          const websocketLifecycle: Array<{
+            event: "created" | "handshake-request" | "handshake-response" | "error" | "closed";
+            requestId: string;
+            atMs: number;
+            browserAtMs?: number;
+            status?: number;
+          }> = [];
+          cdp.on("Network.webSocketCreated", (event) => {
+            websocketLifecycle.push({
+              event: "created",
+              requestId: event.requestId,
+              atMs: performance.now(),
+            });
+          });
+          cdp.on("Network.webSocketFrameError", (event) => {
+            websocketLifecycle.push({
+              event: "error",
+              requestId: event.requestId,
+              atMs: performance.now(),
+              browserAtMs: event.timestamp * 1000,
+            });
+          });
+          cdp.on("Network.webSocketClosed", (event) => {
+            websocketLifecycle.push({
+              event: "closed",
+              requestId: event.requestId,
+              atMs: performance.now(),
+              browserAtMs: event.timestamp * 1000,
+            });
+          });
           const negotiations: Array<{
             requestId: string;
             startedAtMs?: number;
@@ -700,12 +910,25 @@ async function runWorker() {
             extensions: string;
           }> = [];
           cdp.on("Network.webSocketWillSendHandshakeRequest", (event) => {
+            websocketLifecycle.push({
+              event: "handshake-request",
+              requestId: event.requestId,
+              atMs: performance.now(),
+              browserAtMs: event.timestamp * 1000,
+            });
             upgradeRequests.set(event.requestId, {
               startedAtMs: performance.now(),
               browserStartedAtMs: event.timestamp * 1000,
             });
           });
           cdp.on("Network.webSocketHandshakeResponseReceived", (event) => {
+            websocketLifecycle.push({
+              event: "handshake-response",
+              requestId: event.requestId,
+              atMs: performance.now(),
+              browserAtMs: event.timestamp * 1000,
+              status: event.response.status,
+            });
             negotiations.push({
               requestId: event.requestId,
               ...upgradeRequests.get(event.requestId),
@@ -736,11 +959,8 @@ async function runWorker() {
                 responseAtMs: performance.now(),
                 browserResponseAtMs: event.timestamp * 1000,
                 status: event.response.status,
-                cached:
-                  request.cached ||
-                  event.response.fromDiskCache ||
-                  event.response.fromServiceWorker ||
-                  false,
+                cached: request.cached || event.response.fromDiskCache || false,
+                fromServiceWorker: event.response.fromServiceWorker ?? false,
                 headers: Object.fromEntries(
                   Object.entries(event.response.headers).filter(([name]) =>
                     [
@@ -790,12 +1010,15 @@ async function runWorker() {
               const text = event.response.payloadData;
               let name = "non-json";
               let requestId: string | undefined;
+              let shape: unknown;
               try {
                 const message = JSON.parse(text) as {
                   id?: string;
                   type?: string;
                   method?: string;
                   event?: string;
+                  params?: Record<string, unknown>;
+                  payload?: Record<string, unknown>;
                 };
                 requestId = message.id;
                 if (message.method && requestId) {
@@ -807,6 +1030,72 @@ async function runWorker() {
                   (requestId ? methods.get(requestId) : undefined) ??
                   message.type ??
                   "unknown";
+                if (name === "sessions.messages.subscribe" || name === "chat.history") {
+                  const payload = message.params ?? message.payload ?? {};
+                  shape = {
+                    fields: Object.fromEntries(
+                      Object.entries(payload).map(([key, value]) => [
+                        key,
+                        {
+                          bytes: Buffer.byteLength(JSON.stringify(value) ?? ""),
+                          count: Array.isArray(value) ? value.length : undefined,
+                          keys:
+                            value && typeof value === "object" && !Array.isArray(value)
+                              ? Object.keys(value)
+                              : undefined,
+                        },
+                      ]),
+                    ),
+                    sessionKey: message.params?.sessionKey ?? message.params?.key,
+                    initialHistory: message.params?.initialHistory,
+                    includeApprovals: message.params?.includeApprovals,
+                    history: (() => {
+                      const initial = message.payload?.initialHistory as
+                        | { payload?: Record<string, unknown> }
+                        | undefined;
+                      const history =
+                        initial?.payload ?? (name === "chat.history" ? message.payload : undefined);
+                      if (!history) {
+                        return undefined;
+                      }
+                      const rows = Array.isArray(history.messages) ? history.messages : [];
+                      const messageFields: Record<string, number> = {};
+                      for (const row of rows) {
+                        if (!row || typeof row !== "object") {
+                          continue;
+                        }
+                        for (const [key, value] of Object.entries(row)) {
+                          messageFields[key] =
+                            (messageFields[key] ?? 0) +
+                            Buffer.byteLength(JSON.stringify(value) ?? "");
+                        }
+                      }
+                      return {
+                        kind: history.kind ?? "page",
+                        bytes: Buffer.byteLength(JSON.stringify(history)),
+                        fields: Object.fromEntries(
+                          Object.entries(history).map(([key, value]) => [
+                            key,
+                            {
+                              bytes: Buffer.byteLength(JSON.stringify(value) ?? ""),
+                              count: Array.isArray(value) ? value.length : undefined,
+                            },
+                          ]),
+                        ),
+                        messageFields,
+                        metadataFields:
+                          history.metadata && typeof history.metadata === "object"
+                            ? Object.fromEntries(
+                                Object.entries(history.metadata).map(([key, value]) => [
+                                  key,
+                                  Buffer.byteLength(JSON.stringify(value) ?? ""),
+                                ]),
+                              )
+                            : undefined,
+                      };
+                    })(),
+                  };
+                }
               } catch {
                 /* Payload contents never enter the report. */
               }
@@ -818,6 +1107,7 @@ async function runWorker() {
                 name,
                 requestId,
                 digest: createHash("sha256").update(text).digest("hex"),
+                shape,
               });
             });
           }
@@ -825,12 +1115,24 @@ async function runWorker() {
           async function capture(
             name: string,
             action: () => Promise<Response | null | void>,
-            newSession = false,
+            kind: ReadinessKind = "chat",
+            details?: Record<string, unknown>,
           ) {
             // A fresh inspector agent owns counters for this action even when Chrome
             // keeps the renderer for a navigation; a retained agent accumulates them.
             const performanceSession = await context.newCDPSession(page);
             await performanceSession.send("Performance.enable", { timeDomain: "threadTicks" });
+            const traceEvents: unknown[] = [];
+            const trace = values.timeline && (name === "session-switch" || name === "reconnect");
+            if (trace) {
+              performanceSession.on("Tracing.dataCollected", ({ value }) =>
+                traceEvents.push(...value),
+              );
+              await performanceSession.send("Tracing.start", {
+                categories: "devtools.timeline,v8,blink.user_timing",
+                transferMode: "ReportEvents",
+              });
+            }
             try {
               const gatewayCpuBefore = process.cpuUsage();
               const startedAtMs = performance.now();
@@ -840,15 +1142,17 @@ async function runWorker() {
                 throw new Error(`Navigation failed with HTTP ${result.status()}`);
               }
               await page.waitForFunction(
-                (isNew) => {
+                (readinessKind) => {
                   const state = Reflect.get(window, "__wireReadiness")?.state;
-                  return isNew
+                  return readinessKind === "new-session"
                     ? state?.newSessionMs !== null && state?.newSessionMs !== undefined
-                    : state?.transcriptMs !== null &&
+                    : ["board", "usage", "settings"].includes(readinessKind)
+                      ? state?.pageMs !== null && state?.pageMs !== undefined
+                      : state?.transcriptMs !== null &&
                         state?.composerMs !== null &&
                         state?.transcriptMs !== undefined;
                 },
-                newSession,
+                kind,
                 { timeout: 60_000 },
               );
               const driverReadyAtMs = performance.now();
@@ -858,16 +1162,36 @@ async function runWorker() {
                 const state = Reflect.get(window, "__wireReadiness").state;
                 return { ...state };
               });
-              const readyElapsedMs = newSession
-                ? readiness.newSessionMs
-                : Math.max(readiness.transcriptMs, readiness.composerMs);
+              const readyElapsedMs =
+                kind === "new-session"
+                  ? readiness.newSessionMs
+                  : ["board", "usage", "settings"].includes(kind)
+                    ? readiness.pageMs
+                    : Math.max(readiness.transcriptMs, readiness.composerMs);
               const cpuAfter = (await performanceSession.send("Performance.getMetrics")).metrics;
+              const cpuMetrics = (metrics: typeof cpuAfter) =>
+                Object.fromEntries(
+                  metrics
+                    .filter((metric) =>
+                      [
+                        "TaskDuration",
+                        "ScriptDuration",
+                        "LayoutDuration",
+                        "RecalcStyleDuration",
+                      ].includes(metric.name),
+                    )
+                    .map((metric) => [metric.name, metric.value * 1000]),
+                );
               const navigationStart = cpuAfter.find((metric) => metric.name === "NavigationStart");
               if (!navigationStart) {
                 throw new Error("Chrome did not report the navigation clock");
               }
               const actionBrowserStartMs = navigationStart.value * 1000 + readiness.startMs;
               const readyBrowserTimestampMs = actionBrowserStartMs + readyElapsedMs;
+              const transcriptVisibleBrowserTimestampMs =
+                readiness.transcriptVisibleMs === null
+                  ? null
+                  : actionBrowserStartMs + readiness.transcriptVisibleMs;
               // Retain a bounded post-ready tail so queued bytes are not mistaken for delivery.
               await page.waitForTimeout(750);
               const httpSettled = await page
@@ -876,6 +1200,19 @@ async function runWorker() {
                   () => true,
                   () => false,
                 );
+              const settledCpu = (await performanceSession.send("Performance.getMetrics")).metrics;
+              const settledElapsedMs = performance.now() - startedAtMs;
+              if (trace) {
+                const completed = new Promise<void>((resolve) => {
+                  performanceSession.once("Tracing.tracingComplete", () => resolve());
+                });
+                await performanceSession.send("Tracing.end");
+                await completed;
+                await writeFile(
+                  path.join(sampleOutput, `${name}-trace.json`),
+                  JSON.stringify({ traceEvents }),
+                );
+              }
               const observed = decoded.slice(decodedStart);
               const arrivals = new Map<WireFrame, (typeof observed)[number]>();
               for (const event of observed) {
@@ -905,6 +1242,33 @@ async function runWorker() {
                     criticalBeforeReady: received
                       ? received.browserTimestampMs <= readyBrowserTimestampMs
                       : false,
+                    beforeTranscriptVisible:
+                      received && transcriptVisibleBrowserTimestampMs !== null
+                        ? received.browserTimestampMs <= transcriptVisibleBrowserTimestampMs
+                        : false,
+                    shape: received?.shape,
+                    packets: proxy.packets
+                      .filter(
+                        (packet) =>
+                          packet.direction === frame.direction &&
+                          packet.connection === frame.connection &&
+                          packet.streamEnd > frame.streamStart &&
+                          packet.streamStart < frame.streamEnd,
+                      )
+                      .map((packet) => ({
+                        direction: packet.direction,
+                        connection: packet.connection,
+                        request: packet.request,
+                        streamStart: packet.streamStart,
+                        streamEnd: packet.streamEnd,
+                        receivedAtMs: packet.receivedAtMs - startedAtMs,
+                        serialStartMs: packet.serialStartMs - startedAtMs,
+                        scheduledWriteMs: packet.scheduledWriteMs - startedAtMs,
+                        actualWriteMs:
+                          packet.actualWriteMs === undefined
+                            ? undefined
+                            : packet.actualWriteMs - startedAtMs,
+                      })),
                   });
                 });
               if (name === "cold-chat" || name === "session-switch") {
@@ -916,6 +1280,29 @@ async function runWorker() {
                   .waitFor({ state: "visible" });
               }
               const criticalFrames = frames.filter((frame) => frame.criticalBeforeReady);
+              if (kind === "reconnect") {
+                const connected = criticalFrames.find(
+                  (frame) => frame.direction === "received" && frame.name === "connect" && frame.ok,
+                );
+                const freshRoster = criticalFrames.find(
+                  (frame) =>
+                    frame.direction === "received" &&
+                    frame.name === "sessions.list" &&
+                    frame.ok &&
+                    frame.connection === connected?.connection,
+                );
+                if (
+                  !connected ||
+                  !freshRoster ||
+                  !negotiations.some(
+                    (upgrade) => upgrade.atMs >= startedAtMs && upgrade.status === 101,
+                  )
+                ) {
+                  throw new Error(
+                    "Reconnect did not deliver a new handshake and fresh session roster before readiness",
+                  );
+                }
+              }
               const http = [...requests.values()]
                 .filter((record) => record.startedAtMs >= startedAtMs)
                 .map((record) =>
@@ -947,6 +1334,7 @@ async function runWorker() {
                 );
               samples.push({
                 name,
+                ...details,
                 readiness,
                 driverElapsedMs: driverReadyAtMs - startedAtMs,
                 hostLoad: loadavg(),
@@ -954,6 +1342,27 @@ async function runWorker() {
                 incompleteHttpRequests: http.filter((request) => request.finishedAtMs === undefined)
                   .length,
                 http,
+                ...(name === "reconnect"
+                  ? {
+                      websocketLifecycle: websocketLifecycle
+                        .filter(
+                          (event) =>
+                            event.atMs >=
+                            startedAtMs -
+                              (typeof details?.outageMs === "number" ? details.outageMs : 0),
+                        )
+                        .map((event) => ({
+                          event: event.event,
+                          requestId: event.requestId,
+                          status: event.status,
+                          atMs: event.atMs - startedAtMs,
+                          browserAtMs:
+                            event.browserAtMs === undefined
+                              ? undefined
+                              : event.browserAtMs - actionBrowserStartMs,
+                        })),
+                    }
+                  : {}),
                 websocketUpgrades: negotiations
                   .filter((upgrade) => upgrade.atMs >= startedAtMs)
                   .map((upgrade) =>
@@ -971,6 +1380,41 @@ async function runWorker() {
                     }),
                   ),
                 websocket: frames,
+                transportPackets: proxy.packets
+                  .filter((packet) => packet.scheduledWriteMs >= startedAtMs)
+                  .map((packet) => ({
+                    direction: packet.direction,
+                    connection: packet.connection,
+                    request: packet.request,
+                    streamStart: packet.streamStart,
+                    streamEnd: packet.streamEnd,
+                    receivedAtMs: packet.receivedAtMs - startedAtMs,
+                    serialStartMs: packet.serialStartMs - startedAtMs,
+                    scheduledWriteMs: packet.scheduledWriteMs - startedAtMs,
+                    actualWriteMs:
+                      packet.actualWriteMs === undefined
+                        ? undefined
+                        : packet.actualWriteMs - startedAtMs,
+                  })),
+                gatewayTimeline: gatewayTimeline
+                  .filter((event) => event.atMs >= startedAtMs)
+                  .map((event) => Object.assign({}, event, { atMs: event.atMs - startedAtMs })),
+                jsonParses: values.timeline
+                  ? await page.evaluate((startMs) => {
+                      const parseSamples = Reflect.get(window, "__wireJsonParses") as Array<{
+                        startedAtMs: number;
+                        durationMs: number;
+                        bytes: number;
+                      }>;
+                      return parseSamples
+                        .filter((sample) => sample.startedAtMs >= startMs)
+                        .map((sample) => ({
+                          durationMs: sample.durationMs,
+                          bytes: sample.bytes,
+                          startedAtMs: sample.startedAtMs - startMs,
+                        }));
+                    }, readiness.startMs)
+                  : undefined,
                 summary: {
                   ...Object.fromEntries(
                     ["Script", "Stylesheet"].flatMap((type) => {
@@ -998,6 +1442,8 @@ async function runWorker() {
                   httpWireRequests: http.filter((request) => request.bytes > 0).length,
                   httpCacheHits: http.filter((request) => request.cached && request.bytes === 0)
                     .length,
+                  serviceWorkerResponses: http.filter((request) => request.fromServiceWorker)
+                    .length,
                   httpFailedFetches: http.filter((request) => request.failed).length,
                   httpBytes: http.reduce((sum, record) => sum + record.bytes, 0),
                   wsWireBytes: criticalFrames.reduce((sum, frame) => sum + frame.wireBytes, 0),
@@ -1013,18 +1459,9 @@ async function runWorker() {
                 },
                 gatewayCpuMs: { user: gatewayCpu.user / 1000, system: gatewayCpu.system / 1000 },
                 gatewayRssBytes,
-                cpuMs: Object.fromEntries(
-                  cpuAfter
-                    .filter((m) =>
-                      [
-                        "TaskDuration",
-                        "ScriptDuration",
-                        "LayoutDuration",
-                        "RecalcStyleDuration",
-                      ].includes(m.name),
-                    )
-                    .map((m) => [m.name, m.value * 1000]),
-                ),
+                cpuMs: cpuMetrics(cpuAfter),
+                settledCpuMs: cpuMetrics(settledCpu),
+                settledElapsedMs,
               });
               console.log(`Completed ${name}: ${JSON.stringify(readiness)}`);
               if (values.screenshots && pair === 0) {
@@ -1128,7 +1565,7 @@ async function runWorker() {
                   window.openclawControlUi?.navigate("new-session");
                 });
               },
-              true,
+              "new-session",
             );
             // Return to the cached first pane before measuring a first visit to session B.
             await page.evaluate(
@@ -1148,18 +1585,128 @@ async function runWorker() {
                 { key: sessionKeys[1]!, pathname: controlUiSessionPath(sessionKeys[1]!) },
               );
             });
+            if (values["extended-flows"]) {
+              await capture(
+                "first-board",
+                async () => {
+                  await page.evaluate(
+                    (pathname) => {
+                      Reflect.get(window, "__wireReadiness").reset(undefined, "board");
+                      window.openclawControlUi?.navigate("dashboard", { pathname });
+                    },
+                    new URL(controlUiSessionUrl(proxy.url, sessionKeys[1]!, "dashboard")).pathname,
+                  );
+                },
+                "board",
+              );
+              await capture(
+                "first-usage",
+                async () => {
+                  await page.evaluate(() => {
+                    Reflect.get(window, "__wireReadiness").reset(undefined, "usage");
+                    window.openclawControlUi?.navigate("usage");
+                  });
+                },
+                "usage",
+              );
+              await capture(
+                "first-settings",
+                async () => {
+                  await page.evaluate(() => {
+                    Reflect.get(window, "__wireReadiness").reset(undefined, "settings");
+                    // Desktop /settings redirects to chat; Appearance is the default Settings page.
+                    window.openclawControlUi?.navigate("appearance");
+                  });
+                },
+                "settings",
+              );
+              await page.evaluate((pathname) => {
+                Reflect.get(window, "__wireReadiness").reset("agent:main:wire-fixture-b");
+                window.openclawControlUi?.navigate("chat", { pathname });
+              }, controlUiSessionPath(sessionKeys[1]!));
+              await page.waitForFunction(() => {
+                const state = Reflect.get(window, "__wireReadiness").state;
+                return state.transcriptMs !== null && state.composerMs !== null;
+              });
+              // Route visits may retain Dashboard; reconnect compares the same chat layout.
+              const activePane = page.locator(".chat-pane-cache__pane--active");
+              const closeDashboard = activePane.getByRole("button", {
+                name: "Close Dashboard",
+                exact: true,
+              });
+              if (await closeDashboard.isVisible()) {
+                await closeDashboard.click();
+              }
+              const reconnectLayoutHandle = await page.waitForFunction(() => {
+                const pane = document.querySelector(".chat-pane-cache__pane--active");
+                const region = pane?.querySelector<HTMLElement>(".sidebar-region");
+                const conversation = region?.querySelector<HTMLElement>(".sidebar-region__primary");
+                const dashboard = region?.querySelector<HTMLElement>(
+                  '[data-panel-slot="dashboard"]',
+                );
+                if (!region || !conversation?.checkVisibility() || dashboard?.checkVisibility()) {
+                  return null;
+                }
+                const regionBounds = region.getBoundingClientRect();
+                const conversationBounds = conversation.getBoundingClientRect();
+                if (
+                  regionBounds.width <= 0 ||
+                  Math.abs(regionBounds.left - conversationBounds.left) > 1 ||
+                  Math.abs(regionBounds.right - conversationBounds.right) > 1
+                ) {
+                  return null;
+                }
+                return {
+                  regionWidth: regionBounds.width,
+                  conversationWidth: conversationBounds.width,
+                };
+              });
+              const reconnectLayout = await reconnectLayoutHandle.jsonValue();
+              await reconnectLayoutHandle.dispose();
+              const outageStartedAtMs = performance.now();
+              proxy.setOffline(true);
+              try {
+                await page.waitForFunction(
+                  () => window.openclawControlUi?.snapshot().gatewayPhase === "reconnecting",
+                  undefined,
+                  { timeout: 30_000 },
+                );
+                await page.waitForTimeout(
+                  Math.max(0, 5_000 - (performance.now() - outageStartedAtMs)),
+                );
+                const reconnectDetails = { outageMs: 0, layout: reconnectLayout };
+                await capture(
+                  "reconnect",
+                  async () => {
+                    await page.evaluate((key) => {
+                      Reflect.get(window, "__wireReadiness").reset(key, "reconnect");
+                    }, sessionKeys[1]!);
+                    reconnectDetails.outageMs = performance.now() - outageStartedAtMs;
+                    proxy.setOffline(false);
+                  },
+                  "reconnect",
+                  reconnectDetails,
+                );
+              } finally {
+                proxy.setOffline(false);
+              }
+            }
             await writeFile(
               path.join(sampleOutput, "sample.json"),
               JSON.stringify(
                 {
                   format: "control-ui-real-wire-v1",
                   profile: values.profile,
+                  networkProfile,
+                  proxyNagle: values["proxy-nagle"],
+                  timeline: values.timeline,
+                  extendedFlows: values["extended-flows"],
                   revision,
                   dirty,
                   bundle,
                   fixture: { sessions: 2, messagesEach: 120, auth: values.auth },
                   measurement:
-                    "Real Gateway. Synthetic offline-owned state. TCP proxy measures RFC6455 headers/payloads before delivery. HTTP encodedDataLength includes headers. Remote: shared 10 Mbps link per direction, 50 ms one-way application-stream latency, no simulated packet loss/congestion or TCP handshake latency. Readiness is first animation frame with visible enabled selectors; screenshots outside timed interval.",
+                    "Real Gateway. Synthetic offline-owned state. TCP proxy measures RFC6455 headers/payloads before delivery. HTTP bytes and wire-request counts are page-observed lower bounds: encodedDataLength includes response headers, but underlying service-worker fetches are not captured. Service-worker delivery is recorded separately and does not itself prove a cache hit. Network profile describes shared bandwidth per direction and one-way application-stream latency; no simulated packet loss/congestion or TCP handshake latency. Readiness is first animation frame with visible enabled selectors; reconnect additionally requires a fresh handshake and roster. Reconnect timing starts at link restoration, excluding the separately reported outage. Board is the session Dashboard face with an empty Board; Settings is Appearance. Screenshots are outside the timed interval.",
                   samples,
                   negotiations,
                   errors,
@@ -1176,6 +1723,7 @@ async function runWorker() {
                 {
                   error: String(error),
                   url: page.url(),
+                  samples,
                   errors,
                   text: (await page.locator("body").textContent())?.slice(0, 6000),
                   websocket: decoded.map(({ name, bytes, direction }) => ({
@@ -1210,12 +1758,21 @@ async function runWorker() {
       await proxy.close();
     }
   } finally {
+    rpcChannel.unsubscribe(observeGateway);
+    stageChannel.unsubscribe(observeGateway);
     await gateway.close({ reason: "Wire benchmark complete", exitAfterClose: true });
   }
 }
 
 if (values.worker) {
-  await runWorker();
+  // Snapshot staging requires a private temp ancestor; proof/state can stay on an external disk.
+  const cacheRoot = await mkdtemp(path.join(tmpdir(), "openclaw-wire-cache-"));
+  process.env.XDG_CACHE_HOME = cacheRoot;
+  try {
+    await runWorker();
+  } finally {
+    await rm(cacheRoot, { recursive: true, force: true });
+  }
   process.exit(0);
 } else {
   const ownSource = await realpath(
@@ -1330,6 +1887,15 @@ if (values.worker) {
     }
     if (screenshots) {
       args.push("--screenshots");
+    }
+    if (values["extended-flows"]) {
+      args.push("--extended-flows");
+    }
+    if (values.timeline) {
+      args.push("--timeline");
+    }
+    if (values["proxy-nagle"]) {
+      args.push("--proxy-nagle");
     }
     const child = spawn(process.execPath, args, {
       cwd: source,

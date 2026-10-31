@@ -5,7 +5,10 @@ import type {
   PluginHookCronReconciledEvent,
   PluginHookGatewayCronService,
 } from "../plugins/hook-gateway.types.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
+import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import type { GatewayCronState } from "./server-cron-contract.js";
+import { reconcileOrphanedMemoryDreamingJobs } from "./server-cron-memory-dreaming-jobs.js";
 
 type GatewayCronReconciliationArmParams = {
   reason: PluginHookCronReconciledEvent["reason"];
@@ -24,6 +27,9 @@ export function createGatewayCronReconciliation(params: {
   port: number;
   workspaceDir: string;
   isClosing: () => boolean;
+  getConfig: () => OpenClawConfig;
+  getPluginRegistry: () => PluginRegistry | undefined;
+  logger: { warn: (message: string) => void };
   runHook: (
     event: PluginHookCronReconciledEvent,
     ctx: PluginHookCronReconciledContext,
@@ -41,7 +47,8 @@ export function createGatewayCronReconciliation(params: {
       supersedeActive();
       const abortController = new AbortController();
       activeAbortController = abortController;
-      const cron = cronState.cron as PluginHookGatewayCronService;
+      const service = cronState.cron;
+      const cron = service as PluginHookGatewayCronService;
       const event: PluginHookCronReconciledEvent = {
         reason,
         enabled: cronState.cronEnabled,
@@ -56,6 +63,22 @@ export function createGatewayCronReconciliation(params: {
           completed = true;
           // Each signal owns one exact scheduler snapshot. Do not serialize
           // snapshots: a stuck stale observer must not hide the current state.
+          if (params.isClosing() || abortController.signal.aborted) {
+            return;
+          }
+          const cleanupConfig = params.getConfig();
+          const cleanupRegistry = params.getPluginRegistry();
+          await reconcileOrphanedMemoryDreamingJobs({
+            cron: service,
+            cfg: cleanupConfig,
+            logger: params.logger,
+            manifestRegistry: getPluginRuntimeLoadContext(cleanupRegistry)?.manifestRegistry,
+            isCurrent: () =>
+              !params.isClosing() &&
+              !abortController.signal.aborted &&
+              cleanupConfig === params.getConfig() &&
+              cleanupRegistry === params.getPluginRegistry(),
+          });
           if (params.isClosing() || abortController.signal.aborted) {
             return;
           }

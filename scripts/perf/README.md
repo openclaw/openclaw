@@ -1,5 +1,21 @@
 # Team-shaped synthetic state
 
+## Slack shutdown retirement
+
+`slack-shutdown-retirement-measure.ts` runs a real Slack SDK startup with a synthetic
+recoverable API error under the channel monitor's plugin custody. Stopping the
+account then retiring a 44-plugin registry must settle the monitor and release all
+instances within the existing five-second grace. No network, credentials, database,
+or workspace data is used: this owner waits on promises, not state-size-dependent I/O.
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/slack-shutdown-retirement-measure.ts
+```
+
+Run serial baseline/candidate samples with A/A controls. Add `--allocations` in a
+separate pass for sampled allocation including collected objects. JSON reports
+stop/retirement latency, CPU, retained consumers, memory deltas, and host load.
+
 ## Update state I/O
 
 `update-state-io-measure.ts` measures candidate inventory and snapshot creation,
@@ -808,6 +824,31 @@ claim about an idle Gateway's polling cadence. Use `--adopted --unchanged` to
 isolate repeated adoption scans against an unchanged planning snapshot; omit
 `--unchanged` to retain the metadata-update workload.
 
+Add `--empty-catalogs` to retain the 5,000 persisted rows with no registered
+catalog providers. The first handler call runs before explicitly draining the
+projection; `initialList` records its wall time, main-thread CPU, whether selection
+was pending, and public projection acquisition/preparation counts. Fixture
+creation has already admitted the stores, so this is remaining projection work,
+not a measurement of total Gateway startup. Subsequent metadata-update calls run
+before projection settling, then drain after recording handler latency and CPU.
+This keeps total owner work comparable while measuring whether an empty catalog
+reply unnecessarily waits for session preparation. `--empty-catalogs --unchanged`
+measures the warm empty response; this mode cannot combine with `--adopted`.
+The fixture contains session metadata, not a 35 GiB transcript database or a
+workspace file tree; it does not claim their disk scan or storage latency.
+
+Add `--queue-wait-ms 100` to measure the real Gateway request-start queue before
+each measured handler call. Four admitted `models.list` preparations hold their
+settlement promises; a fifth approval subscription queues ahead of the catalog
+on the same synthetic connection. The four holds release after the requested
+delay. `queueLatency` and `queueThreadCpu` cover catalog enqueue to grant;
+handler timings start after grant. All six admissions and the timed holds settle
+before the next operation, including when the catalog bypasses the blocked
+subscription. Whole-cycle CPU, allocation and elapsed include queue setup and
+settlement. Initial and warmup calls do not use the queue. Values must be below
+the queue's 30-second deadline; zero disables the scenario. This proves the queue
+owner and handler together without WebSocket transport or real model discovery.
+
 ```sh
 node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
   scripts/perf/session-catalog-selection-measure.ts \
@@ -823,6 +864,12 @@ separate paired allocation pass including objects collected by minor and major G
 Handler latency excludes the metadata write and row settling; allocation, GC, promotion, CPU, and
 elapsed time include the write, settling, response hashing, and the one-millisecond pacing
 yield. Selection and catalog allocation subtrees are reported separately.
+Empty-catalog mode instead includes any projection wait within handler latency;
+allocation sampling still covers the complete measured cycle after warmup, not
+the initial call. `handlerThreadCpu` and `warmUnchangedThreadCpu` report the
+main thread's CPU during each awaited handler interval; unrelated background work
+that runs within that interval is included. Public projection method counters
+measure handler demand, not internal background preparation.
 
 Compare the initial/final full ordered entry hashes and complete response-sequence
 hash across baseline and candidate: no response fields are omitted. Assertions
@@ -3567,6 +3614,36 @@ if any client never receives content or no steady refresh completes; increase
 then the steady distribution, in concurrent pairs with swapped CPU halves.
 
 ### Large-worktree revision validation
+
+For a content-sized fixture, add `--tracked 62000 --tracked-bytes 17742` at seed
+time (about 1.1 GB of synthetic random tracked bytes). Use the same seeded tree
+for both arms. `--restat-inventory` changes only inventory timestamps before the
+first read. Compare the default read-only index with `--refresh-index`, which
+models a managed checkout's permission to retain verified Git stat data. Use
+`--boundary revision` for revision CPU/allocation and `--boundary read` for the
+complete read owner. Report the first read (`warmup`) separately from subsequent
+polls: retaining stat data changes the work later polls perform. The collector
+alone (`--boundary owner --prepared-status`) excludes this status preparation.
+Accept identical response hashes, lower complete-read Git wall time/CPU, and
+stable owner allocation, with at least five alternating samples per arm and
+identical-code A/A controls. Report filesystem type and cold/warm samples separately.
+
+For native Git CPU and filesystem-specific timing, use the companion probe on a
+new synthetic directory on the target filesystem:
+
+```sh
+python3 scripts/perf/checkout-diff-index-measure.py \
+  --root /mounted-btrfs/synthetic-diff \
+  --output /path/to/index-results.json --trace /path/to/index.trace
+```
+
+It seeds 62,000 files / 1.1 GB, disables seed auto-GC, and alternates two identical
+read-only controls with managed status refresh. Each arm restores the same stale
+index after timestamp-only churn. The report separates the initial round from
+five warm rounds, checks response hashes, and records child-process CPU for
+status, tracked diff statistics, and the following poll. This measures native Git,
+not Gateway latency or JavaScript allocation; use the TypeScript workload above
+for those owner observations. The caller removes its synthetic directory afterward.
 
 Seed separate fixtures with `--boundary rpc --tracked 267000 --untracked 4` to
 exercise production-sized indexes and directory trees. Nonzero `--tracked`
