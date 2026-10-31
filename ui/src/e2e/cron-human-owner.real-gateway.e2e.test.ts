@@ -1,4 +1,5 @@
 import { readFile, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import path from "node:path";
 import type { Page } from "playwright";
 import type { ViteDevServer } from "vite";
@@ -8,6 +9,8 @@ import {
   setUserProfileRole,
 } from "../../../src/state/user-profile-writes.worker.ts";
 import { ensureProfileForEmail } from "../../../src/state/user-profiles.ts";
+import { reserveTestPortListener } from "../../../src/test-utils/port-claims.ts";
+import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses-sse.ts";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -34,20 +37,54 @@ let instance: OpenClawTestInstance;
 const proxies: ViteDevServer[] = [];
 const urls: string[] = [];
 const profiles: string[] = [];
+const providerAuthorizations: (string | undefined)[] = [];
 const suite = createControlUiE2eSuite({
   name: "Human automation ownership through the real Gateway",
   startServerBeforeBrowser: true,
   async startServer() {
+    const provider = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () =>
+        createServer((request, response) => {
+          request.resume().once("end", () => {
+            if (request.method !== "POST" || request.url !== "/v1/responses") {
+              response.writeHead(404).end();
+              return;
+            }
+            providerAuthorizations.push(request.headers.authorization);
+            writeOpenAiResponsesText(response, {
+              text: "Synthetic owner execution completed.",
+              messageId: "owner-message",
+              responseId: "owner-response",
+            });
+          });
+        }),
+    });
     const close = () =>
       runQaGatewayFixture(
         async () => {},
         ...proxies.map((proxy) => () => proxy.close()),
         () => instance?.cleanup(),
+        async () => {
+          provider.listener.closeAllConnections();
+          await provider.releaseListener();
+        },
+        () => provider.claim.release(),
       );
     try {
       instance = await createOpenClawTestInstance({
         name: "cron-human-owner",
-        env: { VITEST: undefined, OPENCLAW_TEST_MINIMAL_GATEWAY: undefined },
+        env: {
+          VITEST: undefined,
+          OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+          // Keep the disposable loopback provider local, as in the quiet-automation fixture.
+          NO_PROXY: [process.env.NO_PROXY, "127.0.0.1", "localhost", "::1"]
+            .filter(Boolean)
+            .join(","),
+          no_proxy: [process.env.no_proxy, "127.0.0.1", "localhost", "::1"]
+            .filter(Boolean)
+            .join(","),
+        },
         config: {
           gateway: {
             controlUi: { enabled: true },
@@ -84,15 +121,21 @@ const suite = createControlUiE2eSuite({
           cron: { enabled: false },
           plugins: { allow: [] },
           agents: {
-            defaults: { model: "fixture/echo" },
+            defaults: {
+              model: "fixture/echo",
+              models: { "fixture/echo": { agentRuntime: { id: "openclaw" } } },
+              skipBootstrap: true,
+              skills: [],
+            },
             entries: { main: { identity: { name: "Automation Test" } } },
           },
           models: {
             providers: {
               fixture: {
-                api: "openai-completions",
+                api: "openai-responses",
                 apiKey: "synthetic-owner-test",
-                baseUrl: "http://127.0.0.1:9/v1",
+                baseUrl: `http://127.0.0.1:${provider.claim.port}/v1`,
+                request: { allowPrivateNetwork: true },
                 models: [{ id: "echo", name: "Fixture" }],
               },
             },
@@ -169,6 +212,11 @@ suite.define(() => {
       payload: { kind: "agentTurn", message: "Send the hourly test ping." },
       delivery: { mode: "none" },
     });
+    // A successful pre-transfer run proves the provider and credential path are live.
+    expect(
+      await rpc(admin, "cron.run", { id: job.id, mode: "force", waitTimeoutMs: 30_000 }),
+    ).toMatchObject({ run: { status: "ok" } });
+    expect(providerAuthorizations).toEqual(["Bearer synthetic-owner-test"]);
     await rpc(admin, "cron.update", { id: job.id, patch: { ownerProfileId: profiles[1] } });
     for (const [index, page] of pages.entries()) {
       await page.goto(new URL("automations?job=" + job.id, urls[index]).toString());
@@ -215,5 +263,18 @@ suite.define(() => {
     await expect
       .poll(async () => (await rpc<CronJob>(admin, "cron.get", { id: job.id })).name)
       .toBe("Hourly ping edited by Bob");
+    await expect(rpc(alice, "cron.run", { id: job.id, mode: "force" })).rejects.toThrow();
+    const sharedSession = "agent:main:owner-transfer-provider-proof";
+    await rpc(bob, "sessions.create", { key: sharedSession, agentId: "main" });
+    for (const sessionTarget of ["isolated", `session:${sharedSession}`]) {
+      await rpc(bob, "cron.update", { id: job.id, patch: { sessionTarget } });
+      expect(
+        await rpc(bob, "cron.run", { id: job.id, mode: "force", waitTimeoutMs: 30_000 }),
+      ).toMatchObject({
+        run: { status: "error", error: expect.stringContaining("fresh execution authority") },
+      });
+      // Check only after the run settles: an enqueue acknowledgment cannot prove no I/O.
+      expect(providerAuthorizations).toEqual(["Bearer synthetic-owner-test"]);
+    }
   }, 120_000);
 });
