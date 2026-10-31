@@ -105,6 +105,8 @@ type DecisionCase = {
   chat?: boolean;
   expectedChat?: boolean;
   error?: boolean;
+  replace?: boolean;
+  prepared?: "remote" | "cleared" | "alias";
 };
 function decisionCase(name: string, overrides: Partial<Omit<DecisionCase, "name">>): DecisionCase {
   return { name, plugins: {}, expected: false, ...overrides };
@@ -121,9 +123,22 @@ describe("models.list plugin metadata handoff", () => {
     decisionCase("decision filter + chat", { provider: "fixture", chat: true, expected: true }),
     decisionCase("chat filter + decisions", { provider: "custom", chat: true, expectedChat: true }),
     decisionCase("unfiltered", { chat: true, expectedChat: true, expected: true }),
+    decisionCase("prepared-only Decision model", { prepared: "remote", expected: true }),
+    decisionCase("route-cleared capabilities", { prepared: "cleared" }),
+    decisionCase("owned provider alias", { prepared: "alias", expected: true }),
+    decisionCase("replace-mode manifest discovery", { replace: true, expected: true }),
   ])(
     "keeps decision discovery separate from chat routing: $name",
-    async ({ plugins, expected, provider, chat = false, expectedChat = false, error }) => {
+    async ({
+      plugins,
+      expected,
+      provider,
+      chat = false,
+      expectedChat = false,
+      error,
+      replace,
+      prepared,
+    }) => {
       await withState(async (state) => {
         const cfg: OpenClawConfig = {
           agents: {
@@ -131,6 +146,7 @@ describe("models.list plugin metadata handoff", () => {
             ...(chat ? { defaults: { model: "custom/chat", models: { "custom/chat": {} } } } : {}),
           },
           plugins,
+          ...(replace ? { models: { mode: "replace" } } : {}),
         };
         const snapshot: ModelCatalogSnapshot = {
           entries: chat ? [catalogEntry("chat")] : [],
@@ -147,17 +163,36 @@ describe("models.list plugin metadata handoff", () => {
         await state.writeJson("openclaw.plugin.json", {
           id: "decisions",
           configSchema: {},
+          providers: ["fixture"],
           contracts: { decisionProviders: ["fixture"] },
+          modelCatalog: { aliases: { "fixture-alias": { provider: "fixture" } } },
           decisionModels: [decision],
         });
         const loaded = loadPluginManifest(state.stateDir);
         if (!loaded.ok) {
           throw new Error(loaded.error);
         }
+        const declared = loaded.manifest.modelCatalog?.providers?.fixture?.models[0];
+        if (!declared?.inference) {
+          throw new Error("legacy Decision manifest omitted canonical inference facts");
+        }
+        const native = { ...declared, provider: "fixture", name: "Fast decisions" };
+        if (!replace) {
+          snapshot.entries.push({
+            ...native,
+            provider: prepared === "alias" ? "fixture-alias" : "fixture",
+            inference: prepared === "cleared" ? { chat: false } : native.inference,
+          });
+        }
+        if (prepared === "remote") {
+          snapshot.entries.push({ ...native, id: "remote", name: "Remote decisions" });
+        }
+        snapshot.entries.push({ ...native, id: "unowned", provider: "unowned" });
         const metadataSnapshot = createPluginMetadataSnapshotFixture({
           plugins: [
             {
               id: "decisions",
+              providers: ["fixture"],
               contracts: { decisionProviders: ["fixture"] },
               modelCatalog: loaded.manifest.modelCatalog,
             },
@@ -193,7 +228,14 @@ describe("models.list plugin metadata handoff", () => {
         const result = respond.mock.calls[0]?.[1] as ModelsListResult;
         expect(result.models.map((entry) => entry.id)).toEqual(expectedChat ? ["chat"] : []);
         expect(result.decisionModels ?? []).toEqual(
-          expected ? [{ ...decision, pluginId: "decisions" }] : [],
+          expected
+            ? [
+                { ...decision, pluginId: "decisions" },
+                ...(prepared === "remote"
+                  ? [{ ...decision, id: "remote", name: "Remote decisions", pluginId: "decisions" }]
+                  : []),
+              ]
+            : [],
         );
         expect(Check(ModelsListResultSchema, result)).toBe(true);
         expect(loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
