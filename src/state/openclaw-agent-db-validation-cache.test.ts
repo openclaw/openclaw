@@ -8,6 +8,7 @@ import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { cleanupSessionStateForTest as cleanupState } from "../test-utils/session-state-cleanup.js";
+import { isReplayableWorkerTranscriptCommitError } from "../gateway/worker-environments/transcript-commit-failure.js";
 import {
   AgentDatabaseSchemaAdmissionChangedError as AdmissionChangedError,
   AgentDatabaseSchemaAdmissionInvalidError as AdmissionInvalidError,
@@ -457,9 +458,18 @@ describe("canonical proof on physical database validation", () => {
         if (race === "schema") {
           assert(original.schema);
           expectFlag(original.schema.valid, 0);
-          expect(() => adoptSchema(database, true, true)).toThrow(
-            "Agent schema admission changed before handle adoption",
-          );
+          let adoptionError: unknown;
+          try {
+            adoptSchema(database, true, true);
+          } catch (error) {
+            adoptionError = error;
+          }
+          // The adoption race must surface as the typed replayable error, not a bare Error (#188935).
+          expect(adoptionError, race).toBeInstanceOf(AdmissionChangedError);
+          expect(adoptionError, race).toMatchObject({
+            message: "Agent schema admission changed before handle adoption; retry the operation",
+          });
+          expect(isReplayableWorkerTranscriptCommitError(adoptionError), race).toBe(true);
         }
         for (const malformed of [
           undefined,
