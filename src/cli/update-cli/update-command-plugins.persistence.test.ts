@@ -300,33 +300,83 @@ it.each(["unrelated", "same-value", "conflict", "include"])(
 );
 
 it.each([1, 5])("bounds publication retries after %s late writes", async (writes) => {
-  await withOpenClawTestState({ label: `updater-late-writes-${writes}` }, async (state) => {
-    const config = { plugins: { enabled: false }, gateway: { port: 18789 } };
-    const prepared = await prepareUpdate(state, config);
-    mocks.convergence.mockImplementationOnce(async ({ cfg }) => ({
-      ...convergenceResult(cfg),
-      installRecords: { fixture: { source: "archive" } },
-    }));
-    let attempts = 0;
-    const result = await updatePluginsAfterCoreUpdate({
-      ...prepared,
-      configWriteOptions: {
-        beforeCommit: async () => {
-          attempts += 1;
-          if (attempts <= writes) {
-            // A manual editor does not participate in the OpenClaw write lock.
-            await state.writeConfig({ ...config, gateway: { port: 19000 + attempts } });
-          }
+  await withOpenClawTestState(
+    {
+      label: `updater-late-writes-${writes}`,
+      env: { UPDATER_RETRY_TOKEN: "synthetic-before-retry" },
+    },
+    async (state) => {
+      const config = {
+        plugins: {
+          enabled: false,
+          entries: { fixture: { enabled: true, config: { apiKey: "${UPDATER_RETRY_TOKEN}" } } },
         },
-      },
-    });
-    expect(attempts).toBe(writes === 1 ? 2 : 5);
-    expect(result.status).toBe(writes === 1 ? "ok" : "warning");
-    expect((await readConfigFileSnapshot()).sourceConfig.gateway?.port).toBe(19000 + writes);
-    expect(await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env })).toEqual(
-      writes === 1 ? { fixture: { source: "archive" } } : {},
-    );
-  });
+        gateway: { port: 18789, auth: { token: "${UPDATER_RETRY_TOKEN}" } },
+      };
+      const prepared = await prepareUpdate(state, config);
+      const originalInclude = JSON.stringify(config.plugins);
+      await fs.writeFile(state.statePath("plugins.json"), originalInclude);
+      await state.writeConfig({ ...config, plugins: { $include: "./plugins.json" } });
+      prepared.configSnapshot = await readConfigFileSnapshot();
+      const preparedWrite = await readConfigFileSnapshotForWrite();
+      mocks.convergence.mockImplementationOnce(async ({ cfg }) => ({
+        ...convergenceResult(cfg),
+        config: {
+          ...cfg,
+          plugins: {
+            ...cfg.plugins,
+            entries: { fixture: { ...cfg.plugins.entries.fixture, enabled: false } },
+          },
+        },
+        installRecords: { fixture: { source: "archive" } },
+      }));
+      let attempts = 0;
+      const result = await updatePluginsAfterCoreUpdate({
+        ...prepared,
+        configWriteOptions: {
+          ...preparedWrite.writeOptions,
+          beforeCommit: async () => {
+            attempts += 1;
+            if (attempts <= writes) {
+              // A manual editor does not participate in the OpenClaw write lock.
+              if (attempts === 1) {
+                process.env.UPDATER_RETRY_TOKEN = "synthetic-after-retry";
+                await fs.writeFile(
+                  state.statePath("plugins-next.json"),
+                  JSON.stringify({ ...config.plugins, allow: ["fixture"] }),
+                );
+              }
+              await state.writeConfig({
+                ...config,
+                plugins: { $include: "./plugins-next.json" },
+                gateway: { ...config.gateway, port: 19000 + attempts },
+              });
+            }
+          },
+        },
+      });
+      expect(attempts).toBe(writes === 1 ? 2 : 5);
+      expect(result.status).toBe(writes === 1 ? "ok" : "warning");
+      expect((await readConfigFileSnapshot()).sourceConfig.gateway?.port).toBe(19000 + writes);
+      const root = JSON.parse(await fs.readFile(state.configPath, "utf8"));
+      expect(root.plugins).toEqual({ $include: "./plugins-next.json" });
+      expect(root.gateway.auth.token).toBe("${UPDATER_RETRY_TOKEN}");
+      expect(await fs.readFile(state.statePath("plugins.json"), "utf8")).toBe(originalInclude);
+      expect(JSON.parse(await fs.readFile(state.statePath("plugins-next.json"), "utf8"))).toEqual({
+        ...config.plugins,
+        allow: ["fixture"],
+        entries: {
+          fixture: {
+            enabled: writes !== 1,
+            config: { apiKey: "${UPDATER_RETRY_TOKEN}" },
+          },
+        },
+      });
+      expect(
+        await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+      ).toEqual(writes === 1 ? { fixture: { source: "archive" } } : {});
+    },
+  );
 });
 
 it("prints each skipped plugin and its reason after the update counts", async () => {
