@@ -11,7 +11,12 @@ it("prepares each advertised catalog once across interleaved connections and cap
   const catalogs = ["sessions.patch", "sessions.create", "plugins.reload"].map((method) => {
     let visits = 0;
     const methods = ["health", method];
-    Object.defineProperty(methods, 0, { get: () => (visits++, "health") });
+    Object.defineProperty(methods, 0, {
+      get: () => {
+        visits++;
+        return "health";
+      },
+    });
     return { methods, visits: () => visits };
   });
   const first = snapshot({ methods: catalogs[0]!.methods });

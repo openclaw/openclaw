@@ -17,7 +17,6 @@ import "../test-helpers/load-styles.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { getAppSidebarOwner } from "./app-sidebar.tsx";
-import "./app-sidebar.tsx";
 
 setupSidebarTest();
 
