@@ -10,7 +10,7 @@ Keep OpenClaw up to date.
 
 Failed-update recovery on Linux restarts an installed Gateway through systemd.
 If a foreground OpenClaw process owns that service's state directory, recovery
-verifies its live identity, requests graceful shutdown, and waits for it to exit
+checks native restart permission and live identity, requests graceful shutdown, and waits for it to exit
 before starting the unit. Processes belonging to another supervisor are preserved.
 An inconclusive readiness check is reported separately from current serving health.
 This recovery repair is supplied by the candidate CLI; older updaters using
