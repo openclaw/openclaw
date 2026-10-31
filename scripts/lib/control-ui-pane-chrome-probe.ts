@@ -3,6 +3,7 @@ export function installPaneChromeProbe() {
   const selectors = {
     headerTrailing: ".chat-pane__header-trailing",
     headerIdentity: ".chat-pane__identity-actions",
+    identity: ".chat-pane__crumbs",
     composerControls: ".chat-controls__session, .chat-controls__permission-picker",
     workspace: ".chat-pane__workspace-chip",
     details: ".chat-details",
@@ -11,7 +12,12 @@ export function installPaneChromeProbe() {
   };
   type Region = keyof typeof selectors;
   type Signature = { nodes: number; hash: number; truncated: boolean };
-  type Frame = { at: number; regions: Record<Region, Signature>; composerHeight: number };
+  type Frame = {
+    at: number;
+    regions: Record<Region, Signature>;
+    composerHeight: number;
+    boxes: Record<Region, number[] | null>;
+  };
   const frames: Frame[] = [];
   let connectionIndicatorFrames = 0;
   const detailsFrames: Array<{ at: number; sections: unknown[] }> = [];
@@ -184,6 +190,13 @@ export function installPaneChromeProbe() {
       frames.push({
         at,
         regions: next,
+        boxes: Object.fromEntries(
+          regions.map((region) => {
+            const root = document.querySelector(".chat-pane-cache__pane--active");
+            const box = root?.querySelector(selectors[region])?.getBoundingClientRect();
+            return [region, box ? [box.x, box.y, box.width, box.height] : null];
+          }),
+        ) as Frame["boxes"],
         composerHeight:
           document
             .querySelector(".chat-pane-cache__pane--active .agent-chat__composer-shell")

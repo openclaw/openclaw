@@ -19,6 +19,7 @@ type PrewarmedSnapshot = {
   cacheKey: string;
   cancelled: boolean;
   promise: Promise<unknown>;
+  ready?: Promise<void>;
   prepared?: {
     promise: PreparedSnapshotRead;
     snapshot?: Awaited<PreparedSnapshotRead>;
@@ -58,7 +59,7 @@ export function discardPrewarmedChatSnapshot(cacheKey?: string): void {
   }
 }
 
-export async function prewarmChatSnapshot(cacheKey: string): Promise<void> {
+export function prewarmChatSnapshot(cacheKey: string): Promise<void> {
   discardPrewarmedChatSnapshot();
   const generation = snapshotStoreGeneration;
   const entry: PrewarmedSnapshot = {
@@ -72,15 +73,32 @@ export async function prewarmChatSnapshot(cacheKey: string): Promise<void> {
   };
   pending = entry;
   // Validate once before mount; dispatch reads facts without adopting display rows.
-  try {
-    const [{ readPrewarmedChatSnapshot }] = await Promise.all([
-      import("./session-snapshot-store.ts"),
-      loadChatHistoryStateValidator(),
-    ]);
-    if (pending === entry) {
-      await readPrewarmedChatSnapshot(cacheKey);
-    }
-  } catch {}
+  entry.ready = Promise.all([
+    import("./session-snapshot-store.ts"),
+    loadChatHistoryStateValidator(),
+  ])
+    .then(async ([{ readPrewarmedChatSnapshot }]) => {
+      if (pending === entry) {
+        await readPrewarmedChatSnapshot(cacheKey);
+      }
+    })
+    .catch(() => undefined);
+  return entry.ready;
+}
+
+export function waitForPrewarmedChatSnapshot(cacheKey: string): Promise<void> | undefined {
+  const entry = pending;
+  if (entry?.cacheKey !== cacheKey || entry.cancelled || entry.prepared?.snapshot !== undefined) {
+    return undefined;
+  }
+  // Only this pane waits: an unavailable cache must never hold first mount indefinitely.
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    entry.ready,
+    new Promise<void>((resolve) => {
+      timeout = setTimeout(resolve, 100);
+    }),
+  ]).finally(() => clearTimeout(timeout));
 }
 
 export function consumePrewarmedChatSnapshot(cacheKey: string): PrewarmedSnapshot | undefined {
