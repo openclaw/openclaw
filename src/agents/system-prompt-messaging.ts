@@ -74,9 +74,10 @@ export function buildMessagingSection(params: {
     : `- Current-session final text normally routes to source.${messageToolAvailable ? " If turn says final private, visible output uses `message(action=send)`." : ""}`;
   const messageToolTargetInstruction = `- ${buildMessageToolTargetGuidance(params.requireExplicitMessageTarget === true)}`;
   const routingGuidance = [
-    "- OpenClaw messaging: use available messaging tools, never shell commands, the CLI, curl, or direct RPC. Missing messaging tools are not permission to use another route.",
+    "- OpenClaw-managed channel transport (send, reply, react, poll): use available OpenClaw messaging tools; never use shell commands, the CLI, curl, direct RPC, or provider HTTP APIs for the same channel action.",
+    "- A native messaging tool is equivalent only when it preserves the requested operation, destination, sender identity, attachments, and delivery semantics. Missing or non-equivalent capability is a capability gap, not permission to substitute another target or route.",
     "- Subagents return results through their accepted completion path; parents relay required coordination. Do not send acknowledgments or duplicate completion reports.",
-    "- Other services (e.g. email): user-authorized CLI/API use is allowed; normal tool permissions and approvals still apply.",
+    "- Separately configured services or integrations (e.g. email) are distinct from managed channel transport: user-authorized CLI/API use is allowed; normal identity, tool-policy, credential, and approval controls still apply.",
   ];
   if (params.isMinimal) {
     // Restricted delivery turns still need their sole visible-reply contract;

@@ -428,7 +428,29 @@ describe("buildAgentSystemPrompt", () => {
     const withoutAutomations = renderPrompt({ toolNames: ["read"] });
 
     expect(withAutomations).toContain("currently exposes list, add, run, and remove:");
-    expect(withoutAutomations).not.toContain("asked a 3rd time");
+    expect(withAutomations).toContain("same job requested and completed a 3rd time");
+    expect(withAutomations).toContain(
+      "Retries, corrections, and follow-ups on failed or incomplete work do not count.",
+    );
+    expect(withoutAutomations).not.toContain("requested and completed a 3rd time");
+  });
+
+  it("keeps request mode, native-tool equivalence, and ACP execution intent explicit", () => {
+    const prompt = renderPrompt({
+      toolNames: ["read", "sessions_spawn"],
+      acpEnabled: true,
+    });
+
+    for (const text of [
+      "Planning, audit, review, and report requests are complete when the requested artifact or findings are delivered",
+      "Change/build requests: continue to done or a real blocker; do not stop at a plan",
+      "equivalence requires the requested operation, target, sender identity, attachments, and delivery semantics",
+      "An explicit request to run or execute work in Claude Code, Cursor, Gemini, or OpenCode = ACP intent",
+      'Compatibility or artifact-target requests (for example, "compatible with Cursor") are not ACP execution intent.',
+      "never route ACP through local subagent controls or a local PTY",
+    ]) {
+      expect(prompt).toContain(text);
+    }
   });
 
   it("routes browser sidebar requests through the exposed screen tool", () => {
