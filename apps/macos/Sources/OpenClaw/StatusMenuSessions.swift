@@ -314,7 +314,9 @@ extension StatusMenuSessions {
         menu.showsStateColumn = true
         menu.delegate = StatusMenuHighlightDelegate.shared
         StatusMenuAppearance.pin(menu)
-        let selected = levels.contains(current ?? "") ? current ?? "off" : "off"
+        // `current` is nil when the session inherits the agent default; show no
+        // item as selected instead of manufacturing an "off" check.
+        let selected = levels.contains(current ?? "") ? current : nil
 
         for level in levels {
             let item = self.makeActionItem(
@@ -342,9 +344,9 @@ extension StatusMenuSessions {
 
     private func updatePreferenceMenu(_ menu: NSMenu?, current: String?) {
         guard let menu else { return }
-        let selected = menu.items.contains {
-            ($0.representedObject as? [String: String])?["value"] == current
-        } ? current : "off"
+        // Mirror buildPreferenceMenu: a nil `current` (inheriting the agent
+        // default) leaves every item unchecked.
+        let selected = current
 
         for item in menu.items {
             let value = (item.representedObject as? [String: String])?["value"]

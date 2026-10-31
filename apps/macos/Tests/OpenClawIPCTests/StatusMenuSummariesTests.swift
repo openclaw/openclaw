@@ -208,6 +208,27 @@ struct StatusMenuSummariesTests {
         }
     }
 
+    @Test func `Thinking and Verbose submenus show no check when the session inherits the agent default`() async throws {
+        try await self.withFixture { fixture in
+            _ = try await fixture.control.request(method: "health")
+            await fixture.sessions.refresh()
+            // The fixture's session has no thinkingLevel/verboseLevel, so it inherits
+            // the agent default. Previously the menu manufactured an "Off" check.
+            let row = try #require(fixture.sessions.rows.first)
+            #expect(row.thinkingLevel == nil)
+            #expect(row.verboseLevel == nil)
+
+            let item = NSMenuItem()
+            fixture.sessions.configureSessionItem(item, row: row)
+            let menu = try #require(item.submenu)
+            for identifier in ["session.thinking", "session.verbose"] {
+                let submenu = try #require(
+                    menu.items.first { $0.identifier?.rawValue == identifier }?.submenu)
+                #expect(submenu.items.allSatisfy { $0.state != .on })
+            }
+        }
+    }
+
     @Test(arguments: [false, true])
     func `new Primary refreshes usage inside the previous Gateway cache window`(keepMenuOpen: Bool) async throws {
         try await self.withFixture { fixture in
