@@ -1,4 +1,3 @@
-import { setImmediate as flushDiagnostics } from "node:timers/promises";
 import { createAssistantMessageEventStream } from "@openclaw/ai/event-stream";
 import { Type } from "typebox";
 import { afterEach, beforeEach, expect, it, onTestFinished } from "vitest";
@@ -20,6 +19,7 @@ import { createExecutionIdentityAdmissionToken } from "../../../audit/execution-
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/io.js";
 import {
   onInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "../../../infra/diagnostic-events.js";
 import {
@@ -129,7 +129,7 @@ it.each([false, true].flatMap((quarantined) => [0, 1].map((raw) => ({ quarantine
       }
     });
     await observed.run(() => agent.prompt("start"));
-    await flushDiagnostics();
+    await waitForDiagnosticEventsDrained();
     expect(values).toEqual(quarantined ? [0, 0, 0] : [0, 0, 0, 1]);
     expect(requests).toHaveLength(quarantined ? 4 : 5);
     expect(agent.state.messages.at(-1)).toMatchObject(
@@ -249,7 +249,7 @@ it.each(["delayed preparation", "sequential tail"] as const)(
     startToolCalls(response, streamed);
     finishMessageStream(response, makeAssistantMessage(streamed));
     await running;
-    await flushDiagnostics();
+    await waitForDiagnosticEventsDrained();
     expect(starts).toEqual(["a1", "a2", "a3", "b1", "b2", "b3"]);
     expect(requests).toHaveLength(6);
     expect(agent.state.messages.at(-1)).toMatchObject({ errorCode: REPEATED_TOOL_ERROR_CODE });
