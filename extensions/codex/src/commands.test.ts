@@ -1442,7 +1442,7 @@ describe("codex command", () => {
       }));
       const resolveCodexCliSessionForBindingOnNode = vi.fn(async () => ({
         node: { nodeId: "node-123", displayName: "mb-m5" },
-        session: listed ? { sessionId, cwd: "/repo", messageCount: 2 } : undefined,
+        session: listed ? { sessionId, cwd: "/repo ", messageCount: 2 } : undefined,
       }));
       await expectCommand(
         listed
@@ -1468,7 +1468,7 @@ describe("codex command", () => {
             nodeId: "node-123",
             sessionId,
             agentId: "main",
-            cwd: "/repo",
+            cwd: "/repo ",
           },
         });
       } else {

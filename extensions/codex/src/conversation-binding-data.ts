@@ -81,7 +81,7 @@ export function createCodexCliNodeConversationBindingData(params: {
   cwd?: string;
 }): CodexCliNodeConversationBindingData {
   const agentId = params.agentId?.trim();
-  const cwd = params.cwd?.trim();
+  const cwd = readNonBlankString(params.cwd);
   return {
     kind: "codex-cli-node-session",
     version: CLI_BINDING_DATA_VERSION,
@@ -114,7 +114,7 @@ export function readCodexConversationBindingDataRecord(
       nodeId,
       sessionId,
       agentId: normalizeOptionalString(data.agentId),
-      cwd: normalizeOptionalString(data.cwd),
+      cwd: readNonBlankString(data.cwd),
     };
   }
   if (data.kind !== "codex-app-server-session") {
