@@ -3,6 +3,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import { createSubsystemLogger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { APIVoiceState, Client } from "../internal/discord.js";
 import { formatMention } from "../mentions.js";
 import type { DiscordLivePolicyReader } from "../monitor/live-policy.js";
@@ -35,6 +36,8 @@ import { DiscordVoiceReceive } from "./voice-receive.js";
 import { DiscordVoiceSessions } from "./voice-session.js";
 
 const logger = createSubsystemLogger("discord/voice");
+const VOICE_JOIN_CANCELLED = "Discord voice join was cancelled.";
+// Credential and Discord access failures cannot clear without operator action.
 const DISCORD_VOICE_FATAL_AUTOJOIN_ERROR_PATTERNS = [
   "api key missing",
   "incorrect api key",
@@ -43,7 +46,13 @@ const DISCORD_VOICE_FATAL_AUTOJOIN_ERROR_PATTERNS = [
   "authentication",
   "permission denied",
   "forbidden",
+  "missing access",
+  "missing permissions",
 ];
+// Other failures retry with bounded backoff. Voice-state events (including the bot's
+// own leave after a failed start) otherwise re-enqueue a join about once a second.
+const AUTOJOIN_RETRY_BASE_MS = 5_000;
+const AUTOJOIN_RETRY_MAX_MS = 10 * 60_000;
 
 function isFatalAutoJoinFailure(message: string): boolean {
   const normalized = message.toLowerCase();
@@ -51,6 +60,8 @@ function isFatalAutoJoinFailure(message: string): boolean {
     normalized.includes(pattern),
   );
 }
+
+type AutoJoinFailure = { message: string; failures: number; retryAtMs: number };
 
 type CaptureJoinOrigin = {
   isCurrent: () => boolean;
@@ -66,10 +77,9 @@ export class DiscordVoiceManager {
   private readonly client: Client;
   private readonly voiceEnabled: boolean;
   private readonly autoJoinTasks = new Map<string, Promise<void>>();
-  private readonly fatalAutoJoinFailures = new Map<
-    string,
-    { message: string; skipLogged: boolean }
-  >();
+  // Cleared by any successful join (including /vc join) and by manager rebuild on config reload.
+  private readonly autoJoinFailures = new Map<string, AutoJoinFailure>();
+  private readonly autoJoinRetries: PluginServiceSchedulerV1;
   readonly readPolicy?: DiscordLivePolicyReader;
   private readonly membership: DiscordVoiceMembershipTracker;
   private readonly allowedChannels: VoiceChannelResidency[] | null;
@@ -99,6 +109,7 @@ export class DiscordVoiceManager {
     this.client = params.client;
     this.readPolicy = params.readPolicy;
     this.botUserId = params.botUserId;
+    this.autoJoinRetries = params.scheduler.scope();
     this.voiceEnabled = resolveDiscordVoiceEnabled(params.discordConfig.voice);
     this.getTranscripts = ({ guildId, channelId }) =>
       this.destroyed
@@ -370,7 +381,7 @@ export class DiscordVoiceManager {
       }
       // A queued recovery must not invalidate the manual join it just waited behind.
       if (!captureIsCurrent()) {
-        return { ok: false, message: "Discord voice join was cancelled.", guildId, channelId };
+        return { ok: false, message: VOICE_JOIN_CANCELLED, guildId, channelId };
       }
       if (options?.captureOnly && !deferredTargetValidated) {
         const entry = this.sessions.get(guildId);
@@ -378,7 +389,7 @@ export class DiscordVoiceManager {
         if (!liveTarget && (entry || this.resolveAutoJoinTarget(guildId))) {
           const resolved = await this.voiceSessions.resolveChannel({ guildId, channelId });
           if (this.destroyed || !captureIsCurrent()) {
-            return { ok: false, message: "Discord voice join was cancelled.", guildId, channelId };
+            return { ok: false, message: VOICE_JOIN_CANCELLED, guildId, channelId };
           }
           if (!resolved.ok) {
             return resolved.error;
@@ -480,9 +491,7 @@ export class DiscordVoiceManager {
         if (this.guildLifecycles.get(guildId) === starting) {
           this.guildLifecycles.set(guildId, { status: "inactive", generation });
         }
-        return result.ok
-          ? { ...result, ok: false, message: "Discord voice join was cancelled." }
-          : result;
+        return result.ok ? { ...result, ok: false, message: VOICE_JOIN_CANCELLED } : result;
       }
       // Starting owns a pending normal join. Commit residency only on success; a failed
       // promotion keeps the previous owner active so capture, stop, and occupancy still work.
@@ -492,7 +501,7 @@ export class DiscordVoiceManager {
       }
       this.guildLifecycles.set(guildId, { status: "active", generation, instance: entry });
       if (result.ok) {
-        this.fatalAutoJoinFailures.delete(`${guildId}:${channelId}`);
+        this.autoJoinFailures.delete(`${guildId}:${channelId}`);
         // Recovery can finish after the last human leaves. Keep capture registered, not presence.
         if (waitingForOccupancy()) {
           await this.leave({ guildId, channelId });
@@ -585,6 +594,7 @@ export class DiscordVoiceManager {
     this.destroyed = true;
     this.abort.abort(new Error("Discord voice manager stopped"));
     this.occupancyWatchers.clear();
+    const retriesStopped = this.autoJoinRetries.stop();
     const followingStopped = this.following.destroy();
     for (const entry of this.sessions.values()) {
       void entry.stop();
@@ -597,7 +607,7 @@ export class DiscordVoiceManager {
       });
     }
     this.receive.daveRecoveryAttempts.clear();
-    await Promise.all([followingStopped, this.voiceSessions.waitForStops()]);
+    await Promise.all([retriesStopped, followingStopped, this.voiceSessions.waitForStops()]);
   }
 
   private isEntryCurrent(entry: VoiceSessionEntry): boolean {
@@ -648,18 +658,12 @@ export class DiscordVoiceManager {
       return { ok: false, message: "Discord voice manager is stopped." };
     }
     if (captureOrigin && !captureOrigin.isCurrent()) {
-      return { ok: false, message: "Discord voice join was cancelled." };
+      return { ok: false, message: VOICE_JOIN_CANCELLED };
     }
     const failureKey = `${entry.guildId}:${entry.channelId}`;
-    const fatalFailure = this.fatalAutoJoinFailures.get(failureKey);
-    if (fatalFailure) {
-      if (!fatalFailure.skipLogged) {
-        logger.warn(
-          `discord voice: autoJoin suppressed guild=${entry.guildId} channel=${entry.channelId} after fatal startup failure; retry with /vc join or reload config after fixing credentials: ${fatalFailure.message}`,
-        );
-        fatalFailure.skipLogged = true;
-      }
-      return { ok: false, message: fatalFailure.message };
+    const failure = this.autoJoinFailures.get(failureKey);
+    if (failure && this.autoJoinRetries.now() < failure.retryAtMs) {
+      return { ok: false, message: failure.message };
     }
 
     // Capture-triggered work keeps its original source/residency guards through
@@ -706,19 +710,46 @@ export class DiscordVoiceManager {
     );
     // A retired capture's late provider failure must not suppress ordinary autoJoin.
     if (captureOrigin && !captureOrigin.isCurrent()) {
-      return { ok: false, message: "Discord voice join was cancelled." };
+      return { ok: false, message: VOICE_JOIN_CANCELLED };
     }
-    if (!result.ok) {
-      logger.warn(
-        `discord voice: autoJoin skipped guild=${entry.guildId} channel=${entry.channelId}: ${result.message}`,
-      );
-      if (isFatalAutoJoinFailure(result.message)) {
-        this.fatalAutoJoinFailures.set(failureKey, {
-          message: result.message,
-          skipLogged: false,
-        });
-      }
+    if (!result.ok && result.message !== VOICE_JOIN_CANCELLED && !this.destroyed) {
+      this.recordAutoJoinFailure(entry, failureKey, result.message);
     }
     return result;
+  }
+
+  private recordAutoJoinFailure(
+    entry: VoiceChannelResidency,
+    failureKey: string,
+    message: string,
+  ): void {
+    const target = `guild=${entry.guildId} channel=${entry.channelId}`;
+    if (isFatalAutoJoinFailure(message)) {
+      this.autoJoinFailures.set(failureKey, { message, failures: 1, retryAtMs: Infinity });
+      logger.warn(
+        `discord voice: autoJoin suppressed ${target} after fatal startup failure; fix the credentials or restore the bot's View Channel and Connect permissions, then run /vc join or reload config: ${message}`,
+      );
+      return;
+    }
+    const failures = (this.autoJoinFailures.get(failureKey)?.failures ?? 0) + 1;
+    const delayMs = Math.min(AUTOJOIN_RETRY_BASE_MS * 2 ** (failures - 1), AUTOJOIN_RETRY_MAX_MS);
+    const retryAtMs = this.autoJoinRetries.now() + delayMs;
+    this.autoJoinFailures.set(failureKey, { message, failures, retryAtMs });
+    logger.warn(
+      `discord voice: autoJoin failed ${target} (attempt ${failures}); retrying in ${Math.round(delayMs / 1000)}s or on /vc join: ${message}`,
+    );
+    // Voice-state events may not arrive while the room is idle; recheck once the backoff expires.
+    if (entry.whenOccupied) {
+      this.autoJoinRetries.schedule({
+        id: `autojoin-retry:${entry.guildId}`,
+        atMs: retryAtMs,
+        run: () =>
+          this.reconcileAutoJoinGuild(entry.guildId).catch((err: unknown) => {
+            logger.warn(
+              `discord voice: autoJoin retry failed ${target}: ${formatErrorMessage(err)}`,
+            );
+          }),
+      });
+    }
   }
 }
