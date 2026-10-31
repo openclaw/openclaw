@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   DecisionContractError,
   decisionBatchV1ToV2,
@@ -9,6 +9,20 @@ import {
   type DecisionBatch,
   type DecisionBatchV2,
 } from "./decisions.js";
+
+// mock-isolation: Decision execution must load without initializing the host harness.
+vi.mock("./agent-harness-runtime.js", () => {
+  throw new Error("Decision transport must not initialize the host harness");
+});
+// mock-isolation: Decision execution must load without initializing extension helpers.
+vi.mock("./extension-shared.js", () => {
+  throw new Error("Decision transport must not initialize extension helpers");
+});
+
+it("loads Decision transport without initializing host runtime bundles", async () => {
+  const { evaluateOpenAICompatibleDecision } = await import("./decisions-openai-runtime.js");
+  expect(evaluateOpenAICompatibleDecision).toBeTypeOf("function");
+});
 
 it("exposes lossless codecs and bounded validation through the public decision entrypoint", () => {
   const legacy: DecisionBatch = {

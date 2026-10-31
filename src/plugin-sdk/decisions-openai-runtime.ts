@@ -1,4 +1,5 @@
-import { getModelProviderRequestTransport } from "./agent-harness-runtime.js";
+import { getModelProviderRequestTransport } from "../agents/provider-request-config.js";
+import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
 import type {
   DecisionAnswerV2,
   DecisionBatchV2,
@@ -7,7 +8,6 @@ import type {
   ProviderDecisionOutcomeV2,
 } from "./decisions.js";
 import { validateDecisionBatchV2 } from "./decisions.js";
-import { buildTimeoutAbortSignal } from "./extension-shared.js";
 import {
   shouldUseEnvHttpProxyForUrl,
   withTrustedEnvProxyGuardedFetchMode,
