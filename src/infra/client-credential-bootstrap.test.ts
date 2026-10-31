@@ -275,6 +275,33 @@ describe("fresh PostgreSQL client credential binding", () => {
     expectCredentialsReadable(f);
   });
 
+  it("rebinds the same anchor file after its device was renumbered", () => {
+    const f = fixture();
+    using source = openNodeSqliteDatabase(f.sourcePath);
+    createAnchor(source);
+    bind(source, f);
+    const current = readClientCredentialFileIdentity(f.sourcePath)!;
+    {
+      using owner = openClientCredentialCustody(f.env, { migration: true })!;
+      const stored = readClientCredentialReceipt(owner.database)!;
+      stored.receipt.sharedFile = { ...current, dev: String(BigInt(current.dev) + 1n) };
+      owner.transaction(() =>
+        writeClientCredentialReceipt(owner.database, stored.receipt, "complete"),
+      );
+    }
+    const previous = localSnapshot(f.env);
+    bind(source, f);
+    expect(localSnapshot(f.env)).toMatchObject({
+      receipt: {
+        phase: "complete",
+        receipt: { ...previous.receipt!.receipt, sharedFile: current },
+      },
+      identities: previous.identities,
+      tokens: previous.tokens,
+    });
+    expectCredentialsReadable(f);
+  });
+
   it("refuses a different durable store identity without changing local credentials or receipts", () => {
     const f = fixture();
     using source = openNodeSqliteDatabase(f.sourcePath);

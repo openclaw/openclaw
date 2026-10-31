@@ -8,10 +8,14 @@ import {
   type ClientIdentityRecord,
 } from "./client-credential-operations.js";
 import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
-import { writeClientCredentialReceipt } from "./client-credential-readiness.js";
+import {
+  readClientCredentialReceipt,
+  writeClientCredentialReceipt,
+} from "./client-credential-readiness.js";
 import {
   emptyClientCredentialReceipt,
   readClientCredentialFileIdentity,
+  type ClientCredentialFileIdentity,
 } from "./client-credential-receipt.js";
 import {
   openClientCredentialCustody,
@@ -363,5 +367,77 @@ it.runIf(process.platform !== "win32")(
       kind: "identity",
       identity,
     });
+  },
+);
+
+// Binds a completed canonical receipt to the shared file with one recorded field shifted.
+function bindRecordedSharedFile(
+  root: string,
+  env: NodeJS.ProcessEnv,
+  shift: "dev" | "ino",
+): { current: ClientCredentialFileIdentity; recorded: ClientCredentialFileIdentity } {
+  const shared = path.join(root, "state", "openclaw.sqlite");
+  fs.mkdirSync(path.dirname(shared));
+  fs.writeFileSync(shared, "");
+  const current = readClientCredentialFileIdentity(shared)!;
+  const recorded = { ...current, [shift]: String(BigInt(current[shift]) + 1n) };
+  withClientCredentialStore(env, true, (db) =>
+    writeClientCredentialReceipt(
+      db,
+      {
+        ...emptyClientCredentialReceipt(recorded),
+        source: {
+          kind: "canonical",
+          engine: "sqlite",
+          identity: `${recorded.path}:17`,
+          generation: "bootstrap:17",
+          sha256: "0".repeat(64),
+          destinationVersion: 1,
+        },
+      },
+      "complete",
+    ),
+  );
+  return { current, recorded };
+}
+
+function recordedSharedFile(env: NodeJS.ProcessEnv) {
+  return withClientCredentialStore(
+    env,
+    false,
+    (db) => readClientCredentialReceipt(db)?.receipt.sharedFile,
+  );
+}
+
+it.each([false, true])(
+  "admits a renumbered shared device with the same path and inode (readOnly: %s)",
+  (readOnly) => {
+    const { root, env } = fixture();
+    const { current, recorded } = bindRecordedSharedFile(root, env, "dev");
+    expect(
+      runClientCredentialOperation(
+        env,
+        { kind: "identity.read", identity_key: "primary" },
+        { readOnly },
+      ),
+    ).toEqual({ kind: "identity", identity: null });
+    // Writable admission records the new device; read-only inspection leaves the receipt alone.
+    expect(recordedSharedFile(env)).toEqual(readOnly ? recorded : current);
+  },
+);
+
+it.each([false, true])(
+  "still refuses a shared file whose inode changed (readOnly: %s)",
+  (readOnly) => {
+    const { root, env } = fixture();
+    const { recorded } = bindRecordedSharedFile(root, env, "ino");
+    expect(() =>
+      runClientCredentialOperation(
+        env,
+        { kind: "identity.read", identity_key: "primary" },
+        { readOnly },
+      ),
+    ).toThrow("run openclaw doctor --fix");
+    expect(recordedSharedFile(env)).toEqual(recorded);
   },
 );

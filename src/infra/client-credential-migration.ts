@@ -20,6 +20,8 @@ import {
 } from "./client-credential-readiness.js";
 import {
   CLIENT_CREDENTIAL_LEGACY_KEYS,
+  isSameClientCredentialFile,
+  isSameIndependentClientCredentialIdentity,
   readClientCredentialFileIdentity,
   serializeClientCredentialReceipt,
   type ClientCredentialReceipt,
@@ -177,10 +179,7 @@ export function bindFreshClientCredentialStore(
     }
     const previousSource = previous?.receipt.source;
     const previousFile = previous?.receipt.sharedFile;
-    const sameSharedFile =
-      previousFile?.path === sharedFile.path &&
-      previousFile.dev === sharedFile.dev &&
-      previousFile.ino === sharedFile.ino;
+    const sameSharedFile = isSameClientCredentialFile(previousFile, sharedFile);
     const samePostgresBootstrap =
       postgres &&
       previousSource?.kind === postgres.kind &&
@@ -336,8 +335,7 @@ export function recoverClientCredentialStore(
     }
     const provenance = stored.receipt.source;
     const original = stored.receipt.sharedFile;
-    const sameFile =
-      original?.path === file.path && original.dev === file.dev && original.ino === file.ino;
+    const sameFile = isSameClientCredentialFile(original, file);
     if (!provenance && !sameFile) {
       throw new Error(
         "Local credentials do not match the shared database; restore their matched backup.",
@@ -364,7 +362,14 @@ export function recoverClientCredentialStore(
         provenance.identity = identity;
       }
     }
-    if (stored.phase === "complete" && sameFile && !sameNativeBootstrap && provenance) {
+    // A renumbered device falls through so recovery records the current binding.
+    if (
+      stored.phase === "complete" &&
+      sameFile &&
+      original?.dev === file.dev &&
+      !sameNativeBootstrap &&
+      provenance
+    ) {
       return;
     }
     // A bootstrap interrupted after source commit still has the original file fence.
@@ -501,11 +506,9 @@ export function prepareClientCredentialMigration(
         previous?.phase === "complete" &&
         previous.receipt.source?.kind === "independent" &&
         nativeBootstrap &&
-        previous.receipt.source.identity === `${file.dev}:${file.ino}` &&
+        isSameIndependentClientCredentialIdentity(previous.receipt.source.identity, file) &&
         previous.receipt.source.sha256 === receipt.source!.sha256 &&
-        previous.receipt.sharedFile?.path === file.path &&
-        previous.receipt.sharedFile.dev === file.dev &&
-        previous.receipt.sharedFile.ino === file.ino;
+        isSameClientCredentialFile(previous.receipt.sharedFile, file);
       if (independent) {
         writeClientCredentialReceipt(database, receipt, "copied");
         return;
