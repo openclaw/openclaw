@@ -1010,8 +1010,14 @@ final class NodeAppModel {
         watchMessagingService: any WatchMessagingServicing = WatchMessagingService(),
         talkMode: TalkModeManager = TalkModeManager(),
         voiceNoteRecorder: OpenClawVoiceNoteRecorder = OpenClawVoiceNoteRecorder(),
-        audioAdmissionInitiallyAllowed: Bool = true)
+        audioAdmissionInitiallyAllowed: Bool = true,
+        restoringSavedGatewayRoute: Bool = false)
     {
+        if restoringSavedGatewayRoute, let stableID = GatewaySettingsStore.activeGatewayEntry()?.stableID {
+            self.connectedGatewayID = stableID
+            self.selectedAgentId = GatewaySettingsStore.loadGatewaySelectedAgentId(stableID: stableID)
+            self.focusedChatSessionKey = GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: stableID)
+        }
         self.camera = camera
         self.preferredCameraFacing = Self.cameraFacingPreference(
             rawValue: UserDefaults.standard.string(forKey: Self.preferredCameraFacingKey))
@@ -1658,13 +1664,7 @@ final class NodeAppModel {
             self.gatewaySessionScope = decoded.scope.value as? String
             self.applyMainSessionKey(decoded.mainkey)
 
-            let selected = (self.selectedAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            if !selected.isEmpty,
-               !decoded.agents.contains(where: { $0.id == selected && $0.isSelectableAgent })
-            {
-                self.selectedAgentId = nil
-                self.focusedChatSessionKey = nil
-            }
+            self.retireSelectedAgentIfRemoved(from: decoded.agents)
             self.synchronizeTalkSessionKey()
             if let routingIdentity {
                 await sourceStore.storeSessionRoutingIdentity(routingIdentity)
@@ -1686,6 +1686,14 @@ final class NodeAppModel {
         await self.refreshAgentsFromGateway()
     }
 
+    func retireSelectedAgentIfRemoved(from agents: [AgentSummary]) {
+        let selected = (self.selectedAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !selected.isEmpty,
+              !agents.contains(where: { $0.id == selected && $0.isSelectableAgent })
+        else { return }
+        self.setSelectedAgentId(nil)
+    }
+
     func setSelectedAgentId(_ agentId: String?) {
         let trimmed = (agentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let nextSelectedAgentId = trimmed.isEmpty ? nil : trimmed
@@ -1700,6 +1708,9 @@ final class NodeAppModel {
         }
         if selectedAgentChanged {
             self.focusedChatSessionKey = nil
+            if let stableID {
+                GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: nil)
+            }
             self.shareDeliveryChannel = nil
             self.shareDeliveryTo = nil
         }
@@ -3220,6 +3231,10 @@ extension NodeAppModel {
 
     func focusChatSession(_ sessionKey: String?) {
         self.focusedChatSessionKey = Self.trimmedOrNil(sessionKey)
+        if let stableID = self.connectedGatewayID {
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(
+                stableID: stableID, sessionKey: self.focusedChatSessionKey)
+        }
         self.synchronizeTalkSessionKey()
     }
 
@@ -3643,7 +3658,7 @@ extension NodeAppModel {
         // Session keys are gateway-owned: transport reconnects keep the active chat,
         // while initial connects and target changes must not inherit another route.
         if !preservingFocusedChatSession {
-            self.focusedChatSessionKey = nil
+            self.focusedChatSessionKey = GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: stableID)
         }
         self.synchronizeTalkSessionKey()
         self.apnsLastRegisteredTokenHex = nil
@@ -5186,9 +5201,8 @@ extension NodeAppModel {
     }
 
     private func currentExecApprovalGatewayStableID() -> String? {
-        let stableID = self.activeGatewayConnectConfig?.effectiveStableID
-            ?? self.connectedGatewayID
-        return GatewayStableIdentifier.exact(stableID)
+        // Remembered presentation ownership is not a configured approval route.
+        GatewayStableIdentifier.exact(self.activeGatewayConnectConfig?.effectiveStableID)
     }
 
     func refreshPendingApprovalInbox() async {
