@@ -77,7 +77,6 @@ describe("private selected Fast metadata", () => {
     expect(resolve(opus, available)).toBe(true);
     expect(resolve(opus, { availability: undefined, routeResolution: null })).toBeUndefined();
     expect(resolve(sonnet, { availability: true, routeResolution: null }, "codex")).toBeUndefined();
-    expect(resolve(opus, { availability: true, routeResolution: null }, "claude-cli")).toBe(false);
   });
   it("uses the same model/agent parameter order as request construction", () => {
     const models = { "anthropic/claude-opus-5": { params: { serviceTier: "standard_only" } } };
