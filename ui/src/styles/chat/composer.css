@@ -1472,7 +1472,7 @@
 
 .slash-menu-item {
   display: grid;
-  grid-template-columns: 16px minmax(0, 1fr);
+  grid-template-columns: 15px minmax(0, 1fr);
   align-items: center;
   column-gap: 8px;
   min-height: 32px;
@@ -1501,14 +1501,14 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
   color: var(--chat-composer-secondary);
 }
 
 .slash-menu-icon svg {
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
   stroke: currentColor;
   fill: none;
   stroke-width: 1.5px;

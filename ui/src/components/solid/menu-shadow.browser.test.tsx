@@ -53,7 +53,7 @@ it.each(["open", "closed"] as const)("navigates menus inside a %s shadow root", 
     await userEvent.keyboard("{Home}{ArrowRight}");
     await phase(root.getElementById("shadow-menu-group:content")!, "open");
     await expect.poll(() => root.activeElement).toBe(child);
-    expect(getComputedStyle(child.querySelector("kbd")!).borderRadius).toBe("0px");
+    expect(getComputedStyle(child.querySelector("kbd")!).borderRadius).toBe("4px");
     await userEvent.keyboard("{ArrowLeft}");
     await expect.poll(() => root.activeElement).toBe(group);
     await userEvent.keyboard("{ArrowDown}");
@@ -63,7 +63,7 @@ it.each(["open", "closed"] as const)("navigates menus inside a %s shadow root", 
     expect(root.querySelector("[data-openclaw-overlay-style]")).toBeNull();
     // Overlay and keycap styles are each shared by the root menu and its submenu.
     expect(replacementRoot.querySelectorAll("[data-openclaw-overlay-style]")).toHaveLength(2);
-    expect(getComputedStyle(child.querySelector("kbd")!).borderRadius).toBe("0px");
+    expect(getComputedStyle(child.querySelector("kbd")!).borderRadius).toBe("4px");
     trigger.focus();
     await userEvent.keyboard("{ArrowDown}");
     await phase(surface, "open");

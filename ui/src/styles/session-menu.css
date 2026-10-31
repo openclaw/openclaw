@@ -83,8 +83,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
   flex: 0 0 auto;
 }
 
@@ -108,11 +108,11 @@
    render as solid black fills (invisible-blob chips in dark mode). */
 .session-menu__icon svg,
 .session-menu__check svg {
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
   stroke: currentColor;
   fill: none;
-  stroke-width: 1.7px;
+  stroke-width: 1.75px;
   stroke-linecap: round;
   stroke-linejoin: round;
 }

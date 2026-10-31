@@ -498,8 +498,8 @@ suite.define(() => {
           page.off("close", stopAvatarDiagnostics);
         }
         await expectAssignmentAvatarLayout(page);
-        await expectBrowser(assignTo.locator(".session-menu__icon")).toHaveCSS("width", "16px");
-        await expectBrowser(assignTo.locator(".session-menu__icon svg")).toHaveCSS("width", "16px");
+        await expectBrowser(assignTo.locator(".session-menu__icon")).toHaveCSS("width", "15px");
+        await expectBrowser(assignTo.locator(".session-menu__icon svg")).toHaveCSS("width", "15px");
         await assignee(panel, "Carol").click();
         await expectAssignmentRequest(gateway, "profile-carol");
         await confirmOwner(gateway, "Carol");

@@ -355,10 +355,12 @@
      Engines without corner-shape keep the circular radius. */
   --chat-composer-corner-shape: superellipse(1.5);
 
-  /* Menu items stay optically parallel to their panel edge: radius 6 + padding 4
-     = panel radius 10. Shared knobs keep transient menus from drifting again. */
-  --menu-radius: calc(16px * var(--openclaw-corner-radius-scale));
-  --menu-item-radius: calc(12px * var(--openclaw-corner-radius-scale));
+  /* Menu steps sit on the --radius-* chain so themes keep their corner character;
+     near-square themes pin them. Shared knobs keep transient menus from drifting. */
+  --radius-menu: calc(var(--radius-md) * 1.6 * var(--openclaw-corner-radius-scale));
+  --radius-menu-item: calc(var(--radius-sm) * 2 * var(--openclaw-corner-radius-scale));
+  --menu-radius: var(--radius-menu);
+  --menu-item-radius: var(--radius-menu-item);
   --menu-item-height: 28px;
   --menu-padding: 4px;
   --menu-selected: var(--surface-selected);

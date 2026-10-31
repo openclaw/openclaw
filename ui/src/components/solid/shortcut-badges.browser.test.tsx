@@ -84,13 +84,6 @@ it.each([
     ];
     expect(Number.parseFloat(reference.paddingInlineStart)).toBeGreaterThan(0);
     for (const badge of view.container.querySelectorAll("kbd")) {
-      if (badge.closest(".oc-menu-item__details")) {
-        // Menu rows show shortcuts as quiet text rather than keycaps.
-        const style = getComputedStyle(badge);
-        expect(style.backgroundColor, badge.outerHTML).toBe("rgba(0, 0, 0, 0)");
-        expect(style.paddingInlineStart, badge.outerHTML).toBe("0px");
-        continue;
-      }
       expect(skin(getComputedStyle(badge)), badge.outerHTML).toEqual(skin(reference));
     }
     const hints = [...surface("badge-pattern").querySelectorAll("kbd")];

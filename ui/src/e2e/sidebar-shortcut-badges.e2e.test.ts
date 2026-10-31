@@ -49,9 +49,9 @@ suite.define(() => {
       ).toBeLessThan(1);
       for (const hint of hints) {
         expect(Math.abs(hint.endGap)).toBeLessThan(1);
-        expect(hint.padding).toBe(0);
-        expect(hint.radius).toBe("0px");
-        expect(hint.background).toBe("rgba(0, 0, 0, 0)");
+        expect(hint.padding).toBeGreaterThan(0);
+        expect(hint.radius).toBe("4px");
+        expect(hint.background).not.toBe("rgba(0, 0, 0, 0)");
       }
     } finally {
       await suite.closeBrowserContext(context);

@@ -369,13 +369,14 @@ a.oc-menu-item[href] {
 
 .oc-menu-item__icon {
   justify-content: center;
-  min-width: 16px;
-  min-height: 16px;
+  min-width: 15px;
+  min-height: 15px;
 }
 
 .oc-menu-item__icon > svg {
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.75px;
 }
 
 .oc-menu-item__details {
@@ -398,34 +399,46 @@ a.oc-menu-item[href] {
 }
 
 .oc-menu-item__check > svg {
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.75px;
 }
 
 .oc-menu-item__submenu-icon {
-  justify-content: center;
+  justify-content: flex-end;
   width: 16px;
   height: 16px;
   margin-inline-start: auto;
   color: var(--text-tertiary);
 }
 
+/* The chevron's glyph sits inset in its box; pull it out to the shortcut column's edge. */
 .oc-menu-item__submenu-icon > svg {
   display: block;
   flex: none;
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
+  margin-inline-end: -4px;
+  stroke-width: 1.75px;
 }
 
-/* Reserve an indicator rail only for checks or submenu rows with shortcuts.
-   An unrelated Help submenu must not indent an account menu's shortcut badges. */
+/* Shortcuts reserve the indicator rail only when a row of this same menu shows an
+   indicator; nested flyouts decide for themselves, so the column stays aligned. */
+.oc-menu {
+  --oc-menu-shortcut-rail: 0px;
+}
+
+.oc-menu:has(
+  > .oc-menu-item > .oc-menu-item__check,
+  > :not(.oc-overlay) > .oc-menu-item > .oc-menu-item__check,
+  > .oc-menu-item--submenu .shortcut-kbd,
+  > :not(.oc-overlay) > .oc-menu-item--submenu .shortcut-kbd
+) {
+  --oc-menu-shortcut-rail: 22px;
+}
+
 .oc-menu-item__details:has(.shortcut-kbd) {
-  padding-inline-end: 22px;
-}
-
-.oc-menu:not(:has(.oc-menu-item__check, .oc-menu-item--submenu .shortcut-kbd))
-  .oc-menu-item__details:has(.shortcut-kbd) {
-  padding-inline-end: 0;
+  padding-inline-end: var(--oc-menu-shortcut-rail, 0px);
 }
 
 .oc-menu-item:has(.oc-menu-item__details .shortcut-kbd)
@@ -436,15 +449,8 @@ a.oc-menu-item[href] {
   padding: 0;
 }
 
-/* Menu shortcuts are quiet text; keycaps stay with tooltips and hints. */
 .oc-menu-item__details .shortcut-kbd {
   justify-content: flex-end;
-  padding-inline: 0;
-  border-radius: 0;
-  background: transparent;
-  color: inherit;
-  font-family: inherit;
-  font-size: inherit;
   white-space: nowrap;
 }
 
