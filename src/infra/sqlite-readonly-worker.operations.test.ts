@@ -13,6 +13,7 @@ import { runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { createSpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "../process/supervisor/cancellation-policy.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { isPidDefinitelyDead } from "../shared/pid-alive.js";
 import { createCurrentOpenClawAgentDatabaseFixtures } from "../state/openclaw-agent-db.test-support.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -510,6 +511,7 @@ it("releases startup metadata maintenance before admitting a Gateway", async () 
   openOpenClawStateDatabase({ env: stateEnv });
   closeOpenClawStateDatabaseForTest();
   const broker = createSpawnBrokerHost();
+  const brokerSpawn = vi.spyOn(broker, "spawn");
   try {
     await broker.ready();
     await expect(
@@ -528,6 +530,11 @@ it("releases startup metadata maintenance before admitting a Gateway", async () 
         ),
       ),
     ).resolves.toMatchObject({ value: { ok: true } });
+
+    expect(brokerSpawn).toHaveBeenCalledTimes(1);
+    const reader = brokerSpawn.mock.results[0]?.value;
+    expect(reader?.pid).toBeTypeOf("number");
+    expect(isPidDefinitelyDead(reader!.pid!)).toBe(true);
 
     const gateway = await acquireGatewayLock({
       env: stateEnv,
