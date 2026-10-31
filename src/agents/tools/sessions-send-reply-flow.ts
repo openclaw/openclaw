@@ -1,4 +1,3 @@
-import { isRequesterParentOfBackgroundAcpSession } from "@openclaw/acp-core/session-interaction-mode";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isGatewayProtocolResponseError } from "../../../packages/gateway-client/src/protocol-request.js";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -228,11 +227,7 @@ export function prepareSessionsSendReplyContext(params: {
   ownedTask: boolean;
   isIsolatedCronRequester: boolean;
   targetIsSubagent: boolean;
-  requesterSessionKey: string;
-  targetSession:
-    | (NonNullable<Parameters<typeof isRequesterParentOfBackgroundAcpSession>[0]> &
-        AgentStepSession)
-    | undefined;
+  targetSession: AgentStepSession | undefined;
   requesterTarget: GatewaySessionStoreTargetWithStore;
   requesterSessionId?: string;
   context: Omit<
@@ -272,8 +267,7 @@ export function prepareSessionsSendReplyContext(params: {
     params.callerOwnsCompletion ||
     params.requesterIsSubagent ||
     params.ownedTask ||
-    params.isIsolatedCronRequester ||
-    isRequesterParentOfBackgroundAcpSession(params.targetSession, params.requesterSessionKey);
+    params.isIsolatedCronRequester;
   return {
     ...params.context,
     requester,

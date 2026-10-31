@@ -329,7 +329,6 @@ it.each(["direct", "cron-fallback", "receive-only", "ask-send", "send-only"] as 
       ownedTask: false,
       isIsolatedCronRequester: false,
       targetIsSubagent: false,
-      requesterSessionKey: targetKey,
       targetSession:
         route === "cron-fallback" ? { ...source, sessionId: "expired-cron-run" } : source,
       requesterTarget: { ...storeTarget(targetKey), storeKeys: [targetKey] },

@@ -649,10 +649,7 @@ export async function executeSessionsSend(
           ownedTask: communication.ownedTask,
           isIsolatedCronRequester,
           targetIsSubagent,
-          requesterSessionKey: requesterSession.canonicalKey,
-          targetSession: targetSessionEntry
-            ? { ...targetSessionEntry, acp: targetAcpMeta }
-            : undefined,
+          targetSession: targetSessionEntry,
           context: {
             callGateway: gatewayCall,
             targetSessionKey: resolvedKey,
