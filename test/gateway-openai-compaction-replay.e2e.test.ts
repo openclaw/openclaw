@@ -90,9 +90,7 @@ it(
 
       const reasoningJson = expectCompactionReplay(modelServer.requests[2]?.input ?? []);
       expect(reasoningJson.split("Continue from the compacted transcript")).toHaveLength(2);
-      expect(
-        reasoningJson.split("recorded reasoning but did not produce a user-visible answer"),
-      ).toHaveLength(2);
+      expect(reasoningJson.split("answer the user's request now")).toHaveLength(2);
 
       await runAgentTurn(client, "replay compaction state");
       expect(modelServer.requests).toHaveLength(4);

@@ -33,7 +33,7 @@ scenario:
       summaryMarker: QA-COMPACTION-EMPTY-RECOVERED-SUMMARY
       finalMarker: QA-COMPACTION-EMPTY-FINAL-OK
       emptyRetryNeedle: Continue from the current state
-      reasoningRetryNeedle: The previous assistant turn recorded reasoning but did not produce a user-visible answer.
+      reasoningRetryNeedle: Continue from the current conversation and answer the user's request now
 
 flow:
   steps:
