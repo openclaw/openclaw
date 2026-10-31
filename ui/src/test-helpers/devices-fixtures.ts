@@ -46,6 +46,7 @@ export function createDevicesViewProps(overrides: Partial<DevicesProps> = {}): D
   return {
     ...createInitialDevicesState({ connected: true }),
     loading: false,
+    initialInventoryReady: true,
     configRead: { scope: () => undefined, value: () => undefined },
     execApprovalsRead: { scope: () => undefined, value: () => undefined },
     inventoryRead: () => undefined,

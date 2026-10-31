@@ -3102,9 +3102,13 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T3",
-        operations: ["readRecoveryRows"],
+        operations: [
+          "readRecoveryRows",
+          "readPluginCohortPairRows",
+          "inspectPluginCohortRecoveryRows",
+        ],
         evidence:
-          "Runtime mutation/reconciliation/interruption readers execute in existing workers. Native load/inspect recovery callers are update CLI repair, result, rollback and terminal owners plus CLI managed-handoff cleanup; no Gateway reader uses the synchronous recovery facade. Recovery exclusion is retained as activation/rollback custody, not removed as bookkeeping.",
+          "Runtime mutation/reconciliation/interruption readers execute in existing workers. Native load/inspect recovery callers are update CLI repair, result, rollback and terminal owners plus CLI managed-handoff cleanup; no Gateway reader uses the synchronous recovery facade. Recovery exclusion is retained as activation/rollback custody, not removed as bookkeeping. Cohort runtime inspection uses inspectPluginCohortRecoveriesAsync through openclaw-state-read-handlers; metadata mutations read the pair inside their worker. Native pair reads serve admitted update/repair/config-capture owners; the synchronous mutation continuation is supplied only by CLI execution-guards with its actual executor fence.",
       },
     ],
   ],
@@ -3616,6 +3620,7 @@ const workerModules = new Set([
   "src/infra/session-cost-usage-worker.ts",
   "src/infra/update-candidate-exec-approvals.ts", // Approval projections run in the update-candidate-state worker.
   "src/infra/update-candidate-plugins.ts", // Plugin inventory and copying run in the update-candidate-state worker.
+  "src/infra/update-database-restore-source.ts", // Sole caller: update-candidate-state.worker database-restore-preparation; private output, parent retains native exclusions.
   "src/infra/update-run-interruption-store.ts", // Interruption writes use the shared-state worker; host imports are pure.
   "src/infra/update-run-dispatch.worker.ts", // Shared-state backend owns update-run dispatch and retains its writer lifecycle.
   "src/infra/update-run-reconciliation.read.ts", // Reconciliation reads use state-read and reconciliation workers.

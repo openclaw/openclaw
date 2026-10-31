@@ -201,24 +201,6 @@ function setTextareaScrollbarGutter(
   }
 }
 
-// A surface that declares the compact shape is a fixed CSS box: it holds one
-// line whatever the draft is, so an inline height, scroll offset or overflow
-// left by an earlier measured pass would silently outrank the stylesheet. Which
-// shape a composer is in is declared in its markup, never inferred here from how
-// much text it holds.
-function resetSingleLineTextarea(el: HTMLTextAreaElement) {
-  const singleLine = el.closest('[data-composer-layout="single-line"]');
-  if (singleLine) {
-    el.scrollTop = 0;
-    el.style.height = "";
-    el.style.overflowY = "";
-    el.removeAttribute("data-composer-scrollable");
-    el.removeAttribute("data-scroll-fade-top");
-    el.removeAttribute("data-scroll-fade-bottom");
-  }
-  return singleLine;
-}
-
 function updateTextareaOverflow(
   el: HTMLTextAreaElement,
   deferNativeEditing = true,
@@ -237,12 +219,6 @@ function updateTextareaOverflow(
   const clientHeight = measured?.clientHeight ?? el.clientHeight;
   const scrollHeight = measured?.scrollHeight ?? el.scrollHeight;
   const state = composerTextareaResizeObservers.get(el);
-  if (resetSingleLineTextarea(el)) {
-    if (state) {
-      state.height = clientHeight;
-    }
-    return;
-  }
   // Only a shrinking cap leaves a draft overflowing a shorter box: keep its
   // visible bottom edge in place unless that would hide the caret line.
   if (state && clientHeight < state.height && scrollHeight > clientHeight) {
@@ -309,9 +285,6 @@ export function adjustTextareaHeight(
   if (state && el.isConnected) {
     // Refs bind before attachment; the first connected measurement sees the pane.
     state.stopPaneLayout ??= observeComposerPane(el, state);
-  }
-  if (resetSingleLineTextarea(el)) {
-    return;
   }
   // Modern engines can size the textarea from its content in the normal layout
   // pass. Do not force repeated transcript and textarea layout reads on every

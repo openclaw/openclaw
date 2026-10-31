@@ -79,17 +79,31 @@ export async function captureManagedWorktreeSnapshot(params: {
       };
       const missing = await missingCommitObjects(record.path, "HEAD", options);
       if (missing.length > 0) {
-        await hydrateCommitObjects(record.path, "HEAD", missing, options).catch(
-          (cause: unknown) => {
-            params.signal?.throwIfAborted();
-            params.assertCurrent?.();
-            // Keep the cleanup owner's shared-repository backoff on failed hydration.
-            throw new Error(
-              `Worktree snapshot has missing blob ${missing[0]}; check the promisor remote or repair the repository before retrying cleanup. Checkout preserved.`,
-              { cause },
-            );
-          },
-        );
+        try {
+          // Retirement must distinguish promised contents from lost local data.
+          // Git scans every promisor pack for this proof; creation does not need it.
+          await requireGit(
+            record.path,
+            [
+              "rev-list",
+              "--objects",
+              "--quiet",
+              "--missing=allow-promisor",
+              "--max-count=1",
+              "HEAD",
+            ],
+            { ...options, env: { ...options.env, GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" } },
+          );
+          await hydrateCommitObjects(record.path, "HEAD", missing, options);
+        } catch (cause) {
+          params.signal?.throwIfAborted();
+          params.assertCurrent?.();
+          // Keep the cleanup owner's shared-repository backoff on failed hydration.
+          throw new Error(
+            `Worktree snapshot has missing blob ${missing[0]}; check the promisor remote or repair the repository before retrying cleanup. Checkout preserved.`,
+            { cause },
+          );
+        }
       }
     }, params.signal);
     params.signal?.throwIfAborted();

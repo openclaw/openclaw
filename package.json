@@ -118,8 +118,6 @@
     "!dist/plugin-sdk/channel-route.d.ts",
     "!dist/plugin-sdk/channel-secret-owner-runtime.d.ts",
     "!dist/plugin-sdk/channel-secret-tts-runtime.d.ts",
-    "!dist/plugin-sdk/channel-target-testing.js",
-    "!dist/plugin-sdk/channel-target-testing.d.ts",
     "!dist/plugin-sdk/channel-targets.d.ts",
     "!dist/plugin-sdk/channel-test-helpers.js",
     "!dist/plugin-sdk/channel-test-helpers.d.ts",

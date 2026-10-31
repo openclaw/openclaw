@@ -207,6 +207,11 @@ unreadable role or recovery records also prevent retirement. Take a verified bac
 when you need a long-term copy. Review and retire superseded captures with
 [`openclaw update cleanup`](#update-cleanup).
 
+If a fresh standalone capture fails before publishing its final manifest, Doctor
+removes that attempt's incomplete copy after owned work settles, while it retains
+live maintenance custody. Existing sealed copies and attempts with uncertain work,
+publication, or ownership remain protected.
+
 On Linux filesystems that reject native no-replace rename, fs-safe uses exclusive
 hard-link publication followed by source removal in native `auto` mode. Existing
 captures are never overwritten; native `require` mode still refuses unsupported

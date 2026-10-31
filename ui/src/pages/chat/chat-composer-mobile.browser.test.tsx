@@ -6,6 +6,7 @@ import {
   resetComposerTestFixtures,
 } from "../new-session/composer.test-support.ts";
 import {
+  createComposerControlsFixture,
   findPrimaryButton,
   renderComposerFixture,
   renderComposerInto,
@@ -83,10 +84,9 @@ it.each(["menu", "padding"] as const)("keeps the mobile draft through %s focus",
     expect(document.activeElement).toBe(trigger);
     expect(shell.dataset.composerEditing).toBe("true");
   } else {
-    const footer = container.querySelector<HTMLElement>(".agent-chat__composer-footer")!;
     for (const [element, position] of [
-      [input, { x: 3, y: 3 }],
-      [footer, { x: footer.clientWidth / 2, y: footer.clientHeight - 2 }],
+      [input, { x: input.clientWidth / 2, y: 3 }],
+      [input, { x: input.clientWidth / 2, y: input.clientHeight - 2 }],
     ] as const) {
       await page.elementLocator(element).click({ position });
       expect(document.activeElement).toBe(textarea);
@@ -107,7 +107,7 @@ it.each(["menu", "padding"] as const)("keeps the mobile draft through %s focus",
     .toHaveAttribute("data-composer-editing", "false");
 });
 
-it("keeps attachment chips at the editing inset in the one-line mobile composer", async () => {
+it("keeps attachment chips at the same inset through mobile focus", async () => {
   await page.viewport(390, 844);
   const { container } = renderComposerFixture({
     mobileComposer: true,
@@ -137,27 +137,116 @@ it("keeps attachment chips at the editing inset in the one-line mobile composer"
   container.querySelector("textarea")!.focus();
   await expect.element(page.elementLocator(shell)).toHaveAttribute("data-composer-editing", "true");
   const editing = inset();
-  // The one-line row's padding must not stack on the rail's own editor inset.
+  // The writing row's padding must not stack on the rail's own editor inset.
   expect(resting.left).toBeCloseTo(editing.left, 1);
   expect(resting.top).toBeCloseTo(editing.top, 1);
   expect(resting.remove).toBeGreaterThanOrEqual(0);
 });
 
-it("keeps the mobile composer 10px above the bottom edge while resting and editing", async () => {
-  await page.viewport(390, 844);
-  const { container } = renderComposerFixture({ mobileComposer: true, draft: "Bottom gap" });
-  document.body.append(container);
-  container.style.cssText = "position:fixed;bottom:0;left:16px;width:358px";
-  const shell = container.querySelector<HTMLElement>(".agent-chat__composer-shell")!;
-  const gap = () => container.getBoundingClientRect().bottom - shell.getBoundingClientRect().bottom;
-  await expect
-    .element(page.elementLocator(shell))
-    .toHaveAttribute("data-composer-editing", "false");
-  expect(gap()).toBeCloseTo(10, 1);
-  container.querySelector("textarea")!.focus();
-  await expect.element(page.elementLocator(shell)).toHaveAttribute("data-composer-editing", "true");
-  expect(gap()).toBeCloseTo(10, 1);
-});
+it.each([
+  { width: 390, height: 844, draft: "Bottom gap" },
+  { width: 844, height: 390, draft: "Bottom gap" },
+  {
+    width: 390,
+    height: 844,
+    draft: "A long draft that wraps inside the mobile text column before it gets focus",
+  },
+])(
+  "keeps the mobile writing row stable at $width x $height: $draft",
+  async ({ width, height, draft }) => {
+    await page.viewport(width, height);
+    const { container } = renderComposerFixture({
+      mobileComposer: true,
+      draft,
+      permissionPicker: { canSelectFull: true, onSelect: vi.fn() },
+      composerControls: createComposerControlsFixture(),
+      attachments:
+        width > height ? [{ id: "landscape", fileName: "notes.txt", mimeType: "text/plain" }] : [],
+    });
+    document.body.append(container);
+    container.style.cssText = `position:fixed;bottom:0;left:16px;width:${width - 32}px`;
+    const outside = document.body.appendChild(document.createElement("button"));
+    outside.textContent = "Outside composer";
+    onTestFinished(() => outside.remove());
+    const shell = container.querySelector<HTMLElement>(".agent-chat__composer-shell")!;
+    const input = container.querySelector<HTMLElement>(".agent-chat__input")!;
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    const attach = container.querySelector<HTMLButtonElement>(".agent-chat__input-btn--attach")!;
+    const primary = findPrimaryButton(container);
+    const permission = container.querySelector<HTMLButtonElement>(
+      ".chat-controls__permission-trigger",
+    )!;
+    const model = container.querySelector<HTMLButtonElement>(".chat-composer-model-control")!;
+    const elements = [shell, input, textarea, attach, primary];
+    const rects = () =>
+      elements.map((element) => {
+        const rect = element.getBoundingClientRect();
+        return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+      });
+    const frame = () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+    await expect
+      .element(page.elementLocator(shell))
+      .toHaveAttribute("data-composer-editing", "false");
+    if (width > height) {
+      await expect.poll(() => container.querySelector(".chat-attachment-file__name")).toBeTruthy();
+    }
+    await frame();
+    const resting = rects();
+    expect(
+      container.getBoundingClientRect().bottom - shell.getBoundingClientRect().bottom,
+    ).toBeCloseTo(10, 1);
+    const assertStable = () => {
+      for (const [index, actual] of rects().entries()) {
+        for (const key of ["x", "y", "width", "height"] as const) {
+          expect(actual[key], `${elements[index]!.className} ${key}`).toBeCloseTo(
+            resting[index]![key],
+            1,
+          );
+        }
+      }
+    };
+    // Sample the full former 180ms reveal window; stable endpoints alone hid
+    // the layout animation and the textarea's change of columns.
+    for (const focus of [true, false]) {
+      if (focus) {
+        textarea.focus();
+      } else {
+        outside.focus();
+      }
+      for (let count = 0; count < 20; count++) {
+        await frame();
+        assertStable();
+      }
+      expect(shell.dataset.composerEditing).toBe(String(focus));
+      if (focus) {
+        await expect.element(page.elementLocator(permission)).toBeVisible();
+        await expect.element(page.elementLocator(model)).toBeVisible();
+        expect(permission.getBoundingClientRect().bottom).toBeLessThan(
+          input.getBoundingClientRect().top,
+        );
+        expect(model.getBoundingClientRect().bottom).toBeLessThan(
+          input.getBoundingClientRect().top,
+        );
+        expect(permission.getBoundingClientRect().right).toBeLessThanOrEqual(
+          model.getBoundingClientRect().left,
+        );
+        for (const control of [permission, model]) {
+          const box = control.getBoundingClientRect();
+          expect(box.top).toBeGreaterThanOrEqual(shell.getBoundingClientRect().top);
+          const target = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+          expect(target === control || (target !== null && control.contains(target))).toBe(true);
+        }
+      } else {
+        await expect.element(page.elementLocator(permission)).not.toBeVisible();
+        await expect.element(page.elementLocator(model)).not.toBeVisible();
+      }
+    }
+    expect(container.querySelector("textarea")).toBe(textarea);
+  },
+);
 
 it.each([
   ["rail", "iPhone", "enter"],
@@ -227,8 +316,8 @@ it.each(["chat", "new-session"] as const)(
   "keeps reverse Tab native with slash suggestions in %s",
   async (surface) => {
     const view = surface === "chat" ? renderComposerFixture() : renderNewSession();
-    const before = document.createElement("button");
-    before.textContent = "Before composer";
+    const before = document.createElement("input");
+    before.setAttribute("aria-label", "Before composer");
     document.body.append(before, view.container);
     onTestFinished(() => before.remove());
     const textarea = view.container.querySelector("textarea")!;

@@ -434,8 +434,8 @@
       "name": "session_conversations_route_context_invalidate_after_update",
       "table": "session_conversations",
       "range": [
-        10172,
-        10555
+        10313,
+        10696
       ]
     },
     {
@@ -466,32 +466,32 @@
       "name": "session_transcript_fts_rows_after_delete",
       "table": "session_transcript_fts_rows",
       "range": [
-        32221,
-        32404
+        32362,
+        32545
       ]
     },
     {
       "name": "standing_intents_fts_after_delete",
       "table": "standing_intents",
       "range": [
-        29761,
-        30008
+        29902,
+        30149
       ]
     },
     {
       "name": "standing_intents_fts_after_insert",
       "table": "standing_intents",
       "range": [
-        29544,
-        29759
+        29685,
+        29900
       ]
     },
     {
       "name": "standing_intents_fts_after_update",
       "table": "standing_intents",
       "range": [
-        30010,
-        30386
+        30151,
+        30527
       ]
     }
   ],

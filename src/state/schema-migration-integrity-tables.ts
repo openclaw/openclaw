@@ -63,6 +63,8 @@ const migrationTables: Readonly<
 > = {
   agent: {
     ...SCHEMA_MIGRATION_BACKUP_TABLES.agent,
+    // Only the stored CHECK definition widens; no transcript rows or indexes change.
+    39: [],
     10: ["session_transcript_active_events", "session_transcript_index_state"],
     11: ["sessions", "conversations", "session_conversations"],
     13: ["transcript_rewrite_watermarks"],
@@ -186,6 +188,14 @@ const migrationTables: Readonly<
 export function resolveSchemaMigrationIntegrityTables(
   migration: SchemaMigration,
 ): readonly string[] {
+  // This crossing changes only the stored constraint, including its finalizer.
+  if (
+    migration.kind === "agent" &&
+    migration.foundVersion === 38 &&
+    migration.supportedVersion === 39
+  ) {
+    return ["schema_meta"];
+  }
   const tables = new Set(["schema_meta"]);
   if (migration.foundVersion === migration.supportedVersion) {
     for (const table of SCHEMA_MIGRATION_HISTORICAL_REPAIR_TABLES[migration.kind]) {

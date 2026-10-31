@@ -37,15 +37,17 @@ function formatStallFrames(
   const render = () =>
     `${header} inclusive=${JSON.stringify(inclusive)} reportTruncated=${reportTruncated} self=${JSON.stringify(self)} deepest=${JSON.stringify(deepest)}`;
   let report = render();
-  // Preserve sampled leaves ahead of inclusive ancestors; never cut JSON mid-frame.
+  // Keep the hottest caller and leaf together; omit lower-ranked samples first.
   while (Buffer.byteLength(report) > MAX_REPORT_BYTES) {
     reportTruncated = true;
     if (inclusive.length) {
       inclusive.pop();
     } else if (deepest.length > 1) {
       deepest.pop();
-    } else if ((deepest[0]?.[1].length ?? 0) > 1) {
-      deepest[0]![1].shift();
+    } else if (self.length > 1) {
+      self.pop();
+    } else if ((deepest[0]?.[1].length ?? 0) > 3) {
+      deepest[0]![1].splice(1, 2, "[...]");
     } else {
       self.pop();
     }
@@ -191,7 +193,11 @@ export function createStallFlightRecorder(warn: (message: string) => void) {
               total.samples += cost.samples;
               total.timeUs += cost.timeUs;
               selfFrames.set(key, total);
-              const tail = frames.slice(0, 8).toReversed();
+              const tail = frames.slice(0, Math.min(16, app ? frames.indexOf(app) + 1 : 16));
+              if (app && tail.at(-1) !== app) {
+                tail.push("[...]", app);
+              }
+              tail.reverse();
               const stackKey = JSON.stringify(tail);
               const stack = stacks.get(stackKey) ?? { frames: tail, samples: 0, timeUs: 0 };
               stack.samples += cost.samples;

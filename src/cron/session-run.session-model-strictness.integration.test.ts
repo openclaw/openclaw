@@ -169,6 +169,11 @@ describe("stored session model selections in scheduled session turns", () => {
     ["policy", "ok", 1, 2, 0],
     ["in-place-policy", "ok", 1, 2, 0],
     ["other-agent", "ok", 1, 1, 0],
+    ["unrelated-auth", "ok", 1, 1, 0],
+    ["provider-auth", "ok", 1, 2, 0],
+    ["unrelated-auth-hook", "ok", 1, 1, 1],
+    ["provider-auth-hook", "error", 0, 1, 1],
+    ["fallback-auth", "error", 1, 1, 0],
     ["agent-policy", "ok", 1, 2, 0],
     ["channel-defaults", "ok", 1, 2, 0],
     ["bootstrap-effect", "error", 0, 1, 1],
@@ -215,7 +220,7 @@ describe("stored session model selections in scheduled session turns", () => {
           vi.spyOn(hooks, "runBeforeAgentReply").mockImplementation(effect);
         }
       }
-      if (params.reload === "bootstrap-effect") {
+      if (params.reload === "bootstrap-effect" || params.reload?.endsWith("auth-hook")) {
         registerInternalHook("agent:bootstrap", effect);
       }
       admission.beforeTargetPreparation = () => {
@@ -260,7 +265,7 @@ describe("stored session model selections in scheduled session turns", () => {
           activeTurn.started.resolve();
           await activeTurn.release.promise;
         }
-        if (route === "pinned") {
+        if (route === "pinned" || (params.reload === "fallback-auth" && route === "primary")) {
           return Response.json(
             {
               error: {
@@ -317,6 +322,13 @@ describe("stored session model selections in scheduled session turns", () => {
           },
           slack: { enabled: true },
         };
+      } else if (params.reload?.includes("auth")) {
+        const provider = params.reload.startsWith("unrelated")
+          ? "unrelated-provider"
+          : params.reload === "fallback-auth"
+            ? "fallback"
+            : "primary";
+        next.auth = { profiles: { [`${provider}:manual`]: { provider, mode: "api_key" } } };
       } else if (params.reload === "other-agent") {
         next.agents = {
           ...cfg.agents,
@@ -501,7 +513,7 @@ describe("stored session model selections in scheduled session turns", () => {
     async (reload, status, calls, attempts, effects) => {
       const { result, requests, preparations, hookEffects } = await runWithFailingPinnedModel({
         storedPin: null,
-        payload: { fallbacks: [] },
+        payload: { fallbacks: reload === "fallback-auth" ? ["fallback/model-b"] : [] },
         reload,
       });
       expect(hookEffects).toBe(effects ? "effect\n" : undefined);
