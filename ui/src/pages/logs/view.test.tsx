@@ -200,10 +200,14 @@ it("keeps the visible export filename suffix stable when labels are localized", 
   expect(onExport).toHaveBeenCalledWith([raw], "visible");
 });
 
-it.each([false, true])(
-  "keeps following appended logs when a row resizes before compensation is read back (queued resize: %s)",
-  (queuedResize) => {
-    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+it.each(["follow", "queued-follow", "reader"] as const)(
+  "preserves scroll intent through row resizes (%s)",
+  (mode) => {
+    const queuedResize = mode === "queued-follow";
+    const reader = mode === "reader";
+    vi.useFakeTimers({
+      toFake: ["requestAnimationFrame", "cancelAnimationFrame", "setTimeout", "clearTimeout"],
+    });
     const observers: Array<{
       callback: ResizeObserverCallback;
       targets: Set<Element>;
@@ -241,6 +245,7 @@ it.each([false, true])(
     const view = mountSolid(() => (
       <LogsView
         {...createProps({
+          autoFollow: !reader,
           status: { error: null, hasLoaded: true, stale: false, awaitingGateway: false },
           onStreamRef: (element, scroll) => {
             stream = element;
@@ -285,6 +290,13 @@ it.each([false, true])(
       for (let index = 0; index < 4; index++) {
         frame();
       }
+      if (reader) {
+        // The stream's border is outside the viewport; this reader has not reached the end.
+        stream.scrollTop -= 2;
+        stream.dispatchEvent(new WheelEvent("wheel", { deltaY: 1000 }));
+        readBack();
+      }
+      const readerTop = stream.scrollTop;
       const rows = Array.from(stream.querySelectorAll(".log-row"));
       resize(rows[0]!);
       resize(rows[1]!);
@@ -297,6 +309,15 @@ it.each([false, true])(
       flush();
       readBack();
       frame();
+      if (reader) {
+        expect(stream.scrollTop).toBe(readerTop);
+        vi.advanceTimersByTime(200);
+        flush();
+        resize(rows[2]!);
+        frame();
+        expect(stream.scrollTop).toBe(readerTop + 47);
+        return;
+      }
       expect(stream.scrollHeight - stream.scrollTop - stream.clientHeight).toBeLessThan(2);
       const afterCompensation = stream.scrollTop;
       const nextRow = rows[queuedResize ? 3 : 2]!;

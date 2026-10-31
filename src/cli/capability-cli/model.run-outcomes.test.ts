@@ -1,8 +1,11 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { Command } from "commander";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { NormalizedUsage, UsageLike } from "../../agents/usage.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { registerCapabilityCli } from "../capability-cli.js";
 import { registerModelCapabilityCommands } from "./model.js";
 
 const mocks = await vi.hoisted(async () => ({
@@ -61,6 +64,82 @@ async function runModel(...options: string[]) {
     from: "user",
   });
 }
+
+async function runPromptFile(root: string, ...options: string[]) {
+  const argv = [root, "model", "run", ...options, "--json"];
+  const program = new Command().exitOverride().configureOutput({ writeErr: () => {} });
+  await registerCapabilityCli(program, ["node", "openclaw", ...argv]);
+  return await program.parseAsync(argv, { from: "user" });
+}
+
+it.each([
+  ["infer", "--local"],
+  ["capability", "--gateway"],
+])("reads bounded prompt files through %s %s without printing the input", async (root, transport) =>
+  withOpenClawTestState({}, async (state) => {
+    const prompt = `  private UTF-8: café\n${"x".repeat(140_000)}\n`;
+    await state.writeText("prompt.txt", prompt);
+    using _ = vi.spyOn(process, "cwd").mockReturnValue(state.stateDir);
+    mocks.complete.mockResolvedValue({ content: [{ type: "text", text: "answer" }] });
+    mocks.callGateway.mockResolvedValue({ result: { payloads: [{ text: "answer" }] } });
+
+    await runPromptFile(root, "--prompt-file", "prompt.txt", transport);
+
+    if (transport === "--local") {
+      expect(mocks.complete.mock.calls[0]?.[0]?.context.messages[0].content).toBe(prompt);
+    } else {
+      expect(mocks.callGateway.mock.calls[0]?.[0]?.params).toMatchObject({
+        message: prompt,
+        modelRun: true,
+      });
+    }
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(expect.objectContaining({ ok: true }), 2);
+    expect(
+      JSON.stringify([
+        mocks.runtime.log.mock.calls,
+        mocks.runtime.error.mock.calls,
+        mocks.runtime.writeJson.mock.calls,
+      ]),
+    ).not.toContain("private UTF-8");
+  }),
+);
+
+it.each(["missing", "empty", "oversized", "traversal", "symlink", "conflict"])(
+  "rejects %s prompt files before inference",
+  async (scenario) =>
+    withOpenClawTestState({}, async (state) => {
+      const dir = state.path("allowed");
+      await fs.mkdir(dir);
+      await fs.writeFile(state.path("private.txt"), "outside private prompt");
+      const content =
+        scenario === "empty" ? " \n" : "x".repeat(scenario === "oversized" ? 1_048_577 : 1);
+      if (scenario === "symlink") {
+        await fs.symlink(state.root, path.join(dir, "alias"), "junction");
+      } else if (scenario !== "missing") {
+        await fs.writeFile(path.join(dir, "prompt.txt"), content);
+      }
+      using _ = vi.spyOn(process, "cwd").mockReturnValue(dir);
+      const file =
+        scenario === "traversal"
+          ? "../private.txt"
+          : scenario === "symlink"
+            ? "alias/private.txt"
+            : "prompt.txt";
+
+      await expect(
+        runPromptFile(
+          "infer",
+          "--prompt-file",
+          file,
+          ...(scenario === "conflict" ? ["--prompt", "argv prompt"] : []),
+        ),
+      ).rejects.toThrow("exit 1");
+
+      expect(mocks.acquire).not.toHaveBeenCalled();
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    }),
+);
 
 const target = 'for provider "openai" model "gpt-5.4"';
 const reasoningOnly = `Model returned reasoning but no text output ${target}.`;

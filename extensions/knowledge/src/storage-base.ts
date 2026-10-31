@@ -64,11 +64,6 @@ export class StorageBase {
       await this.real.run(access, async () => undefined);
     }
   }
-  protected transaction<T>(operationLabel: string, run: (db: DatabaseSync) => T): T {
-    return this.store.withDatabase((db) =>
-      runSqliteImmediateTransactionSync(db, () => run(db), { operationLabel }),
-    );
-  }
   protected identity(
     db: DatabaseSync,
     files: PublicationFiles,
@@ -89,6 +84,14 @@ export class StorageBase {
       throw new Error("Knowledge vault identity mismatch; recovery review required.");
     }
     return manifest;
+  }
+  protected assertCheckpoint(db: DatabaseSync, expected: Manifest) {
+    const row = db
+      .prepare("SELECT manifest FROM identities WHERE agent_key=?")
+      .get(checkpointKey(this.config.vaultId));
+    if (!row || canonical(JSON.parse(String(row.manifest))) !== canonical(expected)) {
+      throw new Error("Stale publisher identity");
+    }
   }
   assertReadable() {
     this.store.withDatabase((db) => {
@@ -239,9 +242,9 @@ export class StorageBase {
           .all(scope)
           .map((row) => [this.publicationToken(scope, String(row.request)), row.request!]),
       );
-      const jobAt = db.prepare("SELECT token,batch FROM git_jobs WHERE sequence=?");
+      const jobAt = db.prepare("SELECT token,batch,state FROM git_jobs WHERE sequence=?");
       const updateJob = db.prepare(
-        "UPDATE git_jobs SET state=?,commit_id=?,message=? WHERE sequence=?",
+        "UPDATE git_jobs SET state=?,commit_id=?,message=? WHERE sequence=? AND state!='committed'",
       );
       const receiptAt = db.prepare("SELECT receipt FROM mutations WHERE scope=? AND request=?");
       const updateReceipt = db.prepare(
@@ -249,6 +252,9 @@ export class StorageBase {
       );
       for (const { sequence } of pending) {
         const job = jobAt.get(sequence!)!;
+        if (job.state === "committed") {
+          continue;
+        }
         access.assertCurrent();
         let result: NonNullable<Receipt["git"]>;
         try {
@@ -262,12 +268,16 @@ export class StorageBase {
           };
         }
         const request = requests.get(String(job.token));
+        access.assertCurrent();
         // The checkpoint ref makes retries idempotent if this acknowledgement fails.
         runSqliteImmediateTransactionSync(
           db,
           () => {
-            access.assertCurrent();
-            updateJob.run(result.state, result.commit ?? null, result.message, sequence!);
+            if (
+              !updateJob.run(result.state, result.commit ?? null, result.message, sequence!).changes
+            ) {
+              return;
+            }
             if (request !== undefined) {
               const receipt: Receipt = JSON.parse(String(receiptAt.get(scope, request)!.receipt));
               receipt.git = result;
@@ -340,13 +350,13 @@ export class StorageBase {
   private observe(records: LoadedRecord[], access: VaultAccess, evidence: EvidenceInspector) {
     const scope = access.scope;
     access.assertCurrent();
-    this.transaction("knowledge.observe", (db) => {
-      this.identity(db, new PublicationFiles(this.config.root));
+    this.store.withDatabase((db) => {
+      const before = this.identity(db, new PublicationFiles(this.config.root));
       if (db.prepare("SELECT 1 FROM mutations WHERE state!='published' LIMIT 1").get()) {
         throw blocked();
       }
       const key = scopeKey(scope);
-      observeWithdrawals(db, records, this.retrievalBinding(access));
+      let changes: GitChange[] = [];
       if (this.config.writesEnabled) {
         const files = new PublicationFiles(this.config.root);
         const snapshot = files.snapshot(key, true);
@@ -419,7 +429,7 @@ export class StorageBase {
             .all(key)
             .map((r) => [String(r.path), String(r.hash)]),
         );
-        const changes: GitChange[] = [...current]
+        changes = [...current]
           .filter(([p, hash]) => prior.get(p) !== hash)
           .map(([file, hash]) => {
             const raw = files.read(file);
@@ -442,69 +452,83 @@ export class StorageBase {
         if (files.snapshot(key, true) !== snapshot) {
           throw new Error("Vault changed during Git observation.");
         }
-        this.enqueueGit(db, key, changes, "external observation");
       }
       // Count IDs once: records with a duplicated ID are not observed.
       const idCounts = new Map<string, number>();
       for (const r of records) {
         idCounts.set(r.id, (idCounts.get(r.id) ?? 0) + 1);
       }
-      // Never materialize stored raw text just to compare hashes.
-      const priorOf = db.prepare(
-        "SELECT path,hash,revision FROM observations WHERE scope=? AND id=?",
-      );
-      const exactWriter = db.prepare(
-        "SELECT provenance,agent_id,sequence FROM history WHERE scope=? AND id=? AND hash=? ORDER BY sequence DESC LIMIT 1",
-      );
-      const convertedWriter = db.prepare(
-        "SELECT provenance,agent_id FROM history WHERE scope=? AND id=? AND sequence<? AND provenance!='conversion' ORDER BY sequence DESC LIMIT 1",
-      );
-      for (const r of records.filter((record) => record.valid && idCounts.get(record.id) === 1)) {
-        const prior = priorOf.get(key, r.id);
-        if (prior && (prior.hash !== r.hash || prior.path !== r.path)) {
-          r.revision = Math.max(r.revision, Number(prior.revision) + 1);
-        } else if (prior) {
-          r.revision = Math.max(r.revision, Number(prior.revision));
-        }
-        if (!prior || prior.hash !== r.hash || prior.path !== r.path) {
-          this.recordObservation(db, key, r, prior ? "external-edit" : "observed");
-        }
-        // Only journal-confirmed agent revisions may carry an agent byline.
-        // Scope ownership alone is not authorship (operator/import/external edits).
-        // In a shared store the writer is whichever agent published, never the viewer.
-        // A store conversion rewrote only the storage envelope; authorship stays
-        // with the revision it converted.
-        const exact = exactWriter.get(key, r.id, r.hash);
-        const writer =
-          exact?.provenance === "conversion"
-            ? convertedWriter.get(key, r.id, exact.sequence!)
-            : exact;
-        if (writer?.provenance === "agent" && writer.agent_id) {
-          r.writtenByAgentId = String(writer.agent_id);
-        }
-      }
-      const present = new Set(records.map((r) => r.id));
-      for (const prior of db
-        .prepare("SELECT id,path,revision FROM observations WHERE scope=? AND hash!=''")
-        .all(key)) {
-        if (!present.has(String(prior.id))) {
-          db.prepare(
-            "INSERT INTO history(scope,id,provenance,at,path,revision,hash,raw) VALUES (?,?,?,?,?,?,?,?)",
-          ).run(
-            key,
-            prior.id!,
-            "external-unavailable",
-            new Date().toISOString(),
-            prior.path!,
-            Number(prior.revision) + 1,
-            "",
-            "",
+      access.assertCurrent();
+      runSqliteImmediateTransactionSync(
+        db,
+        () => {
+          this.assertCheckpoint(db, before);
+          if (db.prepare("SELECT 1 FROM mutations WHERE state!='published' LIMIT 1").get()) {
+            throw blocked();
+          }
+          observeWithdrawals(db, records, this.retrievalBinding(access));
+          this.enqueueGit(db, key, changes, "external observation");
+          // Never materialize stored raw text just to compare hashes.
+          const priorOf = db.prepare(
+            "SELECT path,hash,revision FROM observations WHERE scope=? AND id=?",
           );
-          db.prepare(
-            "UPDATE observations SET hash='',revision=revision+1 WHERE scope=? AND id=?",
-          ).run(key, prior.id!);
-        }
-      }
+          const exactWriter = db.prepare(
+            "SELECT provenance,agent_id,sequence FROM history WHERE scope=? AND id=? AND hash=? ORDER BY sequence DESC LIMIT 1",
+          );
+          const convertedWriter = db.prepare(
+            "SELECT provenance,agent_id FROM history WHERE scope=? AND id=? AND sequence<? AND provenance!='conversion' ORDER BY sequence DESC LIMIT 1",
+          );
+          for (const r of records.filter(
+            (record) => record.valid && idCounts.get(record.id) === 1,
+          )) {
+            const prior = priorOf.get(key, r.id);
+            if (prior && (prior.hash !== r.hash || prior.path !== r.path)) {
+              r.revision = Math.max(r.revision, Number(prior.revision) + 1);
+            } else if (prior) {
+              r.revision = Math.max(r.revision, Number(prior.revision));
+            }
+            if (!prior || prior.hash !== r.hash || prior.path !== r.path) {
+              this.recordObservation(db, key, r, prior ? "external-edit" : "observed");
+            }
+            // Only journal-confirmed agent revisions may carry an agent byline.
+            // Scope ownership alone is not authorship (operator/import/external edits).
+            // In a shared store the writer is whichever agent published, never the viewer.
+            // A store conversion rewrote only the storage envelope; authorship stays
+            // with the revision it converted.
+            const exact = exactWriter.get(key, r.id, r.hash);
+            const writer =
+              exact?.provenance === "conversion"
+                ? convertedWriter.get(key, r.id, exact.sequence!)
+                : exact;
+            if (writer?.provenance === "agent" && writer.agent_id) {
+              r.writtenByAgentId = String(writer.agent_id);
+            }
+          }
+          const present = new Set(records.map((r) => r.id));
+          for (const prior of db
+            .prepare("SELECT id,path,revision FROM observations WHERE scope=? AND hash!=''")
+            .all(key)) {
+            if (!present.has(String(prior.id))) {
+              db.prepare(
+                "INSERT INTO history(scope,id,provenance,at,path,revision,hash,raw) VALUES (?,?,?,?,?,?,?,?)",
+              ).run(
+                key,
+                prior.id!,
+                "external-unavailable",
+                new Date().toISOString(),
+                prior.path!,
+                Number(prior.revision) + 1,
+                "",
+                "",
+              );
+              db.prepare(
+                "UPDATE observations SET hash='',revision=revision+1 WHERE scope=? AND id=?",
+              ).run(key, prior.id!);
+            }
+          }
+        },
+        { operationLabel: "knowledge.observe" },
+      );
     });
     this.store.withDatabase((db) =>
       applyLifecycleGuards(db, records, this.retrievalBinding(access)),

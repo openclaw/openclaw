@@ -87,9 +87,13 @@ export function assertOpenClawAgentSchemaContains(
   participantSchema: "current" | "legacy" = "current",
   allowStartupIndexRepair = false,
   readTable?: SqliteTableContractReader,
+  requireCanonicalIndexes = false,
 ): boolean {
   const compatibility = {
     ...AGENT_SCHEMA_COMPATIBILITY,
+    allowedMissingIndexes: requireCanonicalIndexes
+      ? []
+      : AGENT_SCHEMA_COMPATIBILITY.allowedMissingIndexes,
     allowedMissingTables: [
       ...AGENT_SCHEMA_COMPATIBILITY.allowedMissingTables,
       // Legacy migration preflight precedes creation of the required v20 table.
@@ -121,7 +125,7 @@ export function assertOpenClawAgentSchemaContains(
 
 export function assertOpenClawAgentCurrentRuntimeSchema(
   database: DatabaseSync,
-  options: { agentId: string; pathname: string },
+  options: { agentId: string; pathname: string; requireCanonicalIndexes?: boolean },
   readTable?: SqliteTableContractReader,
 ): void {
   const agentId = normalizeAgentId(options.agentId);
@@ -139,6 +143,7 @@ export function assertOpenClawAgentCurrentRuntimeSchema(
     "current",
     false,
     readTable,
+    options.requireCanonicalIndexes,
   );
 }
 

@@ -560,6 +560,7 @@ export async function prepareSessionWorkspaceForRun(params: {
                 // initialize its prompt in the final execution directory.
                 const bound = await commitPreparedSessionWorkspace({
                   prepared: promptWorkspace,
+                  signal,
                   target,
                   projectId: project?.id,
                   assertCurrent: assertRunOwnership,
@@ -582,6 +583,7 @@ export async function prepareSessionWorkspaceForRun(params: {
       }
       const bound = await commitPreparedSessionWorkspace({
         prepared,
+        signal,
         target,
         projectId: project?.id,
         assertCurrent: assertRunOwnership,

@@ -1,8 +1,13 @@
-import { afterEach, expect, it, onTestFinished } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSkillsPrompt } from "../skills/loading/workspace-skill-prompt.js";
-import { createFixtureSkillEntry } from "../skills/test-support/test-helpers.js";
+import {
+  createCanonicalFixtureSkill,
+  createFixtureSkillEntry,
+} from "../skills/test-support/test-helpers.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { resolveCodeModeSkills } from "./code-mode-skills.js";
 import {
@@ -11,12 +16,197 @@ import {
   createCodeModeTools,
 } from "./code-mode.js";
 import { createCatalogCodeModeHarness, resetCodeModeTestState } from "./code-mode.test-support.js";
+import { bindHostSkillCatalog } from "./harness/host-skills.js";
+import { prepareInstalledSkillCatalog } from "./installed-skill-runtime.js";
+import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import { clearToolSearchCatalog, createToolSearchCatalogRef } from "./tool-search-catalog.js";
 import { createInstalledSkillTools } from "./tools/installed-skill-tools.js";
+import { registerAgentWorkspaceAccess } from "./workspace-access.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(resetCodeModeTestState);
+
+it("reads local skill companions through the worker without exposing escaped, binary or oversized files", async () => {
+  const dir = tempDirs.make("code-mode-skill-resources-");
+  const root = path.join(dir, "guide");
+  await fs.mkdir(path.join(root, "references"), { recursive: true });
+  const filePath = path.join(root, "SKILL.md");
+  await fs.writeFile(filePath, "Read references/workflow.md.");
+  await fs.writeFile(path.join(root, "references/workflow.md"), "Companion text 😀");
+  await fs.writeFile(path.join(dir, "outside.md"), "Outside marker");
+  await fs.symlink(path.join(dir, "outside.md"), path.join(root, "escape.md"));
+  await fs.symlink(dir, path.join(root, "escape-dir"), "dir");
+  await fs.link(path.join(dir, "outside.md"), path.join(root, "hardlink.md"));
+  await fs.writeFile(path.join(root, "large.md"), "x".repeat(256 * 1024 + 1));
+  await fs.writeFile(path.join(root, "binary"), Buffer.from([0, 1, 2]));
+  await fs.writeFile(path.join(root, "invalid-utf8"), Buffer.from([0xff]));
+  const snapshot = {
+    prompt: "",
+    skills: [{ name: "guide" }],
+    discoverySkills: [
+      createCanonicalFixtureSkill({
+        name: "guide",
+        description: "Guide",
+        filePath,
+        baseDir: root,
+        source: "bundled",
+      }),
+    ],
+  };
+  let active = true;
+  const catalog = prepareInstalledSkillCatalog({
+    snapshot,
+    workspaceDir: dir,
+    assertCurrent() {
+      if (!active) {
+        throw new Error("Run retired");
+      }
+    },
+  });
+  const tools = createInstalledSkillTools(catalog);
+  const h = createCatalogCodeModeHarness(tools, { codeModeSkills: catalog });
+  const result = await h.complete(`
+    const whole = await skills.read("guide");
+    const companion = await skills.read("guide", "references/workflow.md");
+    const denied = [];
+    for (const relativePath of ${JSON.stringify([
+      "../outside.md",
+      "references/../../outside.md",
+      "escape.md",
+      "escape-dir/outside.md",
+      "hardlink.md",
+      "large.md",
+      "binary",
+      "invalid-utf8",
+      "references",
+      "missing.md",
+      filePath,
+      "C:/SKILL.md",
+      "C:SKILL.md",
+      "references\\workflow.md",
+      "~/SKILL.md",
+      "",
+    ])}) {
+      try { await skills.read("guide", relativePath); denied.push(false); }
+      catch { denied.push(true); }
+    }
+    return { whole, companion, denied };
+  `);
+  expect(result).toMatchObject({
+    status: "completed",
+    value: {
+      whole: expect.stringContaining("Read references/workflow.md."),
+      companion: "Companion text 😀",
+      denied: Array(16).fill(true),
+    },
+  });
+  const read = tools.find((tool) => tool.name === "skills_read")!;
+  expect(
+    (await read.execute("native", { name: "guide", relativePath: "references/workflow.md" }))
+      .content,
+  ).toEqual([{ type: "text", text: "Companion text 😀" }]);
+  const resourceRoot = (await catalog[0]!.resourceRoot)!;
+  const readFile = resourceRoot.read.bind(resourceRoot);
+  for (const cancel of [false, true]) {
+    const controller = new AbortController();
+    const spy = vi.spyOn(resourceRoot, "read").mockImplementationOnce(async (...args) => {
+      const opened = await readFile(...args);
+      if (cancel) {
+        controller.abort();
+      } else {
+        active = false;
+      }
+      return opened;
+    });
+    onTestFinished(() => spy.mockRestore());
+    await expect(
+      read.execute(
+        "revoked",
+        { name: "guide", relativePath: "references/workflow.md" },
+        controller.signal,
+      ),
+    ).rejects.toThrow();
+    spy.mockRestore();
+    active = true;
+  }
+  await fs.rename(root, `${root}-old`);
+  await fs.mkdir(root);
+  await fs.writeFile(path.join(root, "SKILL.md"), "Replacement marker");
+  expect(await h.complete('return await skills.read("guide", "SKILL.md");')).toMatchObject({
+    status: "failed",
+  });
+});
+
+it("keeps restricted placements instruction-only for companion requests", async () => {
+  const dir = tempDirs.make("skill-resource-placement-");
+  const filePath = path.join(dir, "SKILL.md");
+  await fs.writeFile(filePath, "Instructions");
+  await fs.writeFile(path.join(dir, "companion.md"), "Host marker");
+  const local = createCanonicalFixtureSkill({
+    name: "guide",
+    description: "Guide",
+    filePath,
+    baseDir: dir,
+    source: "bundled",
+  });
+  const snapshot = { prompt: "", skills: [{ name: "guide" }], discoverySkills: [local] };
+  const catalogs = [
+    prepareInstalledSkillCatalog({
+      snapshot: { ...snapshot, discoverySkills: [{ ...local, fileHost: "workspace" }] },
+      workspaceDir: dir,
+    }),
+    prepareInstalledSkillCatalog({
+      snapshot: {
+        ...snapshot,
+        discoverySkills: [{ ...local, filePath: "node://remote/SKILL.md" }],
+      },
+      workspaceDir: dir,
+    }),
+    prepareInstalledSkillCatalog({
+      snapshot,
+      workspaceDir: dir,
+      sandbox: createSandboxTestContext(),
+    }),
+    bindHostSkillCatalog({
+      snapshot,
+      workspaceDir: dir,
+      requiredRoot: dir,
+      readable: true,
+      assertCurrent() {},
+    })(),
+  ];
+  onTestFinished(
+    registerAgentWorkspaceAccess(dir, {
+      loadSkills: vi.fn(),
+      bridge: {
+        readFile: vi.fn(),
+        readFileWithSource: vi.fn(),
+        readDirectory: vi.fn(),
+        writeFile: vi.fn(),
+        createFileExclusive: vi.fn(),
+        stat: vi.fn(),
+      },
+    }),
+  );
+  for (const remoteSnapshot of [
+    snapshot,
+    {
+      ...snapshot,
+      librarySelections: [
+        { name: "guide", skillId: "guide-id", revision: "revision", ownerProfileId: null },
+      ],
+    },
+  ]) {
+    catalogs.push(prepareInstalledSkillCatalog({ snapshot: remoteSnapshot, workspaceDir: dir }));
+  }
+  for (const catalog of catalogs) {
+    const read = createInstalledSkillTools(catalog).find((tool) => tool.name === "skills_read")!;
+    await expect(
+      read.execute("restricted", { name: "guide", relativePath: "companion.md" }),
+    ).rejects.toThrow("instruction-only");
+  }
+});
 
 it("reports bounded, redacted installed-skill failures returned by a Gateway", async () => {
   const secret = `ghp_${"a".repeat(36)}`;

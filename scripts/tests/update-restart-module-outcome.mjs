@@ -227,6 +227,10 @@ async function fixture({
     // real owner/filesystem coverage in update-automatic-cleanup.test.ts; these
     // cases prove the separate package transaction's retirement authorization.
     automaticallyCleanUpdateRecovery: async () => undefined,
+    // Cohort settlement has native ledger coverage; this VM owns only package retirement.
+    commitVerifiedUpdatePluginCohort: async () => {},
+    assertUpdatePluginCohortReportingContinuation: () => {},
+    assertUpdatePluginCohortReportingAdmission: async () => {},
     // Every case here fails after the swap, so none retires its own capture.
     failedBeforeActivation: () => false,
     prepareResult: async (value) => () => printed.push(value),

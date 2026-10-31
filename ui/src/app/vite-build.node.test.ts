@@ -174,6 +174,55 @@ it("omits already imported JavaScript from lazy preload tables, retaining lazy J
   expect(html).toContain(sharedName);
 });
 
+it("fetches deep composer code with the root import without evaluating or route-preloading it", async () => {
+  const config = createConfig();
+  const content = uiPath("pages/chat/components/chat-composer-plus-menu-content.tsx");
+  const subview = uiPath("pages/chat/components/chat-composer-plus-menu-subview.tsx");
+  const shared = uiPath("pages/chat/components/chat-composer-plus-menu-frame.tsx");
+  addModules(
+    config,
+    new Map([
+      [
+        content,
+        'globalThis.rootMenuReady = true; export const openDeep = () => import("./chat-composer-plus-menu-subview.tsx");',
+      ],
+      [
+        subview,
+        'import { frame } from "./chat-composer-plus-menu-frame.tsx"; globalThis.deepMenuReady = true; export const render = () => frame;',
+      ],
+      [shared, 'export const frame = "deep frame";'],
+    ]),
+    { "fixture:menu": content },
+  );
+  await writeRoot("main.js", 'globalThis.openMenu = () => import("fixture:menu");');
+  setOutput(config, {
+    codeSplitting: {
+      groups: [{ name: "deep-frame", test: (id: string) => id === shared }],
+    },
+  });
+  const { output, html } = await buildOutput(config);
+  const chunkWith = (id: string) =>
+    output.find((chunk) => chunk.type === "chunk" && id in chunk.modules);
+  const rootChunk = chunkWith(content);
+  const deepChunk = chunkWith(subview);
+  const frameChunk = chunkWith(shared);
+  const entry = output.find((chunk) => chunk.type === "chunk" && chunk.isEntry);
+  assert.ok(
+    rootChunk?.type === "chunk" &&
+      deepChunk?.type === "chunk" &&
+      frameChunk?.type === "chunk" &&
+      entry?.type === "chunk",
+  );
+  const table = /^const __vite__mapDeps=.*$/mu.exec(entry.code)?.[0];
+  expect(table).toContain(deepChunk.fileName.split("/").at(-1));
+  expect(table).toContain(frameChunk.fileName.split("/").at(-1));
+  expect(rootChunk.dynamicImports).toContain(deepChunk.fileName);
+  expect(rootChunk.imports).not.toContain(deepChunk.fileName);
+  expect(entry.imports).not.toContain(deepChunk.fileName);
+  expect(html).not.toContain(deepChunk.fileName);
+  expect(html).not.toContain(frameChunk.fileName);
+});
+
 it("keeps page styles separate from measured JavaScript boot groups", async () => {
   const config = createConfig();
   const pages = fileURLToPath(new URL("../pages/", import.meta.url));

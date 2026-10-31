@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { Check } from "typebox/value";
 import { parseDocument, stringify } from "yaml";
 import type { VaultAccess } from "./access.js";
 import { annotationEvidence } from "./annotations.js";
-import { AttachInput, ATTACHMENT_CHUNK_BYTES } from "./attachment-contract.js";
-import { attachChunk } from "./attachments.js";
+import { ATTACHMENT_CHUNK_BYTES } from "./attachment-contract.js";
 import { EvidenceInspector, inspectEvidence } from "./evidence-files.js";
 import { parseYaml } from "./files.js";
 import { lifecycleRecord, lifecycleImpact, assertLifecycleTarget } from "./lifecycle.js";
@@ -44,28 +44,6 @@ import type { SampleVault } from "./vault.js";
 import { digest } from "./vault.js";
 /** Validation and journaled acceptance of planned publications, plus single-record writes. */
 export class StoragePublication extends StorageJournal {
-  async attach(input: AttachInput, access: VaultAccess) {
-    access.assertCurrent();
-    if (!this.config.writesEnabled) {
-      throw new Error("Knowledge writes are disabled.");
-    }
-    if (input.expectedVaultId && input.expectedVaultId !== this.config.vaultId) {
-      throw new Error("Connected vault changed; do not upload this file here.");
-    }
-    await this.initialize(access);
-    this.assertReadable();
-    return this.transaction("knowledge.attach", (db) => {
-      this.identity(db, new PublicationFiles(this.config.root));
-      return attachChunk(
-        db,
-        this.config.root,
-        scopeKey(access.scope),
-        input,
-        () => access.assertCurrent(),
-        this.hook,
-      );
-    });
-  }
   save(input: SavePage, access: VaultAccess, actor: string) {
     return this.publish(input, "page", access, actor);
   }
@@ -497,7 +475,7 @@ export class StoragePublication extends StorageJournal {
         budget: rejection.budget,
       });
     }
-    this.transaction("knowledge.accept", (db) => {
+    this.store.withDatabase((db) => {
       const rival = this.row(db, scope, requestId);
       if (rival) {
         this.checkReplay(rival, intent);
@@ -542,12 +520,6 @@ export class StoragePublication extends StorageJournal {
       for (const record of prepared.batch ? (prepared.additional ?? []).map((c) => c.after) : []) {
         for (const evidence of record.metadata.evidence ?? []) {
           cited.inspect(evidence);
-        }
-      }
-      if (prepared.batch?.source) {
-        const prior = this.sourceRow(db, scope, prepared.batch.source);
-        if (prior?.request !== prepared.batch.expectedPreviousRequestId) {
-          throw new Error("Source changed during validation; no batch accepted.");
         }
       }
       for (const evidence of prepared.annotationEvidence ?? []) {
@@ -701,14 +673,38 @@ export class StoragePublication extends StorageJournal {
           ? { restored: changed.map((r) => r.id) }
           : {}),
       };
+      const serializedPlan = JSON.stringify(plan),
+        serializedReceipt = JSON.stringify(receipt);
+      this.hook("before-accept-commit");
       access.assertCurrent();
-      db.prepare("INSERT INTO mutations VALUES (?,?,?,?,?,?)").run(
-        scope,
-        requestId,
-        intent,
-        "accepted",
-        JSON.stringify(plan),
-        JSON.stringify(receipt),
+      runSqliteImmediateTransactionSync(
+        db,
+        () => {
+          const current = this.row(db, scope, requestId);
+          if (current) {
+            this.checkReplay(current, intent);
+            return;
+          }
+          if (db.prepare("SELECT 1 FROM mutations WHERE state!='published' LIMIT 1").get()) {
+            throw blocked();
+          }
+          this.assertCheckpoint(db, before);
+          if (prepared.batch?.source) {
+            const prior = this.sourceRow(db, scope, prepared.batch.source);
+            if (prior?.request !== prepared.batch.expectedPreviousRequestId) {
+              throw new Error("Source changed during validation; no batch accepted.");
+            }
+          }
+          db.prepare("INSERT INTO mutations VALUES (?,?,?,?,?,?)").run(
+            scope,
+            requestId,
+            intent,
+            "accepted",
+            serializedPlan,
+            serializedReceipt,
+          );
+        },
+        { operationLabel: "knowledge.accept" },
       );
     });
     this.hook("after-accept");

@@ -72,6 +72,7 @@ import {
   inspectUpdateRunReconciliation,
   readUpdateRunReconciliationCandidates,
 } from "../infra/update-run-reconciliation.read.js";
+import { inspectPluginCohortRecoveryRows } from "../infra/update-run-recovery-store.js";
 import {
   pluginBlobLookupInDatabase,
   pluginBlobEntriesInDatabase,
@@ -327,6 +328,12 @@ export function readOpenClawStateDatabaseCommand(
     return {
       type: command.type,
       run: readInterruptedUpdateCandidate(db),
+    };
+  }
+  if (command.type === "updateRuns.pluginCohortRecoveries") {
+    return {
+      type: command.type,
+      pairs: runSqliteReadSnapshotSync(db, () => inspectPluginCohortRecoveryRows(db)),
     };
   }
   if (command.type === "exec-approvals.read") {

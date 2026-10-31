@@ -30,8 +30,7 @@ export async function acquireOpenClawStateLease(params: {
   let deadline = startedAt + params.waitMs;
   let preparation = params.prepare;
   let attempt = 0;
-  let lastReportedHolder: string | undefined;
-  let contentionReported = false;
+  let waitReported = false;
   const cancellation = params.signal ? new AbortController() : undefined;
   let aborted: OpenClawStateLeaseAcquisitionError | undefined;
   const abort = () => {
@@ -88,9 +87,9 @@ export async function acquireOpenClawStateLease(params: {
           assertCurrent();
           const remainingMs = deadline - performance.now();
           if (acquiring && remainingMs > 0) {
-            if (!contentionReported) {
+            if (!waitReported) {
               log.warn(`Waiting for ${params.label} after SQLite lock contention.`);
-              contentionReported = true;
+              waitReported = true;
             }
             try {
               await sleepWithAbort(Math.min(remainingMs, LEASE_CONTENTION_RETRY_MS), params.signal);
@@ -124,9 +123,8 @@ export async function acquireOpenClawStateLease(params: {
       if (now >= deadline) {
         throw new OpenClawStateLeaseAcquisitionError(params.label, outcome);
       }
-      const holderIdentity = `${outcome.holder.owner}:${outcome.holder.epoch}`;
-      if (lastReportedHolder !== holderIdentity) {
-        lastReportedHolder = holderIdentity;
+      if (!waitReported) {
+        waitReported = true;
         const expiry =
           outcome.holder.expiresAt === null
             ? "has no recorded expiry"

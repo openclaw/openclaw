@@ -429,6 +429,10 @@ if (isMainThread) {
   const variants: Array<{ name: string; params: SessionsListParams }> = [
     { name: "sidebar", params: { rowMode: "sidebar", source: "sidebar" } },
     { name: "general", params: { source: "sessions-page" } },
+    {
+      name: "runtime-search",
+      params: { source: "sessions-page", search: "openclaw", archived: "all" },
+    },
     { name: "compact", params: { rowMode: "compact", source: "agent-roster" } },
     {
       name: "involving",
@@ -561,8 +565,12 @@ if (isMainThread) {
               ) {
                 throw new Error("sessions.list returned no session counts");
               }
-              if (result.count === 0 || result.totalCount === 0) {
-                throw new Error(`${variant.name}: empty fixture result is not a valid measurement`);
+              if (
+                variant.name === "runtime-search"
+                  ? result.count !== 0 || result.totalCount !== 0
+                  : result.count === 0 || result.totalCount === 0
+              ) {
+                throw new Error(`${variant.name}: unexpected fixture result counts`);
               }
               if (
                 variant.name === "owner-counts" &&

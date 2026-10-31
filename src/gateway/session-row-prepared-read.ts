@@ -92,6 +92,14 @@ export class SessionRowFactsPending extends Error {
   }
 }
 
+/** Only failed row materialization can request a catalog rebind, never its consumer. */
+export class SessionRowCatalogPending extends Error {
+  constructor() {
+    // RPC formatters include causes; keep model-facing plugin errors out of the response.
+    super("Session model catalog is unavailable; refresh and try again.");
+  }
+}
+
 export type SessionRowReadView = {
   readChildVisibility: ReturnType<typeof createSessionRowChildVisibility>["read"];
   readChildActivity(

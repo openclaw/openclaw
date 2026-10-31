@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { globSync } from "tinyglobby";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveCanonicalNodeTestConfig } from "../../scripts/lib/ci-node-test-plan.mts";
 import { collectModuleReferencesFromSource } from "../../scripts/lib/guard-inventory-utils.mjs";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
@@ -12,6 +12,7 @@ import {
   resolveVitestCliEntry,
   resolveVitestPretestBuildMode,
 } from "../../scripts/lib/vitest-build-prerequisites.mts";
+import { resolveLocalVitestScheduling } from "../../scripts/lib/vitest-local-scheduling.mts";
 import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createGatewayDatabaseWorkersVitestConfig } from "../vitest/vitest.gateway-database-workers.config.ts";
@@ -72,6 +73,7 @@ function changedPlans(paths: string[]) {
 
 describe("test-projects args", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  afterEach(() => vi.unstubAllEnvs());
 
   const gatewayWorkerFile = "src/gateway/server-methods/cron.runs.test.ts";
   const catalogFile = "test/plugins/codex-model-catalog.gateway.test.ts";
@@ -165,15 +167,27 @@ describe("test-projects args", () => {
     });
   });
 
-  it.each([false, true])(
-    "sets native run/watch mode without leaking the sentinel (watch=%s)",
-    (watch) => {
+  it.each([
+    { watch: false, maglev: "0" },
+    { watch: true, maglev: "0" },
+    { watch: false, maglev: "1" },
+    { watch: true, maglev: "1" },
+  ])(
+    "sets native run/watch mode from the invocation environment (watch=$watch, maglev=$maglev)",
+    ({ watch, maglev }) => {
+      vi.stubEnv("OPENCLAW_VITEST_ENABLE_MAGLEV", maglev === "0" ? "1" : "0");
       const spec = expectDefined(
-        runSpecs(watch ? ["--watch", "--", "src/foo.test.ts"] : ["src/foo.test.ts"])[0],
+        runSpecs(watch ? ["--watch", "--", "src/foo.test.ts"] : ["src/foo.test.ts"], {
+          baseEnv: { ...process.env, OPENCLAW_VITEST_ENABLE_MAGLEV: maglev },
+        })[0],
         "run spec",
       );
       expect(spec.pnpmArgs).toEqual([
-        ...VITEST_NODE_PREFIX,
+        "exec",
+        "node",
+        ...(maglev === "0" ? ["--no-maglev"] : []),
+        "--no-concurrent-sparkplug",
+        resolveVitestCliEntry(),
         ...(watch ? [] : ["run"]),
         "--config",
         "test/vitest/vitest.unit.config.ts",
@@ -181,6 +195,17 @@ describe("test-projects args", () => {
       ]);
     },
   );
+
+  it("retains the focused UI E2E config loader", () => {
+    expect(runSpecs(["test/vitest/vitest.ui-e2e.config.ts"])[0]?.pnpmArgs).toEqual([
+      ...VITEST_NODE_PREFIX,
+      "run",
+      "--config",
+      "test/vitest/vitest.ui-e2e.config.ts",
+      "--configLoader",
+      "runner",
+    ]);
+  });
 
   it.each([["--watch", "false"], ["--no-watch"]])(
     "preserves native watch controls after the wrapper separator: %j",
@@ -294,6 +319,39 @@ describe("test-projects args", () => {
     "caps project-level parallelism for conservative %s",
     (key) => expect(resolveParallelFullSuiteConcurrency(58, { [key]: "1" })).toBe(1),
   );
+
+  it.each([
+    [undefined, 8],
+    ["", 8],
+    ["  ", 8],
+    ["001", 1],
+    ["02", 2],
+    ["0", null],
+    ["-1", null],
+    ["1.5", null],
+    ["1e0", null],
+    ["8x", null],
+    ["9007199254740992", null],
+  ] as const)("keeps worker and project override policy aligned for %j", (value, expected) => {
+    const host = {
+      cpuCount: 16,
+      totalMemoryBytes: 128 * 1024 ** 3,
+      freeMemoryBytes: 32 * 1024 ** 3,
+    };
+    for (const key of ["OPENCLAW_VITEST_MAX_WORKERS", "OPENCLAW_TEST_WORKERS"]) {
+      const env = { [key]: value };
+      const worker = () => resolveLocalVitestScheduling(env, host).maxWorkers;
+      const projects = () => resolveParallelFullSuiteConcurrency(58, env, host);
+      if (expected === null) {
+        const error = `${key} must be a positive integer; got: ${value}`;
+        expect(worker).toThrow(error);
+        expect(projects).toThrow(error);
+      } else {
+        expect(worker()).toBe(expected);
+        expect(projects()).toBe(expected);
+      }
+    }
+  });
 
   it("keeps explicit project-level parallelism authoritative", () => {
     expect(

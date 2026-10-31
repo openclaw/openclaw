@@ -2069,7 +2069,7 @@ select.settings-select:not([multiple]) {
   background: var(--data-table-row-bg);
 }
 
-.data-table tbody tr:last-child td {
+.data-table tbody:last-child tr:last-child td {
   border-bottom: none;
 }
 
