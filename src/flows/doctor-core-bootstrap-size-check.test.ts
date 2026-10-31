@@ -152,10 +152,10 @@ describe("core/doctor/skill-workshop-tool-policy", () => {
       fixHint: `Add ${prefix}tools.alsoAllow: ["skill_workshop"].`,
     });
 
-  it.each([
+  it.each<[OpenClawConfig["plugins"], string]>([
     [{ allow: ["diffs"] }, "plugins.allow"],
     [{ enabled: false }, "plugins.enabled"],
-  ] as const)("warns when %o keeps the skill-workshop plugin off", async (plugins, path) => {
+  ])("warns when %o keeps the skill-workshop plugin off", async (plugins, path) => {
     expect(await detect({ plugins })).toEqual([
       expect.objectContaining({ severity: "warning", path }),
     ]);

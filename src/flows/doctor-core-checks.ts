@@ -727,4 +727,3 @@ export function createCoreHealthChecks(): readonly DoctorHealthCheck[] {
 }
 
 export const CORE_HEALTH_CHECKS: readonly DoctorHealthCheck[] = createCoreHealthChecks();
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
