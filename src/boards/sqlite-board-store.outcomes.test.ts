@@ -23,7 +23,7 @@ const boundary = vi.hoisted(() => ({
 }));
 
 vi.mock("../state/openclaw-agent-worker-store.js", () => ({
-  openOpenClawAgentSqliteWorkerStore: async () => ({
+  openOpenClawAgentSqliteWorkerStoreV2: async () => ({
     async run<T>(
       operation: (scope: Pick<SqliteWorkerStore<BoardWriteOperations>, "execute">) => Promise<T>,
       assertCurrent: () => void,
