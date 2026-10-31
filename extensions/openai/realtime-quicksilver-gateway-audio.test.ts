@@ -46,6 +46,9 @@ it.each(["direct", "webrtc"] as const)(
       }
       expect(captured.length).toBeGreaterThan(800);
       expect(captured.length).toBeLessThanOrEqual(960);
+      if (transport === "direct") {
+        expect(captured.length).toBe(960);
+      }
       let loudSamples = 0;
       for (let offset = 0; offset < captured.length; offset += 2) {
         if (captured.readInt16LE(offset) > 30_000) {

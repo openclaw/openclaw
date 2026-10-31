@@ -69,6 +69,56 @@ function frame(value = 0) {
 }
 
 describe("GPT-Live Gateway direct transport", () => {
+  it("drains pre-ready carrier audio without adding another real-time clock", async () => {
+    const harness = createHarness({
+      audioFormat: { encoding: "g711_ulaw", sampleRateHz: 8_000, channels: 1 },
+    });
+    const { bridge, start } = harness;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      bridge.sendAudio(Buffer.alloc(8_000, 0x80));
+      const { socket, connection } = await start();
+      bridge.sendAudio(Buffer.alloc(8_000, 0x00));
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(readAudio(socket)).toEqual([]);
+
+      emitSideband(socket, { type: "session.started", session: {} });
+      await connection;
+      const opening = Buffer.concat(readAudio(socket));
+      // Two seconds of capture, less the streaming resampler's small filter tail.
+      expect(opening.length).toBeGreaterThan(95_000);
+      expect(opening.length).toBeLessThanOrEqual(96_000);
+      expect(opening.readInt16LE(400)).toBe(32_124);
+      expect(opening.readInt16LE(48_400)).toBe(-32_124);
+
+      for (let index = 0; index < 10; index++) {
+        await vi.advanceTimersByTimeAsync(20);
+        bridge.sendAudio(Buffer.alloc(160, 0xff));
+      }
+      const captured = Buffer.concat(readAudio(socket));
+      expect(captured.length).toBe(opening.length + 9_600);
+      expect(captured.subarray(-960)).toEqual(Buffer.alloc(960));
+      const sent = socket.sent.length;
+      await vi.advanceTimersByTimeAsync(100);
+      expect(socket.sent).toHaveLength(sent);
+
+      const closing = bridge.close();
+      bridge.sendAudio(Buffer.alloc(160, 0x80));
+      await vi.advanceTimersByTimeAsync(100);
+      expect(socket.sent).toHaveLength(sent + 1);
+      expect(JSON.parse(socket.sent.at(-1)!)).toEqual({ type: "session.close" });
+      closeReceipt(socket);
+      await closing;
+    } finally {
+      const closing = bridge.close();
+      if (harness.socket) {
+        closeReceipt(harness.socket);
+      }
+      await closing;
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["open handoff", "after adoption"])(
     "retains capture and binds output only to the adopted retry (%s)",
     async (readiness) => {
