@@ -190,15 +190,18 @@ describe("sidebar snapshot lifecycle", () => {
     return { ...test, store };
   }
 
-  it("shares one boot read with route rows and retires both displays on invalidation", async () => {
+  it("shares one boot read and prunes a deleted row without retiring unrelated sidebar display", async () => {
     const store = new SessionSnapshotStore();
     store.connect();
     disposers.push(() => store.disconnect());
     const roster = {
       agentId: "main",
       result: sessionsResult(
-        [{ key: "agent:main:cedar", kind: "direct", displayName: "Cedar" }],
-        1,
+        [
+          { key: "agent:main:cedar", kind: "direct", displayName: "Cedar" },
+          { key: "agent:main:birch", kind: "direct", displayName: "Birch" },
+        ],
+        2,
       ),
       groups: [],
       groupSettings: [],
@@ -242,8 +245,12 @@ describe("sidebar snapshot lifecycle", () => {
     expect(test.host.sidebarSnapshot).toEqual(saved);
     expect(read).toHaveBeenCalledOnce();
     await deleteStoredChatSnapshot(sessionKey);
-    expect(test.host.sidebarSnapshot).toBeNull();
-    expect(sessions.state.result).toBeNull();
+    expect(test.host.sidebarSnapshot?.brand).toEqual(model.brand);
+    expect(test.host.sidebarSnapshot?.roster?.result.sessions.map(({ key }) => key)).toEqual([
+      "agent:main:birch",
+    ]);
+    expect(sessions.state.result?.sessions.map(({ key }) => key)).toEqual(["agent:main:birch"]);
+    expect(sessions.state.resultCached).toBe(true);
   });
 
   it.each(["before", "after"] as const)(
@@ -508,6 +515,20 @@ describe("sidebar snapshot lifecycle", () => {
     },
   );
 
+  it("keeps an unchanged saved projection through handoff and repeated capture", async () => {
+    const test = await warmFixture();
+    const write = vi.spyOn(SessionSnapshotStore.prototype, "writeSidebar");
+    test.publish();
+    void test.settle();
+    test.snapshotOwner.synchronize();
+    for (let index = 0; index < 20; index += 1) {
+      await capture(test.snapshotOwner);
+    }
+    expect(test.host.sidebarSnapshot).toBeNull();
+    expect(write).not.toHaveBeenCalled();
+    expect(test.snapshotOwner.read().saved).toBe(true);
+  });
+
   it("cancels pending capture when its account scope retires", async () => {
     const test = await warmFixture();
     void test.settle();
@@ -597,8 +618,8 @@ describe("sidebar snapshot lifecycle", () => {
             `scope:${JSON.stringify([scope.gatewayScope, scope.recoveryScope])}\u0000`,
           )
         : deleteStoredChatSnapshot(sessionKey, kind === "cache-eviction" ? kind : undefined));
-      expect(test.host.sidebarSnapshot).toEqual(kind === "cache-eviction" ? model : null);
-      expect(test.snapshotOwner.read().saved).toBe(kind === "cache-eviction");
+      expect(test.host.sidebarSnapshot).toEqual(kind === "account" ? null : model);
+      expect(test.snapshotOwner.read().saved).toBe(kind !== "account");
     },
   );
 
@@ -612,7 +633,11 @@ describe("sidebar snapshot lifecycle", () => {
     expect(test.host.sidebarSnapshot).toBeNull();
   });
 
-  it("discards the boot scope before an asynchronous session deletion completes", async () => {
+  it("keeps the boot scope while an unrelated asynchronous session deletion completes", async () => {
+    const store = new SessionSnapshotStore();
+    store.connect();
+    disposers.push(() => store.disconnect());
+    await store.writeSidebar(sidebarSnapshotScopeKey(scope), model, parseSidebarSnapshot);
     const test = fixture();
     const deletion = createDeferred();
     const stop = subscribeSnapshotInvalidation(() => deletion.promise);
@@ -621,7 +646,9 @@ describe("sidebar snapshot lifecycle", () => {
     try {
       test.snapshotOwner.connect();
       disposers.push(() => test.snapshotOwner.disconnect());
-      expect(test.snapshotOwner.read().pending).toBe(false);
+      await test.restored;
+      expect(test.host.sidebarSnapshot).toEqual(model);
+      expect(test.snapshotOwner.read().saved).toBe(true);
     } finally {
       stop();
       deletion.resolve();
