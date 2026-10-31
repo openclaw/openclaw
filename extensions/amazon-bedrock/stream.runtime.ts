@@ -92,6 +92,7 @@ import {
   resolveBedrockClaudeThinkingProfile,
   supportsBedrockNativeMaxEffort,
 } from "./thinking-policy.js";
+import { relocateToolResultImages } from "./tool-result-images.js";
 
 type Block = (TextContent | ThinkingContent | ToolCall) & { index?: number };
 type ToolArgumentPreviewSchedules = WeakMap<
@@ -775,6 +776,12 @@ function isAnthropicClaudeModel(model: Model<"bedrock-converse-stream">): boolea
   );
 }
 
+// AWS documents tool-result images only for Nova and Claude:
+// https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolResultContentBlock.html
+function supportsToolResultImages(model: Model<"bedrock-converse-stream">): boolean {
+  return model.id.toLowerCase().includes("amazon.nova") || isAnthropicClaudeModel(model);
+}
+
 function buildSystemPrompt(
   systemPrompt: string | undefined,
   cacheRetention: CacheRetention,
@@ -1012,33 +1019,9 @@ function convertMessages(
 
         const toolResults = group.map((resultMessage) => createBedrockToolResult(resultMessage));
 
-        // GPT-5.6 Sol accepts user images but rejects images nested in tool results.
-        // Keep all tool outputs contiguous before labeled images, without rewriting history.
-        const attachedImages: ContentBlock[] = [];
-        const userContent: ContentBlock[] = model.id.includes("openai.gpt-5.6-sol")
-          ? toolResults.map((block): ContentBlock => {
-              const images: ContentBlock[] = [];
-              const content = (block.toolResult.content ?? []).filter((part) => {
-                if (part.image) {
-                  images.push({ image: part.image });
-                  return false;
-                }
-                return true;
-              });
-              if (images.length === 0) {
-                return block;
-              }
-              const label = `Images from tool result ${block.toolResult.toolUseId}`;
-              attachedImages.push({ text: `${label}:` }, ...images);
-              return {
-                toolResult: {
-                  ...block.toolResult,
-                  content: [...content, { text: `(see attached images labeled "${label}")` }],
-                },
-              };
-            })
-          : toolResults;
-        userContent.push(...attachedImages);
+        const userContent = supportsToolResultImages(model)
+          ? toolResults
+          : relocateToolResultImages(toolResults);
         result.push({
           role: ConversationRole.USER,
           content: userContent,
