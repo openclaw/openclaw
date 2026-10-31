@@ -10,6 +10,7 @@ import {
   writePersistedAuthProfileStoreRaw,
 } from "../../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import { loadConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   installDatabaseProcessRole,
@@ -45,6 +46,7 @@ describe.skipIf(!mixedAgentConnection).each(["shared-state", "agent"] as const)(
         agentDir ? openOpenClawAgentDatabase({ agentId: "worker" }) : openOpenClawStateDatabase(),
       );
       const cfg: OpenClawConfig = {
+        ...loadConfig(),
         plugins: { enabled: false },
         auth: {
           profiles: { "claude-cli:work": { provider: "claude-cli", mode: "api_key" } },
