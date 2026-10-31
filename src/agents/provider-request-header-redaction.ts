@@ -81,9 +81,10 @@ export function redactExactSecretValues(
   }
 
   let longestPartialSuffix = 0;
+  let normalizedRedacted: string | undefined;
   for (const [candidate, percentCaseInsensitive] of representations) {
     const comparableText = percentCaseInsensitive
-      ? normalizePercentEscapeHexCase(redacted)
+      ? (normalizedRedacted ??= normalizePercentEscapeHexCase(redacted))
       : redacted;
     const comparableCandidate = percentCaseInsensitive
       ? normalizePercentEscapeHexCase(candidate)

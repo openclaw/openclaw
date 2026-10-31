@@ -69,10 +69,10 @@ openclaw-terminal-panel {
     max-height: min(420px, var(--tp-session-menu-max-height));
     overflow-y: auto;
     padding: var(--menu-padding);
-    border: 1px solid var(--overlay-border);
     border-radius: var(--menu-radius);
-    background: var(--bg-elevated);
-    box-shadow: var(--overlay-shadow);
+    background: var(--menu-surface);
+    box-shadow: var(--menu-shadow);
+    backdrop-filter: var(--menu-backdrop);
   }
   .tp-session-menu--hosted {
     --tp-session-menu-max-height: calc(100% - 8px);

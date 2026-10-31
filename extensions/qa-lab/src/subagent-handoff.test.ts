@@ -19,7 +19,7 @@ function forRequester<Args extends unknown[], Result>(run: (...args: Args) => Re
     return run(...args);
   };
 }
-function messageEvent(id: string, parentId: string, message: unknown) {
+function messageEvent(id: string, parentId: string | null, message: unknown) {
   return { type: "message", id, parentId, message };
 }
 
@@ -27,11 +27,15 @@ async function runHandoff({
   fault,
   childReply = "qa-sidecar",
   deliveredReply = childReply,
+  withCustomEntries = false,
+  barrier,
   api,
 }: {
   fault?: string;
   childReply?: string;
   deliveredReply?: string;
+  withCustomEntries?: boolean;
+  barrier?: Record<string, unknown>;
   api?: Record<string, unknown>;
 } = {}) {
   const hasFault = (name: string) => fault === name;
@@ -72,7 +76,36 @@ async function runHandoff({
         : child.childSessionKey,
     },
   });
-  const report = messageEvent("report", hasFault("other branch") ? "request" : delivery.id, reply);
+  const customEntries = withCustomEntries
+    ? [
+        ...(barrier ? [{ ...barrier, id: "barrier", parentId: delivery.id }] : []),
+        {
+          type: "custom_message",
+          id: "runtime-context",
+          parentId: barrier ? "barrier" : delivery.id,
+          customType: "openclaw.runtime-context",
+          content: "Runtime context for the completed child.",
+          display: false,
+        },
+        {
+          type: "custom",
+          id: "cache-ttl",
+          parentId: "runtime-context",
+          customType: "openclaw.cache-ttl",
+        },
+        {
+          type: "custom",
+          id: "system-prompt",
+          parentId: "cache-ttl",
+          customType: "openclaw.system-prompt",
+        },
+      ]
+    : [];
+  const report = messageEvent(
+    "report",
+    hasFault("other branch") ? "request" : (customEntries.at(-1)?.id ?? delivery.id),
+    reply,
+  );
   return runLoadedScenarioFlow("subagent-handoff", {
     api: {
       randomUUID: () => "this-handoff",
@@ -105,9 +138,17 @@ async function runHandoff({
         async (childKey: string, text: string, messages: unknown[]) => {
           expect(childKey).toBe(child.childSessionKey);
           const events = hasFault("parent guessed before completion")
-            ? [{ ...report, parentId: "request" }, delivery]
-            : [delivery, report];
-          return findSubagentHandoffReply(messages, childKey, text, async () => events);
+            ? [
+                { ...delivery, message: { role: "user", content: "Earlier task." } },
+                { ...report, parentId: delivery.id },
+                delivery,
+                { type: "leaf", id: "navigate", parentId: delivery.id, targetId: report.id },
+              ]
+            : [delivery, ...customEntries, report];
+          return findSubagentHandoffReply(messages, childKey, text, async () => [
+            messageEvent("request", null, { role: "user", content: "Delegate a task." }),
+            ...events,
+          ]);
         },
       ),
       waitForAgentHistory: forRequester(
@@ -140,6 +181,25 @@ it.each([
     expect((await runHandoff({ childReply, deliveredReply })).status).toBe("pass");
   },
 );
+it("credits a settled result across custom transcript entries", async () => {
+  expect((await runHandoff({ withCustomEntries: true })).status).toBe("pass");
+});
+it.each([
+  { type: "message", message: { role: "user", content: "Start another task." } },
+  {
+    type: "custom_message",
+    customType: "plugin-notification",
+    content: "Start another task.",
+    display: true,
+  },
+  { type: "reset", firstKeptEntryId: "request" },
+  { type: "compaction", firstKeptEntryId: "request", summary: "Earlier task." },
+  { type: "leaf", targetId: "request" },
+])("does not follow custom entries across $type controls", async (barrier) => {
+  await expect(runHandoff({ withCustomEntries: true, barrier })).rejects.toThrow(
+    "no matching delivered reply",
+  );
+});
 it("does not credit a reply that HTML-escaped the child's result", async () => {
   await expect(
     runHandoff({ childReply: "Verified 2 < 3.", deliveredReply: "Verified 2 &lt; 3." }),
@@ -163,7 +223,9 @@ it.each([
     "unrelated public reply",
   ].map((fault) => [fault, "no matching delivered reply"]),
 ])("refuses %s", async (fault, error) => {
-  await expect(runHandoff({ fault })).rejects.toThrow(error);
+  await expect(runHandoff({ fault, withCustomEntries: fault === "other branch" })).rejects.toThrow(
+    error,
+  );
 });
 
 it.each([

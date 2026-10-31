@@ -465,7 +465,7 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
 
 .session-hovercard__notepad {
   padding-block: 4px 14px;
-  border-radius: 0 0 calc(var(--radius-lg) - 1px) calc(var(--radius-lg) - 1px);
+  border-radius: 0 0 var(--menu-radius) var(--menu-radius);
 }
 
 .session-hovercard__notepad-title {

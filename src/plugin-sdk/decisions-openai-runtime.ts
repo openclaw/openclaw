@@ -1,14 +1,16 @@
 import type { ResolvedProviderAuth } from "../agents/model-auth-runtime-shared.js";
 import { getModelProviderRequestTransport } from "../agents/provider-request-config.js";
 import type { ModelProviderRequestTransportOverrides } from "../agents/provider-request-config.types.js";
-import type { DecisionExecutionContext, DecisionReasoning } from "../decisions/execution-types.js";
+import type { DecisionExecutionContext } from "../decisions/execution-types.js";
+import type { DecisionReasoning } from "../decisions/input-types.js";
 import {
   decodeOpenAIDecisionResult,
   encodeOpenAIDecisionRequest,
   supportsOpenAIDecisionBatch,
 } from "../decisions/openai-codec.js";
+import type { ProviderDecisionOutcomeV2 } from "../decisions/provider-outcomes.js";
 import type { DecisionProviderV2 } from "../decisions/provider-types.js";
-import type { DecisionBatchV2, ProviderDecisionOutcomeV2 } from "../decisions/types-v2.js";
+import type { DecisionBatchV2 } from "../decisions/types-v2.js";
 import type { ModelRequestHeaders } from "../llm/types.js";
 import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
 import {
