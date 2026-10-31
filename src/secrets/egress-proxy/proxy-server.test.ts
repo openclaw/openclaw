@@ -9,6 +9,7 @@ import path from "node:path";
 import type { Duplex } from "node:stream";
 import tls from "node:tls";
 import { promisify } from "node:util";
+import { fetch, ProxyAgent } from "undici";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createTempDirTracker,
@@ -996,6 +997,40 @@ describe("secret egress plain HTTP", () => {
     } finally {
       grant.revoke();
     }
+  });
+
+  // Node's fetch tunnels HTTP through CONNECT; undici's tunneling agent does the same on any runtime.
+  async function tunnelFetch(env: Record<string, string>, apiKey = "plain") {
+    const dispatcher = new ProxyAgent({ uri: env.HTTP_PROXY!, proxyTunnel: true });
+    const response = await fetch(`http://127.0.0.1:${port}/ok`, {
+      dispatcher,
+      headers: { "x-api-key": apiKey },
+    });
+    return { status: response.status, body: await response.text() };
+  }
+
+  it("forwards fetch through a CONNECT tunnel", async () => {
+    expect(await tunnelFetch(proxy.registerProcess().env)).toEqual({
+      status: 200,
+      body: "loopback-ok",
+    });
+    expect(observed.map(({ url }) => url)).toEqual(["/ok"]);
+    expect(audit).toEqual([{ kind: "forwarded", host: "127.0.0.1", substituted: false }]);
+  });
+
+  it("refuses a fetch sentinel inside a CONNECT tunnel", async () => {
+    const sentinel = mintSecretSentinel("synthetic-tunnel-secret", { label: "tunnel-refusal" });
+    const { env } = proxy.registerProcess([
+      { name: "SERVICE_API_KEY", sentinel, allowedHosts: ["127.0.0.1"] },
+    ]);
+    expect(await tunnelFetch(env, sentinel)).toEqual({
+      status: 502,
+      body: "Secret egress proxy refused the request.\n",
+    });
+    expect(observed).toEqual([]);
+    expect(audit).toEqual([
+      { kind: "refused", host: "127.0.0.1", substituted: false, reason: "non-https-request" },
+    ]);
   });
 
   it("refuses a real HTTP child outside the lockdown allowlist", async () => {

@@ -1,11 +1,6 @@
 import { randomBytes, timingSafeEqual, X509Certificate } from "node:crypto";
 import fs from "node:fs";
-import {
-  createServer as createHttpServer,
-  type ServerResponse,
-  type IncomingHttpHeaders,
-  type IncomingMessage,
-} from "node:http";
+import type { ServerResponse, IncomingHttpHeaders, IncomingMessage } from "node:http";
 import { Agent as HttpsAgent } from "node:https";
 import net, { type Socket } from "node:net";
 import path from "node:path";
@@ -30,11 +25,16 @@ import {
   type SecretEgressCertificateStatus,
   type SecretEgressTlsContext,
 } from "./certificates.js";
+import {
+  connectTargetOrigin,
+  isLiteralLoopbackHost,
+  startsWithTlsHandshake,
+} from "./connect-tunnel.js";
 import { createSecretEgressProxyEnvironment } from "./environment.js";
 import {
+  createRequestServer,
   createSecretEgressBodyBudget,
   forwardSecretEgressRequest,
-  handleUpgradeRequest,
   REFUSAL_BODY,
   sendHttpRefusal,
   type RequestHandler,
@@ -402,12 +402,10 @@ export async function startSecretEgressProxyServer(params: {
       return;
     }
     const { host } = forward;
-    // Decide from the literal target, never DNS: remote names must not gain
-    // cleartext forwarding just because an answer happens to be loopback.
     const loopbackHttp =
       forward.allowLoopbackHttp &&
       forward.target.protocol === "http:" &&
-      (host === "localhost" || host === "::1" || (net.isIPv4(host) && host.startsWith("127.")));
+      isLiteralLoopbackHost(host);
     if (forward.target.protocol !== "https:" && !loopbackHttp) {
       auditUnsubstitutedRequest(host, "non-https-request");
       sendHttpRefusal(forward.response);
@@ -459,6 +457,28 @@ export async function startSecretEgressProxyServer(params: {
     });
   };
 
+  // Requests inside a CONNECT tunnel carry origin-form URLs: the tunnel target is
+  // the destination, never the Host header.
+  const tunnelRequestHandler =
+    (
+      scheme: "http" | "https",
+      target: ConnectTarget,
+      registered: RegisteredProcess,
+    ): RequestHandler =>
+    (request, response, upgrade) => {
+      const parsed = parseRequestTarget(request, response, connectTargetOrigin(scheme, target));
+      if (parsed) {
+        forwardRequest({
+          request,
+          response,
+          ...parsed,
+          registered,
+          upgrade,
+          allowLoopbackHttp: scheme === "http" && !upgrade,
+        });
+      }
+    };
+
   const tlsServerFor = (target: ConnectTarget, registered: RegisteredProcess) => {
     const key = `${target.hostname}:${target.port}`;
     let context = registered.tlsServers.get(key);
@@ -467,20 +487,7 @@ export async function startSecretEgressProxyServer(params: {
         hostname: target.hostname,
         isActive: registered.isActive,
         createServer: (leaf) => {
-          const handleRequest: RequestHandler = (request, response, upgrade) => {
-            const parsed = parseRequestTarget(
-              request,
-              response,
-              `https://${target.hostname}${target.port === 443 ? "" : `:${target.port}`}`,
-            );
-            if (parsed) {
-              forwardRequest({ request, response, ...parsed, registered, upgrade });
-            }
-          };
-          const httpServer = createHttpServer(handleRequest).on(
-            "upgrade",
-            (request, _socket, head) => handleUpgradeRequest(handleRequest, request, head),
-          );
+          const httpServer = createRequestServer(tunnelRequestHandler("https", target, registered));
           const tlsServer = createTlsServer(leaf).on("secureConnection", (socket) => {
             ownResource(registered, socket);
             httpServer.emit("connection", socket);
@@ -532,9 +539,7 @@ export async function startSecretEgressProxyServer(params: {
       allowLoopbackHttp: !upgrade,
     });
   };
-  const proxy = createHttpServer(handleProxyRequest).on("upgrade", (request, _socket, head) =>
-    handleUpgradeRequest(handleProxyRequest, request, head),
-  );
+  const proxy = createRequestServer(handleProxyRequest);
 
   proxy.on("connection", (socket) => {
     sockets.add(socket);
@@ -571,8 +576,7 @@ export async function startSecretEgressProxyServer(params: {
         const abort = () => controller.abort();
         clientSocket.once("close", abort);
         try {
-          const host = net.isIPv6(target.hostname) ? `[${target.hostname}]` : target.hostname;
-          const proxyUrl = resolveEnvNodeProxyUrlForTarget(`https://${host}:${target.port}`);
+          const proxyUrl = resolveEnvNodeProxyUrlForTarget(connectTargetOrigin("https", target));
           const upstream = ownResource(
             authorization,
             proxyUrl
@@ -632,6 +636,19 @@ export async function startSecretEgressProxyServer(params: {
         clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
         if (head.length > 0) {
           clientSocket.unshift(head);
+        }
+        // Only the first byte tells cleartext loopback HTTP from TLS.
+        if (
+          isLiteralLoopbackHost(target.hostname) &&
+          !(await startsWithTlsHandshake(clientSocket))
+        ) {
+          if (authorization.isActive() && !clientSocket.destroyed) {
+            createRequestServer(tunnelRequestHandler("http", target, authorization)).emit(
+              "connection",
+              clientSocket,
+            );
+          }
+          return;
         }
         tlsServer.acceptConnection(clientSocket);
       } catch (error) {
