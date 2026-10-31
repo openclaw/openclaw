@@ -14,7 +14,7 @@ type CronRouteContext = Pick<ApplicationContext, "gateway"> & {
 
 export const page = definePage({
   ...routePageSpec("cron"),
-  loaderDeps: (_context, { search }) => search,
+  loaderDeps: (_context: CronRouteContext, { search }) => search,
   loader: (context: CronRouteContext, { deps, cause, signal, shouldRun }) => {
     const client = context.gateway.snapshot.client;
     const scopeId = context.agentSelection.state.scopeId;
