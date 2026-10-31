@@ -57,6 +57,7 @@ import {
 } from "./openclaw-state-db-schema-additive.js";
 import { withLegacyPublicationDraft } from "./openclaw-state-db-schema-v28-publication.js";
 import { TEMPLATE_STATE_TABLE_RENAMES } from "./openclaw-state-db-schema-v36-template-names.js";
+import { withoutSubagentRunArchives } from "./openclaw-state-db-schema-v37-subagent-archives.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -94,8 +95,10 @@ function readStateArtifacts(directory: string, pathname: string) {
 
 const legacyIndexOrderingSql = withLegacyPostgresIndexOrdering(
   postgresIndexOrderingMigration(
-    [statePostgresRuntime.eagerSql, ...statePostgresRuntime.fragments.map(({ sql }) => sql)].join(
-      "\n",
+    withoutSubagentRunArchives(
+      [statePostgresRuntime.eagerSql, ...statePostgresRuntime.fragments.map(({ sql }) => sql)].join(
+        "\n",
+      ),
     ),
   ),
 );
@@ -128,6 +131,10 @@ async function restorePublicationSchemaV27(client: pg.Client) {
 // These fixtures start at the successor; restore only empty feature tables from
 // the registered predecessor, including CHECK/PK declarations, before old seals.
 async function restoreTemplatePredecessor(client: pg.Client, previousVersion: number) {
+  await client.query("DROP TABLE subagent_run_archives");
+  if (previousVersion >= 36) {
+    return;
+  }
   const source = expectDefined(
     stateEngineSchema.postgresMigrations?.find((step) => step.version === previousVersion + 1)
       ?.fromSchema,
@@ -571,7 +578,7 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
     }
   });
 
-  it.each([25, 26, 27, 28])(
+  it.each([25, 26, 27, 28, 36])(
     "migrates version %i while preserving heads, leases, lazy fragments and publication intent",
     async (previousVersion) => {
       const directory = tempDirs.make("state-layout-postgres-");
@@ -635,8 +642,8 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
         }
         await client.query(legacyPublicationInsert);
         await client.query(`
-        ${statePostgresRuntime.clientCredentialSource.sql}
-        ${legacyIndexOrderingSql}
+        ${previousVersion < 29 ? statePostgresRuntime.clientCredentialSource.sql : ""}
+        ${previousVersion < 33 ? legacyIndexOrderingSql : ""}
         ${previousVersion < 27 ? legacyWriteIndexesSql : ""}
         UPDATE schema_meta SET schema_version = ${previousVersion};
         UPDATE config_machine_state SET value_json = '${previousVersion}'
@@ -676,6 +683,7 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
         }
         withEngineStoreAdmission(() => {
           const upgraded = openOpenClawStateDatabase(options);
+          expect(upgraded.db.prepare("SELECT * FROM subagent_run_archives").all()).toEqual([]);
           for (const table of [
             "github_publication_requests",
             "github_personal_publication_requests",

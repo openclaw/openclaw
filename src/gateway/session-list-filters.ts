@@ -94,6 +94,9 @@ export type SessionListFilterParams = {
   getTarget: SessionListTargetLookup;
   getModelFacts?: SessionListModelFactsLookup;
   modelSearchMayMatch?: (search: string) => boolean;
+  /** Preparation stops at unresolved history, before accumulating facets or pages. */
+  collectSearchHistory?: Set<string>;
+  requireSearchHistory?: (key: string) => void;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   opts: SessionsListParams;
   now: number;
@@ -330,6 +333,11 @@ export function filterSessionEntries(
         }
         const agentId = target.agentId;
         if (searchRunState) {
+          if (params.collectSearchHistory) {
+            params.collectSearchHistory.add(storeKey);
+            return false;
+          }
+          params.requireSearchHistory?.(storeKey);
           const run = projectGatewaySessionRunState({
             key: storeKey,
             entry,
@@ -361,6 +369,14 @@ export function filterSessionEntries(
         }
         if (identityMatch) {
           return true;
+        }
+        if (!search.startsWith("agent:")) {
+          if (params.collectSearchHistory) {
+            params.collectSearchHistory.add(storeKey);
+            return false;
+          }
+          // Check every candidate, even after another row cached a negative vocabulary result.
+          params.requireSearchHistory?.(storeKey);
         }
         searchModels ??=
           search.startsWith("agent:") ||
@@ -499,6 +515,9 @@ export function filterSessionEntries(
       continue;
     }
     if (matchesSearch && !matchesSearch(key, entry, target)) {
+      continue;
+    }
+    if (params.collectSearchHistory) {
       continue;
     }
     if (activeMinutes !== undefined) {

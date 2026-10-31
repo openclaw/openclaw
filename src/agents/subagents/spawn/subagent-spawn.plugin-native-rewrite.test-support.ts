@@ -232,6 +232,7 @@ export function registerNativePluginRewriteCases(options: NativePluginSpawnTestO
       const ownerB = createSpawnOperatorSource("collector-b");
       const parentB = await createSpawnBoundaryParent({
         stateDir: resolveAgentWorkspaceDir(bound.cfg, "main"),
+        sdkResourceHost: bound.sdkResourceHost,
         parentSessionKey: "agent:main:collector-b",
         parentRunId: "collector-b-parent",
         operatorAuthority: ownerB.authority,

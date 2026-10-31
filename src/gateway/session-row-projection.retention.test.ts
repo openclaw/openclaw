@@ -1,5 +1,9 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
+import { archiveCompletedSubagentRuns } from "../agents/subagents/registry/subagent-registry-archive.js";
+import { mutateSubagentRuns } from "../agents/subagents/registry/subagent-registry-persistence.js";
+import * as registryQueries from "../agents/subagents/registry/subagent-registry-queries.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -19,6 +23,70 @@ import {
   seedRow as writeEntry,
 } from "./session-row-projection.read-fixture.test-support.js";
 import { listProjectedSessions, prepareSessionRowSelection } from "./session-utils-list.js";
+
+it("releases request-owned archived runs while their resident row source stays alive", async () => {
+  await withOpenClawTestState(
+    { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
+    async () => {
+      const cfg = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      const key = "agent:main:subagent:archived-source-retention";
+      const endedAt = Date.now() - 31 * 86_400_000;
+      writeEntry(key, { sessionId: "archived-source-retention", updatedAt: 1 });
+      const run = createSubagentRunRecord({
+        runId: "archived-source-retention",
+        childSessionKey: key,
+        childAgentId: "main",
+        requesterSessionKey: "agent:main:retention-parent",
+        requesterAgentId: "main",
+        cleanup: "keep",
+        createdAt: endedAt - 1_000,
+        execution: {
+          status: "terminal",
+          startedAt: endedAt - 1_000,
+          endedAt,
+          outcome: { status: "ok" },
+        },
+        cleanupCompletedAt: endedAt,
+        delivery: { status: "not_required" },
+        completion: { required: false },
+      });
+      await mutateSubagentRuns([run.runId], () => ({
+        value: undefined,
+        postimages: new Map([[run.runId, run]]),
+      }));
+      using _ = holdForeground();
+      using projection = await createTestProjection({ cfg, modelCatalog: [] });
+      const read = () =>
+        listProjectedSessions({ projection, key, opts: { limit: 1 }, acceptsSerializedJson: true });
+      await read();
+      expect(await archiveCompletedSubagentRuns(Date.now())).toBe(1);
+      await projection.ensureMaterialized();
+      const source = projection.describe({ agentId: "main", key })!.materialized.source;
+      async function capture() {
+        using builds = vi.spyOn(registryQueries, "buildSubagentRunReadIndexFromRuns");
+        expect((await read()).sessions[0]).toMatchObject({
+          key,
+          status: "done",
+          subagentRunState: "historical",
+          endedAt,
+        });
+        const refs = builds.mock.calls.flatMap(([inputs]) => {
+          const archived = inputs.runs.get(run.runId);
+          return archived ? [weak(archived), weak(archived.execution)] : [];
+        });
+        expect(refs.length).toBeGreaterThan(0);
+        // Mock call/results must not become the owner whose retention this checks.
+        builds.mockClear();
+        return refs;
+      }
+      const retired = await capture();
+      await expectCollected(weakControl(), ...retired);
+      expect(projection.describe({ agentId: "main", key })!.materialized.source).toBe(source);
+      expect(projection.state.rowContext.subagentRuns.getDisplaySubagentRun(key)).toBeNull();
+    },
+  );
+});
 
 it("releases old catalog planning rosters while published adoption identities remain usable", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

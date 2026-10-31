@@ -893,6 +893,18 @@ CREATE TABLE "state_leases" (
   PRIMARY KEY ("scope", "lease_key")
 );
 
+CREATE TABLE "subagent_run_archives" (
+  "run_id" text COLLATE "C" NOT NULL,
+  "child_session_key" text COLLATE "C" NOT NULL,
+  "controller_session_key" text COLLATE "C",
+  "controller_store_path" text COLLATE "C",
+  "requester_session_key" text COLLATE "C" NOT NULL,
+  "requester_store_path" text COLLATE "C",
+  "created_at" bigint NOT NULL,
+  "payload_json" text COLLATE "C" NOT NULL DEFAULT '{}',
+  PRIMARY KEY ("run_id")
+);
+
 CREATE TABLE "subagent_runs" (
   "run_id" text COLLATE "C" NOT NULL,
   "child_session_key" text COLLATE "C" NOT NULL,
@@ -1510,6 +1522,12 @@ CREATE INDEX "idx_skill_uploads_idempotency" ON "skill_uploads" (("idempotency_k
 CREATE INDEX "idx_state_leases_expiry" ON "state_leases" (("expires_at") ASC, ("scope") ASC, ("lease_key") ASC) WHERE "expires_at" IS NOT NULL;
 
 CREATE INDEX "idx_state_leases_owner" ON "state_leases" (("owner") ASC);
+
+CREATE INDEX "idx_subagent_run_archives_child_session_key" ON "subagent_run_archives" (("child_session_key") ASC, ("created_at") DESC, ("run_id") ASC);
+
+CREATE INDEX "idx_subagent_run_archives_controller_session_key" ON "subagent_run_archives" (("controller_session_key") ASC NULLS FIRST, ("created_at") DESC, ("run_id") ASC);
+
+CREATE INDEX "idx_subagent_run_archives_requester_session_key" ON "subagent_run_archives" (("requester_session_key") ASC, ("created_at") DESC, ("run_id") ASC);
 
 CREATE INDEX "idx_subagent_runs_child_session_key" ON "subagent_runs" (("child_session_key") ASC, ("created_at") DESC, ("run_id") ASC);
 

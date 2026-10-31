@@ -137,8 +137,8 @@ it.each([
     ["src/gateway/server-methods/diagnostics.heap-snapshot.test.ts", ...sessionWeakRefFiles],
     [],
   ],
-  ["gateway-core", "src/gateway", sessionWeakRefFiles.slice(0, 2), []],
-  ["gateway-database-workers", "src/gateway", sessionWeakRefFiles.slice(2), []],
+  ["gateway-core", "src/gateway", sessionWeakRefFiles.slice(0, 1), []],
+  ["gateway-database-workers", "src/gateway", sessionWeakRefFiles.slice(1), []],
   [
     "gateway-methods",
     "src/gateway",

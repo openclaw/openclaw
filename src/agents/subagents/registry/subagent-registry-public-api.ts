@@ -4,7 +4,10 @@ import { captureGatewayToolCallerAssertion } from "../../tools/gateway-caller-co
 import { prepareRequesterCronAuthority } from "../requester-cron-authority.js";
 import { resolveRecordedRequester } from "./subagent-child-owner-match.js";
 import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
-import { getSubagentRunsForChildSession } from "./subagent-registry-memory.js";
+import {
+  getSubagentRunsForChildSession,
+  getSubagentSessionReadLookup,
+} from "./subagent-registry-memory.js";
 import {
   assertSubagentRegistryWriteSourceCurrent,
   mutateSubagentRuns,
@@ -23,8 +26,10 @@ import { listUnsettledRequesterChildrenInRuns } from "./subagent-registry-reques
 import { claimSubagentYieldInRuns } from "./subagent-registry-run-pause.js";
 import {
   countActiveSubagentRunsForSession,
-  getSubagentRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForRead,
+  prepareSubagentArchiveSessionListRead,
+  prepareSubagentSessionListReadCache,
+  getSubagentSessionListRunsSnapshotForSessions,
   withSubagentRunReadSnapshot,
   prepareSubagentRunsSnapshotForRunIds,
 } from "./subagent-registry-state.js";
@@ -38,12 +43,26 @@ export function createSubagentRegistryPublicApi(config: {
   markRequesterYielded: SubagentLifecycleController["markRequesterTurnYielded"];
 }) {
   const { runs, restoreOnce, settleRequesterTurn } = config;
-  const readRuns = () => getSubagentRunsSnapshotForRead(runs);
-  const findRunById = (records: Map<string, SubagentRunRecord>, runId: string) =>
+  const findRunById = (records: ReadonlyMap<string, SubagentRunRecord>, runId: string) =>
     records.get(runId) ?? [...records.values()].find((entry) => entry.swarmRunId === runId);
 
-  function getSubagentRunByRunId(runId: string): SubagentRunRecord | undefined {
-    return findRunById(readRuns(), runId.trim());
+  async function getSubagentRunByRunId(runId: string): Promise<SubagentRunRecord | undefined> {
+    const id = runId.trim();
+    for (;;) {
+      const exact = await prepareSubagentRunsSnapshotForRunIds(runs, [id], { exact: true });
+      const selected = exact.consume((rows) => rows.get(id));
+      if (!selected.ready) {
+        continue;
+      }
+      if (selected.value) {
+        return selected.value;
+      }
+      const prepared = await prepareSubagentRunsSnapshotForRunIds(runs, [id]);
+      const result = prepared.consume((rows) => findRunById(rows, id));
+      if (result.ready) {
+        return result.value;
+      }
+    }
   }
 
   async function prepareSubagentRunsByRunIds(
@@ -161,17 +180,85 @@ export function createSubagentRegistryPublicApi(config: {
     );
   }
 
-  function listSwarmRunsForGroup(
+  async function prepareSubagentActiveRunCount(
+    requesterSessionKey: string,
+    options?: Parameters<typeof countActiveSubagentRunsForSession>[2],
+  ): Promise<() => number> {
+    await prepareSubagentSessionListReadCache();
+    for (;;) {
+      const archive = await prepareSubagentArchiveSessionListRead({
+        kind: "sessions",
+        sessionKeys: [requesterSessionKey],
+        descendants: true,
+        liveTopology: getSubagentSessionReadLookup(runs).captureTopology(),
+      });
+      if (!archive.isCurrent()) {
+        continue;
+      }
+      const hot = getSubagentSessionListRunsSnapshotForSessions(runs, [
+        requesterSessionKey,
+        ...Array.from(archive.runs.values(), (entry) => entry.childSessionKey),
+      ]);
+      // Keep only settled topology across archival; active capacity always follows current owners.
+      const historical = new Map(
+        [...archive.runs, ...hot].filter(
+          ([, entry]) =>
+            entry.execution.status === "terminal" && entry.cleanupCompletedAt !== undefined,
+        ),
+      );
+      return () => {
+        archive.assertSourceCurrent();
+        return countActiveSubagentRunsForSession(runs, requesterSessionKey, options, historical);
+      };
+    }
+  }
+
+  async function prepareSwarmRunsForGroup(
     groupId: string,
     requesterSessionKey?: string,
     requesterAgentId?: string,
-  ): SubagentRunReadRecord[] {
-    return listSwarmRunsForGroupFromRuns(
-      getSubagentSessionListRunsSnapshotForRead(runs),
-      groupId,
-      requesterSessionKey,
-      requesterAgentId,
-    );
+  ): Promise<() => SubagentRunReadRecord[]> {
+    for (;;) {
+      const archived = await prepareSubagentArchiveSessionListRead(
+        requesterSessionKey
+          ? { kind: "sessions", sessionKeys: [requesterSessionKey], descendants: false }
+          : { kind: "all" },
+      );
+      if (!archived.isCurrent()) {
+        continue;
+      }
+      // Settled history may move during admission; active capacity always comes from current rows.
+      const historical = new Map(
+        listSwarmRunsForGroupFromRuns(
+          new Map([...archived.runs, ...getSubagentSessionListRunsSnapshotForRead(runs)]),
+          groupId,
+          requesterSessionKey,
+          requesterAgentId,
+        )
+          .filter(
+            (entry) =>
+              entry.execution.status === "terminal" && entry.cleanupCompletedAt !== undefined,
+          )
+          .map((entry) => [entry.runId, entry]),
+      );
+      return () => {
+        archived.assertSourceCurrent();
+        return listSwarmRunsForGroupFromRuns(
+          new Map([...historical, ...getSubagentSessionListRunsSnapshotForRead(runs)]),
+          groupId,
+          requesterSessionKey,
+          requesterAgentId,
+        );
+      };
+    }
+  }
+
+  async function listSwarmRunsForGroup(
+    groupId: string,
+    requesterSessionKey?: string,
+    requesterAgentId?: string,
+  ): Promise<SubagentRunReadRecord[]> {
+    return (await prepareSwarmRunsForGroup(groupId, requesterSessionKey, requesterAgentId))();
   }
 
   /** Read current direct-child custody with an exact parent incarnation fence. */
@@ -326,9 +413,14 @@ export function createSubagentRegistryPublicApi(config: {
     completeCollectorLaunchCleanup,
     recordSwarmStructuredOutput,
     listSwarmRunsForGroup,
+    prepareSwarmRunsForGroup,
+    prepareSubagentActiveRunCount,
     getSwarmRunByLaunchReplayKey,
     listCollectorRunsForRequesterIncarnation,
-    countActiveRunsForSession: countActiveSubagentRunsForSession.bind(null, runs),
+    countActiveRunsForSession: async (
+      requesterSessionKey: string,
+      options?: Parameters<typeof countActiveSubagentRunsForSession>[2],
+    ) => (await prepareSubagentActiveRunCount(requesterSessionKey, options))(),
     settleRequesterAfterSessionSpawns: settleRequesterTurn,
     markRequesterTurnYielded,
     listUnsettledRequesterChildren,

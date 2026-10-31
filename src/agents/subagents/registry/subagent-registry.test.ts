@@ -125,28 +125,13 @@ vi.mock("../../../sessions/session-lifecycle-events.js", () => ({
 
 // mock-isolation: Use test-owned read state while retaining real persistence publications.
 vi.mock("./subagent-registry-state.js", async (importOriginal) => {
-  const {
-    clearSubagentRunsReadCacheForTest,
-    consumeFreshSubagentRegistryRows,
-    countActiveSubagentRunsForSession,
-    getSubagentSessionListRunsSnapshotForSessions,
-    prepareSubagentRegistrationRows,
-    prepareSubagentSessionListReadCache,
-    publishSubagentRunsAfterAtomicStore,
-    rememberRestoredSubagentRunNotification,
-  } = await importOriginal<typeof import("./subagent-registry-state.js")>();
+  const original = await importOriginal<typeof import("./subagent-registry-state.js")>();
   return {
-    clearSubagentRunsReadCacheForTest,
-    consumeFreshSubagentRegistryRows,
-    countActiveSubagentRunsForSession,
-    getSubagentSessionListRunsSnapshotForSessions,
-    prepareSubagentRegistrationRows,
-    prepareSubagentSessionListReadCache,
-    rememberRestoredSubagentRunNotification,
+    ...original,
     getSubagentRunsSnapshotForChildSession: mocks.getSubagentRunsSnapshotForChildSession,
     getSubagentRunsSnapshotForRead: mocks.getSubagentRunsSnapshotForRead,
     ...(await import("../../subagent-test-fixtures.test-helpers.js")).createSubagentStateMock(
-      publishSubagentRunsAfterAtomicStore,
+      original.publishSubagentRunsAfterAtomicStore,
     ),
   };
 });

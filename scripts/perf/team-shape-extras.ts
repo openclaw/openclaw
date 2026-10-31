@@ -37,6 +37,8 @@ export type TeamShapeExtrasOptions = {
   retainedRuns: number;
   settledRuns?: boolean;
   teamStress?: boolean;
+  /** Ordinary kept history replaces collectors when measuring aged registry retention. */
+  keptRunAgeDays?: number;
   approvals: number;
   cronJobs: number;
   cronAnnounceLast?: boolean;
@@ -58,7 +60,7 @@ function retainedRun(index: number, options: TeamShapeExtrasOptions): SubagentRu
   const childOffset = index % childCount;
   const child = options.sessions[rootCount + childOffset]!;
   // Keep collector fan-out on the same bounded parents the stress writer updates.
-  const collector = options.teamStress && options.settledRuns;
+  const collector = options.teamStress && options.settledRuns && !options.keptRunAgeDays;
   const parent = options.sessions[childOffset % (collector ? Math.min(64, rootCount) : rootCount)]!;
   const runId = `team-shape-run-${index}`;
   // Collector retention is derived from completion time, not the stored archive deadline.
@@ -68,7 +70,9 @@ function retainedRun(index: number, options: TeamShapeExtrasOptions): SubagentRu
         Math.min(TEAM_SHAPE_RUN_SLOT_MS, Math.floor((30 * 60_000) / options.retainedRuns)),
       )
     : TEAM_SHAPE_RUN_SLOT_MS;
-  const endedAt = options.now - 60_000 - (options.retainedRuns - 1 - index) * slotMs;
+  const endedAt = options.keptRunAgeDays
+    ? options.now - (1 + (index % options.keptRunAgeDays)) * DAY_MS
+    : options.now - 60_000 - (options.retainedRuns - 1 - index) * slotMs;
   const startedAt = endedAt - 30_000 - (index % 100) * 1_000;
   const slot = index % 20;
   const failed = slot >= 12 && slot < 15;
@@ -102,7 +106,7 @@ function retainedRun(index: number, options: TeamShapeExtrasOptions): SubagentRu
     cleanup: "keep",
     generation: Math.floor(index / childCount) + 1,
     createdAt: startedAt - 1_000,
-    archiveAtMs: options.now + 30 * DAY_MS,
+    ...(options.keptRunAgeDays ? {} : { archiveAtMs: options.now + 30 * DAY_MS }),
     ...(collector
       ? {
           collect: true,
@@ -479,6 +483,7 @@ export async function seedTeamShapeExtras(options: TeamShapeExtrasOptions) {
   return {
     retainedRuns: runs.length,
     settledRuns: options.settledRuns ?? false,
+    keptRunAgeDays: options.keptRunAgeDays ?? 0,
     retainedRunStates,
     approvals: options.approvals,
     cronJobs: jobs.length,

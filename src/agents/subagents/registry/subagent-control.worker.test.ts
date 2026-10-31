@@ -53,6 +53,7 @@ import {
   requesterKey,
   useSubagentProgressCohort,
 } from "./subagent-progress-draft.test-support.js";
+import { archiveCompletedSubagentRuns } from "./subagent-registry-archive.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import * as persistence from "./subagent-registry-persistence.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
@@ -154,6 +155,86 @@ async function admitNativeRun(runId: string, sessionKey: string, detachOnAbort =
   };
   return { id: runId, abort, finish };
 }
+
+it.each(["selected parent", "whole session"] as const)(
+  "cancels live descendants through archived ancestors for %s without warming inert history",
+  async (selection) =>
+    withEnvAsync({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" }, async () => {
+      const rootKey = "agent:main:main";
+      const parentKey = "agent:main:subagent:archive-parent";
+      const middleKey = "agent:main:subagent:archive-middle";
+      const descendantKey = "agent:main:subagent:archive-child";
+      const inertKey = "agent:main:subagent:archive-inert";
+      for (const key of [rootKey, parentKey, middleKey, descendantKey, inertKey]) {
+        seedSession(key);
+      }
+      await registerSubagentRun(registration("archive-parent", parentKey));
+      await registerSubagentRun({
+        ...registration("archive-middle", middleKey),
+        requesterSessionKey: parentKey,
+        requesterTurnRunId: "archive-parent",
+      });
+      await registerSubagentRun({
+        ...registration("archive-child", descendantKey),
+        requesterSessionKey: middleKey,
+        requesterTurnRunId: "archive-middle",
+      });
+      await registerSubagentRun(registration("archive-inert", inertKey));
+      const old = Date.now() - 31 * 86_400_000;
+      await persistence.mutateSubagentRuns(
+        ["archive-parent", "archive-middle", "archive-inert"],
+        (rows) => ({
+          value: undefined,
+          postimages: new Map(
+            [...rows].map(([id, entry]) => [
+              id,
+              {
+                ...entry,
+                createdAt: old - 1,
+                cleanupCompletedAt: old + 1,
+                execution: {
+                  status: "terminal" as const,
+                  endedAt: old,
+                  outcome: { status: "ok" as const },
+                },
+                delivery: { status: "not_required" as const },
+              },
+            ]),
+          ),
+        }),
+      );
+      expect(await archiveCompletedSubagentRuns(Date.now())).toBe(3);
+      expect([...subagentRuns.keys()]).toEqual(["archive-child"]);
+      const native = await admitNativeRun("archive-child", descendantKey);
+      try {
+        if (selection === "selected parent") {
+          const result = await (
+            await subagentsTool()
+          ).execute("archive-stop", {
+            action: "cancel",
+            runId: "archive-parent",
+          });
+          expect(result.details).toMatchObject({ found: true, killed: true, cascadeKilled: 1 });
+        } else {
+          expect(
+            await killSessionSubagentRuns({
+              cfg: getRuntimeConfig(),
+              sessionKey: rootKey,
+              agentId: "main",
+            }),
+          ).toMatchObject({ status: "ok", killed: 1 });
+        }
+        expect(native.abort).toHaveBeenCalledOnce();
+        expect(loadSubagentRegistryFromSqlite().get("archive-child")).toMatchObject({
+          execution: { status: "terminal" },
+          endedReason: "subagent-killed",
+        });
+        expect(subagentRuns.has("archive-inert")).toBe(false);
+      } finally {
+        await native.finish();
+      }
+    }),
+);
 
 it.each(["caller admission", "session generation"] as const)(
   "releases an acknowledged native claim when %s retires before publication",

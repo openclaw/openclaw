@@ -62,7 +62,10 @@ export function acknowledgeMockSubagentRegistryWrite(
     throw new Error("Registry policy fixture requires a native receipt consumer");
   }
   const { admission } = createAdmission({ settled: Promise.resolve({ kind: "completed" }) });
-  Object.defineProperty(admission, "committed", { value: { facts: { writeId, notices: [] } } });
+  // Transport-only fixtures never move archival rows; real-worker tests cover that boundary.
+  Object.defineProperty(admission, "committed", {
+    value: { facts: { writeId, notices: [], archivedRunIds: [] } },
+  });
   admission.finish();
 }
 

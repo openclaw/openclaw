@@ -2,7 +2,7 @@ import type { ReplyToMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
 import type {
-  countActiveRunsForSession,
+  prepareSubagentActiveRunCount,
   registerSubagentRun,
 } from "../subagents/registry/subagent-registry.js";
 import type { InProcessGatewayCaller } from "./in-process-gateway.js";
@@ -10,7 +10,10 @@ import type { InProcessGatewayCaller } from "./in-process-gateway.js";
 export type SessionsSpawnToolOptions = {
   callGateway?: InProcessGatewayCaller;
   registerRun?: typeof registerSubagentRun;
-  countActiveRuns?: typeof countActiveRunsForSession;
+  countActiveRuns?: (
+    sessionKey: string,
+    options?: Parameters<typeof prepareSubagentActiveRunCount>[1],
+  ) => number;
   agentSessionKey?: string;
   /** Trusted parent invocation fact, not a model-facing spawn parameter. */
   senderIsOwner?: boolean;

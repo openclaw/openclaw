@@ -677,6 +677,13 @@ it.skipIf(process.platform === "win32").for([true, false])(
             readRestartSession(instance.state.agentDir("other"), key(cycle, "stream"), sharedStore)
               ?.resumeAfterRestart,
           ).toBeDefined();
+          if (!suspended) {
+            expect(
+              readRestartSession(instance.state.agentDir(), key(cycle, "background"), sharedStore)
+                ?.resumeAfterRestart,
+              `${mode}: background restart marker\n${shutdownLogs}`,
+            ).toMatchObject({ hadBackgroundExec: true });
+          }
           await client.stopAndWait();
           client = undefined;
           if (suspended) {
@@ -723,8 +730,9 @@ it.skipIf(process.platform === "win32").for([true, false])(
             ),
           );
           for (const [index, completion] of completedReplies.entries()) {
+            const detail = completion.status === "rejected" ? completion.reason : "";
             expect
-              .soft(completion, expectedReplies[index]?.text)
+              .soft(completion, `${expectedReplies[index]?.text}\n${String(detail)}`)
               .toMatchObject({ status: "fulfilled" });
           }
           const streamInputs = provider.calls

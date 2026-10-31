@@ -33,6 +33,11 @@ import {
 } from "./session-row-projection-access.js";
 import type { SelectionRow } from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
+import {
+  prepareSessionRowSubagentArchive,
+  SessionRowSubagentArchivePending,
+  withCurrentSessionRowSubagentArchive,
+} from "./session-row-subagent-archive.js";
 import { resolveSessionVisibility } from "./session-sharing.js";
 import { prepareProjectedSessionList, selectSessionEntries } from "./session-utils-list.js";
 
@@ -238,12 +243,14 @@ export async function withTrustedPluginSessionFacts<T>(
       }
       const currentPrFacts = prFacts;
       const cache = authority ?? createReadScope("");
-      const snapshot = await projection.withSelectionPreparation(async () => {
+      const prepareSnapshot = async () => {
+        let subagentArchive: Awaited<ReturnType<typeof prepareSessionRowSubagentArchive>>;
         do {
           await projection.prepareSelection({ yieldForCatalog: true });
           await projection.prepareMembership();
+          subagentArchive = await prepareSessionRowSubagentArchive();
           assertAuthority();
-        } while (projection.needsSelectionPreparation());
+        } while (projection.needsSelectionPreparation() || !subagentArchive.isCurrent());
         const previous = cache.snapshot;
         const previousRoster = cache.roster;
         const previousFacts = cache.facts;
@@ -267,6 +274,7 @@ export async function withTrustedPluginSessionFacts<T>(
             now: at,
             metadataPrepared: true,
             visibility: authority?.visibility,
+            subagentArchive,
           });
           const selected = presentation.select(opts, () =>
             withAgentRosterFactsBatch(prepared.cfg, () => selectSessionEntries(filters)),
@@ -346,6 +354,7 @@ export async function withTrustedPluginSessionFacts<T>(
                   facts.finish();
                   return rows;
                 }),
+              { subagentArchive },
             );
             for (const { key, target, current } of batchRows) {
               updates.set(key, current);
@@ -360,6 +369,9 @@ export async function withTrustedPluginSessionFacts<T>(
               }
             }
           } catch (error) {
+            if (error instanceof SessionRowSubagentArchivePending) {
+              throw error;
+            }
             assertAuthority();
             complete = false;
             const unavailable = String(error).replace(/\s+/g, " ").slice(0, 300);
@@ -391,6 +403,9 @@ export async function withTrustedPluginSessionFacts<T>(
           }
         }
         assertAuthority();
+        if (!subagentArchive.isCurrent()) {
+          throw new SessionRowSubagentArchivePending();
+        }
         let retryAt = Infinity;
         for (const [key, retained] of currentPrFacts) {
           if (currentRoster.targets.has(key)) {
@@ -452,7 +467,10 @@ export async function withTrustedPluginSessionFacts<T>(
           }
         }
         return result!;
-      });
+      };
+      const snapshot = await projection.withSelectionPreparation(() =>
+        withCurrentSessionRowSubagentArchive(prepareSnapshot),
+      );
       const result = await run(snapshot);
       assertAuthority();
       return result;

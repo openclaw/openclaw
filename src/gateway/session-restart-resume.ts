@@ -2,6 +2,7 @@ import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { listRunningSessions } from "../agents/bash-process-registry.js";
 import {
   listLiveSubagentRootSessions,
+  prepareSubagentRootRequesterRead,
   resolveRootSubagentRequester,
 } from "../agents/subagents/registry/subagent-registry-read.js";
 import {
@@ -106,6 +107,7 @@ async function persistRunningSessions(
   const assertCurrent = () => params.signal?.throwIfAborted();
   assertCurrent();
   const sessions = new Map<string, SessionIdentity>();
+  let resolveRoot = resolveRootSubagentRequester;
   const add = (input: {
     sessionKey: string;
     agentId?: string;
@@ -114,7 +116,7 @@ async function persistRunningSessions(
     hadBackgroundExec?: true;
     needsResume?: boolean;
   }) => {
-    const root = resolveRootSubagentRequester(input.sessionKey, input.agentId);
+    const root = resolveRoot(input.sessionKey, input.agentId);
     const agentId =
       root.agentId ??
       parseAgentSessionKey(root.sessionKey)?.agentId ??
@@ -149,53 +151,61 @@ async function persistRunningSessions(
       }
     }
   };
-  for (const operation of activeSessionOperations()) {
-    assertCurrent();
-    if (operation.abortSignal.aborted) {
-      summary.record(
-        operation.agentId ??
-          parseAgentSessionKey(operation.key)?.agentId ??
-          resolveDefaultAgentId(params.cfg),
-        operation.key,
-        "already-aborted",
-      );
-      continue;
+  const collectLiveOwners = (visit: typeof add) => {
+    for (const operation of activeSessionOperations()) {
+      assertCurrent();
+      if (operation.abortSignal.aborted) {
+        summary.record(
+          operation.agentId ??
+            parseAgentSessionKey(operation.key)?.agentId ??
+            resolveDefaultAgentId(params.cfg),
+          operation.key,
+          "already-aborted",
+        );
+        continue;
+      }
+      const target = getSessionControllerEntryForOperation(operation).target;
+      visit({
+        sessionKey: operation.key,
+        agentId: operation.agentId,
+        sessionId: operation.sessionId,
+        storePath: target?.physicalStorePath ?? target?.storeScope,
+        // Completed replies can retain execution custody only to settle workspace uploads.
+        needsResume: !operation.result && !hasCommittedReplyOperationOutcome(operation),
+      });
     }
-    const target = getSessionControllerEntryForOperation(operation).target;
-    add({
-      sessionKey: operation.key,
-      agentId: operation.agentId,
-      sessionId: operation.sessionId,
-      storePath: target?.physicalStorePath ?? target?.storeScope,
-      // Completed replies can retain execution custody only to settle workspace uploads.
-      needsResume: !operation.result && !hasCommittedReplyOperationOutcome(operation),
-    });
-  }
-  for (const runId of listLiveAgentRunIds()) {
-    assertCurrent();
-    if (!hasAgentRunContextExecutionOwner(runId)) {
-      continue;
+    for (const runId of listLiveAgentRunIds()) {
+      assertCurrent();
+      if (!hasAgentRunContextExecutionOwner(runId)) {
+        continue;
+      }
+      const operation = findSessionControllerOperationByRunId(runId);
+      if (operation && hasCommittedReplyOperationOutcome(operation)) {
+        continue;
+      }
+      const run = getAgentRunContext(runId);
+      if (run?.sessionKey) {
+        visit({ sessionKey: run.sessionKey, agentId: run.agentId, sessionId: run.sessionId });
+      }
     }
-    const operation = findSessionControllerOperationByRunId(runId);
-    if (operation && hasCommittedReplyOperationOutcome(operation)) {
-      continue;
+    for (const root of listLiveSubagentRootSessions(resolveRoot)) {
+      assertCurrent();
+      visit(root);
     }
-    const run = getAgentRunContext(runId);
-    if (run?.sessionKey) {
-      add({ sessionKey: run.sessionKey, agentId: run.agentId, sessionId: run.sessionId });
+    for (const process of listRunningSessions()) {
+      assertCurrent();
+      const sessionKey = process.sessionKey ?? process.scopeKey;
+      if (sessionKey) {
+        visit({ sessionKey, agentId: process.agentId, hadBackgroundExec: true });
+      }
     }
-  }
-  for (const root of listLiveSubagentRootSessions()) {
-    assertCurrent();
-    add(root);
-  }
-  for (const process of listRunningSessions()) {
-    assertCurrent();
-    const sessionKey = process.sessionKey ?? process.scopeKey;
-    if (sessionKey) {
-      add({ sessionKey, agentId: process.agentId, hadBackgroundExec: true });
-    }
-  }
+  };
+  const ancestrySeeds = new Set<string>();
+  collectLiveOwners((input) => ancestrySeeds.add(input.sessionKey));
+  resolveRoot = await prepareSubagentRootRequesterRead([...ancestrySeeds]);
+  assertCurrent();
+  // A historical link never starts work, including owners that settled during preparation.
+  collectLiveOwners(add);
   const selectors = new Map<string, SessionIdentity[]>();
   for (const session of sessions.values()) {
     const key = JSON.stringify([session.agentId, session.storePath]);

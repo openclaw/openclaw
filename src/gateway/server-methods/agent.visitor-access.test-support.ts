@@ -4,6 +4,10 @@ import { expectDefined, isRecord } from "@openclaw/normalization-core";
 import { expect, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginStateKeyedStore } from "../../plugin-state/plugin-state-store.js";
+import {
+  bindLegacyPluginSdkResourceHost,
+  LegacyPluginSdkResourceHost,
+} from "../../plugins/legacy-sdk-resource-host.js";
 import { activatePluginRegistry } from "../../plugins/loader-shared.js";
 import { clearActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -155,19 +159,10 @@ export async function startVisitorGateway({
     "tools.invoke": expectDefined(toolsInvokeHandlers["tools.invoke"], "tools.invoke missing"),
     "users.list": expectDefined(usersHandlers["users.list"], "users.list handler missing"),
   };
-  const loaded = await loadGatewayPlugins({
-    cfg: config,
-    autoEnabledReasons: {},
-    workspaceDir,
-    env,
-    coreGatewayHandlers: handlers,
-    baseMethods: Object.keys(handlers),
-    pluginIds: ["visitor-access"],
-    resolveGatewayContext,
-    loadIntent: "startup",
-  });
-  const registry = loaded.pluginRegistry;
-  const catalog = await prepareUserProfileCatalog();
+  const sdkResourceHost = new LegacyPluginSdkResourceHost();
+  bindLegacyPluginSdkResourceHost(resolveGatewayContext, sdkResourceHost);
+  let loaded: Awaited<ReturnType<typeof loadGatewayPlugins>> | undefined;
+  let catalog: Awaited<ReturnType<typeof prepareUserProfileCatalog>> | undefined;
   let services: PluginServicesHandle | undefined;
   const stop = async () => {
     try {
@@ -176,12 +171,31 @@ export async function startVisitorGateway({
         expect(stopped.errors).toEqual([]);
       }
     } finally {
-      catalog.release();
-      loaded.retireGatewayRuntimeBindings();
-      await clearActivePluginRegistry(registry);
+      try {
+        catalog?.release();
+        loaded?.retireGatewayRuntimeBindings();
+        if (loaded) {
+          await clearActivePluginRegistry(loaded.pluginRegistry);
+        }
+      } finally {
+        await sdkResourceHost.close();
+      }
     }
   };
   try {
+    loaded = await loadGatewayPlugins({
+      cfg: config,
+      autoEnabledReasons: {},
+      workspaceDir,
+      env,
+      coreGatewayHandlers: handlers,
+      baseMethods: Object.keys(handlers),
+      pluginIds: ["visitor-access"],
+      resolveGatewayContext,
+      loadIntent: "startup",
+    });
+    const registry = loaded.pluginRegistry;
+    catalog = await prepareUserProfileCatalog();
     const methods = createGatewayMethodRegistry(
       createCoreGatewayMethodDescriptors(handlers),
       registry,

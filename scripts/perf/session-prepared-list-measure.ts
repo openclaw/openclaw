@@ -168,6 +168,7 @@ const [
   changes,
   projections,
   lists,
+  searchIdentity,
   foreground,
   plugins,
   pluginRegistry,
@@ -183,6 +184,7 @@ const [
   import("../../src/sessions/session-row-changes.js"),
   import("../../src/gateway/session-row-projection.js"),
   import("../../src/gateway/session-utils-list.js"),
+  import("../../src/gateway/session-search-identities.js"),
   import("../../src/gateway/session-projection-work.js"),
   import("../../src/plugins/runtime.js"),
   import("../../src/plugins/registry-empty.js"),
@@ -502,7 +504,10 @@ try {
     await projection.ensureMaterialized();
   }
   const searchIdentities = values["search-workload"]
-    ? await lists.prepareSessionSearchIdentityNames(projection, {}, true)
+    ? await searchIdentity.prepareSessionSearchIdentityNames(
+        lists.prepareSessionRowSelection(projection, {}, { metadataPrepared: true, ordered: true }),
+        projection.state.scope({}).agentId,
+      )
     : undefined;
   const rows = projection.selectEntries({ agentId: "main" });
   if (values["sort-rows"]) {

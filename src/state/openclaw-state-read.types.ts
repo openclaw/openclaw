@@ -3,7 +3,10 @@ import type {
   AcpSessionReadInput,
 } from "../acp/runtime/session-meta-read.types.js";
 import type { McpOAuthReadOnlyOperations } from "../agents/mcp-oauth-store.kernel.js";
-import type { SubagentRunReadRecord } from "../agents/subagents/registry/subagent-registry-read.types.js";
+import type {
+  SubagentArchiveReadScope,
+  SubagentRunReadRecord,
+} from "../agents/subagents/registry/subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import type { ExecutionIdentityInspectionQuery } from "../audit/execution-identity-inspection.types.js";
 import type { ChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
@@ -118,6 +121,11 @@ export type OpenClawStateReadCommand =
         | { kind: "maintenance" }
         | { kind: "session"; sessionKey: string }
         | { kind: "ids"; runIds: readonly string[] }
+        | {
+            kind: "archive";
+            scope: SubagentArchiveReadScope;
+            projection: "full" | "sessionList";
+          }
         | {
             kind: "descendants";
             sessionKeys: readonly string[];

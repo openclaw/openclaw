@@ -112,6 +112,18 @@ execution resumption. Persisted records alone do not prove a live executor, gran
 permissions, or launch another model turn. Already-produced outbound messages and
 media keep their delivery queue.
 
+Completed `cleanup: "keep"` run-mode task records remain in the resident registry for 30
+days after completion. Once delivery and cleanup obligations have settled, the
+minute maintenance sweep moves older records into archive storage in bounded
+batches. This does not delete their results, sessions, transcripts, attachments,
+or worktrees. Existing task inspection, listing, and status APIs read archived
+records on demand. Sending a follow-up restores the selected task through the
+registry owner before creating its new execution; reading history alone never
+restarts work. Pending delivery, yielded tasks, and incomplete cleanup remain
+resident until their obligations settle. Session-mode registry bookkeeping keeps
+its existing five-minute retirement policy. Session deletion deadlines and collector
+retention continue to use their existing policies.
+
 When shutdown begins, an active retention sweep finishes its current cleanup
 instead of draining the entire expired backlog. Remaining run records stay saved
 for cleanup after restart, including partially cleaned collector groups.

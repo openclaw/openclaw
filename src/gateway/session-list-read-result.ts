@@ -1,8 +1,21 @@
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import { prepareOperatorModelPresentation } from "./operator-model-presentation.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js";
+import { getSessionListBaseMiss, retainSessionListBaseMiss } from "./session-list-diagnostics.js";
+import type { SessionEntrySelection, SessionListFilterParams } from "./session-list-filters.js";
+import type { SessionRowGeneration } from "./session-row-identity.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
-import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
+import {
+  prepareProjectedSessionPresentation,
+  shareSidebarSessionRows,
+} from "./session-row-presentation.js";
 import type { MaterializedRow } from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
+import { getSessionDefaults } from "./session-utils-model.js";
+import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
 
 type SessionListRead = {
   projection: WeakRef<SessionRowProjection>;
@@ -128,4 +141,71 @@ export async function withCurrentSessionListRows<T>(
       return consume(visible);
     },
   );
+}
+
+export function buildSessionsListResult(
+  params: Pick<SessionListFilterParams, "cfg" | "opts" | "modelCatalog">,
+  list: SessionEntrySelection & { now: number; storePath: string },
+  { sessions, rowHistory }: { sessions: GatewaySessionRow[]; rowHistory?: SessionRowGeneration[] },
+  policyConfig: OpenClawConfig,
+  client?: GatewayClient | null,
+): SessionsListResult {
+  const { cfg, opts, modelCatalog } = params;
+  // The defaults projection uses the same agent identity as getSessionDefaults:
+  // the requested agent when scoped, otherwise the legacy compatibility agent.
+  // Legacy plain-array catalogs (direct list callers) pass through
+  // unchanged; per-agent maps resolve by the same identity.
+  const defaultsAgentId = normalizeAgentId(
+    opts.agentId || (tryResolveLegacyCompatibilityAgentId(cfg) ?? LEGACY_IMPLICIT_AGENT_ID),
+  );
+  const preparedDefaultsCatalog =
+    modelCatalog instanceof Map ? modelCatalog.get(defaultsAgentId) : undefined;
+  const defaultsCatalog =
+    modelCatalog instanceof Map ? preparedDefaultsCatalog?.entries : modelCatalog;
+  const metadataSnapshot = readPreparedGatewayModelMetadata(cfg, preparedDefaultsCatalog);
+  const defaults = getSessionDefaults(cfg, defaultsCatalog, {
+    ...(opts.agentId ? { agentId: opts.agentId } : {}),
+    allowPluginNormalization: false,
+    providerPolicySource: preparedDefaultsCatalog?.pluginRegistry ?? "active",
+    metadataSnapshot,
+  });
+  const policy =
+    client === undefined
+      ? undefined
+      : prepareOperatorModelPresentation({
+          cfg,
+          policyConfig,
+          client,
+          metadataSnapshot,
+        })?.forAgent(defaultsAgentId, defaultsCatalog);
+  const sharedRows =
+    opts.rowMode === "sidebar" || opts.ifRowsRevision !== undefined
+      ? shareSidebarSessionRows(sessions, opts.ifRowsRevision, rowHistory)
+      : { sessions };
+  const result = {
+    ts: list.now,
+    path: list.storePath,
+    count: sessions.length,
+    totalCount: list.totalCount,
+    limitApplied: list.limitApplied,
+    offset: list.offset > 0 ? list.offset : undefined,
+    nextOffset: list.nextOffset,
+    hasMore: list.hasMore,
+    owners: list.ownerFacet,
+    ...(list.ownerSessionCounts ? { ownerSessionCounts: list.ownerSessionCounts } : {}),
+    involvingProfileId: list.involvingProfileId,
+    ...(list.activityExpiresAt !== undefined ? { activityExpiresAt: list.activityExpiresAt } : {}),
+    ...(list.activityPulse ? { activityPulse: list.activityPulse } : {}),
+    ...(list.people
+      ? {
+          people: list.people,
+          peopleIncomplete: list.peopleIncomplete,
+          peopleSessionCount: list.peopleSessionCount,
+        }
+      : {}),
+    defaults: policy ? policy.defaults(defaults) : defaults,
+    ...sharedRows,
+  };
+  retainSessionListBaseMiss(result, getSessionListBaseMiss(sharedRows));
+  return result;
 }

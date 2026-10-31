@@ -337,9 +337,8 @@ it.for(["browser", "system"] as const)(
       );
       const registration = getEmbeddedRunAttachment(handle);
       expect(registration?.toolAuthority?.source).toBe("reply");
-      expect(readAdmittedRunOperatorAuthority(attempt.admittedRunContext) !== undefined).toBe(
-        source === "browser",
-      );
+      const admittedAuthority = readAdmittedRunOperatorAuthority(attempt.admittedRunContext);
+      expect(admittedAuthority !== undefined).toBe(source === "browser");
       expect(registration?.operationalRunInstance).toBe(
         attempt.admittedRunContext.operationalRunInstance,
       );
@@ -362,6 +361,7 @@ it.for(["browser", "system"] as const)(
       expect(await withinTest(disposition.promise, signal)).toBe(steered ? "steered" : "followup");
       expect(handle.terminalReplyExpectation).toBe(expectedReply);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(steered ? 0 : 1);
+      expect(readAdmittedRunOperatorAuthority(attempt.admittedRunContext)).toBe(admittedAuthority);
     } finally {
       // The fixture prevents completion until release; only then does its response budget begin.
       const settled =

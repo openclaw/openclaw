@@ -147,8 +147,10 @@ vi.mock("./acp-spawn-parent-stream.js", () => ({
   startAcpSpawnParentStreamRelay: hoisted.startAcpSpawnParentStreamRelayMock,
 }));
 
+// mock-isolation: ACP admission owns synthetic capacity and registration without the live registry.
 vi.mock("../registry/subagent-registry.js", () => ({
-  countActiveRunsForSession: hoisted.countActiveRunsForSessionMock,
+  prepareSubagentActiveRunCount: async (key: string, options?: unknown) => () =>
+    hoisted.countActiveRunsForSessionMock(key, options),
   // ACP registration deliberately moved behind the shared spawn pipeline.
   registerSubagentRun: hoisted.registerSubagentRunMock,
 }));

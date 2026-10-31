@@ -111,7 +111,7 @@ function sampledBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
 try {
   seed();
   const context = captureOpenClawStateWorkerContext();
-  const prepare = () => prepareSubagentRegistrationRows(child, [selected], context);
+  const prepare = () => prepareSubagentRegistrationRows(child, [selected], context, "main");
   let measurement: object;
   const hostLoad = loadavg();
   if (values.mode === "retention") {

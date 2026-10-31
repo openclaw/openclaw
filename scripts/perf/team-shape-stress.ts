@@ -77,6 +77,7 @@ export function parseStressOptions(args: string[]) {
       "worktree-tool-churn": { type: "boolean" },
       "auth-availability-storm": { type: "boolean" },
       "exec-io-storm": { type: "boolean" },
+      "kept-run-age-days": { type: "string", default: "0" },
       port: { type: "string" },
       help: { type: "boolean" },
     },
@@ -143,6 +144,7 @@ export function parseStressOptions(args: string[]) {
     worktreeToolChurn: values["worktree-tool-churn"] ?? false,
     authAvailabilityStorm: values["auth-availability-storm"] ?? false,
     execIoStorm: values["exec-io-storm"] ?? false,
+    keptRunAgeDays: integer("kept-run-age-days", 0),
     port,
     help: values.help,
   };
@@ -201,6 +203,7 @@ async function main() {
   [--warmup-ms 60000 --seed 1711 --transcript-mib 128]
   [--aa-pairs 0: insert a baseline/baseline control after each of the first N pairs]
   [--operator-model-policy --auth-availability-storm]
+  [--kept-run-age-days 100: settled ordinary keep runs spread across days 1..100]
   --smoke-seconds 30 is setup proof only, never performance evidence.
 Timing and allocation are separate fresh-fixture passes. Pairs run AB then BA.
 Without --base, run candidate once per mode. See team-shape-stress.md.`);
@@ -271,6 +274,8 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
             "scripts/perf/team-shape-stress.ts",
             "--fixture-only",
             ...(options.authAvailabilityStorm ? ["--auth-availability-storm"] : []),
+            "--kept-run-age-days",
+            String(options.keptRunAgeDays),
             "--output",
             state,
             "--port",

@@ -14,6 +14,7 @@ import {
 import {
   acceptedFullSnapshot,
   assertSubagentReadContext,
+  getSubagentArchiveRevision,
   consumeSubagentRuns,
   getPersistedSubagentRunsSnapshot,
   getSessionListLookup,
@@ -21,11 +22,15 @@ import {
   prepareSubagentRunsCache,
   readCompactSubagentRuns,
   readFullSubagentRuns,
+  readArchivedSubagentRuns,
   shouldReadPersistedSubagentRuns,
   selectSubagentCacheStateForRead,
   type SubagentRunsCache,
 } from "./subagent-registry-read-cache.js";
-import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
+import type {
+  SubagentArchiveReadScope,
+  SubagentRunReadRecord,
+} from "./subagent-registry-read.types.js";
 import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSubagentRunPayloadEvicted } from "./subagent-run-payload-facts.js";
 import { collectSubagentSessionReadKeys } from "./subagent-session-read-scope.js";
@@ -36,7 +41,7 @@ export type SubagentRunReadSelection = {
 };
 
 export type SubagentRunReadScope =
-  | { runIds: ReadonlySet<string>; yieldedChildren?: boolean }
+  | { runIds: ReadonlySet<string>; yieldedChildren?: boolean; exact?: boolean }
   | { childSessionKeys: readonly string[] }
   | { sessionKeys: readonly string[]; descendants: boolean }
   | "all";
@@ -153,11 +158,81 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
       assertSubagentReadContext(context);
     }
   };
-  const withLiveFacts = (compact: Map<string, SubagentRunReadRecord>) =>
-    mergeSubagentRunReadScope(inMemoryRuns, compactCache, compact, readScope);
   const compact = context
     ? await prepareSubagentRunsCache(compactCache, readCompactSubagentRuns)
     : new Map<string, SubagentRunReadRecord>();
+  const archiveRevision = getSubagentArchiveRevision();
+  const knownIds = new Set<string>();
+  if (readScope !== "all" && "runIds" in readScope && readScope.exact) {
+    for (const entry of mergeSubagentRunReadScope(
+      inMemoryRuns,
+      compactCache,
+      compact,
+      readScope,
+    ).values()) {
+      knownIds.add(entry.runId);
+    }
+  }
+  const archiveScope: SubagentArchiveReadScope =
+    readScope === "all"
+      ? { kind: "all" }
+      : "runIds" in readScope
+        ? {
+            kind: "ids",
+            runIds: readScope.exact
+              ? [...readScope.runIds].filter((id) => !knownIds.has(id))
+              : [...readScope.runIds],
+            exact: readScope.exact,
+          }
+        : "childSessionKeys" in readScope
+          ? { kind: "children", sessionKeys: readScope.childSessionKeys }
+          : {
+              kind: "sessions",
+              ...readScope,
+              liveTopology: getSubagentSessionReadLookup(inMemoryRuns).captureTopology(),
+            };
+  const archivedPayloads =
+    context && archiveScope.kind === "ids"
+      ? await readArchivedSubagentRuns(context, archiveScope, "full")
+      : new Map<string, SubagentRunRecord>();
+  const archived = archivedPayloads.size
+    ? new Map(
+        [...archivedPayloads].map(([id, entry]) => [id, immutableSubagentRunSessionList(entry)]),
+      )
+    : context && archiveScope.kind !== "ids"
+      ? await readArchivedSubagentRuns(context, archiveScope, "sessionList")
+      : new Map<string, SubagentRunReadRecord>();
+  const withLiveFacts = (current: Map<string, SubagentRunReadRecord>) => {
+    // Select hot rows through their retained lookup before merging request-owned archive rows.
+    const hotScope =
+      readScope !== "all" && "sessionKeys" in readScope && readScope.descendants && archived.size
+        ? {
+            ...readScope,
+            sessionKeys: [
+              ...readScope.sessionKeys,
+              ...[...archived.values()].map((entry) => entry.childSessionKey),
+            ],
+          }
+        : readScope;
+    const hot = mergeSubagentRunReadScope(inMemoryRuns, compactCache, current, hotScope);
+    if (!archived.size) {
+      return hot;
+    }
+    const durable = new Map(
+      [...archived, ...hot]
+        .filter(([id]) => archived.has(id) || current.has(id))
+        .toSorted(
+          ([, left], [, right]) =>
+            left.createdAt - right.createdAt ||
+            Buffer.compare(Buffer.from(left.runId), Buffer.from(right.runId)),
+        ),
+    );
+    // Match the original durable ordering, then append not-yet-persisted live registrations.
+    for (const [id, entry] of hot) {
+      durable.set(id, entry);
+    }
+    return mergeSubagentRunReadScope(inMemoryRuns, compactCache, durable, readScope);
+  };
   const initialSnapshot = withLiveFacts(compact);
   const selected = select(initialSnapshot);
   const scope = selectionScope(selected);
@@ -183,6 +258,24 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
     context ??= captureOpenClawStateWorkerContext();
   }
   if (context) {
+    const archivedIds = [...archived.values()]
+      .filter((entry) => scope.matches(entry) && !archivedPayloads.has(entry.runId))
+      .map((entry) => entry.runId);
+    if (archivedIds.length) {
+      const payloads = await readArchivedSubagentRuns(
+        context,
+        { kind: "ids", runIds: archivedIds, exact: true },
+        "full",
+      );
+      for (const [runId, entry] of payloads) {
+        archivedPayloads.set(runId, entry);
+      }
+    }
+    for (const [runId, entry] of archivedPayloads) {
+      if (!preparedPayloads.has(runId) && scope.matches(entry)) {
+        preparedPayloads.set(runId, entry);
+      }
+    }
     const scopes = [
       {
         kind: "ids" as const,
@@ -211,6 +304,18 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
   return {
     consume(consume) {
       assertCurrent();
+      if (!privateSnapshot && archiveRevision !== getSubagentArchiveRevision()) {
+        // Unrelated archival does not retire findings owned by still-resident exact runs.
+        const residentExactScope =
+          readScope !== "all" &&
+          "runIds" in readScope &&
+          readScope.exact &&
+          !readScope.yieldedChildren &&
+          [...readScope.runIds].every((runId) => inMemoryRuns.has(runId));
+        if (!residentExactScope) {
+          return { ready: false };
+        }
+      }
       const currentFull = context ? acceptedFullSnapshot(fullCache, context) : undefined;
       for (const [runId, entry] of residentPayloads) {
         const current = inMemoryRuns.get(runId) ?? currentFull?.get(runId);
@@ -233,6 +338,7 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
       const full = mergeSelectedFullRuns(fullCache, inMemoryRuns, preparedPayloads, matches, {
         context,
         runIds: new Set(snapshot.keys()),
+        archivedRuns: archivedPayloads,
       });
       for (const entry of full.values()) {
         if (inMemoryRuns.get(entry.runId) !== entry) {
@@ -263,7 +369,17 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
       }
       return {
         ready: true,
-        value: consumeSubagentRuns(full, (runs) => consume(current, runs)),
+        value: consumeSubagentRuns(
+          archived.size
+            ? new Map(
+                [...snapshot.keys()].flatMap((id) => {
+                  const entry = full.get(id);
+                  return entry ? [[id, entry]] : [];
+                }),
+              )
+            : full,
+          (runs) => consume(current, runs),
+        ),
       };
     },
   };
@@ -293,7 +409,7 @@ export async function prepareSubagentSessionRunReadSnapshot(params: {
     },
     { context, current: true },
   );
-  if (reply && (reply.projection === "maintenance" || !reply.descendants)) {
+  if (reply && (reply.projection !== undefined || !reply.descendants)) {
     throw new Error("Subagent descendant read omitted its selection");
   }
   const persisted = reply?.runs ?? new Map<string, SubagentRunRecord>();

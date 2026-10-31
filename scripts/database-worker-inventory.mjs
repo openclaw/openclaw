@@ -2423,9 +2423,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["writeSubagentRunValuesInDatabase"],
+        operations: ["writeSubagentRunValuesInDatabase", "archiveSubagentRunValuesInDatabase"],
         evidence:
-          "Registry persistence and completion admission workers invoke the batch write kernel after the host FIFO owner plans from committed receipts. Completion mutation writes are reached only through the admission worker; no native writer caller remains.",
+          "Registry persistence and completion admission workers invoke the batch write kernel after the host FIFO owner plans from committed receipts. Completion mutation writes are reached only through the admission worker; no native writer caller remains. Archival is called only by subagent-registry.store.worker.ts inside its persistChanges transaction.",
       },
     ],
   ],
@@ -2438,10 +2438,11 @@ const reviewedOperations = new Map([
           "readSubagentRunRow",
           "readSubagentSessionListRows",
           "readSubagentRegistryRows",
+          "selectSubagentArchiveSessionRunIds",
           "loadSubagentRunsForSessionsInDatabase",
         ],
         evidence:
-          "Exact rows serve completion admission workers. Session-list and child reads serve openclaw-state-read.worker.ts. Registry rows serve store.worker.ts maintenance/versioned/session reads or completion-mutation.kernel.ts through completion-admission.worker.ts. Descendant selection is called only by store.worker.ts; the native digest comparison has been removed.",
+          "Exact rows serve completion admission workers. Session-list and child reads serve openclaw-state-read.worker.ts. Registry rows serve store.worker.ts maintenance/versioned/session reads or completion-mutation.kernel.ts through completion-admission.worker.ts. Descendant selection is called only by store.worker.ts; the native digest comparison has been removed. Indexed archive scope selection serves loadSubagentArchivedRunsInDatabase, called only by the store worker's subagents.runs archive read.",
       },
     ],
   ],

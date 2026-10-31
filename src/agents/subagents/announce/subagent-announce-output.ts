@@ -345,7 +345,9 @@ export async function captureSubagentCompletionReply(
 type AnnounceRunReader = (runId: string) => SubagentRunRecord | undefined;
 
 async function prepareAnnounceRunReader(runIds: string[]): Promise<AnnounceRunReader> {
-  const prepared = await prepareSubagentRunsSnapshotForRunIds(subagentRuns, runIds);
+  const prepared = await prepareSubagentRunsSnapshotForRunIds(subagentRuns, runIds, {
+    exact: true,
+  });
   return (runId) => {
     const current = prepared.consume((runs) => runs.get(runId));
     return current.ready ? current.value : undefined;

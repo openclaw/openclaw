@@ -14,9 +14,17 @@ import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-cont
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../../../state/openclaw-agent-write-admission.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
+import type { SubagentAdminKillParams } from "./subagent-control.types.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
+import { readFullSubagentRuns } from "./subagent-registry-read-cache.js";
+import {
+  getLatestLiveSubagentRunByChildSessionKey,
+  getLatestSubagentRunByChildSessionKey,
+} from "./subagent-registry-read.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export type SubagentKillSession = {
@@ -28,6 +36,39 @@ export type SubagentKillSession = {
   withPublication: <T>(run: () => Promise<T>) => Promise<T>;
   release: () => void | Promise<void>;
 };
+
+export function readSubagentKillRun(params: SubagentAdminKillParams) {
+  const context = captureOpenClawStateWorkerContext();
+  const id = params.expectedRunId;
+  const resident = id
+    ? subagentRuns.get(id)
+    : getLatestLiveSubagentRunByChildSessionKey(params.sessionKey, undefined, params.agentId);
+  const taskId = params.expectedTaskRunId?.trim();
+  const owner = params.expectedOwnerKey?.trim();
+  const select = (entry: SubagentRunRecord | undefined | null) => ({
+    context,
+    coldRunIds: new Set<string>(!resident && entry ? [entry.runId] : []),
+    entry:
+      entry &&
+      entry.childSessionKey === params.sessionKey &&
+      (!id || entry.runId === id) &&
+      (!taskId || (entry.taskRunId ?? entry.runId) === taskId) &&
+      (params.expectedGeneration === undefined || entry.generation === params.expectedGeneration) &&
+      (!owner || entry.requesterSessionKey === owner)
+        ? entry
+        : undefined,
+  });
+  if (resident) {
+    return select(resident);
+  }
+  return (
+    id
+      ? readFullSubagentRuns(context, { kind: "ids", runIds: [id] }, { current: true }).then(
+          (rows) => rows.get(id),
+        )
+      : getLatestSubagentRunByChildSessionKey(params.sessionKey, params.agentId)
+  ).then(select);
+}
 
 export function prepareSubagentKillSessionReads(
   preparations: Array<SubagentKillSession["prepareRead"] | undefined>,

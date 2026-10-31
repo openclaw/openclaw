@@ -37,8 +37,10 @@ import {
 import { resolveSpawnAdmission } from "../spawn-plan.js";
 import { resolveRequesterDeliveryThreadId } from "../spawn-requester-origin.js";
 import { resolveSpawnedWorkspaceInheritance } from "../spawned-context.js";
-import { prepareSubagentSessionListReadCache } from "../subagents/registry/subagent-registry-state.js";
-import { registerSubagentRun } from "../subagents/registry/subagent-registry.js";
+import {
+  registerSubagentRun,
+  prepareSubagentActiveRunCount,
+} from "../subagents/registry/subagent-registry.js";
 import { getSubagentDepthFromSessionStoreInWorker } from "../subagents/spawn/subagent-depth.js";
 import { terminateAcceptedCollectorRun } from "../subagents/spawn/subagent-spawn-cleanup.js";
 import {
@@ -238,9 +240,9 @@ export async function maybeSpawnVisibleSession(params: {
         'context="fork" currently requires the same target agent as the requester; use context="isolated" for cross-agent spawns.',
     };
   }
-  if (!params.options?.countActiveRuns) {
-    await prepareSubagentSessionListReadCache();
-  }
+  const countActiveRuns =
+    params.options?.countActiveRuns ??
+    (await prepareSubagentActiveRunCount(requesterKey, { collect: false, requesterAgentId }));
   const resolveAdmission = (pendingChildren = 0) =>
     resolveSpawnAdmission({
       cfg,
@@ -251,7 +253,7 @@ export async function maybeSpawnVisibleSession(params: {
       requestedAgentId: params.requestedAgentId,
       configuredAgentIds: listAgentIds(cfg),
       additionalActiveChildren: pendingChildren,
-      countActiveRuns: params.options?.countActiveRuns,
+      activeChildren: countActiveRuns(requesterKey, { collect: false, requesterAgentId }),
     });
   const admission = resolveAdmission();
   if (!admission.ok) {

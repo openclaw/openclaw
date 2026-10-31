@@ -68,6 +68,11 @@ export type KillTree = KillBinding & {
 export type KillSelection = {
   cfg: OpenClawConfig;
   runs: Iterable<SubagentRunRecord>;
+  /** Discover/promote archive roots only after resident reservation holds are captured. */
+  prepareRuns?: (
+    runs: readonly SubagentRunRecord[],
+    controller?: KillSelection["controller"],
+  ) => Promise<readonly SubagentRunRecord[]>;
   exactRunSelection?: boolean;
   assertCurrent?: () => void;
   prepareRead?: () => Promise<void> | undefined;
@@ -318,10 +323,18 @@ export async function withSubagentKillScope<T>(
     owner?: KillSelection["controller"],
     parent?: KillBinding,
     ownsRoot?: (entry: SubagentRunRecord) => boolean,
+    prepareRuns?: KillSelection["prepareRuns"],
   ) => {
     const pending: PendingKillTree[] = [];
-    capture(pending, runs, trees, owner, parent, ownsRoot);
+    const initial = [...runs];
+    const controller = owner ? { ...owner } : undefined;
+    capture(pending, initial, trees, controller, parent, ownsRoot);
     captureResidentDescendants(pending);
+    if (prepareRuns) {
+      const prepared = await prepareRuns(initial, controller);
+      capture(pending, prepared, trees, controller, parent, ownsRoot);
+      captureResidentDescendants(pending);
+    }
     // Hold every resident target before preparing the caller's source generation.
     const preparation = params.prepareRead?.();
     if (preparation) {
@@ -502,7 +515,14 @@ export async function withSubagentKillScope<T>(
         }
       });
     }
-    await select(params.runs, trees, params.controller, undefined, params.ownsRoot);
+    await select(
+      params.runs,
+      trees,
+      params.controller,
+      undefined,
+      params.ownsRoot,
+      params.prepareRuns,
+    );
     const scope: KillScope = {
       cancellationControl,
       stateContext,

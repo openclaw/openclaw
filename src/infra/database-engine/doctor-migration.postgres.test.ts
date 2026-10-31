@@ -251,18 +251,8 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
     `);
   }
 
-  async function prepare(fail = false, provenance = true) {
-    // Build an honestly absent optional fragment, rather than dropping a sealed table.
-    await prepareSource(
-      provenance
-        ? predecessor
-        : {
-            ...predecessor,
-            postgresFragments: predecessor.postgresFragments?.filter(
-              ({ id }) => id !== "agent_provenance",
-            ),
-          },
-    );
+  async function prepare(fail = false) {
+    await prepareSource(predecessor);
     const registered = originalMigrations!.find((migration) => migration.version === target)!;
     stateEngineSchema.postgresMigrations = [
       {
@@ -365,7 +355,19 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
   it.each([true, false])(
     "migrates installed Template facts from v35 with optional provenance present: %s",
     async (provenance) => {
-      await prepare(false, provenance);
+      stateEngineSchema.postgresMigrations = originalMigrations;
+      const sourceSchema = {
+        ...stateEngineSchema,
+        ...originalMigrations!.find((migration) => migration.version === 36)!.fromSchema,
+        version: 35,
+      };
+      // Preserve historical optional-fragment absence before catalog admission.
+      await prepareSource({
+        ...sourceSchema,
+        postgresFragments: provenance
+          ? sourceSchema.postgresFragments
+          : sourceSchema.postgresFragments?.filter(({ id }) => id !== "agent_provenance"),
+      });
       await client.query(`
         INSERT INTO "${namespace}".claw_package_refs VALUES (
           'starter', 'skill', 'clawhub', '@fixture/claw', '0.1.1', 'sha256:claw',
@@ -377,8 +379,8 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
             : ""
         }
       `);
-      expect((await runDoctor()).warnings).toEqual([]);
-      expect(admit(stateEngineSchema)?.version).toBe(36);
+      expect((await runDoctor(35)).warnings).toEqual([]);
+      expect(admit(stateEngineSchema)?.version).toBe(target);
       expect(
         (
           await client.query(`SELECT schema_version, origin, package_integrity

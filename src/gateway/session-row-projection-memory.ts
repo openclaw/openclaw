@@ -142,7 +142,7 @@ export async function withMemorySessionRows<T>(
         const relatedRows: NonNullable<Row["preparedPrivate"]>["relatedRows"] = {};
         const relatedKeys = new Set([
           entry.parentSessionKey || resolveSessionParentSessionKey(query.key),
-          ...listSubagentSessionListRunsForControllers([query.key]).map(
+          ...(await listSubagentSessionListRunsForControllers([query.key])).map(
             (run) => run.childSessionKey,
           ),
         ]);

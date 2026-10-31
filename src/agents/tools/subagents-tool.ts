@@ -13,7 +13,7 @@ import { optionalPositiveIntegerSchema, optionalStringEnum } from "../schema/typ
 import { resolveSubagentChildAgentId } from "../subagents/registry/subagent-child-owner-match.js";
 import {
   ensureSubagentControllerOwnsRun,
-  listControlledSubagentRunFacts,
+  prepareSubagentControlRunFacts,
   resolveSubagentControllerIdentity,
 } from "../subagents/registry/subagent-control-scope.js";
 import {
@@ -107,6 +107,7 @@ function mapRun(
 function waitForSelectedRuns(params: {
   runIds: string[];
   readRuns: (snapshot: ReadonlyMap<string, SubagentRunRecord>) => SubagentRunRecord[];
+  prepareRead: () => Promise<void> | undefined;
   timeoutMs: number;
   signal?: AbortSignal;
   pendingInput?: AgentToolPendingInput;
@@ -166,16 +167,16 @@ function waitForSelectedRuns(params: {
           return;
         }
         try {
-          const compactReady = getSubagentSessionListReadSnapshotIdentity();
+          const scopePreparation = params.prepareRead();
           // Another reader's accepted recovery also keeps custody through abort.
-          if (!compactReady || !prepared) {
-            preparation = !compactReady
-              ? prepareSubagentSessionListReadCache()
-              : prepareSubagentRunsSnapshotForRunIds(subagentRuns, params.runIds, {
-                  yieldedChildren: true,
-                }).then((snapshot) => {
-                  prepared = snapshot;
-                });
+          if (scopePreparation || !prepared) {
+            preparation =
+              scopePreparation ??
+              prepareSubagentRunsSnapshotForRunIds(subagentRuns, params.runIds, {
+                yieldedChildren: true,
+              }).then((snapshot) => {
+                prepared = snapshot;
+              });
             void preparation.then(
               () => {
                 preparation = undefined;
@@ -246,6 +247,7 @@ function waitForSelectedRuns(params: {
 export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTool {
   const readScope = (
     readController: ReturnType<typeof createSubagentControllerRead>["read"],
+    facts: Awaited<ReturnType<typeof prepareSubagentControlRunFacts>>,
     selectedRunId?: string,
   ) => {
     const cfg = opts.config ?? getRuntimeConfig();
@@ -266,7 +268,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
         continue;
       }
       visited.add(identity);
-      const entries = listControlledSubagentRunFacts(
+      const entries = facts.list(
         current.controllerSessionKey,
         current.controllerAgentId,
         cfg,
@@ -343,18 +345,37 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
         agentId: opts.agentId,
         assertCurrent: assertSelection,
       });
-      const readCurrentScope = () => readScope(controllerRead.read, requestedRunId);
+      let controlFacts: Awaited<ReturnType<typeof prepareSubagentControlRunFacts>> | undefined;
+      let preparedController: string | undefined;
+      const readCurrentScope = () => {
+        if (!controlFacts) {
+          throw new Error("Subagent control facts must be prepared before reading");
+        }
+        return readScope(controllerRead.read, controlFacts, requestedRunId);
+      };
       const prepareRead = () => {
         assertSelection();
         if (!getSubagentSessionListReadSnapshotIdentity()) {
           return prepareSubagentSessionListReadCache();
         }
-        return controllerRead.prepare();
+        const pending = controllerRead.prepare();
+        if (pending) {
+          return pending;
+        }
+        const controller = controllerRead.read();
+        const identity = JSON.stringify([
+          controller.controllerAgentId,
+          controller.controllerSessionKey,
+        ]);
+        if (!controlFacts?.isCurrent() || preparedController !== identity) {
+          return prepareSubagentControlRunFacts(controller.controllerSessionKey).then((facts) => {
+            controlFacts = facts;
+            preparedController = identity;
+          });
+        }
+        return undefined;
       };
       try {
-        for (let pending = prepareRead(); pending; pending = prepareRead()) {
-          await pending;
-        }
         signal?.throwIfAborted();
         if (action === "wait") {
           const runIds = [...new Set(readStringArrayParam(params, "runIds", { required: true }))];
@@ -366,6 +387,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
             action,
             ...(await waitForSelectedRuns({
               runIds,
+              prepareRead,
               readRuns: (snapshot) => {
                 const visible = new Set(readCurrentScope().readable.map((entry) => entry.runId));
                 return [...snapshot.values()].filter((entry) => visible.has(entry.runId));
@@ -376,6 +398,9 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
               pendingInput: getAgentToolExecutionContext()?.pendingInput,
             })),
           });
+        }
+        for (let pending = prepareRead(); pending; pending = prepareRead()) {
+          await pending;
         }
         if (action === "list") {
           const cfg = opts.config ?? getRuntimeConfig();

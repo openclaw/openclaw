@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync, constants } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as sqliteQueries from "../../../infra/kysely-sync.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../infra/kysely-sync.js";
@@ -29,6 +30,7 @@ import {
 } from "./subagent-registry.store.released-reader.test-support.js";
 import {
   readSubagentRun,
+  loadSubagentArchivedRunsInDatabase,
   loadSubagentRunsForChildSessionFromSqlite,
   loadSubagentSessionListRunsFromSqlite,
   loadSubagentRunsForSessionsInDatabase,
@@ -77,6 +79,91 @@ describe("subagent registry sqlite store", () => {
     if (tempStateDir) {
       await fs.rm(tempStateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
       tempStateDir = null;
+    }
+  });
+
+  it("reads only the requested archive closure and preserves moved child generations", () => {
+    const root = "agent:main:main";
+    const child = (name: string) => `agent:main:subagent:${name}`;
+    const run = (runId: string, requester: string, target: string) =>
+      createRun({ runId, requesterSessionKey: requester, childSessionKey: target });
+    const unrelated = Array.from({ length: 64 }, (_, index) =>
+      run(`unrelated-${index}`, child("outside"), child(`unrelated-${index}`)),
+    );
+    const archived = [
+      run("a", child("outside"), child("a")),
+      run("b", child("b"), child("c")),
+      run("c", child("d"), child("e")),
+      run("d", child("e"), root),
+      run("moved", child("elsewhere"), child("a")),
+      ...unrelated,
+    ];
+    archived[0]!.controllerSessionKey = root;
+    saveRuns(...archived, run("hot", child("a"), child("b")));
+    runOpenClawStateWriteTransaction(({ db }) => {
+      const stateDb =
+        getNodeSqliteKysely<
+          Pick<OpenClawStateKyselyDatabase, "subagent_runs" | "subagent_run_archives">
+        >(db);
+      executeSqliteQuerySync(
+        db,
+        stateDb
+          .insertInto("subagent_run_archives")
+          .expression(stateDb.selectFrom("subagent_runs").selectAll().where("run_id", "!=", "hot")),
+      );
+      executeSqliteQuerySync(db, stateDb.deleteFrom("subagent_runs").where("run_id", "!=", "hot"));
+    });
+    const queries = vi.spyOn(sqliteQueries, "executeSqliteQuerySync");
+    try {
+      for (const descendants of [false, true]) {
+        for (const projection of ["full", "sessionList"] as const) {
+          const rows = loadSubagentArchivedRunsInDatabase(
+            openOpenClawStateDatabase(),
+            {
+              kind: "sessions",
+              sessionKeys: [root],
+              descendants,
+              liveTopology: [{ requesterSessionKey: child("c"), childSessionKey: child("d") }],
+            },
+            projection,
+          );
+          expect([...rows.keys()]).toEqual(
+            descendants ? ["a", "b", "c", "d", "moved"] : ["a", "moved"],
+          );
+        }
+      }
+      const fetchedIds = () =>
+        queries.mock.results.flatMap((result) =>
+          result.type === "return"
+            ? result.value.rows.map((row) => (isRecord(row) ? row.run_id : undefined))
+            : [],
+        );
+      expect(
+        fetchedIds().filter((id) => typeof id === "string" && id.startsWith("unrelated-")),
+      ).toEqual([]);
+      runOpenClawStateWriteTransaction(({ db }) => {
+        executeSqliteQuerySync(
+          db,
+          getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "subagent_run_archives">>(
+            db,
+          ).deleteFrom("subagent_run_archives"),
+        );
+      });
+      queries.mockClear();
+      expect(
+        loadSubagentArchivedRunsInDatabase(
+          openOpenClawStateDatabase(),
+          {
+            kind: "sessions",
+            sessionKeys: [child("a")],
+            descendants: true,
+          },
+          "sessionList",
+        ).size,
+      ).toBe(0);
+      expect(fetchedIds().filter((id) => typeof id === "string")).toEqual([]);
+    } finally {
+      queries.mockRestore();
     }
   });
 

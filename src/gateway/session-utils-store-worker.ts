@@ -130,7 +130,7 @@ async function includeDirectChildEntriesInWorker(
     }
     const hintedKeys = [
       ...new Set(
-        listSubagentSessionListRunsForControllers([...parentKeys]).map(
+        (await listSubagentSessionListRunsForControllers([...parentKeys])).map(
           ({ childSessionKey }) => childSessionKey,
         ),
       ),

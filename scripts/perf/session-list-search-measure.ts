@@ -48,6 +48,7 @@ import type { SessionsListParams } from "../../packages/gateway-protocol/src/ind
 import type { ModelCatalogEntry } from "../../src/agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { GatewayClient } from "../../src/gateway/server-methods/types.js";
+import type { SessionListFilterParams } from "../../src/gateway/session-list-filters.js";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 import { generateTeamShapeStressFixture } from "./team-shape-stress-fixture.ts";
@@ -164,6 +165,7 @@ const [
   persistence,
   projections,
   lists,
+  searchIdentity,
   roster,
   foreground,
   plugins,
@@ -181,6 +183,7 @@ const [
   import("../../src/agents/subagents/registry/subagent-registry-persistence.js"),
   import("../../src/gateway/session-row-projection.js"),
   import("../../src/gateway/session-utils-list.js"),
+  import("../../src/gateway/session-search-identities.js"),
   import("../../src/agents/agent-scope-config.js"),
   import("../../src/gateway/session-projection-work.js"),
   import("../../src/plugins/runtime.js"),
@@ -344,7 +347,10 @@ try {
   projection = await projections.createSessionRowProjection({ cfg, modelCatalog: catalog });
   await projection.ensureMaterialized();
   await projection.prepareSelection({ metadataOnly: false, includeCatalog: true });
-  const identities = await lists.prepareSessionSearchIdentityNames(projection, {}, true);
+  const identities = await searchIdentity.prepareSessionSearchIdentityNames(
+    lists.prepareSessionRowSelection(projection, {}, { metadataPrepared: true, ordered: true }),
+    projection.state.scope({}).agentId,
+  );
   const shapeRows = projection.selectEntries({ sortBy: null });
   const shape = {
     rows: shapeRows.length,
@@ -424,7 +430,7 @@ try {
     if (baseLists) {
       responseRequests.set(name, { projection, opts, client });
     }
-    const prepare = (listOwner = lists) => {
+    const prepare = (listOwner = lists): SessionListFilterParams => {
       const current = projection!;
       if (values["selection-workload"]) {
         return listOwner.prepareProjectedSessionList({

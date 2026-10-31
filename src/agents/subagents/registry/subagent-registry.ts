@@ -575,16 +575,13 @@ export const listCollectorRunsForRequesterIncarnation =
 export const completeCollectorLaunchCleanup = publicApi.completeCollectorLaunchCleanup;
 export const recordSwarmStructuredOutput = publicApi.recordSwarmStructuredOutput;
 export const listSwarmRunsForGroup = publicApi.listSwarmRunsForGroup;
+export const prepareSwarmRunsForGroup = publicApi.prepareSwarmRunsForGroup;
+export const prepareSubagentActiveRunCount = publicApi.prepareSubagentActiveRunCount;
 export const getSwarmRunByLaunchReplayKey = publicApi.getSwarmRunByLaunchReplayKey;
 export const countActiveRunsForSession = publicApi.countActiveRunsForSession;
 export function initSubagentRegistry() {
   return subagentRestorer.restoreOnce();
 }
-
-export {
-  listLiveSubagentRootSessions,
-  resolveRootSubagentRequester,
-} from "./subagent-registry-read.js";
 
 /** The root resume input owns reconciliation; shutdown children settle without parent notices. */
 export async function terminateLiveSubagentsForShutdown(

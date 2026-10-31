@@ -37,11 +37,15 @@ import type {
   SubagentRegistryWorkerWrite,
   SubagentRunMutationOptions,
 } from "./subagent-registry-persistence.types.js";
-import { readFullSubagentRuns } from "./subagent-registry-read-cache.js";
+import {
+  invalidateSubagentArchiveReads,
+  readFullSubagentRuns,
+} from "./subagent-registry-read-cache.js";
 import {
   consumeFreshSubagentRegistryRows,
   publishSubagentRunsAfterAtomicStore,
   rememberRestoredSubagentRunNotification,
+  publishSubagentArchiveChanges,
 } from "./subagent-registry-state.js";
 import {
   bindSubagentRunRecord,
@@ -176,6 +180,7 @@ function publishRows(
   postimages: ReadonlyMap<string, SubagentRunRecord | null>,
   context: OpenClawStateWorkerContext,
   afterInstall?: () => void,
+  archivedRunIds?: readonly string[],
 ): void {
   for (const [runId, next] of postimages) {
     if (next) {
@@ -194,11 +199,15 @@ function publishRows(
   try {
     if (postimages.size) {
       assertSubagentRegistryWriteSourceCurrent(context);
-      publishSubagentRunsAfterAtomicStore(
-        runs,
-        [...postimages.keys()],
-        context.admission.databasePath,
-      )();
+      if (archivedRunIds?.length) {
+        publishSubagentArchiveChanges(runs, archivedRunIds, context.admission.databasePath)();
+      } else {
+        publishSubagentRunsAfterAtomicStore(
+          runs,
+          [...postimages.keys()],
+          context.admission.databasePath,
+        )();
+      }
     }
   } catch (error) {
     failures.push(error);
@@ -215,6 +224,7 @@ function publishRows(
 
 type SubagentRunMutationReceipt<T> = SubagentRunMutation<T> & {
   notices?: readonly SessionStateNotice[];
+  archiveChanged?: true;
 };
 
 /** Both native writers retain admission and known receipts through worker settlement. */
@@ -371,6 +381,7 @@ async function commitRows<T>(
         value: planned.value,
         postimages,
         notices: receipt.notices,
+        archiveChanged: receipt.archiveChanged,
       };
     };
     return {
@@ -427,7 +438,14 @@ export async function mutateSubagentRuns<P extends SubagentRunMutation<unknown>>
     await Promise.all(predecessors);
     authority.assertCurrent();
     const rows = new Map<string, SubagentRunRecord>();
-    const preparedRows = options.preparedRows?.();
+    const preparedRows = options.loadMissingRows
+      ? await readFullSubagentRuns(
+          context,
+          { kind: "ids", runIds: runIds.filter((id) => !runs.has(id)) },
+          { current: true },
+        )
+      : options.preparedRows?.();
+    authority.assertCurrent();
     for (const runId of runIds) {
       const entry = runs.get(runId) ?? preparedRows?.get(runId);
       if (entry) {
@@ -437,7 +455,7 @@ export async function mutateSubagentRuns<P extends SubagentRunMutation<unknown>>
     const evictedIds = [...rows.values()]
       .filter(isSubagentRunPayloadEvicted)
       .map((row) => row.runId);
-    if (evictedIds.length) {
+    if (evictedIds.length && options.hydratePayloads !== false) {
       const payloads = await readFullSubagentRuns(
         context,
         { kind: "ids", runIds: evictedIds },
@@ -503,6 +521,9 @@ export async function mutateSubagentRuns<P extends SubagentRunMutation<unknown>>
       : await commitRows(planned, context, authority, runs);
     try {
       authority.assertDatabase();
+      if (committed.archiveChanged) {
+        invalidateSubagentArchiveReads();
+      }
       const postimages = committed.postimages ?? new Map<string, SubagentRunRecord | null>();
       for (const [id, row] of postimages) {
         if (!pending.runIds.has(id) || (row && row.runId !== id)) {
@@ -517,13 +538,19 @@ export async function mutateSubagentRuns<P extends SubagentRunMutation<unknown>>
           bindSubagentRunRuntimeKey(row, key);
         }
       }
-      publishRows(runs, postimages, context, () => {
-        published = true;
-        for (const notice of committed.notices ?? []) {
-          enqueueSessionStateNotice(notice);
-        }
-        options.onPublished?.(postimages, committed.value);
-      });
+      publishRows(
+        runs,
+        postimages,
+        context,
+        () => {
+          published = true;
+          for (const notice of committed.notices ?? []) {
+            enqueueSessionStateNotice(notice);
+          }
+          options.onPublished?.(postimages, committed.value);
+        },
+        committed.archivedRunIds,
+      );
       return committed.value;
     } catch (error) {
       if (error instanceof SubagentRegistryCommitReceiptError) {
@@ -559,6 +586,25 @@ export async function mutateSubagentRuns<P extends SubagentRunMutation<unknown>>
     }
     releaseSourceQueue(queue);
   }
+}
+
+/** Historical reads never acquire custody; an admitted mutation restores one exact generation. */
+export async function restoreSubagentRunForMutation(
+  entry: SubagentRunRecord,
+  context: OpenClawStateWorkerContext,
+  assertCurrent?: () => void,
+): Promise<void> {
+  await mutateSubagentRuns(
+    [entry.runId],
+    (rows) => {
+      const current = rows.get(entry.runId);
+      if (!current || !isSameSubagentRun(current, entry)) {
+        throw new SubagentRegistryMutationRejectedError("Archived mutation source changed");
+      }
+      return { value: undefined, postimages: new Map([[entry.runId, current]]) };
+    },
+    { context, assertCurrent, loadMissingRows: true },
+  );
 }
 
 export async function restoreSubagentRunsFromDisk(params: {

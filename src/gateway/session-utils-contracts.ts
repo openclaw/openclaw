@@ -43,6 +43,8 @@ export type SessionListRowContext = {
   workerPlacementEnvironment?: NodeJS.ProcessEnv;
   projectedAgentRuns?: ProjectedAgentRunIndex;
   projectedSubagentActivity?: ReadonlySet<string>;
+  /** Request-owned history must not populate resident run-state presentation caches. */
+  transientSubagentRuns?: true;
   subagentRuns: SubagentRunReadIndex<SubagentRunReadRecord>;
   subagentRunsByChildSessionKey: ReadonlyMap<string, readonly SubagentRunReadRecord[]>;
   configuredDefaultModelByAgent: Map<string, ReturnType<typeof resolveSessionModelRef>>;

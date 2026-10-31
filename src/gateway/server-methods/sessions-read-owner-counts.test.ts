@@ -2,7 +2,9 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import type { SessionsListParams } from "../../../packages/gateway-protocol/src/index.js";
 import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
+import { archiveCompletedSubagentRuns } from "../../agents/subagents/registry/subagent-registry-archive.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
+import { mutateSubagentRuns } from "../../agents/subagents/registry/subagent-registry-persistence.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   assignSessionOwner,
@@ -18,6 +20,7 @@ import {
   registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import { getSessionRowSelectionMetrics } from "../../infra/gateway-work-metrics.js";
+import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { mergeProfiles } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -265,6 +268,97 @@ it("counts caller-visible conversations once through direct and delegated work b
       }
     }
   }));
+
+it("reads idle owner counts without broad history and admits work arriving behind an archived parent", () =>
+  withOpenClawTestState(
+    { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
+    async () => {
+      const profileId = ensureProfileForEmail("archive-counts@example.test").id;
+      const context = requestContext({ agents: { entries: { main: {} } } });
+      setRuntimeConfigSnapshot(context.getRuntimeConfig());
+      const client = identifiedClient(profileId);
+      const root = "agent:main:archive-count-root";
+      const child = "agent:main:subagent:archive-count-bridge";
+      const now = Date.now();
+      const endedAt = now - 31 * 86_400_000;
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: root },
+        profileEntry("archive-count-root", now, profileId),
+      );
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: child },
+        { ...profileEntry("archive-count-bridge", now, profileId), spawnedBy: root },
+      );
+      const bridge = createSubagentRunRecord({
+        runId: "archive-count-bridge",
+        childSessionKey: child,
+        childAgentId: "main",
+        requesterSessionKey: root,
+        requesterAgentId: "main",
+        createdAt: endedAt - 1_000,
+        execution: { status: "terminal", endedAt, outcome: { status: "ok" } },
+        cleanupCompletedAt: endedAt,
+        delivery: { status: "not_required" },
+        completion: { required: false },
+      });
+      await mutateSubagentRuns([bridge.runId], () => ({
+        value: undefined,
+        postimages: new Map([[bridge.runId, bridge]]),
+      }));
+      expect(await archiveCompletedSubagentRuns(now)).toBe(1);
+      const request = { includeOwnerSessionCounts: true, excludeSubagents: true, limit: 1 };
+      const read = () => listSessions({ client, context, request });
+      const executeRead = stateReads.executeExistingOpenClawStateRead;
+      const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+      const grace = createSubagentRunRecord({
+        runId: "archive-count-registration",
+        childSessionKey: "agent:main:subagent:archive-count-registration",
+        childAgentId: "main",
+        requesterSessionKey: child,
+        requesterAgentId: "main",
+        createdAt: now,
+        execution: { status: "running" },
+      });
+      try {
+        expect((await read()).ownerSessionCounts).toEqual([count(profileId, 1)]);
+        expect(
+          reads.mock.calls.flatMap(([, command]) =>
+            command.type === "subagents.runs" && command.scope.kind === "archive"
+              ? [command.scope.scope]
+              : [],
+          ),
+        ).not.toContainEqual({ kind: "all" });
+        let arrived = false;
+        reads.mockImplementation(async (...args) => {
+          const result = await executeRead(...args);
+          const command = args[1];
+          if (
+            !arrived &&
+            command.type === "subagents.runs" &&
+            command.scope.kind === "archive" &&
+            command.scope.scope.kind === "sessions"
+          ) {
+            arrived = true;
+            await mutateSubagentRuns([grace.runId], () => ({
+              value: undefined,
+              postimages: new Map([[grace.runId, { ...grace, createdAt: Date.now() }]]),
+            }));
+          }
+          return result;
+        });
+        expect((await read()).ownerSessionCounts).toEqual([count(profileId, 1, 1)]);
+        expect(arrived).toBe(true);
+        expect(subagentRuns.has(bridge.runId)).toBe(false);
+        expect(
+          getSessionRowProjection(context)!.state.rowContext.subagentRuns.getDisplaySubagentRun(
+            child,
+          ),
+        ).toBeNull();
+      } finally {
+        subagentRuns.delete(grace.runId);
+      }
+    },
+  ));
 
 it("keeps the owner summary complete beyond the people facet cap and resolves merged owners", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {

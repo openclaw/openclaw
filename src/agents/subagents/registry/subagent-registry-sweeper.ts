@@ -13,6 +13,7 @@ import {
   reconcileRetiredSubagentCancellation,
 } from "../completion/subagent-completion-admission.store.js";
 import { settleSubagentCompletionReservation } from "./subagent-controller-inputs.js";
+import { archiveCompletedSubagentRuns } from "./subagent-registry-archive.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import {
   PROVISIONAL_KILL_RECONCILIATION_MS,
@@ -213,6 +214,9 @@ export function createSubagentRegistrySweeper(params: {
     const drainSignal = getGatewayRestartDrainSignal();
     try {
       const now = Date.now();
+      if (!drainSignal.aborted) {
+        await archiveCompletedSubagentRuns(now, runs);
+      }
       const runEntries = orderSubagentSweepEntries(runs, now);
       if (runEntries.length === 0) {
         params.sweepPendingLifecycle(now);

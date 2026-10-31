@@ -17,6 +17,15 @@ const V2026_7_1_2_STATE_FIXTURE_URL = new URL(
   import.meta.url,
 );
 
+// Synthetic predecessors retain current unrelated tables while exercising older stored shapes.
+export const SYNTHETIC_LEGACY_STATE_MIGRATION_TAIL = [
+  "Qualified historical cron creator attribution as unknown (v14)",
+  "Replaced retained task indexes with ordered cron history indexes (v24)",
+  "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
+  "Migrated released starter tables and provenance to canonical Template names (v36)",
+  "Prepared bounded kept-subagent run archive storage (v37)",
+];
+
 export const V2026_7_1_2_STATE_MIGRATION_CHANGES = [
   "Discarded retired shared-state commitments rows, table, and indexes",
   "Retired six dead shared-state tables (v10)",
@@ -30,6 +39,7 @@ export const V2026_7_1_2_STATE_MIGRATION_CHANGES = [
   "Removed redundant conversation binding target projections (v15)",
   "Replaced retained task indexes with ordered cron history indexes (v24)",
   "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
+  "Prepared bounded kept-subagent run archive storage (v37)",
   "Migrated shared state tables to SQLite STRICT typing (46)",
 ];
 
@@ -76,6 +86,9 @@ export function materializeV2026_7_1_2StateDatabase(stateDir: string) {
 
 // Synthetic pre-v8 databases must not retain the current placement-only index.
 export function markStateDatabaseVersion(database: DatabaseSync, version: number): void {
+  if (version < 37) {
+    database.exec("DROP TABLE IF EXISTS subagent_run_archives;");
+  }
   if (version < 36) {
     restorePreTemplateStateIdentifiersForTest(database);
   }

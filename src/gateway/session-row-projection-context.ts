@@ -9,6 +9,7 @@ import {
 } from "../infra/agent-run-registry.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import { createSessionIdentityProjection } from "./session-identity-projection.js";
+import { forgetPreparedSessionRunState } from "./session-row-prepared-read.js";
 import * as records from "./session-row-projection-record.js";
 import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
@@ -208,6 +209,9 @@ export function createSessionRowProjectionContext(
         : subagentIndex.changedChildren) {
         invalidateChildren?.(key);
         for (const row of matching({ key })) {
+          if (row.materialized) {
+            forgetPreparedSessionRunState(row.materialized.source);
+          }
           if (!row.storedEntry) {
             continue;
           }

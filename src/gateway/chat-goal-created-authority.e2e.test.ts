@@ -8,8 +8,8 @@ import { expect, it } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
-import { getSubagentRunByRunId } from "../agents/subagents/registry/subagent-registry.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -352,7 +352,7 @@ it(
         await member.request("sessions.messages.subscribe", { key: scenario.sessionKey }),
       ).toMatchObject({ subscribed: true });
       const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
-        const child = scenario.childRunId && getSubagentRunByRunId(scenario.childRunId);
+        const child = scenario.childRunId && subagentRuns.get(scenario.childRunId);
         if (child && child.requesterSettleWake?.requesterYieldBatch && !child.requesterTurnRunId) {
           scenario.yielded.resolve();
         }

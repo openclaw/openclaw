@@ -95,5 +95,7 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
       "sqlite_stat1",
       "sqlite_stat4",
     ],
+    // Later maintenance removes hot rows; rollback must recover their pre-archive contents.
+    37: ["subagent_runs", "subagent_run_archives"],
   },
 };

@@ -1644,6 +1644,24 @@ CREATE INDEX IF NOT EXISTS idx_subagent_runs_requester_session_key
 CREATE INDEX IF NOT EXISTS idx_subagent_runs_controller_session_key
   ON subagent_runs(controller_session_key, created_at DESC, run_id);
 
+CREATE TABLE IF NOT EXISTS subagent_run_archives (
+  run_id TEXT NOT NULL PRIMARY KEY,
+  child_session_key TEXT NOT NULL,
+  controller_session_key TEXT,
+  controller_store_path TEXT,
+  requester_session_key TEXT NOT NULL,
+  requester_store_path TEXT,
+  created_at INTEGER NOT NULL,
+  payload_json TEXT NOT NULL DEFAULT '{}'
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_subagent_run_archives_child_session_key
+  ON subagent_run_archives(child_session_key, created_at DESC, run_id);
+CREATE INDEX IF NOT EXISTS idx_subagent_run_archives_requester_session_key
+  ON subagent_run_archives(requester_session_key, created_at DESC, run_id);
+CREATE INDEX IF NOT EXISTS idx_subagent_run_archives_controller_session_key
+  ON subagent_run_archives(controller_session_key, created_at DESC, run_id);
+
 CREATE TABLE IF NOT EXISTS current_conversation_bindings (
   binding_key TEXT NOT NULL PRIMARY KEY,
   binding_id TEXT NOT NULL,

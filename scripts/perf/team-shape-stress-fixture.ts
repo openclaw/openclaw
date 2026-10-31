@@ -57,6 +57,7 @@ export async function generateTeamShapeStressFixture(options: {
   transcriptMiB?: number;
   longTranscriptEntries?: number;
   authAvailabilityStorm?: boolean;
+  keptRunAgeDays?: number;
   worktreeFiles?: number;
   worktreeFileBytes?: number;
   worktreeLocalOrigin?: boolean;
@@ -83,6 +84,8 @@ export async function generateTeamShapeStressFixture(options: {
       String(Math.floor((sessions * 4_300) / 10_800)),
       "--settled-runs",
       "--team-stress",
+      "--kept-run-age-days",
+      String(options.keptRunAgeDays ?? 0),
       ...(options.authAvailabilityStorm ? ["--auth-availability-storm"] : []),
       "--transcript-mib",
       String(options.transcriptMiB ?? 128),

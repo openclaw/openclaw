@@ -18,7 +18,7 @@ import {
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import {
   buildControlledSubagentRunsReadContext as readContext,
-  listControlledSubagentRunFacts,
+  prepareSubagentControlRunFacts,
 } from "./subagent-control-scope.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
@@ -115,14 +115,14 @@ describe("subagent registry state", () => {
       };
       save(runMap(old, sibling, latest, foreign));
       await prepare();
-      const read = () =>
-        listControlledSubagentRunFacts(parent, "main", {}).map((entry) => entry.runId);
+      const controlFacts = await prepareSubagentControlRunFacts(parent);
+      const read = () => controlFacts.list(parent, "main", {}).map((entry) => entry.runId);
       expect(read()).toEqual([latest.runId, sibling.runId]);
       const controlled = { ...latest, controllerSessionKey: "agent:main:controller" };
       publish(runMap(controlled), [controlled.runId]);
       expect(read()).toEqual([latest.runId, sibling.runId]);
       expect(
-        listControlledSubagentRunFacts("agent:main:controller", "main", {}).map((run) => run.runId),
+        controlFacts.list("agent:main:controller", "main", {}).map((run) => run.runId),
       ).toEqual([latest.runId]);
       const moved = {
         ...controlled,

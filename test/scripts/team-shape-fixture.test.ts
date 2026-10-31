@@ -364,3 +364,29 @@ it("seeds the stress category mix with readable collector parents and settled un
   expect(summary.agentCount).toBe(8);
   expect(fs.statSync(agents["agent-8"].workspace).isDirectory()).toBe(true);
 });
+
+it("seeds aged kept history without collector cleanup or session-deletion deadlines", async () => {
+  const stateDir = path.join(temporary.make("team-shape-archive-"), "state");
+  const { summary } = await generateTeamShapeFixture(
+    options(
+      stateDir,
+      "--sessions 108 --runs 43 --settled-runs --team-stress --kept-run-age-days 100 --approvals 0 --cron 0 --projects 0 --transcript-mib 0",
+    ),
+  );
+  using state = openDb(path.join(stateDir, "state/openclaw.sqlite"));
+  const rows = state.prepare("SELECT payload_json FROM subagent_runs ORDER BY created_at").all();
+  const runs = rows.map((row) => JSON.parse(String(row.payload_json)));
+  expect(runs).toHaveLength(43);
+  expect(runs.filter((run) => summary.now - run.execution.endedAt > 30 * 86_400_000)).toHaveLength(
+    13,
+  );
+  for (const run of runs) {
+    expect(run).toMatchObject({
+      cleanup: "keep",
+      execution: { status: "terminal" },
+      delivery: { status: "delivered" },
+    });
+    expect(run).not.toHaveProperty("collect");
+    expect(run).not.toHaveProperty("archiveAtMs");
+  }
+});

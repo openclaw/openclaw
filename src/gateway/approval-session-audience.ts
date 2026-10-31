@@ -1,6 +1,6 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
-  buildLatestSubagentSessionListReadIndex,
+  getLatestSubagentRunByChildSessionKey,
   getLatestLiveSubagentRunByChildSessionKey,
 } from "../agents/subagents/registry/subagent-registry-read.js";
 import {
@@ -63,7 +63,7 @@ async function resolveApprovalSessionAudience(
   };
   for (const sessionKey of pending) {
     const subagentLineage = persisted
-      ? buildLatestSubagentSessionListReadIndex([sessionKey]).getLatestSubagentRun(sessionKey)
+      ? await getLatestSubagentRunByChildSessionKey(sessionKey)
       : getLatestLiveSubagentRunByChildSessionKey(sessionKey);
     const registryParents = [
       subagentLineage?.controllerSessionKey,

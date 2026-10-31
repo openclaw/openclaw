@@ -4,8 +4,8 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
-import { getSubagentRunByRunId } from "../agents/subagents/registry/subagent-registry.js";
 import * as queueLifecycle from "../auto-reply/reply/queue/lifecycle.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
@@ -213,7 +213,7 @@ it(
                 }),
               ).toMatchObject({ subscribed: true });
               const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
-                const child = scenario.childRunId && getSubagentRunByRunId(scenario.childRunId);
+                const child = scenario.childRunId && subagentRuns.get(scenario.childRunId);
                 if (!child) {
                   return;
                 }

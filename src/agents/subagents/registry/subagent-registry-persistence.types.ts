@@ -41,6 +41,10 @@ export type SubagentRunMutationOptions<P extends SubagentRunMutation<unknown>> =
   context?: OpenClawStateWorkerContext;
   assertCurrent?: () => void;
   pendingKillClaim?: SubagentRunRecord;
+  /** Archival plans only metadata; the worker moves the canonical payload unchanged. */
+  hydratePayloads?: false;
+  /** Exact historical restoration reads under its FIFO reservation before planning. */
+  loadMissingRows?: true;
   onPublished?: (
     postimages: ReadonlyMap<string, SubagentRunRecord | null>,
     value: P["value"],

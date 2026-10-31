@@ -423,6 +423,7 @@ export function createSessionRowPlacementProjection(
                   (read) => consume(read, preparedQueries),
                   privateRepositories,
                   privateRows,
+                  Boolean(prepareSelection),
                 );
               } finally {
                 exact = previous;

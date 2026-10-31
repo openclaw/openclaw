@@ -31,13 +31,27 @@ import {
   immutableSubagentRun,
   restoreSubagentRunPayload,
 } from "./subagent-registry-memory.js";
-import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
+import type {
+  SubagentArchiveReadScope,
+  SubagentRunReadRecord,
+} from "./subagent-registry-read.types.js";
 import { readAllSubagentRunsInWorker } from "./subagent-registry.store.read.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSubagentRunPayloadEvicted } from "./subagent-run-payload-facts.js";
 import { SubagentSessionReadLookup } from "./subagent-session-read-scope.js";
 
 type SubagentRunChange<T> = { entry: T | undefined };
+
+let archiveRevision = 0;
+
+/** The writer advances this only when archive rows change, never for hot run progress. */
+export function invalidateSubagentArchiveReads(): void {
+  archiveRevision++;
+}
+
+export function getSubagentArchiveRevision(): number {
+  return archiveRevision;
+}
 
 type SubagentRunsCacheState<T extends SubagentRunReadRecord> = (
   | {
@@ -220,6 +234,27 @@ export function rememberSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
   };
 }
 
+/** Unloaded caches need no archive tombstones after an overlapping fill has settled. */
+export function forgetArchivedSubagentRuns<T extends SubagentRunReadRecord>(
+  cache: SubagentRunsCache<T>,
+  runIds: readonly string[],
+): void {
+  const state = cache.state;
+  const remove = () => {
+    for (const runId of runIds) {
+      if (state.changes?.get(runId)?.entry === undefined) {
+        state.changes?.delete(runId);
+      }
+    }
+  };
+  if (state.pending) {
+    // A preceding worker snapshot can still contain the rows that just moved to archive.
+    void state.pending.promise.then(remove, remove);
+  } else {
+    remove();
+  }
+}
+
 export function getPersistedSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
   cache: SubagentRunsCache<T>,
   prepared?: OpenClawStateReadContext,
@@ -328,11 +363,68 @@ export async function readFullSubagentRuns(
   if (!reply) {
     return new Map<string, SubagentRunRecord>();
   }
-  if (!reply.ok || reply.type !== "subagents.runs" || reply.projection === "maintenance") {
+  if (!reply.ok || reply.type !== "subagents.runs" || reply.projection !== undefined) {
     throw new Error("Unexpected subagent registry read result");
   }
   for (const entry of reply.runs.values()) {
     immutableSubagentRun(entry);
+  }
+  if (scope.kind === "ids") {
+    const missing = scope.runIds.filter((runId) => !reply.runs.has(runId));
+    if (missing.length) {
+      for (const [runId, entry] of await readArchivedSubagentRuns(
+        context,
+        { kind: "ids", runIds: missing, exact: true },
+        "full",
+        options,
+      )) {
+        reply.runs.set(runId, entry);
+      }
+    }
+  }
+  return reply.runs;
+}
+
+export function readArchivedSubagentRuns(
+  context: OpenClawStateWorkerContext,
+  scope: SubagentArchiveReadScope,
+  projection: "full",
+  options?: { current?: boolean },
+): Promise<Map<string, SubagentRunRecord>>;
+export function readArchivedSubagentRuns(
+  context: OpenClawStateWorkerContext,
+  scope: SubagentArchiveReadScope,
+  projection: "sessionList",
+  options?: { current?: boolean },
+): Promise<Map<string, SubagentRunReadRecord>>;
+export async function readArchivedSubagentRuns(
+  context: OpenClawStateWorkerContext,
+  scope: SubagentArchiveReadScope,
+  projection: "full" | "sessionList",
+  options: { current?: boolean } = {},
+): Promise<Map<string, SubagentRunReadRecord>> {
+  if (scope.kind === "ids" && scope.runIds.length === 0) {
+    return new Map();
+  }
+  const reply = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    { type: "subagents.runs", scope: { kind: "archive", scope, projection } },
+    options.current ? { context, current: true } : undefined,
+  );
+  if (!reply) {
+    return new Map();
+  }
+  if (
+    reply.type !== "subagents.runs" ||
+    reply.projection === "maintenance" ||
+    reply.projection !== (projection === "full" ? undefined : "sessionList")
+  ) {
+    throw new Error("Unexpected subagent archive read result");
+  }
+  if (reply.projection === undefined) {
+    reply.runs.forEach(immutableSubagentRun);
+  } else {
+    reply.runs.forEach(freezeSubagentRunReadRecord);
   }
   return reply.runs;
 }
@@ -462,10 +554,12 @@ export function mergeSelectedFullRuns(
     context,
     runIds,
     freshPersisted = false,
+    archivedRuns,
   }: {
     context?: OpenClawStateWorkerContext;
     runIds?: ReadonlySet<string>;
     freshPersisted?: boolean;
+    archivedRuns?: ReadonlyMap<string, SubagentRunRecord>;
   } = {},
 ): Map<string, SubagentRunRecord> {
   const current = context && !freshPersisted ? acceptedFullSnapshot(cache, context) : undefined;
@@ -479,6 +573,12 @@ export function mergeSelectedFullRuns(
   for (const [runId, entry] of selectedEntries(current ?? persisted, runIds)) {
     if (matches(entry)) {
       merged.set(runId, withPayload(entry));
+    }
+  }
+  // Historical rows belong to this read; subsequent explicit receipts still win.
+  for (const [runId, entry] of archivedRuns ?? []) {
+    if (!merged.has(runId) && matches(entry) && (!runIds || runIds.has(runId))) {
+      merged.set(runId, entry);
     }
   }
   const state = selectSubagentCacheStateForRead(cache.state, context);

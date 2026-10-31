@@ -22,8 +22,17 @@ import {
 } from "../../subagent-test-fixtures.test-helpers.js";
 import { immutableSubagentRun, subagentRuns } from "./subagent-registry-memory.js";
 import { getSubagentRunByChildSessionKeyFromRuns } from "./subagent-registry-queries.js";
-import { getSubagentRunsSnapshotForChildSession } from "./subagent-registry-state.js";
+import {
+  getSubagentRunsSnapshotForChildSession,
+  getSubagentRunsSnapshotForRead,
+} from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+
+/** Lifecycle fixtures inspect their resident owners without starting a historical read. */
+export function getSubagentRunByRunId(runId: string): SubagentRunRecord | undefined {
+  const runs = getSubagentRunsSnapshotForRead(subagentRuns);
+  return runs.get(runId) ?? [...runs.values()].find((entry) => entry.swarmRunId === runId);
+}
 
 export async function getSubagentRunByChildSessionKey(
   childSessionKey: string,

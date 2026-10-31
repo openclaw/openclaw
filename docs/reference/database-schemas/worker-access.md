@@ -6451,16 +6451,24 @@ Fully settled registry rows retain terminal-reply disposition, length, and route
 notices in memory. Selected readers and mutations hydrate reply text, delivery
 payloads, and operator recovery sources through the existing worker before use.
 Unfinished lifecycle, requester, recovery, and pending, in-progress, or suspended
-delivery work keeps its full resident record. Durable records and retention are
-unchanged; ordinary keep-mode rows still have no automatic archive deadline.
+delivery work keeps its full resident record. Settled keep-mode rows older than
+30 days move to `subagent_run_archives` on the existing minute sweep. Each pass
+moves at most 128 records and approximately 1 MiB of payload, admitting one
+oversized record for progress. The worker copies canonical bytes and removes hot
+rows in one transaction; the host evicts resident copies only after a known commit.
+Startup hydrates hot rows only. Historical reads combine hot and archived records
+in request-owned views, and a follow-up restores its exact generation through the
+registry mutation owner. Explicit deletion removes either location. Shared-state
+schema 37 creates the empty archive table through consecutive startup/Doctor
+migration; it does not rewrite existing records. Older binaries refuse the new
+schema. Rollback restores a verified pre-migration backup with its matching binary.
+
 Completion acknowledgments also carry decoded records and worker-computed physical
 versions; the host does not parse or hash the retained JSON again. The transfer
 owners hash the physical rows only when those versions are needed. Plain decoding,
 including maintenance and session-list projections, does not retain discarded row
-versions. Transaction and
-commit authority, terminal-event
-atomicity, uncertain-write recovery, schemas, retention, and update behavior are
-unchanged. No migration or configuration change is required.
+versions. Transaction and commit authority, terminal-event atomicity, and
+uncertain-write recovery remain owned by the existing registry writer.
 
 Cron execution, descendant follow-up, and delivery observations use the existing
 subagent registry worker snapshot. Descendant closure selection and the existing

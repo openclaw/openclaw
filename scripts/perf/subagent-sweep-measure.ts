@@ -127,6 +127,7 @@ const sweepOnce =
 
 const composition = { settled: 0, running: 0, pendingDelivery: 0, futureArchive: 0 };
 const claims = new Map<string, string | undefined>();
+const fixtureNow = Date.now();
 function makeRun(index: number): SubagentRunRecord {
   const entry: SubagentRunRecord = {
     runId: `sweep-run-${index}`,
@@ -136,19 +137,19 @@ function makeRun(index: number): SubagentRunRecord {
     requesterSessionKey: "agent:main:main",
     requesterAgentId: "main",
     requesterDisplayKey: "main",
-    createdAt: 100 + index,
+    createdAt: fixtureNow - 1_000,
     task: `Synthetic retained task ${index}`,
     cleanup: "keep",
     expectsCompletionMessage: true,
     execution: {
       status: "terminal",
-      startedAt: 200 + index,
-      endedAt: 300 + index,
+      startedAt: fixtureNow - 800,
+      endedAt: fixtureNow - 500,
       outcome: { status: "ok" },
     },
     completion: { required: true, resultText: "Synthetic retained result" },
     delivery: { status: "delivered" },
-    cleanupCompletedAt: 400 + index,
+    cleanupCompletedAt: fixtureNow - 100,
   };
   if (workload === "mixed" && index % 10 === 0) {
     composition.running++;

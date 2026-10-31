@@ -55,6 +55,7 @@ import {
   expectV2026_7_1_2CronHistoryPreserved,
   markStateDatabaseVersion,
   materializeV2026_7_1_2StateDatabase,
+  SYNTHETIC_LEGACY_STATE_MIGRATION_TAIL,
   V2026_7_1_2_STATE_MIGRATION_CHANGES,
 } from "./openclaw-state-db-historical-fixtures.test-support.js";
 import { runHotRollbackJournalRecoveryProbe } from "./openclaw-state-db-hot-journal.test-support.js";
@@ -917,10 +918,7 @@ describe("openclaw state database", () => {
           "Migrated agent database registry paths to state-relative storage (2 relativized, 1 re-anchored, 1 removed)",
           `Re-anchored agent database registry path ${copiedForeignPath} to the current state directory`,
           `Removed duplicate agent database registry path ${dualForeignPath}`,
-          "Qualified historical cron creator attribution as unknown (v14)",
-          "Replaced retained task indexes with ordered cron history indexes (v24)",
-          "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
-          "Migrated released starter tables and provenance to canonical Template names (v36)",
+          ...SYNTHETIC_LEGACY_STATE_MIGRATION_TAIL,
         ],
         warnings: [],
       });
@@ -1111,10 +1109,7 @@ describe("openclaw state database", () => {
 
     await expectRepair(options, [
       "Folded singleton state tables into config_machine_state (v12)",
-      "Qualified historical cron creator attribution as unknown (v14)",
-      "Replaced retained task indexes with ordered cron history indexes (v24)",
-      "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
-      "Migrated released starter tables and provenance to canonical Template names (v36)",
+      ...SYNTHETIC_LEGACY_STATE_MIGRATION_TAIL,
     ]);
 
     const migrated = openOpenClawStateDatabase(options);
@@ -1328,10 +1323,7 @@ describe("openclaw state database", () => {
       "Migrated cloud worker placements to execution modes",
       "Migrated shared state session watch cursors → provenance column (0 ambient, 0 sentinels removed)",
       "Consolidated shared state tables (v13)",
-      "Qualified historical cron creator attribution as unknown (v14)",
-      "Replaced retained task indexes with ordered cron history indexes (v24)",
-      "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
-      "Migrated released starter tables and provenance to canonical Template names (v36)",
+      ...SYNTHETIC_LEGACY_STATE_MIGRATION_TAIL,
     ]);
 
     const migrated = openOpenClawStateDatabase(options);
@@ -1630,6 +1622,7 @@ describe("openclaw state database", () => {
       { kind: "local-workspace-manifests-v31", path: fixture.databasePath },
       { kind: "local-workspace-cas-v35", path: fixture.databasePath },
       { kind: "template-names-v36", path: fixture.databasePath },
+      { kind: "subagent-archives-v37", path: fixture.databasePath },
       { kind: "audit-events-v2", path: fixture.databasePath },
       { kind: "strict-tables-v3", path: fixture.databasePath },
     ]);
@@ -1840,15 +1833,13 @@ describe("openclaw state database", () => {
       { kind: "local-workspace-manifests-v31", path: seeded.databasePath },
       { kind: "local-workspace-cas-v35", path: seeded.databasePath },
       { kind: "template-names-v36", path: seeded.databasePath },
+      { kind: "subagent-archives-v37", path: seeded.databasePath },
       { kind: "session-watch-cursor-provenance-v4", path: seeded.databasePath },
     ]);
     await expectRepair(options, [
       "Migrated cloud worker placements to execution modes",
       "Migrated shared state session watch cursors → provenance column (2 ambient, 5 sentinels removed)",
-      "Qualified historical cron creator attribution as unknown (v14)",
-      "Replaced retained task indexes with ordered cron history indexes (v24)",
-      "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
-      "Migrated released starter tables and provenance to canonical Template names (v36)",
+      ...SYNTHETIC_LEGACY_STATE_MIGRATION_TAIL,
     ]);
 
     const migrated = openOpenClawStateDatabase(options);
@@ -2054,6 +2045,7 @@ describe("openclaw state database", () => {
       { kind: "local-workspace-manifests-v31", path: databasePath },
       { kind: "local-workspace-cas-v35", path: databasePath },
       { kind: "template-names-v36", path: databasePath },
+      { kind: "subagent-archives-v37", path: databasePath },
     ]);
 
     await withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options));

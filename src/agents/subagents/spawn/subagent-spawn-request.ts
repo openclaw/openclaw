@@ -11,7 +11,10 @@ import { summarizeSpawnError } from "../../spawn-pipeline.js";
 import { resolveSpawnAdmission, resolveSpawnMode } from "../../spawn-plan.js";
 import { validateName } from "../../worktrees/name.js";
 import { prepareSubagentSessionListReadCache } from "../registry/subagent-registry-state.js";
-import { listSwarmRunsForGroup } from "../registry/subagent-registry.js";
+import {
+  prepareSwarmRunsForGroup,
+  prepareSubagentActiveRunCount,
+} from "../registry/subagent-registry.js";
 import { resolveSwarmConfig } from "../swarm/swarm-config.js";
 import { validateStructuredOutputSchema } from "../swarm/swarm-output-schema.js";
 import { holdQueuedSwarmRun, reserveSwarmRun } from "../swarm/swarm-scheduler.js";
@@ -256,12 +259,10 @@ export async function resolveSubagentSpawnRequest(
         )
       : undefined,
   });
+  let countActiveRuns: () => number;
+  let readCollectorRuns: Awaited<ReturnType<typeof prepareSwarmRunsForGroup>> | undefined;
   const resolveAdmission = (pendingChildren = 0) => {
-    const collectorRuns = params.collect
-      ? swarmGroupId
-        ? listSwarmRunsForGroup(swarmGroupId, requesterInternalKey, requesterAgentId)
-        : []
-      : undefined;
+    const collectorRuns = readCollectorRuns?.();
     return resolveSpawnAdmission({
       cfg,
       callerDepth,
@@ -280,11 +281,23 @@ export async function resolveSubagentSpawnRequest(
       requestedAgentId: effectiveRequestedAgentId,
       configuredAgentIds,
       additionalActiveChildren: pendingChildren,
+      activeChildren: countActiveRuns(),
     });
   };
   try {
     ctx.assertActive?.();
-    await prepareSubagentSessionListReadCache();
+    if (params.collect) {
+      countActiveRuns = () => 0;
+      await prepareSubagentSessionListReadCache();
+      readCollectorRuns = swarmGroupId
+        ? await prepareSwarmRunsForGroup(swarmGroupId, requesterInternalKey, requesterAgentId)
+        : () => [];
+    } else {
+      countActiveRuns = await prepareSubagentActiveRunCount(requesterInternalKey, {
+        collect: false,
+        requesterAgentId,
+      });
+    }
     ctx.assertActive?.();
   } catch (error) {
     return rejectSubagentSpawnRequest(
@@ -330,7 +343,7 @@ export async function resolveSubagentSpawnRequest(
   let reservationPending = false;
   let soleImplicitMember = false;
   if (params.collect && swarmGroupId && swarmSchedulerGroupKey) {
-    const groupRuns = listSwarmRunsForGroup(swarmGroupId, requesterInternalKey, requesterAgentId);
+    const groupRuns = readCollectorRuns?.() ?? [];
     soleImplicitMember = !explicitSwarmGroupId && !swarmLaunchReplayKey && groupRuns.length === 0;
     try {
       if (

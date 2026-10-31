@@ -92,6 +92,19 @@ plain subagents do not enter that path. Four projects, disabled cron
 entries, user profiles, participants, approvals, and delivered run records use
 the existing offline fixture writers.
 
+For kept-run archival, add `--kept-run-age-days 100`. This replaces the retained
+collectors with ordinary terminal `cleanup: "keep"` records spread evenly across
+ages 1–100 days, without a session-deletion deadline. Session timestamps keep the
+usual stress distribution, so session maintenance does not delete the historical
+run's child as a side effect. The default 10,800-session fixture has 4,300 retained
+runs; 3,010 are older than 30 days at the fixed clock anchor. Both arms and A/A
+controls use the same shape. Bounded archival remains enabled during measurement,
+so the ten-minute result covers backlog drainage rather than full convergence.
+For a schema-changing comparison, run this tooling from the older baseline's
+source with these fixture scripts applied unchanged. Both arms start from that
+supported schema and the candidate performs its normal startup migration; never
+downstamp the candidate's generated databases to make the older binary open them.
+
 The campaign captures one clock anchor and reuses it across all fixtures. Pass
 `--now <epoch-ms>` from `campaign.json` to replay that anchor with the same seed.
 Active dashboard timestamps stay within the normal seven-day archive threshold;

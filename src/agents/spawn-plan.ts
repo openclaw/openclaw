@@ -23,7 +23,6 @@ import type {
 } from "../infra/outbound/session-binding-service.js";
 import { resolveChildAdmission, type ChildAdmissionCap } from "./child-admission.js";
 import { resolveSenderRestrictedSpawnError } from "./spawn-requester-policy.js";
-import { countActiveRunsForSession } from "./subagents/registry/subagent-registry.js";
 import { resolveSubagentCapabilities } from "./subagents/spawn/subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagents/spawn/subagent-depth.js";
 import { resolveRequesterSpawnTargetPolicy } from "./subagents/spawn/subagent-target-policy.js";
@@ -274,7 +273,7 @@ export function resolveSpawnAdmission(params: {
   configuredAgentIds: string[];
   additionalActiveChildren?: number;
   callerDepth?: number;
-  countActiveRuns?: typeof countActiveRunsForSession;
+  activeChildren: number;
 }):
   | {
       ok: true;
@@ -318,11 +317,7 @@ export function resolveSpawnAdmission(params: {
         callerDepth,
         maxSpawnDepth,
         collect: false,
-        activeChildren:
-          (params.countActiveRuns ?? countActiveRunsForSession)(params.requesterSessionKey, {
-            collect: false,
-            requesterAgentId: params.requesterAgentId,
-          }) + (params.additionalActiveChildren ?? 0),
+        activeChildren: params.activeChildren + (params.additionalActiveChildren ?? 0),
         maxActiveChildren:
           params.cfg.agents?.defaults?.subagents?.maxChildrenPerAgent ??
           DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,

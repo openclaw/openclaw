@@ -38,7 +38,7 @@ const readSnapshot = vi.fn<() => object | undefined>(() => registrySnapshot);
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => readConfig() }));
 // mock-isolation: Traverse the fixture-owned run graph without loading the live registry.
 vi.mock("../agents/subagents/registry/subagent-registry-read.js", () => ({
-  buildLatestSubagentSessionListReadIndex: () => ({ getLatestSubagentRun: readRun }),
+  getLatestSubagentRunByChildSessionKey: async (key: string) => readRun(key),
   getLatestLiveSubagentRunByChildSessionKey: (key: string) => readRun(key),
 }));
 // mock-isolation: Control registry publication and preparation for each lineage scenario.

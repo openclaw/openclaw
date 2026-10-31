@@ -35,10 +35,7 @@ import {
 } from "../../../infra/agent-run-registry.js";
 import { withTimeout } from "../../../infra/fs-safe.js";
 import { GatewayScheduler } from "../../../infra/gateway-scheduler.js";
-import {
-  bindLegacyPluginSdkResourceHost,
-  LegacyPluginSdkResourceHost,
-} from "../../../plugins/legacy-sdk-resource-host.js";
+import { LegacyPluginSdkResourceHost } from "../../../plugins/legacy-sdk-resource-host.js";
 import { getActivePluginRegistry } from "../../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { beginSessionEffect } from "../../../sessions/session-controller.lifecycle.js";
@@ -136,11 +133,11 @@ vi.mock("../../embedded-agent.js", async () => {
 const parentSessionKey = "agent:main:subagent:production-boundary-parent";
 const parentRunId = "production-boundary-parent";
 let state: OpenClawTestState;
+let sdkResourceHost: LegacyPluginSdkResourceHost;
 let stateDir = "";
 let runtimeConfig: OpenClawConfig;
 let settleRootWork: ReturnType<typeof observeRootWork>;
 let releaseProfileCatalog: (() => void) | undefined;
-const gatewayResources: LegacyPluginSdkResourceHost[] = [];
 
 async function writeTestConfig(maxChildrenPerAgent?: number) {
   const config = createSpawnBoundaryConfig(stateDir, maxChildrenPerAgent);
@@ -151,6 +148,8 @@ async function writeTestConfig(maxChildrenPerAgent?: number) {
 }
 
 beforeEach(async () => {
+  sdkResourceHost = new LegacyPluginSdkResourceHost();
+  sdkResourceHost.bindScheduler(new GatewayScheduler());
   state = await createOpenClawTestState({
     label: "spawn-production-boundary",
     prepareProfileCatalog: true,
@@ -199,23 +198,26 @@ beforeEach(async () => {
 });
 
 afterEach(async ({ task }) => {
-  // Join finite completion tails before asserting that their registry roots retired.
-  await settleSubagentRegistryPersistenceWork(() => settleRootWork());
-  // Retire workspace observers before fixture cleanup removes their roots.
-  const { closeSkillsWatchers } = await import("../../../skills/runtime/refresh.js");
-  await closeSkillsWatchers(true);
-  await resetSubagentRegistryForTests({ persist: false });
-  for (const sdkHost of gatewayResources.splice(0)) {
-    await sdkHost.scheduler.stop();
-    await sdkHost.close();
+  try {
+    // Join finite completion tails before asserting that their registry roots retired.
+    await settleSubagentRegistryPersistenceWork(() => settleRootWork());
+    // Retire workspace observers before fixture cleanup removes their roots.
+    const { closeSkillsWatchers } = await import("../../../skills/runtime/refresh.js");
+    await closeSkillsWatchers(true);
+    await resetSubagentRegistryForTests({ persist: false });
+    vi.mocked(runSubagentAnnounceFlow).mockReset();
+    vi.mocked(callGateway).mockReset();
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
+    releaseProfileCatalog?.();
+    releaseProfileCatalog = undefined;
+  } finally {
+    try {
+      await sdkResourceHost.scheduler.stop().then(() => sdkResourceHost.close());
+    } finally {
+      await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
+    }
   }
-  vi.mocked(runSubagentAnnounceFlow).mockReset();
-  vi.mocked(callGateway).mockReset();
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
-  releaseProfileCatalog?.();
-  releaseProfileCatalog = undefined;
-  await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
 });
 
 async function createBoundParent(
@@ -238,6 +240,7 @@ async function createBoundParent(
   }
   return await createSpawnBoundaryParent({
     stateDir,
+    sdkResourceHost,
     parentSessionKey,
     parentRunId,
     operatorAuthority,
@@ -250,10 +253,6 @@ async function createBoundParent(
 }
 
 async function createBoundGateway(bound: Awaited<ReturnType<typeof createBoundParent>>) {
-  const sdkHost = new LegacyPluginSdkResourceHost();
-  sdkHost.bindScheduler(new GatewayScheduler());
-  bindLegacyPluginSdkResourceHost(bound.resolveGatewayContext, sdkHost);
-  gatewayResources.push(sdkHost);
   await refreshPreparedModelRuntimeSnapshots(bound.cfg, {
     gatewayLifecycle: true,
     catalogMode: "static",
@@ -433,6 +432,7 @@ describe("recursive spawn production boundary", () => {
       clearRuntimeConfigSnapshot();
       const bound = await createSpawnBoundaryParent({
         stateDir,
+        sdkResourceHost,
         parentSessionKey,
         parentRunId,
         requesterOrigin: { sessionKey: parentSessionKey, messageProvider: "telegram", senderId },

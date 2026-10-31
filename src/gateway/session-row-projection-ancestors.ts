@@ -13,8 +13,13 @@ import {
   type SessionRowReadView,
   type SessionRowPreparationOptions,
   type SessionRowSelectionPreparationOptions,
+  type SessionRowSubagentArchiveRead,
 } from "./session-row-prepared-read.js";
 import * as records from "./session-row-projection-record.js";
+import {
+  prepareSessionRowSubagentArchive,
+  SessionRowSubagentArchivePending,
+} from "./session-row-subagent-archive.js";
 import {
   resolveStoredSessionKeyForAgentStore,
   selectStoredSessionLineage,
@@ -218,6 +223,7 @@ export function createSessionRowAncestorReads(owner: {
     ancestorRows: (record: records.MaterializedRow, read?: SessionRowReadView) =>
       readSessionRowAncestors(record, {
         ...owner.state(),
+        ...(read ? { context: read.state.rowContext } : {}),
         referenced: owner.referenced,
         prepare: (row) =>
           records.hasEntry(row) &&
@@ -233,6 +239,7 @@ export function createSessionRowAncestorReads(owner: {
       consume: (read: SessionRowReadView) => T,
       options?: SessionRowPreparationOptions,
     ): Promise<T> {
+      let subagentArchive = options?.subagentArchive;
       const selected = options?.includeAncestors
         ? (config: records.Inputs["cfg"]) => {
             const targets = queries(config);
@@ -244,6 +251,9 @@ export function createSessionRowAncestorReads(owner: {
                   row &&
                   readSessionRowAncestors(row, {
                     ...owner.state(),
+                    ...(subagentArchive?.isCurrent()
+                      ? { context: subagentArchive.context(owner.state().context) }
+                      : {}),
                     referenced: owner.referenced,
                     // Resident identities must enter preparation even after a reset cleared metadata.
                     prepare: (parent) => parent,
@@ -264,6 +274,7 @@ export function createSessionRowAncestorReads(owner: {
       const releaseExactPreparation = owner.retainExactPreparation();
       const membershipPending = Symbol("session-membership-pending");
       let reboundCatalog = false;
+      let subagentArchiveKeys: readonly string[] = [];
       try {
         while (owner.isActive()) {
           let consumed = false;
@@ -297,14 +308,58 @@ export function createSessionRowAncestorReads(owner: {
                 if (owner.membership.needsPreparation(() => targets)) {
                   return owner.membership.prepare();
                 }
-                return owner.prepareExactRows(targets, Boolean(options?.selection), selectedRows);
+                if (options?.subagentArchive && !options.subagentArchive.isCurrent()) {
+                  throw new SessionRowSubagentArchivePending();
+                }
+                const pending = owner.prepareExactRows(
+                  targets,
+                  Boolean(options?.selection),
+                  selectedRows,
+                );
+                if (pending) {
+                  return pending;
+                }
+                // Stored parent links need child activity even without a registry requester edge.
+                const keys = [
+                  ...new Set(
+                    targets.flatMap((target, index) => [
+                      selectedRows[index]?.key ?? target.key,
+                      ...(selectedRows[index]?.materialized?.source.childLinks ?? []).map(
+                        (child) => child.key,
+                      ),
+                    ]),
+                  ),
+                ];
+                if (
+                  !subagentArchive?.isCurrent() ||
+                  (!options?.subagentArchive &&
+                    (keys.length !== subagentArchiveKeys.length ||
+                      keys.some((key, index) => key !== subagentArchiveKeys[index])))
+                ) {
+                  const accept = (archive: SessionRowSubagentArchiveRead) => {
+                    subagentArchive = archive;
+                    subagentArchiveKeys = keys;
+                  };
+                  const archive = prepareSessionRowSubagentArchive({
+                    kind: "sessions",
+                    sessionKeys: keys,
+                  });
+                  if (archive instanceof Promise) {
+                    return archive.then(accept);
+                  }
+                  accept(archive);
+                }
+                return undefined;
               },
               (read, targets) => {
-                if (owner.membership.needsPreparation(() => targets)) {
+                if (
+                  owner.membership.needsPreparation(() => targets) ||
+                  !subagentArchive?.isCurrent()
+                ) {
                   return membershipPending;
                 }
                 consumed = true;
-                return consume(read);
+                return consume(subagentArchive.read(read));
               },
               options?.selection
                 ? () =>

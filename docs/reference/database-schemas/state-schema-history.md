@@ -59,10 +59,29 @@ Doctor completes recognized schema-1 databases that predate the audit ledger bef
 | 35      | Content-addressed local workspace directory packs and source path sets, with compact per-projection file fingerprints                                                                                                                                                                                                                          | Unreleased          |
 
 | 36 | Starter install tables, record versions, and provenance use canonical Template names; unrelated data and absent optional provenance stay unchanged | Unreleased |
+| 37 | Completed kept-subagent run records move from hot shared-state storage to readable archive storage after 30 days | Unreleased |
 
 Earlier beta releases first included schema 1 in `v2026.5.30-beta.1`, schema 2
 in `v2026.7.2-beta.1`, schema 3 in `v2026.7.2-beta.2`, schema 5 in
 `v2026.7.2-beta.4`, and schema 6 in `v2026.7.2-beta.5`.
+
+### State schema 37
+
+Schema 37 adds `subagent_run_archives` and its child, requester, and controller
+lookup indexes. Startup and Doctor create the empty table through the normal
+consecutive SQLite and PostgreSQL migrations; they do not copy or rewrite the
+existing `subagent_runs` rows. The registry's minute sweeper subsequently moves
+eligible completed keep runs older than 30 days in bounded transactions. Hot
+and archived records remain readable through the same registry APIs; follow-ups
+restore the exact archived generation through the registry owner.
+
+The storage, 30-day retention, migration, and rollback contract was accepted at
+the material-change review checkpoint on October 30, 2026. Older binaries refuse
+schema 37 because they cannot read archived runs. Rollback restores the verified
+pre-migration backup with its matching binary. The archive retains history;
+archival does not delete child sessions, transcripts, attachments, or worktrees.
+The migration backup includes the existing hot `subagent_runs` rows so rollback
+recovers them even after later maintenance has moved them into archive storage.
 
 ### State schema 36
 

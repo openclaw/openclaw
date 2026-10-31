@@ -1,17 +1,27 @@
 import { aroundEach, expect, it, vi } from "vitest";
 import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import { archiveCompletedSubagentRuns } from "./subagent-registry-archive.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { createSubagentRegistryPublicApi } from "./subagent-registry-public-api.js";
 import type { PreparedSubagentRunsRead } from "./subagent-registry-read-snapshot.js";
+import {
+  buildLatestSubagentSessionListReadIndex,
+  countPendingDescendantRuns,
+  listSubagentSessionListRunsForControllers,
+} from "./subagent-registry-read.js";
 import {
   persistRegistryFixture,
   saveSubagentRegistryToSqlite,
 } from "./subagent-registry-state.fixture.test-support.js";
 import {
+  prepareSubagentRegistrationRows,
   clearSubagentRunsReadCacheForTest,
-  prepareSubagentSessionListReadCache,
+  getSubagentRunsSnapshotForRead,
+  withSubagentRunReadSnapshot,
 } from "./subagent-registry-state.js";
 import { holdFirstCompactRead } from "./subagent-registry-state.read.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -75,6 +85,171 @@ function expectSelected(
   ).toEqual({ ready: true, value: undefined });
 }
 
+it("reads archived tasks and descendants without restoring them, and fences archive deletion", async () => {
+  const archived = createRun("archived", {
+    cleanup: "keep",
+    cleanupCompletedAt: 201,
+    swarmRunId: "archived-collector",
+    groupId: "historical-group",
+    task: "complete historical task ".repeat(50),
+  });
+  const child = createRun("current-child", {
+    requesterSessionKey: archived.childSessionKey,
+    swarmRequesterSessionKey: archived.childSessionKey,
+    execution: { status: "running", startedAt: 300 },
+    collectorCompletion: undefined,
+  });
+  const successor = createRun("archived-successor", {
+    cleanup: "keep",
+    cleanupCompletedAt: 221,
+    createdAt: 150,
+    execution: { status: "terminal", endedAt: 220 },
+    swarmRunId: archived.runId,
+    childSessionKey: archived.childSessionKey,
+  });
+  persistRegistryFixture(new Map([archived, successor, child].map((row) => [row.runId, row])));
+  for (const row of [archived, successor, child]) {
+    subagentRuns.set(row.runId, row);
+  }
+  expect(await archiveCompletedSubagentRuns(32 * 24 * 60 * 60_000)).toBe(2);
+  const api = createReadApi(subagentRuns);
+  await mutateSubagentRuns([archived.runId], (rows) => ({ value: undefined, postimages: rows }), {
+    loadMissingRows: true,
+  });
+  expect(subagentRuns.has(archived.runId)).toBe(true);
+  const archivedAlias = await api.prepareSubagentRunsByRunIds([archived.runId]);
+  expect(archivedAlias.consume((rows) => rows.get(archived.runId)?.runId)).toEqual({
+    ready: true,
+    value: successor.runId,
+  });
+  expect(await archiveCompletedSubagentRuns(32 * 24 * 60 * 60_000)).toBe(1);
+  expect(await api.getSubagentRunByRunId(archived.runId)).toMatchObject({
+    task: archived.task,
+    completion: archived.completion,
+  });
+  const prepared = await api.prepareSubagentRunsByRunIds(["archived-collector"]);
+  expect(prepared.consume((rows) => rows.get("archived-collector")?.runId)).toEqual({
+    ready: true,
+    value: archived.runId,
+  });
+  const alias = await api.prepareSubagentRunsByRunIds([archived.runId]);
+  expect(alias.consume((rows) => rows.get(archived.runId)?.runId)).toEqual({
+    ready: true,
+    value: successor.runId,
+  });
+  const descendants = await withSubagentRunReadSnapshot(
+    subagentRuns,
+    (snapshot) => ({ runIds: [...snapshot.keys()], sessionKeys: [] }),
+    (_selection, rows) => [...rows.keys()].toSorted(),
+    { sessionKeys: [archived.requesterSessionKey], descendants: true },
+  );
+  expect(descendants).toEqual([archived.runId, successor.runId, child.runId]);
+  expect(await countPendingDescendantRuns(archived.requesterSessionKey, () => {})).toBe(1);
+  const countActive = await api.prepareSubagentActiveRunCount(archived.requesterSessionKey);
+  expect(countActive()).toBe(1);
+  expect(await api.countActiveRunsForSession(archived.requesterSessionKey)).toBe(1);
+  expect(
+    (
+      await buildLatestSubagentSessionListReadIndex([archived.childSessionKey])
+    ).getLatestSubagentRun(archived.childSessionKey)?.runId,
+  ).toBe(successor.runId);
+  expect(
+    (await listSubagentSessionListRunsForControllers([archived.requesterSessionKey])).some(
+      (row) => row.runId === archived.runId,
+    ),
+  ).toBe(true);
+  expect(subagentRuns.has(archived.runId)).toBe(false);
+  expect(getSubagentRunsSnapshotForRead(subagentRuns).has(archived.runId)).toBe(false);
+  const live = createRun("live-successor", {
+    swarmRunId: archived.runId,
+    groupId: "historical-group",
+    createdAt: 300,
+    execution: { status: "running", startedAt: 300 },
+    collectorCompletion: undefined,
+  });
+  await mutateSubagentRuns([live.runId], () => ({
+    value: undefined,
+    postimages: new Map([[live.runId, live]]),
+  }));
+  expect(countActive()).toBe(2);
+  expect((await api.getSubagentRunByRunId(archived.runId))?.runId).toBe(archived.runId);
+  const currentAlias = await api.prepareSubagentRunsByRunIds([archived.runId]);
+  expect(currentAlias.consume((rows) => rows.get(archived.runId)?.runId)).toEqual({
+    ready: true,
+    value: live.runId,
+  });
+  await mutateSubagentRuns([child.runId], (rows) => ({
+    value: undefined,
+    postimages: new Map([[child.runId, { ...rows.get(child.runId)!, label: "progress" }]]),
+  }));
+  expect(prepared.consume((rows) => rows.get("archived-collector")?.runId).ready).toBe(true);
+  const registrationRows = await prepareSubagentRegistrationRows(
+    archived.childSessionKey,
+    [archived.runId],
+    captureOpenClawStateWorkerContext(),
+    "main",
+  );
+  const readGroup = await api.prepareSwarmRunsForGroup("historical-group");
+  const unrelated = createRun("unrelated-archive", { cleanup: "keep", cleanupCompletedAt: 201 });
+  await mutateSubagentRuns([unrelated.runId], () => ({
+    value: undefined,
+    postimages: new Map([[unrelated.runId, unrelated]]),
+  }));
+  expect(await archiveCompletedSubagentRuns(32 * 24 * 60 * 60_000)).toBe(1);
+  expect(registrationRows().get(archived.runId)?.runId).toBe(archived.runId);
+  expect(
+    readGroup()
+      .map((row) => row.runId)
+      .toSorted(),
+  ).toEqual([archived.runId, live.runId]);
+  await mutateSubagentRuns([live.runId], () => ({
+    value: undefined,
+    postimages: new Map([[live.runId, null]]),
+  }));
+  expect(readGroup().map((row) => row.runId)).toEqual([archived.runId]);
+  expect(countActive()).toBe(1);
+  await mutateSubagentRuns([child.runId], (rows) => ({
+    value: undefined,
+    postimages: new Map([
+      [
+        child.runId,
+        {
+          ...rows.get(child.runId)!,
+          execution: { status: "terminal", endedAt: Date.now() },
+          cleanupCompletedAt: Date.now(),
+          collectorCompletion: { status: "done" },
+        },
+      ],
+    ]),
+  }));
+  expect(countActive()).toBe(0);
+  const context = captureOpenClawStateWorkerContext();
+  await stateReads.withOpenClawStateDatabaseReadSnapshot(async () => {
+    await mutateSubagentRuns(
+      [archived.runId],
+      () => ({
+        value: undefined,
+        postimages: new Map([[archived.runId, null]]),
+      }),
+      { loadMissingRows: true, context },
+    );
+    expect((await api.getSubagentRunByRunId(archived.runId))?.task).toBe(archived.task);
+  });
+  expect(prepared.consume((rows) => rows.size)).toEqual({ ready: false });
+  expect(await api.getSubagentRunByRunId("archived-collector")).toBeUndefined();
+  expect(
+    await mutateSubagentRuns(
+      [archived.runId],
+      (rows) => ({
+        value: rows.has(archived.runId),
+        postimages: rows,
+      }),
+      { loadMissingRows: true },
+    ),
+  ).toBe(false);
+  expect(subagentRuns.has(archived.runId)).toBe(false);
+});
+
 it("uses the replacement owner published while collector payload hydration is pending", async () => {
   const original = createRun("original", { swarmRunId: "collector" });
   saveSubagentRegistryToSqlite(new Map([[original.runId, original]]));
@@ -132,17 +307,17 @@ it("counts retained children without preparing unrelated descendant graphs", asy
   saveSubagentRegistryToSqlite(new Map(rows.map((row) => [row.runId, row])));
   const memory = new Map<string, SubagentRunRecord>();
   const api = createReadApi(memory);
-  expect(() => api.countActiveRunsForSession("agent:main:main")).toThrow("must be prepared");
   const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
   try {
-    await prepareSubagentSessionListReadCache();
-    const count = () =>
-      api.countActiveRunsForSession("agent:main:main", {
-        collect: false,
-        requesterAgentId: "main",
-      });
+    const count = await api.prepareSubagentActiveRunCount("agent:main:main", {
+      collect: false,
+      requesterAgentId: "main",
+    });
     expect(count()).toBe(activeChildren);
-    expect(read.mock.calls.map(([, command]) => command.type)).toEqual(["subagents.sessionList"]);
+    expect(read.mock.calls.map(([, command]) => command.type)).toEqual([
+      "subagents.sessionList",
+      "subagents.runs",
+    ]);
     const settled = createRun("active-0", { collect: false, requesterAgentId: "main" });
     memory.set(settled.runId, settled);
     expect(count()).toBe(activeChildren - 1);

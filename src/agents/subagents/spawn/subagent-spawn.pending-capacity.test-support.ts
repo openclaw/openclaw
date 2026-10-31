@@ -5,14 +5,14 @@ import {
   withinTest,
 } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import type { countActiveRunsForSession } from "../registry/subagent-registry.js";
+import type { SessionsSpawnToolOptions } from "../../tools/sessions-spawn-options.js";
 import type { spawnSubagentDirect } from "./subagent-spawn.js";
 
 export async function expectSharedPendingSpawnCapacity(params: {
   config: OpenClawConfig;
   spawn: typeof spawnSubagentDirect;
   callGatewayMock: Pick<Mock, "mockImplementation">;
-  countActiveRuns: typeof countActiveRunsForSession;
+  countActiveRuns: NonNullable<SessionsSpawnToolOptions["countActiveRuns"]>;
   signal: AbortSignal;
 }) {
   const { maybeSpawnVisibleSession } = await import("../../tools/sessions-spawn-visible.js");

@@ -45,6 +45,7 @@
 // through a real shared auth profile. Tool continuations stay successful. Writes mock counts even on failure.
 // --gateway-preload <file> imports benchmark instrumentation after tsx for source or dist entries;
 // result.json records its resolved path and SHA-256. Use the same instrumentation on both arms.
+// Doctor and Gateway share a private OS temp/cache directory, removed after child cleanup.
 // --chat-active-after-tool with --chat-active-hold-ms waits for the first text delta
 // after a committed tool result before sending queued/steering inputs. Requires --runs 1;
 // the stream continues during admission and holds completion for the requested interval.
@@ -88,14 +89,17 @@ import {
   createWriteStream,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   realpathSync,
   renameSync,
+  rmSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
 import type { HeapProfiler, Profiler } from "node:inspector";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { createHistogram } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
@@ -3317,7 +3321,7 @@ const ownedListeners = new Set<ChildProcess>();
 if (values["default-state-dir"] && path.basename(root) !== ".openclaw") {
   throw new Error("--default-state-dir requires a fixture rooted at <synthetic-home>/.openclaw");
 }
-const env = {
+const env: NodeJS.ProcessEnv = {
   ...createGatewayBenchEnv(path.join(root, "home"), configPath, { startupTrace: false }),
   ...(values["default-state-dir"]
     ? { OPENCLAW_HOME: path.dirname(root), OPENCLAW_STATE_DIR: undefined }
@@ -3331,7 +3335,6 @@ const env = {
   ...(values["attempt-setup-image"] && process.env.OPENCLAW_PATH_BOOTSTRAPPED === "1"
     ? { OPENCLAW_PATH_BOOTSTRAPPED: "1" }
     : {}),
-  TMPDIR: path.join(root, "tmp"),
   OPENAI_API_KEY: "synthetic-fixture",
   ...(values["operator-model-policy"] && values["team-stress-allocation-sampling"]
     ? { OPENCLAW_BENCH_OPERATOR_MODEL_POLICY_COUNTS: "1" }
@@ -5446,6 +5449,7 @@ async function connectClient(index: number) {
   }
   return client;
 }
+let runtimeTempDir: string | undefined;
 let cleanupPromise: Promise<void> | undefined;
 function cleanup() {
   return (cleanupPromise ??= (async () => {
@@ -5485,6 +5489,9 @@ function cleanup() {
     for (const target of diffTargets) {
       writeFileSync(path.join(target.worktree, "README.md"), target.original);
     }
+    if (runtimeTempDir) {
+      rmSync(runtimeTempDir, { recursive: true, force: true });
+    }
   })());
 }
 for (const [signal, exitCode] of [
@@ -5496,6 +5503,10 @@ for (const [signal, exitCode] of [
   });
 }
 try {
+  runtimeTempDir = mkdtempSync(path.join(realpathSync(tmpdir()), "openclaw-bench-"));
+  env.TMPDIR = runtimeTempDir;
+  env.XDG_CACHE_HOME = path.join(runtimeTempDir, "cache");
+  mkdirSync(env.XDG_CACHE_HOME, { mode: 0o700 });
   await assertPortAvailable(port);
   await assertPortAvailable(mockPort);
   if (values["team-stress"]) {

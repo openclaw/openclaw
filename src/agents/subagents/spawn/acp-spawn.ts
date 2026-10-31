@@ -59,7 +59,7 @@ import type { SpawnRequesterConversationSource } from "../../spawn-requester-ori
 import { resolveSpawnedWorkspaceInheritance } from "../../spawned-context.js";
 import type { PreparedSessionPermissionPolicy } from "../../tool-fs-policy.types.js";
 import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
-import { prepareSubagentSessionListReadCache } from "../registry/subagent-registry-state.js";
+import { prepareSubagentActiveRunCount } from "../registry/subagent-registry.js";
 import { countUntrackedActiveAcpRunsForOwner } from "./acp-spawn-admission.js";
 import {
   resolveAcpSpawnBootstrapDeliveryPlan,
@@ -305,7 +305,10 @@ export async function spawnAcpDirect(
     cfg,
     agentId: requesterAgentId,
   });
-  await prepareSubagentSessionListReadCache();
+  const countActiveRuns = await prepareSubagentActiveRunCount(requesterInternalKey, {
+    collect: false,
+    requesterAgentId,
+  });
   ctx.assertActive?.();
   const resolveAdmission = (pendingChildren = 0, pendingChildSessionKeys?: ReadonlySet<string>) =>
     resolveSpawnAdmission({
@@ -318,6 +321,7 @@ export async function spawnAcpDirect(
       targetAgentId,
       requestedAgentId: params.agentId,
       configuredAgentIds: Array.from(resolveConfiguredAcpSubagentTargetIds(cfg)),
+      activeChildren: countActiveRuns(),
       additionalActiveChildren: hasSubagentEnvelope
         ? countUntrackedActiveAcpRunsForOwner(requesterInternalKey, pendingChildSessionKeys) +
           pendingChildren

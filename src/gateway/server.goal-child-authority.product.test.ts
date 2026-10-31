@@ -12,8 +12,8 @@ import { readRequestText } from "../../test/helpers/gateway-integration-fixtures
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
-import { getSubagentRunByRunId } from "../agents/subagents/registry/subagent-registry.js";
 import * as followupDrain from "../auto-reply/reply/queue/drain.js";
 import { getExistingFollowupQueue } from "../auto-reply/reply/queue/state.js";
 import {
@@ -442,7 +442,7 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
         assert(client);
         const wait = <T>(promise: Promise<T>) =>
           withinTest(Promise.race([promise, scenario.failed.promise]), signal);
-        const child = () => scenario.receipt && getSubagentRunByRunId(scenario.receipt.runId);
+        const child = () => scenario.receipt && subagentRuns.get(scenario.receipt.runId);
         const hasGoalCustody = () => {
           const queue = getExistingFollowupQueue(scenario.sessionKey);
           return Boolean(

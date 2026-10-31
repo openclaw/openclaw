@@ -29,12 +29,20 @@ const preparedRunStates = new WeakMap<
   }
 >();
 
+/** Registry eviction must release old run facts even when the stored row source is unchanged. */
+export function forgetPreparedSessionRunState(source: SessionRunSource): void {
+  preparedRunStates.delete(source);
+}
+
 /** Each immutable materialized source belongs to one key; replacement retires its query. */
 export function projectPreparedSessionRunState(
   key: string,
   source: SessionRunSource,
   now: number,
-  rowContext: Parameters<typeof projectGatewaySessionRunState>[0]["rowContext"],
+  rowContext: Pick<
+    SessionListRowContext,
+    "subagentRuns" | "projectedAgentRuns" | "projectedSubagentActivity" | "transientSubagentRuns"
+  >,
 ) {
   let prepared = preparedRunStates.get(source);
   if (!prepared) {
@@ -55,7 +63,7 @@ export function projectPreparedSessionRunState(
     now,
     rowContext,
     projectRunProgress: prepared.progress,
-    cache: prepared.cache,
+    cache: rowContext.transientSubagentRuns ? undefined : prepared.cache,
   });
 }
 
@@ -79,10 +87,19 @@ export type SessionRowSelectionPreparationOptions = {
   catalogSignal?: AbortSignal;
 };
 
+export type SessionRowSubagentArchiveRead = {
+  isCurrent: () => boolean;
+  assertCurrent: () => void;
+  context: (current: SessionListRowContext) => SessionListRowContext;
+  read: (owner: SessionRowReadView) => SessionRowReadView;
+};
+
 export type SessionRowPreparationOptions = {
   includeAncestors?: boolean;
   /** Queries select canonical durable roster keys; private exact reads use the default path. */
   selection?: boolean | SessionRowSelectionPreparationOptions;
+  /** A list's already-prepared full archive view also covers its exact page. */
+  subagentArchive?: SessionRowSubagentArchiveRead;
 };
 
 /** Synchronous selection reenters through the existing exact worker preparation owner. */
@@ -153,6 +170,7 @@ export function readPreparedSessionRows<T>(
   consume: (read: SessionRowReadView) => T,
   privateRepositories?: ReadonlyMap<string, PreparedPrivateSessionRepository>,
   capturedPrivateRows?: ReadonlyMap<string, records.Row | undefined>,
+  fromSelection = false,
 ) {
   if (!isActive()) {
     throw new Error("Session row read view is no longer active");
@@ -161,7 +179,9 @@ export function readPreparedSessionRows<T>(
   let state = owner.state;
   const privateRows = new Map<string, records.MaterializedRow | undefined>();
   const childSelections = new Map<string, records.EntryRow[]>();
-  const privateKey = (query: records.Lookup) => privateSessionRowReadKey(state.cfg, query);
+  // Roster selection already resolved canonical durable keys.
+  const privateKey = (query: records.Lookup) =>
+    fromSelection ? undefined : privateSessionRowReadKey(state.cfg, query);
   for (const query of queries(state.cfg)) {
     const key = privateKey(query);
     if (key && !privateRows.has(key)) {

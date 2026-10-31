@@ -49,6 +49,10 @@ import {
   legacyTemplateStateIdentifier,
 } from "./openclaw-state-db-schema-v36-template-names.js";
 import {
+  subagentArchivesPostgresMigration,
+  withoutSubagentRunArchives,
+} from "./openclaw-state-db-schema-v37-subagent-archives.js";
+import {
   admitStateSchemaFacts,
   PostgresSchemaAdmissionUnavailableError,
 } from "./openclaw-state-db-schema-version.js";
@@ -187,8 +191,12 @@ function statePostgresVersionSql(version: number): string {
 }
 
 function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
+  const statePostgresSchemaV36 = {
+    ...statePostgresSchema,
+    postgres: withoutSubagentRunArchives(statePostgresSchema.postgres),
+  };
   const statePostgresSchemaV35 = {
-    postgres: withLegacyTemplateStateSchema(statePostgresSchema.postgres),
+    postgres: withLegacyTemplateStateSchema(statePostgresSchemaV36.postgres),
     postgresFragments: statePostgresSchema.postgresFragments.map((fragment) => ({
       ...fragment,
       tables: fragment.tables.map(legacyTemplateStateIdentifier),
@@ -364,8 +372,14 @@ function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
     {
       version: 36,
       fromSchema: statePostgresSchemaV35,
-      schema: statePostgresSchema,
+      schema: statePostgresSchemaV36,
       sql: `${TEMPLATE_STATE_POSTGRES_MIGRATION_SQL}\n${statePostgresVersionSql(36)}`,
+    },
+    {
+      version: 37,
+      fromSchema: statePostgresSchemaV36,
+      schema: statePostgresSchema,
+      sql: `${subagentArchivesPostgresMigration(statePostgresSchema.postgres)}\n${statePostgresVersionSql(37)}`,
     },
   ];
 }

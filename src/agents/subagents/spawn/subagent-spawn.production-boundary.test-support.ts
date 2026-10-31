@@ -24,6 +24,10 @@ import {
 } from "../../../gateway/worker-environments/placement-turn-claim-events.js";
 import { withTimeout } from "../../../infra/fs-safe.js";
 import {
+  bindLegacyPluginSdkResourceHost,
+  type LegacyPluginSdkResourceHost,
+} from "../../../plugins/legacy-sdk-resource-host.js";
+import {
   bindGatewayContextResolver,
   withPluginRuntimeGatewayRequestScope,
 } from "../../../plugins/runtime/gateway-request-scope.js";
@@ -136,12 +140,13 @@ export function createSpawnOperatorSource(
 
 export async function createSpawnBoundaryParent(params: {
   stateDir: string;
+  sdkResourceHost: LegacyPluginSdkResourceHost;
   parentSessionKey: string;
   parentRunId: string;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   requesterOrigin?: RequesterOrigin;
 }) {
-  const { stateDir, parentSessionKey, parentRunId, operatorAuthority } = params;
+  const { stateDir, sdkResourceHost, parentSessionKey, parentRunId, operatorAuthority } = params;
   const cfg = await captureRuntimeConfigAsyncReader()();
   const storePath = await writeSubagentSessionEntry({
     stateDir,
@@ -159,6 +164,7 @@ export async function createSpawnBoundaryParent(params: {
   const gatewayBinding = { current: context as unknown as GatewayRequestContext };
   const resolveGatewayContext = () => gatewayBinding.current;
   context.resolveGatewayContext = resolveGatewayContext;
+  bindLegacyPluginSdkResourceHost(resolveGatewayContext, sdkResourceHost);
   const admission = prepareAgentRunAdmission({
     cfg,
     operatorAuthority,
@@ -201,6 +207,7 @@ export async function createSpawnBoundaryParent(params: {
     admitted,
     gatewayBinding,
     resolveGatewayContext,
+    sdkResourceHost,
     execution,
     parentSessionKey,
     parentRunId,

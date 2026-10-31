@@ -31,8 +31,10 @@ vi.mock("../subagents/registry/subagent-control-scope.js", async (importOriginal
   return {
     ...actual,
     ensureSubagentControllerOwnsRun: () => undefined,
-    listControlledSubagentRunFacts: (key: string) =>
-      owner.runs.filter((entry) => entry.requesterSessionKey === key),
+    prepareSubagentControlRunFacts: async () => ({
+      isCurrent: () => true,
+      list: (key: string) => owner.runs.filter((entry) => entry.requesterSessionKey === key),
+    }),
   };
 });
 vi.mock("../subagents/registry/subagent-registry-state.js", () => ({

@@ -12,9 +12,11 @@ import {
   requireSessionRowProjection,
 } from "../session-row-projection-access.js";
 import {
-  prepareProjectedSessionList,
-  prepareSessionSearchIdentityNames,
-} from "../session-utils-list.js";
+  prepareSessionRowSubagentArchive,
+  SessionRowSubagentArchivePending,
+} from "../session-row-subagent-archive.js";
+import { prepareSessionSearchIdentityNames } from "../session-search-identities.js";
+import { prepareProjectedSessionList, prepareSessionRowSelection } from "../session-utils-list.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 /** Search all selected resident metadata; only matching rows cross the wire. */
@@ -28,6 +30,7 @@ export async function searchProjectedSessionTranscripts(params: {
 }) {
   const projection = requireSessionRowProjection(params.context);
   let searchIdentities: Awaited<ReturnType<typeof prepareSessionSearchIdentityNames>> | undefined;
+  let subagentArchive: Awaited<ReturnType<typeof prepareSessionRowSubagentArchive>>;
   const select = () => {
     const { prepared, presentation, filters } = prepareProjectedSessionList({
       projection,
@@ -36,6 +39,7 @@ export async function searchProjectedSessionTranscripts(params: {
       client: params.client,
       now: Date.now(),
       searchIdentities,
+      subagentArchive,
     });
     const { entries } = withAgentRosterFactsBatch(prepared.cfg, () =>
       filterSessionEntries(filters),
@@ -93,10 +97,15 @@ export async function searchProjectedSessionTranscripts(params: {
     do {
       await projection.ensureMaterialized();
       if (params.scope.search?.trim()) {
-        searchIdentities = await prepareSessionSearchIdentityNames(projection, params.scope);
+        searchIdentities = await prepareSessionSearchIdentityNames(
+          prepareSessionRowSelection(projection, params.scope, { ordered: true }),
+          projection.state.scope(params.scope).agentId,
+        );
       }
+      subagentArchive = await prepareSessionRowSubagentArchive();
     } while (
       projection.needsMaterialization ||
+      !subagentArchive.isCurrent() ||
       (searchIdentities && searchIdentities.cfg !== projection.state.cfg)
     );
     const selected = select();
@@ -121,6 +130,7 @@ export async function searchProjectedSessionTranscripts(params: {
     }
     if (
       projection.needsMaterialization ||
+      !subagentArchive.isCurrent() ||
       (searchIdentities && searchIdentities.cfg !== projection.state.cfg)
     ) {
       continue;
@@ -148,7 +158,10 @@ export async function searchProjectedSessionTranscripts(params: {
         if (getSessionRowProjection(params.context) !== projection) {
           throw new Error("Session search owner changed while reading; retry the request");
         }
-        if (searchIdentities && searchIdentities.cfg !== projection.state.cfg) {
+        if (
+          !subagentArchive.isCurrent() ||
+          (searchIdentities && searchIdentities.cfg !== projection.state.cfg)
+        ) {
           return false;
         }
         const refreshed = select();
@@ -178,8 +191,13 @@ export async function searchProjectedSessionTranscripts(params: {
         });
         return true;
       },
-      { selection: true },
-    );
+      { selection: true, subagentArchive },
+    ).catch((error: unknown) => {
+      if (error instanceof SessionRowSubagentArchivePending) {
+        return false;
+      }
+      throw error;
+    });
     if (published) {
       return;
     }

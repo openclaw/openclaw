@@ -263,9 +263,9 @@ it("preserves memory schema admission when a fresh handle reuses repair then rep
   });
 });
 
-it.each(["clean", "unclean"])(
-  "retains reindexed memory admission across a %s restart without skipping required integrity",
-  async (shutdown) => {
+it.each(["matching", "missing"])(
+  "retains reindexed memory across restart with a %s seal without manufacturing verification",
+  async (seal) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (fixture) => {
       const target = openOpenClawAgentDatabase({
         agentId: "main",
@@ -338,7 +338,7 @@ it.each(["clean", "unclean"])(
       }
       await closeOpenClawAgentDatabasesAsync();
       expect(fs.existsSync(`${target.path}.seal`)).toBe(true);
-      if (shutdown === "unclean") {
+      if (seal === "missing") {
         fs.unlinkSync(`${target.path}.seal`);
       }
       // Same-process reopen deliberately retains physical proof; only a new process tests the seal.
@@ -347,10 +347,11 @@ it.each(["clean", "unclean"])(
         target.path,
       ]);
       expect(JSON.parse(stdout)).toEqual({
-        integrityChecked: shutdown === "unclean",
-        // A missing seal requires integrity verification, but the published schema is still valid.
         schemaRebuilt: false,
         ftsAvailable: true,
+        matches: [{ id: "reindexed" }],
+        // Deferred admission must not manufacture verified restart proof.
+        sealPresent: seal === "matching",
       });
     });
   },

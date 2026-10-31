@@ -17,10 +17,6 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasAgentRunContextExecutionOwner } from "../../infra/agent-run-registry.js";
 import * as mutationAdmission from "../../infra/sqlite-worker-operation-admission.js";
-import {
-  bindLegacyPluginSdkResourceHost,
-  LegacyPluginSdkResourceHost,
-} from "../../plugins/legacy-sdk-resource-host.js";
 import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
@@ -122,8 +118,6 @@ describe("visitor access admitted caller", () => {
         const context = makeContext();
         const resolveGatewayContext = () => context;
         context.resolveGatewayContext = resolveGatewayContext;
-        const sdkResources = new LegacyPluginSdkResourceHost();
-        bindLegacyPluginSdkResourceHost(resolveGatewayContext, sdkResources);
         const connection = new AbortController();
         const client: GatewayClient = {
           ...operatorWriteCliClient([scenario === "writer" ? WRITE_SCOPE : ADMIN_SCOPE]),
@@ -347,7 +341,6 @@ describe("visitor access admitted caller", () => {
           caller.release();
           closeGatewayDeviceRevocation(context);
           await gateway?.stop();
-          await sdkResources.close();
         }
       });
     },
@@ -420,8 +413,6 @@ describe("visitor access admitted caller", () => {
       const previousContext = makeContext();
       const resolvePreviousContext = () => previousContext;
       previousContext.resolveGatewayContext = resolvePreviousContext;
-      const previousSdkResources = new LegacyPluginSdkResourceHost();
-      bindLegacyPluginSdkResourceHost(resolvePreviousContext, previousSdkResources);
       const previousGateway = await startVisitorGateway({
         config,
         state,
@@ -441,7 +432,6 @@ describe("visitor access admitted caller", () => {
       } finally {
         closeGatewayDeviceRevocation(previousContext);
         await previousGateway.stop();
-        await previousSdkResources.close();
       }
       await closeOpenClawStateDatabaseAsync();
 
@@ -456,8 +446,6 @@ describe("visitor access admitted caller", () => {
       const context = makeContext();
       const resolveGatewayContext = () => context;
       context.resolveGatewayContext = resolveGatewayContext;
-      const sdkResources = new LegacyPluginSdkResourceHost();
-      bindLegacyPluginSdkResourceHost(resolveGatewayContext, sdkResources);
       const gateway = await startVisitorGateway({
         config: restrictedConfig,
         state,
@@ -697,7 +685,6 @@ describe("visitor access admitted caller", () => {
         }
       } finally {
         await gateway.stop();
-        await sdkResources.close();
       }
     });
   });

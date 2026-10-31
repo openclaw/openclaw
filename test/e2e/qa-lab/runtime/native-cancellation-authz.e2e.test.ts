@@ -90,7 +90,7 @@ async function registerRunningSubagent(
     cleanup: "keep",
     gatewayContextResolver,
   });
-  const generation = getSubagentRunByRunId(runId)?.generation;
+  const generation = (await getSubagentRunByRunId(runId))?.generation;
   if (typeof generation !== "number") {
     throw new Error("Subagent registration did not publish a generation");
   }
@@ -252,7 +252,7 @@ it("allows the owner and rejects foreign or replaced backing runs before termina
           runId: allowedRunId,
         });
         expect(allowed.details).toMatchObject({ found: true, killed: true });
-        expect(getSubagentRunByRunId(allowedRunId)).toMatchObject({
+        expect(await getSubagentRunByRunId(allowedRunId)).toMatchObject({
           endedReason: "subagent-killed",
           execution: { status: "terminal", endedAt: expect.any(Number) },
         });
@@ -265,8 +265,8 @@ it("allows the owner and rejects foreign or replaced backing runs before termina
           runId: foreignRunId,
         });
         expect(foreign.details).toMatchObject({ status: "forbidden" });
-        expect(getSubagentRunByRunId(foreignRunId)?.execution.status).toBe("running");
-        expect(getSubagentRunByRunId(foreignRunId)?.execution.endedAt).toBeUndefined();
+        expect((await getSubagentRunByRunId(foreignRunId))?.execution.status).toBe("running");
+        expect((await getSubagentRunByRunId(foreignRunId))?.execution.endedAt).toBeUndefined();
 
         for (const sameId of [false, true]) {
           const childSessionKey = `agent:main:subagent:replacement-${sameId}`;
@@ -302,7 +302,7 @@ it("allows the owner and rejects foreign or replaced backing runs before termina
                   nextRunId: replacementRunId,
                 }),
               ).toBe(true);
-              expect(getSubagentRunByRunId(runId)).toBeUndefined();
+              expect(await getSubagentRunByRunId(runId)).toBeUndefined();
             }
             await registerRunningSubagent(
               replacementRunId,
@@ -326,8 +326,10 @@ it("allows the owner and rejects foreign or replaced backing runs before termina
               expectedOwnerKey: ROUTE_OWNER,
             }),
           ).toEqual({ found: false, killed: false });
-          expect(getSubagentRunByRunId(replacementRunId)?.execution.status).toBe("running");
-          expect(getSubagentRunByRunId(replacementRunId)?.execution.endedAt).toBeUndefined();
+          expect((await getSubagentRunByRunId(replacementRunId))?.execution.status).toBe("running");
+          expect(
+            (await getSubagentRunByRunId(replacementRunId))?.execution.endedAt,
+          ).toBeUndefined();
         }
 
         const acpChild = "agent:main:acp:native-replacement";

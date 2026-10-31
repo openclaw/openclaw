@@ -8,7 +8,13 @@ import { addSession } from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
+import { archiveCompletedSubagentRuns } from "../agents/subagents/registry/subagent-registry-archive.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import {
+  mutateSubagentRuns,
+  restoreSubagentRunsFromDisk,
+} from "../agents/subagents/registry/subagent-registry-persistence.js";
+import { persistRegistryFixture } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -148,6 +154,70 @@ it("marks ordinary conversations without inheriting cron or external execution o
         }
       }
       resetProcessRegistryForTests();
+    }
+  }));
+
+it("uses archived ancestry only to resume a currently live descendant's root", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
+    vi.stubEnv("OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE", "1");
+    const root = { agentId: "main", sessionKey: "agent:main:archive-root" };
+    const rootEntry = { sessionId: "archive-root", updatedAt: 1 };
+    replaceSessionEntrySync(root, rootEntry);
+    const now = Date.now();
+    const endedAt = now - 31 * 86_400_000;
+    const parent = createSubagentRunRecord({
+      runId: "archived-parent",
+      childSessionKey: "agent:main:subagent:archived-parent",
+      requesterSessionKey: root.sessionKey,
+      endedAt,
+      cleanupCompletedAt: endedAt + 1,
+      expectsCompletionMessage: false,
+    });
+    const child = createSubagentRunRecord({
+      runId: "live-grandchild",
+      childSessionKey: "agent:main:subagent:live-grandchild",
+      requesterSessionKey: parent.childSessionKey,
+      expectsCompletionMessage: false,
+    });
+    persistRegistryFixture(new Map([parent, child].map((row) => [row.runId, row])));
+    await restoreSubagentRunsFromDisk({ runs: subagentRuns });
+    const claim = claimAgentRunContext(
+      child.runId,
+      { agentId: "main", sessionKey: child.childSessionKey },
+      { trackOwner: true, ownsContext: true },
+    );
+    try {
+      expect(await archiveCompletedSubagentRuns(now)).toBe(1);
+      expect(subagentRuns.has(parent.runId)).toBe(false);
+      await persistRunningSessionsForRestart({ cfg: {} });
+      expect(loadExactSessionEntry(root)?.entry.resumeAfterRestart).toEqual({ queuedInputIds: [] });
+      expect(subagentRuns.has(parent.runId)).toBe(false);
+
+      releaseAgentRunContext(child.runId, claim);
+      await mutateSubagentRuns([child.runId], (rows) => ({
+        value: undefined,
+        postimages: new Map([
+          [
+            child.runId,
+            {
+              ...rows.get(child.runId)!,
+              execution: { status: "terminal" as const, endedAt },
+              cleanupCompletedAt: endedAt + 1,
+            },
+          ],
+        ]),
+      }));
+      expect(await archiveCompletedSubagentRuns(now)).toBe(1);
+      replaceSessionEntrySync(root, { ...rootEntry, resumeAfterRestart: undefined });
+      expect(loadExactSessionEntry(root)?.entry.resumeAfterRestart).toBeUndefined();
+      await persistRunningSessionsForRestart({ cfg: {} });
+      expect(loadExactSessionEntry(root)?.entry.resumeAfterRestart).toBeUndefined();
+      expect(subagentRuns.size).toBe(0);
+    } finally {
+      releaseAgentRunContext(child.runId, claim);
+      subagentRuns.clear();
+      vi.unstubAllEnvs();
     }
   }));
 

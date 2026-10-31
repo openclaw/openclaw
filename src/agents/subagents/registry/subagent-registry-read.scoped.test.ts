@@ -54,6 +54,11 @@ vi.mock("./subagent-registry-state.js", () => ({
   getSubagentRunsSnapshotForChildSession: mocks.getSubagentRunsSnapshotForChildSession,
   getSubagentRunsSnapshotForRead: mocks.getSubagentRunsSnapshotForRead,
   prepareSubagentSessionListReadCache: async () => {},
+  prepareSubagentArchiveSessionListRead: async () => ({
+    runs: new Map(),
+    isCurrent: () => true,
+    assertCurrent: () => {},
+  }),
   getSubagentSessionListRunsSnapshotForSessions: () => mocks.readSnapshot,
 }));
 

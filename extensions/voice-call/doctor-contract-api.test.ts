@@ -134,6 +134,7 @@ describe("voice-call doctor state migration", () => {
       preview: expect.arrayContaining([
         "- Voice Call SQLite schema: audit event ledger -> versioned message lifecycle schema",
         "- Voice Call SQLite schema: tables -> SQLite STRICT typing",
+        "- Voice Call SQLite schema: kept subagent history -> bounded resident registry and readable archive",
       ]),
     });
     await expect(

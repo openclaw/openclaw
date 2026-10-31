@@ -4,6 +4,18 @@ import type { SpawnSubagentMode } from "../spawn/subagent-spawn.types.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
 
+/** Historical reads retain only their requested scope for the consumer's lifetime. */
+export type SubagentArchiveReadScope =
+  | { kind: "ids"; runIds: readonly string[]; exact?: boolean }
+  | { kind: "children"; sessionKeys: readonly string[] }
+  | {
+      kind: "sessions";
+      sessionKeys: readonly string[];
+      descendants: boolean;
+      liveTopology?: readonly { childSessionKey: string; requesterSessionKey: string }[];
+    }
+  | { kind: "all" };
+
 export type PendingFinalDeliveryPayload = {
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;

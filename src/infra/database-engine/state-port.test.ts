@@ -19,6 +19,29 @@ const env = {
 const rows = (db: DatabaseSync, sql: string) => db.prepare(sql).all();
 const backupTables = (foundVersion: number, supportedVersion: number) =>
   resolveSchemaMigrationBackupTables({ kind: "state", foundVersion, supportedVersion });
+
+it("keeps archive storage out of predecessor ports and includes it at schema 37", async () => {
+  for (const version of [36, 37]) {
+    const descriptor = await loadStatePortDescriptor(version);
+    using source = openNodeSqliteDatabase(":memory:");
+    source.exec(descriptor.sqlite);
+    expect(
+      rows(source, "SELECT name FROM sqlite_schema WHERE name = 'subagent_run_archives'"),
+    ).toHaveLength(version === 37 ? 1 : 0);
+    expect(descriptor.tables.some(({ name }) => name === "subagent_run_archives")).toBe(
+      version === 37,
+    );
+    expect(
+      (descriptor.preData + descriptor.postData).includes('CREATE TABLE "subagent_run_archives"'),
+    ).toBe(version === 37);
+  }
+  expect(backupTables(36, 37)).toEqual([
+    "config_machine_state",
+    "schema_meta",
+    "subagent_run_archives",
+    "subagent_runs",
+  ]);
+});
 const legacyWorkspaceSchema = `CREATE TABLE local_workspace_projections (
   worktree_id TEXT NOT NULL PRIMARY KEY,
   agent_id TEXT NOT NULL,

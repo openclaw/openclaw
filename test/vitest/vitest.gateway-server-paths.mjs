@@ -295,6 +295,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-row-projection.invalidation.test.ts",
   "src/gateway/session-row-projection.list-page.test.ts",
   "src/gateway/session-row-projection.prepared-read.test.ts",
+  "src/gateway/session-row-projection.retention.test.ts",
   "src/gateway/session-row-projection.subagent-index.test.ts",
   "src/gateway/session-row-projection.test.ts",
   "src/gateway/session-row-projection.topology.test.ts",

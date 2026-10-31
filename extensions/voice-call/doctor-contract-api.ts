@@ -75,6 +75,8 @@ const schemaMigrationDescriptions = {
   "local-workspace-cas-v35":
     "local workspace baselines -> shared immutable trees and scan fingerprints",
   "template-names-v36": "starter installs and provenance -> canonical Template storage names",
+  "subagent-archives-v37":
+    "kept subagent history -> bounded resident registry and readable archive",
   "subagent-operator-recovery-v25": "subagent recovery -> original operator authority required",
   "meeting-transcript-start-time": "meeting transcript start times -> persisted chronology",
   "predicate-columns-v21":

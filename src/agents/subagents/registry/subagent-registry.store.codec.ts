@@ -137,5 +137,20 @@ export function parseSubagentRegistryWriteReceipt(
       queueOnly: notice.queueOnly,
     };
   });
-  return { writeId: write.writeId, notices };
+  if (write.archive) {
+    if (
+      !Array.isArray(value.archivedRunIds) ||
+      value.archivedRunIds.some(
+        (id) => typeof id !== "string" || !write.archive!.runIds.includes(id),
+      )
+    ) {
+      throw new Error("Registry acknowledgement has invalid archived run IDs");
+    }
+    return { writeId: write.writeId, notices, archivedRunIds: value.archivedRunIds };
+  }
+  return {
+    writeId: write.writeId,
+    notices,
+    ...(value.archiveChanged === true ? { archiveChanged: true } : {}),
+  };
 }

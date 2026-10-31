@@ -9,12 +9,18 @@ import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { recordSessionStateEventsInDatabase } from "../../../sessions/session-state-events.kernel.js";
 import type { OpenClawStateReadCommand } from "../../../state/openclaw-state-read.types.js";
 import type { WorkerWriteOperationContext } from "../../../state/worker-operation-registry.js";
-import { writeSubagentRunValuesInDatabase } from "./subagent-registry.store.kernel.js";
+import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
+import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
+import {
+  archiveSubagentRunValuesInDatabase,
+  writeSubagentRunValuesInDatabase,
+} from "./subagent-registry.store.kernel.js";
 import {
   loadSubagentMaintenanceRunsInDatabase,
   loadSubagentRunsForSessionsInDatabase,
   loadSubagentRunsByIdsInDatabase,
   loadSubagentRunsForSessionFromSqlite,
+  loadSubagentArchivedRunsInDatabase,
 } from "./subagent-registry.store.sqlite.js";
 import type {
   SubagentRegistryWrite,
@@ -25,6 +31,11 @@ import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent
 const log = createSubsystemLogger("state/worker");
 
 type SubagentRunsReadResult =
+  | {
+      type: "subagents.runs";
+      projection: "sessionList";
+      runs: Map<string, SubagentRunReadRecord>;
+    }
   | {
       type: "subagents.runs";
       projection?: never;
@@ -41,6 +52,22 @@ export function readSubagentRunsInWorker(
   db: EngineConnection,
   command: Extract<OpenClawStateReadCommand, { type: "subagents.runs" }>,
 ): SubagentRunsReadResult {
+  if (command.scope.kind === "archive") {
+    const runs = loadSubagentArchivedRunsInDatabase(
+      { db },
+      command.scope.scope,
+      command.scope.projection,
+    );
+    return command.scope.projection === "sessionList"
+      ? {
+          type: command.type,
+          projection: "sessionList",
+          runs: new Map(
+            [...runs].map(([id, entry]) => [id, projectSubagentRunForSessionList(entry)]),
+          ),
+        }
+      : { type: command.type, runs };
+  }
   if (command.scope.kind === "maintenance") {
     return {
       type: command.type,
@@ -84,7 +111,10 @@ export const subagentRegistryOperations = {
     try {
       context.write((writer) => {
         requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: writeId });
-        writeSubagentRunValuesInDatabase(writer, values, deleteRunIds);
+        const archiveChanged = writeSubagentRunValuesInDatabase(writer, values, deleteRunIds);
+        const archivedRunIds = input.archive
+          ? archiveSubagentRunValuesInDatabase(writer, input.archive.runIds, input.archive.now)
+          : undefined;
         const { notices } = recordSessionStateEventsInDatabase(writer.db, terminalEvents);
         for (const [eventIndex, event] of terminalEvents.entries()) {
           requestSessionEntryCurrentAdmission(event.sessionEntryCurrentSource, {
@@ -96,6 +126,8 @@ export const subagentRegistryOperations = {
         const receipt: SubagentRegistryWriteReceipt = {
           writeId,
           notices,
+          ...(archivedRunIds ? { archivedRunIds } : {}),
+          ...(archiveChanged ? { archiveChanged: true as const } : {}),
         };
         deferSqliteWorkerCommitReceipt(writer.db, receipt);
         deferSqlitePostCommitPublication(writer.db, () => {

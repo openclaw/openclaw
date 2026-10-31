@@ -77,7 +77,7 @@ it("keeps ordinary subagent registration responsive while a SQLite writer is hel
       () => ({ value: undefined, postimages: new Map([["registration-worker-warmup", null]]) }),
       { context },
     );
-    await prepareSubagentRegistrationRows(childSessionKey, [runId], context);
+    await prepareSubagentRegistrationRows(childSessionKey, [runId], context, "main");
     holder = holdStateDatabaseWriteTransaction(context.admission.databasePath, 1_000);
     await holder.ready;
     Atomics.store(nativeBegin, 0, 1);

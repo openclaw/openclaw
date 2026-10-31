@@ -6,6 +6,7 @@ export type SubagentRegistryWrite = {
   writeId: string;
   values: readonly SubagentRunSqliteRow[];
   deleteRunIds: readonly string[];
+  archive?: { runIds: readonly string[]; now: number };
   terminalEvents?: readonly Pick<
     SessionStateEventWrite,
     "event" | "now" | "sessionEntryCurrentSource"
@@ -15,4 +16,6 @@ export type SubagentRegistryWrite = {
 export type SubagentRegistryWriteReceipt = {
   writeId: string;
   notices: SessionStateNotice[];
+  archivedRunIds?: string[];
+  archiveChanged?: true;
 };

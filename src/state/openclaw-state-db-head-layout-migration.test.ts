@@ -169,6 +169,7 @@ it.each(["runtime", "doctor"] as const)(
           "claw_mcp_server_refs",
           "template_mcp_server_refs",
           "agent_provenance",
+          "subagent_run_archives",
           "sqlite_stat1",
           "sqlite_stat4",
         ],

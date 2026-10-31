@@ -1,6 +1,23 @@
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export const SUBAGENT_SESSION_RUN_TTL_MS = 5 * 60_000;
+export const SUBAGENT_KEEP_RUN_RETENTION_MS = 30 * 24 * 60 * 60_000;
+export const SUBAGENT_ARCHIVE_BATCH_ROWS = 128;
+export const SUBAGENT_ARCHIVE_BATCH_BYTES = 1024 * 1024;
+
+export function isSubagentKeepRunArchiveDue(entry: SubagentRunRecord, now: number): boolean {
+  return (
+    entry.cleanup === "keep" &&
+    entry.spawnMode !== "session" &&
+    !entry.archiveAtMs &&
+    !needsSubagentActivation(entry) &&
+    entry.execution.endedAt !== undefined &&
+    now - entry.execution.endedAt > SUBAGENT_KEEP_RUN_RETENTION_MS &&
+    entry.delivery?.status !== "pending" &&
+    entry.delivery?.status !== "in_progress" &&
+    entry.delivery?.status !== "suspended"
+  );
+}
 
 export function needsSubagentActivation(entry: SubagentRunRecord): boolean {
   return (
@@ -32,7 +49,7 @@ export function subagentSweepAt(entry: SubagentRunRecord): number {
     return entry.archiveAtMs;
   }
   return entry.cleanup === "keep" && entry.spawnMode !== "session"
-    ? Infinity
+    ? (entry.execution.endedAt ?? Infinity) + SUBAGENT_KEEP_RUN_RETENTION_MS + 1
     : (entry.cleanupCompletedAt ?? Infinity) + SUBAGENT_SESSION_RUN_TTL_MS + 1;
 }
 

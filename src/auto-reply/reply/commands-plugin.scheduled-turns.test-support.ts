@@ -106,286 +106,290 @@ export async function withCommandPlugin(
     bundled?: boolean;
   } = {},
 ) {
-  await withAdminIngress(async (ingress) => {
-    const { cfg, state, admins, context, gateway, resolveGatewayContext } = ingress;
-    const sdkResources = new LegacyPluginSdkResourceHost();
-    bindLegacyPluginSdkResourceHost(resolveGatewayContext, sdkResources);
-    // The test state restores both bundled-plugin variables when it ends.
-    const bundledDist = options.bundled ? state.path("openclaw-package", "dist") : undefined;
-    if (bundledDist) {
-      await fs.mkdir(path.join(bundledDist, "extensions"), { recursive: true });
-      setTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(bundledDist, "extensions"));
-      deleteTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS");
-    }
-    const bridge = Symbol.for(`openclaw.command-native-test.${randomUUID()}`);
-    const handler = vi.fn<Handler>((ctx) => ({
-      text: JSON.stringify({
-        subagents: ctx.runtimeContext?.subagents !== undefined,
-        args: ctx.args,
-      }),
-    }));
-    Reflect.set(globalThis, bridge, handler);
-    const pluginDir = bundledDist
-      ? path.join(bundledDist, "extensions", pluginId)
-      : state.path("controller-plugin");
-    await fs.mkdir(pluginDir);
-    const pluginFile = path.join(pluginDir, "index.cjs");
-    await fs.writeFile(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: pluginId,
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
-        contracts: {
-          ...(options.scheduledContract === false
-            ? {}
-            : { sessionScheduledTurns: ["requester-command"] }),
-          commandRuntimeCapabilities:
-            options.manifestCapabilities === undefined
-              ? ["subagents", "scheduledTurns"]
-              : options.manifestCapabilities,
-        },
-      }),
-    );
-    const commands = options.commands ?? [declaredCommand, { name: "ordinary" }];
-    await fs.writeFile(
-      pluginFile,
-      `module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
+  await withAdminIngress(
+    async ({ cfg, state, admins, context, gateway, resolveGatewayContext }) => {
+      // The test state restores both bundled-plugin variables when it ends.
+      const bundledDist = options.bundled ? state.path("openclaw-package", "dist") : undefined;
+      if (bundledDist) {
+        await fs.mkdir(path.join(bundledDist, "extensions"), { recursive: true });
+        setTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(bundledDist, "extensions"));
+        deleteTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS");
+      }
+      const bridge = Symbol.for(`openclaw.command-native-test.${randomUUID()}`);
+      const handler = vi.fn<Handler>((ctx) => ({
+        text: JSON.stringify({
+          subagents: ctx.runtimeContext?.subagents !== undefined,
+          args: ctx.args,
+        }),
+      }));
+      Reflect.set(globalThis, bridge, handler);
+      const pluginDir = bundledDist
+        ? path.join(bundledDist, "extensions", pluginId)
+        : state.path("controller-plugin");
+      await fs.mkdir(pluginDir);
+      const pluginFile = path.join(pluginDir, "index.cjs");
+      await fs.writeFile(
+        path.join(pluginDir, "openclaw.plugin.json"),
+        JSON.stringify({
+          id: pluginId,
+          configSchema: { type: "object", additionalProperties: false, properties: {} },
+          contracts: {
+            ...(options.scheduledContract === false
+              ? {}
+              : { sessionScheduledTurns: ["requester-command"] }),
+            commandRuntimeCapabilities:
+              options.manifestCapabilities === undefined
+                ? ["subagents", "scheduledTurns"]
+                : options.manifestCapabilities,
+          },
+        }),
+      );
+      const commands = options.commands ?? [declaredCommand, { name: "ordinary" }];
+      await fs.writeFile(
+        pluginFile,
+        `module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
         for (const command of ${JSON.stringify(commands)}) {
           api.registerCommand({ ...command, description: "Synthetic review command", acceptsArgs: true,
             handler(ctx) { return globalThis[Symbol.for(${JSON.stringify(Symbol.keyFor(bridge))})](ctx); }
           });
         }
       } };`,
-    );
-    cfg.agents = { defaults: { workspace: state.workspaceDir, model: "openai/gpt-4.1" } };
-    cfg.auth = {
-      profiles: { "openai:schedule-fixture": { provider: "openai", mode: "api_key" } },
-      order: { openai: ["openai:schedule-fixture"] },
-    };
-    await persistAuthProfileBatch({
-      profiles: [
-        {
-          profileId: "openai:schedule-fixture",
-          credential: { type: "api_key", provider: "openai", key: "synthetic-s6-never-sent" },
-        },
-      ],
-    });
-    cfg.commands = { ...cfg.commands, text: true };
-    const storePath = path.join(state.sessionsDir("main"), "sessions.json");
-    cfg.session = { ...cfg.session, store: storePath };
-    cfg.plugins = {
-      allow: [pluginId],
-      ...(bundledDist ? {} : { load: { paths: [pluginFile] } }),
-      entries: { [pluginId]: { enabled: true } },
-    };
-    const cronStorePath = state.path("cron/jobs.json");
-    let registry: PluginRegistry | undefined;
-    const loadPlugin = () => {
-      registry = loadOpenClawPlugins({
-        config: cfg,
-        workspaceDir: state.workspaceDir,
-        cache: false,
-        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-      });
-      setActivePluginRegistry(registry);
-      return registry;
-    };
-    const disposePlugin = () =>
-      expect(
-        disposePluginRegistryInstances(expectDefined(registry, "previous registry")),
-      ).resolves.toMatchObject({ failures: [] });
-    const reloadPlugin = async () => {
-      await disposePlugin();
-      loadPlugin();
-    };
-    let agentTurnRuntime: ReturnType<typeof createGatewayInstanceRuntime> | undefined;
-    const scheduledResults: Fixture["scheduledResults"] = [];
-    const sessionEventPrompts: string[] = [];
-    let fixtureRef: Fixture | undefined;
-    const runSchedulerOwned = createScheduledGatewayRunner(resolveGatewayContext, () => registry);
-    const gatewayCronAgentDeps = createGatewayCronAgentDeps({
-      deps: {},
-      storePath: cronStorePath,
-      resolveCronAgent: () => ({ agentId: "main", cfg }),
-      resolveGatewayContext,
-      resolvePluginRegistry: () => registry,
-    });
-    const createCron = () =>
-      new CronService({
-        scheduler: createTestGatewayScheduler(),
-        nowMs: Date.now,
-        storePath: cronStorePath,
-        cronEnabled: false,
-        defaultAgentId: "main",
-        log: createNoopLogger(),
-        enqueueSystemEvent: vi.fn(),
-        runSchedulerOwned,
-        // Present, as in the Gateway, so a misrouted command schedule would be observed here.
-        runSessionEvent: async ({ text }) => {
-          sessionEventPrompts.push(text);
-          return { status: "error", error: "ordinary session prompt" };
-        },
-        resolvePluginCommandScheduleHosts: gatewayCronAgentDeps.resolvePluginCommandScheduleHosts,
-        runIsolatedAgentJob: async (request) => {
-          const result = await gatewayCronAgentDeps.runIsolatedAgentJob({
-            ...request,
-            onExecutionStarted: (info) => {
-              if (info) {
-                fixtureRef?.onExecutionStarted?.(info);
-              }
-              request.onExecutionStarted?.(info);
-            },
-          });
-          scheduledResults.push(result);
-          return result;
-        },
-      });
-    let cron = createCron();
-    const bindGateway = () =>
-      Object.assign(
-        gateway,
-        createDirectChatContext({
-          cron,
-          cronStorePath,
-          getRuntimeConfig: () => cfg,
-          resolveGatewayContext,
-          validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
-          getGatewayMethodRegistry: () => createRequestGatewayMethodRegistry(),
-          trackExecution: trackAsyncWork,
-        }),
       );
-    bindGateway();
-    const inbound = await context(admins[0]!.identity.senderId);
-    expectDefined(getCommandOwnerAuthority(inbound)?.operatorAuthority, "real ingress authority");
-    const sessionKey = expectDefined(inbound.SessionKey, "real ingress session key");
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey, storePath },
-      {
-        sessionId: "command-parent",
-        lifecycleRevision: "revision-1",
-        updatedAt: 1,
-        modelProvider: "openai",
-        model: "gpt-4.1",
-        authProfileOverride: "openai:schedule-fixture",
-        authProfileOverrideSource: "auto",
-      },
-    );
-    await state.writeConfig(cfg);
-    const params = createPersistedPluginCommandParams(cfg, inbound, state, sessionKey, storePath);
-    const transcriptContents = async (role: "user" | "assistant") => {
-      const events = await loadTranscriptEvents({
-        agentId: "main",
-        sessionKey,
-        storePath,
-        sessionId: "command-parent",
+      cfg.agents = { defaults: { workspace: state.workspaceDir, model: "openai/gpt-4.1" } };
+      cfg.auth = {
+        profiles: { "openai:schedule-fixture": { provider: "openai", mode: "api_key" } },
+        order: { openai: ["openai:schedule-fixture"] },
+      };
+      await persistAuthProfileBatch({
+        profiles: [
+          {
+            profileId: "openai:schedule-fixture",
+            credential: { type: "api_key", provider: "openai", key: "synthetic-s6-never-sent" },
+          },
+        ],
       });
-      return events.flatMap((event) => {
-        const record = asOptionalRecord(event);
-        const message = asOptionalRecord(record?.message);
-        return record?.type === "message" && message?.role === role ? [message.content] : [];
-      });
-    };
-    try {
-      const loadedRegistry = loadPlugin();
-      if (
-        options.commands === undefined &&
-        options.manifestCapabilities === undefined &&
-        options.scheduledContract !== false
-      ) {
+      cfg.commands = { ...cfg.commands, text: true };
+      const storePath = path.join(state.sessionsDir("main"), "sessions.json");
+      cfg.session = { ...cfg.session, store: storePath };
+      cfg.plugins = {
+        allow: [pluginId],
+        ...(bundledDist ? {} : { load: { paths: [pluginFile] } }),
+        entries: { [pluginId]: { enabled: true } },
+      };
+      const cronStorePath = state.path("cron/jobs.json");
+      let registry: PluginRegistry | undefined;
+      const loadPlugin = () => {
+        registry = loadOpenClawPlugins({
+          config: cfg,
+          workspaceDir: state.workspaceDir,
+          cache: false,
+          logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+        });
+        setActivePluginRegistry(registry);
+        return registry;
+      };
+      const disposePlugin = () =>
         expect(
-          loadedRegistry.diagnostics.filter((diagnostic) => diagnostic.pluginId === pluginId),
-          "the valid declaring plugin must load without registration refusals",
-        ).toEqual([]);
-      }
-      const fixture: Fixture = {
-        cfg,
-        get cron() {
-          return cron;
+          disposePluginRegistryInstances(expectDefined(registry, "previous registry")),
+        ).resolves.toMatchObject({ failures: [] });
+      const reloadPlugin = async () => {
+        await disposePlugin();
+        loadPlugin();
+      };
+      let agentTurnRuntime: ReturnType<typeof createGatewayInstanceRuntime> | undefined;
+      const scheduledResults: Fixture["scheduledResults"] = [];
+      const sessionEventPrompts: string[] = [];
+      let fixtureRef: Fixture | undefined;
+      const runSchedulerOwned = createScheduledGatewayRunner(resolveGatewayContext, () => registry);
+      const gatewayCronAgentDeps = createGatewayCronAgentDeps({
+        deps: {},
+        storePath: cronStorePath,
+        resolveCronAgent: () => ({ agentId: "main", cfg }),
+        resolveGatewayContext,
+        resolvePluginRegistry: () => registry,
+      });
+      const createCron = () =>
+        new CronService({
+          scheduler: createTestGatewayScheduler(),
+          nowMs: Date.now,
+          storePath: cronStorePath,
+          cronEnabled: false,
+          defaultAgentId: "main",
+          log: createNoopLogger(),
+          enqueueSystemEvent: vi.fn(),
+          runSchedulerOwned,
+          // Present, as in the Gateway, so a misrouted command schedule would be observed here.
+          runSessionEvent: async ({ text }) => {
+            sessionEventPrompts.push(text);
+            return { status: "error", error: "ordinary session prompt" };
+          },
+          resolvePluginCommandScheduleHosts: gatewayCronAgentDeps.resolvePluginCommandScheduleHosts,
+          runIsolatedAgentJob: async (request) => {
+            const result = await gatewayCronAgentDeps.runIsolatedAgentJob({
+              ...request,
+              onExecutionStarted: (info) => {
+                if (info) {
+                  fixtureRef?.onExecutionStarted?.(info);
+                }
+                request.onExecutionStarted?.(info);
+              },
+            });
+            scheduledResults.push(result);
+            return result;
+          },
+        });
+      let cron = createCron();
+      const bindGateway = () =>
+        Object.assign(
+          gateway,
+          createDirectChatContext({
+            cron,
+            cronStorePath,
+            getRuntimeConfig: () => cfg,
+            resolveGatewayContext,
+            validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
+            getGatewayMethodRegistry: () => createRequestGatewayMethodRegistry(),
+            trackExecution: trackAsyncWork,
+          }),
+        );
+      bindGateway();
+      const inbound = await context(admins[0]!.identity.senderId);
+      expectDefined(getCommandOwnerAuthority(inbound)?.operatorAuthority, "real ingress authority");
+      const sessionKey = expectDefined(inbound.SessionKey, "real ingress session key");
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey, storePath },
+        {
+          sessionId: "command-parent",
+          lifecycleRevision: "revision-1",
+          updatedAt: 1,
+          modelProvider: "openai",
+          model: "gpt-4.1",
+          authProfileOverride: "openai:schedule-fixture",
+          authProfileOverrideSource: "auto",
         },
-        scheduledResults,
-        bundledBuildInfoPath: bundledDist && path.join(bundledDist, "build-info.json"),
-        restart: async (change) => {
+      );
+      await state.writeConfig(cfg);
+      const params = createPersistedPluginCommandParams(cfg, inbound, state, sessionKey, storePath);
+      const transcriptContents = async (role: "user" | "assistant") => {
+        const events = await loadTranscriptEvents({
+          agentId: "main",
+          sessionKey,
+          storePath,
+          sessionId: "command-parent",
+        });
+        return events.flatMap((event) => {
+          const record = asOptionalRecord(event);
+          const message = asOptionalRecord(record?.message);
+          return record?.type === "message" && message?.role === role ? [message.content] : [];
+        });
+      };
+      const sdkHost = new LegacyPluginSdkResourceHost();
+      bindLegacyPluginSdkResourceHost(resolveGatewayContext, sdkHost);
+      try {
+        const loadedRegistry = loadPlugin();
+        if (
+          options.commands === undefined &&
+          options.manifestCapabilities === undefined &&
+          options.scheduledContract !== false
+        ) {
+          expect(
+            loadedRegistry.diagnostics.filter((diagnostic) => diagnostic.pluginId === pluginId),
+            "the valid declaring plugin must load without registration refusals",
+          ).toEqual([]);
+        }
+        const fixture: Fixture = {
+          cfg,
+          get cron() {
+            return cron;
+          },
+          scheduledResults,
+          bundledBuildInfoPath: bundledDist && path.join(bundledDist, "build-info.json"),
+          restart: async (change) => {
+            cron.stop();
+            await cron.waitForIdle();
+            await disposePlugin();
+            await change?.(cfg, pluginDir);
+            loadPlugin();
+            cron = createCron();
+            bindGateway();
+            await cron.start();
+          },
+          pluginIncarnation: () => {
+            const record = registry?.plugins.find((plugin) => plugin.id === pluginId);
+            return record && getPluginInstanceIncarnation(record);
+          },
+          resetParent: () =>
+            upsertSessionEntryCore(
+              { agentId: "main", sessionKey, storePath },
+              {
+                sessionId: "replacement-parent",
+                lifecycleRevision: "revision-2",
+                updatedAt: Date.now(),
+              },
+            ),
+          registry: loadedRegistry,
+          reloadPlugin,
+          params,
+          handler,
+          userInputs: () => transcriptContents("user"),
+          assistantOutputs: () => transcriptContents("assistant"),
+          restrictParentTools: () =>
+            upsertSessionEntryCore(
+              { agentId: "main", sessionKey, storePath },
+              { toolOverrides: { webSearch: false }, updatedAt: Date.now() },
+            ),
+          readJobs: async () => (await loadCronStore(cronStorePath)).jobs,
+          revokeOwner: () => setUserProfileRole(admins[0]!.profile.id, "member"),
+          removeOwner: () => {
+            unlinkUserChannelIdentity(admins[0]!.profile.id, admins[0]!.identity);
+            invalidateOperatorRolePolicy(admins[0]!.profile.id);
+          },
+          demoteOwner: () => {
+            setUserProfileRole(admins[0]!.profile.id, "member");
+            invalidateOperatorRolePolicy(admins[0]!.profile.id);
+          },
+          installAgentTurnFacade: () => {
+            const methodRegistry = createRequestGatewayMethodRegistry();
+            const runtime = createGatewayInstanceRuntime({
+              getContext: () => gateway,
+              getMethodRegistry: () => methodRegistry,
+              isDispatchAvailable: () => true,
+            });
+            agentTurnRuntime = runtime;
+            gateway.createAgentTurnFacade = runtime.createAgentTurnFacade;
+            gateway.lifecycleRuntime = runtime.lifecycle;
+            gateway.getGatewayMethodRegistry = () => methodRegistry;
+          },
+        };
+        fixtureRef = fixture;
+        await withPluginRuntimeGatewayRequestScope(
+          {
+            context: gateway,
+            resolveGatewayContext,
+            pluginRegistry: loadedRegistry,
+            isWebchatConnect: () => false,
+          },
+          () => run(fixture),
+        );
+        expect(sessionEventPrompts, "no ordinary session prompt").toEqual([]);
+      } finally {
+        try {
           cron.stop();
           await cron.waitForIdle();
-          await disposePlugin();
-          await change?.(cfg, pluginDir);
-          loadPlugin();
-          cron = createCron();
-          bindGateway();
-          await cron.start();
-        },
-        pluginIncarnation: () => {
-          const record = registry?.plugins.find((plugin) => plugin.id === pluginId);
-          return record && getPluginInstanceIncarnation(record);
-        },
-        resetParent: () =>
-          upsertSessionEntryCore(
-            { agentId: "main", sessionKey, storePath },
-            {
-              sessionId: "replacement-parent",
-              lifecycleRevision: "revision-2",
-              updatedAt: Date.now(),
-            },
-          ),
-        registry: loadedRegistry,
-        reloadPlugin,
-        params,
-        handler,
-        userInputs: () => transcriptContents("user"),
-        assistantOutputs: () => transcriptContents("assistant"),
-        restrictParentTools: () =>
-          upsertSessionEntryCore(
-            { agentId: "main", sessionKey, storePath },
-            { toolOverrides: { webSearch: false }, updatedAt: Date.now() },
-          ),
-        readJobs: async () => (await loadCronStore(cronStorePath)).jobs,
-        revokeOwner: () => setUserProfileRole(admins[0]!.profile.id, "member"),
-        removeOwner: () => {
-          unlinkUserChannelIdentity(admins[0]!.profile.id, admins[0]!.identity);
-          invalidateOperatorRolePolicy(admins[0]!.profile.id);
-        },
-        demoteOwner: () => {
-          setUserProfileRole(admins[0]!.profile.id, "member");
-          invalidateOperatorRolePolicy(admins[0]!.profile.id);
-        },
-        installAgentTurnFacade: () => {
-          const methodRegistry = createRequestGatewayMethodRegistry();
-          const runtime = createGatewayInstanceRuntime({
-            getContext: () => gateway,
-            getMethodRegistry: () => methodRegistry,
-            isDispatchAvailable: () => true,
-          });
-          agentTurnRuntime = runtime;
-          gateway.createAgentTurnFacade = runtime.createAgentTurnFacade;
-          gateway.lifecycleRuntime = runtime.lifecycle;
-          gateway.getGatewayMethodRegistry = () => methodRegistry;
-        },
-      };
-      fixtureRef = fixture;
-      await withPluginRuntimeGatewayRequestScope(
-        {
-          context: gateway,
-          resolveGatewayContext,
-          pluginRegistry: loadedRegistry,
-          isWebchatConnect: () => false,
-        },
-        () => run(fixture),
-      );
-      expect(sessionEventPrompts, "no ordinary session prompt").toEqual([]);
-    } finally {
-      cron.stop();
-      await cron.waitForIdle();
-      agentTurnRuntime?.close();
-      Reflect.deleteProperty(globalThis, bridge);
-      resetGlobalHookRunner();
-      resetPluginRuntimeStateForTest();
-      if (registry) {
-        await disposePlugin();
+          agentTurnRuntime?.close();
+          Reflect.deleteProperty(globalThis, bridge);
+          resetGlobalHookRunner();
+          resetPluginRuntimeStateForTest();
+          if (registry) {
+            await disposePlugin();
+          }
+          await expect(waitForPluginCacheRetirement()).resolves.toMatchObject({ failures: [] });
+        } finally {
+          await sdkHost.close();
+        }
       }
-      await expect(waitForPluginCacheRetirement()).resolves.toMatchObject({ failures: [] });
-      await sdkResources.close();
-    }
-  });
+    },
+  );
 }
 
 export function commandInvocation(fixture: Fixture, body = "/review-panel") {

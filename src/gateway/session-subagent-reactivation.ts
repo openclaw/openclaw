@@ -1,8 +1,7 @@
 import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
-import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import {
   assertSubagentRegistryWriteSourceCurrent,
-  restoreSubagentRunsFromDisk,
+  restoreSubagentRunForMutation,
 } from "../agents/subagents/registry/subagent-registry-persistence.js";
 import {
   getLatestLiveSubagentRunByChildSessionKey,
@@ -81,12 +80,7 @@ export async function reactivateCompletedSubagentSession(params: {
       (entry) => entry.runId === existing.runId,
     );
   if (!liveSource()) {
-    await restoreSubagentRunsFromDisk({
-      runs: subagentRuns,
-      mergeOnly: true,
-      context: stateContext,
-      assertCurrent: params.assertCurrent,
-    });
+    await restoreSubagentRunForMutation(existing, stateContext, params.assertCurrent);
   }
   const source = liveSource();
   if (!source || !isSameSubagentRun(source, existing)) {

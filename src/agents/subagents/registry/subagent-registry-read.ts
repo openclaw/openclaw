@@ -6,6 +6,7 @@ import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import { listSwarmRunReservationIds } from "../swarm/swarm-scheduler.js";
 import {
   matchesSubagentChildSessionIdentity,
+  matchesSubagentChildSessionOwner,
   resolveRecordedRequester,
 } from "./subagent-child-owner-match.js";
 import {
@@ -34,6 +35,7 @@ import {
   getSubagentSessionListRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForSessions,
   prepareSubagentSessionListReadCache,
+  prepareSubagentArchiveSessionListRead,
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
@@ -60,10 +62,11 @@ export type SubagentRootRequester = {
   storePath?: string;
 };
 
-/** Shutdown follows subagent ancestry; ordinary conversations own their own resume. */
+/** Follow subagent ancestry only; historical links never initiate recovery. */
 export function resolveRootSubagentRequester(
   sessionKey: string,
   agentId?: string,
+  archived?: ReadonlyMap<string, readonly SubagentRunReadRecord[]>,
 ): SubagentRootRequester {
   let root: SubagentRootRequester = { sessionKey, agentId };
   const visited = new Set<string>();
@@ -73,7 +76,13 @@ export function resolveRootSubagentRequester(
       return root;
     }
     visited.add(identity);
-    const entry = latestSubagentRun(getSubagentRunsForChildSession(root.sessionKey, root.agentId));
+    const entry = latestSubagentRun<SubagentRunReadRecord>(
+      [
+        ...getSubagentRunsForChildSession(root.sessionKey, root.agentId),
+        ...(archived?.get(root.sessionKey) ?? []),
+      ],
+      (candidate) => matchesSubagentChildSessionOwner(candidate, root.sessionKey, root.agentId),
+    );
     if (!entry) {
       return root;
     }
@@ -86,14 +95,66 @@ export function resolveRootSubagentRequester(
   return root;
 }
 
-export function listLiveSubagentRootSessions(): SubagentRootRequester[] {
+/** Prepare compact ancestry once; shutdown takes its live-owner census after this await. */
+export async function prepareSubagentRootRequesterRead(sessionKeys: readonly string[]) {
+  for (;;) {
+    const archived = new Map<string, SubagentRunReadRecord[]>();
+    const reads: Array<Awaited<ReturnType<typeof prepareSubagentArchiveSessionListRead>>> = [];
+    const visited = new Set<string>();
+    let frontier = [...new Set(sessionKeys)];
+    while (frontier.length) {
+      for (const key of frontier) {
+        visited.add(key);
+      }
+      const read = await prepareSubagentArchiveSessionListRead({
+        kind: "children",
+        sessionKeys: frontier,
+      });
+      reads.push(read);
+      const next = new Set<string>();
+      const follow = (entry: SubagentRunReadRecord) => {
+        if (!visited.has(entry.requesterSessionKey)) {
+          next.add(entry.requesterSessionKey);
+        }
+      };
+      for (const entry of read.runs.values()) {
+        const bucket = archived.get(entry.childSessionKey) ?? [];
+        bucket.push(entry);
+        archived.set(entry.childSessionKey, bucket);
+        follow(entry);
+      }
+      for (const key of frontier) {
+        for (const entry of getSubagentChildSessionCandidates(key)) {
+          follow(entry);
+        }
+      }
+      frontier = [...next];
+    }
+    for (const read of reads) {
+      read.assertSourceCurrent();
+    }
+    if (reads.some((read) => !read.isCurrent())) {
+      continue;
+    }
+    return (sessionKey: string, agentId?: string) => {
+      for (const read of reads) {
+        read.assertCurrent();
+      }
+      return resolveRootSubagentRequester(sessionKey, agentId, archived);
+    };
+  }
+}
+
+export function listLiveSubagentRootSessions(
+  resolveRoot: typeof resolveRootSubagentRequester,
+): SubagentRootRequester[] {
   const roots = new Map<string, SubagentRootRequester>();
   for (const runId of listLiveAgentRunIds()) {
     const entry = subagentRuns.get(runId);
     if (!entry || !isSubagentRunLive(entry)) {
       continue;
     }
-    const root = resolveRootSubagentRequester(entry.childSessionKey, entry.childAgentId);
+    const root = resolveRoot(entry.childSessionKey, entry.childAgentId);
     roots.set(JSON.stringify([root.agentId, root.storePath, root.sessionKey]), root);
   }
   return [...roots.values()];
@@ -148,19 +209,55 @@ export function buildSubagentSessionListReadIndex(
   });
 }
 
-/** Direct-child discovery needs only its controllers, without building global topology. */
+async function withHistoricalSessionListRuns<T>(
+  scope:
+    | { kind: "children"; sessionKeys: readonly string[] }
+    | { kind: "sessions"; sessionKeys: readonly string[]; descendants: boolean },
+  consume: (runs: Map<string, SubagentRunReadRecord>) => T,
+): Promise<T> {
+  await prepareSubagentSessionListReadCache();
+  for (;;) {
+    const archive = await prepareSubagentArchiveSessionListRead(
+      scope.kind === "sessions" && scope.descendants
+        ? {
+            ...scope,
+            liveTopology: getSubagentSessionReadLookup(subagentRuns).captureTopology(),
+          }
+        : scope,
+    );
+    if (!archive.isCurrent()) {
+      continue;
+    }
+    archive.assertCurrent();
+    const hot =
+      scope.kind === "children"
+        ? getSubagentSessionListRunsSnapshotForChildSessions(scope.sessionKeys)
+        : scope.descendants
+          ? getSubagentSessionListRunsSnapshotForSessions(subagentRuns, [
+              ...scope.sessionKeys,
+              ...Array.from(archive.runs.values(), (entry) => entry.childSessionKey),
+            ])
+          : getSubagentSessionListRunsSnapshotForRead(subagentRuns, scope.sessionKeys);
+    return consume(new Map([...archive.runs, ...hot]));
+  }
+}
+
+/** Direct-child discovery includes archived history without retaining its projection. */
 export function listSubagentSessionListRunsForControllers(
   controllerSessionKeys: readonly string[],
-): SubagentRunReadRecord[] {
-  const runs = getSubagentSessionListRunsSnapshotForRead(subagentRuns, controllerSessionKeys);
-  return controllerSessionKeys.flatMap((key) => listRunsForControllerFromRuns(runs, key));
+): Promise<SubagentRunReadRecord[]> {
+  return withHistoricalSessionListRuns(
+    { kind: "sessions", sessionKeys: controllerSessionKeys, descendants: false },
+    (runs) => controllerSessionKeys.flatMap((key) => listRunsForControllerFromRuns(runs, key)),
+  );
 }
 
 export function buildLatestSubagentSessionListReadIndex(
   childSessionKeys: readonly string[],
-): LatestSubagentRunReadIndex<SubagentRunReadRecord> {
-  return buildLatestSubagentRunReadIndexFromRuns(
-    getSubagentSessionListRunsSnapshotForChildSessions(childSessionKeys),
+): Promise<LatestSubagentRunReadIndex<SubagentRunReadRecord>> {
+  return withHistoricalSessionListRuns(
+    { kind: "children", sessionKeys: childSessionKeys },
+    buildLatestSubagentRunReadIndexFromRuns,
   );
 }
 
@@ -181,10 +278,16 @@ export async function countPendingDescendantRuns(
   assertCurrent: () => void,
 ): Promise<number> {
   assertCurrent();
-  await prepareSubagentSessionListReadCache();
-  assertCurrent();
-  return buildSubagentSessionListReadIndex(Date.now(), [rootSessionKey]).countPendingDescendantRuns(
-    rootSessionKey,
+  return withHistoricalSessionListRuns(
+    { kind: "sessions", sessionKeys: [rootSessionKey], descendants: true },
+    (runs) => {
+      assertCurrent();
+      return buildSubagentSessionListReadIndex(
+        Date.now(),
+        [rootSessionKey],
+        runs,
+      ).countPendingDescendantRuns(rootSessionKey);
+    },
   );
 }
 

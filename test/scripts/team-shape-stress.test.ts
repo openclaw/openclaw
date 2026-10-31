@@ -506,6 +506,7 @@ it("requires ten-minute evidence windows and marks explicit short runs as smoke"
     churnMs: 6_000,
     operatorModelPolicy: false,
     workerHeapSnapshot: false,
+    keptRunAgeDays: 0,
   });
   expect(
     parseStressOptions(["--output", "/unused", "--smoke-seconds", "1", "--agents", "8"]),
@@ -522,6 +523,9 @@ it("requires ten-minute evidence windows and marks explicit short runs as smoke"
   });
   expect(parseStressOptions(["--output", "/unused", "--worker-heap-snapshot"])).toMatchObject({
     workerHeapSnapshot: true,
+  });
+  expect(parseStressOptions(["--output", "/unused", "--kept-run-age-days", "100"])).toMatchObject({
+    keptRunAgeDays: 100,
   });
   expect(
     parseStressOptions([

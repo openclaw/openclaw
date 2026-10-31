@@ -56,6 +56,7 @@ import {
   bindSubagentRunRuntimeKey,
   compareSubagentRunGeneration,
   getSubagentRunRuntimeKey,
+  isSameSubagentRun,
   isSameSubagentRunOwner,
   isSubagentRunGenerationCandidate,
   nextSubagentRunGeneration,
@@ -98,13 +99,14 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
     const gatewayContextResolver = registerParams.gatewayContextResolver;
     const gatewayContext = gatewayContextResolver?.();
     let selected = this.options.runs.get(runId);
+    const selectedWasResident = selected !== undefined;
     const registrationOwnership = subagentRuns.captureRegistrationOwnership(
       childSessionKey,
       undefined,
       childAgentId,
     );
     let authority: Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>;
-    let preparedRows: (() => ReadonlyMap<string, SubagentRunRecord>) | undefined;
+    let preparedRows: Awaited<ReturnType<typeof prepareSubagentRegistrationRows>> | undefined;
     let plannedEntry: SubagentRunRecord | undefined;
     let registered: SubagentRunRecord | undefined;
     let custodyTransferred = false;
@@ -141,6 +143,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       );
     };
     const ownsCleanupSession = () =>
+      registryCurrent() &&
       preparedRows !== undefined &&
       ![
         ...preparedRows().values(),
@@ -154,8 +157,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       initialOutcome === "refused" &&
       ownsCleanupSession() &&
       !selected &&
-      !this.options.runs.has(runId) &&
-      registryCurrent();
+      !this.options.runs.has(runId);
     const activate = () => {
       this.options.ensureListener();
       this.options.startSweeper();
@@ -204,7 +206,6 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
               canCleanupSession: () =>
                 registrationSettled &&
                 initialOutcome !== "uncertain" &&
-                registryCurrent() &&
                 ownsCleanupSession() &&
                 ownsSession() &&
                 !currentEntry(),
@@ -241,6 +242,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
           ),
         ],
         context,
+        childAgentId,
       );
       selected ??= preparedRows().get(runId);
       assertCurrent();
@@ -248,6 +250,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
         isSubagentRunGenerationCandidate(row, childSessionKey, childAgentId);
       const runIds = new Set([
         runId,
+        ...preparedRows.runIds,
         ...[...preparedRows().values(), ...this.options.getChildSessionCandidates(childSessionKey)]
           .filter(isGenerationCandidate)
           .map((row) => row.runId),
@@ -279,7 +282,9 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
             subagentRuns.runWithCompletionAuthority(previous, () => options.assertCurrent?.());
             return { value: undefined };
           }
-          if (selected ? !isSameSubagentRunOwner(previous, selected) : previous !== undefined) {
+          // Durable discovery has no host incarnation; resident selections retain their owner.
+          const matchesSelected = selectedWasResident ? isSameSubagentRunOwner : isSameSubagentRun;
+          if (selected ? !matchesSelected(previous, selected) : previous !== undefined) {
             throw new SubagentRegistryMutationRejectedError(
               "Subagent registration owner changed during preparation",
             );
@@ -331,7 +336,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
         },
         {
           runs: this.options.runs,
-          preparedRows,
+          loadMissingRows: true,
           context,
           assertCurrent,
           onPublished: (postimages, planned) => {

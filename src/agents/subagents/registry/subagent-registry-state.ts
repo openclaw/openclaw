@@ -4,7 +4,11 @@ import {
 } from "../../../sessions/session-lifecycle-events.js";
 import { getActiveOpenClawStateDatabaseReadSnapshot } from "../../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
-import { prepareOpenClawStateReadSource } from "../../../state/openclaw-state-worker-context.js";
+import {
+  captureOpenClawStateReadContext,
+  captureOpenClawStateWorkerContext,
+  prepareOpenClawStateReadSource,
+} from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
 import {
@@ -22,6 +26,10 @@ import { publishSubagentRunChanges } from "./subagent-registry-publication.js";
 import { countActiveRunsForSessionFromRuns } from "./subagent-registry-queries.js";
 import {
   consumeFreshSubagentRuns,
+  assertSubagentReadContext,
+  getSubagentArchiveRevision,
+  invalidateSubagentArchiveReads,
+  forgetArchivedSubagentRuns,
   getSessionListLookup,
   getSubagentRunsSnapshot,
   indexedSnapshotRows,
@@ -30,6 +38,7 @@ import {
   mergeSelectedFullRuns,
   prepareSubagentRunsCache,
   readCompactSubagentRuns,
+  readArchivedSubagentRuns,
   rememberSubagentRunsSnapshot,
   shouldReadPersistedSubagentRuns,
   SubagentSessionListUnavailableError,
@@ -45,9 +54,13 @@ import {
   type SubagentRunReadScope,
 } from "./subagent-registry-read-snapshot.js";
 import { resolveControllerSessionKey } from "./subagent-registry-read-topology.js";
-import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
+import type {
+  SubagentArchiveReadScope,
+  SubagentRunReadRecord,
+} from "./subagent-registry-read.types.js";
 import { readAllSubagentRunsInWorker } from "./subagent-registry.store.read.js";
 import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentRunGenerationCandidate } from "./subagent-run-generation.js";
 
 const persistedSubagentRunsReadCache: SubagentRunsCache<SubagentRunRecord> = {
   state: {},
@@ -177,6 +190,76 @@ export function publishSubagentRunsAfterAtomicStore(
   };
 }
 
+/** Archival evicts every resident copy; historical readers prepare their own durable scope. */
+export function publishSubagentArchiveChanges(
+  runs: Map<string, SubagentRunRecord>,
+  archivedRunIds: readonly string[],
+  databasePath?: string,
+): () => void {
+  invalidateSubagentArchiveReads();
+  const keys = rememberPersistedSubagentRunsSnapshot(runs, archivedRunIds, databasePath);
+  for (const cache of [persistedSubagentRunsReadCache, persistedSubagentSessionListRunsReadCache]) {
+    forgetArchivedSubagentRuns(cache, archivedRunIds);
+  }
+  forgetArchivedSubagentRuns(persistedSubagentMaintenanceReadCache, archivedRunIds);
+  for (const runId of archivedRunIds) {
+    committedSwarmNotifications.delete(runId);
+  }
+  return () => publishSubagentRunChanges(keys, archivedRunIds, "persistence");
+}
+
+/** A caller owns and releases this historical projection; it never enters the hot registry. */
+export function prepareSubagentArchiveSessionListRead(scope: SubagentArchiveReadScope) {
+  const context = shouldReadPersistedSubagentRuns()
+    ? captureOpenClawStateWorkerContext()
+    : undefined;
+  const readContext = context && captureOpenClawStateReadContext(context.admission.databasePath);
+  const revision = getSubagentArchiveRevision();
+  const isCurrent = () => revision === getSubagentArchiveRevision();
+  const assertSourceCurrent = () => {
+    if (context) {
+      assertSubagentReadContext(context);
+    }
+  };
+  const prepare = (runs: Map<string, SubagentRunReadRecord>) => ({
+    runs,
+    isCurrent,
+    assertSourceCurrent,
+    readSessionRuns(sessionKeys: readonly string[], kind: "sessions" | "children") {
+      assertSourceCurrent();
+      const cache = persistedSubagentSessionListRunsReadCache;
+      const compact = readContext
+        ? loadPersistedSubagentRunsForRead(cache, readContext)
+        : new Map<string, SubagentRunReadRecord>();
+      // Archived intermediaries connect the requested roots to current resident descendants.
+      const hot = mergeSubagentRunReadScope(
+        subagentRuns,
+        cache,
+        compact,
+        kind === "children"
+          ? { childSessionKeys: sessionKeys }
+          : {
+              sessionKeys: [
+                ...sessionKeys,
+                ...Array.from(runs.values(), (entry) => entry.childSessionKey),
+              ],
+              descendants: true,
+            },
+      );
+      return new Map([...runs, ...hot]);
+    },
+    assertCurrent() {
+      assertSourceCurrent();
+      if (!isCurrent()) {
+        throw new Error("Subagent archive changed while preparing its read");
+      }
+    },
+  });
+  return context
+    ? readArchivedSubagentRuns(context, scope, "sessionList").then(prepare)
+    : prepare(new Map());
+}
+
 /** Hydration establishes a notification baseline before synchronous ownership observers run. */
 export function rememberRestoredSubagentRunNotification(entry: SubagentRunRecord): void {
   const notification = swarmNotification(entry);
@@ -295,12 +378,13 @@ export function consumeFreshSubagentRegistryRows<T>(
   return consumeFreshSubagentRuns(persistedSubagentRunsReadCache, context, consume);
 }
 
-/** Registration shares the loaded registry; committed receipts keep retained generations current. */
+/** Discover registration candidates; mutation admission reloads their current rows in its FIFO. */
 export async function prepareSubagentRegistrationRows(
   childSessionKey: string,
   selectedRunIds: readonly string[],
   context: OpenClawStateWorkerContext,
-): Promise<() => ReadonlyMap<string, SubagentRunRecord>> {
+  childAgentId: string,
+): Promise<(() => ReadonlyMap<string, SubagentRunRecord>) & { runIds: readonly string[] }> {
   const snapshot = await prepareSubagentRunsCache(
     persistedSubagentRunsReadCache,
     async (source) => {
@@ -321,10 +405,47 @@ export async function prepareSubagentRegistrationRows(
       prepared.set(entry.runId, entry);
     }
   }
-  return () =>
-    mergeSelectedFullRuns(persistedSubagentRunsReadCache, subagentRuns, prepared, matches, {
+  const archived = await readArchivedSubagentRuns(
+    context,
+    { kind: "children", sessionKeys: [childSessionKey] },
+    "full",
+  );
+  const missing = selectedRunIds.filter((id) => !prepared.has(id) && !archived.has(id));
+  if (missing.length) {
+    for (const [id, entry] of await readArchivedSubagentRuns(
       context,
-    });
+      { kind: "ids", runIds: missing, exact: true },
+      "full",
+    )) {
+      archived.set(id, entry);
+    }
+  }
+  // Raw session keys can name different owners; only this owner's generations share a FIFO.
+  const generationRunIds = new Set<string>();
+  for (const rows of [prepared, archived]) {
+    for (const entry of rows.values()) {
+      if (isSubagentRunGenerationCandidate(entry, childSessionKey, childAgentId)) {
+        generationRunIds.add(entry.runId);
+      }
+    }
+  }
+  // Carry discovery IDs across hot-to-archive moves; the mutation reads fresh rows in its FIFO.
+  return Object.assign(
+    () => {
+      assertSubagentReadContext(context);
+      return mergeSelectedFullRuns(
+        persistedSubagentRunsReadCache,
+        subagentRuns,
+        prepared,
+        matches,
+        {
+          context,
+          archivedRuns: archived,
+        },
+      );
+    },
+    { runIds: [...generationRunIds] },
+  );
 }
 
 export function getSubagentRunsSnapshotForRead(
@@ -413,16 +534,21 @@ export function prepareSubagentRunsSnapshotForSessions(
 export async function prepareSubagentRunsSnapshotForRunIds(
   inMemoryRuns: Map<string, SubagentRunRecord>,
   runIds: readonly string[],
-  options: { yieldedChildren?: boolean } = {},
+  options: { yieldedChildren?: boolean; exact?: boolean } = {},
 ): Promise<PreparedSubagentRunsRead> {
   const requested = new Set(runIds.map((runId) => runId.trim()));
   const matches = (entry: SubagentRunReadRecord) =>
-    requested.has(entry.runId) || Boolean(entry.swarmRunId && requested.has(entry.swarmRunId));
+    requested.has(entry.runId) ||
+    (!options.exact && Boolean(entry.swarmRunId && requested.has(entry.swarmRunId)));
   const prepared = await prepareSubagentRunReadSnapshot({
     inMemoryRuns,
     fullCache: persistedSubagentRunsReadCache,
     compactCache: persistedSubagentSessionListRunsReadCache,
-    readScope: { runIds: requested, yieldedChildren: options.yieldedChildren },
+    readScope: {
+      runIds: requested,
+      yieldedChildren: options.yieldedChildren,
+      exact: options.exact,
+    },
     select: (snapshot) => {
       const rows = [...snapshot.values()].filter(matches);
       return {
@@ -463,12 +589,20 @@ export function countActiveSubagentRunsForSession(
   inMemoryRuns: Map<string, SubagentRunRecord>,
   requesterSessionKey: string,
   options?: { collect?: boolean; requesterAgentId?: string },
+  historical?: ReadonlyMap<string, SubagentRunReadRecord>,
 ): number {
   const runs = new Map<string, SubagentRunReadRecord>(
     shouldReadPersistedSubagentRuns()
       ? loadPersistedSubagentRunsForRead(persistedSubagentSessionListRunsReadCache)
       : undefined,
   );
+  if (historical) {
+    for (const [runId, entry] of historical) {
+      if (!runs.has(runId)) {
+        runs.set(runId, entry);
+      }
+    }
+  }
   for (const [runId, entry] of inMemoryRuns) {
     runs.set(runId, entry);
   }

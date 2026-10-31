@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import * as announceDelivery from "../../agents/subagents/announce/subagent-announce-delivery.js";
 import { sourceOwnerChangedResult } from "../../agents/subagents/announce/subagent-announce-dispatch.js";
+import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
 import {
   getSubagentRunByRunId,
@@ -453,7 +454,7 @@ describe("gateway agent completed-child delivery", () => {
         ]);
         const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
           for (const [runId, receipt] of receipts) {
-            if (getSubagentRunByRunId(runId)?.cleanupCompletedAt) {
+            if (subagentRuns.get(runId)?.cleanupCompletedAt) {
               receipt.resolve();
             }
           }
@@ -559,7 +560,7 @@ describe("gateway agent completed-child delivery", () => {
           );
           admitted = true;
           await withinTest(commandStarted.promise, signal);
-          expect(getSubagentRunByRunId(secondRunId)).toMatchObject({
+          expect(await getSubagentRunByRunId(secondRunId)).toMatchObject({
             generation: 2,
             task: "Second task",
             execution: { status: "running" },
@@ -573,11 +574,11 @@ describe("gateway agent completed-child delivery", () => {
             internalEvents: [{ taskLabel: "First task", status: "ok", result: "FIRST_ONLY" }],
           });
           await withinTest(receipts.get(firstRunId)!.promise, signal);
-          expect(getSubagentRunByRunId(firstRunId)?.delivery).toMatchObject({
+          expect((await getSubagentRunByRunId(firstRunId))?.delivery).toMatchObject({
             status: "delivered",
             deliveredAt: expect.any(Number),
           });
-          expect(getSubagentRunByRunId(secondRunId)).toMatchObject({
+          expect(await getSubagentRunByRunId(secondRunId)).toMatchObject({
             execution: { status: "running" },
             delivery: { status: "pending" },
             cleanupHandled: false,
@@ -605,7 +606,7 @@ describe("gateway agent completed-child delivery", () => {
             directIdempotencyKey: `announce:v1:${childSessionKey}:${secondRunId}`,
             internalEvents: [{ taskLabel: "Second task", status: "ok", result: "SECOND_ONLY" }],
           });
-          expect(getSubagentRunByRunId(secondRunId)?.delivery).toMatchObject({
+          expect((await getSubagentRunByRunId(secondRunId))?.delivery).toMatchObject({
             status: "delivered",
             deliveredAt: expect.any(Number),
           });

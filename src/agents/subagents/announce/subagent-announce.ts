@@ -288,8 +288,10 @@ async function runSubagentAnnounceFlowBound(
           childCompletionRows = dedupeLatestChildCompletionRows(
             filterCurrentDirectChildCompletionRows(directChildren, {
               requesterSessionKey: params.childSessionKey,
-              getLatestSubagentRunByChildSessionKey: buildLatestSubagentSessionListReadIndex(
-                directChildren.map((entry) => entry.childSessionKey),
+              getLatestSubagentRunByChildSessionKey: (
+                await buildLatestSubagentSessionListReadIndex(
+                  directChildren.map((entry) => entry.childSessionKey),
+                )
               ).getLatestSubagentRun,
             }),
           );
