@@ -3,6 +3,7 @@ import { canCollectPluginSourceSnapshots } from "../infra/update-run-recovery-st
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { updateInstalledPluginSourceSnapshots } from "./installed-plugin-index-store-write.js";
 import { readCurrentInstalledPluginIndex } from "./installed-plugin-index-store.js";
+import { updatePluginSnapshotCandidates } from "./installed-plugin-snapshot-candidates.js";
 import { withPluginLifecycleLeaseAsync } from "./plugin-lifecycle-lease.js";
 import { collectPluginSourceSnapshots } from "./plugin-source-snapshot-artifact.js";
 import {
@@ -22,12 +23,17 @@ export async function collectInstalledPluginSourceSnapshots(
   try {
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     await withPluginLifecycleLeaseAsync({ env }, async (lease) => {
+      const candidates = await updatePluginSnapshotCandidates({
+        stateDir,
+        lease,
+        operation: "read",
+      });
       let index = await readCurrentInstalledPluginIndex({
         stateDir,
         requireValidIfPresent: true,
       });
       await lease.assertOwned();
-      if (!index && unpublished.length === 0) {
+      if (!index && unpublished.length === 0 && candidates.length === 0) {
         return;
       }
       if (index && unpublished.length) {
@@ -55,7 +61,7 @@ export async function collectInstalledPluginSourceSnapshots(
       const allowed = await canCollectPluginSourceSnapshots({ env });
       await lease.assertOwned();
       // With no index, caller-owned candidates were never published and cannot be rollback roots.
-      if (!allowed && index) {
+      if (!allowed) {
         return;
       }
       const retainedPaths = new Set(
@@ -77,11 +83,22 @@ export async function collectInstalledPluginSourceSnapshots(
       const result = await collectPluginSourceSnapshots({
         stateDir,
         retainedPaths,
-        retiredSnapshots: [...retiredSnapshots, ...(!index ? unpublished : [])],
+        retiredSnapshots: [...retiredSnapshots, ...candidates, ...(!index ? unpublished : [])],
         assertCurrent: lease.assertOwned,
       });
       for (const warning of result.warnings) {
         process.emitWarning(warning);
+      }
+      const removedCandidates = candidates.filter((candidate) =>
+        result.removedSnapshots.some((removed) => isDeepStrictEqual(candidate, removed)),
+      );
+      if (removedCandidates.length) {
+        await updatePluginSnapshotCandidates({
+          stateDir,
+          lease,
+          operation: "release",
+          candidates: removedCandidates,
+        });
       }
       const removedStored = retiredSnapshots.filter((snapshot) =>
         result.removedSnapshots.some((removed) => isDeepStrictEqual(snapshot, removed)),

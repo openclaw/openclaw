@@ -203,8 +203,12 @@ export async function preparePluginSourceSnapshot(params: {
       stateDir: params.stateDir,
     },
   });
-  // SAFETY: The source-only command returns the worker's owned publication handle.
-  return prepared.value as PreparedPluginSourceSnapshot;
+  const { bindPluginSnapshotPublication } = await import("./plugin-source-snapshot-publication.js");
+  // SAFETY: The source-only command returns the worker's owned staging handle.
+  return bindPluginSnapshotPublication(
+    prepared.value as Parameters<typeof bindPluginSnapshotPublication>[0],
+    params.stateDir,
+  );
 }
 
 /** Inspect exact captured inputs without blocking the host or evaluating plugin code. */

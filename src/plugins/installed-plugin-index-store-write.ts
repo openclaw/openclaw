@@ -63,6 +63,8 @@ import {
   type InstalledPluginIndex,
   type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index.js";
+import { forgetPublishedPluginSnapshotCandidates } from "./installed-plugin-snapshot-candidates.kernel.js";
+import type { PluginSnapshotCandidateOperation } from "./installed-plugin-snapshot-candidates.types.js";
 import { PLUGIN_LIFECYCLE_LEASE_IDENTITY } from "./plugin-lifecycle-lease-identity.js";
 import {
   withPluginLifecycleLeaseAsync,
@@ -89,7 +91,7 @@ export type InstalledPluginIndexWriteReceipt = {
   };
 };
 
-export type InstalledPluginIndexWriteOperations = {
+export type InstalledPluginIndexWriteOperations = PluginSnapshotCandidateOperation & {
   "plugins.metadata.index.sourceSnapshots": {
     input: {
       identity: OpenClawStateLeaseIdentity;
@@ -247,6 +249,10 @@ function writePersistedInstalledPluginIndexRow(
   );
   // sqlite-allow-raw: Serialization precedes native prepare; the caller owns rollback.
   database.prepare(compiled.sql).run(...bind());
+  forgetPublishedPluginSnapshotCandidates(
+    database,
+    index.plugins.map((plugin) => plugin.sourceSnapshot),
+  );
   return {
     state_key: INSTALLED_PLUGIN_INDEX_STATE_KEY,
     value_json: valueJson,

@@ -7,7 +7,7 @@ import {
   type RootFileCopyBatchSync,
   type RootFileOpenBatchSync,
 } from "@openclaw/fs-safe/advanced";
-import { isPathInside } from "../infra/path-guards.js";
+import { isPathInside, normalizeWindowsPathPreservingCase } from "../infra/path-guards.js";
 import { getPluginGenerationMetrics } from "./plugin-generation-metrics.js";
 import type { createPluginGenerationReceipt } from "./plugin-generation-receipt.js";
 import type { PluginRecoverySource } from "./plugin-generation-source-lookup.js";
@@ -21,8 +21,15 @@ import {
 } from "./plugin-source-verification.js";
 
 /** Publish only verified dependency links; real nested installs keep their own bytes. */
-export function linkPluginGenerationDependency(link: string, target: string): boolean {
+export function linkPluginGenerationDependency(
+  link: string,
+  target: string,
+  pendingTarget?: string,
+): boolean {
   const entry = fs.lstatSync(link, { throwIfNoEntry: false });
+  if (pendingTarget && (entry || !fs.lstatSync(pendingTarget).isDirectory())) {
+    throw new Error(`Pending dependency link does not own an empty destination: ${link}`);
+  }
   if (entry && !entry.isSymbolicLink()) {
     return false;
   }
@@ -54,7 +61,16 @@ export function linkPluginGenerationDependency(link: string, target: string): bo
       fs.rmSync(staged, { force: true });
     }
   }
-  if (!fs.lstatSync(link).isSymbolicLink() || fs.realpathSync(link) !== fs.realpathSync(target)) {
+  const normalize = (value: string) =>
+    process.platform === "win32" ? normalizeWindowsPathPreservingCase(value) : value;
+  if (
+    !fs.lstatSync(link).isSymbolicLink() ||
+    (pendingTarget
+      ? normalize(path.resolve(path.dirname(link), fs.readlinkSync(link))) !==
+          normalize(path.resolve(target)) ||
+        normalize(fs.realpathSync(pendingTarget)) !== normalize(pendingTarget)
+      : fs.realpathSync(link) !== fs.realpathSync(target))
+  ) {
     throw new Error(`Dependency link does not resolve to its captured target: ${link}`);
   }
   if (entry) {

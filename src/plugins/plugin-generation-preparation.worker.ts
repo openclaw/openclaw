@@ -37,7 +37,7 @@ import { recordPluginNativeLoad } from "./plugin-source-capture-native-loads.js"
 import {
   acquirePluginSourceSnapshot,
   pluginSourceSnapshotClosureDigest,
-  publishPluginSourceSnapshot,
+  stagePluginSourceSnapshot,
   type PluginSourceSnapshotBinding,
 } from "./plugin-source-snapshot-artifact.js";
 
@@ -299,15 +299,17 @@ function createPreparationSession(context: CaptureCommand) {
               const snapshot = own({
                 contentDigest: capture.sourceDigest,
                 dependencyClosureDigest: pluginSourceSnapshotClosureDigest(capture),
-                publish: markPluginSourceCaptureOperation(
+                stage: markPluginSourceCaptureOperation(
                   async (binding: PluginSourceSnapshotBinding) =>
-                    publishPluginSourceSnapshot({
-                      stateDir: publication.stateDir,
-                      capture,
-                      binding,
-                      // The host installation owner checks authority before and after this await.
-                      assertCurrent: () => {},
-                    }),
+                    own(
+                      await stagePluginSourceSnapshot({
+                        stateDir: publication.stateDir,
+                        capture,
+                        binding,
+                        // The host installation owner checks authority before and after this await.
+                        assertCurrent: () => {},
+                      }),
+                    ),
                 ),
                 dispose: () => capture.dispose(),
                 disposeAsync: () => capture.disposeAsync(),

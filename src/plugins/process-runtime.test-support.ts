@@ -9,6 +9,8 @@ export const pluginProcessRuntimeEntrypoints = {
   installedPluginIndex: entrypoint("installed-plugin-index-store"),
   installedPluginIndexWrite: entrypoint("installed-plugin-index-store-write"),
   sourceSnapshot: entrypoint("plugin-source-snapshot-artifact"),
+  sourceCapture: entrypoint("plugin-generation-capture"),
+  snapshotPreparation: entrypoint("plugin-generation-worker"),
   directoryInventory: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../infra/directory-walk",

@@ -12,6 +12,11 @@ import {
 } from "./plugin-generation-capture.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 import {
+  hasPluginNativeCaptureCleanupCandidates,
+  prunePluginNativeCaptureDirectories,
+} from "./plugin-source-capture-directory.js";
+import { resolvePluginSourceCapturesDirectory } from "./plugin-source-capture-path.js";
+import {
   acquirePluginSourceSnapshot,
   collectPluginSourceSnapshots,
   pluginSourceSnapshotClosureDigest,
@@ -94,6 +99,50 @@ it("reuses independent source bytes after original package and dependency remova
   expect(fs.statSync(path.join(first.rootDir, "binary.node")).nlink).toBe(1);
   expect(first.sourceAliases[source]).toBe(first.rootDir);
   expect(first.sourceDigest).toBe(descriptor.contentDigest);
+});
+
+it("keeps absolute dependency links valid across atomic publication", async () => {
+  const { stateDir, capture, binding } = await fixture(false, false, true);
+  const symlink = fs.symlinkSync.bind(fs);
+  // Model Windows junctions on every host: their stored targets are absolute.
+  vi.spyOn(fs, "symlinkSync").mockImplementation((target, link, type) =>
+    symlink(path.resolve(path.dirname(String(link)), String(target)), link, type),
+  );
+  const published = await publishPluginSourceSnapshot({
+    stateDir,
+    capture,
+    binding,
+    assertCurrent,
+  });
+  const descriptor = { ...published, installedRevision: 1 };
+  const reader = await acquirePluginSourceSnapshot({ stateDir, descriptor, assertCurrent });
+  releases.push(reader.release);
+  expect(fs.readFileSync(path.join(reader.rootDir, "node_modules/dep/index.cjs"), "utf8")).toBe(
+    "module.exports = 'original';",
+  );
+});
+
+it("keeps a current-process snapshot publisher out of capture maintenance", async () => {
+  const { stateDir, capture, binding } = await fixture(false);
+  let checks = 0;
+  await publishPluginSourceSnapshot({
+    stateDir,
+    capture,
+    binding,
+    assertCurrent: async () => {
+      if (++checks !== 2) {
+        return;
+      }
+      const parent = resolvePluginSourceCapturesDirectory(stateDir);
+      const stage = path.join(
+        parent,
+        fs.readdirSync(parent).find((name) => name.startsWith("snapshot-v1-staging-"))!,
+      );
+      expect(await hasPluginNativeCaptureCleanupCandidates(stateDir)).toBe(false);
+      await prunePluginNativeCaptureDirectories(stateDir, new Set(), () => {}, { startup: true });
+      expect(fs.existsSync(stage)).toBe(true);
+    },
+  });
 });
 
 it.each(process.platform === "win32" ? [false] : [false, true])(

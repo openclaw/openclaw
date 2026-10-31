@@ -15,16 +15,18 @@ import {
 } from "../infra/sqlite-staging-token.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { PluginGenerationArtifact } from "./plugin-generation-artifact.types.js";
-import { linkPluginGenerationDependency } from "./plugin-generation-file-capture.js";
+import { retainPluginSourceCaptureRoot } from "./plugin-source-capture-context.js";
 import {
   PLUGIN_SOURCE_SNAPSHOT_PREFIX,
+  PLUGIN_SOURCE_SNAPSHOT_STAGING_PREFIX,
   resolvePluginSourceCapturesDirectory,
 } from "./plugin-source-capture-path.js";
+import { hashPluginSourceFile, pluginSourceStatIdentity } from "./plugin-source-file.js";
 import {
-  copyPluginSourceFile,
-  hashPluginSourceFile,
-  pluginSourceStatIdentity,
-} from "./plugin-source-file.js";
+  capturePluginSnapshotPayload,
+  digestPluginSnapshotClosure,
+  resolvePluginSnapshotLink,
+} from "./plugin-source-snapshot-payload.js";
 import type { PluginSourceSnapshotDescriptor } from "./plugin-source-snapshot.types.js";
 
 const PLUGIN_SOURCE_SNAPSHOT_FORMAT = 1;
@@ -126,6 +128,7 @@ function relativeMember(root: string, member: string): string {
 function scanPayload(
   root: string,
   opened: ReturnType<typeof createRootFileOpenBatchSync>,
+  publishedPayload = root,
 ): Entry[] {
   const entries: Entry[] = [];
   const visit = (directory: string) => {
@@ -136,10 +139,9 @@ function scanPayload(
       const relative = relativeMember(root, file);
       if (stat.isSymbolicLink()) {
         privateEntry(file, root, "link");
-        const target = path.resolve(path.dirname(file), fs.readlinkSync(file));
-        if (!isPathInside(root, target) || !isPathInside(root, fs.realpathSync(file))) {
-          fail(root, `dependency link leaves its frozen closure: ${file}`);
-        }
+        const target = resolvePluginSnapshotLink(root, file, publishedPayload, (detail) =>
+          fail(root, detail),
+        );
         if (
           pluginSourceStatIdentity(stat) !==
           pluginSourceStatIdentity(privateEntry(file, root, "link"))
@@ -195,59 +197,16 @@ function scanPayload(
 
 /** Logical closure facts exclude ephemeral capture paths and inode identities. */
 export function pluginSourceSnapshotClosureDigest(capture: PluginGenerationArtifact): string {
-  const facts = capture.sourceSnapshotFacts;
-  if (!facts) {
-    fail(capture.boundaryRoot, "capture does not own complete source facts");
-  }
-  return digest(
-    JSON.stringify({
-      aliases: Object.entries(capture.sourceAliases)
-        .map(([source, captured]) => [source, path.relative(capture.boundaryRoot, captured)])
-        .toSorted(([left], [right]) => left!.localeCompare(right!)),
-      directories: [...facts.directories].toSorted(),
-      links: [...facts.links].toSorted(([left], [right]) => left.localeCompare(right)),
-      files: [...facts.files]
-        .toSorted(([left], [right]) => left.localeCompare(right))
-        .map(([file, fact]) => [file, fact.contentHash, fact.sizeBytes, fact.mode]),
-      hardlinks: [...facts.hardlinks].toSorted(),
-    }),
-  );
-}
-
-function captureIntoPayload(capture: PluginGenerationArtifact, payload: string) {
-  const links: Array<[string, string]> = [];
-  const copy = (source: string, target: string) => {
-    const stat = fs.lstatSync(source, { bigint: true });
-    if (stat.isSymbolicLink()) {
-      const resolved = path.resolve(path.dirname(source), fs.readlinkSync(source));
-      if (!isPathInside(capture.boundaryRoot, resolved)) {
-        fail(capture.boundaryRoot, `capture contains an external link: ${source}`);
-      }
-      links.push([target, path.join(payload, path.relative(capture.boundaryRoot, resolved))]);
-    } else if (stat.isDirectory()) {
-      fs.mkdirSync(target, { recursive: true, mode: 0o700 });
-      for (const name of fs.readdirSync(source).toSorted()) {
-        copy(path.join(source, name), path.join(target, name));
-      }
-    } else if (stat.isFile()) {
-      copyPluginSourceFile(source, capture.boundaryRoot, target);
-    } else {
-      fail(capture.boundaryRoot, `capture contains a nonregular source: ${source}`);
-    }
-  };
-  copy(capture.boundaryRoot, payload);
-  for (const [link, target] of links) {
-    linkPluginGenerationDependency(link, target);
-  }
+  return digestPluginSnapshotClosure(capture, (detail) => fail(capture.boundaryRoot, detail));
 }
 
 /** Publish completed immutable source before making its descriptor reachable from the index. */
-export async function publishPluginSourceSnapshot(params: {
+export async function stagePluginSourceSnapshot(params: {
   stateDir: string;
   capture: PluginGenerationArtifact;
   binding: PluginSourceSnapshotBinding;
   assertCurrent: () => void | Promise<void>;
-}): Promise<Omit<PluginSourceSnapshotDescriptor, "installedRevision">> {
+}) {
   await params.assertCurrent();
   if (
     params.binding.contentDigest !== params.capture.sourceDigest ||
@@ -263,21 +222,41 @@ export async function publishPluginSourceSnapshot(params: {
   const parent = fs.realpathSync.native(requestedParent);
   privateEntry(parent, parent, "directory");
   const generation = randomUUID();
-  const stage = createPrivateSqliteTempDirectorySync(
-    parent,
-    `${PLUGIN_SOURCE_SNAPSHOT_PREFIX}staging-`,
-  );
+  const stage = createPrivateSqliteTempDirectorySync(parent, PLUGIN_SOURCE_SNAPSHOT_STAGING_PREFIX);
   const root = path.join(parent, `${PLUGIN_SOURCE_SNAPSHOT_PREFIX}${generation}`);
   const stagingIdentity = ownerIdentity(privateEntry(stage, stage, "directory"));
   let published = false;
   let token: SqliteStagingToken | undefined;
+  const releaseStage = retainPluginSourceCaptureRoot(stage);
+  let settled = false;
+  let submitted = false;
+  const disposeAsync = async () => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    try {
+      token?.(true);
+      token = undefined;
+      const cleanupRoot = published ? root : stage;
+      const current = fs.lstatSync(cleanupRoot, { bigint: true, throwIfNoEntry: false });
+      if (current && ownerIdentity(current) === stagingIdentity) {
+        await fsPromises.rm(cleanupRoot, { recursive: true, force: true });
+      }
+    } finally {
+      releaseStage();
+    }
+  };
   try {
     token = acquireSqliteStagingToken(stage, "create");
     const expectedTokenIdentity = tokenIdentity(stage);
     const payload = path.join(stage, PAYLOAD);
-    captureIntoPayload(params.capture, payload);
+    const publishedPayload = path.join(root, PAYLOAD);
+    capturePluginSnapshotPayload(params.capture, payload, publishedPayload, (detail) =>
+      fail(stage, detail),
+    );
     using opened = createRootFileOpenBatchSync();
-    const entries = scanPayload(payload, opened);
+    const entries = scanPayload(payload, opened, publishedPayload);
     const expected = params.capture.sourceSnapshotFacts;
     if (
       !expected ||
@@ -348,29 +327,59 @@ export async function publishPluginSourceSnapshot(params: {
       },
     };
     await params.assertCurrent();
-    assertSnapshotIdentities(descriptor, manifest);
-    token();
-    token = undefined;
-    // No descriptor exists before this atomic namespace publication.
-    fs.renameSync(stage, root);
-    descriptor.artifact.path = root;
-    published = true;
-    await params.assertCurrent();
-    assertSnapshotIdentities(descriptor, manifest);
-    return descriptor;
+    assertSnapshotIdentities(descriptor, manifest, publishedPayload);
+    return {
+      descriptor: { ...descriptor, artifact: { ...descriptor.artifact, path: root } },
+      async publish() {
+        if (settled || submitted) {
+          throw new Error("Plugin source snapshot publication already settled");
+        }
+        submitted = true;
+        try {
+          await params.assertCurrent();
+          assertSnapshotIdentities(descriptor, manifest, publishedPayload);
+          token!();
+          token = undefined;
+          fs.renameSync(stage, root);
+          descriptor.artifact.path = root;
+          published = true;
+          await params.assertCurrent();
+          assertSnapshotIdentities(descriptor, manifest);
+          settled = true;
+          releaseStage();
+          return descriptor;
+        } catch (error) {
+          await disposeAsync();
+          throw error;
+        }
+      },
+      dispose: () => {
+        void disposeAsync().catch(() => {});
+      },
+      disposeAsync,
+    };
   } catch (error) {
-    token?.(true);
-    const cleanupRoot = published ? root : stage;
-    const current = fs.lstatSync(cleanupRoot, { bigint: true, throwIfNoEntry: false });
-    if (current && ownerIdentity(current) === stagingIdentity) {
-      await fsPromises.rm(cleanupRoot, { recursive: true, force: true });
-    }
+    await disposeAsync();
     throw error;
+  }
+}
+
+export async function publishPluginSourceSnapshot(
+  params: Parameters<typeof stagePluginSourceSnapshot>[0],
+) {
+  const staged = await stagePluginSourceSnapshot(params);
+  try {
+    return await staged.publish();
+  } finally {
+    await staged.disposeAsync();
   }
 }
 
 function assertArtifactPath(stateDir: string, artifactPath: string) {
   const parent = fs.realpathSync.native(resolvePluginSourceCapturesDirectory(stateDir));
+  if (path.basename(artifactPath).startsWith(PLUGIN_SOURCE_SNAPSHOT_STAGING_PREFIX)) {
+    fail(artifactPath, "unfinished snapshot staging namespace");
+  }
   if (
     path.dirname(artifactPath) !== parent ||
     !path.basename(artifactPath).startsWith(PLUGIN_SOURCE_SNAPSHOT_PREFIX) ||
@@ -477,6 +486,7 @@ function validateSnapshot(stateDir: string, descriptor: PluginSourceSnapshotDesc
 function assertSnapshotIdentities(
   descriptor: Pick<PluginSourceSnapshotDescriptor, "artifact">,
   manifest: Manifest,
+  publishedPayload = path.join(descriptor.artifact.path, PAYLOAD),
 ): void {
   const root = descriptor.artifact.path;
   if (tokenIdentity(root) !== descriptor.artifact.tokenIdentity) {
@@ -504,6 +514,23 @@ function assertSnapshotIdentities(
         root,
         `payload member changed after source validation: ${path.join(payload, entry.path)}`,
       );
+    }
+    if (entry.kind === "link") {
+      const target = resolvePluginSnapshotLink(
+        payload,
+        path.join(payload, entry.path),
+        publishedPayload,
+        (detail) => fail(root, detail),
+      );
+      if (path.relative(payload, target) !== entry.target) {
+        fail(root, `dependency link target changed: ${path.join(payload, entry.path)}`);
+      }
+      if (
+        pluginSourceStatIdentity(privateEntry(path.join(payload, entry.path), root, "link")) !==
+        entry.identity
+      ) {
+        fail(root, `dependency link changed while validating: ${path.join(payload, entry.path)}`);
+      }
     }
   }
 }

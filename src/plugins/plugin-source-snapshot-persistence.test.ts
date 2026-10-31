@@ -8,6 +8,8 @@ import { selectInstallMutationWriteOptions } from "./install-config-mutation.js"
 import { persistPluginInstall } from "./install-persistence.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { readCurrentInstalledPluginIndex } from "./installed-plugin-index-store.js";
+import { updatePluginSnapshotCandidates } from "./installed-plugin-snapshot-candidates.js";
+import { withPluginLifecycleLeaseAsync } from "./plugin-lifecycle-lease.js";
 import { PluginSourceSnapshotDescriptorSchema } from "./plugin-source-snapshot.types.js";
 import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
@@ -76,6 +78,15 @@ it.each(["canonical", "reordered"] as const)(
             dependencyClosureDigest: descriptor.dependencyClosureDigest,
           });
           expect(fs.existsSync(marker)).toBe(false);
+          expect(
+            await withPluginLifecycleLeaseAsync({ env: state.env }, (lease) =>
+              updatePluginSnapshotCandidates({
+                stateDir: state.stateDir,
+                lease,
+                operation: "read",
+              }),
+            ),
+          ).toEqual([]);
           return descriptor;
         };
         const first = await install();

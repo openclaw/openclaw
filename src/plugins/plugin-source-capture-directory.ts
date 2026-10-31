@@ -19,6 +19,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.types.js";
 import {
   pluginSourceCaptureMaintenance,
+  pluginSourceCaptureOwnedRoots,
   resolvePluginSourceCaptureStorage,
 } from "./plugin-source-capture-context.js";
 import {
@@ -30,6 +31,7 @@ import {
   mkdtempPluginCaptureSync,
   PLUGIN_SOURCE_CAPTURE_PREFIX,
   PLUGIN_SOURCE_SNAPSHOT_PREFIX,
+  PLUGIN_SOURCE_SNAPSHOT_STAGING_PREFIX,
   resolvePluginSourceCaptureFallbackPrefix,
   resolvePluginSourceCapturesDirectory,
 } from "./plugin-source-capture-path.js";
@@ -57,7 +59,7 @@ const {
   retainPluginNativeCapturePath,
   sweeps,
 } = resolveGlobalSingleton(Symbol.for("openclaw.pluginSourceCaptureInstances"), () => {
-  const instanceRoots = new Set<string>();
+  const instanceRoots = pluginSourceCaptureOwnedRoots;
   const nativeCustody = createPluginNativeCaptureCustody(instanceRoots);
   process.once("exit", () => {
     for (const [key, instance] of instances) {
@@ -161,9 +163,11 @@ async function reclaimInstances(
   const cutoff = Date.now() - CAPTURE_GRACE_MS;
   const lstatIfPresent = (file: string) => fsPromises.lstat(file).catch(ignoreMissingPath);
   for (const entry of entries) {
+    const snapshotStage =
+      !legacy && !fallbackPrefix && entry.name.startsWith(PLUGIN_SOURCE_SNAPSHOT_STAGING_PREFIX);
     if (
       !entry.isDirectory() ||
-      entry.name.startsWith(PLUGIN_SOURCE_SNAPSHOT_PREFIX) ||
+      (entry.name.startsWith(PLUGIN_SOURCE_SNAPSHOT_PREFIX) && !snapshotStage) ||
       (legacy && !isLegacyPluginSourceCaptureName(entry.name)) ||
       (fallbackPrefix && !entry.name.startsWith(fallbackPrefix))
     ) {
@@ -190,6 +194,9 @@ async function reclaimInstances(
         continue;
       }
       if (!tokenStat) {
+        if (snapshotStage) {
+          continue;
+        }
         // A qualified name selects the state; only its token proves released custody.
         if (fallbackPrefix || changed > cutoff) {
           continue;
@@ -237,7 +244,8 @@ export async function hasPluginNativeCaptureCleanupCandidates(stateDir: string):
     for (const entry of entries) {
       if (
         !entry.isDirectory() ||
-        entry.name.startsWith(PLUGIN_SOURCE_SNAPSHOT_PREFIX) ||
+        (entry.name.startsWith(PLUGIN_SOURCE_SNAPSHOT_PREFIX) &&
+          (prefix || !entry.name.startsWith(PLUGIN_SOURCE_SNAPSHOT_STAGING_PREFIX))) ||
         (prefix && !entry.name.startsWith(prefix))
       ) {
         continue;
