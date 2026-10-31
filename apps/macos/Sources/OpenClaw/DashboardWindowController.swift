@@ -121,6 +121,10 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private(set) var signedOutNeedsRefresh = false
     private var reconnectTask: (id: UUID, task: Task<Void, Never>)?
     private var signInProgress: GatewayBrowserSignInProgress?
+    var isSigningInToGateway: Bool {
+        self.signedOut != nil && self.reconnectTask != nil
+    }
+
     private var browserSignInRoute: (baseURL: URL, url: URL)?
     private var navigationGeneration: UInt64 = 0
     private var pendingNativeCommands: [DashboardNativeCommand] = []
