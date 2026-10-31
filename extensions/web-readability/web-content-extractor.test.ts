@@ -31,10 +31,14 @@ describe("web readability extractor", () => {
     ['<base target="_blank" />', "https://example.com/next"],
     ['<base href="/docs/guide/" />', "https://example.com/docs/next"],
   ])("extracts readable markdown with absolute links (head %j)", async (base, link) => {
-    const html = SAMPLE_HTML.replace("</head>", `${base}</head>`);
+    const html = SAMPLE_HTML.replace("</head>", `${base}</head>`).replace(
+      "Continue reading</a>",
+      'Continue reading</a> <a href="#top">Top</a>',
+    );
     const extracted = await extractArticle(html, "markdown");
     expect(extracted.text).toContain("Main content starts here");
     expect(extracted.text).toContain(`[Continue reading](${link})`);
+    expect(extracted.text).toContain("[Top](https://example.com/article#top)");
     expect(extracted.title).toBe("Example Article");
   });
 
