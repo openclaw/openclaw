@@ -192,10 +192,7 @@ describe("ACP reset", () => {
       expect(notified).toHaveBeenCalledExactlyOnceWith(sessionKey, "main");
       await recordChildActivity();
       expect(peekSystemEvents(sessionKey)).toEqual([]);
-      expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledExactlyOnceWith({
-        targetSessionKey: sessionKey,
-        reason: "session-reset",
-      });
+      expect(threadBindingMocks.unbindThreadBindingsBySessionKey).not.toHaveBeenCalled();
       expect(sessionLifecycleHookMocks.runSessionEnd).toHaveBeenCalledTimes(1);
       expect(sessionLifecycleHookMocks.runSessionStart).toHaveBeenCalledTimes(1);
       expect(events).toEqual([
