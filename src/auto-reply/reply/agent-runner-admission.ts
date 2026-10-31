@@ -69,7 +69,8 @@ export function prepareReplyTurnExecution(params: AgentTurnParams, runId: string
           agentId: params.followupRun.run.agentId,
           runId,
           sessionId: params.followupRun.run.sessionId,
-          sessionKey,
+          // Tools redeem the turn capability under the policy key, as for ordinary replies.
+          sessionKey: params.runtimePolicySessionKey ?? sessionKey,
           jobId: automation.job.id,
           deliveryAttemptFence: automation.deliveryAttemptFence ?? null,
           operatorAuthority: params.followupRun.operatorAuthority,
