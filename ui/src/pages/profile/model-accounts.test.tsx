@@ -214,15 +214,13 @@ it.each([12, 100])("does not rescan %s unchanged accounts on status publications
     flush();
   }
   const scanned = [...find.mock.contexts, ...some.mock.contexts].filter(
-    (rows) => rows[0]?.authProfileId,
+    (rows) => Array.isArray(rows) && rows.length === size,
   );
   find.mockRestore();
   some.mockRestore();
   expect(scanned).toHaveLength(0);
   expect(h.calls("users.listModelAccounts")).toHaveLength(1);
-  h.showAccounts(
-    accounts.map((account, index) => (index === 0 ? { ...account, label: "Renamed" } : account)),
-  );
+  h.showAccounts(accounts.with(0, { ...accounts[0]!, label: "Renamed" }));
   h.button(auth("accounts-refresh")).click();
   await waitForSolid(() =>
     expect(h.button(auth("link-unlink")).getAttribute("aria-label")).toContain("Renamed"),
