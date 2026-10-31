@@ -136,6 +136,12 @@ suite.define(() => {
           await page.setViewportSize({ width, height: 729 });
           await composer.locator("textarea").click();
           await page.mouse.move(0, 0);
+          const composerWidth = await composer.evaluate(
+            (node) => node.getBoundingClientRect().width,
+          );
+          await expect
+            .poll(() => composer.locator(".chat-controls__permission-label").isVisible())
+            .toBe(composerWidth > 560);
           await expect
             .poll(() =>
               composer.locator(".agent-chat__composer-footer").evaluate((footer) => {
