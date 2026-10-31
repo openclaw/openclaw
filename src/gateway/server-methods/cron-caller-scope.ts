@@ -36,6 +36,7 @@ import {
 import type { CronCreatorAuthorityGrant } from "../cron-creator-authority-grant.types.js";
 import { bindGatewayDeviceRevocation } from "../device-revocation.js";
 import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
+import { assertHumanCronJobAccess, assertHumanCronExecutionAccess } from "./cron-human-owner.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -142,7 +143,7 @@ export function resolveCronMutationCommitGuard(
       : undefined;
   if (
     !validatesAuthority &&
-    !jobScope?.callerScope &&
+    !jobScope &&
     !manageAll &&
     !requesterGrant &&
     !callerAuthority?.sessionMutationCommitGuard &&
@@ -157,6 +158,16 @@ export function resolveCronMutationCommitGuard(
       throw new TypeError("Gateway caller authority is no longer active.");
     }
     manageAll?.();
+    if (jobScope) {
+      const job = context.cron.getJob(jobScope.jobId);
+      if (!job) {
+        throw new TypeError("Automation no longer exists.");
+      }
+      assertHumanCronJobAccess(client, job);
+      if (callerAuthority?.modelJobPolicy) {
+        assertHumanCronExecutionAccess(client, job, callerAuthority.modelJobPolicy.patch);
+      }
+    }
     if (identity && callerAuthority?.modelJobPolicy) {
       const { config, jobId, patch } = callerAuthority.modelJobPolicy;
       const job = context.cron.getJob(jobId);

@@ -37,6 +37,17 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
     );
   });
 
+  it("does not reuse ambient credentials after human ownership transfer", async () => {
+    const result = await runJob({
+      ownerProfileId: "new-human-owner",
+      runtimeAuthorityRecoveryRequired: true,
+    });
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("fresh execution authority");
+    expect(harness.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(harness.runCliAgentMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     { name: "a different embedded runtime", runtime: "openclaw", cli: false },
     { name: "a CLI execution path", runtime: "codex", cli: true },

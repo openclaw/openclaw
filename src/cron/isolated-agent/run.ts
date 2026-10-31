@@ -101,6 +101,20 @@ async function runCronIsolatedAgentTurnInTrace(
   params: RunCronAgentTurnParams,
 ): Promise<RunCronAgentTurnResult> {
   params.assertCurrent?.();
+  // A human transfer retires captured credentials. Do not fall back to account
+  // overrides copied from the previous owner's source or retained run session.
+  if (
+    params.job.ownerProfileId &&
+    params.job.runtimeAuthorityRecoveryRequired &&
+    !params.job.runtimeAuthority &&
+    !params.job.inferenceBinding
+  ) {
+    return {
+      status: "error",
+      error:
+        "This automation needs fresh execution authority. Select an inference account or reauthorize it from an authenticated owner turn before running it.",
+    };
+  }
   const admittedLifecycleGeneration = getAgentEventLifecycleGeneration();
   const upstreamAbortSignal = params.abortSignal ?? params.signal;
   const lifecycleAbortController = new AbortController();

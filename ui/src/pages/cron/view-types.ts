@@ -2,6 +2,9 @@ import type { buildCronViewProps } from "./view-props.ts";
 
 type CronViewProps = ReturnType<typeof buildCronViewProps>;
 type OptionalViewProp =
+  | "ownerOptions"
+  | "canCreate"
+  | "canManageJob"
   | "reads"
   | "eventSource"
   | "channelLabels"
@@ -21,6 +24,7 @@ export type CronPanelMode = "overview" | "create" | "job";
 export type CronJobActionProps = Pick<
   CronProps,
   | "canManage"
+  | "canCreate"
   | "busy"
   | "connected"
   | "toggleSavingJobId"

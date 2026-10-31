@@ -1164,7 +1164,7 @@ var External = [
     /(^mode$|^channel$|^threadId$|^accountId$|^bestEffort$|^failureDestination$|^to$)/u,
     /(^after$|^channel$|^to$|^cooldownMs$|^includeSkipped$|^mode$|^accountId$)/u,
     /(^id$|^patch$|^expectedConfigRevision$)/u,
-    /(^name$|^displayName$|^agentId$|^sessionKey$|^description$|^enabled$|^deleteAfterRun$|^schedule$|^pacing$|^activeHours$|^idleOnly$|^trigger$|^sessionTarget$|^wakeMode$|^payload$|^delivery$|^failureAlert$|^state$)/u,
+    /(^ownerProfileId$|^name$|^displayName$|^agentId$|^sessionKey$|^description$|^enabled$|^deleteAfterRun$|^schedule$|^pacing$|^activeHours$|^idleOnly$|^trigger$|^sessionTarget$|^wakeMode$|^payload$|^delivery$|^failureAlert$|^state$)/u,
     /\S/u,
     /(^min$|^max$)/u,
     /(^start$|^end$|^timezone$)/u,
@@ -10992,6 +10992,9 @@ var External = [
     Object.getOwnPropertyNames(value).every(
       (unique_1056, unique_1057) => External[544].test(unique_1056) || check_2(value[unique_1056]),
     ) &&
+    (value.ownerProfileId === void 0 ||
+      !("ownerProfileId" in value) ||
+      check_63(value.ownerProfileId)) &&
     (value.name === void 0 || !("name" in value) || check_63(value.name)) &&
     (value.displayName === void 0 || !("displayName" in value) || check_1647(value.displayName)) &&
     (value.agentId === void 0 || !("agentId" in value) || check_18(value.agentId)) &&

@@ -412,6 +412,8 @@ export type CronJob = CronJobBase<
    * schedule keeps its reserved agentTurn sentinel in `payload` for existing readers.
    */
   payloadSource?: { kind: "pluginCommand"; pluginId: string; command: string };
+  /** Human allowed to manage this automation; separate from its execution envelope. */
+  ownerProfileId?: string;
   owner?: {
     agentId?: string;
     sessionKey?: string;
@@ -510,6 +512,7 @@ export type CronJobCreate = Omit<
   | "updatedAtMs"
   | "state"
   | "scheduledToolPolicy"
+  | "ownerProfileId"
   | "streamExecutionHost"
   | "payloadSource"
 > & {

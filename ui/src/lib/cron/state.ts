@@ -13,6 +13,7 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   name: "",
   description: "",
   agentId: "",
+  ownerProfileId: "",
   sessionKey: "",
   clearAgent: false,
   enabled: true,
