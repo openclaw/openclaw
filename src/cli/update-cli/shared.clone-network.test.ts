@@ -36,40 +36,44 @@ it("clones through native Git after two truncated HTTP pack responses", async ()
   const reservation = await reserveTestPortListener({
     offsets: [0],
     createListener: () =>
-      createServer(async (request, response) => {
-        const url = new URL(request.url ?? "/", "http://localhost");
-        const chunks: Buffer[] = [];
-        for await (const chunk of request) {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
-        }
-        const input = Buffer.concat(chunks);
-        const cgi = execFileSync("git", ["http-backend"], {
-          input,
-          env: {
-            ...process.env,
-            GIT_PROJECT_ROOT: root,
-            GIT_HTTP_EXPORT_ALL: "1",
-            REQUEST_METHOD: request.method,
-            PATH_INFO: url.pathname,
-            QUERY_STRING: url.search.slice(1),
-            CONTENT_TYPE: request.headers["content-type"],
-            CONTENT_LENGTH: String(input.length),
-          },
+      createServer((request, response) => {
+        void (async () => {
+          const url = new URL(request.url ?? "/", "http://localhost");
+          const chunks: Buffer[] = [];
+          for await (const chunk of request) {
+            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+          }
+          const input = Buffer.concat(chunks);
+          const cgi = execFileSync("git", ["http-backend"], {
+            input,
+            env: {
+              ...process.env,
+              GIT_PROJECT_ROOT: root,
+              GIT_HTTP_EXPORT_ALL: "1",
+              REQUEST_METHOD: request.method,
+              PATH_INFO: url.pathname,
+              QUERY_STRING: url.search.slice(1),
+              CONTENT_TYPE: request.headers["content-type"],
+              CONTENT_LENGTH: String(input.length),
+            },
+          });
+          const split = cgi.indexOf("\r\n\r\n");
+          const headers = cgi.subarray(0, split).toString("utf8");
+          const body = cgi.subarray(split + 4);
+          const type = /^Content-Type: (.+)$/imu.exec(headers)?.[1]?.trim();
+          response.writeHead(200, {
+            "Content-Type": type ?? "application/octet-stream",
+            "Content-Length": body.length,
+            Connection: "close",
+          });
+          response.end(
+            url.pathname.endsWith("/git-upload-pack") && ++packs <= 2
+              ? body.subarray(0, Math.max(0, body.length - 32))
+              : body,
+          );
+        })().catch((error: unknown) => {
+          response.destroy(error instanceof Error ? error : new Error(String(error)));
         });
-        const split = cgi.indexOf("\r\n\r\n");
-        const headers = cgi.subarray(0, split).toString("utf8");
-        const body = cgi.subarray(split + 4);
-        const type = /^Content-Type: (.+)$/imu.exec(headers)?.[1]?.trim();
-        response.writeHead(200, {
-          "Content-Type": type ?? "application/octet-stream",
-          "Content-Length": body.length,
-          Connection: "close",
-        });
-        response.end(
-          url.pathname.endsWith("/git-upload-pack") && ++packs <= 2
-            ? body.subarray(0, Math.max(0, body.length - 32))
-            : body,
-        );
       }),
   });
   const wait = vi.spyOn(backoff, "sleepWithAbort").mockResolvedValue();

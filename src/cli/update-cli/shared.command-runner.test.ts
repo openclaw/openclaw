@@ -346,7 +346,7 @@ it("stops clone retries when staging cleanup cannot settle", async () => {
     stderr: "fatal: early EOF",
   });
   const remove = fs.rm.bind(fs);
-  using removal = vi
+  using _ = vi
     .spyOn(fs, "rm")
     .mockImplementation((directory, options) =>
       String(directory).includes(".openclaw-clone-")
