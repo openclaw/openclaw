@@ -440,14 +440,12 @@ describe("worker turn execution", () => {
       const input = turn("launch-tool-negotiation");
       const agentWorkspace = path.join(root, "agent-bootstrap");
       await mkdir(agentWorkspace);
-      await Promise.all([
-        writeFile(path.join(agentWorkspace, "AGENTS.md"), "Canonical agent instructions."),
-        writeFile(path.join(agentWorkspace, "SOUL.md"), "Canonical agent identity."),
-        writeFile(path.join(agentWorkspace, "USER.md"), "Canonical user context."),
-        writeFile(path.join(agentWorkspace, "TOOLS.md"), "Canonical tool instructions."),
-        writeFile(path.join(root, "AGENTS.md"), "Selected execution project instructions."),
-        writeFile(path.join(root, "SOUL.md"), "Unselected execution identity must stay private."),
-      ]);
+      await Promise.all(
+        ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md"].flatMap((name) => [
+          writeFile(path.join(agentWorkspace, name), `Unrelated agent ${name}.`),
+          writeFile(path.join(root, name), `Selected session ${name}.`),
+        ]),
+      );
       try {
         await expect(
           execute(provider, {
@@ -469,12 +467,12 @@ describe("worker turn execution", () => {
         const request = launchTurn.mock.calls[0]![0];
         const { systemPrompt, prompt, runtimeContext } = request.plan.assignment;
         expect(systemPrompt).toContain("You are a personal assistant running inside OpenClaw.");
-        expect(systemPrompt).toContain("Canonical agent instructions.");
-        expect(systemPrompt).toContain("Canonical agent identity.");
-        expect(systemPrompt).toContain("Canonical user context.");
-        expect(systemPrompt).not.toContain("Canonical tool instructions.");
-        expect(systemPrompt).toContain("Selected execution project instructions.");
-        expect(systemPrompt).not.toContain("Unselected execution identity must stay private.");
+        expect(systemPrompt).toContain("Selected session AGENTS.md.");
+        expect(systemPrompt).toContain("Selected session SOUL.md.");
+        expect(systemPrompt).toContain("Selected session USER.md.");
+        expect(systemPrompt).not.toContain("Selected session TOOLS.md.");
+        expect(systemPrompt).not.toContain("Unrelated agent ");
+        expect(systemPrompt).not.toContain(agentWorkspace);
         expect(systemPrompt).toContain("Working directory: /worker/workspace");
         expect(prompt).toMatch(
           /^\[[^\]]+\d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] Inspect this workspace$/u,
