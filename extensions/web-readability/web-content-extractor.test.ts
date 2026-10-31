@@ -6,13 +6,10 @@ const SAMPLE_HTML = `<!doctype html><html lang="en"><head><meta charset="utf-8" 
 <h1>Example Article</h1><p>Main content starts here with enough words to satisfy readability.</p><p>Second paragraph for a bit more signal.</p><p><a href="../next">Continue reading</a> <a href="#top">Top</a></p></article></main><footer>Footer text</footer></body></html>`;
 
 const MINIFIED_BLOCKS_HTML =
-  "<!doctype html><html><head><title>Results</title></head><body><article>" +
-  "<h1>Heading</h1>" +
+  "<!doctype html><html><head><title>Results</title></head><body><article><h1>Heading</h1>" +
   "<p>Para 0. Quarterly results were published today with figures for each region and the year over year change, and the summary below explains what moved and why it matters for the next planning cycle.</p>" +
-  "<p>Para 1. Quarterly results were published today with figures for each region and the year over year change, and the summary below explains what moved and why it matters for the next planning cycle.</p>" +
-  "<ul><li>alpha</li><li>beta</li></ul>" +
-  "<p>Para 2. Quarterly results were published today with figures for each region and the year over year change, and the summary below explains what moved and why it matters for the next planning cycle.</p>" +
-  "</article></body></html>";
+  "<p>Para 1. Quarterly results were published today with figures for each region and the year over year change, and the summary below explains what moved and why it matters for the next planning cycle.</p><ul><li>alpha</li><li>beta</li></ul>" +
+  "<p>Para 2. Quarterly results were published today with figures for each region and the year over year change, and the summary below explains what moved and why it matters for the next planning cycle.</p></article></body></html>";
 
 async function extractArticle(html: string, extractMode: "text" | "markdown" = "text") {
   const result = await createReadabilityWebContentExtractor().extract({
