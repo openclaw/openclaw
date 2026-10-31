@@ -1661,8 +1661,8 @@ importers:
         specifier: 43.0.0
         version: 43.0.0(patch_hash=c3ad7f3afbd9ded4643fbfa31f5862d48d4e05d198cb438efbb4fcdaa845b0cc)
       music-metadata:
-        specifier: 12.2.3
-        version: 12.2.3(supports-color@10.2.2)
+        specifier: 12.3.1
+        version: 12.3.1(supports-color@10.2.2)
       typebox:
         specifier: 1.4.3
         version: 1.4.3
@@ -9261,8 +9261,8 @@ packages:
     resolution: {integrity: sha512-uR/mHK6eyfl8h3jVCobF5b38Mfg1IDJMiBxIVbmm5F+G1OXEFcUpQHveO84tJBAqvY93GCRY2R4kDyx7s06Rug==}
     engines: {node: '>=18'}
 
-  music-metadata@12.2.3:
-    resolution: {integrity: sha512-YN0oQcaIhXyIW8lmmjErhegZhqpyO325oQu9ZjtOFXb/QfwgGjxpzIQUmEGHBpLlrCix42OmrlvUZFkfv+Eecw==}
+  music-metadata@12.3.1:
+    resolution: {integrity: sha512-ZclzGZ6B5hN0fkn+atkloZgwYzZAYghrhEmPxbzUcdUDgxk7l6iQrQKuH3zDbYpNY+kD5sIfVV27YkT0WpLpUw==}
     engines: {node: '>=22'}
 
   nanoid@3.3.20:
@@ -17547,7 +17547,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  music-metadata@12.2.3(supports-color@10.2.2):
+  music-metadata@12.3.1(supports-color@10.2.2):
     dependencies:
       '@borewit/text-codec': 0.2.2
       '@tokenizer/token': 0.3.0
