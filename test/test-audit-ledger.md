@@ -17,6 +17,7 @@ keeps the current campaign state instead of repeating historical checkpoints.
 - [189268](https://github.com/openclaw/openclaw/pull/189268): Unused Nostr fixture rows/labels and three voice-call fixture-shape assertions; exact sanitizer, streamed error and signed webhook proof remain. 124/8 suites before and after; −34 support/test LOC, no declarations removed.
 - [189289](https://github.com/openclaw/openclaw/pull/189289): DeepInfra mock request-policy replay; real POST, CONNECT proxy and blocked-I/O keepers remain. 35→34/2 suites; dropping policy fails three real requests while two denial controls pass; −55 test LOC.
 - [189313](https://github.com/openclaw/openclaw/pull/189313): Setup-failure cleanup replay and DM tool-result replay; shared exact-error/settlement table and registered delivered-payload keeper remain. 178→176/3 suites; skipped settlement fails all three keeper rows, dropped tool handoff fails payload; −33 test LOC.
+- [189333](https://github.com/openclaw/openclaw/pull/189333): File Transfer helper metadata/no-load replay and Diffs loopback replay; registered entry and full access matrix remain. 33→29/4 suites; wrong metadata, eager import and rejected local access faults caught. −25 test LOC; 48 CI checks pass. Ledger compacted to about11 KB.
 
 All landed batches completed focused checks, independent review and every removal
 scan phase. Existing Knip findings were attributed, never suppressed; unused-file
@@ -27,19 +28,15 @@ Its failed CI remains failed; no current-head CI success is claimed.
 
 ## Current qualification
 
-Pinned main `3a9578d82d5`; [draft PR189333](https://github.com/openclaw/openclaw/pull/189333).
-File Transfer's helper metadata/no-load case repeats its registered-entry exact
-commands and eager-import refusal. Diffs' three loopback-address rows repeat the
-same inputs and registered handler in its access matrix. Untouched baseline:
-33 tests pass across four suites, including actual HTTP HEAD responses. The registered-entry keeper catches wrong metadata and eager loading;
-all three retained loopback rows catch rejected local access (404 instead of 200).
-Faulted production files were restored byte for byte. Independent preservation
-review approves both deletions. Remove two declarations/four expanded cases and
-25 test lines; production/support delta is zero. Delegate caching/failure, proxy
-and security rows stay. Candidate: 29 tests pass across four suites; focused typed
-lint, compilation, formatting and Markdown lint pass. Every removal-scan phase
-ran on baseline and candidate: the same three production and three full-tree
-unused exports remain; unused-file and script-export scans report zero entries.
+Pinned main `298b86c81fa`; qualifying the legacy requester-scoped MCP preview
+absence case. Its fixture lacks owner identity and resource-reading capability,
+so real view creation can independently return no preview. The retained identity
+matrix asserts the view factory is never called for private/no-profile tools,
+with public and mapped-private positive controls. Full source/history and
+independent preservation review support only its15-line declaration deletion;
+retain all helpers, imports, positive previews and the shared viewstore cleanup.
+Runtime baselines, keeper fault controls, removal scans and final review remain
+pending. No deletion has been applied in this qualification seed.
 
 ## Completed source review
 
@@ -56,27 +53,27 @@ permission to delete without root qualification.
 - Core content/runtime: Templates31/230; logging64/465; meeting bot30/183 direct+inherited; hooks41; TTS23; media-understanding43/241; context/chat/Canvas19/139; generation19/103; web/fetch8/69; status/storage25/207; realtime1/13.
 - Core setup/tools: Bootstrap/provider/interactive/plugin state21/179; daemon127/920; Talk39/250 plus inherited table; wizard30/239; security46/181; model commands35/215; catalog/memory SDK7/71; Doctor118/673.
 - Core entrypoints: Root src25; root docs/scripts21/63; direct channels103; CLI Gateway31/246; admin/share/Bonjour8/41. Deeper nested channel owners remain open.
-- Agent internals: 190 unique suites/1,509 physical sites/55,269 test LOC: R1504/F2/C1/D2. Latest MCP materialization10/66 R65/D1; separate reply/upstream scopes below. Preserve transport, requester isolation, authority, cancellation and work-count contracts.
+- Agent internals: 250 unique suites/1,857 physical sites/71,323 test LOC: R1849/F5/C1/D2. Latest result persistence10/74 R73/F1; separate reply/upstream scopes below. Preserve transport, requester isolation, authority, cancellation and work-count contracts.
 - Auto-reply: All429 suites plus43 separate upstream suites and invoked local registrars/support classified. Latest54/498: R495/F2/C1; qualified two duplicates landed above. Keep channel persistence, group/native routing, progress suppression and abort cases.
 - CLI: Config/setup24/209; plugin lifecycle25/176; validation22/106; channel/root/message/device/skills/session98/542; execution/reply presentation overlaps the reply aggregate. Only qualified fixture reduction landed above.
-- Control UI: Devices11/80, nodes5/38, browser Gateway10/88, Gateway state10/40: 36 suites/246 retained sites. Authority, token rotation, heartbeat, event projection and early subscription handoff differ. Other UI remains open.
+- Control UI: Devices11/80, nodes5/38, browser Gateway10/88, Gateway state10/40, browser boundaries10/93: 46 suites/339 retained sites. Authority, token rotation, heartbeat, event projection, browser credentials and subscriber lifetimes differ. Other UI remains open.
 - Shared native: OpenClawKit209 files/2,528 sites: R2523/F3/C2. NativeState/MLX protocol5/46: R45/F1. Swabble6/12 R; MLX helper1/5 with one pending PCM consolidation.
 - macOS: 304 Swift files/2,653 sites: R2635/F8/C9/D1. Native runtime qualification pending.
 - iOS: 135 files/1,416 sites: R1370/F39/C6/D1; obsolete typography metadata scanner and a migration helper remain candidates. Native qualification pending.
-- Android: 262 declaration files/3,441 sites/122,410 test LOC: R3384/F36/C20/D1. Remaining62 declaration files/719 sites, including two benchmarks. Wear is fully classified; native qualification pending.
+- Android: Source classification complete: 324 declaration files/4,160 sites/143,748 test LOC: R4029/F107/C20/D4. All15 original support/assets read, another2,138 LOC. No unread declarations remain; native runtime/fault qualification remains pending.
 - Provider plugins: Alibaba/Arcee/Cerebras/GMI/Qianfan/StepFun/Voyage/DuckDuckGo8/41; Fireworks/NVIDIA/Together/Novita13/45; Cohere/Featherless/Groq/LongCat/SGLang/SubQ12/33 retained.
 - Further providers: Bedrock/OpenCode/Copilot/LM Studio/Kimi/Moonshot/ClawRouter/OpenRouter/Qwen/Venice/Microsoft/Foundry/Azure128/848: R847/F1; Vertex/Mantle11/62 R; Perplexity/DeepSeek/Mistral/Hugging Face17/69 R.
 - Other audited plugins: Voice-call64/523 R522/F1; Nostr14/112 R; Prometheus7/55 R; IMAP/A2A13/103 R; MXC13/64 R61/F3; DeepInfra17/78 qualified above; MiniMax13/75 R74/F1.
 - Plugin service owners: File Transfer21/162 R161/D1; active-memory11/122 R; Synology10/91 R; OpenShell11/88 R; Diagnostics OTel12/86 R83/F1/C2; AgentsAPI10/96 R; Cua12/83 R. All local support/assets live.
 - Later plugin closures: LanceDB22/109 R; Logbook13/55 R; IRC15/99 R97/F2; Diffs14/58 R56/F1/C1; policy15/301 physical R298/F3; SMS16/158 R; team-reports21/138 R; Twitch15/86 R; TypeSafe10/50 R; X24/149 R148/C1; Zalo25/89 local R87/F2 plus9 inherited R and one duplicate row. Assertion-only candidates below do not remove their declarations.
-- Plugin lane progress: Leaf557 suites/41 owners; including known root exclusions628 suites/74 owners. Remaining3,676 directory suites/104 owners plus3 root suites. No wholly unread 10–25-suite owner remains at this checkpoint.
+- Plugin lane progress: Leaf665 suites/45 owners; including known root exclusions736 suites/78 owners. Remaining3,568 directory suites/100 owners plus3 root suites. Latest full owners: llama-cpp26/212R, FaceTime26/154R, Copilot28/282 R281/F1, Nextcloud Talk28/172R. Source-only; no runtime verdict.
 
 ## Pending qualification and proof repairs
 
-- Keep source-only candidates separate from applied removals. FileTransfer/Diffs are active above; X midnight-spend replay has an identical table keeper and needs runtime qualification; Cua enum, TypeSafe reflected-token, SMS call-count/retry-list, and Twitch settled-flag assertions need runtime keeper qualification.
+- Keep source-only candidates separate from applied removals. MCP preview is active above; X midnight-spend replay needs runtime qualification; Cua enum, TypeSafe reflected-token, SMS call-count/retry-list, Twitch settled-flag and Copilot fingerprint self-comparison assertions need keeper qualification. Nextcloud upload-table branch538–545 is unreachable under its four rows; independent lost-ack preservation remains.
 - Transfer rows before consolidating core failed-tool classification, CodeMode deadline duplication, Android loading/blank-auth, persisted outbox keys/epochs, terminal initial projection, and native PCM/decoder/reader cases. Keep typed host-error precedence and active-run settlement.
-- Repair Android pairing runtime custody through the existing guaranteed fixture closer; no measured leak is claimed. Retarget misleading coroutine/authority/streaming assertions rather than deleting their contracts.
-- Repair swallowed/unrelated setup errors, silent auth/symlink skips, SSRF negative controls, content-absence/privacy results, delayed observer-state proofs, and unregistered temporary fixtures at their existing owners. Retain CI inventory gaps as route repairs, including PostgreSQL conformance and removed Logbook worker paths.
+- Repair Android runtime/model fixture custody through existing guaranteed closers; no measured leak is claimed. Retarget misleading coroutine/authority/streaming assertions. Qualify Android dropdown arithmetic, IPv6 URL, empty SMS defaults and component-state mapping against their stronger keepers.
+- Repair swallowed/unrelated setup errors, silent auth/symlink skips, SSRF negative controls, content-absence/privacy results, delayed observer proofs, missing CLI fixture cleanup and aggregate-only tool-result fidelity. Retain CI inventory gaps as route repairs, including PostgreSQL conformance and removed Logbook worker paths.
 - Diagnostics OTel: obsolete NodeSDK replay only; preserve every private-provider sampler row and six span-limit probes. Content capture proof is a separate repair.
 - SDK removal search was incomplete: public2,115/2,527 complete and bundled169/179 complete. No observed consumer is not proof of no external reliance. The retired target facade was private and excluded from packaging since `780bc791470`.
 - Retain duplicate Swift TLS fixtures in separate packages, renderer-discovered Blobster JSON (also production prompt inputs), process-entry helpers referenced extensionlessly, stable borrowed-reference assertions, and independent release/architecture/platform guards.
