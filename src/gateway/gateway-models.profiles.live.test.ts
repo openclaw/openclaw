@@ -5615,8 +5615,10 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
         `${params.label}: gateway-connect`,
       );
       if (ultraWireBaseUrls.length > 0) {
-        // Gateway startup installs the production transport host. Wrap that final
-        // host so the live sweep observes requests instead of a startup replacement.
+        // The agent transport host is installed lazily on the first embedded run,
+        // after gateway startup. Load that final owner before wrapping it so the
+        // live sweep observes requests instead of having its capture replaced.
+        await import("../agents/ai-transport-runtime-host.js");
         ultraWireCapture = startOpenAIUltraWireCapture(ultraWireBaseUrls);
         openAIUltraRunsByClient.set(client, new Map());
       }
