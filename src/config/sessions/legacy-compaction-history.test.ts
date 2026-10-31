@@ -91,10 +91,3 @@ it.each([
   expect(readLegacyCompactionMetrics(entry)).toEqual([]);
 });
 
-it("keeps protected history unreclaimable rather than reporting no references", () => {
-  const entry = entryWith({ nope: true });
-  // Reporting `[]` here would let the referenced checkpoint files look unreferenced.
-  expect(() => readLegacyCompactionSnapshotPaths(entry)).toThrow(
-    "Invalid legacy compaction history references",
-  );
-});

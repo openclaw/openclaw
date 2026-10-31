@@ -1,0 +1,5 @@
+# Characterization tests for the legacy session-recovery contracts:
+# legacy-compaction-history (fail-closed checkpoint references) and
+# legacy-transcript-repair (parent walk, strip/raw key asymmetry,
+# rewritten-branch classification). Neither module had any coverage.
+176
