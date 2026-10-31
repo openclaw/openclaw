@@ -581,7 +581,7 @@ try {
                 tracingStarted = true;
               }
               if (scenario.id.startsWith("chat-actions-")) {
-                await installChatActionObservation(page);
+                await installChatActionObservation(page, values.trace);
               }
               measurement = await startEngineMeasurement(page, engine, {
                 trace: values.trace,

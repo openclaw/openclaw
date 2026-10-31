@@ -23,6 +23,7 @@ import {
 } from "./composer-draft-storage.ts";
 import { chatAttachmentDraftSignature } from "./composer-draft.ts";
 import { isIncognitoComposerScope } from "./composer-persistence-state.ts";
+import { getChatSessionProjection } from "./history-merge.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import { clearChatMessagesFromCache } from "./session-message-cache.ts";
@@ -251,7 +252,13 @@ export async function rewindChatHistory(
     const editorText = result.editorText ?? "";
     clearCachedChatMessagesForSession(state, sessionKey, agentParams.agentId, "cache-eviction");
     if (viewMatches()) {
-      resetChatHistoryProjection(state, agentParams.agentId);
+      const entries = getChatSessionProjection(state).entries;
+      const rewindIndex = entries.findIndex((entry) => entry.identity?.id === entryId);
+      const retainedHistory = entries
+        .slice(0, Math.max(0, rewindIndex))
+        .filter((entry) => !entry.pending)
+        .map((entry) => entry.message);
+      resetChatHistoryProjection(state, agentParams.agentId, retainedHistory);
       await Promise.all([loadChatHistory(state), loadChatBranches(state)]);
     }
     // Rewind commits history independently; only its unchanged composer package
