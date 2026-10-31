@@ -100,7 +100,11 @@ function findExecutableOnPath(
           .map((extension) => extension.toLowerCase())
       : [""];
   const pathDelimiter = platform === "win32" ? ";" : path.delimiter;
-  for (const directory of envPath.split(pathDelimiter)) {
+  for (const entry of envPath.split(pathDelimiter)) {
+    const directory =
+      platform === "win32" && entry.startsWith('"') && entry.endsWith('"')
+        ? entry.slice(1, -1)
+        : entry;
     if (!directory && platform === "win32") {
       continue;
     }

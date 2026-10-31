@@ -32,6 +32,7 @@ function expectCmdRunner(params: PnpmRunnerParams, line: string, command = comSp
 }
 
 const posixIt = process.platform === "win32" ? it.skip : it;
+const windowsIt = process.platform === "win32" ? it : it.skip;
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 let fixturesRoot: string;
@@ -44,6 +45,8 @@ beforeAll(() => {
     "parent/pnpm": "#!/usr/bin/env node\n",
     "corepack/corepack": "#!/bin/sh\nexit 0\n",
     "windows/corepack.cmd": "@exit /b 0\r\n",
+    "quoted pnpm/pnpm.cmd": "@echo off\r\necho preferred-pnpm\r\n",
+    "quoted corepack/corepack.cmd": "@exit /b 0\r\n",
     "empty-path/cwd/pnpm": "#!/bin/sh\nprintf '%s\n' 'cwd' \"$@\"\nexit 7\n",
     "empty-path/corepack-only/corepack": "#!/bin/sh\nprintf '%s\n' 'corepack' \"$@\"\nexit 9\n",
   };
@@ -173,4 +176,75 @@ it("builds a shared spawn spec with inherited stdio and env overrides", () => {
     args: ["exec", "vitest", "run"],
     options: { ...options, stdio: "inherit", shell: false, windowsVerbatimArguments: undefined },
   });
+});
+
+it.each(["pnpm", "corepack"])("honors a quoted Windows PATH entry for %s", (command) => {
+  const directory = path.join(fixturesRoot, "quoted " + command);
+  const args = command === "corepack" ? ["pnpm", ...pnpmArgs] : pnpmArgs;
+  expectCmdRunner(
+    {
+      comSpec,
+      npmExecPath: "",
+      env: { Path: '"' + directory + '";' + path.join(fixturesRoot, "windows"), PATHEXT: ".CMD" },
+    },
+    buildCmdExeCommandLine(path.join(directory, command + ".cmd"), args),
+  );
+});
+
+it.each(["", '""'])("does not turn an empty Windows PATH entry %j into a cwd lookup", (segment) => {
+  const directory = path.join(fixturesRoot, "windows");
+  expectCmdRunner(
+    {
+      comSpec,
+      cwd: path.join(fixturesRoot, "quoted pnpm"),
+      npmExecPath: "",
+      env: { Path: segment + ";" + directory, PATHEXT: ".CMD" },
+    },
+    buildCmdExeCommandLine(path.join(directory, "corepack.cmd"), ["pnpm", ...pnpmArgs]),
+  );
+});
+
+posixIt("preserves literal quotes in POSIX PATH directory names", () => {
+  const directory = path.join(fixturesRoot, '"literal quotes"');
+  mkdirSync(directory);
+  writeFileSync(path.join(directory, "pnpm"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  expectRunner(
+    { env: { PATH: directory }, npmExecPath: "", platform: "linux" },
+    path.join(directory, "pnpm"),
+  );
+});
+
+windowsIt("matches cmd.exe selection before falling back to Corepack", () => {
+  const systemRoot = process.env.SystemRoot;
+  if (!systemRoot) {
+    throw new Error("SystemRoot is required for the Windows process test");
+  }
+  const command = path.join(systemRoot, "System32", "cmd.exe");
+  const env = {
+    SystemRoot: systemRoot,
+    Path: '"' + path.join(fixturesRoot, "quoted pnpm") + '";' + path.join(fixturesRoot, "windows"),
+    PATHEXT: ".CMD;.EXE",
+  };
+  const direct = spawnSync(command, ["/d", "/s", "/c", "pnpm.cmd --version"], {
+    env,
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 5_000,
+  });
+  expect(direct.error).toBeUndefined();
+  expect(direct).toMatchObject({ status: 0, stdout: "preferred-pnpm\r\n", stderr: "" });
+  const spec = createPnpmRunnerSpawnSpec({
+    env,
+    npmExecPath: "",
+    pnpmArgs: ["--version"],
+    stdio: "pipe",
+  });
+  const wrapped = spawnSync(spec.command, spec.args, {
+    ...spec.options,
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 5_000,
+  });
+  expect(wrapped.error).toBeUndefined();
+  expect(wrapped).toMatchObject({ status: 0, stdout: direct.stdout, stderr: "" });
 });
