@@ -36,11 +36,15 @@ afterEach(() => setRemoteModelCatalogOverlaySourcesForTest());
 it("carries published task facts through HTTP, SQLite and prepared role selection", async () => {
   const fixture = await createCatalogFixture(makeTempDir, 0);
   const route = { api: "openai-completions", baseUrl: "https://worker-catalog.invalid/v1" };
+  const nativeBaseUrl = "https://native-worker-catalog.invalid/v1";
   const manifestFile = path.join(fixture.root, "plugin/openclaw.plugin.json");
   const manifest = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
   // Installed transport owns the route, but cannot supply the task facts being proved.
   manifest.modelCatalog.providers = {
-    [PROVIDER_ID]: { ...route, models: [{ id: "sqlite-model" }] },
+    [PROVIDER_ID]: {
+      ...route,
+      models: [{ id: "sqlite-model" }, { id: "native", baseUrl: nativeBaseUrl }],
+    },
   };
   manifest.modelCatalog.discovery = { [PROVIDER_ID]: "static" };
   writeJsonFile(manifestFile, manifest);
@@ -64,7 +68,7 @@ it("carries published task facts through HTTP, SQLite and prepared role selectio
         [PROVIDER_ID]: {
           ...route,
           models: [
-            { id: "native", inference },
+            { id: "native", baseUrl: nativeBaseUrl, inference },
             { id: "dual", inference: { ...inference, chat: true } },
             { id: "free" },
             { id: "unknown" },
