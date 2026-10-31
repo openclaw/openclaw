@@ -44,6 +44,10 @@ export async function migrateSessionColdNavigation(
   const changes: string[] = [];
   const warnings: string[] = [];
   signal?.throwIfAborted();
+  // Empty admitted discovery has no work; acquiring a lease would dirty shared state.
+  if (params.preparedTargets?.length === 0) {
+    return { changes, warnings };
+  }
   try {
     await withAgentDatabaseMaintenanceLease({ env, processBound: true }, async (maintenance) => {
       const assertCurrent = () => {
