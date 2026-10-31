@@ -790,6 +790,7 @@ src/config/sessions/targets-discovery.native.ts
 src/config/sessions/targets-path-validation.ts
 src/config/sessions/targets-read-availability.worker.ts
 src/config/sessions/targets.ts
+src/config/sessions/transcript-payload-navigation.ts
 src/config/sessions/transcript-payload-read.ts
 src/config/sessions/transcript-payload.ts
 src/config/sessions/transcript-predicate-fields.ts
@@ -1926,6 +1927,7 @@ src/state/openclaw-agent-board-schema.ts
 src/state/openclaw-agent-canonical-validation-migration.ts
 src/state/openclaw-agent-canonical-validation-receipt.ts
 src/state/openclaw-agent-canonical-validation-schema.ts
+src/state/openclaw-agent-cold-navigation-schema.ts
 src/state/openclaw-agent-cold-archive-chunks-schema.ts
 src/state/openclaw-agent-context-engine-turn-outbox-schema.ts
 src/state/openclaw-agent-db-additive-columns.ts
