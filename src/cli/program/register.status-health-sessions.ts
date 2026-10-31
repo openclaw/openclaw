@@ -452,6 +452,90 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       },
     );
 
+  const storageCmd = sessionsCmd
+    .command("storage")
+    .description(
+      "Inspect cold-transcript inventory and trigger archival maintenance via the Gateway",
+    );
+  storageCmd.enablePositionalOptions();
+
+  for (const verb of ["status", "run"] as const) {
+    const destructive = verb === "run";
+    storageCmd
+      .command(verb)
+      .description(
+        destructive
+          ? "Start or join the Gateway cold-transcript archival batch"
+          : "Show per-agent hot/cold transcript inventory and maintenance status",
+      )
+      .option(
+        "--url <url>",
+        "Gateway WebSocket URL (defaults to gateway.remote.url when configured)",
+      )
+      .option("--token <token>", "Gateway token (if required)")
+      .option("--password <password>", "Gateway password (password auth)")
+      .option("--timeout <ms>", "RPC timeout in milliseconds")
+      .option("--json", "Output JSON", false)
+      .addHelpText(
+        "after",
+        () =>
+          `\n${theme.heading("Examples:")}\n${formatHelpExamples(
+            destructive
+              ? [
+                  [
+                    "openclaw sessions storage run --json",
+                    "Start or join cold-transcript archival; poll with status.",
+                  ],
+                  [
+                    "openclaw sessions storage run --url ws://127.0.0.1:18789 --token $TOKEN --json",
+                    "Target an explicit Gateway.",
+                  ],
+                ]
+              : [
+                  [
+                    "openclaw sessions storage status --json",
+                    "Show hot/cold counts, store sizes, and maintenance state.",
+                  ],
+                  [
+                    "openclaw sessions storage status --url ws://127.0.0.1:18789 --token $TOKEN --json",
+                    "Target an explicit Gateway.",
+                  ],
+                ],
+          )}\n\n${theme.muted(
+            destructive
+              ? "Backed by sessions.storage.run (operator.admin). Does not replace sessions cleanup."
+              : "Backed by sessions.storage.status (operator.admin). See /gateway/protocol/rpc-session-control.",
+          )}`,
+      )
+      .action(async (opts, command: Command) => {
+        const sessionsParent = command.parent?.parent?.opts() as SessionsListCliOptions | undefined; // SAFETY: Commander parent opts match SessionsListCliOptions when present.
+        rejectUnsupportedSessionsParentOptions(
+          `storage ${verb}`,
+          sessionsParent,
+          ["store", "agent", "allAgents", "active", "limit", "verbose"],
+          "cold-storage RPCs are Gateway-wide and ignore session-list filters",
+        );
+        const timeoutMs = parseStrictPositiveInteger(opts.timeout);
+        if (opts.timeout !== undefined && timeoutMs === undefined) {
+          throwExpectedCliError("--timeout must be a positive integer (milliseconds).");
+        }
+        await runCommandWithRuntime(defaultRuntime, async () => {
+          const { sessionsStorageCommand } = await import("../../commands/sessions-storage.js");
+          await sessionsStorageCommand(
+            verb,
+            {
+              timeout: timeoutMs !== undefined ? String(timeoutMs) : undefined,
+              url: opts.url as string | undefined, // SAFETY: Gateway client option is string | undefined.
+              token: opts.token as string | undefined, // SAFETY: Gateway client option is string | undefined.
+              password: opts.password as string | undefined, // SAFETY: Gateway client option is string | undefined.
+              json: Boolean(opts.json || sessionsParent?.json),
+            },
+            defaultRuntime,
+          );
+        });
+      });
+  }
+
   addSessionsGatewayOptions(sessionsCmd.command("compact <key>"))
     .description("Compact a stored session transcript via the running gateway")
     .option(

@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for listing, importing, archiving, deleting, and maintaining stored sessions"
+summary: "CLI reference for listing, importing, archiving, deleting, cold-storage inventory, and maintaining stored sessions"
 read_when:
   - You want to list stored sessions and see recent activity
   - You want to archive or delete sessions from a headless Gateway
@@ -396,6 +396,24 @@ Optional cold transcript extraction has its own background worker and
 It uses `session.maintenance.coldStorage.afterDays` and preserves inactive
 transcripts in authoritative compressed files. The cleanup command's
 reset/deletion archive retention does not delete those cold files.
+
+Use the dedicated storage verbs to inspect inventory or trigger that same
+Gateway archival batch without composing `gateway call` JSON:
+
+```bash
+openclaw sessions storage status --json
+openclaw sessions storage run --json
+```
+
+`openclaw sessions storage status` and `openclaw sessions storage run` forward
+the existing `sessions.storage.status` / `sessions.storage.run` RPCs
+(`operator.admin`). They return per-agent hot/cold counts, database/WAL/archive
+sizes, and maintenance status. `run` starts or joins the archival worker and
+returns promptly; poll `status` while `maintenance.running` is true. These
+commands do not replace `openclaw sessions cleanup` (session-store cap/stale
+cleanup) and do not scan SQLite locally. See
+[session control protocol](/gateway/protocol/rpc-session-control) and
+[cold transcript storage](/reference/session-management-compaction/maintenance#cold-transcript-storage).
 
 Flags:
 
