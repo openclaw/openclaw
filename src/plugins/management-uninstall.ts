@@ -502,6 +502,7 @@ export async function uninstallPluginWithPolicy(
         for (const warning of await clearRemovedPluginMcpOAuth({
           endpoints: prepared.mcpOAuthEndpoints,
           config: nextConfig,
+          assertCurrent: beforePersistentApply,
         })) {
           warnings.push(warning);
           params.onWarning?.(warning);

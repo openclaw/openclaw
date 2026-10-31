@@ -112,6 +112,8 @@ export function listPluginMcpOAuthEndpoints(
 export async function clearRemovedPluginMcpOAuth(params: {
   endpoints: readonly PluginMcpOAuthEndpoint[];
   config: OpenClawConfig;
+  /** The uninstall's live authority, checked again at each credential write. */
+  assertCurrent: () => void;
 }): Promise<string[]> {
   const { clearMcpOAuthServer } = await import("../agents/mcp-oauth.js");
   const warnings: string[] = [];
@@ -126,8 +128,12 @@ export async function clearRemovedPluginMcpOAuth(params: {
       continue;
     }
     try {
-      await clearMcpOAuthServer(operatorMcpOAuthIdentity(serverName, url));
+      await clearMcpOAuthServer(operatorMcpOAuthIdentity(serverName, url), {
+        assertCurrent: params.assertCurrent,
+      });
     } catch {
+      // Lost authority stops the uninstall; only storage failures become warnings.
+      params.assertCurrent();
       warnings.push(
         `The saved sign-in for MCP server "${serverName}" could not be removed. Reinstall the plugin and select Sign out to remove it.`,
       );

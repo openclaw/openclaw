@@ -341,6 +341,7 @@ const enPluginManagement = {
       signOut: "Sign out",
       signOutAccount: "Sign out of {name}",
       signOutConfirmTitle: "Sign out of {name}?",
+      signOutUnavailable: "Sign-out could not open. Your account is still connected; try again.",
       signOutConfirmMessage:
         "OpenClaw removes the saved sign-in for {name}. Its tools stop working until you sign in again.",
       configure: "Configure",

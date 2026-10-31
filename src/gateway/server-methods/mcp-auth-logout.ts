@@ -8,11 +8,13 @@ import { clearMcpOAuthCredentials } from "../../agents/mcp-oauth.js";
 import { getGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
 import { resolveOperatorMcpOAuthConnection } from "../../plugins/mcp-auth-status.js";
 import { respondUnavailableOnThrow } from "./response.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const mcpAuthLogoutHandlers: GatewayRequestHandlers = {
-  "mcp.authLogout": async ({ params, respond, context }) => {
+  "mcp.authLogout": async (options) => {
+    const { params, respond, context, client } = options;
     if (!assertValidParams(params, validateMcpAuthLogoutParams, "mcp.authLogout", respond)) {
       return;
     }
@@ -35,9 +37,19 @@ export const mcpAuthLogoutHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const request = readGatewayRequestMutationAuthority(options);
+    // The credential lease can wait behind another sign-in; the caller must still be an
+    // administrator when the row is cleared.
+    const assertCurrent = () => {
+      request.assertCurrent();
+      if (!client?.connect.scopes?.includes("operator.admin")) {
+        throw new Error("Sign-out requires an administrator connection.");
+      }
+    };
     await respondUnavailableOnThrow(respond, async () => {
       await clearMcpOAuthCredentials(
         operatorMcpOAuthIdentity(params.serverName, connection.config.url),
+        { assertCurrent, ...(options.signal ? { signal: options.signal } : {}) },
       );
       respond(true, { serverName: params.serverName });
     });

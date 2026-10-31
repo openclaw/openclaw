@@ -16,7 +16,10 @@ import {
   resetPluginsPageTestState,
 } from "./plugins-page.test-support.ts";
 
-vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
+vi.mock("../../components/confirm-dialog.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../components/confirm-dialog.ts")>()),
+  showConfirmDialog: vi.fn(),
+}));
 
 beforeEach(async () => {
   await i18n.setLocale("en");
@@ -138,6 +141,22 @@ it("signs out after confirmation and shows the account as signed out again", asy
   await waitForSolid(() => expect(accountButton(page)?.textContent?.trim()).toBe("Sign in"));
   expect(signOutButton(page)).toBeNull();
   expect(heroSignIn(page)).not.toBeNull();
+});
+
+it("reports a confirmation that cannot open and keeps the account connected", async () => {
+  vi.mocked(showConfirmDialog).mockRejectedValueOnce(new Error("chunk failed to load"));
+  const { page, calls } = await setup({
+    "plugins.inspect": () => inspectionWithAuth("authorized"),
+    "mcp.authLogout": () => ({ serverName: "workboard-mcp" }),
+  });
+  signOutButton(page)!.click();
+  await waitForSolid(() =>
+    expect(page.querySelector('[role="alert"]')?.textContent).toContain(
+      "Sign-out could not open. Your account is still connected; try again.",
+    ),
+  );
+  expect(calls("mcp.authLogout")).toHaveLength(0);
+  expect(signOutButton(page)?.disabled).toBe(false);
 });
 
 it("keeps the account connected and shows the error when sign-out fails", async () => {

@@ -129,8 +129,9 @@ export function createPluginMcpLogin(
       const { pluginId } = detail;
       const name = options.getName(pluginId) ?? serverName;
       setSigningOut(true);
+      let confirmed = false;
       try {
-        const confirmed = await showConfirmDialog({
+        confirmed = await showConfirmDialog({
           title: t("pluginsPage.auth.signOutConfirmTitle", { name }),
           message: t("pluginsPage.auth.signOutConfirmMessage", { name }),
           confirmLabel: t("pluginsPage.auth.signOut"),
@@ -140,22 +141,21 @@ export function createPluginMcpLogin(
           return;
         }
         options.setMessage(pluginRowKey(pluginId), null);
-        try {
-          await scope.client.request("mcp.authLogout", { serverName });
-        } catch (error) {
-          if (gateway.isCurrent(scope)) {
-            options.setMessage(pluginRowKey(pluginId), {
-              kind: "error",
-              text: formatUiError(error),
-            });
-          }
-        }
-        // The credential owner decides the outcome; re-inspect instead of guessing it.
-        if (gateway.isCurrent(scope) && options.getDetail()?.pluginId === pluginId) {
-          await options.refresh(pluginId);
+        await scope.client.request("mcp.authLogout", { serverName });
+      } catch (error) {
+        if (gateway.isCurrent(scope)) {
+          // A confirmation that failed to open has no useful detail; the account is unchanged.
+          options.setMessage(pluginRowKey(pluginId), {
+            kind: "error",
+            text: confirmed ? formatUiError(error) : t("pluginsPage.auth.signOutUnavailable"),
+          });
         }
       } finally {
         setSigningOut(false);
+      }
+      // The credential owner decides the outcome; re-inspect instead of guessing it.
+      if (confirmed && gateway.isCurrent(scope) && options.getDetail()?.pluginId === pluginId) {
+        await options.refresh(pluginId);
       }
     },
   };
