@@ -72,7 +72,7 @@ suite.define(() => {
   it.each(["chromium", "webkit"] as const)(
     "loads the native bundle and preserves overlay focus and card identity in %s",
     async (engine) => {
-      const proof = createWorkboardProof(suite, "workboard-native", undefined, {
+      const proof = createWorkboardProof("workboard-native", {
         captureMode: engine,
       });
       for (const view of views) {

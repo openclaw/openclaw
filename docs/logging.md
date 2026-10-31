@@ -128,6 +128,10 @@ scroll position. Filter and Export cover the entire retained history; browser
 Find and native text selection cover the rendered window. Use Filter to find an
 older retained line, or Export to copy all matching lines.
 
+Filter ignores case and matches canonically equivalent composed and decomposed
+Unicode text. This normalization applies only to comparisons; displayed and
+exported log lines retain their original text.
+
 Scroll to the bottom, or focus the log stream and press End, to reach the newest
 line. Turn on Auto-follow to keep following new lines as they arrive.
 

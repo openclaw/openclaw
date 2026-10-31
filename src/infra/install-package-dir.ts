@@ -4,10 +4,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { assertDirectoryIdentitySync, readDirectoryIdentity } from "@openclaw/fs-safe/advanced";
-import {
-  movePathWithCopyFallback,
-  type MovePathPublicationReceipt,
-} from "@openclaw/fs-safe/atomic";
+import type { MovePathPublicationReceipt } from "@openclaw/fs-safe/atomic";
 import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -26,6 +23,7 @@ import { formatNpmCommandFailureOutput } from "./install-source-utils.js";
 import { tryReadJson, writeJson } from "./json-files.js";
 import { retainMutationAuthority } from "./mutation-authority.js";
 import { resolveNpmCommand } from "./npm-command.js";
+import { movePackageRoot } from "./package-update-filesystem.js";
 import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-package-install.js";
 
 type InstallSourceHardlinks = "package-manager" | "reject";
@@ -350,6 +348,7 @@ export async function installPackageDir<
     restore: MovePathPublicationReceipt | null;
   } = { backup: null, install: null, restore: null };
   const sourceHardlinks = params.sourceHardlinks === "package-manager" ? "allow" : "reject";
+  const warn = (message: string) => params.logger?.warn?.(message);
   let quarantine:
     | { directory: string; identity: Awaited<ReturnType<typeof readDirectoryIdentity>> }
     | undefined;
@@ -483,23 +482,23 @@ export async function installPackageDir<
           },
         });
       } else {
-        await movePathWithCopyFallback({
+        await movePackageRoot(restoring.path, canonicalTargetDir, {
+          operation: "plugin restore",
           assertBeforeRename: () => {
             assertDirectoryIdentity(restoring.path, restoring);
             if (fsSync.lstatSync(canonicalTargetDir, { throwIfNoEntry: false })) {
               throw new Error(`install target changed during rollback: ${canonicalTargetDir}`);
             }
           },
-          assertBeforeMutation: () => {
+          assertCaller: () => {
             assertDirectoryIdentity(restoring.path, restoring);
             assertRollbackOwned(assertCurrent);
           },
-          onDestinationPublished: (receipt) => {
+          onPublished: (receipt) => {
             published.restore = receipt;
           },
-          from: restoring.path,
           sourceHardlinks,
-          to: canonicalTargetDir,
+          warn,
         });
       }
       published.backup = null;
@@ -636,14 +635,14 @@ export async function installPackageDir<
         await params.authorizeMutation();
       }
       originalIdentity = await readDirectoryIdentity(canonicalTargetDir);
-      await movePathWithCopyFallback({
-        assertBeforeMutation: assertPersistentApply,
-        onDestinationPublished: (receipt) => {
+      await movePackageRoot(canonicalTargetDir, backupPath, {
+        operation: "plugin backup",
+        assertCaller: assertPersistentApply,
+        onPublished: (receipt) => {
           published.backup = receipt;
         },
-        from: canonicalTargetDir,
         sourceHardlinks,
-        to: backupPath,
+        warn,
       });
       // Only incomplete displacement can leave the original at the target path.
       originalIdentity = undefined;
@@ -674,14 +673,14 @@ export async function installPackageDir<
     if (params.authorizeMutation) {
       await params.authorizeMutation();
     }
-    await movePathWithCopyFallback({
-      assertBeforeMutation: assertPersistentApply,
-      onDestinationPublished: (receipt) => {
+    await movePackageRoot(stageDir, canonicalTargetDir, {
+      operation: "plugin install",
+      assertCaller: assertPersistentApply,
+      onPublished: (receipt) => {
         published.install = receipt;
       },
-      from: stageDir,
       sourceHardlinks,
-      to: canonicalTargetDir,
+      warn,
     });
     stageDir = null;
   } catch (err) {

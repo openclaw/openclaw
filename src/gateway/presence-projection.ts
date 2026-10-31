@@ -102,8 +102,7 @@ export function createPresenceRecipientProjection(params: {
         params.projection?.hasMembership(target.storePath, target.storeKey, identityId) ?? false,
     });
     // Memory actors have independent lifetimes; their watches must stay live.
-    const audience =
-      currentRevision && !hasMemoryWatches ? sharing.getCacheKey(currentRevision) : undefined;
+    const audience = currentRevision && !hasMemoryWatches ? sharing.getCacheKey() : undefined;
     const cached = audience === undefined ? undefined : audiences.get(audience);
     if (cached) {
       return cached;

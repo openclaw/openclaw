@@ -86,7 +86,7 @@ const CONTROL_UI_PRECOMPRESS_MIN_BYTES = 4096;
 
 function isControlUiPrecompressedAsset(fileName: string) {
   return (
-    fileName.startsWith("assets/") &&
+    (fileName === "sw.js" || fileName.startsWith("assets/")) &&
     controlUiPrecompressedAssetExtensions.has(path.extname(fileName).toLowerCase())
   );
 }
@@ -577,6 +577,11 @@ export async function refreshControlUiBuildOutput(
     .replace(offlinePlaceholder, () => `const OFFLINE_BOOT = ${JSON.stringify(offlineBuild)};`);
   fs.mkdirSync(buildOutDir, { recursive: true });
   fs.writeFileSync(swPath, updated);
+  // Identity refresh rewrites the worker after asset precompression. Its sidecars
+  // must describe this final worker, including the current offline inventory.
+  for (const variant of await createControlUiPrecompressedAssetVariants("sw.js", updated)) {
+    fs.writeFileSync(path.join(buildOutDir, variant.fileName), variant.source);
+  }
   return deferredSize;
 }
 

@@ -2,14 +2,17 @@
 import type { DatabaseSync } from "node:sqlite";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isMainThread, threadId } from "node:worker_threads";
-import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { createSubsystemLogger, type SubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { startSqliteStatementTiming } from "./database-engine/observation.js";
 // The cache-state module keeps this lifecycle edge off the kysely value graph
 // so cold control-plane paths using transactions do not load kysely.
 import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
-import { isPostgresSqlConnection, type PostgresSqlConnection } from "./sql-connection.js";
+import {
+  assertSyncTransactionResult,
+  isPostgresSqlConnection,
+  type PostgresSqlConnection,
+} from "./sql-connection.js";
 import {
   readSqliteBusyTimeout,
   runWithSqliteBusyTimeout,
@@ -191,14 +194,6 @@ export type SqliteTransactionOptions = {
 
 type SqliteTransactionStep = "begin" | "commit";
 type SqliteTransactionMode = "deferred" | "immediate";
-
-function assertSyncTransactionResult(value: unknown): void {
-  if (isPromiseLike(value)) {
-    throw new Error(
-      "SQLite write transactions must be synchronous; Promise returns are not supported.",
-    );
-  }
-}
 
 function slowBusyWaitThresholdMs(options: SqliteTransactionOptions | undefined): number {
   if (options?.busyTimeoutMs === undefined || options.busyTimeoutMs <= 0) {

@@ -48,6 +48,8 @@ const { values } = parseArgs({
     "tracked-bytes": { type: "string", default: "0" },
     "changed-tracked": { type: "string", default: "0" },
     "changed-lines": { type: "string", default: "1" },
+    "history-commits": { type: "string", default: "0" },
+    "base-commit": { type: "string" },
     "diff-owner": { type: "string" },
     "prepared-status": { type: "boolean" },
     "revisions-owner": { type: "string" },
@@ -129,6 +131,11 @@ observations and thread CPU. --diff-owner <baseline.ts> replaces that owner's so
 in this process only. --allocation adds a separate 4 KiB sampled allocation pass
 (use --expose-gc); compare timing from runs without this option. Seed with
 --changed-tracked 200 for changed text, binary, and near-limit tracked files.
+Use --changed-tracked 2000 to measure patch work beyond the 500 tracked-file response
+cap. --history-commits 501 seeds content-changing history and records historyBase;
+--base-commit <OID> selects that old base at owner/read/worker boundaries. RPC bases
+remain session-owned. Git output bytes are not physical disk bytes; thread CPU
+does not include native Git children.
 Use --boundary revision to measure fresh checkout-revision CPU, allocation and census
 counts directly. --revision-owner <baseline.ts> replaces only that owner. Compare both
 arms on the same fixture and require identical responseSha256 values.`);
@@ -169,7 +176,13 @@ const tracked = integer(values.tracked, "--tracked");
 assert(tracked <= 500_000, "--tracked must not exceed 500000 files");
 const changedTracked = integer(values["changed-tracked"], "--changed-tracked");
 const changedLines = integer(values["changed-lines"], "--changed-lines", 1);
-assert(changedTracked === 0 || (changedTracked >= 4 && changedTracked <= 497));
+const historyCommits = integer(values["history-commits"], "--history-commits");
+assert(historyCommits <= 10_000, "--history-commits must not exceed 10000");
+assert(changedTracked === 0 || (changedTracked >= 4 && changedTracked <= 10_000));
+assert(
+  !values["base-commit"] || ["owner", "read", "worker"].includes(values.boundary),
+  "--base-commit requires owner, read, or worker boundary",
+);
 assert(
   !values.allocation || values.boundary === "owner" || values.boundary === "revision",
   "--allocation requires owner or revision boundary",
@@ -410,6 +423,10 @@ async function seed() {
   for (const file of ["modified.txt", "staged.txt", "deleted.txt", "unchanged.txt"]) {
     await fs.writeFile(path.join(repo, file), "Synthetic tracked content\n");
   }
+  if (historyCommits) {
+    await fs.writeFile(path.join(repo, "history.txt"), "Synthetic history 0\n");
+    await git("config", "gc.auto", "0");
+  }
   for (let index = 0; index < tracked; index++) {
     const bucket = path.join(repo, "inventory", String(Math.floor(index / 1000)));
     if (index % 1000 === 0) {
@@ -426,6 +443,9 @@ async function seed() {
         } while (dirtyKb >= 1024 * 1024);
       }
       await fs.mkdir(bucket, { recursive: true });
+      if (index % 10_000 === 0) {
+        console.log(JSON.stringify({ seedingFiles: index, tracked }));
+      }
     }
     await fs.writeFile(
       path.join(bucket, `${index}.txt`),
@@ -446,6 +466,31 @@ async function seed() {
   }
   await git("add", ".");
   await git("-c", "commit.gpgSign=false", "commit", "--quiet", "-m", "test: seed synthetic diff");
+  const historyBase = (await git("rev-parse", "HEAD")).stdout.trim();
+  if (historyCommits) {
+    // Fast-import creates real changing trees without rescanning the large checkout per commit.
+    const commits = Array.from({ length: historyCommits }, (_, index) => {
+      const content = `Synthetic history ${index + 1}\n`;
+      const message = `test: synthetic history ${index + 1}\n`;
+      return [
+        "commit refs/heads/synthetic-history",
+        "committer Synthetic Fixture <fixture@example.invalid> 1792368000 +0000",
+        `data ${Buffer.byteLength(message)}`,
+        message.trimEnd(),
+        ...(index === 0 ? [`from ${historyBase}`] : []),
+        "M 100644 inline history.txt",
+        `data ${Buffer.byteLength(content)}`,
+        content,
+      ].join("\n");
+    }).join("\n");
+    const imported = promisify(execFile)("git", ["-C", repo, "fast-import", "--quiet"], {
+      env: gitEnv,
+    });
+    imported.child.stdin?.end(`${commits}\ndone\n`);
+    await imported;
+    await git("checkout", "--detach", "--quiet", "synthetic-history");
+    await fs.writeFile(path.join(repo, "history.txt"), `Synthetic history ${historyCommits + 1}\n`);
+  }
   for (let index = 0; index < changedTracked; index++) {
     await fs.writeFile(path.join(repo, `changed-${index}.txt`), changedContent(index, true));
   }
@@ -530,8 +575,9 @@ async function seed() {
     ...(values.boundary === "rpc" ? { heavyFiles, heavyLines } : {}),
     format: "openclaw-checkout-diff-v1",
     head,
+    ...(historyCommits ? { historyBase, historyCommits } : {}),
     untracked,
-    tracked: 3 + changedTracked,
+    tracked: 3 + changedTracked + (historyCommits ? 1 : 0),
     changedLines,
     unchangedTracked: tracked + 1,
     trackedBytes,
@@ -584,7 +630,7 @@ async function measure() {
     await measureRpc(fixture);
     return;
   }
-  const expectedFiles = fixture.untracked + fixture.tracked;
+  const expectedFiles = fixture.untracked + Math.min(500, fixture.tracked);
   Object.assign(process.env, gitEnv, { GIT_TRACE2_EVENT: trace });
   const { drainGlobalSingletonLifecycleState } =
     await import("../../src/shared/global-singleton.js");
@@ -606,6 +652,7 @@ async function measure() {
     scope,
     summaryOnly: values.summary === true,
     refreshIndex: values["refresh-index"] === true,
+    baseCommit: values["base-commit"],
   };
   if (values["restat-inventory"]) {
     for (const directory of await fs.readdir(path.join(repo, "inventory"))) {
@@ -746,6 +793,7 @@ async function measure() {
       revision: values.revision ?? null,
       boundary: values.boundary,
       scope,
+      baseCommit: values["base-commit"] ?? null,
       summaryOnly: values.summary === true,
       mutate: values.mutate === true,
       preparedStatus: values["prepared-status"] === true,
@@ -842,6 +890,10 @@ async function measureRpc(fixture: Awaited<ReturnType<typeof readFixture>>) {
   const extraRoots = (values["poll-state-dir"] ?? []).map((directory) => path.resolve(directory));
   assert(!extraRoots.length || !values.mutate, "--poll-state-dir prohibits --mutate");
   const extraFixtures = await Promise.all(extraRoots.map(readFixture));
+  assert(
+    !(values.mutate || churnMs) || fixture.tracked <= 500,
+    "RPC mutation controls require their tracked paths to fit within the 500-file response cap",
+  );
   const checkoutRoots = [
     repo,
     ...extraRoots.map((directory) => path.join(directory, "repository")),
@@ -1025,9 +1077,13 @@ async function measureRpc(fixture: Awaited<ReturnType<typeof readFixture>>) {
       }
       assert(!result.files.some((file) => file.path === "external-ignored.txt"));
       if (values.cold) {
-        assert.equal(result.files.length, currentFixture.untracked + currentFixture.tracked);
         assert.equal(
-          result.files.find((file) => file.path === "modified.txt")?.additions,
+          result.files.length,
+          currentFixture.untracked + Math.min(500, currentFixture.tracked),
+        );
+        const trackedPath = currentFixture.tracked > 500 ? "changed-1.txt" : "modified.txt";
+        assert.equal(
+          result.files.find((file) => file.path === trackedPath)?.additions,
           1,
           "cold polling must eventually return the seeded tracked edit",
         );

@@ -274,6 +274,9 @@ it("stays inert while disabled", async () => {
   expect(props.onOpen).not.toHaveBeenCalled();
 });
 
+// Geometry assertions measure the settled list, not the Select entry scale.
+document.documentElement.style.setProperty("--select-enter-duration", "0s");
+
 it("keeps the scroll position when the pointer highlights a clipped edge row", async () => {
   const { element } = await createMultiSelect({
     options: Array.from({ length: 60 }, (_, index) => ({

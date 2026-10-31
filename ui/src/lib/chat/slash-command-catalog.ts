@@ -17,21 +17,38 @@ type RemoteSlashCommandCacheEntry = {
   inFlight?: Promise<SlashCommandDef[]>;
 };
 
+// Logical session (agent + session key) -> catalog variant (project or execution root).
 const remoteSlashCommandCache = new WeakMap<
   GatewayBrowserClient,
-  Map<string, RemoteSlashCommandCacheEntry>
+  Map<string, Map<string, RemoteSlashCommandCacheEntry>>
 >();
 
-function remoteSlashCommandCacheKey(agentId: string | undefined, sessionKey?: string): string {
-  return JSON.stringify([agentId ?? null, sessionKey ?? null]);
+type RemoteSlashCommandScope = {
+  agentId?: string;
+  sessionKey?: string;
+  /** Registered project selected by a New session draft; never combined with sessionKey. */
+  projectId?: string;
+  /**
+   * The existing session's execution-root facts. Agent-scoped chat metadata cannot carry
+   * that session's project skills, so a scoped session reads its own commands.list.
+   */
+  sessionSkillScope?: string;
+};
+
+function sessionCacheKey(scope: { agentId?: string; sessionKey?: string }): string {
+  return JSON.stringify([scope.agentId ?? null, scope.sessionKey ?? null]);
 }
 
 function loadRemoteSlashCommands(
   client: GatewayBrowserClient,
-  agentId: string | undefined,
-  sessionKey?: string,
+  scope: RemoteSlashCommandScope,
 ): Promise<SlashCommandDef[]> {
-  const metadata = peekChatMetadata(client, { agentId, sessionKey });
+  const { agentId, sessionKey, projectId } = scope;
+  // Chat metadata carries agent-scoped commands; a project needs its own catalog.
+  const metadata =
+    projectId || scope.sessionSkillScope
+      ? undefined
+      : peekChatMetadata(client, { agentId, sessionKey });
   // Store-held metadata carries app-level invalidation on config changes and logical reconnects,
   // so no TTL applies here. The cache below owns only commands.list-derived entries.
   if (metadata) {
@@ -42,8 +59,13 @@ function loadRemoteSlashCommands(
     cache = new Map();
     remoteSlashCommandCache.set(client, cache);
   }
-  const key = remoteSlashCommandCacheKey(agentId, sessionKey);
-  const cached = cache.get(key);
+  let variants = cache.get(sessionCacheKey(scope));
+  if (!variants) {
+    variants = new Map();
+    cache.set(sessionCacheKey(scope), variants);
+  }
+  const key = JSON.stringify([projectId ?? null, scope.sessionSkillScope ?? null]);
+  const cached = variants.get(key);
   const now = Date.now();
   if (cached?.commands && cached.expiresAt > now) {
     return Promise.resolve(cached.commands);
@@ -60,6 +82,7 @@ function loadRemoteSlashCommands(
       const result = await client.request<CommandsListResult>("commands.list", {
         ...(agentId ? { agentId } : {}),
         ...(sessionKey ? { sessionKey } : {}),
+        ...(projectId ? { projectId } : {}),
         includeArgs: true,
         scope: "text",
       });
@@ -79,18 +102,20 @@ function loadRemoteSlashCommands(
       delete entry.inFlight;
     });
   entry.inFlight = inFlight;
-  cache.set(key, entry);
+  variants.set(key, entry);
   return inFlight;
 }
 
+/**
+ * Retires every cached variant of one session. A late commands.list result settles into the
+ * detached entry, so it can neither apply nor repopulate the cache.
+ */
 export function invalidateSessionSlashCommands(
   client: GatewayBrowserClient,
-  scope: { agentId: string; sessionKey: string },
+  scope: { agentId?: string; sessionKey: string },
 ): void {
   refreshSeq += 1;
-  remoteSlashCommandCache
-    .get(client)
-    ?.delete(remoteSlashCommandCacheKey(scope.agentId, scope.sessionKey));
+  remoteSlashCommandCache.get(client)?.delete(sessionCacheKey(scope));
 }
 
 export function applyRemoteSlashCommandsResult(
@@ -109,12 +134,20 @@ export async function refreshSlashCommands(params: {
   client: GatewayBrowserClient | null;
   agentId?: string | null;
   sessionKey?: string;
+  projectId?: string;
+  sessionSkillScope?: string;
   shouldApply?: () => boolean;
 }): Promise<void> {
   const seq = ++refreshSeq;
-  const agentId = params.agentId?.trim();
+  const agentId = params.agentId?.trim() || undefined;
+  const projectId = params.sessionKey ? undefined : params.projectId?.trim() || undefined;
   const commands = params.client
-    ? await loadRemoteSlashCommands(params.client, agentId, params.sessionKey)
+    ? await loadRemoteSlashCommands(params.client, {
+        agentId,
+        sessionKey: params.sessionKey,
+        projectId,
+        sessionSkillScope: params.sessionKey ? params.sessionSkillScope || undefined : undefined,
+      })
     : undefined;
   if (seq !== refreshSeq || params.shouldApply?.() === false) {
     return;

@@ -71,6 +71,7 @@
   --sidebar-rail-control-size: 36px;
   --sidebar-rail-action-size: 30px;
   --sidebar-rail-glyph-size: 19px;
+  --sidebar-rail-item-gap: 8px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -78,7 +79,7 @@
   min-width: 0;
   min-height: 0;
   padding: 8px 4px;
-  gap: 8px;
+  gap: var(--sidebar-rail-item-gap);
   border-inline-end: var(--shell-divider-size) solid var(--resize-handle-rest-color);
   background: var(--sidebar-rail-surface, transparent);
 }
@@ -89,7 +90,7 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: var(--sidebar-rail-item-gap);
 }
 
 .sidebar-rail__pins {
@@ -296,7 +297,7 @@
   flex-direction: column;
   min-height: 0;
   width: var(--sidebar-rail-control-size);
-  gap: 8px;
+  gap: var(--sidebar-rail-item-gap);
   padding: 0;
   border: 0;
 }
@@ -308,7 +309,7 @@
   transform: none;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--sidebar-rail-item-gap);
 }
 
 .sidebar-rail .sidebar-identity-anchor {
@@ -574,8 +575,61 @@ html.openclaw-native-web-chrome body .shell:not(.shell--mobile-nav) .sidebar-she
   padding-top: 0 !important;
 }
 
+/* One 40px step for every control; blocks add a fixed 8px beyond the step. */
+.shell--mobile-nav .sidebar-rail {
+  --sidebar-rail-control-size: 36px;
+  --sidebar-rail-action-size: 30px;
+  --sidebar-rail-item-gap: 4px;
+  --sidebar-rail-block-gap: 8px;
+  flex-basis: calc(48px + var(--shell-divider-size));
+  align-items: flex-start;
+  padding-block: 12px;
+  padding-inline: 6px 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.shell--mobile-nav
+  .sidebar-rail
+  :is(
+    .sidebar-rail__button,
+    .nav-item,
+    .sidebar-brand__icon,
+    .sidebar-issues-button,
+    .sidebar-agent-card__main,
+    .sidebar-workspace-header__main,
+    .sidebar-identity-card
+  ) {
+  border-radius: calc(10px * var(--openclaw-corner-radius-scale, 1));
+}
+
+.shell--mobile-nav .sidebar-rail__create {
+  margin-block-end: calc(var(--sidebar-rail-block-gap) - var(--sidebar-rail-item-gap));
+  padding-bottom: calc(
+    var(--sidebar-rail-block-gap) -
+      (var(--sidebar-rail-control-size) - var(--sidebar-rail-action-size)) / 2
+  );
+  border-bottom: var(--shell-divider-size) solid
+    var(--sidebar-rail-divider-color, var(--resize-handle-rest-color));
+}
+
+.shell--mobile-nav .sidebar-rail__pins {
+  align-self: flex-start;
+  width: calc(var(--sidebar-rail-control-size) + 4px);
+  min-height: 0;
+  margin-block-start: calc(var(--sidebar-rail-block-gap) - var(--sidebar-rail-item-gap) - 2px);
+}
+
+.shell--mobile-nav .sidebar-rail__bottom {
+  margin-block-start: calc(var(--sidebar-rail-block-gap) - var(--sidebar-rail-item-gap));
+}
+
+.shell--mobile-nav .sidebar-rail .sidebar-footer-bar__home .session-glyph__ring {
+  inset: -5px;
+}
+
 @media (hover: none), (pointer: coarse) {
-  .sidebar-rail {
+  .shell:not(.shell--mobile-nav) .sidebar-rail {
     --sidebar-rail-control-size: 44px;
     --sidebar-rail-action-size: 44px;
     flex-basis: 52px;
@@ -741,13 +795,6 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
 .sidebar--rail .sidebar-session-toolbar__button {
   width: 28px;
   height: 28px;
-}
-
-.sidebar--rail .sidebar-session-toolbar__button.sidebar-session-sort {
-  width: auto;
-  max-width: 50%;
-  gap: 4px;
-  opacity: 1;
 }
 
 html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-panel-header {
