@@ -192,3 +192,49 @@ it("seeds from a trailing summary without a boundary", async () => {
     ]),
   ).toMatchObject({ summaryText: "trailing summary without boundary" });
 });
+
+const syntheticAssistant = (text: string) => ({
+  type: "assistant",
+  message: {
+    role: "assistant",
+    model: "<synthetic>",
+    stop_reason: "stop_sequence",
+    content: blocks(text),
+    usage: { input_tokens: 0, output_tokens: 0 },
+  },
+});
+const realAssistant = (text: string) => ({
+  type: "assistant",
+  message: { role: "assistant", model: "claude-sonnet-4-5", content: blocks(text) },
+});
+const parseRow = (row: Record<string, unknown>) =>
+  parseClaudeCliHistoryEntry(row, "native-session", 1, new Map(), { reseedMode: "recover" });
+
+it.each(["No response requested.", "API Error: OAuth refresh lock timeout"])(
+  "drops <synthetic> assistant rows (%s) without hiding real replies or human text",
+  (text) => {
+    expect(parseRow(syntheticAssistant(text))).toBeNull();
+    expect(parseRow(realAssistant(text))).toMatchObject({ role: "assistant" });
+    expect(projectChatDisplayMessages([parseRow(claudeUser(text))])).toHaveLength(1);
+  },
+);
+
+it("hides <synthetic> rows from imported history and the fallback seed", () =>
+  withClaudeProjectsDir(async ({ filePath, sessionId, homeDir, readMessages }) => {
+    await writeRows(filePath, [
+      claudeUser("first question"),
+      syntheticAssistant("API Error: OAuth refresh lock timeout"),
+      claudeUser("Continue from where you left off.", { isMeta: true }),
+      syntheticAssistant("No response requested."),
+      claudeUser("second question"),
+      realAssistant("real answer"),
+    ]);
+    const imported = await readMessages();
+    expect(imported.map((m) => [m["role"], m["content"]])).toEqual([
+      ["user", "first question"],
+      ["user", "second question"],
+      ["assistant", blocks("real answer")],
+    ]);
+    const seed = await readClaudeCliFallbackSeed({ cliSessionId: sessionId, homeDir });
+    expect(JSON.stringify(seed?.recentTurns)).not.toContain("No response requested.");
+  }));

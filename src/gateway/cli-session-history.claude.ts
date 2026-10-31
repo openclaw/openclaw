@@ -246,6 +246,21 @@ function isClaudeCliInterrupt(entry: ClaudeCliProjectEntry, content: string | un
   );
 }
 
+// Claude Code writes harness-generated assistant rows (API-error placeholders,
+// "No response requested." after a resume) with the model id "<synthetic>".
+// They are lifecycle markers, not replies the model produced, so they must not
+// be imported as assistant turns. Match on the model id only: a real model's
+// reply, or a human message with the same words, stays visible.
+const CLAUDE_CLI_SYNTHETIC_MODEL = "<synthetic>";
+
+function isClaudeCliSyntheticAssistant(entry: ClaudeCliProjectEntry): boolean {
+  return (
+    entry.type === "assistant" &&
+    entry.message?.role === "assistant" &&
+    entry.message.model === CLAUDE_CLI_SYNTHETIC_MODEL
+  );
+}
+
 function isClaudeCliTaskNotification(
   entry: ClaudeCliProjectEntry,
   content: string | unknown[],
@@ -328,6 +343,11 @@ export function parseClaudeCliHistoryEntry(
   const type = typeof entry.type === "string" ? entry.type : undefined;
   const role = typeof entry.message.role === "string" ? entry.message.role : undefined;
   if ((type !== "user" && type !== "assistant") || role !== type) {
+    return null;
+  }
+  // Omit before content normalization and indexing so a lifecycle row never
+  // occupies a visible-history page or reaches the fallback seed.
+  if (isClaudeCliSyntheticAssistant(entry)) {
     return null;
   }
 
