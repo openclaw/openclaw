@@ -1,3 +1,4 @@
+import { AgentDatabaseSchemaAdmissionChangedError } from "./agent-database-admission-error.js";
 import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import {
@@ -49,7 +50,9 @@ export function adoptAgentValidationSchema(
     Atomics.load(new Int32Array(schema.valid), 0) === 1,
   );
   if (required && !adopted) {
-    throw new Error("Agent schema admission changed before handle adoption; retry the operation");
+    throw new AgentDatabaseSchemaAdmissionChangedError(
+      "Agent schema admission changed before handle adoption; retry the operation",
+    );
   }
   if (adopted) {
     adoptCanonicalSessionValidationSchema(database.db);
