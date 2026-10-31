@@ -212,7 +212,7 @@ suite.define(() => {
       const review = page.locator(".session-diff");
       await expect.poll(() => review.getAttribute("aria-busy")).toBe("true");
       await readCount().toBe(4);
-      expect((await reads())[3]?.params.summaryOnly).not.toBe(true);
+      expect((await reads())[3]?.params).not.toMatchObject({ summaryOnly: true });
       await gateway.resolveDeferred("sessions.diff", undefined, {
         match: { summaryOnly: true },
       });
