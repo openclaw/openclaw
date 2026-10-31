@@ -775,6 +775,8 @@ export default function controlUiViteConfig(
   const staticImports = new Map<string, readonly string[]>();
   const styledChunks = new Set<string>();
   const parallelStyleTargets = new Set<string>();
+  let composerMenuChunk: string | undefined;
+  let composerSubviewChunk: string | undefined;
   const parallelStyleEntries = [
     "/ui/src/pages/config/config-page.tsx",
     "/ui/src/pages/usage/usage-page.tsx",
@@ -812,7 +814,16 @@ export default function controlUiViteConfig(
       parallelStyleTargets.has(filename) &&
       (styledChunks.has(filename) ||
         [...collectStaticImports(filename)].some((dep) => styledChunks.has(dep)));
-    const dependencies = deps.filter((dep) => !loaded.has(dep) && dep !== filename);
+    // Warm the deep menu alongside its root import, without evaluating it or
+    // making every route download it. Selection then needs no serial fetch.
+    const candidates = new Set(deps);
+    if (filename === composerMenuChunk && composerSubviewChunk) {
+      candidates.add(composerSubviewChunk);
+      for (const dependency of collectStaticImports(composerSubviewChunk)) {
+        candidates.add(dependency);
+      }
+    }
+    const dependencies = [...candidates].filter((dep) => !loaded.has(dep) && dep !== filename);
     return waitsForStyles && !loaded.has(filename) ? [filename, ...dependencies] : dependencies;
   };
   return {
@@ -898,9 +909,28 @@ export default function controlUiViteConfig(
           staticImports.clear();
           styledChunks.clear();
           parallelStyleTargets.clear();
+          composerMenuChunk = undefined;
+          composerSubviewChunk = undefined;
           for (const chunk of Object.values(bundle)) {
             if (chunk.type === "chunk") {
               staticImports.set(chunk.fileName, chunk.imports);
+              for (const id of chunk.moduleIds) {
+                const source = id.replaceAll("\\", "/");
+                if (
+                  source.endsWith(
+                    "/ui/src/pages/chat/components/chat-composer-plus-menu-content.tsx",
+                  )
+                ) {
+                  composerMenuChunk = chunk.fileName;
+                }
+                if (
+                  source.endsWith(
+                    "/ui/src/pages/chat/components/chat-composer-plus-menu-subview.tsx",
+                  )
+                ) {
+                  composerSubviewChunk = chunk.fileName;
+                }
+              }
               if (chunk.viteMetadata?.importedCss.size) {
                 styledChunks.add(chunk.fileName);
               }
