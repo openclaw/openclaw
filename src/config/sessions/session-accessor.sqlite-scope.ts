@@ -352,7 +352,7 @@ export function withPreparedSqliteScope<T>(
 export function captureLifecycleDatabaseScope<T extends ResolvedSqliteReadScope>(
   scope: T,
 ): T & { env: NodeJS.ProcessEnv; path: string } {
-  const env = { ...(scope.env ?? process.env) };
+  const env = cloneEnvWithPlatformSemantics(scope.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   return {
     ...scope,
