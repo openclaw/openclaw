@@ -388,21 +388,23 @@ export function ApplicationShell(props: {
         <Show when={readOnlyNotice()} keyed>
           {(notice) => (
             <p
-              class="shell-config-read-only callout info"
+              class="shell-config-read-only callout callout--dismissible info"
               inert={view().mobileNavLayout && view().navDrawerOpen}
             >
-              <strong>{t("nav.gateway.configReadOnly")}</strong> {notice.message}
-              <Show when={notice.docsUrl}>
-                {" "}
-                <a
-                  href={notice.docsUrl}
-                  target={EXTERNAL_LINK_TARGET}
-                  rel={buildExternalLinkRel()}
-                  data-link-reader-external
-                >
-                  {t("common.learnMore")}
-                </a>
-              </Show>
+              <span class="callout__content">
+                <strong>{t("nav.gateway.configReadOnly")}</strong> {notice.message}
+                <Show when={notice.docsUrl}>
+                  {" "}
+                  <a
+                    href={notice.docsUrl}
+                    target={EXTERNAL_LINK_TARGET}
+                    rel={buildExternalLinkRel()}
+                    data-link-reader-external
+                  >
+                    {t("common.learnMore")}
+                  </a>
+                </Show>
+              </span>
               <button
                 type="button"
                 class="btn btn--sm btn--ghost btn--icon"

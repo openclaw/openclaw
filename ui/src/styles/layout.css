@@ -123,15 +123,9 @@
   overflow-wrap: anywhere;
 }
 
-.shell-config-read-only.callout {
-  padding-inline-end: 52px;
-}
-
 .shell-config-read-only > button {
-  position: absolute;
-  inset-inline-end: 8px;
-  top: 50%;
-  transform: translateY(-50%);
+  /* Keep the icon button from increasing the notice's text-led height. */
+  margin-block: -9px;
 }
 
 .shell--nav-collapsed:not(.shell--mobile-nav) .shell-config-read-only {
