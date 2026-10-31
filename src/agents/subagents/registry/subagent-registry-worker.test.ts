@@ -424,14 +424,19 @@ it("publishes overlapping durable and runtime-only mutations in FIFO order", asy
 it("releases unrelated registration rows while following new owners and deletion receipts", async () => {
   vi.stubEnv("OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE", "1");
   const child = "agent:main:subagent:retained-registration";
-  seed(entry("selected", { childSessionKey: child }), entry("unrelated"));
-  const preparedRows = await prepareSubagentRegistrationRows(
-    child,
-    ["selected"],
-    captureOpenClawStateWorkerContext(),
-  );
-  const retired = weak(getSubagentRunsSnapshotForRead(new Map()).get("unrelated")!);
-  clearSubagentRunsReadCacheForTest();
+  async function capture() {
+    seed(entry("selected", { childSessionKey: child }), entry("unrelated"));
+    const preparedRows = await prepareSubagentRegistrationRows(
+      child,
+      ["selected"],
+      captureOpenClawStateWorkerContext(),
+    );
+    const retired = weak(getSubagentRunsSnapshotForRead(new Map()).get("unrelated")!);
+    clearSubagentRunsReadCacheForTest();
+    return { preparedRows, retired };
+  }
+  // Finish the frame that read the full snapshot before testing the reader's retention.
+  const { preparedRows, retired } = await capture();
   await expectCollected(weakControl(), retired);
   expect([...preparedRows().keys()]).toEqual(["selected"]);
   await register(entry("unrelated", { childSessionKey: child, generation: 2 }));
