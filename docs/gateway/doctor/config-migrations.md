@@ -66,13 +66,14 @@ current widget formats; they do not retain a compatibility renderer.
 Skill Workshop ships as the bundled `skill-workshop` plugin, enabled by default.
 Releases from 2026.10.1 ignored `skill-workshop` plugin policy while Workshop was
 built in. Until a config records `meta.migrations.skillWorkshopPlugin: true`, the
-runtime keeps ignoring that older policy, so Workshop keeps working before Doctor runs.
+runtime and config validation keep ignoring an older `plugins.entries.skill-workshop`
+entry, including its old settings, and the `skill-workshop` id in `plugins.deny`.
+Validation reports that Doctor will remove them.
 
-Doctor and the next config write then remove the older `plugins.entries.skill-workshop`
-entry and the `skill-workshop` id in `plugins.deny`. They also add `skill-workshop` to a
-non-empty `plugins.allow`, and record the marker. After that, `skill-workshop`
-policy applies like any other plugin's. A config write keeps `skill-workshop` policy
-that it adds itself.
+Doctor, which also runs during `openclaw update`, removes that older policy, adds
+`skill-workshop` to a non-empty `plugins.allow`, and records the marker. An ordinary
+config write records the marker only when no older policy needs repair. After that,
+`skill-workshop` policy applies like any other plugin's.
 
 With `plugins.enabled: false`, Doctor reports that the switch now also turns off
 learned skills. To keep them, enable plugins and limit them with `plugins.allow`.

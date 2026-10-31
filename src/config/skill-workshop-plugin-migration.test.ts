@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
+import { stampConfigWriteMetadata } from "./io.meta.js";
 import { materializeSkillWorkshopPlugin } from "./skill-workshop-plugin-migration.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
@@ -37,6 +38,17 @@ describe("materializeSkillWorkshopPlugin", () => {
     expect(config.plugins).toEqual(next.plugins);
     expect(config.meta?.migrations?.skillWorkshopPlugin).toBe(true);
     expect(changes).toEqual([]);
+  });
+
+  it("lets ordinary writes record the marker only when no older policy needs repair", () => {
+    const stale = builtInEraConfig();
+    const written = stampConfigWriteMetadata(stale, "2026.10.9", stale);
+
+    expect(
+      stampConfigWriteMetadata({}, "2026.10.9", {}).meta?.migrations?.skillWorkshopPlugin,
+    ).toBe(true);
+    expect(written.plugins).toEqual(stale.plugins);
+    expect(written.meta?.migrations?.skillWorkshopPlugin).toBeUndefined();
   });
 
   it("honors skill-workshop policy once the migration is recorded", () => {

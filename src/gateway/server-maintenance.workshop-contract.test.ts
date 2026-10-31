@@ -84,7 +84,7 @@ it("L6/Y1/Y2: Gateway usage protects read skills, and post-turn cleanup is daily
         models: { "anthropic/*": { agentRuntime: { id: "openclaw" } } },
       },
     },
-    plugins: { enabled: false },
+    plugins: { allow: ["skill-workshop"] },
     skills: { load: { watch: false } },
   };
   const birth = Date.now();
@@ -279,7 +279,7 @@ it.each([
       },
     },
     ...(reason === "tool-denied" ? { tools: { deny: ["skill_workshop"] } } : {}),
-    plugins: { enabled: false },
+    plugins: { allow: ["skill-workshop"] },
     skills: { load: { watch: false }, workshop: { autonomous: { mode: "auto" } } },
   };
   let timers:
@@ -416,7 +416,7 @@ it("Y3: daily maintenance diets one oversized learned skill as a restorable cura
             },
           },
           models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
-          plugins: { enabled: false },
+          plugins: { allow: ["skill-workshop"] },
           skills: { load: { watch: false } },
         };
         await state.writeConfig(config);

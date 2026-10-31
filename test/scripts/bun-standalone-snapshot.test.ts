@@ -108,6 +108,7 @@ it("packages docs and custodian skills at their standalone source roots", async 
       managedSkillsDir: path.join(root, "managed"),
       pluginSkillsDir: path.join(root, "plugin-skills"),
       pluginSkillRoots: [],
+      agentSkillsDirs: [],
     });
     const candidates = plan.roots
       .filter((entry) => entry.source === "openclaw-custodian")

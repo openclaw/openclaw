@@ -69,6 +69,12 @@ export function projectWebhookMigrationIncludeWrite(
   return { config, paths };
 }
 
+/** Writes record the migration only when no older policy needs it; Doctor owns policy repair. */
+function stampSkillWorkshopPluginMigration(cfg: OpenClawConfig, previousConfig: unknown) {
+  const migrated = materializeSkillWorkshopPlugin(cfg, previousConfig);
+  return migrated.changes.length === 0 ? migrated.config : cfg;
+}
+
 export function stampConfigWriteMetadata(
   cfg: OpenClawConfig,
   version: string = VERSION,
@@ -78,13 +84,13 @@ export function stampConfigWriteMetadata(
   const migrationStamped =
     previousConfig === undefined
       ? cfg
-      : materializeSkillWorkshopPlugin(
+      : stampSkillWorkshopPluginMigration(
           materializeUtilityModelSeparation(
             materializeModelPolicyAllowlist(cfg, previousConfig).config,
             previousConfig,
           ).config,
           previousConfig,
-        ).config;
+        );
   if (resolveUpdateRehearsalRoot(env)) {
     // Released drivers compare this copy before activation. Keep real migrations,
     // but leave writer-only stamps for the subsequent live config write.

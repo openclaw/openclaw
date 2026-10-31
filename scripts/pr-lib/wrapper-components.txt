@@ -808,6 +808,7 @@ src/config/sessions/transcript-store-identity.ts
 src/config/sessions/transcript-target-binding.ts
 src/config/sessions/version.ts
 src/config/shell-env-expected-keys.ts
+src/config/skill-workshop-plugin-migration.ts
 src/config/source-value-projection.ts
 src/config/state-dir.ts
 src/config/talk.ts

@@ -82,3 +82,36 @@ export function materializeSkillWorkshopPlugin(
     changes,
   };
 }
+
+/**
+ * Runtime and validation view of an unmarked config: older `skill-workshop` policy is ignored,
+ * not validated against the restored plugin's schema. Doctor removes it and records the marker.
+ * Admitting the plugin through an older exclusive allowlist is Doctor's repair alone.
+ */
+export function projectSkillWorkshopPluginPolicy<T extends OpenClawConfig>(
+  cfg: T,
+): { config: T; ignored: boolean } {
+  const plugins = cfg.plugins;
+  if (hasSkillWorkshopPluginMigrationMarker(cfg) || !plugins) {
+    return { config: cfg, ignored: false };
+  }
+  const entries = Object.entries(plugins.entries ?? {}).filter(([id]) => !isWorkshopId(id));
+  const deny = plugins.deny?.filter((id) => !isWorkshopId(id));
+  if (
+    entries.length === Object.keys(plugins.entries ?? {}).length &&
+    deny?.length === plugins.deny?.length
+  ) {
+    return { config: cfg, ignored: false };
+  }
+  return {
+    config: {
+      ...cfg,
+      plugins: {
+        ...plugins,
+        ...(plugins.entries ? { entries: Object.fromEntries(entries) } : {}),
+        ...(deny ? { deny } : {}),
+      },
+    },
+    ignored: true,
+  };
+}
