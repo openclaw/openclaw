@@ -142,7 +142,9 @@ const repositoryScriptEntries = [
   "scripts/bench-channel-turn.mts!",
   "scripts/perf/session-actor-retention-seed.ts!",
   "scripts/perf/session-cold-selection.ts!",
+  "scripts/perf/session-delete-diagnostics-measure.ts!",
   "scripts/perf/session-entry-projection-measure.ts!",
+  "scripts/perf/session-lifecycle-delete-sql-measure.ts!",
   // docs/reference/test/performance.md invokes the Decision transport comparison driver.
   "scripts/bench-decision-transport.mts!",
   // docs/reference/test/performance.md invokes the frozen-revision benchmark builder.

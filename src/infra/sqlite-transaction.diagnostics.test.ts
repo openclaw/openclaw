@@ -1,5 +1,6 @@
 import { isMainThread, threadId } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
+import { observeConnection } from "./database-engine/observation.js";
 import {
   expectSettledEntries,
   readEntryIds as readEntries,
@@ -50,6 +51,108 @@ function asWorker(operation: string, run: () => unknown) {
 }
 
 const thread = { isMainThread, pid: process.pid, threadId };
+
+it("attributes slow deletion statements without counting iterator consumers or exposing SQL", () => {
+  const { db, advance, run, warning, logger } = fixture();
+  vi.spyOn(performance, "now").mockImplementation(() => Date.now());
+  db.function("synthetic_elapsed", () => {
+    advance(100);
+    return 1;
+  });
+  observeConnection(db);
+  const statement = db.prepare("SELECT synthetic_elapsed(), ? AS private_identifier");
+  run(
+    () => {
+      statement.get("private-binding");
+      statement.get("another-binding");
+      for (const row of db
+        .prepare("SELECT synthetic_elapsed() UNION ALL SELECT synthetic_elapsed()")
+        .iterate()) {
+        expect(row).toBeDefined();
+        advance(300);
+      }
+      advance(400);
+    },
+    { operationLabel: "session.lifecycle.delete" },
+  );
+  warning("hold", {
+    elapsedMs: 1_400,
+    phases: expect.objectContaining({
+      sqlMs: 1_400,
+      statementExecutionMs: 400,
+      callbackOtherMs: 1_000,
+    }),
+    statementTiming: {
+      count: 3,
+      maxMs: 200,
+      slowest: { id: expect.stringMatching(/^[a-f0-9]{16}$/), operation: "SELECT", maxMs: 200 },
+      statements: [
+        {
+          id: expect.stringMatching(/^[a-f0-9]{16}$/),
+          operation: "SELECT",
+          count: 2,
+          totalMs: 200,
+          maxMs: 100,
+        },
+        {
+          id: expect.stringMatching(/^[a-f0-9]{16}$/),
+          operation: "SELECT",
+          count: 1,
+          totalMs: 200,
+          maxMs: 200,
+        },
+      ],
+    },
+  });
+  expect(JSON.stringify(logger.warn.mock.calls)).not.toMatch(
+    /private|synthetic_elapsed|UNION|binding/,
+  );
+});
+
+it("bounds deletion statement attribution and releases it after a failed callback", () => {
+  const { db, advance, run, logger } = fixture();
+  vi.spyOn(performance, "now").mockImplementation(() => Date.now());
+  db.function("synthetic_elapsed", () => {
+    advance(10);
+    return 1;
+  });
+  observeConnection(db);
+  expect(() =>
+    run(
+      () => {
+        for (let index = 0; index < 40; index++) {
+          db.prepare(`SELECT synthetic_elapsed() AS column_${index}`).get();
+        }
+        advance(800);
+        throw new Error("synthetic rejection");
+      },
+      { operationLabel: "session.lifecycle.delete" },
+    ),
+  ).toThrow("synthetic rejection");
+  const hold = logger.warn.mock.calls.find(
+    ([message]) => message === "slow SQLite transaction hold",
+  )?.[1];
+  expect(hold).toMatchObject({
+    phases: { statementExecutionMs: 400, callbackOtherMs: 800 },
+    statementTiming: { count: 40, maxMs: 10, statements: expect.any(Array) },
+  });
+  expect(hold.statementTiming.statements).toHaveLength(33);
+  expect(hold.statementTiming.statements.at(-1)).toEqual({
+    id: "other",
+    operation: "OTHER",
+    count: 8,
+    totalMs: 80,
+    maxMs: 10,
+  });
+  logger.warn.mockClear();
+  run(() => advance(1_200), { operationLabel: "session.actor" });
+  expect(logger.warn.mock.calls[0]?.[1]).not.toHaveProperty("statementTiming");
+  logger.warn.mockClear();
+  run(() => db.prepare("SELECT synthetic_elapsed()").get(), {
+    operationLabel: "session.lifecycle.delete",
+  });
+  expect(logger.warn).not.toHaveBeenCalled();
+});
 
 it.each(["callback", "commit"])("attributes a metadata relay wait during %s", (stage) => {
   const { db, advance, run, warning } = fixture();

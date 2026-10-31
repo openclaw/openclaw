@@ -967,8 +967,22 @@ Both include `engine` (`"sqlite"` or `"postgres"`),
 also include normalized `sql` with literals redacted; neither event includes
 bindings. Request events count the worker boundary separately from the statements
 that the request executes. This lets census tools compare both engines without
-inferring them from SQL. When no subscriber is present, the boundary skips timing,
-SQL normalization, and event construction.
+inferring them from SQL. Outside the scoped deletion diagnostic below, when no
+subscriber is present, the boundary skips timing, SQL normalization, and event
+construction.
+
+Slow `session.lifecycle.delete` transaction warnings additionally split legacy
+`sqlMs` into `statementExecutionMs` and `callbackOtherMs`. Statement execution includes
+native SQLite calls and their triggers inside the application callback; the remainder
+includes preparation, JavaScript, final guards, rollback on failure, garbage
+collection, and scheduling delays. These are elapsed times,
+not CPU measurements. Admission waits and commit time remain separate.
+
+The warning records statement count, maximum duration, and at most 32 statement
+groups plus an overflow group. Groups use the first 16 hexadecimal characters of
+the SHA-256 hash of normalized SQL, matching the statement channel's normalization;
+SQL text and bindings are omitted. Collection is scoped to this deletion callback,
+and serialization occurs only above the existing 1,000 ms slow-hold threshold.
 
 See [Database schemas](/reference/database-schemas) for store ownership and schema
 contracts, and [Configuration reference](/gateway/configuration-reference) for
