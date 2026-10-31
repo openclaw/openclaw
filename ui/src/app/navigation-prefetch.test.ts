@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ApplicationRouter } from "../app-routes.ts";
+import { warmWhenIdle, takeIdleWarmups } from "../lib/idle-warmup.ts";
 import { createContext, createSessions } from "../test-helpers/app-sidebar.ts";
 import {
   createApplicationGateway,
@@ -52,6 +53,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanups.splice(0).forEach((stop) => stop());
   idleCallbacks.length = 0;
+  takeIdleWarmups();
   Reflect.deleteProperty(navigator, "connection");
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -224,6 +226,23 @@ it("warms New Session after presentation and leaves other routes for intent", as
   fixture.stop();
   await idle();
   expect(hints()).toHaveLength(0);
+});
+
+it("warms the next route before queued menu bodies", async () => {
+  const fixture = setup();
+  fixture.outlet.presentationSettled = true;
+  fixture.transcript.ready = true;
+  const warmMenu = vi.fn(async () => {});
+  warmWhenIdle(warmMenu);
+  await idle();
+  expect(hints().map((link) => link.href)).toEqual([
+    new URL("/control/assets/new-1234abcd.js", location.origin).href,
+    new URL("/control/assets/new-1234abcd.css", location.origin).href,
+  ]);
+  expect(warmMenu).not.toHaveBeenCalled();
+  hints().forEach((link) => link.dispatchEvent(new Event("load")));
+  await idle();
+  expect(warmMenu).toHaveBeenCalledOnce();
 });
 
 it("keeps declared next interactions as the route's only automatic idle work", async () => {

@@ -4,6 +4,7 @@ import { listen } from "../lib/reactive/listener.ts";
 import type { ShellOwner } from "./app-host.tsx";
 import type { ApplicationContext } from "./context.ts";
 import { connectControlUiFavicon } from "./control-ui-favicon-status.runtime.ts";
+import { trackForegroundActivity } from "./foreground-activity.ts";
 
 function canPreload(): boolean {
   // SAFETY: Network Information is optional and is not in TypeScript's DOM library.
@@ -139,13 +140,6 @@ export function connectShellIdle(
       if (!ready()) {
         return;
       }
-      // Current-page menu bodies precede next-route guesses; navigation intent still wins.
-      const warmups = intent ? [] : takeIdleWarmups();
-      if (warmups.length) {
-        // Speculation only; opening the surface owns any load failure.
-        await Promise.all(warmups.map((load) => load().catch(() => undefined)));
-        return;
-      }
       const currentRoute = router.getState().matches[0]?.routeId;
       if (currentRoute) {
         pending.delete(currentRoute);
@@ -153,6 +147,9 @@ export function connectShellIdle(
       const key = nextPending();
       intent = undefined;
       if (!key) {
+        // Warm the declared next route before menu bodies can enqueue more bodies.
+        // Opening any surface still owns its load failure.
+        await Promise.all(takeIdleWarmups().map((load) => load().catch(() => undefined)));
         return;
       }
       pending.delete(key);
@@ -204,7 +201,7 @@ export function connectShellIdle(
           }),
         );
       }
-      await Promise.all(loads);
+      await trackForegroundActivity(Promise.all(loads));
     } catch {
       // Speculation never triggers stale-chunk recovery; navigation owns failures.
       manifest = {};
