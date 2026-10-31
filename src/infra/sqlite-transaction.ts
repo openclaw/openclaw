@@ -279,14 +279,13 @@ function execTimedTransactionStep(params: {
   step: SqliteTransactionStep;
 }): number {
   const startedAt = Date.now();
-  const holderAtWaitStart =
-    params.sql === "BEGIN IMMEDIATE"
-      ? readSqliteTransactionWriter(params.db, startedAt)
-      : undefined;
   const beginAdmission =
     params.sql === "BEGIN IMMEDIATE"
       ? { nativeAttempts: 0, nativeMs: 0, serviceCalls: 0, serviceMs: 0 }
       : undefined;
+  const holderAtWaitStart = beginAdmission
+    ? readSqliteTransactionWriter(params.db, startedAt)
+    : undefined;
   try {
     if (beginAdmission) {
       beginImmediateTransaction(params.db, beginAdmission);
