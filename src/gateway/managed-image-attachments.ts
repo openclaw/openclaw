@@ -28,7 +28,11 @@ import {
 } from "../media/playback-transcode.js";
 import { MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
 import { unlinkIfExists } from "../media/temp-files.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import {
+  isIncognitoSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
 import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import {
   captureChannelReadScope,
@@ -87,7 +91,10 @@ import {
   readManagedImageRecord,
   type ManagedImageRecord,
 } from "./managed-image-record-store.js";
-import { withManagedImageSessionRead } from "./managed-image-session-read.js";
+import {
+  prepareManagedImageRetentionRead,
+  withManagedImageSessionRead,
+} from "./managed-image-session-read.js";
 import { readImageThumbnailFromFile } from "./managed-image-thumbnail-cache.js";
 import { handleManagedImageThumbnailResponse } from "./managed-image-thumbnail-response.js";
 import {
@@ -150,6 +157,7 @@ type ManagedMediaBlock = Record<string, unknown>;
 type SessionManagedOutgoingAttachmentIndex = {
   messageIds: Set<string>;
   matches?: Set<string> | null;
+  retainedMatches?: Set<string> | null;
 };
 type ManagedOutgoingTranscriptMatch = "match" | "missing" | "unavailable";
 type ManagedOutgoingAttachmentRef = { attachmentId: string; sessionKey: string };
@@ -316,6 +324,10 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
   const forceDeleteSessionRecords = params?.forceDeleteSessionRecords === true;
   const entries = await listManagedImageRecordEntries({ stateDir });
   let pendingPreparedAttachmentIds: Set<string> | null | undefined;
+  const retainedRead = prepareManagedImageRetentionRead({
+    stateDir,
+    assertCurrent: captureChannelReadScope()?.assertCurrent ?? (() => {}),
+  });
 
   const transcriptAttachmentIndexCache = new Map<string, SessionManagedOutgoingAttachmentIndex>();
   for (const { record } of entries) {
@@ -356,6 +368,7 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
         record,
         transcriptAttachmentIndexCache.get(managedOutgoingAttachmentSessionKey(record))!,
         stateDir,
+        retainedRead,
       );
       // Session-store unavailability is not proof that durable chat history no longer owns media.
       shouldDelete = transcriptMatch === "missing";
@@ -557,14 +570,21 @@ async function recordMatchesTranscriptMessage(
   record: ManagedImageRecord,
   index: SessionManagedOutgoingAttachmentIndex,
   stateDir: string,
+  retainedRead: ReturnType<typeof prepareManagedImageRetentionRead>,
 ): Promise<ManagedOutgoingTranscriptMatch> {
   if (!record.messageId) {
     return "missing";
   }
   const { sessionKey, agentId, messageId: requestedMessageId } = record;
   const refKey = buildManagedOutgoingAttachmentRefKey(requestedMessageId, record.attachmentId);
-  if (index.matches !== undefined) {
-    return index.matches === null ? "unavailable" : index.matches.has(refKey) ? "match" : "missing";
+  if (index.retainedMatches !== undefined) {
+    retainedRead.assertCurrent();
+  }
+  if (index.matches?.has(refKey) || index.retainedMatches?.has(refKey)) {
+    return "match";
+  }
+  if (index.matches === null || index.retainedMatches === null) {
+    return "unavailable";
   }
   const cfg = getRuntimeConfig();
   const ownerAgentId =
@@ -573,26 +593,51 @@ async function recordMatchesTranscriptMessage(
   if (!ownerAgentId) {
     return "unavailable";
   }
-  const result = await withManagedImageSessionRead<ManagedOutgoingTranscriptMatch>(
-    {
-      cfg,
-      agentId: ownerAgentId,
-      sessionKey,
-      stateDir,
-      assertCurrent: captureChannelReadScope()?.assertCurrent ?? (() => {}),
-      unavailable: "unavailable",
-    },
-    async (scope, assertCurrent) => {
-      const matches = await readManagedOutgoingAttachmentIndex(scope, index.messageIds);
-      assertCurrent();
-      index.matches = matches;
-      return matches === null ? "unavailable" : matches.has(refKey) ? "match" : "missing";
-    },
-  );
-  if (result === null) {
-    index.matches = new Set();
+  if (index.matches === undefined) {
+    const result = await withManagedImageSessionRead<ManagedOutgoingTranscriptMatch>(
+      {
+        cfg,
+        agentId: ownerAgentId,
+        sessionKey,
+        stateDir,
+        assertCurrent: captureChannelReadScope()?.assertCurrent ?? (() => {}),
+        unavailable: "unavailable",
+      },
+      async (scope, assertCurrent) => {
+        const matches = await readManagedOutgoingAttachmentIndex(scope, index.messageIds);
+        assertCurrent();
+        index.matches = matches;
+        return matches === null ? "unavailable" : matches.has(refKey) ? "match" : "missing";
+      },
+    );
+    index.matches ??= result === "unavailable" ? null : new Set();
   }
-  return result ?? "missing";
+  if (index.matches?.has(refKey)) {
+    return "match";
+  }
+  if (index.matches === null) {
+    return "unavailable";
+  }
+  // Incognito lifetime stays with its memory actor, never durable discovery.
+  if (isIncognitoSessionKey(sessionKey)) {
+    return "missing";
+  }
+  if (index.retainedMatches === undefined) {
+    index.retainedMatches = await retainedRead.read(
+      { agentId: ownerAgentId, sessionKey },
+      async (scope, assertCurrent) => {
+        const matches = await readManagedOutgoingAttachmentIndex(scope, index.messageIds);
+        assertCurrent();
+        return matches;
+      },
+    );
+  }
+  retainedRead.assertCurrent();
+  return index.retainedMatches === null
+    ? "unavailable"
+    : index.retainedMatches.has(refKey)
+      ? "match"
+      : "missing";
 }
 
 function managedOutgoingAttachmentSessionKey(record: ManagedImageRecord): string {

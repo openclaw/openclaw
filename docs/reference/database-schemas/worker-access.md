@@ -1226,13 +1226,15 @@ After scheduled completion, committed job rows determine whether schedule repair
 is needed before dispatching a maintenance sweep. Manual runs retain their
 expired-slot and cadence repair.
 
-Managed outgoing media cleanup uses the same retained session reader as media
-serving. Durable session discovery and entry reads execute in the existing
-read workers; incognito reads use the memory actor. Cleanup distinguishes an
-unavailable or ambiguous store from a missing transcript reference and retains
-media when ownership cannot be read. It no longer keeps a separate native
-session selector or discovery cache. Stored media, retention policy, schemas,
-and update behavior are unchanged.
+Managed outgoing media cleanup first uses the retained session reader used by
+media serving. When readable current history does not own a committed reference,
+cleanup also checks registered durable stores through the existing read workers,
+using each store's physical owner. This retention-only fallback does not change
+serving's selected source. Unavailable, ambiguous, or incompatible sources are not
+proof of absence and defer reclamation. Incognito reads use the memory actor,
+without durable discovery. Cleanup keeps no separate native session selector;
+fallback caches are local to the cleanup pass. No schema or writer changes are
+required.
 
 Session accessor kernels remain mixed where released durable synchronous SDK
 methods or opaque transaction callbacks still call them. Incognito access uses

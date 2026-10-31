@@ -16,6 +16,7 @@ export type ArtifactRecord = ArtifactSummary & { data?: string; url?: string };
 export type ArtifactLookup = {
   artifact?: ArtifactRecord;
   sessionKey?: string;
+  prepareRead?: () => Promise<void> | undefined;
   assertCurrent?: () => void;
 };
 

@@ -51,6 +51,12 @@ export type SessionSharingReadProjection = Pick<
   | "prepareMembership"
 >;
 
+function sessionSharingReadError(error: unknown): SessionMutationFactsUnavailableError {
+  return error instanceof SessionMutationFactsUnavailableError
+    ? error
+    : new SessionMutationFactsUnavailableError({ cause: error });
+}
+
 export function isSameSessionSharingTarget(
   target: SessionSharingTarget | null,
   selected: SessionSharingTarget,
@@ -139,9 +145,7 @@ export async function prepareSessionSharingRead(params: {
             new Set<string>(),
         };
       } catch (error) {
-        throw error instanceof SessionMutationFactsUnavailableError
-          ? error
-          : new SessionMutationFactsUnavailableError({ cause: error });
+        throw sessionSharingReadError(error);
       }
     };
     readCurrent(cfg);
@@ -151,15 +155,27 @@ export async function prepareSessionSharingRead(params: {
         canonicalKey: captured.canonicalKey,
         storePath: configuredStorePath,
       },
+      // Readiness may change while a consumer reads data. Prepare the same
+      // projection, then let readCurrent enforce the original captured target.
+      prepareRead() {
+        try {
+          if (!active || !projection.needsMembershipPreparation()) {
+            return undefined;
+          }
+          return projection.prepareMembership().catch((error: unknown) => {
+            throw sessionSharingReadError(error);
+          });
+        } catch (error) {
+          throw sessionSharingReadError(error);
+        }
+      },
       readCurrent,
       release: () => {
         active = false;
       },
     };
   } catch (error) {
-    throw error instanceof SessionMutationFactsUnavailableError
-      ? error
-      : new SessionMutationFactsUnavailableError({ cause: error });
+    throw sessionSharingReadError(error);
   }
 }
 

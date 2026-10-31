@@ -19,6 +19,7 @@ export function artifactFixtureSessionFacts(
   return {
     storageTarget,
     bindCreation() {},
+    prepareRead: () => undefined,
     release() {},
     readCurrent: () => ({
       target: {

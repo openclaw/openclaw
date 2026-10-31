@@ -16,7 +16,7 @@ export async function prepareArtifactSessionRead(
   if (!selected) {
     return undefined;
   }
-  const { sessionKey, release } = selected;
+  const { sessionKey, release, prepareRead } = selected;
   const initial = selected.readCurrent();
   const { target } = initial;
   const entry = target?.entry;
@@ -34,10 +34,11 @@ export async function prepareArtifactSessionRead(
     }
   };
   if (!sessionId || !storePath) {
-    return { sessionKey, assertCurrent, release };
+    return { sessionKey, assertCurrent, release, prepareRead };
   }
   return {
     sessionKey,
+    prepareRead,
     scope: {
       agentId: initial.sourceAgentId ?? selected.agentId,
       sessionEntry: entry,

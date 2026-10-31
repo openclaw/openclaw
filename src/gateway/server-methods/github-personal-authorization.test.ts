@@ -235,6 +235,7 @@ it.each(["options", "shared-observation"] as const)(
     const release = vi.fn();
     mocks.prepareSharing.mockResolvedValue({
       storageTarget: replacement,
+      prepareRead: () => undefined,
       readCurrent: () => ({
         target: { ...replacement, storeKey: replacement.canonicalKey },
         membership: new Set(["profile-cache-test"]),

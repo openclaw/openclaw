@@ -140,13 +140,14 @@ async function loadArtifacts(
   sessionKey?: string;
   nextCursor?: string;
   omittedOversized?: boolean;
+  prepareRead?: () => Promise<void> | undefined;
   assertCurrent?: () => void;
 }> {
   const selected = await prepareArtifactSessionRead(query, access);
   if (!selected?.scope) {
     return { sessionKey: selected?.sessionKey, artifacts: [] };
   }
-  const { sessionKey, scope, assertCurrent } = selected;
+  const { sessionKey, scope, assertCurrent, prepareRead } = selected;
   const { storePath, sessionId, sessionEntry: entry } = scope;
   if (query.type === "image") {
     const binding = JSON.stringify([
@@ -194,12 +195,17 @@ async function loadArtifacts(
       });
       pruneMapToMaxSize(state, 128);
     }
+    const pending = prepareRead();
+    if (pending) {
+      await pending;
+    }
     assertCurrent();
     return {
       artifacts: page.artifacts,
       ...(nextCursor ? { nextCursor } : {}),
       ...(page.omittedOversized ? { omittedOversized: true } : {}),
       sessionKey,
+      prepareRead,
       assertCurrent,
     };
   }
@@ -221,8 +227,12 @@ async function loadArtifacts(
   if (queued && opts.downloadArtifactId) {
     queued.ids.add(opts.downloadArtifactId);
     const loaded = await queued.result;
+    const pending = prepareRead();
+    if (pending) {
+      await pending;
+    }
     assertCurrent();
-    return { ...loaded, assertCurrent };
+    return { ...loaded, prepareRead, assertCurrent };
   }
   const collect = async () => {
     // Close before target resolution or snapshot acquisition, including empty/error reads.
@@ -246,8 +256,12 @@ async function loadArtifacts(
   }
   // Queued scans share data; each caller retains its own disclosure authority.
   const loaded = await result;
+  const pending = prepareRead();
+  if (pending) {
+    await pending;
+  }
   assertCurrent();
-  return { ...loaded, assertCurrent };
+  return { ...loaded, prepareRead, assertCurrent };
 }
 
 function requireQueryable(params: ArtifactQuery, respond: RespondFn): boolean {
@@ -303,6 +317,7 @@ async function findArtifact(
   return {
     sessionKey: loaded.sessionKey,
     artifact: loaded.artifacts.find((artifact) => artifact.id === params.artifactId),
+    prepareRead: loaded.prepareRead,
     assertCurrent: loaded.assertCurrent,
   };
 }
@@ -320,9 +335,14 @@ async function prepareDownload(
     kind: "download-grant",
     sessionKey: selected.sessionKey,
   });
+  const pending = selected.prepareRead();
+  if (pending) {
+    await pending;
+  }
   selected.assertCurrent();
   const result = {
     sessionKey: selected.sessionKey,
+    prepareRead: selected.prepareRead,
     assertCurrent: selected.assertCurrent,
     release: selected.release,
   };
@@ -355,6 +375,10 @@ async function respondManagedArtifactDownload(
             artifactId: query.artifactId,
           })
         : null;
+    const pending = selected?.prepareRead();
+    if (pending) {
+      await pending;
+    }
     selected?.assertCurrent();
     if (!managed || !selected) {
       respondArtifactNotFound(respond, query.artifactId);
@@ -495,7 +519,8 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     if (!found.ok) {
       return;
     }
-    let { artifact } = found.value;
+    const lookup = found.value;
+    let { artifact } = lookup;
     if (!artifact) {
       respondArtifactNotFound(respond, query.artifactId);
       return;
@@ -516,12 +541,12 @@ export const artifactsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    if (found.value.download) {
-      const assertArtifactCurrent = found.value.assertCurrent;
+    if (lookup.download) {
+      const assertArtifactCurrent = lookup.assertCurrent;
       const download = createArtifactDownload({
         client,
-        prepared: found.value.download,
-        release: found.value.release,
+        prepared: lookup.download,
+        release: lookup.release,
         assertCurrent: () => {
           assertCurrent();
           assertArtifactCurrent?.();
@@ -542,25 +567,38 @@ export const artifactsHandlers: GatewayRequestHandlers = {
             sessionKey: selected.sessionKey,
             response,
           });
+          const pending = selected.prepareRead();
+          if (pending) {
+            await pending;
+          }
           selected.assertCurrent();
           return current.response;
         },
       });
-      access.detach(found.value.release);
+      access.detach(lookup.release);
       respond(true, {
         artifact: { ...toArtifactSummary(artifact), download: { mode: "url" as const } },
         ...download,
       });
       return;
     }
-    const managedSource =
-      artifact.download.mode === "url" && artifact.url && artifact.sessionKey
-        ? await resolveManagedOutgoingMediaUrlDownload({
-            sessionKey: artifact.sessionKey,
-            url: artifact.url,
-          })
-        : null;
-    if (!artifactResponseIsCurrent(found.value, respond)) {
+    let managedSource: Awaited<ReturnType<typeof resolveManagedOutgoingMediaUrlDownload>> = null;
+    if (artifact.download.mode === "url" && artifact.url && artifact.sessionKey) {
+      const { sessionKey, url } = artifact;
+      const source = await runArtifactSessionOperation(respond, async () => {
+        const managed = await resolveManagedOutgoingMediaUrlDownload({
+          sessionKey,
+          url,
+        });
+        await lookup.prepareRead?.();
+        return managed;
+      });
+      if (!source.ok) {
+        return;
+      }
+      managedSource = source.value;
+    }
+    if (!artifactResponseIsCurrent(lookup, respond)) {
       return;
     }
     let managedUrl: { url: string; expiresAt: string } | undefined;
@@ -600,12 +638,20 @@ export const artifactsHandlers: GatewayRequestHandlers = {
         const source = Buffer.from(artifact.data, "base64");
         const width = normalizeChatImageRenditionWidth(query.previewWidth);
         const cacheKey = `${createHash("sha256").update(source).digest("hex")}\0${width}`;
-        preview = await resolveManagedImageThumbnail(cacheKey, () =>
-          encodeImageThumbnail(source, width),
-        ).catch(() => undefined);
+        const prepared = await runArtifactSessionOperation(respond, async () => {
+          const result = await resolveManagedImageThumbnail(cacheKey, () =>
+            encodeImageThumbnail(source, width),
+          ).catch(() => undefined);
+          await lookup.prepareRead?.();
+          return result;
+        });
+        if (!prepared.ok) {
+          return;
+        }
+        preview = prepared.value;
       }
       assertCurrent();
-      if (!artifactResponseIsCurrent(found.value, respond)) {
+      if (!artifactResponseIsCurrent(lookup, respond)) {
         return;
       }
       if (!preview) {
