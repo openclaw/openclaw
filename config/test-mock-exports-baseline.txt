@@ -6164,7 +6164,6 @@
 ["src/transcripts/summary-model.test.ts","../agents/simple-completion-runtime.js","7fb9df7604389708145c2dd9a83536ed0ec68419ceaef9fd0605c1aac9eb3f8f",1]
 ["src/tts/openai-compatible-speech-provider.test.ts","./provider-registry.js","dec51b51bd84ca186ada180eeaa23c3150257ed6e59732cc88ad833bec37fdf7",1]
 ["src/tts/tts-runtime.test-support.ts","../channels/plugins/tts-capabilities.js","c4d84b08312ec92f63de9daaf9a71368a3f7b5f0775b8c8570aa5d9428558158",1]
-["src/tts/tts-runtime.test-support.ts","../media/media-services.js","1ebb5a95e379040693ae2ffe498b1f8376ed6de1d54ee244dd876557e727b59a",1]
 ["src/tts/tts-summary.test.ts","../agents/simple-completion-runtime.js","bfbcebc1da1e2fdcbaad018162f65b9b9a44a52fd6391946de341a63de1d3f6f",1]
 ["src/tui/embedded-backend.test.ts","../agents/agent-command.js","658bad9b53a94fda6a29dd4e116ad4993bf6dde1a9d94e4d594ce16548ccdaa3",1]
 ["src/tui/embedded-backend.test.ts","../agents/btw.js","aa47533c8c2e45d495edc28ba19fdd4b61f8f10c569823a455ad9df96ab81a72",1]
