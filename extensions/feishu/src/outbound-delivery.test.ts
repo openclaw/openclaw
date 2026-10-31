@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
@@ -13,7 +14,7 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
-import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
+import { withEnvAsync, withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMediaFeishuMock = vi.hoisted(() => vi.fn<typeof import("./media.js").sendMediaFeishu>());
@@ -395,5 +396,89 @@ describe("Feishu outbound shared delivery", () => {
     } finally {
       Object.assign(feishuChannelRuntime.feishuOutbound, originalSenders);
     }
+  });
+
+  it("recovers queued text once when the process stops at the first runtime access", async () => {
+    const outbound = feishuChannelRuntime.feishuOutbound;
+    const deliveryIntentId = "feishu-direct-text-stopped";
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "feishu", plugin: feishuPlugin, source: "test" }]),
+    );
+    await withStateDirEnv("openclaw-feishu-recovery-", async ({ stateDir }) => {
+      // The first read of the lazily loaded runtime is where a cold process finishes
+      // importing it. The database at that instant is what a process stopped there leaves.
+      const stoppedStateDir = path.join(stateDir, "stopped");
+      const stoppedDb = path.join(stoppedStateDir, "state", "openclaw.sqlite");
+      fs.mkdirSync(path.dirname(stoppedDb), { recursive: true });
+      let copied = false;
+      Object.defineProperty(feishuChannelRuntime, "feishuOutbound", {
+        configurable: true,
+        get() {
+          if (!copied) {
+            copied = true;
+            const live = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
+              readOnly: true,
+            });
+            try {
+              live.exec(`VACUUM INTO '${stoppedDb.replaceAll("'", "''")}'`);
+            } finally {
+              live.close();
+            }
+          }
+          return outbound;
+        },
+      });
+      try {
+        const live = await sendBatch({
+          accountId: "default",
+          durability: "required",
+          deliveryIntentId,
+          completionRetention: { idPrefix: "feishu-direct-", maxAgeMs: 60_000, maxEntries: 10 },
+          maxRetries: 2,
+          replyToId: "om_parent",
+          payloads: [{ text: "queued reply" }],
+        });
+        expect(live.status).toBe("sent");
+      } finally {
+        Object.defineProperty(feishuChannelRuntime, "feishuOutbound", {
+          configurable: true,
+          enumerable: true,
+          writable: true,
+          value: outbound,
+        });
+      }
+      expect(copied).toBe(true);
+
+      // A stopped process never renews its producer lease. Model that expiry in the copy.
+      const stopped = new DatabaseSync(stoppedDb);
+      try {
+        const where = `WHERE queue_name = 'outbound-prepared-v1' AND id = ?`;
+        const stored = stopped
+          .prepare(`SELECT entry_json FROM delivery_queue_entries ${where}`)
+          .get(deliveryIntentId) as { entry_json: string };
+        const entry = JSON.parse(stored.entry_json) as { availableAt: number };
+        entry.availableAt = Date.now() - 1;
+        stopped
+          .prepare(`UPDATE delivery_queue_entries SET entry_json = ? ${where}`)
+          .run(JSON.stringify(entry), deliveryIntentId);
+      } finally {
+        stopped.close();
+      }
+      sendMessageFeishuMock.mockClear();
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stoppedStateDir }, () =>
+        drainPendingDeliveries({
+          drainKey: "feishu:default",
+          logLabel: "Feishu delivery recovery",
+          cfg: {},
+          stateDir: stoppedStateDir,
+          log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+          selectEntry: (entry) => ({ match: entry.channel === "feishu", bypassBackoff: true }),
+        }),
+      );
+      expect(sendMessageFeishuMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ to: "chat_1", replyToMessageId: "om_parent" }),
+      );
+      expect(readDeliveryQueueRow(stoppedStateDir, deliveryIntentId)?.status).toBe("completed");
+    });
   });
 });
