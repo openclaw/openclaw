@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import type { UserProfile } from "../../../packages/gateway-protocol/src/index.ts";
 import { buildOnboardingWelcome } from "../../../src/system-agent/onboarding-welcome.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -8,8 +9,98 @@ import {
 } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI onboarding locale" });
+const unnamedProfile = {
+  id: "profile-onboarding-name",
+  displayName: null,
+  emails: [],
+  avatarMime: null,
+  hasAvatar: false,
+  githubIdentity: null,
+  mergedInto: null,
+  createdAt: 1,
+  updatedAt: 1,
+} satisfies UserProfile;
 
 suite.define(() => {
+  it("keeps the optional profile-name prompt usable at desktop and mobile widths", async () => {
+    await suite.withPage(
+      { serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          operatorScopes: ["operator.admin", "operator.read", "operator.write"],
+          featureMethods: ["openclaw.chat"],
+          presenceUsers: [{ id: unnamedProfile.id, self: true }],
+          methodResponses: {
+            "channels.status": {
+              ts: 1,
+              channelOrder: [],
+              channelLabels: {},
+              channels: {},
+              channelAccounts: {},
+              channelDefaultAccountId: {},
+            },
+            "users.self": { profile: unnamedProfile },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}custodian?onboarding=1`, {
+          waitUntil: "domcontentloaded",
+        });
+
+        const nameInput = page.getByRole("textbox", { name: "Your name" });
+        const heading = page.getByRole("heading", { name: "What should we call you?" });
+        const skipButton = page.getByRole("button", { name: "Maybe later" });
+        await heading.waitFor();
+        await nameInput.waitFor();
+        await skipButton.waitFor();
+        expect(await heading.isVisible()).toBe(true);
+        expect(await nameInput.isVisible()).toBe(true);
+        expect(await skipButton.isVisible()).toBe(true);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+          true,
+        );
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(suite.artifactDir, "profile-name-desktop.png"),
+        });
+
+        await page.setViewportSize({ width: 390, height: 844 });
+        expect(await nameInput.isVisible()).toBe(true);
+        expect(await skipButton.isVisible()).toBe(true);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+          true,
+        );
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(suite.artifactDir, "profile-name-mobile.png"),
+        });
+
+        await skipButton.click();
+        await page.locator(".custodian__name-prompt").waitFor({ state: "detached" });
+        expect(
+          await page
+            .locator(".custodian--page")
+            .evaluate((element) => element.classList.contains("custodian--onboarding")),
+        ).toBe(false);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+          true,
+        );
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(suite.artifactDir, "profile-name-skipped-mobile.png"),
+        });
+
+        await page.setViewportSize({ width: 1280, height: 900 });
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+          true,
+        );
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(suite.artifactDir, "profile-name-skipped-desktop.png"),
+        });
+      },
+    );
+  });
+
   it("uses the selected Chinese UI locale for the onboarding welcome and keeps replies actionable", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 1000 } },

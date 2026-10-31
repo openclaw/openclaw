@@ -320,6 +320,7 @@ openclaw-custodian-page {
   font-size: 14px;
 }
 
+.custodian__name-actions .btn,
 .custodian__wizard-step .btn {
   min-height: 44px;
 }

@@ -85,6 +85,8 @@ export function createContext(
   const { gateway, publish } = createApplicationGateway(snapshot);
   Object.assign(gateway, {
     connection,
+    loadSelfProfile: vi.fn(async () => null),
+    updateSelfUser: vi.fn(),
     subscribeEvents: (listener: GatewayEventListener) => {
       eventListeners.add(listener);
       return () => eventListeners.delete(listener);
