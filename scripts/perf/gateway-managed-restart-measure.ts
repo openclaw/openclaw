@@ -387,6 +387,7 @@ try {
   Object.assign(process.env, env);
   const { installLaunchAgent, uninstallLaunchAgent } =
     await import("../../src/daemon/launchd-install.ts");
+  const { stopLaunchAgent } = await import("../../src/daemon/launchd-stop.ts");
   const { buildServiceEnvironment } = await import("../../src/daemon/service-env.ts");
   const { probeLaunchAgentState } = await import("../../src/daemon/launchd-runtime.ts");
   assert.equal(
@@ -394,7 +395,10 @@ try {
     "not-loaded",
     "Fixture label is loaded",
   );
-  uninstall = () => uninstallLaunchAgent({ env, stdout: sink });
+  uninstall = async () => {
+    await stopLaunchAgent({ env, stdout: sink });
+    await uninstallLaunchAgent({ env, stdout: sink });
+  };
   verifyUnloaded = async () => {
     assert.equal(
       (await probeLaunchAgentState(target)).state,
