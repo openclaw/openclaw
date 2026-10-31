@@ -37,6 +37,7 @@ import { assertRuntimeMediaRequestSecretOwnerAvailable } from "../secrets/runtim
 import { MediaAttachmentCache } from "./attachments.cache.js";
 import { resolveCliOutput } from "./cli-output.js";
 import { CLI_OUTPUT_MAX_BUFFER, MIN_AUDIO_FILE_BYTES } from "./defaults.constants.js";
+import { describeMediaProviderFailure, formatAttemptError } from "./failure-cause.js";
 import {
   normalizeImageDescriptionInput,
   optimizeImageDescriptionInput,
@@ -114,7 +115,10 @@ export function buildModelDecision(params: {
   entryType: "provider" | "cli";
   outcome: MediaUnderstandingModelDecision["outcome"];
   reason?: string;
+  error?: unknown;
 }): MediaUnderstandingModelDecision {
+  const reason =
+    params.reason ?? (params.error === undefined ? undefined : formatAttemptError(params.error));
   if (params.entryType === "cli") {
     const command = params.entry.command?.trim();
     const requestedBackend = command
@@ -129,7 +133,7 @@ export function buildModelDecision(params: {
       model: params.entry.model ?? command,
       ...(requestedBackend ? { requestedBackend } : {}),
       outcome: params.outcome,
-      reason: params.reason,
+      reason,
     };
   }
   const providerIdRaw = params.entry.provider?.trim();
@@ -139,7 +143,8 @@ export function buildModelDecision(params: {
     provider: providerId ?? providerIdRaw,
     model: params.entry.model,
     outcome: params.outcome,
-    reason: params.reason,
+    reason,
+    cause: describeMediaProviderFailure(params.error),
   };
 }
 
@@ -164,7 +169,11 @@ export function formatDecisionSummary(decision: MediaUnderstandingDecision): str
       ? ` requested=${chosen.requestedBackend}`
       : "";
   const reason = findDecisionReason(decision, decision.outcome === "failed" ? "failed" : undefined);
-  const shortReason = summarizeDecisionReason(reason);
+  // Same selection as the attachment disposition: the last classified attempt explains the outcome.
+  const cause = decision.attachments
+    .flatMap((entry) => entry.attempts)
+    .findLast((attempt) => attempt.cause);
+  const shortReason = cause?.cause ?? summarizeDecisionReason(reason);
   const countLabel = total > 0 ? ` (${success}/${total})` : "";
   const viaLabel = modelLabel ? ` via ${modelLabel}${backendLabel}` : "";
   const reasonLabel = shortReason ? ` reason=${shortReason}` : "";

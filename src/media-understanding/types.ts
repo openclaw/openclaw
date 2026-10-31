@@ -20,6 +20,8 @@ export type MediaUnderstandingModelDecision = {
   type: "provider" | "cli";
   outcome: "success" | "skipped" | "failed";
   reason?: string;
+  /** Bounded provider failure classification, safe to show the agent. */
+  cause?: string;
 };
 
 export type MediaAttachmentDisposition =
@@ -29,7 +31,11 @@ export type MediaAttachmentDisposition =
   | { kind: "capability-disabled" }
   | { kind: "no-model" }
   | { kind: "scope-denied" }
-  | { kind: "failed"; reason?: string };
+  | {
+      kind: "failed";
+      reason?: string;
+      /** Bounded provider cause shown to the agent. */ cause?: string;
+    };
 
 export type MediaAttachmentProcessing = "completed" | "omitted";
 
