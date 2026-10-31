@@ -15,6 +15,7 @@ import type {
 import * as state from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import * as pluginTest from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePinnedHostnameWithPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -300,7 +301,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
   afterEach(async () => {
     await current?.stop();
     current = undefined;
-    state.closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
     vi.unstubAllEnvs();
     await rm(directory, { recursive: true, force: true });
   });
