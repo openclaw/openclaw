@@ -2817,6 +2817,7 @@ src/plugins/setup-registry.ts
 src/shared/map-nested-strings.ts
 src/shared/owned-buffer.ts
 src/shared/state-lease-loss.ts
+src/shared/weak-owner-map.ts
 src/status/utility-model-warnings.ts
 src/infra/sqlite-integrity.worker.ts
 src/infra/sqlite-readonly-inspection.ts
