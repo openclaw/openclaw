@@ -1,0 +1,3 @@
+4
+# Source c6646642e6c0c4a1ed2ff74da9f7b0eb28ca9785; focused real-Chromium regression preserving existing assertions.
+# Exact net added LF; no scalar increase or assertion removal.

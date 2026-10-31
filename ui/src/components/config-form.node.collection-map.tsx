@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo, createSignal } from "solid-js";
-import { containsRedactedSentinel } from "../lib/config-form-utils.ts";
+import { containsRedactedSentinel, copyWithPathPatch } from "../lib/config-form-utils.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { liveValue } from "../lib/reactive/live-value.ts";
 import {
@@ -8,7 +8,7 @@ import {
   type ConfigCollectionDraftHandle,
   type ConfigFormCollectionDraftProps,
 } from "./config-form-collection-draft.tsx";
-import { defaultValue, NO_SAFE_DEFAULT } from "./config-form.constraints.ts";
+import { configValuesEqual, defaultValue, NO_SAFE_DEFAULT } from "./config-form.constraints.ts";
 import {
   configChildRenderOptions,
   createCollectionFocus,
@@ -181,6 +181,51 @@ function ConfigMapRow(
 export function ConfigMapField(props: MapProps): JSX.Element {
   let draft!: ConfigCollectionDraftHandle;
   const content = createMemo(() => resolveMapContent(props.params));
+  let localEdit: { expected: unknown; retained: unknown } | undefined;
+  let sourceRevision = 0;
+  let sourceSnapshot: { source: unknown; revision: number } | undefined;
+  const draftSource = createMemo(() => {
+    const source = props.params.sourceIdentity ?? props.params.value;
+    if (localEdit && configValuesEqual(source, localEdit.expected)) {
+      return localEdit.retained;
+    }
+    // Returning to the pre-edit value is still an external context change.
+    // Keep its reset distinct from the retained source, without changing draft ownership.
+    if (localEdit) {
+      sourceRevision += 1;
+      localEdit = undefined;
+    }
+    // Unset maps use a symbol, which cannot survive JSON equality in a cloned wrapper.
+    if (
+      !sourceSnapshot ||
+      !Object.is(sourceSnapshot.source, source) ||
+      sourceSnapshot.revision !== sourceRevision
+    ) {
+      sourceSnapshot = { source, revision: sourceRevision };
+    }
+    return sourceSnapshot;
+  });
+  const patchChild: MapParams["onPatch"] = (path, value) => {
+    const root = props.params.path;
+    const previous = localEdit;
+    if (path.length > root.length && root.every((segment, index) => path[index] === segment)) {
+      const next = copyWithPathPatch(
+        props.params.value,
+        path.slice(root.length),
+        value,
+        "copy-set",
+      );
+      if (next.ok) {
+        // The parent may synchronously render; record this exact local result before dispatch.
+        localEdit = { expected: next.value, retained: draftSource() };
+      }
+    }
+    const accepted = props.params.onPatch(path, value);
+    if (accepted === false) {
+      localEdit = previous;
+    }
+    return accepted;
+  };
   const focus = createCollectionFocus(() => content().visibleEntries.map(([key]) => key));
   return (
     <Show when={content().visible}>
@@ -222,6 +267,7 @@ export function ConfigMapField(props: MapProps): JSX.Element {
         </div>
         <ConfigCollectionDraft
           {...content().draftProps}
+          sourceIdentity={draftSource()}
           id={content().draftId}
           ref={(handle) => (draft = handle)}
           onCommit={({ key, value }) =>
@@ -239,7 +285,7 @@ export function ConfigMapField(props: MapProps): JSX.Element {
             <For each={content().visibleEntries} keyed={(entry) => entry[0]}>
               {(entry) => (
                 <ConfigMapRow
-                  params={props.params}
+                  params={{ ...props.params, onPatch: patchChild }}
                   renderNode={props.renderNode}
                   entry={entry()}
                   anySchema={content().anySchema}
