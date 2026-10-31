@@ -44,7 +44,7 @@ Profile changes are staged beside the destination and atomically replace it only
 Profiles must be regular files; symlinks to regular files are supported. Pipes and
 other special files are rejected before reading, so completion does not wait for a writer.
 
-Installed source lines preserve literal cache paths, including spaces, quotes, dollar signs, and backslashes. Reinstalling replaces OpenClaw's previous source line after the state directory changes.
+Installed source lines preserve literal cache paths, including spaces, quotes, dollar signs, and backslashes. Reinstalling replaces OpenClaw's previous source line after the state directory changes. On Windows, PowerShell profiles and cached scripts containing non-ASCII text declare UTF-8 with a BOM so Windows PowerShell can read Unicode paths and completion values; existing UTF-16 profiles retain their encoding.
 
 Installation messages display control characters in profile paths as visible escapes. If the reload command would contain terminal controls, the installer tells you to restart your shell instead; the installed profile still uses the literal path.
 

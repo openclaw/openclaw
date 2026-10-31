@@ -1,7 +1,8 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createInvalidConfigError } from "../config/io.invalid-config.js";
@@ -329,6 +330,52 @@ describe("completion-cli write-state", () => {
     );
     expectRegistrationWarning();
   });
+
+  it.skipIf(process.platform !== "win32")(
+    "loads cached Unicode choices in Windows PowerShell",
+    async () => {
+      registerPlugins.mockImplementationOnce(async (program) => {
+        program.addOption(new Option("--fixture-value <value>").choices(["café空"]));
+        return {};
+      });
+      await runCompletion(["--shell", "powershell", "--write-state"]);
+      const loaded = spawnSync(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          `
+        $ErrorActionPreference = 'Stop'
+        . $env:COMPLETION_FIXTURE_PATH
+        $matches = [System.Management.Automation.CommandCompletion]::CompleteInput(
+          'openclaw --fixture-value caf', 28, $null
+        ).CompletionMatches
+        @{
+          choices = @($matches | ForEach-Object {
+            [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($_.ListItemText))
+          })
+          major = $PSVersionTable.PSVersion.Major
+        } | ConvertTo-Json -Compress
+      `,
+        ],
+        {
+          env: {
+            ...process.env,
+            COMPLETION_FIXTURE_PATH: resolveCompletionCachePath("powershell", "openclaw"),
+          },
+          encoding: "utf8",
+          timeout: 30_000,
+        },
+      );
+      expect(loaded.error).toBeUndefined();
+      expect(loaded.status, loaded.stderr).toBe(0);
+      expect(JSON.parse(loaded.stdout.trim())).toEqual({
+        choices: [Buffer.from("café空", "utf8").toString("base64")],
+        major: 5,
+      });
+    },
+  );
 
   it("keeps completion cache generation alive when a subcli fails to register", async () => {
     subcliGroups.mockReturnValueOnce([

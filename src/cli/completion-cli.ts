@@ -131,11 +131,16 @@ export function registerCompletionCli(program: Command) {
         const generateScript = createCompletionScriptGenerator(program);
         for (const writeShell of writeShells) {
           const script = generateScript(writeShell);
+          // Windows PowerShell otherwise decodes Unicode command and choice literals as ANSI.
+          const content =
+            writeShell === "powershell" && process.platform === "win32" && /\P{ASCII}/u.test(script)
+              ? `\uFEFF${script}`
+              : script;
           await publishOutputFileAtomically({
             filePath: resolveCompletionCachePath(writeShell, binName),
             tempPrefix: ".openclaw-completion-cache",
             writeTemp: async (tempPath) => {
-              await fs.writeFile(tempPath, script, { encoding: "utf-8", flag: "wx" });
+              await fs.writeFile(tempPath, content, { encoding: "utf-8", flag: "wx" });
             },
           });
         }

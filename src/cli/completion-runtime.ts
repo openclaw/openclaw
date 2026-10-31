@@ -605,7 +605,15 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
       const block = `# OpenClaw Completion\n${formatCompletionSourceLine(shell, cachePath)}`;
       next = trimmed ? `${trimmed}\n\n${block}\n` : `${block}\n`;
     }
-    if (next === content) {
+    // Windows PowerShell treats BOM-less scripts as ANSI, including literal cache paths.
+    const writeEncoding =
+      shell === "powershell" &&
+      process.platform === "win32" &&
+      encoding === "utf8" &&
+      /\P{ASCII}/u.test(next)
+        ? "utf8bom"
+        : encoding;
+    if (next === content && writeEncoding === encoding) {
       if (!yes) {
         console.log(terminalText`Completion already installed in ${profilePath}`);
       }
@@ -622,7 +630,7 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
       tempPrefix: ".openclaw-completion-profile",
       durable: true,
       writeTemp: async (tempPath) => {
-        await fs.writeFile(tempPath, encodeCompletionProfile(next, encoding), {
+        await fs.writeFile(tempPath, encodeCompletionProfile(next, writeEncoding), {
           flag: "wx",
         });
       },
