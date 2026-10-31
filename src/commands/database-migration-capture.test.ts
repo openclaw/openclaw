@@ -194,6 +194,38 @@ describe("exact database migration capture", () => {
     });
   });
 
+  it("restores a shared database without a local credential image", async () => {
+    const local = state.statePath("client/credentials.sqlite");
+    for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+      await fs.rm(`${local}${suffix}`, { force: true });
+    }
+    const base = await createBackupArchive({
+      output: state.path("no-local-base.tar.gz"),
+      verify: true,
+    });
+    const capture = await createDatabaseMigrationCapture({
+      baseArchive: base.archivePath,
+      output: state.path("no-local-capsule"),
+    });
+    const manifest = JSON.parse(await fs.readFile(capture.manifestPath, "utf8"));
+    expect(manifest.sourceSharedFile).not.toBeNull();
+    expect(manifest.missingDatabases).toContain(local);
+    const restored = await restoreDatabaseMigrationCapture(createTestRuntime(), {
+      capture: capture.directory,
+      target: state.path("no-local-staging"),
+      manifestSha256: capture.manifestSha256,
+    });
+    const staged = (file: string) =>
+      path.join(restored.targetPath, buildBackupArchivePath(restored.archiveRoot, file));
+    await expect(fs.stat(staged(local))).rejects.toMatchObject({ code: "ENOENT" });
+    using database = new DatabaseSync(staged(state.statePath("state/openclaw.sqlite")), {
+      readOnly: true,
+    });
+    expect(database.prepare("SELECT value FROM migration_witness").all()).toEqual([
+      { value: "exact retained history" },
+    ]);
+  });
+
   it("refuses changed capsule contents and producer metadata before creating a restore target", async () => {
     const copied = state.path("tampered-capsule");
     await fs.cp(capsule.directory, copied, { recursive: true });
