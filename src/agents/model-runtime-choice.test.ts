@@ -1,5 +1,6 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -181,6 +182,63 @@ describe("prepared model support admission", () => {
     ...custom,
     agents: { defaults: { modelPolicy: { allow: ["fixture/manual-only"] } } },
   };
+  it.each([
+    {
+      policy: "defaults",
+      agentPolicy: undefined,
+      path: "agents.defaults.modelPolicy.allow",
+      visible: false,
+    },
+    {
+      policy: "defaults",
+      agentPolicy: undefined,
+      path: "agents.defaults.modelPolicy.allow",
+      visible: true,
+    },
+    {
+      policy: "agent",
+      agentPolicy: { allow: ["fixture/manual-only"] },
+      path: "agents.entries.*.modelPolicy.allow",
+      visible: false,
+    },
+    {
+      policy: "agent",
+      agentPolicy: { allow: ["fixture/manual-only"] },
+      path: "agents.entries.*.modelPolicy.allow",
+      visible: true,
+    },
+  ])(
+    "explains the $policy model policy when a spawn requests a disallowed model (visible: $visible)",
+    async ({ agentPolicy, path: policyPath, visible }) => {
+      await withTestDir({ prefix: "openclaw-spawn-model-policy-" }, async (dir) => {
+        const config: OpenClawConfig = {
+          ...manualPolicy,
+          session: { store: path.join(dir, "sessions.json") },
+          agents: {
+            ...manualPolicy.agents,
+            entries: { main: { workspace: dir, modelPolicy: agentPolicy } },
+          },
+        };
+        publish(() => true, config, { agentDir: path.join(dir, "agent"), workspaceDir: dir });
+        const { callGateway, tool } = createSpawnReachingGateway(config);
+        setRuntimeConfigSnapshot(config);
+        try {
+          const result = await tool.execute("model-policy", {
+            task: "test",
+            model: "fixture/new-model",
+            visible,
+          });
+          expect(result.details).toMatchObject({
+            status: "error",
+            error: expect.stringContaining(policyPath),
+          });
+          expect(callGateway).not.toHaveBeenCalled();
+        } finally {
+          clearRuntimeConfigSnapshot();
+        }
+      });
+    },
+  );
   const inheritedRef = { provider: "fixture", model: "fixture/custom-model" };
   it.each([
     {
@@ -203,7 +261,11 @@ describe("prepared model support admission", () => {
       current: true,
       config: manualPolicy,
       request: { source: "override" as const },
-      expected: { kind: "unavailable", error: "model not allowed: fixture/new-model" },
+      expected: {
+        kind: "unavailable",
+        error:
+          'model not allowed: fixture/new-model. Add "fixture/new-model" to agents.defaults.modelPolicy.allow, or choose an allowed model.',
+      },
     },
     {
       name: "does not replace a missing pinned account with the shared account",

@@ -112,6 +112,19 @@ export async function prepareModelChoice(params: {
           return { kind: "unavailable", error: `invalid model: ${params.raw}` };
         }
         if ("error" in selected) {
+          if (selected.error.startsWith("model not allowed:")) {
+            const { resolveConfiguredModelPolicyAllow } =
+              await import("./model-selection-shared.js");
+            const { repairConfigPath } = resolveConfiguredModelPolicyAllow({
+              cfg: owner.config,
+              agentId: params.agentId,
+            });
+            const ref = selected.error.slice("model not allowed:".length).trim();
+            return {
+              kind: "unavailable",
+              error: `${selected.error}. Add "${ref}" to ${repairConfigPath}, or choose an allowed model.`,
+            };
+          }
           return { kind: "unavailable", error: selected.error };
         }
         const requested = selected.ref;
