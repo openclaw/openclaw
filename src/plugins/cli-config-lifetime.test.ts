@@ -77,6 +77,7 @@ describe("CLI config producer lifetime", () => {
           filename: "index.cjs",
           body: 'throw new Error("provider runtime must not load for config defaults");',
         });
+        writeJson(path.join(owner.dir, "package.json"), { type: "module" });
         writeJson(path.join(owner.dir, "openclaw.plugin.json"), {
           id: owner.id,
           providers: ["anthropic"],
