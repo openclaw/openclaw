@@ -22,6 +22,7 @@ import {
   spawnCommand,
   waitForCommandSpawn,
 } from "./exec-spawn.js";
+import type { ProcessExecutionIntent } from "./linux-exec-cgroup.js";
 import { setProcessTimeout } from "./process-deadline.js";
 import { BrokerChild } from "./spawn-broker/child.js";
 export { runCommandWithTimeout, runUtf8CommandWithTimeout } from "./exec-runner.js";
@@ -256,6 +257,7 @@ export async function runExec(
 }
 
 export type BufferedCommandOptions = {
+  executionIntent?: ProcessExecutionIntent;
   timeoutMs?: number;
   noOutputTimeoutMs?: number;
   cwd?: string;
@@ -337,6 +339,7 @@ export async function runCommandBuffered(
 
   try {
     const result = await runCommandWithTimeout(argv, {
+      executionIntent: options.executionIntent,
       baseEnv: options.baseEnv,
       cwd: options.cwd,
       env: options.env,

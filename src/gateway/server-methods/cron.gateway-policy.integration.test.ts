@@ -275,16 +275,53 @@ describe("Gateway automation policy", () => {
     },
   );
 
+  it.each(["operator.cron", "operator.write"])(
+    "allows %s to manage only the current conversation's jobs without a management policy",
+    async (scope) => {
+      await withCron(async ({ cron, invoke, readJobs }) => {
+        const owned = await addOwnedJob(cron);
+        const foreign = await cron.add({
+          ...jobInput,
+          owner: { sessionKey: "agent:main:other", agentId: "main", accountId: "default" },
+        });
+        await withModelTurn("channel-owner", async (identity) => {
+          const list = await invoke("cron.list", { includeDisabled: true }, identity, undefined, [
+            scope,
+          ]);
+          expect(list[0]).toBe(true);
+          expect(list[1]).toMatchObject({ jobs: [expect.objectContaining({ id: owned.id })] });
+          for (const method of ["cron.get", "cron.update", "cron.run", "cron.remove"]) {
+            const params = method === "cron.update" ? { patch: { description: "allowed" } } : {};
+            expectDenied(
+              await invoke(method, { id: foreign.id, ...params }, identity, undefined, [scope]),
+              method === "cron.get" ? "cron job not found" : "Automation not found",
+            );
+            const response = await invoke(
+              method,
+              { id: owned.id, ...params },
+              identity,
+              undefined,
+              [scope],
+            );
+            expect(response[0], response[2]?.message).toBe(true);
+          }
+        });
+        expect((await readJobs()).jobs.map((job) => job.id)).toEqual([foreign.id]);
+      });
+    },
+  );
+
   it.each([
-    "policy absent",
+    "cron-only direct caller",
     "ordinary caller",
+    "session-only runtime",
     "read-only runtime",
     "revoked before commit",
   ] as const)("keeps mutation authority restricted for %s", async (scenario) => {
     await withCron(async ({ cron, invoke, readJobs }) => {
       const job = await addOwnedJob(cron);
       const before = await readJobs();
-      setRuntimeConfigSnapshot(scenario === "policy absent" ? {} : managed);
+      setRuntimeConfigSnapshot({});
       for (const method of ["cron.update", "cron.remove", "cron.run"]) {
         // Each method needs a fresh admitted run so revocation happens at its own commit.
         await withModelTurn("channel-owner", async (identity) => {
@@ -294,11 +331,21 @@ describe("Gateway automation policy", () => {
               id: job.id,
               ...(method === "cron.update" ? { patch: { description: "denied" } } : {}),
             },
-            scenario === "ordinary caller" ? undefined : identity,
+            scenario === "ordinary caller" || scenario === "cron-only direct caller"
+              ? undefined
+              : identity,
             scenario === "revoked before commit"
               ? () => releaseAgentRunDelegatedAuthority(identity.delegatedAuthority)
               : undefined,
-            [scenario === "read-only runtime" ? "operator.read" : "operator.write"],
+            [
+              scenario === "read-only runtime"
+                ? "operator.read"
+                : scenario === "session-only runtime"
+                  ? "operator.sessions.write"
+                  : scenario === "cron-only direct caller"
+                    ? "operator.cron"
+                    : "operator.write",
+            ],
           );
           if (scenario === "revoked before commit") {
             expectDenied(response, "authority is no longer active");
