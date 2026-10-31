@@ -77,19 +77,23 @@ describe("google-interactions provider", () => {
     messages: [{ role: "user", content: "Hello", timestamp: 0 }],
   };
 
-  it.each([
-    { options: {}, processing: undefined },
-    {
-      options: { videoMetadata: { startOffset: 0, endOffset: 10, fps: 0.5 } },
-      processing: { type: "static", start_offset: 0, end_offset: 10, fps: 0.5 },
-    },
-    {
-      options: { video_metadata: { start_offset: 2, end_offset: 5 } },
-      processing: { type: "static", start_offset: 2, end_offset: 5 },
-    },
-  ])(
-    "sends native video from the transient provider context handoff ($options)",
-    async ({ options, processing }) => {
+  it.each(
+    (["direct", "simple"] as const).flatMap((adapter) =>
+      [
+        { options: {}, processing: undefined },
+        {
+          options: { videoMetadata: { startOffset: 0, endOffset: 10, fps: 0.5 } },
+          processing: { type: "static", start_offset: 0, end_offset: 10, fps: 0.5 },
+        },
+        {
+          options: { video_metadata: { start_offset: 2, end_offset: 5 } },
+          processing: { type: "static", start_offset: 2, end_offset: 5 },
+        },
+      ].map((entry) => ({ adapter, ...entry })),
+    ),
+  )(
+    "sends native video from the transient provider context handoff ($adapter, $options)",
+    async ({ adapter, options, processing }) => {
       const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
         sseResponse(completedSse()),
       );
@@ -103,12 +107,16 @@ describe("google-interactions provider", () => {
           },
         ],
       }));
-      const stream = streamGoogleInteractions(makeInteractionsModel(), basicContext, {
+      const streamOptions = {
         apiKey: "test-key",
         ...options,
-        [PROVIDER_MODEL_INPUT]: ["text", "image", "video"],
+        [PROVIDER_MODEL_INPUT]: ["text", "image", "video"] as Array<"text" | "image" | "video">,
         [PROVIDER_CONTEXT_HANDOFF]: handoff,
-      });
+      };
+      const stream =
+        adapter === "simple"
+          ? streamSimpleGoogleInteractions(makeInteractionsModel(), basicContext, streamOptions)
+          : streamGoogleInteractions(makeInteractionsModel(), basicContext, streamOptions);
       expect((await stream.result()).stopReason).toBe("stop");
       expect(handoff).toHaveBeenCalledOnce();
       expect(requestJson(fetchMock.mock.calls[0]?.[1]?.body)).toMatchObject({

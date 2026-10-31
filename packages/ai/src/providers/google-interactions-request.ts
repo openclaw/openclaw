@@ -95,7 +95,7 @@ export type GoogleInteractionsRequestBody = {
     stop_sequences?: string[];
     thinking_level?: string;
     thinking_summaries?: "auto" | "none";
-    tool_choice?: "auto" | "none" | "any";
+    tool_choice?: GoogleInteractionsToolChoice;
   };
   store: boolean;
   stream: boolean;
@@ -220,10 +220,38 @@ function convertMessages<T extends GoogleApiType>(
   return steps;
 }
 
+/** Interactions tool choice; a named function becomes `allowed_tools` with mode `any`. */
+export type GoogleInteractionsToolChoice =
+  | "auto"
+  | "none"
+  | "any"
+  | { allowed_tools: { mode: "any"; tools: string[] } };
+
+/** Maps the shared tool-choice vocabulary (as GenerateContent does) to Interactions. */
+export function normalizeGoogleInteractionsToolChoice(
+  choice: unknown,
+): GoogleInteractionsToolChoice | undefined {
+  if (choice === "auto" || choice === "none" || choice === "any") {
+    return choice;
+  }
+  if (choice === "required") {
+    return "any";
+  }
+  const name = asRecord(asRecord(choice).function).name;
+  return asRecord(choice).type === "function" && typeof name === "string" && name
+    ? { allowed_tools: { mode: "any", tools: [name] } }
+    : undefined;
+}
+
+export type GoogleInteractionsOptions = Omit<GoogleProviderOptions, "toolChoice"> &
+  ProviderStreamOptions & {
+    toolChoice?: GoogleInteractionsToolChoice;
+  };
+
 export function buildGoogleInteractionsParams<T extends GoogleApiType>(
   model: Model<T>,
   context: ProviderContext,
-  options: GoogleProviderOptions & ProviderStreamOptions = {},
+  options: GoogleInteractionsOptions = {},
   videoSlots?: GoogleVideoSlots,
 ): GoogleInteractionsRequestBody {
   const generationConfig: NonNullable<GoogleInteractionsRequestBody["generation_config"]> = {};

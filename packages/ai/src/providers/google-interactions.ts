@@ -12,11 +12,7 @@ import {
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import { calculateCost } from "../model-utils.js";
-import {
-  resolveProviderContext,
-  PROVIDER_MODEL_INPUT,
-  type ProviderStreamOptions,
-} from "../provider-types.js";
+import { resolveProviderContext, PROVIDER_MODEL_INPUT } from "../provider-types.js";
 import { createAssistantOutput } from "../transports/assistant-output.js";
 import { buildGuardedModelFetch } from "../transports/host-policy.js";
 import { parseJsonPreservingUnsafeIntegers } from "../transports/json-unsafe-integers.js";
@@ -40,14 +36,12 @@ import type {
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import {
   buildGoogleInteractionsParams,
+  normalizeGoogleInteractionsToolChoice,
   resolveGoogleApiClientHeaders,
+  type GoogleInteractionsOptions,
   type GoogleInteractionsRequestBody,
 } from "./google-interactions-request.js";
-import {
-  buildGoogleInteractionsSimpleThinking,
-  type GoogleApiType,
-  type GoogleProviderOptions,
-} from "./google-shared.js";
+import { buildGoogleInteractionsSimpleThinking, type GoogleApiType } from "./google-shared.js";
 import {
   GOOGLE_VIDEO_SLOT_OMISSION,
   materializeGoogleVideoSlots,
@@ -59,7 +53,7 @@ let toolCallCounter = 0;
 
 function resolveGoogleInteractionsApiKey<T extends GoogleApiType>(
   model: Model<T>,
-  options?: GoogleProviderOptions,
+  options?: Pick<GoogleInteractionsOptions, "apiKey">,
 ): string {
   return (
     options?.apiKey ||
@@ -95,7 +89,7 @@ function isGoogleInteractionsRequestBody(value: unknown): value is GoogleInterac
 
 export const streamGoogleInteractions: StreamFunction<
   "google-interactions",
-  GoogleProviderOptions & ProviderStreamOptions
+  GoogleInteractionsOptions
 > = (model, context, options) => {
   const stream = new AssistantMessageEventStream();
   const output = createAssistantOutput(model, "google-interactions");
@@ -560,8 +554,14 @@ export const streamSimpleGoogleInteractions: StreamFunction<
   }
 
   const base = buildBaseOptions(model, options, apiKey);
+  // Google-specific call options are not part of the shared base projection.
+  const record = asRecord(options);
+  const toolChoice = normalizeGoogleInteractionsToolChoice(record.toolChoice);
+  const videoMetadata = record.videoMetadata ?? record.video_metadata;
   return streamGoogleInteractions(model, context, {
     ...base,
     thinking: buildGoogleInteractionsSimpleThinking(model, options),
-  } satisfies GoogleProviderOptions);
+    ...(toolChoice ? { toolChoice } : {}),
+    ...(videoMetadata !== undefined ? { videoMetadata } : {}),
+  });
 };

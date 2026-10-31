@@ -76,6 +76,27 @@ describe("Google Interactions provider parity", () => {
     expect(headers.has("x-goog-api-key")).toBe(false);
   });
 
+  it.each([
+    ["none", "none"],
+    ["required", "any"],
+    [
+      { type: "function", function: { name: "lookup" } },
+      { allowed_tools: { mode: "any", tools: ["lookup"] } },
+    ],
+  ] as const)("forwards tool choice %j as %j", async (toolChoice, expected) => {
+    const fetch = vi.fn().mockResolvedValue(success());
+    vi.stubGlobal("fetch", fetch);
+    const streamFn = select(model);
+    assert(streamFn);
+    const toolContext = {
+      ...context,
+      tools: [{ name: "lookup", description: "Look up", parameters: { type: "object" } }],
+    };
+    await (await streamFn(model, toolContext, { apiKey: "gemini-key-1", toolChoice })).result();
+    const body: unknown = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body ?? "{}"));
+    expect(body).toMatchObject({ generation_config: { tool_choice: expected } });
+  });
+
   it("rotates a pre-stream HTTP 429 to the next Gemini key", async () => {
     vi.stubEnv("OPENCLAW_LIVE_GEMINI_KEY", "");
     vi.stubEnv("GEMINI_API_KEYS", "gemini-key-2");
