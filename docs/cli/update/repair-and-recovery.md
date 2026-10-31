@@ -202,6 +202,12 @@ Scheduled Task autostart. Check the named plugin, disk space, and storage perfor
 before retrying `openclaw doctor --fix`. Already admitted native capture work must
 settle before restoration; forced termination cannot run this recovery.
 
+For a closed, checkpointed SQLite source under Doctor's exclusive custody, ordinary
+original capture keeps foreign-key violations in the recovery image and reports
+a warning. Physical integrity checks still apply; Doctor separately validates and
+backs up each repair. Explicit full verification and sources with durable journal
+data retain their existing strict checks.
+
 Shared database families larger than 64 MiB keep discovery copies in an isolated process
 so a slow copy does not block Doctor's main thread from processing cancellation.
 Official image activation keeps one such copy per container: after a capture

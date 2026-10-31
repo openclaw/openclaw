@@ -1,2 +1,2 @@
-# Doctor inventory cancellation, service restoration, and unchanged fast preparation regressions.
-146
+# Doctor inventory cancellation, service restoration, original-image integrity, and fast preparation regressions.
+216
