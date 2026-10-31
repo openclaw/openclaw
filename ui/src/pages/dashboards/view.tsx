@@ -18,6 +18,7 @@ import {
   latest,
   onSettled,
 } from "solid-js";
+import { foldSearchCase } from "../../../../src/shared/search-case.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
@@ -69,7 +70,7 @@ function dashboardAuthor(row: DashboardRow, fallbackAgentId: string) {
 }
 
 function visibleDashboardRows(data: DashboardsRouteData, filters: DashboardGalleryFilters) {
-  const query = filters.query.trim().toLocaleLowerCase();
+  const query = foldSearchCase(filters.query.trim().toLocaleLowerCase());
   return (data.result?.sessions ?? [])
     .filter((row) => {
       const author = dashboardAuthor(row, data.fallbackAgentId);
@@ -83,7 +84,7 @@ function visibleDashboardRows(data: DashboardsRouteData, filters: DashboardGalle
           author.label,
           row.lastMessagePreview,
           row.key,
-        ].some((value) => value?.toLocaleLowerCase().includes(query))
+        ].some((value) => foldSearchCase(value?.toLocaleLowerCase() ?? "").includes(query))
       );
     })
     .toSorted((left, right) =>

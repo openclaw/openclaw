@@ -11,6 +11,7 @@ import {
 } from "solid-js";
 import { SESSION_VISIBILITY_VALUES } from "../../../../../packages/gateway-protocol/src/schema/sessions-sharing-constants.js";
 import type { SessionMemberPermissionLevel } from "../../../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
+import { foldSearchCase } from "../../../../../src/shared/search-case.js";
 import type { SessionVisibility } from "../../../api/types.ts";
 import { PersonName, PersonAvatarLink } from "../../../components/person-activity-link-solid.tsx";
 import {
@@ -211,10 +212,10 @@ function SharingPermissions(props: {
   let input: HTMLInputElement | undefined;
   let trigger: HTMLButtonElement | undefined;
   const matches = () => {
-    const terms = query().trim().toLocaleLowerCase().split(/\s+/u);
+    const terms = foldSearchCase(query().trim().toLocaleLowerCase()).split(/\s+/u);
     return props.data.rows.filter(({ identity }) =>
       terms.every((term) =>
-        [identity.label, identity.id].join(" ").toLocaleLowerCase().includes(term),
+        foldSearchCase([identity.label, identity.id].join(" ").toLocaleLowerCase()).includes(term),
       ),
     );
   };

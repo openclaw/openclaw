@@ -1,5 +1,6 @@
 import { Errored, For, Loading, Show, createMemo, createSignal, latest } from "solid-js";
 import { SESSION_COMMUNICATION_MODES } from "../../../packages/gateway-protocol/src/session-communication.js";
+import { foldSearchCase } from "../../../src/shared/search-case.js";
 import { registerSessionMenuEnglish } from "../i18n/locales/en-session-menu.ts";
 import { registerSessionPeopleEnglish } from "../i18n/locales/en-session-people.ts";
 import { formatUiError } from "../lib/format-error.ts";
@@ -69,18 +70,19 @@ export function useSessionMenuDetails(
     ) {
       options.push({ ...currentOwner, type: "human", id });
     }
-    const terms = query().trim().toLocaleLowerCase().split(/\s+/u);
+    const terms = foldSearchCase(query().trim().toLocaleLowerCase()).split(/\s+/u);
     return options.filter((owner) =>
       terms.every((term) =>
-        [
-          owner.label,
-          owner.id,
-          owner.type,
-          owner === state.self ? t("sessionsView.assignToMe") : "",
-        ]
-          .join(" ")
-          .toLocaleLowerCase()
-          .includes(term),
+        foldSearchCase(
+          [
+            owner.label,
+            owner.id,
+            owner.type,
+            owner === state.self ? t("sessionsView.assignToMe") : "",
+          ]
+            .join(" ")
+            .toLocaleLowerCase(),
+        ).includes(term),
       ),
     );
   });

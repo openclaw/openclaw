@@ -1,5 +1,6 @@
 import "./personal-session-group-dialog.css";
 import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import { foldSearchCase } from "../../../src/shared/search-case.js";
 import { registerSessionOrganizationSharedEnglish } from "../i18n/locales/en-session-organization-shared.ts";
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
@@ -187,10 +188,12 @@ export function PersonalSessionGroupDialogView(props: {
   // Selected sessions outside this scope stay listed first so they can be unselected.
   const pinned = createMemo(() => {
     const listed = new Set(results().map((row) => row.key));
-    const needle = query().trim().toLocaleLowerCase();
+    const needle = foldSearchCase(query().trim().toLocaleLowerCase());
     return [...selected()].flatMap((key) => {
       const row = seen().get(key);
-      return row && !listed.has(key) && (!needle || row.label.toLocaleLowerCase().includes(needle))
+      return row &&
+        !listed.has(key) &&
+        (!needle || foldSearchCase(row.label.toLocaleLowerCase()).includes(needle))
         ? [row]
         : [];
     });

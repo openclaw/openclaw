@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import type { SkillsLibraryMutateParams } from "../../../../packages/gateway-protocol/src/index.ts";
+import { foldSearchCase } from "../../../../src/shared/search-case.js";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import "../../components/modal-dialog.tsx";
 import {
@@ -38,7 +39,9 @@ export function SkillLibrary(props: {
   const Entries = () => {
     const list = createMemo(() => acceptedList() ?? read().list);
     // Canonical-form comparison: a composed (NFC) query must match decomposed (NFD) copy.
-    const query = createMemo(() => props.library.local.query.toLowerCase().trim().normalize("NFC"));
+    const query = createMemo(() =>
+      foldSearchCase(props.library.local.query.trim()).normalize("NFC"),
+    );
     const scope = createMemo(() => current().view);
     const entries = createMemo(() => {
       const snapshot = list();
@@ -52,8 +55,7 @@ export function SkillLibrary(props: {
         return (
           scopeMatches &&
           (!search ||
-            `${entry.slug} ${entry.name} ${entry.description} ${entry.ownerLabel}`
-              .toLowerCase()
+            foldSearchCase(`${entry.slug} ${entry.name} ${entry.description} ${entry.ownerLabel}`)
               .normalize("NFC")
               .includes(search))
         );

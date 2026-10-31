@@ -1,6 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createMemo, For, Show } from "solid-js";
+import { foldSearchCase } from "../../../../src/shared/search-case.js";
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/tooltip.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -450,7 +451,7 @@ function SessionLogs(props: {
       const showLogData = !initialLoading && !initialError && Boolean(logs?.length);
       const message = initialLoading ? "usage.loading.badge" : "usage.details.noMessages";
 
-      const normalizedQuery = normalizeLowercaseStringOrEmpty(filters.query);
+      const normalizedQuery = foldSearchCase(normalizeLowercaseStringOrEmpty(filters.query));
       const toolOptions = Array.from(
         new Set(parsedEntries.flatMap((entry) => entry.toolInfo.tools.map(([name]) => name))),
       ).toSorted((a, b) => a.localeCompare(b));
@@ -462,7 +463,9 @@ function SessionLogs(props: {
           (filters.tools.length === 0 ||
             entry.toolInfo.tools.some(([name]) => filters.tools.includes(name))) &&
           (!normalizedQuery ||
-            normalizeLowercaseStringOrEmpty(entry.cleanContent).includes(normalizedQuery)),
+            foldSearchCase(normalizeLowercaseStringOrEmpty(entry.cleanContent)).includes(
+              normalizedQuery,
+            )),
       );
       const hasActiveFilters =
         filters.roles.length > 0 || filters.tools.length > 0 || filters.hasTools || normalizedQuery;

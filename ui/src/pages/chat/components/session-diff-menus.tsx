@@ -1,6 +1,7 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
+import { foldSearchCase } from "../../../../../src/shared/search-case.js";
 import { bindOverlayAnchor } from "../../../components/overlay-anchor.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import {
@@ -235,9 +236,9 @@ export function SessionDiffMenu(props: SessionDiffMenuProps) {
   ): MenuEntry[] {
     if (menu.kind === "jump") {
       // Canonical NFC so NFD Git paths (macOS) still match NFC queries.
-      const query = jumpQuery().trim().toLowerCase().normalize("NFC");
+      const query = foldSearchCase(jumpQuery().trim()).normalize("NFC");
       const matches = menu.paths.flatMap((path, index) => {
-        if (!path.toLowerCase().normalize("NFC").includes(query)) {
+        if (!foldSearchCase(path).normalize("NFC").includes(query)) {
           return [];
         }
         const slash = path.lastIndexOf("/");

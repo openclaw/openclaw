@@ -19,6 +19,7 @@ import {
   Switch,
   For,
 } from "solid-js";
+import { foldSearchCase } from "../../../../src/shared/search-case.js";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
@@ -115,7 +116,7 @@ function matchesEntry(entry: ActivityEntry, needle: string): boolean {
       .filter(Boolean)
       .join(" "),
   ).normalize("NFC");
-  return haystack.includes(needle);
+  return foldSearchCase(haystack).includes(needle);
 }
 
 const STATUS_KINDS = { running: "warn", done: "ok", error: "danger" } as const satisfies Record<
@@ -381,7 +382,9 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
       },
     );
     const filtered = createMemo(() => {
-      const needle = normalizeLowercaseStringOrEmpty(filters.filterText).normalize("NFC");
+      const needle = foldSearchCase(normalizeLowercaseStringOrEmpty(filters.filterText)).normalize(
+        "NFC",
+      );
       return liveProps.entries.filter(
         (entry) =>
           filters.statusFilters[entry.status] &&

@@ -11,6 +11,7 @@ import {
   Show,
 } from "solid-js";
 import type { ProjectRecord } from "../../../../packages/gateway-protocol/src/index.js";
+import { foldSearchCase } from "../../../../src/shared/search-case.js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
@@ -179,11 +180,11 @@ export function ProjectPickerContent(props: ProjectChipProps) {
   const localProjects = createMemo(() => {
     // Retired catalogs clear immediately; a live refresh keeps local filtering responsive.
     const accepted = !props.nativeTerminal && projectsReady() ? projects() : [];
-    const query = view().query.toLowerCase().normalize("NFC");
+    const query = foldSearchCase(view().query).normalize("NFC");
     // Match the visible name, not shared Git owners or parent checkout directories.
     return query
       ? accepted.filter((project) =>
-          project.displayName.toLowerCase().normalize("NFC").includes(query),
+          foldSearchCase(project.displayName).normalize("NFC").includes(query),
         )
       : accepted;
   });

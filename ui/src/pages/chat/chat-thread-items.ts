@@ -4,6 +4,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
+import { foldSearchCase } from "../../../../src/shared/search-case.js";
 import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { readChatThreadMessageIdentity } from "../../lib/chat/history-message-identity.ts";
 import { extractTextCached, readTranscriptMediaEntries } from "../../lib/chat/message-extract.ts";
@@ -74,7 +75,7 @@ export function messageMatchesSearchQuery(
   query: string,
   recovery?: ChatMessageRecovery,
 ): boolean {
-  const normalizedQuery = normalizeLowercaseStringOrEmpty(query).normalize("NFC");
+  const normalizedQuery = foldSearchCase(normalizeLowercaseStringOrEmpty(query)).normalize("NFC");
   if (!normalizedQuery) {
     return true;
   }
@@ -86,14 +87,16 @@ export function messageMatchesSearchQuery(
   if (expansion?.status === "loaded") {
     const role = normalizeRoleForGrouping(normalizeMessage(message).role);
     if (resolveCappedMessageId(message, role)) {
-      return normalizeLowercaseStringOrEmpty(
-        role === "assistant" ? stripThinkingTags(expansion.markdown) : expansion.markdown,
+      return foldSearchCase(
+        normalizeLowercaseStringOrEmpty(
+          role === "assistant" ? stripThinkingTags(expansion.markdown) : expansion.markdown,
+        ),
       )
         .normalize("NFC")
         .includes(normalizedQuery);
     }
   }
-  return normalizeLowercaseStringOrEmpty(extractTextCached(message))
+  return foldSearchCase(normalizeLowercaseStringOrEmpty(extractTextCached(message)))
     .normalize("NFC")
     .includes(normalizedQuery);
 }
