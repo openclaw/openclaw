@@ -3590,7 +3590,6 @@
 ["src/commands/doctor-maintenance.settlement.test-support.ts","./doctor-prompter.js","deb312b7f435462d4106504617a4da9a83d013b6d2bfe410a973e07b47b25300",1]
 ["src/commands/doctor-maintenance.settlement.test-support.ts","./doctor-update-refusal.js","d69e825de42ac14f71a2a7a3fd05547efe84941971425b092e9554b65ecc6c07",1]
 ["src/commands/doctor-memory-recall.test.ts","../../packages/terminal-core/src/note.js","37412184cc3282e016b1748bb2a1a99e58e75ce323b4d18573c39a596044afb9",1]
-["src/commands/doctor-memory-search.test.ts","../agents/agent-scope.js","9c0ab162d0316f5b89bde612c36e34b270937b6da2247df96f880f1d4f5dde73",1]
 ["src/commands/doctor-memory-search.test.ts","../agents/auth-profiles.js","72f2b4936c8033169da6071fdeec9f00d7aa6ec2b72bc124b34851b27338fc0b",1]
 ["src/commands/doctor-memory-search.test.ts","../agents/model-auth.js","0f1ca482744ee8ba64f1c65459b006a8fb7bd7a7881b25b11fc2c5696f7bc584",1]
 ["src/commands/doctor-memory-search.test.ts","../plugin-sdk/memory-core-bundled-runtime.js","8a9350f6986b48f53bea64b8df025d4891ad185db0b203b1a328bcf52eac28cd",1]
