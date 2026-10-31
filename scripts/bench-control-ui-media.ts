@@ -18,6 +18,12 @@ import {
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
 import { createControlUiTeamScaleFixture } from "../ui/src/test-helpers/control-ui-team-scale-fixture.ts";
 import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway-server.ts";
+import {
+  classifyMediaErrors,
+  type MediaConsoleError,
+  type MediaFailedRequest,
+  type MediaFetchAttempt,
+} from "./lib/control-ui-media-errors.ts";
 
 const { values } = parseArgs({
   options: {
@@ -137,16 +143,6 @@ type MediaSnapshot = {
   }>;
   blobs: Array<{ source: string; revoked: boolean; live: boolean; attached: boolean }>;
 };
-type MediaFetchAttempt = {
-  url: string;
-  method: string;
-  cache: RequestCache;
-  mode: RequestMode;
-  credentials: RequestCredentials;
-  authorizationContext: number;
-  outcome: "pending" | "fulfilled" | "rejected";
-  status?: number;
-};
 type GeometryNode = {
   id: number;
   node: string;
@@ -185,19 +181,12 @@ type Result = {
   status: "passed" | "failed";
   error?: string;
   errors?: string[];
-  consoleErrors?: Array<{
-    type: string;
-    message: string;
-    url: string;
-    lineNumber: number;
-    columnNumber: number;
-  }>;
-  failedRequests?: Array<{
-    url: string;
-    method: string;
-    resourceType: string;
-    errorText: string;
-  }>;
+  pageErrors?: string[];
+  httpErrors?: string[];
+  consoleErrors?: MediaConsoleError[];
+  failedRequests?: MediaFailedRequest[];
+  expectedCacheMisses?: MediaConsoleError[];
+  unexpectedErrors?: string[];
   loadMs?: number;
   scrollMs?: number;
   stable?: MediaSnapshot;
@@ -264,11 +253,16 @@ try {
         const serverRequestOffset = slot.server.requests.length;
         let mediaTransferAt = 0;
         const errors: string[] = [];
+        const pageErrors: string[] = [];
+        const httpErrors: string[] = [];
         const consoleErrors: NonNullable<Result["consoleErrors"]> = [];
         const failedRequests: NonNullable<Result["failedRequests"]> = [];
         const events: Array<Record<string, unknown>> = [];
         let tracing = false;
-        page.on("pageerror", (error) => errors.push(error.message));
+        page.on("pageerror", (error) => {
+          errors.push(error.message);
+          pageErrors.push(error.message);
+        });
         page.on("request", (request) => {
           const url = new URL(request.url());
           const kind = mediaKind(url);
@@ -306,7 +300,9 @@ try {
         });
         page.on("response", (response) => {
           if (response.status() >= 400) {
-            errors.push(`HTTP ${response.status()} ${response.url()}`);
+            const error = `HTTP ${response.status()} ${response.url()}`;
+            errors.push(error);
+            httpErrors.push(error);
           }
         });
         let releaseMedia!: () => void;
@@ -898,7 +894,7 @@ try {
           );
           const afterDispose = await metrics(cdp);
           Object.assign(result, {
-            status: errors.length ? "failed" : "passed",
+            status: "passed",
             errors,
             loadMs,
             scrollMs,
@@ -951,6 +947,8 @@ try {
           releaseMedia();
           result.consoleErrors = consoleErrors;
           result.failedRequests = failedRequests;
+          result.pageErrors = pageErrors;
+          result.httpErrors = httpErrors;
           if (tracing && cdp) {
             await cdp.send("Tracing.end").catch(() => undefined);
           }
@@ -959,6 +957,19 @@ try {
               () => Reflect.get(window, "__mediaBench")?.readFetches() ?? null,
             )
             .catch(() => null);
+          const classification = classifyMediaErrors({
+            engine,
+            origin: slot.server.baseUrl,
+            pageErrors,
+            httpErrors,
+            consoleErrors,
+            failedRequests,
+            fetchAttempts: fetchAttempts ?? [],
+          });
+          Object.assign(result, classification);
+          if (classification.unexpectedErrors.length) {
+            result.status = "failed";
+          }
           result.cacheProbe = {
             transport: "native-http",
             browserHttpCache: "enabled",

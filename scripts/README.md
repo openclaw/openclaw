@@ -615,6 +615,11 @@ actual HTTP admissions separately from `fetchAttempts.cacheOnly`, whose
 completed-download byte measurements. Earlier routed-media reports disabled HTTP
 caching and returned full-image bytes for thumbnails; compare the corrected
 workload only against runs using the same HTTP fixture and rendition metadata.
+Raw browser errors remain in `errors`, `consoleErrors`, and `failedRequests`.
+`unexpectedErrors` determines failure: WebKit cache-only misses are expected only
+when same-origin media GET rejections match the native fetch failures and console
+errors exactly, including duplicate counts. Page errors and HTTP failures always
+fail the sample; expected misses remain visible in `expectedCacheMisses`.
 
 ## Control UI route dependency probes
 
