@@ -92,3 +92,26 @@ it.each(["another registry", "shared duplicate", "distinct duplicate"])(
     await expect(summarize()).resolves.toBe("first runtime");
   },
 );
+
+it("rejects a duplicate of a padded provider ID and resolves the first by its trimmed ID", async () => {
+  const active = createTestRegistry();
+  const { registry } = active;
+  const padded = makeProvider(" shared ");
+  registerProvider(active, "first-owner", padded);
+  registerProvider(active, "second-owner", makeProvider("shared"));
+  setActivePluginRegistry(registry);
+
+  expect(registry.compactionProviders).toEqual([
+    { provider: padded, ownerPluginId: "first-owner" },
+  ]);
+  expect(registry.diagnostics).toContainEqual(
+    expect.objectContaining({
+      level: "error",
+      pluginId: "second-owner",
+      message: "compaction provider already registered: shared (owner: first-owner)",
+    }),
+  );
+  await expect(getCompactionProvider("shared")?.summarize({ messages: [] })).resolves.toBe(
+    "summary-from- shared ",
+  );
+});

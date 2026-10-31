@@ -241,7 +241,7 @@ export function createPluginRegistrars(state: PluginRegistryState) {
       reportRegistrationError(record, `compaction provider "${id}" registration missing summarize`);
       return;
     }
-    const existing = registry.compactionProviders.find((entry) => entry.provider.id === id);
+    const existing = registry.compactionProviders.find((entry) => entry.provider.id.trim() === id);
     if (existing) {
       const ownerDetail = existing.ownerPluginId ? ` (owner: ${existing.ownerPluginId})` : "";
       reportRegistrationError(
