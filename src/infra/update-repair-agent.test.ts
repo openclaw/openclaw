@@ -105,6 +105,42 @@ it("returns at the wall deadline even if a read-only oracle never settles", asyn
   expect(runtime.runUpdateRepairTurn).not.toHaveBeenCalled();
 });
 
+it("keeps the turn budget when the wall clock steps inside the inference window", async () => {
+  const wallClock = Date.now.bind(Date);
+  let skew = 0;
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => wallClock() + skew);
+  runtime.prepareUpdateRepairInference.mockImplementationOnce(async () => ({
+    ok: true,
+    route: repairRoute("/fixture/agent"),
+    modelFallbacks: [],
+  }));
+  try {
+    const validate = vi
+      .fn()
+      // The host clock correction lands after the loop seeded its wall deadline, so route
+      // preparation and the turn budget must both survive it.
+      .mockImplementationOnce(async () => {
+        skew = 610_000;
+        return unhealthy(-2);
+      })
+      .mockResolvedValueOnce(healthy);
+    const result = await repairLoop({
+      ...params(validate),
+      budget: { wallClockMs: 600_000, perTurnMs: 300_000 },
+    });
+    expect(result).toMatchObject({ status: "repaired" });
+    expect(runtime.prepareUpdateRepairInference).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.closeTo(600_000, -2),
+    );
+    expect(runtime.runUpdateRepairTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 300_000 }),
+    );
+  } finally {
+    clock.mockRestore();
+  }
+});
+
 it("validates partial edits before reporting tool-budget exhaustion", async () => {
   runtime.runUpdateRepairTurn.mockResolvedValueOnce(turnResult("Partial repair", 2));
   const validate = vi.fn(async () => unhealthy(-4 + validate.mock.calls.length));

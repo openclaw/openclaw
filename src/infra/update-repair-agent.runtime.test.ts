@@ -206,6 +206,51 @@ it.each(["process", "sdk"] as const)(
     }),
 );
 
+it("keeps the remaining turn budget when the wall clock steps between candidates", () =>
+  withOpenClawTestState({ layout: "home" }, async (state) => {
+    const wallClock = Date.now.bind(Date);
+    let skew = 0;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => wallClock() + skew);
+    const budgets: number[] = [];
+    try {
+      mocks.run.mockImplementation(async (input: { timeoutMs?: number }) => {
+        budgets.push(input.timeoutMs ?? -1);
+        // A host clock correction lands between the primary and fallback attempt.
+        if (budgets.length === 1) {
+          skew = 610_000;
+        }
+        return { payloads: [{ text: "Stopped." }], meta: { durationMs: 1 } };
+      });
+      mocks.entry.mockImplementation(
+        async (params: {
+          runCandidate: (
+            provider: string,
+            model: string,
+            options: { agentHarnessRuntimeOverride: string },
+          ) => Promise<unknown>;
+        }) => {
+          await params.runCandidate("fixture", "primary", {
+            agentHarnessRuntimeOverride: "openclaw",
+          });
+          const result = await params.runCandidate("fixture", "fallback", {
+            agentHarnessRuntimeOverride: "openclaw",
+          });
+          return {
+            result,
+            provider: "fixture",
+            model: "fallback",
+            terminal: { outcome: { status: "ok" } },
+          };
+        },
+      );
+      await repairTurn(state);
+    } finally {
+      clock.mockRestore();
+    }
+    expect(budgets).toHaveLength(2);
+    expect(budgets[1]).toBeGreaterThan(9_000);
+  }));
+
 it("refuses revoked repair authority before starting the runner", () =>
   withOpenClawTestState({ layout: "home" }, async (state) => {
     const result = await repairTurn(state, { isCurrent: () => false });

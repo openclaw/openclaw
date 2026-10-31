@@ -1,6 +1,6 @@
 import { once } from "node:events";
 import { setImmediate } from "node:timers/promises";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { resolveAgentEntry } from "../agents/agent-scope-config.js";
 import { makeModel } from "../agents/embedded-agent-runner/model.test-harness.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
@@ -78,6 +78,9 @@ beforeEach(() => {
   mocks.catalog.mockReset().mockReturnValue([]);
   mocks.probe.mockReset().mockResolvedValue({ ok: true, latencyMs: 1, text: "OK", auth: {} });
 });
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 it.each([1, 3])(
   "preserves auth ownership while falling back after %s owner failures",
@@ -142,6 +145,20 @@ it("skips unauthenticated, CLI, manifest non-tool and custom non-tool routes bef
   expect(probedModels()).toEqual(["zeta/tools"]);
   expect(mocks.hasAuth.mock.calls.map(([params]) => params.modelId)).toEqual(["no-auth", "tools"]);
 });
+
+it.each([-5_000, 5_000])(
+  "keeps the route probe budget monotonic when the wall clock jumps by %ims",
+  async (jump) => {
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
+    vi.setSystemTime(1_700_000_000_000);
+    mocks.hasAuth.mockImplementationOnce(() => {
+      vi.setSystemTime(Date.now() + jump);
+      return true;
+    });
+    expect(await select()).toMatchObject({ ok: true });
+    expect(mocks.probe).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 10_000 }));
+  },
+);
 
 it("returns unavailable when no route has usable auth", async () => {
   mocks.hasAuth.mockReturnValue(false);

@@ -44,6 +44,7 @@ beforeEach(() => {
   });
 });
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   if (connected) {
     Object.defineProperty(process, "connected", connected);
@@ -147,6 +148,25 @@ it("keeps in-turn liveness cheap and refuses revoked authority before tool effec
     expect(snapshots).toHaveBeenCalled();
   });
 });
+it.each([-5_000, 5_000])(
+  "keeps the repair turn budget monotonic when the wall clock jumps by %ims",
+  async (jump) => {
+    await withRun("chat", requester, async (state, runId) => {
+      vi.useFakeTimers({ toFake: ["Date", "performance"] });
+      vi.setSystemTime(1_700_000_000_000);
+      runtime.withUpdateRepairEnvironment.mockImplementationOnce(async (_target, operation) => {
+        vi.setSystemTime(Date.now() + jump);
+        return operation();
+      });
+      const result = await runTurn(runId, state, requester);
+      expect(result).toMatchObject({ status: "completed", toolCalls: 0 });
+      expect(runtime.prepareUpdateRepairInference).toHaveBeenCalledWith(expect.anything(), 30_000);
+      expect(runtime.runUpdateRepairTurn).toHaveBeenCalledWith(
+        expect.objectContaining({ timeoutMs: 30_000 }),
+      );
+    });
+  },
+);
 function runTurn(
   runId: string,
   state: OpenClawTestState,
