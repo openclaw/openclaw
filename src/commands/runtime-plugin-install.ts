@@ -106,6 +106,8 @@ type RuntimePluginRepairParams = {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  /** Rechecks the caller's authority before each package, marker, or install-record effect. */
+  beforePersistentEffect?: () => void | Promise<void>;
 };
 
 export const CODEX_RUNTIME_PLUGIN_ID = "codex";
@@ -262,7 +264,7 @@ async function ensureRuntimePluginForModelSelection(
 
 /** Repairs missing install records for runtime plugins required by model selection. */
 async function repairRequiredRuntimePluginInstall(
-  params: RuntimePluginRepairParams & { beforePersistentEffect?: () => void | Promise<void> },
+  params: RuntimePluginRepairParams,
   pluginId: string,
 ): Promise<{ changes: string[]; warnings: string[] }> {
   const { repairMissingPluginInstallsForIds } =
