@@ -1459,9 +1459,7 @@ function installControlUiMockGateway(
             bootId: gatewayBootId,
             controlUiBuildSource: scenario.controlUiBuildSource,
             connId: "control-ui-e2e",
-            version: scenario.serverVersion,
-            ...(scenario.serverCommit ? { commit: scenario.serverCommit } : {}),
-            ...(scenario.serverBuiltAt ? { builtAt: scenario.serverBuiltAt } : {}),
+            ...scenario.serverRelease,
           },
           policy: {
             maxPayload: scenario.maxPayload,

@@ -139,7 +139,10 @@ export type NormalizedControlUiMockGatewayScenario = Required<
     "nativePlugins" | "awaitInitialRoster" | "bootstrapPreferences"
   >
 > &
-  Pick<ControlUiMockGatewayScenario, "bootstrapPreferences">;
+  Pick<ControlUiMockGatewayScenario, "bootstrapPreferences"> & {
+    /** Running-Gateway identity in hello; unset commit and build time are omitted. */
+    serverRelease: { version: string; commit?: string; builtAt?: string };
+  };
 
 const DEFAULT_MOCK_MAX_PAYLOAD_BYTES = 25 * 1024 * 1024;
 const DEFAULT_MOCK_ATTACHMENT_MAX_BYTES = Math.floor(
@@ -208,6 +211,11 @@ export function normalizeScenario(
     serverVersion: scenario.serverVersion?.trim() || sharedBuildInfo?.version || "e2e",
     serverCommit: scenario.serverCommit ?? "",
     serverBuiltAt: scenario.serverBuiltAt ?? "",
+    serverRelease: {
+      version: scenario.serverVersion?.trim() || sharedBuildInfo?.version || "e2e",
+      ...(scenario.serverCommit ? { commit: scenario.serverCommit } : {}),
+      ...(scenario.serverBuiltAt ? { builtAt: scenario.serverBuiltAt } : {}),
+    },
     ...normalizeControlUiMockAuth(scenario),
     featureEvents: scenario.featureEvents ?? [],
     // Baseline scenarios represent a current Gateway. Tests for unsupported or
