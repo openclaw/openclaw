@@ -521,8 +521,11 @@ export async function buildAnthropicRequest(
   }
   const generationParams: Pick<
     MessageCreateParamsStreaming,
-    "temperature" | "stop_sequences" | "tools" | "output_config" | "metadata" | "tool_choice"
+    "stop_sequences" | "tools" | "output_config" | "metadata" | "tool_choice"
   > & {
+    // SDK 1.x types follow API version 2026-10-21, which removed sampling parameters;
+    // requests pin ANTHROPIC_API_VERSION, where pre-4.7 Claude models accept temperature.
+    temperature?: number;
     // SDK 0.127.0 does not yet include Sonnet 5.5's between_tools setting.
     thinking?: MessageCreateParamsStreaming["thinking"] | { type: "between_tools" };
   } = {};

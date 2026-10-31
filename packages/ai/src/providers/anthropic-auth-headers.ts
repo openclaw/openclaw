@@ -1,6 +1,13 @@
 import { getAiTransportHost } from "../host.js";
 import type { ModelRequestHeaders } from "../types.js";
 
+/**
+ * Messages API version both Anthropic transports send. SDK 1.x defaults to 2026-10-21, which
+ * rejects sampling parameters that Claude models before 4.7 accept and is unavailable for those
+ * models on Bedrock, so moving to it is a separate product change.
+ */
+export const ANTHROPIC_API_VERSION = "2023-06-01";
+
 /** Inspect resolved credential shape for auth routing without exposing its value. */
 export function isAnthropicOAuthApiKey(apiKey: unknown): boolean {
   return (

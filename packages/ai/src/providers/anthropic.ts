@@ -11,13 +11,15 @@ import { runAnthropicStreamLifecycle } from "../transports/anthropic-stream-life
 import { applyAnthropicThinkingOptions } from "../transports/anthropic-transport-options.js";
 import { withModelRequestBodyBytes } from "../transports/model-request-body.js";
 import { resolveOpencodeSessionHeaders } from "../transports/session-affinity.js";
+import { mergeTransportHeaders } from "../transports/transport-stream-shared.js";
 import { streamFragmentError } from "../transports/transport-utils.js";
-import type { Model, SimpleStreamOptions, StreamFunction } from "../types.js";
+import type { Model, ModelRequestHeaders, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { parseJsonWithRepair } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { requireApiKey } from "../utils/required-api-key.js";
 import {
+  ANTHROPIC_API_VERSION,
   isAnthropicOAuthApiKey,
   omitFoundryBearerCredentialHeaders,
   usesFoundryBearerAuth,
@@ -163,18 +165,26 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
         const baseHeaders = {
           accept: "application/json",
           "anthropic-dangerous-direct-browser-access": "true",
+          // SDK 1.x defaults to 2026-10-21; keep the version the fetch transport sends.
+          "anthropic-version": ANTHROPIC_API_VERSION,
           ...(betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {}),
+        };
+        // SDK 1.x sends `apiKey` as a bearer token. Keep API keys in X-Api-Key, which
+        // Anthropic-compatible routes and gateways read; `apiKey` still blocks env/profile lookup.
+        const apiKeyHeaders = {
+          "x-api-key": apiKey,
+          authorization: apiKey ? null : "",
         };
         let configuredApiKey: string | null = apiKey;
         let authToken: string | null = null;
-        let defaultHeaders: Record<string, string | null>;
+        let defaultHeaders: ModelRequestHeaders | undefined;
         const isCopilot = model.provider === "github-copilot";
         if (model.provider === "cloudflare-ai-gateway") {
           clientOptions.baseURL = resolveCloudflareBaseUrl(model);
-          defaultHeaders = Object.assign(
-            {},
+          defaultHeaders = mergeTransportHeaders(
             baseHeaders,
-            { Authorization: null },
+            apiKeyHeaders,
+            { authorization: null },
             model.headers,
             optionsHeaders,
           );
@@ -187,8 +197,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
         ) {
           configuredApiKey = null;
           authToken = apiKey;
-          defaultHeaders = Object.assign(
-            {},
+          defaultHeaders = mergeTransportHeaders(
             baseHeaders,
             isCopilot ? model.headers : omitFoundryBearerCredentialHeaders(model.headers),
             dynamicHeaders,
@@ -202,25 +211,28 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
           );
           configuredApiKey = null;
           authToken = apiKey;
-          defaultHeaders = identity.headers;
+          defaultHeaders = mergeTransportHeaders(
+            { "anthropic-version": ANTHROPIC_API_VERSION },
+            identity.headers,
+          );
           isOAuthToken = true;
           claudeCodeVersion = identity.version;
         } else {
           serverSideFallback =
             model.provider === "anthropic" && supportsAnthropicServerSideFallback(model);
-          defaultHeaders = Object.assign(
-            {},
+          defaultHeaders = mergeTransportHeaders(
             baseHeaders,
+            apiKeyHeaders,
             sessionId && getAnthropicCompat(model).sendSessionAffinityHeaders
               ? { "x-session-affinity": sessionId }
-              : {},
+              : undefined,
             model.headers,
             optionsHeaders,
           );
           // Binding controls are verified only on direct API-key requests, not OAuth or proxies.
           if (isDirectAnthropicModel(model)) {
             directApiKeyBetaHeader =
-              Object.entries(defaultHeaders).findLast(
+              Object.entries(defaultHeaders ?? {}).findLast(
                 ([name]) => name.toLowerCase() === "anthropic-beta",
               )?.[1] ?? "";
           }

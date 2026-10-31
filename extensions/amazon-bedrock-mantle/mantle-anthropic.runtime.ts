@@ -22,6 +22,8 @@ import {
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 
 const MANTLE_ANTHROPIC_BETA = "fine-grained-tool-streaming-2025-05-14";
+// SDK 1.x defaults to 2026-10-21, which Bedrock serves only for Claude 4.7 and later.
+const MANTLE_ANTHROPIC_VERSION = "2023-06-01";
 
 function isClaudeMythosPreviewModel(model: Model): boolean {
   return [model.id, model.name, model.params?.canonicalModelId]
@@ -82,6 +84,7 @@ export function createMantleAnthropicStreamFn(): StreamFn {
         accept: "application/json",
         "anthropic-dangerous-direct-browser-access": "true",
         "anthropic-beta": MANTLE_ANTHROPIC_BETA,
+        "anthropic-version": MANTLE_ANTHROPIC_VERSION,
         ...model.headers,
         ...options?.headers,
       },

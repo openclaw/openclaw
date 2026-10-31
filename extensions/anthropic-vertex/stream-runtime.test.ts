@@ -3,6 +3,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { AnthropicVertex as AnthropicVertexSdk } from "@anthropic-ai/vertex-sdk";
+import { GoogleAuth, OAuth2Client } from "google-auth-library";
 import { stream as streamModel, type Model } from "openclaw/plugin-sdk/llm";
 import {
   notifyProviderStreamOpened,
@@ -136,6 +138,7 @@ describe("createAnthropicVertexStreamFn", () => {
     createAnthropicVertexStreamFn(undefined, "global", undefined, deps);
 
     expect(anthropicVertexCtorMock).toHaveBeenCalledWith({
+      defaultHeaders: { "anthropic-version": "vertex-2023-10-16" },
       googleAuth: googleAuthClient,
       region: "global",
     });
@@ -234,6 +237,7 @@ describe("createAnthropicVertexStreamFn", () => {
       await once(proxy, "close");
     }
     expect(anthropicVertexCtorMock).toHaveBeenCalledWith({
+      defaultHeaders: { "anthropic-version": "vertex-2023-10-16" },
       googleAuth: googleAuthClient,
       projectId: "vertex-project",
       region: "us-east5",
@@ -280,6 +284,64 @@ describe("createAnthropicVertexStreamFn", () => {
       { temperature: 0.7 },
     );
     expect(payload).toHaveProperty("temperature", 0.7);
+  });
+
+  it("keeps the Vertex body API version and custom sampling on the SDK wire", async () => {
+    const requests: Array<{ url: string; headers: Headers; body: unknown }> = [];
+    const events = [
+      { type: "message_start", message: { id: "msg_vertex", usage: { input_tokens: 1 } } },
+      { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+      { type: "content_block_stop", index: 0 },
+      { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+      { type: "message_stop" },
+    ];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init);
+      requests.push({
+        url: request.url,
+        headers: request.headers,
+        body: JSON.parse(await request.text()),
+      });
+      return new Response(
+        events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""),
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    });
+    const authClient = new OAuth2Client();
+    authClient.setCredentials({ access_token: "gcp-token" });
+    const getClient = vi.spyOn(GoogleAuth.prototype, "getClient").mockResolvedValue(authClient);
+    try {
+      const streamFn = createAnthropicVertexStreamFn(
+        "vertex-project",
+        "us-east5",
+        undefined,
+        { AnthropicVertex: AnthropicVertexSdk, GoogleAuth, streamAnthropic: streamModel },
+        {},
+      );
+      const stream = await streamFn(
+        makeModel({ id: "claude-sonnet-4-6", maxTokens: 128000 }),
+        { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+        { temperature: 0.7 },
+      );
+      const result = await stream.result();
+      expect(result.stopReason, result.errorMessage).toBe("stop");
+    } finally {
+      getClient.mockRestore();
+      vi.unstubAllGlobals();
+    }
+    expect(requests).toHaveLength(1);
+    const [request] = requests;
+    expect(request?.url).toBe(
+      "https://us-east5-aiplatform.googleapis.com/v1/projects/vertex-project/locations/us-east5/publishers/anthropic/models/claude-sonnet-4-6:streamRawPredict",
+    );
+    expect(request?.headers.get("authorization")).toBe("Bearer gcp-token");
+    expect(request?.headers.get("anthropic-version")).toBeNull();
+    expect(request?.body).toMatchObject({
+      anthropic_version: "vertex-2023-10-16",
+      stream: true,
+      temperature: 0.7,
+    });
   });
 
   it.each([
@@ -492,6 +554,7 @@ describe("createAnthropicVertexStreamFnForModel", () => {
     );
     void streamFn(makeModel({ id: "claude-sonnet-5", maxTokens: 128_000 }), { messages: [] }, {});
     expect(anthropicVertexCtorMock).toHaveBeenCalledWith({
+      defaultHeaders: { "anthropic-version": "vertex-2023-10-16" },
       googleAuth: googleAuthClient,
       projectId: "vertex-project",
       region,

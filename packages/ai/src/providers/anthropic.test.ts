@@ -266,9 +266,12 @@ describe("Anthropic provider", () => {
       apiKey: "sk-ant-provider",
       authToken: null,
       fetch: managedFetch ? expect.any(Function) : undefined,
-      defaultHeaders: { "cf-aig-authorization": "Bearer gateway-token" },
+      defaultHeaders: {
+        "cf-aig-authorization": "Bearer gateway-token",
+        "x-api-key": "sk-ant-provider",
+        authorization: null,
+      },
     });
-    expect(anthropicMockState.configs[0]).not.toHaveProperty("defaultHeaders.x-api-key");
     const input = "https://provider.invalid";
     const init = { method: "POST", body: '{"text":"🦞"}' };
     if (managedFetch) {
@@ -311,7 +314,7 @@ describe("Anthropic provider", () => {
           ([key]) => key.startsWith("x-") || key === "session_id",
         ),
       ),
-    ).toEqual({ "x-opencode-session": "session-123" });
+    ).toEqual({ "x-api-key": "sk-ant-provider", "x-opencode-session": "session-123" });
   });
 
   it.each(anthropicTerminalFallbackCases)("terminal fallback: $name", async (testCase) => {
