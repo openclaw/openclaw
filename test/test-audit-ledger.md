@@ -28,15 +28,21 @@ Its failed CI remains failed; no current-head CI success is claimed.
 
 ## Current qualification
 
-Pinned main `298b86c81fa`; qualifying the legacy requester-scoped MCP preview
-absence case. Its fixture lacks owner identity and resource-reading capability,
-so real view creation can independently return no preview. The retained identity
-matrix asserts the view factory is never called for private/no-profile tools,
-with public and mapped-private positive controls. Full source/history and
-independent preservation review support only its15-line declaration deletion;
-retain all helpers, imports, positive previews and the shared viewstore cleanup.
-Runtime baselines, keeper fault controls, removal scans and final review remain
-pending. No deletion has been applied in this qualification seed.
+Pinned main `298b86c81fa`; [189373](https://github.com/openclaw/openclaw/pull/189373)
+removes one redundant requester-scoped MCP preview absence case. Its incomplete
+fixture can independently prevent view creation. The retained identity matrix
+asserts that the view factory is never called for private/no-profile tools, with
+public and mapped-private positive controls. Source/history and independent
+preservation review found no assertions to carry or unused helpers to remove.
+
+Baseline40→candidate39 tests/3 suites pass. Removing the requester guard leaves
+the retired case green but fails the private identity row; both positive controls
+pass. Production was restored byte for byte. Typed lint, scoped compilation and
+format checks pass. Every removal-scan phase ran before and after deletion:
+three production/three full-tree export findings unchanged, both unused-file
+scans and script exports clean. Only16 test LOC removed; production/support
+unchanged, including the shared viewstore cleanup's eight live consumers.
+The PR tracks final review and CI.
 
 ## Completed source review
 
@@ -56,7 +62,7 @@ permission to delete without root qualification.
 - Agent internals: 250 unique suites/1,857 physical sites/71,323 test LOC: R1849/F5/C1/D2. Latest result persistence10/74 R73/F1; separate reply/upstream scopes below. Preserve transport, requester isolation, authority, cancellation and work-count contracts.
 - Auto-reply: All429 suites plus43 separate upstream suites and invoked local registrars/support classified. Latest54/498: R495/F2/C1; qualified two duplicates landed above. Keep channel persistence, group/native routing, progress suppression and abort cases.
 - CLI: Config/setup24/209; plugin lifecycle25/176; validation22/106; channel/root/message/device/skills/session98/542; execution/reply presentation overlaps the reply aggregate. Only qualified fixture reduction landed above.
-- Control UI: Devices11/80, nodes5/38, browser Gateway10/88, Gateway state10/40, browser boundaries10/93: 46 suites/339 retained sites. Authority, token rotation, heartbeat, event projection, browser credentials and subscriber lifetimes differ. Other UI remains open.
+- Control UI: Devices11/80, nodes5/38, browser Gateway10/88, Gateway helpers10/40, browser boundaries10/93: 45 unique suites/336 retained sites; `page-request.node.test.ts` belongs to both helper/browser groups and is counted once. Authority, token rotation, heartbeat, event projection, browser credentials and subscriber lifetimes differ. Other UI remains open.
 - Shared native: OpenClawKit209 files/2,528 sites: R2523/F3/C2. NativeState/MLX protocol5/46: R45/F1. Swabble6/12 R; MLX helper1/5 with one pending PCM consolidation.
 - macOS: 304 Swift files/2,653 sites: R2635/F8/C9/D1. Native runtime qualification pending.
 - iOS: 135 files/1,416 sites: R1370/F39/C6/D1; obsolete typography metadata scanner and a migration helper remain candidates. Native qualification pending.
