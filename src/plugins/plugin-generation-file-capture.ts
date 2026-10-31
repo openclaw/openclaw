@@ -8,6 +8,7 @@ import {
   type RootFileOpenBatchSync,
 } from "@openclaw/fs-safe/advanced";
 import { isPathInside } from "../infra/path-guards.js";
+import { getPluginGenerationMetrics } from "./plugin-generation-metrics.js";
 import type { createPluginGenerationReceipt } from "./plugin-generation-receipt.js";
 import type { PluginRecoverySource } from "./plugin-generation-source-lookup.js";
 import type { createPluginNativeAdmission } from "./plugin-native-admission.js";
@@ -78,6 +79,7 @@ export function createPluginGenerationFileCapture({
   boundary,
   destination,
   directory,
+  packageKind,
   outputRoot,
   capturedPaths,
   originalSources,
@@ -94,6 +96,7 @@ export function createPluginGenerationFileCapture({
   boundary: string;
   destination: string;
   directory: string;
+  packageKind: "package" | "dependency";
   outputRoot?: string;
   capturedPaths: Map<string, string>;
   originalSources: Map<string, string>;
@@ -117,6 +120,7 @@ export function createPluginGenerationFileCapture({
     realParent?: string,
     sourceEntry?: fs.BigIntStats,
   ) => {
+    const metrics = getPluginGenerationMetrics();
     // Metadata can precede its package body; promotion never replaces those captured bytes.
     if (capturedPaths.get(path.resolve(source)) === target) {
       return;
@@ -170,6 +174,9 @@ export function createPluginGenerationFileCapture({
       }
       ancestors.delete(real);
     } else if (stat.isFile()) {
+      if (metrics) {
+        metrics[packageKind === "package" ? "packageFiles" : "dependencyFiles"]++;
+      }
       if (stat.nlink > 1n) {
         hardlinkedSources.add(target);
       }
@@ -181,6 +188,9 @@ export function createPluginGenerationFileCapture({
       additions.add(target);
       const retainedFile = retained?.files.get(path.relative(directory, target));
       const retainedReference = retained?.source.native?.references.has(target);
+      if (metrics && !prepared && !captured && (!retainedFile || retainedReference)) {
+        metrics.originalBytes += Number(stat.size);
+      }
       if (retainedReference) {
         // The fork owns this validated reference; the new lease must admit its own native owner.
         fs.unlinkSync(target);

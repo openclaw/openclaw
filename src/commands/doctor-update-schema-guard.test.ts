@@ -97,8 +97,8 @@ function withDatabase<T>(pathname: string, readOnly: boolean, run: (db: Database
 }
 
 function captureBytes(files: string[]) {
-  const before = files.map((file) => fs.readFileSync(file));
-  return () => expect(files.map((file) => fs.readFileSync(file))).toEqual(before);
+  const before = files.map((file) => fs.readFileSync(file, "hex"));
+  return () => expect(files.map((file) => fs.readFileSync(file, "hex"))).toEqual(before);
 }
 
 function repairOptions(f: AgentFixture, assertCurrent = () => {}) {

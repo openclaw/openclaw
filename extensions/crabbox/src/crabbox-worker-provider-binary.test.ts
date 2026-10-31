@@ -45,6 +45,54 @@ function heldAcquisition(command?: CrabboxCommandRunner) {
   return { ...fixture(command), started, finish };
 }
 
+it.each(["0.78.1-local.gce7e7554", "0.80.0-local.g22111202", "missing"])(
+  "inspects through the deployed default after rejecting captured %s",
+  async (version) => {
+    vi.mocked(ensureManagedCrabboxBinary).mockImplementation(actual.ensureManagedCrabboxBinary);
+    const directory = tempDirs.make("crabbox-deployed-binary-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(directory, "state"));
+    const captured = path.join(directory, "captured-crabbox");
+    if (version !== "missing") {
+      await fs.writeFile(captured, version);
+    }
+    const managed = actual.resolveManagedCrabboxBinaryPath();
+    await fs.mkdir(path.dirname(managed), { recursive: true });
+    await fs.writeFile(managed, actual.CRABBOX_MIN_VERSION);
+    const { provider, runCommand, warn } = fixture(async ([binary, command]) => {
+      if (command === "--version") {
+        const observed =
+          binary === SIBLING_BINARY ? "0.80.0+local.g22111202" : await fs.readFile(binary!, "utf8");
+        return commandResult({ stdout: `crabbox ${observed}` });
+      }
+      if (binary !== SIBLING_BINARY || command !== "inspect") {
+        throw new Error("Inspection must use the current deployed binary");
+      }
+      return commandResult({
+        stdout: JSON.stringify({ id: "cbx_0123456789ab", state: "running" }),
+      });
+    });
+    const profile = Object.freeze({ ...PROFILE, binary: captured });
+    const lease = { leaseId: "cbx_0123456789ab", profile };
+    await expect(provider.inspect(lease)).resolves.toEqual({ status: "active", sharedHost: false });
+    await expect(provider.inspect(lease)).resolves.toEqual({ status: "active", sharedHost: false });
+    expect(runCommand.mock.calls.map(([argv]) => argv.slice(0, 2))).toEqual([
+      [captured, "--version"],
+      [SIBLING_BINARY, "--version"],
+      [SIBLING_BINARY, "inspect"],
+      [SIBLING_BINARY, "inspect"],
+    ]);
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn.mock.calls[0]![0]).toContain(`using current deployed binary "${SIBLING_BINARY}"`);
+    expect(profile.binary).toBe(captured);
+    if (version === "missing") {
+      await expect(fs.access(captured)).rejects.toMatchObject({ code: "ENOENT" });
+    } else {
+      expect(await fs.readFile(captured, "utf8")).toBe(version);
+    }
+    expect(await fs.readFile(managed, "utf8")).toBe(actual.CRABBOX_MIN_VERSION);
+  },
+);
+
 it.each([
   ["current", commandResult({ stdout: "crabbox 999.0.0" }), "", true],
   [

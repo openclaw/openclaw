@@ -241,7 +241,7 @@ export function requireWorkerLease(value: unknown): WorkerLease {
 }
 
 export function requireInstall(
-  record: WorkerEnvironmentRecord,
+  record: Pick<WorkerEnvironmentRecord, "profileSnapshot">,
 ): WorkerInstallationArtifact["install"] {
   const install = record.profileSnapshot.install;
   if (install !== undefined && install !== "bundle" && install !== "npm") {

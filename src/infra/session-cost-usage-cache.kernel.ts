@@ -49,6 +49,7 @@ export type SessionCostUsageRollupSnapshot = Omit<SessionCostUsageRollupRow, "va
 export type SessionCostUsageDeferredMetadata = {
   checkpoint: UsageCostFreshnessCheckpoint;
   scannedAt: number;
+  sqliteGenerationHash?: string;
 };
 
 type RollupReadOptions = {

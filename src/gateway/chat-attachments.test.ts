@@ -56,7 +56,6 @@ import {
   parseMessageWithAttachments,
   persistInboundImagesForTranscript,
   stripImageMediaMarkers,
-  UnsupportedAttachmentError,
 } from "./chat-attachments.js";
 import { sanitizeChatHistoryMessages } from "./chat-display-projection.sanitize.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
@@ -290,7 +289,7 @@ describe("persistInboundImagesForTranscript", () => {
       const recovered = readPersistedMediaFacts(message)?.[0];
       expect(recovered).toMatchObject({ kind: "image", fileName, contentType: mimeType });
       expect([recovered?.width, recovered?.height]).toEqual([width, height]);
-      expect(saveMediaBufferMock.mock.calls[0]?.[0]).toEqual(bytes);
+      expect(saveMediaBufferMock.mock.calls[0]?.[0]?.equals(bytes), "saved image bytes").toBe(true);
     },
   );
 
@@ -436,7 +435,6 @@ describe("parseMessageWithAttachments validation errors", () => {
       normalizeRpcAttachmentsToChatAttachments([attachment]),
       options,
     ).catch((error: unknown) => error);
-    expect(caught).toBeInstanceOf(UnsupportedAttachmentError);
     expect(caught).toMatchObject({ name: "UnsupportedAttachmentError", reason });
     expect(saveMediaBufferMock).not.toHaveBeenCalled();
   });

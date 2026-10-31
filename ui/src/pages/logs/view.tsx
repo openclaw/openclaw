@@ -126,15 +126,24 @@ export function LogsView(props: LogsProps) {
     const staticRows = filtered();
     return (index: number) => staticRows[index]!.id;
   });
-  const [window, setWindow] = createSignal<{ items: VirtualItem[]; height: number }>({
+  const [window, setWindow] = createSignal<{
+    items: VirtualItem[];
+    height: number;
+    getItemKey: ((index: number) => VirtualItem["key"]) | null;
+  }>({
     items: [],
     height: 0,
+    getItemKey: null,
   });
   const publish = () =>
-    setWindow({ items: virtualizer.getVirtualItems(), height: virtualizer.getTotalSize() });
+    setWindow({
+      items: virtualizer.getVirtualItems(),
+      height: virtualizer.getTotalSize(),
+      getItemKey: virtualizer.options.getItemKey,
+    });
   const scrollRequest = {};
   let readerScrollPending = false;
-  let synchronizeScrollOffset: (() => void) | undefined;
+  let synchronizeScrollOffset: ((scrolling: boolean) => void) | undefined;
   const virtualizer = new Virtualizer<HTMLDivElement, HTMLDivElement>({
     count: 0,
     getScrollElement: () => stream,
@@ -142,12 +151,7 @@ export function LogsView(props: LogsProps) {
     estimateSize: () => 44,
     observeElementRect,
     observeElementOffset: (instance, notify) => {
-      synchronizeScrollOffset = () => {
-        if (readerScrollPending) {
-          readerScrollPending = false;
-          notify(stream.scrollTop, true);
-        }
-      };
+      synchronizeScrollOffset = (scrolling) => notify(stream.scrollTop, scrolling);
       return observeElementOffset(instance, (offset, scrolling) => {
         readerScrollPending = false;
         notify(offset, scrolling);
@@ -188,7 +192,10 @@ export function LogsView(props: LogsProps) {
       }
       // WebKit can expose a wheel offset before delivering its scroll event.
       // Anchor a trim to the reader's current position, not the previous event.
-      synchronizeScrollOffset?.();
+      if (readerScrollPending) {
+        readerScrollPending = false;
+        synchronizeScrollOffset?.(true);
+      }
       for (const key of virtualizer.itemSizeCache.keys()) {
         if (!next.byKey.has(key)) {
           virtualizer.itemSizeCache.delete(key);
@@ -200,21 +207,22 @@ export function LogsView(props: LogsProps) {
         getItemKey: next.getItemKey,
         followOnAppend: next.autoFollow,
       });
-      const { _willUpdate: updateVirtualizer } = virtualizer;
-      updateVirtualizer();
       publish();
     },
     { targets: () => [stream], changeTiming: "sync", fonts: true },
   );
   const windowHeight = createMemo(() => window().height);
+  const windowItemKey = createMemo(() => window().getItemKey);
   createLayoutMeasurement(
-    windowHeight,
+    () => [windowHeight(), windowItemKey()],
     () => {
-      // Retry compensation only after Solid commits the measured spacer height.
+      // Apply append/trim anchors after Solid commits their spacer and row window.
       const { _willUpdate: updateVirtualizer } = virtualizer;
       updateVirtualizer();
+      // A retried compensation must be read back before another row measures from the old offset.
+      synchronizeScrollOffset?.(virtualizer.isScrolling);
     },
-    { targets: () => [stream] },
+    { targets: () => [stream], changeTiming: "sync" },
   );
   const rendered = createMemo(() =>
     window().items.flatMap((item) => {

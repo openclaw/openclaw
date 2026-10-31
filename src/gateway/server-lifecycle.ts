@@ -375,6 +375,9 @@ export async function prepareGatewayLifecycle(params: {
     port,
     workspaceDir: defaultWorkspaceDir,
     isClosing: () => lifecycle.closePreludeStarted,
+    getConfig: getRuntimeConfig,
+    getPluginRegistry: () => pluginRuntime.registry,
+    logger: logCron,
     runHook: async (event, ctx) => {
       try {
         const hookRunner = (await import("../plugins/hooks.js")).createHookRunner(
@@ -410,11 +413,7 @@ export async function prepareGatewayLifecycle(params: {
     markGatewaySuspendExiting();
     authRateLimiter.dispose();
     browserAuthRateLimiter.dispose();
-    worktreeRunEnd.beginClose();
-    sandboxRegistry.beginClose();
     talkClose.beginClose();
-    void stopModelAccountsForClose();
-    void closeAuthProfileUsage(params.sdkResourceHost);
     void runtimeState.maintenance?.stopPeriodicTasks();
     void mentionInbox.dispose();
     healthWork.beginClose();
@@ -521,6 +520,11 @@ export async function prepareGatewayLifecycle(params: {
     // Fence admission now; database cleanup must wait for restart marker persistence.
     fenceSessionSuspensionWritesForGatewayShutdown();
     lifecycle.closePreludeStarted = true;
+    // Close intake before cancellation; accepted persistence keeps its own drain.
+    worktreeRunEnd.beginClose();
+    sandboxRegistry.beginClose();
+    void stopModelAccountsForClose();
+    void closeAuthProfileUsage(params.sdkResourceHost);
     requestEntryLifetime.beginClose();
     runtime.scheduler.beginClose();
     cronReconciliation.invalidate();

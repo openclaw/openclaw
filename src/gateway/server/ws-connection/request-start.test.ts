@@ -18,6 +18,7 @@ const independentReads = [
   "board.get",
   "sessions.resolve",
   "sessions.list",
+  "sessions.catalog.list",
   "cron.list",
   "push.web.vapidPublicKey",
   "sessions.github.options",

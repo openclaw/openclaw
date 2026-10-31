@@ -76,3 +76,15 @@ export function createAgentDatabaseStartupObservation(
     },
   };
 }
+
+export function recoveryTiming(recovery: PendingAgentDatabaseRecovery, now = performance.now()) {
+  return {
+    elapsedMs: Math.round(now - recovery.startedAt),
+    phaseDurationsMs: {
+      ...recovery.phaseDurationsMs,
+      [recovery.phase]: Math.round(
+        (recovery.phaseDurationsMs[recovery.phase] ?? 0) + now - recovery.phaseStartedAt,
+      ),
+    },
+  };
+}

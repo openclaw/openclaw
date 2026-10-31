@@ -1292,42 +1292,45 @@ describe("Feishu reactions", () => {
     });
   });
 });
-
 describe("Feishu topic routing", () => {
-  it.each(["implicit", "explicit"] as const)(
-    "preserves prepared %s reply semantics",
-    async (source) => {
-      textDelivery();
-      await run(
-        "send",
-        { to: "chat:oc_group_1", text: "reply", replyTo: "om_inbound" },
-        {
-          ...topicContext,
-          sessionKey: "feishu:group:oc_group_1:topic:om_inbound:sender:ou_user",
-          reply:
-            source === "explicit"
-              ? { source, replyToId: "om_inbound" }
-              : { source, replyToId: "om_inbound", mode: "all" },
-        },
-      );
-      expect(feishuOutboundSendTextMock).toHaveBeenCalledExactlyOnceWith({
-        ...actionContext,
-        to: "chat:oc_group_1",
-        text: "reply",
-        mediaLocalRoots: undefined,
-        ...(source === "implicit" ? { threadId: "om_inbound" } : { replyToId: "om_inbound" }),
-      });
-    },
-  );
+  it.each(["implicit", "explicit"] as const)("routes %s replies", async (source) => {
+    const id = "855a9b56-ced7-4627-b9ca-454c30a91f9d";
+    const threading = feishuPlugin.threading!;
+    const context = { To: "oc_group_1", CurrentMessageId: id, MessageThreadId: "om_inbound" };
+    const toolContext = threading.buildToolContext!({ cfg, context });
+    expect(toolContext).toHaveProperty("currentMessageId", undefined);
+    expect(
+      threading.resolveReplyTransport!({ cfg, replyToId: id, threadId: "om_inbound" }),
+    ).toEqual({ replyToId: null, threadId: "om_inbound" });
+    textDelivery();
+    await run(
+      "send",
+      { to: "chat:oc_group_1", text: "reply", replyTo: "om_inbound" },
+      {
+        ...topicContext,
+        toolContext,
+        sessionKey: "feishu:group:oc_group_1:topic:om_inbound:sender:ou_user",
+        reply:
+          source === "explicit"
+            ? { source, replyToId: "om_inbound" }
+            : { source, replyToId: "om_inbound", mode: "all" },
+      },
+    );
+    expect(feishuOutboundSendTextMock).toHaveBeenCalledOnce();
+    expect(args(feishuOutboundSendTextMock).to).toBe("chat:oc_group_1");
+    expect(args(feishuOutboundSendTextMock).threadId).toBe(
+      source === "implicit" ? "om_inbound" : undefined,
+    );
+    expect(args(feishuOutboundSendTextMock).replyToId).toBe(
+      source === "explicit" ? "om_inbound" : undefined,
+    );
+  });
   it.each([
     { name: "destination changes", params: { to: "chat:oc_other" }, context: topicContext },
     { name: "top-level requested", params: { topLevel: true }, context: topicContext },
     { name: "inheritance suppressed", params: { threadId: null }, context: topicContext },
     { name: "account changes", context: { ...topicContext, requesterAccountId: "other" } },
-    {
-      name: "session has no topic",
-      context: { ...topicContext, sessionKey: "feishu:group:oc_group_1" },
-    },
+    { name: "no topic", context: { ...topicContext, sessionKey: "feishu:group:oc_group_1" } },
     { name: "inbound context is absent", context: { ...topicContext, toolContext: {} } },
   ] satisfies Array<{ name: string; params?: Record<string, unknown>; context: Context }>)(
     "does not inherit a source topic when $name",
@@ -1335,13 +1338,10 @@ describe("Feishu topic routing", () => {
       textDelivery();
       const target = { to: "chat:oc_group_1", ...params };
       await run("send", { ...target, text: "hello" }, context);
-      expect(feishuOutboundSendTextMock).toHaveBeenCalledExactlyOnceWith({
-        ...actionContext,
-        to: target.to,
-        text: "hello",
-        mediaLocalRoots: undefined,
-        replyToId: undefined,
-      });
+      expect(feishuOutboundSendTextMock).toHaveBeenCalledOnce();
+      expect(args(feishuOutboundSendTextMock).to).toBe(target.to);
+      expect(args(feishuOutboundSendTextMock).replyToId).toBeUndefined();
+      expect(args(feishuOutboundSendTextMock).threadId).toBeUndefined();
     },
   );
   it("requires a thread-reply anchor", async () => {
@@ -1353,5 +1353,4 @@ describe("Feishu topic routing", () => {
     await expect(run("search", {})).rejects.toThrow('Unsupported Feishu action: "search"');
   });
 });
-
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

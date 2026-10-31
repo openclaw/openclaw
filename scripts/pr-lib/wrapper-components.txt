@@ -689,6 +689,7 @@ src/config/redact-sentinel.ts
 src/config/redact-snapshot.raw.ts
 src/config/redact-snapshot.secret-ref.ts
 src/config/redact-snapshot.ts
+src/config/repository-branch-prefix.ts
 src/config/resolution-facts.ts
 src/config/runtime-config-capture-state.ts
 src/config/runtime-config-publication.ts
@@ -1608,6 +1609,7 @@ src/plugins/plugin-control-plane-context.ts
 src/plugins/plugin-generation-artifact.ts
 src/plugins/plugin-generation-capture.ts
 src/plugins/plugin-generation-file-capture.ts
+src/plugins/plugin-generation-metrics.ts
 src/plugins/plugin-generation-receipt.ts
 src/plugins/plugin-generation-source-lookup.ts
 src/plugins/plugin-install-default-choice.ts
@@ -1896,6 +1898,7 @@ src/state/agent-creation-claim.ts
 src/state/agent-database-admission-error.ts
 src/state/agent-database-admission.ts
 src/state/agent-database-preparation-context.ts
+src/state/agent-database-startup-integrity.ts
 src/state/agent-database-startup-observation.ts
 src/state/agent-database-startup.ts
 src/state/agent-deletion-cleanup-admission.ts

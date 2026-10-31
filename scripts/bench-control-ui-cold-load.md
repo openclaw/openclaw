@@ -1,5 +1,22 @@
 # Team-scale Control UI cold-load benchmark
 
+## Low-memory mobile profile
+
+Both `bench-control-ui-cold-load.ts` and `bench-control-ui-interactions.ts` accept
+`--low-memory`. This starts Chromium in low-end-device mode with a 128 MiB V8
+old-generation limit and records the profile in the report. It does not impose
+an Android OS/process RSS limit or emulate a physical Android WebView. Pair it
+with `--viewport mobile --cpu-throttle 6`; keep the memory profile identical in
+the unthrottled control. For slow-4G boot delivery, use
+`--network-latency-ms 150 --download-kbps 1600` in the cold-load runner. Static
+HTTP delivery and synthetic Gateway RPC delays remain separate measurements.
+
+Use untraced runs for ranking and interleaved base/control/head comparisons,
+then a separate `--trace` interaction run to attribute an expensive cell. On a
+busy host, repeat with `--thread-cpu-time` to distinguish renderer CPU from
+descheduling. Multi-action scenarios report aggregate task time, not per-event
+input latency.
+
 ## Cold route CSS coverage and rendering cost
 
 `bench-control-ui-css.ts` serves already-built base and head bundles through the
@@ -455,6 +472,29 @@ For a boot-weight comparison, use `--bundle-dir <base> --compare-bundle-dir <hea
 each build's own warm state. Every run records `presentation.firstNonemptyTranscriptMs`
 and `presentation.firstEnabledComposerMs` from visible DOM observed on animation
 frames; these are readiness observations, not compositor paint timestamps.
+`firstEnabledComposerMs` retains its original definition: the first matching
+hydrated-chat or New Session textarea is visible and enabled. It does not include
+the static boot composer or reject read-only or inert editors.
+
+`presentation.firstUsableComposerMs` adds an editable-input observation, with
+`firstUsableComposerKind` identifying `static`, `hydrated`, or `new`. It accepts a
+visible, enabled, non-read-only textarea with no inert ancestor from the static
+boot composer, the active hydrated chat pane, or New Session. It uses the same
+animation-frame sampler and visibility check, with no extra geometry or hit test.
+This is editor eligibility, not actual key-to-paint latency, compositor paint,
+click-occlusion proof, or send admission. Sampling ends at the existing shell and
+route completion boundary; the value remains null if no eligible editor was
+observed during that window. Older captures have no such fields: preserve them
+as absent, without relabeling or retrofitting the legacy metric.
+
+Warm reloads also record `warmReload.milestones.firstLiveTranscript` on the first
+sample with both visible transcript rows and the pane's `transcriptReady` state.
+It reuses the existing visibility and catch-up observations. `firstTranscript`
+still marks the first visible rows, including saved rows, and `catchupApplied`
+still marks owner readiness even while the virtualizer keeps rows hidden. The
+new marker distinguishes live transcript visibility from both; it is a DOM
+readiness observation, not an Element Timing paint. It remains absent if not
+observed before collection stops. Cold `firstNonemptyTranscriptMs` is unchanged.
 
 Every run also records browser paint entries (`presentation.firstPaintMs` and
 `firstContentfulPaintMs`), the first visible `#openclaw-boot-shell` frame and its
@@ -730,6 +770,33 @@ Solid and Markdown work. The source-mapped CPU profile covers that later work;
 the task/microtask and next-rAF timings do not measure presentation to the screen.
 After timing, each run also checks that the real transcript grew and remains
 within two pixels of its native scroll bottom, without manually requesting a render.
+
+For a mixed fast turn in both engines, use the cross-engine companion:
+
+```bash
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --bundle-dir dist/control-ui --steps streaming-mixed-fast \
+  --viewport desktop --engines chromium,webkit --pairs 1 \
+  --output .artifacts/streaming-profile
+```
+
+This workload delivers the 645-delta Markdown reply at 150 deltas/s in bursts
+of five, with reasoning, 24 tool calls and results, and an image arriving midway.
+It requires `--viewport desktop`: mobile's modal navigation drawer prevents
+simultaneous composer and sidebar input.
+It checks native composer typing, the sidebar's Show more action, complete text,
+tool results, reasoning, tail following, and image decoding. The outer action
+includes the final image inspection; streaming probe metrics stop before that
+inspection. Delivery-to-next-task includes scheduling delay. Delivery-to-rAF and
+DOM-mutation-to-rAF are frame-boundary proxies, not paint timestamps.
+
+Use a separate `--trace` run for script/layout/style attribution. Long Task API
+metrics are present only when supported; WebKit's missing counters are not zero.
+WebKit Inspector durations are elapsed time, not CPU consumed by the action.
+`--cpu-throttle 4 --engines chromium` measures Chromium's emulated slowdown;
+WebKit has no equivalent supported CPU throttle, so requesting it fails explicitly.
+Use `--compare-bundle-dir` and `--control-bundle-dir` for interleaved candidate and
+A/A comparisons, following the same-machine timing rules above.
 
 ## Initial baseline
 

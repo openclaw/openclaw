@@ -32,6 +32,7 @@ import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
 } from "../../../sessions/user-turn-transcript.types.js";
+import { MODEL_FALLBACK_NOTICE_KIND } from "../../../shared/model-fallback-notice.js";
 import {
   isOpenClawDeliveryMirrorAssistantMessage,
   SKILL_WORKSHOP_CHANGE_NOTICE_KIND,
@@ -77,8 +78,11 @@ function isInterruptedTurnEntry(entry: SessionEntry, runId: string): boolean {
   const delivery = isOpenClawDeliveryMirrorAssistantMessage(message)
     ? asOptionalRecord(Reflect.get(message, "openclawDeliveryMirror"))
     : undefined;
-  // Background Workshop notices do not complete the foreground user turn.
-  if (delivery?.kind === SKILL_WORKSHOP_CHANGE_NOTICE_KIND) {
+  // Operational notices do not complete the foreground user turn.
+  if (
+    delivery?.kind === SKILL_WORKSHOP_CHANGE_NOTICE_KIND ||
+    delivery?.kind === MODEL_FALLBACK_NOTICE_KIND
+  ) {
     return true;
   }
   if (Reflect.get(message, "__openclaw")?.runId !== runId) {
@@ -223,6 +227,7 @@ export async function preparePersistedCurrentUserTurn(params: {
   message: PersistedUserTurnMessage | undefined;
   recorder: UserTurnTranscriptRecorder | undefined;
   runId: string;
+  fallbackReason?: string | null;
   signal?: AbortSignal;
   initial?: InitialPersistedUserTurn;
 }): Promise<InitialUserTurnReplayPreparation | "already-delivered" | undefined> {
@@ -407,14 +412,16 @@ export async function preparePersistedCurrentUserTurn(params: {
     );
     const current = currentId ? sessionManager.getEntry(currentId) : undefined;
     // A retry can retain the keyed current user with a newer prompt projection.
-    // A same-run failed attempt remains recovery-owned; retryability is not completion.
+    // The fallback owner may continue its timed-out or output-limited request, not a historical retry.
     if (
       current?.type === "message" &&
       ((current.message.role === "user" &&
         Reflect.get(current.message, "idempotencyKey") === message.idempotencyKey) ||
         (current.message.role === "assistant" &&
           Reflect.get(current.message, "__openclaw")?.runId === runId &&
-          current.message.stopReason === "error"))
+          (current.message.stopReason === "error" ||
+            (params.fallbackReason === "timeout" && current.message.stopReason === "aborted") ||
+            (params.fallbackReason === "format" && current.message.stopReason === "length"))))
     ) {
       return undefined;
     }
