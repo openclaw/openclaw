@@ -120,9 +120,8 @@
   min-width: 0;
   max-width: calc(100dvw - 20px);
   padding: 4px;
-  border-radius: 16px;
+  border-radius: var(--menu-radius);
   background: var(--popover);
-  corner-shape: round;
 }
 
 .chat-header-session-menu--mobile.session-menu .oc-menu .oc-menu {
@@ -135,7 +134,7 @@
   min-height: 40px;
   gap: 10px;
   padding: 5px 12px;
-  border-radius: 12px;
+  border-radius: var(--menu-item-radius);
   font-size: var(--control-ui-text-md);
   line-height: calc(20px * var(--control-ui-text-scale));
 }
@@ -224,7 +223,7 @@
   gap: 10px;
   padding: 10px 12px;
   border: 0;
-  border-radius: var(--radius-md);
+  border-radius: var(--menu-item-radius);
   background: transparent;
   color: var(--text);
   text-align: start;

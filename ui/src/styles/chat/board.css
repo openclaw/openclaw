@@ -121,7 +121,7 @@
   min-width: 0;
   max-width: calc(100vw - 24px);
   padding: 8px;
-  border-radius: 22px;
+  border-radius: var(--menu-radius-large);
   font-size: 13px;
   line-height: 18px;
 }
@@ -133,7 +133,7 @@
   column-gap: 10px;
   min-height: 34px;
   padding: 7px 10px;
-  border-radius: 10px;
+  border-radius: var(--menu-item-radius);
   font: inherit;
 }
 

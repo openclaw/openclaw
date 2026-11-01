@@ -637,21 +637,15 @@ openclaw-pending-session-create {
 }
 
 /* Browser flow preserves adjacency even when smooth scrolling skips a row's
-   measurement. flow-root includes child margins in each measured row. */
+   measurement. flow-root includes child margins in each measured row.
+   The virtualizer bounds mounted rows, so overscan rows always lay out: a
+   skipped (content-visibility: auto) row kept its estimate until it reached
+   the viewport, then pushed the messages being read as it rendered. */
 .chat-virtual-row {
   position: relative;
   display: flow-root;
   width: 100%;
-  content-visibility: auto;
-}
-
-@media (min-width: 769px) {
-  .chat-virtual-row {
-    /* The virtualizer bounds mounted rows. Wide rows pay for WebKit's automatic
-       content skipping; compact rows retain it for steadier frame delivery. */
-    content-visibility: visible;
-    contain: content;
-  }
+  contain: content;
 }
 
 /* Small notice rows must enter at their real height, not the virtual estimate. */

@@ -26,8 +26,7 @@ import { stripThinkingTags } from "../../lib/strip-thinking-tags.ts";
 import { phraseQueryPattern } from "../../lib/text-match.ts";
 import {
   messageRecoveryKey,
-  resolveCappedMessageId,
-  resolveSourceMessageId,
+  resolveFullMessageRecovery,
   type ChatMessageRecovery,
 } from "./chat-message-recovery.ts";
 import { chatItemStartsUserTurn, safeNormalizeMessage } from "./chat-turn-boundary.ts";
@@ -84,32 +83,31 @@ export function createChatSearchMatcher(
   const sourceMatches = (markdown: string | null) =>
     normalizeLowercaseStringOrEmpty(markdown).normalize("NFC").includes(normalizedQuery);
   return (message) => {
-    const messageId = recovery && resolveSourceMessageId(message);
-    const expansion =
-      recovery && messageId
-        ? recovery.messages.get(messageRecoveryKey(recovery.agentId, messageId))
-        : undefined;
+    const role = recovery ? normalizeRoleForGrouping(normalizeMessage(message).role) : "";
+    const expansion = recovery
+      ? resolveFullMessageRecovery(message, role, {
+          displayFacts: recovery.displayFacts,
+          canFetchFullMessage: recovery.canFetchFullMessage ?? true,
+          getAssistantMessageExpansion: (id) =>
+            recovery.messages.get(messageRecoveryKey(recovery.agentId, id)),
+        })?.state
+      : undefined;
     // Keep source syntax and link destinations searchable, then compare the same
     // display preparation used by message rendering.
     if (expansion?.status === "loaded") {
-      const role = normalizeRoleForGrouping(normalizeMessage(message).role);
-      if (resolveCappedMessageId(message, role)) {
-        const markdown =
-          role === "assistant" ? stripThinkingTags(expansion.markdown) : expansion.markdown;
-        const recovered = expansion.message
-          ? prepareChatMessageRender(expansion.message)
-          : undefined;
-        return (
-          sourceMatches(markdown) ||
-          (phrase !== null &&
-            markdownVisibleText(expansion, markdown, {
-              mode: "document",
-              humanMentions:
-                recovered?.displayMarkdown === markdown ? recovered.humanMentions : undefined,
-              assistantTranscriptRoleHeaders: role === "assistant",
-            }).search(phrase) >= 0)
-        );
-      }
+      const markdown =
+        role === "assistant" ? stripThinkingTags(expansion.markdown) : expansion.markdown;
+      const recovered = expansion.message ? prepareChatMessageRender(expansion.message) : undefined;
+      return (
+        sourceMatches(markdown) ||
+        (phrase !== null &&
+          markdownVisibleText(expansion, markdown, {
+            mode: "document",
+            humanMentions:
+              recovered?.displayMarkdown === markdown ? recovered.humanMentions : undefined,
+            assistantTranscriptRoleHeaders: role === "assistant",
+          }).search(phrase) >= 0)
+      );
     }
     if (sourceMatches(extractTextCached(message))) {
       return true;

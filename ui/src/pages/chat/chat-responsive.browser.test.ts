@@ -2668,8 +2668,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             currentColor: style(".session-progress-card__current").color,
             countColor: style(".session-progress-card__summary-count--collapsed").color,
             chevronColor: style(".session-progress-card__summary-chevron").color,
-            spinnerBorderColor: spinner.borderColor,
-            spinnerBorderTopColor: spinner.borderTopColor,
+            spinnerColor: spinner.backgroundColor,
             titleLeft: bounds(".session-progress-card__summary-title").left,
             firstMarkerLeft: bounds(".session-progress-card__step-marker").left,
             y: bounds(".session-progress-card__summary").y,
@@ -2853,8 +2852,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(collapsedAfter.currentColor).not.toBe(collapsedBefore.currentColor);
       expect(collapsedAfter.countColor).not.toBe(collapsedBefore.countColor);
       expect(collapsedAfter.chevronColor).not.toBe(collapsedBefore.chevronColor);
-      expect(collapsedAfter.spinnerBorderColor).toBe(collapsedBefore.spinnerBorderColor);
-      expect(collapsedAfter.spinnerBorderTopColor).toBe(collapsedBefore.spinnerBorderTopColor);
+      expect(collapsedAfter.spinnerColor).toBe(collapsedBefore.spinnerColor);
       const collapsed = await page.evaluate(() => {
         const rect = (selector: string) =>
           document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();

@@ -644,7 +644,7 @@ if (legacy && args[0] === "run" && args[1] === "download" && args[2] === "77") {
   fs.copyFileSync(decision ? "legacy-decision.json" : "legacy-plan.json", require("node:path").join(args[args.indexOf("--dir") + 1], decision ? "full-release-decision.json" : "full-release-execution-plan.json"));
   process.exit(0);
 }
-if (args[0] !== "api" || (!legacy && (!args.includes("GET") || !args.includes("github.com"))) || !args.includes("Cache-Control: max-age=0")) reject();
+if (args[0] !== "api" || (!legacy && (!args.includes("GET") || !args.includes("github.com"))) || (${args[0] !== "watch"} && !args.includes("Cache-Control: max-age=0"))) reject();
 if (!legacy && (args.includes("--include") || args.includes("--paginate"))) reject();
 let path = args.find(a => a.startsWith("repos/"));
 if (legacy && path.endsWith("/jobs?per_page=100")) path += "&page=1";
@@ -1762,30 +1762,98 @@ describe("publication status real CLI", () => {
     },
   );
 
-  it("keeps blocked Decision and active Diagnostic Drain distinct", async () => {
+  it.each([false, true])(
+    "keeps blocked Decision and active Diagnostic Drain distinct (json=%s)",
+    async (json) => {
+      const fixture = publicationFixture();
+      fixture.root.status = "in_progress";
+      const result = await runPublicationCli(
+        fixture,
+        ["status", "--run", "77", ...(json ? ["--json"] : [])],
+        (responses) => {
+          responses[`repos/${REPOSITORY}/actions/runs/77/jobs?filter=all&per_page=100`] = {
+            jobs: [
+              {
+                ...job("Diagnostic Drain"),
+                status: "in_progress",
+                conclusion: null,
+                run_attempt: 2,
+              },
+              { ...job("Prepare release npm artifacts", "failure"), run_attempt: 2 },
+            ],
+          };
+        },
+        false,
+        0,
+        "accepted",
+        "blocked_diagnostics_running",
+      );
+      expect(result.status, result.stderr).toBe(0);
+      if (json) {
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          qualification: { state: "blocked", evidence: "pending" },
+          drain: { status: "in_progress" },
+          blockers: [
+            {
+              owner: "parent",
+              job: "Prepare release npm artifacts",
+              conclusion: "failure",
+              runAttempt: 2,
+            },
+          ],
+        });
+        return;
+      }
+      expect(result.stdout).toContain("qualification: blocked; evidence: pending");
+      expect(result.stdout).toContain("drain: in_progress");
+      expect(result.stdout).toContain("actual test blocker");
+      expect(result.stdout).toContain("Diagnostic Drain is still collecting");
+      expect(result.stdout).toContain(
+        'blocker: parent job "Prepare release npm artifacts" failure (attempt 2)',
+      );
+      expect(result.stdout).toContain("next: pnpm frv watch --run 77");
+    },
+  );
+
+  it("stops the shipped watcher on a current artifact blocker without mutating GitHub", async () => {
     const fixture = publicationFixture();
     fixture.root.status = "in_progress";
+    fixture.root.conclusion = null;
     const result = await runPublicationCli(
       fixture,
-      ["status", "--run", "77"],
+      ["watch", "--run", "77", "--once", "--state", "watch.json", "--json"],
       (responses) => {
         responses[`repos/${REPOSITORY}/actions/runs/77/jobs?filter=all&per_page=100`] = {
+          jobs: [{ ...job("Prepare release npm artifacts"), id: 7705, run_attempt: 2 }],
+        };
+        responses[`repos/${REPOSITORY}/actions/jobs/7705/logs`] = {
+          raw: `Dispatched full-release-artifacts.yml: https://github.com/${REPOSITORY}/actions/runs/808 (attempt 1)`,
+        };
+        responses[`repos/${REPOSITORY}/actions/runs/808`] = {
+          ...runFor(requiredChildren()[0]!, 1, "failure"),
+          id: 808,
+        };
+        responses[`repos/${REPOSITORY}/actions/runs/808/attempts/1/jobs?per_page=100&page=1`] = {
           jobs: [
-            { ...job("Diagnostic Drain"), status: "in_progress", conclusion: null, run_attempt: 2 },
+            { ...job("Prepare npm artifacts / Check npm dependencies", "failure"), run_attempt: 1 },
           ],
         };
       },
-      false,
-      0,
-      "accepted",
-      "blocked_diagnostics_running",
     );
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("qualification: blocked; evidence: pending");
-    expect(result.stdout).toContain("drain: in_progress");
-    expect(result.stdout).toContain("actual test blocker");
-    expect(result.stdout).toContain("Diagnostic Drain is still collecting");
-    expect(result.stdout).toContain("next: pnpm frv watch --run 77");
+    expect(result.status, result.stderr).toBe(1);
+    const events = result.stdout
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(events.filter((event) => event.blocker)).toEqual([
+      expect.objectContaining({
+        blocker: true,
+        message: expect.stringContaining("Check npm dependencies"),
+      }),
+    ]);
+    expect(result.stderr).toContain("stopped on blocker");
+    expect(result.stderr).toContain("continue --failed --dry-run --run 77");
+    expect(result.calls.flat()).not.toContain("POST");
   });
 
   it("labels canceled children and never suggests retry while descendants remain active", async () => {
