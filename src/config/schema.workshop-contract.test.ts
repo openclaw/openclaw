@@ -1,11 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it } from "vitest";
+import type { PluginConfigUiHint } from "../plugins/manifest-types.js";
 import { buildConfigSchemaCore } from "./schema.js";
 
 const manifest = JSON.parse(
   fs.readFileSync(path.resolve("extensions/skill-workshop/openclaw.plugin.json"), "utf8"),
-) as { id: string; configSchema: Record<string, unknown>; uiHints: Record<string, unknown> };
+) as {
+  id: string;
+  configSchema: Record<string, unknown>;
+  uiHints: Record<string, PluginConfigUiHint>;
+};
 
 it("C1: exposes Workshop settings with labels and help in the common settings tier", () => {
   const { uiHints } = buildConfigSchemaCore({

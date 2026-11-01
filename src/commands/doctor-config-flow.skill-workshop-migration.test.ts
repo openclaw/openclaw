@@ -8,6 +8,7 @@ import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
 import { useDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 
 const note = vi.hoisted(() => vi.fn<(message: string, title?: string) => void>());
+// mock-isolation: Doctor prints notes to the terminal; the test reads them from this mock.
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 const withHome = useDoctorConfigPreflightHome();
 

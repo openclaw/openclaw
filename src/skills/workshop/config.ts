@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isRecord } from "../../utils.js";
 
 /** How background reviews may change Workshop skills. */
-export type SkillsWorkshopAutonomousMode = "off" | "propose" | "auto";
+type SkillsWorkshopAutonomousMode = "off" | "propose" | "auto";
 
 /** Runtime configuration for Skill Workshop. */
 type SkillWorkshopConfig = {

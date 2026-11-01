@@ -40,7 +40,7 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   config: OpenClawConfig;
   changes: string[];
 } {
-  // The retired key is outside the canonical type; widen only to remove it.
+  // SAFETY: a structured clone of a valid config; the widening only names the retired key to remove.
   const next = structuredClone(cfg) as OpenClawConfig & { skills?: { workshop?: unknown } };
   if (!next.skills || !Object.hasOwn(next.skills, "workshop")) {
     return { config: cfg, changes: [] };
