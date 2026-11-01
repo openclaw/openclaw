@@ -91,16 +91,13 @@ const CSS_STRING = String.raw`"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'`;
 const CSS_URL =
   /^\((?:\s*"(?:\\[\s\S]|[^"\\])*"\s*|\s*'(?:\\[\s\S]|[^'\\])*'\s*|(?:\\[\s\S]|[^)"'\\])*)\)/;
 
+function decodeCssEscape(_escape: string, hex: string | undefined, char: string | undefined) {
+  const code = hex ? Number.parseInt(hex, 16) : 0;
+  return hex ? String.fromCodePoint(code > 0 && code <= 0x10ffff ? code : 0xfffd) : (char ?? "");
+}
+
 function decodeCss(value: string): string {
-  return value.replace(
-    /\\(?:([a-f\d]{1,6})(?:\r\n|[ \t\r\n\f])?|([^\r\n]))/gi,
-    (_escape, hex: string | undefined, char: string | undefined) => {
-      const code = hex ? Number.parseInt(hex, 16) : 0;
-      return hex
-        ? String.fromCodePoint(code > 0 && code <= 0x10ffff ? code : 0xfffd)
-        : (char ?? "");
-    },
-  );
+  return value.replace(/\\(?:([a-f\d]{1,6})(?:\r\n|[ \t\r\n\f])?|([^\r\n]))/gi, decodeCssEscape);
 }
 
 function hasUnescapedCssNewline(value: string): boolean {
@@ -139,15 +136,7 @@ export function htmlPreviewCssReferences(source: string, stylesheet = ""): HtmlP
       if (value.startsWith('"') || value.startsWith("'")) {
         value = value.slice(1, -1);
       }
-      value = value.replace(
-        /\\(?:([a-f\d]{1,6})\s?|([^\r\n]))/gi,
-        (_escape, hex: string | undefined, char: string | undefined) => {
-          const code = hex ? Number.parseInt(hex, 16) : 0;
-          return hex
-            ? String.fromCodePoint(code > 0 && code <= 0x10ffff ? code : 0xfffd)
-            : (char ?? "");
-        },
-      );
+      value = value.replace(/\\(?:([a-f\d]{1,6})\s?|([^\r\n]))/gi, decodeCssEscape);
       const ref = relativeRef(value);
       if (ref && !FONT_PATH.test(ref)) {
         refs.push({ start: match.index, end: match.index + token.length, ref: directory + ref });

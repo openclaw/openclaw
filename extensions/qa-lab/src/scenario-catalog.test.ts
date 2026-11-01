@@ -1,5 +1,8 @@
 import { expect, it } from "vitest";
-import { resolveQaParityPackScenarioIds } from "./agentic-parity.js";
+import {
+  QA_AGENTIC_PARITY_SCENARIO_TITLES,
+  resolveQaParityPackScenarioIds,
+} from "./agentic-parity.js";
 import { resolveQaRepoPath } from "./repo-path.js";
 import { resolveQaRuntimePairLaneScenarioIds } from "./runtime-pair-lane-selection.js";
 import {
@@ -100,6 +103,9 @@ it("declares every release agentic scenario in the core lane", () => {
   const scenarioIds = resolveQaParityPackScenarioIds({ parityPack: "agentic" });
 
   expect(scenarioIds).toHaveLength(12);
+  expect(scenarioIds.map((scenarioId) => readQaScenarioById(scenarioId).title)).toEqual(
+    QA_AGENTIC_PARITY_SCENARIO_TITLES,
+  );
   expect(scenarioIds.map((scenarioId) => readQaScenarioById(scenarioId).runtimePairLane)).toEqual(
     scenarioIds.map(() => "core"),
   );

@@ -7,9 +7,10 @@ import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { i18n } from "../../i18n/index.ts";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
+import { sourceConfigSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import type { PluginMutationResult } from "../../lib/plugins/index.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { pageFixture, queryWithin } from "./plugins-page.lifecycle-test-support.ts";
+import { pageFixture, queryWithin, runtimeFixture } from "./plugins-page.lifecycle-test-support.ts";
 import {
   clickPluginAction,
   createClient,
@@ -32,6 +33,49 @@ afterEach(resetPluginsPageTestState);
 function objectSchema(properties: Record<string, JsonSchema>): JsonSchema {
   return { type: "object", properties };
 }
+
+it("accepts a changed schema with the same version while retaining drafts during unrelated revisions", async () => {
+  const schema = (fields: Record<string, JsonSchema>) =>
+    objectSchema({
+      plugins: objectSchema({
+        entries: objectSchema({ workboard: objectSchema({ config: objectSchema(fields) }) }),
+      }),
+    });
+  const first = schema({ greeting: { type: "string", title: "Greeting" } });
+  const replacement = schema({
+    greeting: { type: "string", title: "Updated greeting" },
+    timeout: { type: "integer", title: "Timeout" },
+  });
+  let schemaResponse = { schema: first, version: "same", uiHints: {} };
+  const harness = runtimeFixture({
+    "plugins.list": () => createResult(),
+    "plugins.inspect": () => createInspectResult(),
+    "config.get": () =>
+      sourceConfigSnapshot(
+        { plugins: { entries: { workboard: { config: { greeting: "Saved", timeout: 30 } } } } },
+        "hash",
+      ),
+    "config.schema": () => schemaResponse,
+  });
+  await harness.runtimeConfig.ensureLoaded();
+  await harness.runtimeConfig.ensureSchemaLoaded();
+  const { page, find } = await harness.mount("/settings/plugins/workboard?view=settings");
+  await waitForSolid(() => expect(find('[data-setting="greeting"] input')).not.toBeNull());
+  const input = find<HTMLInputElement>('[data-setting="greeting"] input')!;
+  input.value = "Unfinished greeting";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  harness.emit(harness.client, true);
+  await page.updateComplete;
+  expect(find('[data-setting="greeting"] input')).toBe(input);
+  expect(input.value).toBe("Unfinished greeting");
+
+  schemaResponse = { schema: replacement, version: "same", uiHints: {} };
+  await harness.runtimeConfig.refreshSchema();
+  await waitForSolid(() => {
+    expect(find('[data-setting="greeting"]')?.textContent).toContain("Updated greeting");
+    expect(find<HTMLInputElement>('[data-setting="timeout"] input')?.value).toBe("30");
+  });
+});
 
 it("retains installed settings and an unfinished input across transport loss, but retires them for a new client", async () => {
   const refresh = deferred();

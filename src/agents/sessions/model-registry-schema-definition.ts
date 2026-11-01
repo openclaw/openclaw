@@ -110,6 +110,7 @@ const ProviderAuthModeSchema = Type.Union([
   Type.Literal("oauth"),
   Type.Literal("token"),
   Type.Literal("none"),
+  Type.Literal("native-command"),
 ]);
 export type ProviderAuthMode = Static<typeof ProviderAuthModeSchema>;
 

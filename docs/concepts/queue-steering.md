@@ -33,6 +33,8 @@ In the built-in runtime, each steered user input gets its own delivered answer i
 
 Recording a steering receipt while another input is being persisted keeps the active turn running. Accepted inputs remain in order and reach the next available model boundary.
 
+If the built-in runtime reaches its 120-second transcript-delivery deadline and proves that it removed the exact queued message before submission, that input returns to followup custody in its original queue position. Younger steers already accepted by the active run stay there and are not replayed. A timeout without proven withdrawal remains non-replayable because the runtime may still consume the input; this also applies to the native Codex confirmation timeout.
+
 A steered channel reply carries that message's quoted or forwarded context into
 the model input. Quoted content stays conversation data; commands and answers to
 pending questions use the literal incoming text. Text-only transcript entries
@@ -135,6 +137,17 @@ Authorized cross-transport continuation also retains the active execution's task
 This continuation rule applies to ordinary human guidance. It does not change questions, approvals, cancellation, or explicit cross-session `sessions_send` authorization. It does not bypass access revocation or authorize a new execution configuration. Explicit execution-setting changes, including a different workspace, execution policy, or selected model, can require a followup.
 
 This also applies when a subagent completion resumes the conversation: compatible guidance from the same person joins that completion without changing its capabilities, rather than waiting for a separate turn.
+
+An authenticated Gateway owner with `operator.admin` can steer an active automation,
+loop, or visible subagent turn in the same authorized session, even when collaborative
+steering is disabled. The incoming message keeps the owner's provenance and live
+authorization; the running turn keeps its existing permissions and tool bindings.
+This guidance does not answer pending questions under the automation's authority.
+The owner-guidance exception does not apply to system-authored direct commands in
+a parent conversation, including subagent completion reports. Those commands keep
+normal requester-compatibility checks, so a browser correction to a system-owned
+direct command stays a followup. A child's active execution is distinct from its
+completion report to the parent.
 
 Configured permissions are resolved when each new execution is admitted and remain stable for that execution. Human messages waiting for admission use current policy. Already admitted native work retains its prepared policy while waiting to run. A new delegation resolves current destination policy for the original requester, or for an explicitly selected authenticated participant on a tool that supports `user`. Native delegation retains the original requester. A delegation may intentionally use a more capable agent; selecting a participant does not establish that person’s intent or approval. Cancellation and current-owner checks still apply, and accepted asynchronous work survives normal source-turn completion.
 

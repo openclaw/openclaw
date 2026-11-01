@@ -156,7 +156,7 @@ it("keeps filtered choices and unavailable rows in DOM order before the existing
         ? {
             projects: [
               { id: "alpha", displayName: "Alpha", repoRoot: "/alpha", source: "registered" },
-              { id: "beta", displayName: "Beta", repoRoot: "/beta", source: "registered" },
+              { id: "beta", displayName: "Be\u0301ta", repoRoot: "/beta", source: "registered" },
             ],
           }
         : {},
@@ -178,6 +178,10 @@ it("keeps filtered choices and unavailable rows in DOM order before the existing
   );
   const content = get(host, ".palette-session-settings__content");
   const back = get(content, ".palette-session-settings__back");
+  get(content, ".header-search__toggle").click();
+  await waitForSolid(() =>
+    expect(content.querySelector(".palette-session-settings__search")).not.toBeNull(),
+  );
   const search = expectDefined(
     content.querySelector<HTMLInputElement>(".palette-session-settings__search"),
     "settings search",
@@ -197,7 +201,7 @@ it("keeps filtered choices and unavailable rows in DOM order before the existing
   expectArrow(connect, "ArrowDown", retry);
   expectArrow(retry, "ArrowDown", back);
 
-  search.value = "Beta";
+  search.value = "BÉTA";
   search.dispatchEvent(new Event("input", { bubbles: true }));
   await host.updateComplete;
   expectArrow(search, "ArrowDown", beta);
@@ -231,6 +235,8 @@ it("retains focused place choices through a quiet cloud catalog refresh failure"
   const draft = expectDefined(host.draft.settingsView(), "palette settings").options.draft;
   await draft.gateway.refreshCloudProfiles();
   get(host, ".palette-session-settings__workspace").click();
+  await waitForSolid(() => expect(host.querySelector(".header-search__toggle")).not.toBeNull());
+  get(host, ".header-search__toggle").click();
   await waitForSolid(() =>
     expect(host.querySelector(".palette-session-settings__search")).not.toBeNull(),
   );

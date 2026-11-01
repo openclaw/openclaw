@@ -48,6 +48,8 @@ import {
   withLegacyTemplateStateSchema,
   legacyTemplateStateIdentifier,
 } from "./openclaw-state-db-schema-v36-template-names.js";
+import { withLegacyWorkerResourceReceipts } from "./openclaw-state-db-schema-v37-resource-receipts.js";
+import { withLegacyRepositoryDiskAuthority } from "./openclaw-state-db-schema-v38-repository-disk.js";
 import {
   admitStateSchemaFacts,
   PostgresSchemaAdmissionUnavailableError,
@@ -187,9 +189,20 @@ function statePostgresVersionSql(version: number): string {
 }
 
 function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
-  const statePostgresSchemaV35 = {
-    postgres: withLegacyTemplateStateSchema(statePostgresSchema.postgres),
+  const statePostgresSchemaV37 = {
+    postgres: withLegacyRepositoryDiskAuthority(statePostgresSchema.postgres),
     postgresFragments: statePostgresSchema.postgresFragments.map((fragment) => ({
+      ...fragment,
+      sql: withLegacyRepositoryDiskAuthority(fragment.sql),
+    })),
+  };
+  const statePostgresSchemaV36 = {
+    postgres: withLegacyWorkerResourceReceipts(statePostgresSchemaV37.postgres),
+    postgresFragments: statePostgresSchemaV37.postgresFragments,
+  };
+  const statePostgresSchemaV35 = {
+    postgres: withLegacyTemplateStateSchema(statePostgresSchemaV36.postgres),
+    postgresFragments: statePostgresSchemaV36.postgresFragments.map((fragment) => ({
       ...fragment,
       tables: fragment.tables.map(legacyTemplateStateIdentifier),
       sql: withLegacyTemplateStateSchema(fragment.sql),
@@ -364,8 +377,23 @@ function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
     {
       version: 36,
       fromSchema: statePostgresSchemaV35,
-      schema: statePostgresSchema,
+      schema: statePostgresSchemaV36,
       sql: `${TEMPLATE_STATE_POSTGRES_MIGRATION_SQL}\n${statePostgresVersionSql(36)}`,
+    },
+    {
+      version: 37,
+      fromSchema: statePostgresSchemaV36,
+      schema: statePostgresSchemaV37,
+      sql: `ALTER TABLE worker_environments ADD COLUMN resource_receipt_json text COLLATE "C";
+        ${statePostgresVersionSql(37)}`,
+    },
+    {
+      version: 38,
+      fromSchema: statePostgresSchemaV37,
+      schema: statePostgresSchema,
+      sql: `ALTER TABLE IF EXISTS session_repository_workspaces ADD COLUMN disk_authority_json text COLLATE "C";
+        ALTER TABLE worker_workspace_pending_results ADD COLUMN repository_disk_authority_json text COLLATE "C";
+        ${statePostgresVersionSql(38)}`,
     },
   ];
 }
@@ -433,8 +461,10 @@ export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: st
     throw new Error("PostgreSQL state fragments require the owner's transaction");
   }
   invalidateLocalSqliteSchemaAdmissions(db);
+  const repositorySql =
+    facts.version < 38 ? withLegacyRepositoryDiskAuthority(fragment.sql) : fragment.sql;
   const templateSql =
-    facts.version < 36 ? withLegacyTemplateStateSchema(fragment.sql) : fragment.sql;
+    facts.version < 36 ? withLegacyTemplateStateSchema(repositorySql) : repositorySql;
   const fragmentSql = facts.version < 35 ? withLegacyLocalWorkspaceCas(templateSql) : templateSql;
   // Lazy fragments can be created before Doctor upgrades a predecessor's index ordering.
   // sqlite-allow-raw: The schema owner installs a verified fragment under its transaction.

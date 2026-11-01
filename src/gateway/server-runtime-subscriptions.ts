@@ -683,6 +683,15 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
         agentId: target.agentId,
         dropIfSlow: true,
       });
+      const dispatch = dispatchEventHandler({
+        loadHandler: getLifecycleEventHandler,
+        event: { ...target, reason: "background-processes", scope: "runtime" },
+        log: params.log,
+        failureMessage: "Background process row dispatch failed",
+        context: { sessionKey: target.sessionKey },
+      });
+      agentEventDispatches.add(dispatch);
+      void dispatch.then(() => agentEventDispatches.delete(dispatch));
     }
   });
 

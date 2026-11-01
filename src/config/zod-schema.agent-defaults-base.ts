@@ -1,7 +1,11 @@
 import { z } from "zod";
 import { ALL_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
-import { AgentModelMapSchema, AgentModelPolicySchema } from "./zod-schema.agent-entry-base.js";
+import {
+  AgentModelMapSchema,
+  AgentModelPolicySchema,
+  WorkspaceFileModeSchema,
+} from "./zod-schema.agent-entry-base.js";
 import {
   AgentModelSchema,
   AgentToolModelSchema,
@@ -60,6 +64,7 @@ export const AgentDefaultsBaseSchema = z.strictObject({
   models: AgentModelMapSchema.optional(),
   modelPolicy: AgentModelPolicySchema.optional(),
   workspace: z.string().optional(),
+  workspaceFileMode: WorkspaceFileModeSchema.optional(),
   cwd: z.string().optional(),
   skills: z.array(z.string()).optional(),
   silentReply: SilentReplyPolicyConfigSchema.optional(),

@@ -5,6 +5,10 @@ import {
   persistAuthProfileBatch,
   upsertAuthProfileWithLockOrThrow,
 } from "../../../agents/auth-profiles/upsert-with-lock.js";
+import * as modelRuntime from "../../../agents/embedded-agent-runner/model.js";
+import { prepareEmbeddedRunAuthPlan } from "../../../agents/embedded-agent-runner/run/auth-plan.js";
+import type { AgentHarness } from "../../../agents/harness/types.js";
+import { makeProviderModelFixture } from "../../../agents/test-helpers/provider-model-fixture.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
   replaceSessionEntry,
@@ -15,6 +19,7 @@ import type { ModelProviderConfig } from "../../../config/types.models.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveCronJobConfigRevision } from "../../../cron/config-revision.js";
 import { captureCronInferenceBinding } from "../../../cron/inference-binding.runtime.js";
+import { prepareCronRunInference } from "../../../cron/run-inference.js";
 import { resolveCronOperatorExecutionRevision } from "../../../cron/service/jobs-tool-policy.js";
 import { loadCronJobsStore, saveCronJobsStore } from "../../../cron/store.js";
 import * as receipts from "../../../cron/store/run-receipt-store.test-support.js";
@@ -23,6 +28,8 @@ import { runLegacyCronHealth } from "../../../flows/doctor-health-contribution-r
 import { mintCronStandingGrantLocked } from "../../../gateway/operator-approval-standing-grants.worker.js";
 import * as grants from "../../../gateway/operator-approval-store.js";
 import * as snapshots from "../../../infra/sqlite-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
+import { withPluginRuntimeGenerationScope } from "../../../plugins/runtime/generation-scope.js";
 import * as stateDb from "../../../state/openclaw-state-db.js";
 import type { OpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
@@ -132,6 +139,147 @@ function legacyJob(id: string, model?: string): CronStoredJob {
     state: { lastRunAtMs: 123, lastRunStatus: "ok", consecutiveErrors: 2 },
   };
 }
+
+it.each(["model", "provider", "session"] as const)(
+  "repairs migrated heartbeat-main on explicit Codex %s runtime twice before scheduled auth",
+  async (runtimeSource) => {
+    await withAccounts(async (state) => {
+      const modelRef = "openai/gpt-5.5";
+      const cfg = config(state, {
+        systemAgent: { agentId: "main" },
+        model: modelRef,
+        ...(runtimeSource === "model"
+          ? { models: { [modelRef]: { agentRuntime: { id: "codex" } } } }
+          : {}),
+      });
+      if (runtimeSource === "provider") {
+        cfg.models = {
+          providers: {
+            openai: {
+              api: "openai-chatgpt-responses",
+              baseUrl: "https://chatgpt.com/backend-api/codex",
+              agentRuntime: { id: "codex" },
+              models: [createTestModelDefinition("gpt-5.5")],
+            },
+          },
+        };
+      }
+      await configure(state, cfg);
+      await saveProfiles(oauthProfile("openai:heartbeat", "synthetic-heartbeat-access"));
+      const sessionKey = "agent:main:main";
+      if (runtimeSource === "session") {
+        await replaceSessionEntry(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: "heartbeat-session",
+            updatedAt: 1,
+            agentRuntimeOverride: "codex",
+          },
+        );
+      }
+      // Persist the heartbeat retirement shape without inventing historical account ownership.
+      const job: CronStoredJob = {
+        ...legacyJob("heartbeat-main"),
+        sessionTarget: `session:${sessionKey}`,
+        delivery: { mode: "none", target: "owner" },
+      };
+      const storePath = state.statePath("cron", "jobs.json");
+      await saveJobs(storePath, job);
+      const model = makeProviderModelFixture<"openai-chatgpt-responses">({
+        id: "gpt-5.5",
+        provider: "openai",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+      });
+      const harness: AgentHarness = {
+        id: "codex",
+        label: "Codex auth boundary",
+        authBootstrap: "harness",
+        supports: () => ({ supported: true }),
+        runAttempt: async () => {
+          throw new Error("Auth boundary must not execute inference");
+        },
+      };
+      const stores = modelRuntime.createEmptyAgentDiscoveryStores();
+      vi.spyOn(modelRuntime, "resolveModelAsync").mockResolvedValue({
+        ...stores,
+        model,
+        logicalRef: { provider: "openai", model: "gpt-5.5" },
+      });
+      const run = async (stored: CronStoredJob) => {
+        const inference = await prepareCronRunInference({
+          cfg,
+          binding: stored.inferenceBinding,
+          agentDir: state.agentDir(),
+        });
+        try {
+          inference?.assertCandidate("openai", false, "codex");
+          return await withPluginRuntimeGenerationScope(
+            { metadataSnapshot: createPluginMetadataSnapshotFixture() },
+            () =>
+              prepareEmbeddedRunAuthPlan({
+                assertCurrent() {},
+                runParams: {
+                  sessionId: "heartbeat-session",
+                  runId: "heartbeat-run",
+                  agentId: "main",
+                  workspaceDir: state.workspaceDir,
+                  prompt: "Synthetic heartbeat",
+                  timeoutMs: 1000,
+                  trigger: "cron",
+                  config: cfg,
+                  ...inference?.runParams,
+                },
+                provider: "openai",
+                modelId: "gpt-5.5",
+                model,
+                agentDir: state.agentDir(),
+                workspaceDir: state.workspaceDir,
+                nativeModelOwned: false,
+                ...stores,
+                getAgentHarness: () => harness,
+                setAgentHarness() {},
+                getRuntimeModel: () => model,
+                getEffectiveModel: () => model,
+                applyResolvedRuntimeModel() {},
+                selectHarnessForPreparedAttempts: () => harness,
+              }),
+          );
+        } finally {
+          inference?.dispose();
+        }
+      };
+      const repaired = await doctor.withDoctorConfigMaintenance(async () => {
+        await migrate(cfg);
+        const [first] = await readJobs(storePath);
+        await migrate(cfg);
+        expect(await readJobs(storePath)).toEqual([first]);
+        if (!first) {
+          throw new Error("Migrated heartbeat-main is missing");
+        }
+        return first;
+      });
+      const prepared = await run(repaired);
+      expect(repaired).toEqual({
+        ...job,
+        inferenceBinding: {
+          version: 1,
+          provider: "openai",
+          profileId: "openai:heartbeat",
+          authorizationId: expect.stringMatching(/^[a-f0-9]{64}$/),
+          authRequirement: "subscription",
+          source: "auto",
+          runtime: "codex",
+        },
+      });
+      expect(prepared.preparedAuthAttempts).toMatchObject([
+        { kind: "profile", profileId: "openai:heartbeat" },
+      ]);
+      expect(prepared.lockedProfileId).toBe("openai:heartbeat");
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+    });
+  },
+);
 
 it("adopts canonical SQLite jobs during update Doctor without pinning inherited models or rewriting existing bindings", async () => {
   await withAccounts(async (state) => {
@@ -340,6 +488,7 @@ it("records the planner's first account for ambiguous jobs, keeps direct keys un
           "openai/gpt-5.4",
           "synthetic/model",
           "literal/model",
+          "native-command/model",
           "ollama/llama3.3",
         ],
       },
@@ -348,6 +497,13 @@ it("records the planner's first account for ambiguous jobs, keeps direct keys un
       providers: {
         synthetic: provider("synthetic:stored", "https://invalid.test/v1"),
         literal: provider("synthetic-direct-key", "https://literal.invalid.test/v1"),
+        "native-command": {
+          api: "openai-responses",
+          baseUrl: "https://native.invalid.test/v1",
+          auth: "native-command",
+          agentRuntime: { id: "codex" },
+          models: [configuredModel("model")],
+        },
         ollama: {
           api: "ollama",
           baseUrl: "http://127.0.0.1:11434",
@@ -404,6 +560,7 @@ it("records the planner's first account for ambiguous jobs, keeps direct keys un
       makeAccountJob("native-config", "openai/gpt-5.4@openai:a"),
       makeAccountJob("native-session"),
       makeAccountJob("native-locked"),
+      makeAccountJob("native-command", "native-command/model"),
       makeAccountJob("local", "ollama/llama3.3"),
       { ...makeAccountJob("deleted-agent"), agentId: "deleted" },
       makeAccountJob("unavailable-model", "openai/does-not-exist"),
@@ -446,8 +603,6 @@ it("records the planner's first account for ambiguous jobs, keeps direct keys un
         "deleted-agent",
         "unavailable-model",
         "modelPolicy.allow",
-        "native-config",
-        "native-session",
         "native-locked",
       );
       expect(globalThis.fetch).not.toHaveBeenCalled();
@@ -460,6 +615,8 @@ it("records the planner's first account for ambiguous jobs, keeps direct keys un
         ambiguous: { profileId: "openai:a", source: "auto" },
         "previous-fallback": { provider: "openai", profileId: "openai:a" },
         "provider-account": { provider: "synthetic", profileId: "synthetic:stored" },
+        "native-config": { profileId: "openai:a", runtime: "codex" },
+        "native-session": { profileId: "openai:a", runtime: "codex" },
       };
       expect(Object.fromEntries(saved.map((j) => [j.id, j.inferenceBinding]))).toMatchObject(
         bindings,

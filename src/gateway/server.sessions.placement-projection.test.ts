@@ -83,6 +83,7 @@ function placementContext(
               providerId: "machine0",
               profileId: "team",
               leaseId: null,
+              resourceReceipt: null,
               sharedHost: null,
               createdAtMs: 100,
               idleSinceAtMs: null,

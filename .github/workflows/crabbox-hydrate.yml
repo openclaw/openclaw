@@ -331,15 +331,15 @@ jobs:
             case "$arch" in
               aarch64|arm64)
                 buildx_arch=arm64
-                buildx_sha256=38e890e1a162bfdbf32fbe91404991dc4fc28e55b0de901b34374a061bab4d2c
+                buildx_sha256=3b83b3731916ba433feccaaa689fe5bcdc81c641d92c8e6c2ea865dfa141c97a
                 ;;
               x86_64|amd64)
                 buildx_arch=amd64
-                buildx_sha256=4fe4cc38adf48169132749b6ca22a990928db0118e3407584ee553723115d287
+                buildx_sha256=e25d5cd675092bb5d1d03632fdc46cdf3fede7b514dc5f023a105e00d3ce5ad4
                 ;;
               *) echo "unsupported buildx arch: $arch" >&2; exit 2 ;;
             esac
-            buildx_version="v0.38.0"
+            buildx_version="v0.38.1"
             mkdir -p "$HOME/.docker/cli-plugins"
             curl --fail --show-error --location \
               --connect-timeout "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_CONNECT_TIMEOUT_SECONDS:-15}" \

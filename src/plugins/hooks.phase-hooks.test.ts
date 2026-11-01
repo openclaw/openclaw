@@ -254,6 +254,7 @@ describe("prompt phase hooks", () => {
     const enrichment = vi.fn<PromptHook["handler"]>((_event, ctx) => {
       expect(ctx.toolAuthority?.allows("memory_search")).toBe(false);
       expect(ctx.toolAuthority?.allows("message")).toBe(true);
+      expect(ctx.toolAuthority?.list?.()).toEqual(["message"]);
       return { prependContext: "authorized context", systemPrompt: "ignored override" };
     });
     const runner = promptRunner([
@@ -269,6 +270,77 @@ describe("prompt phase hooks", () => {
     });
     const retained = enrichment.mock.calls[0]?.[1].toolAuthority;
     expect(() => retained?.assertActive()).toThrow("no longer active");
+    expect(() => retained?.list?.()).toThrow("no longer active");
+  });
+
+  it("enumerates only each finalized turn surface, including an empty surface", async () => {
+    const ordinary = vi.fn<PromptHook["handler"]>(() => ({ toolsAllow: ["message"] }));
+    const enrichment = vi.fn<PromptHook["handler"]>(() => ({ prependContext: "policy guidance" }));
+    const runner = promptRunner([
+      { handler: ordinary },
+      { requiresToolAuthority: true, handler: enrichment },
+    ]);
+    const policy = await runner.runBeforePromptBuild(phaseEvent, {});
+    expect(ordinary.mock.calls[0]?.[1].toolAuthority).toBeUndefined();
+    expect(enrichment).not.toHaveBeenCalled();
+    const tools = applyEmbeddedAttemptToolsAllow(
+      [{ name: "message" }, { name: "exec" }, { name: "memory_search" }],
+      policy?.toolsAllow,
+    );
+    for (const [activeToolNames, expected] of [
+      [tools.map((tool) => tool.name), ["message"]],
+      [[], []],
+      [["memory_search"], ["memory_search"]],
+    ] as const) {
+      let names: readonly string[] | undefined;
+      enrichment.mockImplementation((_event, ctx) => {
+        names = ctx.toolAuthority?.list?.();
+        return { prependContext: "policy guidance" };
+      });
+      await runner.runAuthorizedPromptBuild(phaseEvent, {}, { ...authority, activeToolNames });
+      expect(names).toEqual(expected);
+    }
+  });
+
+  it("returns immutable canonical names and rejects enumeration after host revocation", async () => {
+    const started = createDeferred();
+    const release = createDeferred();
+    const enrichment = vi.fn<PromptHook["handler"]>(async () => {
+      started.resolve();
+      await release.promise;
+    });
+    const runner = promptRunner([{ requiresToolAuthority: true, handler: enrichment }]);
+    let active = true;
+    const run = runner.runAuthorizedPromptBuild(
+      phaseEvent,
+      {},
+      {
+        ...authority,
+        activeToolNames: [" Message ", "memory_search", "message", ""],
+        assertHostActive: () => {
+          if (!active) {
+            throw new Error("host revoked");
+          }
+        },
+      },
+    );
+    const settled = expect(run).rejects.toThrow("host revoked");
+    try {
+      await started.promise;
+      const capability = enrichment.mock.calls[0]?.[1].toolAuthority;
+      const names = capability?.list?.();
+      expect(names).toEqual(["memory_search", "message"]);
+      expect(Object.isFrozen(names)).toBe(true);
+      expect(capability?.list?.()).toBe(names);
+      expect(capability?.allows("exec")).toBe(false);
+      expect(capability?.allows("memory_search")).toBe(true);
+      active = false;
+      expect(() => capability?.list?.()).toThrow("host revoked");
+    } finally {
+      active = false;
+      release.resolve();
+      await settled;
+    }
   });
 
   it("rejects stale enrichment and never starts its successor after host authority closes", async () => {
@@ -484,6 +556,9 @@ describe("prompt hook invocation", () => {
         secondGate.resolve();
         await expect(run).resolves.toEqual({ prependContext: "live context" });
         expect(isActive(contexts[1]?.hookInvocation)).toBe(false);
+        if (phase === "authorized") {
+          expect(() => contexts[0]?.toolAuthority?.list?.()).toThrow("no longer active");
+        }
       } finally {
         firstGate.resolve();
         secondGate.resolve();

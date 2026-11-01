@@ -2436,17 +2436,22 @@ EOF
     expect(result.stdout).toContain("fund=false");
   });
 
-  it("warns before redirecting an unwritable npm prefix and persists it before shell guards", () => {
-    const tmp = tempDirs.make("openclaw-install-npm-prefix-");
-    const home = join(tmp, "home");
-    const events = join(tmp, "events.log");
-    mkdirSync(home, { recursive: true });
-    writeFileSync(
-      join(home, ".bashrc"),
-      'case $- in\n  *i*) ;;\n  *) return ;;\nesac\nexport PATH="$HOME/.npm-global/bin:$PATH"\n',
-    );
+  it.each(["success", "mkdir", "config"] as const)(
+    "redirects an unwritable npm prefix only after successful setup: %s",
+    (failure) => {
+      const tmp = tempDirs.make("openclaw-install-npm-prefix-");
+      const home = join(tmp, "home");
+      const events = join(tmp, "events.log");
+      mkdirSync(home, { recursive: true });
+      if (failure === "mkdir") {
+        writeFileSync(join(home, ".npm-global"), "existing user file");
+      }
+      writeFileSync(
+        join(home, ".bashrc"),
+        'case $- in\n  *i*) ;;\n  *) return ;;\nesac\nexport PATH="$HOME/.npm-global/bin:$PATH"\n',
+      );
 
-    const result = runInstallShell(`
+      const result = runInstallShell(`
       set -euo pipefail
       source "${SCRIPT_PATH}"
       SHELL=/bin/bash
@@ -2462,6 +2467,7 @@ EOF
         fi
         if [[ "$1" == "config" && "$2" == "set" && "$3" == "prefix" ]]; then
           printf 'npm-set:%s\\n' "$4" >> "$events"
+          ${failure === "config" ? "return 73" : ""}
           return 0
         fi
         return 1
@@ -2469,30 +2475,43 @@ EOF
       ui_info() { printf 'info:%s\\n' "$*" >> "$events"; }
       ui_warn() { printf 'warn:%s\\n' "$*" >> "$events"; }
       ui_success() { printf 'success:%s\\n' "$*" >> "$events"; }
-      fix_npm_permissions
+      fix_npm_permissions || exit 1
       cat "$events"
       printf 'first=%s\\n' "$(sed -n '1p' "$HOME/.bashrc")"
       HOME=${JSON.stringify(home)} PATH=/usr/bin:/bin bash -c 'source_rc() { . "$HOME/.bashrc"; }; source_rc; printf "path=%s\\n" "\${PATH%%:*}"'
     `);
 
-    expect(result.status).toBe(0);
-    const lines = result.stdout.trim().split("\n");
-    const warningIndex = lines.findIndex((line) =>
-      line.includes("The installer will switch npm's user prefix"),
-    );
-    const npmSetIndex = lines.findIndex((line) => line.startsWith("npm-set:"));
-    const noSudoWarningIndex = lines.findIndex((line) => line.includes("Avoid sudo npm i -g"));
-    expect(warningIndex).toBeGreaterThanOrEqual(0);
-    expect(npmSetIndex).toBeGreaterThan(warningIndex);
-    expect(noSudoWarningIndex).toBeGreaterThan(npmSetIndex);
-    expect(result.stdout).toContain("npm global prefix is not writable");
-    expect(result.stdout).toContain("npm normally writes that setting to ~/.npmrc");
-    expect(result.stdout).toContain("npm i -g openclaw@latest");
-    expect(result.stdout).toContain("using this user prefix");
-    expect(result.stdout).not.toContain("has been saved");
-    expect(result.stdout).toContain('first=export PATH="$HOME/.npm-global/bin:$PATH"');
-    expect(result.stdout).toContain(`path=${home}/.npm-global/bin`);
-  });
+      if (failure !== "success") {
+        expect(result.status, result.stdout + result.stderr).toBe(1);
+        const recorded = readFileSync(events, "utf8");
+        expect(recorded).not.toContain("success:");
+        expect(recorded).not.toContain("Avoid sudo npm i -g");
+        expect(readFileSync(join(home, ".bashrc"), "utf8")).toMatch(/^case \$-/);
+        if (failure === "mkdir") {
+          expect(recorded).not.toContain("npm-set:");
+          expect(readFileSync(join(home, ".npm-global"), "utf8")).toBe("existing user file");
+        }
+        return;
+      }
+      expect(result.status).toBe(0);
+      const lines = result.stdout.trim().split("\n");
+      const warningIndex = lines.findIndex((line) =>
+        line.includes("The installer will switch npm's user prefix"),
+      );
+      const npmSetIndex = lines.findIndex((line) => line.startsWith("npm-set:"));
+      const noSudoWarningIndex = lines.findIndex((line) => line.includes("Avoid sudo npm i -g"));
+      expect(warningIndex).toBeGreaterThanOrEqual(0);
+      expect(npmSetIndex).toBeGreaterThan(warningIndex);
+      expect(noSudoWarningIndex).toBeGreaterThan(npmSetIndex);
+      expect(result.stdout).toContain("npm global prefix is not writable");
+      expect(result.stdout).toContain("npm normally writes that setting to ~/.npmrc");
+      expect(result.stdout).toContain("npm i -g openclaw@latest");
+      expect(result.stdout).toContain("using this user prefix");
+      expect(result.stdout).not.toContain("has been saved");
+      expect(result.stdout).toContain('first=export PATH="$HOME/.npm-global/bin:$PATH"');
+      expect(result.stdout).toContain(`path=${home}/.npm-global/bin`);
+    },
+  );
 
   it.each([
     { shell: "bash", profiles: [".bashrc", ".profile"], absent: [".zshrc", ".zprofile"] },

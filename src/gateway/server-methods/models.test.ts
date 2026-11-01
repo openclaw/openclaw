@@ -1187,6 +1187,7 @@ describe("models.list", () => {
                     source: "model",
                   },
                   available,
+                  supportsFastMode: false,
                   tags: ["configured"],
                   ...(authenticated ? {} : { unavailableReason: "missing-auth" }),
                 },

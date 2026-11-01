@@ -197,6 +197,51 @@ itUnix("restores a SQLite runtime that has no engine-aware sentinel method", asy
   expect(result.log).not.toContain("could not be recorded");
 });
 
+itUnix.each(["run", "root"] as const)(
+  "does not borrow another %s's SQLite notice during service recovery",
+  async (foreignIdentity) => {
+    let original: unknown;
+    const foreignReason = "unrelated-update-failure";
+    const result = await runManagedServiceManagerBoundary("systemd", {
+      ledger: true,
+      controlDisconnect: "transferred",
+      helperExitCode: 7,
+      updaterResult: failedUpdate,
+      async prepareState({ env }) {
+        await writeRestartSentinel(
+          {
+            kind: "update",
+            status: "error",
+            ts: Date.now(),
+            stats: {
+              handoffId: "systemd-boundary",
+              root:
+                foreignIdentity === "root"
+                  ? path.join(env.OPENCLAW_STATE_DIR!, "other-install")
+                  : env.OPENCLAW_STATE_DIR,
+              ...(foreignIdentity === "run" ? { runId: "another-run" } : {}),
+              reason: foreignReason,
+              steps: [],
+            },
+          },
+          env,
+        );
+        original = readRestartSentinelPayload(env);
+      },
+    });
+
+    expect(result.sentinel).toEqual(original);
+    expect(result.state).toMatchObject({
+      restored: true,
+      triageObservedRestored: true,
+      triageInput: { error: expect.stringContaining("candidate-failed") },
+    });
+    expect(JSON.stringify(result.state.triageInput)).not.toContain(foreignReason);
+    expect(result.run).toMatchObject({ status: "failed", reason: "candidate-failed" });
+    expect(result.sensitiveFilesRemoved).toBe(true);
+  },
+);
+
 describe.skipIf(!connection || process.platform === "win32")(
   "generated handoff on PostgreSQL",
   () => {

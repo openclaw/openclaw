@@ -97,6 +97,8 @@ export const ModelCompatSchema = z
     reasoningEffortMap: z.record(z.string().min(1), z.string().min(1)).optional(),
     /** Thinking level a new session starts at. When set, this row owns the thinking profile. */
     defaultThinkingLevel: z.string().min(1).optional(),
+    /** Offered thinking levels, in order. When set, this row owns the thinking profile. */
+    thinkingLevels: z.array(z.string().min(1)).optional(),
     /** Offers the `adaptive` thinking level. */
     adaptiveThinking: z.boolean().optional(),
     /** Thinking stays on even when `reasoning` is false. */

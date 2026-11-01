@@ -1,7 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "../../../../packages/agent-core/src/types.js";
-import { prepareForeignLiveSessionPendingInputEntries } from "../../../config/sessions/session-accessor.pending-inputs.js";
+import {
+  prepareForeignLiveSessionPendingInputEntries,
+  readSessionSubmittedInput,
+} from "../../../config/sessions/session-accessor.pending-inputs.js";
 import type { SessionTranscriptWriteScope } from "../../../config/sessions/session-accessor.sqlite-contract.js";
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.types.js";
 import { runWithSessionActorStorage } from "../../../config/sessions/session-actor-storage-binding.js";
@@ -10,6 +13,7 @@ import { SessionTranscriptReadFenceError } from "../../../config/sessions/sessio
 import { resolveSessionTranscriptReadFence } from "../../../config/sessions/session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "../../../config/sessions/session-transcript-read-source.js";
 import type { TranscriptEntryAnchor } from "../../../config/sessions/transcript-entry-anchor.js";
+import { messagesMatchForIdempotentReplay } from "../../../config/sessions/transcript-message-equality.js";
 import { sameSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import {
   captureOwnedTranscriptWriteAssertion,
@@ -28,6 +32,7 @@ import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
 } from "../../../sessions/user-turn-transcript.types.js";
+import { MODEL_FALLBACK_NOTICE_KIND } from "../../../shared/model-fallback-notice.js";
 import {
   isOpenClawDeliveryMirrorAssistantMessage,
   SKILL_WORKSHOP_CHANGE_NOTICE_KIND,
@@ -73,8 +78,11 @@ function isInterruptedTurnEntry(entry: SessionEntry, runId: string): boolean {
   const delivery = isOpenClawDeliveryMirrorAssistantMessage(message)
     ? asOptionalRecord(Reflect.get(message, "openclawDeliveryMirror"))
     : undefined;
-  // Background Workshop notices do not complete the foreground user turn.
-  if (delivery?.kind === SKILL_WORKSHOP_CHANGE_NOTICE_KIND) {
+  // Operational notices do not complete the foreground user turn.
+  if (
+    delivery?.kind === SKILL_WORKSHOP_CHANGE_NOTICE_KIND ||
+    delivery?.kind === MODEL_FALLBACK_NOTICE_KIND
+  ) {
     return true;
   }
   if (Reflect.get(message, "__openclaw")?.runId !== runId) {
@@ -219,9 +227,10 @@ export async function preparePersistedCurrentUserTurn(params: {
   message: PersistedUserTurnMessage | undefined;
   recorder: UserTurnTranscriptRecorder | undefined;
   runId: string;
+  fallbackReason?: string | null;
   signal?: AbortSignal;
   initial?: InitialPersistedUserTurn;
-}): Promise<InitialUserTurnReplayPreparation | undefined> {
+}): Promise<InitialUserTurnReplayPreparation | "already-delivered" | undefined> {
   const { sessionManager, message, recorder, runId } = params;
   const sessionTarget = sessionManager.getSessionTarget();
   if (!sessionTarget || !message?.idempotencyKey || !recorder) {
@@ -398,7 +407,48 @@ export async function preparePersistedCurrentUserTurn(params: {
         })
       )?.anchor;
   if (!initial) {
-    return undefined;
+    const currentId = sessionManager.resolveCurrentTurnEntryId((entry) =>
+      isInterruptedTurnEntry(entry, runId),
+    );
+    const current = currentId ? sessionManager.getEntry(currentId) : undefined;
+    // A retry can retain the keyed current user with a newer prompt projection.
+    // The fallback owner may continue its timed-out or output-limited request, not a historical retry.
+    if (
+      current?.type === "message" &&
+      ((current.message.role === "user" &&
+        Reflect.get(current.message, "idempotencyKey") === message.idempotencyKey) ||
+        (current.message.role === "assistant" &&
+          Reflect.get(current.message, "__openclaw")?.runId === runId &&
+          (current.message.stopReason === "error" ||
+            (params.fallbackReason === "timeout" && current.message.stopReason === "aborted") ||
+            (params.fallbackReason === "format" && current.message.stopReason === "length"))))
+    ) {
+      return undefined;
+    }
+    // Fresh staged input has no prior commit to acknowledge.
+    if (
+      recorder.getPendingInputMessage?.() &&
+      !recorder.validateCommittedReplay &&
+      !recorder.hasPersisted()
+    ) {
+      return undefined;
+    }
+    await recorder.validateCommittedReplay?.();
+    const submitted = await withSource(params.signal, async (target, assertSource) => {
+      const result = await readSessionSubmittedInput(target, message.idempotencyKey!, {
+        includeSource: true,
+      });
+      assertSource();
+      assertCurrent();
+      return result;
+    });
+    params.signal?.throwIfAborted();
+    // Active-path sequence excludes reset/replaced branches. Matching all persisted
+    // input fields preserves content and requester identity, not merely the key.
+    return submitted?.messageSeq !== undefined &&
+      messagesMatchForIdempotentReplay(submitted.message, message)
+      ? "already-delivered"
+      : undefined;
   }
   // Hooks and compaction can intervene before the core consumes this turn once.
   let pending = true;

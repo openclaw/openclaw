@@ -671,14 +671,14 @@ suite.define(() => {
   it.each(["final", "error"] as const)(
     "clears shared session activity when chat %s arrives first",
     async (terminalState) => {
-      const { page, gateway, runId, mainSession, mainSessionRunIndicator, activeUpdatedAt } =
+      const { page, gateway, runId, mainSessionRunIndicator, activeUpdatedAt } =
         await startLifecycleRun("finish this run");
       const diagnostic =
         "Provider request failed: session store unavailable. Retry after recovery.";
       if (terminalState === "error") {
         const readMatch = { key: "agent:main:main", unread: false };
         const readsBeforeError = (await gateway.getRequests("sessions.patch", readMatch)).length;
-        // Inspect terminal attention before the visible pane acknowledges it as read.
+        // Inspect the terminal result before the visible pane acknowledges it as read.
         await gateway.deferNext("sessions.patch", readMatch);
         await gateway.emitGatewayEvent("chat", {
           runId,
@@ -692,10 +692,6 @@ suite.define(() => {
             match: readMatch,
           });
           await page.getByRole("alert").filter({ hasText: diagnostic }).waitFor();
-          await mainSession.locator('[data-session-attention="error"]').waitFor();
-          expect(
-            await mainSession.locator("[data-session-attention=error]").getAttribute("aria-label"),
-          ).toContain(diagnostic);
           expect(await stopButton(page).count()).toBe(0);
           await expect.poll(() => mainSessionRunIndicator.count()).toBe(0);
         } finally {

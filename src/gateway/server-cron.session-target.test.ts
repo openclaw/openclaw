@@ -10,9 +10,10 @@ import {
 } from "./server-cron.test-support.js";
 
 let state: ReturnType<typeof loadCronService>;
+let cfg: ReturnType<typeof createCronConfig>;
 beforeEach(({ task }) => {
   resetGatewayCronMocks();
-  const cfg = createCronConfig(`server-cron-session-target-${task.id}`);
+  cfg = createCronConfig(`server-cron-session-target-${task.id}`);
   cfg.agents = { defaults: { systemAgent: { agentId: "main" } }, entries: { main: {}, ops: {} } };
   state = loadCronService(cfg);
 });
@@ -23,11 +24,17 @@ afterEach(async () => {
 
 const opaqueKey = "agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==";
 it.each([
-  [undefined, opaqueKey, "main", opaqueKey],
-  ["ops", "agent:main:main", "ops", "agent:ops:main"],
-])(
-  "routes agent=%s session=%s through to controller-owned cron turns",
-  async (agentId, sessionKey, expectedAgentId, expectedSessionKey) => {
+  [undefined, opaqueKey, "main", opaqueKey, "per-sender"],
+  ["ops", "agent:main:main", "ops", "agent:ops:main", "per-sender"],
+  ["main", "global", "main", "global", "global"],
+  ["ops", "global", "ops", "global", "global"],
+  ["main", "main", "main", "global", "global"],
+  ["main", "global", "main", "agent:main:global", "per-sender"],
+  ["main", "agent:main:global", "main", "agent:main:global", "global"],
+] as const)(
+  "routes agent=%s session=%s to %s/%s under %s scope",
+  async (agentId, sessionKey, expectedAgentId, expectedSessionKey, scope) => {
+    cfg.session = { ...cfg.session, scope };
     const job = await addAgentTurnJob(state, "custom-session", "hello", {
       agentId,
       sessionTarget: `session:${sessionKey}`,

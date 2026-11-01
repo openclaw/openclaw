@@ -170,6 +170,21 @@ it.each<[string, string[], string[], boolean, number?, number?, boolean?]>([
   },
 );
 
+it("retires a reader anchor when an explicit scroll command replaces it", () => {
+  const { scroller, instance, anchor, measureRows } = fixture();
+  anchor.messageKeys = messages("visible");
+  anchor.capture(scroller, false);
+  anchor.messageKeys = messages("older", "visible");
+  anchor.capture(scroller, false);
+  expect(anchor.messageKey).toBe("visible");
+
+  anchor.messageKeys = messages("older", "visible", "sent");
+  anchor.capture(scroller, true, true);
+  expect(anchor.messageKey).toBeNull();
+  expect(anchor.update(scroller, instance, measureRows)).toBe(false);
+  expect(measureRows).not.toHaveBeenCalled();
+});
+
 it("keeps the original reader target when another projection commits before restoration", () => {
   const { scroller, bubble, instance, anchor, measureRows } = fixture();
   let contentTop = 290;

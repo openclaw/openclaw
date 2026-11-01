@@ -7,6 +7,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Automatic composer height" });
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 suite.define(() => {
   it.each([
@@ -44,10 +45,12 @@ suite.define(() => {
         const initialShell = await shell.boundingBox();
         await editor.fill(Array.from({ length: 12 }, (_, i) => `Draft line ${i + 1}`).join("\n"));
         const expanded = await measure();
-        const artifacts = createControlUiE2eArtifactDir(
-          `composer-height-${route}-${width}-${height}`,
-        );
-        await page.screenshot({ path: `${artifacts}/expanded.png`, animations: "disabled" });
+        const artifacts = captureUiProof
+          ? createControlUiE2eArtifactDir(`composer-height-${route}-${width}-${height}`)
+          : undefined;
+        if (artifacts) {
+          await page.screenshot({ path: `${artifacts}/expanded.png`, animations: "disabled" });
+        }
         if (height === 900) {
           await expect
             .poll(async () => (await measure()).height)
@@ -80,17 +83,21 @@ suite.define(() => {
         const send = page.getByRole("button", { name: /^(Send|Start)/ }).last();
         await send.scrollIntoViewIfNeeded();
         await send.click({ trial: true });
-        await page.screenshot({ path: `${artifacts}/capped.png`, animations: "disabled" });
+        if (artifacts) {
+          await page.screenshot({ path: `${artifacts}/capped.png`, animations: "disabled" });
+        }
         if (route === "chat" && width > 600) {
           const thread = await page.locator(".chat-thread").boundingBox();
           expect(thread!.height).toBeGreaterThanOrEqual(height === 900 ? 159 : 59);
         }
         await editor.fill("Short draft");
         await expect.poll(async () => (await measure()).height).toBe(initial.height);
-        writeFileSync(
-          `${artifacts}/geometry.json`,
-          JSON.stringify({ route, width, height, initial, expanded, capped }, null, 2),
-        );
+        if (artifacts) {
+          writeFileSync(
+            `${artifacts}/geometry.json`,
+            JSON.stringify({ route, width, height, initial, expanded, capped }, null, 2),
+          );
+        }
       });
     },
   );

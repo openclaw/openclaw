@@ -19,7 +19,7 @@ import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
 import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-owner.ts";
 import type { ChatActivityPillsProps } from "./chat-activity-pills-types.ts";
 import { hasVisibleChatActivityPills } from "./chat-activity-pills-visibility.ts";
-import { chatPullRequestId } from "./chat-pull-requests.ts";
+import { chatPullRequestId, publicationPullRequestTarget } from "./chat-pull-requests.ts";
 import "./chat-activity-pills.css";
 
 registerEnglishCatalog(registerChatSessionOptionalEnglish);
@@ -315,8 +315,12 @@ function publicationView(view: GitHubPublicationView): PillView {
     };
   }
   if (view.result?.status === "published") {
+    // Bridges the receipt until the PR snapshot lists it and the PR pill takes over.
+    const target = publicationPullRequestTarget(view);
     return {
-      label: t("chat.activityPills.publication.published"),
+      label: target
+        ? t("chat.activityPills.pullRequest.number", { number: String(target.number) })
+        : t("chat.activityPills.publication.published"),
       icon: "gitPullRequest",
       badge: {
         icon: "check",

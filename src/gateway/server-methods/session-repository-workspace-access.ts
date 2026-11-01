@@ -9,6 +9,7 @@ import {
   runSessionMutation,
 } from "../../sessions/session-controller.lifecycle.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
+import { assertRepositoryWorkspaceDiskIdentity } from "../../state/session-repository-workspaces.authority.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import {
   parseWorkspaceInspectionResult,
@@ -136,6 +137,11 @@ export async function resolveRepositoryWorkspaceAccess(
       : await readSessionWorkerPlacementAsync({ context: context ?? {}, sessionId });
     assertSession(repository.revision);
     if (placement?.state !== "active" || !environments) {
+      if (repository.diskAuthority) {
+        throw new Error(
+          "The repository disk is unavailable; reconnect its original runner before accessing files.",
+        );
+      }
       return {
         kind: "stored" as const,
         repository,
@@ -150,6 +156,9 @@ export async function resolveRepositoryWorkspaceAccess(
         ? placementRead.current()
         : placements?.getMany([sessionId]).get(sessionId);
       const environment = environments.get(placement.environmentId);
+      if (repository.diskAuthority) {
+        assertRepositoryWorkspaceDiskIdentity(repository.diskAuthority, environment);
+      }
       if (
         current?.state !== "active" ||
         current.agentId !== repository.agentId ||

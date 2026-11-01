@@ -61,6 +61,26 @@ including when the update was started by an older installed update driver.
 Stored A2UI rows do not prevent the update. Runtime readers accept only the
 current widget formats; they do not retain a compatibility renderer.
 
+## Skill Workshop plugin policy
+
+Skill Workshop ships as the bundled `skill-workshop` plugin, enabled by default.
+Releases from 2026.10.1 ignored `skill-workshop` plugin policy while Workshop was
+built in. Until a config records `meta.migrations.skillWorkshopPlugin: true`, the
+runtime and config validation keep ignoring an older `plugins.entries.skill-workshop`
+entry, including its old settings, and the `skill-workshop` id in `plugins.deny`.
+Validation reports that Doctor will remove them.
+
+Doctor, which also runs during `openclaw update`, removes that older policy and records
+the marker. It does not change `plugins.allow` or `plugins.enabled`. An ordinary
+config write records the marker only when no older policy needs repair. While an older
+entry or deny id is ignored, config writes that change `plugins` are refused with the
+next step: run `openclaw doctor --fix`, then retry. After that, `skill-workshop` policy
+applies like any other plugin's.
+
+An exclusive `plugins.allow` without `skill-workshop`, or `plugins.enabled: false`, keeps
+the plugin off, so learned skills do not load. Doctor's Skill Workshop health check warns
+about either switch while Workshop is on and names the fix.
+
 ## Group allowlist fallback
 
 For channels that support legacy DM sender fallback, Doctor copies `allowFrom`

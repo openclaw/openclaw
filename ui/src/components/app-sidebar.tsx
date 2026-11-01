@@ -1,5 +1,4 @@
 import "../styles/sidebar-attention-floating.css";
-import "../styles/session-title-placeholder.css";
 import { getObserver } from "@solidjs/signals";
 import type { JSX } from "@solidjs/web";
 import { createEffect, createMemo, createProjection, onCleanup, onSettled } from "solid-js";

@@ -70,10 +70,14 @@ const controlUiPerformanceBudgets = {
   // one fewer request and 9,859 fewer encoded bytes. Retain 64 B build variance.
   // The lazily loaded Sections editor measures 308,462 B (#186229); Vyctor Brzezowski
   // approved the increase on 2026-10-28. Retain 64 B build variance.
-  totalCssGzipBytes: 308_526,
-  // Logs windowing adds 38 B raw / 11 B gzip for 17% lower first-render task CPU
-  // and 42% lower filter task CPU at 4x. Measured raw total plus 64 B variance.
-  totalCssRawBytes: 1_597_676,
+  // iOS-style mobile sheet motion (#188162) adds 279 B to a main that already measured
+  // 308,922 B: 309,201 B. Vyctor Brzezowski approved exceeding the budget on 2026-10-30.
+  // Retain 64 B build variance.
+  // Mobile composer controls stay inside the composer: 309,341 B measured.
+  totalCssGzipBytes: 309_366,
+  // Mobile composer controls stay inside the composer: 1,599,255 B raw measured.
+  // Keep the existing 64 B variance for the measured rendering and layout-stability wins.
+  totalCssRawBytes: 1_599_319,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

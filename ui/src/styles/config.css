@@ -810,16 +810,6 @@
   opacity: 0.7;
 }
 
-/* Hairline dividers around form sub-blocks (collapsible objects, arrays,
-   maps) so they chain with sibling settings-rows inside one group. */
-.cfg-block + .cfg-block,
-.settings-row + .cfg-block,
-.cfg-block + .settings-row,
-.settings-subrows + .cfg-block,
-.cfg-block + .settings-subrows {
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-}
-
 /* Collapsible nested-object summary behaves like a nav row. */
 .cfg-object__summary {
   cursor: var(--cursor-action);

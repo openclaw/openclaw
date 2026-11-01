@@ -11,6 +11,7 @@ import {
 } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveExecutablePath } from "../../infra/executable-path.js";
+import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import * as execRunner from "../../process/exec-runner.js";
 import { captureSessionDiffBaseline } from "../../sessions/session-diff.js";
@@ -381,16 +382,17 @@ describe("loadSessionDiff", () => {
   });
 
   it.each([
-    { kind: "tracked", flag: "--numstat" },
-    { kind: "untracked", flag: "ls-files" },
-  ])("reports a failed $kind inventory instead of an empty diff", async ({ kind, flag }) => {
+    { kind: "tracked", flags: ["--numstat"] },
+    { kind: "untracked", flags: ["status", "ls-files"] },
+  ])("reports a failed $kind inventory instead of an empty diff", async ({ kind, flags }) => {
     seedRepo({ "tracked.txt": "before\n" }, "init");
     write("tracked.txt", "after\n");
     const runCommand = execRunner.runCommandBuffersWithTimeout;
     vi.spyOn(execRunner, "runCommandBuffersWithTimeout").mockImplementation(
       async (argv, options) => {
         const result = await runCommand(argv, options);
-        return argv[argv.indexOf("-C") + 1] === repoRoot && argv.includes(flag)
+        return argv[argv.indexOf("-C") + 1] === repoRoot &&
+          flags.some((flag) => argv.includes(flag))
           ? { ...result, code: 1, stdout: Buffer.alloc(0) }
           : result;
       },
@@ -499,6 +501,9 @@ describe("loadSessionDiff", () => {
   });
 
   it("uses the accepted managed base for working, committed, and archived reads", async () => {
+    vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+    vi.stubEnv("GIT_CONFIG_GLOBAL", os.devNull);
+    await drainGlobalSingletonLifecycleState("restart");
     const stateRoot = tempDir("openclaw-review-base-");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateRoot);
     const id = randomUUID();
@@ -514,6 +519,26 @@ describe("loadSessionDiff", () => {
       repoGit("checkout", "-qb", "task");
       const worktree = { id, repoRoot, branch: "task" };
       await seedManagedReview(worktree, { sessionKey, sessionId: "s1" }, stateRoot, acceptedBase);
+      // Native revision reads are disabled on Windows.
+      if (process.platform !== "win32") {
+        // A later raw diff must not mask whether status retained its verified stat data.
+        repoGit("config", "diff.autoRefreshIndex", "false");
+        const indexPath = path.join(repoRoot, ".git", "index");
+        const originalIndex = fs.readFileSync(indexPath);
+        fs.utimesSync(path.join(repoRoot, "base.txt"), new Date(0), new Date(0));
+        expect(
+          await runGitWorkerOperation({
+            type: "checkout.revision",
+            input: { root: repoRoot, scope: "diff" },
+          }),
+        ).toMatchObject({ worktreeStatus: { clean: true } });
+        expect(fs.readFileSync(indexPath)).toEqual(originalIndex);
+        mockSession(repoRoot, { worktree });
+        expect(await requestDiff({ sessionKey, scope: "uncommitted" })).toMatchObject([
+          { ok: true, payload: { files: [], additions: 0, deletions: 0 } },
+        ]);
+        expect(fs.readFileSync(indexPath)).not.toEqual(originalIndex);
+      }
       mockSession(repoRoot, { worktree });
       write("task.txt", "authored change\n");
       const beforePublication = await readDiff();
@@ -577,6 +602,7 @@ describe("loadSessionDiff", () => {
       expect(filePaths(await readDiff())).toEqual(["task.txt", "upstream.txt"]);
     } finally {
       await closeOpenClawStateDatabaseAsync();
+      await drainGlobalSingletonLifecycleState("restart");
     }
   });
 

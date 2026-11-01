@@ -13,6 +13,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import { runWithProcessCleanupBudget } from "../process/supervisor/cleanup-budget.js";
 import { registerActiveDebugProxyCapture } from "../proxy-capture/runtime-cleanup.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
@@ -65,7 +66,7 @@ afterEach(() => {
   resetPluginRuntimeStateForTest();
 });
 
-it.each(["rejected", "timed out"])(
+it.each(["rejected", "slow", "timed out"])(
   "closes its listener and resources after restart marker persistence %s",
   async (outcome) => {
     const { listener, releaseListener, claim } = await reserveTestPortListener({
@@ -73,38 +74,40 @@ it.each(["rejected", "timed out"])(
       createListener: () => createServer(),
     });
     const entered = createDeferredCore();
-    const failure = new Error("marker store refused");
+    const committed = createDeferredCore();
     const params = createGatewayCloseTestDeps({
       httpServer: listener,
       channelIds: ["telegram"],
       persistRunningSessionsForRestart: async (signal) => {
         entered.resolve();
         if (outcome === "rejected") {
-          throw failure;
+          throw new Error("marker store refused");
         }
-        await new Promise<void>((_, reject) => {
-          signal.addEventListener(
-            "abort",
-            () => reject(new Error("marker write cancelled", { cause: signal.reason })),
-            { once: true },
-          );
-        });
+        await committed.promise;
+        signal.throwIfAborted();
       },
     });
-    vi.useFakeTimers();
-    const closing = closeGateway(params).catch((error: unknown) => error);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+    const closing = runWithProcessCleanupBudget(
+      { deadline: performance.now() + 2_000, warn() {} },
+      () => closeGateway(params).catch((error: unknown) => error),
+    );
     try {
       await entered.promise;
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(await closing).toEqual(
-        outcome === "rejected"
-          ? failure
-          : new Error("Shutdown session persistence did not settle within 1000ms"),
+      await vi.advanceTimersByTimeAsync(outcome === "timed out" ? 2_000 : 1_100);
+      committed.resolve();
+      expect(await closing).toMatchObject(
+        outcome === "slow"
+          ? { warnings: [] }
+          : outcome === "rejected"
+            ? new Error("marker store refused")
+            : new Error("Shutdown session persistence did not settle within 2000ms"),
       );
       expect(listener.listening).toBe(false);
       expect(params.stopChannel).toHaveBeenCalledWith("telegram");
       expect(sharedStateLifecycle.size).toBe(0);
     } finally {
+      committed.resolve();
       vi.useRealTimers();
       if (listener.listening) {
         await releaseListener();

@@ -1,5 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { createEffect, createMemo, For, Show } from "solid-js";
+import { createEffect, createMemo, Errored, For, Loading, Show } from "solid-js";
 import type { ThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import type { AgentsListResult } from "../api/types.ts";
 import {
@@ -16,8 +16,9 @@ import type { AgentSelectionCapability } from "../app/agent-selection.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import type { NativeDeviceSettingsCapability } from "../app/native-device-settings.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
+import { i18n } from "../i18n/index.ts";
 import { registerRouteSubtitlesEnglish } from "../i18n/locales/en-route-subtitles.ts";
-import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
+import { registerSettingsSidebarEnglish } from "../i18n/locales/en-settings-sidebar.ts";
 import { listSelectableAgents, normalizeAgentLabel } from "../lib/agents/display.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import type { GatewayStatus as GatewayStatusKind } from "../lib/gateway-status.ts";
@@ -34,7 +35,6 @@ import {
   settingsNavigationOwnerRoute,
   settingsSearchTextMatches,
 } from "../lib/settings-navigation.ts";
-import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
 import type { GatewayStatusProps } from "./gateway-status.ts";
 import {
   SettingsSaveIndicator,
@@ -50,7 +50,7 @@ import { ThemeBrandingIcon } from "./theme-brand-icon.tsx";
 
 registerRouteSubtitlesEnglish();
 
-registerSettingsEnglish();
+registerSettingsSidebarEnglish();
 
 type AgentRosterRow = AgentsListResult["agents"][number];
 
@@ -70,7 +70,9 @@ export type SettingsSidebarProps = {
   gatewayVersion: string;
   searchQuery: string;
   searchBlockMatches?: readonly SettingsSearchBlock[];
-  searchParams?: Parameters<typeof findSettingsSearchBlocks>[0];
+  searchParams?: Parameters<
+    typeof import("../pages/config/settings-search.ts").findSettingsSearchBlocks
+  >[0];
   onExit: () => void;
   onRetryConnect: () => void;
   onNavigate: (routeId: RouteId, options?: ApplicationNavigationOptions) => void;
@@ -295,19 +297,28 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
   let searchInput: HTMLInputElement | undefined;
   function SettingsNavigation() {
     const branding = themeBrandingProjection;
+    const blockMatches = createMemo(() => {
+      i18nRevision();
+      const params = props.searchParams;
+      if (props.searchBlockMatches) {
+        return props.searchBlockMatches;
+      }
+      if (!props.searchQuery.trim() || !params) {
+        return [];
+      }
+      return (async () => {
+        const { findSettingsSearchBlocks } = await import("../pages/config/settings-search.ts");
+        await i18n.prepareLocale();
+        return findSettingsSearchBlocks(params);
+      })();
+    });
     const groups = createMemo<readonly SettingsNavigationGroupView[]>(() => {
       i18nRevision();
       branding.read();
       const searchQuery = props.searchQuery;
-      const blockMatches =
-        props.searchBlockMatches ??
-        (props.searchParams ? findSettingsSearchBlocks(props.searchParams) : []);
       const canAdmin = props.canAdmin !== false;
       const nativeDeviceSettings = props.nativeDeviceSettings ?? null;
       const navigationGroups = visibleSettingsNavigationGroups(canAdmin, nativeDeviceSettings);
-      const visibleBlockMatches = blockMatches.filter((block) =>
-        isSettingsNavigationRouteVisible(block.routeId, canAdmin, nativeDeviceSettings),
-      );
       const normalizedQuery = normalizeLowercaseStringOrEmpty(searchQuery);
       if (!normalizedQuery) {
         return navigationGroups.map((group) => ({
@@ -315,6 +326,9 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
           items: group.routes.map((routeId) => ({ routeId, blocks: [] })),
         }));
       }
+      const visibleBlockMatches = blockMatches().filter((block) =>
+        isSettingsNavigationRouteVisible(block.routeId, canAdmin, nativeDeviceSettings),
+      );
       const sidebarRoutes = navigationGroups.flatMap((group) => group.routes);
       const searchableRoutes = [
         ...new Set([
@@ -395,38 +409,57 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
           )
         }
       >
-        <Show
-          when={groups().length > 0}
-          fallback={
-            <p class="settings-sidebar__empty" role="status">
-              {t("nav.settingsSearchNoResults")}
+        <Errored
+          fallback={(_error, retry) => (
+            <p class="settings-sidebar__empty" role="alert">
+              {t("nav.settingsLoadFailed")}
+              <button type="button" class="btn btn--sm" onClick={retry}>
+                {t("common.retry")}
+              </button>
             </p>
-          }
+          )}
         >
-          <For each={groups()} keyed={false}>
-            {(group) => (
-              <div class="settings-sidebar__group">
-                <Show when={group().labelKey}>
-                  {(label) => <div class="settings-sidebar__group-label">{t(label())}</div>}
-                </Show>
-                <For each={group().items} keyed={false}>
-                  {(item) => (
-                    <>
-                      <SettingsNavigationItem
-                        sidebar={props}
-                        routeId={item().routeId}
-                        branding={branding.read()}
-                      />
-                      <For each={item().blocks} keyed={false}>
-                        {(block) => <SettingsBlockItem sidebar={props} block={block()} />}
-                      </For>
-                    </>
-                  )}
-                </For>
-              </div>
-            )}
-          </For>
-        </Show>
+          <Loading
+            fallback={
+              <p class="settings-sidebar__empty" role="status">
+                {t("common.loading")}
+              </p>
+            }
+          >
+            <Show
+              when={groups().length > 0}
+              fallback={
+                <p class="settings-sidebar__empty" role="status">
+                  {t("nav.settingsSearchNoResults")}
+                </p>
+              }
+            >
+              <For each={groups()} keyed={false}>
+                {(group) => (
+                  <div class="settings-sidebar__group">
+                    <Show when={group().labelKey}>
+                      {(label) => <div class="settings-sidebar__group-label">{t(label())}</div>}
+                    </Show>
+                    <For each={group().items} keyed={false}>
+                      {(item) => (
+                        <>
+                          <SettingsNavigationItem
+                            sidebar={props}
+                            routeId={item().routeId}
+                            branding={branding.read()}
+                          />
+                          <For each={item().blocks} keyed={false}>
+                            {(block) => <SettingsBlockItem sidebar={props} block={block()} />}
+                          </For>
+                        </>
+                      )}
+                    </For>
+                  </div>
+                )}
+              </For>
+            </Show>
+          </Loading>
+        </Errored>
       </nav>
     );
   }
@@ -480,7 +513,9 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
                   return;
                 }
                 event.preventDefault();
-                if (props.searchQuery) {
+                // Native input can be newer than the committed query projection.
+                if (event.currentTarget.value) {
+                  event.currentTarget.value = "";
                   props.onSearchQueryChange("");
                 } else {
                   props.onExit();

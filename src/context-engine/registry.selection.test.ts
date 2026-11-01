@@ -41,10 +41,7 @@ import { getProcessStartTime } from "../shared/pid-alive.js";
 import { seedNativeVersionZeroState } from "../state/native-version-zero.test-support.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import {
-  createPassthroughEngineMethods,
-  MockContextEngine,
-} from "./context-engine.test-support.js";
+import { createPassthroughEngineMethods } from "./context-engine.test-support.js";
 import { LegacyContextEngine } from "./legacy.js";
 import { registerLegacyContextEngine } from "./legacy.registration.js";
 import {
@@ -837,7 +834,7 @@ describe("quarantine health", () => {
         const { reached, release, observer } = gateContextEngineHealthCleanupForTest();
         const registration = registerContextEngineForOwner(
           engineId,
-          () => new MockContextEngine(),
+          () => new LegacyContextEngine(),
           "test:health-registration",
         );
         const observed = registration.then(

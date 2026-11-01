@@ -80,8 +80,11 @@ export function ChatDetailSlot(props: ChatDetailSlotProps) {
       {props.content.kind === "loading" ? (
         <PanelLoadingSkeleton variant="review" label={t("common.loading")} />
       ) : props.content.kind === "unavailable" ? (
-        <div class="callout danger review-unavailable" role="alert">
-          <strong>{t("chat.detailPanel.unavailable")}</strong>
+        <div
+          class={["callout review-unavailable", { danger: !props.content.permission }]}
+          role={props.content.permission ? "status" : "alert"}
+        >
+          {!props.content.permission && <strong>{t("chat.detailPanel.unavailable")}</strong>}
           <span>{props.content.message}</span>
         </div>
       ) : props.content.kind === "tool-output" ? (

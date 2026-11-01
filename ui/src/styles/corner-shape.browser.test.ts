@@ -8,11 +8,8 @@ function corners(circular: string, superelliptical: string, selectors: string) {
 }
 
 const CORNER_CASES = [
-  ...corners(
-    "10px",
-    "12.5px",
-    ".btn, .sidebar-recent-session, .nav-item, .slash-menu, .chat-reply-context-menu",
-  ),
+  ...corners("10px", "12.5px", ".btn, .nav-item"),
+  ...corners("16px", "12.5px", ".slash-menu, .chat-reply-context-menu"),
   ...corners(
     "14px",
     "17.5px",
@@ -20,7 +17,7 @@ const CORNER_CASES = [
   ),
   ...corners("20px", "25px", ".option-card, .agent-chat__input, .agent-chat__input .slash-menu"),
   // Item radius is panel radius minus 4px, at both scales.
-  ...corners("6px", "8.5px", ".slash-menu-item, .chat-reply-context-menu button"),
+  ...corners("12px", "8.5px", ".slash-menu-item, .chat-reply-context-menu button"),
 ];
 
 // Neither siblings nor non-opted descendants may inherit scaled radius tokens.

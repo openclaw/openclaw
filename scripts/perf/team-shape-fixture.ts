@@ -106,8 +106,8 @@ export function parseTeamShapeOptions(argv: string[]) {
   }
   const worktreeFiles = integer("worktree-files", 0);
   const worktreeFileBytes = integer("worktree-file-bytes", 0);
-  if (worktreeFiles * worktreeFileBytes > 256 * 1024 ** 2) {
-    throw new Error("Synthetic worktree contents must fit within 256 MiB");
+  if (worktreeFiles * worktreeFileBytes > 2 * 1024 ** 3) {
+    throw new Error("Synthetic worktree contents must fit within 2 GiB");
   }
   const worktreeColdCommits = integer("worktree-cold-commits", 0);
   if (worktreeFiles > 500_000) {

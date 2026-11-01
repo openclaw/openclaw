@@ -7,8 +7,15 @@ import type { ConnectParams } from "../../packages/gateway-protocol/src/index.js
 import type { NodePairingRequestInput, PairedDeviceNode } from "../infra/device-pairing-node.js";
 import { resolveNodePairApprovalScopes } from "../infra/node-pairing-authz.js";
 import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-contract.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { resolveEffectiveComputerUseDescriptor } from "./node-computer-use-descriptor.js";
 import { reconcileNodePairingOnConnect } from "./node-connect-reconcile.js";
+
+const logs = vi.hoisted(() => ({ warn: vi.fn(), debug: vi.fn() }));
+vi.mock("../logging/subsystem.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logging/subsystem.js")>()),
+  createSubsystemLogger: () => logs,
+}));
 
 const makeNodeConnectParams = (overrides?: Partial<ConnectParams>): ConnectParams => ({
   minProtocol: 1,
@@ -267,4 +274,54 @@ it("applies declared capability and permission downgrades without reapproval", a
   expect(result.effectivePermissions).toEqual({ camera: false, watchReachable: false });
   expect(result.pendingPairing).toBeUndefined();
   expect(result.shouldClearPendingPairings).toBe(true);
+});
+
+it("warns once per node and distinct withheld command set across reconnects", async () => {
+  logs.warn.mockClear();
+  logs.debug.mockClear();
+  const connect = async (nodeId: string, commands: string[], allow: string[] = []) => {
+    const { result } = await reconcilePending("req-withheld", {
+      cfg: { gateway: { nodes: { commands: { allow } } } },
+      connectParams: hostConnectParams({
+        device: { id: nodeId, publicKey: "key", signature: "sig", signedAt: 1, nonce: "nonce" },
+        commands,
+      }),
+    });
+    return result.withheldCommands;
+  };
+  const commands = ["ollama.chat", "ollama.models"];
+  expect(await connect("withheld-a", commands)).toEqual(commands);
+  expect(await connect("withheld-a", commands.toReversed())).toEqual(commands.toReversed());
+  expect(await connect("withheld-a", [...commands, "ollama.chat"])).toEqual([
+    ...commands,
+    "ollama.chat",
+  ]);
+  expect(logs.warn.mock.calls).toEqual([
+    ["node command surface withheld node=withheld-a commands=ollama.chat,ollama.models"],
+  ]);
+  expect(logs.debug).toHaveBeenCalledTimes(2);
+
+  // A different node and a changed policy outcome must each remain visible.
+  await connect("withheld-b", commands);
+  expect(await connect("withheld-a", commands, ["ollama.chat"])).toEqual(["ollama.models"]);
+  await connect("withheld-a", commands, ["ollama.chat"]);
+  expect(logs.warn.mock.calls.slice(1)).toEqual([
+    ["node command surface withheld node=withheld-b commands=ollama.chat,ollama.models"],
+    ["node command surface withheld node=withheld-a commands=ollama.models"],
+  ]);
+  expect(logs.debug).toHaveBeenCalledTimes(3);
+});
+
+it.each(["close", "restart"] as const)("warns again after Gateway %s", async (event) => {
+  logs.warn.mockClear();
+  const connect = () =>
+    reconcilePending("req-lifecycle", {
+      connectParams: hostConnectParams({ commands: [`withheld.lifecycle.${event}`] }),
+    });
+  await connect();
+  await connect();
+  expect(logs.warn).toHaveBeenCalledTimes(1);
+  await drainGlobalSingletonLifecycleState(event);
+  await connect();
+  expect(logs.warn).toHaveBeenCalledTimes(2);
 });

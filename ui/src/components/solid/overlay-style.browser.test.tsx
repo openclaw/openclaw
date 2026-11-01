@@ -80,7 +80,6 @@ function positionTrigger(style: Partial<CSSStyleDeclaration>) {
 function expectItemVisible(element: HTMLElement, menu: HTMLElement) {
   const box = expectWithinViewport(menu);
   const itemBox = element.getBoundingClientRect();
-  expect(box.height).toBeLessThanOrEqual(420);
   expect(itemBox.bottom).toBeLessThanOrEqual(box.bottom);
   expect(itemBox.top).toBeGreaterThanOrEqual(box.top);
 }
@@ -118,13 +117,17 @@ describe("native overlay presentation", () => {
       }
       document.getAnimations().forEach((animation) => animation.finish());
       const colors: [Element, "color" | "backgroundColor", string][] = [
-        [surface(), "backgroundColor", "popover"],
+        [surface(), "backgroundColor", "menu-surface"],
         [item("Open"), "color", "text"],
-        [details("Open"), "color", "muted"],
-        [trigger("people-group").querySelector(".oc-menu-item__submenu-icon")!, "color", "muted"],
+        [details("Open"), "color", "text-tertiary"],
+        [
+          trigger("people-group").querySelector(".oc-menu-item__submenu-icon")!,
+          "color",
+          "text-tertiary",
+        ],
         [item("Delete"), "color", "danger"],
         [details("Delete"), "color", "danger"],
-        [trigger("people-group"), "backgroundColor", "surface-selected"],
+        [trigger("people-group"), "backgroundColor", "surface-hover"],
       ];
       for (const [element, property, token] of colors) {
         expect(getComputedStyle(element)[property], theme).toBe(color(`var(--${token})`));

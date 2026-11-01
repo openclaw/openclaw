@@ -64,6 +64,7 @@ function SidebarOwnerPicker(props: { host: SessionListHost }) {
         params: {
           id: "sidebar-session-owner-title",
           class: "sidebar-session-owner-filter",
+          triggerIcon: "chevronsUpDown" as const,
           label: t("sessionsView.owners"),
           value: props.host.sessionInvolvingMeFilterActive
             ? "involving-me"
@@ -137,7 +138,6 @@ export function renderSessionListToolbar(host: SessionListHost & { onToggleSideb
         }}
       >
         <Icon name="listFilter" />
-        <span class="sidebar-session-sort__status">{statusLabel()}</span>
       </button>
       <SidebarCollapseToggle onToggle={() => host.onToggleSidebar?.()} />
     </div>

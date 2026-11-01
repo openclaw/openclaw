@@ -19,10 +19,6 @@ const catalog = {
       contextFree: "Free space",
       contextUnavailable: "No matching context report. Send a message to capture one.",
       contextReserve: "{tokens} tokens reserved outside this budget",
-      contextCompactDescription: "Replaces older context with a summary.",
-      contextCompact: "Compact session",
-      contextCompacting: "Compacting",
-      contextCompactShort: "Compact",
       contextFreeShort: "{tokens} free",
       contextReserveShort: "+{tokens} reserved",
       contextInputShort: "in",
@@ -372,24 +368,6 @@ const catalog = {
       elapsed: "Elapsed time",
       duration: "Run duration",
     },
-    sessionSharing: {
-      noPeopleFound: "No people found",
-      tryAnotherName: "Try another name",
-      visibility: "Visibility",
-      publishDraft: "Publish draft",
-      noPeople: "No paired people found.",
-      publicAccess: "Public access",
-      notPublic: "Only signed-in people with access can view this session.",
-      enablePublicAccess: "Enable public access…",
-      disablePublicAccess: "Disable public access",
-      copyPublicLink: "Copy public link",
-      publicConfirmTitle: "Make this session world-readable?",
-      publicConfirmMessage:
-        "Anyone with the public link can read existing and future conversation text, including all user and assistant messages and progress, plus tool names, short argument summaries, and images without signing in.\n\nReasoning, tool-result text, and private dashboards stay hidden. Image contents are not redacted. Review for private information before sharing; disabling access cannot recall downloaded copies.",
-      publicConfirmEnable: "Make public",
-      publicEnabled: "Public access enabled. Copy the public link from Session sharing.",
-      publicDisabled: "Public access disabled.",
-    },
     sessionHeader: {
       continueInTerminal: {
         title: "Continue in terminal",
@@ -489,7 +467,6 @@ export const registerChatSessionOptionalEnglish = Object.assign(
     Object.assign(en.chat.rail, catalog.chat.rail);
     Object.assign(en.chat.sessionDiff, catalog.chat.sessionDiff);
     mergeCatalog(en.chat.subagentsPanel, catalog.chat.subagentsPanel);
-    Object.assign(en.chat.sessionSharing, catalog.chat.sessionSharing);
     mergeCatalog(en.chat.sessionHeader, catalog.chat.sessionHeader);
     Object.assign(en.chat.workspaceConflict, catalog.chat.workspaceConflict);
     Object.assign(en.chat.workspaceFiles, catalog.chat.workspaceFiles);

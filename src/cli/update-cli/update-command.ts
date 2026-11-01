@@ -144,6 +144,7 @@ async function updateCommandWithRuntime(
               prepared,
               recoveryState,
               invocationCwd,
+              env,
               (opts, presentation, executor) =>
                 updateCommandInternal(
                   opts,

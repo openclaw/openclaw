@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import * as sqliteRuntime from "../../infra/node-sqlite.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import * as storeWriterQueue from "../../shared/store-writer-queue.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   isOpenClawAgentDatabaseOpen,
@@ -37,6 +40,7 @@ import {
 } from "./session-accessor.sqlite-message-cut.test-support.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
+import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import * as coldStorage from "./session-cold-storage.js";
 import {
   createSessionColdStorageFixture,
@@ -158,7 +162,9 @@ describe("SQLite session branches", () => {
     );
   });
 
-  it("refuses cached worker summaries in cold storage and reuses them after restoration", async () => {
+  it("cancels queued cold branch reads and reuses summaries after restoration", async ({
+    signal,
+  }) => {
     const storePath = path.join(tempDirs.make("openclaw-branch-cold-"), "agent.sqlite");
     const fixture = await createSessionColdStorageFixture(storePath);
     await replaceSessionEntry(fixture.scope, { sessionId: historicalId, updatedAt: 1 });
@@ -175,10 +181,51 @@ describe("SQLite session branches", () => {
     expect(() => readSessionBranchSummariesInWorker(request)).toThrow(
       expect.objectContaining({ code: "TRANSCRIPT_COLD" }),
     );
+    const archive = readSessionColdTranscript(fixture.database(), historicalId);
+    const entered = createDeferredCore();
+    const release = createDeferredCore<undefined>();
+    const held = coldStorage.restoreSessionColdTranscript(fixture.scope, undefined, {
+      target: { ...fixture.scope, path: storePath },
+      readMetadata: async (phase) => {
+        if (phase === "initial") {
+          return archive;
+        }
+        entered.resolve();
+        return release.promise;
+      },
+    });
+    const controller = new AbortController();
+    let canceled: ReturnType<typeof listSessionBranches> | undefined;
+    try {
+      await awaitGateBeforeSettlement(entered.promise, held, "Restore did not enter its queue");
+      const queued = createDeferredCore();
+      const enqueue = storeWriterQueue.runQueuedStoreWrite;
+      const spy = vi.spyOn(storeWriterQueue, "runQueuedStoreWrite").mockImplementation((input) => {
+        const result = enqueue(input);
+        if (input.label === "session.cold.restore") {
+          queued.resolve();
+        }
+        return result;
+      });
+      canceled = listSessionBranches({ ...fixture.scope, signal: controller.signal });
+      await awaitGateBeforeSettlement(
+        queued.promise,
+        canceled,
+        "Branch read did not queue restoration",
+      );
+      controller.abort();
+      await withinTest(expect(canceled).resolves.toEqual({ status: "failed" }), signal);
+      spy.mockRestore();
+    } finally {
+      release.resolve(undefined);
+      await Promise.allSettled([held, canceled]);
+    }
+    const reads = vi.spyOn(transcriptWorker, "runSessionBranchSummaryWorkerRequest");
     await expect(listSessionBranches(fixture.scope)).resolves.toMatchObject({
       status: "ok",
       branches,
     });
+    expect(reads).toHaveBeenCalledTimes(2);
     expect(readSessionBranchSummariesInWorker(request)).toEqual(first);
   });
 

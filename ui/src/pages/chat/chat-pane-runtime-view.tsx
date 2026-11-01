@@ -28,6 +28,7 @@ import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
 import { chatGoalOperations } from "./chat-goals.ts";
+import { adoptBootComposer } from "./chat-pane-boot-composer.ts";
 import { chatPanePropertyKeys } from "./chat-pane-inputs.ts";
 import { PaneLayout } from "./chat-pane-layout-view.tsx";
 import type { ChatPaneRuntime } from "./chat-pane-render.ts";
@@ -141,6 +142,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     const focus = focusPending;
     focusPending = false;
     runtime.afterRender(focus);
+    adoptBootComposer(runtime);
     runtime.chatState.commitRender();
     if (runtime.presented && runtime.presentation.documentVisible) {
       notifyRenderLifecycleForTest(runtime.element, "commit");

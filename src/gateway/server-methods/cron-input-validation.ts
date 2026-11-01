@@ -340,7 +340,7 @@ export async function captureCronCreatorSession(
     loaded &&
     creatorSession &&
     operatorAuthority &&
-    operatorScopeSatisfied("operator.write", operatorAuthority.scopes) &&
+    operatorScopeSatisfied("operator.cron", operatorAuthority.scopes) &&
     job.payload.kind === "agentTurn" &&
     isCronOperatorSourceParent(
       { sessionTarget: job.sessionTarget, sourceConversation },
@@ -502,25 +502,36 @@ export async function captureCronUpdatedInferenceBinding(
 export async function cronRunQueuesBehindCaller(params: {
   job: CronStoredJob;
   cfg: OpenClawConfig;
-  callerSessionKey?: string;
+  caller?: { agentId: string; sessionKey: string };
   resolveDefaultAgentId: () => string | undefined;
 }): Promise<boolean> {
-  const { job, cfg, callerSessionKey } = params;
-  if (!callerSessionKey) {
+  const { job, cfg, caller } = params;
+  if (!caller?.sessionKey) {
     return false;
   }
   if (job.sessionTarget === "main") {
     return true;
   }
   const agentId = normalizeAgentId(job.agentId ?? params.resolveDefaultAgentId());
-  const isCallerSession = (sessionKey: string | undefined) =>
-    sessionKey !== undefined &&
-    resolveCronAgentSessionKey({
-      sessionKey,
-      agentId,
-      mainKey: cfg.session?.mainKey,
-      cfg,
-    }) === callerSessionKey;
+  const isCallerSession = (sessionKey: string | undefined) => {
+    if (sessionKey === undefined) {
+      return false;
+    }
+    const targetKey =
+      cfg.session?.scope === "global" && sessionKey.trim() === "global"
+        ? "global"
+        : resolveCronAgentSessionKey({
+            sessionKey,
+            agentId,
+            mainKey: cfg.session?.mainKey,
+            cfg,
+          });
+    // The literal global key identifies separate conversations for different agents.
+    return (
+      targetKey === caller.sessionKey &&
+      (targetKey !== "global" || agentId === normalizeAgentId(caller.agentId))
+    );
+  };
   if (
     job.payload.kind === "agentTurn" &&
     isCallerSession(resolveCronSessionTargetSessionKey(job.sessionTarget))

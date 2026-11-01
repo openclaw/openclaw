@@ -202,10 +202,14 @@ describe("subagent registry query regressions", () => {
       const second = makeRun("second", { childSessionKey: "child", generation: 2 });
       const memory =
         kind === "absent" ? undefined : kind === "same object" ? second : { ...second };
+      using copies = vi.spyOn(Array.prototype, "slice");
       let index = buildSubagentRunReadIndexFromRuns({
         runs: toRunMap([first, second]),
         inMemoryRuns: memory ? [memory, memory] : [],
       });
+      const initialCopies = copies.mock.calls.length;
+      copies.mockRestore();
+      expect(initialCopies).toBe(0);
       const captured = index.runsByChildSessionKey.get("child");
       const expected = kind === "distinct object" ? [first, second, memory] : [first, second];
       expect(captured).toEqual(expected);
@@ -221,6 +225,26 @@ describe("subagent registry query regressions", () => {
       );
       expect(captured).toEqual(expected);
       expect(captured?.[0]).toBe(first);
+    },
+  );
+
+  it.each([false, true])(
+    "keeps retired child snapshots after a memory-only update (%s)",
+    (same) => {
+      const first = makeRun("first", { childSessionKey: "child" });
+      let index = buildSubagentRunReadIndexFromRuns({
+        runs: toRunMap([first]),
+        inMemoryRuns: same ? [first] : [],
+      });
+      const captured = index.runsByChildSessionKey.get("child");
+      const memory = { ...first, cleanupCompletedAt: 50 };
+      index = index.patch(new Map(), toRunMap([memory]));
+      expect(index.runsByChildSessionKey.get("child")).toEqual([first, memory]);
+      const replacement = { ...first, cleanupCompletedAt: 100 };
+      index = index.patch(toRunMap([replacement]), new Map());
+      index = index.patch(new Map([[first.runId, undefined]]), new Map());
+      expect(index.runsByChildSessionKey.get("child")).toEqual([memory]);
+      expect(captured).toEqual([first]);
     },
   );
 

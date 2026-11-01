@@ -1,8 +1,10 @@
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../infra/agent-events.js";
+import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { hasGatewayContextOwner } from "../plugins/runtime/gateway-request-scope.js";
+import { getProcessCleanupBudget } from "../process/supervisor/cleanup-budget.js";
 import { captureGatewaySessionWorkAdmissionInterruption } from "../sessions/session-controller.lifecycle-work.js";
 import { sessionControllerMailboxes } from "../sessions/session-controller.mailbox.js";
 import { listRpcSourceEntries } from "../sessions/session-controller.rpc-sources.js";
@@ -42,13 +44,18 @@ export async function prepareGatewayRunShutdown(
   });
   const effects = captureGatewaySessionWorkAdmissionInterruption(params.resolveGatewayContext);
   const persistence = new AbortController();
+  // Marker writes share the lifecycle owner's deadline, including worker/writer queueing.
+  const budget = getProcessCleanupBudget();
+  const persistenceMs = budget ? Math.max(0, budget.deadline - performance.now()) : 1_000;
   let failure: { error: unknown } | undefined;
   try {
     await raceWithTimeout(
       async () => params.persistRunningSessionsForRestart?.(persistence.signal),
-      1_000,
+      persistenceMs,
       () => {
-        const error = new Error("Shutdown session persistence did not settle within 1000ms");
+        const error = new Error(
+          `Shutdown session persistence did not settle within ${persistenceMs}ms`,
+        );
         persistence.abort(error);
         throw error;
       },
@@ -56,6 +63,7 @@ export async function prepareGatewayRunShutdown(
     );
   } catch (error) {
     persistence.abort(error);
+    shutdownLog.warn(`Restart marker persistence failed: ${String(error)}`);
     failure = { error };
   }
   try {
@@ -92,16 +100,15 @@ export async function prepareGatewayRunShutdown(
   params.cancelReceivedWork?.(reason);
   const interrupted = effects.interrupt(reason);
   // Raw model/tool ownership is resource cleanup, not permission to wait forever.
-  // The close owner bounds this join and forbids reusing a retained runtime.
   const terminalPersistence = sources.flatMap(([, source]) =>
     source.adapter.projectSessionTerminalPersistence
       ? [source.adapter.projectSessionTerminalPersistence]
       : [],
   );
-  return {
-    failure,
-    released: Promise.all([capture.settled, interrupted.released, ...terminalPersistence]).then(
-      () => undefined,
-    ),
-  };
+  const released = Promise.allSettled([
+    capture.settled,
+    interrupted.released,
+    ...terminalPersistence,
+  ]).then((results) => throwIfSettledRejected(results, "Session shutdown persistence failed"));
+  return { failure, released };
 }

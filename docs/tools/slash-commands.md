@@ -47,6 +47,9 @@ command handling is enabled for the surface.
       and an adjacent separator (or its own line ending when alone on a line)
       are removed. Text with no recognized directive is unchanged.
       Added prompt context is not scanned for text commands or stripped as directives.
+    - Ordinary prose such as `How does /queue work?` stays unchanged. Native
+      `/queue` commands and explicit `/queue:` syntax still validate their arguments;
+      a mistyped mode such as `/queue backlog` still produces an error.
     - In **directive-only** messages (the message is only directives), they
       persist to the session and reply with an acknowledgement. Both the literal
       command and its delivered acknowledgement are retained as user/assistant

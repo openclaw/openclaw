@@ -256,6 +256,22 @@ describe("provider profiles", () => {
     ]);
   });
 
+  it("lets a stated ladder own the profile without a default", () => {
+    mocks.profile.mockReturnValue({ levels: [{ id: "high" }], defaultLevel: "high" });
+    // A mapped wire alias (xhigh -> high) stays hidden on the OpenClaw runtime too.
+    const params = thinkingModel({
+      api: "openai-responses",
+      reasoning: true,
+      compat: { thinkingLevels: ["low", "medium", "high"], reasoningEffortMap: { xhigh: "high" } },
+    });
+    expect(resolveThinkingProfile({ ...params, agentRuntime: "openclaw" })).toMatchObject({
+      levels: [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "ultra" }],
+      defaultLevel: undefined,
+    });
+    expect(resolveProviderThinkingLevel({ ...params, level: "ultra" })).toBe("high");
+    expect(mocks.profile).not.toHaveBeenCalled();
+  });
+
   it("preserves catalog-advertised advanced levels on other runtimes", () => {
     const params = thinkingModel({
       reasoning: true,

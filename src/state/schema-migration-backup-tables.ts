@@ -39,6 +39,8 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
     37: ["session_transcript_cold_archive_chunks"],
     // PostgreSQL-only full-text token split; SQLite advances metadata only.
     38: [],
+    // The table definition changes; rollback retains it without rebuilding indexes/statistics.
+    39: ["transcript_events"],
   },
   state: {
     [CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION]: [
@@ -46,7 +48,10 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
       "sqlite_stat1",
       "sqlite_stat4",
     ],
-    [MEETING_TRANSCRIPT_START_TIME_SCHEMA_VERSION]: ["meeting_transcript_sessions"],
+    [MEETING_TRANSCRIPT_START_TIME_SCHEMA_VERSION]: [
+      "meeting_transcript_sessions",
+      "worker_environments",
+    ],
     26: ["session_state_heads", "sqlite_stat1", "sqlite_stat4"],
     27: ["acp_replay_events", "skill_usage", "state_leases", "sqlite_stat1", "sqlite_stat4"],
     28: [
@@ -90,5 +95,7 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
       "sqlite_stat1",
       "sqlite_stat4",
     ],
+    37: ["worker_environments"],
+    38: ["session_repository_workspaces", "worker_workspace_pending_results"],
   },
 };

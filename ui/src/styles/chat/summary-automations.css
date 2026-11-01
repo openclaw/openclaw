@@ -35,6 +35,7 @@ openclaw-chat-summary-automations {
     line-height: 24px;
 
     &:hover {
+      background: transparent;
       color: var(--text);
     }
 
@@ -50,8 +51,7 @@ openclaw-chat-summary-automations {
   }
 }
 
-.chat-summary__automations,
-.session-automation-result {
+.chat-summary__automations {
   display: grid;
   gap: 2px;
   min-width: 0;
@@ -64,7 +64,7 @@ openclaw-chat-summary-automations {
   min-height: 32px;
   gap: 8px;
   padding: 4px 0;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   color: var(--text);
   font-size: 12px;
   line-height: 24px;
@@ -198,25 +198,4 @@ openclaw-chat-summary-automations {
   align-items: center;
   gap: 8px;
   min-width: 0;
-}
-
-.session-automation-result {
-  line-height: 16px;
-}
-
-.session-automation-result__summary {
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow-wrap: anywhere;
-}
-
-.session-automation-result__checked {
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.session-automation-result__error {
-  color: var(--danger);
 }

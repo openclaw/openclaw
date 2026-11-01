@@ -262,7 +262,9 @@ suite.define(() => {
       await rowFor("Alpha").locator('input[type="checkbox"]').check();
       await page.locator(".data-table-bulk-bar").getByText("1 selected").waitFor();
       await page.getByRole("button", { name: "Filters", exact: true }).click();
-      await page.locator('.sessions-filter-popover:popover-open input[type="text"]').fill("Bravo");
+      const filters = page.locator(".sessions-filter-popover:popover-open");
+      await filters.locator(".header-search__toggle").click();
+      await filters.getByRole("searchbox").fill("Bravo");
 
       await expectCount(rowFor("Alpha"), 0);
       await expectCount(page.locator(".data-table-bulk-bar"), 0);

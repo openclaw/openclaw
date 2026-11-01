@@ -290,32 +290,38 @@ until their dependent enforcement changes land.
   dispatch `rerun_group=all`.
 - Rerun a failed or timed out test job only after the lead records its
   real-blocker-or-flake decision (see the maintainer skill's shared release
-  boundaries). A flake gets at most two recorded reruns on the same Release SHA
-  plus a fix-in-parallel issue or PR on `main`; never a re-cut, tooling change,
-  or new FRV. New dispatches reject `known_flaky_jobs_json`.
+  boundaries). Call it a flake only when the same job or failure signature has
+  passed on the same Release SHA. Before rerunning, read the failure's own
+  diagnostics, inspect same-SHA attempts, and compare the failing paths against
+  the candidate delta and recent `main` history; a fix on `main` is not present
+  on the frozen candidate until ancestry or patch equivalence proves it. An
+  identical signature repeated on the same or another candidate is deterministic
+  until a named mechanism and fix prove otherwise. A flake gets at most two
+  recorded reruns on the same Release SHA plus a fix-in-parallel issue or PR on
+  `main`; never a re-cut, tooling change, or new FRV. New dispatches reject
+  `known_flaky_jobs_json`.
 - For a supported parent, `pnpm frv rerun --run <parent-run-id> --job
   "<child-key>:<exact job name>"` reruns one executed terminal job using its accepted
   Actions job ID. Get the child key and exact name from `frv status --json`.
   GitHub also reruns dependent jobs. The controller waits only for that child
   before sending the request; it does not retry unrelated failures.
 - `pnpm frv rerun --run <parent-run-id> --child <child-key|run-id>
-  [--max-attempts N]` records one of those bounded reruns. It waits for the
-  child to finish, sends exactly one rerun-failed-jobs request, and returns once
-  the new attempt exists without duplicate jobs. Before the request it prints
-  each failed job's runner labels and the current `OPENCLAW_CI_RUNNER_BACKEND`;
-  afterwards it appends an audit line to
-  `$TMPDIR/openclaw-frv/<repo>-<parent>-reruns.jsonl`. It refuses a passed
-  child, an artifact producer (use `continue --failed`), and a child past its
-  attempt budget: the default 2 allows one rerun; pass `--max-attempts 3` only
-  for a confirmed flake. When a failed-jobs rerun would re-execute an
-  attempt-bound install-smoke payload consumer (`installer_smoke_update`,
-  `installer_smoke_nonroot`; #161317), it reruns the green
-  producer job and its dependents instead, or the whole child when another
-  failed job is outside that set. `continue --failed` applies the same choice.
-  Reseal with `continue --failed`.
-- `pnpm frv continue --failed --run <parent-run-id>` reruns each failed child
-  as soon as it is terminal, even while the parent or siblings remain active.
-  It adopts active attempts and preserves green children. Once every required
+  [--max-attempts N]` records one bounded exact-job rerun. It waits for the
+  child to finish, requires exactly one blocking failed job, sends one request
+  for that accepted Actions job ID, and returns once the new attempt exists
+  without duplicate jobs. Before the request it prints the failed job's runner
+  labels and the current `OPENCLAW_CI_RUNNER_BACKEND`; afterwards it appends
+  an audit line to `$TMPDIR/openclaw-frv/<repo>-<parent>-reruns.jsonl`. It
+  refuses a passed child, an artifact producer (use `continue --failed`), a
+  child with multiple blocking failures, and a child past its attempt budget:
+  the default 2 allows one rerun; pass `--max-attempts 3` only for a confirmed
+  flake. Start a fresh all-group FRV when multiple blocking jobs fail. Reseal
+  with `continue --failed`.
+- `pnpm frv continue --failed --run <parent-run-id>` applies the same
+  exact-job restriction to each terminal failed child and failed artifact
+  producer, even while the parent or siblings remain active. It refuses
+  multi-job recovery and directs the operator to a fresh all-group FRV. It
+  adopts active attempts and preserves green children. Once every required
   child is green and the original parent finishes, it reruns the parent once
   to restore the same immutable plan and seal the updated all-group manifest.
   An early retry can invalidate the original Decision/Drain pairing; the final
@@ -873,9 +879,17 @@ run-ID-cached bytes first.
    them in a clean-home CLI probe, never as a substitute for a required
    Anthropic API-key lane.
 5. For live-cache failures, inspect whether it is missing/invalid key, empty text, provider refusal, timeout, or baseline miss. Do not weaken release gates without clear provider evidence.
-6. Decide blocker or flake for each failed test before editing. Track a fix for
-   flakes on `main`; every selected job must still pass before publication.
-   Classify blockers further:
+6. Decide blocker or flake for each failed test before editing. A flake requires
+   a passing occurrence of the same job or signature on this exact Release SHA.
+   First preserve the failing diagnostics, inspect every same-SHA attempt, and
+   run `git log <previous-release-tag>..<release-sha> -- <failing paths>` for
+   the candidate delta and `git log <release-sha>..origin/main -- <failing paths>`
+   for main-only changes. If `main` contains a repair absent from the frozen
+   candidate, treat the failure as a blocker and backport or supersede; do not
+   rerun it as inherited success. A signature repeated on another candidate is
+   deterministic until a named mechanism and fix prove otherwise. Track a fix
+   for genuine flakes on `main`; every selected job must still pass before
+   publication. Classify blockers further:
    - confirmed product/code failure: fix the release branch, freeze a new Code
      SHA, and invalidate product evidence
    - qualification harness/contract defect: repair the candidate closure and
