@@ -242,10 +242,6 @@ describe("node SQLite safety", () => {
       expect(captureSqliteNativeRuntimeAdmission()).toMatchObject({
         version: "3.51.3",
         extensionLoadingSupported: omitted === 0,
-        iteratorBehavior: {
-          nextAfterDoneIsTerminal: expect.any(Boolean),
-          returnAfterDoneIsInert: expect.any(Boolean),
-        },
       });
       expect(prepare).toHaveBeenCalledOnce();
     },
@@ -316,7 +312,7 @@ describe("node SQLite safety", () => {
       const native = mockBunSqliteNativeBoundary({ isBun: false });
       const parent = await loadNodeSqliteWithVersion("3.44.6", 1);
       parent.requireNodeSqlite();
-      const iteratorBehavior = parent.captureSqliteNativeRuntimeAdmission()?.iteratorBehavior;
+      const admission = parent.captureSqliteNativeRuntimeAdmission();
       parent.prepare.mockRestore();
       const receiptKey = "openclaw.sqliteNativeRuntimeAdmission";
       const receipt = native.environment.get(receiptKey);
@@ -362,9 +358,7 @@ describe("node SQLite safety", () => {
       expect(worker.supportsNodeSqliteExtensionLoading()).toBe(changed !== "unchanged");
       if (changed === "unchanged") {
         expect(worker.prepare).not.toHaveBeenCalled();
-        expect(worker.captureSqliteNativeRuntimeAdmission()?.iteratorBehavior).toEqual(
-          iteratorBehavior,
-        );
+        expect(worker.captureSqliteNativeRuntimeAdmission()).toEqual(admission);
       } else {
         expect(worker.prepare).toHaveBeenCalled();
       }

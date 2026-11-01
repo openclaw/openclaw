@@ -17,19 +17,13 @@ import {
   bindSqliteDatabaseAdmission,
   prepareSqliteDatabaseAdmission,
 } from "./sqlite-database-admission.js";
-import {
-  probeSqliteIteratorBehavior,
-  type SqliteIteratorBehavior,
-} from "./sqlite-native-observer.js";
 import { registerSqliteReaderConnection } from "./sqlite-reader-lifecycle.js";
 import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
 import { trackSqliteSchema } from "./sqlite-schema-facts.js";
 import { installProcessWarningFilter } from "./warning-filter.js";
 
 const require = createRequire(import.meta.url);
-let validatedSqliteModule:
-  | { sqlite: typeof import("node:sqlite"); iteratorBehavior: SqliteIteratorBehavior }
-  | undefined;
+let validatedSqliteModule: typeof import("node:sqlite") | undefined;
 let extensionLoadingSupported = false;
 let jsonbSupported = false;
 // Unqualified runtimes cannot confirm native disposal until the owning worker exits.
@@ -115,7 +109,6 @@ type SqliteNativeRuntimeAdmission = {
   runtime: ReturnType<typeof sqliteNativeRuntimeIdentity>;
   version: string;
   extensionLoadingSupported: boolean;
-  iteratorBehavior: SqliteIteratorBehavior;
 };
 
 function parseSqliteNativeRuntimeAdmission(
@@ -125,10 +118,7 @@ function parseSqliteNativeRuntimeAdmission(
     !isRecord(value) ||
     value.format !== 1 ||
     typeof value.version !== "string" ||
-    typeof value.extensionLoadingSupported !== "boolean" ||
-    !isRecord(value.iteratorBehavior) ||
-    typeof value.iteratorBehavior.nextAfterDoneIsTerminal !== "boolean" ||
-    typeof value.iteratorBehavior.returnAfterDoneIsInert !== "boolean"
+    typeof value.extensionLoadingSupported !== "boolean"
   ) {
     return undefined;
   }
@@ -141,10 +131,6 @@ function parseSqliteNativeRuntimeAdmission(
     runtime,
     version: value.version,
     extensionLoadingSupported: value.extensionLoadingSupported,
-    iteratorBehavior: {
-      nextAfterDoneIsTerminal: value.iteratorBehavior.nextAfterDoneIsTerminal,
-      returnAfterDoneIsInert: value.iteratorBehavior.returnAfterDoneIsInert,
-    },
   };
 }
 
@@ -171,9 +157,9 @@ export function installSqliteNativeRuntimeAdmission(value: unknown): void {
   }
 }
 
-function assertSafeSqliteRuntime(sqlite: typeof import("node:sqlite")): SqliteIteratorBehavior {
-  if (validatedSqliteModule?.sqlite === sqlite) {
-    return validatedSqliteModule.iteratorBehavior;
+function assertSafeSqliteRuntime(sqlite: typeof import("node:sqlite")): void {
+  if (validatedSqliteModule === sqlite) {
+    return;
   }
   const inherited = isMainThread
     ? undefined
@@ -183,15 +169,14 @@ function assertSafeSqliteRuntime(sqlite: typeof import("node:sqlite")): SqliteIt
     assertSqliteWalResetSafeVersion(inherited.version, process.versions.node);
     jsonbSupported = (compareValidSemver(inherited.version, "3.45.0") ?? -1) >= 0;
     extensionLoadingSupported = inherited.extensionLoadingSupported;
-    validatedSqliteModule = { sqlite, iteratorBehavior: inherited.iteratorBehavior };
-    return inherited.iteratorBehavior;
+    validatedSqliteModule = sqlite;
+    return;
   }
   // Shared-SQLite Node builds can load a different library than process.versions
   // reports, so query the loaded library before callers open real state databases.
   const database = new sqlite.DatabaseSync(":memory:");
   let version: string;
   let extensions: boolean;
-  let iteratorBehavior: SqliteIteratorBehavior;
   try {
     const statement = database.prepare(
       "SELECT sqlite_version() AS version, sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted",
@@ -200,21 +185,18 @@ function assertSafeSqliteRuntime(sqlite: typeof import("node:sqlite")): SqliteIt
     version = typeof row?.version === "string" ? row.version : "unknown";
     assertSqliteWalResetSafeVersion(version, process.versions.node);
     extensions = row?.omitted === 0;
-    iteratorBehavior = probeSqliteIteratorBehavior(statement);
   } finally {
     database.close();
   }
   jsonbSupported = (compareValidSemver(version, "3.45.0") ?? -1) >= 0;
   extensionLoadingSupported = extensions;
-  validatedSqliteModule = { sqlite, iteratorBehavior };
+  validatedSqliteModule = sqlite;
   setEnvironmentData(SQLITE_NATIVE_RUNTIME_ADMISSION_KEY, {
     format: 1,
     runtime: sqliteNativeRuntimeIdentity(),
     version,
     extensionLoadingSupported: extensions,
-    iteratorBehavior,
   });
-  return iteratorBehavior;
 }
 
 // node:sqlite is optional across Node versions, so callers get a clear runtime
@@ -287,7 +269,6 @@ export function openNodeSqliteDatabase(
     {
       DatabaseSync: sqlite.DatabaseSync,
       StatementSync: sqlite.StatementSync,
-      iteratorBehavior: assertSafeSqliteRuntime(sqlite),
     },
     options?.readOnly !== true,
   );
