@@ -116,7 +116,9 @@ export function applyConstructFallbacks(
     styles: synthesizedHeading ? mergeStyleSpans(projected) : projected,
   });
   const metadataIR: MarkdownIRWithMetadata = ir;
-  attachBlockMetadata(styled, metadataIR.blocks ?? []);
+  if (metadataIR.blocks) {
+    attachBlockMetadata(styled, metadataIR.blocks);
+  }
   const listEdits: TextEdit[] = [];
   for (const item of styled.listItems ?? []) {
     if (item.task) {

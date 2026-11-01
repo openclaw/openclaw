@@ -213,7 +213,10 @@ export function renderMarkdownWithMarkers(
           text[start] !== "\n" &&
           !codeBlocks.some((code) => code.start < start && start < code.end)
         ) {
-          quoteLineStarts.set(start, Math.max(quoteLineStarts.get(start) ?? 0, quote.blockquoteDepth ?? 1));
+          quoteLineStarts.set(
+            start,
+            Math.max(quoteLineStarts.get(start) ?? 0, quote.blockquoteDepth ?? 1),
+          );
           boundaries.add(start);
         }
         const newline = text.indexOf("\n", start);
