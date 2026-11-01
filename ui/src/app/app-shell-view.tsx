@@ -26,7 +26,7 @@ import type { ShellOwnedElements } from "./app-shell-components.ts";
 import { DevicePairSetup } from "./app-shell-device-pair-setup.tsx";
 import { ShellDocks } from "./app-shell-docks.tsx";
 import { ShellLazyOverlays, type ShellElementAttributes } from "./app-shell-lazy-view.tsx";
-import { readShellView, type ShellViewHost } from "./app-shell-view-state.ts";
+import { readShellView, type ShellView, type ShellViewHost } from "./app-shell-view-state.ts";
 import { beginNativeWindowDrag, beginNativeWindowDragFromTopInset } from "./native-window-drag.ts";
 import { FloatingUpdateCard } from "./navigation-surface-view.tsx";
 import { floatingSidebarAttentionVisible } from "./navigation-surface.ts";
@@ -78,7 +78,7 @@ declare module "@solidjs/web" {
 }
 
 export function ApplicationShell(props: {
-  host: ShellViewHost & { commitRenderedPresentation(): void };
+  host: ShellViewHost & { commitRenderedPresentation(view: ShellView): void };
 }): SolidJSX.Element {
   let content!: HTMLElement;
   let releaseNavDrawer: (() => void) | undefined;
@@ -536,9 +536,9 @@ export function ApplicationShell(props: {
   );
   return (
     <>
-      <Show when={view()} keyed>
+      <Show when={(props.host.navigationRevision(), view(), {})} keyed>
         {(_view) => {
-          onSettled(() => props.host.commitRenderedPresentation());
+          onSettled(() => props.host.commitRenderedPresentation(view()));
           return null;
         }}
       </Show>

@@ -59,6 +59,7 @@ import {
   createPersistCronSessionEntry,
   setCronSessionRuntimeModel,
   setCronSessionAgentHarnessId,
+  type MutableCronSession,
 } from "./run-session-state.js";
 import { resolveCronRunTimeoutOverrideMs } from "./run-timeout.js";
 import { prepareCronSessionWorkspace } from "./run-workspace.js";
@@ -243,7 +244,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
       resolveCreatorSandbox(runtimeCfg, { actor: cronExecutionActor(input.job) }) ??
       input.occurrence.childParent?.sandbox;
     const usesExactRunSession = usesDetachedRunSession || baseSessionKey.startsWith("cron:");
-    const cronSession = await prepareCronSession({
+    const cronSession: MutableCronSession = await prepareCronSession({
       cfg: runtimeCfg,
       sessionKey: agentSessionKey,
       sourceSessionKey,

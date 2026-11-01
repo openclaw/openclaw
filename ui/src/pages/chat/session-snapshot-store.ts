@@ -9,6 +9,12 @@ import {
 import { listen } from "../../lib/reactive/listener.ts";
 import * as json from "../../lib/snapshot-json.ts";
 import {
+  consumePrewarmedChatSnapshot,
+  discardPrewarmedChatSnapshot,
+  peekPrewarmedChatSnapshot,
+  type PrewarmedSnapshot,
+} from "./chat-snapshot-prewarm.ts";
+import {
   getSessionCacheValue,
   MAX_CACHED_CHAT_SESSIONS,
   setSessionCacheValue,
@@ -37,17 +43,12 @@ import {
 import {
   snapshotStoreGeneration,
   sidebarSnapshotInvalidationMatches,
+  sidebarSnapshotDeletedSessionKey,
   subscribeSnapshotInvalidation,
   type SessionSnapshotInvalidationReason,
   type SnapshotInvalidation,
 } from "./session-snapshot-invalidation-events.ts";
 import { deleteStoredChatSnapshot } from "./session-snapshot-invalidation.ts";
-import {
-  consumePrewarmedChatSnapshot,
-  discardPrewarmedChatSnapshot,
-  peekPrewarmedChatSnapshot,
-  readSharedPrewarm,
-} from "./session-snapshot-prewarm.ts";
 import {
   CHAT_SNAPSHOT_PROJECTION_VERSION,
   createSnapshotRecord,
@@ -68,6 +69,34 @@ type SnapshotReadScope = {
 
 const activeStores = new Set<SessionSnapshotStore>();
 
+function readSharedPrewarm(
+  entry: PrewarmedSnapshot,
+  read: () => Promise<ChatSessionSnapshot | null>,
+) {
+  const prepared: NonNullable<PrewarmedSnapshot["prepared"]> = (entry.prepared ??= {
+    promise: read().then((snapshot) => {
+      prepared.snapshot = snapshot;
+      return snapshot;
+    }),
+  });
+  return prepared;
+}
+
+export function waitForPrewarmedChatSnapshot(cacheKey: string): Promise<void> | undefined {
+  const entry = peekPrewarmedChatSnapshot();
+  if (entry?.cacheKey !== cacheKey || entry.cancelled || entry.prepared?.snapshot !== undefined) {
+    return undefined;
+  }
+  // Only this pane waits: an unavailable cache must never hold first mount indefinitely.
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    entry.ready,
+    new Promise<void>((resolve) => {
+      timeout = setTimeout(resolve, 100);
+    }),
+  ]).finally(() => clearTimeout(timeout));
+}
+
 async function readSnapshotRecord(
   sessionKey: string,
   value: unknown,
@@ -86,8 +115,8 @@ async function readSnapshotRecord(
     return null;
   }
   if (!record) {
-    debugSnapshotStore("resetting cache after record shape mismatch");
-    await resetSessionSnapshotDatabase();
+    debugSnapshotStore("discarding malformed snapshot record");
+    await deleteStoredChatSnapshot(sessionKey, "cache-eviction");
   }
   return record?.snapshot ?? null;
 }
@@ -336,7 +365,11 @@ export class SessionSnapshotStore implements ChatCacheObserver {
 
   forgetSidebar(invalidation: SnapshotInvalidation): void {
     for (const key of this.readScopes.keys()) {
-      if (key.includes("\u0000sidebar:") && sidebarSnapshotInvalidationMatches(key, invalidation)) {
+      if (
+        key.includes("\u0000sidebar:") &&
+        (sidebarSnapshotInvalidationMatches(key, invalidation) ||
+          sidebarSnapshotDeletedSessionKey(key, invalidation))
+      ) {
         this.forget(key);
       }
     }

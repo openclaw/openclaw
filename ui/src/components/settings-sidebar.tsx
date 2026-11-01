@@ -202,10 +202,19 @@ function SettingsAgentSelector(props: SettingsSidebarProps) {
   const selectionSource = createMemo(() => props.settingsAgentSelection);
   const identities = createMemo(() => projectOwner(identitySource(), (source) => source.entries()));
   const selection = createMemo(() => projectAgentSelection(selectionSource()));
+  let readIdentityTargets: () => readonly (string | null)[] = () => [
+    selection().read().state.selectedId,
+  ];
   createEffect(
-    () => [identitySource(), selection().read().state.selectedId] as const,
-    ([source, agentId]) => {
-      void source.ensure([agentId]);
+    () => {
+      identities().read();
+      return {
+        source: identitySource(),
+        ids: [...new Set([selection().read().state.selectedId, ...readIdentityTargets()])],
+      };
+    },
+    ({ source, ids }) => {
+      void source.ensure(ids);
     },
   );
   const roster = createMemo(() => props.agents);
@@ -231,6 +240,10 @@ function SettingsAgentSelector(props: SettingsSidebarProps) {
     <div class="settings-sidebar__agent">
       <openclaw-agent-select
         prop:options={options()}
+        prop:identityTargetsRef={(read) => {
+          readIdentityTargets = read;
+        }}
+        prop:onIdentityTargetsChange={() => void identitySource().ensure(readIdentityTargets())}
         prop:identityById={Object.fromEntries(
           identities()
             .read()
@@ -241,7 +254,6 @@ function SettingsAgentSelector(props: SettingsSidebarProps) {
         prop:menuLabel={t("agentScope.label")}
         prop:disabled={options().length <= 1}
         prop:onSelect={(agentId: string) => props.settingsAgentSelection.set(agentId)}
-        onOverlay-show={() => void props.agentIdentity.ensure(agents().map((agent) => agent.id))}
       />
     </div>
   );

@@ -345,6 +345,12 @@ same `{ event, ctx }` payload as
 `runAgentHarnessAgentEndHook(...)`; their failures do not alter the completed
 attempt result.
 
+Set `event.modelIterations` when the harness observes model calls directly, and
+`ctx.toolNames` to the OpenClaw tool names the model could call. The helpers add
+`event.skillsUsed` from the run's skill-usage record. `ctx.modelIterations` and
+`ctx.skillWorkshopAvailable` are deprecated aliases for those two fields,
+supported through 2026-12-31.
+
 Pass `ctx.foregroundPromptContext` built with
 `buildEmbeddedForegroundPromptContext(params, agentDir)` from the same
 `EmbeddedRunAttemptParams` the attempt ran with. The detached Skill Workshop
