@@ -23,7 +23,7 @@
 }
 
 .dashboards-loading__control {
-  height: 40px;
+  height: var(--settings-control-height);
 }
 
 .dashboards-loading__select {
