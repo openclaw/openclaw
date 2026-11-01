@@ -1,0 +1,3 @@
+# Italian recall-intent positives (question, completed discussion, retrospective
+# decision) and negatives (future reminders, ordinary narration) for escalate mode.
+12
