@@ -210,8 +210,11 @@ export function createWorkboardColumnWindow(input: {
         viewport = element;
         const layout = input.layout();
         const gap = Number.parseFloat(getComputedStyle(element).rowGap) || 0;
-        measuredLayout = layout;
-        publishViewport(element.scrollTop, element.clientHeight, element.clientWidth, gap);
+        // Remounts keep the previous size so settlement can invalidate old measurements.
+        if (view().width === 0) {
+          measuredLayout = layout;
+          publishViewport(element.scrollTop, element.clientHeight, element.clientWidth, gap);
+        }
         captureAnchor(element.scrollTop, describePositions(layout, gap));
         observeViewport = () => {
           if (observer) {
