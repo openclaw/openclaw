@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolveAdmittedRunActiveAssertion as activeAssertion } from "../../agents/admitted-run-context.js";
 import { runWithAgentToolSourceExecutionScope as withSource } from "../../agents/agent-tool-source-execution-guard.js";
@@ -29,6 +30,7 @@ import {
 } from "../../infra/diagnostic-events.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { readSqliteDatabaseScopedWriteTokensForPath } from "../../infra/sqlite-database-admission.js";
+import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -150,6 +152,34 @@ it("yields an in-flight review when interactive work starts", async () => {
     }
   });
   await expect(runSkillExperienceReview(candidate)).rejects.toThrow("yielded to foreground");
+});
+
+it("holds Gateway drain until the notice of committed changes settles", async () => {
+  const committed: WorkshopChange = {
+    id: "c1",
+    agentId: "main",
+    skillName: "actual-budget-operations",
+    action: "patch",
+    actor: "review",
+    summary: "tightened reconciliation step",
+    createdAtMs: 1,
+  };
+  const noticeStarted = createDeferred<void>();
+  const noticeRelease = createDeferred<void>();
+  mocks.listWorkshopChanges.mockResolvedValue([committed]);
+  mocks.runEmbeddedAgent.mockResolvedValue(completedReview);
+  mocks.postWorkshopChangeNotice.mockImplementationOnce(async () => {
+    noticeStarted.resolve();
+    await noticeRelease.promise;
+  });
+
+  const review = runSkillExperienceReview(candidate);
+  await noticeStarted.promise;
+  // A graceful restart waits while root work is active; the model run has already ended.
+  expect(getActiveGatewayRootWorkCount()).toBe(1);
+  noticeRelease.resolve();
+  await review;
+  expect(getActiveGatewayRootWorkCount()).toBe(0);
 });
 
 it("announces changes committed before the review run failed", async () => {

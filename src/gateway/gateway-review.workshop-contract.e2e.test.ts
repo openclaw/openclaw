@@ -164,6 +164,8 @@ async function withReview(
     failAt?: number;
     channel?: "telegram" | "slack";
     deliveryFailure?: boolean;
+    /** Holds the channel notice send open until released. */
+    holdDelivery?: { started: Deferred; release: Deferred };
     mode?: "auto" | "propose";
   } = {},
 ) {
@@ -329,6 +331,10 @@ async function withReview(
                     sendPayload: async (context: ChannelOutboundPayloadContext) => {
                       sends.push(context);
                       eventsAtSend.push(peekSystemEvents(sessionKey));
+                      if (options.holdDelivery) {
+                        options.holdDelivery.started.resolve();
+                        await options.holdDelivery.release.promise;
+                      }
                       if (options.deliveryFailure) {
                         throw new Error("CONTRACT_CHANNEL_FAILURE");
                       }
@@ -872,6 +878,32 @@ describe("Workshop review through the real Gateway", () => {
           expect(fixture.reviewRequests.length).toBeGreaterThan(0);
         },
         { channel: "telegram" },
+      );
+    },
+  );
+
+  it(
+    "keeps a graceful restart waiting until the review's channel notice settles",
+    { timeout: 150_000 },
+    async () => {
+      const holdDelivery = { started: createDeferred(), release: createDeferred() };
+      await withReview(
+        editActions.slice(0, 2),
+        async (fixture) => {
+          fixture.release.resolve();
+          await fixture.foreground();
+          // The skill change is committed and the review model run has ended; only the
+          // Learned notice is still being delivered.
+          await holdDelivery.started.promise;
+          expect((await fixture.changes()).length).toBeGreaterThan(0);
+          expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
+          holdDelivery.release.resolve();
+          await expect
+            .poll(() => getActiveGatewayRootWorkCount(), { timeout: 30_000, interval: 100 })
+            .toBe(0);
+          expect(fixture.sends).toHaveLength(1);
+        },
+        { channel: "telegram", holdDelivery },
       );
     },
   );

@@ -50,9 +50,10 @@ export async function runSkillExperienceReview(
   // A Gateway reset keeps the sessionId and rotates the lifecycle revision; the notice is
   // posted only to the generation the review read.
   let generation: Parameters<typeof postWorkshopChangeNotice>[0]["generation"] | undefined;
-  let reviewFailure: unknown;
-  try {
-    const result = await runSessionFork({
+  // Settlement runs inside the fork's detached admission, so a graceful restart waits for the
+  // notice of skills the review already committed.
+  await runSessionFork(
+    {
       config,
       source,
       prompt: buildSkillExperienceReviewPrompt({
@@ -85,43 +86,50 @@ export async function runSkillExperienceReview(
           lifecycleRevision: entry.lifecycleRevision ?? null,
         };
       },
-    });
-    assertSkillReviewRunSucceeded(result);
-  } catch (error) {
-    reviewFailure = error;
-  }
-  // Each skill_workshop call commits on its own, so a failed or aborted run may have changed
-  // skills. Cleanup always runs after the stop, and its independent failure must stay visible
-  // to the scheduler instead of being classified as part of the cancellation.
-  let cleanupFailure: unknown;
-  try {
-    const changes = await listWorkshopChanges(agentId, { runId });
-    if (generation) {
-      await postWorkshopChangeNotice({ config, generation, runId, changes });
-    }
-  } catch (error) {
-    cleanupFailure = error;
-  }
-  if (cleanupFailure !== undefined) {
-    // Cleanup failure identity survives even when the model succeeded. Do not throw it bare:
-    // an aborted controller would classify a plain error as expected cancellation.
-    throw reviewFailure === undefined
-      ? new AggregateError([cleanupFailure], "Skill experience review cleanup failed")
-      : new AggregateError(
-          [reviewFailure, cleanupFailure],
-          "Skill experience review and its cleanup failed",
-        );
-  }
-  if (reviewFailure !== undefined) {
-    if (options.abortSignal?.aborted || getGatewayRestartDrainSignal().aborted) {
-      // The model aborts with a plain error; normalize the outcome so the scheduler reports
-      // an expected cancellation rather than a review failure.
-      throw Object.assign(new Error("Skill experience review was stopped by the user."), {
-        name: "AbortError",
-      });
-    }
-    throw reviewFailure instanceof Error
-      ? reviewFailure
-      : new Error(formatErrorMessage(reviewFailure));
-  }
+    },
+    async (outcome) => {
+      let reviewFailure: unknown = outcome.ok ? undefined : outcome.error;
+      if (outcome.ok) {
+        try {
+          assertSkillReviewRunSucceeded(outcome.result);
+        } catch (error) {
+          reviewFailure = error;
+        }
+      }
+      // Each skill_workshop call commits on its own, so a failed or aborted run may have changed
+      // skills. Cleanup always runs after the stop, and its independent failure must stay visible
+      // to the scheduler instead of being classified as part of the cancellation.
+      let cleanupFailure: unknown;
+      try {
+        const changes = await listWorkshopChanges(agentId, { runId });
+        if (generation) {
+          await postWorkshopChangeNotice({ config, generation, runId, changes });
+        }
+      } catch (error) {
+        cleanupFailure = error;
+      }
+      if (cleanupFailure !== undefined) {
+        // Cleanup failure identity survives even when the model succeeded. Do not throw it bare:
+        // an aborted controller would classify a plain error as expected cancellation.
+        throw reviewFailure === undefined
+          ? new AggregateError([cleanupFailure], "Skill experience review cleanup failed")
+          : new AggregateError(
+              [reviewFailure, cleanupFailure],
+              "Skill experience review and its cleanup failed",
+            );
+      }
+      if (reviewFailure !== undefined) {
+        if (options.abortSignal?.aborted || getGatewayRestartDrainSignal().aborted) {
+          // The model aborts with a plain error; normalize the outcome so the scheduler reports
+          // an expected cancellation rather than a review failure.
+          throw Object.assign(new Error("Skill experience review was stopped by the user."), {
+            name: "AbortError",
+          });
+        }
+        throw reviewFailure instanceof Error
+          ? reviewFailure
+          : new Error(formatErrorMessage(reviewFailure));
+      }
+    },
+  );
 }

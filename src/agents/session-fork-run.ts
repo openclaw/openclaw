@@ -132,14 +132,33 @@ function sessionConversationFacts(entry: SessionEntry | undefined) {
   };
 }
 
-export async function runSessionFork(params: SessionForkRunParams) {
+export type SessionForkOutcome =
+  | { ok: true; result: Awaited<ReturnType<typeof runSessionForkInner>> }
+  | { ok: false; error: unknown };
+
+/**
+ * Runs the fork, then the caller's settlement (for example, announcing what the fork's tools
+ * committed) inside the same detached admission, so a graceful restart waits for both.
+ */
+export async function runSessionFork<T>(
+  params: SessionForkRunParams,
+  settle: (outcome: SessionForkOutcome) => Promise<T>,
+): Promise<T> {
   const abortSignal = params.abortSignal
     ? AbortSignal.any([getGatewayRestartDrainSignal(), params.abortSignal])
     : getGatewayRestartDrainSignal();
   // The foreground root has closed by the time a background owner forks. Admit this detached
   // run independently; a real Gateway drain still refuses it.
   return await runWithGatewayDetachedWorkAdmission(
-    () => runSessionForkInner(params, abortSignal),
+    async () => {
+      let outcome: SessionForkOutcome;
+      try {
+        outcome = { ok: true, result: await runSessionForkInner(params, abortSignal) };
+      } catch (error) {
+        outcome = { ok: false, error };
+      }
+      return await settle(outcome);
+    },
     `${params.owner}:session-fork`,
     abortSignal,
   );
