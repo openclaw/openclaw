@@ -25,6 +25,73 @@ describe("existing PR preparation through the registered agent action", () => {
     realWorktree: true,
   });
 
+  it.each(["private PR", "revoked transfer", "revoked recovery"] as const)(
+    "preserves the bound workspace when base refresh is unauthorized (%s)",
+    async (condition) => {
+      const privatePr = condition === "private PR";
+      const f = await fixture({ fork: true, conflict: true });
+      expect(await f.invoke()).toMatchObject({ status: "prepared" });
+      // The accepted public PR becomes private before this unlinked guest refreshes it.
+      f.pr.base.repo.private = f.pr.head.repo.private = privatePr;
+      const upstreamGit = (...args: string[]) => f.local!.git("-C", f.upstream, ...args);
+      await upstreamGit("checkout", "main");
+      await fs.writeFile(path.join(f.upstream, "artifact.txt"), "new target change\n");
+      await upstreamGit("add", "artifact.txt");
+      await upstreamGit("commit", "-m", "Advance the target after preparation");
+      const baseCommit = (f.pr.base.sha = await upstreamGit("rev-parse", "HEAD"));
+      const refresh = (resolved = false) =>
+        f.invoke({
+          action: "refresh_base",
+          pullRequestUrl: undefined,
+          ...(resolved ? { conflictsResolved: true, baseCommit } : {}),
+        });
+      if (condition === "revoked recovery") {
+        expect(await refresh()).toMatchObject({ status: "conflicts", baseCommit });
+        await fs.writeFile(path.join(f.projection, "artifact.txt"), "resolved guest work\n");
+      }
+      const snapshot = async () => ({
+        binding: f.readSession().worktree,
+        hostHead: await f.git("rev-parse", "HEAD"),
+        hostIndex: await f.git("write-tree"),
+        guestHead: await f.guestGit("rev-parse", "HEAD"),
+        guestIndex: await f.guestGit("write-tree"),
+        hostFiles: await fs.readFile(path.join(f.cwd, "artifact.txt"), "utf8"),
+        guestFiles: await fs.readFile(path.join(f.projection, "artifact.txt"), "utf8"),
+      });
+      const before = await snapshot();
+      let revoked = false;
+      if (condition === "revoked transfer") {
+        const transport = mocks.runCommand.getMockImplementation()!;
+        mocks.runCommand.mockImplementation(async (...args) => {
+          const result = await transport(...args);
+          if (!revoked && args[0].includes("fetch") && args[0].includes(baseCommit)) {
+            await f.revoke();
+            revoked = true;
+          }
+          return result;
+        });
+      } else if (condition === "revoked recovery") {
+        const backend = f.sandbox.backend!;
+        const runShell = backend.runShellCommand.bind(backend);
+        backend.runShellCommand = async (params) => {
+          const result = await runShell(params);
+          if (!revoked) {
+            await f.revoke();
+            revoked = true;
+          }
+          return result;
+        };
+      }
+      await expect(refresh(condition === "revoked recovery")).rejects.toThrow(
+        /verified|permission|revoked|access|changed|unavailable/i,
+      );
+      expect(revoked).toBe(!privatePr);
+      expect(await snapshot()).toEqual(before);
+      expect(f.writes).toEqual([]);
+      expect(f.externalWrites).toEqual([]);
+    },
+  );
+
   it.each([
     { fork: false, baseBranch: "main", projectFork: false },
     { fork: true, baseBranch: "main", projectFork: false },
@@ -182,9 +249,19 @@ describe("existing PR preparation through the registered agent action", () => {
         code: "push_rejected",
         nextAction: expect.stringContaining("call prepare_pr with this PR's URL"),
       });
-      await expect(f.invoke({ action: "refresh_base", pullRequestUrl: undefined })).rejects.toThrow(
-        "prepare_pr",
-      );
+      await expect(
+        f.invoke({ action: "refresh_base", pullRequestUrl: undefined }),
+      ).resolves.toMatchObject({
+        status: "refreshed",
+        baseCommit: f.pr.base.sha,
+      });
+      // Updating the base does not accept a different writer's remote PR head.
+      await expect(
+        f.invoke({ action: "publish", pullRequestUrl: undefined }),
+      ).resolves.toMatchObject({
+        status: "failed",
+        code: "push_rejected",
+      });
       await expect(
         f.invoke({
           action: "request_review",
