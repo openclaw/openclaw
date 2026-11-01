@@ -16,6 +16,7 @@ import type {
   MediaUnderstandingScopeConfig,
 } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { toAgentRequestSessionKey } from "../routing/session-key.js";
 import { runtimeMediaModelSecretOwnerId } from "../secrets/runtime-media-secret-owner.js";
 import { DEFAULT_MEDIA_CONCURRENCY, MEDIA_CAPABILITY_DEFAULTS } from "./defaults.constants.js";
 import { resolveEffectiveMediaEntryCapabilities } from "./entry-capabilities.js";
@@ -156,6 +157,8 @@ export function resolveScopeDecision(params: {
   const channel = normalizeOptionalLowercaseString(params.ctx.Surface ?? params.ctx.Provider);
   const chatType = normalizeChatType(params.ctx.ChatType);
   const sessionKey = normalizeOptionalLowercaseString(params.ctx.SessionKey) ?? "";
+  const requestSessionKey =
+    normalizeOptionalLowercaseString(toAgentRequestSessionKey(params.ctx.SessionKey)) ?? "";
 
   for (const rule of scope.rules ?? []) {
     // Rules are first-match-wins so operators can place specific denials before
@@ -164,6 +167,7 @@ export function resolveScopeDecision(params: {
     const matchChannel = normalizeOptionalLowercaseString(match.channel);
     const matchChatType = normalizeChatType(match.chatType);
     const matchPrefix = normalizeOptionalLowercaseString(match.keyPrefix);
+    const matchRawPrefix = normalizeOptionalLowercaseString(match.rawKeyPrefix);
 
     if (matchChannel && matchChannel !== channel) {
       continue;
@@ -171,7 +175,14 @@ export function resolveScopeDecision(params: {
     if (matchChatType && matchChatType !== chatType) {
       continue;
     }
-    if (matchPrefix && !sessionKey.startsWith(matchPrefix)) {
+    if (matchRawPrefix && !sessionKey.startsWith(matchRawPrefix)) {
+      continue;
+    }
+    if (
+      matchPrefix &&
+      !sessionKey.startsWith(matchPrefix) &&
+      !requestSessionKey.startsWith(matchPrefix)
+    ) {
       continue;
     }
     return rule.action;

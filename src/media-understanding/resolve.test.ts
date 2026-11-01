@@ -2,7 +2,12 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
-import { resolveMediaRuntimeTimeoutMs, resolveModelEntries, resolveTimeoutMs } from "./resolve.js";
+import {
+  resolveMediaRuntimeTimeoutMs,
+  resolveModelEntries,
+  resolveScopeDecision,
+  resolveTimeoutMs,
+} from "./resolve.js";
 import type { MediaUnderstandingCapability } from "./types.js";
 
 const providerRegistry = new Map<string, { capabilities: MediaUnderstandingCapability[] }>([
@@ -83,5 +88,27 @@ describe("resolveModelEntries", () => {
       "provider:openai",
     );
     expect(entries[0]?.entry.provider).toBe("openai");
+  });
+});
+
+describe("media scope session-key matching", () => {
+  const ctx = (SessionKey: string) => ({ SessionKey });
+
+  it("limits rawKeyPrefix rules to raw session keys with that prefix", () => {
+    const scope = {
+      rules: [{ action: "deny" as const, match: { rawKeyPrefix: "agent:main:discord:" } }],
+    };
+    expect(resolveScopeDecision({ scope, ctx: ctx("agent:main:telegram:direct:123") })).toBe(
+      "allow",
+    );
+    expect(resolveScopeDecision({ scope, ctx: ctx("agent:main:discord:direct:456") })).toBe("deny");
+  });
+
+  it("matches keyPrefix against the agent-stripped session key", () => {
+    const scope = { rules: [{ action: "deny" as const, match: { keyPrefix: "slack:" } }] };
+    expect(resolveScopeDecision({ scope, ctx: ctx("agent:main:slack:direct:u789") })).toBe("deny");
+    expect(resolveScopeDecision({ scope, ctx: ctx("agent:main:telegram:direct:123") })).toBe(
+      "allow",
+    );
   });
 });
