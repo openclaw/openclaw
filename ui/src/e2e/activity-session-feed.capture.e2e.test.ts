@@ -267,6 +267,16 @@ suite.define(() => {
         const entries = activity.locator(".activity-entry");
         await expectCount(entries).toBe(2);
 
+        // Active sessions scroll with the page instead of clipping a row in a second scroller.
+        const currentWork = activity.locator(".activity-current-work__rows");
+        expect(await currentWork.evaluate((element) => getComputedStyle(element).overflowY)).toBe(
+          "clip",
+        );
+        expect(
+          await activity
+            .locator(".activity-current-work")
+            .evaluate((element) => getComputedStyle(element).maxHeight),
+        ).toBe("none");
         // Rows separate by spacing, with no hairline on the rows or above the stream.
         expect(
           await entries.evaluateAll((rows) => {
@@ -297,6 +307,18 @@ suite.define(() => {
         const panel = activity.locator(".activity-live-filter-popover:popover-open");
         await expectCount(panel.locator('.activity-status-filter input[type="checkbox"]')).toBe(3);
         await expectCount(panel.locator(".activity-live-autofollow").getByRole("switch")).toBe(1);
+        // The panel's labels read as one set.
+        const labelStyles = await panel.evaluate((element) =>
+          [
+            ".activity-status-filter > span",
+            ".field > span",
+            ".activity-live-autofollow > span",
+          ].map((selector) => {
+            const style = getComputedStyle(element.querySelector(selector)!);
+            return [style.color, style.fontSize, style.fontWeight].join(",");
+          }),
+        );
+        expect(new Set(labelStyles).size).toBe(1);
         await statuses.nth(1).click();
         await expectCount(entries).toBe(1);
         await expect
@@ -412,6 +434,10 @@ suite.define(() => {
         expect(await meta("unresolved").locator(".activity-feed__session-owner").count()).toBe(0);
         await expectCount(meta("unresolved").locator(".activity-feed__session-time")).toBe(1);
         await expectText(meta("named")).toContain("Alice Chen");
+        // A person with no name gets the generic avatar, not the first digit of their id.
+        await expectCount(rowLink("unresolved").locator(".activity-feed__unknown-avatar")).toBe(1);
+        await expectCount(rowLink("unresolved").locator(".viewer-avatar__initials")).toBe(0);
+        await expectText(rowLink("named").locator(".viewer-avatar__initials")).toBe("AC");
 
         const gap = (name: string) =>
           activity

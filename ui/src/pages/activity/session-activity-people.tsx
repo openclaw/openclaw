@@ -36,6 +36,18 @@ function compactPersonLabel(person: PresenceViewer): string {
     : presenceViewerLabel(person);
 }
 
+/** Someone with no name or picture: a raw id's first character would say nothing. */
+export function UnknownPersonAvatar() {
+  return (
+    <span
+      class="viewer-avatar viewer-avatar--overflow activity-feed__unknown-avatar"
+      aria-hidden="true"
+    >
+      <Icon name="users" />
+    </span>
+  );
+}
+
 function PersonAvatar(props: {
   person: PresenceViewer | null;
   showPresence?: boolean;
@@ -48,17 +60,7 @@ function PersonAvatar(props: {
     return props.person ? presenceViewerActivity(props.person) : "unknown";
   });
   return (
-    <Show
-      when={resolvedPerson()}
-      fallback={
-        <span
-          class="viewer-avatar viewer-avatar--overflow activity-feed__unknown-avatar"
-          aria-hidden="true"
-        >
-          <Icon name="users" />
-        </span>
-      }
-    >
+    <Show when={resolvedPerson()} fallback={<UnknownPersonAvatar />}>
       {(person) => (
         <span class="activity-feed__person-avatar">
           <openclaw-viewer-avatar

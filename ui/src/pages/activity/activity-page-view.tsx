@@ -471,11 +471,11 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
               <Menu
                 id="activity-live-actions"
                 pointerFocus="trigger"
-                label={t("common.moreActions")}
+                label={t("browser.moreActions")}
                 placement="bottom-end"
                 trigger={<Icon name="moreHorizontal" />}
                 triggerClass="btn btn--sm activity-live-actions__trigger"
-                triggerAttributes={{ title: t("common.moreActions") }}
+                triggerAttributes={{ title: t("browser.moreActions") }}
                 items={[
                   {
                     id: "expand",

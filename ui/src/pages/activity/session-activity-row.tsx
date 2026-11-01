@@ -32,7 +32,7 @@ import {
 import { activityRunInspectorHref } from "./run-inspector-model.ts";
 import { ActivitySessionGit } from "./session-activity-git.tsx";
 import { ActivitySessionMedia } from "./session-activity-media.tsx";
-import { isUnresolvedPerson } from "./session-activity-people.tsx";
+import { isUnresolvedPerson, UnknownPersonAvatar } from "./session-activity-people.tsx";
 import { ACTIVITY_PHONE_QUERY, sessionActivityOwner } from "./session-activity.ts";
 
 registerEnglishCatalog(registerActivityEnglish);
@@ -175,12 +175,16 @@ export function SessionLinkView(props: {
           {props.row.hasActiveRun === true ? (
             <span class="activity-feed__presence-dot activity-feed__run-dot" aria-hidden="true" />
           ) : undefined}
-          <openclaw-viewer-avatar
-            prop:identity={props.row.owner?.actor.identity ?? props.row.createdActor?.identity}
-            prop:user={owner()}
-            prop:markAsViewer={false}
-            variant="footer"
-          />
+          {phone() && isUnresolvedPerson(owner()) && !owner().avatarUrl ? (
+            <UnknownPersonAvatar />
+          ) : (
+            <openclaw-viewer-avatar
+              prop:identity={props.row.owner?.actor.identity ?? props.row.createdActor?.identity}
+              prop:user={owner()}
+              prop:markAsViewer={false}
+              variant="footer"
+            />
+          )}
         </span>
         <span class="activity-feed__session-main">
           <span class="activity-feed__session-title">

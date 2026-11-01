@@ -1230,9 +1230,27 @@ a.activity-current-work__row:hover {
     justify-content: space-between;
   }
 
+  /* The panel's labels read as one set: statuses, Tool and Auto-follow. */
+  .activity-live-filter-popover__panel .field > span,
+  .activity-live-autofollow {
+    color: var(--text);
+    font-size: var(--control-ui-text-sm);
+    font-weight: var(--control-ui-font-weight-normal);
+  }
+
   /* Tapping a checkbox in the popover should not draw the keyboard focus ring. */
   .activity-status-filter:focus-within:not(:has(:focus-visible)) {
     outline: none;
+  }
+
+  /* The page scrolls here, so Active sessions takes the height it needs instead of
+     clipping a row inside a second scroller. */
+  .activity-current-work {
+    max-height: none;
+  }
+
+  .activity-current-work__rows {
+    overflow: clip;
   }
 
   /* Live rows separate by spacing, not hairlines. */
