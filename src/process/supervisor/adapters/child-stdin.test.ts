@@ -38,7 +38,7 @@ it("reports a closed write separately from the queued stream failure", async () 
 
   expect(onWrite).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ code: "EPIPE" }));
   expect(onError).toHaveBeenCalledTimes(2);
-  expect(onError).toHaveBeenNthCalledWith(1, onWrite.mock.calls[0][0]);
+  expect(onError.mock.calls[0]?.[0]).toBe(onWrite.mock.calls[0]?.[0]);
   expect(onError).toHaveBeenNthCalledWith(2, expect.objectContaining({ code: "EPIPE" }));
 });
 
