@@ -275,7 +275,9 @@ describe("configured plugin migration deferral", () => {
           {
             id: f.pluginId,
             configSchema: objectSchema({ enabled: { type: "boolean" } }),
-            configContracts: { compatibilityMigrationPaths: [configPaths[0].join(".")] },
+            configContracts: {
+              compatibilityMigrationPaths: [`plugins.entries.${f.pluginId}.config`],
+            },
             doctorContract: { stateMigrations: actions },
           },
           false,

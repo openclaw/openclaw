@@ -12,6 +12,7 @@ import { resolveConfigPath } from "../config/paths.js";
 import { describeConfigSnapshotInputChange } from "../config/snapshot-inputs.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { validateConfigObjectRawWithPlugins } from "../config/validation.js";
 import { withConfigSourceLocks } from "../config/write-lock.js";
 import {
   DeferredPluginMigrationConflictError,
@@ -27,6 +28,7 @@ import type {
   MigrationMessages,
 } from "../infra/state-migrations.types.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import { passesManifestOwnerBasePolicy } from "../plugins/manifest-owner-policy.js";
@@ -306,8 +308,52 @@ export function createDoctorPluginMigrationPreparation(params: {
       const settlements: NonNullable<DeferredPluginMigrationRecordInput["settlements"]>[number][] =
         [];
       const warnings: string[] = [];
+      const inactiveReady = new Set<string>();
+      const inspectPluginIds = [...previousById.values()]
+        .filter(
+          (plugin) =>
+            hasOwner(inactivePluginIds, plugin.pluginId) &&
+            !hasOwner(discoveryBlockedPluginIds, plugin.pluginId) &&
+            hasDeferredPluginMigrationConfig(sourceConfig, plugin),
+        )
+        .map((plugin) => plugin.pluginId);
+      if (
+        sourceSnapshot?.valid &&
+        sourceConfig &&
+        !installationDeferred &&
+        inspectPluginIds.length
+      ) {
+        const { runPostSessionPluginDoctorStateRepairs } =
+          await import("../infra/state-migrations.plugin-doctor.js");
+        const inspected = await params.runWithPluginMetadataSnapshot({ config: sourceConfig }, () =>
+          runPostSessionPluginDoctorStateRepairs({
+            config: sourceConfig,
+            env: params.env(),
+            inspectPluginIds,
+            inspectDisabled: true,
+          }),
+        );
+        for (const pluginId of inspected.completedPluginIds ?? []) {
+          // The source settings must validate without their exclusion before we release them.
+          const validation = validateConfigObjectRawWithPlugins(sourceConfig, {
+            env: params.env(),
+            deferredPluginMigrations: expectedPending.filter(
+              (plugin) => !matchesOwner(plugin.pluginId, pluginId),
+            ),
+          });
+          if (validation.ok) {
+            inactiveReady.add(pluginId);
+          }
+        }
+      }
       const resolvedPluginIds = [...previousById.values()]
         .filter((plugin) => {
+          if (hasOwner(inactiveReady, plugin.pluginId)) {
+            const reason = `Plugin "${plugin.pluginId}" is inactive and its migration detectors found no remaining work. Retained settings have been validated and kept; no runtime or tools were registered.`;
+            settlements.push({ pluginId: plugin.pluginId, status: "completed", reason });
+            warnings.push(reason);
+            return true;
+          }
           if (hasOwner(completedIds, plugin.pluginId)) {
             return true;
           }
@@ -445,6 +491,9 @@ export function createDoctorPluginMigrationPreparation(params: {
       }
       if (!committed) {
         return true;
+      }
+      for (const warning of warnings) {
+        createSubsystemLogger("state-migrations").warn(warning);
       }
       for (const pluginId of resolvedPluginIds) {
         previousById.delete(pluginId);
