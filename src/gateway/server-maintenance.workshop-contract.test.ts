@@ -16,6 +16,7 @@ import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import * as admission from "../process/gateway-work-admission.js";
 import { buildSkillSnapshot } from "../skills/loading/workspace-skill-prompt.js";
 import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
+import { workshopPluginConfig } from "../skills/workshop/config.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -202,10 +203,7 @@ it("L6/Y1/Y2: Gateway usage protects read skills, and post-turn cleanup is daily
     });
     await timers.stopPeriodicTasks();
     timers = start();
-    await finishTurn({
-      ...config,
-      skills: { ...config.skills, workshop: { autonomous: { mode: "off" } } },
-    });
+    await finishTurn(workshopPluginConfig({ autonomous: { mode: "off" } }, config));
     expect(await fs.readFile(path.join(root, "stale", "SKILL.md"), "utf8")).toContain(
       "stale procedure",
     );
@@ -279,8 +277,12 @@ it.each([
       },
     },
     ...(reason === "tool-denied" ? { tools: { deny: ["skill_workshop"] } } : {}),
-    plugins: { allow: ["skill-workshop"] },
-    skills: { load: { watch: false }, workshop: { autonomous: { mode: "auto" } } },
+    plugins: {
+      allow: ["skill-workshop"],
+      entries: { "skill-workshop": { config: { autonomous: { mode: "auto" } } } },
+    },
+    meta: { migrations: { skillWorkshopPlugin: true } },
+    skills: { load: { watch: false } },
   };
   let timers:
     | { stopPeriodicTasks: () => Promise<void>; skillUsageCleanup: () => Promise<void> }
@@ -297,9 +299,13 @@ it.each([
       reason === "learning-off" || reason === "learning-propose"
         ? {
             ...config,
-            skills: {
-              ...config.skills,
-              workshop: { autonomous: { mode: reason === "learning-off" ? "off" : "propose" } },
+            plugins: {
+              ...config.plugins,
+              entries: {
+                "skill-workshop": {
+                  config: { autonomous: { mode: reason === "learning-off" ? "off" : "propose" } },
+                },
+              },
             },
           }
         : config,

@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { SkillsWorkshopAutonomousMode } from "../../config/types.skills.js";
+import { isRecord } from "../../utils.js";
+
+/** How background reviews may change Workshop skills. */
+export type SkillsWorkshopAutonomousMode = "off" | "propose" | "auto";
 
 /** Runtime configuration for Skill Workshop. */
 type SkillWorkshopConfig = {
@@ -10,13 +13,23 @@ type SkillWorkshopConfig = {
   maxSkillBytes: number;
 };
 
+function isMode(value: unknown): value is SkillsWorkshopAutonomousMode {
+  return value === "off" || value === "propose" || value === "auto";
+}
+
+/**
+ * Reads the bundled plugin's own settings (`plugins.entries.skill-workshop.config`); its manifest
+ * schema validates them. Doctor moves the retired core `skills.workshop` key here.
+ */
 export function resolveSkillWorkshopConfig(config?: OpenClawConfig): SkillWorkshopConfig {
-  const raw = config?.skills?.workshop;
+  const raw = config?.plugins?.entries?.["skill-workshop"]?.config;
+  const autonomous = isRecord(raw?.autonomous) ? raw.autonomous : undefined;
+  const maxSkillBytes = typeof raw?.maxSkillBytes === "number" ? raw.maxSkillBytes : 40_000;
   return {
     autonomous: {
-      mode: raw?.autonomous?.mode ?? "auto",
-      channelNotices: raw?.autonomous?.channelNotices ?? false,
+      mode: isMode(autonomous?.mode) ? autonomous.mode : "auto",
+      channelNotices: autonomous?.channelNotices === true,
     },
-    maxSkillBytes: Math.min(Math.max(raw?.maxSkillBytes ?? 40_000, 1024), 200_000),
+    maxSkillBytes: Math.min(Math.max(maxSkillBytes, 1024), 200_000),
   };
 }

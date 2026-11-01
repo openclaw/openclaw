@@ -113,7 +113,8 @@ suite.define(() => {
       const filesResponse = { agentId: "main", workspace };
       const readOnlyConfig = {
         ...operatorConfig,
-        skills: { workshop: { autonomous: { mode: "auto" } } },
+        plugins: { entries: { "skill-workshop": { config: { autonomous: { mode: "auto" } } } } },
+        meta: { migrations: { skillWorkshopPlugin: true } },
       };
       const gateway = await installMockGateway(page, {
         featureMethods: [

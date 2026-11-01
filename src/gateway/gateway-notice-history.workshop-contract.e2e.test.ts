@@ -86,9 +86,13 @@ it(
             },
             gateway: { auth: { mode: "token", token } },
             models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
-            plugins: { slots: { memory: "none" } },
+            plugins: {
+              slots: { memory: "none" },
+              entries: { "skill-workshop": { config: { autonomous: { mode: "off" } } } },
+            },
+            meta: { migrations: { skillWorkshopPlugin: true } },
             tools: { profile: "minimal" },
-            skills: { load: { watch: false }, workshop: { autonomous: { mode: "off" } } },
+            skills: { load: { watch: false } },
           } satisfies OpenClawConfig;
           // The census found this exact marker shape in on-disk transcript_events.
           // Initialize the schema, join every worker, then take exclusive offline custody.

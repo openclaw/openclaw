@@ -26,10 +26,6 @@ Most skills configuration lives under `skills` in
       nodeManager: "npm",
       allowUploadedArchives: false,
     },
-    workshop: {
-      autonomous: { mode: "auto" },
-      maxSkillBytes: 40000,
-    },
     entries: {
       "image-lab": {
         enabled: true,
@@ -362,9 +358,14 @@ different visible skill set per agent.
   credentials at the MCP server.
 </Warning>
 
-## Workshop (`skills.workshop`)
+## Workshop settings
 
-<ParamField path="skills.workshop.autonomous.mode" type='"off" | "propose" | "auto"' default='"auto"'>
+Skill Workshop is a bundled plugin, so its settings live under
+`plugins.entries.skill-workshop.config`. Older configs kept them in
+`skills.workshop`; `openclaw doctor --fix` moves them, and `openclaw update`
+runs that repair for you.
+
+<ParamField path="plugins.entries.skill-workshop.config.autonomous.mode" type='"off" | "propose" | "auto"' default='"auto"'>
   `auto` lets agents save and update Workshop skills: a background review runs
   after substantial work, learned skills unused for 30 days are archived, and
   one oversized learned skill a day is [dieted](/tools/skill-workshop#skill-diet).
@@ -378,7 +379,7 @@ different visible skill set per agent.
   learning sessions work in every mode.
 </ParamField>
 
-<ParamField path="skills.workshop.autonomous.channelNotices" type="boolean" default="false">
+<ParamField path="plugins.entries.skill-workshop.config.autonomous.channelNotices" type="boolean" default="false">
   When `true`, background review notices are posted to channel conversations
   (except Slack) with an **Undo** button; the Control UI shows that message as
   plain text. When `false`, they appear only as the **Learned** row in the
@@ -388,15 +389,16 @@ different visible skill set per agent.
 See [Self-learning](/tools/self-learning) for eligibility, privacy, cost,
 and troubleshooting.
 
-<ParamField path="skills.workshop.maxSkillBytes" type="number" default="40000">
+<ParamField path="plugins.entries.skill-workshop.config.maxSkillBytes" type="number" default="40000">
   Maximum `SKILL.md` size in bytes for Workshop skills (allowed range:
   1024-200000). Skill descriptions are capped at 1024 bytes separately; keep
   them near 160 bytes because they appear in discovery and listing output.
 </ParamField>
 
-`openclaw doctor --fix` migrates configs from the removed proposal queue: it
-maps `autonomous.enabled: true` to `mode: "propose"` (`false` to `"off"`) and
-deletes `skills.workshop.approvalPolicy` and `skills.workshop.maxPending`.
+`openclaw doctor --fix` also migrates configs from the removed proposal queue:
+it maps `skills.workshop.autonomous.enabled: true` to `mode: "propose"`
+(`false` to `"off"`) and deletes `skills.workshop.approvalPolicy` and
+`skills.workshop.maxPending` before moving the remaining settings.
 
 See [Skill Workshop](/tools/skill-workshop) for the skill lifecycle, CLI
 commands, agent tool parameters, and Gateway methods this config controls.
