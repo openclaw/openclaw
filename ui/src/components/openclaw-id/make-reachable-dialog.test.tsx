@@ -60,9 +60,20 @@ describe("Make reachable publication outcome", () => {
     await click("Continue");
     await click("Create owner key");
     await vi.waitFor(() => expect(document.querySelector('input[type="checkbox"]')).not.toBeNull());
+    const password = document.querySelector<HTMLInputElement>(
+      'input[autocomplete="new-password"]',
+    )!;
+    expect(password.value).toBe("synthetic kit");
+    expect(request.mock.calls.some(([, params]) => params.action === "commit")).toBe(false);
+    const form = password.form!;
+    const submitted = vi.fn();
+    form.addEventListener("submit", submitted);
     (document.querySelector('input[type="checkbox"]') as HTMLInputElement).click();
     await click("Continue");
     await vi.waitFor(() => expect(document.body.textContent).toContain("HTTP 503"));
+    expect(submitted).toHaveBeenCalledOnce();
+    form.removeEventListener("submit", submitted);
+    expect(password.value).toBe("");
     expect(document.body.textContent).toContain("retries automatically");
     expect(document.body.textContent).not.toMatch(/add an enrollment code/i);
     await click("Done");
