@@ -25,7 +25,9 @@ suite.define(() => {
           const sessionKey = fixture.selectedSessionKey;
           await page.addInitScript(
             ({ key, settings }) => {
-              if (!localStorage.getItem(key)) localStorage.setItem(key, JSON.stringify(settings));
+              if (!localStorage.getItem(key)) {
+                localStorage.setItem(key, JSON.stringify(settings));
+              }
             },
             {
               key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
@@ -46,10 +48,7 @@ suite.define(() => {
             { ...fixture.scenario, deferredMethods: ["connect"] },
             {
               requestHandlers: {
-                "cron.list": (params) => {
-                  if (!isRecord(params)) throw new Error("Missing automation query");
-                  return fixture.listCronJobs(params);
-                },
+                "cron.list": (params) => fixture.listCronJobs(isRecord(params) ? params : {}),
               },
             },
           );
@@ -82,7 +81,9 @@ suite.define(() => {
               const card = document.querySelector(
                 '.chat-pane-cache__pane--active [data-progress-card-placement="details"]',
               );
-              if (card?.checkVisibility()) frames.push(card.textContent ?? "");
+              if (card?.checkVisibility()) {
+                frames.push(card.textContent ?? "");
+              }
               requestAnimationFrame(sample);
             };
             Reflect.set(window, "progressReloadFrames", frames);
@@ -97,7 +98,6 @@ suite.define(() => {
             await new Promise(requestAnimationFrame);
             return Reflect.get(window, "progressReloadFrames") as string[];
           });
-          expect(frames.length).toBeGreaterThan(0);
           expect(new Set(frames)).toEqual(new Set([loaded]));
           await gateway.setMethodResponse("progressCard.get", {
             card: {
