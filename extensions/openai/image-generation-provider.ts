@@ -32,7 +32,6 @@ import { resolveModelAuthPolicy } from "./provider-policy-api.js";
 import { resolveConfiguredOpenAIBaseUrl } from "./shared.js";
 
 const DEFAULT_OPENAI_IMAGE_BASE_URL = "https://api.openai.com/v1";
-const DEFAULT_OPENAI_CODEX_IMAGE_BASE_URL = OPENAI_CODEX_RESPONSES_BASE_URL;
 const OPENAI_MODEL_REF_PREFIX = "openai/";
 const DEFAULT_OPENAI_CODEX_IMAGE_RESPONSES_MODEL = OPENAI_CODEX_DEFAULT_MODEL.slice(
   OPENAI_MODEL_REF_PREFIX.length,
@@ -52,7 +51,14 @@ const OPENAI_SUPPORTED_SIZES = [
   "3840x2160",
   "2160x3840",
 ] as const;
-const OPENAI_LEGACY_IMAGE_SIZES = ["1024x1024", "1536x1024", "1024x1536"] as const;
+const OPENAI_LEGACY_IMAGE_SIZES = ["1024x1024", "1536x1024", "1024x1536"];
+const OPENAI_IMAGE_SIZES_BY_MODEL: Record<string, string[]> = {
+  "dall-e-2": ["256x256", "512x512", "1024x1024"],
+  "dall-e-3": ["1024x1024", "1792x1024", "1024x1792"],
+  [OPENAI_TRANSPARENT_BACKGROUND_IMAGE_MODEL]: OPENAI_LEGACY_IMAGE_SIZES,
+  "gpt-image-1": OPENAI_LEGACY_IMAGE_SIZES,
+  "gpt-image-1-mini": OPENAI_LEGACY_IMAGE_SIZES,
+};
 const OPENAI_MAX_INPUT_IMAGES = 5;
 const OPENAI_MAX_IMAGE_RESULTS = 4;
 const LOG_VALUE_MAX_CHARS = 256;
@@ -202,16 +208,6 @@ function resolveOpenAIImageRequestModel(
   return model;
 }
 
-function resolveNativeOpenAIImageSizesForModel(model: string): readonly string[] {
-  switch (model) {
-    case "gpt-image-1":
-    case "gpt-image-1-mini":
-      return OPENAI_LEGACY_IMAGE_SIZES;
-    default:
-      return OPENAI_SUPPORTED_SIZES;
-  }
-}
-
 function isValidFlexibleOpenAIImageSize(model: string, size: string | undefined): size is string {
   if (!OPENAI_FLEXIBLE_IMAGE_MODELS.some((candidate) => candidate === model)) {
     return false;
@@ -262,7 +258,7 @@ function resolveOpenAIImageRequestSize(
   if (!params.applyNativeLimits) {
     return { size: requestedSize };
   }
-  const supportedSizes = resolveNativeOpenAIImageSizesForModel(params.model);
+  const supportedSizes = OPENAI_IMAGE_SIZES_BY_MODEL[params.model] ?? OPENAI_SUPPORTED_SIZES;
   const size =
     resolveSize({
       requestedSize,
@@ -539,7 +535,7 @@ async function generateOpenAICodexImage(params: {
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
     resolveProviderHttpRequestConfig({
       baseUrl: canonicalizeCodexResponsesBaseUrl(codexProviderConfig?.baseUrl),
-      defaultBaseUrl: DEFAULT_OPENAI_CODEX_IMAGE_BASE_URL,
+      defaultBaseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
       defaultHeaders: {
         Authorization: `Bearer ${apiKey}`,
         Accept: "text/event-stream",
@@ -684,7 +680,10 @@ export function buildOpenAIImageGenerationProvider(
       geometry: {
         sizes: [...OPENAI_SUPPORTED_SIZES],
         // Empty model-specific lists stop core from snapping valid flexible dimensions.
-        sizesByModel: Object.fromEntries(OPENAI_FLEXIBLE_IMAGE_MODELS.map((model) => [model, []])),
+        sizesByModel: {
+          ...OPENAI_IMAGE_SIZES_BY_MODEL,
+          ...Object.fromEntries(OPENAI_FLEXIBLE_IMAGE_MODELS.map((model) => [model, []])),
+        },
       },
       output: {
         formats: [...OPENAI_OUTPUT_FORMATS],

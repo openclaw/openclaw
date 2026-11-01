@@ -1,0 +1,5 @@
+51
+# LOCAL 2026.11.8 row 145; source a460b0c1ead257e25296b586b3ad6d46bf47ab81.
+# Existing native model sizes also reach custom endpoint geometry; real generation/edit request assertions, flexible models retained.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.
