@@ -385,12 +385,12 @@ async function stopWithLiveDrain() {
 }
 
 const test = it.skipIf(process.platform !== "linux");
-test.each(["ready", "draining"] as const)(
-  "settles the process behind the live %s lease",
-  async (phase) => {
-    f.ordinaryWork = Number(phase === "draining");
+test.each([0, 1])(
+  "settles the process behind its ready lease with %s active roots",
+  async (ordinaryWork) => {
+    f.ordinaryWork = ordinaryWork;
     await stopWithLiveDrain();
-    expect(f.events).toContain(`prepared:${phase}`);
+    expect(f.events).toContain("prepared:ready");
     expect(f.events.filter((event) => event === "effect:StopUnit")).toHaveLength(1);
     expect(f.events).toContain("effect:admission-closed");
     expect(f.events.indexOf("cgroup:empty")).toBeGreaterThan(f.events.indexOf("effect:StopUnit"));

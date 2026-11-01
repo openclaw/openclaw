@@ -1,13 +1,14 @@
+import { createHash } from "node:crypto";
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import {
   prepareGitHubPublicationWorkspaceOwner,
-  type PublicationSessionIdentity,
   prepareGitHubPublicationSession,
 } from "./github-publication-availability.js";
 import { GitHubPublicationSessionChangedError } from "./github-publication-failure.js";
 import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
+import type { PublicationSessionIdentity } from "./github-publication-session.types.js";
 import {
   failRepositoryGitHubPublicationPreparationAsync,
   type GitHubPublicationTransitionAuthority,
@@ -16,7 +17,14 @@ import {
   readGitHubRepositoryPublicationMetadata,
   type GitHubRepositoryPublicationSnapshot,
 } from "./github-repository-publication-snapshot.js";
+import { captureRepositoryDiskCheckpoint } from "./worker-environments/repository-workspace-snapshot.js";
 import { withSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
+import { workerWorkspaceResultRef } from "./worker-environments/workspace-result-staging.js";
+
+export type RepositoryDiskPublicationSource = Pick<
+  Parameters<typeof captureRepositoryDiskCheckpoint>[0],
+  "placements" | "environments"
+> & { captureRequestIds?: readonly string[] };
 
 export async function prepareRepositoryOwner(session: PublicationSessionIdentity) {
   const current = await prepareGitHubPublicationWorkspaceOwner(session);
@@ -110,6 +118,7 @@ export async function captureCheckpoint<T>(
     },
   ) => Promise<T>,
   authority: GitHubPublicationTransitionAuthority,
+  disk?: RepositoryDiskPublicationSource,
 ): Promise<T | SessionGitHubPublicationResult> {
   let checkpointRef = row.checkpoint_ref;
   let assertSelected = assertCurrent;
@@ -121,12 +130,6 @@ export async function captureCheckpoint<T>(
     releaseOwner = preparedOwner.release;
     assertCurrent();
     const { workspace } = assertReceiptOwner(row, preparedOwner);
-    checkpointRef = workspace.checkpointRef ?? null;
-    if (!checkpointRef) {
-      throw new Error(
-        "GitHub publication is waiting for the first accepted repository checkpoint.",
-      );
-    }
     assertSelected = () => {
       assertCurrent();
       const { workspace: current } = assertReceiptOwner(row, preparedOwner);
@@ -137,6 +140,47 @@ export async function captureCheckpoint<T>(
         throw new Error("GitHub publication checkpoint changed during preparation.");
       }
     };
+    if (workspace.diskAuthority) {
+      if (!disk) {
+        throw new Error(
+          "GitHub publication requires a fresh snapshot from the repository disk; a stored mirror cannot be used.",
+        );
+      }
+      // Every recovery path can recover this identity from the durable request alone.
+      const requestRef = (requestId: string) =>
+        workerWorkspaceResultRef(
+          "publication-" +
+            createHash("sha256")
+              .update(JSON.stringify([workspace.workspaceId, requestId]))
+              .digest("hex"),
+        );
+      const ref = requestRef(row.request_id);
+      checkpointRef = (
+        await captureRepositoryDiskCheckpoint(
+          {
+            ...disk,
+            repository: workspace,
+            checkpointRef: ref,
+            additionalRefs: disk.captureRequestIds?.map(requestRef),
+            purpose: "publication",
+            identity: {
+              sessionId: row.session_id,
+              sessionKey: row.session_key,
+              agentId: row.agent_id,
+            },
+            assertCurrent: assertSelected,
+          },
+          async (snapshot) => snapshot,
+        )
+      ).checkpointRef;
+    } else {
+      checkpointRef = workspace.checkpointRef ?? null;
+    }
+    if (!checkpointRef) {
+      throw new Error(
+        "GitHub publication is waiting for the first accepted repository checkpoint.",
+      );
+    }
   }
   const selectedAuthority: GitHubPublicationTransitionAuthority = {
     ...authority,
@@ -146,7 +190,6 @@ export async function captureCheckpoint<T>(
     {
       workspaceId: row.workspace_id,
       checkpointRef: checkpointRef ?? undefined,
-      includePublication: true,
     },
     async (payload) => {
       assertSelected();

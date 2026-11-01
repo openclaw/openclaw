@@ -18,7 +18,7 @@ import {
   cronJobMessageToolAuthorityInputsEqual,
 } from "./jobs-tool-policy.js";
 import { publishCronRunReceiptMutation } from "./run-receipts.js";
-import { emit, type CronServiceState } from "./state.js";
+import { emit, type CronServiceState, type CronAddOptions } from "./state.js";
 import { persistCronJobMutation, type captureCronJobMutationSource } from "./store.js";
 
 export async function persistUpdatedJob(params: {
@@ -28,6 +28,10 @@ export async function persistUpdatedJob(params: {
   source: ReturnType<typeof captureCronJobMutationSource>;
   mutationMethod: "cron.add" | "cron.update";
   commitGuard?: () => void;
+  streamAuthority?: Pick<
+    CronAddOptions,
+    "execPolicy" | "sessionEntryCurrent" | "streamExecApproval"
+  >;
   agentId?: string;
   preconditionJob?: CronJob;
   jobMutation: CronJobMutation;
@@ -75,6 +79,7 @@ export async function persistUpdatedJob(params: {
       resolveCronJobEffectiveAgentId(previousJob, currentDefaultAgentId);
       resolveCronJobEffectiveAgentId(nextJob, currentDefaultAgentId);
     },
+    streamAuthority: params.streamAuthority,
     agentId: params.agentId,
     preconditionJob: params.preconditionJob,
     expectedJob: { id: previousJob.id, configRevision: resolveCronJobConfigRevision(previousJob) },
@@ -97,7 +102,13 @@ export async function persistUpdatedJob(params: {
         // Sandbox policy is captured at admission; a new requester needs a new run.
         if (requesterAuthorityChanged) {
           requestActiveCronJobCancellation(nextJob.id, "Cron job requester authority changed.");
-        } else if (isJobEnabled(previousJob) && !isJobEnabled(nextJob)) {
+        } else if (previousJob.ownerProfileId !== nextJob.ownerProfileId) {
+          requestActiveCronJobCancellation(nextJob.id, "Cron job ownership transferred.");
+        } else if (
+          params.jobMutation.kind === "update"
+            ? params.jobMutation.patch.enabled === false
+            : isJobEnabled(previousJob) && !isJobEnabled(nextJob)
+        ) {
           requestActiveCronJobCancellation(nextJob.id, "Cron job disabled by operator.");
         }
       } finally {

@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
+import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage as errorMessage, toErrorObject } from "../../infra/errors.js";
+import { realpathOrResolve } from "../../infra/path-existence.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { enqueueKeyedTask } from "../../plugin-sdk/keyed-async-queue.js";
@@ -138,21 +139,11 @@ async function releaseGitLock(cleanup: LeaseCleanup): Promise<boolean> {
   });
 }
 
-async function realpathOrSelf(candidate: string): Promise<string> {
-  try {
-    return await fs.realpath(candidate);
-  } catch {
-    return path.resolve(candidate);
-  }
-}
-
 export async function resolveWorktreeForPath(params: {
   sessionEntry?: { worktree?: { id: string } };
   candidatePaths: Array<string | undefined>;
-  env?: NodeJS.ProcessEnv;
 }): Promise<WorktreeRunSource | undefined> {
-  const env = params.env ?? process.env;
-  const context = captureOpenClawStateWorkerContext({ env });
+  const context = captureOpenClawStateWorkerContext({ env: process.env });
   const boundId = params.sessionEntry?.worktree?.id;
   if (boundId !== undefined) {
     // The session's stored binding is authoritative: if that worktree is gone the
@@ -170,7 +161,7 @@ export async function resolveWorktreeForPath(params: {
   }
   const bases = new Map<string, string>();
   for (const record of records) {
-    bases.set(record.id, await realpathOrSelf(record.path));
+    bases.set(record.id, await realpathOrResolve(record.path));
   }
   const seen = new Set<string>();
   for (const candidate of params.candidatePaths) {
@@ -178,7 +169,7 @@ export async function resolveWorktreeForPath(params: {
       continue;
     }
     seen.add(candidate);
-    const real = await realpathOrSelf(candidate);
+    const real = await realpathOrResolve(candidate);
     for (const record of records) {
       const base = bases.get(record.id);
       if (base && (real === base || real.startsWith(`${base}${path.sep}`))) {
@@ -247,6 +238,7 @@ async function runLeaseCleanup(cleanup: LeaseCleanup): Promise<boolean> {
 }
 
 function retainCleanupFailure(cleanup: LeaseCleanup, error: unknown): void {
+  materializeErrorStack(error);
   cleanup.failure = error;
   pendingLeaseCleanups.add(cleanup);
   setWorktreeRunEndCleanupFailure(cleanup.context, cleanup, { error });

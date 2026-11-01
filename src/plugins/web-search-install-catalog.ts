@@ -168,16 +168,12 @@ export function resolveWebSearchInstallCatalogEntriesForEnv(
   );
 }
 
-/** Resolves one web-search install catalog entry by provider id or plugin id. */
+/** Resolves one web-search install catalog entry by provider id. */
 export function resolveWebSearchInstallCatalogEntry(params: {
   providerId?: string;
-  pluginId?: string;
 }): WebSearchInstallCatalogEntry | undefined {
   const providerId = normalizeString(params.providerId);
-  const pluginId = normalizeString(params.pluginId);
   return resolveWebSearchInstallCatalogEntries().find(
-    (entry) =>
-      (!providerId || entry.provider.id === providerId) &&
-      (!pluginId || entry.pluginId === pluginId),
+    (entry) => !providerId || entry.provider.id === providerId,
   );
 }

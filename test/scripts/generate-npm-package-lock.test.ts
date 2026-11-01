@@ -1027,6 +1027,13 @@ describe("generate-npm-package-lock", () => {
         tarball,
       };
     };
+    const registryVersions = (entries: Array<[string, ReturnType<typeof packPackage>]>) =>
+      Object.fromEntries(
+        entries.map(([version, { artifact, manifest, tarball }]) => [
+          version,
+          { integrity: artifact.integrity, manifest, tarball },
+        ]),
+      );
     const writeParent = (
       name: string,
       dependencies: Record<string, string>,
@@ -1122,71 +1129,17 @@ describe("generate-npm-package-lock", () => {
     writeFileSync(
       registryConfig,
       JSON.stringify({
-        parent: {
-          "1.0.0": {
-            integrity: parent.artifact.integrity,
-            manifest: parent.manifest,
-            tarball: parent.tarball,
-          },
-        },
-        overlap: {
-          "1.0.0": {
-            integrity: overlap.artifact.integrity,
-            manifest: overlap.manifest,
-            tarball: overlap.tarball,
-          },
-        },
-        modern: {
-          "1.0.0": {
-            integrity: modern.artifact.integrity,
-            manifest: modern.manifest,
-            tarball: modern.tarball,
-          },
-        },
-        broad: {
-          "1.0.0": {
-            integrity: broad.artifact.integrity,
-            manifest: broad.manifest,
-            tarball: broad.tarball,
-          },
-        },
-        unrelated: {
-          "1.0.0": {
-            integrity: unrelated.artifact.integrity,
-            manifest: unrelated.manifest,
-            tarball: unrelated.tarball,
-          },
-        },
-        violator: {
-          "1.0.0": {
-            integrity: violator.artifact.integrity,
-            manifest: violator.manifest,
-            tarball: violator.tarball,
-          },
-        },
-        forked: Object.fromEntries(
-          forkedPackages.map(({ artifact, manifest, tarball }) => [
-            artifact.version,
-            { integrity: artifact.integrity, manifest, tarball },
-          ]),
-        ),
-        leaf: Object.fromEntries(
-          leafPackages.map(({ artifact, manifest, tarball }) => [
-            artifact.version,
-            { integrity: artifact.integrity, manifest, tarball },
-          ]),
-        ),
-        blocked: Object.fromEntries(
-          blockedPackages.map(({ artifact, manifest, tarball }) => [
-            artifact.version,
-            { integrity: artifact.integrity, manifest, tarball },
-          ]),
-        ),
-        replacement: Object.fromEntries(
-          replacementPackages.map(({ artifact, manifest, tarball }) => [
-            artifact.version,
-            { integrity: artifact.integrity, manifest, tarball },
-          ]),
+        parent: registryVersions([["1.0.0", parent]]),
+        overlap: registryVersions([["1.0.0", overlap]]),
+        modern: registryVersions([["1.0.0", modern]]),
+        broad: registryVersions([["1.0.0", broad]]),
+        unrelated: registryVersions([["1.0.0", unrelated]]),
+        violator: registryVersions([["1.0.0", violator]]),
+        forked: registryVersions(forkedPackages.map((entry) => [entry.artifact.version, entry])),
+        leaf: registryVersions(leafPackages.map((entry) => [entry.artifact.version, entry])),
+        blocked: registryVersions(blockedPackages.map((entry) => [entry.artifact.version, entry])),
+        replacement: registryVersions(
+          replacementPackages.map((entry) => [entry.artifact.version, entry]),
         ),
       }),
     );
@@ -1413,6 +1366,142 @@ process.on("SIGTERM", () => server.close(() => process.exit(0)));
       expect(installedVersions(inferredBranches.packages, "leaf")).toEqual(["1.0.0", "2.0.0"]);
     } finally {
       registry.kill();
+    }
+  });
+
+  it.each([
+    "valid",
+    "missing-pin",
+    "ambiguous-pin",
+    "wrong-version",
+    "wrong-alias",
+    "strong-mismatch",
+  ])("generates mirror locks only with matching unambiguous pnpm pins (%s)", async (scenario) => {
+    const root = tempDirs.make("openclaw-npm-sha1-registry-");
+    mkdirSync(path.join(root, "package"));
+    const manifest = { name: "@borewit/text-codec", version: "0.2.2", main: "index.js" };
+    writeFileSync(path.join(root, "package/package.json"), JSON.stringify(manifest));
+    writeFileSync(path.join(root, "package/index.js"), "module.exports = 42;\n");
+    const archive = path.join(root, "codec.tgz");
+    createTar({ cwd: root, file: archive, sync: true, gzip: true }, ["package"]);
+    const bytes = readFileSync(archive);
+    const integrity = `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
+    const shasum = createHash("sha1").update(bytes).digest("hex");
+    writeFileSync(path.join(root, "pnpm-workspace.yaml"), "{}\n");
+    const conflictingIntegrity = `sha512-${Buffer.alloc(64, 3).toString("base64")}`;
+    const packageKey =
+      scenario === "wrong-version"
+        ? "@borewit/text-codec@0.2.3"
+        : scenario === "wrong-alias"
+          ? "other@0.2.2"
+          : "@borewit/text-codec@0.2.2";
+    writeFileSync(
+      path.join(root, "pnpm-lock.yaml"),
+      JSON.stringify({
+        packages: {
+          [packageKey]: {
+            resolution:
+              scenario === "missing-pin"
+                ? {}
+                : { integrity: scenario === "strong-mismatch" ? conflictingIntegrity : integrity },
+          },
+          ...(scenario === "ambiguous-pin"
+            ? {
+                [`${packageKey}(peer@1.0.0)`]: { resolution: { integrity: conflictingIntegrity } },
+              }
+            : {}),
+        },
+        snapshots: { [packageKey]: {} },
+      }),
+    );
+    writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        name: "registry-fixture",
+        version: "1.0.0",
+        dependencies: { "@borewit/text-codec": "0.2.2", codec: "npm:@borewit/text-codec@0.2.2" },
+      }),
+    );
+    const registry = spawn(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `
+import { createServer } from 'node:http';
+import { readFileSync } from 'node:fs';
+const manifest = ${JSON.stringify(manifest)};
+const server = createServer((req, res) => {
+  if (req.url === '/codec.tgz') { res.end(readFileSync(${JSON.stringify(archive)})); return; }
+  if (decodeURIComponent(req.url) !== '/@borewit/text-codec') { res.writeHead(404); res.end(); return; }
+  res.setHeader('content-type', 'application/json');
+  res.end(JSON.stringify({ name: manifest.name, 'dist-tags': { latest: manifest.version },
+    versions: { [manifest.version]: { ...manifest, dist: { shasum: ${JSON.stringify(shasum)},
+      ...${JSON.stringify(scenario === "strong-mismatch" ? { integrity } : {})},
+      tarball: 'http://127.0.0.1:' + server.address().port + '/codec.tgz' } } } }));
+});
+server.listen(0, '127.0.0.1', () => process.stdout.write(String(server.address().port)));
+process.on('SIGTERM', () => server.close(() => process.exit(0)));
+`,
+      ],
+      { stdio: ["ignore", "pipe", "inherit"] },
+    );
+    try {
+      const port = await new Promise<number>((resolve, reject) => {
+        registry.once("error", reject);
+        registry.once("exit", (code) => reject(new Error(`fixture registry exited ${code}`)));
+        registry.stdout.once("data", (chunk) => resolve(Number(String(chunk))));
+      });
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          import.meta.resolve("tsx"),
+          "--input-type=module",
+          "-e",
+          `
+import { generateNpmPackageLock } from ${JSON.stringify(new URL("../../scripts/generate-npm-package-lock.mts", import.meta.url).href)};
+console.log(generateNpmPackageLock(${JSON.stringify(root)}));
+`,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT: root,
+            npm_config_registry: `http://127.0.0.1:${port}`,
+            npm_config_cache: path.join(root, "cache"),
+          },
+        },
+      );
+      if (scenario !== "valid") {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          scenario === "strong-mismatch"
+            ? `node_modules/@borewit/text-codec integrity ${integrity}, expected ${conflictingIntegrity}`
+            : scenario === "wrong-version" || scenario === "wrong-alias"
+              ? "pnpm-lock.yaml has no runtime resolution for @borewit/text-codec@0.2.2"
+              : "expected one pnpm SHA512 pin",
+        );
+        return;
+      }
+      expect(result.status, result.stderr).toBe(0);
+      const lock = JSON.parse(result.stdout);
+      expect(lock.packages["node_modules/@borewit/text-codec"]).toMatchObject({
+        version: "0.2.2",
+        integrity,
+      });
+      expect(lock.packages["node_modules/codec"]).toMatchObject({
+        name: "@borewit/text-codec",
+        version: "0.2.2",
+        integrity,
+      });
+    } finally {
+      const exited = new Promise((resolve) => {
+        registry.once("exit", resolve);
+      });
+      registry.kill();
+      await exited;
     }
   });
 
@@ -1765,8 +1854,16 @@ process.on("SIGTERM", () => server.close(() => process.exit(0)));
     ).toEqual([]);
   });
 
-  it("falls back to every npm lock when lockfile ownership is ambiguous", () => {
-    const packageDirs = npmLockPackageDirsForChangedPaths(["pnpm-lock.yaml"]).map(repoRelativePath);
+  it.each([
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "scripts/generate-npm-package-lock.mts",
+    "scripts/lib/npm-lock-package-selection.mjs",
+    "scripts/lib/npm-lock-package-selection.d.mts",
+    "scripts/lib/record-shared.mjs",
+    "scripts/lib/record-shared.d.mts",
+  ])("falls back to every npm lock when policy ownership changes: %s", (file) => {
+    const packageDirs = npmLockPackageDirsForChangedPaths([file]).map(repoRelativePath);
 
     expect(packageDirs).toContain("");
     expect(packageDirs).toContain("packages/gateway-client");

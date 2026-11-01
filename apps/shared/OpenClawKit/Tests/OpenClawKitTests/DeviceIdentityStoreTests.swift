@@ -1,6 +1,7 @@
 import CryptoKit
 import Darwin
 import Foundation
+import OpenClawNativeState
 import SQLite3
 import Testing
 @testable import OpenClawKit
@@ -10,11 +11,11 @@ private final class DeviceIdentityMigrationFixture {
     let destination: URL
     let databaseURL: URL
 
-    init(destinationName: String = "destination", databasePath: String = "openclaw.sqlite") {
-        self.root = FileManager.default.temporaryDirectory
+    init(destinationName: String = "destination") {
+        self.root = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TMPDIR"] ?? NSTemporaryDirectory())
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         self.destination = self.root.appendingPathComponent(destinationName, isDirectory: true)
-        self.databaseURL = self.destination.appendingPathComponent(databasePath, isDirectory: false)
+        self.databaseURL = OpenClawClientCredentialStore.databaseURL(rootURL: self.destination)
     }
 
     deinit {
@@ -45,17 +46,12 @@ private final class DeviceIdentityMigrationFixture {
 
     func load(
         profile: GatewayDeviceIdentityProfile = .primary,
-        sources: [DeviceIdentityPaths.LegacyIdentitySource] = [],
-        beforeLegacyClaim: ((DeviceIdentityPaths.LegacyIdentitySource) throws -> Void)? = nil,
-        afterLegacyCommit: (() throws -> Void)? = nil) throws -> DeviceIdentity
+        sources: [DeviceIdentityPaths.LegacyIdentitySource] = []) throws -> DeviceIdentity
     {
         try DeviceIdentitySQLiteStore.loadOrCreate(
-            databaseURL: self.databaseURL,
             destinationStateDirURL: self.destination,
             profile: profile,
-            legacySources: sources,
-            beforeLegacyClaim: beforeLegacyClaim,
-            afterLegacyCommit: afterLegacyCommit)
+            legacySources: sources)
     }
 }
 
@@ -127,7 +123,7 @@ struct DeviceIdentityStoreTests {
         #expect(observed.count == stateDirectories.count)
         for stateDirectory in stateDirectories {
             #expect(FileManager.default.fileExists(
-                atPath: stateDirectory.appendingPathComponent("state/openclaw.sqlite").path))
+                atPath: stateDirectory.appendingPathComponent("client/credentials.sqlite").path))
         }
     }
 
@@ -181,13 +177,11 @@ struct DeviceIdentityStoreTests {
     @Test
     func `concurrent identity creation converges on persisted key material`() async throws {
         let fixture = DeviceIdentityMigrationFixture()
-        let databaseURL = fixture.databaseURL
         let stateDirectory = fixture.destination
         let identities = try await withThrowingTaskGroup(of: DeviceIdentity.self) { group in
             for _ in 0..<4 {
                 group.addTask {
                     try DeviceIdentitySQLiteStore.loadOrCreate(
-                        databaseURL: databaseURL,
                         destinationStateDirURL: stateDirectory,
                         profile: .primary)
                 }
@@ -262,7 +256,7 @@ struct DeviceIdentityStoreTests {
         let stateDirPath = try #require(getenv("OPENCLAW_STATE_DIR").map { String(cString: $0) })
         let stateDirURL = URL(fileURLWithPath: stateDirPath, isDirectory: true)
         #expect(try Self.scalarInt(
-            stateDirURL.appendingPathComponent("state/openclaw.sqlite"),
+            stateDirURL.appendingPathComponent("client/credentials.sqlite"),
             "SELECT COUNT(*) FROM device_auth_tokens WHERE device_id = '\(deviceID)'") == 3)
         #expect(!FileManager.default.fileExists(
             atPath: stateDirURL.appendingPathComponent("identity/device-auth.json").path))
@@ -295,8 +289,9 @@ struct DeviceIdentityStoreTests {
                 ],
             ],
         ]
-        try JSONSerialization.data(withJSONObject: legacy).write(to: authURL, options: [.atomic])
+        try JSONSerialization.data(withJSONObject: legacy).write(to: authURL)
 
+        _ = try DeviceIdentityStore.loadOrCreatePersistedOrThrow()
         #expect(deviceAuthEntry(deviceID, owner: composedOwner)?.token == "legacy-composed-token")
         #expect(DeviceAuthStore.storeTokenPersisted(
             deviceId: deviceID,
@@ -369,7 +364,7 @@ struct DeviceIdentityStoreTests {
         let sharedIdentityURL = sharedURL.appendingPathComponent("identity", isDirectory: true)
         let sharedDeviceURL = sharedIdentityURL.appendingPathComponent("device.json", isDirectory: false)
         try FileManager.default.createDirectory(at: legacyIdentityURL, withIntermediateDirectories: true)
-        try "legacy-device\n".write(to: legacyDeviceURL, atomically: true, encoding: .utf8)
+        try "legacy-device\n".write(to: legacyDeviceURL, atomically: false, encoding: .utf8)
 
         let selected = DeviceIdentityPaths.stateDirURL(
             overrideURL: nil,
@@ -436,10 +431,10 @@ struct DeviceIdentityStoreTests {
         #expect(primaryIdentity.deviceId != nodeIdentity.deviceId)
         #expect(primaryIdentity.deviceId != shareIdentity.deviceId)
         #expect(try Self.scalarInt(
-            stateDir.appendingPathComponent("state/openclaw.sqlite"),
+            stateDir.appendingPathComponent("client/credentials.sqlite"),
             "SELECT COUNT(*) FROM device_identities") == 3)
         #expect(try Self.scalarInt(
-            stateDir.appendingPathComponent("state/openclaw.sqlite"),
+            stateDir.appendingPathComponent("client/credentials.sqlite"),
             "SELECT COUNT(*) FROM device_auth_tokens") == 3)
         #expect(!FileManager.default.fileExists(atPath: identityDir.appendingPathComponent("device-auth.json").path))
         #expect(!FileManager.default
@@ -460,17 +455,14 @@ struct DeviceIdentityStoreTests {
     }
 
     @Test
-    func `fresh database creates only canonical identity schema and leaves user version zero`() throws {
+    func `fresh database creates the independent local credential schema`() throws {
         let fixture = DeviceIdentityMigrationFixture()
         _ = try fixture.load()
 
-        #expect(try Self.scalarInt(fixture.databaseURL, "PRAGMA user_version") == 0)
-        #expect(try Self.scalarText(
+        #expect(try Self.scalarInt(fixture.databaseURL, "PRAGMA user_version") == 1)
+        #expect(try Self.scalarInt(
             fixture.databaseURL,
-            """
-            SELECT group_concat(type || ':' || name, ',')
-            FROM (SELECT type, name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name)
-            """) == "index:idx_device_identities_device,table:device_identities")
+            "SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'") == 5)
         let directoryMode = try #require(
             FileManager.default.attributesOfItem(atPath: fixture.destination.path)[.posixPermissions] as? NSNumber)
         let databaseMode = try #require(
@@ -478,7 +470,7 @@ struct DeviceIdentityStoreTests {
         #expect(directoryMode.intValue & 0o777 == 0o700)
         #expect(databaseMode.intValue & 0o777 == 0o600)
 
-        #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.destination.path) == ["openclaw.sqlite"])
+        #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.destination.path) == ["client"])
     }
 
     @Test
@@ -493,7 +485,7 @@ struct DeviceIdentityStoreTests {
         #expect(identity.publicKey == Self.fixturePublicKeyRaw)
         #expect(identity.privateKey == Self.fixturePrivateKeyRaw)
         #expect(identity.createdAtMs == 1_800_000_000_000)
-        #expect(!FileManager.default.fileExists(atPath: source.identityURL.path))
+        #expect(FileManager.default.fileExists(atPath: source.identityURL.path))
         #expect(try Self.scalarText(
             fixture.databaseURL,
             "SELECT public_key_pem FROM device_identities WHERE identity_key = 'primary'") == Self.fixturePublicKeyPEM)
@@ -513,7 +505,7 @@ struct DeviceIdentityStoreTests {
     @Test
     func `reads a canonical Node SQLite row without rewriting it`() throws {
         let fixture = DeviceIdentityMigrationFixture()
-        try Self.seedCanonicalSchema(fixture.databaseURL, nodeOwned: true)
+        try Self.seedCanonicalSchema(fixture.databaseURL)
         try Self.execute(fixture.databaseURL, """
         INSERT INTO device_identities (
           identity_key, device_id, public_key_pem, private_key_pem, created_at_ms, updated_at_ms
@@ -533,70 +525,8 @@ struct DeviceIdentityStoreTests {
     }
 
     @Test
-    func `adopts a Node row and creates primary while the global version zero migration is pending`() throws {
-        let fixture = DeviceIdentityMigrationFixture()
-        try Self.seedCanonicalSchema(fixture.databaseURL)
-        try Self.execute(fixture.databaseURL, """
-        CREATE TABLE plugin_state_entries (entry_key TEXT NOT NULL PRIMARY KEY) STRICT;
-        INSERT INTO device_identities (
-          identity_key, device_id, public_key_pem, private_key_pem, created_at_ms, updated_at_ms
-        ) VALUES (
-          'node', '\(Self.fixtureDeviceID)', '\(Self.sql(Self.fixturePublicKeyPEM))',
-          '\(Self.sql(Self.fixturePrivateKeyPEM))', 1800000000000, 1800000000123
-        )
-        """)
-
-        let nodeIdentity = try fixture.load(profile: .node)
-        let primaryIdentity = try fixture.load()
-
-        #expect(nodeIdentity.deviceId == Self.fixtureDeviceID)
-        #expect(nodeIdentity.createdAtMs == 1_800_000_000_000)
-        #expect(primaryIdentity.deviceId != nodeIdentity.deviceId)
-        #expect(try Self.scalarInt(fixture.databaseURL, "PRAGMA user_version") == 0)
-        #expect(try Self.scalarInt(
-            fixture.databaseURL,
-            "SELECT updated_at_ms FROM device_identities WHERE identity_key = 'node'") == 1_800_000_000_123)
-        #expect(try Self.scalarInt(fixture.databaseURL, "SELECT COUNT(*) FROM device_identities") == 2)
-    }
-
-    @Test
-    func `gateway connect keeps its identity after an unrelated shared schema upgrade`() async throws {
-        let fixture = DeviceIdentityMigrationFixture(databasePath: "state/openclaw.sqlite")
-        try Self.seedCanonicalSchema(fixture.databaseURL, nodeOwned: true)
-        let original = try fixture.load()
-        try Self.execute(fixture.databaseURL, """
-        PRAGMA user_version = 2147483647;
-        UPDATE schema_meta SET schema_version = 2147483647;
-        CREATE TABLE unrelated_gateway_state (value TEXT) STRICT;
-        INSERT INTO unrelated_gateway_state VALUES ('preserved');
-        """)
-
-        try await DeviceIdentityStore.withStateDirectory(fixture.destination) {
-            let identity = try #require(try GatewayChannelActor.loadDeviceIdentityForConnect(
-                includeDeviceIdentity: true,
-                profile: .primary))
-            #expect(identity.deviceId == original.deviceId)
-            #expect(identity.publicKey == original.publicKey)
-            #expect(identity.privateKey == original.privateKey)
-            #expect(identity.createdAtMs == original.createdAtMs)
-            #expect(DeviceIdentityStore.signPayload("gateway-challenge", identity: identity) != nil)
-        }
-        // A different native identity can still be persisted without migrating backend state.
-        let node = try fixture.load(profile: .node)
-        #expect(try fixture.load(profile: .node).deviceId == node.deviceId)
-        #expect(try Self.scalarInt(fixture.databaseURL, "PRAGMA user_version") == 2_147_483_647)
-        #expect(try Self.scalarInt(
-            fixture.databaseURL,
-            "SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'") ==
-            2_147_483_647)
-        #expect(try Self.scalarText(
-            fixture.databaseURL,
-            "SELECT value FROM unrelated_gateway_state") == "preserved")
-    }
-
-    @Test
     func `gateway identity failure names corrupt row and state directory without rotating it`() async throws {
-        let fixture = DeviceIdentityMigrationFixture(databasePath: "state/openclaw.sqlite")
+        let fixture = DeviceIdentityMigrationFixture()
         try Self.seedCanonicalSchema(fixture.databaseURL)
         try Self.execute(fixture.databaseURL, """
         INSERT INTO device_identities (
@@ -627,32 +557,6 @@ struct DeviceIdentityStoreTests {
             "not-a-private-key")
     }
 
-    @Test
-    func `same key migration preserves the authoritative SQLite timestamp`() throws {
-        let fixture = DeviceIdentityMigrationFixture()
-        let source = try fixture.source()
-        let identity = try fixture.load(
-            sources: [source],
-            beforeLegacyClaim: { _ in
-                try Self.seedCanonicalSchema(fixture.databaseURL, nodeOwned: true)
-                try Self.execute(fixture.databaseURL, """
-                INSERT INTO device_identities (
-                  identity_key, device_id, public_key_pem, private_key_pem, created_at_ms, updated_at_ms
-                ) VALUES (
-                  'primary', '\(Self.fixtureDeviceID)', '\(Self.sql(Self.fixturePublicKeyPEM))',
-                  '\(Self.sql(Self.fixturePrivateKeyPEM))', 1700000000000, 1700000000123
-                )
-                """)
-            })
-
-        #expect(identity.deviceId == Self.fixtureDeviceID)
-        #expect(identity.createdAtMs == 1_700_000_000_000)
-        #expect(try Self.scalarInt(
-            fixture.databaseURL,
-            "SELECT updated_at_ms FROM device_identities WHERE identity_key = 'primary'") == 1_700_000_000_123)
-        #expect(!FileManager.default.fileExists(atPath: source.identityURL.path))
-    }
-
     @Test(arguments: [GatewayDeviceIdentityProfile.primary, .node])
     func `canonical SQLite identity ignores a recreated retired file`(
         profile: GatewayDeviceIdentityProfile) throws
@@ -670,8 +574,7 @@ struct DeviceIdentityStoreTests {
 
         let loaded = try fixture.load(
             profile: profile,
-            sources: [source],
-            beforeLegacyClaim: { _ in Issue.record("canonical identity inspected a retired source") })
+            sources: [source])
 
         #expect(loaded == canonical)
         #expect(canonical.deviceId != Self.fixtureDeviceID)
@@ -695,7 +598,7 @@ struct DeviceIdentityStoreTests {
             try fixture.load(sources: [source])
         }
         #expect(FileManager.default.fileExists(atPath: source.identityURL.path))
-        #expect(!FileManager.default.fileExists(atPath: fixture.databaseURL.path))
+        #expect(try Self.scalarInt(fixture.databaseURL, "SELECT COUNT(*) FROM device_identities") == 0)
     }
 
     @Test
@@ -710,25 +613,7 @@ struct DeviceIdentityStoreTests {
         }
 
         #expect(FileManager.default.fileExists(atPath: claimURL.path))
-        #expect(!FileManager.default.fileExists(atPath: fixture.databaseURL.path))
-    }
-
-    @Test
-    func `Doctor rename winning native claim race blocks identity generation`() throws {
-        let fixture = DeviceIdentityMigrationFixture()
-        let source = try fixture.source()
-        let claimURL = fixture.claimURL(for: source, suffix: ".doctor-importing")
-
-        #expect(throws: NSError.self) {
-            try fixture.load(
-                sources: [source],
-                beforeLegacyClaim: { _ in
-                    try FileManager.default.moveItem(at: source.identityURL, to: claimURL)
-                })
-        }
-
-        #expect(FileManager.default.fileExists(atPath: claimURL.path))
-        #expect(!FileManager.default.fileExists(atPath: fixture.databaseURL.path))
+        #expect(try Self.scalarInt(fixture.databaseURL, "SELECT COUNT(*) FROM device_identities") == 0)
     }
 
     @Test
@@ -741,27 +626,7 @@ struct DeviceIdentityStoreTests {
 
         #expect(identity.deviceId == Self.fixtureDeviceID)
         #expect(!FileManager.default.fileExists(atPath: source.identityURL.path))
-        #expect(!FileManager.default.fileExists(atPath: claimURL.path))
-    }
-
-    @Test
-    func `matching recreated source parks stale native claim`() throws {
-        let fixture = DeviceIdentityMigrationFixture()
-        let source = try fixture.source(
-            contents: Self.nodePEMIdentityJSON(deviceId: "recreated-source"))
-        let claimURL = fixture.claimURL(for: source)
-        try Self.nodePEMIdentityJSON(deviceId: "interrupted-claim")
-            .write(to: claimURL, atomically: true, encoding: .utf8)
-        let identity = try fixture.load(sources: [source])
-
-        #expect(identity.deviceId == Self.fixtureDeviceID)
-        #expect(!FileManager.default.fileExists(atPath: source.identityURL.path))
-        #expect(!FileManager.default.fileExists(atPath: claimURL.path))
-        let parkedClaims = try FileManager.default.contentsOfDirectory(
-            at: source.identityURL.deletingLastPathComponent(),
-            includingPropertiesForKeys: nil)
-            .filter { $0.lastPathComponent.hasPrefix("device.json.native-importing.stale-") }
-        #expect(parkedClaims.count == 1)
+        #expect(FileManager.default.fileExists(atPath: claimURL.path))
     }
 
     @Test
@@ -775,8 +640,7 @@ struct DeviceIdentityStoreTests {
             _ = try fixture.load(sources: [source])
             Issue.record("Expected conflicting source and claim to throw")
         } catch let error as NSError {
-            #expect(error.localizedDescription ==
-                "Legacy device identity source and interrupted native claim both exist")
+            #expect(error.localizedDescription.contains("Legacy device identity sources conflict across"))
         }
 
         #expect(FileManager.default.fileExists(atPath: source.identityURL.path))
@@ -788,8 +652,8 @@ struct DeviceIdentityStoreTests {
         let fixture = DeviceIdentityMigrationFixture()
         let material1 = DeviceIdentityStore.generateMaterial()
         let material2 = DeviceIdentityStore.generateMaterial()
-        let json1 = try String(decoding: JSONEncoder().encode(material1.identity), as: UTF8.self)
-        let json2 = try String(decoding: JSONEncoder().encode(material2.identity), as: UTF8.self)
+        let json1 = try #require(String(bytes: JSONEncoder().encode(material1.identity), encoding: .utf8))
+        let json2 = try #require(String(bytes: JSONEncoder().encode(material2.identity), encoding: .utf8))
         let source1 = try fixture.source("source1", contents: json1)
         let source2 = try fixture.source("source2", contents: json2)
 
@@ -819,80 +683,11 @@ struct DeviceIdentityStoreTests {
             _ = try fixture.load(sources: [source])
             Issue.record("Expected unparseable claim to throw")
         } catch let error as NSError {
-            #expect(error.localizedDescription ==
-                "Legacy device identity source and interrupted native claim both exist")
+            #expect(error.localizedDescription == "Legacy device identity is not a JSON object")
         }
 
         #expect(FileManager.default.fileExists(atPath: source.identityURL.path))
         #expect(FileManager.default.fileExists(atPath: claimURL.path))
-    }
-
-    @Test
-    func `source reappearance preserves both native claim and recreated source`() throws {
-        let fixture = DeviceIdentityMigrationFixture()
-        let legacyData = try Self.nodePEMIdentityJSON()
-        let source = try fixture.source(contents: legacyData)
-        let claimURL = fixture.claimURL(for: source)
-
-        #expect(throws: NSError.self) {
-            try fixture.load(
-                sources: [source],
-                afterLegacyCommit: {
-                    try legacyData.write(to: source.identityURL, atomically: true, encoding: .utf8)
-                })
-        }
-
-        #expect(FileManager.default.fileExists(atPath: source.identityURL.path))
-        #expect(FileManager.default.fileExists(atPath: claimURL.path))
-        #expect(try Self.scalarText(
-            fixture.databaseURL,
-            "SELECT device_id FROM device_identities WHERE identity_key = 'primary'") == Self.fixtureDeviceID)
-    }
-
-    @Test
-    func `multi source rollback restores every independent native claim`() throws {
-        let fixture = DeviceIdentityMigrationFixture()
-        let legacyData = try Self.nodePEMIdentityJSON()
-        let first = try fixture.source("first", contents: legacyData)
-        let second = try fixture.source("second", contents: legacyData)
-        let firstClaimURL = fixture.claimURL(for: first)
-        let secondClaimURL = fixture.claimURL(for: second)
-
-        #expect(throws: NSError.self) {
-            try fixture.load(
-                sources: [first, second],
-                afterLegacyCommit: {
-                    try legacyData.write(to: second.identityURL, atomically: true, encoding: .utf8)
-                })
-        }
-
-        #expect(FileManager.default.fileExists(atPath: first.identityURL.path))
-        #expect(!FileManager.default.fileExists(atPath: firstClaimURL.path))
-        #expect(FileManager.default.fileExists(atPath: second.identityURL.path))
-        #expect(FileManager.default.fileExists(atPath: secondClaimURL.path))
-    }
-
-    @Test
-    func `post commit identity change restores native claim before cleanup`() throws {
-        let fixture = DeviceIdentityMigrationFixture()
-        let source = try fixture.source()
-        let claimURL = fixture.claimURL(for: source)
-
-        #expect(throws: NSError.self) {
-            try fixture.load(
-                sources: [source],
-                afterLegacyCommit: {
-                    try Self.execute(
-                        fixture.databaseURL,
-                        "UPDATE device_identities SET device_id = 'tampered' WHERE identity_key = 'primary'")
-                })
-        }
-
-        #expect(FileManager.default.fileExists(atPath: source.identityURL.path))
-        #expect(!FileManager.default.fileExists(atPath: claimURL.path))
-        #expect(try Self.scalarText(
-            fixture.databaseURL,
-            "SELECT device_id FROM device_identities WHERE identity_key = 'primary'") == "tampered")
     }
 
     @Test
@@ -912,7 +707,6 @@ struct DeviceIdentityStoreTests {
         try FileManager.default.createSymbolicLink(at: symbolic.identityURL, withDestinationURL: real.identityURL)
         #expect(throws: NSError.self) {
             try DeviceIdentitySQLiteStore.loadOrCreate(
-                databaseURL: root.appendingPathComponent("symbolic.sqlite"),
                 destinationStateDirURL: root,
                 profile: .primary,
                 legacySources: [symbolic])
@@ -926,7 +720,6 @@ struct DeviceIdentityStoreTests {
             withDestinationURL: real.identityURL.deletingLastPathComponent())
         #expect(throws: NSError.self) {
             try DeviceIdentitySQLiteStore.loadOrCreate(
-                databaseURL: root.appendingPathComponent("traversing.sqlite"),
                 destinationStateDirURL: root,
                 profile: .primary,
                 legacySources: [traversing])
@@ -940,7 +733,6 @@ struct DeviceIdentityStoreTests {
         try FileManager.default.linkItem(at: real.identityURL, to: hard.identityURL)
         #expect(throws: NSError.self) {
             try DeviceIdentitySQLiteStore.loadOrCreate(
-                databaseURL: root.appendingPathComponent("hard.sqlite"),
                 destinationStateDirURL: root,
                 profile: .primary,
                 legacySources: [hard])
@@ -948,23 +740,24 @@ struct DeviceIdentityStoreTests {
         #expect(FileManager.default.fileExists(atPath: real.identityURL.path))
         #expect(FileManager.default.fileExists(atPath: hard.identityURL.path))
     }
+}
 
+extension DeviceIdentityStoreTests {
     @Test
     func `migration imports auth rows without removing its source`() throws {
         let fixture = DeviceIdentityMigrationFixture(
-            destinationName: "legacy",
-            databasePath: "state/openclaw.sqlite")
+            destinationName: "legacy")
         let source = try fixture.source("shared")
         let auth = """
-        {"version":1,"deviceId":"\(Self
-            .fixtureDeviceID)","tokens":{"node":{"token":"source-token","role":"node","scopes":["write"],"updatedAtMs":100}}}
+        {"version":1,"deviceId":"\(Self.fixtureDeviceID)","tokens":{
+          "node":{"token":"source-token","role":"node","scopes":["write"],"updatedAtMs":100}}}
         """
-        try auth.write(to: source.authURL, atomically: true, encoding: .utf8)
+        try auth.write(to: source.authURL, atomically: false, encoding: .utf8)
         let destinationAuthURL = fixture.destination.appendingPathComponent("identity/device-auth.json")
 
         _ = try fixture.load(sources: [source])
 
-        #expect(!FileManager.default.fileExists(atPath: source.identityURL.path))
+        #expect(FileManager.default.fileExists(atPath: source.identityURL.path))
         #expect(try String(contentsOf: source.authURL, encoding: .utf8) == auth)
         #expect(!FileManager.default.fileExists(atPath: destinationAuthURL.path))
         #expect(try Self.scalarText(
@@ -976,35 +769,22 @@ struct DeviceIdentityStoreTests {
     @Test
     func `migration preserves canonical destination auth rows`() throws {
         let fixture = DeviceIdentityMigrationFixture(
-            destinationName: "legacy",
-            databasePath: "state/openclaw.sqlite")
+            destinationName: "legacy")
         let source = try fixture.source("shared")
         let sourceAuth = """
         {"version":1,"deviceId":"\(Self
             .fixtureDeviceID)","tokens":{"node":{"token":"source-token","role":"node","scopes":[],"updatedAtMs":100}}}
         """
-        try sourceAuth.write(to: source.authURL, atomically: true, encoding: .utf8)
-        try FileManager.default.createDirectory(
-            at: fixture.databaseURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true)
+        try sourceAuth.write(to: source.authURL, atomically: false, encoding: .utf8)
+        try Self.seedCanonicalSchema(fixture.databaseURL)
         try Self.execute(fixture.databaseURL, """
-        CREATE TABLE device_auth_tokens (
-          device_id TEXT NOT NULL,
-          role TEXT NOT NULL,
-          token TEXT NOT NULL,
-          scopes_json TEXT NOT NULL,
-          updated_at_ms INTEGER NOT NULL,
-          PRIMARY KEY (device_id, role)
-        ) STRICT;
-        CREATE INDEX idx_device_auth_tokens_updated
-          ON device_auth_tokens(updated_at_ms DESC, device_id, role);
         INSERT INTO device_auth_tokens (device_id, role, token, scopes_json, updated_at_ms)
         VALUES ('\(Self.fixtureDeviceID)', 'node', 'destination-token', '[]', 200);
         """)
 
         _ = try fixture.load(sources: [source])
 
-        #expect(!FileManager.default.fileExists(atPath: source.identityURL.path))
+        #expect(FileManager.default.fileExists(atPath: source.identityURL.path))
         #expect(try String(contentsOf: source.authURL, encoding: .utf8) == sourceAuth)
         #expect(try Self.scalarText(
             fixture.databaseURL,
@@ -1014,25 +794,25 @@ struct DeviceIdentityStoreTests {
 
     @Test
     func `migration imports destination legacy auth before source auth`() throws {
-        let fixture = DeviceIdentityMigrationFixture(databasePath: "state/openclaw.sqlite")
+        let fixture = DeviceIdentityMigrationFixture()
         let source = try fixture.source("source")
         let sourceAuth = """
         {"version":1,"deviceId":"\(Self
             .fixtureDeviceID)","tokens":{"node":{"token":"source-token","role":"node","scopes":[],"updatedAtMs":100}}}
         """
-        try sourceAuth.write(to: source.authURL, atomically: true, encoding: .utf8)
+        try sourceAuth.write(to: source.authURL, atomically: false, encoding: .utf8)
         let destinationAuthURL = fixture.destination.appendingPathComponent("identity/device-auth.json")
         try FileManager.default.createDirectory(
             at: destinationAuthURL.deletingLastPathComponent(),
             withIntermediateDirectories: true)
         let destinationAuth = sourceAuth.replacingOccurrences(of: "source-token", with: "destination-token")
-        try destinationAuth.write(to: destinationAuthURL, atomically: true, encoding: .utf8)
+        try destinationAuth.write(to: destinationAuthURL, atomically: false, encoding: .utf8)
 
         _ = try fixture.load(sources: [source])
 
-        #expect(!FileManager.default.fileExists(atPath: source.identityURL.path))
+        #expect(FileManager.default.fileExists(atPath: source.identityURL.path))
         #expect(try String(contentsOf: source.authURL, encoding: .utf8) == sourceAuth)
-        #expect(!FileManager.default.fileExists(atPath: destinationAuthURL.path))
+        #expect(FileManager.default.fileExists(atPath: destinationAuthURL.path))
         #expect(try Self.scalarText(
             fixture.databaseURL,
             "SELECT token FROM device_auth_tokens WHERE device_id = '\(Self.fixtureDeviceID)' AND role = 'node'") ==
@@ -1041,12 +821,12 @@ struct DeviceIdentityStoreTests {
 
     @Test
     func `source auth access failure preserves the identity claim for retry`() throws {
-        let fixture = DeviceIdentityMigrationFixture(databasePath: "state/openclaw.sqlite")
+        let fixture = DeviceIdentityMigrationFixture()
         let source = try fixture.source("source")
         let sourceAuth = """
         {"version":1,"deviceId":"\(Self.fixtureDeviceID)","tokens":{}}
         """
-        try sourceAuth.write(to: source.authURL, atomically: true, encoding: .utf8)
+        try sourceAuth.write(to: source.authURL, atomically: false, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: source.authURL.path)
         defer {
             try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: source.authURL.path)
@@ -1062,7 +842,7 @@ struct DeviceIdentityStoreTests {
 
     @Test
     func `migration rejects conflicting source auth stores`() throws {
-        let fixture = DeviceIdentityMigrationFixture(databasePath: "state/openclaw.sqlite")
+        let fixture = DeviceIdentityMigrationFixture()
         let identityJSON = try Self.nodePEMIdentityJSON()
         let first = try fixture.source("first", contents: identityJSON)
         let second = try fixture.source("second", contents: identityJSON)
@@ -1071,8 +851,8 @@ struct DeviceIdentityStoreTests {
             .fixtureDeviceID)","tokens":{"node":{"token":"first-token","role":"node","scopes":[],"updatedAtMs":100}}}
         """
         let secondAuth = firstAuth.replacingOccurrences(of: "first-token", with: "second-token")
-        try firstAuth.write(to: first.authURL, atomically: true, encoding: .utf8)
-        try secondAuth.write(to: second.authURL, atomically: true, encoding: .utf8)
+        try firstAuth.write(to: first.authURL, atomically: false, encoding: .utf8)
+        try secondAuth.write(to: second.authURL, atomically: false, encoding: .utf8)
 
         #expect(throws: NSError.self) {
             try fixture.load(sources: [first, second])
@@ -1087,74 +867,23 @@ struct DeviceIdentityStoreTests {
     @Test
     func `migration normalizes imported auth scopes`() throws {
         let fixture = DeviceIdentityMigrationFixture(
-            destinationName: "legacy",
-            databasePath: "state/openclaw.sqlite")
+            destinationName: "legacy")
         let source = try fixture.source("shared")
         let sourceAuth = """
-        {"version":1,"deviceId":"\(Self
-            .fixtureDeviceID)","tokens":{"legacy":{"token":"source-token","role":"node","scopes":["write","read"],"updatedAtMs":100}}}
+        {"version":1,"deviceId":"\(Self.fixtureDeviceID)","tokens":{
+          "legacy":{"token":"source-token","role":"node","scopes":["write","read"],"updatedAtMs":100}}}
         """
-        try sourceAuth.write(to: source.authURL, atomically: true, encoding: .utf8)
+        try sourceAuth.write(to: source.authURL, atomically: false, encoding: .utf8)
 
         _ = try fixture.load(sources: [source])
 
-        #expect(!FileManager.default.fileExists(atPath: source.identityURL.path))
+        #expect(FileManager.default.fileExists(atPath: source.identityURL.path))
         #expect(try String(contentsOf: source.authURL, encoding: .utf8) == sourceAuth)
-        #expect(try Self.scalarText(
+        let scopes = try Self.scalarText(
             fixture.databaseURL,
-            "SELECT scopes_json FROM device_auth_tokens WHERE device_id = '\(Self.fixtureDeviceID)' AND role = 'node'") ==
-            "[\"read\",\"write\"]")
-    }
-
-    @Test
-    func `preserves WAL journal mode`() throws {
-        let fixture = DeviceIdentityMigrationFixture()
-        try Self.seedCanonicalSchema(fixture.databaseURL)
-        #expect(try Self.scalarText(fixture.databaseURL, "PRAGMA journal_mode = WAL")?.lowercased() == "wal")
-
-        _ = try fixture.load()
-
-        #expect(try Self.scalarText(fixture.databaseURL, "PRAGMA journal_mode")?.lowercased() == "wal")
-    }
-
-    @Test
-    func `fails closed for nonempty missing wrong and newer schemas`() throws {
-        let fixture = DeviceIdentityMigrationFixture()
-        let root = fixture.root
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-
-        let missing = root.appendingPathComponent("missing.sqlite")
-        try Self.execute(missing, "CREATE TABLE unrelated (id INTEGER PRIMARY KEY) STRICT")
-        #expect(throws: NSError.self) {
-            try DeviceIdentitySQLiteStore.loadOrCreate(
-                databaseURL: missing,
-                destinationStateDirURL: root,
-                profile: .primary)
-        }
-
-        let wrong = root.appendingPathComponent("wrong.sqlite")
-        try Self.execute(wrong, """
-        CREATE TABLE device_identities (
-          identity_key TEXT NOT NULL PRIMARY KEY,
-          device_id TEXT NOT NULL
-        ) STRICT;
-        CREATE INDEX idx_device_identities_device ON device_identities(device_id);
-        """)
-        #expect(throws: NSError.self) {
-            try DeviceIdentitySQLiteStore.loadOrCreate(
-                databaseURL: wrong,
-                destinationStateDirURL: root,
-                profile: .primary)
-        }
-
-        let newer = root.appendingPathComponent("newer.sqlite")
-        try Self.execute(newer, "PRAGMA user_version = 4")
-        #expect(throws: NSError.self) {
-            try DeviceIdentitySQLiteStore.loadOrCreate(
-                databaseURL: newer,
-                destinationStateDirURL: root,
-                profile: .primary)
-        }
+            "SELECT scopes_json FROM device_auth_tokens " +
+                "WHERE device_id = '\(Self.fixtureDeviceID)' AND role = 'node'")
+        #expect(scopes == "[\"read\",\"write\"]")
     }
 }
 
@@ -1217,7 +946,7 @@ extension DeviceIdentityStoreTests {
         try FileManager.default.createDirectory(
             at: source.identityURL.deletingLastPathComponent(),
             withIntermediateDirectories: true)
-        try contents.write(to: source.identityURL, atomically: true, encoding: .utf8)
+        try contents.write(to: source.identityURL, atomically: false, encoding: .utf8)
         return source
     }
 
@@ -1233,40 +962,10 @@ extension DeviceIdentityStoreTests {
             authURL: identityDirURL.appendingPathComponent(profile.authFileName, isDirectory: false))
     }
 
-    fileprivate static func seedCanonicalSchema(_ databaseURL: URL, nodeOwned: Bool = false) throws {
-        try FileManager.default.createDirectory(
-            at: databaseURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true)
-        let metadataSQL = nodeOwned
-            ? """
-            CREATE TABLE schema_meta (
-              meta_key TEXT NOT NULL PRIMARY KEY,
-              role TEXT NOT NULL,
-              schema_version INTEGER NOT NULL,
-              agent_id TEXT,
-              app_version TEXT,
-              created_at INTEGER NOT NULL,
-              updated_at INTEGER NOT NULL
-            ) STRICT;
-            INSERT INTO schema_meta (
-              meta_key, role, schema_version, agent_id, app_version, created_at, updated_at
-            ) VALUES ('primary', 'global', 4, NULL, NULL, 1800000000000, 1800000000000);
-            PRAGMA user_version = 4;
-            """
-            : ""
-        try self.execute(databaseURL, """
-        CREATE TABLE device_identities (
-          identity_key TEXT NOT NULL PRIMARY KEY,
-          device_id TEXT NOT NULL,
-          public_key_pem TEXT NOT NULL,
-          private_key_pem TEXT NOT NULL,
-          created_at_ms INTEGER NOT NULL,
-          updated_at_ms INTEGER NOT NULL
-        ) STRICT;
-        CREATE INDEX idx_device_identities_device
-          ON device_identities(device_id, updated_at_ms DESC);
-        \(metadataSQL)
-        """)
+    fileprivate static func seedCanonicalSchema(_ databaseURL: URL) throws {
+        let owner = try OpenClawClientCredentialStore(rootURL: databaseURL.deletingLastPathComponent()
+            .deletingLastPathComponent())
+        owner.close()
     }
 
     fileprivate static func execute(_ databaseURL: URL, _ sql: String) throws {

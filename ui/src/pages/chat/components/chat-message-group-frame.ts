@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
+import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import {
   normalizeRoleForGrouping,
   resolveMessageRole,
@@ -15,14 +16,14 @@ import {
   isProviderVoiceTranscript,
   resolveAssistantReplyPhase,
 } from "../chat-assistant-reply.ts";
-import { readPendingSendStatus } from "../chat-thread.ts";
+import { isChatSendReconnecting } from "../chat-send-presentation.ts";
+import { readPendingSendStatus } from "../chat-thread-items.ts";
 import { hasForwardedSource } from "../chat-turn-boundary.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import type { RenderMessageGroupOptions } from "./chat-message-group-options.ts";
 import {
   FULL_MESSAGE_RETRY_REVISION_LIMIT,
   hasMessageActionButtons,
-  prepareChatMessageRender,
   resolveMessageActionDetails,
 } from "./chat-message-markdown-view.tsx";
 import {
@@ -56,10 +57,9 @@ export function prepareGroupMessage(
     canFetchFullMessage: Boolean(opts.loadFullAssistantMessage && opts.sessionKey),
     senderLabel: resolveMessageGroupSenderLabel(group, opts),
   });
-  const messageId = details?.fullMessage?.messageId;
-  if (messageId) {
-    // Projected rows can share a source ID; a preceding row may have started its load.
-    const expansion = opts.getAssistantMessageExpansion?.(messageId);
+  const fullMessage = details?.fullMessage;
+  if (fullMessage) {
+    const { messageId, state: expansion } = fullMessage;
     // Retry transient failures on later renders, bounded so a dead loader cannot hot-loop.
     if (
       !expansion ||
@@ -119,6 +119,14 @@ export function resolveFileLinkOwnerOptions(
             )),
       }
     : options;
+  if (
+    group.senderSession &&
+    (sourceSessionKey !== options.sessionKey ||
+      (group.senderSession.agentId && group.senderSession.agentId !== options.agentId))
+  ) {
+    // Files search belongs to the current pane, unlike source-bound direct file references.
+    return { ...owned, onFindWorkspaceFile: undefined };
+  }
   return owned;
 }
 
@@ -180,7 +188,8 @@ export function prepareMessageGroupFrame(
   // no identity, footer or actions of their own, only the run-block gap.
   const isTurnBlock =
     normalizedRole === "tool" ||
-    group.messages.every(({ message }) => isProviderVoiceTranscript(message)) ||
+    (group.messages.length > 0 &&
+      group.messages.every(({ message }) => isProviderVoiceTranscript(message))) ||
     (normalizedRole === "assistant" &&
       !opts.searchResult &&
       !ownsRunFrame &&
@@ -199,15 +208,23 @@ export function prepareMessageGroupFrame(
   const hasUserFooterActions =
     normalizedRole === "user" &&
     ((opts.onRewind && !opts.rewindDisabled) || hasMessageActionButtons(footerActionDetails, opts));
-  // Source sessions share the stable sender hue machinery; CSS owns contrast
-  // in each theme. Unattributed local messages keep the accent skin.
+  // Source sessions share stable sender hues; the shared participant palette owns contrast
+  // in each theme. Own and unattributed messages keep the theme-derived accent skin.
   const senderHue =
     isForwarded && sourceSessionKey
       ? resolveIdentityHue({ id: sourceSessionKey })
-      : normalizedRole === "user" && group.sender
+      : normalizedRole === "user" && group.sender && !isOwnGroup
         ? resolveIdentityHue(group.sender)
         : null;
-  const sendStatus = readPendingSendStatus(group.messages.at(-1)?.message);
+  const pendingSend = readPendingSendStatus(group.messages.at(-1)?.message);
+  // Normal delivery uses the settled footer; only recovery needs an interruption.
+  const sendStatus =
+    pendingSend &&
+    (pendingSend.state === "failed" ||
+      pendingSend.state === "held" ||
+      isChatSendReconnecting(pendingSend.state, opts.connected))
+      ? pendingSend
+      : null;
 
   const inlineUserAvatar =
     normalizedRole === "user" &&
@@ -258,7 +275,7 @@ export function prepareMessageGroupFrame(
         "chat-group--reply": holdsReplyRow,
       },
     ],
-    style: senderHue === null ? undefined : `--chat-sender-hue: ${senderHue}`,
+    senderHue,
     sessionKey: sourceSessionKey ?? undefined,
   };
 }

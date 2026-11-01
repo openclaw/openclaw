@@ -8,6 +8,7 @@ import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
+import { assertRepositoryWorkspaceDiskIdentity } from "../../state/session-repository-workspaces.authority.js";
 import {
   placementTurnOwner,
   type WorkerSessionPlacementIdentity,
@@ -131,6 +132,12 @@ export function createRepositoryWorkspaceMutationService(options: {
         );
         const assertPlacementCurrent = (current: WorkerSessionPlacementRecord | undefined) => {
           const currentEnvironment = environments.get(placement.environmentId);
+          if (workspace.repository.diskAuthority) {
+            assertRepositoryWorkspaceDiskIdentity(
+              workspace.repository.diskAuthority,
+              currentEnvironment,
+            );
+          }
           if (
             current?.state !== "active" ||
             current.agentId !== params.agentId ||
@@ -185,7 +192,8 @@ export function createRepositoryWorkspaceMutationService(options: {
           assertCurrent();
           const result = await params.mutate(assertCurrent);
           assertCurrent();
-          if (!result.changed) {
+          // The retained disk owns editor bytes; only explicit publication/export captures them.
+          if (!result.changed || workspace.repository.diskAuthority) {
             await placements.acceptWorkspaceResult(claim, assertWorkerCurrent, currentCheck);
             await placements.completeWorkspaceResultAndReleaseTurn(
               claim,

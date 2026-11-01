@@ -15,10 +15,13 @@ import {
   setDiagnosticsEnabledForProcess,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import * as nodeRuntime from "../infra/node-runtime-executable.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
+import * as execCgroup from "./linux-exec-cgroup.js";
 import { emitChildProcessSpawnSample, withChildProcessOperation } from "./spawn-diagnostics.js";
+import { createWindowsNpmShim } from "./supervisor/adapters/child.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   signalPtySessionTree: vi.fn(),
@@ -69,22 +72,15 @@ async function spawnDirectTerminalPty(
   }
 }
 
-function createWindowsNpmShim(command: string) {
+async function createTerminalNpmShim(command: string) {
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-terminal-pty-shim-"));
   tempDirs.push(binDir);
-  const entrypoint = path.join(binDir, "node_modules", "@openai", command, "bin", `${command}.js`);
-  fs.mkdirSync(path.dirname(entrypoint), { recursive: true });
-  fs.writeFileSync(entrypoint, "", "utf8");
-  const relativeEntrypoint = path.relative(binDir, entrypoint).replaceAll(path.sep, "\\");
-  const shimPath = path.join(binDir, `${command}.cmd`);
-  fs.writeFileSync(
-    shimPath,
-    "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n" +
-      'IF EXIST "%dp0%\\node.exe" (\r\n  SET "_prog=%dp0%\\node.exe"\r\n) ELSE (\r\n  SET "_prog=node"\r\n)\r\n' +
-      `endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%" "%dp0%\\${relativeEntrypoint}" %*\r\n`,
-    "utf8",
-  );
-  return { entrypoint, shimPath };
+  const { entrypoint } = await createWindowsNpmShim({
+    binDir,
+    command,
+    packagePath: ["@openai", command, "bin", `${command}.js`],
+  });
+  return { entrypoint, shimPath: path.join(binDir, `${command}.cmd`) };
 }
 
 function fakePty(pid = 4321) {
@@ -143,58 +139,102 @@ describe("terminal PTY spawn diagnostics", () => {
     resetDiagnosticEventsForTest();
   });
 
-  it.each(["node-pty", "bun-native", "node-helper"] as const)(
-    "counts an admitted %s PTY once with the agent owner",
-    async (backend) => {
-      const bunDescriptor = Object.getOwnPropertyDescriptor(process.versions, "bun");
-      const bunGlobalDescriptor = Object.getOwnPropertyDescriptor(globalThis, "Bun");
-      const bunRuntime =
-        (globalThis as typeof globalThis & { Bun?: { Terminal?: unknown } }).Bun ?? {};
-      const terminalDescriptor = Object.getOwnPropertyDescriptor(bunRuntime, "Terminal");
-      Object.defineProperty(process.versions, "bun", {
-        configurable: true,
-        value: backend === "node-pty" ? undefined : "synthetic-bun",
-      });
-      const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-      const pty = fakePty();
-      mocks.spawn.mockReturnValueOnce(pty);
-      mocks.spawnBunTerminalPty.mockReturnValueOnce(pty);
-      mocks.spawnNodeTerminalPty.mockResolvedValueOnce(pty);
-      // The real Bun global is immutable; its Terminal capability is writable.
-      Object.defineProperty(bunRuntime, "Terminal", {
-        ...(terminalDescriptor ?? { configurable: true, writable: true }),
-        value: backend === "bun-native" ? { prototype: { pause() {} } } : undefined,
-      });
+  it.each([
+    "node-pty",
+    "bun-native",
+    "node-helper",
+    "cgroup-helper",
+    "gateway-cgroup",
+    "bun-native-no-node",
+  ] as const)("counts an admitted %s PTY once with the agent owner", async (backend) => {
+    const bunDescriptor = Object.getOwnPropertyDescriptor(process.versions, "bun");
+    const bunGlobalDescriptor = Object.getOwnPropertyDescriptor(globalThis, "Bun");
+    const bunRuntime =
+      (globalThis as typeof globalThis & { Bun?: { Terminal?: unknown } }).Bun ?? {};
+    const terminalDescriptor = Object.getOwnPropertyDescriptor(bunRuntime, "Terminal");
+    Object.defineProperty(process.versions, "bun", {
+      configurable: true,
+      value: backend === "node-pty" ? undefined : "synthetic-bun",
+    });
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    const isolation =
+      backend === "cgroup-helper" ||
+      backend === "gateway-cgroup" ||
+      backend === "bun-native-no-node";
+    vi.spyOn(execCgroup, "getAgentExecCgroup").mockReturnValue(
+      isolation ? "/synthetic/agent-exec" : undefined,
+    );
+    vi.spyOn(nodeRuntime, "resolveNodeRuntimeExecutable").mockReturnValue(
+      backend === "bun-native-no-node" ? undefined : "/synthetic/node",
+    );
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    const pty = fakePty();
+    mocks.spawn.mockReturnValueOnce(pty);
+    mocks.spawnBunTerminalPty.mockReturnValueOnce(pty);
+    mocks.spawnNodeTerminalPty.mockResolvedValueOnce(pty);
+    // The real Bun global is immutable; its Terminal capability is writable.
+    Object.defineProperty(bunRuntime, "Terminal", {
+      ...(terminalDescriptor ?? { configurable: true, writable: true }),
+      value: backend === "bun-native" || isolation ? { prototype: { pause() {} } } : undefined,
+    });
+    if (!bunGlobalDescriptor) {
+      vi.stubGlobal("Bun", bunRuntime);
+    }
+    try {
+      const aborted = AbortSignal.abort();
+      await expect(
+        spawnTerminalPty(
+          { file: "/bin/bash", args: ["-c", "synthetic"], cols: 80, rows: 24 },
+          { abortSignal: aborted },
+        ),
+      ).rejects.toThrow("PTY construction aborted");
+      expect(mocks.spawn).not.toHaveBeenCalled();
+      expect(mocks.spawnBunTerminalPty).not.toHaveBeenCalled();
+      expect(mocks.spawnNodeTerminalPty).not.toHaveBeenCalled();
+      await withChildProcessOperation("agent.exec", () =>
+        spawnTerminalPty({
+          executionIntent: backend === "gateway-cgroup" ? "gateway-internal" : "agent-tool",
+          file: "/bin/bash",
+          args: ["-c", "synthetic"],
+          cols: 80,
+          rows: 24,
+        }),
+      );
+      if (backend === "bun-native-no-node") {
+        expect(mocks.spawnBunTerminalPty).toHaveBeenCalledOnce();
+        expect(mocks.spawnNodeTerminalPty).not.toHaveBeenCalled();
+        expect(warning).toHaveBeenCalledWith(expect.stringContaining("isolation is partial"));
+      } else if (backend === "cgroup-helper") {
+        expect(mocks.spawnNodeTerminalPty).toHaveBeenCalledOnce();
+        expect(mocks.spawnBunTerminalPty).not.toHaveBeenCalled();
+        expect(warning).not.toHaveBeenCalled();
+      } else if (backend === "gateway-cgroup") {
+        expect(mocks.spawnBunTerminalPty).toHaveBeenCalledOnce();
+        expect(mocks.spawnNodeTerminalPty).not.toHaveBeenCalled();
+        expect(warning).not.toHaveBeenCalled();
+      }
+    } finally {
+      platform.mockRestore();
+      if (terminalDescriptor) {
+        Object.defineProperty(bunRuntime, "Terminal", terminalDescriptor);
+      } else {
+        Reflect.deleteProperty(bunRuntime, "Terminal");
+      }
       if (!bunGlobalDescriptor) {
-        vi.stubGlobal("Bun", bunRuntime);
+        vi.unstubAllGlobals();
       }
-      try {
-        await withChildProcessOperation("agent.exec", () =>
-          spawnTerminalPty({ file: "/bin/bash", args: ["-c", "synthetic"], cols: 80, rows: 24 }),
-        );
-      } finally {
-        platform.mockRestore();
-        if (terminalDescriptor) {
-          Object.defineProperty(bunRuntime, "Terminal", terminalDescriptor);
-        } else {
-          Reflect.deleteProperty(bunRuntime, "Terminal");
-        }
-        if (!bunGlobalDescriptor) {
-          vi.unstubAllGlobals();
-        }
-        if (bunDescriptor) {
-          Object.defineProperty(process.versions, "bun", bunDescriptor);
-        } else {
-          Reflect.deleteProperty(process.versions, "bun");
-        }
+      if (bunDescriptor) {
+        Object.defineProperty(process.versions, "bun", bunDescriptor);
+      } else {
+        Reflect.deleteProperty(process.versions, "bun");
       }
-      now = 60_000;
-      emitChildProcessSpawnSample();
-      expect(events).toEqual([
-        expect.objectContaining({ family: "bash", operation: "agent.exec", count: 1 }),
-      ]);
-    },
-  );
+    }
+    now = 60_000;
+    emitChildProcessSpawnSample();
+    expect(events).toEqual([
+      expect.objectContaining({ family: "bash", operation: "agent.exec", count: 1 }),
+    ]);
+  });
 
   it("retains preparation ownership and excludes failed or denied native launches", async () => {
     const params = { file: "/bin/bash", args: ["-c", "synthetic"], cols: 80, rows: 24 };
@@ -375,7 +415,7 @@ describe("terminal PTY invocation", () => {
   it.runIf(process.platform === "win32")(
     "passes arbitrary Codex initial-message text literally through an npm shim",
     async () => {
-      const { entrypoint, shimPath } = createWindowsNpmShim("codex");
+      const { entrypoint, shimPath } = await createTerminalNpmShim("codex");
       const nodePath = resolveTestNodeExecPath();
       mocks.spawn.mockReturnValueOnce(fakePty());
 
@@ -400,7 +440,7 @@ describe("terminal PTY invocation", () => {
   it.runIf(process.platform === "win32")(
     "uses PATH node.exe instead of a packaged non-Node host for an npm shim",
     async () => {
-      const { entrypoint, shimPath } = createWindowsNpmShim("codex");
+      const { entrypoint, shimPath } = await createTerminalNpmShim("codex");
       const nodeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-terminal-pty-node-"));
       tempDirs.push(nodeDir);
       const nodePath = path.join(nodeDir, "node.exe");
@@ -427,7 +467,7 @@ describe("terminal PTY invocation", () => {
   it.runIf(process.platform === "win32")(
     "fails closed when an npm shim has no Node executable",
     async () => {
-      const { shimPath } = createWindowsNpmShim("codex");
+      const { shimPath } = await createTerminalNpmShim("codex");
       vi.spyOn(process, "execPath", "get").mockReturnValue(
         "C:\\Program Files\\OpenClaw\\openclaw.exe",
       );

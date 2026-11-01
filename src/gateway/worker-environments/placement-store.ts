@@ -4,7 +4,12 @@ import { sessionChanges, type SessionRowChange } from "../../sessions/session-ro
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { subscribePlacementChanges } from "./placement-authority-owner.js";
+import {
+  placementAuthorityOwnerFor,
+  subscribePlacementChanges,
+  withLocalPlacementTurn,
+  withLocalPlacementTurns,
+} from "./placement-authority-owner.js";
 import { createPlacementLifecycleWorkerOps } from "./placement-lifecycle-store.js";
 import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
 import { readPublishedPlacementProjection } from "./placement-read-publication.js";
@@ -135,6 +140,8 @@ export function createWorkerSessionPlacementStore(
     }),
     ...createPlacementTurnClaimWorkerOps({
       path,
+      read: (sessionId): Promise<WorkerSessionPlacementRecord | undefined> =>
+        store.getAsync(sessionId),
       instanceId: runtime.instanceId,
       now: options.now,
     }),
@@ -189,10 +196,13 @@ export function createWorkerSessionPlacementStore(
         sessionId,
         () => store.readProjection([sessionId], { current: true }),
       );
+      const placement: WorkerSessionPlacementRecord | undefined = structuredClone(
+        projection.placements.get(sessionId),
+      );
       return {
-        placement: projection.placements.get(sessionId),
-        move: projection.moves.get(sessionId),
-        pendingResult: projection.pendingResults.get(sessionId),
+        placement,
+        move: structuredClone(projection.moves.get(sessionId)),
+        pendingResult: structuredClone(projection.pendingResults.get(sessionId)),
         ...observation,
       };
     },
@@ -251,7 +261,17 @@ export function createWorkerSessionPlacementStore(
           throw new Error("Worker placement projection source is unavailable");
         }
         publish(result.result.projection.placements.values(), ids);
-        return result.result;
+        return {
+          ...result.result,
+          projection: {
+            ...result.result.projection,
+            placements: withLocalPlacementTurns(
+              placementAuthorityOwnerFor(context.admission.identity),
+              result.result.projection.placements.values(),
+              ids,
+            ),
+          },
+        };
       };
       const singleSessionId = ids.length === 1 ? ids[0] : undefined;
       const { projection, conflictSessionIds } =
@@ -318,19 +338,25 @@ export function createWorkerSessionPlacementStore(
       }
     },
 
-    async readEnvironmentOwner(environmentId: string) {
+    async readEnvironmentOwner(environmentId: string, signal?: AbortSignal) {
       const result = await executeExistingOpenClawStateRead(
         { path },
         {
           type: "workers.placementEnvironmentOwner",
           environmentId: required(environmentId, "environment id"),
         },
-        { current: true },
+        { current: true, signal },
       );
       if (!result) {
         throw new Error("Worker placement environment owner source is unavailable");
       }
-      return result.placement;
+      return result.placement
+        ? withLocalPlacementTurn(
+            placementAuthorityOwnerFor(context.admission.identity),
+            result.placement.sessionId,
+            result.placement,
+          )
+        : undefined;
     },
 
     async readRecoveryCandidates() {

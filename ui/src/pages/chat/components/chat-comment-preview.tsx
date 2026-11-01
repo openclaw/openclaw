@@ -50,7 +50,7 @@ export function CommentPreviewRow(props: { comment: CommentPreview; children?: J
   );
 }
 
-type ChipProps = {
+export function CommentPreviewChip(props: {
   count: number;
   children?: JSX.Element;
   onReveal?: () => void;
@@ -58,17 +58,18 @@ type ChipProps = {
   elementRef?: (element: Element | undefined) => void;
   previewRef?: (element: HTMLElement) => void;
   triggerRef?: (element: HTMLButtonElement) => void;
-};
-
-export function CommentPreviewChip(props: ChipProps) {
+}) {
   const ref = scrollRef();
+  let trigger: HTMLButtonElement | undefined;
+  // Wide previews need the full inline area to flip without covering their trigger.
   return (
     <openclaw-tooltip
       ref={props.previewRef}
       class={["chat-comment-preview", { "chat-comment-preview--editable": Boolean(props.removal) }]}
-      prop:placement="top-start"
+      prop:placement="top"
       prop:autoSize={true}
       prop:describe={false}
+      prop:descriptionTarget={props.removal ? () => trigger ?? null : undefined}
       prop:openOnClick={true}
       prop:hoverDismissDelay={props.removal ? 200 : undefined}
     >
@@ -81,7 +82,7 @@ export function CommentPreviewChip(props: ChipProps) {
         onReveal={props.onReveal}
         onClick={props.onReveal}
         elementRef={props.elementRef}
-        triggerRef={props.triggerRef}
+        triggerRef={[(element) => (trigger = element), props.triggerRef]}
         removal={
           props.removal
             ? { ...props.removal, label: t("chat.messages.removeAnnotations") }

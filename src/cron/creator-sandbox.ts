@@ -12,6 +12,7 @@ import {
   prepareUserChannelIdentityAuthority,
   prepareUserProfileRoleAuthority,
 } from "../state/user-channel-identity-operations.js";
+import { cronExecutionActor } from "./human-owner.js";
 import {
   resolveCronAuthenticatedCallerOrigin,
   resolveCronAuthenticatedChannelRequester,
@@ -27,12 +28,13 @@ export async function resolveCronCreatorSandbox(cfg: OpenClawConfig, job: CronSt
   const origin = resolveCronAuthenticatedCallerOrigin(job);
   const requester = resolveCronAuthenticatedChannelRequester(job);
   // Local provenance supersedes a reused session's channel attribution.
+  const executionActor = cronExecutionActor(job);
   const actor =
     origin?.kind === "local" &&
-    job.createdActor?.type === "human" &&
-    job.createdActor.source === "channel"
+    executionActor?.type === "human" &&
+    executionActor.source === "channel"
       ? undefined
-      : job.createdActor;
+      : executionActor;
   const channelCreated =
     (actor?.type === "human" && actor.source === "channel") ||
     origin?.kind === "external" ||
@@ -57,18 +59,27 @@ export async function resolveCronCreatorSandbox(cfg: OpenClawConfig, job: CronSt
   if (requester && !linked) {
     throw reauthorizationError();
   }
-  const profileId =
-    linked?.linked.profileId ??
-    (actor?.type === "human" && actor.source === "profile" ? actor.id : undefined);
+  // Ownership transfer changes the execution principal, independently of requester attestation.
+  const actorProfileId =
+    actor?.type === "human" && actor.source === "profile" ? actor.id : undefined;
+  const profileId = job.ownerProfileId
+    ? actorProfileId
+    : (linked?.linked.profileId ?? actorProfileId);
+  const needsProfileAuthority = linked?.linked.profileId !== profileId;
   const profileAuthority =
-    roles && profileId && !linked ? await prepareUserProfileRoleAuthority(profileId) : undefined;
-  const profile = linked?.linked ?? profileAuthority;
+    roles && profileId && needsProfileAuthority
+      ? await prepareUserProfileRoleAuthority(profileId)
+      : undefined;
+  const profile = needsProfileAuthority ? profileAuthority : linked?.linked;
   const assertCurrent = () => {
     if (
       (followsRuntime && getRuntimeConfigSnapshotMetadata() !== publication) ||
       readConfig().gateway?.roles !== roles ||
       (linked && !linked.isCurrent()) ||
-      (roles && profileId && !linked && (!profileAuthority || !profileAuthority.isCurrent()))
+      (roles &&
+        profileId &&
+        needsProfileAuthority &&
+        (!profileAuthority || !profileAuthority.isCurrent()))
     ) {
       throw channelCreated
         ? reauthorizationError()
@@ -88,7 +99,7 @@ export async function resolveCronCreatorSandbox(cfg: OpenClawConfig, job: CronSt
     : resolveCreatorSandbox(cfg, { actor: requester ? undefined : actor });
   return {
     sandbox: sandbox === "required" ? ("required" as const) : undefined,
-    profileId: profile?.profileId ?? profileId,
+    profileId,
     assertCurrent,
   };
 }

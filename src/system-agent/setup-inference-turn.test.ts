@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as embeddedAgent from "../agents/embedded-agent.js";
 import { FailoverError } from "../agents/failover-error.js";
+import { createFixtureProviderModels } from "../agents/test-helpers/model-fallback-config-fixture.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAgentEventTestHarness } from "../gateway/server-chat.agent-events.test-harness.js";
 import {
@@ -27,6 +28,7 @@ import { captureAsyncWorkTracker } from "../shared/async-work-scope.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
+import { SETUP_INFERENCE_TEST_MAX_TOKENS } from "./setup-inference-probe-work.js";
 import {
   loadSetupInferencePluginGeneration,
   revalidateStableSetupInferenceOwner,
@@ -101,11 +103,31 @@ function revalidateOwner(
     route,
     auth,
     stagedOwnerPluginArtifacts: binding,
-    deps: {},
   });
 }
 
 describe("setup inference plugin ownership", () => {
+  it("runs a bounded read-only probe with a detached transcript", async () => {
+    const route = embeddedRoute("openclaw");
+    vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(async (params) => {
+      expect(params).toMatchObject({
+        sessionPersistence: "detached",
+        authProfileStateMode: "read-only",
+        preparedModelRuntimeMode: "isolated-read-only",
+        allowAuthProfileFallback: false,
+        disableTools: true,
+        thinkLevel: "off",
+        streamParams: { maxTokens: SETUP_INFERENCE_TEST_MAX_TOKENS },
+      });
+      return probeReply(route);
+    });
+    const result = await runProbe(route);
+    expect(result, result.ok ? undefined : result.error).toMatchObject({
+      ok: true,
+      text: "OK",
+    });
+  });
+
   it.each([
     ["ECONNREFUSED", "Nothing is listening at http://127.0.0.1:43210", "Start the server"],
     ["ENOTFOUND", "The server name in http://127.0.0.1:43210 could not be found", "DNS"],
@@ -240,12 +262,10 @@ describe("setup inference plugin ownership", () => {
       }),
     );
     const previousMetadata = getCurrentPluginMetadataSnapshot();
-    const resolveMetadataSnapshot = vi
-      .spyOn(pluginMetadata, "resolvePluginMetadataSnapshotAsync")
-      .mockImplementation(async () => {
-        order.push("metadata");
-        return metadataSnapshot;
-      });
+    vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshotAsync").mockImplementation(async () => {
+      order.push("metadata");
+      return metadataSnapshot;
+    });
     mocks.loadAgentRuntimePluginRegistryHandle.mockImplementationOnce(() => {
       order.push("load");
       expect(getCurrentPluginMetadataSnapshot()).toBe(metadataSnapshot);
@@ -269,34 +289,19 @@ describe("setup inference plugin ownership", () => {
 
     expect(order).toEqual(["metadata", "load", "validate"]);
     expect(getCurrentPluginMetadataSnapshot()).toBe(previousMetadata);
-    expect(resolveMetadataSnapshot).toHaveBeenCalledWith({
-      config: route.runConfig,
-      env: process.env,
-      workspaceDir: "/tmp/openclaw-workspace",
-      allowCurrent: false,
-    });
-    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith({
-      config: route.runConfig,
-      metadataSnapshot,
-      preferBuiltPluginArtifacts: true,
-      workspaceDir: "/tmp/openclaw-workspace",
-      selections: [
-        { provider: "openai", modelId: "gpt-5.6-sol", runtime: "codex", agentId: "main" },
-      ],
-    });
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preferBuiltPluginArtifacts: true,
+        selections: [
+          { provider: "openai", modelId: "gpt-5.6-sol", runtime: "codex", agentId: "main" },
+        ],
+      }),
+    );
   });
 
   it("does not load plugins for a direct custom provider using the built-in OpenClaw harness", async () => {
     const config = embeddedRoute("openclaw", "fixture", "direct-model").runConfig;
-    config.models = {
-      providers: {
-        fixture: {
-          api: "openai-completions",
-          baseUrl: "https://provider.example/v1",
-          models: [],
-        },
-      },
-    };
+    config.models = createFixtureProviderModels("https://provider.example/v1");
     const { binding } = await createSystemAgentVerifiedInferenceTestFixture(config);
     expect(binding.ownerPluginIds).toEqual([]);
     mocks.loadAgentRuntimePluginRegistryHandle.mockClear();

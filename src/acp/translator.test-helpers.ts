@@ -10,7 +10,7 @@ import { AcpGatewayAgent } from "./translator.js";
 
 type TestAcpConnection = AgentSideConnection & {
   __requestPermissionMock: ReturnType<typeof vi.fn>;
-  __sessionUpdateMock: ReturnType<typeof vi.fn>;
+  __sessionUpdateMock: ReturnType<typeof vi.fn<AgentSideConnection["sessionUpdate"]>>;
 };
 
 type TestAcpGatewayAgentOptions = AcpServerOptions & {
@@ -26,7 +26,7 @@ export function createAcpConnection(
 ): TestAcpConnection {
   const requestPermission =
     params.requestPermission ?? vi.fn(async () => ({ outcome: { outcome: "cancelled" } }));
-  const sessionUpdate = vi.fn(async () => {});
+  const sessionUpdate = vi.fn<AgentSideConnection["sessionUpdate"]>(async () => {});
   return {
     requestPermission,
     sessionUpdate,

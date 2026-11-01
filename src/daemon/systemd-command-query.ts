@@ -7,6 +7,7 @@ import {
   findServiceOwnershipRefusal,
   ServiceInspectionError,
   ServiceOwnershipRefusalError,
+  SystemdInspectionTimeout,
 } from "./service-inspection-error.js";
 import type { GatewayServiceEnv, GatewayServiceReadOptions } from "./service-types.js";
 import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
@@ -73,7 +74,9 @@ export async function createSystemdCommandQuery(
       env,
       scope,
       deadline: deadlineAt,
-      calls: managerUid !== undefined ? 6 : 3,
+      calls:
+        (managerUid !== undefined ? 6 : 3) +
+        (scope === "system" && opts?.inspectStateIdentity ? 2 : 0),
       boundCalls: managerUid !== undefined,
       noAutoStart: Boolean(opts?.requireLoaded),
       unitName,
@@ -96,15 +99,16 @@ export async function createSystemdCommandQuery(
         (args[0] === "call" && args[4] === "LoadUnit"
           ? undefined
           : inspection?.assertReadCurrent) ?? inspection?.assertCurrent;
+      const check = `effective command ${args[0] === "call" ? args[4] : args.slice(4).join(", ")}`;
       if (budget.now() >= deadlineAt) {
-        throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+        throw new SystemdInspectionTimeout(check);
       }
       if (peer) {
         runServiceInspectionGuard(assertCurrent);
         const values = await peer.query(args, signatures, deadlineAt, inspection);
         runServiceInspectionGuard(assertCurrent);
         if (budget.now() >= deadlineAt) {
-          throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+          throw new SystemdInspectionTimeout(check);
         }
         return values;
       }

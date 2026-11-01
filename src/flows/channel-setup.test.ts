@@ -13,6 +13,7 @@ import { hasPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import { createInstallAccountPolicyFixture } from "../plugins/test-helpers/install-account-policy.test-support.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { WizardCancelledError, WizardNavigationError } from "../wizard/prompts.js";
 import {
   externalChatSetupEntries,
@@ -262,6 +263,93 @@ it("enables an explicitly selected active plugin in eager setup", async () => {
   expect(callArg<{ cfg?: unknown }>(setupWizard.configure).cfg).toEqual(enabled);
   expect(next).toEqual({ ...enabled, channels: { "custom-chat": { token: "secret" } } });
 });
+
+it.each([false, true])(
+  "reports denied plugin enablement after lifecycle settlement (resume=%s)",
+  async (resume) => {
+    const channel = "custom-chat";
+    const configure = vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({ cfg }));
+    trustedCatalog.mockReturnValue([]);
+    activePlugins.mockReturnValue([
+      makeSetupPlugin({
+        id: channel,
+        label: "Custom Chat",
+        setupWizard: {
+          channel,
+          getStatus: async () => ({ channel, configured: false, statusLines: [] }),
+          configure,
+        },
+      }),
+    ]);
+    discoverChannels.mockReturnValue(
+      makeChannelSetupEntries({
+        entries: [{ id: channel, meta: makeMeta(channel, "Custom Chat") }],
+      }),
+    );
+    const cfg: OpenClawConfig = {
+      plugins: {
+        deny: [channel],
+        ...(resume ? { entries: { [channel]: { enabled: false } } } : {}),
+      },
+      channels: { [channel]: { token: "saved-fixture-token" } },
+    };
+    const before = structuredClone(cfg);
+    const pluginLifecycle = await import("../plugins/plugin-lifecycle-lease.js");
+    const originalWithLease = pluginLifecycle.withPluginLifecycleLeaseAsync;
+    let pending = 0;
+    const observeLease: typeof originalWithLease = async (options, run) => {
+      pending += 1;
+      try {
+        return await originalWithLease(options, run);
+      } finally {
+        pending -= 1;
+      }
+    };
+    const lease = vi
+      .spyOn(pluginLifecycle, "withPluginLifecycleLeaseAsync")
+      .mockImplementation(observeLease);
+    try {
+      const note = vi.fn(async (_message: string, _title?: string) => {
+        expect(pending).toBe(0);
+        expect(hasPluginLifecycleLease()).toBe(false);
+      });
+      const confirm = vi.fn(async () => true);
+      const onSelection = vi.fn();
+      const next = await withEnvAsync(
+        { OPENCLAW_LOCALE: "en", OPENCLAW_PROFILE: undefined, OPENCLAW_CONTAINER_HINT: undefined },
+        () =>
+          runDeferred(
+            cfg,
+            {
+              note,
+              confirm,
+              select: vi.fn().mockResolvedValueOnce(channel).mockResolvedValueOnce("__done__"),
+            },
+            { deferStatusUntilSelection: resume, onSelection },
+          ),
+      );
+      expect(note).toHaveBeenCalledExactlyOnceWith(
+        "Cannot enable custom-chat: blocked by denylist. Run openclaw plugins list to inspect plugin state.",
+        "Channel setup",
+      );
+      expect(next).toEqual(before);
+      expect(cfg).toEqual(before);
+      expect(configure).not.toHaveBeenCalled();
+      expect(installPlugin).not.toHaveBeenCalled();
+      expect(onSelection).toHaveBeenCalledWith([]);
+      if (resume) {
+        expect(confirm).toHaveBeenCalledWith({
+          message: "custom-chat plugin is disabled. Enable it and continue setup now?",
+          initialValue: true,
+        });
+      } else {
+        expect(confirm).not.toHaveBeenCalled();
+      }
+    } finally {
+      lease.mockRestore();
+    }
+  },
+);
 
 it("returns to quickstart selection when install-on-demand is skipped", async () => {
   const configure = vi.fn(async ({ cfg }: { cfg: Record<string, unknown> }) => ({ cfg }));

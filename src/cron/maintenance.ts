@@ -1,4 +1,4 @@
-import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { GatewayScheduler, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
 import { normalizeDatabasePath } from "../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -11,7 +11,7 @@ import {
   sessionChanges,
   sessionChangeScopeAffectsStoredRows,
 } from "../sessions/session-row-changes.js";
-import { getAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
+import { isAgentDatabaseDeletionSnapshotChangedError } from "../state/agent-deletion-journal.read.js";
 import { registerOpenClawStateDatabaseLifecycleListener } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -24,38 +24,14 @@ let scope: GatewaySchedulerScope | undefined;
 let scheduledSweep: Promise<void> | undefined;
 let nextHistorySweepAtMs = Infinity;
 let nextRegistrySweepAtMs = Infinity;
+let lastRegistrySuccessAtMs: number | null = null;
 let unsubscribeSessionChanges: (() => void) | undefined;
 let unsubscribeHistoryChanges: (() => void) | undefined;
 let unsubscribeDatabaseLifecycle: (() => void) | undefined;
 
-function scheduleSweep(getCronStorePath: () => string) {
-  if (!scope || scope.signal.aborted || scheduledSweep) {
-    return;
-  }
-  const atMs = Math.min(nextHistorySweepAtMs, nextRegistrySweepAtMs);
-  if (!Number.isFinite(atMs)) {
-    return;
-  }
-  const { signal } = scope;
-  scope.schedule({
-    id: "cron-maintenance",
-    atMs,
-    run: () =>
-      (scheduledSweep ??= sweep(signal, getCronStorePath).finally(() => {
-        scheduledSweep = undefined;
-        scheduleSweep(getCronStorePath);
-      })),
-  });
-}
-
 async function sweep(signal: AbortSignal, getCronStorePath: () => string) {
   let admitted = false;
   try {
-    const preparation = getAgentDatabaseStartupAdmission()?.pendingPreparation;
-    if (preparation) {
-      log.info("Cron maintenance deferred until agent database startup preparation completes");
-      await racePromiseWithAbortSignal(preparation, signal);
-    }
     await runWithGatewayIndependentRootWorkAdmission(
       async () => {
         admitted = true;
@@ -88,11 +64,35 @@ async function sweep(signal: AbortSignal, getCronStorePath: () => string) {
               result.nextSweepAtMs ?? Infinity,
             );
             if (result.skippedReason) {
-              log.warn("Session registry maintenance skipped", { reason: result.skippedReason });
+              log.warn("Session registry maintenance skipped", {
+                reason: result.skippedReason,
+                retryAtMs: nextRegistrySweepAtMs,
+                lastSuccessAtMs: lastRegistrySuccessAtMs,
+              });
+            } else {
+              lastRegistrySuccessAtMs = scope?.now() ?? Date.now();
+              log.info("Session registry maintenance completed", {
+                lastSuccessAtMs: lastRegistrySuccessAtMs,
+                nextSweepAtMs: Number.isFinite(nextRegistrySweepAtMs)
+                  ? nextRegistrySweepAtMs
+                  : null,
+                pruned: result.pruned,
+                skippedStores: result.skippedStores,
+              });
             }
           } catch (error) {
-            nextRegistrySweepAtMs = Math.min(nextRegistrySweepAtMs, now + 60_000);
-            throw error;
+            nextRegistrySweepAtMs = Math.min(
+              nextRegistrySweepAtMs,
+              (scope?.now() ?? Date.now()) + 60_000,
+            );
+            if (!isAgentDatabaseDeletionSnapshotChangedError(error)) {
+              throw error;
+            }
+            log.warn("Session registry maintenance deferred", {
+              reason: "agent-database-snapshot-changed",
+              retryAtMs: nextRegistrySweepAtMs,
+              lastSuccessAtMs: lastRegistrySuccessAtMs,
+            });
           }
         }
       },
@@ -120,11 +120,32 @@ export function startCronMaintenance(scheduler: GatewayScheduler, getCronStorePa
     return;
   }
   scope = scheduler.scope();
+  // Notifications can borrow startup admission; retention keeps the Gateway owner context.
+  const scheduleSweep = AsyncLocalStorage.bind(() => {
+    if (!scope || scope.signal.aborted || scheduledSweep) {
+      return;
+    }
+    const atMs = Math.min(nextHistorySweepAtMs, nextRegistrySweepAtMs);
+    if (!Number.isFinite(atMs)) {
+      return;
+    }
+    const { signal } = scope;
+    scope.schedule({
+      id: "cron-maintenance",
+      atMs,
+      run: () =>
+        (scheduledSweep ??= sweep(signal, getCronStorePath).finally(() => {
+          scheduledSweep = undefined;
+          scheduleSweep();
+        })),
+    });
+  });
+  lastRegistrySuccessAtMs = null;
   nextHistorySweepAtMs = nextRegistrySweepAtMs = scope.now() + 5_000;
   const invalidateHistory = () => {
     if (scope) {
       nextHistorySweepAtMs = Math.min(nextHistorySweepAtMs, scope.now() + 60_000);
-      scheduleSweep(getCronStorePath);
+      scheduleSweep();
     }
   };
   unsubscribeHistoryChanges = subscribeCronRunHistoryChanges((databasePath) => {
@@ -146,11 +167,16 @@ export function startCronMaintenance(scheduler: GatewayScheduler, getCronStorePa
       return;
     }
     if (scope) {
-      nextRegistrySweepAtMs = Math.min(nextRegistrySweepAtMs, scope.now() + 60_000);
+      const agentReady =
+        "all" in change && typeof change.scope === "object" && change.scope.topology === true;
+      nextRegistrySweepAtMs = Math.min(
+        nextRegistrySweepAtMs,
+        scope.now() + (agentReady ? 0 : 60_000),
+      );
     }
-    scheduleSweep(getCronStorePath);
+    scheduleSweep();
   });
-  scheduleSweep(getCronStorePath);
+  scheduleSweep();
 }
 
 export async function stopCronMaintenance(): Promise<void> {

@@ -1,6 +1,7 @@
 import { hostname } from "node:os";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
@@ -30,6 +31,7 @@ import {
   reclaimDeadOpenClawStateLeaseInTransaction,
   releaseOpenClawStateLeaseInTransaction,
   renewOpenClawStateLeaseInTransaction,
+  readOpenClawStateLeaseLoss,
 } from "./openclaw-state-lease-store.js";
 import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 
@@ -63,8 +65,6 @@ function stageLeaseExpiryObservation(
   const value = BigInt(expiresAt ?? 0);
   if (
     !stageSqliteTransactionState(db, {
-      stage() {},
-      rollback() {},
       commit() {
         publishLeaseExpiryObservation(shared, value);
       },
@@ -160,6 +160,7 @@ export function acquireOpenClawStateLeaseInWorker(
             process.pid,
             getSqliteWorkerStateContext().environment,
           ),
+          processNamespace: readGatewayLockProcessNamespace(),
         },
       })
     : null;
@@ -236,7 +237,11 @@ export function executeOpenClawStateLeaseCommand(
           command.input.leaseMs,
         );
         if (expiresAt === undefined) {
-          throw createOpenClawStateLeaseLostError(command.input.identity);
+          throw createOpenClawStateLeaseLostError(
+            command.input.identity,
+            undefined,
+            readOpenClawStateLeaseLoss(db, command.input.identity),
+          );
         }
         assertOpenClawStateLeaseWorkerOwnedInTransaction(
           db,

@@ -16,7 +16,7 @@ import {
 } from "./provider-usage-runtime.js";
 
 const log = createSubsystemLogger("provider-usage-cache");
-const USAGE_CACHE_TTL_MS = 60_000;
+const DEFAULT_USAGE_CACHE_TTL_MS = 60_000;
 
 export type ProviderUsageStatus = Pick<
   ProviderUsageSnapshot,
@@ -80,9 +80,16 @@ function scopeProviderUsageCredentialKey(
   });
 }
 
-function mapProviderUsage(usage: Awaited<ReturnType<typeof loadProviderUsageSummary>>) {
+function mapProviderUsage(usage: UsageSummary, previous?: Map<string, ProviderUsageStatus>) {
   const usageByProvider = new Map<string, ProviderUsageStatus>();
   for (const snap of usage.providers) {
+    // Auth status has no usage-error field. Keep its last quota while usage.status
+    // still receives the provider's error in the unmodified summary.
+    const retained = snap.error ? previous?.get(snap.provider) : undefined;
+    if (retained) {
+      usageByProvider.set(snap.provider, retained);
+      continue;
+    }
     usageByProvider.set(snap.provider, {
       windows: snap.windows,
       ...(snap.summary ? { summary: snap.summary } : {}),
@@ -125,7 +132,7 @@ function scheduleProviderUsageRefresh(
     agentId: string;
     authStore?: AuthProfileStore;
     providerIds: UsageProviderId[];
-    lastGood?: UsageSummary;
+    previous?: ProviderUsageCacheEntry;
   },
 ): Promise<UsageSummary> {
   const isCurrent = () =>
@@ -149,7 +156,7 @@ function scheduleProviderUsageRefresh(
       timeoutMs: PROVIDER_USAGE_TIMEOUT_MS,
     })
       .then((freshUsage) => {
-        const usage = retainLastGoodOnTimeout(freshUsage, params.lastGood);
+        const usage = retainLastGoodOnTimeout(freshUsage, params.previous?.summary);
         if (isCurrent()) {
           agentEntries(usageCacheByAgentId, params.agentId).set(params.providerKey, {
             agentDir: params.agentDir,
@@ -158,7 +165,7 @@ function scheduleProviderUsageRefresh(
             providerKey: params.providerKey,
             refreshedAt: Date.now(),
             summary: usage,
-            usageByProvider: mapProviderUsage(usage),
+            usageByProvider: mapProviderUsage(usage, params.previous?.usageByProvider),
           });
         }
         return usage;
@@ -215,7 +222,8 @@ function resolveProviderUsageCacheRead(params: ProviderUsageCacheParams) {
   const needsRefresh =
     params.forceRefresh === true ||
     !matching ||
-    params.now - matching.refreshedAt >= USAGE_CACHE_TTL_MS;
+    params.now - matching.refreshedAt >=
+      (params.configRef.models?.usage?.cacheTtlMs ?? DEFAULT_USAGE_CACHE_TTL_MS);
   return {
     matching,
     needsRefresh,
@@ -227,32 +235,48 @@ function resolveProviderUsageCacheRead(params: ProviderUsageCacheParams) {
       credentialKey,
       providerIds,
       providerKey,
-      lastGood: matching?.summary,
+      previous: matching,
     },
   };
 }
 
-export function readProviderUsageStaleWhileRevalidate(
-  params: ProviderUsageCacheParams,
-): Map<string, ProviderUsageStatus> {
+/** Ordinary reads stay nonblocking; post-run reads await only cold or stale usage. */
+export async function readProviderUsage(
+  params: ProviderUsageCacheParams & { awaitRefresh?: boolean },
+): Promise<{ usageByProvider: Map<string, ProviderUsageStatus>; refreshAt?: number }> {
   if (params.providerIds.length === 0) {
     usageCacheByAgentId.delete(params.agentId);
-    return new Map();
+    return { usageByProvider: new Map() };
   }
   const { matching, needsRefresh, refreshParams } = resolveProviderUsageCacheRead(params);
+  let published = matching;
   if (needsRefresh) {
-    // Never couple the RPC deadline to provider HTTP. A cold call returns auth
-    // without usage; stale calls return the last snapshot while one refresh runs.
-    void scheduleProviderUsageRefresh(refreshParams).catch(() => {});
+    const refresh = scheduleProviderUsageRefresh(refreshParams);
+    if (params.awaitRefresh) {
+      const usage = await refresh;
+      const failed = usage.providers.find((provider) => provider.error);
+      if (failed) {
+        throw new Error(`Provider usage refresh failed for ${failed.provider}. Try again later.`);
+      }
+      // Logout or credential replacement can retire an in-flight publication.
+      published = resolveProviderUsageCacheRead(params).matching;
+    } else {
+      void refresh.catch(() => {});
+    }
   }
-  return matching?.usageByProvider ?? new Map();
+  return {
+    usageByProvider: published?.usageByProvider ?? new Map(),
+    refreshAt: published
+      ? published.refreshedAt +
+        (params.configRef.models?.usage?.cacheTtlMs ?? DEFAULT_USAGE_CACHE_TTL_MS)
+      : params.now,
+  };
 }
 
 /** Shares the models.authStatus cache contract with the unscoped usage.status RPC. */
 export async function loadUsageStatusStaleWhileRevalidate(options: {
   config: OpenClawConfig;
   coldRead?: "refresh-marker";
-  now?: number;
 }): Promise<UsageSummary> {
   const snapshot = await getProviderUsageRuntimeSnapshot({ config: options.config });
   const params: ProviderUsageCacheParams = {
@@ -263,7 +287,7 @@ export async function loadUsageStatusStaleWhileRevalidate(options: {
     credentialKey: snapshot.credentialKey,
     providerIds: snapshot.providerIds,
     coldRead: options.coldRead,
-    now: options.now ?? Date.now(),
+    now: Date.now(),
   };
   if (params.providerIds.length === 0) {
     usageCacheByAgentId.delete(params.agentId);

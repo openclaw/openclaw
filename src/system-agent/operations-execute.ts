@@ -28,7 +28,7 @@ import {
   type ExecuteOptions,
 } from "./operations-execution-helpers.js";
 import type { SystemAgentOperation, SystemAgentOperationResult } from "./operations-parse.js";
-import { executePluginInstall } from "./plugin-install.js";
+import { validateSystemAgentPluginInstallSpec } from "./plugin-install-spec.js";
 
 const INTERACTIVE_SETUP_GUIDANCE = {
   "skills-setup": [
@@ -93,12 +93,8 @@ export async function executeSystemAgentOperation(
       return { applied: false, exitsInteractive: operation.message.includes("Bye.") };
     case "overview": {
       const overview = await loadOverviewForOperation(opts.deps);
-      if (opts.deps?.formatOverview) {
-        runtime.log(opts.deps.formatOverview(overview));
-      } else {
-        const { formatSystemAgentOverview } = await import("./overview.js");
-        runtime.log(formatSystemAgentOverview(overview));
-      }
+      const { formatSystemAgentOverview } = await import("./overview.js");
+      runtime.log(formatSystemAgentOverview(overview));
       return { applied: false };
     }
     case "agents": {
@@ -368,8 +364,31 @@ export async function executeSystemAgentOperation(
           };
         },
       );
-    case "plugin-install":
-      return await executePluginInstall(operation, runtime, opts);
+    case "plugin-install": {
+      // Reject an untrusted plugin source before proposing or installing it, not
+      // only on the approved apply — a formatted "plan" must never surface an
+      // arbitrary npm/url/file spec that bypassed the ClawHub trust boundary.
+      const validationError = validateSystemAgentPluginInstallSpec(operation.spec);
+      if (validationError) {
+        throw new Error(validationError);
+      }
+      const { runPluginInstallCommand } = await import("../cli/plugins-install-command.js");
+      return await apply("plugin.install", async (ctx) => {
+        await ctx.commit(() =>
+          runPluginInstallCommand({
+            raw: operation.spec,
+            opts: {},
+            runtime: createNoExitRuntime(ctx.runtime),
+            allowInstallPolicyWarningPrompt: false,
+            applyRuntime: ctx.deps?.applyPluginRuntime,
+            ...(ctx.assertPersistentApply
+              ? { beforePersistentApply: ctx.assertPersistentApply }
+              : {}),
+          }),
+        );
+        return { summary: `Installed plugin ${operation.spec}`, details: { spec: operation.spec } };
+      });
+    }
     case "plugin-activate-artifact": {
       const { executePluginArtifactActivation } = await import("./plugin-artifact.js");
       return await executePluginArtifactActivation(operation, runtime, opts);

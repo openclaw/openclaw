@@ -1,7 +1,6 @@
 import { createSignal, onCleanup, untrack } from "solid-js";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import type { BoardWidgetAppViewState } from "../../lib/board/view-types.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import { NearViewportObserver } from "../near-viewport-observer.ts";
 
 const REFRESH_LEAD_MS = 5_000;
@@ -24,14 +23,12 @@ type AppViewCallbacks = {
   refreshWidgetAppView: (name: string, revision: number) => Promise<BoardWidgetAppViewState>;
 };
 
-type LifecycleHost = {
+export function createBoardMcpAppLifecycle(host: {
   active: () => boolean;
   connected: () => boolean;
   sessionKey: () => string;
   widget: () => BoardWidget | undefined;
-};
-
-export function createBoardMcpAppLifecycle(host: LifecycleHost) {
+}) {
   let state: BoardWidgetAppViewState | undefined;
   let loading = false;
   let callbacks: AppViewCallbacks | undefined;
@@ -49,13 +46,7 @@ export function createBoardMcpAppLifecycle(host: LifecycleHost) {
     nearVisible: visibility.nearVisible,
   });
   // Later activity publishes with visibility from synchronize(), never independently.
-  const initialActive = untrack(host.active);
-  const [snapshot, setSnapshot] = createSignal<ReturnType<typeof read>>({
-    state,
-    loading,
-    active: initialActive,
-    nearVisible: visibility.nearVisible,
-  });
+  const [snapshot, setSnapshot] = createSignal(untrack(read));
   const publish = () => {
     if (host.connected()) {
       setSnapshot(read());
@@ -105,7 +96,7 @@ export function createBoardMcpAppLifecycle(host: LifecycleHost) {
       return;
     }
     const wasLoading = loading;
-    state = { status: "stale", error: "MCP App view expired" };
+    state = { status: "stale" };
     loading = false;
     publish();
     if (host.active() && !wasLoading) {
@@ -174,7 +165,7 @@ export function createBoardMcpAppLifecycle(host: LifecycleHost) {
         () => {
           expiryTimer = undefined;
           if (isCurrent()) {
-            state = { status: "stale", error: "MCP App lease expired while renewing" };
+            state = { status: "stale" };
             loading = false;
             publish();
           }
@@ -187,13 +178,12 @@ export function createBoardMcpAppLifecycle(host: LifecycleHost) {
       appView = await (mode === "cached"
         ? requestCallbacks.widgetAppView(widget.name, widget.revision)
         : requestCallbacks.refreshWidgetAppView(widget.name, widget.revision));
-    } catch (error) {
+    } catch {
       if (!isCurrent()) {
         return;
       }
       appView = {
         status: "stale",
-        error: formatUiError(error),
       };
     }
     if (!isCurrent()) {
@@ -230,7 +220,7 @@ export function createBoardMcpAppLifecycle(host: LifecycleHost) {
           state.viewId === appView.viewId &&
           state.expiresAtMs === appView.expiresAtMs
         ) {
-          state = { status: "stale", error: "MCP App lease expired" };
+          state = { status: "stale" };
           publish();
         }
       },

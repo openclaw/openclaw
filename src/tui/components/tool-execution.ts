@@ -9,20 +9,18 @@ import { extractTuiImageSources } from "../tui-images.js";
 import { HyperlinkMarkdown } from "./hyperlink-markdown.js";
 import { MessageImages, type TuiImageRenderer } from "./message-images.js";
 
-type ToolResultContent = {
-  type?: string;
-  text?: string;
-  mimeType?: string;
-  bytes?: number;
-  omitted?: boolean;
-  data?: string;
-  url?: string;
-  artifactId?: string;
-  source?: unknown;
-};
-
 type ToolResult = {
-  content?: ToolResultContent[];
+  content?: {
+    type?: string;
+    text?: string;
+    mimeType?: string;
+    bytes?: number;
+    omitted?: boolean;
+    data?: string;
+    url?: string;
+    artifactId?: string;
+    source?: unknown;
+  }[];
   details?: Record<string, unknown>;
 };
 

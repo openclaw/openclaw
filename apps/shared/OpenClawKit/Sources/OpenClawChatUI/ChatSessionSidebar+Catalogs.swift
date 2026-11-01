@@ -15,24 +15,18 @@ extension ChatSessionSidebar {
                 key: $0, agentID: OpenClawChatSessionKey.agentID(from: $0) ?? self.viewModel.selectedAgentID) })
     }
 
-    func catalogSections(
-        now: Date,
-        ownership: ChatSidebarOwnership,
-        previewRequest: ChatSessionSidebarPreviews.Request) -> some View
-    {
+    func catalogSections(context: RowContext) -> some View {
         ChatSidebarCatalogSections(
             data: self.catalogData,
             viewModel: self.viewModel,
             projection: self.catalogPresentation,
-            ownership: ownership,
+            ownership: context.ownership,
             ownerFilter: self.$sessionOwnerFilter)
         { row, menu in
             AnyView(self.row(
                 for: ChatSessionSidebarModel.tree(from: [row])[0],
                 isChild: false,
-                now: now,
-                ownership: ownership,
-                previewRequest: previewRequest,
+                context: context,
                 menu: menu))
         }
     }

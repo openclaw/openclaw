@@ -39,7 +39,6 @@ export function prepareTerminatedCollectorLaunch(
 ): void {
   entry.swarmLaunchPending = false;
   entry.collectorLaunchCleanupPending = true;
-  entry.queuedLaunch = undefined;
   entry.execution = { ...entry.execution, status: "terminal", endedAt };
   entry.completion = {
     required: false,
@@ -57,6 +56,7 @@ export function updateSwarmCollectorCompletion(
   entry: SubagentRunRecord,
   cfg: OpenClawConfig,
   prepared: { entry: SessionEntry | undefined },
+  reason?: NonNullable<SubagentRunRecord["collectorCompletion"]>["reason"],
 ): boolean {
   if (!entry.collect) {
     return false;
@@ -95,6 +95,7 @@ export function updateSwarmCollectorCompletion(
     ...(captured?.structured !== undefined ? { structured: captured.structured } : {}),
     ...(schemaError ? { schemaError } : {}),
     ...(usage ? { usage } : {}),
+    ...(reason ? { reason } : {}),
   };
   return true;
 }

@@ -390,6 +390,7 @@ export async function resumeExistingCodexThread(
           modelProvider: resumePatch.modelProvider ?? null,
           preserveNativeModel: resumeBinding.preserveNativeModel,
         },
+        params,
       ),
       lifecycle: {
         action: "resumed",
@@ -457,7 +458,9 @@ export async function resumeExistingCodexThread(
       }
       acceptedConfiguration.assertConfigured();
     }
+    // Missing native state cannot authorize discarding acknowledged conversation history.
     if (
+      (!acceptedConfiguration && resumeBinding.historyCoveredThrough !== undefined) ||
       resumeBinding.pendingResumeConfiguration ||
       resumeBinding.preserveNativeModel ||
       resumeBinding.connectionScope === "supervision" ||
@@ -726,6 +729,7 @@ export async function startFreshCodexThread(
             params.params.authProfileId,
             dynamicToolsFingerprint,
             { model: response.model, modelProvider: bindingModelProvider ?? null },
+            params,
           ),
         }
       : {}),

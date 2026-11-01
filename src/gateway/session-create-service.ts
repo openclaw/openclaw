@@ -16,22 +16,14 @@ import {
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
-import {
-  prepareSessionForkFromParent,
-  MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE,
-} from "../auto-reply/reply/session-fork.js";
+import { MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE } from "../auto-reply/reply/session-fork.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import {
   createSessionEntryWithTranscript,
   type SessionEntryCreateWithTranscriptOptions,
 } from "../config/sessions/session-accessor.js";
-import { runWithSessionEntryCreationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import type { SessionEntryCreationOperation } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
-import {
-  captureSessionActorStorageOwner,
-  withSessionActorStorage,
-} from "../config/sessions/session-actor-storage-binding.js";
 import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
 import { buildSessionParentLink } from "../config/sessions/session-entry-lineage.js";
 import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
@@ -67,19 +59,28 @@ import {
   prepareSessionCreateFilesystemRoot,
   prepareSessionForkFilesystemRoot,
 } from "./server-methods/session-create-root.js";
-import { refreshSessionPatchQueuedSelection } from "./server-methods/sessions-patch-model-selection.js";
+import {
+  createSessionAccessProgramValidation,
+  refreshSessionPatchQueuedSelection,
+} from "./server-methods/sessions-patch-model-selection.js";
 import { completeGatewaySessionCreation } from "./session-create-completion.js";
 import {
+  buildSessionCreateSettingsPatch,
   existingSessionSelectionWouldChange,
   sessionCreatePolicyAdoptionError,
 } from "./session-create-existing-selection.js";
-import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
+import { prepareGatewaySessionFork } from "./session-create-fork.js";
 import {
   inheritSessionCreateParentFields,
   prepareSessionCreateParent,
   resolveSessionCreateInheritance,
+  resolveSessionCreateRoot,
   resolveSessionCreateSpawnPolicy,
 } from "./session-create-inheritance.js";
+import {
+  validateFreshSessionConstraints,
+  withInitialAssistantTranscript,
+} from "./session-create-initial-assistant.js";
 import { buildDashboardSessionKey, resolveSessionCreateTargetKey } from "./session-create-key.js";
 import { buildSessionCreateLifecycleTargets } from "./session-create-lifecycle-targets.js";
 import {
@@ -89,7 +90,6 @@ import {
   prepareSessionCreateModelSelection,
   projectSessionCreateSpawnModelSelection,
   resolveSessionCreateModelInputError,
-  resolveSessionForkMaxTokens,
 } from "./session-create-model-selection.js";
 import { tryResetGatewaySessionForCreation } from "./session-create-reset.js";
 import type {
@@ -115,6 +115,7 @@ import {
   rollbackGatewaySessionPreparation,
 } from "./session-lifecycle-preparation.js";
 import { loadSessionLifecycleRuntime } from "./session-lifecycle-runtime-loader.js";
+import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
 import { prepareSessionPublicShareGrant } from "./session-publication-grant.js";
 import * as sessionAgent from "./session-request-agent.js";
@@ -133,50 +134,7 @@ import { projectSessionsPatchEntry } from "./sessions-patch.js";
 export function createGatewaySession(
   params: CreateGatewaySessionParams,
 ): Promise<CreateGatewaySessionResult> {
-  return withSessionCreateAdmission(params, createAdmittedGatewaySession);
-}
-
-async function createAdmittedGatewaySession(
-  params: CreateGatewaySessionParams,
-  agentId: string,
-): Promise<CreateGatewaySessionResult> {
-  const incognito = params.incognito === true || isIncognitoSessionKey(params.parentSessionKey);
-  const generatedKey =
-    !params.key?.trim() && incognito
-      ? buildDashboardSessionKey(agentId, { incognito: true })
-      : undefined;
-  const sessionKey =
-    generatedKey ??
-    resolveSessionCreateTargetKey({
-      cfg: params.cfg,
-      agentId,
-      requestedKey: normalizeOptionalString(params.key),
-    });
-  const assertCurrent = () => params.commitGuard?.();
-  const created = await withSessionActorStorage(
-    { sessionKey, agentId },
-    {
-      create: true,
-      lifetime: { assertCurrent, assertReadable: assertCurrent },
-      authority: { assertCurrent, authorize() {} },
-    },
-    async (memory) => {
-      try {
-        return await createGatewaySessionInScope(params, agentId, generatedKey);
-      } finally {
-        const captured = captureSessionActorStorageOwner({ sessionActor: memory });
-        // Failed creation may outlive its caller's authority; only empty state is discarded.
-        const entry = captured?.owner?.readSession(memory.actor.target.sessionKey, {
-          assertCurrent() {},
-          authorize() {},
-        })?.entry;
-        if (!entry) {
-          captured?.owner?.closeSession(memory.actor.target.sessionKey);
-        }
-      }
-    },
-  );
-  return created ?? createGatewaySessionInScope(params, agentId, generatedKey);
+  return withSessionCreateAdmission(params, createGatewaySessionInScope);
 }
 
 async function createGatewaySessionInScope(
@@ -197,12 +155,21 @@ async function createGatewaySessionInScope(
   // Fresh account authority covers title generation and resource preparation,
   // not just the final row. An inherited parent pin is not a new selection.
   let validateRuntimeSelection: (() => ErrorShape | undefined) | undefined;
+  let validateVisibility: (() => ErrorShape | undefined) | undefined;
   let releaseRuntimeSelection: (() => void) | undefined;
-  const commitGuard = resolveSessionCreationCommitGuard(params, {
+  const assertCreationCurrent = resolveSessionCreationCommitGuard(params, {
     readOperatorAuthority: () => operatorAuthority,
     assertPreparedTargetCurrent: () => assertPreparedTargetCurrent?.(),
     validateSelection: () => validateRuntimeSelection?.(),
   });
+  const commitGuard = () => {
+    assertCreationCurrent?.();
+    // Creation restrictions end at commit; a later policy change cannot block this chat's turn.
+    const error = !createdTargetCommitted && validateVisibility?.();
+    if (error) {
+      throw new SessionMutationAuthorizationChangedError(error);
+    }
+  };
   commitGuard?.();
   const displayName = truncateUtf16Safe(params.displayName?.trim() ?? "", 500).trimEnd();
   const label = normalizeOptionalString(params.label);
@@ -366,19 +333,13 @@ async function createGatewaySessionInScope(
       return initializingSessionFailure();
     }
   }
-  const agentMainSessionKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId });
-  // Durable dashboard sessions parent to main for flow-up notices and sidebar threads.
-  // Incognito roots omit durable lineage so notices cannot cross the storage boundary.
-  const dashboardParentSessionKey =
-    !parentSessionKey &&
-    !params.authorizedPluginId &&
-    !incognito &&
-    params.fork !== true &&
-    (params.cfg.session?.dmScope ?? "main") === "main" &&
-    params.cfg.session?.scope !== "global" &&
-    targetSessionKey !== agentMainSessionKey
-      ? agentMainSessionKey
-      : undefined;
+  const { standalone: standaloneRoot, mainParentSessionKey: dashboardParentSessionKey } =
+    resolveSessionCreateRoot(params, {
+      parentSessionKey,
+      incognito,
+      targetSessionKey,
+      mainSessionKey: resolveAgentMainSessionKey({ cfg: params.cfg, agentId }),
+    });
 
   const authorityTargets = params.operatorAuthority
     ? [
@@ -555,6 +516,14 @@ async function createGatewaySessionInScope(
       return targetRead;
     }
     const currentTargetEntry = targetRead.value;
+    const visibilityAdmission = resolveSessionCreateVisibility(
+      params,
+      currentTargetEntry,
+      currentParentSessionEntry,
+    );
+    if (!visibilityAdmission.ok) {
+      return visibilityAdmission;
+    }
     // Delegated isolation survives changes to the creator's current role.
     const creationSandbox =
       creation?.sandbox ?? (creation ? resolveCreatorSandbox(params.cfg, creation) : undefined);
@@ -676,34 +645,33 @@ async function createGatewaySessionInScope(
         ) {
           return invalidSessionRequest(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
         }
-        if (!params.initialEntry && existingEntry?.initializationPending === true) {
-          return initializingSessionFailure();
+        const freshSessionError = validateFreshSessionConstraints({
+          params,
+          existingEntry,
+          sessionKey: target.canonicalKey,
+          hasWorkspacePreparation: Boolean(pendingProjectGitUrl || pendingWorktree),
+          hasSpawnToolPolicy: Boolean(spawnToolPolicy),
+        });
+        if (freshSessionError) {
+          return freshSessionError;
         }
-        if (params.initialEntry && existingEntry !== undefined) {
-          return invalidSessionRequest("trusted initial session state requires a new session");
-        }
-        if (
-          params.deviceFolder &&
-          existingEntry !== undefined &&
-          (existingEntry.deviceFolder?.deviceId !== params.deviceFolder.deviceId ||
-            existingEntry.deviceFolder.path !== params.deviceFolder.path)
-        ) {
-          return invalidSessionRequest(
-            "device folder requires a new session or its original folder",
-          );
-        }
-        if (params.catalogTarget && existingEntry !== undefined) {
-          return invalidSessionRequest("catalog session target requires a new session");
-        }
-        if ((pendingProjectGitUrl || pendingWorktree) && existingEntry !== undefined) {
-          return invalidSessionRequest("workspace preparation requires a new session");
-        }
-        if (spawnToolPolicy && existingEntry !== undefined) {
-          return invalidSessionRequest("spawn tool policy requires a new session");
-        }
-        const visibility = resolveSessionCreateVisibility(params, existingEntry);
+        const visibility = resolveSessionCreateVisibility(
+          params,
+          existingEntry,
+          currentParentSessionEntry,
+        );
         if (!visibility.ok) {
           return visibility;
+        }
+        if (!existingEntry && visibility.value) {
+          validateVisibility = () => {
+            const current = resolveSessionCreateVisibility(
+              params,
+              undefined,
+              currentParentSessionEntry,
+            );
+            return current.ok ? undefined : current.error;
+          };
         }
         // Adoption of an existing key must not stamp provenance or emit a
         // `created` event; only a genuinely new row is a node creation.
@@ -728,6 +696,7 @@ async function createGatewaySessionInScope(
             requestedModel,
             requestedAgentRuntime: params.agentRuntime,
             requestedContextWindow,
+            requestedCyberAccessProgram: params.cyberAccessProgram,
             requestedFastMode,
             requestedThinkingLevel,
             subagentModelHint: isSubagentSessionKey(target.canonicalKey)
@@ -755,24 +724,14 @@ async function createGatewaySessionInScope(
           agentId: target.agentId,
           preparedSessionRoot: sessionRoot,
           preparedAgentRuntime: catalogAgentRuntime,
-          // Patch appliers read key presence as caller intent (present = change,
-          // null = clear), so omitted create fields must stay absent: a present
-          // undefined model trips the selection lock and drops modelFallback,
-          // and present undefined contextWindow/thinkingLevel take the
-          // reject-invalid branch instead of the model-change clearing branch.
-          patch: {
+          patch: buildSessionCreateSettingsPatch(params, {
             key: target.canonicalKey,
             label,
-            category: normalizeOptionalString(params.category),
-            ...((catalogModel ?? requestedModel) ? { model: catalogModel ?? requestedModel } : {}),
-            ...(params.agentRuntime !== undefined ? { agentRuntime: params.agentRuntime } : {}),
-            ...(requestedContextWindow ? { contextWindow: requestedContextWindow } : {}),
-            ...(requestedThinkingLevel ? { thinkingLevel: requestedThinkingLevel } : {}),
-            ...(requestedFastMode !== undefined ? { fastMode: requestedFastMode } : {}),
-            ...(requestedToolOverrides ? { toolOverrides: params.toolOverrides } : {}),
-            ...(params.communication !== undefined ? { communication: params.communication } : {}),
-            ...(params.permissionMode ? { permissionMode: params.permissionMode } : {}),
-          },
+            model: catalogModel ?? requestedModel,
+            contextWindow: requestedContextWindow,
+            thinkingLevel: requestedThinkingLevel,
+            fastMode: requestedFastMode,
+          }),
           loadGatewayModelCatalogSnapshot: loadModelCatalog
             ? async () => {
                 preparedModelCatalog = await loadModelCatalog();
@@ -783,7 +742,6 @@ async function createGatewaySessionInScope(
           personalModelSelection: params.personalModelSelection,
           operatorAuthority,
           preparedModelSelection: params.preparedModelSelection?.ref,
-          pinModelSelection: true,
         });
         if (!patched.ok) {
           return patched;
@@ -906,14 +864,15 @@ async function createGatewaySessionInScope(
         };
         const explicitParentSessionKey =
           canonicalParentSessionKey ?? normalizeOptionalString(initializedEntry.parentSessionKey);
+        const newStandaloneRoot = createdNewEntry && standaloneRoot && !explicitParentSessionKey;
         const entry: InternalSessionEntry = {
           ...initializedEntry,
           ...inheritSessionCreateParentFields({
             parent: currentParentSessionEntry,
             overrides: params,
             newExplicitChild: createdNewEntry && Boolean(canonicalParentSessionKey),
-            newDashboardRoot:
-              createdNewEntry && Boolean(dashboardParentSessionKey) && !explicitParentSessionKey,
+            newDashboardRoot: newStandaloneRoot && Boolean(dashboardParentSessionKey),
+            newOperatorRoot: newStandaloneRoot && creation?.via === "operator",
             selectedModel: initializedEntry.modelOverride,
           }),
           ...buildSessionParentLink({
@@ -950,6 +909,16 @@ async function createGatewaySessionInScope(
             }
           }
         }
+        const validateSelection = createSessionAccessProgramValidation({
+          operatorAuthority,
+          entry,
+          validateModelSelection:
+            validateAccountModel ?? patched.validateModelSelection ?? modelSelection.validate,
+        });
+        const accessError = validateSelection();
+        if (accessError) {
+          return { ok: false, error: accessError };
+        }
         const runtimeSelection = await prepareSessionCreateRuntimeSelection({
           request: params,
           agentId: target.agentId,
@@ -958,8 +927,7 @@ async function createGatewaySessionInScope(
           existingEntry,
           entry,
           catalog: preparedModelCatalog,
-          validateModelSelection:
-            validateAccountModel ?? patched.validateModelSelection ?? modelSelection.validate,
+          validateModelSelection: validateSelection,
         });
         if (!runtimeSelection.ok) {
           return runtimeSelection;
@@ -979,70 +947,27 @@ async function createGatewaySessionInScope(
           entry.publicShare = prepareSessionPublicShareGrant(entry, target.canonicalKey);
         }
         if (params.fork !== true) {
-          return { ...patched, entry };
+          return withInitialAssistantTranscript(
+            patched,
+            entry,
+            params.initialAssistantMessage,
+            runtimeCwd,
+          );
         }
         if (!canonicalParentSessionKey || !currentParentSessionEntry || !parentSessionTarget) {
           return unavailableSessionRequest("failed to resolve parent session for fork");
         }
-        const forkMaxTokens = await resolveSessionForkMaxTokens({
-          cfg: params.cfg,
-          agentId: target.agentId,
-          sessionKey: target.canonicalKey,
+        const forkResult = await prepareGatewaySessionFork({
+          request: params,
+          target,
           entry,
-          loadGatewayModelCatalogSnapshot: params.loadGatewayModelCatalogSnapshot,
+          existingEntry,
+          parent: { entry: currentParentSessionEntry, target: parentSessionTarget },
+          commitGuard,
+          withCommit: preparedLifecycle?.withCommit,
+          creationOperation,
         });
-        // The storage owner selects one source for both size admission and copying,
-        // so an active tail cannot make a smaller stable prefix fail the cap.
-        const forkFromParent = async (assertSourceCurrent?: () => void) =>
-          await prepareSessionForkFromParent({
-            parentEntry: currentParentSessionEntry,
-            agentId: parentSessionTarget.agentId,
-            ...(commitGuard || assertSourceCurrent
-              ? {
-                  commitGuard: () => {
-                    commitGuard?.();
-                    assertSourceCurrent?.();
-                  },
-                }
-              : {}),
-            parentSessionKey: canonicalParentSessionKey,
-            sessionKey: target.canonicalKey,
-            storePath: parentSessionTarget.storePath,
-            ...(forkMaxTokens ? { maxTokens: forkMaxTokens } : {}),
-            // Keep the fork transcript owned by the child store across agent boundaries.
-            targetStorePath: target.storePath,
-            ...(params.forkFrom ? { forkFrom: params.forkFrom } : {}),
-          });
-        const forkWithCreation = (assertSourceCurrent?: () => void) =>
-          creationOperation
-            ? runWithSessionEntryCreationPublication(creationOperation, () =>
-                forkFromParent(assertSourceCurrent),
-              )
-            : forkFromParent(assertSourceCurrent);
-        const forkResult = preparedLifecycle?.withCommit
-          ? await preparedLifecycle.withCommit(forkWithCreation)
-          : await forkWithCreation();
-        if (forkResult.status === "too-large") {
-          return invalidSessionRequest(
-            `parent session is too large to fork (${forkResult.decision.parentTokens}/${forkResult.decision.maxTokens} tokens)`,
-          );
-        }
-        if (forkResult.status !== "prepared") {
-          return unavailableSessionRequest("failed to fork parent session transcript");
-        }
-        return {
-          ...patched,
-          transcriptEvents: forkResult.events,
-          entry: buildForkedGatewaySessionEntry(
-            entry,
-            forkResult.transcript,
-            {
-              sessionKey: canonicalParentSessionKey,
-              entry: currentParentSessionEntry,
-            },
-            existingEntry,
-          ),
-        };
+        return forkResult.ok ? { ...patched, ...forkResult } : forkResult;
       },
       {
         onPhase,
@@ -1053,7 +978,7 @@ async function createGatewaySessionInScope(
               requireWriteSuccess: true,
             }
           : {}),
-        ...(commitGuard ? { commitGuard } : {}),
+        commitGuard,
         followRegistration,
         ...(bindPreparedCreation || params.bindSharingCreation
           ? {
@@ -1145,7 +1070,6 @@ async function createGatewaySessionInScope(
         });
       }
       emitGatewaySessionStartPluginHook({
-        cfg: params.cfg,
         sessionKey: target.canonicalKey,
         sessionId: created.entry.sessionId,
         resumedFrom: parentEntry?.sessionId,

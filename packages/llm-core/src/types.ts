@@ -73,6 +73,9 @@ export interface ProviderResponse {
   headers: Record<string, string>;
 }
 
+/** Runtime header overrides; null preserves an SDK's default-header deletion sentinel. */
+export type ModelRequestHeaders = Record<string, string | null>;
+
 export interface StreamOptions {
   temperature?: number;
   maxTokens?: number;
@@ -99,6 +102,8 @@ export interface StreamOptions {
    * Default: "short".
    */
   cacheRetention?: CacheRetention;
+  /** Request-level cache lifetime for GPT-5.6+ Responses APIs; unset preserves provider defaults. */
+  promptCacheTtl?: "30m" | "12h";
   /**
    * Optional session identifier for providers that support session-based caching.
    * Providers can use this to enable prompt caching, request routing, or other
@@ -149,7 +154,7 @@ export interface StreamOptions {
    * Merged with provider defaults; can override default headers.
    * Not supported by all providers (e.g., AWS Bedrock uses SDK auth).
    */
-  headers?: Record<string, string>;
+  headers?: ModelRequestHeaders;
   /**
    * HTTP request timeout in milliseconds for providers/SDKs that support it.
    * For example, OpenAI and Anthropic SDK clients default to 10 minutes.
@@ -317,6 +322,8 @@ export interface Usage {
   cacheTelemetry?: { state: "available" | "unavailable" };
   /** Subset of `cacheWrite` written with 1-hour retention when reported. */
   cacheWrite1h?: number;
+  /** Subset of `cacheWrite` written with 5-minute retention when reported. */
+  cacheWrite5m?: number;
   /**
    * Whether usage is complete for this provider response. Missing terminal usage
    * and provisional stream counters are unavailable, including after interruption.
@@ -533,6 +540,8 @@ export interface AssistantMessage {
   provider: Provider;
   model: string;
   responseModel?: string; // Concrete `chunk.model` when different from the requested `model` (e.g. OpenRouter `auto` -> `anthropic/...`)
+  /** Provider-reported access only; absent/null never confirms a requested program. */
+  responseAccessProgram?: "standard" | "daybreak_blue" | "daybreak_red" | null;
   responseId?: string; // Provider-specific response/message identifier when the upstream API exposes one
   providerReplay?: ProviderReplayState; // Opaque provider state carried into a compatible later request.
   turnId?: string; // Runtime-assigned stable turn identity when the provider does not expose one
@@ -594,8 +603,16 @@ export interface Tool<TParameters extends TSchema = TSchema> {
   async?: false;
 }
 
+/** Derived prompt bytes belong to this exact immutable text revision. */
+export interface PreparedSystemPrompt {
+  readonly text: string;
+  readonly stripped: string;
+  readonly instructions: string;
+}
+
 export interface Context {
   systemPrompt?: string;
+  preparedSystemPrompt?: PreparedSystemPrompt;
   messages: Message[];
   tools?: Tool[];
 }
@@ -827,10 +844,12 @@ export interface Model<TApi extends Api = Api> {
   contextTokens?: number;
   /** Provider/catalog-declared total parameter count, including inactive experts. */
   parameterCount?: number;
+  /** Provider/catalog-declared canonical developer lineage, such as `anthropic`. */
+  family?: string;
   maxTokens: number;
   /** Provider-specific request/runtime parameters passed through to provider plugins. */
   params?: Record<string, unknown>;
-  headers?: Record<string, string>;
+  headers?: ModelRequestHeaders;
   /** Sends runtime credentials as Authorization: Bearer instead of provider-specific key headers. */
   authHeader?: boolean;
   /** Compatibility overrides for OpenAI-compatible APIs. If not set, auto-detected from baseUrl. */

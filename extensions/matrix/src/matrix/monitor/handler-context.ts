@@ -73,6 +73,7 @@ export async function resolveMatrixInboundContext(config: {
     canDetectMention,
     shouldRequireMention,
     commandAuthorized,
+    isControlCommand,
     locationPayload,
     media,
     preflightAudioTranscript,
@@ -104,22 +105,16 @@ export async function resolveMatrixInboundContext(config: {
     }
     return true;
   };
-  const shouldIncludeRoomContextSender = (
-    kind: "thread" | "quote" | "history",
-    contextSenderId?: string,
-  ): boolean =>
+  const shouldIncludeRoomContextSender = (contextSenderId?: string): boolean =>
     evaluateSupplementalContextVisibility({
       mode: contextVisibilityMode,
-      kind,
+      kind: "thread",
       senderAllowed: isRoomContextSenderAllowed(contextSenderId),
     }).include;
   let threadContext =
     ingress.threadContext ??
     (threadRootId ? await resolveThreadContext({ roomId, eventId: threadRootId }) : undefined);
-  if (
-    threadContext?.senderId &&
-    !shouldIncludeRoomContextSender("thread", threadContext.senderId)
-  ) {
+  if (threadContext?.senderId && !shouldIncludeRoomContextSender(threadContext.senderId)) {
     logVerboseMessage(`matrix: drop thread root context (mode=${contextVisibilityMode})`);
     threadContext = undefined;
   }
@@ -137,7 +132,7 @@ export async function resolveMatrixInboundContext(config: {
   }
   const replySenderAllowed =
     !replyContext?.senderId || isRoomContextSenderAllowed(replyContext.senderId);
-  const roomInfo = isRoom ? await getRoomInfo(roomId) : undefined;
+  const roomInfo = isRoom ? await getRoomInfo(roomId, { currentName: true }) : undefined;
   const roomName = roomInfo?.name;
   const envelopeFrom = isDirectMessage ? senderName : (roomName ?? roomId);
   const textWithId = `${bodyText}\n[matrix event id: ${messageId} room: ${roomId}]`;
@@ -237,10 +232,12 @@ export async function resolveMatrixInboundContext(config: {
       nativeChannelId: roomId,
       threadId: threadTarget,
     },
+    // Preserve model ancestry without requesting a room-transcript fork.
     route: {
       ..._route,
       routeSessionKey: _route.sessionKey,
-      parentSessionKey:
+      parentSessionKey: undefined,
+      modelParentSessionKey:
         threadTarget && _route.matchedBy !== "binding.channel" ? _route.mainSessionKey : undefined,
     },
     reply: {
@@ -277,7 +274,7 @@ export async function resolveMatrixInboundContext(config: {
       GroupChannel: isRoom ? roomId : undefined,
       GroupId: isRoom ? roomId : undefined,
       ...locationPayload?.context,
-      CommandSource: "text" as const,
+      CommandSource: isControlCommand ? ("text" as const) : undefined,
       NativeDirectUserId: isDirectMessage ? senderId : undefined,
     },
   });

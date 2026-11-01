@@ -29,3 +29,5 @@ export {
   fingerprintJsonObject,
 } from "./src/app-server/thread-fingerprints.js";
 export { buildCodexNativeWebSearchThreadConfig } from "./src/app-server/web-search.js";
+
+export { runCodexAppServerSideQuestion } from "./src/app-server/side-question.js";

@@ -1,227 +1,228 @@
 import { flush } from "solid-js";
-import { describe, expect, it, vi } from "vitest";
-import type { WebSearchStatusResult } from "../../../../packages/gateway-protocol/src/schema/web-search.ts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  WebSearchStatusResult,
+  WebSearchTestResult,
+} from "../../../../packages/gateway-protocol/src/schema/web-search.ts";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import type { ModelCatalogResult } from "../../api/types.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { ConfigSnapshot, ModelCatalogResult } from "../../api/types.ts";
 import { i18n } from "../../i18n/lib/translate.ts";
+import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import { REDACTED_SENTINEL } from "../../lib/config-form-utils.ts";
 import { createInitialConfigState } from "../../lib/config/config-state-model.ts";
-import { settleModelCatalogRequests } from "../../lib/model-catalog-store.ts";
-import { ApplicationProvider } from "../../lib/reactive/context.ts";
-import {
-  createGatewayRequestMock,
-  createTestGatewayClient,
-} from "../../test-helpers/gateway-client.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { createApplicationGateway } from "../../test-helpers/solid-application-context.tsx";
+import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { SearchPage } from "./search-page.tsx";
-
-const providerPath = ["plugins", "entries", "searxng", "config", "webSearch"];
-const ready: WebSearchStatusResult = {
-  enabled: true,
-  provider: null,
-  agentId: "main",
-  model: { provider: "example", id: "local", runtime: "pi" },
-  route: { kind: "managed", provider: "searxng", label: "SearXNG", testable: true },
-  providers: [
-    {
-      id: "searxng",
-      pluginId: "searxng",
-      label: "SearXNG",
-      hint: "Self-hosted search",
-      configured: true,
-      installed: true,
-      available: true,
-      requiresCredential: false,
-      credentialSource: "none",
-      configPath: providerPath,
-    },
-  ],
-};
-
-async function mount(
-  options: {
-    result?: WebSearchStatusResult;
-    admin?: boolean;
-    config?: Record<string, unknown>;
-    modelsResponse?: Promise<ModelCatalogResult>;
-    waitReady?: boolean;
-  } = {},
-) {
-  let result = options.result ?? ready;
-  const requested: Promise<unknown>[] = [];
-  const statusRequested = createDeferred();
-  let testResponse: Promise<unknown> = Promise.resolve({
-    provider: "searxng",
-    status: "ok",
-    latencyMs: 12,
-    results: [
-      { title: "Documentation", url: "https://example.com/docs", snippet: "Search result" },
-    ],
-  });
-  const request = createGatewayRequestMock((method) => {
-    if (method === "webSearch.status") {
-      statusRequested.resolve();
-    }
-    const response =
-      method === "webSearch.status"
-        ? Promise.resolve(result)
-        : method === "webSearch.test"
-          ? testResponse
-          : method === "models.list"
-            ? (options.modelsResponse ?? Promise.resolve({ models: [] }))
-            : method === "plugins.credentials.inspect"
-              ? Promise.resolve({ baseHash: "one", credential: { kind: "missing" } })
-              : Promise.resolve({});
-    requested.push(response);
-    return response;
-  });
-  const client = createTestGatewayClient(request);
-  const snapshot = {
-    phase: "connected",
-    client,
-    hello: {
-      auth: {
-        role: "operator",
-        scopes: options.admin === false ? ["operator.read"] : ["operator.admin"],
-      },
-    },
-  } as ApplicationGatewaySnapshot;
-  const gateway = createApplicationGateway(snapshot);
-  const config = options.config ?? {
-    tools: { web: { search: { enabled: true } } },
-    plugins: {
-      entries: { searxng: { config: { webSearch: { baseUrl: "https://search.example.com" } } } },
-    },
-  };
-  const configState = {
-    ...createInitialConfigState(snapshot),
-    configForm: config,
-    configSnapshot: { config, hash: "one", valid: true, issues: [] },
-  };
-  const runtimeListeners = new Set<() => void>();
-  const runtime = {
-    state: configState,
-    canPatch: true,
-    ensureLoaded: vi.fn().mockResolvedValue(undefined),
-    ensureSchemaLoaded: vi.fn().mockResolvedValue(undefined),
-    refresh: vi.fn().mockResolvedValue(undefined),
-    refreshSchema: vi.fn().mockResolvedValue(undefined),
-    retry: vi.fn().mockResolvedValue(undefined),
-    patchForm: vi.fn(),
-    removeFormValue: vi.fn(),
-    flushFormChanges: vi.fn().mockResolvedValue(true),
-    discardFormValue: vi.fn().mockResolvedValue(true),
-    subscribe: (listener: () => void) => {
-      runtimeListeners.add(listener);
-      return () => runtimeListeners.delete(listener);
-    },
-  };
-  const selectionListeners = new Set<() => void>();
-  const selection = {
-    state: { selectedId: "main" },
-    set: (id: string) => {
-      selection.state.selectedId = id;
-      for (const listener of selectionListeners) {
-        listener();
-      }
-    },
-    subscribe: (listener: () => void) => {
-      selectionListeners.add(listener);
-      return () => selectionListeners.delete(listener);
-    },
-  };
-  const navigate = vi.fn();
-  const context = {
-    basePath: "",
-    gateway: gateway.gateway,
-    runtimeConfig: runtime,
-    settingsAgentSelection: selection,
-    agents: {
-      state: {
-        agentsList: {
-          agents: [
-            { id: "main", name: "Main" },
-            { id: "scout", name: "Scout" },
-          ],
-        },
-      },
-      subscribe: () => () => {},
-    },
-    navigate,
-  } as unknown as ApplicationContext;
-  const view = mountSolid(() => (
-    <ApplicationProvider value={context}>
-      <SearchPage />
-    </ApplicationProvider>
-  ));
-  const element = view.container;
-  const settle = async () => {
-    flush();
-    await settleModelCatalogRequests(client, { agentId: selection.state.selectedId });
-    await Promise.allSettled(requested);
-    await waitForSolid(() => {
-      expect(button(element, i18n.t("searchPage.refresh")).disabled).toBe(false);
-    });
-  };
-  if (options.waitReady === false) {
-    flush();
-  } else {
-    await settle();
-  }
-  return {
-    element,
-    dispose: () => view.unmount(),
-    request,
-    runtime,
-    publishRuntime: () => {
-      for (const listener of runtimeListeners) {
-        listener();
-      }
-    },
-    selection,
-    navigate,
-    gateway,
-    snapshot,
-    settle,
-    statusRequested: statusRequested.promise,
-    setResult: (next: WebSearchStatusResult) => {
-      result = next;
-    },
-    setTestResponse: (next: Promise<unknown>) => {
-      testResponse = next;
-    },
-  };
-}
-
-function button(element: Element, text: string) {
-  const control = [...element.querySelectorAll("button")].find(
-    (candidate) =>
-      (
-        candidate.querySelector(".settings-row__title")?.textContent ?? candidate.textContent
-      )?.trim() === text,
-  );
-  expect(control, text).toBeDefined();
-  return control!;
-}
-function select(element: Element, label: string, value: string) {
-  const field = element.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!;
-  expect(field).not.toBeNull();
-  field.value = value;
-  field.dispatchEvent(new Event("change", { bubbles: true }));
-}
+import {
+  atPath,
+  editInput,
+  mountSearch,
+  observable,
+  pendingResult,
+  providerPath as pathForProvider,
+  searchPath,
+  searchStatus,
+} from "./search-page.test-support.tsx";
 
 describe("Search settings", () => {
-  it("keeps the initial localized query and edited draft when the locale changes", async () => {
+  const providerPath = pathForProvider("searxng");
+  const ready = searchStatus("searxng", "SearXNG", { hint: "Self-hosted search" });
+  const unsafeContent = '<img src=x onerror="alert(1)">';
+  const searchResult = (overrides: Partial<WebSearchTestResult>): WebSearchTestResult => ({
+    provider: "searxng",
+    status: "ok",
+    latencyMs: 1,
+    ...overrides,
+  });
+
+  async function mount(
+    options: {
+      result?: WebSearchStatusResult;
+      admin?: boolean;
+      config?: Record<string, unknown>;
+      modelsResponse?: Promise<ModelCatalogResult>;
+      waitReady?: boolean;
+    } = {},
+  ) {
+    let result = options.result ?? ready;
+    let statusResponse: Promise<WebSearchStatusResult> | undefined;
+    const statusRequested = createDeferred();
+    let testResponse: Promise<unknown> = Promise.resolve(searchResult({}));
+    const page = await mountSearch({
+      hello: gatewayHelloForMethods(
+        [],
+        options.admin === false ? ["operator.read"] : ["operator.admin"],
+      ),
+      waitReady: options.waitReady,
+      waitForRefresh: true,
+      respond: (method) => {
+        if (method === "webSearch.status") {
+          statusRequested.resolve();
+        }
+        return method === "webSearch.status"
+          ? (statusResponse ?? Promise.resolve(result))
+          : method === "webSearch.test"
+            ? testResponse
+            : method === "models.list"
+              ? (options.modelsResponse ?? Promise.resolve({ models: [] }))
+              : method === "plugins.credentials.inspect"
+                ? Promise.resolve({ baseHash: "one", credential: { kind: "missing" } })
+                : Promise.resolve({});
+      },
+      runtime: (_gateway, snapshot) => {
+        const config = options.config ?? {
+          ...atPath(searchPath, { enabled: true }),
+          ...atPath(providerPath, { baseUrl: "https://search.example.com" }),
+        };
+        const source = observable({
+          ...createInitialConfigState(snapshot),
+          configForm: config,
+          configSnapshot: { config, hash: "one", valid: true, issues: [] },
+        });
+        return {
+          ...source,
+          canPatch: true,
+          ensureLoaded: vi.fn().mockResolvedValue(undefined),
+          ensureSchemaLoaded: vi.fn().mockResolvedValue(undefined),
+          refresh: vi.fn().mockResolvedValue(undefined),
+          refreshSchema: vi.fn().mockResolvedValue(undefined),
+          retry: vi.fn().mockResolvedValue(undefined),
+          patchForm: vi.fn(),
+          removeFormValue: vi.fn(),
+          flushFormChanges: vi.fn().mockResolvedValue(true),
+          discardFormValue: vi.fn().mockResolvedValue(true),
+        };
+      },
+    });
+    return {
+      ...page,
+      settle: () => page.settle(true),
+      statusRequested: statusRequested.promise,
+      setResult: (next: WebSearchStatusResult) => {
+        result = next;
+      },
+      setStatusResponse: (next: Promise<WebSearchStatusResult> | undefined) => {
+        statusResponse = next;
+      },
+      setTestResponse: (next: Promise<unknown>) => {
+        testResponse = next;
+      },
+    };
+  }
+
+  it("preserves drafts through status and config read recovery", async () => {
+    const page = await mount();
+    const query = page.edit("Search query", "Keep my search draft", false);
+    const refresh = createDeferred<WebSearchStatusResult>();
+    page.setStatusResponse(refresh.promise);
+    page.click("Refresh search status");
+    flush();
+    await waitForSolid(() => expect(page.calls("webSearch.status")).toHaveLength(2));
+
+    expect(page.button("Refresh search status").disabled).toBe(true);
+    expect(page.button("Test search").disabled).toBe(true);
+    expect(page.input("Search query")).toBe(query);
+    page.expectText(i18n.t("searchPage.loading"));
+    expect(page.element.querySelector(".settings-loading-skeleton")).toBeNull();
+
+    refresh.reject(new Error("Search status unavailable"));
+    await page.settle();
+    await waitForSolid(() =>
+      expect(page.element.querySelector('[role="alert"]')?.textContent).toContain(
+        "Search status unavailable",
+      ),
+    );
+    expect(page.input("Search query")).toBe(query);
+    expect(query.value).toBe("Keep my search draft");
+
+    const retry = createDeferred<WebSearchStatusResult>();
+    page.setStatusResponse(retry.promise);
+    page.click("Retry");
+    flush();
+    await waitForSolid(() => expect(page.calls("webSearch.status")).toHaveLength(3));
+    expect(page.element.querySelector('[role="alert"]')).toBeNull();
+    expect(page.input("Search query")).toBe(query);
+    retry.resolve(ready);
+    await page.settle();
+    expect(page.element.querySelector('[role="alert"]')).toBeNull();
+    expect(page.input("Search query")).toBe(query);
+    expect(query.value).toBe("Keep my search draft");
+    expect(page.calls("webSearch.test")).toHaveLength(0);
+    page.runtime.state.lastError = "Could not load search settings";
+    page.runtime.publish();
+    flush();
+    page.click("Retry");
+    await page.settle();
+    expect(page.runtime.refresh).toHaveBeenCalledOnce();
+    expect(page.runtime.refreshSchema).toHaveBeenCalledOnce();
+    expect(page.runtime.retry).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["status", "connection"],
+    ["status", "agent"],
+    ["test", "connection"],
+    ["test", "agent"],
+  ] as const)("retires a %s response after its %s changes", async (request, change) => {
+    const page = await mount();
+    const originalQuery = page.input("Search query");
+    const refresh = createDeferred<WebSearchStatusResult>();
+    const test = createDeferred<unknown>();
+    if (request === "status") {
+      page.setStatusResponse(refresh.promise);
+      page.click("Refresh search status");
+      await waitForSolid(() => expect(page.calls("webSearch.status")).toHaveLength(2));
+      page.setStatusResponse(undefined);
+    } else {
+      page.setTestResponse(test.promise);
+      page.click("Test search");
+      await waitForSolid(() => page.expectStatus("Searching…"));
+    }
+    try {
+      if (change === "agent") {
+        page.setResult({
+          ...ready,
+          agentId: "scout",
+          route:
+            request === "test" ? { kind: "disabled", label: "Off", testable: false } : ready.route,
+        });
+        page.select("Agent", "scout");
+      } else if (request === "status") {
+        page.replaceConnection();
+      } else {
+        page.gateway.publish({ ...page.snapshot, phase: "stopped", client: null });
+        page.gateway.publish(page.snapshot);
+      }
+      if (request === "test") {
+        await waitForSolid(() => page.expectStatus("Not tested"));
+      } else {
+        flush();
+      }
+      expect(originalQuery.isConnected).toBe(false);
+    } finally {
+      if (request === "status") {
+        refresh.reject(new Error("Retired search status failed"));
+      } else {
+        test.resolve(searchResult({ content: "Obsolete success" }));
+      }
+    }
+    await page.settle();
+    page.expectNoText("Obsolete success", "Search succeeded");
+    expect(page.element.querySelector('[role="alert"]')).toBeNull();
+    expect(page.input("Search query")).not.toBe(originalQuery);
+    expect(page.calls("webSearch.status").at(-1)?.[1]).toEqual({
+      agentId: change === "agent" ? "scout" : "main",
+    });
+    expect(page.calls("webSearch.test")).toHaveLength(request === "status" ? 0 : 1);
+  });
+
+  it("preserves the localized draft across locale changes", async () => {
     const locale = i18n.getLocale();
     try {
       await i18n.setLocale("pt-BR");
-      const fixture = await mount();
-      const query = fixture.element.querySelector<HTMLInputElement>(
-        `input[aria-label="${i18n.t("searchPage.query")}"]`,
-      )!;
+      const page = await mount();
+      const query = page.input(i18n.t("searchPage.query"));
       const initialQuery = i18n.t("searchPage.queryDefault");
       expect(query.value).toBe(initialQuery);
 
@@ -231,8 +232,7 @@ describe("Search settings", () => {
       expect(query.getAttribute("aria-label")).toBe(i18n.t("searchPage.query"));
       expect(query.value).toBe(initialQuery);
 
-      query.value = "My search draft";
-      query.dispatchEvent(new Event("input", { bubbles: true }));
+      editInput(query, "My search draft", false);
       flush();
       await i18n.setLocale("pt-BR");
       flush();
@@ -244,360 +244,514 @@ describe("Search settings", () => {
   });
 
   it.each(["success", "failure"] as const)(
-    "resolves current search status after catalog %s without manual refresh",
+    "loads current status after catalog %s",
     async (outcome) => {
       const catalog = createDeferred<ModelCatalogResult>();
-      const fixture = await mount({ modelsResponse: catalog.promise, waitReady: false });
-      expect(fixture.request.mock.calls.some(([method]) => method === "webSearch.status")).toBe(
-        false,
+      const page = await mount({ modelsResponse: catalog.promise, waitReady: false });
+      expect(page.calls("webSearch.status")).toHaveLength(0);
+      await waitForSolid(() =>
+        expect(page.element.querySelector(".settings-loading-skeleton")).not.toBeNull(),
       );
       if (outcome === "success") {
-        fixture.setResult({ ...ready, agentId: "scout" });
-        fixture.selection.set("scout");
+        page.setResult({ ...ready, agentId: "scout" });
+        page.setAgent("scout");
         catalog.resolve({ models: [{ id: "local", name: "Local model", provider: "example" }] });
       } else {
         catalog.reject(new Error("Model catalog unavailable"));
       }
-      await fixture.statusRequested;
-      await fixture.settle();
-      const statuses = fixture.request.mock.calls.filter(
-        ([method]) => method === "webSearch.status",
-      );
+      await page.statusRequested;
+      await page.settle();
+      const statuses = page.calls("webSearch.status");
       expect(statuses).toHaveLength(1);
       expect(statuses[0]?.[1]).toEqual({ agentId: outcome === "success" ? "scout" : "main" });
-      expect(fixture.element.querySelector('select[aria-label="Search provider"]')).not.toBeNull();
-      expect(fixture.element.textContent).toContain("Configured");
+      expect(page.element.querySelector('select[aria-label="Search provider"]')).not.toBeNull();
+      expect(page.element.querySelector(".settings-loading-skeleton")).toBeNull();
+      page.expectText("Configured");
     },
   );
 
-  it("keeps configured separate from tested and writes explicit and automatic selection through the config owner", async () => {
-    const fixture = await mount();
-    expect(fixture.element.querySelector(".page-title")?.textContent).toBe("Search");
-    expect(fixture.element.textContent).toContain("Configured");
-    expect(
-      [...fixture.element.querySelectorAll('[role="status"]')].map((region) => region.textContent),
-    ).toContainEqual(expect.stringContaining("Not tested"));
-    select(fixture.element, "Search provider", "searxng");
-    await fixture.settle();
-    expect(fixture.runtime.patchForm).toHaveBeenCalledWith(
-      ["tools", "web", "search", "provider"],
-      "searxng",
-    );
-    select(fixture.element, "Search provider", "");
-    await fixture.settle();
-    expect(fixture.runtime.removeFormValue).toHaveBeenCalledWith([
-      "tools",
-      "web",
-      "search",
-      "provider",
-    ]);
-    button(fixture.element, "Test search").click();
-    await fixture.settle();
-    expect(
-      [...fixture.element.querySelectorAll('[role="status"]')].map((region) => region.textContent),
-    ).toContainEqual(expect.stringContaining("Search succeeded"));
-    expect(fixture.element.querySelector('a[href="https://example.com/docs"]')?.textContent).toBe(
-      "Documentation",
-    );
+  it("commits explicit and automatic provider selection", async () => {
+    const page = await mount();
+    page.expectText("Configured");
+    page.expectStatus("Not tested");
+    page.select("Search provider", "searxng");
+    await page.settle();
+    expect(page.runtime.patchForm).toHaveBeenCalledWith([...searchPath, "provider"], "searxng");
+    page.select("Search provider", "");
+    await page.settle();
+    expect(page.runtime.removeFormValue).toHaveBeenCalledWith([...searchPath, "provider"]);
   });
 
-  it.each(["endpoint", "advanced"] as const)(
-    "edits %s fields through the config owner",
-    async (kind) => {
-      const fixture = await mount();
-      const endpoint = kind === "endpoint";
-      const path = endpoint ? providerPath : ["tools", "web", "search"];
-      const label = endpoint ? "Search endpoint" : "Result limit";
-      fixture.runtime.state.configSchema = path.reduceRight<unknown>(
-        (schema, key) => ({ type: "object", properties: { [key]: schema } }),
-        {
-          type: "object",
-          properties: endpoint
-            ? { baseUrl: { type: "string", title: label } }
-            : {
-                enabled: { type: "boolean" },
-                provider: { type: "string" },
-                maxResults: { type: "integer", title: label, default: 5 },
-              },
-        },
-      );
-      fixture.publishRuntime();
-      flush();
-      if (!endpoint) {
-        const advanced = fixture.element.querySelector<HTMLDetailsElement>("details")!;
-        expect(advanced.open).toBe(false);
-        advanced.open = true;
-      }
-      const field = fixture.element.querySelector<HTMLInputElement>(
-        `input[aria-label="${label}"]`,
-      )!;
-      expect(field).not.toBeNull();
-      if (endpoint) {
-        expect(field.value).toBe("https://search.example.com");
-      }
-      field.focus();
-      field.value = endpoint ? "https://custom.example.com" : "8";
-      field.dispatchEvent(new Event("input", { bubbles: true }));
-      field.blur();
-      await fixture.settle();
-      expect(fixture.runtime.patchForm).toHaveBeenCalledWith(
-        [...path, endpoint ? "baseUrl" : "maxResults"],
-        endpoint ? "https://custom.example.com" : 8,
-      );
-      if (endpoint) {
-        fixture.setResult({
-          ...ready,
-          providers: ready.providers.map((provider) => ({ ...provider, configPath: [] })),
-        });
-        button(fixture.element, "Refresh search status").click();
-        await fixture.settle();
-        expect(fixture.element.querySelector('input[aria-label="Search endpoint"]')).toBeNull();
-      } else {
-        expect(
-          fixture.element.querySelectorAll('select[aria-label="Search provider"]'),
-        ).toHaveLength(1);
-      }
-    },
-  );
-
-  it.each([
-    { label: "other subtree", configPath: providerPath, stored: REDACTED_SENTINEL },
-    { label: "no settings subtree", configPath: [], stored: REDACTED_SENTINEL },
-    { label: "null credential", configPath: [], stored: null },
-  ])("reads a credential by its full path ($label)", async ({ configPath, stored }) => {
+  it("reads credentials outside the settings subtree and hides missing settings", async () => {
     const credentialPath = ["plugins", "entries", "searxng", "config", "accounts", 0, "apiKey"];
-    const fixture = await mount({
-      config: {
-        plugins: {
-          entries: {
-            searxng: {
-              config: { webSearch: { apiKey: "" }, accounts: [{ apiKey: stored }] },
-            },
-          },
-        },
-      },
-      result: {
-        ...ready,
-        providers: [
-          {
-            ...ready.providers[0]!,
-            configPath,
-            credential: { path: credentialPath, label: "Provider credential", envVars: [] },
-          },
-        ],
-      },
+    const page = await mount({
+      config: atPath(providerPath.slice(0, -1), {
+        webSearch: { apiKey: "" },
+        accounts: [{ apiKey: REDACTED_SENTINEL }],
+      }),
+      result: searchStatus("searxng", "SearXNG", {
+        configPath: providerPath,
+        credential: { path: credentialPath, label: "Provider credential", envVars: [] },
+      }),
     });
-    fixture.runtime.state.configSchema = providerPath.reduceRight<unknown>(
+    page.runtime.state.configSchema = providerPath.reduceRight<unknown>(
       (schema, key) => ({ type: "object", properties: { [key]: schema } }),
       {
         type: "object",
         properties: { apiKey: { type: "string", title: "Independent request key" } },
       },
     );
-    fixture.publishRuntime();
+    page.runtime.publish();
     flush();
-    const independent = fixture.element.querySelector<HTMLInputElement>(
-      'input[aria-label="Independent request key"]',
+    page.edit("Independent request key", "synthetic-request-key");
+    await page.settle();
+    expect(page.runtime.patchForm).toHaveBeenCalledWith(
+      [...providerPath, "apiKey"],
+      "synthetic-request-key",
     );
-    if (configPath.length) {
-      expect(independent).not.toBeNull();
-      independent!.focus();
-      independent!.value = "synthetic-request-key";
-      independent!.dispatchEvent(new Event("input", { bubbles: true }));
-      independent!.blur();
-      await fixture.settle();
-      expect(fixture.runtime.patchForm).toHaveBeenCalledWith(
-        [...providerPath, "apiKey"],
-        "synthetic-request-key",
-      );
-    } else {
-      expect(independent).toBeNull();
-    }
-    const editor = fixture.element.querySelector<HTMLElement>("openclaw-plugin-credential-editor")!;
-    flush();
-    const input = editor.querySelector<HTMLInputElement>(
-      'input[aria-label="Provider credential"]',
-    )!;
-    expect(input.placeholder).toBe(stored ? "••••••••" : "");
-    expect(input.value).toBe("");
-    input.focus();
-    input.value = "synthetic-replacement-key";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.blur();
-    await fixture.settle();
-    expect(fixture.runtime.patchForm).toHaveBeenCalledWith(
+    const input = page.input("Provider credential");
+    expect(input).toMatchObject({ placeholder: "••••••••", value: "" });
+    editInput(input, "synthetic-replacement-key");
+    await page.settle();
+    expect(page.runtime.patchForm).toHaveBeenCalledWith(
       credentialPath,
       "synthetic-replacement-key",
     );
+    page.setResult(searchStatus("searxng", "SearXNG", { configPath: [] }));
+    page.click("Refresh search status");
+    await page.settle();
+    expect(page.input("Independent request key")).toBeNull();
   });
-
-  it("retries a failed configuration read without attempting a write", async () => {
-    const fixture = await mount();
-    fixture.runtime.state.lastError = "Could not load search settings";
-    fixture.publishRuntime();
-    flush();
-    button(fixture.element, "Retry").click();
-    await fixture.settle();
-    expect(fixture.runtime.refresh).toHaveBeenCalledOnce();
-    expect(fixture.runtime.refreshSchema).toHaveBeenCalledOnce();
-    expect(fixture.runtime.retry).not.toHaveBeenCalled();
-  });
-
-  it.each(["agent", "connection"] as const)(
-    "rejects a late successful test after its %s changes",
-    async (change) => {
-      const fixture = await mount();
-      const old = createDeferred<unknown>();
-      fixture.setTestResponse(old.promise);
-      button(fixture.element, "Test search").click();
-      flush();
-      expect(
-        [...fixture.element.querySelectorAll('[role="status"]')].map(
-          (region) => region.textContent,
-        ),
-      ).toContainEqual(expect.stringContaining("Searching…"));
-      if (change === "agent") {
-        fixture.setResult({
-          ...ready,
-          agentId: "scout",
-          route: { kind: "disabled", label: "Off", testable: false },
-        });
-        select(fixture.element, "Agent", "scout");
-      } else {
-        fixture.gateway.publish({ ...fixture.snapshot, phase: "stopped", client: null });
-        fixture.gateway.publish(fixture.snapshot);
-      }
-      old.resolve({ provider: "searxng", status: "ok", latencyMs: 1, content: "Obsolete success" });
-      await fixture.settle();
-      expect(fixture.element.textContent).not.toContain("Obsolete success");
-      expect(fixture.element.textContent).not.toContain("Search succeeded");
-    },
-  );
 
   it.each(["success", "provider error", "request error"] as const)(
-    "locks the tested query until %s settles and clears health on editing",
+    "locks the query through %s and clears health on editing",
     async (outcome) => {
-      const fixture = await mount();
-      const query = fixture.element.querySelector<HTMLInputElement>(
-        'input[aria-label="Search query"]',
-      )!;
-      query.value = "Query A";
-      query.dispatchEvent(new Event("input", { bubbles: true }));
+      const page = await mount();
+      const query = page.input("Search query");
+      const button = page.button("Test search");
+      editInput(query, "Query A", false);
       const pending = createDeferred<unknown>();
-      fixture.setTestResponse(pending.promise);
-      button(fixture.element, "Test search").click();
-      flush();
+      page.setTestResponse(pending.promise);
+      page.click("Test search");
+      page.click("Test search");
+      expect(page.calls("webSearch.test")).toHaveLength(1);
       try {
-        expect(query.disabled).toBe(true);
-        expect(query.value).toBe("Query A");
+        await waitForSolid(() => expect(query).toMatchObject({ disabled: true, value: "Query A" }));
       } finally {
         if (outcome === "request error") {
           pending.reject(new Error("Previous transport error"));
         } else {
           pending.resolve(
-            outcome === "success"
-              ? {
-                  provider: "searxng",
-                  status: "ok",
-                  latencyMs: 1,
-                  content: "Previous answer",
-                  results: [{ title: "Previous source", url: "https://example.com/previous" }],
-                }
-              : {
-                  provider: "searxng",
-                  status: "error",
-                  latencyMs: 1,
-                  error: "Previous provider error",
-                },
+            searchResult(
+              outcome === "success"
+                ? {
+                    status: "ok",
+                    content: `Previous answer ${unsafeContent}`,
+                    results: [
+                      {
+                        title: "Docs",
+                        url: "https://a.test/previous",
+                        snippet: "Source",
+                      },
+                    ],
+                    citations: [{ title: "Unsafe", url: "javascript:alert(1)" }],
+                  }
+                : { status: "error", error: "Previous provider error" },
+            ),
           );
         }
       }
-      await fixture.settle();
-      expect(fixture.element.textContent).toContain(
-        outcome === "success" ? "Search succeeded" : "Search failed",
-      );
+      await page.settle();
+      page.expectText(outcome === "success" ? "Search succeeded" : "Search failed");
       expect(query.disabled).toBe(false);
-      expect(
-        fixture.request.mock.calls.find(([method]) => method === "webSearch.test")?.[1],
-      ).toMatchObject({ query: "Query A" });
+      expect(page.calls("webSearch.test")[0]?.[1]).toMatchObject({ query: "Query A" });
       if (outcome === "success") {
-        expect(fixture.element.textContent).toContain("Previous answer");
+        page.expectText("Previous answer", unsafeContent);
+        expect(page.element.querySelector('a[href="https://a.test/previous"]')?.textContent).toBe(
+          "Docs",
+        );
+        expect(page.element.querySelector('a[href^="javascript:"]')).toBeNull();
+        expect(page.element.querySelector("img")).toBeNull();
       }
-      query.value = "Query B";
-      query.dispatchEvent(new Event("input", { bubbles: true }));
+      if (outcome === "request error") {
+        page.expectText("Previous transport error");
+        const retry = pendingResult(searchResult({ content: "Previous retry" }));
+        page.setTestResponse(retry.promise);
+        button.click();
+        await waitForSolid(() => {
+          page.expectNoText("Previous transport error");
+          page.expectStatus("Searching…");
+          expect(page.input("Search query")).toBe(query);
+          expect(query.disabled).toBe(true);
+          expect(page.button("Searching…")).toBe(button);
+        });
+        retry.complete();
+        await waitForSolid(() => {
+          page.expectText("Previous retry");
+          page.expectStatus("Search succeeded");
+          expect(page.button("Test search")).toBe(button);
+          expect(query.disabled).toBe(false);
+        });
+      }
+      editInput(query, "Query B", false);
       flush();
-      expect(fixture.element.textContent).toContain("Not tested");
-      expect(fixture.element.textContent).not.toContain("Previous");
-      expect(fixture.element.querySelector('a[href="https://example.com/previous"]')).toBeNull();
+      page.expectText("Not tested");
+      page.expectNoText("Previous");
+      expect(page.element.querySelector('a[href="https://a.test/previous"]')).toBeNull();
     },
   );
 
-  it("opens native search in an unsent chat and prevents a reader from testing shared credentials", async () => {
-    const fixture = await mount({
-      result: {
-        ...ready,
-        route: {
-          kind: "native",
-          label: "Native search",
-          reason: "Test through the active model in chat.",
-          testable: false,
-        },
-      },
-    });
-    expect(fixture.element.querySelector('input[aria-label="Search query"]')).toBeNull();
-    expect(
-      [...fixture.element.querySelectorAll("button")].some(
-        (candidate) => candidate.textContent?.trim() === "Test search",
-      ),
-    ).toBe(false);
-    button(fixture.element, "Test in chat").click();
-    expect(fixture.navigate).toHaveBeenCalledExactlyOnceWith("new-session", {
-      search: "?agent=main&model=example%2Flocal",
-    });
-    expect(fixture.request.mock.calls.some(([method]) => method === "webSearch.test")).toBe(false);
-    fixture.dispose();
-    const reader = await mount({ admin: false });
-    expect(button(reader.element, "Test search").disabled).toBe(true);
-  });
+  it("submits Enter but ignores IME confirmation", async () => {
+    const page = await mount();
+    const query = page.input("Search query");
+    editInput(query, "東京", false);
+    query.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await page.settle();
+    expect(page.calls("webSearch.test")).toHaveLength(1);
+    expect(page.calls("webSearch.test")[0]?.[1]).toMatchObject({ query: "東京" });
 
-  it("tests an explicitly selected managed provider separately from external harness search", async () => {
-    const fixture = await mount({
-      result: {
-        ...ready,
-        provider: "searxng",
-        route: {
-          kind: "external",
-          label: "External harness",
-          reason: "Check native search in chat.",
-          testable: false,
-        },
-        testProvider: { id: "searxng", label: "SearXNG" },
-      },
-    });
-    button(fixture.element, "Test SearXNG").click();
-    await fixture.settle();
-    expect(
-      fixture.request.mock.calls.find(([method]) => method === "webSearch.test")?.[1],
-    ).toMatchObject({ providerId: "searxng", agentId: "main" });
-    expect(fixture.element.textContent).toContain("Search succeeded");
-    expect(fixture.element.textContent).toContain("Check in chat");
-  });
-
-  it("renders search output as text and does not make script citations clickable", async () => {
-    const fixture = await mount();
-    fixture.setTestResponse(
-      Promise.resolve({
-        provider: "searxng",
-        status: "ok",
-        latencyMs: 1,
-        content: '<img src=x onerror="alert(1)">',
-        citations: [{ title: "Unsafe", url: "javascript:alert(1)" }],
-      }),
+    editInput(query, "おおさか", false);
+    query.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true }),
     );
-    button(fixture.element, "Test search").click();
-    await fixture.settle();
-    expect(fixture.element.textContent).toContain('<img src=x onerror="alert(1)">');
-    expect(fixture.element.querySelector('a[href^="javascript:"]')).toBeNull();
-    expect(fixture.element.querySelector("img")).toBeNull();
+    flush();
+    expect(page.calls("webSearch.test")).toHaveLength(1);
+
+    // WebKit can deliver the committing Enter just after compositionend with both flags cleared.
+    editInput(query, "大阪", false);
+    query.dispatchEvent(new CompositionEvent("compositionend", { data: "大阪", bubbles: true }));
+    query.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    flush();
+    expect(page.calls("webSearch.test")).toHaveLength(1);
+  });
+
+  it.each(["native", "external"] as const)(
+    "routes %s search to chat and tests only managed credentials",
+    async (kind) => {
+      const external = kind === "external";
+      const page = await mount({
+        result: {
+          ...ready,
+          ...(external
+            ? { provider: "searxng", testProvider: { id: "searxng", label: "SearXNG" } }
+            : {}),
+          route: {
+            ...ready.route,
+            kind,
+            testable: false,
+          },
+        },
+      });
+      if (external) {
+        page.click("Test SearXNG");
+        await page.settle();
+        expect(page.calls("webSearch.test")[0]?.[1]).toMatchObject({
+          providerId: "searxng",
+          agentId: "main",
+        });
+        page.expectText("Search succeeded", "Check in chat");
+        return;
+      }
+      expect(page.input("Search query")).toBeNull();
+      page.click("Test in chat");
+      expect(page.navigate).toHaveBeenCalledExactlyOnceWith("new-session", {
+        search: "?agent=main&model=example%2Flocal",
+      });
+      expect(page.calls("webSearch.test")).toHaveLength(0);
+      page.dispose();
+      const reader = await mount({ admin: false });
+      expect(reader.button("Test search").disabled).toBe(true);
+    },
+  );
+});
+
+describe("Search configuration lifecycle", () => {
+  const providerPath = pathForProvider("example");
+  const endpointPath = [...providerPath, "baseUrl"];
+  const config = {
+    ...atPath([...searchPath, "provider"], "example"),
+    ...atPath(providerPath, {
+      baseUrl: "https://initial.example.test",
+      apiKey: "synthetic-original-key",
+    }),
+  };
+  const ready = searchStatus("example", "Example Search", {
+    requiresCredential: true,
+    credentialSource: "config",
+    credential: { path: [...providerPath, "apiKey"], label: "Example API key", envVars: [] },
+  });
+  const testResult = {
+    status: "ok",
+    provider: "example",
+    latencyMs: 1,
+    content: "Health from the original configuration",
+  } satisfies WebSearchTestResult;
+
+  beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }));
+  afterEach(() => vi.useRealTimers());
+
+  function schemaAt(path: string[], properties: NonNullable<JsonSchema["properties"]>) {
+    return path.reduceRight<JsonSchema>(
+      (child, key) => ({ type: "object", properties: { [key]: child } }),
+      { type: "object", properties },
+    );
+  }
+
+  async function mount(
+    options: { advanced?: boolean; searchResponse?: Promise<WebSearchTestResult> } = {},
+  ) {
+    const schema = schemaAt(providerPath, {
+      baseUrl: { type: "string", title: "Search endpoint" },
+      apiKey: { type: "string", title: "Example API key" },
+    });
+    if (options.advanced) {
+      Object.assign(
+        (schema.properties ??= {}),
+        schemaAt(searchPath, {
+          enabled: { type: "boolean" },
+          provider: { type: "string" },
+          maxResults: { type: "integer", title: "Result limit", default: 5 },
+        }).properties,
+      );
+    }
+    const stored: ConfigSnapshot = {
+      config: structuredClone(config),
+      sourceConfig: structuredClone(config),
+      raw: JSON.stringify(config),
+      hash: "saved-1",
+      configRevisionHash: "revision-1",
+      appliedConfigHash: "revision-1",
+      valid: true,
+      issues: [],
+    };
+    const save = createDeferred<unknown>();
+    const writeStarted = createDeferred<{ raw: string; baseHash: string }>();
+    const searchResponse = options.searchResponse ?? Promise.resolve(testResult);
+    let statusResponse: Promise<WebSearchStatusResult> | undefined;
+    const responses: Record<string, (params: unknown) => Promise<unknown>> = {
+      "config.get": async () => structuredClone(stored),
+      "config.schema": async () => ({ schema, uiHints: {}, version: "test-1", generatedAt: "" }),
+      "config.set": (params) => {
+        writeStarted.resolve(params as { raw: string; baseHash: string });
+        return save.promise;
+      },
+      "models.list": async () => ({ models: [] }),
+      "plugins.credentials.inspect": async () => ({
+        baseHash: stored.hash,
+        credential: { kind: "literal" },
+      }),
+      "webSearch.status": async () =>
+        statusResponse ?? {
+          ...ready,
+          route: { ...ready.route, label: `Runtime ${stored.appliedConfigHash}` },
+        },
+      "webSearch.test": () => searchResponse,
+    };
+    const page = await mountSearch({
+      respond: (method, params) => {
+        const respond = Object.hasOwn(responses, method) ? responses[method] : undefined;
+        if (!respond) {
+          throw new Error(`Unexpected request: ${method}`);
+        }
+        return respond(params);
+      },
+      hello: gatewayHelloForMethods([...Object.keys(responses), "config.apply", "config.patch"]),
+      agents: ["main"],
+      waitForRefresh: true,
+      runtime: async (gateway) => {
+        const runtime = createRuntimeConfigCapability(gateway);
+        await runtime.ensureLoaded();
+        await runtime.ensureSchemaLoaded();
+        return runtime;
+      },
+      cleanup: (runtime) => runtime.dispose(),
+    });
+    return {
+      ...page,
+      testButton: () => page.button("Test search"),
+      save,
+      rejectSave: () =>
+        save.reject(
+          new GatewayRequestError({ code: "INVALID_REQUEST", message: "Synthetic save rejected" }),
+        ),
+      writeStarted,
+      setStored: (patch: Partial<ConfigSnapshot>) => Object.assign(stored, patch),
+      setStatusResponse: (next: Promise<WebSearchStatusResult> | undefined) => {
+        statusResponse = next;
+      },
+    };
+  }
+
+  it.each([
+    { label: "Search endpoint", value: "https://replacement.example.test" },
+    { label: "Result limit", value: "9" },
+  ])("rejects a retired $label blur after replacing the connection", async ({ label, value }) => {
+    const page = await mount({ advanced: true });
+    if (label === "Result limit") {
+      const advanced = page.element.querySelector<HTMLDetailsElement>("details")!;
+      expect(advanced.open).toBe(false);
+      advanced.open = true;
+    }
+    const field = page.input(label);
+    if (label === "Search endpoint") {
+      expect(field.value).toBe("https://initial.example.test");
+    }
+    await page.runtime.refresh({ background: true });
+    await page.settle();
+    expect(page.input(label)).toBe(field);
+    page.edit(label, value, false);
+
+    page.replaceConnection();
+    await page.settle();
+    const current = page.input(label);
+    expect(current).toMatchObject({ disabled: false });
+    expect(current).not.toBe(field);
+    expect(field.isConnected).toBe(false);
+    field.dispatchEvent(new FocusEvent("blur"));
+    await page.settle();
+    expect(page.calls("config.set")).toHaveLength(0);
+    expect(page.runtime.state.configFormDirty).toBe(false);
+
+    if (label === "Result limit") {
+      page.element.querySelector<HTMLDetailsElement>("details")!.open = true;
+    }
+    page.edit(label, value);
+    const submitted = await page.writeStarted.promise;
+    expect(submitted.baseHash).toBe("saved-1");
+    const expected =
+      label === "Search endpoint"
+        ? atPath(endpointPath, value)
+        : atPath([...searchPath, "maxResults"], Number(value));
+    expect(JSON.parse(submitted.raw)).toMatchObject(expected);
+    page.save.resolve({ config: JSON.parse(submitted.raw), hash: "saved-2" });
+    await page.runtime.flushFormChanges();
+  });
+
+  it.each([
+    { label: "Search endpoint", phase: "pending" },
+    { label: "Search endpoint", phase: "rejected" },
+    { label: "Search endpoint", phase: "pending reverted" },
+    { label: "Example API key", phase: "rejected" },
+  ])("blocks tests for a $phase $label save while allowing repair", async ({ label, phase }) => {
+    const page = await mount();
+    const field = page.edit(label, "synthetic-replacement");
+    const committed = page.runtime.flushFormChanges();
+    await page.writeStarted.promise;
+    if (label === "Example API key") {
+      await vi.advanceTimersByTimeAsync(0);
+      await waitForSolid(() => expect(field.disabled).toBe(true));
+    }
+    if (phase === "pending reverted") {
+      page.runtime.patchForm(endpointPath, "https://initial.example.test");
+    }
+    if (phase === "rejected") {
+      page.rejectSave();
+      await committed;
+    }
+    flush();
+    try {
+      expect(page.runtime.state.configFormDirty).toBe(phase !== "pending reverted");
+      expect(page.testButton().disabled).toBe(true);
+      page.testButton().click();
+      expect(page.calls("webSearch.test")).toHaveLength(0);
+      if (phase === "rejected") {
+        await waitForSolid(() => {
+          expect(field).toMatchObject({ isConnected: true, disabled: false });
+          expect(page.input(label)).toBe(field);
+        });
+        page.expectText("Synthetic save rejected");
+        expect(page.button("Retry")).toBeDefined();
+      }
+    } finally {
+      if (phase !== "rejected") {
+        page.rejectSave();
+        await committed;
+      }
+    }
+  });
+
+  it.each(["completed", "success", "request error"] as const)(
+    "invalidates %s health when an external draft appears",
+    async (outcome) => {
+      const pending = pendingResult(testResult);
+      const page = await mount({ searchResponse: pending.promise });
+      page.testButton().click();
+      if (outcome === "completed") {
+        pending.complete();
+        await page.settle(true);
+        page.expectText(testResult.content);
+      } else {
+        await waitForSolid(() => expect(page.input("Search query").disabled).toBe(true));
+      }
+      page.runtime.patchForm(endpointPath, "https://draft.example.test");
+      await waitForSolid(() => page.expectStatus("Not tested"));
+      if (outcome === "request error") {
+        pending.reject(new Error("Retired search request failed"));
+      } else {
+        pending.complete();
+      }
+      await page.settle(true);
+      page.expectNoText(testResult.content, "Retired search request failed");
+      page.expectStatus("Not tested");
+      expect(page.testButton().disabled).toBe(true);
+    },
+  );
+
+  it.each(["success", "request error"] as const)(
+    "reloads status after configuration advances before %s",
+    async (outcome) => {
+      const page = await mount();
+      const pending = pendingResult({
+        ...ready,
+        route: { ...ready.route, label: "Retired route" },
+      });
+      page.setStatusResponse(pending.promise);
+      page.click("Refresh search status");
+      await waitForSolid(() => expect(page.calls("webSearch.status")).toHaveLength(2));
+      page.setStatusResponse(undefined);
+      page.setStored({
+        hash: "saved-2",
+        configRevisionHash: "revision-2",
+        appliedConfigHash: "revision-2",
+      });
+      await page.runtime.refresh({ background: true });
+      if (outcome === "success") {
+        pending.complete();
+      } else {
+        pending.reject(new Error("Retired status failed"));
+      }
+      await page.settle();
+      await waitForSolid(() => page.expectText("Runtime revision-2"));
+      page.expectNoText("Retired route", "Retired status failed");
+      expect(page.calls("webSearch.test")).toHaveLength(0);
+    },
+  );
+
+  it("waits for activation and refreshes on applied revision changes", async () => {
+    const page = await mount();
+    page.edit("Search endpoint", "https://next.example.test");
+    const committed = page.runtime.flushFormChanges();
+    const submitted = await page.writeStarted.promise;
+    const saved = JSON.parse(submitted.raw) as Record<string, unknown>;
+    page.setStored({
+      config: saved,
+      sourceConfig: saved,
+      raw: submitted.raw,
+      hash: "saved-2",
+      configRevisionHash: "revision-2",
+    });
+    page.save.resolve({ config: saved, hash: "saved-2" });
+    await committed;
+    await vi.advanceTimersByTimeAsync(250);
+    await page.settle();
+    expect(page.testButton().disabled).toBe(true);
+    page.expectText("Runtime revision-1");
+    const savedHash = page.runtime.state.configSnapshot?.hash;
+    page.setStored({ appliedConfigHash: "revision-2" });
+    await vi.advanceTimersByTimeAsync(750);
+    await page.settle();
+    expect(page.runtime.state.configSnapshot?.hash).toBe(savedHash);
+    page.expectText("Runtime revision-2");
+    expect(page.testButton().disabled).toBe(false);
   });
 });

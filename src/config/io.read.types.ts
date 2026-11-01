@@ -1,5 +1,4 @@
 import type fs from "node:fs";
-import type JSON5 from "json5";
 
 export type ParseConfigJson5Result = { ok: true; parsed: unknown } | { ok: false; error: string };
 
@@ -7,7 +6,6 @@ export type ConfigSnapshotReadMeasure = <T>(name: string, run: () => T | Promise
 
 export type ConfigIoDeps = {
   fs?: typeof fs;
-  json5?: typeof JSON5;
   env?: NodeJS.ProcessEnv;
   lowerPrecedenceEnv?: Readonly<Record<string, string>>;
   homedir?: () => string;

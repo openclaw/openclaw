@@ -5,7 +5,6 @@ import { runUtf8CommandWithTimeout } from "../process/exec.js";
 export type NodeIdentityProbeParams = {
   user: string;
   host: string;
-  port?: number;
   identity?: string;
   timeoutMs: number;
 };
@@ -58,7 +57,7 @@ export async function runNodeIdentityProbe(
     "-o",
     "ExitOnForwardFailure=yes",
     "-p",
-    String(params.port ?? 22),
+    "22",
   ];
   if (params.identity?.trim()) {
     args.push("-i", params.identity.trim(), "-o", "IdentitiesOnly=yes");

@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import {
   getLatestWebSocket,
   MockWebSocket,
@@ -17,7 +18,6 @@ import { makeChatHost } from "./chat-host.test-support.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
-import { UNCONFIRMED_CHAT_SEND_ERROR } from "./chat-send-support.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
 useChatSendBrowserFixture();
@@ -83,7 +83,7 @@ async function connect(client: GatewayBrowserClient, recoveryScope = "account-a"
   return ws;
 }
 async function heartbeatUntilDeadline(ws: MockWebSocket) {
-  for (let seq = 1; seq < 30; seq += 1) {
+  for (let seq = 1; seq < GATEWAY_STARTUP_ADMISSION_WAIT_MS / 1_000; seq += 1) {
     await vi.advanceTimersByTimeAsync(1_000);
     for (const socket of wsInstances) {
       socket.emitMessage({ type: "event", event: "tick", seq, payload: {} });
@@ -151,12 +151,12 @@ it.each(["unchanged", "newer input", "navigation", "account"] as const)(
     await expect(result.value).rejects.toBeInstanceOf(GatewayProtocolRequestTimeoutError);
     await expect(result.value).rejects.toMatchObject({
       requestSent: true,
-      timeoutMs: 30_000,
+      timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
       method: "chat.send",
     });
     const expectedError =
       change === "unchanged" || change === "newer input"
-        ? UNCONFIRMED_CHAT_SEND_ERROR
+        ? "gateway request timed out after 300000ms: chat.send"
         : "Current context notice";
     expectComposer(host, draft, expectedError);
     if (change === "unchanged") {
@@ -229,7 +229,6 @@ it.each(["success", "terminal error", "known rejection"] as const)(
           ? "Approval rejected"
           : "Chat failed before the run started; try again.",
       );
-      expect(host.chatError).not.toBe(UNCONFIRMED_CHAT_SEND_ERROR);
     }
     const previousError = host.chatError;
     await heartbeatUntilDeadline(ws);
@@ -240,7 +239,7 @@ it.each(["success", "terminal error", "known rejection"] as const)(
   },
 );
 
-it("does not call a known unsent timeout unconfirmed", async () => {
+it("restores detached approval after a known unsent timeout", async () => {
   const error = new GatewayProtocolRequestTimeoutError({
     method: "chat.send",
     timeoutMs: 30_000,

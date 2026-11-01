@@ -19,13 +19,12 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { sessionDeliveryRoute } from "../utils/delivery-context.read.js";
-import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
-import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import {
   writeJson,
   sessionScope,
   runStoreDoctor,
   archivedSource,
+  retireRecovery,
 } from "./doctor-session-sqlite.fixtures.test-support.js";
 import {
   expectMissing,
@@ -298,12 +297,7 @@ it("archives legacy stores with valid sessions and invalid cron stubs without fa
     ),
   ).toBe(true);
   closeDatabases();
-  const cleanup = await retireSessionSqliteRecovery({
-    env: store.env,
-    preview: inspectSessionSqliteRecovery({ cfg: {}, env: store.env }),
-    readConfig: async () => ({}),
-    confirm: async () => true,
-  });
+  const cleanup = await retireRecovery(store);
   expect(cleanup.totals.removedFiles).toBe(0);
   expect(fs.existsSync(archivedStorePath)).toBe(true);
 });

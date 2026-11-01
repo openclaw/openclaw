@@ -33,7 +33,6 @@ type CodexBootstrapFile = Awaited<
 export type CodexWorkspaceBootstrapContext = {
   bootstrapFiles: CodexBootstrapFile[];
   contextFiles: EmbeddedContextFile[];
-  inheritsAgentWorkspace: boolean;
   promptContextFiles?: EmbeddedContextFile[];
   threadDeveloperInstructionFiles?: EmbeddedContextFile[];
   personaFiles?: EmbeddedContextFile[];
@@ -153,7 +152,6 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
     return {
       bootstrapFiles,
       contextFiles,
-      inheritsAgentWorkspace,
       promptContextFiles,
       threadDeveloperInstructionFiles,
       personaFiles,
@@ -183,7 +181,6 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
     return {
       bootstrapFiles: [],
       contextFiles: [],
-      inheritsAgentWorkspace,
       threadDeveloperInstructions: includeAgentWorkspaceInstructions
         ? params.agentWorkspaceDeveloperInstructions
         : undefined,

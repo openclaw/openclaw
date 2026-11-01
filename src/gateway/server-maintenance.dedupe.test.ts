@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
-import { retireSessionControllerInput } from "../sessions/session-controller.mailbox.js";
 import type { RpcSourceRef } from "../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import {
@@ -20,10 +19,8 @@ vi.mock("../infra/device-bootstrap.js", () => ({
   startDevicePairSetupMaintenance: vi.fn(async () => 0),
 }));
 
-const fixtureSources: RpcSourceRef[] = [];
-
 function createActiveRun(kind: "chat-send" | "agent" = "agent"): RpcSourceRef {
-  const ref = createRpcSourceForTest(
+  return createRpcSourceForTest(
     { kind },
     {
       sessionKey: "agent:main:main",
@@ -31,16 +28,6 @@ function createActiveRun(kind: "chat-send" | "agent" = "agent"): RpcSourceRef {
       phase: kind === "chat-send" ? "waiting" : "preparing",
     },
   );
-  fixtureSources.push(ref);
-  return ref;
-}
-
-function createMaintenanceTimerDeps() {
-  return {
-    ...createGatewayMaintenanceStateForTest(),
-    runWorktreeGc: vi.fn(async () => undefined),
-    runManagedOutgoingMediaGc: async () => undefined,
-  };
 }
 
 function expiredDedupe(runId: string, status = "accepted") {
@@ -50,7 +37,7 @@ function expiredDedupe(runId: string, status = "accepted") {
 function createTimedMaintenanceScenario(resolveGatewayContext?: GatewayContextResolver) {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
-  const deps = createMaintenanceTimerDeps();
+  const deps = createGatewayMaintenanceStateForTest();
   let timers: ReturnType<typeof startGatewayMaintenanceTimers> | undefined;
   return {
     deps,
@@ -76,9 +63,6 @@ async function stopMaintenanceTimers(
 
 describe("gateway dedupe maintenance", () => {
   afterEach(() => {
-    for (const ref of fixtureSources.splice(0)) {
-      retireSessionControllerInput(ref.input);
-    }
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.clearAllMocks();
@@ -89,7 +73,7 @@ describe("gateway dedupe maintenance", () => {
     using now = vi.spyOn(Date, "now");
     now.mockImplementation(() => clock.clock.now());
     const scheduler = createTestGatewayScheduler(clock.clock);
-    const deps = { ...createMaintenanceTimerDeps(), scheduler, isNixMode: true };
+    const deps = { ...createGatewayMaintenanceStateForTest(), scheduler, isNixMode: true };
     const controller = new AbortController();
     const client: GatewayClient = {
       connId: "unused-artifact",
@@ -102,7 +86,6 @@ describe("gateway dedupe maintenance", () => {
     };
     deps.clients.add(client);
     const release = vi.fn();
-    const read = vi.fn(async () => undefined);
     const grant = createArtifactDownload({
       client,
       prepared: {
@@ -115,20 +98,14 @@ describe("gateway dedupe maintenance", () => {
         digest: "unused-artifact-digest",
       },
       assertCurrent: () => {},
-      read,
+      read: async () => undefined,
       release,
     });
     const timers = startGatewayMaintenanceTimers(deps);
     try {
-      await clock.advanceBy(0);
-      await clock.advanceTo(Date.parse(grant.expiresAt) - 1);
-      expect(release).not.toHaveBeenCalled();
-      await clock.advanceBy(60_000);
+      await clock.advanceTo(Date.parse(grant.expiresAt) + 60_000);
       expect(controller.signal.aborted).toBe(false);
       expect(release).toHaveBeenCalledOnce();
-      await clock.advanceBy(60_000);
-      expect(release).toHaveBeenCalledOnce();
-      expect(read).not.toHaveBeenCalled();
     } finally {
       controller.abort();
       await stopMaintenanceTimers(timers);

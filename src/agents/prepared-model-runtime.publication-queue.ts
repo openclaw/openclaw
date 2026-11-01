@@ -1,4 +1,5 @@
 import { runOutsideRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
+import { createPendingPromiseTracker } from "../shared/pending-promises.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import { capturePreparedModelRuntimeLifetime } from "./prepared-model-runtime.lifecycle.js";
 import type { PreparedModelRuntimeStartup } from "./prepared-model-runtime.startup.js";
@@ -10,14 +11,7 @@ export class PreparedModelRuntimePublicationQueue {
   readonly #pending = new Set<Promise<unknown>>();
   #latestRefresh: { completion: Promise<void>; isCurrent: () => boolean } | undefined;
 
-  track<T>(work: Promise<T>): Promise<T> {
-    this.#pending.add(work);
-    const settled = () => {
-      this.#pending.delete(work);
-    };
-    void work.then(settled, settled);
-    return work;
-  }
+  readonly track = createPendingPromiseTracker(this.#pending);
 
   enqueue(task: () => Promise<void>, release?: Promise<void>): Promise<void> {
     const previous = this.#tail;

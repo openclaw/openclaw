@@ -1,8 +1,13 @@
 import type { JSX } from "@solidjs/web";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 /* @vitest-environment jsdom */
 import type { SelectPicker } from "../../components/select-picker.ts";
 import { updatePickers, openPicker, choosePickerValue } from "../../test-helpers/select-picker.ts";
+import {
+  pairingAccount as personal,
+  pairingRequest as request,
+  pairingSnapshot,
+} from "./pairing.test-support.ts";
 import {
   renderChannelPairingDetail,
   renderChannelPairingPrompt,
@@ -16,255 +21,179 @@ import {
 } from "./view.test-support.ts";
 import type { ChannelsProps } from "./view.types.ts";
 
-const request = {
-  requestId: "opaque-request-id",
-  channel: "whatsapp",
-  channelLabel: "WhatsApp",
-  accountId: "personal",
-  accountLabel: "Personal",
-  senderId: "+15551234567",
-  senderLabel: "Phone number",
-  metadata: { name: "Alice" },
-  createdAt: "2026-07-20T10:00:00.000Z",
-  lastSeenAt: "2026-07-20T10:05:00.000Z",
-  expiresAt: "2026-07-20T11:00:00.000Z",
-  notifySupported: true,
-} as const;
-
-function createProps(overrides: ChannelsViewTestOverrides = {}): ChannelsProps {
-  return createChannelsViewProps(
-    null,
-    {
-      accounts: [
-        {
-          channel: "whatsapp",
-          channelLabel: "WhatsApp",
-          accountId: "personal",
-          accountLabel: "Personal",
-          notifySupported: true,
-        },
-      ],
-      requests: [request],
-      commandOwnerConfigured: false,
-      limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
-    },
-    overrides,
-  );
-}
-
-// Rendered prompts mount <openclaw-modal-dialog> into document.body; leaked
-// containers keep an open dialog alive and poison later dialog-owning test
-// files in the same worker.
-const renderedContainers: HTMLDivElement[] = [];
+const createProps = (overrides: ChannelsViewTestOverrides = {}): ChannelsProps =>
+  createChannelsViewProps(null, pairingSnapshot(), overrides);
 
 afterEach(() => {
   disposeChannelViews();
-  for (const container of renderedContainers.splice(0)) {
-    container.remove();
-  }
+  document.body.replaceChildren();
 });
 
-function renderInto<T extends object>(
-  component: (props: T) => JSX.Element,
-  props: T,
-): HTMLDivElement {
+function renderInto(
+  props: ChannelsProps = createProps(),
+  component: (props: ChannelsProps) => JSX.Element = renderChannelPairingQueue,
+) {
   const container = document.createElement("div");
   document.body.append(container);
-  renderedContainers.push(container);
   renderChannelView(component, props, container);
   return container;
 }
 
-// These render into the shared document, so a missing teardown leaks pairing
-// dialogs into whichever suite the worker runs next.
-afterEach(() => {
-  document.body.replaceChildren();
+it("renders pending senders and keeps their actions current across refresh", () => {
+  const onApprove = vi.fn();
+  const onDismiss = vi.fn();
+  const props = createProps({ onPairingApprove: onApprove, onPairingDismiss: onDismiss });
+  const container = renderInto(props);
+
+  expect(container.textContent).toContain("+15551234567");
+  expect(container.textContent).toContain("Alice");
+  const buttons = Array.from(container.querySelectorAll("button"));
+  const approve = buttons.find((button) => button.textContent?.trim() === "Approve")!;
+  const dismiss = buttons.find((button) => button.textContent?.trim() === "Dismiss")!;
+  approve.click();
+  dismiss.click();
+  expect(onApprove).toHaveBeenCalledWith(request);
+  expect(onDismiss).toHaveBeenCalledWith(request);
+
+  const details = container.querySelector<HTMLDetailsElement>(
+    ".channels-pairing-request__details",
+  )!;
+  details.open = true;
+  const refreshed = { ...request, metadata: { name: "Alice Updated" } };
+  props.channels.pairingSnapshot = {
+    ...props.channels.pairingSnapshot!,
+    requests: [refreshed],
+  };
+  renderChannelView(renderChannelPairingQueue, props, container);
+  expect(container.querySelector(".channels-pairing-request__details")).toBe(details);
+  expect(details.open).toBe(true);
+  expect(details.textContent).toContain("Alice Updated");
+  expect(container.contains(approve)).toBe(true);
+  expect(container.contains(dismiss)).toBe(true);
+  approve.click();
+  dismiss.click();
+  expect(onApprove).toHaveBeenLastCalledWith(refreshed);
+  expect(onDismiss).toHaveBeenLastCalledWith(refreshed);
 });
 
-describe("channel DM access request views", () => {
-  it("renders pending senders without exposing the pairing code", () => {
-    const onApprove = vi.fn();
-    const onDismiss = vi.fn();
-    const props = createProps({ onPairingApprove: onApprove, onPairingDismiss: onDismiss });
-    const container = renderInto(renderChannelPairingQueue, props);
+it("hides cached sender data without pairing access", () => {
+  const container = renderInto(createProps({ canManagePairing: false }));
 
-    expect(container.textContent).toContain("+15551234567");
-    expect(container.textContent).toContain("Alice");
-    expect(container.textContent).not.toContain("SECRET12");
-    const buttons = Array.from(container.querySelectorAll("button"));
-    const approve = buttons.find((button) => button.textContent?.trim() === "Approve")!;
-    const dismiss = buttons.find((button) => button.textContent?.trim() === "Dismiss")!;
-    approve.click();
-    dismiss.click();
-    expect(onApprove).toHaveBeenCalledWith(request);
-    expect(onDismiss).toHaveBeenCalledWith(request);
+  expect(container.textContent).toContain("operator.pairing access");
+  expect(container.querySelector(".settings-status--warn")?.textContent).toContain(
+    "operator.pairing access",
+  );
+  expect(container.querySelector(".callout")).toBeNull();
+  expect(container.textContent).not.toContain("+15551234567");
+  expect(container.textContent).not.toContain("Alice");
+});
 
-    const details = container.querySelector<HTMLDetailsElement>(
-      ".channels-pairing-request__details",
-    )!;
-    details.open = true;
-    const refreshed = { ...request, metadata: { name: "Alice Updated" } };
-    props.channels.pairingSnapshot = {
-      ...props.channels.pairingSnapshot!,
-      requests: [refreshed],
-    };
-    renderChannelView(renderChannelPairingQueue, props, container);
-    expect(container.querySelector(".channels-pairing-request__details")).toBe(details);
-    expect(details.open).toBe(true);
-    expect(details.textContent).toContain("Alice Updated");
-    expect(container.contains(approve)).toBe(true);
-    expect(container.contains(dismiss)).toBe(true);
-    approve.click();
-    dismiss.click();
-    expect(onApprove).toHaveBeenLastCalledWith(refreshed);
-    expect(onDismiss).toHaveBeenLastCalledWith(refreshed);
+it("renders notice and error feedback as status rows without nested callouts", () => {
+  const noticeProps = createProps({ pairingNotice: "Request approved" });
+  const noticeContainer = renderInto(noticeProps);
+  const noticeSelector = '.channels-pairing-feedback[role="status"]';
+  const notice = noticeContainer.querySelector(noticeSelector);
+
+  expect(notice?.textContent).toContain("Request approved");
+  expect(noticeContainer.querySelector(".callout")).toBeNull();
+  noticeProps.pairingNotice = "Request dismissed";
+  renderChannelView(renderChannelPairingQueue, noticeProps, noticeContainer);
+  expect(noticeContainer.querySelector(noticeSelector)).toBe(notice);
+  expect(notice?.textContent).toContain("Request dismissed");
+  noticeProps.pairingNotice = null;
+  renderChannelView(renderChannelPairingQueue, noticeProps, noticeContainer);
+  expect(noticeContainer.querySelector(noticeSelector)).toBeNull();
+
+  const errorContainer = renderInto(createProps({ channels: { pairingError: "Approval failed" } }));
+  const error = errorContainer.querySelector('.channels-pairing-feedback[role="alert"]');
+
+  expect(error?.textContent).toContain("Approval failed");
+  expect(errorContainer.querySelector(".callout")).toBeNull();
+});
+
+it("uses the channel picker and clears the account filter when the channel changes", async () => {
+  const onPairingFilterChange = vi.fn();
+  const props = createProps({
+    pairingChannelFilter: "whatsapp",
+    pairingAccountFilter: "personal",
+    onPairingFilterChange,
   });
-
-  it("hides cached sender data without pairing access", () => {
-    const container = renderInto(
-      renderChannelPairingQueue,
-      createProps({ canManagePairing: false }),
-    );
-
-    expect(container.textContent).toContain("operator.pairing access");
-    expect(container.querySelector(".settings-status--warn")?.textContent).toContain(
-      "operator.pairing access",
-    );
-    expect(container.querySelector(".callout")).toBeNull();
-    expect(container.textContent).not.toContain("+15551234567");
-    expect(container.textContent).not.toContain("Alice");
+  props.channels.pairingSnapshot!.accounts.push({
+    ...personal,
+    channel: "telegram",
+    channelLabel: "Telegram",
+    accountId: "work",
+    accountLabel: "Work",
   });
+  const container = renderInto(props);
+  await updatePickers(container);
+  const selects = container.querySelectorAll<SelectPicker>("openclaw-select-picker");
+  const channel = selects.item(0);
+  const account = selects.item(1);
+  expect(selects).toHaveLength(2);
+  expect(container.querySelectorAll("select.settings-select")).toHaveLength(0);
+  await openPicker(account);
+  expect(
+    account.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
+  ).toBe("personal");
+  await choosePickerValue(channel, "telegram");
+  expect(onPairingFilterChange).toHaveBeenCalledWith("telegram", null);
+});
 
-  it("renders notice and error feedback as status rows without nested callouts", () => {
-    const noticeProps = createProps({ pairingNotice: "Request approved" });
-    const noticeContainer = renderInto(renderChannelPairingQueue, noticeProps);
-    const noticeSelector = '.channels-pairing-feedback[role="status"]';
-    const notice = noticeContainer.querySelector(noticeSelector);
-
-    expect(notice?.textContent).toContain("Request approved");
-    expect(noticeContainer.querySelector(".callout")).toBeNull();
-    noticeProps.pairingNotice = "Request dismissed";
-    renderChannelView(renderChannelPairingQueue, noticeProps, noticeContainer);
-    expect(noticeContainer.querySelector(noticeSelector)).toBe(notice);
-    expect(notice?.textContent).toContain("Request dismissed");
-    noticeProps.pairingNotice = null;
-    renderChannelView(renderChannelPairingQueue, noticeProps, noticeContainer);
-    expect(noticeContainer.querySelector(noticeSelector)).toBeNull();
-
-    const errorContainer = renderInto(
-      renderChannelPairingQueue,
-      createProps({ channels: { pairingError: "Approval failed" } }),
-    );
-    const error = errorContainer.querySelector('.channels-pairing-feedback[role="alert"]');
-
-    expect(error?.textContent).toContain("Approval failed");
-    expect(errorContainer.querySelector(".callout")).toBeNull();
+it("disables every request action while one mutation is active", () => {
+  const props = createProps({ channels: { pairingBusyRequestId: request.requestId } });
+  props.channels.pairingSnapshot!.requests.push({
+    ...request,
+    requestId: "other-request",
+    senderId: "987654321",
   });
+  const container = renderInto(props);
+  const actionButtons = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).filter(
+    (button) => /^(Approve|Dismiss) /u.test(button.getAttribute("aria-label") ?? ""),
+  );
 
-  it("uses the channel picker and clears the account filter when the channel changes", async () => {
-    const onPairingFilterChange = vi.fn();
-    const base = createProps();
-    const container = renderInto(
-      renderChannelPairingQueue,
-      createProps({
-        pairingChannelFilter: "whatsapp",
-        pairingAccountFilter: "personal",
-        channels: {
-          pairingSnapshot: {
-            ...base.channels.pairingSnapshot!,
-            accounts: [
-              ...base.channels.pairingSnapshot!.accounts,
-              {
-                channel: "telegram",
-                channelLabel: "Telegram",
-                accountId: "work",
-                accountLabel: "Work",
-                notifySupported: true,
-              },
-            ],
-          },
-        },
-        onPairingFilterChange,
-      }),
-    );
+  expect(actionButtons).toHaveLength(4);
+  expect(actionButtons.every((button) => button.disabled)).toBe(true);
+});
 
-    await updatePickers(container);
-    const selects = container.querySelectorAll<SelectPicker>("openclaw-select-picker");
-    const channel = selects.item(0);
-    const account = selects.item(1);
-    expect(selects).toHaveLength(2);
-    expect(container.querySelectorAll("select.settings-select")).toHaveLength(0);
-    await openPicker(account);
-    expect(
-      account.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
-    ).toBe("personal");
-    await choosePickerValue(channel, "telegram");
-    expect(onPairingFilterChange).toHaveBeenCalledWith("telegram", null);
-  });
-
-  it("disables every request action while one mutation is active", () => {
-    const secondRequest = {
-      ...request,
-      requestId: "other-request",
-      senderId: "987654321",
-    };
-    const props = createProps({
-      channels: {
-        pairingBusyRequestId: request.requestId,
-        pairingSnapshot: {
-          ...createProps().channels.pairingSnapshot!,
-          requests: [request, secondRequest],
-        },
+it("shows explicit notification and first-owner choices for an admin", () => {
+  const container = renderInto(
+    createProps({
+      pairingPrompt: {
+        kind: "approve",
+        request,
+        notify: false,
+        bootstrapCommandOwner: false,
       },
-    });
-    const container = renderInto(renderChannelPairingQueue, props);
-    const actionButtons = Array.from(
-      container.querySelectorAll<HTMLButtonElement>("button"),
-    ).filter((button) => /^(Approve|Dismiss) /u.test(button.getAttribute("aria-label") ?? ""));
+    }),
+    renderChannelPairingPrompt,
+  );
 
-    expect(actionButtons).toHaveLength(4);
-    expect(actionButtons.every((button) => button.disabled)).toBe(true);
-  });
+  expect(container.textContent).toContain("Notify the requester after approval");
+  expect(container.textContent).toContain("Also make this sender the first command owner");
+  expect(container.querySelectorAll('input[type="checkbox"]')).toHaveLength(2);
+});
 
-  it("shows explicit notification and first-owner choices for an admin", () => {
-    const container = renderInto(
-      renderChannelPairingPrompt,
-      createProps({
-        pairingPrompt: {
-          kind: "approve",
-          request,
-          notify: false,
-          bootstrapCommandOwner: false,
-        },
-      }),
-    );
+it("links a channel account detail back to the filtered request queue", () => {
+  const review = vi.fn();
+  const props = createProps({ onPairingReviewAccount: review });
+  const detail = (current: ChannelsProps) => renderChannelPairingDetail("whatsapp", current);
+  const container = renderInto(props, detail);
 
-    expect(container.textContent).toContain("Notify the requester after approval");
-    expect(container.textContent).toContain("Also make this sender the first command owner");
-    expect(container.querySelectorAll('input[type="checkbox"]')).toHaveLength(2);
-  });
+  expect(container.textContent).toContain("1 pending");
+  const button = Array.from(container.querySelectorAll("button")).find(
+    (candidate) => candidate.textContent?.trim() === "Review requests",
+  );
+  button?.click();
+  expect(review).toHaveBeenCalledWith("whatsapp", "personal");
 
-  it("links a channel account detail back to the filtered request queue", () => {
-    const review = vi.fn();
-    const props = createProps({ onPairingReviewAccount: review });
-    const detail = (current: ChannelsProps) => renderChannelPairingDetail("whatsapp", current);
-    const container = renderInto(detail, props);
-
-    expect(container.textContent).toContain("1 pending");
-    const button = Array.from(container.querySelectorAll("button")).find(
-      (candidate) => candidate.textContent?.trim() === "Review requests",
-    );
-    button?.click();
-    expect(review).toHaveBeenCalledWith("whatsapp", "personal");
-
-    props.channels.pairingSnapshot = {
-      ...props.channels.pairingSnapshot!,
-      accounts: structuredClone(props.channels.pairingSnapshot!.accounts),
-      requests: [],
-    };
-    renderChannelView(detail, props, container);
-    expect(container.querySelector("button")).toBe(button);
-    expect(container.textContent).toContain("No pending requests");
-    expect(container.textContent).not.toContain("1 pending");
-  });
+  props.channels.pairingSnapshot = {
+    ...props.channels.pairingSnapshot!,
+    accounts: structuredClone(props.channels.pairingSnapshot!.accounts),
+    requests: [],
+  };
+  renderChannelView(detail, props, container);
+  expect(container.querySelector("button")).toBe(button);
+  expect(container.textContent).toContain("No pending requests");
+  expect(container.textContent).not.toContain("1 pending");
 });

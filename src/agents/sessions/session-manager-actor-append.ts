@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type {
   SessionActor,
   SessionActorAppend,
@@ -11,6 +12,7 @@ import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/
 import {
   hasSqliteWorkerOutcomeUnknown,
   SqliteWorkerError,
+  wrapSqliteWorkerError,
 } from "../../infra/sqlite-worker-contract.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { captureSessionMessageAdmission } from "./session-manager-message-admission.js";
@@ -27,6 +29,7 @@ export async function appendSessionManagerActor(input: {
   actor: SessionActor;
   append: SessionActorAppend;
   toolResult: boolean;
+  message: { role: string; idempotencyKey?: unknown } | null;
   assertCurrent(this: void): void;
   beforeFreshMessageCommit?: () => void;
   onCommitted?(committed: SessionActorAppendCommitted): void;
@@ -35,7 +38,7 @@ export async function appendSessionManagerActor(input: {
   failure?: SessionManagerActorCommittedError;
 }> {
   const { actor, assertCurrent } = input;
-  const admission = captureSessionMessageAdmission(assertCurrent, input);
+  const admission = captureSessionMessageAdmission(assertCurrent, input, input.message);
   const append: SessionActorAppend =
     input.append.kind === "message"
       ? { ...input.append, input: { ...input.append.input, ...admission.control } }
@@ -92,7 +95,7 @@ export async function appendSessionManagerActor(input: {
     return finish(captured, new Error("Session actor reply contradicted its captured commit"));
   }
   if (outcome.kind === "unknown") {
-    const error = new SqliteWorkerError(outcome.error.message, "outcome-unknown");
+    const error = wrapSqliteWorkerError(outcome.error.message, "outcome-unknown", outcome.error);
     recordModelFallbackStop(error);
     throw error;
   }
@@ -103,7 +106,7 @@ export async function appendSessionManagerActor(input: {
     if (outcome.error.name === "SqliteTranscriptMutationConflictError") {
       throw new SqliteTranscriptMutationConflictError(append.input.scope.sessionId);
     }
-    throw Object.assign(new Error(outcome.error.message), { name: outcome.error.name });
+    throw toErrorObject(outcome.error, outcome.error.message);
   }
   return finish(
     outcome,

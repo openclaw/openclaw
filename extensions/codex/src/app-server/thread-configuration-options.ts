@@ -1,10 +1,19 @@
 import type { CodexAppServerRuntimeOptions } from "./config-contracts.js";
-import type { CodexDynamicToolSpec, CodexTurnEnvironmentParams, JsonObject } from "./protocol.js";
+import type {
+  CodexConfigReadResponse,
+  CodexDynamicToolSpec,
+  CodexTurnEnvironmentParams,
+  JsonObject,
+} from "./protocol.js";
 import type { CodexNativeWebSearchSupport } from "./web-search.js";
 
 export type CodexThreadConfigurationOptions = {
   cwd?: string;
   dynamicTools?: CodexDynamicToolSpec[];
+  /** Current executor availability, independent of retained tool declarations. */
+  askUserAvailable?: boolean;
+  /** Preflight snapshot whose origins distinguish authored settings from defaults. */
+  nativeQuestionConfig?: CodexConfigReadResponse;
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
   /** Skills, persona, and memory carried with thread developer instructions, separate from generic policy. */

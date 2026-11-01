@@ -38,22 +38,6 @@ const log = createSubsystemLogger("memory");
 type MemoryIndexSearchOptions = NonNullable<Parameters<MemorySearchManager["search"]>[1]>;
 
 export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
-  private readonly sessionWarm = new Set<string>();
-
-  protected claimSessionWarmSync(sessionKey?: string): boolean {
-    if (!this.settings.sync.onSessionStart) {
-      return false;
-    }
-    const key = sessionKey?.trim() || "";
-    if (key && this.sessionWarm.has(key)) {
-      return false;
-    }
-    if (key) {
-      this.sessionWarm.add(key);
-    }
-    return this.dirty || this.sessionsDirty;
-  }
-
   async search(query: string, opts?: MemoryIndexSearchOptions): Promise<MemorySearchResult[]> {
     const normalizedQuery = query.trim();
     if (!normalizedQuery) {
@@ -281,10 +265,7 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
       if (recoveringEmbeddingProvider) {
         indexState = await readIndexState();
       }
-      const sessionStartSync = this.claimSessionWarmSync(opts?.sessionKey);
-      const searchSyncEnabled =
-        (this.settings.sync.onSearch || sessionStartSync) &&
-        (this.purpose === "default" || this.purpose === "cli");
+      const searchSyncEnabled = this.purpose === "default" || this.purpose === "cli";
       if (
         !embeddingBootstrapKeywordOnly &&
         !this.provider &&
@@ -550,6 +531,11 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
         }
       }
       const hasVector = queryVec.some((v) => v !== 0);
+      if (!hasVector) {
+        log.warn(
+          `memory search: query embedding from ${semanticProvider.id} is all zeros; vector recall skipped; check the embedding service and retry`,
+        );
+      }
       const vector = hasVector
         ? await this.searchVector(
             queryVec,
@@ -576,6 +562,7 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
           results: eligible,
           temporalDecay: hybrid.temporalDecay,
           workspaceDir: this.workspaceDir,
+          extraPaths: this.settings.extraPaths,
           sessionSourceMtimes: this.loadSourceMtimes("sessions", vectorResults),
           memorySourceMtimes: this.loadSourceMtimes("memory", vectorResults),
         });
@@ -607,6 +594,7 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
         temporalDecay: hybrid.temporalDecay,
         activeProjectKeys: opts?.activeProjectKeys,
         workspaceDir: this.workspaceDir,
+        extraPaths: this.settings.extraPaths,
         // Vector enrichment runs last, so its facts win for paths in both sets.
         sessionSourceMtimes: this.loadSourceMtimes("sessions", [
           ...keywordResults,

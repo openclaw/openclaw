@@ -6,8 +6,10 @@ import type { PreparedMessageToolCatalog } from "../../channels/plugins/message-
 import type { ReplyToMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
+import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 
 export type MessageToolOptions = {
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
   agentAccountId?: string;
   agentSessionKey?: string;
   runSessionKey?: string;

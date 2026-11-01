@@ -18,6 +18,10 @@ export type ThemeCatalogSnapshot = {
   themes: readonly ThemeDescriptor[];
   error: string | null;
   unavailableId?: string;
+  read?: {
+    scope: object;
+    result: Promise<ThemeCatalogSnapshot | undefined>;
+  };
 };
 
 export type CatalogTheme = {
@@ -27,7 +31,11 @@ export type CatalogTheme = {
 };
 
 /** Connection-scoped projection; profile preferences remain the selection owner. */
-export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => void) {
+export function createThemeCatalog(
+  gateway: ApplicationGateway,
+  onChange: () => void,
+  onRead?: () => void,
+) {
   let snapshot: ThemeCatalogSnapshot = { themes: [], error: null };
   let ownerScope = gateway.connection.gatewayUrl;
   let ownerClient = gateway.snapshot.client;
@@ -37,6 +45,23 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
   const definitions = new Map<string, CatalogTheme>();
   const definitionErrors = new Map<string, string>();
   const requested = new Set<string>();
+  let readScope = {};
+  let retired = Promise.withResolvers<void>();
+  let catalogRead: Promise<void> | undefined;
+  const definitionReads = new Map<ThemeName, Promise<void>>();
+  const reads = new Map<ThemeName, NonNullable<ThemeCatalogSnapshot["read"]>>();
+  const retireReads = () => {
+    retired.resolve();
+    retired = Promise.withResolvers<void>();
+    readScope = {};
+    catalogRead = undefined;
+    definitionReads.clear();
+    reads.clear();
+  };
+  const readSnapshot = (theme: ThemeName): ThemeCatalogSnapshot => {
+    const error = snapshot.error ?? definitionErrors.get(theme) ?? null;
+    return error === snapshot.error ? snapshot : { ...snapshot, error };
+  };
 
   const remainsCurrent = (client: ApplicationGateway["snapshot"]["client"], profile?: string) =>
     !disposed &&
@@ -63,38 +88,49 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
     }
   };
 
-  const refresh = async () => {
+  const refresh = () => {
     const client = gateway.snapshot.client;
     if (disposed || gateway.snapshot.phase !== "connected" || !client) {
-      return;
+      return undefined;
     }
     ownerClient = client;
     ownerProfile = gateway.snapshot.selfUser?.id;
     const profile = ownerProfile;
     requested.clear();
     definitionErrors.clear();
-    try {
-      const result = await client.request<ThemesListResult>("themes.list", {});
-      if (!remainsCurrent(client, profile)) {
-        return;
-      }
-      const available = new Set<string>(result.themes.map((theme) => theme.id));
-      for (const entries of [definitions, definitionErrors]) {
-        for (const id of entries.keys()) {
-          if (!available.has(id)) {
-            entries.delete(id);
+    definitionReads.clear();
+    const operation = (async () => {
+      try {
+        const result = await client.request<ThemesListResult>("themes.list", {});
+        if (!remainsCurrent(client, profile)) {
+          return;
+        }
+        const available = new Set<string>(result.themes.map((theme) => theme.id));
+        for (const entries of [definitions, definitionErrors]) {
+          for (const id of entries.keys()) {
+            if (!available.has(id)) {
+              entries.delete(id);
+            }
           }
         }
-      }
-      rememberDefinition(result);
-      snapshot = { themes: result.themes, error: null, unavailableId: result.current.requestedId };
-      onChange();
-    } catch (error) {
-      if (remainsCurrent(client, profile)) {
-        snapshot = { ...snapshot, error: error instanceof Error ? error.message : String(error) };
+        rememberDefinition(result);
+        snapshot = {
+          themes: result.themes,
+          error: null,
+          unavailableId: result.current.requestedId,
+        };
         onChange();
+      } catch (error) {
+        if (remainsCurrent(client, profile)) {
+          snapshot = { ...snapshot, error: error instanceof Error ? error.message : String(error) };
+          onChange();
+        }
       }
-    }
+    })();
+    catalogRead = operation;
+    reads.clear();
+    onRead?.();
+    return operation;
   };
 
   const ensureDefinition = (id: ThemeName) => {
@@ -111,7 +147,7 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
     }
     requested.add(id);
     const profile = gateway.snapshot.selfUser?.id;
-    void client.request<ThemesGetResult>("themes.get", { id }).then(
+    const operation = client.request<ThemesGetResult>("themes.get", { id }).then(
       (result) => {
         if (!remainsCurrent(client, profile)) {
           return;
@@ -126,6 +162,9 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
         }
       },
     );
+    definitionReads.set(id, operation);
+    reads.delete(id);
+    onRead?.();
   };
 
   const clear = () => {
@@ -135,10 +174,14 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
     snapshot = { themes: [], error: null };
     onChange();
   };
+  // Retire profile-scoped catalog data immediately when connection ownership changes.
   const stopGateway = gateway.subscribe(() => {
     const connected = gateway.snapshot.phase === "connected";
     const scopeChanged = gateway.connection.gatewayUrl !== ownerScope;
     if (!connected) {
+      if (ownerConnected || scopeChanged) {
+        retireReads();
+      }
       ownerConnected = false;
       if (scopeChanged) {
         ownerScope = gateway.connection.gatewayUrl;
@@ -154,6 +197,7 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
       gateway.snapshot.client !== ownerClient ||
       gateway.snapshot.selfUser?.id !== ownerProfile
     ) {
+      retireReads();
       const profileChanged = gateway.snapshot.selfUser?.id !== ownerProfile;
       ownerConnected = true;
       ownerScope = gateway.connection.gatewayUrl;
@@ -185,8 +229,24 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
 
   return {
     snapshot(theme: ThemeName): ThemeCatalogSnapshot {
-      const error = snapshot.error ?? definitionErrors.get(theme) ?? null;
-      return error === snapshot.error ? snapshot : { ...snapshot, error };
+      const value = readSnapshot(theme);
+      if (!catalogRead && !definitionReads.has(theme)) {
+        return value;
+      }
+      let read = reads.get(theme);
+      if (!read) {
+        const scope = readScope;
+        read = {
+          scope,
+          // A held previous selection must not delay the current palette.
+          result: Promise.race([
+            Promise.all([catalogRead, definitionReads.get(theme)]),
+            retired.promise,
+          ]).then(() => (!disposed && scope === readScope ? readSnapshot(theme) : undefined)),
+        };
+        reads.set(theme, read);
+      }
+      return { ...value, read };
     },
     theme(id: ThemeName) {
       ensureDefinition(id);
@@ -195,6 +255,7 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
     refresh,
     dispose() {
       disposed = true;
+      retireReads();
       stopGateway();
       stopEvents();
       definitions.clear();

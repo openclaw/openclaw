@@ -1,3 +1,4 @@
+import type { WorkerResourceReceipt } from "../../plugins/capability-provider.types.js";
 import type { WorkerCredentialRecord } from "./credential.js";
 import type {
   WorkerEnvironmentIntentInput,
@@ -36,6 +37,12 @@ export type WorkerEnvironmentCommitAdmission = Array<{
 /** Native mutation signatures own the host callbacks and the worker's serializable contract. */
 export type WorkerEnvironmentMutationMethods = {
   createIntent(input: WorkerEnvironmentIntentInput): WorkerEnvironmentRecord;
+  recordResourceReceipt(input: {
+    environmentId: string;
+    provisionOperationId: string;
+    receipt: WorkerResourceReceipt;
+    assertCurrent: () => void;
+  }): WorkerEnvironmentRecord;
   ensureNodeEnrollment(environmentId: string): WorkerEnvironmentRecord;
   revokeEnvironmentCredential(input: CredentialRevocationInput): void;
   reconcileSharedHost(input: {

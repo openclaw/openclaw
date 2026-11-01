@@ -258,22 +258,15 @@ function testRegexFromStart(regex: RegExp, value: string): boolean {
   return regex.test(value);
 }
 
-export function testRegexWithBoundedInput(
-  regex: RegExp,
-  input: string,
-  maxWindow = SAFE_REGEX_TEST_WINDOW,
-): boolean {
-  if (maxWindow <= 0) {
-    return false;
-  }
-  if (input.length <= maxWindow) {
+export function testRegexWithBoundedInput(regex: RegExp, input: string): boolean {
+  if (input.length <= SAFE_REGEX_TEST_WINDOW) {
     return testRegexFromStart(regex, input);
   }
-  const head = input.slice(0, maxWindow);
+  const head = input.slice(0, SAFE_REGEX_TEST_WINDOW);
   if (testRegexFromStart(regex, head)) {
     return true;
   }
-  return testRegexFromStart(regex, input.slice(-maxWindow));
+  return testRegexFromStart(regex, input.slice(-SAFE_REGEX_TEST_WINDOW));
 }
 
 export function compileSafeRegexDetailed(source: string, flags = ""): SafeRegexCompileResult {

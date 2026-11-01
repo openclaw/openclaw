@@ -14,13 +14,13 @@ import {
   expandBundleCommandPromptTemplate,
   expandExplicitSkillReferences,
   hasSkillReferenceCandidate,
-  listReservedChatSlashCommandNames,
   mergeExplicitSkillSelections as mergeSelections,
   resolveSkillCommandInvocation,
   skillCommandsToExplicitSelections as toSelections,
 } from "../../skills/discovery/chat-command-invocation.js";
 import type { ExplicitSkillSelection } from "../../skills/types.js";
 import { notifyPreparedAgentRunStart } from "../agent-run-start.js";
+import { listReservedChatSlashCommandNames } from "../commands-registry.data.js";
 import {
   copyReplyPayloadMetadata,
   markCommandReplyForDelivery,
@@ -36,6 +36,7 @@ import {
   shouldSkipMessageByAbortCutoff,
 } from "./abort-cutoff.js";
 import { getAbortMemory, isAbortRequestText } from "./abort-primitives.js";
+import { isBangCommandInput } from "./bash-command-input.js";
 import { takeCommandSessionMetadataChangesFromTargets } from "./command-session-metadata.js";
 import { matchSlashCommandToken, resolveSlashCommandName } from "./commands-slash-parse.js";
 import type { CommandDispatchParams } from "./commands-types.js";
@@ -130,8 +131,6 @@ export async function handleInlineActions(
     skillFilter?: string[];
   },
 ): Promise<InlineActionResult> {
-  // Native directive results also carry turn-local fast mode; commands resolve their own status.
-  const commandParams = { ...params, resolvedFastMode: undefined };
   const {
     ctx,
     sessionCtx,
@@ -304,56 +303,52 @@ export async function handleInlineActions(
     if (dispatch?.kind === "tool") {
       const rawArgs = (skillInvocation.args ?? "").trim();
       const { resolveSkillDispatchTools } = await skillToolDispatchRuntimeLoader.load();
-      const { createOpenClawToolsAsync } = await import("../../agents/openclaw-tools.js");
       const { hasAnyAuthProfileStoreSourceAsync } =
         await import("../../agents/auth-profiles/source-check.js");
       const authSourceAgentDir = agentDir?.trim();
       const authProfileStoreSource = authSourceAgentDir
         ? await hasAnyAuthProfileStoreSourceAsync(authSourceAgentDir)
         : false;
-      const authorizedTools = await resolveSkillDispatchTools(
-        {
-          message: {
-            surface: ctx.Surface,
-            provider: ctx.Provider,
-            accountId: ctx.AccountId,
-            senderId: ctx.SenderId,
-            senderName: ctx.SenderName,
-            senderUsername: ctx.SenderUsername,
-            senderE164: ctx.SenderE164,
-            originatingTo: ctx.OriginatingTo,
-            to: ctx.To,
-            nativeChannelId: ctx.NativeChannelId,
-            messageThreadId: ctx.MessageThreadId,
-            memberRoleIds: ctx.MemberRoleIds,
-          },
-          cfg,
-          agentId,
-          agentDir,
-          authProfileStoreSource,
-          sessionEntry: targetSessionEntry,
-          sessionKey,
-          workspaceDir,
-          provider,
-          model,
-          senderIsOwner: command.senderIsOwner,
-          senderId: command.senderId,
-          currentChannelId: command.channelId,
-          groupId: extractExplicitGroupId(ctx.From),
-          skillCommand: {
-            name: skillInvocation.command.name,
-            ...(skillInvocation.command.skillFile
-              ? { skillFile: skillInvocation.command.skillFile }
-              : {}),
-            skillName: skillInvocation.command.skillName,
-            ...(skillInvocation.command.skillSource
-              ? { skillSource: skillInvocation.command.skillSource }
-              : {}),
-            toolName: dispatch.toolName,
-          },
+      const authorizedTools = await resolveSkillDispatchTools({
+        message: {
+          surface: ctx.Surface,
+          provider: ctx.Provider,
+          accountId: ctx.AccountId,
+          senderId: ctx.SenderId,
+          senderName: ctx.SenderName,
+          senderUsername: ctx.SenderUsername,
+          senderE164: ctx.SenderE164,
+          originatingTo: ctx.OriginatingTo,
+          to: ctx.To,
+          nativeChannelId: ctx.NativeChannelId,
+          messageThreadId: ctx.MessageThreadId,
+          memberRoleIds: ctx.MemberRoleIds,
         },
-        { createOpenClawToolsAsync },
-      );
+        cfg,
+        agentId,
+        agentDir,
+        authProfileStoreSource,
+        sessionEntry: targetSessionEntry,
+        sessionKey,
+        workspaceDir,
+        provider,
+        model,
+        senderIsOwner: command.senderIsOwner,
+        senderId: command.senderId,
+        currentChannelId: command.channelId,
+        groupId: extractExplicitGroupId(ctx.From),
+        skillCommand: {
+          name: skillInvocation.command.name,
+          ...(skillInvocation.command.skillFile
+            ? { skillFile: skillInvocation.command.skillFile }
+            : {}),
+          skillName: skillInvocation.command.skillName,
+          ...(skillInvocation.command.skillSource
+            ? { skillSource: skillInvocation.command.skillSource }
+            : {}),
+          toolName: dispatch.toolName,
+        },
+      });
 
       const tool = authorizedTools.find((candidate) => candidate.name === dispatch.toolName);
       if (!tool) {
@@ -493,7 +488,8 @@ export async function handleInlineActions(
   if (handleInlineStatus) {
     const { buildStatusReply } = await commandsRuntimeLoader.load();
     const inlineStatusReply = await buildStatusReply({
-      ...commandParams,
+      ...params,
+      resolvedFastMode: undefined,
       sessionEntry: targetSessionEntry,
       parentSessionKey: targetSessionEntry?.parentSessionKey ?? ctx.ParentSessionKey,
       ...(await resolveModelLevels()),
@@ -512,7 +508,9 @@ export async function handleInlineActions(
     opts?.operatorAuthority?.assertCurrent();
     commandInput.assertOwnerCurrent?.();
     const result = await handleCommands({
-      ...commandParams,
+      ...params,
+      // Native directive results carry turn-local fast mode; commands resolve their own status.
+      resolvedFastMode: undefined,
       // Command handlers mutate the continuation context and retain the dispatch context.
       ctx: sessionCtx,
       rootCtx: ctx,
@@ -567,7 +565,8 @@ export async function handleInlineActions(
     (inlineCommand !== undefined ||
       directiveAck !== undefined ||
       inlineStatusRequested ||
-      command.commandBodyNormalized.trim().startsWith("/"));
+      command.commandBodyNormalized.trimStart().startsWith("/") ||
+      isBangCommandInput(command.commandBodyNormalized));
   if (shouldRunCommandHandlers) {
     const strippedBody = stripStructuralPrefixes(cleanedBody);
     const remainingBodyAfterInlineStatus = (

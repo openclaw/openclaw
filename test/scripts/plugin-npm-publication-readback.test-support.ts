@@ -19,6 +19,29 @@ export const version = "2026.9.2-beta.1";
 const publisherName = `Publish plugin npm package (${packageName})`;
 const preflightName = `Preflight plugin npm package (${packageName})`;
 
+export function npmRegistryPackument(
+  name: string,
+  packageVersion: string,
+  bytes: Buffer,
+  distTagVersion = packageVersion,
+) {
+  return {
+    name,
+    "dist-tags": { beta: distTagVersion },
+    versions: {
+      [packageVersion]: {
+        name,
+        version: packageVersion,
+        dist: {
+          integrity: `sha512-${createHash("sha512").update(bytes).digest("base64")}`,
+          shasum: createHash("sha1").update(bytes).digest("hex"),
+          tarball: `https://registry.npmjs.org/${name}/-/${name.split("/")[1]}.tgz`,
+        },
+      },
+    },
+  };
+}
+
 export function npmWorkflowRun(
   id: number,
   attempt: number,
@@ -298,7 +321,10 @@ export async function createNpmPublicationReadbackFixture(
   };
   const runGh = (args: string[]) => {
     const endpoint = expectDefined(args[1], "GitHub fixture endpoint");
-    const response = JSON.stringify(respondGh(endpoint));
+    const body = JSON.stringify(respondGh(endpoint));
+    const response = args.includes("--include")
+      ? `HTTP/2 200 OK\r\nx-ratelimit-remaining: 100\r\n\r\n${body}`
+      : body;
     ghResponses[endpoint] = response;
     return response;
   };
@@ -336,21 +362,7 @@ export async function createNpmPublicationReadbackFixture(
         : packageName;
       const registryBytes =
         name === "@openclaw/existing" || fault === "archive-identity" ? existingBytes : bytes;
-      return Response.json({
-        name,
-        "dist-tags": { beta: distTagVersion },
-        versions: {
-          [version]: {
-            name,
-            version,
-            dist: {
-              integrity: `sha512-${createHash("sha512").update(registryBytes).digest("base64")}`,
-              shasum: createHash("sha1").update(registryBytes).digest("hex"),
-              tarball: `https://registry.npmjs.org/${name}/-/${name.split("/")[1]}.tgz`,
-            },
-          },
-        },
-      });
+      return Response.json(npmRegistryPackument(name, version, registryBytes, distTagVersion));
     }
     throw new Error(`Unexpected transfer: ${url}`);
   };

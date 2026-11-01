@@ -7,7 +7,6 @@ import {
   nextDeliveryQueueTombstoneExpiryAdmission,
   type FailedDeliveryQueueHealth,
 } from "./delivery-queue-cache.js";
-import type { DeliveryQueueReadMode } from "./delivery-queue-sqlite-bound.js";
 import {
   countPendingDeliveryQueueEntriesInDatabase,
   loadDeliveryQueueEntriesInDatabase,
@@ -61,10 +60,8 @@ export async function inspectDeliveryQueueReceipt(
 export function loadDeliveryQueueEntries(
   queueName: string,
   stateDir?: string,
-  mode: DeliveryQueueReadMode = "pending",
-  context?: DeliveryQueueStateContext,
 ): DeliveryQueueEntryState[] {
-  return loadDeliveryQueueEntriesInDatabase(openStateDatabase(stateDir, context), queueName, mode);
+  return loadDeliveryQueueEntriesInDatabase(openStateDatabase(stateDir), queueName);
 }
 
 /** Count dead-lettered entries per queue namespace for coarse health reporting. */

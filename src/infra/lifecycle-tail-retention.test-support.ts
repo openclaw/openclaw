@@ -5,46 +5,40 @@ import { collectForRetentionCheck } from "../test-utils/retention.js";
 const [root, mode] = process.argv.slice(2);
 assert.ok(root && mode, "Lifecycle retention requires its temporary directory and resource");
 
-class LifecycleTailCaller {
-  readonly prompt = Buffer.alloc(1024 * 1024, 39);
-  constructor(readonly label: string) {}
+const callers = new AsyncLocalStorage<object>();
+const references: WeakRef<object>[] = [];
+function createCaller() {
+  const caller = { prompt: Buffer.alloc(1024 * 1024, 39) };
+  references.push(new WeakRef(caller), new WeakRef(caller.prompt));
+  return caller;
 }
-const callers = new AsyncLocalStorage<LifecycleTailCaller>();
-const references: Array<{ label: string; reference: WeakRef<object> }> = [];
 
-async function withCaller(label: string, run: () => unknown) {
-  const caller = new LifecycleTailCaller(label);
-  references.push(
-    { label: `${label} context`, reference: new WeakRef(caller) },
-    { label: `${label} prompt`, reference: new WeakRef(caller.prompt) },
-  );
-  await callers.run(caller, async () => {
-    await run();
+async function withCaller<T>(run: () => T | Promise<T>) {
+  const caller = createCaller();
+  return callers.run(caller, async () => {
+    const result = await run();
     assert.equal(callers.getStore(), caller, "An operation must retain its own caller context");
+    return result;
   });
 }
 
 async function assertCollected() {
   await collectForRetentionCheck(mode!);
   assert.deepEqual(
-    references.filter(({ reference }) => reference.deref()).map(({ label }) => label),
+    references.filter((reference) => reference.deref()),
     [],
-    `The live ${mode} resource retained completed caller state`,
   );
 }
 
 if (mode === "native-source") {
   const { captureRetainedNativeWorkerSource } = await import("./worker-native-lifecycle.js");
   const { drainGlobalSingletonLifecycleState } = await import("../shared/global-singleton.js");
-  let source: ReturnType<typeof captureRetainedNativeWorkerSource> | undefined;
+  const captureSource = () => captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
   try {
-    await withCaller("native source creation", () => {
-      source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
-    });
-    assert.ok(source);
+    const source = await withCaller(captureSource);
     source.retain({}, async () => {});
     await assertCollected();
-    assert.equal(captureRetainedNativeWorkerSource({ runtimeGeneration: undefined }), source);
+    assert.equal(captureSource(), source);
     assert.equal(await source.retireIdleBroker(), true);
   } finally {
     await drainGlobalSingletonLifecycleState();
@@ -63,20 +57,17 @@ if (mode === "native-source") {
   };
   owner.handleRequested(record, scheduler);
   try {
-    await withCaller("question resolver", () =>
-      owner.handleResolved({ id: record.id, status: "cancelled" }),
-    );
+    await withCaller(() => owner.handleResolved({ id: record.id, status: "cancelled" }));
     await assertCollected();
-    let finalized = false;
+    const finalized: string[] = [];
     owner.registerDelivery({
       questionId: record.id,
       deliveryId: "late-delivery",
       finalize: (line) => {
-        assert.equal(line, "Cancelled");
-        finalized = true;
+        finalized.push(line);
       },
     });
-    assert.equal(finalized, true, "Cleanup scheduling must preserve late-delivery finalization");
+    assert.deepEqual(finalized, ["Cancelled"], "Cleanup must preserve late-delivery finalization");
   } finally {
     await owner.clear();
     await scheduler.stop();
@@ -84,7 +75,7 @@ if (mode === "native-source") {
 } else if (mode === "worker-pool") {
   const { WorkerTaskPool } = await import("./worker-task-pool.js");
   function abandonPool() {
-    const caller = new LifecycleTailCaller("worker pool options");
+    const caller = createCaller();
     const pool = new WorkerTaskPool<never, void>({
       workerUrl: new URL("file:///unused-worker.js"),
       maxWorkers: 1,
@@ -92,11 +83,7 @@ if (mode === "native-source") {
         assert.equal(caller.prompt.byteLength, 1024 * 1024);
       },
     });
-    references.push(
-      { label: "abandoned worker pool", reference: new WeakRef(pool) },
-      { label: "worker pool options context", reference: new WeakRef(caller) },
-      { label: "worker pool options prompt", reference: new WeakRef(caller.prompt) },
-    );
+    references.push(new WeakRef(pool));
   }
   // An unused pool has no worker resources and needs no explicit close to be collected.
   abandonPool();
@@ -104,12 +91,6 @@ if (mode === "native-source") {
 } else {
   throw new Error(`Unknown lifecycle retention resource: ${mode}`);
 }
-process.stdout.write(
-  JSON.stringify({
-    resource: mode,
-    collected: references.length,
-    ...(mode === "worker-pool"
-      ? { runtime: process.versions.bun ? "bun" : "node" }
-      : { reused: true }),
-  }),
-);
+const detail =
+  mode === "worker-pool" ? { runtime: process.versions.bun ? "bun" : "node" } : { reused: true };
+process.stdout.write(JSON.stringify({ resource: mode, collected: references.length, ...detail }));

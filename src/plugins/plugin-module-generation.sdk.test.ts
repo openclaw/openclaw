@@ -5,17 +5,11 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeArtifacts as write } from "./public-surface.test-support.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
 const execute = promisify(execFile);
 
-function write(root: string, files: Record<string, string>) {
-  for (const [relative, content] of Object.entries(files)) {
-    const filename = path.join(root, relative);
-    fs.mkdirSync(path.dirname(filename), { recursive: true });
-    fs.writeFileSync(filename, content);
-  }
-}
 const moduleUrl = (relative: string) => pathToFileURL(path.resolve(relative)).href;
 async function probe(source: string, root?: string) {
   const code = `import assert from 'node:assert/strict';\n${source}\nconsole.log('probe passed');`;
@@ -79,19 +73,14 @@ it("preserves real host command authority and Gateway execution frames in the SD
   );
 });
 
-it.each([
-  ["src", false],
-  ["dist", false],
-  ["src", true],
-  ["dist", true],
-] as const)(
-  "shares the native %s host owner across plugin generations and recovered workers (legacy loader=%s)",
-  async (preference, legacyLoader) => {
+it.each(["src", "dist"] as const)(
+  "shares the native %s host owner across plugin generations and recovered workers",
+  async (preference) => {
     const root = fs.realpathSync(temp.make("plugin-sdk-generation-"));
     const host = path.join(root, "host");
     const hostLink = path.join(root, "host-link");
     write(host, {
-      "package.json": JSON.stringify({
+      "package.json": {
         name: "openclaw",
         type: "module",
         bin: { openclaw: "./openclaw.mjs" },
@@ -99,7 +88,7 @@ it.each([
           "./plugin-sdk/identity": "./dist/plugin-sdk/identity.js",
           "./plugin-sdk/identity-peer": "./dist/plugin-sdk/identity-peer.js",
         },
-      }),
+      },
     });
     for (const [tree, extension] of [
       ["src", "ts"],
@@ -125,7 +114,7 @@ it.each([
     const captures = path.join(root, "captures");
     fs.mkdirSync(captures);
     write(plugin, {
-      "package.json": JSON.stringify({ name: "fixture", type: "module" }),
+      "package.json": { name: "fixture", type: "module" },
       "eager.ts": `import { once } from 'node:events';
          import { Worker } from 'node:worker_threads';
          import { identity } from 'openclaw/plugin-sdk/identity';
@@ -156,7 +145,7 @@ it.each([
     await probe(
       `import fs from 'node:fs';
          import Module from 'node:module';
-         ${legacyLoader ? 'Object.defineProperty(Module, "registerHooks", { value: undefined, configurable: true });' : 'if (!process.versions.bun) assert.equal(typeof Module.registerHooks, "function");'}
+         if (!process.versions.bun) assert.equal(typeof Module.registerHooks, "function");
          const { bindPluginInstanceModuleLoader } = await import(${JSON.stringify(moduleUrl("src/plugins/plugin-instance-module-loader.ts"))});
          const { PluginInstance } = await import(${JSON.stringify(moduleUrl("src/plugins/plugin-instance.ts"))});
          const { withPluginSourceCaptureDirectory } = await import(${JSON.stringify(moduleUrl("src/plugins/plugin-package-metadata-capture.ts"))});
@@ -211,7 +200,7 @@ it.each([
            instances.push(restored);
            try {
              withPluginSourceCaptureDirectory(captures, () => recovery.bind(restored));
-           } finally { recovery.dispose(); }
+           } finally { await recovery.dispose(); }
            await assertWorker(restored.loadModule(${JSON.stringify(path.join(plugin, "eager.ts"))}));
          } finally {
            for (const instance of instances.reverse()) await instance.dispose();

@@ -196,53 +196,53 @@ export function openOpenClawAgentDatabaseReadOnly(
     unregister = undefined;
   };
   try {
+    let database: OpenClawAgentReadOnlyDatabaseHandle;
     if (engineInput) {
-      selected = openAgentEngineStore(db, agentId, pathname, true, (connection, error) => {
-        selected = connection;
-        throw error;
-      });
+      selected = openAgentEngineStore(
+        db,
+        agentId,
+        pathname,
+        true,
+        (connection, error) => {
+          selected = connection;
+          throw error;
+        },
+        true,
+      );
       registerOpenClawAgentDatabaseIdentity(selected);
-      const database = { agentId, db: selected, path: pathname, close };
-      if (behavior.lifecycle === "agent") {
-        unregister = registerOpenClawAgentDatabaseSyncResource({
-          agentId,
-          path: pathname,
-          revoke: close,
-          close,
+      database = { agentId, db: selected, path: pathname, close };
+    } else {
+      enableNodeSqliteKyselyStatementCache(db);
+      registerOpenClawAgentDatabaseIdentity(db);
+      const privatePath = isArtifactPreservingStateRead("agent", pathname)
+        ? db.location()
+        : undefined;
+      database = { agentId, db, path: privatePath ?? pathname, close };
+      // The physical owner already checked ownership and canonical definitions.
+      const hasSchema =
+        adoptOpenClawAgentDatabaseSchema(database) ||
+        runSqliteReadOperationSync(db, () => {
+          admitSqliteSchema(db);
+          if (!hasAdmittedAgentReadOnlySchema(database)) {
+            return false;
+          }
+          const schema = getAdmittedSqliteSchemaFacts(database.db);
+          if (schema && hasPendingAgentStartupColumns(schema.tableSql)) {
+            throw new SqliteSchemaMismatchError(
+              `OpenClaw agent database ${database.path} requires writable startup admission before session reads; restart the Gateway or run openclaw doctor --fix.`,
+            );
+          }
+          return true;
         });
+      if (!hasSchema) {
+        close();
+        return { found: false, reason: "schema-missing" };
       }
-      return { found: true, database };
-    }
-    enableNodeSqliteKyselyStatementCache(db);
-    registerOpenClawAgentDatabaseIdentity(db);
-    const privatePath = isArtifactPreservingStateRead("agent", pathname)
-      ? db.location()
-      : undefined;
-    const database = { agentId, db, path: privatePath ?? pathname, close };
-    // The physical owner already checked ownership and canonical definitions.
-    const hasSchema =
-      adoptOpenClawAgentDatabaseSchema(database) ||
-      runSqliteReadOperationSync(db, () => {
-        admitSqliteSchema(db);
-        if (!hasAdmittedAgentReadOnlySchema(database)) {
-          return false;
-        }
-        const schema = getAdmittedSqliteSchemaFacts(database.db);
-        if (schema && hasPendingAgentStartupColumns(schema.tableSql)) {
-          throw new SqliteSchemaMismatchError(
-            `OpenClaw agent database ${database.path} requires writable startup admission before session reads; restart the Gateway or run openclaw doctor --fix.`,
-          );
-        }
-        return true;
-      });
-    if (!hasSchema) {
-      close();
-      return { found: false, reason: "schema-missing" };
-    }
-    // Worker admission loads file-bound proof before a read transaction prevents it.
-    if (!isMainThread) {
-      loadOpenClawAgentCanonicalValidationReceipt(database);
-      hasOpenClawAgentCanonicalValidation(database);
+      // Worker admission loads file-bound proof before a read transaction prevents it.
+      if (!isMainThread) {
+        loadOpenClawAgentCanonicalValidationReceipt(database);
+        hasOpenClawAgentCanonicalValidation(database);
+      }
     }
     if (behavior.lifecycle === "agent") {
       unregister = registerOpenClawAgentDatabaseSyncResource({

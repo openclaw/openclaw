@@ -6,12 +6,8 @@ import {
 import {
   normalizeStringEntries,
   normalizeUniqueStringEntries,
-  uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
-import {
-  normalizeCommandDescriptorName,
-  sanitizeCommandDescriptorDescription,
-} from "../cli/program/command-descriptor-utils.js";
+import { normalizePluginCliRegistrationMetadata } from "../cli/program/command-descriptor-utils.js";
 import {
   NODE_EXEC_APPROVALS_COMMANDS,
   isPrivateNodeInvokeCommand,
@@ -19,9 +15,14 @@ import {
   NODE_SYSTEM_RUN_COMMANDS,
   NODE_WORKER_PRIVATE_COMMANDS,
 } from "../infra/node-commands.js";
-import { isReservedCommandName, registerPluginCommandInRegistry } from "./command-registration.js";
+import {
+  isReservedCommandName,
+  registerPluginCommandInRegistry,
+  snapshotPluginCommandRuntimeCapabilities,
+} from "./command-registration.js";
 import { bindPluginGatewayAccessPolicy } from "./gateway-access-policy-registration.js";
 import type { PluginGatewayAccessPolicy } from "./gateway-access-policy.types.js";
+import { PluginInstanceUnavailableError } from "./plugin-instance-error.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import type { WidgetPresenter } from "./plugin-registration.types.js";
 import type { PluginRegistryState } from "./registry-state.js";
@@ -30,7 +31,6 @@ import type {
   OpenClawGatewayDiscoveryService,
   OpenClawPluginCliRegistrationOptions,
   OpenClawPluginCliRegistrar,
-  OpenClawPluginCliRootCommandDescriptor,
   OpenClawPluginCommandDefinition,
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeInvokePolicy,
@@ -122,56 +122,13 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     registrar: OpenClawPluginCliRegistrar,
     opts?: OpenClawPluginCliRegistrationOptions,
   ) => {
-    const normalizeCommandRoot = (raw: string, source: "command" | "descriptor") => {
-      const normalized = normalizeCommandDescriptorName(raw);
-      if (!normalized) {
-        reportRegistrationError(
-          record,
-          `invalid cli ${source} name: ${JSON.stringify(raw.trim())}`,
-        );
-      }
-      return normalized;
-    };
-    const parentPath = (opts?.parentPath ?? []).map((segment) =>
-      normalizeCommandRoot(segment, "command"),
+    const metadata = normalizePluginCliRegistrationMetadata(opts, (message) =>
+      reportRegistrationError(record, message),
     );
-    if (parentPath.some((segment) => segment === null)) {
+    if (!metadata) {
       return;
     }
-    const normalizedParentPath = parentPath as string[];
-    const rootRegistration = normalizedParentPath.length === 0;
-    const descriptors = (opts?.descriptors ?? [])
-      .map((descriptor) => {
-        const name = normalizeCommandRoot(descriptor.name, "descriptor");
-        const description = sanitizeCommandDescriptorDescription(descriptor.description);
-        const machineOutput = rootRegistration
-          ? (descriptor as OpenClawPluginCliRootCommandDescriptor).machineOutput
-          : undefined;
-        if (!name || !description) {
-          return null;
-        }
-        const normalized: OpenClawPluginCliRootCommandDescriptor = {
-          name,
-          description,
-          hasSubcommands: descriptor.hasSubcommands,
-        };
-        if (machineOutput) {
-          normalized.machineOutput = machineOutput;
-        }
-        return normalized;
-      })
-      .filter(
-        (descriptor): descriptor is OpenClawPluginCliRootCommandDescriptor => descriptor !== null,
-      );
-    const commands = uniqueStrings(
-      [...(opts?.commands ?? []), ...descriptors.map((descriptor) => descriptor.name)]
-        .map((command) => normalizeCommandRoot(command, "command"))
-        .filter((command): command is string => command !== null),
-    );
-    if (commands.length === 0) {
-      reportRegistrationError(record, "cli registration missing explicit commands metadata");
-      return;
-    }
+    const { parentPath: normalizedParentPath, commands, descriptors } = metadata;
     const serializeCommandPath = (command: string) => [...normalizedParentPath, command].join(" ");
     const commandPaths = commands.map(serializeCommandPath);
     const commandPathSet = new Set(commandPaths);
@@ -339,6 +296,48 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     );
   };
 
+  const registerRepositoryIntegration = (
+    record: PluginRecord,
+    integration: import("./repository-integration.types.js").RepositoryIntegration,
+  ) => {
+    if (
+      integration.version !== 1 ||
+      typeof integration.withIdentity !== "function" ||
+      typeof integration.resolveConnectionIdentity !== "function" ||
+      !["image", "repository"].includes(integration.preparedCapacity) ||
+      registry.repositoryIntegrations.some((entry) => entry.pluginId === record.id)
+    ) {
+      reportRegistrationError(record, "Invalid or duplicate repository integration");
+      return;
+    }
+    const instance = getPluginInstance(record);
+    if (!instance) {
+      reportRegistrationError(record, "Repository integration requires a live plugin instance");
+      return;
+    }
+    const bound = instance.wrap(integration);
+    const scoped: import("./repository-integration.types.js").RepositoryIntegration = {
+      version: 1,
+      preparedCapacity: bound.preparedCapacity,
+      resolveConnectionIdentity: bound.resolveConnectionIdentity,
+      // Callback arguments are plugin values too; bind their retained callables
+      // before the native credential owner can keep them past this invocation.
+      withIdentity: (context, run) =>
+        bound.withIdentity(context, (scope) => run(instance.wrap(scope))),
+    };
+    registry.repositoryIntegrations.push(
+      createIdentityRegistration(record, {
+        assertCurrent: () => {
+          if (!instance.acceptingCalls || instance.disposing) {
+            throw new PluginInstanceUnavailableError(record.id);
+          }
+          instance.lifecycle.signal.throwIfAborted();
+        },
+        integration: scoped,
+      }),
+    );
+  };
+
   const resolveServiceRegistrationId = (
     record: PluginRecord,
     service: { id: string },
@@ -405,7 +404,11 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     });
   };
 
-  const registerCommand = (record: PluginRecord, command: OpenClawPluginCommandDefinition) => {
+  const registerCommand = (
+    record: PluginRecord,
+    callerCommand: OpenClawPluginCommandDefinition,
+  ) => {
+    const command = snapshotPluginCommandRuntimeCapabilities(callerCommand);
     const name = command.name.trim();
     if (!name) {
       reportRegistrationError(record, "command registration missing name");
@@ -435,6 +438,16 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     }
     const { ownership: _ownership, ...commandForRegistration } = command;
     void _ownership;
+    if (
+      command.runtimeCapabilities?.includes("scheduledTurns") &&
+      !record.contracts?.sessionScheduledTurns?.includes("requester-command")
+    ) {
+      reportRegistrationError(
+        record,
+        'scheduled command turns require contracts.sessionScheduledTurns: ["requester-command"]',
+      );
+      return;
+    }
     const result = registerPluginCommandInRegistry(
       registry,
       record.id,
@@ -445,6 +458,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
         allowReservedCommandNames,
         allowOwnerStatusExposure: canClaimReservedCommandOwnership(record),
       },
+      record.contracts?.commandRuntimeCapabilities,
     );
     if (!result.ok) {
       reportRegistrationError(record, `command registration failed: ${result.error}`);
@@ -467,6 +481,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     registerNodeHostCommand,
     registerNodeInvokePolicy,
     registerGatewayAccessPolicy,
+    registerRepositoryIntegration,
     registerSecurityAuditCollector,
     registerService,
     registerGatewayDiscoveryService,

@@ -6,6 +6,7 @@ import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/age
 import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-read.js";
 import { appendTranscriptMessage } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { emitAgentEvent, onAgentRuntimeEvent } from "../../infra/agent-events.js";
+import { heartbeatNotifications } from "../../infra/heartbeat-events.js";
 import { getSessionControllerOperation } from "../../sessions/session-controller.js";
 import * as sessionAdmission from "../../sessions/session-controller.lifecycle.js";
 import { startGatewayEventSubscriptions } from "../server-runtime-subscriptions.js";
@@ -169,7 +170,7 @@ it.for(
       await fixture.cleanup();
       await mutation;
       if (subscriptions) {
-        subscriptions.heartbeatUnsub();
+        heartbeatNotifications.onEvent = () => {};
         subscriptions.transcriptUnsub();
         subscriptions.lifecycleUnsub();
         await subscriptions.agentUnsub();
@@ -252,7 +253,7 @@ it.for(
       admission.release();
       registration.cleanup();
       await mutation;
-      subscriptions.heartbeatUnsub();
+      heartbeatNotifications.onEvent = () => {};
       subscriptions.transcriptUnsub();
       subscriptions.lifecycleUnsub();
       await subscriptions.agentUnsub();

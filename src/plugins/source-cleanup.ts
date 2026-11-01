@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withConfigSourceLocks } from "../config/write-lock.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { isPluginSourcePathInUse } from "./installed-plugin-package-ownership.js";
-import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import { withPluginLifecycleLeaseAsync } from "./plugin-lifecycle-lease.js";
 
 export async function withPluginSourceCleanup<T>(
   sourcePath: string,
@@ -21,11 +21,10 @@ export async function withPluginSourceCleanup<T>(
 ): Promise<T> {
   const env = options.env ?? process.env;
   const configPath = path.resolve(options.configPath);
-  return await withPluginLifecycleLease(options, async (lease) => {
-    const assertOwned = () => lease.assertOwned();
-    assertOwned();
+  return await withPluginLifecycleLeaseAsync(options, async (lease) => {
+    await lease.assertOwned();
     const readSources = async () => {
-      assertOwned();
+      lease.assertCurrent();
       const { snapshot, writeOptions } = await createConfigIO({
         configPath,
         env: cloneEnvWithPlatformSemantics(env),
@@ -35,7 +34,7 @@ export async function withPluginSourceCleanup<T>(
         suppressFutureVersionWarning: true,
         logger: { warn: () => {}, error: () => {} },
       }).readConfigFileSnapshotForWrite();
-      assertOwned();
+      await lease.assertOwned();
       if (!snapshot.valid) {
         throw new Error(
           `Cannot remove plugin source with invalid config at ${configPath}: ${formatConfigIssueSummary(snapshot.issues)}`,
@@ -81,13 +80,14 @@ export async function withPluginSourceCleanup<T>(
             }
             assertCurrent();
           };
+          await lease.assertOwned();
           assertCleanup();
           const result = await run(assertCleanup);
           assertCurrent();
           return { kind: "complete" as const, result };
         },
         env,
-        assertOwned,
+        lease.assertCurrent,
       );
       if (attempt.kind === "complete") {
         return attempt.result;

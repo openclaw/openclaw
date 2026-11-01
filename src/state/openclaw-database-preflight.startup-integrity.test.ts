@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readSelectedSessionEntryRows } from "../config/sessions/session-accessor.sqlite-entry-select.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -16,6 +15,7 @@ import {
   readSqliteDatabaseCleanClose,
 } from "../infra/sqlite-database-admission.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
 import * as integrity from "../infra/sqlite-integrity.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { VERSION } from "../version.js";
@@ -100,18 +100,22 @@ it.each(["legacy", "malformed", "unknown-policy"])(
               .update(OPENCLAW_AGENT_SCHEMA_SQL)
               .digest("hex")
           : "unknown-policy";
-      expect(writeSqliteCleanCloseSeal(agentPath, identity, file, seal)).toBe(true);
+      expect(
+        writeSqliteCleanCloseSeal(agentPath, identity, file, {
+          ...seal,
+          identity:
+            kind === "legacy"
+              ? undefined
+              : { ...sqliteDatabaseSealSchemaFor("agent")!.identity, policy: -1 },
+        }),
+      ).toBe(true);
     }
     retireSqliteDatabaseAdmissionForPath(agentPath);
     expect(readSqliteDatabaseCleanClose(agentPath)).toBe(false);
     fixture.state();
-    const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-    try {
-      fixture.agent();
-      expect(observer.queries.filter((sql) => sql === "PRAGMA integrity_check;")).toHaveLength(1);
-    } finally {
-      observer.restore();
-    }
+    const check = vi.spyOn(integrityWorker, "runSqliteIntegrityCheckInWorkerSync");
+    fixture.agent();
+    expect(check.mock.calls.filter(([input]) => input.databaseLabel === agentPath)).toHaveLength(1);
   },
 );
 
@@ -122,7 +126,7 @@ it("admits every previously sealed same-version agent before transcript readers 
   const agents = ids.map((agentId) => ({ agentId, path: fixture.agent(agentId).path }));
   closeDatabases();
   for (const agent of agents) {
-    const identity = sqliteDatabaseSealSchemaFor("agent")!;
+    const identity = sqliteDatabaseSealSchemaFor("agent")!.schemaIdentity;
     const seal = readSqliteCleanCloseSeal(agent.path, fs.statSync(agent.path, { bigint: true }))!;
     expect(seal).toBeDefined();
     revokeSqliteDatabaseAdmissionsForPath(agent.path);
@@ -356,4 +360,17 @@ it("isolates a corrupt foreign secondary before reporting its integrity failure"
   expect(readAgentDatabaseAdmissionRefusal("worker", { env: fixture.env })).toMatchObject({
     embeddedOwnerId: "foreign",
   });
+});
+
+it("names the failing state database when startup admission hits a corrupted store", async () => {
+  const fixture = databaseFixture(tempDirs.make("startup-state-corruption-"));
+  fixture.state();
+  closeDatabases();
+  fs.writeFileSync(fixture.statePath, "corrupted store bytes");
+  const admission = fixture.ready({}, "gateway-startup");
+  await expect(admission).rejects.toMatchObject({
+    code: "ERR_SQLITE_ERROR",
+    message: expect.stringContaining(fixture.statePath),
+  });
+  await expect(admission).rejects.toThrow(/not a database|disk image is malformed/iu);
 });

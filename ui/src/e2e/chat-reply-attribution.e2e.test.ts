@@ -1,6 +1,5 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -116,14 +115,6 @@ suite.define(() => {
         await page
           .locator('.chat-group--peer:has([data-entry-id="review-prompt"]) .chat-avatar:visible')
           .waitFor();
-        const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-        if (artifactRoot) {
-          const artifactDir = createControlUiE2eArtifactDir(
-            "reply-strip-resumed-work",
-            artifactRoot,
-          );
-          await page.screenshot({ path: `${artifactDir}/reply-strip.png`, animations: "disabled" });
-        }
         expect(await answerGroup.locator(".chat-work-group").count()).toBe(1);
         const lineBounds = await line.boundingBox();
         const workBounds = await work.boundingBox();

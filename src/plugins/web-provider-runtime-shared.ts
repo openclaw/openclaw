@@ -1,3 +1,4 @@
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { withActivatedPluginIds } from "./activation-context.js";
 import {
   getLoadedRuntimePluginRegistry,
@@ -83,14 +84,7 @@ function mergeInspectedProviderEntries<T extends { pluginId: string; provider: {
       (order.get(left.pluginId) ?? Number.MAX_SAFE_INTEGER) -
       (order.get(right.pluginId) ?? Number.MAX_SAFE_INTEGER),
   );
-  const ids = new Set<string>();
-  return providers.filter(({ provider }) => {
-    if (ids.has(provider.id.trim())) {
-      return false;
-    }
-    ids.add(provider.id);
-    return true;
-  });
+  return dedupeByKey(providers, ({ provider }) => provider.id.trim());
 }
 
 /** Resolves plugin web providers from setup, active runtime, or a scoped load. */

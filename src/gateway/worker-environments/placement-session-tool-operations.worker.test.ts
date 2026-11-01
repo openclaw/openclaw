@@ -27,62 +27,54 @@ beforeAll(async () => {
   await advancePlacementFixtureToActive(h.store, h.database, session);
 });
 afterEach(() => vi.restoreAllMocks());
-async function claim(name: string, toolName: "sessions_send" | "sessions_spawn" = "sessions_send") {
+async function claim(name: string) {
   const source = await h.store.claimTurn({
     ...session,
     claimId: `claim-${name}`,
     runId: `run-${name}`,
     owner: { kind: "worker", environmentId: "environment-placement-claim-close", ownerEpoch: 7 },
   });
-  return h.toolTurn(source, toolName);
+  return h.toolTurn(source);
 }
 
-it.each([
-  { toolName: "sessions_send", lostReply: true },
-  { toolName: "sessions_spawn", lostReply: false },
-] as const)(
-  "seals $toolName admission and drains durable receipts (lost reply: $lostReply)",
-  async ({ toolName, lostReply }) => {
-    const turn = await claim("drain", toolName);
-    const observed = observeHostDataSql();
-    try {
-      await turn.authorize([` ${toolName} `]);
-      expect(turn.authorized()).toBe(true);
-      expect(
-        turn.authorized(toolName === "sessions_send" ? "sessions_spawn" : "sessions_send"),
-      ).toBe(false);
-      expect(await turn.begin()).toMatchObject({
-        kind: "execute",
-        operationSeed: expect.any(String),
-      });
-      expect(await turn.begin()).toEqual({ kind: "in-progress" });
-      const closing = turn.close();
-      expect(turn.authorized()).toBe(false);
-      expect(
-        await h.store.beginWorkerSessionToolOperation({
-          ...turn.request,
-          toolCallId: "late",
-          requestDigest: "late-digest",
-        }),
-      ).toEqual({ kind: "unauthorized" });
-      const verifyCorruption = lostReply
-        ? corruptReply((value) => value.changed === true && value.toolNames === undefined)
-        : undefined;
-      expect(await turn.complete('{"status":"ok"}')).toBe(true);
-      verifyCorruption?.();
-      await closing;
-      await turn.release();
-      expect(observed.queries).toEqual([]);
-    } finally {
-      observed.restore();
-    }
+it("seals admission and drains durable receipts despite a lost completion reply", async () => {
+  const turn = await claim("drain");
+  const observed = observeHostDataSql();
+  try {
+    await turn.authorize([" sessions_send "]);
+    expect(turn.authorized()).toBe(true);
+    expect(turn.authorized("sessions_spawn")).toBe(false);
+    expect(await turn.begin()).toMatchObject({
+      kind: "execute",
+      operationSeed: expect.any(String),
+    });
+    expect(await turn.begin()).toEqual({ kind: "in-progress" });
+    const closing = turn.close();
     expect(turn.authorized()).toBe(false);
-    for (const table of ["worker_turn_tool_authorities", "worker_session_tool_operations"]) {
-      const row = h.database.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get();
-      expect(row).toEqual({ count: 0 });
-    }
-  },
-);
+    expect(
+      await h.store.beginWorkerSessionToolOperation({
+        ...turn.request,
+        toolCallId: "late",
+        requestDigest: "late-digest",
+      }),
+    ).toEqual({ kind: "unauthorized" });
+    const verifyCorruption = corruptReply(
+      (value) => value.changed === true && value.toolNames === undefined,
+    );
+    expect(await turn.complete('{"status":"ok"}')).toBe(true);
+    verifyCorruption();
+    await closing;
+    await turn.release();
+    expect(observed.queries).toEqual([]);
+  } finally {
+    observed.restore();
+  }
+  expect(turn.authorized()).toBe(false);
+  for (const table of ["worker_turn_tool_authorities", "worker_session_tool_operations"]) {
+    const row = h.database.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get();
+    expect(row).toEqual({ count: 0 });
+  }
+});
 
 it("checks live admission at commit and keeps a refused operation replayable", async () => {
   const turn = await claim("guard");

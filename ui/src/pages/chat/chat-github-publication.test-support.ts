@@ -1,16 +1,14 @@
 import { expect, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   GitHubPublicationOwner,
   type GitHubPublicationOptions,
   type GitHubPublicationPresentationBinding,
 } from "../../lib/sessions/github-publication-owner.ts";
 
-type GitHubPublicationScope = Parameters<GitHubPublicationPresentationBinding["sync"]>[0] & {
-  client: Pick<GatewayBrowserClient, "request">;
-  key: string;
-  target: ConstructorParameters<typeof GitHubPublicationOwner>[0]["target"];
-};
+type GitHubPublicationScope = Parameters<GitHubPublicationPresentationBinding["sync"]>[0] &
+  Pick<ConstructorParameters<typeof GitHubPublicationOwner>[0], "client" | "target"> & {
+    key: string;
+  };
 
 export const shared = { source: "system-configured" as const, accountId: 1, login: "system-bot" };
 export const account = { accountId: 2, login: "alice-tools" };
@@ -69,37 +67,31 @@ export function setup(initialOptions = options) {
     isCurrent: () => true,
   };
   const changed = vi.fn();
-  let current = scope;
-  const create = (owner: GitHubPublicationScope) =>
-    new GitHubPublicationOwner({
-      client: owner.client,
-      target: owner.target,
-      isCurrent: () => current.key === owner.key && current.isCurrent(),
-      reserve: () => {},
-      release: () => {},
-      unbound: () => {},
-    });
-  let operation = create(scope);
-  let binding = operation.bind();
-  binding.subscribe(changed);
-  binding.sync(scope);
+  let current: GitHubPublicationScope;
+  let operation: GitHubPublicationOwner;
+  let binding: GitHubPublicationPresentationBinding;
   const controller = {
     view: () => binding.view(),
     reset: () => operation.reset(),
     sync(next: GitHubPublicationScope) {
-      if (next.key !== current.key) {
-        binding.detach();
-        operation.reset();
-        current = next;
-        operation = create(next);
+      if (!current || next.key !== current.key) {
+        binding?.detach();
+        operation?.reset();
+        operation = new GitHubPublicationOwner({
+          ...next,
+          isCurrent: () => current.key === next.key && current.isCurrent(),
+          reserve: () => {},
+          release: () => {},
+          unbound: () => {},
+        });
         binding = operation.bind();
         binding.subscribe(changed);
-      } else {
-        current = next;
       }
+      current = next;
       binding.sync(next);
     },
   };
+  controller.sync(scope);
   return { controller, request, scope, changed };
 }
 export async function settled(controller: ReturnType<typeof setup>["controller"]) {

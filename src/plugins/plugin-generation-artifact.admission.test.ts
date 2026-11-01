@@ -19,7 +19,6 @@ import {
   observeFileIo,
   expectBytes,
   readText,
-  writeTree,
   type Artifact,
   type Cache,
 } from "./plugin-generation-capture.test-support.js";
@@ -36,6 +35,7 @@ import {
 import { withPluginSourceAdmissionPublisher } from "./plugin-source-admission-context.js";
 import { createPluginSourceAdmissionPublisher } from "./plugin-source-admission-store.js";
 import type { PluginSourceAdmissionReceipt } from "./plugin-source-admission.types.js";
+import { writeArtifacts as writeTree } from "./public-surface.test-support.js";
 
 vi.mock("@openclaw/fs-safe/advanced", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/fs-safe/advanced")>()),
@@ -65,6 +65,17 @@ function expectNativeCopy(io: NativeIo, exact = true) {
 
 function readIndex(cache: Cache, stateDir: string) {
   return withPluginCache(cache, () => readPersistedInstalledPluginIndex({ stateDir }));
+}
+
+function onlyReceipt(index: Awaited<ReturnType<typeof readIndex>>) {
+  const receipts = Object.values(index?.plugins[0]?.sourceAdmissions ?? {});
+  expect(receipts).toHaveLength(1);
+  return receipts[0]!;
+}
+
+function expectAdmissionCount(index: Awaited<ReturnType<typeof readIndex>>, count: number) {
+  expect(index?.plugins).toHaveLength(1);
+  expect(Object.keys(index!.plugins[0]!.sourceAdmissions ?? {})).toHaveLength(count);
 }
 
 function fixtureConfig(root: string) {
@@ -135,10 +146,8 @@ it("shares first native admission across private inspections and publishes after
     );
     await settlePluginNativeAdmissions(parent);
     await retirePluginCache(parent);
-    const persisted = await readIndex(reader, state.stateDir);
-    const persistedReceipts = Object.values(persisted?.plugins[0]?.sourceAdmissions ?? {});
-    expect(persistedReceipts).toHaveLength(1);
-    const native = persistedReceipts[0]!.nativeArtifacts[fixture.filename];
+    const receipt = onlyReceipt(await readIndex(reader, state.stateDir));
+    const native = receipt.nativeArtifacts[fixture.filename];
     expect(native?.contentHash).toBe(createHash("sha256").update(fixture.bytes).digest("hex"));
     expectBytes(native!.capturedPath, fixture.bytes);
   });
@@ -173,10 +182,7 @@ it.each([false, true])(
       }
       await using reader = resources.cache();
       const persisted = await readIndex(reader, state.stateDir);
-      expect(persisted?.plugins).toHaveLength(1);
-      expect(Object.keys(persisted!.plugins[0]!.sourceAdmissions ?? {})).toHaveLength(
-        writable ? 1 : 0,
-      );
+      expectAdmissionCount(persisted, writable ? 1 : 0);
     });
   },
 );
@@ -204,10 +210,7 @@ it("keeps deferred native admission publication with its original state director
       for (const stateDir of [state.stateDir, replacementState]) {
         await using reader = resources.cache();
         const persisted = await readIndex(reader, stateDir);
-        expect(persisted?.plugins).toHaveLength(1);
-        expect(Object.keys(persisted!.plugins[0]!.sourceAdmissions ?? {})).toHaveLength(
-          stateDir === state.stateDir ? 1 : 0,
-        );
+        expectAdmissionCount(persisted, stateDir === state.stateDir ? 1 : 0);
       }
     } finally {
       await retirePluginCache(cache);
@@ -250,8 +253,7 @@ it("pins a custody fork's publisher before deferred native materialization", asy
         expect(replacement).not.toHaveBeenCalled();
       }),
     );
-    const persisted = await readIndex(resources.cache(), state.stateDir);
-    expect(Object.keys(persisted!.plugins[0]!.sourceAdmissions ?? {})).toHaveLength(1);
+    onlyReceipt(await readIndex(resources.cache(), state.stateDir));
   });
 });
 
@@ -275,9 +277,8 @@ it.each(["retained", "partial"] as const)(
       await using cache = resources.cache();
       const persisted = await readIndex(cache, state.stateDir);
       expect(persisted).not.toBeNull();
-      const receipts = Object.values(persisted!.plugins[0]!.sourceAdmissions ?? {});
-      expect(receipts).toHaveLength(1);
-      for (const namespace of Object.values(receipts[0]!.nativeNamespaces)) {
+      const receipt = onlyReceipt(persisted);
+      for (const namespace of Object.values(receipt.nativeNamespaces)) {
         fs.rmSync(
           missing === "partial"
             ? path.join(namespace.capturedRoot, "content", "README.md")
@@ -379,9 +380,8 @@ it.each(["npm", "clawhub"] as const)(
         if (!persisted) {
           throw new Error("Native admission did not persist its installed index");
         }
-        const receipts = Object.values(persisted.plugins[0]!.sourceAdmissions ?? {});
-        expect(receipts).toHaveLength(1);
-        expect(receipts[0]!.nativeArtifacts[fixture.filename]?.contentHash).toBe(
+        const receipt = onlyReceipt(persisted);
+        expect(receipt.nativeArtifacts[fixture.filename]?.contentHash).toBe(
           createHash("sha256").update(fixture.bytes).digest("hex"),
         );
         preparePluginNativeAdmissions(persisted, freshCache);
@@ -424,8 +424,8 @@ it.each(["npm", "clawhub"] as const)(
         await assertDependencyCapture(successor.value);
         expect(readChildSdk(successor.value)).toBe("second");
         expect(readChildSdk(warm.value)).toBe("first");
-        const native = receipts[0]!.nativeArtifacts[fixture.filename]!;
-        const namespace = receipts[0]!.nativeNamespaces[native.namespace]!;
+        const native = receipt.nativeArtifacts[fixture.filename]!;
+        const namespace = receipt.nativeNamespaces[native.namespace]!;
         expect(fs.realpathSync(path.join(namespace.capturedRoot, "node_modules/openclaw"))).toBe(
           fs.realpathSync(hosts[0]!),
         );
@@ -493,9 +493,7 @@ it.each([false, true])(
         await first.disposeAsync();
         await retirePluginCache(caches[0]!);
         const persisted = await readPersistedInstalledPluginIndex({ stateDir: state.stateDir });
-        const receipts = Object.values(persisted!.plugins[0]!.sourceAdmissions ?? {});
-        expect(receipts).toHaveLength(1);
-        const namespaces = Object.values(receipts[0]!.nativeNamespaces);
+        const namespaces = Object.values(onlyReceipt(persisted).nativeNamespaces);
         const candidate = unrelated ? createFixture(state.path("unrelated"), false) : fixture;
         const candidateCompanion = path.join(candidate.root, "README.md");
         if (unrelated) {

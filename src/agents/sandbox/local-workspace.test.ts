@@ -55,6 +55,7 @@ function createLocalSandbox(
       workspaceDir: root,
       workspaceCwd: root,
       checkpoint: async () => {},
+      terminate: async (run) => await run(),
       retain: () => {
         assertCurrent();
         return () => {};

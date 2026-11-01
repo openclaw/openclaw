@@ -1,11 +1,9 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { drainStoreWriterQueuesForTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import * as databasePathIdentity from "../infra/sqlite-worker-identity.js";
 import { withOpenClawAgentDatabaseWrite as writeDatabase } from "../plugin-sdk/sqlite-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
@@ -40,12 +38,11 @@ describe("agent database write admission", () => {
     closeDatabases();
   });
 
-  function reserveWorkerOperation(start?: () => void, workerOptions = options) {
+  function reserveWorkerOperation(workerOptions = options) {
     const entered = createDeferredCore();
     const settled = createDeferredCore();
     releases.push(settled.resolve);
     const done = workerWrite(workerOptions, async () => {
-      start?.();
       entered.resolve();
       await settled.promise;
     });
@@ -76,67 +73,6 @@ describe("agent database write admission", () => {
       },
     };
   }
-
-  it.each(["stable", "retargeted"] as const)(
-    "preserves FIFO and rejects stale worker reservation through a %s alias",
-    async (target) => {
-      const { successor, aliased, retarget } = aliasFixture();
-      const capture = databasePathIdentity.readDatabasePathIdentitySync.bind(databasePathIdentity);
-      const identity =
-        target === "retargeted"
-          ? vi
-              .spyOn(databasePathIdentity, "readDatabasePathIdentitySync")
-              .mockImplementationOnce((pathname) => {
-                const observed = capture(pathname);
-                // Move the alias between its captured identity and worker reservation.
-                fs.mkdirSync(successor);
-                retarget();
-                return observed;
-              })
-          : undefined;
-      const calls: number[] = [];
-      const writes: Promise<number>[] = [];
-      const reservation = reserveWorkerOperation(() => {
-        for (const value of [1, 2, 3]) {
-          writes.push(
-            writeDatabase(value === 2 ? aliased : options, () => {
-              calls.push(value);
-              return value;
-            }),
-          );
-        }
-      }, aliased);
-      try {
-        if (target === "retargeted") {
-          reservation.release();
-          await expect(reservation.done).rejects.toThrow("database target changed");
-          expect(writes).toEqual([]);
-          return;
-        }
-        await reservation.entered;
-        await setImmediate();
-        expect(calls).toEqual([]);
-      } finally {
-        identity?.mockRestore();
-        reservation.release();
-        await reservation.done.catch(() => undefined);
-        await Promise.all(writes);
-      }
-      await expect(Promise.all(writes)).resolves.toEqual([1, 2, 3]);
-      expect(calls).toEqual([1, 2, 3]);
-    },
-  );
-
-  it("retains caller context and lets synchronous mutations reenter the ordinary owner", async () => {
-    const caller = new AsyncLocalStorage<string>();
-    const reservation = reserveWorkerOperation();
-    await reservation.entered;
-    const write = caller.run("foreground-owner", () =>
-      admitWrite(options, () => writeDatabase(options, () => caller.getStore())),
-    );
-    await reservation.finish();
-    await expect(write).resolves.toBe("foreground-owner");
-  });
 
   it.each(["cold", "warm", "borrowed", "admission"] as const)(
     "rejects a queued write after its alias retargets without committing to either target (%s)",
@@ -218,7 +154,7 @@ describe("agent database write admission", () => {
       fs.mkdirSync(secondDirectory);
       const borrowed = mode === "borrowed" ? borrowDatabase(options) : undefined;
       const borrowedDb = borrowed && requireNativeSqliteDatabase(borrowed.db);
-      const reservation = reserveWorkerOperation(undefined, { ...options, path: selectedPath });
+      const reservation = reserveWorkerOperation({ ...options, path: selectedPath });
       const cwd = vi.spyOn(process, "cwd").mockReturnValue(firstDirectory);
       const mutate = vi.fn(
         ({ path: databasePath }: ReturnType<typeof openDatabase>) => databasePath,

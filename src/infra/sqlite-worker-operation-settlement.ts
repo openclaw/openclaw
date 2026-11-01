@@ -11,6 +11,7 @@ import {
   SqliteWorkerError,
   type SqliteWorkerAdmissionTimeoutError,
   type SqliteWorkerExecutionAuthority,
+  type SqliteWorkerRequest,
 } from "./sqlite-worker-contract.js";
 import type { SqliteWorkerRequestCustodyDescriptor } from "./sqlite-worker-request-custody.js";
 
@@ -20,6 +21,7 @@ export type SqliteWorkerOperationContext = {
   /** Present for broker-owned work; standalone admission owners keep their own lifetime. */
   requestCustody?: SqliteWorkerRequestCustodyDescriptor;
   executionAuthority?: SqliteWorkerExecutionAuthority;
+  databaseIdentity?: SqliteWorkerRequest["databaseIdentity"];
   attachment?: { value: unknown };
   refusal?: SqliteWorkerError | InstanceType<typeof SqliteWorkerAdmissionTimeoutError>;
   committed?: { facts: unknown };
@@ -34,22 +36,16 @@ export type NativeCommitReceipt = {
   facts: unknown;
 };
 
-export function readNativeCommitReceipt(value: unknown): NativeCommitReceipt | undefined {
-  if (
-    !isRecord(value) ||
-    value.version !== 1 ||
-    typeof value.sequence !== "number" ||
-    !Number.isSafeInteger(value.sequence) ||
-    value.sequence < 1 ||
-    !Object.hasOwn(value, "facts")
-  ) {
-    return undefined;
-  }
-  return {
-    version: 1,
-    sequence: value.sequence,
-    facts: value.facts,
-  };
+// The private MessagePort already detached this receipt from its sender.
+export function isNativeCommitReceipt(value: unknown): value is NativeCommitReceipt {
+  return (
+    isRecord(value) &&
+    value.version === 1 &&
+    typeof value.sequence === "number" &&
+    Number.isSafeInteger(value.sequence) &&
+    value.sequence >= 1 &&
+    Object.hasOwn(value, "facts")
+  );
 }
 
 // Keep the latest committed evidence for settlement if ordinary delivery fails.
@@ -84,6 +80,8 @@ export type SqliteWorkerNativeSettlementOwner = {
 /** The broker resolves this only from the executing owner's settlement evidence. */
 export type RetainedWorkerTransactionAdmission = {
   readonly settled: Promise<SqliteWorkerOperationSettlement>;
+  /** Actual native retirement, including failed-close recovery after an unknown outcome. */
+  readonly nativeStopped?: Promise<void>;
 };
 
 /** Observe each finish after the previously installed handler, including failure. */
@@ -118,7 +116,7 @@ export function captureSqliteWorkerCommitReceipt(
   return { kind: "inline", facts: structuredClone(facts), payloadBytes };
 }
 
-export function deferSqliteWorkerNativeCommitReceipt(
+function deferSqliteWorkerNativeCommitReceipt(
   owner: SqliteWorkerOperationContext,
   database: DatabaseSync | PostgresSqlConnection,
   captured: CapturedSqliteWorkerCommitReceipt,
@@ -201,3 +199,47 @@ export const currentSqliteWorkerOperationAdmission = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteWorkerOperationAdmission"),
   () => new AsyncLocalStorage<WorkerAdmissionScope>(),
 );
+
+/** Record facts only after the real transaction commits, before native settlement is announced. */
+export function deferSqliteWorkerCommitReceipt(
+  database: DatabaseSync | PostgresSqlConnection,
+  facts: unknown,
+  delivery: "commit" | "settlement" = "commit",
+): void {
+  const scope = currentSqliteWorkerOperationAdmission.getStore();
+  if (!scope?.active) {
+    throw new SqliteWorkerError("SQLite receipt requires its retained admission", "unavailable");
+  }
+  deferSqliteWorkerNativeCommitReceipt(
+    scope.owner,
+    database,
+    captureSqliteWorkerCommitReceipt(facts),
+    delivery,
+  );
+}
+
+/** Reuse the capture that selected an inline transport; publication still belongs to COMMIT. */
+export function deferCapturedSqliteWorkerCommitReceipt(
+  database: DatabaseSync | PostgresSqlConnection,
+  captured: Extract<CapturedSqliteWorkerCommitReceipt, { kind: "inline" }>,
+  delivery: "commit" | "settlement" = "commit",
+): void {
+  const scope = currentSqliteWorkerOperationAdmission.getStore();
+  if (!scope?.active) {
+    throw new SqliteWorkerError("SQLite receipt requires its retained admission", "unavailable");
+  }
+  deferSqliteWorkerNativeCommitReceipt(scope.owner, database, captured, delivery);
+}
+
+/** A typed fenced write cannot commit without its destination owner's settlement evidence. */
+export function assertSqliteWorkerCommitReceiptPending(
+  database: DatabaseSync | PostgresSqlConnection,
+): void {
+  const scope = currentSqliteWorkerOperationAdmission.getStore();
+  if (!scope?.active || !scope.owner.pendingReceipts?.get(sqlPublicationAnchor(database))) {
+    throw new SqliteWorkerError(
+      "SQLite source fence requires a destination commit receipt",
+      "closed",
+    );
+  }
+}

@@ -16,7 +16,6 @@ input.settings-input,
 select.settings-select:not([multiple]) {
   height: var(--settings-control-height);
   padding-block: 0;
-  box-sizing: border-box;
 }
 
 .settings-row__control .btn--icon,
@@ -24,10 +23,6 @@ select.settings-select:not([multiple]) {
   width: var(--settings-control-height);
   min-width: var(--settings-control-height);
   padding-inline: 0;
-}
-
-.settings-section__actions .agent-select__trigger:not(:focus-visible) {
-  border-color: var(--border);
 }
 
 .settings-section__actions .btn--xs.btn--icon {
@@ -44,7 +39,6 @@ select.settings-select:not([multiple]) {
 /* The neutral track keeps its 2px inset; many-option enums may wrap. */
 .settings-segmented {
   min-height: var(--settings-control-height);
-  box-sizing: border-box;
   align-items: stretch;
   display: inline-flex;
   flex-wrap: wrap;
@@ -80,18 +74,6 @@ select.settings-select:not([multiple]) {
   --settings-control-height: 24px;
 
   flex-wrap: nowrap;
-}
-
-.settings-control__sr-label {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
 }
 
 /* The parent selector also wins over the shared .btn hover/active chrome. */
@@ -144,7 +126,8 @@ select.settings-select:not([multiple]) {
   font-size: 10px;
 }
 
-.settings-segmented > .settings-segmented__btn--active {
+.settings-segmented > .settings-segmented__btn--active,
+.settings-segmented > .settings-segmented__btn:has(> input:checked) {
   background: var(--bg-elevated);
   color: var(--text-strong);
   box-shadow: var(--shadow-sm);
@@ -181,26 +164,32 @@ select.settings-select:not([multiple]) {
 }
 
 :where(.settings-segmented:not(.settings-segmented--accent, .settings-segmented--primary))
-  > .settings-segmented__btn:focus-visible {
+  > .settings-segmented__btn:focus-visible,
+.settings-segmented > .settings-segmented__btn:has(> input:focus-visible) {
   outline: none;
   color: var(--text);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
-:where(.settings-segmented:not(.settings-segmented--primary)) > .settings-segmented__btn:disabled {
+:where(.settings-segmented:not(.settings-segmented--primary))
+  > .settings-segmented__btn:is(:disabled, [aria-disabled="true"]),
+.settings-toggle:has(input:is(:disabled, [aria-disabled="true"])),
+.settings-segmented > .settings-segmented__btn:has(> input:is(:disabled, [aria-disabled="true"])) {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
 @media (forced-colors: active) {
   :where(.settings-segmented:not(.settings-segmented--accent, .settings-segmented--primary))
-    > .settings-segmented__btn--active {
+    > .settings-segmented__btn--active,
+  .settings-segmented > .settings-segmented__btn:has(> input:checked) {
     text-decoration: underline 2px;
     text-underline-offset: 3px;
   }
 
   :where(.settings-segmented:not(.settings-segmented--accent, .settings-segmented--primary))
-    > .settings-segmented__btn:focus-visible {
+    > .settings-segmented__btn:focus-visible,
+  .settings-segmented > .settings-segmented__btn:has(> input:focus-visible) {
     outline: 2px solid Highlight;
     outline-offset: 2px;
   }
@@ -227,54 +216,23 @@ select.settings-select:not([multiple]) {
 .settings-input {
   --control-ui-touch-input-size: var(--control-ui-input-text-size);
 
-  font-size: var(--control-ui-input-text-size);
+  font-size: var(--field-font-size);
 }
 
 .settings-select {
   --control-ui-touch-input-size: var(--control-ui-text-sm);
 
-  font-size: var(--control-ui-text-sm);
+  font-size: var(--field-font-size);
 }
 
 /* Native controls own their box. */
 .settings-input,
 select.settings-select {
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  border-radius: var(--radius-md);
-  background-color: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
+  border: 1px solid var(--field-border);
+  border-radius: var(--field-radius);
+  background-color: var(--field-bg);
   color: var(--text);
-  padding: 7px 10px;
-  transition: border-color var(--duration-fast) var(--ease-out);
-}
-
-select.settings-select:not([multiple]) {
-  appearance: none;
-  padding-right: 36px;
-  background-image: var(--select-chevron);
-  background-repeat: no-repeat;
-  background-position:
-    right 18px center,
-    right 14px center;
-  background-size: 5px 5px;
-}
-
-@media (forced-colors: active) {
-  select.settings-select:not([multiple]) {
-    appearance: auto;
-    padding-inline-end: 10px;
-    background-image: none;
-  }
-}
-
-.settings-input::placeholder {
-  color: var(--muted);
-}
-
-.settings-input:focus-visible,
-select.settings-select:focus-visible {
-  outline: none;
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border) 45%);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+  padding: 7px var(--field-padding-inline);
 }
 
 /* Secret inputs also appear in the startup login gate. Keep these selectors
@@ -296,16 +254,7 @@ select.settings-select:focus-visible {
 .settings-secret__toggle {
   position: absolute;
   right: 5px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--muted);
   cursor: var(--cursor-action);
   transition: color var(--duration-fast) var(--ease-out);
 }
@@ -324,14 +273,18 @@ select.settings-select:focus-visible {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
+@media (forced-colors: active) {
+  /* Forced colors suppress the shadow that marks keyboard focus above. */
+  .settings-secret__toggle:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+}
+
 .settings-secret__toggle svg {
   width: 16px;
   height: 16px;
-  fill: none;
-  stroke: currentColor;
   stroke-width: 2px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 /* Quiet count badge used by settings pages and the Skill Workshop. */
@@ -345,4 +298,10 @@ select.settings-select:focus-visible {
   font-size: var(--control-ui-text-xs);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+@media (pointer: coarse), (max-width: 640px) {
+  :root {
+    --settings-control-height: 38px;
+  }
 }

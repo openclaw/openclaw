@@ -79,8 +79,19 @@ function expectBundle(
   expect(decodedSkillLibraryFiles(read.files)).toEqual(decodedSkillLibraryFiles(bundle.files!));
 }
 
-const waitRun = (client: SkillLibraryWireClient, runId: string, timeoutMs = PROOF_TIMEOUT_MS) =>
-  client.request<{ status: string }>("agent.wait", { runId, timeoutMs }, timeoutMs + 5_000);
+const waitRun = (client: SkillLibraryWireClient, runId: string) => {
+  const deadline = Date.now() + PROOF_TIMEOUT_MS;
+  return waitFor(`skill library run ${runId}`, async () => {
+    const remainingMs = Math.max(0, deadline - Date.now());
+    const observation = await client.request<{ status: string }>(
+      "agent.wait",
+      { runId, timeoutMs: remainingMs },
+      remainingMs + 5_000,
+    );
+    // Queue admission is observable before the turn has a terminal result.
+    return observation.status === "pending" ? undefined : observation;
+  });
+};
 
 const expectAssistantText = (client: SkillLibraryWireClient, key: string, ...parts: string[]) =>
   vi.waitFor(
@@ -219,13 +230,7 @@ it("pins skill bundles through worker authoring and lifecycle changes", async (c
         marker: string,
         runId: string,
       ) => {
-        const deadline = Date.now() + PROOF_TIMEOUT_MS;
-        const waitResult = await waitFor(`skill library turn ${marker}`, async () => {
-          const remainingMs = Math.max(0, deadline - Date.now());
-          const observation = await waitRun(client, runId, remainingMs);
-          // Queue admission is observable before the turn has a terminal result.
-          return observation.status === "pending" ? undefined : observation;
-        });
+        const waitResult = await waitRun(client, runId);
         expect(waitResult, waitMessage(waitResult, key, marker)).toMatchObject({
           status: "ok",
         });
@@ -354,8 +359,9 @@ it("pins skill bundles through worker authoring and lifecycle changes", async (c
       expect(outside(workerSkillDir, remoteCwd)).toBe(true);
       // Scoped turn inputs live in the secure scratch root, separate from node credentials.
       const materializationDir = path.dirname(workerSkillDir);
+      const workerTmpDir = node.tmpDir;
       expect(path.dirname(materializationDir)).toBe(
-        await fs.realpath(resolvePreferredOpenClawTmpDir()),
+        await fs.realpath(resolvePreferredOpenClawTmpDir({ tmpdir: () => workerTmpDir })),
       );
       expect(path.basename(materializationDir)).toMatch(/^skill-resources-[a-f0-9]{16}$/u);
       expect(outside(workerSkillDir, await fs.realpath(node.stateDir))).toBe(true);

@@ -1,5 +1,6 @@
 {
   "id": "clawrouter",
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "categories": [
     "models"
   ],
@@ -13,10 +14,25 @@
   "providers": [
     "clawrouter"
   ],
+  "mediaUnderstandingProviderMetadata": {
+    "clawrouter": {
+      "capabilities": ["audio"],
+      "defaultModels": { "audio": "gpt-4o-transcribe" }
+    }
+  },
   "contracts": {
+    "mediaUnderstandingProviders": ["clawrouter"],
+    "imageGenerationProviders": ["clawrouter"],
+    "speechProviders": ["clawrouter"],
     "usageProviders": [
       "clawrouter"
+    ],
+    "decisionProviders": [
+      "clawrouter"
     ]
+  },
+  "imageGenerationProviderMetadata": {
+    "clawrouter": { "authSignals": [{ "provider": "clawrouter" }] }
   },
   "setup": {
     "providers": [
@@ -58,5 +74,73 @@
     "styles": [
       "dist/control-ui/58dc1ca82e99f3402ac0361b455184ab67224ad535f0ffa12b5234c9170eac45/index.css"
     ]
+  },
+  "modelCatalog": {
+    "configuredEndpointDiscovery": ["clawrouter"],
+    "discovery": { "clawrouter": "runtime" },
+    "runtimeAugment": true,
+    "providers": {
+      "clawrouter": {
+        "baseUrl": "https://clawrouter.openclaw.ai/v1",
+        "api": "openai-responses",
+        "defaultUtilityModels": {
+          "anthropic": "anthropic/claude-haiku-5-5",
+          "openai": "openai/gpt-6-luna"
+        },
+        "models": [
+          {
+            "id": "openai/gpt-6-luna",
+            "name": "GPT-6 Luna via ClawRouter",
+            "compat": {
+              "codeMode": "capable"
+            },
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "openai-decisions",
+                "input": [
+                  "text",
+                  "image"
+                ],
+                "reasoning": {
+                  "modes": [
+                    "auto"
+                  ]
+                },
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 255
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false
+                  }
+                },
+                "confidence": "provider-specific",
+                "limits": {
+                  "maxQuestions": 400,
+                  "image": {
+                    "maxBytes": 4194304,
+                    "mimeTypes": [
+                      "image/png",
+                      "image/jpeg",
+                      "image/webp"
+                    ],
+                    "remoteUrls": false
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
   }
 }

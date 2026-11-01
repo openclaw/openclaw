@@ -206,6 +206,28 @@ export function createControlUiMockResponses(
     };
   }
 
+  /** Static transcript overrides also serve the startup read inside a subscription. */
+  function historyTranscript(): Record<string, unknown> {
+    const configured = input.methodResponses["chat.history"];
+    if (!isRecord(configured) || responseCases(configured) || responseSequence(configured)) {
+      return {};
+    }
+    const transcript: Record<string, unknown> = {};
+    for (const field of [
+      "messages",
+      "activity",
+      "sessionId",
+      "sessionInfo",
+      "inFlightRun",
+      "thinkingLevel",
+    ]) {
+      if (Object.hasOwn(configured, field)) {
+        transcript[field] = configured[field];
+      }
+    }
+    return transcript;
+  }
+
   function scopedSearchResponse(
     params: Record<string, unknown>,
     response: Record<string, unknown>,
@@ -293,6 +315,7 @@ export function createControlUiMockResponses(
     applyAgentModel,
     applySessionPlacement,
     sessionList: sessionListResponse,
+    historyTranscript,
     cases: responseCases,
     sequence: responseSequence,
     matches: paramsMatch,

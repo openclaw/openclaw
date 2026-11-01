@@ -1,6 +1,4 @@
 /**
- * Realtime voice provider selection and config resolution.
- *
  * This adapter applies the generic capability-provider resolver to Talk
  * providers, including default model injection and per-call config overrides.
  */

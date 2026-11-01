@@ -1,20 +1,15 @@
-import type { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../config/sessions/types.js";
-import type { SessionCatalogProvider, SessionUpstreamProbe } from "../plugins/session-catalog.js";
+import { vi } from "vitest";
+import * as sessionReads from "../config/sessions/session-entry-read-runtime.js";
+import * as transcript from "../config/sessions/transcript.js";
+import type { SessionCatalogProvider } from "../plugins/session-catalog.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
-import type { isSessionRunActive } from "./session-controller.queries.js";
+import * as sessionRuns from "./session-controller.queries.js";
 import "./session-upstream-monitor.js";
 
 type SessionUpstreamMonitorOptions = OpenClawStateDatabaseOptions & {
   providers?: readonly SessionCatalogProvider[];
   now?: () => number;
   signal?: AbortSignal;
-  loadEntry?: typeof loadSessionEntry;
-  isRunActive?: typeof isSessionRunActive;
-  loadOwnRecentUserTexts?: (params: {
-    entry: SessionEntry;
-    probe: Omit<SessionUpstreamProbe, "ownRecentUserTexts">;
-  }) => Promise<string[]>;
 };
 
 type SessionUpstreamMissingCounter = {
@@ -28,6 +23,22 @@ type SessionUpstreamMonitorTestApi = {
     missingCounts?: Map<string, SessionUpstreamMissingCounter>,
   ): Promise<void>;
 };
+
+export function mockEntry(implementation: typeof sessionReads.readSessionEntryReadOnlyInWorker) {
+  return vi
+    .spyOn(sessionReads, "readSessionEntryReadOnlyInWorker")
+    .mockImplementation(implementation);
+}
+
+export function mockRunActive(implementation: typeof sessionRuns.isSessionRunActive) {
+  vi.spyOn(sessionRuns, "isSessionRunActive").mockImplementation(implementation);
+}
+
+export function mockOwnTexts(texts: string[] = []) {
+  vi.spyOn(transcript, "readRecentUserAssistantTextForSession").mockResolvedValue(
+    texts.map((text) => ({ role: "user", text })),
+  );
+}
 
 function getTestApi(): SessionUpstreamMonitorTestApi {
   return (globalThis as Record<PropertyKey, unknown>)[

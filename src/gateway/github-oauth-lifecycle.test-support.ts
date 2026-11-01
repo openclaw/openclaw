@@ -33,12 +33,11 @@ export function configForScope(
   scope: GitHubIdentityScope,
   selected?: GitHubToolIdentityConfig,
 ): OpenClawConfig {
-  return scope === "system"
-    ? { tools: selected ? { github: selected } : {}, agents: { entries: { main: {} } } }
-    : {
-        tools: { github: identity(OTHER_PROFILE) },
-        agents: { entries: { main: { tools: selected ? { github: selected } : {} } } },
-      };
+  const tools = selected ? { github: selected } : {};
+  return {
+    tools: scope === "system" ? tools : { github: identity(OTHER_PROFILE) },
+    agents: { entries: { main: scope === "system" ? {} : { tools } } },
+  };
 }
 
 export function configWithSelectedIdentity(
@@ -48,16 +47,8 @@ export function configWithSelectedIdentity(
   nextIdentity: GitHubToolIdentityConfig,
 ): OpenClawConfig {
   const next = structuredClone(config);
-  if (scope === "system") {
-    next.tools ??= {};
-    next.tools.github = structuredClone(nextIdentity);
-  } else {
-    next.agents ??= {};
-    next.agents.entries ??= {};
-    const entry = (next.agents.entries[agentId] ??= {});
-    entry.tools ??= {};
-    entry.tools.github = structuredClone(nextIdentity);
-  }
+  const owner = scope === "system" ? next : (((next.agents ??= {}).entries ??= {})[agentId] ??= {});
+  (owner.tools ??= {}).github = structuredClone(nextIdentity);
   return next;
 }
 

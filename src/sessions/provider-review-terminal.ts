@@ -29,7 +29,6 @@ export function captureAgentRunProviderReview(params: {
   expectedWriterRunId: string;
   assertCurrent: () => void;
 }): void {
-  params.assertCurrent();
   const context = getAgentRunContext(params.runId);
   const lifecycleGeneration = getAgentRunLifecycleGeneration();
   if (

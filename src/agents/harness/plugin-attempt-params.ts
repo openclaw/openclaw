@@ -43,12 +43,12 @@ export async function preparePluginHarnessParams(
       ? harness.conversationToolPolicySafeDenyTools
       : undefined,
     harness.conversationToolPolicyNativeTools,
-    webSearchModel === null
-      ? undefined
-      : (webSearchModel ?? {
+    webSearchModel === undefined
+      ? {
           provider: preparedParams.model.provider,
           model: preparedParams.modelId,
-        }),
+        }
+      : webSearchModel,
   );
   if (policies.requiresLiveToolAuthority) {
     // Native-runtime consent does not waive a separate revocable delegation grant.
@@ -62,8 +62,10 @@ export async function preparePluginHarnessParams(
     pluginHarnessToolPolicyRestricted: policies.toolPolicyRestricted,
     pluginHarnessToolPolicyScope: hasRuntimePluginToolGrant ? "turn" : policies.toolPolicyScope,
   };
+  // Consent means the user accepted that the native runtime runs unrestricted;
+  // native harnesses pick their own approval mode from permissionMode.
   const effectiveParams = nativePermissionsConsented
-    ? policyParams
+    ? { ...policyParams, permissionMode: "full" as const }
     : applyPluginHarnessDenyAllToolPolicy(policyParams, policies);
   setInputAttachmentReadAllowed(
     isRuntimeToolAllowed("read", effectiveParams.toolsAllow) &&

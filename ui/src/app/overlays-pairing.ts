@@ -15,8 +15,6 @@ import {
 import type { ApplicationGateway } from "./gateway.ts";
 import { readGatewayOperatorAccess } from "./operator-access.ts";
 
-type DevicePairSetupState = ReturnType<typeof createDevicePairSetupState>;
-
 const runtime = {
   openDevicePairSetup,
   readDevicePairSetupSnapshot,
@@ -35,7 +33,48 @@ export function createOverlayPairing(params: {
     connected: params.gateway.snapshot.phase === "connected",
     onChange: params.publish,
   });
-  const pendingCount = createOverlayPairingPendingCount({ ...params, state });
+  const { gateway, isDisposed, publish } = params;
+  let generation = 0;
+  const pendingCount = {
+    invalidate(options: { clear?: boolean } = {}) {
+      generation += 1;
+      if (options.clear) {
+        state.pendingCount = 0;
+      }
+    },
+
+    async refresh() {
+      const client = gateway.snapshot.client;
+      if (
+        !client ||
+        gateway.snapshot.phase !== "connected" ||
+        isDisposed() ||
+        !state.devicePairSetupOpen ||
+        !readGatewayOperatorAccess(gateway.snapshot).canAdmin
+      ) {
+        return;
+      }
+      const requestGeneration = ++generation;
+      let result: { pending?: unknown };
+      try {
+        result = await client.request<{ pending?: unknown }>("device.pair.list", {});
+      } catch {
+        return;
+      }
+      if (
+        isDisposed() ||
+        requestGeneration !== generation ||
+        gateway.snapshot.client !== client ||
+        gateway.snapshot.phase !== "connected" ||
+        !state.devicePairSetupOpen ||
+        !readGatewayOperatorAccess(gateway.snapshot).canAdmin
+      ) {
+        return;
+      }
+      state.pendingCount = Array.isArray(result.pending) ? result.pending.length : 0;
+      publish();
+    },
+  };
   return {
     runtime,
     state,
@@ -64,56 +103,6 @@ export function createOverlayPairing(params: {
         return true;
       }
       return false;
-    },
-  };
-}
-
-function createOverlayPairingPendingCount(params: {
-  gateway: ApplicationGateway;
-  state: DevicePairSetupState;
-  isDisposed: () => boolean;
-  publish: () => void;
-}) {
-  let generation = 0;
-
-  return {
-    invalidate(options: { clear?: boolean } = {}) {
-      generation += 1;
-      if (options.clear) {
-        params.state.pendingCount = 0;
-      }
-    },
-
-    async refresh() {
-      const client = params.gateway.snapshot.client;
-      if (
-        !client ||
-        params.gateway.snapshot.phase !== "connected" ||
-        params.isDisposed() ||
-        !params.state.devicePairSetupOpen ||
-        !readGatewayOperatorAccess(params.gateway.snapshot).canAdmin
-      ) {
-        return;
-      }
-      const requestGeneration = ++generation;
-      let result: { pending?: unknown };
-      try {
-        result = await client.request<{ pending?: unknown }>("device.pair.list", {});
-      } catch {
-        return;
-      }
-      if (
-        params.isDisposed() ||
-        requestGeneration !== generation ||
-        params.gateway.snapshot.client !== client ||
-        params.gateway.snapshot.phase !== "connected" ||
-        !params.state.devicePairSetupOpen ||
-        !readGatewayOperatorAccess(params.gateway.snapshot).canAdmin
-      ) {
-        return;
-      }
-      params.state.pendingCount = Array.isArray(result.pending) ? result.pending.length : 0;
-      params.publish();
     },
   };
 }

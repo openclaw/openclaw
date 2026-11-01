@@ -1,4 +1,8 @@
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import type { Command } from "commander";
+import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 // Sub-CLI descriptor catalog used for root help placeholders and lazy registration.
 import { isCronMachineOutput } from "../cron-cli/output-mode.js";
 import { isDevicesMachineOutput } from "../devices-output-mode.js";
@@ -9,7 +13,7 @@ import { isProxyMachineOutput } from "../proxy-output-mode.js";
 import { isSkillsMachineOutput } from "../skills-output-mode.js";
 import { isSystemMachineOutput } from "../system-output-mode.js";
 import type { RegisteredCommandDescriptor } from "./command-group-descriptors.js";
-import { loadPrivateQaCliModule } from "./private-qa-cli.js";
+import { isPrivateQaCliEnabled } from "./private-qa-policy.js";
 import { getSubCliCommandMetadata, type SubCliCommandName } from "./subcli-command-metadata.js";
 
 export type SubCliRegistrationContext = {
@@ -20,6 +24,44 @@ type SubCliCommand = RegisteredCommandDescriptor<
   [argv: string[], context: SubCliRegistrationContext]
 >;
 type SubCliRegistration = SubCliCommand["register"];
+
+const PRIVATE_QA_DIST_RELATIVE_PATH = path.join("dist", "plugin-sdk", "qa-lab.js");
+const SOURCE_CHECKOUT_MARKER_RELATIVE_PATHS = [".git", "pnpm-workspace.yaml"] as const;
+
+function resolvePrivateQaSourceModuleSpecifier(): string | null {
+  if (!isPrivateQaCliEnabled()) {
+    return null;
+  }
+  const packageRoot = resolveOpenClawPackageRootSync({
+    argv1: process.argv[1],
+    cwd: process.cwd(),
+    moduleUrl: import.meta.url,
+  });
+  if (!packageRoot) {
+    return null;
+  }
+  const sourceModulePath = path.join(packageRoot, PRIVATE_QA_DIST_RELATIVE_PATH);
+  const hasSourceCheckoutMarker = SOURCE_CHECKOUT_MARKER_RELATIVE_PATHS.some((relativePath) =>
+    fs.existsSync(path.join(packageRoot, relativePath)),
+  );
+  if (
+    !hasSourceCheckoutMarker ||
+    !fs.existsSync(path.join(packageRoot, "src")) ||
+    !fs.existsSync(sourceModulePath)
+  ) {
+    return null;
+  }
+  return pathToFileURL(sourceModulePath).href;
+}
+
+/** Load the private QA module from a source checkout or throw a user-facing availability error. */
+function loadPrivateQaCliModule(): Promise<Record<string, unknown>> {
+  const specifier = resolvePrivateQaSourceModuleSpecifier();
+  if (!specifier) {
+    throw new Error("Private QA CLI is only available from an OpenClaw source checkout.");
+  }
+  return import(specifier);
+}
 
 async function registerPluginCommandsIfNeeded(program: Command, argv: string[]) {
   const { resolveCliArgvInvocation } = await import("../argv-invocation.js");
@@ -189,16 +231,4 @@ export function getSubCliEntriesCore(): readonly SubCliCommand[] {
   return getSubCliCommandMetadata().map((metadata) =>
     Object.assign({}, metadata, registrations[metadata.name]),
   );
-}
-
-export function getSubCliCommandsWithSubcommands(): string[] {
-  return getSubCliEntriesCore()
-    .filter((descriptor) => descriptor.hasSubcommands)
-    .map((descriptor) => descriptor.name);
-}
-
-export function getSubCliParentDefaultHelpCommands(): string[] {
-  return getSubCliEntriesCore()
-    .filter((descriptor) => descriptor.parentDefaultHelp)
-    .map((descriptor) => descriptor.name);
 }

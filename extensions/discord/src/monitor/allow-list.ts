@@ -489,19 +489,15 @@ export function shouldEmitDiscordReactionNotification(params: {
   channelConfig?: DiscordChannelConfigResolved | null;
   guildInfo?: DiscordGuildEntryResolved | null;
   memberRoleIds?: string[];
-  allowlist?: string[];
   allowNameMatching?: boolean;
 }) {
   const mode = params.mode ?? "own";
   if (mode === "off") {
     return false;
   }
-  const accessGuildInfo =
-    params.guildInfo ??
-    (params.allowlist ? ({ users: params.allowlist } satisfies DiscordGuildEntryResolved) : null);
   const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
     channelConfig: params.channelConfig,
-    guildInfo: accessGuildInfo,
+    guildInfo: params.guildInfo,
     memberRoleIds: params.memberRoleIds ?? [],
     sender: {
       id: params.userId,

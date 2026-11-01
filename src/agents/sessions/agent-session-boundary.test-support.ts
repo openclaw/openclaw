@@ -22,8 +22,10 @@ export function sessionTarget(
 export async function extensionFixture(
   cwd: string,
   factory: Parameters<typeof loadExtensionFromFactory>[0],
-  resourceLoader = createResourceLoader(),
+  providedResourceLoader?: Awaited<ReturnType<typeof createResourceLoader>>,
 ) {
+  const resourceLoader =
+    providedResourceLoader ?? (await createResourceLoader(undefined, { cwd, agentDir: cwd }));
   const eventBus = createEventBus();
   const extensions = resourceLoader.getExtensions();
   extensions.extensions.push(

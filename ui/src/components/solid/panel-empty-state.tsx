@@ -1,74 +1,35 @@
 import type { JSX } from "@solidjs/web";
-import { onSettled } from "solid-js";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import panelStyles from "../../styles/panel-empty-state.css?inline";
 
-export type PanelEmptyStateProps = {
+export function PanelEmptyState(props: {
   icon?: JSX.Element;
   heading: string;
   description: string;
   action?: JSX.Element;
-};
-
-export type PanelEmptyStateElement = SolidBridgeElement<PanelEmptyStateProps>;
-
-export function PanelEmptyStateContent(props: PanelEmptyStateProps & { children?: JSX.Element }) {
-  let outlet!: HTMLDivElement;
-  // Keep the caller's Lit range intact; only its direct unnamed elements are decorative.
-  onSettled(() => {
-    const update = () => {
-      for (const element of outlet.children) {
-        if (element.getAttribute("slot") !== "action") {
-          element.setAttribute("aria-hidden", "true");
-        }
-      }
-    };
-    update();
-    const observer = new MutationObserver(update);
-    observer.observe(outlet, { childList: true });
-    return () => observer.disconnect();
-  });
+  /** Explicit session presentation; omitted keeps existing consumers unchanged. */
+  presentation?: "desktop" | "mobile";
+}) {
   return (
-    <div class="empty-state" role="status">
-      <div
-        class="empty-state__icon"
-        ref={(element) => {
-          outlet = element;
-        }}
-      >
-        {props.children ?? (
-          <>
+    <openclaw-panel-empty-state>
+      <style>{panelStyles}</style>
+      <div class="empty-state" data-presentation={props.presentation} role="status">
+        {(!props.presentation || props.icon) && (
+          <div class="empty-state__icon" aria-hidden="true">
             {props.icon}
-            {props.action != null ? <span slot="action">{props.action}</span> : undefined}
-          </>
+          </div>
+        )}
+        {props.action != null ? <span slot="action">{props.action}</span> : undefined}
+        {(!props.presentation || props.heading || props.description) && (
+          <div class="empty-state__body">
+            {(!props.presentation || props.heading) && (
+              <strong class="empty-state__title">{props.heading}</strong>
+            )}
+            {(!props.presentation || props.description) && (
+              <p class="empty-state__description">{props.description}</p>
+            )}
+          </div>
         )}
       </div>
-      <strong class="empty-state__title">{props.heading}</strong>
-      <p class="empty-state__description">{props.description}</p>
-    </div>
+    </openclaw-panel-empty-state>
   );
-}
-
-export const PanelEmptyState = defineSolidBridge<PanelEmptyStateProps>(
-  "openclaw-panel-empty-state",
-  (props) => (
-    <>
-      <style>{panelStyles}</style>
-      <PanelEmptyStateContent {...props} />
-    </>
-  ),
-  {
-    properties: {
-      heading: { default: "" },
-      description: { default: "" },
-      icon: { default: undefined, attribute: false },
-      action: { default: undefined, attribute: false },
-    },
-  },
-);
-
-declare global {
-  interface HTMLElementTagNameMap {
-    "openclaw-panel-empty-state": PanelEmptyStateElement;
-  }
 }

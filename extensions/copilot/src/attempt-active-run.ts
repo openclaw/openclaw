@@ -41,7 +41,11 @@ export function registerCopilotActiveRun(params: {
     text: string,
     options?: CopilotQueueMessageOptions,
   ) => {
-    if (options?.isInboundUserMessage !== true || options.images?.length) {
+    if (
+      options?.isInboundUserMessage !== true ||
+      options.allowPendingUserInputAnswer === false ||
+      options.images?.length
+    ) {
       return false;
     }
     return await claimPendingAgentQuestionAnswer({

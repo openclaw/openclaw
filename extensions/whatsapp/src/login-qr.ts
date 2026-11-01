@@ -95,6 +95,8 @@ function notifyQrUpdate(login: ActiveLogin) {
 function updateLoginQrState(accountId: string, login: ActiveLogin, qr: string, notify = false) {
   login.qr = qr;
   login.qrVersion += 1;
+  // A rotated QR must not join the previous version's in-flight render.
+  login.qrRenderPromise = null;
   if (notify) {
     notifyQrUpdate(login);
   }
@@ -494,7 +496,7 @@ export async function waitForWebLogin(
     };
   }
   const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, 120_000, 1000);
-  const deadline = Date.now() + timeoutMs;
+  const deadline = performance.now() + timeoutMs;
   const currentQrDataUrl = opts.currentQrDataUrl;
 
   while (true) {
@@ -523,7 +525,7 @@ export async function waitForWebLogin(
       };
     }
 
-    const remaining = deadline - Date.now();
+    const remaining = deadline - performance.now();
     if (remaining <= 0) {
       return {
         connected: false,

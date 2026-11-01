@@ -1,31 +1,32 @@
-const failureListeners = new Set<(url: string) => void>();
-const restoredListeners = new Set<() => void>();
+import { createChangeListeners } from "../../../src/shared/listeners.js";
 
-export function subscribeBrowserHttpFailures(listener: (url: string) => void): () => void {
-  failureListeners.add(listener);
-  return () => void failureListeners.delete(listener);
+let reportHttpFailure: ((url: string) => void) | undefined;
+const restoredListeners = createChangeListeners({ snapshot: true });
+
+export function bindBrowserHttpFailures(listener: (url: string) => void): () => void {
+  reportHttpFailure = listener;
+  return () => {
+    reportHttpFailure = undefined;
+  };
 }
 
 export function subscribeBrowserAuthRestored(listener: () => void): () => void {
-  restoredListeners.add(listener);
-  return () => void restoredListeners.delete(listener);
+  const stop = restoredListeners.subscribe(listener);
+  return () => {
+    stop();
+  };
 }
 
 export function notifyBrowserAuthRestored(): void {
   // A retry can replace its resource subscription during notification.
-  const listeners = [...restoredListeners];
-  for (const listener of listeners) {
-    listener();
-  }
+  restoredListeners.publish();
 }
 
 /** Preserve each caller's response, cancellation, and retry policy. */
 export async function fetchControlUiResource(url: string, init?: RequestInit): Promise<Response> {
   const reportFailure = () => {
     if (!init?.signal?.aborted) {
-      for (const listener of failureListeners) {
-        listener(url);
-      }
+      reportHttpFailure?.(url);
     }
   };
   try {

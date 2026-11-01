@@ -1,3 +1,4 @@
+import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import { isCommandPaletteShortcut } from "../components/command-palette-contract.ts";
 import { activeElement, tabbableElements } from "../components/focus-navigation.ts";
 import { containsComposed } from "../components/overlay-registry.ts";
@@ -6,33 +7,33 @@ import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../lib/keyboard-shortcut-contract.ts";
+import type { RouteElements } from "./route-elements.ts";
 
 export const NAVIGATION_RAIL_WIDTH = 52;
+export const NAV_DRAWER_TOGGLE_REGISTRATION = "nav-drawer-toggle";
 
 export type ShellNavigationElements = {
   shellElement?: HTMLElement;
   navDrawerElement?: HTMLElement;
+  navBackdropElement?: HTMLElement;
   contentElement?: HTMLElement;
   toastElement?: HTMLElement;
 };
 
-type AppSidebarElement = HTMLElement & { dismissTransientMenus(): boolean };
-type SidebarAttentionElement = HTMLElement & { dismissPanel(): boolean };
+export type ShellNavigationSurfaces = {
+  readonly element: HTMLElement;
+  readonly navigationSidebar: HTMLElement &
+    Partial<Pick<AppSidebarElement, "dismissTransientMenus" | "activeNavigationViewElement">>;
+  readonly queryRenderedElements: RouteElements["renderedElements"];
+};
 
-export function navDrawerFocusableElements(drawer: HTMLElement): HTMLElement[] {
-  return [...tabbableElements(drawer.children)];
-}
-
-export function dismissNavigationTransientSurfaces(host: HTMLElement): boolean {
-  // Sidebar-owned menu/panel markup stays foreign; unupgraded elements own no transient UI.
-  const dismissedPanel = [
-    ...host.querySelectorAll<SidebarAttentionElement>("openclaw-sidebar-attention:defined"),
-  ]
+export function dismissNavigationTransientSurfaces(host: ShellNavigationSurfaces): boolean {
+  const dismissedPanel = host
+    .queryRenderedElements("openclaw-sidebar-attention")
     .map((attention) => attention.dismissPanel())
     .some((dismissed) => dismissed);
-  const dismissedMenu = host
-    .querySelector<AppSidebarElement>("openclaw-app-sidebar:defined")
-    ?.dismissTransientMenus();
+  const sidebar = host.navigationSidebar;
+  const dismissedMenu = host.element.contains(sidebar) && sidebar.dismissTransientMenus?.();
   return dismissedMenu === true || dismissedPanel;
 }
 
@@ -52,7 +53,7 @@ function trapNavDrawerFocus(drawer: HTMLElement | undefined, event: KeyboardEven
   ) {
     return;
   }
-  const focusable = navDrawerFocusableElements(drawer);
+  const focusable = [...tabbableElements(drawer.children)];
   const active = activeElement(drawer);
   const target = event.shiftKey ? focusable.at(-1) : focusable[0];
   const boundary = event.shiftKey ? focusable[0] : focusable.at(-1);
@@ -104,11 +105,15 @@ export function setToastInNavDrawer(host: ShellNavigationElements, inDrawer: boo
   }
 }
 
-export function visibleNavDrawerToggle(host: HTMLElement): HTMLElement | undefined {
-  // Topbar and chat own separate triggers; select whichever surface is currently visible.
-  return [...host.querySelectorAll<HTMLElement>(".topbar-nav-toggle, .chat-pane__nav-toggle")].find(
-    (candidate) => candidate.checkVisibility(),
-  );
+export function visibleNavDrawerToggle(
+  host: Pick<ShellNavigationSurfaces, "queryRenderedElements">,
+): HTMLElement | undefined {
+  return host
+    .queryRenderedElements(NAV_DRAWER_TOGGLE_REGISTRATION)
+    .toSorted((left, right) =>
+      left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+    )
+    .find((candidate) => candidate.checkVisibility());
 }
 
 export function navigationSurfaceIsHidden(params: {

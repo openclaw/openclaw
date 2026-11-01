@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
@@ -18,24 +18,13 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
-import {
-  linkUserChannelIdentity,
-  unlinkUserChannelIdentity,
-} from "../../state/user-channel-identities.js";
+import { linkUserChannelIdentity, unlinkUserChannelIdentity } from "../../state/user-channel-identities.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { expectObjectFields } from "../../test-utils/mock-call-assertions.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
-import {
-  loadRunCronIsolatedAgentTurn,
-  mockRunCronFallbackPassthrough,
-  ensureAgentWorkspaceMock,
-  runEmbeddedAgentMock,
-  loadSessionEntryMock,
-  patchSessionEntryMock,
-  resetRunCronIsolatedAgentTurnHarness,
-  resolveCronSessionMock,
-} from "./run.test-harness.js";
+import * as harness from "./run.test-harness.js";
 
 const actualSession = await vi.importActual<typeof import("./session.js")>("./session.js");
 const actualAccessor = await vi.importActual<
@@ -53,8 +42,25 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     cleanup();
   }),
 );
+function openTestDatabase() {
+  vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-cron-session-"));
+  return openOpenClawAgentDatabase({ agentId: "main", env: process.env });
+}
+function prepareRun(storePath: string, sessionKey = "cron:test-job", job = {}) {
+  return prepareCronRunContext({
+    input: makeIsolatedAgentParamsFixture({
+      agentId: "main",
+      cfg: { session: { store: storePath } },
+      sessionKey,
+      job: makeIsolatedAgentJobFixture({ delivery: { mode: "none" }, ...job }),
+    }),
+    isFastTestEnv: true,
+    onLifecycleInterrupt: () => {},
+  });
+}
 
 describe("cron session preparation", () => {
+  beforeEach(harness.resetRunCronIsolatedAgentTurnHarness);
   it.each([
     "linked",
     "local",
@@ -66,7 +72,7 @@ describe("cron session preparation", () => {
     "wrong-account",
     "malformed",
   ] as const)("prepares creator identity fail-closed: %s", async (kind) => {
-    resetRunCronIsolatedAgentTurnHarness();
+    harness.resetRunCronIsolatedAgentTurnHarness();
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-cron-channel-creator-"));
     const database = openOpenClawAgentDatabase({ agentId: "main", env: process.env });
     const profile = ensureProfileForEmail("creator@example.test");
@@ -79,7 +85,7 @@ describe("cron session preparation", () => {
     }
     using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     const boundary = new Error("session preparation reached");
-    resolveCronSessionMock.mockRejectedValue(boundary);
+    harness.resolveCronSessionMock.mockRejectedValue(boundary);
     const sessionKey = "agent:main:source";
     const preparation = prepareCronRunContext({
       input: makeIsolatedAgentParamsFixture({
@@ -161,27 +167,27 @@ describe("cron session preparation", () => {
       await expect(preparation).rejects.toBe(boundary);
     } else {
       await expect(preparation).rejects.toThrow(/reauthoriz/i);
-      expect(resolveCronSessionMock).not.toHaveBeenCalled();
+      expect(harness.resolveCronSessionMock).not.toHaveBeenCalled();
     }
   });
 
   it.each(["unchanged", "revoked", "relinked", "role", "config", "profile-role"] as const)(
     "checks creator authority before session persistence and runner launch: %s",
     async (change) => {
-      resetRunCronIsolatedAgentTurnHarness();
-      mockRunCronFallbackPassthrough();
+      harness.resetRunCronIsolatedAgentTurnHarness();
+      harness.mockRunCronFallbackPassthrough();
       vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-cron-launch-authority-"));
       const database = openOpenClawAgentDatabase({ agentId: "main", env: process.env });
-      resolveCronSessionMock.mockImplementation(actualSession.prepareCronSession);
-      loadSessionEntryMock.mockImplementation(actualSession.loadCronSessionEntryLatest);
-      patchSessionEntryMock.mockImplementation(actualAccessor.patchSessionEntryCore);
+      harness.resolveCronSessionMock.mockImplementation(actualSession.prepareCronSession);
+      harness.loadSessionEntryMock.mockImplementation(actualSession.loadCronSessionEntryLatest);
+      harness.patchSessionEntryMock.mockImplementation(actualAccessor.patchSessionEntryCore);
       const profile = ensureProfileForEmail("requester@example.test");
       const identity = { channelId: "slack", accountId: "default", senderId: "U-REQUESTER" };
       if (change !== "profile-role") {
         linkUserChannelIdentity(profile.id, identity);
       }
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-      ensureAgentWorkspaceMock.mockImplementationOnce(async () => {
+      harness.ensureAgentWorkspaceMock.mockImplementationOnce(async () => {
         if (change === "revoked" || change === "relinked") {
           unlinkUserChannelIdentity(profile.id, identity);
           if (change === "relinked") {
@@ -211,7 +217,7 @@ describe("cron session preparation", () => {
         }
         return { dir: "/tmp/workspace" };
       });
-      const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
+      const runCronIsolatedAgentTurn = await harness.loadRunCronIsolatedAgentTurn();
       const run = runCronIsolatedAgentTurn(
         makeIsolatedAgentParamsFixture({
           agentId: "main",
@@ -271,8 +277,8 @@ describe("cron session preparation", () => {
       if (change === "unchanged") {
         const result = await run;
         expect(result.status).toBe("ok");
-        expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-        expect(runEmbeddedAgentMock.mock.calls[0]?.[0].execSession).toMatchObject({
+        expect(harness.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+        expect(harness.runEmbeddedAgentMock.mock.calls[0]?.[0].execSession).toMatchObject({
           sandbox: "required",
           createdActor: { type: "human", source: "channel", id: "U-HISTORICAL-PERSON" },
         });
@@ -289,7 +295,7 @@ describe("cron session preparation", () => {
         if (change === "profile-role") {
           expect(result.error).not.toContain("cron.reauthorizeChannelRequester");
         }
-        expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+        expect(harness.runEmbeddedAgentMock).not.toHaveBeenCalled();
         expect(
           actualAccessor.loadSessionEntry({
             storePath: database.path,
@@ -300,12 +306,11 @@ describe("cron session preparation", () => {
     },
   );
 
+
   it.each(["unchanged", "workspace"] as const)(
     "revalidates %s authority across absent-field snapshot representations",
     async (change) => {
-      resetRunCronIsolatedAgentTurnHarness();
-      vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-cron-session-authority-"));
-      const database = openOpenClawAgentDatabase({ agentId: "main", env: process.env });
+      const database = openTestDatabase();
       const sessionKey = "agent:main:conversation";
       const target = { agentId: "main", storePath: database.path, sessionKey };
       const now = Date.now();
@@ -325,11 +330,8 @@ describe("cron session preparation", () => {
         nowMs: now,
       });
       const initial = expectDefined(cronSession.initialSessionEntry, "initial session");
-      expect([initial.owner, initial.participants, initial.participantCount]).toEqual([
-        undefined,
-        undefined,
-        undefined,
-      ]);
+      const absent = { owner: undefined, participants: undefined, participantCount: undefined };
+      expectObjectFields(initial, absent);
       delete initial.owner;
       delete initial.participants;
       delete initial.participantCount;
@@ -339,7 +341,7 @@ describe("cron session preparation", () => {
           spawnedCwd: "/tmp/another-workspace",
         });
       }
-      loadSessionEntryMock.mockImplementation(
+      harness.loadSessionEntryMock.mockImplementation(
         async (...args: Parameters<typeof actualSession.loadCronSessionEntryLatest>) => {
           const current = await actualSession.loadCronSessionEntryLatest(...args);
           // Published snapshots can include absent fields that SQL-backed rows omit.
@@ -360,21 +362,17 @@ describe("cron session preparation", () => {
         runSessionKey: sessionKey,
         usesDetachedRunSession: false,
         onInterrupt: () => {},
-      });
-      if (change === "unchanged") {
-        const lease = await admission;
+      }).then((lease) => {
         try {
-          expect(lease.isActive()).toBe(true);
+          return lease.isActive();
         } finally {
           lease.release();
         }
+      });
+      if (change === "unchanged") {
+        await expect(admission).resolves.toBe(true);
       } else {
-        await expect(
-          admission.then((lease) => {
-            lease.release();
-            return lease;
-          }),
-        ).rejects.toMatchObject({
+        await expect(admission).rejects.toMatchObject({
           name: "CronSessionLifecycleClaimError",
           admissionDisposition: "session-conflict",
         });
@@ -383,9 +381,7 @@ describe("cron session preparation", () => {
   );
 
   it("preserves a concurrent metadata write during detached preparation without caller SQL", async () => {
-    resetRunCronIsolatedAgentTurnHarness();
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-cron-session-write-"));
-    const database = openOpenClawAgentDatabase({ agentId: "main", env: process.env });
+    const database = openTestDatabase();
     const target = {
       agentId: "main",
       storePath: database.path,
@@ -398,14 +394,14 @@ describe("cron session preparation", () => {
       createdVia: "cron",
       totalTokens: 10,
     });
-    resolveCronSessionMock.mockImplementation(async (params) => {
+    harness.resolveCronSessionMock.mockImplementation(async (params) => {
       const prepared = await actualSession.prepareCronSession(params);
       await actualAccessor.patchSessionEntryCore(target, () => ({ totalTokens: 25 }));
       return prepared;
     });
-    loadSessionEntryMock.mockImplementation(actualSession.loadCronSessionEntryLatest);
+    harness.loadSessionEntryMock.mockImplementation(actualSession.loadCronSessionEntryLatest);
     const queries: string[] = [];
-    patchSessionEntryMock.mockImplementation(
+    harness.patchSessionEntryMock.mockImplementation(
       async (...args: Parameters<typeof actualAccessor.patchSessionEntryCore>) => {
         const sql = observeHostDataSql();
         try {
@@ -416,46 +412,27 @@ describe("cron session preparation", () => {
         }
       },
     );
-    const result = await prepareCronRunContext({
-      input: makeIsolatedAgentParamsFixture({
-        agentId: "main",
-        cfg: { session: { store: database.path } },
-        sessionKey: "cron:test-job",
-        job: makeIsolatedAgentJobFixture({ delivery: { mode: "none" } }),
-      }),
-      isFastTestEnv: true,
-      onLifecycleInterrupt: () => {},
-    });
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw new Error("Cron preparation failed");
-    }
+    const result = await prepareRun(database.path);
+    const context = expectDefined(result.ok ? result.context : undefined, "prepared context");
     try {
-      await using _ = result.context.preparedModelRuntimeLease;
-      expect(patchSessionEntryMock).toHaveBeenCalled();
+      await using _ = context.preparedModelRuntimeLease;
+      expect(harness.patchSessionEntryMock).toHaveBeenCalled();
       expect(queries).toEqual([]);
-      expect(
-        actualAccessor.loadSessionEntry({
-          storePath: database.path,
-          sessionKey: "agent:main:cron:test-job",
-        }),
-      ).toMatchObject({
+      expect(actualAccessor.loadSessionEntry(target)).toMatchObject({
         createdVia: "cron",
-        sessionId: result.context.runSessionId,
+        sessionId: context.runSessionId,
         totalTokens: 25,
       });
-      expect(result.context.cronSession.sessionEntry.totalTokens).toBe(25);
+      expect(context.cronSession.sessionEntry.totalTokens).toBe(25);
     } finally {
-      result.context.sessionPreparationEffect.release();
-      await result.context.workspaceLease?.release();
+      context.sessionPreparationEffect.release();
+      await context.workspaceLease?.release();
     }
   });
 
   it("prepares full target and source rows without host database reads", async () => {
-    resetRunCronIsolatedAgentTurnHarness();
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-cron-session-read-"));
+    const database = openTestDatabase();
     const scope = { agentId: "main", env: process.env };
-    const database = openOpenClawAgentDatabase(scope);
     const targetKey = "agent:main:cron:test-job";
     const sourceKey = "agent:main:source";
     const now = Date.now();
@@ -497,7 +474,7 @@ describe("cron session preparation", () => {
 
     let prepared: Awaited<ReturnType<typeof actualSession.prepareCronSession>> | undefined;
     const preparedBoundary = new Error("cron session preparation complete");
-    resolveCronSessionMock.mockImplementation(async (params) => {
+    harness.resolveCronSessionMock.mockImplementation(async (params) => {
       prepared = await actualSession.prepareCronSession(params);
       // Later lifecycle admission and writes have their own boundary coverage.
       throw preparedBoundary;
@@ -505,20 +482,7 @@ describe("cron session preparation", () => {
     const host = observeHostDataSql();
     try {
       await expect(
-        prepareCronRunContext({
-          input: makeIsolatedAgentParamsFixture({
-            agentId: "main",
-            cfg: { session: { store: database.path } },
-            sessionKey: sourceKey,
-            job: makeIsolatedAgentJobFixture({
-              sessionTarget: "current",
-              sessionKey: sourceKey,
-              delivery: { mode: "none" },
-            }),
-          }),
-          isFastTestEnv: true,
-          onLifecycleInterrupt: () => {},
-        }),
+        prepareRun(database.path, sourceKey, { sessionTarget: "current", sessionKey: sourceKey }),
       ).rejects.toBe(preparedBoundary);
       for (const calls of host.calls) {
         expect(calls).not.toHaveBeenCalled();
@@ -530,16 +494,18 @@ describe("cron session preparation", () => {
     expect(Object.keys(prepared?.store ?? {}).toSorted()).toEqual(
       [targetKey, sourceKey].toSorted(),
     );
-    expect(prepared?.initialSessionEntry).toMatchObject(target);
-    expect(prepared?.store[sourceKey]).toMatchObject(source);
-    expect(prepared?.sessionEntry).toMatchObject({
-      label: source.label,
-      thinkingLevel: source.thinkingLevel,
-      createdAt: target.createdAt,
-      createdVia: target.createdVia,
-      skillLibrarySelections: target.skillLibrarySelections,
+    expect(prepared).toMatchObject({
+      initialSessionEntry: target,
+      store: { [sourceKey]: source },
+      sessionEntry: {
+        label: source.label,
+        thinkingLevel: source.thinkingLevel,
+        createdAt: target.createdAt,
+        createdVia: target.createdVia,
+        skillLibrarySelections: target.skillLibrarySelections,
+      },
+      isNewSession: true,
     });
-    expect(prepared?.isNewSession).toBe(true);
     expect(prepared?.sessionEntry.sessionId).not.toBe(source.sessionId);
   });
 });

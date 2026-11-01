@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { defineCodexBuildState } from "../build-state.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
@@ -23,6 +24,13 @@ import { isJsonObject, type CodexConfigReadResponse, type JsonObject } from "./p
 import { CODEX_RESPONSES_OAUTH_PROVIDER, type CodexResponsesOAuth } from "./responses-oauth.js";
 import type { CodexBindingAuthority, CodexAppServerThreadBinding } from "./session-binding.js";
 import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
+
+const loadSsrfRuntime = createLazyRuntimeModule(() => import("openclaw/plugin-sdk/ssrf-runtime"));
+const loadInferenceProxy = createLazyRuntimeModule(() => import("./inference-proxy.js"));
+const loadNativeSubagentMonitor = createLazyRuntimeModule(
+  () => import("./native-subagent-monitor.js"),
+);
+const loadInferenceDispatch = createLazyRuntimeModule(() => import("./inference-dispatch.js"));
 
 export type CodexInferenceProviderRoutes = ReadonlyMap<string, CodexInferenceProxy>;
 type ThreadRoutes = {
@@ -285,7 +293,7 @@ async function prepareCodexInferenceRoute(params: {
     configured ||
       (type === "apiKey" ? "https://api.openai.com/v1" : "https://chatgpt.com/backend-api/codex"),
   );
-  const { isBlockedHostnameOrIp } = await import("openclaw/plugin-sdk/ssrf-runtime");
+  const { isBlockedHostnameOrIp } = await loadSsrfRuntime();
   assertCurrent();
   if (isBlockedHostnameOrIp(target.hostname)) {
     return unsupported();
@@ -337,13 +345,14 @@ async function prepareCodexInferenceRoute(params: {
         );
       }
       pending = Promise.all([
-        import("./inference-proxy.js"),
-        import("./native-subagent-monitor.js"),
-        import("./inference-dispatch.js"),
+        loadInferenceProxy(),
+        loadNativeSubagentMonitor(),
+        loadInferenceDispatch(),
       ]).then(([{ createCodexInferenceProxy }, native, { createCodexInferenceModelBinding }]) => {
         assertClient();
         return createCodexInferenceProxy({
           upstream: target,
+          configurationIdentity: key,
           assertCurrent: assertClient,
           oauth: owner.oauth,
           preserveAzureUrlFeatures,
@@ -455,27 +464,6 @@ export async function prepareCodexInferenceThreadConfig(params: {
     retained?.route ?? (await prepareCodexInferenceRoute({ ...params, effectiveConfig }));
   if (!route) {
     return undefined;
-  }
-  if (
-    binding?.clientId === params.clientId &&
-    !getCodexInferenceThread(params.client, binding.threadId)
-  ) {
-    const { thread } = await params.client.request(
-      "thread/read",
-      { threadId: binding.threadId, includeTurns: false },
-      {
-        signal: params.signal,
-        assertCurrent: params.assertCurrent,
-        withCurrent: params.authority?.withCurrent,
-      },
-    );
-    params.signal?.throwIfAborted();
-    params.assertCurrent();
-    if (thread.id !== binding.threadId || thread.status?.type !== "notLoaded") {
-      throw new Error(
-        "Codex loaded thread has no owned inference route; reconnect before retrying",
-      );
-    }
   }
   const provider = owner.handles.get(route)?.provider;
   if (!provider) {

@@ -29,7 +29,6 @@ export async function copyPackagePublicationTree(
   const assertCurrent = retainMutationAuthority(assertion);
   assertCurrent();
   const root = await openRoot(destination, { assertBeforeMutation: assertCurrent });
-  assertCurrent();
   const copy = async (relative: string, assertParents: () => void): Promise<void> => {
     assertParents();
     const from = path.join(source, relative);

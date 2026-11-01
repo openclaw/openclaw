@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createDefaultDeps } from "../../cli/deps.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { admitEventOccurrence } from "../../cron/event-occurrence-admission.js";
 import type { CronJob } from "../../cron/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -173,7 +174,13 @@ export async function reportChannelRoomJoin(
         state: { nextRunAtMs: nowMs },
       };
       const { runCronIsolatedAgentTurn } = await import("../../cron/isolated-agent.js");
+      const occurrence = await admitEventOccurrence({
+        cfg: params.cfg,
+        job,
+        agentId: params.route.agentId,
+      });
       const result = await runCronIsolatedAgentTurn({
+        occurrence,
         cfg: params.cfg,
         deps: createDefaultDeps(),
         job,

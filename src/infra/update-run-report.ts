@@ -15,6 +15,7 @@ import {
   selectUpdateFailureReportSteps,
   UPDATE_DESTINATION_RECOVERY,
 } from "./update-failure-facts-format.js";
+import { updateRepairRefusalNextAction } from "./update-preflight-details.js";
 import {
   LEGACY_UPDATE_RUN_ADVISORY,
   LEGACY_UPDATE_RUN_EXPIRED_REASON,
@@ -120,7 +121,9 @@ export function resolveUpdateRunVerifiedServingVersion(
   const { recovery } = verification;
   return recovery?.serviceRestartSafe && recovery.service === "healthy"
     ? recovery.version
-    : verification.versionMatch && verification.readyz && verification.settled
+    : verification.versionMatch &&
+        (verification.coreReady ?? verification.readyz) &&
+        verification.settled
       ? verification.runningVersion
       : undefined;
 }
@@ -164,7 +167,9 @@ export function formatUpdateRunRecovery(
   }
   return code === "gateway-probe-failed"
     ? `recovery check failed (${code})`
-    : `not serving (${code})`;
+    : code === "stopped-free"
+      ? `not serving (${code})`
+      : `readiness unverified (${code})`;
 }
 
 function bounded(text: string, limit: number): string {
@@ -185,6 +190,10 @@ function recoveryHints(run: ReportInput, nextAction?: string): string[] {
   }
   if (run.status !== "failed") {
     return [];
+  }
+  const refusalNextAction = updateRepairRefusalNextAction(run.reason);
+  if (refusalNextAction) {
+    return nextAction ? [] : [refusalNextAction];
   }
   if (run.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON) {
     return [LEGACY_UPDATE_RUN_ADVISORY];
@@ -328,6 +337,11 @@ export function renderUpdateRunReport(
   if (opts.mode && opts.mode !== "unknown") {
     lines.push(`Update mode: ${opts.mode}`);
   }
+  const target =
+    run.target && (formatUpdateVersion(run.target) || run.target.tag || run.target.channel);
+  if (target) {
+    lines.push(`Update target: ${bounded(target, 120)}`);
+  }
   const admission = run.origin.admission;
   if (admission) {
     const candidateVersion = admission.candidateVersion
@@ -393,8 +407,13 @@ export function renderUpdateRunReport(
   )) {
     const failure = `Failed: ${step.step}${step.detail ? ` — ${step.detail}` : ""}`;
     lines.push(bounded(failure, 300));
-    if (step.termination === "signal" && step.stderrTail) {
-      lines.push(`Stderr (${step.signal ?? "unknown signal"}):\n${step.stderrTail}`);
+    if (
+      step.stderrTail &&
+      (step.termination === "signal" || step.step === "candidate-state-snapshot")
+    ) {
+      lines.push(
+        `Stderr${step.termination === "signal" ? ` (${step.signal ?? "unknown signal"})` : ""}:\n${step.stderrTail}`,
+      );
     }
     lines.push(
       ...(step.failureFacts ?? []).slice(0, 5).map((fact) =>
@@ -432,6 +451,7 @@ export function renderUpdateRunReport(
         ? "channels ready"
         : "channels not ready",
     facts.readyz === undefined ? undefined : facts.readyz ? "HTTP ready" : "HTTP not ready",
+    facts.coreReady === undefined ? undefined : facts.coreReady ? "core ready" : "core not ready",
     facts.pluginErrors?.length
       ? `${facts.pluginErrors.length} plugin activation error(s)`
       : undefined,
@@ -554,6 +574,7 @@ export function updateRunReportInputFromResult(
         ? recordedOutcome.reason
         : (result.reason ?? recorded?.reason ?? null),
     origin: recorded?.origin ?? {},
+    target: recorded?.target,
     before: recordedOutcome?.before ?? result.before ?? recorded?.before ?? {},
     after: recordedOutcome?.after ?? result.after ?? recorded?.after ?? {},
     repair: recorded?.repair ?? [],

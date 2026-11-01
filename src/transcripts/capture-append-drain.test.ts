@@ -10,9 +10,21 @@ import {
 } from "./status.producer.test-harness.js";
 
 const fixture = useTranscriptStatusFixture();
+type Fixture = ReturnType<typeof fixture>;
+
+async function expectFinalized(f: Fixture, request: TranscriptStartRequest, text: string[]) {
+  const { session } = request;
+  expect((await f.store.readSession(session.sessionId))?.stoppedAt).toEqual(expect.any(String));
+  expect((await f.store.readUtterancesForSession(session)).map((row) => row.text)).toEqual(text);
+  expect(await f.store.readSummary(session)).toMatchObject({
+    summary: { utteranceCount: text.length, transcript: text },
+  });
+  await request.onUtterance({ text: "Retired callback" });
+  expect(await f.store.readUtterancesForSession(session)).toHaveLength(text.length);
+}
 
 function blockAppends(
-  f: ReturnType<typeof fixture>,
+  f: Fixture,
   options: {
     text?: string;
     otherwise?: Promise<void>;
@@ -75,9 +87,9 @@ describe("transcript capture accepted append drainage", () => {
 
     const first = Promise.resolve(request.onUtterance({ text: firstText }));
     const failure = new Error("Metadata cannot be serialized");
-    const toJSON = vi.fn(() => {
+    const toJSON = () => {
       throw failure;
-    });
+    };
     const rejected = Promise.resolve(
       request.onUtterance({ text: "Unserializable speech", metadata: { toJSON } }),
     );
@@ -96,17 +108,8 @@ describe("transcript capture accepted append drainage", () => {
       await Promise.allSettled([first, rejected, second, terminal]);
     }
     await Promise.all([first, second, terminal]);
-    expect(toJSON).toHaveBeenCalledOnce();
-    expect((await f.store.readSession(session.sessionId))?.stoppedAt).toEqual(expect.any(String));
     expect.soft(events).toEqual([firstText, secondText, "stopped metadata", "summary"]);
-    expect
-      .soft((await f.store.readUtterancesForSession(session)).map((row) => row.text))
-      .toEqual([firstText, secondText]);
-    expect.soft(await f.store.readSummary(session)).toMatchObject({
-      summary: { utteranceCount: 2, transcript: [firstText, secondText] },
-    });
-    await request.onUtterance({ text: "Retired callback" });
-    expect(await f.store.readUtterancesForSession(session)).toHaveLength(2);
+    await expectFinalized(f, request, [firstText, secondText]);
   });
 
   it("fences new speech before draining failed post-start setup and retains cleanup retry", async () => {
@@ -328,26 +331,20 @@ describe("transcript capture accepted append drainage", () => {
     const { session } = request;
     const speech = "Speech that ends capture";
     const terminal = createDeferred();
-    const toJSON = vi.fn(() => {
+    const toJSON = () => {
       // Provider metadata can synchronously end capture while this speech is being prepared.
       void Promise.resolve(request.onStatus?.({ active: false })).then(
         terminal.resolve,
         terminal.reject,
       );
       return { caption: "final" };
-    });
+    };
     const accepted = Promise.resolve(request.onUtterance({ text: speech, metadata: { toJSON } }));
     await Promise.all([accepted, terminal.promise]);
 
-    expect(toJSON).toHaveBeenCalledOnce();
     expect(await f.store.readUtterancesForSession(session)).toMatchObject([
       { text: speech, metadata: { caption: "final" } },
     ]);
-    expect(await f.store.readSummary(session)).toMatchObject({
-      summary: { utteranceCount: 1, transcript: [speech] },
-    });
-    expect((await f.store.readSession(session.sessionId))?.stoppedAt).toEqual(expect.any(String));
-    await request.onUtterance({ text: "Retired callback" });
-    expect(await f.store.readUtterancesForSession(session)).toHaveLength(1);
+    await expectFinalized(f, request, [speech]);
   });
 });

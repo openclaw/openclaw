@@ -11,9 +11,9 @@ vi.mock("../../daemon/runtime-pin-state.js", () => ({
   },
   readDaemonRuntimePin: pinSnapshotMock,
 }));
-// Start repair tests cover stale service repair install-plan wiring.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayServiceState } from "../../daemon/service.js";
+import { requireMockCallArg } from "./lifecycle.test-helpers.js";
 
 const buildGatewayInstallPlanMock = vi.hoisted(() =>
   vi.fn(
@@ -115,87 +115,74 @@ vi.mock("../../runtime.js", () => ({
 
 const { repairLoadedGatewayServiceForStart } = await import("./start-repair.js");
 
-function readFirstInstallPlanArg(): Record<string, unknown> {
-  const [firstArg] = buildGatewayInstallPlanMock.mock.calls[0] ?? [];
-  if (!firstArg) {
-    throw new Error("expected first install plan call");
-  }
-  return firstArg as Record<string, unknown>;
-}
+const homeEnv = { HOME: "/home/openclaw" };
+type ServiceCommand = NonNullable<GatewayServiceState["command"]>;
 
-function stoppedServiceState(
-  command: GatewayServiceState["command"],
-  env: GatewayServiceState["env"] = {},
-): GatewayServiceState {
-  return {
+function repairFixture(command: Partial<ServiceCommand> = {}, loaded = true) {
+  const service = { install: vi.fn(async () => {}), isLoaded: vi.fn(async () => loaded) };
+  const state: GatewayServiceState = {
     installed: true,
     loadState: { status: "loaded" },
     running: false,
-    env,
-    command,
+    env: {},
+    command: {
+      programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+      environment: homeEnv,
+      ...command,
+    },
   };
+  const params = {
+    service,
+    state,
+    issues: [{ message: "old port" }],
+    json: true,
+    stdout: process.stdout,
+  };
+  return { service, state, params };
+}
+
+function expectNoPlanning(service: ReturnType<typeof repairFixture>["service"]) {
+  expect(resolveGatewayInstallTokenMock).not.toHaveBeenCalled();
+  expect(buildGatewayInstallPlanMock).not.toHaveBeenCalled();
+  expect(service.install).not.toHaveBeenCalled();
+}
+
+function installPlan() {
+  return requireMockCallArg(buildGatewayInstallPlanMock, "install plan");
 }
 
 describe("repairLoadedGatewayServiceForStart", () => {
   beforeEach(() => {
     pinSnapshotMock.mockReset().mockReturnValue({ revision: "empty", stored: false });
     pinMigrationMock.mockReset().mockResolvedValue(undefined);
-    vi.stubEnv("HOME", "/home/openclaw");
+    vi.stubEnv("HOME", homeEnv.HOME);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", "");
     vi.stubEnv("OPENCLAW_GATEWAY_PORT", "");
     vi.stubEnv("OPENCLAW_HOME", "");
     vi.stubEnv("OPENCLAW_PROFILE", "");
     vi.stubEnv("OPENCLAW_STATE_DIR", "");
-    buildGatewayInstallPlanMock.mockClear();
-    resolveGatewayInstallTokenMock.mockReset();
-    readConfigFileSnapshotForWriteMock.mockReset();
-    resolveGatewayPortMock.mockClear();
-    resolveOpenClawWrapperPathMock.mockReset();
-    formatGatewayServiceStartRepairIssuesMock.mockReset();
-    defaultRuntimeLogMock.mockClear();
-    assertGatewayServiceMutationAllowedMock.mockReset();
-    resolveBunRuntimeInfoMock.mockReset();
-    resolveBunRuntimeInfoMock.mockResolvedValue({ status: "supported" });
-
-    resolveGatewayInstallTokenMock.mockResolvedValue({
-      warnings: [],
-    });
-    readConfigFileSnapshotForWriteMock.mockResolvedValue({
+    vi.clearAllMocks();
+    resolveGatewayInstallTokenMock.mockReset().mockResolvedValue({ warnings: [] });
+    readConfigFileSnapshotForWriteMock.mockReset().mockResolvedValue({
       snapshot: { exists: true, valid: true, sourceConfig: {}, config: {} },
       writeOptions: { expectedConfigPath: "/tmp/openclaw.json" },
     });
-    resolveOpenClawWrapperPathMock.mockResolvedValue("/usr/bin/openclaw");
-    formatGatewayServiceStartRepairIssuesMock.mockReturnValue(
-      "service port does not match current gateway config",
-    );
+    resolveOpenClawWrapperPathMock.mockReset().mockResolvedValue("/usr/bin/openclaw");
+    formatGatewayServiceStartRepairIssuesMock.mockReset().mockReturnValue("stale service port");
+    assertGatewayServiceMutationAllowedMock.mockReset();
+    resolveBunRuntimeInfoMock.mockReset().mockResolvedValue({ status: "supported" });
   });
-
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
+  afterEach(() => vi.unstubAllEnvs());
 
   it("leaves the service untouched when runtime-pin migration is pending", async () => {
     const failure = new Error("Runtime pin migration pending; run openclaw doctor.");
     pinMigrationMock.mockRejectedValueOnce(failure);
-    const service = { install: vi.fn(), isLoaded: vi.fn(async () => true) };
-
-    await expect(
-      repairLoadedGatewayServiceForStart({
-        service,
-        state: stoppedServiceState({
-          programArguments: ["/usr/bin/node", "/fixture/openclaw.mjs", "gateway"],
-          environment: { HOME: "/home/openclaw" },
-        }),
-        issues: [{ code: "port-mismatch", message: "old port" }],
-        json: true,
-        stdout: process.stdout,
-      }),
-    ).rejects.toBe(failure);
-
+    const { service, params } = repairFixture({
+      programArguments: ["/usr/bin/node", "/fixture/openclaw.mjs", "gateway"],
+    });
+    await expect(repairLoadedGatewayServiceForStart(params)).rejects.toBe(failure);
     expect(pinSnapshotMock).not.toHaveBeenCalled();
-    expect(resolveGatewayInstallTokenMock).not.toHaveBeenCalled();
-    expect(buildGatewayInstallPlanMock).not.toHaveBeenCalled();
-    expect(service.install).not.toHaveBeenCalled();
+    expectNoPlanning(service);
   });
 
   it.each([
@@ -214,75 +201,45 @@ describe("repairLoadedGatewayServiceForStart", () => {
   ] as const)(
     "explains $reason without exposing raw details or doing config/token work",
     async ({ guidance, ...capability }) => {
-      const install = vi.fn();
-      const service = {
-        install,
-        isLoaded: vi.fn(async () => true),
+      const { service, state, params } = repairFixture({
+        programArguments: ["/usr/bin/openclaw", "gateway"],
+      });
+      state.env = homeEnv;
+      const guarded = {
+        ...service,
         readDefinitionMutationCapability: vi.fn(async () => ({
           ...capability,
           detail: "repair-inspection-secret-canary",
         })),
       };
-      const state = stoppedServiceState(
-        {
-          programArguments: ["/usr/bin/openclaw", "gateway"],
-          environment: { HOME: "/home/openclaw" },
-        },
-        { HOME: "/home/openclaw" },
-      );
-      const params = {
-        service,
-        state,
-        issues: [{ code: "missing-program" as const, message: "missing" }],
-        json: true,
-        stdout: process.stdout,
-      };
       for (const action of ["start", "restart"] as const) {
         const repair =
           action === "restart"
-            ? repairLoadedGatewayServiceForStart({ ...params, action })
-            : repairLoadedGatewayServiceForStart(params);
+            ? repairLoadedGatewayServiceForStart({ ...params, service: guarded, action })
+            : repairLoadedGatewayServiceForStart({ ...params, service: guarded });
         await expect(repair).rejects.toThrow(`SERVICE_DEFINITION_${capability.kind.toUpperCase()}`);
         await expect(repair).rejects.toThrow(guidance);
         await expect(repair).rejects.not.toThrow("secret-canary");
       }
       expect(readConfigFileSnapshotForWriteMock).not.toHaveBeenCalled();
-      expect(resolveGatewayInstallTokenMock).not.toHaveBeenCalled();
-      expect(install).not.toHaveBeenCalled();
+      expectNoPlanning(service);
     },
   );
 
   it("preserves the managed base environment when an environment-only drop-in overrides it", async () => {
-    const installMock = vi.fn(async () => {});
-    const isLoadedMock = vi.fn(async () => true);
-    const service = {
-      install: installMock,
-      isLoaded: isLoadedMock,
-    };
     pinSnapshotMock.mockReturnValue({
       revision: "prior",
       stored: true,
       pin: { runtime: "bun", path: "/inactive/bun" },
     });
     const existingEnvironment = {
-      HOME: "/home/openclaw",
-      OPENCLAW_SERVICE_VERSION: "2026.4.24",
+      ...homeEnv,
       OPENCLAW_WRAPPER: "/usr/bin/openclaw",
-
       TELEGRAM_DEFAULT_BOTTOKEN: "existing-env-file-token",
     };
-    const existingEnvironmentValueSources = {
-      OPENCLAW_SERVICE_VERSION: "inline" as const,
-      TELEGRAM_DEFAULT_BOTTOKEN: "file" as const,
-    };
-    const programArguments = [
-      "/usr/bin/node",
-      "--max-old-space-size=24576",
-      "--require=/tmp/service-preload.js",
-      "/usr/local/bin/openclaw",
-      "gateway",
-    ];
-    const state = stoppedServiceState({
+    const existingEnvironmentValueSources = { TELEGRAM_DEFAULT_BOTTOKEN: "file" as const };
+    const programArguments = ["/usr/bin/node", "/usr/local/bin/openclaw", "gateway"];
+    const { service, state, params } = repairFixture({
       programArguments,
       environment: {
         ...existingEnvironment,
@@ -291,10 +248,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
         NODE_OPTIONS: "--max-old-space-size=512",
         TELEGRAM_DEFAULT_BOTTOKEN: "operator-drop-in-token",
       },
-      environmentValueSources: {
-        ...existingEnvironmentValueSources,
-        TELEGRAM_DEFAULT_BOTTOKEN: "inline",
-      },
+      environmentValueSources: { TELEGRAM_DEFAULT_BOTTOKEN: "inline" },
       managedDefinition: {
         programArguments,
         environment: existingEnvironment,
@@ -302,24 +256,16 @@ describe("repairLoadedGatewayServiceForStart", () => {
       },
       managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } },
     });
-
-    await repairLoadedGatewayServiceForStart({
-      service,
-      state,
-      issues: [{ code: "port-mismatch", message: "old port" }],
-      json: true,
-      stdout: process.stdout,
-    });
-
-    const planArg = readFirstInstallPlanArg();
-    expect(planArg.existingCommand).toBe(state.command);
-    expect(planArg.existingEnvironment).toBe(existingEnvironment);
-    expect(planArg.existingEnvironmentValueSources).toBe(existingEnvironmentValueSources);
-    expect(planArg.env).not.toHaveProperty("OPERATOR_DROPIN_ONLY");
+    await repairLoadedGatewayServiceForStart(params);
+    const plan = installPlan();
+    expect(plan.existingCommand).toBe(state.command);
+    expect(plan.existingEnvironment).toBe(existingEnvironment);
+    expect(plan.existingEnvironmentValueSources).toBe(existingEnvironmentValueSources);
+    expect(plan.env).not.toHaveProperty("OPERATOR_DROPIN_ONLY");
+    expect(plan.pinnedRuntimePath).toBe("/inactive/bun");
     expect(resolveOpenClawWrapperPathMock).toHaveBeenCalledWith("/usr/bin/openclaw");
-    expect(planArg.pinnedRuntimePath).toBe("/inactive/bun");
     expect(resolveBunRuntimeInfoMock).not.toHaveBeenCalled();
-    expect(installMock).toHaveBeenCalledWith(
+    expect(service.install).toHaveBeenCalledWith(
       expect.objectContaining({
         environment: { TELEGRAM_DEFAULT_BOTTOKEN: "existing-env-file-token" },
         environmentValueSources: { TELEGRAM_DEFAULT_BOTTOKEN: "file" },
@@ -332,104 +278,68 @@ describe("repairLoadedGatewayServiceForStart", () => {
     { status: "probe-failed", expectedRuntime: null },
     { status: "unsupported", sqliteSelectionError: true, expectedRuntime: null },
   ])(
-    "repairs an installed Bun Gateway only when its probe result is known ($status, selection error: $sqliteSelectionError)",
+    "repairs installed Bun only with a known probe result ($status, selection error: $sqliteSelectionError)",
     async ({ status, sqliteSelectionError, expectedRuntime }) => {
-      const error = new Error("Bun runtime probe failed (cwd /root): EACCES");
-      const selectionError =
-        "Cannot use SQLite library /opt/broken/libsqlite3.dylib: missing file. Fix or unset OPENCLAW_SQLITE_LIBRARY; install a supported library with brew install sqlite.";
+      const error = new Error("Bun runtime probe failed: EACCES");
+      const selectionError = "Invalid OPENCLAW_SQLITE_LIBRARY";
       resolveBunRuntimeInfoMock.mockResolvedValue({
         status,
         error,
         ...(sqliteSelectionError ? { sqliteSelectionError: selectionError } : {}),
       });
-      const service = {
-        install: vi.fn(async () => {}),
-        isLoaded: vi.fn(async () => true),
-      };
-      const state = stoppedServiceState({
-        programArguments: [
-          "/home/openclaw/.bun/bin/bun",
-          "/usr/lib/openclaw/dist/index.js",
-          "gateway",
-          "--port",
-          "18789",
-        ],
-        environment: { HOME: "/home/openclaw", OPENCLAW_GATEWAY_PORT: "18789" },
+      const { service, params } = repairFixture({
+        programArguments: ["/home/openclaw/.bun/bin/bun", "openclaw", "gateway", "--port", "18789"],
+        environment: { ...homeEnv, OPENCLAW_GATEWAY_PORT: "18789" },
       });
-
-      const repair = repairLoadedGatewayServiceForStart({
-        service,
-        state,
-        issues: [{ code: "port-mismatch", message: "old port" }],
-        json: true,
-        stdout: process.stdout,
-      });
+      const repair = repairLoadedGatewayServiceForStart(params);
       if (expectedRuntime === null) {
-        // Neither an unreadable probe nor an operator's broken override may rewrite the service to Node.
         await expect(repair).rejects.toThrow(
           status === "probe-failed" ? error.message : selectionError,
         );
-        expect(resolveGatewayInstallTokenMock).not.toHaveBeenCalled();
-        expect(service.install).not.toHaveBeenCalled();
-        return;
+        expectNoPlanning(service);
+      } else {
+        await repair;
+        expect(installPlan()).toMatchObject({
+          runtime: "bun",
+          runtimePath: "/home/openclaw/.bun/bin/bun",
+        });
       }
-      await repair;
-
-      const plan = readFirstInstallPlanArg();
-      expect(plan.runtime).toBe(expectedRuntime);
-      expect(plan.runtimePath).toBe(
-        expectedRuntime === "bun" ? "/home/openclaw/.bun/bin/bun" : undefined,
-      );
     },
   );
 
   describe.each(["linux", "win32"] as const)("operator overrides on %s", (platform) => {
     it.each([
-      ["command", { launcher: "command" as const }, undefined],
+      ["command", { launcher: "command" as const }, homeEnv],
       [
         "gateway target environment",
         { environment: { keys: ["OPENCLAW_STATE_DIR"] } },
-        { HOME: "/home/openclaw", OPENCLAW_STATE_DIR: "/srv/operator-state" },
+        { ...homeEnv, OPENCLAW_STATE_DIR: "/srv/operator-state" },
       ],
     ])(
       "refuses an ineffective stopped-service repair for a %s override",
-      async (_, overrides, effectiveEnvironment) => {
+      async (_, overrides, environment) => {
         const originalPlatform = process.platform;
         Object.defineProperty(process, "platform", { value: platform });
         try {
-          const installMock = vi.fn(async () => {});
-          const service = { install: installMock, isLoaded: vi.fn(async () => true) };
           const managedDefinition = {
             programArguments: ["/usr/bin/openclaw", "gateway", "run"],
             workingDirectory: "/srv/openclaw",
-            environment: { HOME: "/home/openclaw" },
+            environment: homeEnv,
           };
-          const state = stoppedServiceState({
+          const { service, params } = repairFixture({
             ...managedDefinition,
-            ...(effectiveEnvironment ? { environment: effectiveEnvironment } : {}),
+            environment,
             sourcePath: "/home/openclaw/.config/systemd/user/openclaw-work.service",
             managedDefinition,
             managedOverrides: overrides,
           });
-
-          await expect(
-            repairLoadedGatewayServiceForStart({
-              service,
-              state,
-              issues: [{ code: "missing-program", message: "missing program" }],
-              json: true,
-              stdout: process.stdout,
-            }),
-          ).rejects.toThrow(
+          await expect(repairLoadedGatewayServiceForStart(params)).rejects.toThrow(
             platform === "win32"
               ? /Scheduled Task.*registered action and working directory/
               : /systemd drop-in.*systemctl --user cat openclaw-work\.service/,
           );
-
           expect(readConfigFileSnapshotForWriteMock).not.toHaveBeenCalled();
-          expect(resolveGatewayInstallTokenMock).not.toHaveBeenCalled();
-          expect(buildGatewayInstallPlanMock).not.toHaveBeenCalled();
-          expect(installMock).not.toHaveBeenCalled();
+          expectNoPlanning(service);
         } finally {
           Object.defineProperty(process, "platform", { value: originalPlatform });
         }
@@ -437,124 +347,47 @@ describe("repairLoadedGatewayServiceForStart", () => {
     );
   });
 
-  it.each(["start"] as const)(
-    "refuses %s repair when ambient state, config, and port target a different service",
-    async (action) => {
-      vi.stubEnv("OPENCLAW_STATE_DIR", "/home/openclaw/stress-state");
-      vi.stubEnv("OPENCLAW_CONFIG_PATH", "/home/openclaw/stress-state/openclaw.json");
-      readConfigFileSnapshotForWriteMock.mockResolvedValue({
-        snapshot: {
-          exists: true,
-          valid: true,
-          sourceConfig: { gateway: { port: 18_999 } },
-          config: { gateway: { port: 18_999 } },
-        },
-        writeOptions: { expectedConfigPath: "/home/openclaw/stress-state/openclaw.json" },
-      });
-
-      const originalUnit = [
-        "ExecStart=/usr/bin/openclaw gateway --port 18789",
-        "EnvironmentFile=-/home/openclaw/.openclaw/gateway.systemd.env",
-        "Environment=OPENCLAW_SERVICE_MANAGED_ENV_KEYS=OPENAI_API_KEY,OPENCLAW_GATEWAY_PASSWORD",
-      ].join("\n");
-      let unit = originalUnit;
-      const installMock = vi.fn(async () => {
-        unit = "rewritten";
-      });
-      const service = {
-        install: installMock,
-        isLoaded: vi.fn(async () => true),
-      };
-      const state = stoppedServiceState({
-        programArguments: ["/usr/bin/openclaw", "gateway", "--port", "18789"],
-        environment: {
-          HOME: "/home/openclaw",
-          OPENAI_API_KEY: "file-backed-openai-key",
-          OPENCLAW_GATEWAY_PASSWORD: "file-backed-password",
-          OPENCLAW_GATEWAY_PORT: "18789",
-          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "OPENAI_API_KEY,OPENCLAW_GATEWAY_PASSWORD",
-        },
-        environmentValueSources: {
-          HOME: "inline",
-          OPENAI_API_KEY: "file",
-          OPENCLAW_GATEWAY_PASSWORD: "file",
-          OPENCLAW_GATEWAY_PORT: "inline",
-          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "inline",
-        },
-      });
-
-      const repairParams = {
-        service,
-        state,
-        issues: [{ code: "port-mismatch" as const, message: "old port" }],
-        json: true,
-        stdout: process.stdout,
-      };
-      const repair = repairLoadedGatewayServiceForStart(repairParams);
-      await expect(repair).rejects.toThrow(
-        [
-          "Refusing to repair the managed Gateway service because the current invocation targets a different Gateway:",
-          '- OPENCLAW_STATE_DIR: installed="/home/openclaw/.openclaw", ambient="/home/openclaw/stress-state"',
-          '- OPENCLAW_CONFIG_PATH: installed="/home/openclaw/.openclaw/openclaw.json", ambient="/home/openclaw/stress-state/openclaw.json"',
-          '- gateway.port: installed="18789", ambient="18999"',
-          `Run \`openclaw gateway ${action}\` with the installed state directory, config path, and port (or unset conflicting environment overrides). To retarget intentionally, run \`openclaw gateway install --force\`.`,
-        ].join("\n"),
-      );
-
-      expect(unit).toBe(originalUnit);
-      expect(installMock).not.toHaveBeenCalled();
-      expect(buildGatewayInstallPlanMock).not.toHaveBeenCalled();
-      expect(resolveGatewayInstallTokenMock).not.toHaveBeenCalled();
-    },
-  );
+  it("refuses start repair when ambient state, config, and port target a different service", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/home/openclaw/stress-state");
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", "/home/openclaw/stress-state/openclaw.json");
+    const config = { gateway: { port: 18_999 } };
+    readConfigFileSnapshotForWriteMock.mockResolvedValue({
+      snapshot: { exists: true, valid: true, sourceConfig: config, config },
+      writeOptions: { expectedConfigPath: "/home/openclaw/stress-state/openclaw.json" },
+    });
+    const { service, params } = repairFixture({
+      programArguments: ["/usr/bin/openclaw", "gateway", "--port", "18789"],
+      environment: { ...homeEnv, OPENCLAW_GATEWAY_PORT: "18789" },
+    });
+    await expect(repairLoadedGatewayServiceForStart(params)).rejects.toThrow(
+      [
+        "Refusing to repair the managed Gateway service because the current invocation targets a different Gateway:",
+        '- OPENCLAW_STATE_DIR: installed="/home/openclaw/.openclaw", ambient="/home/openclaw/stress-state"',
+        '- OPENCLAW_CONFIG_PATH: installed="/home/openclaw/.openclaw/openclaw.json", ambient="/home/openclaw/stress-state/openclaw.json"',
+        '- gateway.port: installed="18789", ambient="18999"',
+        "Run `openclaw gateway start` with the installed state directory, config path, and port (or unset conflicting environment overrides). To retarget intentionally, run `openclaw gateway install --force`.",
+      ].join("\n"),
+    );
+    expectNoPlanning(service);
+  });
 
   it("refuses repair when a legacy service does not identify its installed state directory", async () => {
     vi.stubEnv("HOME", "/home/ambient-user");
-    const installMock = vi.fn(async () => {});
-    const service = {
-      install: installMock,
-      isLoaded: vi.fn(async () => true),
-    };
-    const state = stoppedServiceState({
+    const { service, params } = repairFixture({
       programArguments: ["/usr/bin/openclaw", "gateway", "--port", "18789"],
       environment: { OPENCLAW_GATEWAY_PORT: "18789" },
     });
-
-    await expect(
-      repairLoadedGatewayServiceForStart({
-        service,
-        state,
-        issues: [{ code: "missing-program", message: "missing program" }],
-        json: true,
-        stdout: process.stdout,
-      }),
-    ).rejects.toThrow("installed state directory cannot be determined");
-
-    expect(installMock).not.toHaveBeenCalled();
-    expect(buildGatewayInstallPlanMock).not.toHaveBeenCalled();
+    await expect(repairLoadedGatewayServiceForStart(params)).rejects.toThrow(
+      "installed state directory cannot be determined",
+    );
+    expectNoPlanning(service);
   });
 
-  it.each([{ action: "restart", probe: "returns false" }] as const)(
-    "fails $action repair when the post-install probe $probe",
-    async ({ action }) => {
-      const service = {
-        install: vi.fn(async () => {}),
-        isLoaded: vi.fn(async () => false),
-      };
-      const state = stoppedServiceState({
-        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
-        environment: { HOME: "/home/openclaw" },
-      });
-      const params = {
-        service,
-        state,
-        issues: [{ code: "port-mismatch" as const, message: "old port" }],
-        json: true,
-        stdout: process.stdout,
-      };
-      const repair = repairLoadedGatewayServiceForStart({ ...params, action });
-      await expect(repair).rejects.toThrow("Gateway service is not loaded after repair.");
-      expect(service.install).toHaveBeenCalledTimes(1);
-    },
-  );
+  it("fails restart repair when the post-install probe returns false", async () => {
+    const { service, params } = repairFixture({}, false);
+    await expect(
+      repairLoadedGatewayServiceForStart({ ...params, action: "restart" }),
+    ).rejects.toThrow("Gateway service is not loaded after repair.");
+    expect(service.install).toHaveBeenCalledTimes(1);
+  });
 });

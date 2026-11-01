@@ -1,14 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { expect } from "vitest";
-import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import { getCommandOwnerAuthority } from "../auto-reply/command-owner-authority.js";
+import {
+  CommandOwnerRevokedError,
+  getCommandOwnerAuthority,
+} from "../auto-reply/command-owner-authority.js";
 import { getRequesterProfile } from "../auto-reply/requester-profile.js";
 import { buildChannelInboundEventContext } from "../channels/inbound-event/context.js";
 import { createHostChannelInboundEventContextBuilder } from "../channels/inbound-event/host-context-builder.js";
 import { createHostChannelIngressRuntime } from "../channels/message-access/runtime.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { loadUnfinishedDeliveries } from "../infra/outbound/delivery-queue-storage.js";
 import {
   getRpcSourceIdentity,
@@ -19,12 +21,16 @@ import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes
 import {
   createScenario,
   dispatchProofHuman,
+  expectProofIdle,
   gateway,
   gatewayContext,
   humanReplies,
   outbound,
   patchProofConfig,
+  proofDeliveries,
   providerErrors,
+  requesterCase,
+  waitForProofGate,
   waitForProofRun,
 } from "./gateway.sessions-send-provenance.test-support.js";
 import { holdProofSend } from "./gateway.sessions-send-provenance.transport.test-support.js";
@@ -33,14 +39,20 @@ import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2
 /** The channel authenticates the subject; canonical links supply its live human authority. */
 export async function verifyLinkedPrincipalDelivery(signal: AbortSignal) {
   const originalRoles = getRuntimeConfig().gateway?.roles;
+  const scopes = ["operator.read", "operator.write"];
+  const definitions = {
+    admin: { scopes: ["operator.admin"], agents: "*", sessions: { others: "write" } },
+    member: { scopes, agents: "*", sessions: { others: "view" } },
+  };
   const alice = await ensureCanonicalUserProfileForEmail("linked-alice@provenance.example.test");
   const bob = await ensureCanonicalUserProfileForEmail("linked-bob@provenance.example.test");
   const identity = { channelId: "telegram", accountId: "default", senderId: "linked-human" };
+  const { channelId, accountId, senderId } = identity;
   const refusedRecipients: string[] = [];
   let linkedProfileId: string | undefined;
   let live = true;
   const owner = {
-    channelId: identity.channelId,
+    channelId,
     isLive: () => live,
     resolveGatewayContext: gatewayContext.resolveGatewayContext,
   };
@@ -62,58 +74,43 @@ export async function verifyLinkedPrincipalDelivery(signal: AbortSignal) {
   };
   await runQaGatewayFixture(
     async () => {
-      await patchProofConfig({
-        gateway: {
-          roles: {
-            default: "member",
-            definitions: {
-              admin: { scopes: ["operator.admin"], agents: "*", sessions: { others: "write" } },
-              member: {
-                scopes: ["operator.read", "operator.write"],
-                agents: "*",
-                sessions: { others: "view" },
-              },
-            },
-          },
-        },
-      });
+      await patchProofConfig({ gateway: { roles: { default: "member", definitions } } });
       // Role publication invalidates the old connection after the config RPC responds.
       await disconnectGatewayClient(gateway.client);
       gateway.client = await connectGatewayClient({
         url: `ws://127.0.0.1:${gateway.port}`,
         token: process.env.OPENCLAW_GATEWAY_TOKEN,
-        scopes: ["operator.admin", "operator.read", "operator.write"],
+        scopes: ["operator.admin", ...scopes],
         signal,
       });
       for (const profile of [alice, bob]) {
         await gateway.client.request("users.setRole", { profileId: profile.id, role: "admin" });
       }
       for (const action of ["unlink", "reassign", "current"] as const) {
-        if (action !== "current") {
+        const current = action === "current";
+        if (!current) {
           await link(alice.id);
         }
-        const profile = action === "current" ? bob : alice;
+        const profile = current ? bob : alice;
         const id = `linked-${action}`;
         const sourceKey = `agent:main:telegram:direct:provenance-source-${id}`;
         const scenario = createScenario(
-          {
-            name: `linked principal ${action} during final send preparation`,
-            id,
-            sender: identity.senderId,
-            agent: "main",
-            denied: action !== "current",
+          requesterCase(id, `linked principal ${action} during final send preparation`, {
+            sender: senderId,
+            denied: !current,
             targetKey: `agent:deployment:telegram:direct:provenance-target-${id}`,
-          },
+          }),
           sourceKey,
         );
-        using hold = holdProofSend(scenario.recipient);
+        const { recipient, sourceRecipient, targetKey } = scenario;
+        using hold = holdProofSend(recipient);
         const messageId = randomUUID();
         const channelIngress = await ingress.resolveStable({
-          channelId: identity.channelId,
-          accountId: identity.accountId,
+          channelId,
+          accountId,
           identity: { authentication: "verified" },
-          subject: { stableId: identity.senderId },
-          conversation: { kind: "direct", id: scenario.sourceRecipient },
+          subject: { stableId: senderId },
+          conversation: { kind: "direct", id: sourceRecipient },
           contextBinding: {
             agentId: "main",
             sessionKey: sourceKey,
@@ -126,37 +123,35 @@ export async function verifyLinkedPrincipalDelivery(signal: AbortSignal) {
           useDefaultPairingStore: false,
         });
         const ctx = await buildContext({
-          channel: identity.channelId,
-          accountId: identity.accountId,
+          channel: channelId,
+          accountId,
           messageId,
-          from: `telegram:${identity.senderId}`,
-          sender: { id: identity.senderId },
-          conversation: { kind: "direct", id: scenario.sourceRecipient },
+          from: `telegram:${senderId}`,
+          sender: { id: senderId },
+          conversation: { kind: "direct", id: sourceRecipient },
           route: { agentId: "main", routeSessionKey: sourceKey },
-          reply: { to: scenario.sourceRecipient },
+          reply: { to: sourceRecipient },
           message: { rawBody: scenario.sourcePrompt },
           channelIngress,
         });
         expect(getRequesterProfile(ctx)?.id).toBe(profile.id);
-        expect(getCommandOwnerAuthority(ctx)?.operatorAuthority?.profileId).toBe(profile.id);
-        expect(getCommandOwnerAuthority(ctx)?.isCurrent()).toBe(true);
-        await gateway.client.request("sessions.create", {
-          agentId: "deployment",
-          key: scenario.targetKey,
-        });
+        const authority = getCommandOwnerAuthority(ctx);
+        const revocationSignal = authority?.operatorAuthority?.signal;
+        expect(authority?.operatorAuthority?.profileId).toBe(profile.id);
+        expect(authority?.isCurrent()).toBe(true);
+        expect(revocationSignal).toBeDefined();
+        expect(revocationSignal?.aborted).toBe(false);
+        await gateway.client.request("sessions.create", { agentId: "deployment", key: targetKey });
         const firstReply = humanReplies.length;
         let completion: ReturnType<typeof waitForProofRun> | undefined;
         try {
-          await dispatchProofHuman(ctx, identity.senderId, "followup", signal);
+          await dispatchProofHuman(ctx, senderId, "followup", signal);
           scenario.sourceCompleted = true;
           expect(
             humanReplies.slice(firstReply),
-            JSON.stringify({
-              providerErrors,
-              requests: scenario.sourceRequests.length,
-            }),
+            JSON.stringify({ providerErrors, requests: scenario.sourceRequests.length }),
           ).toContainEqual({
-            sender: identity.senderId,
+            sender: senderId,
             text: `SOURCE_COMPLETE_${id}`,
           });
           expect(scenario.accepted).toMatchObject({
@@ -165,54 +160,52 @@ export async function verifyLinkedPrincipalDelivery(signal: AbortSignal) {
           });
           completion = waitForProofRun(scenario.accepted?.runId);
           scenario.releaseTarget.resolve();
-          await withinTest(
-            awaitGateBeforeSettlement(
-              hold.entered.promise,
-              completion,
-              `${id}: delegate settled before send preparation`,
-            ),
+          await waitForProofGate(
+            hold.entered.promise,
+            completion,
             signal,
+            `${id}: delegate settled before send preparation`,
           );
           expect(scenario.targetRequests[0]?.tools).toContain("message");
-          expect(outbound.filter((item) => item.to === scenario.recipient)).toEqual([]);
-          if (action !== "current") {
+          expect(proofDeliveries(recipient)).toEqual([]);
+          if (!current) {
             await unlink();
             if (action === "reassign") {
               await link(bob.id);
             }
           }
-          expect(getCommandOwnerAuthority(ctx)?.isCurrent()).toBe(action === "current");
-          // The plugin only waits. Production's post-await authority check owns refusal.
+          expect(revocationSignal?.aborted).toBe(!current);
+          if (!current) {
+            expect(revocationSignal?.reason).toBeInstanceOf(CommandOwnerRevokedError);
+            expect(revocationSignal?.reason).toMatchObject({
+              message: "Channel operator authority changed; send a new request.",
+            });
+          }
+          expect(authority?.isCurrent()).toBe(current);
+          // Retained authority cancels the target; the effect boundary also refuses
+          // revoked sends after plugin preparation. The plugin only waits.
           hold.release.resolve();
           const terminal = await withinTest(completion, signal);
-          expect(terminal, JSON.stringify(terminal)).toMatchObject({
-            status: action === "current" ? "ok" : "error",
-          });
-          if (action !== "current") {
-            expect(terminal.error).toContain("Channel operator authority changed");
-            refusedRecipients.push(scenario.recipient);
+          expect(terminal, JSON.stringify(terminal)).toMatchObject(
+            current ? { status: "ok" } : { status: "error", stopReason: "rpc" },
+          );
+          if (!current) {
+            refusedRecipients.push(recipient);
           }
-          await waitForGatewayActiveWork(30_000);
+          await expectProofIdle();
           expect(
             listRpcSourceEntries().some(
               ([, source]) =>
-                getRpcSourceIdentity(source).sessionKey === scenario.targetKey &&
-                isRpcSourceQueued(source),
+                getRpcSourceIdentity(source).sessionKey === targetKey && isRpcSourceQueued(source),
             ),
           ).toBe(false);
           expect(
-            (await loadUnfinishedDeliveries()).filter((entry) => entry.to === scenario.recipient),
+            (await loadUnfinishedDeliveries()).filter((entry) => entry.to === recipient),
           ).toEqual([]);
-          expect(
-            outbound.filter((item) => item.to === scenario.recipient),
-            id,
-          ).toEqual(
-            action === "current"
-              ? [{ to: scenario.recipient, text: scenario.marker, accountId: "default" }]
-              : [],
+          expect(proofDeliveries(recipient), id).toEqual(
+            current ? [{ to: recipient, text: scenario.marker, accountId: "default" }] : [],
           );
-          expect(scenario.effectAfterSourceCompletion).toEqual(action === "current" ? [true] : []);
-          expect(providerErrors).toEqual([]);
+          expect(scenario.effectAfterSourceCompletion).toEqual(current ? [true] : []);
         } finally {
           scenario.releaseTarget.resolve();
           hold.release.resolve();
@@ -220,10 +213,10 @@ export async function verifyLinkedPrincipalDelivery(signal: AbortSignal) {
         }
       }
       // Fresh admission under the new person cannot revive either old send or its retry row.
-      expect(outbound.filter((entry) => refusedRecipients.includes(entry.to))).toEqual([]);
-      expect(
+      expect([
+        outbound.filter((entry) => refusedRecipients.includes(entry.to)),
         (await loadUnfinishedDeliveries()).filter((entry) => refusedRecipients.includes(entry.to)),
-      ).toEqual([]);
+      ]).toEqual([[], []]);
     },
     async () => {
       live = false;

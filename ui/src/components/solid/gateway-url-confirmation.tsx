@@ -1,15 +1,30 @@
+import "../../styles/connection-surfaces.css";
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
-import { Show, onSettled } from "solid-js";
 import {
-  isOptionalElementDefined,
-  createLazyCustomElementRequests,
-} from "../../app/lazy-custom-element.ts";
+  children,
+  createSignal,
+  Errored,
+  isPending,
+  lazy,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
+import {
+  cancelStaleChunkRecovery,
+  isStaleChunkImportError,
+  retryStaleChunkReloadWhenReachable,
+} from "../../app/stale-chunk-reload.ts";
+import { registerConnectionRecoveryEnglish } from "../../i18n/locales/en-connection-recovery.ts";
 import { formatGatewayHost } from "../../lib/gateway-host.ts";
-import { t } from "../../lib/reactive/i18n.ts";
-import { projectOwner } from "../../lib/reactive/projection.ts";
-import { defineSolidBridge } from "../../lib/solid-bridge.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { Icon } from "./icon.tsx";
-import { LazyElementStateView } from "./lazy-view-error.tsx";
+import { LazyViewError } from "./lazy-view-error.tsx";
+import { LoadingState } from "./loading-state.tsx";
+
+registerEnglishCatalog(registerConnectionRecoveryEnglish);
+
+const ModalDialog = lazy(() => import("../modal-dialog.tsx"), { export: "ModalDialog" });
 
 type ConfirmationProps = {
   pendingGatewayUrl: string | null;
@@ -20,23 +35,6 @@ type ConfirmationProps = {
 };
 
 function renderConfirmation(props: () => ConfirmationProps) {
-  const dialogElement = {
-    tagName: "openclaw-modal-dialog",
-    get label() {
-      return t("connection.switchGateway.title");
-    },
-    loadModule: () => import("../modal-dialog.ts"),
-  };
-  const loader = createLazyCustomElementRequests({}, () => props().onCancel());
-  const loadingState = projectOwner(loader, (owner) => owner.visibleState);
-  onSettled(() => {
-    loader.requestWhileActive(dialogElement, true);
-    return () => loader.requestWhileActive(dialogElement, false);
-  });
-  const loaded = () => {
-    loadingState.revision();
-    return isOptionalElementDefined(dialogElement);
-  };
   const title = () => t("connection.switchGateway.title");
   const summary = () => t("connection.switchGateway.summary");
   const notes = () =>
@@ -54,75 +52,95 @@ function renderConfirmation(props: () => ConfirmationProps) {
     ]
       .filter(Boolean)
       .join(" ");
-  return (
-    <Show
-      when={loaded()}
-      fallback={
-        <Show when={loadingState.read()}>
-          {(state) => (
-            <LazyElementStateView
-              state={state()}
-              onRetry={() => loader.retry()}
-              onClose={() => loader.close()}
-            />
-          )}
-        </Show>
-      }
-    >
-      <openclaw-modal-dialog
-        label={title()}
-        description={summary()}
-        onModal-cancel={() => props().onCancel()}
-      >
-        <div class="gateway-switch">
-          <div class="gateway-switch__head">
-            <span class="gateway-switch__icon" aria-hidden="true">
-              <Icon name="shieldAlert" />
-            </span>
-            <div class="gateway-switch__text">
-              <h2 class="gateway-switch__title">{title()}</h2>
-              <p class="gateway-switch__summary">{summary()}</p>
-            </div>
+  const content = children(() => (
+    <ModalDialog label={title()} description={summary()} onModal-cancel={() => props().onCancel()}>
+      <div class="gateway-switch">
+        <div class="gateway-switch__head">
+          <span class="gateway-switch__icon" aria-hidden="true">
+            <Icon name="shieldAlert" />
+          </span>
+          <div class="gateway-switch__text">
+            <h2 class="gateway-switch__title">{title()}</h2>
+            <p class="gateway-switch__summary">{summary()}</p>
           </div>
-          <div class="gateway-switch__hosts">
-            <div class="gateway-switch__host">
-              <span class="gateway-switch__label">{t("connection.switchGateway.current")}</span>
-              <code translate="no">{props().currentGatewayUrl.trim() || t("common.na")}</code>
-            </div>
-            <span class="gateway-switch__arrow" aria-hidden="true">
-              <Icon name="arrowRight" />
-            </span>
-            <div class="gateway-switch__host gateway-switch__host--next">
-              <span class="gateway-switch__label">{t("connection.switchGateway.next")}</span>
-              <code translate="no">{props().pendingGatewayUrl}</code>
-            </div>
-          </div>
-          <p class="gateway-switch__note">{notes()}</p>
-          <openclaw-modal-actions class="gateway-switch__actions">
-            <button type="button" class="btn primary" onClick={() => props().onConfirm()}>
-              {t("connection.switchGateway.confirm", {
-                host: formatGatewayHost(props().pendingGatewayUrl ?? ""),
-              })}
-            </button>
-            <button type="button" class="btn" onClick={() => props().onCancel()}>
-              {t("connection.switchGateway.cancel")}
-            </button>
-          </openclaw-modal-actions>
         </div>
-      </openclaw-modal-dialog>
-    </Show>
+        <div class="gateway-switch__hosts">
+          <div class="gateway-switch__host">
+            <span class="gateway-switch__label">{t("connection.switchGateway.current")}</span>
+            <code translate="no">{props().currentGatewayUrl.trim() || t("common.na")}</code>
+          </div>
+          <span class="gateway-switch__arrow" aria-hidden="true">
+            <Icon name="arrowRight" />
+          </span>
+          <div class="gateway-switch__host gateway-switch__host--next">
+            <span class="gateway-switch__label">{t("connection.switchGateway.next")}</span>
+            <code translate="no">{props().pendingGatewayUrl}</code>
+          </div>
+        </div>
+        <p class="gateway-switch__note">{notes()}</p>
+        <openclaw-modal-actions class="gateway-switch__actions">
+          <button type="button" class="btn" onClick={() => props().onCancel()}>
+            {t("connection.switchGateway.cancel")}
+          </button>
+          <button type="button" class="btn primary" onClick={() => props().onConfirm()}>
+            {t("connection.switchGateway.confirm", {
+              host: formatGatewayHost(props().pendingGatewayUrl ?? ""),
+            })}
+          </button>
+        </openclaw-modal-actions>
+      </div>
+    </ModalDialog>
+  ));
+  return (
+    <Errored
+      fallback={(error, reset) => {
+        let active = true;
+        const [retrying, setRetrying] = createSignal(false);
+        const stale = isStaleChunkImportError(error());
+        onSettled(() => () => {
+          active = false;
+          if (stale) {
+            cancelStaleChunkRecovery();
+          }
+        });
+        const retry = async () => {
+          if (!active) {
+            return;
+          }
+          setRetrying(true);
+          if (stale && (await retryStaleChunkReloadWhenReachable({ canReload: () => active }))) {
+            return;
+          }
+          if (active) {
+            setRetrying(false);
+            reset();
+          }
+        };
+        return (
+          <Show when={!retrying() && !isPending(content)} fallback={<LoadingState />}>
+            <LazyViewError
+              error={error()}
+              stale={stale}
+              subtitle={title()}
+              actionLabel={t("common.retry")}
+              onRetry={() => void retry()}
+              onClose={() => props().onCancel()}
+            />
+          </Show>
+        );
+      }}
+    >
+      <Loading fallback={<LoadingState />}>{content()}</Loading>
+    </Errored>
   );
 }
 
-export const GatewayUrlConfirmation = defineSolidBridge<{ props?: ConfirmationProps }>(
-  "openclaw-gateway-url-confirmation",
-  (props, host) => {
-    host.style.display = "contents";
-    return (
-      <Show when={props.props?.pendingGatewayUrl ? props.props : undefined}>
+export function GatewayUrlConfirmation(input: { props?: ConfirmationProps }) {
+  return (
+    <openclaw-gateway-url-confirmation style="display: contents">
+      <Show when={input.props?.pendingGatewayUrl ? input.props : undefined}>
         {(confirmation) => renderConfirmation(confirmation)}
       </Show>
-    );
-  },
-  { properties: { props: { default: undefined, attribute: false } } },
-);
+    </openclaw-gateway-url-confirmation>
+  );
+}

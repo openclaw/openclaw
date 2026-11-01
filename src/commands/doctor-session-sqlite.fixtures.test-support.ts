@@ -17,6 +17,8 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
+import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import type {
   DoctorSessionSqliteMode,
   DoctorSessionSqliteTargetReport,
@@ -60,17 +62,14 @@ export function archivedSource(report: DoctorSessionSqliteReport, sourcePath: st
 }
 
 export function expectPresent(...files: string[]) {
-  for (const file of files) {
-    expect(fs.existsSync(file)).toBe(true);
-  }
+  expect(files.map((file) => fs.existsSync(file))).toEqual(files.map(() => true));
 }
 
-export function expectIssue(report: DoctorSessionSqliteReport, shape: Record<string, unknown>) {
+export const expectIssue = (report: DoctorSessionSqliteReport, shape: Record<string, unknown>) =>
   containsObjects(
     report.targets.flatMap((target) => target.issues),
     shape,
   );
-}
 
 export function messageEvent(
   id: string,
@@ -81,17 +80,14 @@ export function messageEvent(
   return { type: "message", id, parentId, message: { role, content } };
 }
 
-export function writePrivateFile(file: string, contents: string | Uint8Array) {
+export const writePrivateFile = (file: string, contents: string | Uint8Array) =>
   fs.writeFileSync(file, contents, { mode: 0o600 });
-}
 
-export function writeJson(file: string, value: unknown, space?: number) {
+export const writeJson = (file: string, value: unknown, space?: number) =>
   writePrivateFile(file, JSON.stringify(value, null, space));
-}
 
-export function jsonl(...events: unknown[]) {
-  return events.map((event) => JSON.stringify(event)).join("\n") + "\n";
-}
+export const jsonl = (...events: unknown[]) =>
+  events.map((event) => JSON.stringify(event)).join("\n") + "\n";
 
 export function sessionScope(store: TestStore, agentId = "main") {
   return {
@@ -103,8 +99,20 @@ export function sessionScope(store: TestStore, agentId = "main") {
   };
 }
 
-export function runStoreDoctor(store: TestStore, mode: DoctorSessionSqliteMode) {
-  return runDoctorSessionSqlite({ env: store.env, store: store.storePath, mode });
+export const runStoreDoctor = (store: TestStore, mode: DoctorSessionSqliteMode) =>
+  runDoctorSessionSqlite({ env: store.env, store: store.storePath, mode });
+
+export function retireRecovery(
+  store: Pick<TestStore, "env">,
+  confirm: Parameters<typeof retireSessionSqliteRecovery>[0]["confirm"] = async () => true,
+  preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env }),
+) {
+  return retireSessionSqliteRecovery({
+    env: store.env,
+    preview,
+    readConfig: async () => ({}),
+    confirm,
+  });
 }
 
 export async function seedRetainedSource(
@@ -113,22 +121,23 @@ export async function seedRetainedSource(
   pluginId = "fixture-plugin",
 ) {
   const fixture = await seedDeferredPluginSessionSource(state, layout, pluginId);
-  const options = { cfg: fixture.cfg, env: state.env, allAgents: true };
+  const { cfg, scope, storePath } = fixture;
+  const options = { cfg, env: state.env, allAgents: true };
   const receiptParams = (target: DoctorSessionSqliteTargetReport) => ({
-    cfg: fixture.cfg,
+    cfg,
     env: state.env,
     target,
     sqlitePath: target.sqlitePath,
   });
   return {
     ...fixture,
-    file: (name: string) => path.join(path.dirname(fixture.storePath), name),
-    assertReady: () => assertSessionStoreMigrationComplete({ cfg: fixture.cfg, env: state.env }),
+    file: (name: string) => path.join(path.dirname(storePath), name),
+    assertReady: () => assertSessionStoreMigrationComplete({ cfg, env: state.env }),
     run: (mode: DoctorSessionSqliteMode = "import") => runDoctorSessionSqlite({ ...options, mode }),
-    readEntry: (sessionKey: string) => loadExactSessionEntry({ ...fixture.scope, sessionKey }),
+    readEntry: (sessionKey: string) => loadExactSessionEntry({ ...scope, sessionKey }),
     writeEntry: (sessionKey: string, entry: Parameters<typeof upsertSessionEntryCore>[1]) =>
-      upsertSessionEntryCore({ ...fixture.scope, sessionKey }, entry),
-    readEvents: (sessionId: string) => loadTranscriptEventsSync({ ...fixture.scope, sessionId }),
+      upsertSessionEntryCore({ ...scope, sessionKey }, entry),
+    readEvents: (sessionId: string) => loadTranscriptEventsSync({ ...scope, sessionId }),
     readReceipt: (target: DoctorSessionSqliteTargetReport) =>
       readDeferredPluginSessionImport(receiptParams(target)),
     hasReceipt: (target: DoctorSessionSqliteTargetReport) =>

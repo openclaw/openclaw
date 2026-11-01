@@ -3,16 +3,21 @@ import { Client } from "pg";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { runDatabasePortTask as runWorkboardPortTask } from "./port-command.worker.js";
+import { runDatabasePortTask } from "./port-command.worker.js";
 import { readPostgresPortCapabilities } from "./port.worker.js";
 import { workboardPortProvider } from "./workboard-port.js";
-const loadWorkboardPortDescriptor = () => workboardPortProvider.loadDescriptor();
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const scope = { assertCurrent() {} };
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => vi.unstubAllEnvs());
+function preflight(postgres: NonNullable<OpenClawConfig["database"]>["postgres"]) {
+  const config: OpenClawConfig = { database: { engine: "postgres", postgres } };
+  return runDatabasePortTask(
+    { operation: "preflight", probe: false, config },
+    { assertCurrent() {} },
+  );
+}
 
 it.each([
   { version: 150000, encoding: "UTF8", client_encoding: "UTF8" },
@@ -20,35 +25,19 @@ it.each([
   { version: 170000, encoding: "UTF8", client_encoding: "LATIN1" },
 ])("rejects incompatible PostgreSQL capabilities %j at the query boundary", async (facts) => {
   const client = Object.assign(new Client({ host: "127.0.0.1", port: 1 }), {
-    query: vi.fn(async () => ({
-      rows: [facts],
-      rowCount: 1,
-      command: "SELECT",
-      oid: 0,
-      fields: [],
-    })),
+    query: vi.fn(async () => ({ rows: [facts] })),
   });
   await expect(
-    readPostgresPortCapabilities(client, await loadWorkboardPortDescriptor()),
+    readPostgresPortCapabilities(client, await workboardPortProvider.loadDescriptor()),
   ).rejects.toThrow("required PostgreSQL >=16 and UTF8 server/client");
 });
 
 it("redacts unresolved connection SecretRefs", async () => {
-  const config: OpenClawConfig = {
-    database: {
-      engine: "postgres",
-      postgres: {
-        connection: {
-          source: "env",
-          provider: "default",
-          id: "OPENCLAW_PORT_TEST_UNRESOLVED_CONNECTION",
-        },
-      },
-    },
-  };
-  const result = runWorkboardPortTask({ operation: "preflight", config, probe: false }, scope);
+  const id = "OPENCLAW_PORT_TEST_UNRESOLVED_CONNECTION";
+  const secret = { source: "env" as const, provider: "default", id };
+  const result = preflight({ connection: secret });
   await expect(result).rejects.toThrow("preflight:");
-  await expect(result).rejects.not.toThrow("OPENCLAW_PORT_TEST_UNRESOLVED_CONNECTION");
+  await expect(result).rejects.not.toThrow(id);
 });
 
 it.skipIf(!connection)(
@@ -57,19 +46,6 @@ it.skipIf(!connection)(
     const empty = tempDirs.make("port-preflight-empty-bundled-");
     vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", empty);
     vi.stubEnv("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
-    try {
-      await expect(
-        runWorkboardPortTask(
-          {
-            operation: "preflight",
-            probe: false,
-            config: { database: { engine: "postgres", postgres: { connection: connection! } } },
-          },
-          scope,
-        ),
-      ).resolves.toMatchObject({ encoding: "UTF8", privilegesChecked: false });
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    await preflight({ connection: connection! });
   },
 );

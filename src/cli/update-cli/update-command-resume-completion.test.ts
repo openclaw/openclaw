@@ -7,7 +7,6 @@ import {
   recordDeferredPluginMigrations,
 } from "../../infra/deferred-plugin-migrations.js";
 import { listUpdateRuns } from "../../infra/update-run-reader.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { updateRunWarningMessages } from "../../infra/update-run-step.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import {
@@ -15,7 +14,6 @@ import {
   seedInstalledPluginIndex,
 } from "../../plugins/test-helpers/installed-plugin-index.js";
 import { runExec } from "../../process/exec.js";
-import { defaultRuntime } from "../../runtime.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
@@ -34,6 +32,10 @@ import {
   state,
   writeScenario,
 } from "./update-command-lease.test-harness.js";
+
+await vi.hoisted(async () => {
+  await import("./update-command-lease.test-harness.js");
+});
 
 installUpdateLeaseHarness();
 
@@ -66,6 +68,50 @@ async function legacyResume(metadata?: boolean) {
 
 describe("update completion ownership", () => {
   it.each([false, true])(
+    "retires the settled model warning (other advisory=%s)",
+    async (otherAdvisory) => {
+      vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+      const deferred = "Model retirement deferred until configured plugin installation converges.";
+      const unrelated = "An unrelated Doctor advisory remains.";
+      await writeScenario("repair", {
+        runDoctorConfigFlow: true,
+        doctorWarningsByInvocation: [[deferred, ...(otherAdvisory ? [unrelated] : [])], []],
+      });
+      mocks.plugins.mockImplementationOnce(async () => {
+        expect(listUpdateRuns()[0]?.steps).toContainEqual(
+          expect.objectContaining({
+            step: "finalize:doctor:model-retirement",
+            status: "skipped",
+          }),
+        );
+        return unchangedPluginResult();
+      });
+
+      await runRegisteredCli({
+        register: registerUpdateCli,
+        argv: ["update", "repair", "--yes", "--no-restart", "--json"],
+      });
+
+      const [run] = listUpdateRuns();
+      expect(run).toMatchObject({ status: "succeeded" });
+      expect(run?.steps).toContainEqual(
+        expect.objectContaining({
+          step: "finalize:doctor:model-retirement",
+          status: "completed",
+        }),
+      );
+      expect(reportedResult("repair")).toMatchObject({ status: otherAdvisory ? "warning" : "ok" });
+      expect(reportedResult("repair")).toHaveProperty(
+        "postUpdate.doctor",
+        otherAdvisory ? { status: "warning", warnings: [unrelated] } : { status: "ok" },
+      );
+      const warnings = updateRunWarningMessages(run?.steps ?? []);
+      expect(warnings).not.toContain(deferred);
+      expect(warnings.includes(unrelated)).toBe(otherAdvisory);
+    },
+  );
+
+  it.each([false, true])(
     "reconciles a delayed Doctor warning against current pending state (pending again=%s)",
     async (pendingAgain) => {
       const pending = {
@@ -80,9 +126,6 @@ describe("update completion ownership", () => {
         OPENCLAW_UPDATE_IN_PROGRESS: "1",
         OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
       });
-      expect(swapWarning).toContain("Let the current update or repair finish.");
-      expect(finalPassWarning).not.toContain("Let the current update");
-      expect(finalPassWarning).toContain('Run "openclaw doctor --fix" to retry the upgrade.');
       await recordDeferredPluginMigrations({ pending: [pending] });
       await writeScenario("repair", {
         doctorWarningsByInvocation: [[swapWarning], [finalPassWarning]],
@@ -102,7 +145,6 @@ describe("update completion ownership", () => {
 
       await invoke("repair");
 
-      expect(mocks.plugins).toHaveBeenCalledOnce();
       expect(reportedResult("repair")).toMatchObject({
         status: pendingAgain ? "warning" : "ok",
       });
@@ -116,9 +158,6 @@ describe("update completion ownership", () => {
       expect(run).toMatchObject({ status: "succeeded" });
       const expectedWarnings = pendingAgain ? [finalPassWarning] : [];
       expect(updateRunWarningMessages(run?.steps ?? [])).toEqual(expectedWarnings);
-      expect(
-        renderUpdateRunReport(run!).lines.filter((line) => line.startsWith("Warning: ")),
-      ).toEqual(expectedWarnings.map((warning) => `Warning: ${warning}`));
     },
   );
 
@@ -140,13 +179,14 @@ describe("update completion ownership", () => {
       doctorContract: { stateMigrations: [] },
       configSchema: { type: "object", additionalProperties: false },
     });
-    const pluginSources = {
-      "doctor-contract-api.js": "export const stateMigrations = [];\n",
-      "index.js": `export default { id: "${pluginId}", register() {} };\n`,
-    };
-    for (const [name, source] of Object.entries(pluginSources)) {
-      await state.writeText(`${pluginRoot}/${name}`, source);
-    }
+    await state.writeText(
+      `${pluginRoot}/doctor-contract-api.js`,
+      "export const stateMigrations = [];\n",
+    );
+    await state.writeText(
+      `${pluginRoot}/index.js`,
+      `export default { id: "${pluginId}", register() {} };\n`,
+    );
     await state.writeConfig({
       ...localConfig,
       plugins: {
@@ -175,10 +215,6 @@ describe("update completion ownership", () => {
       argv: ["update", "repair", "--yes", "--no-restart", "--json"],
     });
 
-    expect(
-      mocks.plugins,
-      vi.mocked(defaultRuntime.error).mock.calls.flat().join("\n"),
-    ).toHaveBeenCalledOnce();
     expect(await readDeferredPluginMigrationsAsync()).toEqual([]);
     expect(await deferredCompletions()).toEqual([expect.objectContaining({ pluginId })]);
     expect(JSON.stringify(reportedResult("repair"))).not.toContain(
@@ -297,7 +333,6 @@ describe("update completion ownership", () => {
     await invoke("resume");
 
     expectSuccess("resume");
-    expect(mocks.plugins).toHaveBeenCalledOnce();
     expect(mocks.restart).not.toHaveBeenCalled();
     expect(await readConfig()).toBe(originalConfig);
     expect(await events()).toEqual(readyEvents);

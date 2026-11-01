@@ -9,7 +9,7 @@ import { createTranscriptMemo } from "./chat-transcript-memo.ts";
 const workingIndicators = createTranscriptMemo<
   Extract<ChatItem, { kind: "reading-indicator" }> | undefined
 >();
-const activityGroups = createTranscriptMemo<string | undefined>();
+const activityGroups = createTranscriptMemo<{ key: string; running: boolean } | undefined>();
 
 export function projectTranscriptActivity(
   chatItems: ReturnType<typeof buildCachedChatItems>,
@@ -20,24 +20,47 @@ export function projectTranscriptActivity(
     chatItems.find((item) => item.kind === "reading-indicator"),
   );
   const activityRunId = workingIndicator?.runId ?? props.runId;
-  const activityGroupKey = activityGroups(
+  const activityGroup = activityGroups(
     chatItems,
     [generation, activityRunId, props.runActive],
-    () =>
-      props.runActive && activityRunId
-        ? chatItems.findLast(
-            (item) =>
-              item.kind === "group" &&
-              item.messages.some(
-                ({ message }) =>
-                  transcriptRunId(message) === activityRunId &&
-                  readPreparedActivity(message).some(
-                    (activity) =>
-                      !activity.hideFromChannelProgress && !activity.suppressChannelProgress,
-                  ),
-              ),
-          )?.key
-        : undefined,
+    () => {
+      const group =
+        props.runActive && activityRunId
+          ? chatItems.findLast(
+              (item) =>
+                item.kind === "group" &&
+                item.messages.some(
+                  ({ message }) =>
+                    transcriptRunId(message) === activityRunId &&
+                    readPreparedActivity(message).some(
+                      (activity) =>
+                        !activity.hideFromChannelProgress && !activity.suppressChannelProgress,
+                    ),
+                ),
+            )
+          : undefined;
+      if (group?.kind !== "group") {
+        return undefined;
+      }
+      const calls = new Map(
+        group.messages.flatMap(({ message }) =>
+          transcriptRunId(message) === activityRunId
+            ? readPreparedActivity(message).map(
+                (item) => [item.toolCallId ?? item.itemId, item] as const,
+              )
+            : [],
+        ),
+      );
+      return {
+        key: group.key,
+        running: [...calls.values()].some(
+          (item) =>
+            item.status === "running" &&
+            !item.hideFromChannelProgress &&
+            !item.suppressChannelProgress,
+        ),
+      };
+    },
   );
   // A run that resumed a handoff counts on from the runs before it. Its own
   // run id and first usage report may not have arrived yet.
@@ -47,5 +70,11 @@ export function projectTranscriptActivity(
       props.runUsageById,
       workingIndicator?.runId ? [...earlierRunIds, workingIndicator.runId] : [],
     ) ?? sumRunOutputTokens(props.runUsageById, earlierRunIds);
-  return { workingIndicator, activityRunId, activityGroupKey, runOutputTokens };
+  return {
+    workingIndicator,
+    activityRunId,
+    activityGroupKey: activityGroup?.key,
+    runningActivityGroupKey: activityGroup?.running ? activityGroup.key : undefined,
+    runOutputTokens,
+  };
 }

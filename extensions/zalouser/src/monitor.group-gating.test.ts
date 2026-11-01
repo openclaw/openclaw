@@ -71,22 +71,9 @@ function createConfig(): OpenClawConfig {
 
 const createRuntimeEnv = createZalouserRuntimeEnv;
 
-type DispatchReplyCallArg = {
-  ctx?: {
-    Body?: string;
-    BodyForCommands?: string;
-    CommandAuthorized?: boolean;
-    CommandBody?: string;
-    InboundHistory?: unknown;
-    OriginatingTo?: string;
-    ReplyToBody?: string;
-    ReplyToId?: string;
-    ReplyToIsQuote?: boolean;
-    SessionKey?: string;
-    To?: string;
-    WasMentioned?: boolean;
-  };
-};
+type DispatchReplyCallArg = Parameters<
+  PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"]
+>[0];
 
 function mockCallArg(mock: unknown, label: string, index = 0) {
   const call = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls?.at(index);
@@ -153,21 +140,15 @@ function installRuntime(
   );
   const readAllowFromStore = vi.fn(async () => []);
   type TurnPlan = Parameters<PluginRuntime["channel"]["inbound"]["dispatch"]>[0];
-  const dispatch = vi.fn(async (plan: TurnPlan) => {
-    const turn = {
-      ...plan,
-      agentId: plan.route.agentId,
-      routeSessionKey: plan.route.sessionKey,
-      dispatchReply,
-    };
+  const dispatch = vi.fn(async (turn: TurnPlan) => {
     const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
       cfg: turn.cfg,
-      agentId: turn.agentId,
+      agentId: turn.route.agentId,
       channel: "zalouser",
       accountId: turn.accountId,
       ...turn.replyPipeline,
     });
-    const dispatchResult = await turn.dispatchReply({
+    const dispatchResult = await dispatchReply({
       ctx: turn.ctxPayload,
       cfg: turn.cfg,
       dispatcherOptions: {
@@ -190,7 +171,7 @@ function installRuntime(
       admission: { kind: "dispatch" as const },
       dispatched: true,
       ctxPayload: turn.ctxPayload,
-      routeSessionKey: turn.routeSessionKey,
+      routeSessionKey: turn.route.sessionKey,
       dispatchResult,
     };
   });
@@ -672,7 +653,6 @@ describe("zalouser monitor group mention gating", () => {
     await processMessageThroughMonitor({
       message: createDmMessage({
         quotedGlobalMsgId: "987654321234",
-        quotedOwnerId: "555444333",
         quotedBody: "Previous bot message content",
       }),
     });

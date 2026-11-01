@@ -5,6 +5,7 @@
  * routes to interactive or non-interactive onboarding.
  */
 import path from "node:path";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveGatewayPort } from "../config/config.js";
 import { isConfigReadFailure } from "../config/io.invalid-config.js";
@@ -18,7 +19,6 @@ import {
   type ProviderAuthChoiceMetadata,
   resolveManifestProviderAuthChoices,
 } from "../plugins/provider-auth-choices.js";
-import { normalizeTokenProviderInput } from "../plugins/provider-auth-input.js";
 import { resolveProviderInstallCatalogEntries } from "../plugins/provider-install-catalog.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -212,14 +212,14 @@ async function validateResetAuthChoice(params: {
     ...resolveProviderInstallCatalogEntries(providerLookup),
   ];
   const isGenericProviderChoice = GENERIC_PROVIDER_AUTH_CHOICES.includes(authChoice);
-  const normalizedTokenProvider = normalizeTokenProviderInput(params.opts.tokenProvider);
+  const normalizedTokenProvider = normalizeOptionalLowercaseString(params.opts.tokenProvider);
   const inferredOptionKey = inferredAuthChoice?.matches[0]?.optionKey;
   const providerAuthChoice = isGenericProviderChoice
     ? providerAuthChoices.find((choice) => {
         const providerMatches = normalizedTokenProvider
-          ? normalizeTokenProviderInput(choice.providerId) === normalizedTokenProvider ||
+          ? normalizeOptionalLowercaseString(choice.providerId) === normalizedTokenProvider ||
             choice.providerAliases?.some(
-              (alias) => normalizeTokenProviderInput(alias) === normalizedTokenProvider,
+              (alias) => normalizeOptionalLowercaseString(alias) === normalizedTokenProvider,
             )
           : inferredOptionKey !== undefined && choice.optionKey === inferredOptionKey;
         const methodId = choice.methodId.toLowerCase();

@@ -1,20 +1,14 @@
-// Covers outbound session context construction for canonical keys, policy keys,
-// conversation type inference, requester metadata, and agent derivation.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildOutboundSessionContext } from "./session-context.js";
 
 const resolveSessionAgentIdMock = vi.hoisted(() => vi.fn());
 
-type SessionContextModule = typeof import("./session-context.js");
-
-let buildOutboundSessionContext: SessionContextModule["buildOutboundSessionContext"];
+const buildContext = (params: Omit<Parameters<typeof buildOutboundSessionContext>[0], "cfg">) =>
+  buildOutboundSessionContext({ cfg: {}, ...params });
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveSessionAgentId: (...args: unknown[]) => resolveSessionAgentIdMock(...args),
 }));
-
-beforeAll(async () => {
-  ({ buildOutboundSessionContext } = await import("./session-context.js"));
-});
 
 beforeEach(() => {
   resolveSessionAgentIdMock.mockReset();
@@ -31,14 +25,11 @@ describe("buildOutboundSessionContext", () => {
 
     expect(
       buildOutboundSessionContext({
-        cfg: { agents: {} } as never,
+        cfg: { agents: {} },
         sessionKey: "cron:job-123:failure",
         agentId: "  explicit-agent  ",
       }),
-    ).toEqual({
-      key: "cron:job-123:failure",
-      agentId: "explicit-agent",
-    });
+    ).toEqual({ key: "cron:job-123:failure", agentId: "explicit-agent" });
     expect(resolveSessionAgentIdMock).toHaveBeenCalledWith({
       sessionKey: "cron:job-123:failure",
       config: { agents: {} },
@@ -47,23 +38,12 @@ describe("buildOutboundSessionContext", () => {
   });
 
   it("falls back to isGroup when no explicit conversation type is provided", () => {
-    expect(
-      buildOutboundSessionContext({
-        cfg: {} as never,
-        sessionKey: "agent:main:generic",
-        isGroup: true,
-      }),
-    ).toEqual({
+    expect(buildContext({ sessionKey: "agent:main:generic", isGroup: true })).toEqual({
       key: "agent:main:generic",
       conversationType: "group",
       conversationKind: "group",
     });
-    expect(
-      buildOutboundSessionContext({
-        cfg: {} as never,
-        isGroup: false,
-      }),
-    ).toEqual({
+    expect(buildContext({ isGroup: false })).toEqual({
       conversationType: "direct",
       conversationKind: "direct",
     });
@@ -73,8 +53,7 @@ describe("buildOutboundSessionContext", () => {
     // A policy key can name an acted-on session that is not the delivery
     // destination; conversationKind must stay unset without declared facts.
     expect(
-      buildOutboundSessionContext({
-        cfg: {} as never,
+      buildContext({
         sessionKey: "agent:main:discord:dm:U123",
         policySessionKey: "agent:main:whatsapp:default:direct:+15551234567",
       }),
@@ -86,13 +65,7 @@ describe("buildOutboundSessionContext", () => {
   });
 
   it("keeps an explicit conversation type authoritative over a direct fallback", () => {
-    expect(
-      buildOutboundSessionContext({
-        cfg: {} as never,
-        conversationType: "channel",
-        isGroup: false,
-      }),
-    ).toEqual({
+    expect(buildContext({ conversationType: "channel", isGroup: false })).toEqual({
       conversationType: "group",
       conversationKind: "channel",
     });

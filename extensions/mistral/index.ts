@@ -4,7 +4,6 @@ import { mistralMediaUnderstandingProvider } from "./media-understanding-provide
 import { mistralMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 import { applyMistralConnectionConfig } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { resolveThinkingProfile } from "./provider-policy-api.js";
 import { buildMistralRealtimeTranscriptionProvider } from "./realtime-transcription-provider-factory.js";
 
 const PROVIDER_ID = "mistral";
@@ -25,7 +24,6 @@ export default defineSingleProviderPluginEntry({
     matchesContextOverflowError: ({ errorMessage }) =>
       /\bmistral\b.*(?:input.*too long|token limit.*exceeded)/i.test(errorMessage),
     normalizeResolvedModel: ({ model }) => applyMistralModelCompat(model),
-    resolveThinkingProfile,
     buildReplayPolicy: () => ({
       sanitizeToolCallIds: true,
       toolCallIdMode: "strict9",

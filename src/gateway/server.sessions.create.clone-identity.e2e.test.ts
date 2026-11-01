@@ -9,7 +9,6 @@ import { requireGit } from "../agents/worktrees/git.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import * as processExec from "../process/exec.js";
 import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
 import { getRpcSource } from "../sessions/session-controller.rpc-sources.js";
@@ -44,10 +43,7 @@ const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
 test.each(
   (["clone", "refresh"] as const).flatMap((operation) =>
-    (["allowed", "retired", "rotated"] as const).map((identity) => ({
-      operation,
-      identity,
-    })),
+    (["allowed", "retired", "rotated"] as const).map((identity) => ({ operation, identity })),
   ),
 )(
   "sessions.create fences $operation Git effects when its identity is $identity",
@@ -56,12 +52,14 @@ test.each(
     vi.stubEnv("OPENCLAW_STATE_DIR", git.root);
     vi.stubEnv("GH_TOKEN", "");
     vi.stubEnv("GITHUB_TOKEN", "");
-    const { storePath } = await createSessionStoreDir();
+    await createSessionStoreDir();
     const profileId = "ghp_11111111111111111111111111111111";
-    await writeManagedGitHubProfileFiles(
-      resolveManagedGitHubProfileDir({ agentId: "main", scope: "system", profileId }),
-      { login: "fixture", token: TOKEN },
-    );
+    const profileDir = resolveManagedGitHubProfileDir({
+      agentId: "main",
+      scope: "system",
+      profileId,
+    });
+    await writeManagedGitHubProfileFiles(profileDir, { login: "fixture", token: TOKEN });
     const selected = {
       ...getRuntimeConfig(),
       gateway: { projects: { nativeGitHubSearch: true } },
@@ -70,10 +68,7 @@ test.each(
     setRuntimeConfigSnapshot(selected);
     const runCommand = processExec.runCommandWithTimeout;
     vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation((argv, options) => {
-      if (
-        argv[0] !== "git" ||
-        !argv.some((arg) => arg === REPOSITORY_URL || arg === git.endpoint)
-      ) {
+      if (argv[0] !== "git" || !argv.some((arg) => [REPOSITORY_URL, git.endpoint].includes(arg))) {
         return runCommand(argv, options);
       }
       // Translate HTTPS into this owned authenticated endpoint; the production
@@ -92,16 +87,13 @@ test.each(
       counts: { block: 0, final: 0, tool: 0 },
     });
     const broadcast = vi.fn();
-    const context = { broadcast };
     let sequence = 0;
-    const errors = () =>
-      JSON.stringify(
-        broadcast.mock.calls
-          .filter(([event, data]) => event === "chat" && data.state === "error")
-          .map(([, data]) => data.errorMessage),
-      );
+    const chatErrors = () =>
+      broadcast.mock.calls
+        .filter(([event, data]) => event === "chat" && data.state === "error")
+        .map(([, data]) => data.errorMessage);
     const create = async (worktree = false) => {
-      const created = await directSessionReq<{ key: string; runId: string; entry: SessionEntry }>(
+      const created = await directSessionReq<{ key: string; runId: string }>(
         "sessions.create",
         {
           agentId: "main",
@@ -116,40 +108,24 @@ test.each(
               }
             : {}),
         },
-        { ...controlUiClient, context },
+        { ...controlUiClient, context: { broadcast } },
       );
       expect(created.ok, JSON.stringify(created.error)).toBe(true);
       expect(created.payload).toMatchObject({ runStarted: true });
       const { key, runId } = created.payload!;
       const target = await loadGatewaySessionEntryReadOnlyAsync(key, { agentId: "main" });
-      const released = captureSessionControllerSettlement({
+      await captureSessionControllerSettlement({
         scope: target.storePath,
         identities: [key],
       });
-      await released;
       expect(getRpcSource(runId)).toBeUndefined();
       const entry = (await loadGatewaySessionEntryReadOnlyAsync(key, { agentId: "main" })).entry;
-      expect(
-        entry,
-        JSON.stringify({
-          key,
-          storePath,
-          events: broadcast.mock.calls.map(([event, data]) => ({
-            event,
-            state: data?.state,
-            error: data?.errorMessage,
-          })),
-        }),
-      ).toBeDefined();
-      return {
-        key,
-        runId,
-        entry,
-      };
+      expect(entry, JSON.stringify(chatErrors())).toBeDefined();
+      return { runId, entry };
     };
     if (operation === "refresh") {
       const warm = await create();
-      expect(warm.entry?.projectId, errors()).toBeDefined();
+      expect(warm.entry?.projectId, JSON.stringify(chatErrors())).toBeDefined();
       await requireGit(path.join(git.root, "remote.git"), ["branch", "fresh-base", git.later]);
       git.requests.length = 0;
       dispatchInboundMessageMock.mockClear();
@@ -160,10 +136,10 @@ test.each(
       if (identity === "retired") {
         setRuntimeConfigSnapshot({ ...selected, tools: {} });
       } else if (identity === "rotated") {
-        await writeManagedGitHubProfileFiles(
-          resolveManagedGitHubProfileDir({ agentId: "main", scope: "system", profileId }),
-          { login: "fixture", token: `${TOKEN}-rotated` },
-        );
+        await writeManagedGitHubProfileFiles(profileDir, {
+          login: "fixture",
+          token: `${TOKEN}-rotated`,
+        });
       }
     };
     if (operation === "clone") {
@@ -190,9 +166,9 @@ test.each(
     if (identity === "allowed") {
       expect(git.requests.length).toBeGreaterThan(0);
       expect(git.requests.every((authorization) => authorization === AUTHORIZATION)).toBe(true);
-      expect(created.entry?.projectId, errors()).toBeDefined();
+      expect(created.entry?.projectId, JSON.stringify(chatErrors())).toBeDefined();
       expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-      expect(errors()).toBe("[]");
+      expect(chatErrors()).toEqual([]);
       expect(created.entry?.pendingWorktree).toBeUndefined();
       expect(await fs.readFile(path.join(created.entry!.spawnedCwd!, "input.txt"), "utf8")).toBe(
         "later private content\n",

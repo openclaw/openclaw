@@ -9,6 +9,30 @@ read_when:
 `openclaw doctor --fix` owns the persistent file-to-SQLite migrations. This page
 describes each migration source and what to do when one stays blocked.
 
+Within a repair run, Doctor reuses a successful preflight scan while the config
+and plugin inventory remain unchanged. If either changes or migrations remain
+unresolved, Doctor scans again without repeating preflight's detection notices
+or warnings.
+
+When an agent schema needs an upgrade, Doctor defers legacy session-entry
+inspection until its stopped-writer schema repair finishes. This applies to
+PostgreSQL as well as SQLite.
+
+Before rewriting stored auth profiles, Doctor saves a verified backup of the
+owning database. SQLite stores keep a single-file backup; PostgreSQL stores keep
+an exact export directory with its matching anchor and original credential rows.
+Doctor checks the captured credentials and rotation state against its migration
+plan before rewriting either store. Keep the reported backup for recovery.
+This repair runs in the candidate Doctor during an update; the installed updater
+needs no change.
+
+Legacy text imports require valid UTF-8. If a source contains malformed bytes,
+Doctor warns and skips that source instead of storing replacement characters.
+Independent migrations continue. The original bytes remain in the source or its
+reported `.migrated` archive; recover the text from a verified backup before
+retrying. Invalid Skill Workshop proposal or rollback files never restore text
+into workspace skills, and their bundles remain available for manual recovery.
+
 After an interrupted legacy session import, rerun `openclaw doctor --fix` against
 the same state directory. Doctor compares retained transcripts with the importer's
 repaired representation, including legacy provider names and duplicate session
@@ -16,6 +40,11 @@ headers. Already imported events succeed without duplication; a verified missing
 suffix can be appended. Matching stores finish archival with the original bytes
 preserved. Genuine content conflicts retain the affected store and its originals;
 Doctor displays the blocking finding and records archive validation as failed.
+
+Retained session recovery prepares archive mappings once per verification phase,
+including when the legacy index is already archived. Source files are still
+rechecked after asynchronous verification. Interrupted-run manifests remain
+available as recovery evidence; you do not need to delete them before retrying.
 
 Session-key repair treats paths that resolve to the same physical database as one
 store, including case variants on case-insensitive filesystems. For example, an
@@ -155,8 +184,11 @@ Ordinary session reads require this repair instead of converting the old fields
 in memory. A Doctor preview reports the affected rows without changing them and
 defers further session inspection until `doctor --fix` runs. The update-time
 Doctor pass performs the same repair before the candidate resumes sessions.
-The migration prelude upgrades database schemas before retrying deferred scalar
-repairs. Standalone session import keeps its existing `doctor --fix` prerequisite
+The migration prelude repairs scalar rows in already-readable databases before
+media rewriting. Databases whose version was just advanced retain unrelated
+content until a later same-version Doctor pass. Other targets that need schema,
+media, or integrity preparation are retried after that preparation in the same
+invocation. Standalone session import keeps its existing `doctor --fix` prerequisite
 for older schemas; session recovery restores or repairs its selected database
 before inspecting and converting scalar state.
 If the recovered database still needs a schema upgrade, recovery reports the
@@ -209,11 +241,15 @@ records remain read-only inventory. After the candidate is installed, the real
 Doctor runs the normal import and archival against the operator's state.
 
 Skill Workshop proposals were removed. Doctor exports each pending or
-quarantined proposal draft, with its support files, to
-`<state-dir>/agents/<agentId>/agent/workshop-skills/.archive/.retired-proposals/<proposal-id>/`,
-then drops the proposal tables. Exported drafts are not live skills; to keep
-one, ask the agent to save it with `/learn` so it goes through the normal
-validated, versioned Workshop write.
+quarantined proposal draft, with its support files, to the Workshop
+[drafts](/tools/skill-workshop#drafts) directory
+`<state-dir>/agents/<agentId>/agent/workshop-skills/.drafts/<proposal-id>/`,
+then drops the proposal tables. Drafts are not live skills; review them with
+`/learn drafts`, which saves the ones worth keeping through the normal
+validated, versioned Workshop write. Drafts that an earlier Doctor exported to
+`workshop-skills/.archive/.retired-proposals/` move to `.drafts/` on the next
+run. An existing draft with the same id is never overwritten: Doctor keeps that
+export where it is and warns, so you can compare the two and delete one.
 
 Doctor keeps the proposal tables and files, with a recoverable warning, when no
 configured agent owns a proposal, it cannot export a draft, or it finds a
@@ -275,8 +311,13 @@ the maintenance holds in the existing migration tables. It leaves valid in-fligh
 deletions with their lifecycle owner. For regular agents, quarantine retains a
 safe deletion tombstone until explicit restoration; it never resurrects a deleted
 agent merely by archiving malformed cleanup details. Recovery preserves held
-stores; it does not migrate or retire them. Runtime admission remains separate
-from Doctor's repair holds. Review the paths and use the
+stores. After missing-table reconstruction, Doctor automatically restores a
+configured agent's matching database after verifying its ownership metadata,
+absence of a deletion record, and a rollback backup of the database and shared
+recovery records. An intervening OpenClaw upgrade does not disqualify the store.
+Quarantined deletion records and unconfigured or mismatched stores still require
+explicit restoration. Runtime admission remains separate from Doctor's repair
+holds. Review the paths and use the
 noninteractive `openclaw agents add` command printed by Doctor to restore the
 intended agent, or `openclaw agents delete` to confirm deletion. An unconfigured
 agent must be restored before deletion. For a custom database filename, restore
@@ -308,6 +349,8 @@ repairs and updates continue. Separate integrity, schema, and required-state
 refusals retain their existing data-preservation checks.
 
 Doctor reports interrupted auth-profile archive recovery even when no new migration remains or you decline another migration. If recovery cannot finish, its warning includes the failure cause and leaves the pending source for recovery; do not delete it to silence the warning.
+
+If an identical auth-profile source reappears after migration, Doctor reuses a byte-verified archive instead of creating another copy. Missing, unreadable, or mismatched archives cannot authorize removal: Doctor preserves the source in a new archive. Changed source bytes still follow the normal migration flow, with existing SQLite credentials taking precedence.
 
 `doctor --fix` also repairs an inconsistent completed auth migration only when its old receipt has no credential fingerprints, none of the migrated credentials remain in the current store, and the preserved archive still matches the recorded source hash. Doctor reimports through the normal verified migration flow. Completed receipts with fingerprints, surviving migrated credentials, or no archive remain untouched, so removing credentials after a verified migration does not restore them from backup.
 
@@ -381,6 +424,19 @@ Stop OpenClaw processes and back up both databases named in the warning before r
 For the retired QMD memory backend, including config rewrites and derived
 workspace cleanup, see [Migrating from QMD](/concepts/memory-builtin#migrating-from-qmd).
 
+Doctor also reclaims legacy memory reindex shadows named `<database>.tmp-<uuid>`
+and their SQLite companions once the primary has been archived as `.migrated`
+and no primary or primary companion remains. Every file in the shadow family
+must be a regular file at least 24 hours old. Doctor previews eligible files and
+declares them for migration backups. Every cleanup path also reports each file
+to standard error before removing it, including automatic Doctor migrations
+without a backup capture. Failed removals produce recoverable warnings.
+Live indexes, current `.memory-reindex-<uuid>` shadows,
+configured import sources (including aliases), and unresolved legacy recovery
+files remain untouched. Newly archived indexes
+become eligible on the next Doctor run. This repair runs in candidate Doctor;
+the installed updater needs no new protocol.
+
 This includes retired MCP OAuth files under `<state-dir>/mcp-oauth/*.json`. Stop the Gateway before repair. Doctor imports valid credentials into `<state-dir>/state/openclaw.sqlite`, preserves an existing SQLite session when both stores exist, drops the obsolete persisted OAuth `state` value, and uses its receipt to prevent a recreated stale file from resurrecting logged-out credentials. Retired `.lock` sidecars block the import: if Doctor reports a stale owner, verify that no older OpenClaw process is running, remove that sidecar, and rerun Doctor.
 
 After explicit repair (`--fix`, `--repair`, or `--yes`), Doctor verifies runtime schema readiness for existing configured, default-layout, and registered databases before reporting completion, including stores whose migration failed before registration. A blocked required migration exits nonzero; stop the Gateway and other OpenClaw processes, then rerun repair. Unrelated advisory warnings, including archived transcript repair failures, do not make a ready database fail this check. Missing databases are not created by the readiness check.
@@ -436,6 +492,8 @@ appropriate for migrations that change only core-captured state or have no data
 resources. See the [plugin migration contract](/plugins/sdk-migration/compatibility-policy).
 
 Bundled Canvas and Memory Core migrations declare their legacy data sources.
+Codex declares its legacy thread-binding sidecars, and Voice Call declares its
+existing SQLite call store, including a configured custom location.
 Crabbox's shared SQLite records are core-captured; the retired Workboard check
 leaves its legacy rows unchanged. QMD retirement removes only empty directories
 and disposable stale coordination locks, so it has no additional data to retain.
@@ -447,3 +505,31 @@ copy. They do not add resources to an original capture already created by an
 older installed updater. Keep those retained copies, and do not assume an older
 capture includes newly declared external resources. A recovery copy is evidence
 for manual recovery; its existence alone does not guarantee automatic rollback.
+
+### Older updater recovery copies
+
+During an update, Doctor reuses the installed updater's original recovery copy;
+it does not create another full copy to expand an older inventory. The admitted
+original is verified and kept unchanged. If that verification fails, Doctor
+refuses repair; inspect the named recovery copy with `openclaw update status --json`
+before retrying.
+
+New declarations do not retroactively add plugin files to older recovery copies.
+Do not assume automatic rollback restores external plugin data missing from the
+original manifest. For manual recovery, inspect the manifest and the plugin's
+migration documentation; migrated files or archives may remain in their new
+locations. Undeclared third-party resources remain unknown: ask the plugin
+maintainer to declare them before relying on recovery coverage.
+
+Standalone Doctor keeps its best-effort pre-repair capture boundary. It reuses
+its newest sealed standalone copy only when the retained payloads and the complete
+current config, database, and declared plugin-resource inventory match exactly.
+Changed or unverifiable sources take a fresh copy; an incomplete comparison never
+counts as verified equality. Healthy schema bookkeeping and plugin repair planning
+leave unchanged state untouched, so consecutive healthy repair runs can reuse one
+copy. `--full-integrity-check` still takes a fresh capture.
+This does not turn repair discovery into a read-only pass: a Doctor invocation can
+still take a copy even when it ultimately reports no repairs.
+Candidate validation uses disposable rehearsal state and defers plugins whose
+declared migration data is outside that rehearsal; it does not create a manual
+recovery copy for those disposable checks.

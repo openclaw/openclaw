@@ -35,7 +35,6 @@ Auth is scoped by agent: each agent has its own `<agentDir>/openclaw-agent.sqlit
       "agents": {
         "ownership": "explicit",
         "defaults": {
-          "heartbeat": { "agentId": "main" },
           "systemAgent": { "agentId": "main" }
         },
         "entries": {
@@ -97,7 +96,6 @@ Auth is scoped by agent: each agent has its own `<agentDir>/openclaw-agent.sqlit
       "agents": {
         "ownership": "explicit",
         "defaults": {
-          "heartbeat": { "agentId": "personal" },
           "systemAgent": { "agentId": "personal" },
           "authInheritance": { "agentId": "personal" }
         },
@@ -131,7 +129,6 @@ Auth is scoped by agent: each agent has its own `<agentDir>/openclaw-agent.sqlit
       "agents": {
         "ownership": "explicit",
         "defaults": {
-          "heartbeat": { "agentId": "main" },
           "systemAgent": { "agentId": "main" }
         },
         "entries": {
@@ -159,7 +156,6 @@ Auth is scoped by agent: each agent has its own `<agentDir>/openclaw-agent.sqlit
       "agents": {
         "ownership": "explicit",
         "defaults": {
-          "heartbeat": { "agentId": "main" },
           "systemAgent": { "agentId": "main" },
           "sandbox": {
             "mode": "non-main",

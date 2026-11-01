@@ -7,6 +7,7 @@ import { getPluginCache } from "./plugin-cache.js";
 import type { PluginCache } from "./plugin-cache.types.js";
 import {
   nativeAdmissionStateFor,
+  queuePluginNativeAdmissionPublication,
   retainNativePath,
   snapshotOwners,
   startNativeAdmissionPublication,
@@ -35,13 +36,14 @@ import type {
   PluginNativeNamespaceFact,
 } from "./plugin-source-admission.types.js";
 import {
-  createPluginNativeCaptureRoot,
+  type createPluginNativeCaptureRoot,
   isPluginSourceCaptureRetained,
   retainPluginNativeCapturePath,
 } from "./plugin-source-capture-directory.js";
 import {
   hashPluginSourceFile,
   isPluginNativeExecutable,
+  isPluginWasmModule,
   pluginSourceIdentityChangedOnlyByCtime,
   pluginSourceStatIdentity,
 } from "./plugin-source-file.js";
@@ -217,7 +219,9 @@ function isNativeArtifact(
   known: boolean,
 ): boolean {
   return (
-    /\.(?:node|so(?:\.\d+)*|dylib|dll|exe|bin)$/i.test(source) ||
+    // WASI libraries can use .so; their bytes do not need a native companion namespace.
+    (/\.(?:node|so(?:\.\d+)*|dylib|dll|exe|bin)$/i.test(source) &&
+      (known || !/\.so(?:\.\d+)*$/i.test(source) || !isPluginWasmModule(source, boundary))) ||
     ((stat.mode & 0o111n) !== 0n &&
       path.extname(source) === "" &&
       (known || isPluginNativeExecutable(source, boundary)))
@@ -311,10 +315,7 @@ export function createPluginNativeAdmission(
     previous?: PluginNativeNamespaceFact,
     retainedRoot?: string,
   ) => {
-    const root = createPluginNativeCaptureRoot(
-      state.captureStorage.stateDir,
-      state.captureStorage.placement,
-    );
+    const root = state.createRoot();
     state.roots.add(root);
     snapshotOwners.set(root, new Set([state]));
     const { fact, changed } = capturePluginNativeNamespace({
@@ -408,30 +409,17 @@ export function createPluginNativeAdmission(
       startNativeAdmissionPublication(state, key);
       return;
     }
-    const roots = [...state.roots].filter((root) => used.has(root.directory));
-    const publication = () =>
-      publishAdmission({
+    queuePluginNativeAdmissionPublication(
+      state,
+      {
         pluginId: owner.pluginId,
         rootDir: owner.rootDir,
         installRecordHash: owner.installRecordHash,
         key,
         receipt: next,
-      })
-        .then((accepted) => {
-          if (accepted) {
-            for (const root of roots) {
-              root.commit();
-            }
-            if (state.publications.get(key) === publication) {
-              state.publications.delete(key);
-            }
-          }
-        })
-        .catch((error: unknown) =>
-          process.emitWarning(`Plugin source receipt was not recorded: ${String(error)}`),
-        );
-    state.publications.set(key, publication);
-    startNativeAdmissionPublication(state, key);
+      },
+      publishAdmission,
+    );
   };
   const refreshReference = (fact: PluginNativeArtifactFact, input: string, target: string) => {
     const namespace = state.namespaces.get(fact.namespace)!;
@@ -580,6 +568,7 @@ export function createPluginNativeAdmission(
       const recovered = recoveredFiles.get(source);
       const resolvedSource = sourceForPrepared(source) ?? source;
       const known = files.get(logicalSource) ?? state.files.get(logicalSource) ?? recovered;
+      const identity = known && pluginSourceStatIdentity(stat);
       if (
         owner?.source === logicalSource ||
         owner?.setupSource === logicalSource ||
@@ -587,7 +576,16 @@ export function createPluginNativeAdmission(
       ) {
         return undefined;
       }
-      if (!isNativeArtifact(source, boundary, stat, Boolean(known))) {
+      if (
+        !isNativeArtifact(
+          source,
+          boundary,
+          stat,
+          Boolean(
+            known && (known.sourceIdentity === identity || known.capturedIdentity === identity),
+          ),
+        )
+      ) {
         return undefined;
       }
       const found = namespaceFor(resolvedSource);

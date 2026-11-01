@@ -40,7 +40,6 @@ export { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 
 export {
   CodexAppServerEventProjector,
-  createCodexTestModel,
   createCodexTestToolTerminalObserver,
   createMockPluginRegistry,
   describe,
@@ -108,18 +107,6 @@ export async function createProjector(
   return new CodexAppServerEventProjector(resolvedParams, THREAD_ID, TURN_ID, options);
 }
 
-export async function createProjectorWithAssistantHooks() {
-  const onAssistantMessageStart = vi.fn();
-  const onPartialReply = vi.fn();
-  const params = await createParams();
-  const projector = await createProjector({
-    ...params,
-    onAssistantMessageStart,
-    onPartialReply,
-  });
-  return { onAssistantMessageStart, onPartialReply, projector };
-}
-
 export function registerCodexEventProjectorTestLifecycle(): void {
   beforeEach(() => {
     resetAgentEventsForTest();
@@ -127,6 +114,8 @@ export function registerCodexEventProjectorTestLifecycle(): void {
   });
 
   afterEach(async () => {
+    // Drain projected setImmediate hooks before a later test replaces their registry.
+    await flushDiagnosticEvents();
     resetAgentEventsForTest();
     resetDiagnosticEventsForTest();
     resetGlobalHookRunner();

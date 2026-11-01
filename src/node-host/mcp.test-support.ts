@@ -25,7 +25,7 @@ type ClientParams = {
 
 export const okResult: CallToolResult = { content: [{ type: "text", text: "ok" }] };
 export const transport = {
-  transport: {} as never,
+  transport: { start: async () => {}, send: async () => {}, close: async () => {} },
   transportType: "stdio" as const,
   connectionTimeoutMs: 100,
   requestTimeoutMs: 50,

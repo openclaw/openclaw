@@ -8,7 +8,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 FUNCTIONAL_IMAGE="$(docker_e2e_resolve_image "openclaw-mcp-docker-custody-functional:local" OPENCLAW_MCP_DOCKER_CUSTODY_IMAGE)"
 RUNNER_IMAGE="openclaw-mcp-docker-custody-runner:${OPENCLAW_DOCKER_ALL_LANE_NAME:-local}"
-FIXTURE_IMAGE="node:24-alpine"
+FIXTURE_IMAGE="node:24.22.1-alpine@sha256:6a1c190e17215d844926b0677f4bf87273ff7d5e54db06d3b5b5863ab0b09a3d"
 DOCKER_SOCKET="${OPENCLAW_DOCKER_SOCKET:-/var/run/docker.sock}"
 SCENARIO_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-mcp-docker-custody.XXXXXX")"
 RUN_ID="$(node -e 'process.stdout.write(require("node:crypto").randomUUID())')"
@@ -41,7 +41,7 @@ ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
 USER root
 RUN apt-get update \
- && apt-get install -y --no-install-recommends docker.io \
+ && apt-get install -y --no-install-recommends docker.io docker-cli \
  && rm -rf /var/lib/apt/lists/*
 USER appuser
 EOF

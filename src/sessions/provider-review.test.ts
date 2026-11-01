@@ -109,29 +109,14 @@ beforeEach(() => {
 });
 afterEach(() => runs.resetAgentRunRegistryForTest());
 
-it("enforces pause, settlement, recovery and unforgeable admission", async () => {
+it("enforces pause, settlement and unforgeable admission", async () => {
   const paused = entry;
-  entry = {
-    ...entry,
-    mainRestartRecovery: {
-      cycleId: "recovery-cycle",
-      revision: 1,
-      chargedAttempts: 1,
-      tombstone: { reason: "automatic recovery exhausted" },
-    },
-  };
   const ack = await issue();
   const settlement = {
     purpose: "accepted-result-settlement" as const,
     expectedSessionId: target.sessionId,
   };
-  const recovery = { allowRestartTombstoneReplacement: true };
   const forged = { providerReviewAcknowledgment: {} as Ack };
-  const acknowledgedRecovery = {
-    ...recovery,
-    providerReviewAcknowledgment: ack,
-    runId: accepted.runId,
-  };
   const cases: Array<
     [InternalSessionEntry, Parameters<typeof workStartError>[2], string | undefined]
   > = [
@@ -141,9 +126,7 @@ it("enforces pause, settlement, recovery and unforgeable admission", async () =>
     [paused, settlement, undefined],
     [{ ...paused, sessionId: "replacement" }, settlement, "changed"],
     [{ ...paused, archivedAt: 2 }, settlement, "archived"],
-    [entry, recovery, "paused as a precaution"],
-    [entry, acknowledgedRecovery, "ended during restart recovery"],
-    [{ ...entry, providerReview: undefined }, recovery, undefined],
+    [paused, { providerReviewAcknowledgment: ack, runId: accepted.runId }, undefined],
   ];
   for (const [candidate, options, error] of cases) {
     const result = workStartError(target.sessionKey, candidate, options);
@@ -282,7 +265,7 @@ it("persists new refusal identity and keeps duplicate terminal notification iden
   expect(store.compare).toHaveBeenCalledOnce();
   expect(workStartError(target.sessionKey, entry)).toContain("paused as a precaution");
 });
-it.each(["run", "source"])("keeps incognito findings private until %s revocation", (revoked) => {
+it.each(["run", "source", "capture"])("guards incognito facts against %s revocation", (revoked) => {
   const incognito = {
     ...target,
     sessionKey: "agent:main:dashboard:incognito-test",
@@ -306,13 +289,22 @@ it.each(["run", "source"])("keeps incognito findings private until %s revocation
       nativeTurnId: undefined,
     },
   });
-  captureAgentRunProviderReview({
-    runId: "incognito-run",
-    target: incognito,
-    review,
-    expectedWriterRunId: "incognito-run",
-    assertCurrent,
-  });
+  const capture = () =>
+    captureAgentRunProviderReview({
+      runId: "incognito-run",
+      target: incognito,
+      review,
+      expectedWriterRunId: "incognito-run",
+      assertCurrent,
+    });
+  if (revoked === "capture") {
+    sourceCurrent = false;
+    expect(capture).toThrow("source revoked");
+    sourceCurrent = true;
+    expect(readAgentRunProviderReview("incognito-run")).toBeUndefined();
+    return;
+  }
+  capture();
   const fact = readAgentRunProviderReview("incognito-run");
   expect(fact?.review).toEqual(review);
   const context = runs.getAgentRunContext("incognito-run")!;

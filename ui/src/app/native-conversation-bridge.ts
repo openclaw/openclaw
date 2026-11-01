@@ -13,7 +13,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { z } from "zod";
-import { registerListener } from "../../../src/shared/listeners.js";
 import { routeIdFromPath } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import type { StoredSidebarSessionFacts } from "../lib/chat/outbox-store-projection.ts";
@@ -152,7 +151,7 @@ export function createNativeConversationBridge(
   let stateDelivery = Promise.resolve<Delivery>("rejected");
   let stateDeliveryFailed = false;
   const requests = new Set<string>();
-  const listeners = new Set<() => void>();
+  let render: (() => void) | undefined;
   const pending = new Set<() => void>();
   const current = () =>
     !disposed &&
@@ -162,7 +161,7 @@ export function createNativeConversationBridge(
   const bounded = <T>(
     work: (active: () => boolean, signal: AbortSignal) => Promise<T>,
     timeout: T,
-    deadline = Date.now() + RESPONSE_TIMEOUT_MS,
+    deadline = performance.now() + RESPONSE_TIMEOUT_MS,
   ): Promise<T> =>
     new Promise((resolve) => {
       let settled = false;
@@ -178,9 +177,9 @@ export function createNativeConversationBridge(
         resolve(result);
       };
       const expire = () => finish(timeout);
-      const timer = setTimeout(expire, Math.max(0, deadline - Date.now()));
+      const timer = setTimeout(expire, Math.max(0, deadline - performance.now()));
       pending.add(expire);
-      void work(() => !settled && current() && Date.now() < deadline, abort.signal).then(
+      void work(() => !settled && current() && performance.now() < deadline, abort.signal).then(
         finish,
         expire,
       );
@@ -451,7 +450,7 @@ export function createNativeConversationBridge(
           return "invalid-command";
         }
         presentation = next.data;
-        listeners.forEach((listener) => listener());
+        render?.();
         return undefined;
       }
       case "focus-composer": {
@@ -485,7 +484,7 @@ export function createNativeConversationBridge(
       return;
     }
     requests.add(key);
-    const deadline = Date.now() + RESPONSE_TIMEOUT_MS;
+    const deadline = performance.now() + RESPONSE_TIMEOUT_MS;
     const previous = commands;
     // The receipt deadline includes queueing; expired continuations cannot publish
     // state or take ownership from the next command after a late loader resolves.
@@ -557,6 +556,7 @@ export function createNativeConversationBridge(
     surface: "conversation",
     capabilities: ["navigate", "presentation", "focus-composer", ...features],
   });
+  // Publish accepted native-host state from owner receipts, independently of Solid commits.
   stops.push(
     listen(document, CHAT_RUN_ACTIVITY_CHANGED_EVENT, refreshConversation),
     listen(document, CHAT_PANE_LIFECYCLE_CHANGED_EVENT, refreshConversation),
@@ -570,14 +570,19 @@ export function createNativeConversationBridge(
     get presentation() {
       return presentation;
     },
-    subscribe: (listener) => registerListener(listeners, listener),
+    subscribe(listener: () => void) {
+      render = listener;
+      return () => {
+        render = undefined;
+      };
+    },
     interceptNavigation,
     publishSessionFacts,
     dispose() {
       disposed = true;
       pending.forEach((expire) => expire());
       stops.forEach((stop) => stop());
-      listeners.clear();
+      render = undefined;
       if (host["__OPENCLAW_NATIVE_CONVERSATION_DOCUMENT__"] === binding) {
         delete host["__OPENCLAW_NATIVE_CONVERSATION_DOCUMENT__"];
       }

@@ -8,7 +8,11 @@ import {
 } from "./browser-bridges.js";
 import { removeSandboxContainerRuntime } from "./container-lifecycle.js";
 import { dockerSandboxBackendManager } from "./docker-backend.js";
-import { validateSandboxContainerEngineTarget, type SandboxContainerEngine } from "./docker.js";
+import {
+  execContainer,
+  validateSandboxContainerEngineTarget,
+  type SandboxContainerEngine,
+} from "./docker.js";
 import {
   readBrowserRegistry,
   readRegistry,
@@ -102,34 +106,69 @@ export async function listSandboxBrowsers(
 
 /** Retire only the physical generation fenced by local workspace settlement. */
 export async function removeSandboxRuntimeGeneration(params: {
-  runtime: { assertCurrent: () => void } & (
+  runtime:
     | { kind: "container"; entry: SandboxRegistryEntry }
-    | { kind: "browser"; entry: SandboxBrowserRegistryEntry }
-  );
+    | { kind: "browser"; entry: SandboxBrowserRegistryEntry };
+  database: { path: string; env: NodeJS.ProcessEnv; assertCurrent: () => void };
   engine: SandboxContainerEngine;
   id: string | null;
   bridges: ReadonlyArray<readonly [string, CachedBrowserBridge]>;
   assertCurrent: () => void;
+  assertGenerationCurrent?: () => Promise<void>;
 }): Promise<void> {
   const { runtime, engine, id } = params;
-  const assertCurrent = () => {
+  const revalidateGeneration = async () => {
+    await params.assertGenerationCurrent?.();
     params.assertCurrent();
-    runtime.assertCurrent();
+  };
+  const assertCurrent = () => {
+    params.database.assertCurrent();
+    params.assertCurrent();
   };
   if (id !== null && !/^[a-f0-9]{64}$/u.test(id)) {
     throw new Error("Invalid sandbox runtime generation");
   }
+  await revalidateGeneration();
   assertCurrent();
   await validateSandboxContainerEngineTarget(
     engine,
     runtime.kind === "container" ? runtime.entry.backendTarget : undefined,
   );
+  await revalidateGeneration();
   assertCurrent();
   await removeSandboxContainerRuntime(engine, runtime.entry.containerName, { id, assertCurrent });
+  // A name can be rebound without a registry update. Never forget its replacement's
+  // metadata or bridge merely because the old physical ID was already absent.
+  const assertAbsent = async () => {
+    const named = await execContainer(
+      engine,
+      ["inspect", "-f", "{{.Id}}", runtime.entry.containerName],
+      { allowFailure: true, signal: AbortSignal.timeout(30_000) },
+    );
+    await revalidateGeneration();
+    assertCurrent();
+    if (named.code === 0 || !/no such (?:container|object)|does not exist/iu.test(named.stderr)) {
+      throw new Error(
+        "Sandbox runtime generation changed or removal is unconfirmed; custody retained",
+      );
+    }
+  };
+  await assertAbsent();
   for (const [sessionKey, bridge] of params.bridges) {
-    await stopCachedBrowserBridge(sessionKey, bridge, params.assertCurrent);
+    assertCurrent();
+    await stopCachedBrowserBridge(sessionKey, bridge, assertCurrent);
+    await revalidateGeneration();
+    assertCurrent();
   }
-  await removeSandboxRegistryGeneration(runtime.kind, runtime.entry, params.assertCurrent);
+  if (params.bridges.length) {
+    await assertAbsent();
+  }
+  await removeSandboxRegistryGeneration(
+    runtime.kind,
+    runtime.entry,
+    assertCurrent,
+    params.database,
+  );
 }
 
 export async function removeSandboxContainer(containerName: string): Promise<void> {

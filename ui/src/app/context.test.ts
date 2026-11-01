@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { useApplication } from "../lib/reactive/context.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
-import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
+import {
+  createApplicationContextProvider,
+  requestApplicationContext,
+} from "../test-helpers/application-context.ts";
+import { cleanupSolid } from "../test-helpers/solid-cleanup.ts";
 import type { ApplicationContext } from "./context.ts";
 
 const Consumer = defineSolidBridge(
@@ -35,5 +39,22 @@ describe("application context consumption", () => {
     await consumer.updateComplete;
 
     expect(consumer.textContent).toBe("/replacement");
+  });
+
+  it("retires plain-DOM providers during Solid test cleanup", () => {
+    const provider = createApplicationContextProvider({
+      basePath: "/initial",
+    } as ApplicationContext);
+    const consumer = document.createElement("div");
+    provider.append(consumer);
+    const values: string[] = [];
+    const receive = (context: ApplicationContext) => values.push(context.basePath);
+
+    requestApplicationContext(consumer, receive);
+    expect(values).toEqual(["/initial"]);
+
+    cleanupSolid();
+    requestApplicationContext(consumer, receive);
+    expect(values).toEqual(["/initial"]);
   });
 });

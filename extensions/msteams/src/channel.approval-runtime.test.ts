@@ -16,7 +16,7 @@ describe("msteams approval runtime startup", () => {
   });
 
   it("registers before monitor startup only when native delivery is enabled", async () => {
-    monitorMSTeamsProviderMock.mockResolvedValue({ app: null, shutdown: async () => {} });
+    monitorMSTeamsProviderMock.mockResolvedValue(undefined);
     const register = vi.fn(() => ({ dispose: vi.fn() }));
     const controller = new AbortController();
     const cfg: OpenClawConfig = {

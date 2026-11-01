@@ -142,6 +142,18 @@ dispatchers that keep platform delivery in the delivery adapter. New send
 paths should use message adapters and durable message helpers from
 `channel-outbound` instead.
 
+## Debouncing
+
+`createInboundDebouncer` from `openclaw/plugin-sdk/channel-inbound-debounce`
+releases a keyed queue when the flush's `admission` promise settles and keeps its
+`completion` promise available to `drain()`. New `onFlush` callbacks should use
+the supplied `createFlush` helper or return those two promises explicitly.
+
+Plugins built against the stable `v2026.7.x` releases can still return a
+Promise or thenable. The host waits for that result for both admission and
+completion, preserving same-key ordering and rejection handling. No removal date
+has been announced for this runtime compatibility path.
+
 ## Platform-selected history windows
 
 When the platform owns recent history, pass the selected entries as

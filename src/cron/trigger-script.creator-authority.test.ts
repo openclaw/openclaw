@@ -18,6 +18,7 @@ import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
+import { TEST_SCHEDULED_OCCURRENCE } from "./scheduled-occurrence.test-support.js";
 import { createCronScriptRuntime } from "./trigger-script.js";
 import type { CronStoredJob } from "./types.js";
 
@@ -67,14 +68,25 @@ const config: OpenClawConfig = {
 };
 
 describe("cron code-mode creator authority", () => {
-  it.each(["trigger", "payload"] as const)(
-    "%s provisions the canonical creator's required sandbox with agent mode off",
-    async (mode) => {
+  it.each([
+    { mode: "trigger", transferred: false },
+    { mode: "payload", transferred: false },
+    { mode: "trigger", transferred: true },
+    { mode: "payload", transferred: true },
+  ] as const)(
+    "$mode provisions the execution principal's required sandbox with transferred=$transferred",
+    async ({ mode, transferred }) => {
       await withOpenClawTestState(
         { scenario: "minimal", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
         async (state) => {
           const profile = ensureProfileForEmail("sandbox-creator@example.test");
           linkUserChannelIdentity(profile.id, identity);
+          const executionOwner = transferred
+            ? ensureProfileForEmail("current-owner@example.test")
+            : profile;
+          if (transferred) {
+            setUserProfileRole(profile.id, "member");
+          }
           using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
           const owner = acquireGatewayStateOwner({
             databasePath: resolveOpenClawStateSqlitePath(),
@@ -122,7 +134,14 @@ describe("cron code-mode creator authority", () => {
             });
             const sandboxJob = job();
             sandboxJob.payload.toolsAllow = [];
-            const invocation = { job: sandboxJob, deliveryAttemptFence: null };
+            if (transferred) {
+              sandboxJob.ownerProfileId = executionOwner.id;
+            }
+            const invocation = {
+              occurrence: TEST_SCHEDULED_OCCURRENCE,
+              job: sandboxJob,
+              deliveryAttemptFence: null,
+            };
             const result =
               mode === "trigger"
                 ? await runtime.evaluateTrigger({
@@ -139,7 +158,7 @@ describe("cron code-mode creator authority", () => {
             expect(backend).toHaveBeenCalledOnce();
             expect(backend.mock.calls[0]?.[0]).toMatchObject({
               scopeKey: expect.stringContaining(
-                `principal:${hashTextSha256(profile.id).slice(0, 32)}`,
+                `principal:${hashTextSha256(executionOwner.id).slice(0, 32)}`,
               ),
               cfg: { workspaceAccess: "ro" },
             });
@@ -216,7 +235,11 @@ describe("cron code-mode creator authority", () => {
               callerOrigin: { kind: "local" },
             };
           }
-          const invocation = { job: stored, deliveryAttemptFence: null };
+          const invocation = {
+            occurrence: TEST_SCHEDULED_OCCURRENCE,
+            job: stored,
+            deliveryAttemptFence: null,
+          };
           const pending =
             mode === "trigger"
               ? runtime.evaluateTrigger({ ...invocation, script: "return result", state: null })

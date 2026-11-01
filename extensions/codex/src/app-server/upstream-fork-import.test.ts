@@ -7,7 +7,7 @@ import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-run
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { toGenericTranscriptItem } from "../session-catalog-transcript-item.js";
 import type { CodexSessionCatalogControl } from "../session-catalog-types.js";
-import type { CodexThread, CodexThreadItem, CodexTurn } from "./protocol.js";
+import type { CodexThread, CodexTurn } from "./protocol.js";
 import { sessionBindingIdentity } from "./session-binding.js";
 import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
 import { importCodexThreadHistoryToTranscript } from "./transcript-mirror.js";
@@ -37,18 +37,17 @@ afterEach(async () => {
 });
 
 function turn(id: string, texts: string[]): CodexTurn {
-  const user: CodexThreadItem = {
-    ...codexForkTurn(id, "").items[0]!,
-    content: texts.map((text) => ({ type: "text", text, text_elements: [] })),
-  };
-  return {
-    id,
-    status: "completed",
-    items: [
-      user,
-      { ...user, id: `${id}-assistant`, type: "agentMessage", content: [], text: "Answer" },
-    ],
-  };
+  const value = codexForkTurn(id, "");
+  const user = value.items[0]!;
+  user.content = texts.map((text) => ({ type: "text", text, text_elements: [] }));
+  value.items.push({
+    ...user,
+    id: `${id}-assistant`,
+    type: "agentMessage",
+    content: [],
+    text: "Answer",
+  });
+  return value;
 }
 
 async function importHistory(turns: CodexTurn[], name?: string) {
@@ -70,7 +69,7 @@ async function importHistory(turns: CodexTurn[], name?: string) {
     },
   });
   const thread: CodexThread = { id: "thread-source", projectId: null, name, turns };
-  const imported = await importCodexThreadHistoryToTranscript({
+  await importCodexThreadHistoryToTranscript({
     ...target,
     thread,
     throughTurnId: turns.at(-1)!.id,
@@ -95,7 +94,6 @@ async function importHistory(turns: CodexTurn[], name?: string) {
     target,
     thread,
     control,
-    imported,
     users,
     resolve: () =>
       resolveCodexUpstreamForkBoundary({
@@ -243,7 +241,6 @@ describe("fork boundaries from imported Codex history", () => {
         ];
       }
       const history = await importHistory(turns);
-      expect(history.imported.omittedMessages).toBeGreaterThan(0);
       expect(history.users.length).toBeLessThan(count);
 
       await expect(history.resolve()).resolves.toEqual({

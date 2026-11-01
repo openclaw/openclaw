@@ -9,12 +9,17 @@ import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
 import { chatCommentLineEnd, resolveChatCommentAnchor } from "./chat-comment-anchor.ts";
 import { currentChatComments } from "./chat-comment-controller.ts";
 import { dispatchChatCommentAction } from "./chat-selection-annotations.tsx";
+import type { TranscriptMessageElements } from "./chat-transcript-message-elements.ts";
 import "../../../styles/chat/selection-annotations.css";
 
 registerChatMessageMetadataEnglish();
 
 type ChatCommentPinsProps = {
   threadState?: { commentPins?: ChatCommentPinsHandle };
+  transcript?: {
+    readonly messageElements: TranscriptMessageElements;
+    readonly contentElement: HTMLDivElement | null;
+  };
   attachments: readonly ChatAttachment[];
   sessionKey: string;
   disabled: boolean;
@@ -97,12 +102,15 @@ export const ChatCommentPins = defineSolidBridge<ChatCommentPinsProps>(
       if (!root) {
         return undefined;
       }
-      const inner = root.querySelector(".chat-thread-inner");
-      if (inner && inner !== observedInner) {
+      const content = props.transcript?.contentElement;
+      const inner = content?.isConnected ? content : undefined;
+      if (inner !== observedInner) {
         if (observedInner) {
           resizeObserver?.unobserve(observedInner);
         }
-        resizeObserver?.observe(inner);
+        if (inner) {
+          resizeObserver?.observe(inner);
+        }
         observedInner = inner;
       }
       const origin = host.getBoundingClientRect();
@@ -118,7 +126,10 @@ export const ChatCommentPins = defineSolidBridge<ChatCommentPinsProps>(
           placed = false;
           continue;
         }
-        const anchor = resolveChatCommentAnchor(root, attachment.selectionAnnotation);
+        const anchor = resolveChatCommentAnchor(
+          props.transcript?.messageElements.elements.values() ?? [],
+          attachment.selectionAnnotation,
+        );
         const line = anchor ? chatCommentLineEnd(anchor) : null;
         if (!anchor || !line) {
           hidden.push(pin);
@@ -225,6 +236,7 @@ export const ChatCommentPins = defineSolidBridge<ChatCommentPinsProps>(
     propertyChanged: (host) => inputHandlers.get(host)?.(),
     properties: {
       threadState: { default: undefined, attribute: false },
+      transcript: { default: undefined, attribute: false },
       attachments: { default: [], attribute: false },
       sessionKey: { default: "" },
       disabled: { default: false, attribute: false },

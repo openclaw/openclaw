@@ -1,6 +1,10 @@
+import { writeFileSync } from "node:fs";
+import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { afterAll, beforeAll, expect, it, onTestFinished } from "vitest";
 import type { PluginDiscoveryDetailResult } from "../../lib/plugins/index.ts";
+import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   calendarInspection,
   calendarPlugin,
@@ -49,6 +53,64 @@ async function setup(
 describeControlUiE2e("Plugin overview", () => {
   beforeAll(setupPluginsE2e);
   afterAll(teardownPluginsE2e);
+
+  it("gives failed plugin actions shared callout padding and space before capabilities", async () => {
+    const message =
+      "Another plugin or config operation is already running; retry when it completes.";
+    const disabled = { ...calendarPlugin, enabled: false, state: "disabled" as const };
+    const { page, gateway } = await setup({
+      "plugins.list": inventory([disabled]),
+      "plugins.inspect": { ...calendarInspection, plugin: disabled },
+      "plugins.setEnabled": { __mockError: { code: "UNAVAILABLE", message } },
+    });
+    await page.goto(server.baseUrl + "settings/plugins/calendar-plus");
+    await role(page, "button", "Enable Calendar Plus").click();
+    await gateway.waitForRequest("plugins.setEnabled");
+    const alert = page.locator(
+      '.plugin-catalog-detail__panel > .plugins-row-message[role="alert"]',
+    );
+    await alert.getByText(message, { exact: true }).waitFor();
+    const artifactDir =
+      process.env.OPENCLAW_UPDATE_E2E_SCREENSHOTS === "1"
+        ? createControlUiE2eArtifactDir("plugin-action-alert")
+        : undefined;
+    for (const width of [1440, 393]) {
+      await page.setViewportSize({ width, height: 1000 });
+      if (artifactDir) {
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          page.locator(".plugin-catalog-detail"),
+          [alert],
+          { animations: "disabled" },
+        );
+        writeFileSync(path.join(artifactDir, `alert-${width}.png`), frame.png);
+      }
+      await expect
+        .poll(async () => {
+          const geometry = await alert.evaluate((element) => {
+            const style = getComputedStyle(element);
+            const next = element.nextElementSibling;
+            return {
+              paddingTop: Number.parseFloat(style.paddingTop),
+              paddingBottom: Number.parseFloat(style.paddingBottom),
+              gap: next
+                ? next.getBoundingClientRect().top - element.getBoundingClientRect().bottom
+                : 0,
+              contained: element.scrollWidth <= element.clientWidth,
+            };
+          });
+          expect(geometry.paddingTop).toBeGreaterThanOrEqual(14);
+          expect(geometry.paddingBottom).toBeGreaterThanOrEqual(14);
+          expect(geometry.gap).toBeGreaterThanOrEqual(16);
+          return geometry.contained;
+        })
+        .toBe(true);
+    }
+    expect((await gateway.getRequests("plugins.setEnabled"))[0]?.params).toEqual({
+      pluginId: "calendar-plus",
+      enabled: true,
+    });
+  });
 
   it.each(["fresh", "refresh"] as const)(
     "initializes direct catalog Settings on %s entry with editable fields and permissions",
@@ -155,6 +217,95 @@ describeControlUiE2e("Plugin overview", () => {
       });
     },
   );
+
+  it("explains a single-server integration instead of repeating setup instructions when enabled", async () => {
+    const summary = "Find, create, and update Linear issues, projects, and comments.";
+    const setupText = "Enable this plugin and connect your account in OpenClaw.";
+    const linear = {
+      ...calendarPlugin,
+      id: "linear",
+      name: "Linear",
+      packageName: "@openclaw/linear",
+      description: summary,
+    };
+    const catalog: PluginDiscoveryDetailResult = {
+      plugin: {
+        id: "ch_bGluZWFy",
+        catalog: {
+          name: "Linear",
+          summary,
+          family: "bundle-plugin",
+          official: true,
+          categories: ["productivity"],
+        },
+        local: {
+          present: true,
+          installed: true,
+          enabled: true,
+          state: "enabled",
+          pluginId: "linear",
+          action: "manage",
+        },
+      },
+      detail: {
+        origin: "clawhub",
+        packageName: "@openclaw/linear",
+        author: { handle: "openclaw", displayName: "OpenClaw", official: true },
+        topics: [],
+        configuration: [],
+        skills: [],
+        versions: [],
+        mcpServers: ["linear"],
+        mcpServerDetails: [
+          {
+            name: "linear",
+            url: "https://mcp.linear.app/mcp",
+            transport: "streamable-http",
+            auth: "oauth",
+            setup: setupText,
+          },
+        ],
+      },
+    };
+    const { page } = await setup({
+      "plugins.list": inventory([linear]),
+      "plugins.catalog.get": catalog,
+      "plugins.inspect": {
+        ...calendarInspection,
+        plugin: { ...calendarInspection.plugin, id: "linear", name: "Linear" },
+        catalog,
+        declared: { ...calendarInspection.declared, tools: [], mcpServers: ["linear"] },
+        components: {
+          mapped: [],
+          skills: [],
+          mcpServers: ["linear"],
+          commands: [],
+          hooks: [],
+          lspServers: [],
+          unavailable: { capabilities: [], mcpServers: [], lspServers: [] },
+        },
+      },
+    });
+    await page.goto(server.baseUrl + "plugins/ch_bGluZWFy");
+    const disable = role(page, "button", "Disable Linear");
+    await disable.waitFor();
+    await page.locator(".plugin-capability__disclosure summary").click();
+    const details = page.locator(".plugin-capability__details");
+    await details.getByText("OAuth", { exact: true }).waitFor();
+    if (process.env.OPENCLAW_UPDATE_E2E_SCREENSHOTS === "1") {
+      const artifactDir = createControlUiE2eArtifactDir("linear-mcp");
+      const frame = await takeControlUiScreenshotFrame(
+        page,
+        page.locator(".plugin-catalog-detail"),
+        [disable, details],
+        { animations: "disabled" },
+      );
+      writeFileSync(path.join(artifactDir, "linear-mcp.png"), frame.png);
+    }
+    expect(await details.locator("dt").allTextContents()).toContain("What this server does");
+    expect(await details.locator("dd").allTextContents()).toContain(summary);
+    expect(await details.textContent()).not.toContain(setupText);
+  });
 
   it("keeps catalog identity while presenting installed controls, complete content, and a contained metadata rail", async () => {
     const description = `${"Search previous calendar entries.\n\n".repeat(120)}TOOL_DESCRIPTION_TAIL`;

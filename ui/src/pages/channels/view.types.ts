@@ -2,7 +2,7 @@ import type { ChannelsPairingRequest } from "../../api/types.ts";
 import type { ChannelsState } from "../../lib/channels/index.ts";
 import type { RuntimeConfigState } from "../../lib/config/config-state-model.ts";
 import type { PluginListResult } from "../../lib/plugins/index.ts";
-import type { ChannelSetup } from "./wizard-setup.ts";
+import type { createChannelSetup } from "./wizard-setup.ts";
 
 export type ChannelSettingsPresentation = {
   has: (channelId: string) => boolean;
@@ -19,6 +19,7 @@ export type ChannelPairingPrompt = {
 };
 
 export type ChannelsProps = {
+  mutationBusy?: Readonly<Partial<Record<"config" | "pairing" | "whatsapp" | "wizard", boolean>>>;
   channels: ChannelsState;
   config: RuntimeConfigState;
   presentation: {
@@ -26,7 +27,7 @@ export type ChannelsProps = {
     readonly pluginIconUrls: Record<string, string>;
     readonly details: ChannelSettingsPresentation;
   };
-  wizardHost: ChannelSetup;
+  wizardHost: ReturnType<typeof createChannelSetup>;
   pairingChannelFilter: string | null;
   pairingAccountFilter: string | null;
   pairingPrompt: ChannelPairingPrompt | null;
@@ -50,8 +51,9 @@ export type ChannelsProps = {
   ) => void;
   onPairingPromptCancel: () => void;
   onPairingPromptConfirm: () => void;
-  onWhatsAppStart: (force: boolean) => void;
-  onWhatsAppWait: () => void;
+  onWhatsAppStart: (force: boolean) => void | Promise<void>;
+  onWhatsAppWait: () => void | Promise<void>;
+  onWhatsAppLogout: (accountId: string) => void | Promise<void>;
   onShowAdvancedSettings: (enabled: boolean) => void;
   onConfigPatch: (path: Array<string | number>, value: unknown) => void;
   onConfigSave: () => void;

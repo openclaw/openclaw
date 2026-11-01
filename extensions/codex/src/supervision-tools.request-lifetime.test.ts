@@ -3,7 +3,7 @@ import * as providerAuth from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCodexAuthProfileSelection } from "./app-server/auth-profile-selection.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./app-server/config-runtime.js";
-import { createClientHarness } from "./app-server/test-support.js";
+import { createRequestClientHarness } from "./app-server/test-support.js";
 import { createCodexSupervisionTools } from "./supervision-tools.js";
 
 const auth = createCodexAuthProfileSelection(providerAuth);
@@ -41,23 +41,20 @@ function createTool(
     senderIsOwner: true,
     env: {},
     resolveAuthProfileId: auth.resolveCodexAppServerAuthProfileIdForAgent,
-    resolveAuthProfileIdAtEffect: auth.resolveCodexAppServerAuthProfileIdAtEffect,
+    withAuthProfileIdAtEffect: auth.withCodexAppServerAuthProfileIdAtEffect,
     resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
     ...options,
   }).find((candidate) => candidate.name === name)!;
 }
 
-const clients: Array<ReturnType<typeof createClientHarness>["client"]> = [];
+const clients: Array<ReturnType<typeof createRequestClientHarness>["client"]> = [];
 const threadResponse = (type = "idle", fields = {}) => ({
   thread: { id: "thread-1", status: { type }, ...fields },
 });
 function respondingClient(result: (method: string) => unknown) {
-  const harness = createClientHarness({
-    onWrite(line, send) {
-      const { id, method } = JSON.parse(line) as { id: number; method: string };
-      send({ id, result: result(method) });
-    },
-  });
+  const harness = createRequestClientHarness((method, id, _params, send) =>
+    send({ id, result: result(method) }),
+  );
   clients.push(harness.client);
   return harness;
 }
@@ -69,28 +66,16 @@ describe("Codex supervision request lifetime", () => {
   });
   afterEach(() => clients.splice(0).forEach((client) => client.close()));
 
-  it("uses the injected account selection at the final request guard", async () => {
-    const harness = respondingClient(() => threadResponse());
-    sharedClientMocks.getLeasedSharedCodexAppServerClient.mockResolvedValue(harness.client);
-    const resolveAuthProfileIdAtEffect = vi.fn(() => "synthetic:account");
-    const tool = createTool("codex_session_read", readConfig, {
-      resolveAuthProfileId: async () => "synthetic:account",
-      resolveAuthProfileIdAtEffect,
-    });
-    await expect(tool.execute("read", sessionParams)).resolves.toMatchObject({
-      details: { response: { thread: { id: "thread-1" } } },
-    });
-    expect(resolveAuthProfileIdAtEffect).toHaveBeenCalled();
-  });
-
-  it.each(
-    ["codex_session_read", "codex_sessions_list", "codex_endpoint_probe"].flatMap((toolName) =>
+  it.each([
+    { toolName: "codex_session_read", timing: "account" },
+    ...["codex_session_read", "codex_sessions_list", "codex_endpoint_probe"].flatMap((toolName) =>
       ["response", "final-auth"].map((timing) => ({ toolName, timing })),
     ),
-  )("$toolName honors policy revocation at $timing", async ({ toolName, timing }) => {
+  ])("$toolName honors revocation at $timing", async ({ toolName, timing }) => {
     const privateText = "private transcript contents";
     const pluginConfig = readConfig();
     let responseReturned = false;
+    let selected: string | undefined = "synthetic:account";
     const revoke = () => {
       pluginConfig.supervision = {
         enabled: toolName !== "codex_endpoint_probe",
@@ -102,6 +87,8 @@ describe("Codex supervision request lifetime", () => {
         responseReturned = true;
         if (timing === "response") {
           revoke();
+        } else if (timing === "account") {
+          selected = undefined;
         }
       }
       return method === "thread/loaded/list"
@@ -114,28 +101,26 @@ describe("Codex supervision request lifetime", () => {
     });
     sharedClientMocks.getLeasedSharedCodexAppServerClient.mockResolvedValue(harness.client);
     const tool = createTool(toolName, () => pluginConfig, {
-      resolveAuthProfileId: async () => {
-        if (responseReturned && timing === "final-auth") {
-          revoke();
-        }
-        return "synthetic:account";
-      },
-      resolveAuthProfileIdAtEffect: () => "synthetic:account",
+      resolveAuthProfileId: async () => "synthetic:account",
+      withAuthProfileIdAtEffect: async (_params, consume) =>
+        consume({
+          read: async () => {
+            if (responseReturned && timing === "final-auth") {
+              revoke();
+            }
+            return selected;
+          },
+          assertCurrent() {},
+        }),
     });
-    const result = await Promise.resolve(tool.execute("read", sessionParams)).catch(
-      (error: unknown) => {
-        expect(error).toBeInstanceOf(Error);
-        expect(error).toHaveProperty(
-          "message",
-          expect.stringMatching(/Codex (?:supervision|session reads).*disabled/),
-        );
-      },
-    );
-    expect(result !== undefined && !pluginConfig.supervision.enabled).toBe(false);
-    expect(
-      JSON.stringify(result)?.includes(privateText) &&
-        !pluginConfig.supervision.allowRawTranscripts,
-    ).not.toBe(true);
+    const result = tool.execute("read", sessionParams);
+    if (timing === "account") {
+      await expect(result).rejects.toThrow("endpoint local was removed or changed");
+    } else if (toolName === "codex_sessions_list") {
+      expect(JSON.stringify(await result)).not.toContain(privateText);
+    } else {
+      await expect(result).rejects.toThrow(/Codex (?:supervision|session reads).*disabled/);
+    }
   });
 
   it.each([

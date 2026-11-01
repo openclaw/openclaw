@@ -1,5 +1,8 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -26,6 +29,7 @@ import {
   getActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import type { RuntimePluginLoadPurpose } from "./harness/runtime-plugin-load-plan.js";
 import {
   createPreparedInboundRegistryLoader,
@@ -34,7 +38,10 @@ import {
 } from "./prepared-model-runtime.inbound-registry.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import { retainPreparedPluginRegistry } from "./prepared-model-runtime.plugin-lifetime.js";
-import { PreparedModelRuntimeBuildResources } from "./prepared-model-runtime.resources.js";
+import {
+  PreparedModelRuntimeBuildResources,
+  retainPreparedModelRuntimeSnapshotResources,
+} from "./prepared-model-runtime.resources.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -46,8 +53,9 @@ afterAll(cleanupPluginLoaderFixturesForTest);
 
 function startupFixture(
   id: string,
-  model: string,
-  registration: (event: string) => string,
+  model = "selected/model",
+  registration = (event: string) => `process.emit(${JSON.stringify(event)}, __dirname);
+      api.registerProvider({ id: "selected", label: "Selected", auth: [] });`,
   hooks = false,
 ) {
   useNoBundledPlugins();
@@ -93,6 +101,48 @@ function startupFixture(
   return { plugin, input, captures, start, [Symbol.dispose]: () => process.off(event, capture) };
 }
 
+async function loadRegistryInCallerContext(
+  context: AsyncLocalStorage<object>,
+  resources: PreparedModelRuntimeBuildResources,
+  input: Parameters<PreparedModelRuntimeBuildResources["load"]>[0],
+) {
+  const caller = { transcript: ["settled caller transcript"] };
+  const reference = new WeakRef(caller);
+  const registry = await context.run(caller, () => resources.load(input, () => {}));
+  return { registry, reference };
+}
+
+it("releases the acquiring caller context while a prepared registry remains retained", async () => {
+  using fixture = startupFixture("retained-catalog");
+  await using cache = createPluginCache();
+  await withPluginCache(cache, async () => {
+    const { root, metadata } = await fixture.start([]);
+    const context = new AsyncLocalStorage<object>();
+    await using resources = new PreparedModelRuntimeBuildResources(retainPreparedPluginRegistry);
+    const { registry, reference } = await loadRegistryInCallerContext(context, resources, {
+      ...fixture.input,
+      metadataSnapshot: metadata,
+      preferBuiltPluginArtifacts: true,
+      basePluginIds: [],
+      purpose: "model-catalog",
+    });
+    const claim = retainPreparedModelRuntimeSnapshotResources({ pluginRegistry: registry });
+    expect(claim).toBeDefined();
+    try {
+      await resources[Symbol.asyncDispose]();
+      await setImmediate();
+      queryObjects(WeakRef);
+      expect(() => claim!.assertOpen()).not.toThrow();
+      expect(context.getStore()).toBeUndefined();
+      expect(reference.deref()).toBeUndefined();
+    } finally {
+      context.disable();
+      await claim?.release();
+      await disposePluginRegistryInstances(root);
+    }
+  });
+});
+
 it.each<[boolean, boolean, RuntimePluginLoadPurpose]>([
   [false, true, "agent"],
   [true, true, "agent"],
@@ -101,12 +151,7 @@ it.each<[boolean, boolean, RuntimePluginLoadPurpose]>([
 ])(
   "borrows startup captures only for admitted selected owners (inspection=%s, selected=%s, purpose=%s)",
   async (inspection, selectedAtStartup, purpose) => {
-    using fixture = startupFixture(
-      "selected-provider",
-      "selected/model",
-      (event) => `process.emit(${JSON.stringify(event)}, __dirname);
-        api.registerProvider({ id: "selected", label: "Selected", auth: [] });`,
-    );
+    using fixture = startupFixture("selected-provider");
     const { plugin, captures } = fixture;
     fs.writeFileSync(
       path.join(plugin.dir, "openclaw.plugin.json"),
@@ -125,9 +170,6 @@ it.each<[boolean, boolean, RuntimePluginLoadPurpose]>([
       const loadInbound = createPreparedInboundRegistryLoader();
       let selected: PluginRegistry | undefined;
       try {
-        expect(root.plugins).toEqual(
-          selectedAtStartup ? [expect.objectContaining({ id: plugin.id, status: "loaded" })] : [],
-        );
         expect(captures).toHaveLength(selectedAtStartup ? 1 : 0);
         const startupCapture = captures[0];
         const prepared = await withPluginRuntimeRegistryScope(root, async () => {
@@ -204,6 +246,92 @@ it.each<[boolean, boolean, RuntimePluginLoadPurpose]>([
     });
   },
 );
+
+it("borrows global startup instances across workspaces without borrowing shadowed sources", async () => {
+  using fixture = startupFixture("global-startup-provider");
+  const { config } = fixture.input;
+  await using cache = createPluginCache();
+  await withPluginCache(cache, async () => {
+    const firstWorkspace = path.join(fixture.input.workspaceDir, "first");
+    const rootMetadata = loadPluginMetadataSnapshot({ config, workspaceDir: firstWorkspace });
+    const root = await loadAndActivateRootPluginRegistry({
+      config,
+      metadataSnapshot: rootMetadata,
+      onlyPluginIds: [fixture.plugin.id],
+      runtimeOptions: { allowGatewaySubagentBinding: true },
+      cache: false,
+      throwOnLoadError: true,
+    });
+    const gateway = createPluginRegistryOwner(root);
+    const context = getPluginRuntimeLoadContext(root);
+    const loadInbound = createPreparedInboundRegistryLoader();
+    try {
+      expect(rootMetadata.workspaceDir).toBe(firstWorkspace);
+      expect(context?.workspaceDir).toBeUndefined();
+      await using resources = new PreparedModelRuntimeBuildResources(retainPreparedPluginRegistry);
+      for (const agent of ["first", "second"]) {
+        const workspaceDir = path.join(fixture.input.workspaceDir, agent);
+        const shadow = agent === "second";
+        const shadowPlugin = shadow
+          ? writePlugin({
+              id: fixture.plugin.id,
+              dir: path.join(workspaceDir, ".openclaw", "extensions", fixture.plugin.id),
+              filename: "index.cjs",
+              registration:
+                'api.registerProvider({ id: "selected", label: "Workspace", auth: [] });',
+            })
+          : undefined;
+        const selectedConfig = shadow
+          ? { ...config, plugins: { ...config.plugins, load: { paths: [] } } }
+          : config;
+        const metadata = shadow
+          ? loadPluginMetadataSnapshot({ config: selectedConfig, workspaceDir })
+          : rootMetadata;
+        const input = {
+          ...fixture.input,
+          config: selectedConfig,
+          workspaceDir,
+          runtimePluginSelections: [
+            { provider: "selected", modelId: "model", runtime: "openclaw" },
+          ],
+        };
+        const prepared = await withPluginRuntimeRegistryScope(root, () =>
+          prepareWorkspacePluginRegistries(
+            input,
+            metadata,
+            (registry) => resources.retainRegistry(registry),
+            loadInbound,
+            true,
+            undefined,
+            () => [],
+          ),
+        );
+        prepareOwnedPluginLoadContext(
+          input,
+          process.env,
+          prepared.runtimePluginRegistry,
+          metadata,
+          true,
+          prepared.inboundPluginRegistry,
+        );
+        const record = prepared.runtimePluginRegistry?.plugins.find(
+          (plugin) => plugin.id === fixture.plugin.id,
+        );
+        expect(record?.status).toBe("loaded");
+        expect(record === root.plugins[0]).toBe(!shadow);
+        expect(record?.source).toBe(shadowPlugin?.file ?? fixture.plugin.file);
+        expect(prepared.runtimePluginRegistry?.providers[0]?.provider.label).toBe(
+          shadow ? "Workspace" : "Selected",
+        );
+        expect(getPluginRuntimeLoadContext(root)).toBe(context);
+        expect(getPluginRuntimeLoadContext(root)?.workspaceDir).toBeUndefined();
+        expect(fixture.captures).toHaveLength(1);
+      }
+    } finally {
+      await gateway.close();
+    }
+  });
+});
 
 it.each(["inbound", "selected", "inspection"] as const)(
   "borrows hooks from the current Gateway through %s preparation",

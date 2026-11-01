@@ -4,20 +4,17 @@ import express from "express";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   createEmptyPluginRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { acquireTestPortBlock, useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterAll, expect, it, vi } from "vitest";
+import { acquireTestPortBlock } from "openclaw/plugin-sdk/test-env";
+import { expect, it, vi } from "vitest";
 import { getMSTeamsIngressMockState } from "./monitor-ingress-mock.test-support.js";
 import {
   createConfig,
   createRuntime,
-  createStores,
   updateMSTeamsConfig,
 } from "./monitor-lifecycle.test-helpers.js";
 import { createSigninEvent } from "./monitor-sso.test-helpers.js";
@@ -25,6 +22,7 @@ import { monitorMSTeamsProvider } from "./monitor.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { createMSTeamsSsoTokenStoreFs } from "./sso-token-store.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
+import { useMSTeamsStateTempDirs } from "./test-support/state.js";
 
 const fixture = vi.hoisted(() => ({ origin: "", botToken: "" }));
 
@@ -76,13 +74,7 @@ vi.mock("@microsoft/teams.apps", async (importOriginal) => {
   };
 });
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterAll(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    resetPluginStateStoreForTests();
-    cleanup();
-  }),
-);
+const tempDirs = useMSTeamsStateTempDirs();
 
 async function closeServer(server: Server) {
   await new Promise<void>((resolve, reject) => {
@@ -210,7 +202,6 @@ it("authenticates SSO webhooks before real sender authorization, token I/O, and 
       cfg,
       runtime: createRuntime(),
       abortSignal: abort.signal,
-      ...createStores(),
       statusSink: (patch) => {
         if (patch.connected) {
           ready.resolve();

@@ -1,7 +1,28 @@
-import { createMemo } from "solid-js";
+import { createMemo, Errored, Loading, type Element } from "solid-js";
+import type { ModelCatalogResult } from "../../api/types.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { ChatModelControls } from "../chat/components/chat-model-controls.tsx";
 import type { NewSessionModelControl, NewSessionModelRenderOptions } from "./model-control.ts";
+
+function ModelCatalogStatus(props: {
+  read: () => ModelCatalogResult | undefined;
+  identity: object;
+  children: () => Element;
+}) {
+  // Re-arm on admitted retries so the owner's loading status replaces a preceding error.
+  const identity = createMemo(() => props.identity);
+  const ready = createMemo(() => {
+    props.read();
+    return true;
+  });
+  return (
+    <Errored fallback={() => props.children()}>
+      <Loading on={identity()} fallback={props.children()}>
+        {ready() ? props.children() : undefined}
+      </Loading>
+    </Errored>
+  );
+}
 
 export function NewSessionModelControlView(props: {
   control: NewSessionModelControl;
@@ -38,9 +59,22 @@ export function NewSessionModelControlView(props: {
         previous.every(
           ([key, value], index) => key === next[index]?.[0] && value === next[index]?.[1],
         ),
+      // Project only defaults changes; session-row publications must not rebuild controls.
       subscribe: (app, notify) => app?.sessions.subscribe(notify) ?? (() => {}),
     }),
   );
+  // Keep receipt identity stable across unrelated owner publications.
+  const read = createMemo(
+    () => {
+      updates().revision();
+      return { promise: control().metadataRead, scope: control().metadataReadScope };
+    },
+    {
+      equals: (previous, next) =>
+        previous.promise === next.promise && previous.scope === next.scope,
+    },
+  );
+  const metadata = createMemo(() => read().promise);
   const controls = createMemo(() => {
     updates().revision();
     defaults().revision();
@@ -51,5 +85,14 @@ export function NewSessionModelControlView(props: {
       sending: sending(),
     });
   });
-  return <ChatModelControls {...controls()} />;
+  return (
+    <ChatModelControls
+      {...controls()}
+      renderModelCatalogStatus={(render) => (
+        <ModelCatalogStatus read={metadata} identity={read()}>
+          {render}
+        </ModelCatalogStatus>
+      )}
+    />
+  );
 }
