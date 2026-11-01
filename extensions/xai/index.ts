@@ -223,15 +223,14 @@ function classifyXaiFailoverReason({
   if (XAI_RATE_LIMIT_RE.test(errorMessage)) {
     return "rate_limit" as const;
   }
-  if (
-    status === undefined &&
+  return status === undefined &&
     code === undefined &&
-    errorType === undefined &&
-    XAI_PROVIDER_INTERNAL_ERROR_RE.test(errorMessage)
-  ) {
-    return "server_error" as const;
-  }
-  return undefined;
+    (errorType === undefined
+      ? XAI_PROVIDER_INTERNAL_ERROR_RE.test(errorMessage)
+      : errorType === "error" &&
+        /^internal error during token generation$/i.test(errorMessage.trim()))
+    ? ("server_error" as const)
+    : undefined;
 }
 
 function isCodeExecutionEnabled(

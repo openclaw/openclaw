@@ -20,7 +20,6 @@ import { isComposingKeyboardEvent, recordCompositionEnd } from "../../lib/ime.ts
 import { pathDisplayName } from "../../lib/path-display.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
-import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { SessionMenuItem } from "./cloud-target-view.tsx";
 import { findBrowsableDeviceFolderHost } from "./device-placement.ts";
 import type { BrowserProjectRegistration } from "./draft-place-browser.ts";
@@ -65,6 +64,8 @@ export function ProjectPickerContent(props: ProjectChipProps) {
       place.deviceFolderAvailable && place.isAdmin()
         ? findBrowsableDeviceFolderHost(place.deviceId, place.devices())
         : undefined;
+    const deviceLabel =
+      place.devices().find((device) => device.deviceId === place.deviceId)?.label ?? place.deviceId;
     const browserNodeId = place.browser.browserNodeId;
     const gatewayName = props.params.gateway.gatewayName;
     const browserLabel = browserNodeId
@@ -94,6 +95,7 @@ export function ProjectPickerContent(props: ProjectChipProps) {
       recentItems,
       recentSuffixes,
       deviceBrowse,
+      deviceLabel,
       browserLabel,
       projectSearchAvailable,
       projectAddAvailable,
@@ -283,7 +285,7 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                 value: "new-workspace",
                 label: t("newSession.newWorkspace"),
                 icon: newWorkspaceIcon,
-                sub: t("newSession.newWorkspaceDescription"),
+                title: t("newSession.newWorkspaceDescription"),
                 checked: props.params.place.freshWorkspace,
                 onSelect: () => props.params.place.selectNewWorkspace(),
               }}
@@ -294,44 +296,30 @@ export function ProjectPickerContent(props: ProjectChipProps) {
             <SessionMenuItem
               item={{
                 value: "device-folder",
-                label: t("newSession.deviceFolder"),
+                label: t("newSession.deviceFolderOn", { device: view().deviceLabel }),
                 icon: deviceFolderIcon,
-                sub:
+                sub: props.params.place.deviceFolderRuntimeUnsupportedReason
+                  ? t("newSession.deviceFolderModelUnsupported")
+                  : undefined,
+                disabled: Boolean(props.params.place.deviceFolderRuntimeUnsupportedReason),
+                title:
                   props.params.place.deviceFolderRuntimeUnsupportedReason ??
                   t("newSession.deviceFolderDescription"),
-                disabled: Boolean(props.params.place.deviceFolderRuntimeUnsupportedReason),
-                title: props.params.place.deviceFolderRuntimeUnsupportedReason,
                 checked: Boolean(props.params.place.deviceFolder),
-                onSelect: () => props.params.place.selectDeviceFolder(),
+                // Admins pick the folder in the device browser; writers type its path.
+                hasSubmenu: Boolean(view().deviceBrowse),
+                keepOpen: Boolean(view().deviceBrowse),
+                onSelect: () =>
+                  view().deviceBrowse
+                    ? props.params.place.browser.selectDeviceBrowser(
+                        props.params.place.deviceId,
+                        props.params.place.deviceFolder?.path.trim() || undefined,
+                      )
+                    : props.params.place.selectDeviceFolder(),
               }}
               submitting={props.params.submitting || props.params.pendingPlacement}
             />
           ) : undefined}
-          <Show when={!view().query && view().deviceBrowse?.label}>
-            {(deviceLabel) => (
-              <button
-                type="button"
-                class="session-menu__item"
-                data-value="browse-device"
-                aria-pressed="false"
-                disabled={props.params.submitting || props.params.pendingPlacement}
-                ref={nativeListener("click", () =>
-                  props.params.place.browser.selectDeviceBrowser(
-                    props.params.place.deviceId,
-                    props.params.place.deviceFolder?.path.trim() || undefined,
-                  ),
-                )}
-              >
-                <span class="session-menu__check" aria-hidden="true" />
-                <span class="session-menu__text">
-                  {t("newSession.browseDevice", { device: deviceLabel() })}
-                </span>
-                <span class="new-session-page__menu-chevron" aria-hidden="true">
-                  <Icon name="chevronRight" />
-                </span>
-              </button>
-            )}
-          </Show>
           {view().workspace && props.state.showWorkspace ? (
             <SessionMenuItem
               item={{

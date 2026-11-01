@@ -7,6 +7,7 @@ import {
   readClientCredentialReceipt,
 } from "../infra/client-credential-readiness.js";
 import { openClientCredentialCustody } from "../infra/client-credential-store.js";
+import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import {
   assertNoPendingLegacyExecApprovals,
   ExecApprovalsMigrationRequiredError,
@@ -29,7 +30,6 @@ async function prepareRequiredLegacyClientCredentials(env: NodeJS.ProcessEnv) {
       withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
       withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync,
     },
-    { withEngineStoreAdmission },
     { isStatePostgres },
     { resolveExecApprovalsPath },
   ] = await Promise.all([
@@ -42,7 +42,6 @@ async function prepareRequiredLegacyClientCredentials(env: NodeJS.ProcessEnv) {
     import("../state/openclaw-state-db-schema-version.js"),
     import("../state/openclaw-state-db-contract.js"),
     import("../state/openclaw-state-db-readonly.js"),
-    import("../infra/database-engine/admission-scope.js"),
     import("../state/openclaw-state-db-engine.js"),
     import("../infra/exec-approvals-config.js"),
   ]);
@@ -260,7 +259,9 @@ export async function prepareStartupClientCredentials(
           () =>
             approvals.migrateLegacyExecApprovals({
               ...context,
-              detected: approvals.detectLegacyExecApprovals(context),
+              detected: withEngineStoreAdmission(() =>
+                approvals.detectLegacyExecApprovals(context),
+              ),
             }),
         ]) {
           for (const warning of (await migrate()).warnings) {
@@ -282,16 +283,9 @@ export async function preparePostgresClientCredentials(
   runtime: RuntimeEnv,
   rebindMissing = false,
 ) {
-  const [
-    preflight,
-    { prepareDoctorDatabaseMigrations },
-    { withEngineStoreAdmission },
-    state,
-    credentials,
-  ] = await Promise.all([
+  const [preflight, { prepareDoctorDatabaseMigrations }, state, credentials] = await Promise.all([
     import("../state/openclaw-database-preflight.js"),
     import("./doctor-schema-migrations.js"),
-    import("../infra/database-engine/admission-scope.js"),
     import("../state/openclaw-state-db.js"),
     import("../infra/client-credential-migration.js"),
   ]);

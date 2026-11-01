@@ -101,7 +101,7 @@ type CatalogWarning = (message: string) => void;
 
 function parseCatalogRows<T extends { id: string }>(
   rows: unknown[],
-  schema: z.ZodType<T>,
+  parse: (value: unknown) => z.ZodSafeParseResult<T>,
   path: string,
   warn: CatalogWarning,
   key: (model: T) => string = (model) => model.id,
@@ -124,7 +124,7 @@ function parseCatalogRows<T extends { id: string }>(
         value = { ...raw, input };
       }
     }
-    const parsed = schema.safeParse(value);
+    const parsed = parse(value);
     if (!parsed.success || seen.has(key(parsed.data))) {
       warn(`remote model catalog: skipped invalid row ${row}`);
       return [];
@@ -434,7 +434,12 @@ export function validateAndSanitizeRemoteModelCatalogBundle(
     .parse(value);
   const providers = Object.fromEntries(
     Object.entries(bundle.providers).flatMap<[string, ModelCatalogProvider]>(([id, provider]) => {
-      const models = parseCatalogRows(provider.models, modelSchema, `providers.${id}.models`, warn);
+      const models = parseCatalogRows(
+        provider.models,
+        (row) => modelSchema.safeParse(row),
+        `providers.${id}.models`,
+        warn,
+      );
       return models.length > 0 ? [[id, { ...provider, models }]] : [];
     }),
   );
@@ -475,9 +480,12 @@ export function validateAndSanitizeRemoteModelCatalogBundleV2(
       models: z.array(z.unknown()),
     })
     .parse(value);
+  const rowSchema = modelV2Schema.refine((model) =>
+    Object.hasOwn(bundle.providers, model.provider),
+  );
   const models = parseCatalogRows(
     bundle.models,
-    modelV2Schema.refine((model) => Object.hasOwn(bundle.providers, model.provider)),
+    (row) => rowSchema.safeParse(row),
     "models",
     warn,
     (model) => JSON.stringify([model.provider, model.id]),
@@ -489,14 +497,64 @@ export function validateAndSanitizeRemoteModelCatalogBundleV2(
   return sanitizeRemoteModelCatalogBundle({ ...bundle, providers, models });
 }
 
+// v3 is additive: newer publishers may add keys at any depth. The strict schemas keep
+// validating authoring, while readers drop only keys those schemas report as unknown.
+function safeParseIgnoringUnknownKeys<T>(
+  schema: z.ZodType<T>,
+  value: unknown,
+): z.ZodSafeParseResult<T> {
+  let current = value;
+  let cloned = false;
+  for (;;) {
+    const parsed = schema.safeParse(current);
+    if (parsed.success) {
+      return parsed;
+    }
+    const unknownKeys = parsed.error.issues.filter((issue) => issue.code === "unrecognized_keys");
+    if (!cloned && unknownKeys.length > 0) {
+      current = structuredClone(current);
+      cloned = true;
+    }
+    let removed = false;
+    for (const issue of unknownKeys) {
+      const target = issue.path.reduce<unknown>(
+        (node, key) =>
+          (isRecord(node) || Array.isArray(node)) && Object.hasOwn(node, key)
+            ? Reflect.get(node, key)
+            : undefined,
+        current,
+      );
+      if (!isRecord(target)) {
+        continue;
+      }
+      for (const key of issue.keys) {
+        removed = Reflect.deleteProperty(target, key) || removed;
+      }
+    }
+    if (!removed) {
+      return parsed;
+    }
+  }
+}
+
 export function validateAndSanitizeRemoteModelCatalogBundleV3(
   value: unknown,
   warn: CatalogWarning = console.warn,
 ): RemoteModelCatalogBundleV3 {
-  const bundle = bundleV3FieldsSchema.extend({ models: z.array(z.unknown()) }).parse(value);
+  const envelope = safeParseIgnoringUnknownKeys(
+    bundleV3FieldsSchema.extend({ models: z.array(z.unknown()) }),
+    value,
+  );
+  if (!envelope.success) {
+    throw envelope.error;
+  }
+  const bundle = envelope.data;
+  const rowSchema = modelV3Schema.refine((model) =>
+    Object.hasOwn(bundle.providers, model.provider),
+  );
   const models = parseCatalogRows(
     bundle.models,
-    modelV3Schema.refine((model) => Object.hasOwn(bundle.providers, model.provider)),
+    (row) => safeParseIgnoringUnknownKeys(rowSchema, row),
     "models",
     warn,
     (model) => JSON.stringify([model.provider, model.id]),
