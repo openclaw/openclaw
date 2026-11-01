@@ -36,10 +36,9 @@ describe("projectTelegramCurrentMessageCarrier — Telegram current-message carr
       BodyForAgent: body,
     } as TemplateContext);
 
-    // The carrier block is a separate model-facing message; a bare "#34974:"
-    // header is read as an empty (elided) current-message body and real
-    // instructions get treated as absent/duplicate. The body must be stated
-    // inside the block itself.
+    // The carrier is separate from the live user body. Check that this block
+    // contains both the quoted reply target and the canonical current body.
+    // This assertion checks the projected text, not the model's response.
     expect(text).toContain(`Current message:\n[Replying to: "selected quote"]\n#34974: ${body}`);
     const currentMessageBlock = text.split("Current message:").at(-1) ?? "";
     expect(currentMessageBlock.trimEnd().endsWith("#34974:")).toBe(false);

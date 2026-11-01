@@ -46,11 +46,10 @@ export function formatTelegramCurrentMessageContext(ctx: TemplateContext): strin
 /**
  * Carrier projection of the inbound user context. The runtime-context carrier
  * ships as its own model-facing message while the live body arrives as a
- * separate user turn, so no joiner completes the header there. A bare "#<id>:"
- * header is read as an empty/elided current-message body and real instructions
- * get treated as absent or duplicates. The carrier states the canonical body
- * inline instead (sanitized like every other transcript projection; bodyless
- * turns keep the bare header). The block is always the last one in the prefix,
+ * separate user turn, so no joiner completes the header there. This projection
+ * includes the canonical body in the carrier, sanitized like every other
+ * transcript projection; bodyless turns keep the bare header.
+ * The block is always the last one in the prefix,
  * so only that trailing block is swapped; any other input is returned unchanged.
  */
 export function projectTelegramCurrentMessageCarrier(
