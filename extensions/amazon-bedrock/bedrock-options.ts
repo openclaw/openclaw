@@ -68,6 +68,7 @@ type BedrockThinkingDisplay = "summarized" | "omitted";
 export interface BedrockOptions extends StreamOptions {
   region?: string;
   profile?: string;
+  topP?: number;
   toolChoice?: "auto" | "any" | "none" | { type: "tool"; name: string };
   reasoning?: ModelThinkingLevel;
   thinkingBudgets?: ThinkingBudgets;
@@ -75,6 +76,18 @@ export interface BedrockOptions extends StreamOptions {
   thinkingDisplay?: BedrockThinkingDisplay;
   requestMetadata?: Record<string, string>;
   bearerToken?: string;
+}
+
+export function buildBedrockInferenceConfig(
+  options: BedrockOptions,
+  policy: { adaptiveThinking: boolean; claude: boolean },
+) {
+  return {
+    ...(options.maxTokens !== undefined && { maxTokens: options.maxTokens }),
+    ...(options.temperature !== undefined &&
+      !policy.adaptiveThinking && { temperature: options.temperature }),
+    ...(options.topP !== undefined && !policy.claude && { topP: options.topP }),
+  };
 }
 
 function resolveBedrockClaudeCachePolicy(
