@@ -16,6 +16,7 @@ const state = vi.hoisted(() => ({
   diagnosticLoads: 0,
   lossless: true,
   initializeSqlite: vi.fn(),
+  releaseStdin: vi.fn(),
 }));
 
 vi.mock("./bun-sqlite-library.js", async (importOriginal) => ({
@@ -52,6 +53,8 @@ vi.mock("../logging/json-console-line.js", async (importOriginal) => {
 vi.mock("../worker/worker-deploy-runtime.js", () => ({}));
 vi.mock("../worker/worker-deploy-browser-runtime.js", () => ({ default: {} }));
 vi.mock("../worker/worker-process.js", () => ({ runWorkerProcess: state.run }));
+// mock-isolation: the real helper would inspect and destroy the test runner's own stdin.
+vi.mock("../process/release-stdin.js", () => ({ releaseProcessStdin: state.releaseStdin }));
 // mock-isolation: keep the worker's process-local agent/exec state out of admission tests.
 vi.mock("../worker/worker.runtime.js", () => ({
   createWorkerRuntimeEnvironment: vi.fn(),
@@ -88,23 +91,6 @@ function createRuntime() {
 }
 
 describe("runtime-guard", () => {
-  it.each(["24.22.0", "26.12.0"])(
-    "refuses Node %s with compromised-key trust even when SQLite is healthy",
-    async (version) => {
-      state.version = version;
-      state.lossless = true;
-      const runtime = createExitingRuntime();
-      await expect(assertSupportedRuntime(runtime)).rejects.toThrow("exit");
-      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Upgrade Node"));
-    },
-  );
-  it("validates ordinary CLI runtimes without initializing SQLite worker policy", async () => {
-    state.initializeSqlite.mockClear();
-    state.version = "24.22.1";
-    state.lossless = true;
-    await assertSupportedRuntime(createExitingRuntime());
-    expect(state.initializeSqlite).not.toHaveBeenCalled();
-  });
   it("warns once while admitting capable Node 22 diagnostics", async () => {
     const runtime = createRuntime();
     const details = runtimeDetails("node", { version: "22.23.2", sqliteVersion: null });
@@ -247,9 +233,13 @@ describe("runtime-guard", () => {
     ["22.23.2", false],
     ["23.11.0", false],
     ["24.15.0", false],
+    ["24.16.0", true],
+    ["24.22.0", true],
     ["24.22.1", true],
     ["25.9.0", false],
     ["26.0.0", false],
+    ["26.1.0", true],
+    ["26.12.0", true],
     ["26.12.1", true],
     ["27.0.0", true],
     ["v27.0.0-head", true],
@@ -318,7 +308,7 @@ describe("runtime-guard", () => {
     expect(runtime.error).toHaveBeenCalledOnce();
     expect(runtime.error).toHaveBeenCalledWith(
       [
-        "openclaw requires Node >=24.22.1 <25, or >=26.12.1.",
+        "openclaw requires Node >=24.16.0 <25, or >=26.1.0.",
         `Detected: ${detected}.`,
         `PATH searched: ${path}`,
         "Install Node: https://nodejs.org/en/download",
@@ -329,14 +319,21 @@ describe("runtime-guard", () => {
   });
 
   it.each([
-    runtimeDetails("node", {
-      sqliteVersion: "3.53.3",
-      sqliteProbe: { available: true, version: "3.53.3", text: true, blob: true, json: true },
-    }),
+    ...["24.16.0", "24.22.0", "24.22.1", "26.1.0", "26.12.0"].map((version) =>
+      runtimeDetails("node", {
+        version,
+        sqliteVersion: "3.53.3",
+        sqliteProbe: { available: true, version: "3.53.3", text: true, blob: true, json: true },
+      }),
+    ),
     runtimeDetails("bun"),
   ])("returns silently when $kind runtime meets requirements", async (details) => {
+    state.initializeSqlite.mockClear();
     const runtime = createRuntime();
     await expect(assertSupportedRuntime(runtime, details)).resolves.toBeUndefined();
+    if (details.kind === "node") {
+      expect(state.initializeSqlite).not.toHaveBeenCalled();
+    }
     expect(runtime.exit).not.toHaveBeenCalled();
     expect(runtime.error).not.toHaveBeenCalled();
   });
@@ -430,7 +427,6 @@ describe("runtime failure diagnostics", () => {
 });
 
 describe("sealed worker runtime", () => {
-  let destroyStdin: MockInstance<typeof process.stdin.destroy>;
   let disconnect: MockInstance<NonNullable<typeof process.disconnect>>;
   const originalArgv = process.argv;
   const originalExitCode = process.exitCode;
@@ -440,8 +436,8 @@ describe("sealed worker runtime", () => {
     state.run.mockClear();
     process.argv = [process.execPath, "worker.mjs"];
     process.exitCode = undefined;
-    // The executable owns stdin and IPC, not the test runner's real transports.
-    destroyStdin = vi.spyOn(process.stdin, "destroy").mockReturnThis();
+    state.releaseStdin.mockClear();
+    // The executable owns IPC, not the test runner's real transport.
     disconnect = vi.spyOn(process, "disconnect").mockImplementation(() => {});
     vi.stubEnv("OPENCLAW_DEBUG", undefined);
   });
@@ -455,7 +451,9 @@ describe("sealed worker runtime", () => {
   it.each([
     { version: "22.23.2", supported: false },
     { version: "26.0.0", supported: false },
+    { version: "24.16.0", supported: true },
     { version: "24.22.1", supported: true },
+    { version: "26.1.0", supported: true },
     { version: "26.12.1", supported: true },
   ])("handles worker runtime $version", async ({ version, supported }) => {
     state.version = version;
@@ -463,7 +461,7 @@ describe("sealed worker runtime", () => {
     const stderr = supported ? undefined : vi.spyOn(process.stderr, "write").mockReturnValue(true);
     await expect(import("../worker/worker-deploy-entry.js")).resolves.toBeDefined();
     expect(process.exitCode).toBe(supported ? undefined : 1);
-    expect(destroyStdin).toHaveBeenCalledOnce();
+    expect(state.releaseStdin).toHaveBeenCalledOnce();
     expect(disconnect).toHaveBeenCalledOnce();
     expect(state.run).toHaveBeenCalledTimes(supported ? 1 : 0);
     if (supported) {

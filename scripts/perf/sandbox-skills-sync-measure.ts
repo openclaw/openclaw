@@ -9,20 +9,25 @@
  * Forty skills have nine files each, including hidden instructions and nested
  * references/scripts. Discovery, fixture writes and content verification are
  * outside measurement. This measures skills_sync, not container startup/layout.
+ * --skills 96 --custody includes real retained Gateway state ownership checks.
+ * --background-files 62000 adds 1.116 GB of unrelated synthetic workspace files.
+ * Counters cover Node realpathSync.native/lstatSync, not native-internal syscalls.
  * Allocation sampling includes collected objects on the main thread only;
  * process CPU and memory also include the discovery worker. No forced GC.
  */
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { Session } from "node:inspector/promises";
 import os from "node:os";
 import path from "node:path";
-import { performance, PerformanceObserver, type PerformanceEntry } from "node:perf_hooks";
+import { performance, PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { listDirectoryTreeStrict } from "../../src/infra/directory-walk.js";
 import type { syncWorkspaceSkills } from "../../src/skills/loading/workspace-skill-sync.runtime.js";
+import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 
 const { values } = parseArgs({
   options: {
@@ -31,10 +36,17 @@ const { values } = parseArgs({
     iterations: { type: "string", default: "10" },
     mode: { type: "string", default: "all" },
     allocations: { type: "boolean", default: false },
+    skills: { type: "string", default: "40" },
+    "background-files": { type: "string", default: "0" },
+    custody: { type: "boolean", default: false },
   },
 });
 const iterations = Number(values.iterations);
+const skillCount = Number(values.skills);
+const backgroundFiles = Number(values["background-files"]);
 assert(Number.isSafeInteger(iterations) && iterations > 0, "--iterations must be positive");
+assert(Number.isSafeInteger(skillCount) && skillCount > 0, "--skills must be positive");
+assert(Number.isSafeInteger(backgroundFiles) && backgroundFiles >= 0, "Invalid --background-files");
 const modes = values.mode === "all" ? ["cold", "warm", "refreshed"] : [values.mode];
 assert(
   modes.every((mode) => ["cold", "warm", "refreshed"].includes(mode)),
@@ -65,6 +77,30 @@ const { getSkillsSnapshotVersion, markSkillsSupportingFilesChanged } =
   await import("../../src/skills/runtime/refresh-state.js");
 const { drainGlobalSingletonLifecycleState } = await import("../../src/shared/global-singleton.js");
 const inspector = values.allocations ? new Session() : undefined;
+const { captureSandboxStateOwner } = await import("../../src/agents/sandbox/state-owner.js");
+const { acquireGatewayStateOwner } = await import("../../src/infra/gateway-state-owner.js");
+const { readGatewayLockProcessNamespace } = await import("../../src/infra/gateway-lock-payload.js");
+const { resolveOpenClawStateSqlitePath } =
+  await import("../../src/state/openclaw-state-db.paths.js");
+if (values.custody) {
+  // Custody reads file identity only; keep its path present as on an initialized Gateway.
+  await mkdir(path.dirname(resolveOpenClawStateSqlitePath()), { recursive: true });
+  await writeFile(resolveOpenClawStateSqlitePath(), "synthetic identity fixture\n");
+}
+const custody = values.custody
+  ? acquireGatewayStateOwner({
+      databasePath: resolveOpenClawStateSqlitePath(),
+      payload: {
+        pid: process.pid,
+        processNamespace: readGatewayLockProcessNamespace(),
+        createdAt: new Date().toISOString(),
+        configPath: process.env.OPENCLAW_CONFIG_PATH!,
+        role: "gateway",
+      },
+    })
+  : undefined;
+const assertOwner = custody ? await captureSandboxStateOwner() : undefined;
+let checks = 0;
 
 function distribution(samples: number[]) {
   const ordered = samples.toSorted((a, b) => a - b);
@@ -83,7 +119,11 @@ try {
   inspector?.connect();
   const workspace = path.join(fixture, "workspace");
   const expected = new Map<string, string>();
-  const skillCount = 40;
+  const background = path.join(workspace, "unrelated-project");
+  await mkdir(background, { recursive: true });
+  for (let index = 0; index < backgroundFiles; index++) {
+    await writeFile(path.join(background, `file-${index}.txt`), "x".repeat(18_000));
+  }
   for (let index = 0; index < skillCount; index++) {
     const name = `synthetic-${String(index).padStart(2, "0")}`;
     expected.set(
@@ -120,6 +160,12 @@ try {
       sourceWorkspaceDir: workspace,
       targetWorkspaceDir,
       skillsSnapshot: snapshot,
+      assertCurrent: assertOwner
+        ? () => {
+            checks++;
+            assertOwner();
+          }
+        : undefined,
     });
   await sync(path.join(fixture, "discovery-warmup"));
   const results = [];
@@ -144,17 +190,9 @@ try {
     const collections: { kind: number; ms: number }[] = [];
     let started = Infinity;
     let ended = Infinity;
-    const recordGc = (entries: PerformanceEntry[]) => {
-      for (const entry of entries) {
-        if (entry.startTime >= started && entry.startTime < ended) {
-          collections.push({
-            kind: (entry as PerformanceEntry & { detail: { kind: number } }).detail.kind,
-            ms: entry.duration,
-          });
-        }
-      }
-    };
-    const observer = new PerformanceObserver((batch) => recordGc(batch.getEntries()));
+    const observer = new PerformanceObserver((batch) =>
+      recordGcCollections(batch.getEntries(), collections, started, ended),
+    );
     observer.observe({ entryTypes: ["gc"] });
     try {
       if (inspector) {
@@ -170,11 +208,33 @@ try {
       const threadBefore = process.threadCpuUsage();
       const latency: number[] = [];
       const deliveries = [];
+      checks = 0;
+      let realpaths = 0;
+      let lstats = 0;
+      const realpath = fs.realpathSync.native;
+      const lstat = fs.lstatSync;
+      fs.realpathSync.native = new Proxy(realpath, {
+        apply(target, receiver, args) {
+          realpaths++;
+          return Reflect.apply(target, receiver, args);
+        },
+      });
+      fs.lstatSync = new Proxy(lstat, {
+        apply(target, receiver, args) {
+          lstats++;
+          return Reflect.apply(target, receiver, args);
+        },
+      });
       started = performance.now();
-      for (const target of targets) {
-        const before = performance.now();
-        deliveries.push(await sync(target));
-        latency.push(performance.now() - before);
+      try {
+        for (const target of targets) {
+          const before = performance.now();
+          deliveries.push(await sync(target));
+          latency.push(performance.now() - before);
+        }
+      } finally {
+        fs.realpathSync.native = realpath;
+        fs.lstatSync = lstat;
       }
       ended = performance.now();
       const thread = process.threadCpuUsage(threadBefore);
@@ -185,7 +245,7 @@ try {
         ? (await inspector.post("HeapProfiler.stopSampling")).profile
         : undefined;
       await nextTurn();
-      recordGc(observer.takeRecords());
+      recordGcCollections(observer.takeRecords(), collections, started, ended);
       const sampledBytes = profile?.samples.reduce((sum, sample) => sum + sample.size, 0);
       if (profile) {
         await writeFile(`${output}.${mode}.heapprofile`, JSON.stringify(profile));
@@ -204,6 +264,9 @@ try {
       results.push({
         workload: mode,
         iterations,
+        authorityChecksPerSync: checks / iterations,
+        nodeRealpathsPerSync: realpaths / iterations,
+        nodeLstatsPerSync: lstats / iterations,
         elapsedMs: ended - started,
         latency: distribution(latency),
         processCpuMs: (cpu.user + cpu.system) / 1000,
@@ -231,6 +294,8 @@ try {
   const result = {
     ownerPath,
     skillCount,
+    backgroundFiles,
+    custody: values.custody,
     filesPerSkill: 9,
     mode: inspector ? "allocation" : "timing",
     results,
@@ -238,6 +303,7 @@ try {
   await writeFile(output, `${JSON.stringify(result, null, 2)}\n`);
   console.log(JSON.stringify(result));
 } finally {
+  custody?.release();
   inspector?.disconnect();
   await drainGlobalSingletonLifecycleState();
   await rm(fixture, { recursive: true, force: true });

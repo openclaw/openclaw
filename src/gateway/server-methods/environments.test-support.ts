@@ -149,6 +149,8 @@ export function workerRecord(overrides: Partial<TestWorkerRecord> = {}): TestWor
     profileId: "development",
     ownerEpoch: 1,
     leaseId: "lease-1",
+    resourceReceipt: null,
+    retention: null,
     sharedHost: false,
     sshEndpoint: {
       host: "worker.example.test",

@@ -204,7 +204,8 @@ export async function listPage(
       enteredAt = performance.now();
       try {
         const read = await readSnapshot(state);
-        const query = normalizeLowercaseStringOrEmpty(opts?.query);
+        // Normalize comparison text only; stored cron job fields stay original.
+        const query = normalizeLowercaseStringOrEmpty(opts?.query).normalize("NFC");
         const enabledFilter = opts?.enabled ?? (opts?.includeDisabled ? "all" : "enabled");
         const scheduleKindFilter = opts?.scheduleKind ?? "all";
         const lastRunStatusFilter = opts?.lastRunStatus ?? "all";
@@ -254,7 +255,7 @@ export async function listPage(
                   job.agentId ?? "",
                   ...(job.displayName ? [job.displayName] : []),
                 ].join(" "),
-              );
+              ).normalize("NFC");
               read.searchText.set(job, haystack);
             }
             if (!haystack.includes(query)) {

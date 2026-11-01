@@ -10,6 +10,10 @@
 // excluded. Detached persistence avoids unrelated storage IO, not authority checks.
 // Acceptance: fewer applicable policy assertions and allocated bytes per check,
 // with no repeatable thread CPU regression. This is not whole-Gateway evidence.
+// --scenario watchdog-progress measures the actual attempt-bound model-progress
+// callback with --plugins 40 --access-policies 1 --iterations 5000 --samples 5.
+// Set OPENCLAW_STATE_DIR to an isolated synthetic scratch directory for this scenario.
+// Admission and effects still check the plugin; progress only owns run liveness.
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { Session } from "node:inspector/promises";
@@ -54,6 +58,7 @@ import { createPluginRecord } from "../../src/plugins/loader-records.js";
 import { getPluginInstance } from "../../src/plugins/plugin-instance-scope.js";
 import { createPluginRegistry } from "../../src/plugins/registry.js";
 import { clearActivePluginRegistry, setActivePluginRegistry } from "../../src/plugins/runtime.js";
+import type { SessionControllerWatchdogAttempt } from "../../src/sessions/session-controller.watchdog.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../src/state/openclaw-state-db.js";
 import { profileCatalogPath } from "../../src/state/user-profile-identity.read.js";
 import { prepareUserProfileIdentity } from "../../src/state/user-profile-list.js";
@@ -240,7 +245,7 @@ const operator = createAdmittedRunOperatorAuthority({
   gatewayAccessGrant: grant,
   signal: retained.signal,
   assertCurrent:
-    values.scenario === "attempt-transcript-guard"
+    values.scenario === "attempt-transcript-guard" || values.scenario === "watchdog-progress"
       ? composeSessionSourceAssertion([access.assertCurrent])
       : checkSource,
   modelPolicy: {
@@ -386,6 +391,49 @@ const scenarios = [
   { name: "admitted-run", check: admitted },
   { name: "transcript-guard", check: transcript },
 ];
+let watchdogLifetime: Promise<void> | undefined;
+const finishWatchdog = Promise.withResolvers<void>();
+if (values.scenario === "watchdog-progress") {
+  const { withPreparedEmbeddedRunToolAuthority } =
+    await import("../../src/agents/harness/tool-authority.runtime.js");
+  const { createReplyOperation } = await import("../../src/sessions/session-controller.js");
+  const operation = createReplyOperation({
+    sessionId: transcriptTarget.sessionId,
+    sessionKey: transcriptTarget.sessionKey,
+    resetTriggered: false,
+    turnKind: "direct",
+  });
+  const ready = Promise.withResolvers<SessionControllerWatchdogAttempt>();
+  watchdogLifetime = withPreparedEmbeddedRunToolAuthority(
+    { admittedRunContext, replyOperation: operation },
+    {
+      ...transcriptTarget,
+      config,
+      runId: "synthetic-authority-run",
+      sessionFile: "synthetic-authority-session.jsonl",
+      workspaceDir: process.cwd(),
+      provider: model.provider,
+      modelId: model.model,
+    },
+    undefined,
+    async () => {
+      const { getGatewayToolCallerIdentity } =
+        await import("../../src/agents/tools/gateway-caller-context.js");
+      const watchdog = getGatewayToolCallerIdentity()?.watchdogAttempt;
+      assert(watchdog);
+      ready.resolve(watchdog);
+      await finishWatchdog.promise;
+    },
+  ).finally(() => operation.complete());
+  void watchdogLifetime.catch(ready.reject);
+  const watchdog = await ready.promise;
+  scenarios.push({
+    name: "watchdog-progress",
+    check() {
+      assert(watchdog.progressModel("model:delta"));
+    },
+  });
+}
 if (attemptTranscript) {
   const check = attemptTranscript.ownedTranscriptWriteContext.assertCommitAllowed;
   assert(check);
@@ -602,6 +650,9 @@ try {
   // Positive control outside capture: retained plugin answers remain live on the next check.
   grantLive = false;
   assert.throws(checkGrant);
+  if (watchdogLifetime) {
+    assert.throws(admitted);
+  }
   if (attemptTranscript) {
     assert.throws(attemptTranscript.ownedTranscriptWriteContext.assertCommitAllowed!);
   }
@@ -631,6 +682,8 @@ try {
   console.log(json);
 } finally {
   inspector.disconnect();
+  finishWatchdog.resolve();
+  await watchdogLifetime;
   await attemptTranscript?.transcriptLifecycle.dispose();
   execution.release();
   admission.close();

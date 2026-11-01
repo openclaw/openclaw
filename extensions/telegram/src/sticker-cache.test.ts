@@ -70,11 +70,11 @@ it("settles only after the backing write commits", async () => {
 
 it.each([
   { query: "🦊", limit: undefined, ids: ["fox1-unique", "fox2-unique"] },
-  { query: "FOX", limit: 1, ids: ["fox1-unique"] },
+  { query: "MÜLLER", limit: 1, ids: ["fox1-unique"] },
 ])("finds $query with limit $limit", async ({ query, limit, ids }) => {
   for (const [fileId, emoji, setName, description] of [
-    ["fox1", "🦊", "CuteFoxes", "A fox waving"],
-    ["fox2", "🦊", "CuteFoxes", "A fox sleeping"],
+    ["fox1", "🦊", "CuteFoxes", "Mu\u0308ller fox waving"],
+    ["fox2", "🦊", "CuteFoxes", "Mu\u0308ller fox sleeping"],
     ["cat1", "🐱", "FunnyCats", "A cat sitting"],
   ] as const) {
     await stickerCache.cacheSticker(sticker(fileId, { emoji, setName, description }));

@@ -35,7 +35,7 @@ import type { ComposerDictationOwner } from "../composer-dictation.ts";
 import type { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
 import type { ChatRunError, ChatRunUiStatus } from "../run-lifecycle.ts";
-import type { FallbackStatus } from "../tool-stream-contract.ts";
+import type { CompactionStatus, FallbackStatus } from "../tool-stream-contract.ts";
 import type { ChatActivityPillsProps } from "./chat-activity-pills-types.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import type { ComposerEmojiMenu } from "./chat-composer-emoji-state.ts";
@@ -90,7 +90,8 @@ export type ChatComposerDisabledBanner = {
   stop?: { onAbort: () => void };
 } & ({ actionLabel: string; onAction: () => void } | { actionLabel?: never; onAction?: never });
 
-export type ChatSessionProgressProps = {
+export type ChatSessionProgressProps = import("../chat-spawned-subagent.ts").SubagentRoster & {
+  connected?: boolean;
   sessionKey: string;
   currentAgentId: string;
   progressCard?: ProgressCard | null;
@@ -149,8 +150,10 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   readingHistory?: boolean;
   onProgressManipulate?: () => void;
   runId?: string | null;
-  /** The pane scopes Gateway questions to this conversation's agent and session. */
+  /** The pane scopes Gateway questions to this conversation and its direct child sessions. */
   gatewayQuestionPrompts?: readonly QuestionPrompt[];
+  /** Asking child session display names, keyed by question id. */
+  gatewayQuestionSources?: ReadonlyMap<string, string>;
   stream: string | null;
   queue: ChatQueueItem[];
   draft: string;
@@ -176,6 +179,10 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   providerUsage?: ProviderUsageDisplayProps;
   contextGateway?: ApplicationGateway;
   onOpenContext?: () => void;
+  /** Present only when this viewer may compact the session; the context popover offers it. */
+  onCompact?: () => void | Promise<unknown>;
+  compactionStatus?: CompactionStatus | null;
+  runActive?: boolean;
   assistantName: string;
   sendShortcut?: ChatSendShortcut;
   followUpMode?: ControlUiFollowUpMode;
@@ -184,6 +191,8 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   getPendingAttachmentReads?: () => number;
   replyTarget?: ChatReplyTarget | null;
   gatewayClient?: GatewayBrowserClient | null;
+  chatMessageMaxWidth?: string | null;
+  onComposerWidthChange?: (value: string | undefined) => void;
   composerHoldToRecord?: boolean;
   realtimeTalkInputDeviceId?: string;
   onComposerHoldToRecordChange?: (enabled: boolean) => void;
@@ -257,12 +266,14 @@ export type ChatComposerState = {
   presentation: {
     dictationError: string | null;
     goalExpandedId: string | null;
+    queuedSubmit: string | null;
   };
   updatePresentation: StoreSetter<ChatComposerState["presentation"]>;
   questionTakeoverActive: boolean;
   restoreComposerFocus: boolean;
   composerInput: HTMLElement | null;
   composerTextarea: HTMLTextAreaElement | null;
+  composerContext: HTMLElement | null;
   microphonePicker: ComposerMicrophoneOwner | null;
   // Stable refs keep layout observers attached across frame updates.
   composerInputRef: ((element?: Element) => void) | null;

@@ -129,9 +129,10 @@ NODE_VERSION_REQUESTED=0
 if [[ -n "${OPENCLAW_NODE_VERSION:-}" ]]; then
   NODE_VERSION_REQUESTED=1
 fi
-MIN_NODE_24_VERSION="24.22.1"
-MIN_NODE_26_VERSION="26.12.1"
-SUPPORTED_NODE_VERSION_LABEL="Node 24.22.1+ or Node 26.12.1+"
+# Compatibility floors mirror node-version.mjs, not the patched download default.
+MIN_NODE_24_VERSION="24.16.0"
+MIN_NODE_26_VERSION="26.1.0"
+SUPPORTED_NODE_VERSION_LABEL="Node 24.16.0+ or Node 26.1.0+"
 NODE_RELEASE_VERSION_CORE=""
 APK_NODE_BIN_DIR="/usr/bin"
 NPM_LOGLEVEL="${OPENCLAW_NPM_LOGLEVEL:-error}"
@@ -1045,7 +1046,8 @@ publish_executable_wrapper() {
   (umask 077; mkdir -p "$target_dir")
   temp="$(mktemp "${target_dir}/.openclaw-wrapper.XXXXXX")" || return 1
   TMPFILES+=("$temp")
-  cat > "$temp"
+  # Generated Bash must execute literal paths, not expand their shell characters.
+  printf '#!/usr/bin/env bash\nset -euo pipefail\nexec %q %q "$@"\n' "$2" "$3" > "$temp"
   chmod +x "$temp"
   if [[ -z "$WRAPPER_BACKUP_PATH" && ( -e "$target" || -L "$target" ) ]]; then
     backup="$(mktemp "${target}.backup.XXXXXX")" || return 1
@@ -1118,11 +1120,8 @@ install_openclaw() {
     fi
   fi
 
-  publish_executable_wrapper "${PREFIX}/bin/openclaw" <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
-exec "${PREFIX}/tools/node/bin/node" "$(node_dir)/lib/node_modules/openclaw/dist/entry.js" "\$@"
-EOF
+  publish_executable_wrapper "${PREFIX}/bin/openclaw" \
+    "${PREFIX}/tools/node/bin/node" "$(node_dir)/lib/node_modules/openclaw/dist/entry.js"
   emit_json step name openclaw status ok version "$requested"
 }
 
@@ -1214,11 +1213,8 @@ install_openclaw_from_git() {
   run_pnpm -C "$repo_dir" build
   emit_json step name cli-build status ok
 
-  publish_executable_wrapper "${PREFIX}/bin/openclaw" <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
-exec "${PREFIX}/tools/node/bin/node" "${repo_dir}/dist/entry.js" "\$@"
-EOF
+  publish_executable_wrapper "${PREFIX}/bin/openclaw" \
+    "${PREFIX}/tools/node/bin/node" "${repo_dir}/dist/entry.js"
   emit_json step name openclaw status ok method git
 }
 

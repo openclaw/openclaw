@@ -354,6 +354,45 @@ it("rediscovers replaced workspaces and roots that disappear and return", async 
   }
 });
 
+it.each([false, true])(
+  "narrows Windows personal skill watches (initially missing=%s)",
+  async (missing) => {
+    const home = temporary.make("skills-personal-");
+    const skills = path.join(home, ".agents", "skills");
+    if (!missing) {
+      await write("Personal", home, ".agents/skills/guide");
+    }
+    const input = request();
+    input.sourcePlan.roots = [{ dir: skills, source: "openclaw-workspace", tier: "workspace" }];
+    expect(await descriptions(input, false)).toEqual(missing ? [] : ["Personal"]);
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const watch = vi.spyOn(nativeFs, "watch");
+    Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+    try {
+      await descriptions(input);
+      const opened = watch.mock.calls.filter(
+        (_, index) => watch.mock.results[index]?.type === "return",
+      );
+      expect(opened.map(([directory, options]) => [directory, options])).toEqual([
+        [missing ? home : skills, { persistent: false, recursive: !missing }],
+      ]);
+      if (missing) {
+        await write("Created later", home, ".agents/skills/guide");
+        const callback = opened[0]!.at(-1);
+        if (typeof callback !== "function") {
+          throw new Error("Expected a directory watch callback");
+        }
+        callback("rename", ".agents");
+        await completePassiveScan();
+        expect(await descriptions(input)).toEqual(["Created later"]);
+        expect(watch.mock.calls.at(-1)?.[0]).toBe(skills);
+      }
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
+  },
+);
+
 it("refreshes supporting resources without publishing an unchanged catalog", async () => {
   await write("Stable catalog");
   await descriptions();

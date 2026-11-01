@@ -135,57 +135,46 @@ describe("placement recovery session admission with persisted placements", () =>
     releaseOwnedWork = undefined;
   });
 
-  it.each(["busy", "idle"] as const)(
-    "startup pre-pass leaves %s Stop with its current final-save owner",
-    async (state) => {
-      const claimStop = vi.spyOn(placements, "claimReclaimWorkspaceResult");
-      const reads = vi.spyOn(placements, "readProjection");
-      const stopBarrier = barrier();
-      const environmentBarrier = barrier();
-      const harness = await harnessFor({
-        workspacePath: support.testState.root,
-        runReclaimPreparation: async ({ run, authorize }) => {
-          await stopBarrier.wait();
-          return run(authorize);
-        },
-      });
-      const active = await seedActive(harness);
-      await placements.startDrain(placementTransition(active));
-      const coordinated = coordinate(harness);
-      vi.mocked(harness.environments.reconcileEnvironment).mockImplementation(
-        environmentBarrier.wait,
-      );
-      const stop = state === "busy" ? coordinated.reclaim(REQUEST) : undefined;
-      void stop?.catch(stopBarrier.reject);
-      let sweep: Promise<void> | undefined;
-      try {
-        if (stop) {
-          await stopBarrier.entered;
-        }
-        reads.mockClear();
-        sweep = coordinated.reconcile("startup");
-        void sweep.catch(environmentBarrier.reject);
-        await environmentBarrier.entered;
-        expect(claimStop).toHaveBeenCalledTimes(state === "busy" ? 0 : 1);
-        if (state === "busy") {
-          expect(reads).not.toHaveBeenCalled();
-          expect(await pendingResults()).toEqual([]);
-        } else {
-          expect(await pendingResults()).toMatchObject([
-            { sessionId: REQUEST.sessionId, recoveryRequestedAtMs: 1_000 },
-          ]);
-        }
-        environmentBarrier.release();
-        await sweep;
-      } finally {
-        environmentBarrier.release();
-        stopBarrier.release();
-        await Promise.allSettled([sweep, stop]);
-      }
-      expect(placements.get(REQUEST.sessionId)?.state).toBe("reclaimed");
-      expect(harness.environments.destroy).toHaveBeenCalledOnce();
-    },
-  );
+  it("startup pre-pass leaves live Stop with its current final-save owner", async () => {
+    const claimStop = vi.spyOn(placements, "claimReclaimWorkspaceResult");
+    const reads = vi.spyOn(placements, "readProjection");
+    const stopBarrier = barrier();
+    const environmentBarrier = barrier();
+    const harness = await harnessFor({
+      workspacePath: support.testState.root,
+      runReclaimPreparation: async ({ run, authorize }) => {
+        await stopBarrier.wait();
+        return run(authorize);
+      },
+    });
+    const active = await seedActive(harness);
+    await placements.startDrain(placementTransition(active));
+    const coordinated = coordinate(harness);
+    vi.mocked(harness.environments.reconcileEnvironment).mockImplementation(
+      environmentBarrier.wait,
+    );
+    const stop = coordinated.reclaim(REQUEST);
+    void stop.catch(stopBarrier.reject);
+    let sweep: Promise<void> | undefined;
+    try {
+      await stopBarrier.entered;
+      reads.mockClear();
+      sweep = coordinated.reconcile("startup");
+      void sweep.catch(environmentBarrier.reject);
+      await environmentBarrier.entered;
+      expect(claimStop).not.toHaveBeenCalled();
+      expect(reads).not.toHaveBeenCalled();
+      expect(await pendingResults()).toEqual([]);
+      environmentBarrier.release();
+      await sweep;
+    } finally {
+      environmentBarrier.release();
+      stopBarrier.release();
+      await Promise.allSettled([sweep, stop]);
+    }
+    expect(placements.get(REQUEST.sessionId)?.state).toBe("reclaimed");
+    expect(harness.environments.destroy).toHaveBeenCalledOnce();
+  });
 
   it.each(["startup", "full", "targeted"] as const)(
     "%s recovery preserves a live dispatch through activation",

@@ -111,6 +111,8 @@ export function sessionMenuReasons(params: {
     : reason({
         method: "sessions.create",
         params: { parentSessionKey: session.key, fork: true },
+        sessionScope: true,
+        session,
       });
   const cloudWorkerStopReason = cloudWorkerStopAction ? reason(cloudWorkerStopAction) : undefined;
   const placementReason = params.placementRow

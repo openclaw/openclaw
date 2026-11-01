@@ -66,19 +66,18 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       changed: ${{ steps.scope.outputs.changed }}
+      rust_changed: ${{ steps.rust_scope.outputs.changed }}
     steps:
       - name: Checkout scheduled admission
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: .github/actions/detect-scheduled-changes
           persist-credentials: false
-      - name: Detect scheduled input changes
+      - name: Detect scheduled TypeScript input changes
         id: scope
         uses: ./.github/actions/detect-scheduled-changes
         with:
-          proof-jobs: |
-            TypeScript contracts
-            Rust workspace
+          proof-jobs: TypeScript contracts
           # Reuse is stricter than event admission: include transitive source and tool inputs.
           paths: |
             .github/workflows/node-runtime-conformance.yml
@@ -101,6 +100,25 @@ jobs:
             src/**
             packages/**
             crates/**
+      - name: Detect scheduled Rust input changes
+        id: rust_scope
+        uses: ./.github/actions/detect-scheduled-changes
+        with:
+          proof-jobs: Rust workspace
+          # Cargo consumes protocol versions and shared fixtures without a Node setup.
+          paths: |
+            .github/workflows/node-runtime-conformance.yml
+            .github/actions/detect-scheduled-changes/**
+            crates/**
+            packages/gateway-protocol/src/version.ts
+            test/fixtures/**
+            .cargo/**
+            rust-toolchain*
+            rustfmt.toml
+            .rustfmt.toml
+            clippy.toml
+            .clippy.toml
+            .gitattributes
 
   typescript:
     needs: scope
@@ -132,7 +150,7 @@ jobs:
 
   rust:
     needs: scope
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name != 'schedule' || needs.scope.outputs.changed == 'true') && (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name != 'schedule' || needs.scope.outputs.rust_changed == 'true') && (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') }}
     name: Rust workspace
     runs-on: ubuntu-24.04
     timeout-minutes: 20

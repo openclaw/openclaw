@@ -74,8 +74,10 @@ export function expectResponsiveTableGeometry(
   } else {
     expect(geometry.denseOverflow).toBeGreaterThan(0);
     if (width === 932) {
-      // Full-width mobile shell keeps the 16px reading gutter on each side.
-      expect(geometry.width).toBeCloseTo(width - 2 * 16, 0);
+      // Landscape tables borrow spare width while keeping a centered gutter.
+      expect(geometry.width).toBeGreaterThan(geometry.prose);
+      expect(geometry.leadingGap).toBeGreaterThan(0);
+      expect(geometry.trailingGap).toBeCloseTo(geometry.leadingGap, 0);
     } else {
       expect(geometry.width).toBeLessThanOrEqual(geometry.prose + 1);
     }
@@ -109,6 +111,8 @@ export function readResponsiveTableGeometry(element: HTMLElement) {
     width: rect.width,
     prose: paragraph.getBoundingClientRect().width,
     withinPane: rect.left >= paneRect.left && rect.right <= paneRect.right,
+    leadingGap: rect.left - paneRect.left,
+    trailingGap: paneRect.right - rect.right,
     verticalOverflow: viewport.scrollHeight - viewport.clientHeight,
     columnWidths: [...cells].map((cell) => cell.getBoundingClientRect().width),
     topAligned: [...cells].every((cell) => getComputedStyle(cell).verticalAlign === "top"),

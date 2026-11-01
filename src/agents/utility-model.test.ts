@@ -8,12 +8,18 @@ import {
   resolveUtilityModelRefForAgent,
 } from "./utility-model.js";
 
-function snapshotWithDefaults(defaults: Record<string, string>) {
+/** A string declares the provider's small model; a map declares a router's per-vendor models. */
+function snapshotWithDefaults(defaults: Record<string, string | Record<string, string>>) {
   return createPluginMetadataSnapshotFixture({
-    plugins: Object.entries(defaults).map(([provider, defaultUtilityModel], index) => ({
+    plugins: Object.entries(defaults).map(([provider, utility], index) => ({
       id: `plugin-${index}`,
       modelCatalog: {
-        providers: { [provider]: { defaultUtilityModel, models: [{ id: defaultUtilityModel }] } },
+        providers: {
+          [provider]:
+            typeof utility === "string"
+              ? { defaultUtilityModel: utility, models: [{ id: utility }] }
+              : { defaultUtilityModels: utility, models: [] },
+        },
       },
     })),
   });
@@ -57,16 +63,10 @@ describe("resolveConfiguredSetupModelForAgent", () => {
     (acp) => {
       const cfg: OpenClawConfig = {
         agents: {
-          defaults: {
-            model: "openai/gpt-5.5@openai:primary",
-            utilityModel: "local-utility/tiny",
-          },
-          entries: {
-            main: acp ? { model: "harness-only", runtime: { type: "acp" } } : {},
-          },
+          defaults: { model: "openai/gpt-5.5@openai:primary", utilityModel: "local-utility/tiny" },
+          entries: { main: acp ? { model: "harness-only", runtime: { type: "acp" } } : {} },
         },
       };
-
       expect(resolveConfiguredSetupModelForAgent({ cfg, agentId: "main" })).toEqual({
         modelRef: "openai/gpt-5.5@openai:primary",
       });
@@ -94,7 +94,6 @@ describe("resolveConfiguredSetupModelForAgent", () => {
         }),
       };
       const original = structuredClone(cfg);
-
       expect(resolveConfiguredSetupModelForAgent({ cfg, agentId: "main" })).toEqual({
         modelRef: "local-utility/tiny",
         implicitPrimary: true,
@@ -111,15 +110,22 @@ describe("resolveUtilityModelRefForAgent", () => {
   const metadataSnapshot = snapshotWithDefaults({
     openai: "gpt-5.6-luna",
     anthropic: "claude-haiku-4-5",
+    router: { openai: "openai/luna", anthropic: "anthropic/haiku", google: "google/flash" },
   });
-  type Scenario = {
-    name: string;
-    cfg: OpenClawConfig;
-    agentId?: string;
-    primaryProvider?: string;
-    primaryModelRef?: string;
-    expected?: string;
+  // The router credential's inventory does not grant google/flash.
+  const catalog = {
+    entries: ["openai/luna", "anthropic/haiku"].map((id) => ({ provider: "router", id })),
   };
+  const sharedWithOptOut = {
+    agents: {
+      defaults: { utilityModel: "openai/gpt-5.4-mini" },
+      entries: { ops: { utilityModel: "" } },
+    },
+  };
+  type Scenario = Omit<
+    Parameters<typeof resolveUtilityModelRefForAgent>[0],
+    "agentId" | "metadataSnapshot"
+  > & { name: string; agentId?: string; expected?: string };
   it.each<Scenario>([
     {
       name: "trimmed explicit reference",
@@ -155,30 +161,33 @@ describe("resolveUtilityModelRefForAgent", () => {
       expected: "openai/gpt-5.6-luna@work",
     },
     { name: "no provider default", cfg: { agents: { defaults: { model: "ollama/llama-4-70b" } } } },
+    { name: "agent opt-out", cfg: sharedWithOptOut, agentId: "ops" },
+    { name: "shared model for others", cfg: sharedWithOptOut, expected: "openai/gpt-5.4-mini" },
+    { name: "router default", cfg: routed("openai/sol"), catalog, expected: "router/openai/luna" },
+    { name: "router vendor without a declaration", cfg: routed("mistral/large"), catalog },
+    { name: "router declaration not granted", cfg: routed("google/pro"), catalog },
+    { name: "router without a known catalog", cfg: routed("openai/sol") },
     {
-      name: "agent opt-out",
-      cfg: {
-        agents: {
-          defaults: { utilityModel: "openai/gpt-5.4-mini" },
-          entries: { ops: { utilityModel: "" } },
-        },
-      },
-      agentId: "ops",
+      name: "router decision-only row",
+      cfg: routed("openai/sol"),
+      catalog: { entries: [{ provider: "router", id: "openai/luna", inference: { chat: false } }] },
     },
     {
-      name: "other agent retains shared model",
-      cfg: {
-        agents: {
-          defaults: { utilityModel: "openai/gpt-5.4-mini" },
-          entries: { ops: { utilityModel: "" } },
-        },
-      },
-      expected: "openai/gpt-5.4-mini",
+      name: "router session vendor and auth profile",
+      cfg: routed("openai/sol"),
+      primaryProvider: "router",
+      primaryModelRef: "router/anthropic/opus@work",
+      catalog,
+      expected: "router/anthropic/haiku@work",
     },
   ])("resolves $name", ({ expected, agentId = "main", ...params }) => {
     expect(resolveUtilityModelRefForAgent({ ...params, agentId, metadataSnapshot })).toBe(expected);
   });
 });
+
+function routed(model: string): OpenClawConfig {
+  return { agents: { defaults: { model: `router/${model}` } } };
+}
 
 describe("resolveAutomaticUtilityRuntimeOverride", () => {
   const primary = "anthropic/claude-opus-5";

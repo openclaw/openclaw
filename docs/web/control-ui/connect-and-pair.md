@@ -48,6 +48,8 @@ Switching an already-paired browser from read access to write/admin access norma
 
 When the connected Control UI reports limited access, open **Inbox > System > Limited access**, then click **Request admin**. On mobile, open the sidebar to reach Inbox. The browser files the pending device scope-upgrade request over its existing connection; run the displayed `openclaw devices approve <requestId>` command on the Gateway host or approve from **Devices** in another admin-capable browser that also has `operator.pairing`. Keep the requesting tab connected while approval completes so it can receive and store the freshly rotated device token before reconnecting. **Retry** reattaches to the pending request. **Cancel** stops the local wait but does not reject the device request; if you cancel or disconnect before approval, use the normal pairing repair path on the next connection.
 
+Intentionally restricted guests do not receive the limited-access Inbox warning. Open **Settings > Profile > Your access** to review access even when the Inbox warning was dismissed. If the assigned role cannot grant administrator access, this section explains the limit without offering **Request admin**. Ask a Gateway administrator to change the role, then reconnect. Once the role permits administrator access, **Request admin** becomes available for this browser; separate device approval is still required. Requesting access does not grant it automatically.
+
 If the device was previously approved for admin access but its token was later narrowed, approving the request preserves that token limit. The UI explains that pairing was approved without restoring the requested access, rather than reporting rejection or offering a retry that cannot lift the limit. Run `openclaw dashboard --json` on the Gateway host and open its fresh one-time `browserUrl` in the same browser to restore administrator access through the owner handoff.
 
 For a LAN or remote browser, keep the same Control UI origin and Gateway URL so the handoff repairs the existing browser identity. If `browserUrl` uses loopback, replace its base address with the current Control UI address and its `gatewayUrl` fragment parameter with the current Gateway WebSocket URL. Preserve the remaining one-time pairing fragment values, and open the link within ten minutes. Only use addresses for the same Gateway; do not send the pairing link to another host.
@@ -176,6 +178,8 @@ switch that disables device identity.
 See [Tailscale](/gateway/tailscale) for HTTPS setup guidance.
 
 ## Blank Control UI page
+
+Browsers without module-script support show **This browser is not supported**. Open the Control UI in an up-to-date browser, or update your system WebView.
 
 If the browser loads a blank dashboard and DevTools shows no useful error, an extension or early content script may have prevented the JavaScript module app from evaluating. The static page includes a plain HTML recovery panel that appears when `<openclaw-app>` does not complete its first render after startup. While the browser is still downloading the initial app modules, the panel shows **Control UI is still loading** and leaves those downloads running. Once module loading finishes without a render, automatic recovery can request a fresh page. **Keep waiting** cancels a pending recovery request and gives the current page more time; **Try again** explicitly reloads it.
 

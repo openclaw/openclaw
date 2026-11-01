@@ -108,7 +108,7 @@ an unsupported guess.
 Relink leaves claims that name no page, or more than one. Maintenance does not
 review them: it runs relink only and never starts an agent turn. An agent
 review handles them on its own schedule: an automation whose agent turn follows
-the `knowledge-unlinked-claims` skill over every private claim with no linked
+the `knowledge-claim-consolidation` skill over every private claim with no linked
 page and no source page, whichever tool saved it. It runs weekly by default
 (Sundays at 3:45 AM) or, if you choose, nightly at 3:45 AM, after the default
 3:30 AM maintenance pass. Each run is an agent turn over every unlinked claim,
@@ -117,7 +117,7 @@ retired `maintenance.reviewJobId` setting fails validation; run
 `openclaw doctor --fix` to remove it.
 
 The review edits private knowledge, so its automation must run in a session
-with the owner's private access. Turn on **Review unlinked claims** from the
+with the owner's private access. Turn on **Knowledge Consolidation** from the
 [Scribes](/plugins/knowledge/scribes) tab of the Knowledge page. To start it
 without the Control UI, open a new conversation in the owner's direct chat and
 send the prompt the Scribes tab would send; the
@@ -132,7 +132,11 @@ use **Repair** on the Scribes tab. If the scribe's conversation is reset or
 removed, it loses access: start the scribe again from a new conversation.
 Conversation partitions are not reviewed.
 
-The `knowledge-unlinked-claims` skill is the agent workflow for the claims relink
+The `knowledge-claim-consolidation` skill is the agent workflow for the claims relink
 leaves unlinked. It chooses subject pages with judgment, creates pages for
-substantial missing subjects, retires exact duplicates and explicitly replaced
-claims, and folds durable outcomes into page State.
+substantial missing subjects, retires exact duplicates, supersedes explicitly
+replaced claims and status snapshots by their outcome, and folds durable
+outcomes into page State. The same skill runs as a claim consolidation review
+over other scopes when you ask for one: the claims on one hub or oversized page,
+or the claims about one subject since a date. Scribe runs only review the
+unlinked residue.

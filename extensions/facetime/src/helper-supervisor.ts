@@ -225,8 +225,8 @@ export class FaceTimeHelperSupervisor {
   }
 
   async #waitForAuthenticatedConnection(target: FaceTimeHelperTarget): Promise<void> {
-    const deadline = Date.now() + 10_000;
-    while (this.#started && Date.now() < deadline) {
+    const deadline = performance.now() + 10_000;
+    while (this.#started && performance.now() < deadline) {
       this.#refreshConnections();
       const state = this.#states.get(target);
       if (!state || state.connected || state.stale) {

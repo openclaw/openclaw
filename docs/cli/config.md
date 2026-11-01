@@ -138,7 +138,9 @@ syntax and whole-list inputs still work with `set`, `patch`, and `unset`; writes
 persist the current keyed roster. Indexed edits use the current roster order.
 Within a batch, a submitted list keeps its order across subsequent keyed edits,
 including when agent IDs are numeric strings. Existing roster-deletion and
-`$include` ownership protections still apply.
+`$include` ownership protections still apply. `config unset agents.entries.<id>`,
+or a patch that sets it to `null`, removes only that config entry; use
+`openclaw agents delete` to also clean up the agent's state.
 
 When a legacy roster expands a single-agent installation in the root config file,
 writes retire its `default` marker and preserve the existing agent's responsibilities
@@ -169,7 +171,8 @@ are rejected; they do not suppress validation of later options.
 
 A schema-valid but unset authorable path explains that the runtime default applies and suggests
 `openclaw config set`. For automatically managed metadata, such as `meta.lastTouchedVersion`,
-`meta.migrations.modelPolicyAllowlist`, and `meta.migrations.utilityModelSeparation`, the message
+`meta.migrations.modelPolicyAllowlist`, `meta.migrations.utilityModelSeparation`, and
+`meta.migrations.skillWorkshopPlugin`, the message
 instead explains that OpenClaw manages the values on config writes. Reading their unset parent
 paths (`meta` or `meta.migrations`) gives the same explanation, not a refused set command.
 An unknown path suggests `openclaw config schema`. With `--json`, unset and unknown paths use
@@ -455,6 +458,10 @@ openclaw config patch --file ./openclaw.patch.json5
 ```
 
 Patch files are limited to 8 MiB. Piped `--stdin` patches are limited to 1 MiB.
+
+While `--stdin` is waiting for input, Ctrl-C or SIGTERM stops the read and exits
+with status 130 or 143 without applying the pending patch. A write already
+admitted after input preparation keeps its existing completion and cleanup path.
 
 Pipe a patch over stdin for remote setup scripts:
 

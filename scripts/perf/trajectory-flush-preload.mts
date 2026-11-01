@@ -19,6 +19,7 @@ import { registerHooks } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMainThread } from "node:worker_threads";
+import { findBundledModuleRegion } from "../lib/bundled-module-regions.mjs";
 
 const expectedBody = `async function flushEmbeddedAttemptTrajectoryRecorder(params) {
 \tawait runAgentCleanupStep({
@@ -30,7 +31,7 @@ const expectedBody = `async function flushEmbeddedAttemptTrajectoryRecorder(para
 \t\t}
 \t});
 }`;
-const sourceMarker = "//#region src/agents/embedded-agent-runner/run/attempt-trajectory-flush.ts";
+const sourceOwner = "src/agents/embedded-agent-runner/run/attempt-trajectory-flush.ts";
 type FlushRecord = {
   runId: string;
   sessionId: string;
@@ -63,13 +64,15 @@ export function recordTrajectoryFlush(
 
 /** Exact checked transformation used by the loader hook below. */
 function instrumentTrajectoryFlushSource(source: string): string {
-  assert(source.includes(sourceMarker), "Trajectory flush source marker changed");
-  assert.equal(source.split(expectedBody).length, 2, "Trajectory flush built body changed");
+  const bounds = findBundledModuleRegion(source, sourceOwner);
+  assert(bounds, "Trajectory flush source marker changed");
+  const region = source.slice(bounds.start, bounds.end);
+  assert.equal(region.split(expectedBody).length, 2, "Trajectory flush built body changed");
   const originalStatements = expectedBody.slice(expectedBody.indexOf("\n") + 1, -2);
   return `import { recordTrajectoryFlush as __recordTrajectoryFlush } from ${JSON.stringify(import.meta.url)};
-${source.replace(
-  expectedBody,
-  `async function flushEmbeddedAttemptTrajectoryRecorder(params) {
+${source.slice(0, bounds.start)}${region.replace(
+    expectedBody,
+    `async function flushEmbeddedAttemptTrajectoryRecorder(params) {
   const __trajectoryStarted = performance.now();
   const __trajectoryEpoch = Date.now();
   const __trajectoryHasRecorder = Boolean(params.trajectoryRecorder);
@@ -80,7 +83,7 @@ ${originalStatements}
       performance.now() - __trajectoryStarted, __trajectoryHasRecorder);
   }
 }`,
-)}`;
+  )}${source.slice(bounds.end)}`;
 }
 
 if (isMainThread) {

@@ -192,6 +192,26 @@ own plugin settings still follows its plugin reload policy.
 Overlapping model or credential changes use the newer write's runtime application;
 superseding an earlier publication does not itself require a Gateway restart.
 
+Auth-profile edits refresh credential facts without replacing unchanged plugin
+instances. A scheduled session event that has selected its model keeps running
+when another provider's auth profile changes. Changes to its own provider's auth
+policy still invalidate the captured policy. Before execution has started, the
+session-event owner can re-admit the same occurrence under current policy, with
+at most two retries. Once a hook, model, or delivery may have performed work, it
+does not replay the occurrence; a failed scheduled run remains visible in cron
+history and the next schedule is a separate run.
+
+Logging changes never revoke scheduled work. Once a scheduled turn selects its
+model, edits to another provider's model configuration also leave it running.
+Adding models to the allowlist preserves the turn while its selected model remains
+allowed; removing that permission or changing its provider's configuration still
+rechecks the occurrence under current policy. These unrelated edits do not consume
+the occurrence's bounded readmission attempts.
+
+Session detail and process-list reads that encounter a retired model-catalog
+callback refresh their catalog binding once before preparing the response.
+If the replacement is unavailable, the read reports a session-read error.
+
 After a transient connection failure, an in-flight turn using a directly configured
 provider can retry with an endpoint whose hot reload has completed. It keeps the same
 model, permissions, prompt, conversation history, and model limits while resolving
@@ -305,7 +325,7 @@ newly selected workspace. Reload does not replay `gateway:startup`.
 
 Under `gateway.controlUi`, the `enabled`, `environment`, `github`,
 `sessionObserver`, `embedSandbox`, `allowExternalEmbedUrls`, `experimental.customPlugins`,
-`experimental.claws`, and
+`experimental.templates`, and
 `automaticallyFetchFavicons` settings hot-apply. Reload open Control UI pages to
 pick up the environment label, CLI agent picker, embed preferences, and favicon
 display preference; the Gateway process keeps running. `allowedOrigins` and

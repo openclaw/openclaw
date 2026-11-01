@@ -79,7 +79,7 @@ export type OpenClawStateReadCommand =
   | { type: "capture.readOnlyBlob"; blobId: string }
   | { type: "deliveryQueue.outbound"; id?: string; mode: "pending" | "unfinished" }
   | { type: "config.snapshot.read" }
-  | { type: "claws.inventory" }
+  | { type: "templates.inventory" }
   | { type: "gatewayOwnerLease.read"; schemaMaintenance: boolean }
   | AcpSessionReadCommand
   | SqliteWorkerCommand<McpOAuthReadOnlyOperations>
@@ -184,6 +184,8 @@ export type OpenClawStateReadCommand =
   | { type: "updateRuns.reconciliationCandidate"; runId: string }
   | { type: "updateRuns.status" }
   | { type: "updateRuns.historyStatus" }
+  | { type: "updateRuns.pluginCohortRecoveries" }
+  | { type: "updateRuns.pluginSnapshotCollection" }
   | { type: "worktrees.cleanupState" }
   | { type: "workerPlacements.changeSnapshot"; profileIds?: string[] }
   | { type: "nodeHost.config" }

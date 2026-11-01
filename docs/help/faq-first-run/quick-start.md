@@ -104,6 +104,7 @@ where to run the Gateway see
     - Token source: `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`).
     - Password source: `gateway.auth.password` (or `OPENCLAW_GATEWAY_PASSWORD`).
     - No shared secret configured yet? Run `openclaw doctor --generate-gateway-token` (or `openclaw doctor --fix --generate-gateway-token`).
+    - Windows PowerShell says running scripts is disabled? The bare command selected npm's `openclaw.ps1` shim. Use [npm's `openclaw.cmd`](/platforms/windows#powershell-execution-policy) instead of changing the execution policy.
 
     **Not on localhost:**
 

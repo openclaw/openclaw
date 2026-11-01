@@ -84,6 +84,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   let requestRuntimeReady: Promise<void> | undefined;
   const projectionLifetime: { closing: boolean; detach?: () => void } = { closing: false };
   runtime.registerGatewayLifetimeSidecars({
+    name: "request-runtime",
     stop: async () => {
       projectionLifetime.closing = true;
       // Received mutations and their finalizers join before lifetime sidecars stop.
@@ -200,7 +201,6 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     // stay current until run shutdown records recovery and cancels execution.
     isDispatchAvailable: () => startupState.dispatchReady,
     logError: (message) => log.error(message),
-    prepareRestartRecovery: runtime.channelManager.recoverAutostartSuppression,
   });
   gatewayInstanceRuntimeRef.current = gatewayInstanceRuntime;
   gatewayRequestContext.resolveGatewayContext = () =>
@@ -237,9 +237,9 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     };
   }
   gatewayRequestContext.approvalEvents = gatewayInstanceRuntime.approvalEvents;
-  gatewayRequestContext.recoveryRuntime = gatewayInstanceRuntime.recovery;
+  gatewayRequestContext.lifecycleRuntime = gatewayInstanceRuntime.lifecycle;
   bindGatewayContextResolver(
-    gatewayInstanceRuntime.recovery,
+    gatewayInstanceRuntime.lifecycle,
     gatewayRequestContext.resolveGatewayContext,
   );
   gatewayRequestContext.createAgentTurnFacade = gatewayInstanceRuntime.createAgentTurnFacade;

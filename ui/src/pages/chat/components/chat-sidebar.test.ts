@@ -953,31 +953,38 @@ describe("file sidebar clipboard feedback", () => {
 });
 
 describe("file sidebar SVG preview", () => {
-  it("renders a desktop SVG without an optional lightbox callback", async () => {
-    const panel = document.createElement("openclaw-chat-detail-panel");
-    const source = '<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>';
-    panel.content = {
-      kind: "file",
-      path: "diagram.svg",
-      name: "diagram.svg",
-      mimeType: "image/svg+xml",
-      content: source,
-    };
-    container.append(panel);
-    await waitForSolid(() => {
-      const preview = expectDefined(
-        panel.querySelector<HTMLElement>(".sidebar-svg-file__view"),
-        "SVG preview",
-      );
-      expect(preview.hidden).toBe(false);
-      const image = expectDefined(preview.querySelector("img"), "SVG image");
-      expect(image.getAttribute("src")).toBe(
-        `data:image/svg+xml;charset=utf-8,${encodeURIComponent(source)}`,
-      );
-      expect(image.alt).toBe("diagram.svg");
-      expect(image.closest("button")).toBeNull();
-    });
-  });
+  it.each([
+    { name: "diagram.svg", mimeType: "image/svg+xml" },
+    { name: "diagram.SVG", mimeType: "text/plain" },
+    { name: "diagram.svg", mimeType: undefined },
+  ])(
+    "renders desktop $name ($mimeType) without a lightbox callback",
+    async ({ name, mimeType }) => {
+      const panel = document.createElement("openclaw-chat-detail-panel");
+      const source = '<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>';
+      panel.content = {
+        kind: "file",
+        path: name,
+        name,
+        mimeType,
+        content: source,
+      };
+      container.append(panel);
+      await waitForSolid(() => {
+        const preview = expectDefined(
+          panel.querySelector<HTMLElement>(".sidebar-svg-file__view"),
+          "SVG preview",
+        );
+        expect(preview.hidden).toBe(false);
+        const image = expectDefined(preview.querySelector("img"), "SVG image");
+        expect(image.getAttribute("src")).toBe(
+          `data:image/svg+xml;charset=utf-8,${encodeURIComponent(source)}`,
+        );
+        expect(image.alt).toBe(name);
+        expect(image.closest("button")).toBeNull();
+      });
+    },
+  );
 });
 
 describe("file sidebar HTML preview ownership", () => {

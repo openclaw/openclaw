@@ -261,7 +261,7 @@ describe("project registry persistence", () => {
   });
 
   it("registers, orders, resolves real paths, deduplicates roots, and removes rows", async () => {
-    const repo = await initializeRepository(root, "openclaw");
+    const repo = await initializeRepository(root, "openclaw ");
     const alias = path.join(root, "repo-link");
     await fs.symlink(repo, alias, "dir");
 

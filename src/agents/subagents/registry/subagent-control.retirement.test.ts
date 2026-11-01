@@ -32,7 +32,8 @@ import {
   requesterWakeDriver,
   seedSubagentCompletionDelivery,
 } from "../completion/subagent-completion-admission.test-helpers.js";
-import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { enqueueSwarmRun } from "../swarm/swarm-scheduler.lifecycle.test-support.js";
 import {
   attachActiveEmbeddedRun,
   detachActiveEmbeddedRun,
@@ -50,18 +51,13 @@ import {
 } from "./subagent-registry-persistence.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import {
-  activateSubagentRegistry,
-  initSubagentRegistry,
   markSubagentRunTerminated as terminate,
   registerSubagentRun,
-  resumeSubagentRun,
 } from "./subagent-registry.js";
 import {
-  prepareSubagentRecoveryFixture,
+  prepareSubagentRequesterFixture,
   writeChildSession,
 } from "./subagent-registry.persistence.test-support.js";
-import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
-import { writeSubagentRunValuesInDatabase } from "./subagent-registry.store.kernel.js";
 import { testing } from "./subagent-registry.test-helpers.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import { resolveSubagentSessionStatus as status } from "./subagent-session-metrics.js";
@@ -451,21 +447,6 @@ it("does not create a missing child database while binding cancellation", async 
   }
 });
 
-const settle = fixture.settle;
-
-async function sweep() {
-  await testing.sweepOnceForTests();
-  await settle();
-}
-
-async function resume(runId: string, reconcile = false) {
-  resumeSubagentRun(runId, "restore");
-  await settle();
-  if (reconcile) {
-    await sweep();
-  }
-}
-
 function historicalCancellation(days = 9) {
   vi.mocked(resolveContextEngine).mockReset();
   wake.mockImplementation(async (params) => {
@@ -502,16 +483,9 @@ function historicalCancellation(days = 9) {
 }
 
 async function persistRetiredOwner(input: ReturnType<typeof records>) {
-  await prepareSubagentRecoveryFixture(input.subagent, { stateDir: fixture.stateDir });
+  await prepareSubagentRequesterFixture(input.subagent, { stateDir: fixture.stateDir });
   const database = openOpenClawStateDatabase();
   seedSubagentCompletionDelivery({ ...input, databaseOptions: { database } });
-}
-
-async function restore() {
-  await initSubagentRegistry();
-  // These terminal-only fixtures need a live owner but never dispatch a model turn.
-  const gatewayContext = { resolveGatewayContext: () => gatewayContext as never };
-  await activateSubagentRegistry(() => gatewayContext as never).settled;
 }
 
 function expectNoExecutionReplay() {
@@ -519,122 +493,6 @@ function expectNoExecutionReplay() {
     expect(replay).not.toHaveBeenCalled();
   }
 }
-
-it.each([false, true])("retires after the cancellation wake (%s)", async (yielded) => {
-  const { input, runId } = historicalCancellation(2);
-  const endedAt = input.subagent.execution.endedAt!;
-  input.subagent.cleanupCompletedAt = endedAt + 30_000;
-  input.subagent.killReconciliation = {
-    killedAt: endedAt + 30_000,
-    taskCancellationAccepted: true,
-  };
-  input.subagent.completionTarget = "parent";
-  input.subagent.requesterSettleWake = {
-    ...input.subagent.requesterSettleWake!,
-    batchRunIds: [runId],
-    ...(yielded ? { requesterYieldBatch: true, afterRequesterYield: true } : {}),
-  };
-  await persistRetiredOwner(input);
-  await restore();
-  await resume(runId, true);
-  expect(savedRun(runId)?.requesterSettleWake).toBeUndefined();
-  await sweep();
-  expect(loadSubagentRegistryFromSqlite().has(runId)).toBe(false);
-  expect(wake).toHaveBeenCalledOnce();
-  expectNoExecutionReplay();
-});
-
-it("defers a rejected historical retirement write without aborting resume", async () => {
-  const { input, runId } = historicalCancellation();
-  await persistRetiredOwner(input);
-  await restore();
-  const database = openOpenClawStateDatabase();
-  database.db.exec(`CREATE TRIGGER reject_retired_cancellation
-      BEFORE UPDATE ON subagent_runs
-      BEGIN SELECT RAISE(ABORT, 'retirement write rejected'); END`);
-  try {
-    expect(() => resumeSubagentRun(runId, "restore")).not.toThrow();
-    await settle();
-    const saved = savedRun(runId)!;
-    expect(saved.killReconciliation).toEqual(input.subagent.killReconciliation);
-    expect(saved.requesterSettleWake).toEqual(input.subagent.requesterSettleWake);
-    expect(wake).not.toHaveBeenCalled();
-  } finally {
-    database.db.exec("DROP TRIGGER reject_retired_cancellation");
-  }
-
-  await resume(runId);
-  expect(savedRun(runId)?.requesterSettleWake).toBeUndefined();
-  expect(wake).toHaveBeenCalledOnce();
-  expectNoExecutionReplay();
-});
-
-it.each([true, false])("keeps successor (pre-restore=%s)", async (beforeRestore) => {
-  const { input, runId } = historicalCancellation();
-  await persistRetiredOwner(input);
-  const successor = createSubagentRunRecord({
-    runId: "successor-run",
-    childSessionKey: input.subagent.childSessionKey,
-    childSessionIdentity: input.subagent.childSessionIdentity,
-    generation: 2,
-    createdAt: input.subagent.createdAt + 1,
-    endedAt: input.subagent.execution.endedAt,
-    outcome: { status: "ok" },
-    cleanupHandled: true,
-    cleanupCompletedAt: input.subagent.cleanupCompletedAt,
-    expectsCompletionMessage: false,
-    completion: { required: false, resultText: "completed", capturedAt: Date.now() },
-  });
-  if (beforeRestore) {
-    writeSubagentRunValuesInDatabase(
-      openOpenClawStateDatabase(),
-      [bindSubagentRunRecord(successor)],
-      [],
-    );
-  }
-  await restore();
-  if (!beforeRestore) {
-    await replaceRun(successor);
-  }
-  const originalBefore = savedRun(runId);
-  const successorBefore = structuredClone(subagentRuns.get(successor.runId));
-  const successorPersistedBefore = savedRun(successor.runId);
-  expect(successorBefore).toMatchObject({ runId: "successor-run", generation: 2 });
-  expect(successorPersistedBefore).toMatchObject({
-    runId: "successor-run",
-    generation: 2,
-    completion: { resultText: "completed" },
-  });
-  await resume(runId, true);
-  expect(savedRun(successor.runId)).toEqual(successorPersistedBefore);
-  expect(subagentRuns.get(successor.runId)).toEqual(successorBefore);
-  expect(savedRun(runId)).toEqual(originalBefore);
-  expect(wake).not.toHaveBeenCalled();
-  expectNoExecutionReplay();
-});
-
-it("keeps ordinary yielded wakes ahead of terminal cleanup", async () => {
-  const { input, runId } = historicalCancellation();
-  input.subagent.pauseReason = "sessions_yield";
-  input.subagent.endedReason = undefined;
-  input.subagent.killReconciliation = undefined;
-  input.subagent.execution.outcome = undefined;
-  input.subagent.cleanupCompletedAt = undefined;
-  input.subagent.cleanupHandled = false;
-  input.subagent.requesterSettleWake!.retireAfterSettle = true;
-  await persistRetiredOwner(input);
-  await restore();
-  await settle();
-  await sweep();
-
-  const saved = savedRun(runId)!;
-  expect(saved.requesterSettleWake).toBeUndefined();
-  expect(saved.execution).toEqual(input.subagent.execution);
-  expect(saved.pauseReason).toBe("sessions_yield");
-  expect(saved.delivery).toEqual(input.subagent.delivery);
-  expect(wake).toHaveBeenCalledOnce();
-  expectNoExecutionReplay();
-});
 
 it.each([-1, 1])("ignores killed callbacks after cancellation cleanup (%ims)", async (offset) => {
   const { input, runId } = historicalCancellation();

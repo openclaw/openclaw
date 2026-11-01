@@ -63,6 +63,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "agent.identity.changed": [READ_SCOPE],
   "users.prefs.changed": [SESSION_READ_SCOPE],
   "mentions.changed": [SESSION_READ_SCOPE],
+  "mentions.failed": [SESSION_READ_SCOPE],
   "skills.changed": [READ_SCOPE],
   "plugins.changed": [READ_SCOPE],
   "plugins.install.progress": [ADMIN_SCOPE],
@@ -124,6 +125,20 @@ export function isSessionReadInvalidation(
     return false;
   }
   const fields = Object.entries(Object.getOwnPropertyDescriptors(payload));
+  if (event === "mentions.changed") {
+    // Inbox producers target only the recipient's connections; this signal carries no message data.
+    return (
+      targeted &&
+      Object.hasOwn(payload, "gatewayInstanceId") &&
+      Object.hasOwn(payload, "revision") &&
+      fields.every(
+        ([key, field]) =>
+          "value" in field &&
+          ((key === "gatewayInstanceId" && typeof field.value === "string") ||
+            (key === "revision" && Number.isSafeInteger(field.value) && field.value >= 0)),
+      )
+    );
+  }
   // Hidden/deleted rows send subscribed readers only a signal to repeat an authorized read.
   return (
     event === "sessions.changed" &&

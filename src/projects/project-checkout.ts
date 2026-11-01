@@ -79,7 +79,8 @@ export async function resolveProjectCheckout(projectPath: string) {
   if (rootResult.code !== 0) {
     throw new ProjectCheckoutError(`project path is not a git checkout: ${projectPath}`);
   }
-  const repoRoot = await fs.realpath(rootResult.stdout.trim()).catch(() => {
+  // Git appends one LF; other trailing whitespace can belong to the checkout path.
+  const repoRoot = await fs.realpath(rootResult.stdout.replace(/\n$/, "")).catch(() => {
     throw new ProjectCheckoutError(`project checkout root is unavailable: ${projectPath}`);
   });
   const headResult = await runGit(repoRoot, ["rev-parse", "--verify", "HEAD^{commit}"], {

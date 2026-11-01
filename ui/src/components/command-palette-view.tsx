@@ -25,6 +25,7 @@ import {
 } from "../lib/keyboard-shortcut-contract.ts";
 import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { keyboardHintsVisible } from "../lib/reactive/keyboard-hints.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
 import { paneDomId } from "../pages/chat/components/chat-composer-dom.ts";
@@ -34,7 +35,6 @@ import {
   PaletteSessionAttachments,
   PaletteSessionControls,
   PaletteSessionAuxiliary,
-  PaletteSessionRecovery,
 } from "../pages/new-session/palette-session-draft-view.tsx";
 import { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
 import { createSubmissionAction } from "../pages/new-session/submission-action.ts";
@@ -238,9 +238,11 @@ function resolvePaletteResults(snapshot: CommandPaletteProps, prepared?: Command
 
 function PaletteHint(props: { shortcut: SolidJSX.Element; label: string }) {
   return (
-    <span class="cmd-palette__hint">
-      {props.shortcut} <span>{props.label}</span>
-    </span>
+    <Show when={keyboardHintsVisible()}>
+      <span class="cmd-palette__hint">
+        {props.shortcut} <span>{props.label}</span>
+      </span>
+    </Show>
   );
 }
 
@@ -490,7 +492,6 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
   const mentionListboxId = () => paneDomId(current().mentionHost.paneId, "mention-menu-listbox");
   const mentionAnnouncementId = () =>
     paneDomId(current().mentionHost.paneId, "mention-announcement");
-  const recovery = createMemo(() => current().draft.recoveryAction);
   const reason = () =>
     current().draft.disabledReason ??
     (current().draft.hasPrompt ? undefined : t("palette.promptRequired"));
@@ -508,10 +509,6 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
             if (!snapshot.composing) {
               snapshot.mentionMenu.close();
             }
-            return;
-          }
-          if (snapshot.draft.submitting) {
-            event.preventDefault();
             return;
           }
           snapshot.onToggle();
@@ -671,11 +668,6 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
           <Show when={error()}>
             <div class="cmd-palette__creation-error" role="alert">
               {error()}
-            </div>
-          </Show>
-          <Show when={recovery()}>
-            <div class="cmd-palette__footer">
-              <PaletteSessionRecovery onOpen={() => recovery()?.()} />
             </div>
           </Show>
         </div>

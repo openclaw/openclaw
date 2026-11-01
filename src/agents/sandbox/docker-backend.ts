@@ -12,6 +12,7 @@ import type {
 } from "./backend.types.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { SANDBOX_GITHUB_CONFIG_DIR } from "./constants.js";
+import { buildSandboxContainerEngineArgv } from "./container-engine.js";
 import { containerHasTerminated } from "./container-inspect.js";
 import {
   captureSandboxContainerTermination,
@@ -33,7 +34,6 @@ import {
   execContainer,
   execContainerRaw,
   PODMAN_SANDBOX_ENGINE,
-  resolvePodmanSandboxRuntimeInfo,
   type SandboxContainerEngine,
   type SandboxContainerEngineTarget,
   validateSandboxContainerEngineTarget,
@@ -66,20 +66,13 @@ async function createContainerSandboxBackend(
       "Podman sandboxing does not support browser sandboxes. Install Docker and select the docker backend, or disable sandbox.browser.enabled.",
     );
   }
-  const podmanTarget =
-    engine.id === "podman" ? (await resolvePodmanSandboxRuntimeInfo()).target : undefined;
   const dockerTarget = engine.id === "docker" ? await captureDockerPersistentTarget() : undefined;
   assertCurrent();
-  const boundEngine = podmanTarget
-    ? bindPodmanSandboxEngine(podmanTarget)
-    : dockerTarget
-      ? bindDockerPersistentTarget(dockerTarget)
-      : engine;
+  const configuredEngine = dockerTarget ? bindDockerPersistentTarget(dockerTarget) : engine;
   phases.mark("attempt.setup.sandbox.backend.container");
-  const { containerName, containerId, configHash, mountPlan, currentConfig } =
+  const { containerName, containerId, configHash, mountPlan, currentConfig, podmanTarget } =
     await ensureSandboxContainer({
-      engine: boundEngine,
-      ...(podmanTarget ? { podmanTarget } : {}),
+      engine: configuredEngine,
       ...(dockerTarget ? { dockerTarget } : {}),
       scopeKey: params.scopeKey,
       workspaceDir: params.workspaceDir,
@@ -95,6 +88,7 @@ async function createContainerSandboxBackend(
         : {}),
     });
   assertCurrent();
+  const boundEngine = podmanTarget ? bindPodmanSandboxEngine(podmanTarget) : configuredEngine;
   // Allocation pins the generation under its lifecycle lock; never rediscover it
   // by reusable name after another admission or recreation can acquire the lock.
   phases.mark("attempt.setup.sandbox.backend.mount_snapshot");
@@ -155,7 +149,7 @@ async function createContainerSandboxBackend(
       const envFile = await createContainerEnvFile(containerEnv);
       try {
         assertCurrent();
-        const argv = [boundEngine.command, ...(boundEngine.globalArgs ?? []), "exec", "-i"];
+        const argv = buildSandboxContainerEngineArgv(boundEngine, ["exec", "-i"]);
         if (usePty) {
           argv.push("-t");
         }

@@ -67,15 +67,17 @@ export function createSubmittedModelNoticeProjector() {
     if (!from || (from.provider === selected.provider && from.model === selected.model)) {
       return undefined;
     }
+    const modelChange = {
+      from: `${from.provider}/${from.model}`,
+      to: `${selected.provider}/${selected.model}`,
+    };
     return {
       kind: "notice",
       key: `model-selection:${item.key}`,
       timestamp: safeNormalizeMessage(item.message)?.timestamp ?? 0,
       icon: "brain",
-      label: t("chat.systemNotice.modelChanged", {
-        from: `${from.provider}/${from.model}`,
-        to: `${selected.provider}/${selected.model}`,
-      }),
+      label: t("chat.systemNotice.modelChanged", modelChange),
+      modelChange,
       text: "",
     };
   };
@@ -93,18 +95,6 @@ export function projectChatSystemNotice(
   },
 ): ChatItem[] {
   const raw = asRecord(item.message);
-  if (raw?.role === "custom" && raw.customType === "session-send-recovery-blocked") {
-    return [
-      {
-        kind: "notice",
-        key: item.key,
-        timestamp: (normalized ?? safeNormalizeMessage(item.message))?.timestamp ?? 0,
-        icon: "cpu",
-        systemEvent: "delivery-warning",
-        text: extractTextCached(item.message) ?? "",
-      },
-    ];
-  }
   if (raw?.role === "custom" && raw.customType === "session-model-change") {
     const details = asRecord(raw.details);
     if (typeof details?.from === "string" && typeof details.to === "string") {
@@ -115,6 +105,7 @@ export function projectChatSystemNotice(
           timestamp: (normalized ?? safeNormalizeMessage(item.message))?.timestamp ?? 0,
           icon: "brain",
           label: t("chat.systemNotice.modelChanged", { from: details.from, to: details.to }),
+          modelChange: { from: details.from, to: details.to },
           text: "",
         },
       ];
@@ -123,7 +114,7 @@ export function projectChatSystemNotice(
   const provenance = asRecord(raw?.provenance);
   const agentUpdate = provenance?.kind === "inter_session";
   const pendingText =
-    pending && agentUpdate && (pending.status === "cancelled" || pending.status === "interrupted")
+    pending && agentUpdate && pending.status === "cancelled"
       ? t(`chat.pendingInputs.agentUpdate.${pending.status}`)
       : pending && pending.status !== "queued"
         ? t(`chat.pendingInputs.${pending.status}`)
@@ -197,15 +188,11 @@ export function projectChatSystemNotice(
       : typeof pluginSteering?.pluginId === "string" && pluginSteering.pluginId.trim()
         ? pluginSteering.pluginId
         : sourceTool?.slice("plugin:".length);
-  const pendingSummaryKey = pending && noticeKind?.pendingSummaryKeys?.[pending.status];
-  const summaryKey = pendingSummaryKey ?? noticeKind?.summaryKey;
-  const text =
-    summaryKey === null
-      ? ""
-      : summaryKey
-        ? t(summaryKey)
-        : (extractTextCached(item.message)?.replace(/^\[System\] /u, "") ?? "");
-  if (!text.trim() && summaryKey !== null) {
+  const summaryKey = noticeKind?.summaryKey;
+  const text = summaryKey
+    ? t(summaryKey)
+    : (extractTextCached(item.message)?.replace(/^\[System\] /u, "") ?? "");
+  if (!text.trim()) {
     return pendingItems;
   }
   return [
@@ -221,8 +208,7 @@ export function projectChatSystemNotice(
       text,
       timestamp: message.timestamp,
       ...optionalBoundaryIdentity(userTurnRunId(item.message)),
-      ...(pendingSummaryKey && pending?.retired ? { retiredPendingInput: pending.retired } : {}),
     },
-    ...(pendingSummaryKey ? [] : pendingItems),
+    ...pendingItems,
   ];
 }

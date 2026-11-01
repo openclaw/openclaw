@@ -147,6 +147,10 @@ export function hasProfilerConflict() {
   );
 }
 
+function codePath(pathname: string): string {
+  return path.sep === "/" ? pathname : pathname.replaceAll(path.sep, "/");
+}
+
 function codeUrl(url: string, packageRoot: string | null): string | undefined {
   if (/^node:[a-zA-Z0-9_./-]+$/.test(url)) {
     return url;
@@ -166,14 +170,10 @@ function codeUrl(url: string, packageRoot: string | null): string | undefined {
   if (!path.isAbsolute(filename)) {
     return undefined;
   }
-  const relative = packageRoot
-    ? path.relative(packageRoot, filename).split(path.sep).join("/")
-    : "";
+  const relative = packageRoot ? codePath(path.relative(packageRoot, filename)) : "";
   // Ignore the installation's enclosing node_modules; classify only its contents.
   const dependency = (
-    packageRoot && !relative.startsWith("..")
-      ? `/${relative}`
-      : path.normalize(filename).split(path.sep).join("/")
+    packageRoot && !relative.startsWith("..") ? `/${relative}` : codePath(path.normalize(filename))
   ).match(
     /.*\/node_modules\/((?:@[a-zA-Z0-9_-][a-zA-Z0-9._-]*\/)?[a-zA-Z0-9_-][a-zA-Z0-9._-]*)\//,
   )?.[1];
@@ -204,16 +204,20 @@ export function sanitizeDiagnosticProfileFrame(
   );
   const url = codeUrl(frame.url, packageRoot);
   const engine = frame.url === "" && ENGINE_NAMES.has(frame.functionName);
-  const attribution = url?.startsWith("node_modules/")
-    ? `[dep:${url.slice(13)}]`
-    : frame.scriptId === "0" && frame.url === "" && frame.lineNumber < 0 && !engine
-      ? "[native]"
-      : undefined;
   const safeName =
     engine ||
     (url !== undefined &&
       frame.functionName.length <= 256 &&
-      /^(?:(?:(?:get|set) )?[$A-Z_a-z][$\w]*(?:\.[$A-Z_a-z][$\w]*)*)?$/.test(frame.functionName));
+      /^(?:(?:(?:get|set) )?#?[$A-Z_a-z][$\w]*(?:\.#?[$A-Z_a-z][$\w]*)*)?$/.test(
+        frame.functionName,
+      ));
+  // First-party package symbols identify native work without exposing dependency paths.
+  const attribution =
+    url?.startsWith("node_modules/") && !(url.startsWith("node_modules/@openclaw/") && safeName)
+      ? `[dep:${url.slice(13)}]`
+      : frame.scriptId === "0" && frame.url === "" && frame.lineNumber < 0 && !engine
+        ? "[native]"
+        : undefined;
   return {
     redacted: !safeName && !attribution,
     callFrame: {

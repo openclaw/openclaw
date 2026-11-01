@@ -73,6 +73,8 @@ export async function submitEmbeddedAttemptPrompt(input: {
     | "skipPreparedUserTurnMessage"
     | "suppressNextUserMessagePersistence"
     | "userTurnTranscriptRecorder"
+    | "inputAlreadyDelivered"
+    | "abortSignal"
   >;
   registration?: ActiveEmbeddedRunAttachment;
   activeSession: PromptSubmissionSession;
@@ -83,6 +85,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
   compactBeforeRequest?: ReturnType<typeof createChatGPTV2CompactionBoundary>;
   images: ImageContent[];
   modelPrompt: string;
+  normalizeToolCallIds?: Parameters<typeof wrapStreamFnWithMessageTransform>[1];
   onFinalPromptText: (prompt: string) => void;
   assertHostActive?: SessionSourceAssertion;
   getUserTranscriptContexts?: () => readonly UserTranscriptContext[] | undefined;
@@ -107,6 +110,11 @@ export async function submitEmbeddedAttemptPrompt(input: {
   transcriptPrompt: string;
 }): Promise<void> {
   const { activeSession, attempt } = input;
+  if (attempt.inputAlreadyDelivered) {
+    attempt.abortSignal?.throwIfAborted();
+    input.assertHostActive?.();
+    return;
+  }
   const userTurnRecorder = attempt.userTurnTranscriptRecorder;
   const projectionRecorder =
     attempt.skipPreparedUserTurnMessage || input.runtimeOnly || userTurnRecorder?.isBlocked()
@@ -221,7 +229,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
       );
     const providerPromptStreamFn = wrapStreamFnWithMessageTransform(
       persistThenStream,
-      (messages) => {
+      (messages, model) => {
         const providerPromptHistoryTruncation = truncateOversizedToolResultsInMessages(
           messages,
           input.contextTokenBudget,
@@ -236,7 +244,8 @@ export async function submitEmbeddedAttemptPrompt(input: {
         if (providerPromptHistoryTruncation.aggregateTruncatedCount > 0) {
           recordAggregateTruncation(attempt);
         }
-        return providerMessages;
+        // Bind measured pressure to the final ID-normalized provider context.
+        return input.normalizeToolCallIds?.(providerMessages, model) ?? providerMessages;
       },
     );
     activeSession.agent.streamFn = providerPromptStreamFn;

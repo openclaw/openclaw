@@ -22,7 +22,7 @@
   height: 0.375rem;
   overflow: hidden;
   border-radius: var(--oc-radius-round);
-  background: var(--oc-surface-interactive);
+  background: var(--surface-selected);
 }
 
 .oc-inspector-meter span {

@@ -56,7 +56,7 @@ vi.mock("../src/plugins/provider-hook-runtime.js", async () => {
         (!params.providerRefs?.length ||
           params.providerRefs.some((ref) => matchesProviderPluginRef(provider, ref))),
     );
-  return createProviderHookRuntime({
+  const providerResolvers: Parameters<typeof createProviderHookRuntime>[0] = {
     isPluginProvidersLoadInFlight: () => false,
     resolvePluginProviderRegistryCore: (params) => {
       const providers = selectProviders(params);
@@ -81,7 +81,12 @@ vi.mock("../src/plugins/provider-hook-runtime.js", async () => {
       }
       return providers.map((provider) => Object.assign({}, provider, { pluginId: provider.id }));
     },
-  });
+    withPluginProviderRegistry: async (params, run) =>
+      run(providerResolvers.resolvePluginProviderRegistryCore(params)),
+    withPluginProviders: async (params, run) =>
+      run(providerResolvers.resolvePluginProvidersCore(params)),
+  };
+  return createProviderHookRuntime(providerResolvers);
 });
 
 function createCatalogProviderRegistry(providers = discovery.providers) {
@@ -113,8 +118,6 @@ function authOrder(provider: string, ...profiles: string[]): OpenClawConfig {
 }
 
 function mockRefreshFailure(message = "synthetic OAuth refresh failure") {
-  // Diagnostic hints are independent of refresh selection and load the full runtime.
-  vi.spyOn(providerRuntime, "buildProviderAuthDoctorHintWithPlugin").mockResolvedValue(undefined);
   return vi
     .spyOn(providerRuntime, "resolveProviderOAuthCredentialWithPlugin")
     .mockRejectedValue(new Error(message));
@@ -293,10 +296,6 @@ describe("Provider model discovery auth preparation", () => {
       }
       await state.writeAuthProfiles(store);
       const events: string[] = [];
-      // Diagnostic copy is independent of refresh selection and loads the full plugin runtime.
-      vi.spyOn(providerRuntime, "buildProviderAuthDoctorHintWithPlugin").mockResolvedValue(
-        undefined,
-      );
       const refresh = vi
         .spyOn(providerRuntime, "resolveProviderOAuthCredentialWithPlugin")
         .mockImplementation(async ({ credential }) => {
@@ -553,9 +552,6 @@ describe("Provider model discovery auth preparation", () => {
         createDeferredCore<
           Awaited<ReturnType<typeof providerRuntime.resolveProviderOAuthCredentialWithPlugin>>
         >();
-      vi.spyOn(providerRuntime, "buildProviderAuthDoctorHintWithPlugin").mockResolvedValue(
-        undefined,
-      );
       const refresh = vi
         .spyOn(providerRuntime, "resolveProviderOAuthCredentialWithPlugin")
         .mockImplementation(async ({ credential }) => {

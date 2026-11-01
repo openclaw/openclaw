@@ -18,6 +18,8 @@ import type { WorkerTunnelManager } from "./tunnel.js";
 export type WorkerEnvironmentCreateRequest = {
   profileId: string;
   idempotencyKey: string;
+  /** Internal opt-in; profile defaults and prepared reserves remain fixed-lease. */
+  retainedPolicy?: import("../../plugins/worker-retention.types.js").WorkerRetentionPolicy;
   machineClass?: string;
   executionMode?: WorkerExecutionMode;
   projectPath?: string;
@@ -26,6 +28,8 @@ export type WorkerEnvironmentCreateRequest = {
   runSetupScript?: boolean;
   inheritedProfile?: { providerId: string; profileSnapshot: WorkerProfile };
   admittedIntent?: WorkerProviderPreparedIntent;
+  /** Revalidate caller authority after preparation, immediately before provider effects. */
+  beforeProvision?: () => void;
 };
 
 export type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions &

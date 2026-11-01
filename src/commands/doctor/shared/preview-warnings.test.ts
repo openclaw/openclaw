@@ -641,60 +641,29 @@ describe("doctor preview warnings", () => {
     expect(warning).not.toContain("agents.list");
   });
 
-  it("uses inherited provider alsoAllow for agent provider profile warnings", async () => {
+  it.each([
+    {
+      name: "inherited provider alsoAllow",
+      provider: { alsoAllow: ["exec", "process"] },
+      agentProvider: { profile: "messaging" },
+      model: undefined,
+    },
+    {
+      name: "model-scoped agent provider overrides",
+      provider: { profile: "messaging" },
+      agentProvider: { alsoAllow: ["exec", "process"] },
+      model: { primary: "openai/gpt-5" },
+    },
+  ])("uses $name for profile warnings", async ({ provider, agentProvider, model }) => {
     const warnings = await collectProfileConfiguredToolSectionWarningsThroughDoctor({
-      tools: {
-        byProvider: {
-          openai: {
-            alsoAllow: ["exec", "process"],
-          },
-        },
-      },
+      tools: { byProvider: { openai: provider } },
       agents: {
         entries: {
           sage: {
+            ...(model ? { model } : {}),
             tools: {
-              exec: {
-                mode: "allowlist",
-              },
-              byProvider: {
-                "openai/gpt-5": {
-                  profile: "messaging",
-                },
-              },
-            },
-          },
-        },
-      },
-    });
-
-    expect(warnings).toStrictEqual([]);
-  });
-
-  it("uses model-scoped agent provider overrides for inherited provider warnings", async () => {
-    const warnings = await collectProfileConfiguredToolSectionWarningsThroughDoctor({
-      tools: {
-        byProvider: {
-          openai: {
-            profile: "messaging",
-          },
-        },
-      },
-      agents: {
-        entries: {
-          sage: {
-            model: {
-              primary: "openai/gpt-5",
-            },
-            tools: {
-              exec: {
-                mode: "allowlist",
-              },
-              byProvider: {
-                "openai/gpt-5": {
-                  alsoAllow: ["exec", "process"],
-                },
-              },
+              exec: { mode: "allowlist" },
+              byProvider: { "openai/gpt-5": agentProvider },
             },
           },
         },
@@ -742,72 +711,42 @@ describe("doctor preview warnings", () => {
     expect(warnings).toStrictEqual([]);
   });
 
-  it("still warns when provider policy blocks the runtime message grant", async () => {
+  it.each([
+    {
+      name: "warns when provider policy blocks the runtime message grant",
+      policy: { allow: ["read"] },
+      visibleWarnings: ['messages.groupChat.visibleReplies is set to "message_tool"'],
+      channelWarnings: [
+        '- Agent "main" is routed from channel "discord", but the message tool is unavailable for that agent; explicit channel actions such as sendAttachment, upload-file, thread-reply, or reply can fail. Add "message" to the agent tool allowlist, add "group:messaging", or switch the agent to a profile that includes messaging tools.',
+      ],
+    },
+    {
+      name: "keeps provider-specific message grants when checking provider policy",
+      policy: { alsoAllow: ["message"] },
+      visibleWarnings: [],
+      channelWarnings: [],
+    },
+  ])("$name", async ({ policy, visibleWarnings, channelWarnings }) => {
     const cfg = {
       agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.5",
-          },
-        },
+        defaults: { model: { primary: "openai/gpt-5.5" } },
         entries: { main: {} },
       },
-      channels: {
-        discord: {},
-      },
-      messages: {
-        groupChat: {
-          visibleReplies: "message_tool",
-        },
-      },
+      channels: { discord: {} },
+      messages: { groupChat: { visibleReplies: "message_tool" } },
       tools: {
-        profile: "coding" as const,
-        byProvider: {
-          openai: {
-            allow: ["read"],
-          },
-        },
+        profile: "coding",
+        byProvider: { openai: policy },
       },
     } satisfies OpenClawConfig;
 
-    expectWarningsContaining(await collectVisibleReplyToolPolicyWarningsThroughDoctor(cfg), [
-      'messages.groupChat.visibleReplies is set to "message_tool"',
-    ]);
-    expect(await collectChannelBoundMessageToolPolicyWarningsThroughDoctor(cfg)).toEqual([
-      '- Agent "main" is routed from channel "discord", but the message tool is unavailable for that agent; explicit channel actions such as sendAttachment, upload-file, thread-reply, or reply can fail. Add "message" to the agent tool allowlist, add "group:messaging", or switch the agent to a profile that includes messaging tools.',
-    ]);
-  });
-
-  it("keeps provider-specific message grants when checking provider policy", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.5",
-          },
-        },
-        entries: { main: {} },
-      },
-      channels: {
-        discord: {},
-      },
-      messages: {
-        groupChat: {
-          visibleReplies: "message_tool",
-        },
-      },
-      tools: {
-        profile: "coding" as const,
-        byProvider: {
-          openai: {
-            alsoAllow: ["message"],
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    expect(await collectVisibleReplyToolPolicyWarningsThroughDoctor(cfg)).toStrictEqual([]);
-    expect(await collectChannelBoundMessageToolPolicyWarningsThroughDoctor(cfg)).toStrictEqual([]);
+    expectWarningsContaining(
+      await collectVisibleReplyToolPolicyWarningsThroughDoctor(cfg),
+      visibleWarnings,
+    );
+    expect(await collectChannelBoundMessageToolPolicyWarningsThroughDoctor(cfg)).toEqual(
+      channelWarnings,
+    );
   });
 
   it("warns separately for explicit global and group visible reply policy mismatches", async () => {

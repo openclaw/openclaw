@@ -86,6 +86,26 @@ describe("sidebar attention projection", () => {
     );
     expect(items[0]?.meta?.context).toBe("Writer");
   });
+  it("orders rows by arrival, newest first, with timeless live states on top", () => {
+    const [cron] = cronItems(
+      [cronJob("job", { lastRunStatus: "error", lastRunAtMs: 2_000 })],
+      5_000,
+    );
+    const entries = buildSidebarInboxEntries({
+      approvals: [
+        { id: "old", createdAtMs: 1_000 },
+        { id: "new", createdAtMs: 4_000 },
+      ] as never,
+      attention: [cron!],
+      mentions: [{ ...inboxMention("mention"), createdAt: 3_000 }],
+      scopeUpgrade: { type: "scopeUpgrade" } as never,
+      update: null,
+    });
+    expect(
+      entries.map((entry) => (entry.type === "approval" ? entry.approval.id : entry.type)),
+    ).toEqual(["scopeUpgrade", "new", "mention", "attention", "old"]);
+  });
+
   it("derives every tab count and dismiss control from one entry list", () => {
     const entries = inbox(true, {
       approvals: [
@@ -112,17 +132,15 @@ describe("sidebar attention projection", () => {
       all: 6,
       approvals: 1,
       mentions: 2,
-      automations: 1,
-      system: 2,
+      system: 3,
     });
     expect(entries.filter((entry) => entry.dismissal).map((entry) => entry.type)).toEqual([
       "scopeUpgrade",
       "attention",
     ]);
-    expect(entries.slice(-2).map((entry) => entry.type === "mention" && entry.mention.id)).toEqual([
-      "newer",
-      "older",
-    ]);
+    expect(
+      entries.flatMap((entry) => (entry.type === "mention" ? [entry.mention.id] : [])),
+    ).toEqual(["newer", "older"]);
   });
 
   it("keeps informational updates visible without adding them to attention counts", () => {
@@ -133,7 +151,6 @@ describe("sidebar attention projection", () => {
       all: 0,
       approvals: 0,
       mentions: 0,
-      automations: 0,
       system: 0,
     });
   });

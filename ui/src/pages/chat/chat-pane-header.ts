@@ -12,6 +12,7 @@ import { EMPTY_SESSION_MENU_DATA } from "../../components/session-menu-data.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { resolveGatewayStatus } from "../../lib/gateway-status.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { resolveChatAgentIdentity } from "./chat-agent-id.ts";
 import {
@@ -20,7 +21,6 @@ import {
   getChatBranchesQueryState,
   loadChatBranches,
 } from "./chat-history-branches.ts";
-import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { createChatMobilePeopleMentions } from "./chat-mobile-people-mentions.ts";
 import { ChatPaneDiscussion } from "./chat-pane-discussion.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
@@ -360,22 +360,31 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     const personActivity = this.headerActivityMemo.read([this.context, this.context.basePath], () =>
       personActivityRouting(this.context),
     );
-    const { showOwnerChip, viewers, ownerViewing, mobilePeople } = this.headerPeople.read({
-      session: row,
-      ownerCount: this.state?.sessionsResult?.owners?.length ?? 0,
-      presence: this.presence.snapshot,
-      selfUser: sharingSnapshot.selfUser,
-      instanceId: sharingSnapshot.client?.instanceId,
-      sessionKey: key,
-      catalog,
-      detailsControl,
-      mentionableUsers: this.headerPeopleMentions.read()?.result.users,
-    });
+    const { showOwnerChip, viewers, totalCount, ownerViewing, mobilePeople } =
+      this.headerPeople.read({
+        host: this.state,
+        session: row,
+        ownerCount: this.state?.sessionsResult?.owners?.length ?? 0,
+        presence: this.presence.snapshot,
+        selfUser: sharingSnapshot.selfUser,
+        instanceId: sharingSnapshot.client?.instanceId,
+        sessionKey: key,
+        catalog,
+        detailsControl,
+        mentionableUsers: this.headerPeopleMentions.read()?.result.users,
+      });
     const sharing = this.prepareSessionSharing(row, {
       personActivity,
       ownerViewing,
       showOwner: showOwnerChip && !this.mergedChrome && !detailsControl,
     });
+    const sharingControl =
+      sharing &&
+      (canManageChatSessionSharing(sharing.session)
+        ? !this.narrow && !sharing.openDisabledReason
+        : sharing.session.visibility === "draft")
+        ? sharing
+        : undefined;
     this.headerBoardMenu = this.pageBoardWidgetMenu(currentLayout);
     const boardWidgetMenu = this.headerBoardMenuMemo.read(
       [this.headerBoardMenu?.widget, this.headerBoardMenu?.tabs, this.headerBoardMenu?.canMutate],
@@ -441,13 +450,16 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       narrow: this.narrow,
       mergedChrome: this.mergedChrome,
       navDrawerOpen: this.navDrawerOpen,
-      gatewayStatus: this.gatewayStatus,
+      // Mobile owns notice placement, including suppression while its drawer is open.
+      gatewayStatus: this.mergedChrome
+        ? this.gatewayStatus
+        : (this.gatewayStatus ?? {
+            kind: resolveGatewayStatus(sharingSnapshot),
+            lastError: sharingSnapshot.lastError,
+            onRetry: this.context.gateway.connect,
+          }),
       savedConversation: Boolean(
-        this.state &&
-        (!this.state.connected ||
-          this.routeResolutionPending ||
-          isInitialChatHistoryUnavailable(this.state)) &&
-        this.state.chatMessages.length,
+        this.state && !this.state.connected && this.state.chatMessages.length,
       ),
       title,
       titlePending: !catalog && !title ? true : undefined,
@@ -543,14 +555,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               this.navigateMobileHost({ area: "panels", slot: "dashboard" });
             }
           : undefined,
-      presence: viewers?.length ? { staticUsers: viewers, personActivity } : undefined,
-      sharingControl:
-        sharing &&
-        (canManageChatSessionSharing(sharing.session)
-          ? !this.narrow && !sharing.openDisabledReason
-          : sharing.session.visibility === "draft")
-          ? sharing
-          : undefined,
+      presence: viewers?.length ? { staticUsers: viewers, totalCount, personActivity } : undefined,
+      sharingControl,
+      sharingPlaceholder: this.headerSharingPlaceholder(row, sharingControl),
       publicAccessIndicator: this.narrow ? (sharing ?? undefined) : undefined,
       readMachineName,
       onMobilePlacementStop: row

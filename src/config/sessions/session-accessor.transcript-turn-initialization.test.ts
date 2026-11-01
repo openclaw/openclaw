@@ -80,9 +80,6 @@ describe("first transcript turn initialization", () => {
       sessionLifecyclePatch: {
         status: undefined,
         lifecycleRunId: operation.operationId,
-        restartRecoveryDeliveryRunId: operation.operationId,
-        restartRecoveryDeliverySourceRunId: operation.operationId,
-        restartRecoveryDeliveryRequestFingerprint: operation.requestFingerprint,
       },
       updateMode: "none",
       ...options,
@@ -112,7 +109,7 @@ describe("first transcript turn initialization", () => {
       sessionEntry: {
         ...initialSessionEntry,
         updatedAt: expect.any(Number),
-        restartRecoveryDeliveryRunId: operation.operationId,
+        lifecycleRunId: operation.operationId,
         goal: { objective: operation.objective, status: "active" },
       },
       sessionTurnMutationResult: {

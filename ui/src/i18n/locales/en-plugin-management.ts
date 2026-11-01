@@ -18,7 +18,6 @@ const enPluginManagement = {
     dashboardEmpty: "This session has no dashboard widgets yet.",
     customPluginsDisabled: en.pluginUi.customPluginsDisabled,
     customPluginsEnableHint: en.pluginUi.customPluginsEnableHint,
-    openLabs: en.pluginUi.openLabs,
     surface: {
       "session-list": "Session list",
       composer: "Composer",
@@ -337,9 +336,14 @@ const enPluginManagement = {
       edit: "Edit",
       connected: "Connected",
       configured: "Configured",
-      editAccount: "Edit {name} connection",
       editCredential: "Edit {name}",
       connectAccount: "Sign in to {name}",
+      signOut: "Sign out",
+      signOutAccount: "Sign out of {name}",
+      signOutConfirmTitle: "Sign out of {name}?",
+      signOutUnavailable: "Sign-out could not open. Your account is still connected; try again.",
+      signOutConfirmMessage:
+        "OpenClaw removes the saved sign-in for {name}. Its tools stop working until you sign in again.",
       configure: "Configure",
       configureCredential: "Configure {name}",
       connect: "Sign in",
@@ -541,6 +545,8 @@ const enPluginManagement = {
       "Plugin availability changed. Refresh the catalog to see its current state.",
     installDestinationChanged:
       "The Gateway or operator changed. Install the plugin again to request a fresh review.",
+    installBlockedByUpdate:
+      "Installation blocked: an OpenClaw upgrade is in progress, try again when it finishes.",
   },
 } satisfies TranslationMap;
 

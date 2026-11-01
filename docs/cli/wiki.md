@@ -199,6 +199,10 @@ retain their existing lookup fallbacks and may scan the vault.
 Wiki-page reads support large files and hard links. Reads refuse paths that
 escape the vault or pass through a symbolic link inside it.
 
+Pagination counts real body lines, not the empty split element after a terminal
+newline. A read ending on the last line reports `truncated: false`; intentional
+blank lines are preserved.
+
 ```bash
 openclaw wiki get entity.alpha
 openclaw wiki get syntheses/alpha-summary.md --from 1 --lines 80
@@ -231,6 +235,13 @@ Import from explicitly configured local paths (`unsafeLocal.paths`) in `unsafe-l
 ### `wiki chatgpt import`
 
 Import a ChatGPT export into draft wiki source pages.
+
+`--export` accepts a JSON file or a directory containing `conversations.json`.
+The path's file type determines which is used, so renamed JSON files and
+directories whose names end in `.json` work the same way.
+
+Imported transcript text preserves line breaks, code indentation, and internal
+spacing, including text parts stored as serialized JSON in the export.
 
 ```bash
 openclaw wiki chatgpt import --export ./chatgpt-export

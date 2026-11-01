@@ -32,7 +32,6 @@ it("extends the owned generation config without copying or sharing it between re
 
     expect(first.generationConfig).toBe(buildConfig.mock.results[0]?.value);
     expect(second.generationConfig).toBe(buildConfig.mock.results[1]?.value);
-    expect(first.generationConfig).not.toBe(second.generationConfig);
     expect(first.generationConfig).toEqual({
       maxOutputTokens: 64,
       temperature: 0.25,

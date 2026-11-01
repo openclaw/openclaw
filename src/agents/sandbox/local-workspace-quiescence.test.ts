@@ -44,7 +44,7 @@ vi.mock("./mount-plan.js", () => ({
   sandboxContainerShowsWorkspacePaths: mocks.imageBacking,
 }));
 import {
-  prepareLocalWorkspaceImageRead,
+  prepareLocalWorkspaceFileRead,
   quiesceLocalWorkspace,
   type LocalWorkspacePausedRuntime,
 } from "./local-workspace-quiescence.js";
@@ -344,13 +344,21 @@ it("fences a dedicated stream writer and requires settlement before retiring its
   expect(mocks.custodyCurrent).toHaveBeenCalledWith(record);
   expect(persistCustody).toHaveBeenLastCalledWith([]);
 
+  record.phase = "stopped";
+  mocks.command.mockClear();
+  const stopped = await quiesce({ persist: persistCustody });
+  expect(mocks.command.mock.calls.some(([, args]) => args.at(-1) === childId)).toBe(false);
+  await expect(stopped.retire()).rejects.toThrow("Settle persistent streams");
+  await stopped.resume();
+  expect(persistCustody).toHaveBeenLastCalledWith([]);
+
   const imageRead = {
     workspaceDir: entry.workspaceDir,
     containerRoot: "/workspace",
     targets: ["/workspace/image.png"],
     assertCurrent: () => {},
   };
-  const assertImageCurrent = await prepareLocalWorkspaceImageRead(imageRead);
+  const assertImageCurrent = await prepareLocalWorkspaceFileRead(imageRead);
   expect(mocks.imageBacking).toHaveBeenCalledOnce();
   expect(mocks.imageBacking).toHaveBeenCalledWith(
     expect.objectContaining({ containerName: entry.containerName }),
@@ -360,8 +368,8 @@ it("fences a dedicated stream writer and requires settlement before retiring its
   });
   expect(assertImageCurrent).toThrow("parent retired");
   mocks.read.mockResolvedValue({ entries: [] });
-  await expect(prepareLocalWorkspaceImageRead(imageRead)).rejects.toThrow(
-    "Sandbox image backing is unavailable",
+  await expect(prepareLocalWorkspaceFileRead(imageRead)).rejects.toThrow(
+    "Sandbox file backing is unavailable",
   );
   expect(mocks.imageBacking).toHaveBeenCalledOnce();
 });

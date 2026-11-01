@@ -28,8 +28,8 @@ import {
 } from "../../src/config/sessions/session-accessor.sqlite-lifecycle-state.js";
 import type { ProjectedLifecycleMutation } from "../../src/config/sessions/session-accessor.sqlite-lifecycle-types.js";
 import { bindSqliteWorkerBackend } from "../../src/config/sessions/session-lifecycle-projection.worker.js";
+import { classifyWorkerRequest } from "../../src/infra/sqlite-worker-request-class.js";
 import { runWithSqliteWorkerStateContext } from "../../src/infra/sqlite-worker-state-context.js";
-import { classifyWorkerRequest } from "../../src/infra/worker-request-diagnostics.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../src/state/openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabase } from "../../src/state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";

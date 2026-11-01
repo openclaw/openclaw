@@ -102,6 +102,7 @@ use a JIT build for full speed. Fetched CJS/TypeScript plugins load from disk
 through the normal loader against the compiled SDK in both emitted-JavaScript
 and original-TypeScript AOT builds. The loader transfers compiled SDK exports to
 interpreted plugins; virtual SDK paths do not contain readable source files.
+AOT builds enable `compile.allowCodeFromDisk` so installed plugins, their disk workers, and dynamic sibling imports can run interpreted.
 Missing runtime modules and
 builds with `--disallow-code-generation-from-strings=strict` still report actionable
 guidance. Guest runtimes keep their own qualification requirements; OpenClaw

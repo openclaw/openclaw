@@ -1,10 +1,15 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
+import * as pinPolicy from "../config/sessions/session-pin-policy.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { createSessionIdentityProjection } from "./session-identity-projection.js";
 import type { SessionListFilteredEntries } from "./session-list-filters.js";
-import { readSessionListSelectionFacts } from "./session-list-target.js";
-import { identity, type SelectionRow } from "./session-row-projection-record.js";
+import {
+  create as createRow,
+  identity,
+  selectionRow,
+  type EntryRow,
+} from "./session-row-projection-record.js";
 import { createSessionRowSelection } from "./session-row-selection.js";
 import { selectSessionEntries } from "./session-utils-list.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
@@ -42,7 +47,7 @@ function fixture() {
       true,
     );
   const selection = create();
-  const rows = new Map<string, SelectionRow>();
+  const rows = new Map<string, EntryRow>();
   const remove = (key: string) => {
     const previous = rows.get(key);
     if (previous) {
@@ -64,12 +69,10 @@ function fixture() {
     const previous = rows.get(key);
     const agentId = key.startsWith("agent:ops:") ? "ops" : "main";
     const nextPath = options?.path ?? previous?.storeTarget.storePath ?? storePath;
-    const row: SelectionRow = {
-      key,
-      agentId,
-      storeTarget: { agentId, storePath: nextPath },
+    const row: EntryRow = {
+      ...createRow({ key, agentId, storeTarget: { agentId, storePath: nextPath } }, entry),
+      selectionSnapshot: previous?.selectionSnapshot,
       entry,
-      selection: readSessionListSelectionFacts(key, entry),
       hasBoard: options?.hasBoard ?? previous?.hasBoard ?? false,
       generation:
         previous &&
@@ -83,7 +86,14 @@ function fixture() {
       remove(key);
     }
     rows.set(key, row);
-    selection.change({ kind: "row", id: identity(row), key, agentId, row, scope: "session-entry" });
+    selection.change({
+      kind: "row",
+      id: identity(row),
+      key,
+      agentId,
+      row: selectionRow(row),
+      scope: "session-entry",
+    });
   };
   const select = (
     owner: ReturnType<typeof create>,
@@ -119,7 +129,7 @@ function fixture() {
     fresh() {
       const result = create();
       for (const row of rows.values()) {
-        result.add(row);
+        result.add(selectionRow(row)!);
       }
       return result;
     },
@@ -165,15 +175,65 @@ it("retains filtered partitions while publishing current usage and bookkeeping m
     sessionDiffBaseline: { version: 1, sessionId: entry.sessionId, root: "/synthetic", files: [] },
     sessionDiffBaselineCapture: { version: 1, captureId: "capture-2", status: "pending" },
   };
-  state.put(key, next);
-  expect(revisions().every((revision) => before.has(revision))).toBe(true);
-  expect(state.select(state.selection, opts, retained).entries).toEqual([[key, next]]);
-  state.put(key, entry);
-  expect(revisions().every((revision) => before.has(revision))).toBe(true);
-  expect(state.select(state.selection, opts, retained).entries).toEqual([[key, entry]]);
+  for (const published of [next, entry]) {
+    state.put(key, published);
+    expect(revisions().every((revision) => before.has(revision))).toBe(true);
+    expect(state.select(state.selection, opts, retained).entries).toEqual([[key, published]]);
+  }
   state.put(key, { ...entry, updatedAt: now + 1 });
   expect(revisions().every((revision) => before.has(revision))).toBe(false);
   expect(state.select(state.selection, opts, retained)).toEqual(state.select(state.fresh(), opts));
+});
+
+it("reads only the requested page from retained ordered partitions", () => {
+  const state = fixture();
+  const count = 10_800;
+  for (let index = 0; index < count; index++) {
+    state.put(`agent:main:page-${index}`, {
+      sessionId: String(index),
+      updatedAt: now + index,
+      pinnedAt: now + index,
+      createdActor: { type: "human", source: "profile", id: index % 2 ? "bob" : "ada" },
+    });
+  }
+  for (const opts of [
+    { limit: 200, offset: 7 },
+    { limit: 200, ownerFirst: true },
+  ]) {
+    const retained = new WeakMap<object, SessionListFilteredEntries>();
+    state.select(state.selection, opts, retained);
+    const reads = { entries: 0, ownerEntries: 0 };
+    for (const partition of state.selection.read().partitions!) {
+      const part = retained.get(partition.revision)!;
+      for (const field of ["entries", "ownerEntries"] as const) {
+        part[field] = new Proxy(part[field], {
+          get(target, key, receiver) {
+            if (typeof key === "string" && /^\d+$/.test(key)) {
+              reads[field]++;
+            }
+            return Reflect.get(target, key, receiver);
+          },
+        });
+      }
+    }
+    using pins = vi.spyOn(pinPolicy, "isPinnableSessionEntry");
+    const result = state.select(state.selection, opts, retained);
+    const shared = Array.from({ length: opts.limit }, (_, i) => count - 1 - (opts.offset ?? 0) - i);
+    const owned = opts.ownerFirst ? Array.from({ length: 60 }, (_, i) => count - 2 - i * 2) : [];
+    expect(result.entries.map(([, entry]) => entry.sessionId)).toEqual(
+      [...owned, ...shared.filter((index) => !owned.includes(index))].map(String),
+    );
+    expect(result).toMatchObject({
+      totalCount: count,
+      ownerCount: owned.length,
+      hasMore: true,
+      nextOffset: (opts.offset ?? 0) + opts.limit,
+    });
+    expect(result.ownerFacet.map((owner) => owner.id)).toEqual(["ada", "bob"]);
+    expect(reads.entries).toBeLessThanOrEqual((opts.offset ?? 0) + opts.limit + 64);
+    expect(reads.ownerEntries).toBeLessThanOrEqual(owned.length + 64);
+    expect(pins).toHaveBeenCalledTimes(reads.entries + reads.ownerEntries);
+  }
 });
 
 it.for([0x12e7, 0x4b91])("matches fresh selection after seeded write sequences (%i)", (seed) => {
@@ -270,103 +330,64 @@ it.for([0x12e7, 0x4b91])("matches fresh selection after seeded write sequences (
     const previous = state.rows.get(key);
     const entry = previous?.entry ?? initial(key, index);
     const value = random(2) === 0;
-    let patch: Partial<SessionEntry> = {};
-    switch (random(22)) {
-      case 0:
-        state.remove(key);
-        break;
-      case 1:
-        patch = { updatedAt: now + step + 1 };
-        break;
-      case 2:
-        patch = { lastInteractionAt: value ? now + step + 1 : undefined };
-        break;
-      case 3:
-        patch = { lastActivityAt: value ? now + step + 1 : undefined };
-        break;
-      case 4:
-        patch = { archivedAt: value ? 0 : undefined };
-        break;
-      case 5:
-        patch = {
+    const operation = random(22);
+    if (operation === 0) {
+      state.remove(key);
+    } else if (operation >= 20) {
+      state.put(
+        key,
+        entry,
+        operation === 20 ? { hasBoard: value } : { path: value ? storePath : outsidePath },
+      );
+    } else {
+      const patches: Partial<SessionEntry>[] = [
+        { updatedAt: now + step + 1 },
+        { lastInteractionAt: value ? now + step + 1 : undefined },
+        { lastActivityAt: value ? now + step + 1 : undefined },
+        { archivedAt: value ? 0 : undefined },
+        {
           pinnedAt: value ? now + step : undefined,
           sidebarRoot: value,
           parentSessionKey: keys[4],
-        };
-        break;
-      case 6:
-        patch = { label: value ? "alpha" : "beta" };
-        break;
-      case 7:
-        patch = { category: value ? "work" : "personal" };
-        break;
-      case 8:
-        patch = { projectId: value ? "one" : "two" };
-        break;
-      case 9:
-        patch = { spawnedCwd: value ? "/one" : undefined, spawnedWorkspaceDir: "/two" };
-        break;
-      case 10:
-        patch = { boardFace: value ? "chat" : "dashboard" };
-        break;
-      case 11:
-        patch = {
+        },
+        { label: value ? "alpha" : "beta" },
+        { category: value ? "work" : "personal" },
+        { projectId: value ? "one" : "two" },
+        { spawnedCwd: value ? "/one" : undefined, spawnedWorkspaceDir: "/two" },
+        { boardFace: value ? "chat" : "dashboard" },
+        {
           createdActor: value
             ? { type: "human", source: "profile", id: "ada" }
             : { type: "system", id: "fixture" },
-        };
-        break;
-      case 12:
-        patch = { owner: { actor: { type: "human", id: value ? "ada" : "bob" } } };
-        break;
-      case 13:
-        patch = { participants: value ? [{ identity: { type: "profile", id: "ada" } }] : [] };
-        break;
-      case 14:
-        patch = {
+        },
+        { owner: { actor: { type: "human", id: value ? "ada" : "bob" } } },
+        { participants: value ? [{ identity: { type: "profile", id: "ada" } }] : [] },
+        {
           profileInvolvement: { key, profiles: { ada: { hidden: value, updatedAt: now + step } } },
-        };
-        break;
-      case 15:
-        patch = { heartbeatIsolatedBaseSessionKey: value ? keys[4] : undefined };
-        break;
-      case 16:
-        patch = {
+        },
+        { heartbeatIsolatedBaseSessionKey: value ? keys[4] : undefined },
+        {
           createdSurface: value ? "plugin-dock" : undefined,
           spawnedBy: value ? keys[4] : undefined,
-        };
-        break;
-      case 17:
-        patch = {
+        },
+        {
           sessionId: `${key}-replacement-${step}`,
           lifecycleRevision: `generation-${step}`,
-        };
-        break;
-      case 18:
-        patch = {
+        },
+        {
           inputTokens: step,
           estimatedCostUsd: step / 100,
           activeWriterRunId: `writer-${step}`,
-        };
-        break;
-      case 19:
-        patch = {
+        },
+        {
           startedAt: now + step,
           abortedLastRun: value,
           pendingFinalDelivery: value
             ? { kind: "transport-only", createdAt: now + step }
             : undefined,
-        };
-        break;
-      case 20:
-        state.put(key, entry, { hasBoard: value });
-        break;
-      case 21:
-        state.put(key, entry, { path: value ? storePath : outsidePath });
-        break;
-    }
-    if (Object.keys(patch).length) {
-      state.put(key, { ...entry, ...patch });
+        },
+      ];
+      state.put(key, { ...entry, ...patches[operation - 1] });
     }
     check();
   }

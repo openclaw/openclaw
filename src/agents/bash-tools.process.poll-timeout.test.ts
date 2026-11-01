@@ -214,18 +214,31 @@ test("sorts by start time then registration order across terminal transitions", 
   await expectOrder();
 });
 
-test("poll returns a new interactive prompt before its wait expires", async () => {
-  const { session, poll } = harness();
-  let settled = false;
-  const pending = poll(30_000).then((result) => {
-    settled = true;
-    return result;
-  });
-  appendOutput(session, "stderr", "interactive prompt\n");
-  await tick();
-  expect(settled).toBe(true);
-  check(await pending, { status: "running", sessionId: session.id }, ["interactive prompt"]);
-});
+test.each(["output", "exit"])(
+  "poll observes %s without waiting for a timer tick",
+  async (event) => {
+    const { session, poll } = harness();
+    let settled = false;
+    const pending = poll(30_000).then((result) => {
+      settled = true;
+      return result;
+    });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(settled).toBe(false);
+    if (event === "output") {
+      appendOutput(session, "stderr", "interactive prompt\n");
+    } else {
+      markExited(session, 0, null, "completed");
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(true);
+    check(
+      await pending,
+      { status: event === "output" ? "running" : "completed", sessionId: session.id },
+      [event === "output" ? "interactive prompt" : "Process exited with code 0."],
+    );
+  },
+);
 
 test("an already-aborted poll leaves buffered output unread", async () => {
   const { session, poll } = harness();

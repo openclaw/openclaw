@@ -37,9 +37,11 @@ import { createSandboxBackend, getSandboxBackendWorkdirResolver } from "./backen
 import { ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { SANDBOX_GITHUB_CONFIG_DIR } from "./constants.js";
+import { retainSandboxContainerUsage } from "./container-usage.js";
 import { resolveSandboxDockerUser } from "./docker-user.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import { toSandboxProvisioningError } from "./provisioning-error.js";
+import { acquireSandboxRuntimeUse } from "./registry-lifecycle.js";
 import {
   resolveSandboxRuntimeStatus,
   resolveSandboxRuntimeStatusAsync,
@@ -64,6 +66,7 @@ async function ensureSandboxWorkspaceLayout(
   params: ResolveSandboxContextParams,
   selected: Awaited<ReturnType<typeof prepareSandboxWorkspaceSelection>>,
   guard?: WorkspaceStateGuard,
+  lifetime?: DisposableStack,
 ): Promise<{
   agentWorkspaceDir: string;
   scopeKey: string;
@@ -89,6 +92,14 @@ async function ensureSandboxWorkspaceLayout(
     });
 
   assertCurrent?.();
+  if (lifetime) {
+    if (localWorkspace) {
+      await localWorkspace.protectRuntimeScope(scopeKey);
+    } else {
+      lifetime.use(await acquireSandboxRuntimeUse({ scopeKey }));
+    }
+    assertCurrent?.();
+  }
   if (cfg.workspaceAccess !== "rw") {
     await ensureSandboxWorkspace(
       sandboxWorkspaceDir,
@@ -193,6 +204,7 @@ type ResolveSandboxContextParams = {
   execOverrides?: ExecPolicyOverrides;
   requireCurrentConfig?: boolean;
   assertCurrent?: () => void;
+  abortSignal?: AbortSignal;
   admittedRunContext?: AdmittedRunContext;
   sessionKey?: string;
   skillsSnapshot?: SkillSnapshot;
@@ -237,7 +249,10 @@ async function prepareSandboxWorkspaceSelection(
         sessionKey: rawSessionKey,
         workspaceDir: params.workspaceDir,
         sandbox: resolved.cfg,
-        signal: operatorAuthority?.signal,
+        signal:
+          params.abortSignal && operatorAuthority?.signal
+            ? AbortSignal.any([params.abortSignal, operatorAuthority.signal])
+            : (params.abortSignal ?? operatorAuthority?.signal),
         // Cleanup retains the workspace owner after execution authorization closes.
         assertCurrent: persistentExecution ? undefined : params.assertCurrent,
         assertHost: () => {
@@ -346,6 +361,8 @@ async function resolveSandboxContextWithAuthority(
           operatorAuthority,
           persistentExecution,
         );
+        const lifetime = new DisposableStack();
+        lifetime.use(selected.localWorkspace);
         try {
           phases.mark("attempt.setup.sandbox.github_identity");
           ownedParams.assertCurrent?.();
@@ -380,13 +397,6 @@ async function resolveSandboxContextWithAuthority(
                 };
               })()
             : undefined;
-          if (cfg.prune.idleHours !== 0 || cfg.prune.maxAgeDays !== 0) {
-            phases.mark("attempt.setup.sandbox.prune");
-            await (
-              await import("./prune.js")
-            ).maybePruneSandboxes(undefined, ownedParams.assertCurrent, guard?.assertHost);
-          }
-
           phases.mark("attempt.setup.sandbox.layout");
           const {
             agentWorkspaceDir,
@@ -396,9 +406,12 @@ async function resolveSandboxContextWithAuthority(
             skillsWorkspaceDir,
             workspaceDir,
           } = await timeWorktreePreparationPhase("workspaceLayout", () =>
-            ensureSandboxWorkspaceLayout(ownedParams, selected, guard),
+            ensureSandboxWorkspaceLayout(ownedParams, selected, guard, lifetime),
           );
           localWorkspace?.assertCurrent();
+          if (cfg.backend === "docker" || cfg.backend === "podman") {
+            lifetime.defer(retainSandboxContainerUsage(scopeKey));
+          }
 
           phases.mark("attempt.setup.sandbox.mounts");
           const docker = await resolveSandboxDockerUser({
@@ -533,7 +546,7 @@ async function resolveSandboxContextWithAuthority(
 
           phases.mark("attempt.setup.sandbox.finalize");
           const sandboxContext: SandboxContext & { backend: typeof backend } = {
-            ...(localWorkspace ? { [Symbol.dispose]: () => localWorkspace[Symbol.dispose]() } : {}),
+            [Symbol.dispose]: () => lifetime.dispose(),
             enabled: true,
             ...(runtime.sandboxRequired ? { required: true } : {}),
             ...(localWorkspace
@@ -583,9 +596,12 @@ async function resolveSandboxContextWithAuthority(
               localWorkspace?.assertCurrent();
             },
           });
+          if (cfg.prune.idleHours !== 0 || cfg.prune.maxAgeDays !== 0) {
+            (await import("./prune.js")).scheduleSandboxPrune(assertStateOwner);
+          }
           return sandboxContext;
         } catch (error) {
-          selected.localWorkspace?.[Symbol.dispose]();
+          lifetime.dispose();
           throw error;
         }
       },
@@ -622,6 +638,7 @@ export async function prepareSandboxWorkspaceForSession(
     agentId?: string;
     sessionKey?: string;
     workspaceDir?: string;
+    abortSignal?: AbortSignal;
   },
   readSource?: CapturedSessionEntryReadSource,
 ): Promise<{
@@ -630,7 +647,10 @@ export async function prepareSandboxWorkspaceForSession(
   [Symbol.dispose]: () => void;
 } | null> {
   const readAuthority = captureChannelReadAuthority();
-  const assertCurrent = () => readAuthority?.();
+  const assertCurrent = () => {
+    params.abortSignal?.throwIfAborted();
+    readAuthority?.();
+  };
   const ownedParams = { ...params, assertCurrent };
   using resources = new DisposableStack();
   let assertWorkspaceCurrent = assertCurrent;

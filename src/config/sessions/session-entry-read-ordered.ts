@@ -1,6 +1,9 @@
 import path from "node:path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
+import {
+  getSqliteDatabaseAdmissionIdentityForPath,
+  readSqliteDatabaseWriteTokenForPath,
+} from "../../infra/sqlite-database-admission.js";
 import { readSqliteNativeMutationRevision } from "../../infra/sqlite-schema-facts.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
@@ -153,7 +156,10 @@ export function createAdmittedSessionEntryCohortReader(params: {
       const result = await params.execution.runExisting(
         source,
         async (worker) => {
-          const before = readSqliteDatabaseWriteTokenForPath(database.path);
+          const before =
+            !database.readIdentity || getSqliteDatabaseAdmissionIdentityForPath(database.path)
+              ? readSqliteDatabaseWriteTokenForPath(database.path)
+              : undefined;
           const cached = readRetainedSessionEntryFacts(database, captured, params.generation);
           const read =
             cached ?? (await worker.execute({ type: "session.entry.read", input: captured }));
@@ -322,7 +328,10 @@ export async function withOrderedSessionEntriesInWorker<T>(
           for (const { input: selectedInput, owner, database, continuation } of selected) {
             assertCurrent();
             const request = captureSessionEntryWorkerRequest(selectedInput);
-            const before = readSqliteDatabaseWriteTokenForPath(database.path);
+            const before =
+              !database.readIdentity || getSqliteDatabaseAdmissionIdentityForPath(database.path)
+                ? readSqliteDatabaseWriteTokenForPath(database.path)
+                : undefined;
             const cached = readRetainedSessionEntryFacts(database, request);
             const result =
               cached ??

@@ -8,15 +8,20 @@
  * Run already-built baseline/candidate owners in counterbalanced order:
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/sandbox-start-measure.ts \
  *   --owner <dist/docker-*.mjs exporting ensureSandboxContainer> --iterations 2000
+ * Built owners are preferred; source owners also work through the tsx loader:
+ *   --owner src/agents/sandbox/backend.ts --backend --engine podman --iterations 2000
+ * Record the source revision/diff for source runs; the owner hash covers its entry.
  * Add --allocations for a separate collected-object sampling pass. Setup, warmup
  * and forced GC are outside measurement. Each invocation owns and removes its
- * fixture under .local; never points at a running Gateway or real Docker.
+ * fixture under .local; never points at a running Gateway or real container engine.
  * Timing/GC values from the sampled pass are diagnostic only. Both revisions
  * use the same current-source sandbox config factory, whose hash is reported.
  * --cold-create makes the synthetic engine report each container absent, measuring
  * image admission/create/start work without real daemon latency or image pulls.
  * --backend selects an owner exporting createSandboxBackend instead, including
  * backend dispatch, daemon identity, filesystem-bridge setup and registry publication.
+ * --engine docker|podman selects the synthetic engine (default: docker); Podman
+ * models a local rootless engine, including its native target-resolution probes.
  */
 import assert from "node:assert/strict";
 import { hash } from "node:crypto";
@@ -37,9 +42,12 @@ const { values } = parseArgs({
     allocations: { type: "boolean", default: false },
     "cold-create": { type: "boolean", default: false },
     backend: { type: "boolean", default: false },
+    engine: { type: "string", default: "docker" },
   },
 });
-assert(values.owner, "--owner must select an already-built Docker owner");
+assert(values.owner, "--owner must select a built or source sandbox owner");
+const engine = values.engine;
+assert(engine === "docker" || engine === "podman", "--engine must be docker or podman");
 assert(global.gc, "Run with --expose-gc");
 const iterations = parseStrictIntegerOption({
   raw: values.iterations,
@@ -64,15 +72,33 @@ Object.assign(process.env, {
   SANDBOX_MEASURE_CONTAINER: path.join(root, "container"),
   SANDBOX_MEASURE_ID: containerId,
   SANDBOX_MEASURE_COLD: values["cold-create"] ? "1" : "0",
+  SANDBOX_MEASURE_ENGINE: engine,
 });
+for (const name of [
+  "DOCKER_CONTEXT",
+  "DOCKER_HOST",
+  "DOCKER_TLS",
+  "DOCKER_TLS_VERIFY",
+  "DOCKER_CERT_PATH",
+  "CONTAINER_HOST",
+  "CONTAINER_CONNECTION",
+  "CONTAINER_SSHKEY",
+]) {
+  delete process.env[name];
+}
 await fs.writeFile(
-  path.join(bin, "docker"),
+  path.join(bin, engine),
   `#!/bin/sh
 if [ "$1" = --host ]; then shift 2; fi
 printf '%s\n' "$1" >> "$SANDBOX_MEASURE_CALLS"
 case "$1" in
   context) printf '{"Host":"unix:///synthetic-sandbox.sock"}\n' ;;
-  info) printf 'synthetic-daemon\n' ;;
+  info)
+    if [ "$SANDBOX_MEASURE_ENGINE" = podman ]; then
+      printf 'true\tfalse\t\t5.0.0\n'
+    else
+      printf 'synthetic-daemon\n'
+    fi ;;
   inspect)
     if [ "$3" = '{"Mounts":{{json .Mounts}},"Tmpfs":{{json .HostConfig.Tmpfs}}}' ]; then
       printf '{"Mounts":[],"Tmpfs":{}}\n'
@@ -152,7 +178,11 @@ try {
     readOnlyResourceMounts.push({ hostPath, containerPath: `/resources/skill-${index}` });
   }
   const cfg = resolveSandboxConfigForAgent({
-    agents: { defaults: { sandbox: { mode: "all", scope: "shared", workspaceAccess: "rw" } } },
+    agents: {
+      defaults: {
+        sandbox: { mode: "all", backend: engine, scope: "shared", workspaceAccess: "rw" },
+      },
+    },
   });
   const params = {
     scopeKey: "sandbox-start-measure",
@@ -166,12 +196,18 @@ try {
         const { createSandboxBackend } =
           owner as typeof import("../../src/agents/sandbox/backend.js");
         const result = await createSandboxBackend({ ...params, sessionKey: params.scopeKey });
-        assert.equal(result.runtimeId, `${cfg.docker.containerPrefix}shared`);
+        assert.equal(
+          result.runtimeId,
+          `${cfg.docker.containerPrefix}${engine === "podman" ? "podman-" : ""}shared`,
+        );
       }
     : async () => {
-        const { ensureSandboxContainer, DOCKER_SANDBOX_ENGINE } =
+        const { ensureSandboxContainer, DOCKER_SANDBOX_ENGINE, PODMAN_SANDBOX_ENGINE } =
           owner as typeof import("../../src/agents/sandbox/docker.js");
-        const result = await ensureSandboxContainer({ ...params, engine: DOCKER_SANDBOX_ENGINE });
+        const result = await ensureSandboxContainer({
+          ...params,
+          engine: engine === "podman" ? PODMAN_SANDBOX_ENGINE : DOCKER_SANDBOX_ENGINE,
+        });
         assert.equal(result.containerId, containerId);
         assert.equal(result.currentConfig, true);
       };
@@ -251,6 +287,7 @@ try {
       allocations: values.allocations,
       coldCreate: values["cold-create"],
       backend: values.backend,
+      engine,
       callsByOperation,
       timingAndGcDiagnosticOnly: values.allocations,
       postWarmBarrierMs: 100,

@@ -340,8 +340,10 @@ above.
 
 When the current turn uses the plugin being reloaded, use `reloadAndResume`.
 It checks administrator authority before yielding, finishes turn cleanup, then
-reloads and resumes the same conversation with the result. Permission revocation
-still stops the reload; do not repeat a completed mutation.
+reloads and resumes the same conversation with the result. The resumed turn keeps
+the requesting turn's owner access for as long as that requester's authority stays
+current; a non-owner or system turn never gains owner tools this way. Permission
+revocation still stops the reload; do not repeat a completed mutation.
 
 In the embedded agent runtime, an applied change refreshes tools before the next
 model request after running code programs have settled. A parked program may need
@@ -437,7 +439,7 @@ managed install directory is removed once unless you pass `--keep-files`. With a
 running Gateway, ordinary uninstall waits for the package's runtime owners to
 stop before removing files and returns after the new inventory is applied.
 
-Claw Add installs plugins as shared dependencies. Deleting an agent created by
+Template Add installs plugins as shared dependencies. Deleting an agent created by
 Add does not uninstall its plugins. Before uninstalling a plugin, check which
 agents use it; uninstall may break those agents.
 

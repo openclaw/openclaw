@@ -1,0 +1,2 @@
+59
+# Two regressions: real WebSocket rejection/retry and pre-auth frame admission.
