@@ -854,22 +854,29 @@ it.each([
     type: "image",
     url: expect.stringContaining("/api/chat/media/outgoing/"),
   });
-  for (const [view, messages] of [
-    ["chat.history", await historyMessages()],
-    ["live session.message", liveMessages()],
-  ] as const) {
-    const withImage = messages.filter((message) =>
-      JSON.stringify(asOptionalRecord(message)?.content).includes("/api/chat/media/outgoing/"),
-    );
-    expect(withImage, view).toHaveLength(1);
-    expect(asOptionalRecord(withImage.at(-1))?.content, view).toEqual(
-      expect.arrayContaining([managedImage]),
-    );
-    expect(JSON.stringify(messages), view).not.toContain(imagePath);
-    if (caption) {
-      expect(matchingTexts(messages, caption), view).toEqual([caption]);
-    }
+  const history = await historyMessages();
+  const withImage = history.filter((message) =>
+    JSON.stringify(asOptionalRecord(message)?.content).includes("/api/chat/media/outgoing/"),
+  );
+  expect(withImage).toHaveLength(1);
+  expect(asOptionalRecord(withImage[0])?.content).toEqual(expect.arrayContaining([managedImage]));
+  expect(JSON.stringify(history)).not.toContain(imagePath);
+  if (caption) {
+    expect(matchingTexts(history, caption)).toEqual([caption]);
   }
+  // Live clients see the consult final as it streams. Staging its attachment rewrites
+  // that row afterwards, like Gateway agent finals: either the live message already
+  // carries the image, or a later sessions.changed tells the client to refresh history.
+  const events = broadcast.mock.calls.map(([event, payload]) => ({
+    event,
+    content: JSON.stringify(asOptionalRecord(asOptionalRecord(payload)?.message)?.content ?? null),
+  }));
+  const finalIndex = events.findLastIndex(({ event }) => event === "session.message");
+  expect(finalIndex).toBeGreaterThanOrEqual(0);
+  expect(
+    events[finalIndex]?.content.includes("/api/chat/media/outgoing/") ||
+      events.slice(finalIndex + 1).some(({ event }) => event === "sessions.changed"),
+  ).toBe(true);
 });
 
 it.each([
