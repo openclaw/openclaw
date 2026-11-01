@@ -25,6 +25,67 @@ type StreamingCloseResult = Awaited<ReturnType<FeishuStreamingSession["closeWith
 describe("createFeishuReplyDispatcher block table receipts", () => {
   installTableDispatcherHarness();
 
+  it.each([
+    { mode: "off", blocks: 1, settle: "idle", tail: "Roster complete." },
+    { mode: "off", blocks: 2, settle: "idle", tail: "Roster complete." },
+    { mode: "off", blocks: 2, settle: "final", tail: "Roster complete." },
+    { mode: "off", blocks: "2 equal", settle: "final", tail: "Roster complete." },
+    { mode: "off", blocks: 2, settle: "idle", tail: "" },
+    { mode: "off", blocks: 2, settle: "final", tail: "  \n" },
+    { mode: "block", blocks: 2, settle: "final", tail: "Roster complete." },
+  ] as const)(
+    "settles only the remainder of $blocks accepted $mode blocks via $settle with tail=$tail",
+    async ({ mode, blocks, settle, tail }) => {
+      createBlockTableHarness(tableCfg(mode));
+      let nextPostId = 0;
+      sendMessageFeishuMock.mockImplementation(async () => ({
+        messageId: `om-post-${++nextPostId}`,
+      }));
+      const mentions = [{ openId: "ou_reader", name: "Reader", key: "@reader" }];
+      const { result, options } = createDispatcherHarness({
+        accountId: "main",
+        cfg: tableCfg(mode),
+        mentionTargets: mentions,
+        allowReasoningPreview: true,
+      });
+      const first = mode === "off" ? tableMarkdown : tableMarkdown.replaceAll(/^/gm, "> ");
+      const second = blocks === "2 equal" ? first : first.replace("Ada", "Grace");
+      const accepted = blocks === 1 ? [first] : [first, second];
+      const answer = [...accepted, tail].join("\n\n");
+      result.replyOptions.onPartialReply?.({ text: first });
+      for (const text of accepted) {
+        await options.deliver({ text }, { kind: "block" });
+      }
+      result.replyOptions.onReasoningStream?.({ text: "Check the team roster." });
+      result.replyOptions.onPartialReply?.({ text: answer });
+      if (settle === "idle") {
+        await options.onIdle?.();
+      }
+      const delivered = await options.deliver({ text: answer }, { kind: "final" });
+      await options.onIdle?.();
+      expect(sendMessageFeishuMock.mock.calls.map(([call]) => call.text)).toEqual([
+        ...(mode === "off"
+          ? accepted
+          : [
+              "> ```\n> | Name | Role |\n> | ---- | ---- |\n> | Ada  | Lead |\n> ```",
+              "> ```\n> | Name  | Role |\n> | ----- | ---- |\n> | Grace | Lead |\n> ```",
+            ]),
+        ...(tail.trim() ? [tail] : []),
+        ...(settle === "idle" ? ["> 💭 **Thinking**  \n> Check the team roster."] : []),
+      ]);
+      expect(delivered?.messageIds).toEqual(
+        Array.from(
+          { length: accepted.length + (tail.trim() ? 1 : 0) + (settle === "idle" ? 1 : 0) },
+          (_, index) => `om-post-${index + 1}`,
+        ),
+      );
+      if (tail.trim()) {
+        expect(sendMessageFeishuMock.mock.calls[accepted.length]?.[0]?.mentions).toEqual(mentions);
+      }
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["answer", "reasoning"] as const)(
     "shows off-mode %s tables literally without changing the eventual post",
     async (stream) => {
@@ -230,15 +291,17 @@ describe("createFeishuReplyDispatcher block table receipts", () => {
   });
 
   it.each([
-    { waiter: "final", pending: false, receipt: true },
-    { waiter: "idle", pending: false, receipt: true },
-    { waiter: "final", pending: true, receipt: true },
-    { waiter: "idle", pending: true, receipt: true },
-    { waiter: "final", pending: true, receipt: false },
-    { waiter: "idle", pending: true, receipt: false },
+    { waiter: "final", pending: false, receipt: true, growing: false },
+    { waiter: "idle", pending: false, receipt: true, growing: false },
+    { waiter: "final", pending: true, receipt: true, growing: false },
+    { waiter: "idle", pending: true, receipt: true, growing: false },
+    { waiter: "final", pending: true, receipt: false, growing: false },
+    { waiter: "idle", pending: true, receipt: false, growing: false },
+    { waiter: "idle", pending: false, receipt: true, growing: true },
+    { waiter: "final", pending: true, receipt: true, growing: true },
   ])(
-    "retains accepted off block chunks for $waiter with pending=$pending and receipt=$receipt",
-    async ({ waiter, pending, receipt }) => {
+    "retains accepted off block chunks for $waiter with pending=$pending, receipt=$receipt and growing=$growing",
+    async ({ waiter, pending, receipt, growing }) => {
       await useRealMarkdownChunker(200);
       const { result, options } = createBlockTableHarness();
       const text = `${tableMarkdown}\n${"| Grace | Engineer |\n".repeat(30)}`.trim();
@@ -262,13 +325,15 @@ describe("createFeishuReplyDispatcher block table receipts", () => {
         rejectChunk(new Error("later chunk rejected"));
         await block;
       }
+      const finalText = growing ? `${text}\n\nRoster complete.` : text;
+      result.replyOptions.onPartialReply?.({ text: finalText });
       const idle =
         waiter === "idle"
           ? Promise.resolve(options.onIdle?.()).catch((error: unknown) => error)
           : undefined;
       const final =
         waiter === "final"
-          ? options.deliver({ text }, { kind: "final" }).catch((error: unknown) => error)
+          ? options.deliver({ text: finalText }, { kind: "final" }).catch((error: unknown) => error)
           : undefined;
       await requireStreamingInstance(0).discardStarted.promise;
       expect(requireStreamingInstance(0).discard).toHaveBeenCalledTimes(1);
@@ -294,7 +359,9 @@ describe("createFeishuReplyDispatcher block table receipts", () => {
       }
       const finalError: unknown = final
         ? await final
-        : await options.deliver({ text }, { kind: "final" }).catch((error: unknown) => error);
+        : await options
+            .deliver({ text: finalText }, { kind: "final" })
+            .catch((error: unknown) => error);
       expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
       expect(isChannelPartialDeliveryError(finalError)).toBe(true);
       if (!isChannelPartialDeliveryError(finalError)) {

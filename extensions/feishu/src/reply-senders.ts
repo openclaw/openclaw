@@ -49,7 +49,7 @@ type FeishuReplySenderContext = {
   requiredMentionTargets?: MentionTarget[];
   markVisibleReplySent: () => void;
   deliveredFinalTexts: Set<string>;
-  blockPostDeliveries: Map<string, Promise<FeishuReplyDeliveryResult>>;
+  blockPostDeliveries: [string, Promise<FeishuReplyDeliveryResult>][];
   rememberStreamingSettlement: (content: string, result: FeishuReplyDeliveryResult) => void;
   tableNeedsPostPath: (value: string) => boolean;
   answerTableNeedsPostPath: (value: string) => boolean;
@@ -231,12 +231,11 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
     },
   ) => {
     const blockAnswerText = options?.blockAnswerText ?? text;
-    // Block receipts are keyed by the rendered answer, never the reasoning preview
-    // added by close. Keep that key separate from an unmatched close's post body.
-    const matchingBlock =
+    // Receipts use rendered block text, separate from the reasoning added by close.
+    const matchingBlocks =
       infoKind === "final" &&
       (tableNeedsPostPath(blockAnswerText) || answerTableNeedsPostPath(blockAnswerText))
-        ? blockPostDeliveries.get(blockAnswerText)
+        ? blockPostDeliveries
         : undefined;
     const send = () =>
       sendChunkedTextReply({
@@ -246,60 +245,67 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
         infoKind,
         firstChunkMentions,
       });
-    if (matchingBlock) {
-      return matchingBlock.then(
-        async (acceptedBlock) => {
-          const supplementalReasoningText = options?.supplementalReasoningText;
-          if (!supplementalReasoningText?.trim()) {
-            return acceptedBlock;
+    if (matchingBlocks?.length) {
+      return (async () => {
+        const accepted: FeishuReplyDeliveryResult[] = [];
+        let remaining = blockAnswerText;
+        try {
+          // Keep identical block occurrences in dispatch order. Only complete acceptance
+          // advances the prefix; a partial rejection still owns its chunks.
+          for (const [blockText, pending] of matchingBlocks) {
+            if (!remaining.startsWith(blockText)) {
+              continue;
+            }
+            let block: FeishuReplyDeliveryResult;
+            try {
+              block = await pending;
+            } catch (error: unknown) {
+              if (isChannelPartialDeliveryError(error)) {
+                throw error;
+              }
+              continue;
+            }
+            accepted.push(block);
+            remaining = remaining.slice(blockText.length).replace(/^\s*\n/u, "");
           }
-          // The block receipt covers only the answer. Closing removed the reasoning
-          // preview, so send its missing content without replaying the accepted answer.
-          try {
-            const reasoning = await sendChunkedTextReply({
-              text: supplementalReasoningText,
-              useCard: false,
-            });
-            return mergeFeishuReplyDeliveryResults([acceptedBlock, reasoning]);
-          } catch (error: unknown) {
-            const partial = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
-            throw createFeishuPartialReplyDeliveryError(
-              partial && error instanceof Error ? (error.cause ?? error) : error,
-              mergeFeishuReplyDeliveryResults([acceptedBlock, ...(partial ? [partial] : [])]),
+          if (accepted.length === 0) {
+            return await send();
+          }
+          if (remaining.trim()) {
+            accepted.push(
+              await sendChunkedTextReply({
+                text: remaining,
+                useCard: false,
+                firstChunkMentions,
+              }),
             );
           }
-        },
-        (error: unknown) => {
-          // A partial failure still owns accepted chunks. Retrying the whole text
-          // would duplicate them, and the error does not identify a retryable suffix.
-          if (isChannelPartialDeliveryError(error)) {
-            throw error;
+          const supplementalReasoningText = options?.supplementalReasoningText;
+          if (supplementalReasoningText?.trim()) {
+            accepted.push(
+              await sendChunkedTextReply({
+                text: supplementalReasoningText,
+                useCard: false,
+                firstChunkMentions: remaining.trim() ? undefined : firstChunkMentions,
+              }),
+            );
           }
-          return send();
-        },
-      );
+          deliveredFinalTexts.add(blockAnswerText);
+          return mergeFeishuReplyDeliveryResults(accepted);
+        } catch (error: unknown) {
+          const partial = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
+          throw createFeishuPartialReplyDeliveryError(
+            partial && error instanceof Error ? (error.cause ?? error) : error,
+            mergeFeishuReplyDeliveryResults([...accepted, ...(partial ? [partial] : [])]),
+          );
+        }
+      })();
     }
     const delivery = send();
     if (infoKind === "block") {
-      // Idle may overlap the send. Its matching preview inherits this post's
-      // acceptance and receipt instead of starting a second delivery.
-      const previousDelivery = blockPostDeliveries.get(text);
-      const retainedDelivery = delivery.catch((error: unknown) => {
-        // A later failed attempt cannot erase an earlier accepted post.
-        if (previousDelivery) {
-          return previousDelivery;
-        }
-        throw error;
-      });
-      blockPostDeliveries.set(text, retainedDelivery);
-      void retainedDelivery.catch((error: unknown) => {
-        if (
-          !isChannelPartialDeliveryError(error) &&
-          blockPostDeliveries.get(text) === retainedDelivery
-        ) {
-          blockPostDeliveries.delete(text);
-        }
-      });
+      // Retain each occurrence, including identical blocks, for an overlapping close.
+      blockPostDeliveries.push([text, delivery]);
+      void delivery.catch(() => undefined);
     }
     return delivery;
   };

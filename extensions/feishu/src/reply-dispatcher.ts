@@ -282,7 +282,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   // Partial previews are replaceable; only committed final text may precede an error notice.
   let hasStreamingFinalText = false;
   const deliveredFinalTexts = new Set<string>();
-  const blockPostDeliveries = new Map<string, Promise<FeishuReplyDeliveryResult>>();
+  const blockPostDeliveries: [string, Promise<FeishuReplyDeliveryResult>][] = [];
   type StreamingDisposition = "closed" | "discarded";
   type StreamingCloseOutcome = {
     disposition: StreamingDisposition;
@@ -953,7 +953,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (!replyLifecycleStateInitialized) {
         replyLifecycleStateInitialized = true;
         deliveredFinalTexts.clear();
-        blockPostDeliveries.clear();
+        blockPostDeliveries.length = 0;
         lastStreamingSettlement = undefined;
         sentIndependentBlockText = false;
         idleRequestedForReply = false;
