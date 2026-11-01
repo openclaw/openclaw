@@ -1,1 +1,1 @@
-7 # RPC regression for pending startup guidance without repair advice.
+6 # RPC regression for pending startup guidance without repair advice.
