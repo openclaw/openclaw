@@ -3,16 +3,15 @@ import { assertCronJobsStoreUnchanged, CronJobsStoreChangedError } from "../../.
 import { resolveCronStoreKeyInDatabase } from "../../../cron/store/paths.js";
 import type { EngineConnection } from "../../../infra/sql-connection.js";
 import { captureOpenClawStateReadContext } from "../../../state/openclaw-state-worker-context.js";
-import type { LegacyCronRepairState } from "./legacy-repair.js";
 import { inspectCronOwnerRowsForDoctor } from "./store-inventory.js";
 
 /** Backup and commit must validate the same inspected rows under the captured source owner. */
-export function captureLegacyCronRepairAdmission(
-  state: Pick<
-    LegacyCronRepairState,
-    "storePath" | "ownerRows" | "jobsFingerprint" | "legacyImport"
-  >,
-) {
+export function captureLegacyCronRepairAdmission(state: {
+  storePath: string;
+  ownerRows: ReturnType<typeof inspectCronOwnerRowsForDoctor>;
+  jobsFingerprint: string | undefined;
+  legacyImport?: { assertCurrent: () => void };
+}) {
   const source = captureOpenClawStateReadContext();
   const assertCurrent = () => {
     source.admission.assertCurrent();
