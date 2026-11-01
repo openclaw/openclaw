@@ -56,6 +56,10 @@ describe("Doctor legacy audit skips", () => {
         preservedPath = audit.config.source;
       } else if (shape.startsWith("missing companion")) {
         await audit.writeJsonLines(audit.config.source, [record]);
+        if (shape.endsWith("moved file")) {
+          // Whole-second timestamps survive a utimes round trip exactly.
+          await fs.utimes(audit.config.source, 1_700_000_000, 1_700_000_000);
+        }
         expect((await audit.migrate()).warnings).toEqual([]);
         if (shape.endsWith("imported")) {
           await audit.appendJsonLines(audit.config.raw, [record]);
@@ -63,12 +67,16 @@ describe("Doctor legacy audit skips", () => {
           expect((await audit.migrate()).warnings.join("\n")).toContain("interrupted import");
           failure.mockRestore();
         } else if (shape.endsWith("moved file")) {
-          // Same bytes and mtime under a new file identity, as after a volume remount or copy.
-          const bytes = await fs.readFile(audit.config.raw);
-          const { atime, mtime } = await fs.stat(audit.config.raw);
-          await fs.rm(audit.config.raw);
-          await fs.writeFile(audit.config.raw, bytes);
-          await fs.utimes(audit.config.raw, atime, mtime);
+          // Same bytes, size and mtime under a new file identity, as after a volume remount or
+          // copy. The copy is written beside the original so it cannot reuse its inode.
+          const before = await fs.stat(audit.config.raw);
+          const copy = `${audit.config.raw}.copy`;
+          await fs.copyFile(audit.config.raw, copy);
+          await fs.utimes(copy, before.atimeMs / 1000, before.mtimeMs / 1000);
+          await fs.rename(copy, audit.config.raw);
+          const after = await fs.stat(audit.config.raw);
+          expect(after.ino).not.toBe(before.ino);
+          expect([after.size, after.mtimeMs]).toEqual([before.size, before.mtimeMs]);
         } else {
           // Revisit unchanged content after a backup restore changes file metadata.
           await fs.utimes(audit.config.raw, 1, 1);
@@ -257,6 +265,45 @@ describe("Doctor legacy audit skips", () => {
       );
       await expect(fs.readFile(audit.system.raw, "utf8")).resolves.toBe(changed);
       await fs.access(audit.system.restore);
+    });
+  });
+
+  it("refuses without importing when the companion is missing and raw records remain unimported", async () => {
+    await withOpenClawTestState({ label: "audit-companion-refusal" }, async (state) => {
+      const cfg = { plugins: { enabled: false } };
+      await state.writeConfig(cfg);
+      const audit = new AuditMigrationFixture(state.stateDir);
+      await audit.writeJsonLines(audit.config.source, [configAuditRecord("***")]);
+      expect((await audit.migrate()).warnings).toEqual([]);
+      await audit.appendJsonLines(audit.config.raw, [
+        configAuditRecord("***", { ts: "2026-07-01T00:00:09.000Z" }),
+      ]);
+      await fs.rm(audit.config.sanitized);
+      const rawBytes = await fs.readFile(audit.config.raw);
+      const checkpoints = openLegacyAuditRawCheckpointStore(state.stateDir).entries();
+      const imported = audit.configRecords();
+      expect(imported).toHaveLength(1);
+
+      const result = await autoMigrateLegacyState({
+        cfg,
+        doctorOnlyStateMigrations: true,
+        env: state.env,
+        homedir: () => state.home,
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      });
+
+      expect(result.stepReceipts.find((receipt) => receipt.id === "audit-logs")).toMatchObject({
+        outcome: "refused",
+        warnings: [expect.stringContaining("the raw archive contains unimported records")],
+      });
+      expect(result.warnings.join("\n")).toContain("from a verified backup");
+      expect(() => throwIfDoctorStateMigrationRefused(result.stepReceipts)).toThrow(
+        "Doctor stopped",
+      );
+      expect(audit.configRecords()).toEqual(imported);
+      await expect(fs.readFile(audit.config.raw)).resolves.toEqual(rawBytes);
+      expect(openLegacyAuditRawCheckpointStore(state.stateDir).entries()).toEqual(checkpoints);
+      await expect(fs.access(audit.config.sanitized)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 });
