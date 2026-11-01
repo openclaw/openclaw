@@ -69,7 +69,7 @@ function dashboardAuthor(row: DashboardRow, fallbackAgentId: string) {
 }
 
 function visibleDashboardRows(data: DashboardsRouteData, filters: DashboardGalleryFilters) {
-  const query = filters.query.trim().toLocaleLowerCase();
+  const query = filters.query.trim().toLocaleLowerCase().normalize("NFC");
   return (data.result?.sessions ?? [])
     .filter((row) => {
       const author = dashboardAuthor(row, data.fallbackAgentId);
@@ -83,7 +83,7 @@ function visibleDashboardRows(data: DashboardsRouteData, filters: DashboardGalle
           author.label,
           row.lastMessagePreview,
           row.key,
-        ].some((value) => value?.toLocaleLowerCase().includes(query))
+        ].some((value) => value?.toLocaleLowerCase().normalize("NFC").includes(query))
       );
     })
     .toSorted((left, right) =>

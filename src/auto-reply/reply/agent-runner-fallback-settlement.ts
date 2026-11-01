@@ -95,16 +95,16 @@ export async function settleAgentFallbackCycle(params: {
       },
     });
   };
-  const isContextOverflow = embeddedError && isContextOverflowError(embeddedError.message);
-  if (isContextOverflow || embeddedError?.kind === "role_ordering") {
+  const isCompactionFailure = embeddedError && isContextOverflowError(embeddedError.message);
+  if (isCompactionFailure || embeddedError?.kind === "role_ordering") {
     emitSettledLifecycleError(new Error(terminalErrorMessage ?? "Agent run failed"));
-    if (isContextOverflow) {
+    if (isCompactionFailure) {
       defaultRuntime.error(
-        `Context window was exceeded mid-turn (${embeddedError.message}). Preserving existing session mapping for ${turn.sessionKey ?? turn.followupRun.run.sessionId}.`,
+        `Auto-compaction failed (${embeddedError.message}). Preserving existing session mapping for ${turn.sessionKey ?? turn.followupRun.run.sessionId}.`,
       );
     }
     turn.replyOperation?.fail("run_failed", embeddedError);
-    const text = isContextOverflow
+    const text = isCompactionFailure
       ? buildContextOverflowRecoveryText()
       : cycle.shouldSurfaceToControlUi
         ? renderControlUiAgentFailureCopy()

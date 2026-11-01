@@ -51,9 +51,9 @@ function limitEntryReads(root: JsoncValue | null, budget: number) {
 
 describe("empty string keys", () => {
   it.each([
-    ["f.json", parseJsonc, '{"":"old","keep":"unchanged"}', '""'],
+    ["f.json", parseJsonc, '{"":"first","":"old","keep":"unchanged"}', '""'],
     ["f.yaml", parseYaml, '"": old\nkeep: unchanged\n', '""'],
-    ["f.jsonl/L1", parseJsonl, '{"":"old","keep":"unchanged"}\n', '""'],
+    ["f.jsonl/L1", parseJsonl, '{"":"first","":"old","keep":"unchanged"}\n', '""'],
     ["f.json", parseJsonc, '{"":{"value":"old"},"keep":"unchanged"}', '""/value'],
     ["f.yaml", parseYaml, '"":\n  value: old\nkeep: unchanged\n', '""/value'],
     ["f.jsonl/L1", parseJsonl, '{"":{"value":"old"},"keep":"unchanged"}\n', '""/value'],
@@ -139,9 +139,9 @@ describe("findOcPaths — JSONC", () => {
     expect(leafValues(out)).toEqual(["t", "u"]);
   });
 
-  it("filters object members by boolean values and preserves leaf types", () => {
+  it("filters effective object members by boolean values and preserves leaf types", () => {
     const ast = parseJsonc(
-      '{"plugins":{"github":{"enabled":true},"slack":{"enabled":false},"jira":{"enabled":true}}}',
+      '{"plugins":{"github":{"enabled":false,"enabled":true},"slack":{"enabled":true},"slack":{"enabled":false},"jira":{"enabled":true}}}',
     );
     const out = find(ast, "oc://config/plugins/[enabled=true]/enabled");
     expect(out.map(({ path }) => path.item)).toEqual(["github", "jira"]);
