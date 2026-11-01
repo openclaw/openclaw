@@ -252,7 +252,11 @@ function resolveOwnerAllowFromList(
   for (const trimmed of normalizeStringEntries(raw.map((entry) => entry ?? ""))) {
     const separatorIndex = trimmed.indexOf(":");
     const prefix = trimmed.slice(0, separatorIndex);
-    const channel = separatorIndex > 0 ? normalizeAnyChannelId(prefix) : undefined;
+    // Bundled channel metadata names the prefix when its plugin is not loaded in this process.
+    const channel =
+      separatorIndex > 0
+        ? (normalizeAnyChannelId(prefix) ?? normalizeChatChannelId(prefix))
+        : undefined;
     if (!channel) {
       filtered.push(trimmed);
       continue;

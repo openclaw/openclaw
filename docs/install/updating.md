@@ -1931,6 +1931,10 @@ another administrator does not transfer an update already in progress; a current
 owner must start a new update. Older updater handoffs without a captured profile
 source retain their configured-owner checks and cannot acquire linked-profile
 authority during recovery.
+When configured channel plugins are waiting for Doctor to migrate their state,
+update authorization still matches configured owners using bundled channel metadata.
+Other plugin-load failures remain errors, and removing an owner still revokes access.
+The runtime performing Doctor authorization must contain this fix.
 External-chat updates through `/update` or the tool require `commands.restart`
 (enabled by default), including managed installations. The slash command also
 follows command-access restrictions; tool calls follow tool policy. Chat updates use the hosting installation's
