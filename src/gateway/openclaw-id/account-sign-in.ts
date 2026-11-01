@@ -3,7 +3,7 @@
 // authorization URL in a popup and hands the returned code back; the Gateway
 // holds the verifier and redeems the code, because the issuer serves no CORS.
 // The ID token goes back to the browser, which keeps the account; the Gateway
-// stores nothing beyond the short-lived pending sign-ins.
+// keeps only display claims in its claw record through the trusted completion callback.
 import { createHash, randomBytes } from "node:crypto";
 
 /** The signed-in account the Control UI shows. */
@@ -269,6 +269,8 @@ export function createOpenClawIdSignIn(
     async complete(params: {
       state: unknown;
       code: unknown;
+      /** Gateway-owned sink, called only after all issuer-token checks pass. */
+      onVerifiedAccount?: (account: OpenClawIdAccount) => Promise<void>;
     }): Promise<{ account: OpenClawIdAccount; idToken: string } | OpenClawIdSignInRefusal> {
       const entry = typeof params.state === "string" ? pending.get(params.state) : undefined;
       if (typeof params.state === "string") {
@@ -326,15 +328,14 @@ export function createOpenClawIdSignIn(
       if (!acceptedClaims(claims, expected)) {
         return refusal("id_token_invalid", "the issuer returned an unusable ID token");
       }
-      return {
-        idToken,
-        account: {
-          sub: claims.sub,
-          email: optionalText(claims.email),
-          name: optionalText(claims.name),
-          exp: claims.exp,
-        },
+      const account: OpenClawIdAccount = {
+        sub: claims.sub,
+        email: optionalText(claims.email),
+        name: optionalText(claims.name),
+        exp: claims.exp,
       };
+      await params.onVerifiedAccount?.(account);
+      return { idToken, account };
     },
 
     /** Asks Discovery for a one-time link code for the signed-in account. */

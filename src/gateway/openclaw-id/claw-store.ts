@@ -11,12 +11,14 @@ import type { DeviceTokenBinding } from "./device-token-binding.js";
 /** Everything the Gateway keeps about its claw. */
 export type StoredClaw = {
   v: 1;
-  /** 128 random bits, hex; created on the first "Make reachable". */
+  /** 128 random bits, hex; created on first verified sign-in or "Make reachable". */
   claw_id: string;
   /** `<claw_id>.<loaderDomain>`, fixed at link time (the binding is signed for it). */
   hostname: string | null;
   /** Membership authority; null until the claw is linked. */
   authority: AuthorityState | null;
+  /** Server-redeemed OIDC display claims; usable only for the linked owner subject. */
+  owner_profile?: { sub: string; email: string | null; name: string | null };
   /** The current ServerBinding, signed by R or an owner device. */
   binding: SignedStatement<"ServerBinding"> | null;
   /**

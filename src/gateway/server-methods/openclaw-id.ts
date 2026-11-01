@@ -7,7 +7,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { Ed25519PublicKey } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { isEd25519PublicKey } from "../../../packages/openclaw-id-protocol/src/index.js";
-import { createOpenClawIdSignIn } from "../openclaw-id/account-sign-in.js";
+import { createOpenClawIdSignIn, type OpenClawIdSignIn } from "../openclaw-id/account-sign-in.js";
 import {
   resolveOpenClawIdClientChannel,
   resolveOpenClawIdClientPeerKey,
@@ -61,11 +61,11 @@ async function linkAfterWrite(service: OpenClawIdService, opts: GatewayRequestHa
 const accountSignIn = createOpenClawIdSignIn();
 
 // Responds with a sign-in step's result, or maps its refusal to an RPC error.
-function respondSignIn<T extends object>(
+function respondSignIn(
   opts: GatewayRequestHandlerOptions,
-  result: T | { ok: false; code: string; detail: string },
+  result: Awaited<ReturnType<OpenClawIdSignIn["begin" | "complete" | "enrollmentCode"]>>,
 ) {
-  if ("ok" in result && result.ok === false) {
+  if ("ok" in result && !result.ok) {
     refuse(opts, result);
     return;
   }
@@ -109,7 +109,18 @@ async function handleAccount(opts: GatewayRequestHandlerOptions, action: string)
       return;
     }
     if (action === "account_complete") {
-      respondSignIn(opts, await accountSignIn.complete({ state: params.state, code: params.code }));
+      const service = requireService(opts);
+      if (!service) {
+        return;
+      }
+      respondSignIn(
+        opts,
+        await accountSignIn.complete({
+          state: params.state,
+          code: params.code,
+          onVerifiedAccount: (account) => service.recordVerifiedAccount(account),
+        }),
+      );
       return;
     }
     if (action === "account_link_code") {
@@ -143,17 +154,26 @@ export const openclawIdHandlers: GatewayRequestHandlers = {
       return;
     }
     const config = opts.context.getRuntimeConfig().gateway?.openclawId;
+    const ownerCheck = await service.prepareOwnerClientCheck(
+      resolveOpenClawIdClientChannel(opts.client),
+      resolveOpenClawIdClientPeerKey(opts.client),
+    );
+    const ownerDeviceCount = ownerCheck() ? await service.ownerDeviceCount() : undefined;
+    const connection = await service.connectionIdentity(
+      resolveOpenClawIdClientChannel(opts.client),
+      resolveOpenClawIdClientPeerKey(opts.client),
+    );
+    const link = await service.linkSummary();
+    const owner = ownerCheck();
     opts.respond(true, {
       status: service.status(),
-      link: await service.linkSummary(),
+      link,
       channel: resolveOpenClawIdClientChannel(opts.client) ?? null,
       // Whether openclawId.people will answer this client.
-      owner: await isOwnerCaller(service, opts),
+      owner,
+      ...(owner ? { ownerDeviceCount: ownerDeviceCount ?? 0 } : {}),
       // Who this connection is (the account menu): loopback, owner device or member.
-      connection: await service.connectionIdentity(
-        resolveOpenClawIdClientChannel(opts.client),
-        resolveOpenClawIdClientPeerKey(opts.client),
-      ),
+      connection,
       services: {
         issuerUrl: config?.issuerUrl ?? null,
         discoveryUrl: config?.discoveryUrl ?? null,

@@ -27,6 +27,7 @@ import {
   type OwnerKeyRegenerationPreparation,
   type SignedStatement,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
+import type { OpenClawIdAccount } from "./account-sign-in.js";
 import {
   readStoredClaw,
   writeStoredClaw,
@@ -237,6 +238,21 @@ export function createOpenClawIdAuthority(
   return {
     /** Loads the record (once); call before reading state synchronously. */
     load,
+
+    /** Persists only a server-verified sign-in; another subject cannot replace a linked owner. */
+    recordVerifiedAccount(account: OpenClawIdAccount): Promise<void> {
+      return serialize(async () => {
+        const current = (await load()) ?? emptyRecord(bytesToHex(randomBytes(16)));
+        const owner = current.discovery.owner_account_id;
+        if (owner && owner !== account.sub) {
+          return;
+        }
+        await commit({
+          ...current,
+          owner_profile: { sub: account.sub, email: account.email, name: account.name },
+        });
+      });
+    },
 
     /** The current record, if loaded. */
     current(): StoredClaw | undefined {
@@ -703,7 +719,17 @@ export function createOpenClawIdAuthority(
       return serialize(async () => {
         const current = await load();
         if (current) {
-          await commit({ ...current, discovery: { ...current.discovery, ...update } });
+          const discovery = { ...current.discovery, ...update };
+          await commit({
+            ...current,
+            discovery,
+            // A link code for another account must never adopt this sign-in's profile.
+            owner_profile:
+              discovery.owner_account_id &&
+              current.owner_profile?.sub !== discovery.owner_account_id
+                ? undefined
+                : current.owner_profile,
+          });
         }
       });
     },

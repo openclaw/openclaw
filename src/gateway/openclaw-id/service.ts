@@ -12,6 +12,7 @@ import type {
   MemberRole,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import type { GatewayOpenClawIdConfig } from "../../config/types.gateway.js";
+import type { OpenClawIdAccount } from "./account-sign-in.js";
 import type {
   AuthorityAccepted,
   AuthorityRefusal,
@@ -22,6 +23,7 @@ import type {
 } from "./authority.js";
 import { clawOriginOfRecord, setOpenClawIdClawOriginResolver } from "./claw-origin.js";
 import type { StoredClaw } from "./claw-store.js";
+import { createOpenClawIdConnectionAccess } from "./connection-identity.js";
 import { setDeviceTokenBindingOwner } from "./device-token-binding.js";
 import type { TunnelApiHandler } from "./ingress-listener.js";
 import { listInviteViews } from "./invites-view.js";
@@ -105,19 +107,6 @@ function sameSettings(a: TunnelRuntimeSettings, b: TunnelRuntimeSettings): boole
 const refusal = (code: string, detail: string): AuthorityRefusal => ({ ok: false, code, detail });
 
 /** The owner's choice for "Make reachable": a one-time link code and a claw name. */
-/** Who a connection is, as `openclawId.status` reports it to that connection. */
-export type OpenClawIdConnectionIdentity =
-  | { kind: "local" }
-  | { kind: "none" }
-  | { kind: "owner"; deviceLabel: string | null; ownerAccountId: string | null }
-  | {
-      kind: "member";
-      role: MemberRole;
-      accountId: string;
-      email: string | null;
-      displayName: string | null;
-    };
-
 export type ClawNameRequest = { enrollmentCode?: string; name?: string };
 
 /** The address Discovery assigns for a claw name, and whether it is free. */
@@ -602,7 +591,17 @@ export function createOpenClawIdService(params: {
     };
   };
 
+  const connectionAccess = createOpenClawIdConnectionAccess({
+    enabled: () => isOpenClawIdEnabled(params.getConfig()),
+    getAuthority,
+  });
+
   return {
+    ...connectionAccess,
+    /** Records display claims produced by the Gateway's verified sign-in flow, never RPC params. */
+    async recordVerifiedAccount(account: OpenClawIdAccount): Promise<void> {
+      await (await getAuthority()).recordVerifiedAccount(account);
+    },
     /** Connects removal side effects owned by the Gateway's connection and run owners (loaded on first use). */
     bindEffects(load: () => Promise<OpenClawIdEffects>): void {
       loadEffects = load;
@@ -617,73 +616,6 @@ export function createOpenClawIdService(params: {
     /** Current status; never touches the network. */
     status(): OpenClawIdStatus {
       return status;
-    },
-
-    /**
-     * Whether a Gateway client may read and manage people: the direct-loopback
-     * operator (who already holds the Gateway token and runs the root ceremonies),
-     * or a tunnel client whose authenticated device key belongs to an owner device
-     * that is active right now (current epoch, unexpired, unrevoked). Members and
-     * every other client are refused; a scope alone is never enough.
-     */
-    async isOwnerClient(
-      channel: Exclude<Channel, "mailbox"> | undefined,
-      peerKey: string | undefined,
-    ): Promise<boolean> {
-      if (!isOpenClawIdEnabled(params.getConfig())) {
-        return false;
-      }
-      if (channel === "local_operator") {
-        return true;
-      }
-      if (channel !== "tunnel" || !peerKey) {
-        return false;
-      }
-      return (await (await getAuthority()).resolvePeer(peerKey))?.kind === "owner";
-    },
-
-    /**
-     * Who this connection is, for the account menu: the direct-loopback operator,
-     * or over the tunnel the owner device (its label and the claw's OpenClaw ID
-     * owner account) or the member (their own account, role and the name and email
-     * reported when they joined). Nothing about other people.
-     */
-    async connectionIdentity(
-      channel: "local_operator" | "tunnel" | undefined,
-      peerKey: string | undefined,
-    ): Promise<OpenClawIdConnectionIdentity> {
-      if (channel === "local_operator") {
-        return { kind: "local" };
-      }
-      if (channel !== "tunnel" || !peerKey || !isOpenClawIdEnabled(params.getConfig())) {
-        return { kind: "none" };
-      }
-      const store = await getAuthority();
-      const peer = await store.resolvePeer(peerKey);
-      const record = await store.load();
-      if (peer?.kind === "owner") {
-        const device = Object.values(record?.authority?.owner_devices ?? {}).find((entry) =>
-          entry.cert.body.peer_keys.includes(peerKey as IrohEndpointKey),
-        );
-        return {
-          kind: "owner",
-          deviceLabel: device?.cert.body.label ?? null,
-          ownerAccountId: record?.discovery.owner_account_id ?? null,
-        };
-      }
-      if (peer?.kind === "member") {
-        const report = Object.values(record?.invite_reports ?? {}).find(
-          (entry) => entry.account_id === peer.accountId && entry.resolution === "approved",
-        );
-        return {
-          kind: "member",
-          role: peer.role,
-          accountId: peer.accountId,
-          email: report?.email ?? null,
-          displayName: report?.display_name ?? null,
-        };
-      }
-      return { kind: "none" };
     },
 
     /**

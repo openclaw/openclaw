@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { createOpenClawIdSignIn } from "./account-sign-in.js";
+import { createOpenClawIdAuthority } from "./authority.js";
+import { linkedClaw, memoryStore, serviceFor } from "./openclaw-id.test-support.js";
 
 const ISSUER = "https://issuer.example.test/api/auth";
 const REDIRECT = "http://127.0.0.1:18789/openclaw-id/callback";
@@ -26,7 +28,11 @@ function fakeServices(tokenClaims: (nonce: string) => Record<string, unknown>) {
       });
     }
     if (url.endsWith("/oauth2/token")) {
-      const form = new URLSearchParams(String(init?.body));
+      const body = init?.body;
+      const form =
+        body instanceof URLSearchParams
+          ? body
+          : new URLSearchParams(typeof body === "string" ? body : "");
       const verifier = form.get("code_verifier") ?? "";
       const derived = createHash("sha256").update(verifier).digest("base64url");
       if (!verifier || derived !== challenge || form.get("code") !== "the-code") {
@@ -91,6 +97,69 @@ describe("createOpenClawIdSignIn", () => {
     expect(again).toMatchObject({ ok: false, code: "state_mismatch" });
   });
 
+  it("persists only verified display claims and binds them to the linked owner across restart", async () => {
+    const store = memoryStore();
+    const authority = createOpenClawIdAuthority(store);
+    const services = fakeServices(valid);
+    const signIn = createOpenClawIdSignIn({ fetchImpl: services.fetchImpl, now });
+    const started = await begin(signIn);
+    services.authorize(started.authorizationUrl);
+    await signIn.complete({
+      state: started.state,
+      code: "the-code",
+      onVerifiedAccount: (account) => authority.recordVerifiedAccount(account),
+    });
+    expect((await store.read())?.owner_profile).toEqual({
+      sub: "acct-1",
+      email: "owner@example.test",
+      name: "Owner",
+    });
+    const unlinked = serviceFor(authority).service;
+    expect(await unlinked.connectionIdentity("local_operator", undefined)).toEqual({
+      kind: "local",
+      accountEmail: "owner@example.test",
+      accountName: "Owner",
+    });
+    await unlinked.stop();
+    // The sign-in precedes the local link; registration establishes which subject owns it.
+    const claw = await linkedClaw(store);
+    await claw.authority.recordDiscovery({ owner_account_id: "acct-1" });
+    const restarted = createOpenClawIdAuthority(store);
+    const { service } = serviceFor(restarted);
+    expect(await service.connectionIdentity("tunnel", claw.w1)).toMatchObject({
+      kind: "owner",
+      accountEmail: "owner@example.test",
+      accountName: "Owner",
+    });
+    await restarted.recordVerifiedAccount({
+      sub: "someone-else",
+      email: "other@example.test",
+      name: "Other",
+      exp: 2_000_000_000,
+    });
+    expect((await store.read())?.owner_profile?.sub).toBe("acct-1");
+    await service.stop();
+  });
+
+  it("never adopts a verified profile for a different linked account", async () => {
+    const claw = await linkedClaw();
+    await claw.authority.recordVerifiedAccount({
+      sub: "acct-1",
+      email: "owner@example.test",
+      name: "Owner",
+      exp: 2_000_000_000,
+    });
+    await claw.authority.recordDiscovery({ owner_account_id: "another-owner" });
+    const { service } = serviceFor(claw.authority);
+    expect(await service.connectionIdentity("tunnel", claw.w1)).toMatchObject({
+      ownerAccountId: "another-owner",
+      accountEmail: null,
+      accountName: null,
+    });
+    expect((await claw.store.read())?.owner_profile).toBeUndefined();
+    await service.stop();
+  });
+
   it("sends the verifier that matches the S256 challenge, and fails with another sign-in's", async () => {
     const services = fakeServices(valid);
     const signIn = createOpenClawIdSignIn({ fetchImpl: services.fetchImpl, now });
@@ -115,8 +184,14 @@ describe("createOpenClawIdSignIn", () => {
     const signIn = createOpenClawIdSignIn({ fetchImpl: services.fetchImpl, now });
     const started = await begin(signIn);
     services.authorize(started.authorizationUrl);
-    const done = await signIn.complete({ state: started.state, code: "the-code" });
+    const onVerifiedAccount = vi.fn(async () => {});
+    const done = await signIn.complete({
+      state: started.state,
+      code: "the-code",
+      onVerifiedAccount,
+    });
     expect(done).toMatchObject({ ok: false, code: "id_token_invalid" });
+    expect(onVerifiedAccount).not.toHaveBeenCalled();
   });
 
   it("refuses an ID token issued to another client", async () => {
@@ -124,8 +199,14 @@ describe("createOpenClawIdSignIn", () => {
     const signIn = createOpenClawIdSignIn({ fetchImpl: services.fetchImpl, now });
     const started = await begin(signIn);
     services.authorize(started.authorizationUrl);
-    const done = await signIn.complete({ state: started.state, code: "the-code" });
+    const onVerifiedAccount = vi.fn(async () => {});
+    const done = await signIn.complete({
+      state: started.state,
+      code: "the-code",
+      onVerifiedAccount,
+    });
     expect(done).toMatchObject({ ok: false, code: "id_token_invalid" });
+    expect(onVerifiedAccount).not.toHaveBeenCalled();
   });
 
   it("only accepts the Control UI callback path as redirect URI", async () => {

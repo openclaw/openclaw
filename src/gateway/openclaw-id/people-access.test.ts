@@ -112,6 +112,7 @@ describe("OpenClaw ID people access", () => {
       const status = await call(service, "openclawId.status", tunnel(key));
       expect(status.ok).toBe(true);
       expect(status.payload?.owner).toBe(false);
+      expect(status.payload).not.toHaveProperty("ownerDeviceCount");
       expect(Object.keys(status.payload!.link!).toSorted()).toEqual(SUMMARY_KEYS);
       // Its own account is who it is (the account menu); nobody else's appears.
       expect(status.payload?.connection).toMatchObject({ kind: "member", accountId: self });
@@ -129,6 +130,7 @@ describe("OpenClaw ID people access", () => {
     const { service } = serviceFor(claw.authority);
     const status = await call(service, "openclawId.status", tunnel(claw.w1));
     expect(status.payload?.owner).toBe(true);
+    expect(status.payload?.ownerDeviceCount).toBe(1);
     expect(Object.keys(status.payload!.link!).toSorted()).toEqual(SUMMARY_KEYS);
     const people = await call(service, "openclawId.people", tunnel(claw.w1));
     expect(people.ok).toBe(true);
@@ -149,9 +151,17 @@ describe("OpenClaw ID people access", () => {
     const { service } = serviceFor(claw.authority);
     expect((await call(service, "openclawId.status", loopback)).payload?.connection).toEqual({
       kind: "local",
+      accountEmail: null,
+      accountName: null,
     });
     expect((await call(service, "openclawId.status", tunnel(claw.w1))).payload?.connection).toEqual(
-      { kind: "owner", deviceLabel: "phone", ownerAccountId: null },
+      {
+        kind: "owner",
+        deviceLabel: "phone",
+        ownerAccountId: null,
+        accountEmail: null,
+        accountName: null,
+      },
     );
     expect((await call(service, "openclawId.status", tunnel(viewer))).payload?.connection).toEqual({
       kind: "member",
@@ -159,6 +169,7 @@ describe("OpenClaw ID people access", () => {
       accountId: "acct-viewer",
       email: null,
       displayName: null,
+      invitedBy: null,
     });
     const stranger = formatIrohEndpointKey(randomBytes(32));
     for (const client of [lan, tunnel(stranger)]) {
@@ -166,6 +177,35 @@ describe("OpenClaw ID people access", () => {
         kind: "none",
       });
     }
+  });
+
+  it("shows the linked owner's verified name/email, and only inviter display details to members", async () => {
+    const claw = await linkedClaw();
+    await claw.authority.recordDiscovery({ owner_account_id: "acct-owner" });
+    await claw.authority.recordVerifiedAccount({
+      sub: "acct-owner",
+      email: "owner@example.test",
+      name: "Owner",
+      exp: 2_000_000_000,
+    });
+    const member = await addMember(claw, "acct-member", "viewer");
+    const { service } = serviceFor(claw.authority);
+    for (const client of [loopback, tunnel(claw.w1)]) {
+      const status = await call(service, "openclawId.status", client);
+      expect(status.payload?.connection).toMatchObject({
+        accountEmail: "owner@example.test",
+        accountName: "Owner",
+      });
+      expect(status.payload?.ownerDeviceCount).toBe(1);
+    }
+    const status = await call(service, "openclawId.status", tunnel(member));
+    expect(status.payload?.connection).toMatchObject({
+      kind: "member",
+      invitedBy: { name: "Owner", email: "owner@example.test" },
+    });
+    expect(status.payload).not.toHaveProperty("ownerDeviceCount");
+    expect(status.payload?.connection).not.toHaveProperty("ownerAccountId");
+    await service.stop();
   });
 
   it("answers the direct-loopback operator and refuses a LAN client", async () => {
