@@ -265,11 +265,15 @@ it.for(["valid", "invalid-row", "missing-index", "failed", "stopped", "supersede
           publishAgent: async () => {
             if (contents !== "missing-index") {
               expect(readAgentDatabaseReadAdmissionRefusal("main", { env })).toBeUndefined();
-              expect(assertWrite).toThrow("startup inspection");
+              expect(assertWrite).toThrow(
+                /still preparing \(phase: publication-wait; background preparation elapsed: \d+s\)\.[\s\S]*Retry the request after preparation finishes/,
+              );
               const publicationContext = AsyncLocalStorage.snapshot();
               publicationWrite = () => publicationContext(assertWrite);
               await Promise.resolve().then(() =>
-                expect(publicationWrite).toThrow("startup inspection"),
+                expect(publicationWrite).toThrow(
+                  /still preparing \(phase: publication-wait; background preparation elapsed: \d+s\)\.[\s\S]*Retry the request after preparation finishes/,
+                ),
               );
             }
             phases.push("publication");
@@ -292,7 +296,9 @@ it.for(["valid", "invalid-row", "missing-index", "failed", "stopped", "supersede
           const before = await listProjectedSessions({ projection, opts: {} });
           expect(before.sessions).toMatchObject([{ key: scope.sessionKey }]);
         }
-        expect(publicationWrite).toThrow("startup inspection");
+        expect(publicationWrite).toThrow(
+          /still preparing \(phase: open; background preparation elapsed: \d+s\)\.[\s\S]*Retry the request after preparation finishes/,
+        );
         expect(isAgentDatabaseStartupReadReady(`${pathname}.other`, { env })).toBe(false);
         const writeSettled = vi.fn();
         const writing = Promise.resolve(admission.waitForAgentPreparation("main", { env })).then(
