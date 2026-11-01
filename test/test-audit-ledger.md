@@ -57,13 +57,20 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main `0c535a62a658`: remove two implied surrogate predicates from
-tool-description summary tests and their exclusive local helper. Keep both
-split-surrogate boundary cases, their inputs and their exact string assertions;
-every declaration and table row remains. Production stays unchanged.
-The original regression patch and all live summary callers were inspected.
-Untouched baseline, raw-slice preservation fault, passing candidate, removal
-scans, focused checks, fresh review and final-head proof remain pending.
+Pinned main `0c535a62a658`: removed two implied surrogate predicates from
+tool-description summary tests and their exclusive local helper (−6 test LOC).
+Both split-surrogate boundary cases, every input/table row and all exact string
+assertions remain. Production is unchanged.
+Untouched baseline and candidate each pass 116 cases across five suites/four
+Vitest shards, including every direct production consumer. A temporary raw-slice
+fault in the shared truncation owner fails both retained exact output assertions
+(two failures, 27 filtered); the owner was restored byte-for-byte.
+All four removal phases ran before and after: unused-file scans pass; production
+and full-tree export scans retain exactly the same baseline findings in two model
+policy modules and Gateway repository materialization. No suppression was added.
+The native Bun hash was already stale on the baseline; proof uses ordinary Vitest
+fallback without changing that map or claiming native Bun qualification.
+Focused types, lint, format and MDX pass. Fresh review, final-head proof and CI remain pending.
 
 ## Completed source review
 
