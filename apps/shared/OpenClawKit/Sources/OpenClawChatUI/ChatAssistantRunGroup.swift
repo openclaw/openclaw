@@ -46,14 +46,6 @@ struct ChatAssistantRunGroup: Identifiable {
     var parts: [Part]
     var includesLive = false
 
-    var answerID: UUID? {
-        self.parts.reversed().compactMap { part -> UUID? in
-            if case let .row(.message(message)) = part, message.presentationOwnsFooter,
-               message.isCompletedReply { return message.presentationID }
-            return nil
-        }.first
-    }
-
     /// ScrollViewReader resolves the lazy group's root, not an unmeasured nested row.
     static func scrollTargets(_ groups: [Self]) -> [UUID: ID] {
         groups.reduce(into: [:]) { targets, group in
