@@ -458,6 +458,35 @@ describe("sessionsTailCommand", () => {
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
+  it.each(["main", "MAIN", "Agent:Main:Main"])(
+    "tails the default agent main session from the %s key spelling",
+    async (requestedKey) => {
+      mocks.getRuntimeConfig.mockReturnValue({});
+      const mainKey = "agent:main:main";
+      const mainStorePath = path.join(
+        process.env.OPENCLAW_STATE_DIR!,
+        "agents",
+        "main",
+        "sessions",
+        "sessions.json",
+      );
+      await upsertSessionEntryCore(
+        { sessionKey: mainKey, storePath: mainStorePath },
+        { sessionId: "main-session", updatedAt: 3, status: "done" },
+      );
+      appendSqliteTrajectoryRuntimeEvents(
+        { agentId: "main", sessionId: "main-session", storePath: mainStorePath },
+        [toolResult("read", { sessionId: "main-session", sessionKey: mainKey })],
+      );
+
+      await tail({ sessionKey: requestedKey });
+
+      expectOutput(["agent:main:main", "tool.result", "read ok"], ["Session not found"]);
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
+    },
+  );
+
   it("resolves the target store from a fully qualified non-default agent session key", async () => {
     const opsSessionKey = "agent:ops:telegram:direct:owner";
     const opsSessionsDir = path.join(process.env.OPENCLAW_STATE_DIR!, "agents", "ops", "sessions");
