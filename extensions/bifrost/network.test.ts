@@ -69,14 +69,16 @@ async function configure({
   if (!auth) {
     throw new Error("Expected Bifrost setup");
   }
+  let emptyUrlError: string | undefined;
   const result = await auth.run({
     config,
     opts: apiKey ? { bifrostApiKey: apiKey } : {},
     env: {},
     runtime: createRuntimeSpies(),
     prompter: createTestWizardPrompter({
-      text: async ({ message }) => {
+      text: async ({ message, validate }) => {
         if (/base URL/i.test(message)) {
+          emptyUrlError = validate?.("");
           return baseUrl;
         }
         return /API key|virtual key/i.test(message) ? (apiKey ?? "") : MODEL_ID;
@@ -90,6 +92,7 @@ async function configure({
   return {
     result,
     config: applyProviderAuthConfigPatch(config, result.configPatch, result),
+    emptyUrlError,
   };
 }
 
@@ -119,6 +122,7 @@ it("clears old credentials before anonymous discovery and persists no-auth", asy
         "x-bf-vk": "synthetic-old-vk",
       },
       request: {
+        allowPrivateNetwork: true,
         auth: { mode: "header", headerName: "x-bf-vk", value: "synthetic-old-request-vk" },
       },
     }),
@@ -129,7 +133,8 @@ it("clears old credentials before anonymous discovery and persists no-auth", asy
   expect(result.profiles).toEqual([]);
   expect(config.models?.providers?.bifrost).toMatchObject({ auth: "none" });
   expect(config.models?.providers?.bifrost?.apiKey).toBeUndefined();
-  expect(config.models?.providers?.bifrost?.request?.auth).toBeUndefined();
+  // Same endpoint: setup replaces authentication but keeps the other request settings.
+  expect(config.models?.providers?.bifrost?.request).toEqual({ allowPrivateNetwork: true });
 });
 
 it("replaces stale no-auth with the supplied credential before discovery", async () => {
@@ -174,6 +179,30 @@ it("rejects revoked setup authority before sending a request", async () => {
   };
   await expect(configure({ assertCurrent })).rejects.toBe(revoked);
   expect(requests).toEqual([]);
+});
+
+it.each([
+  { storedUrl: "localhost:8080/openai/v1", emptyUrlError: "Enter an HTTP or HTTPS gateway URL" },
+  { storedUrl: "http://127.0.0.1:9/v1", emptyUrlError: undefined },
+])("replaces stored gateway URL $storedUrl without its request settings", async (stored) => {
+  const config = providerConfig({
+    baseUrl: stored.storedUrl,
+    request: {
+      allowPrivateNetwork: true,
+      auth: { mode: "header", headerName: "x-bf-vk", value: "synthetic-old-vk" },
+    },
+  });
+  const interactive = await configure({ config });
+  const nonInteractive = await runNonInteractive({
+    config,
+    opts: { customBaseUrl: baseUrl, customModelId: MODEL_ID, customNoAuth: true },
+  });
+  // An empty answer keeps the stored URL, so it is only accepted while that URL is valid.
+  expect(interactive.emptyUrlError).toBe(stored.emptyUrlError);
+  for (const saved of [interactive.config, nonInteractive]) {
+    expect(saved?.models?.providers?.bifrost).toMatchObject({ baseUrl, auth: "none" });
+    expect(saved?.models?.providers?.bifrost?.request).toBeUndefined();
+  }
 });
 
 it("non-interactive anonymous setup never resolves or stores a credential", async () => {

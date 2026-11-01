@@ -49,12 +49,11 @@ export async function configureBifrostInteractive(ctx: ProviderAuthContext) {
       message: "Bifrost gateway base URL",
       initialValue: configured,
       placeholder: BIFROST_BASE_URL,
-      validate: (value) => {
-        if (!value.trim()) {
-          return undefined;
-        }
-        return tryNormalizeBifrostBaseUrl(value) ? undefined : "Enter an HTTP or HTTPS gateway URL";
-      },
+      // Validate the URL setup will use: an empty answer keeps the stored URL.
+      validate: (value) =>
+        tryNormalizeBifrostBaseUrl(value || configured || BIFROST_BASE_URL)
+          ? undefined
+          : "Enter an HTTP or HTTPS gateway URL",
     })) ||
       configured ||
       BIFROST_BASE_URL,
