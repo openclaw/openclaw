@@ -10,6 +10,8 @@ export type SessionProgressCardRuntime = {
     running: number;
     queued: number;
     waiting: number;
+    /** Yielded on sessions_yield: unfinished, but not active work. */
+    paused?: number;
     failed: number;
     stopped?: number;
   };

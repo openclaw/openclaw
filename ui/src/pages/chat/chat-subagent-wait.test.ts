@@ -703,12 +703,14 @@ it("counts only hydrated direct children and keeps current failures separate fro
     },
     { ...child, key: "agent:main:stopped", hasActiveRun: false, status: "killed", endedAt: 3000 },
     { ...child, key: "agent:main:old", hasActiveRun: false, status: "failed", endedAt: 1000 },
+    { ...child, key: "agent:main:paused", hasActiveRun: false, subagentRunState: "paused" },
     { ...child, key: "agent:main:unrelated", spawnedBy: "agent:main:other" },
   ];
   const roster = { subagentSessions: rows, subagentSessionsHydrated: true };
   expect(projectProgressCardRuntime(parent, roster, 2000)).toMatchObject({
     hasActiveSubagentRun: true,
-    children: { running: 1, queued: 1, waiting: 1, failed: 1, stopped: 1 },
+    // A paused child still owes its task, however long ago it yielded.
+    children: { running: 1, queued: 1, waiting: 1, paused: 1, failed: 1, stopped: 1 },
     childError: "Backend implementation: Access denied",
   });
   expect(
@@ -722,15 +724,16 @@ it("counts only hydrated direct children and keeps current failures separate fro
 
 it("counts an interrupted child as stopped only for its current progress snapshot", () => {
   const session = { ...parent, hasActiveSubagentRun: false };
+  const stopped = { ...child, status: "interrupted" as const, hasActiveRun: false, endedAt: 3000 };
+  const paused = { ...stopped, key: "agent:main:paused", status: "done" as const };
   const roster = {
-    subagentSessions: [
-      { ...child, status: "interrupted" as const, hasActiveRun: false, endedAt: 3000 },
-    ],
+    subagentSessions: [stopped, { ...paused, subagentRunState: "paused" as const }],
     subagentSessionsHydrated: true,
   };
+  // A paused child is unfinished, not active work: the card stays paused, not working.
   expect(projectProgressCardRuntime(session, roster, 2000)).toMatchObject({
     hasActiveSubagentRun: false,
-    children: { running: 0, queued: 0, waiting: 0, failed: 0, stopped: 1 },
+    children: { running: 0, queued: 0, waiting: 0, paused: 1, failed: 0, stopped: 1 },
   });
   expect(projectProgressCardRuntime(session, roster, 3001).children?.stopped).toBe(0);
 });

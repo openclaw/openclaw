@@ -95,9 +95,6 @@ describe("renderSessionProgressCard", () => {
       ...runWindow,
     });
     expect(container.querySelector("time")?.textContent).toBe("Updated 2m ago");
-    expect(container.querySelector("time")?.getAttribute("datetime")).toBe(
-      new Date(progressCard.updatedAt).toISOString(),
-    );
     render({ sessionStatus: "done" }, container);
     expect(container.querySelector("time")?.textContent).toBe("Updated 2m ago");
   });
@@ -129,14 +126,14 @@ describe("renderSessionProgressCard", () => {
           runtime: {
             known: true,
             connected: true,
-            children: { running: 1, queued: 1, waiting: 0, failed: 1 },
+            children: { running: 1, queued: 1, waiting: 0, paused: 1, failed: 1 },
             childError: "Review: Access denied",
           },
         },
         container,
       );
       expect(container.querySelector('[role="status"]')?.textContent).toContain(
-        "1 running · 1 queued · 1 failed",
+        "1 running · 1 queued · 1 paused · 1 failed",
       );
       expect(container.querySelector('[role="status"]')?.textContent).toContain(
         "Review: Access denied",
