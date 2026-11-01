@@ -24,7 +24,7 @@ export function hasCodexNativeToolCatalog(
 }
 
 /** Only a settled foreground binding may keep its immutable catalog after an addition. */
-export function mayRetainSettledCodexCatalog(binding: CodexAppServerThreadBinding): boolean {
+function mayRetainSettledCodexCatalog(binding: CodexAppServerThreadBinding): boolean {
   return (
     !binding.connectionScope &&
     !binding.turnRecovery &&
@@ -36,7 +36,7 @@ export function mayRetainSettledCodexCatalog(binding: CodexAppServerThreadBindin
 }
 
 /** Old names, namespaces, schemas, loading and descriptions must all still be available. */
-export function codexCurrentCatalogContains(
+function codexCurrentCatalogContains(
   old: readonly CodexDynamicToolSpec[],
   current: readonly CodexDynamicToolSpec[],
 ): boolean {
