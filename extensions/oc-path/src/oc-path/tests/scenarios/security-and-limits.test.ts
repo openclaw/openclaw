@@ -65,12 +65,9 @@ it("rejects multibyte paths above MAX_PATH_LENGTH bytes", () => {
 it("preserves raw Unicode at the byte limit and rejects the next byte", () => {
   const input = `oc://${"a".repeat(74)}😀${"\u0344".repeat(2006)}`;
   expect(Buffer.byteLength(input, "utf8")).toBe(PATH_LENGTH_LIMIT - 1);
-  for (const path of [input, input + "a"]) {
-    expect(formatOcPath(parseOcPath(path))).toBe(path);
-  }
-  expect(() => parseOcPath(input + "aa")).toThrow(
-    expect.objectContaining({ code: "OC_PATH_TOO_LONG" }),
-  );
+  expect(formatOcPath(parseOcPath(input))).toBe(input);
+  expect(formatOcPath(parseOcPath(input + "a"))).toBe(input + "a");
+  expect(() => parseOcPath(input + "aa")).toThrow(/exceeds 4096 bytes/);
 });
 
 it("walker depth cap fires on synthetic deeply-nested AST", () => {

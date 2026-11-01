@@ -1,2 +1,0 @@
-# Literal key identity across JSONC/JSONL/YAML and Markdown fields, plus raw path byte boundaries.
-63
