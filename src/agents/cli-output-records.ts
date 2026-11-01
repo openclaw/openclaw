@@ -152,6 +152,26 @@ export function readCliUsage(parsed: Record<string, unknown>): CliUsage | undefi
   );
 }
 
+// Claude's assistant snapshots repeat the stream-start usage of their call;
+// only the call's message_delta carries its final output count. `callUsage`
+// is the parent call's message_start usage: background subagent and task
+// records can replace the parser's latest usage mid-call.
+export function readClaudeStreamEventUsage(
+  parsed: Record<string, unknown>,
+  callUsage: CliUsage | undefined,
+): CliUsage | undefined {
+  if (parsed.type !== "stream_event" || isClaudeSubagentRecord(parsed) || !isRecord(parsed.event)) {
+    return undefined;
+  }
+  const event = parsed.event;
+  if (event.type === "message_start") {
+    return normalizeCliUsageRecord(isRecord(event.message) ? event.message.usage : undefined);
+  }
+  const output =
+    event.type === "message_delta" ? normalizeCliUsageRecord(event.usage)?.output : undefined;
+  return output && callUsage ? { ...callUsage, output } : undefined;
+}
+
 function collectCliText(value: unknown): string {
   if (typeof value === "string") {
     return value;
