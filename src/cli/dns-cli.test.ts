@@ -379,12 +379,18 @@ describe("dns-cli probe bounds", () => {
         stdout: "",
         stderr: "/bin/ls: capture failed",
       };
-      const baseImplementation = spawnSyncMock.getMockImplementation();
+      // The mock may not be primed yet; a missing implementation is a test
+      // setup failure, not a reason to weaken the injection.
+      const baseImplementation =
+        spawnSyncMock.getMockImplementation() ??
+        (() => {
+          throw new Error("spawnSync was called before the test primed the mock");
+        });
       spawnSyncMock.mockImplementation((command: string, args: string[], opts?: unknown) => {
         if (command === "/bin/ls") {
           return failedCapture;
         }
-        return baseImplementation?.(command, args, opts);
+        return baseImplementation(command, args, opts);
       });
 
       try {
