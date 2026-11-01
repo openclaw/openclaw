@@ -50,6 +50,7 @@ const repositoryScriptEntries = [
   "scripts/perf/backup-verify-measure.mjs!",
   "scripts/perf/board-read-admission-measure.ts!",
   "scripts/perf/spawn-broker-shutdown-measure.ts!",
+  "scripts/perf/workspace-inventory-spawn-measure.ts!",
   // catalog-compare-released.mts copies and spawns this sandboxed reader by path.
   "scripts/lib/catalog-compare-released-worker.mts!",
   // The prepublish registry executes this shared build-and-pack lifetime by path.
@@ -140,6 +141,8 @@ const repositoryScriptEntries = [
   "scripts/bench-control-ui-document.ts!",
   // The channel-turn benchmark guide invokes this opt-in CLI by path.
   "scripts/bench-channel-turn.mts!",
+  // Opt-in append benchmark CLI documented in its source header.
+  "scripts/perf/transcript-append-normalization-measure.ts!",
   "scripts/perf/session-actor-retention-seed.ts!",
   "scripts/perf/session-cold-selection.ts!",
   "scripts/perf/session-delete-diagnostics-measure.ts!",

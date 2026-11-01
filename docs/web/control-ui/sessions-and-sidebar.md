@@ -373,8 +373,12 @@ still apply; opening Systems does not grant additional access.
 System details use reported facts. A connected device is not necessarily the
 machine running a session, and unavailable measurements are not shown as zero.
 The telemetry and backup overview reserves its space while those readings load,
-so the desktop stays in place. Scroll that overview when its contents exceed the
-available space; turning off statistics keeps a compact backup area.
+so the desktop and Backups stay in place. It summarizes the three volumes with
+the highest used percentage and reserves unused rows for machines with fewer
+volumes. **+N more volumes in Details** opens every volume and its history.
+**Backup details** opens the complete backup outcomes, schedules, and storage
+locations, even when no machine is selected. The overview does not scroll;
+turning off statistics keeps a compact backup area.
 See [Cloud Worker Desktop](/gateway/cloud-workers/desktop) for worker desktop
 enablement and sizing.
 

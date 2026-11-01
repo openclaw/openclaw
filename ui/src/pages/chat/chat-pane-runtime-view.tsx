@@ -40,6 +40,8 @@ import { installChatComposerPickerDismissal } from "./components/chat-picker-ove
 import { sessionWorkspaceForHost } from "./components/chat-session-workspace-state.ts";
 import { activeQueuedMessageEdit, subscribeQueuedMessageEdit } from "./queued-message-edit.ts";
 import { notifyRenderLifecycleForTest } from "./render-lifecycle.ts";
+import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
+import { waitForPrewarmedChatSnapshot } from "./session-snapshot-store.ts";
 
 const ChatComposerCapabilityDialogs = lazy(() => import("./chat-composer-capability-host.tsx"), {
   export: "ChatComposerCapabilityDialogs",
@@ -118,7 +120,27 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
   };
 
   onSettled(() => {
-    setReady(true);
+    const gateway = runtime.context.gateway;
+    const pendingSnapshot = waitForPrewarmedChatSnapshot(
+      resolveChatSnapshotKey(
+        {
+          settings: gateway.connection,
+          client: gateway.snapshot.client,
+          hello: gateway.snapshot.hello,
+          agentsList: runtime.context.agents.state.agentsList,
+        },
+        { sessionKey: runtime.sessionKey },
+      ),
+    );
+    if (pendingSnapshot) {
+      void pendingSnapshot.then(() => {
+        if (!disposed) {
+          setReady(true);
+        }
+      });
+    } else {
+      setReady(true);
+    }
   });
   onCleanup(() => {
     disposed = true;

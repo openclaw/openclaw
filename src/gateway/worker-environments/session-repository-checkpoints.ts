@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -16,6 +16,11 @@ import {
 import type { SessionRepositoryWorkspaceRecord } from "../../state/session-repository-workspaces.types.js";
 import { MAX_WORKSPACE_RESULT_GIT_PACK_BYTES } from "../../worker/node-workspace-transfer-protocol.js";
 import { readGitHubRepositoryPublicationMetadata } from "../github-repository-publication-snapshot.js";
+import {
+  checkpointRef,
+  publicationRef,
+  publishCheckpointRefs,
+} from "./session-repository-checkpoint-refs.js";
 import { boundedWorkerError } from "./worker-error.js";
 import { sameEntry } from "./workspace-manifest-comparison.js";
 import {
@@ -27,7 +32,6 @@ import {
   requireWorkspaceResultGit as git,
   updateWorkspaceResultRefs,
   readWorkspaceResultRefObjects,
-  publishImmutableWorkspaceResultRefs,
   workspaceResultCheckpointInitArgs,
   workspaceResultGitCommand,
   WORKSPACE_RESULT_GIT_TIMEOUT_MS,
@@ -63,8 +67,6 @@ export type SessionRepositoryCheckpointPayload = CheckpointSnapshot &
     publicationStagingRoot?: string;
     publicationDigest?: string;
   };
-const publicationRef = (ref: string) =>
-  workerWorkspaceResultRef(`publication-${createHash("sha256").update(ref).digest("hex")}`);
 const workspaceLog = createSubsystemLogger("gateway/worker-workspace");
 
 async function owner(params: CheckpointOwner) {
@@ -80,14 +82,6 @@ async function owner(params: CheckpointOwner) {
     current: prepared.current,
     root: store.artifactPath(params.workspaceId),
   };
-}
-
-function checkpointRef(workspace: SessionRepositoryWorkspaceRecord, ref?: string): string {
-  const selected = ref ?? workspace.checkpointRef;
-  if (!selected || !/^refs\/openclaw\/worker-results\/[A-Za-z0-9-]+$/u.test(selected)) {
-    throw new Error("Repository workspace has no valid checkpoint");
-  }
-  return selected;
 }
 
 function assertBase(
@@ -438,23 +432,26 @@ export async function stageSessionRepositoryCheckpoint(
         assertRevision();
       };
       await verify();
+      const publishArtifacts = async (additionalRefs: readonly string[] = []) => {
+        await verify();
+        // Keep requested recovery identities and their companions atomic, even
+        // when the accepted checkpoint needs no new objects or SQLite update.
+        await publishCheckpointRefs(
+          root,
+          workspace,
+          object,
+          companion,
+          [params.checkpointRef ? ref : acceptedRef, ...additionalRefs],
+          assertRevision,
+        );
+      };
       return {
         checkpointRef: acceptedRef,
         verify,
         discard: async () => {},
+        publishArtifacts,
         publish: async () => {
-          await verify();
-          if (params.checkpointRef && ref !== acceptedRef) {
-            // Preserve claim recovery if acceptance succeeds before its pointer is recorded.
-            await publishImmutableWorkspaceResultRefs(
-              root,
-              [
-                [ref, object],
-                [publicationRef(ref), companion],
-              ],
-              assertRevision,
-            );
-          }
+          await publishArtifacts();
           assertRevision();
           return currentWorkspace()!;
         },
@@ -466,34 +463,25 @@ export async function stageSessionRepositoryCheckpoint(
   await requireWorkspaceResultGit(root, workspaceResultCheckpointInitArgs());
   assertRevision();
   /** The checkpoint owns this synthetic parent; the pack stays opaque until a base is fetched. */
-  const historyInput = {
-    ...params,
-    root,
-    baseCommit,
-    assertCurrent: assertRevision,
-  };
-  const workerGitHistory = historyInput.gitHistory;
+  const { gitHistory: workerGitHistory, gitPackPath } = params;
   let note = repositoryHistoryNote(baseCommit, params);
   let blob: string | undefined;
   if (!note && workerGitHistory && workerGitHistory.headCommit !== workerGitHistory.baseCommit) {
     try {
-      if (!historyInput.gitPackPath) {
+      if (!gitPackPath) {
         throw new Error("worker Git history has no pack");
       }
-      const pack = await fs.open(
-        historyInput.gitPackPath,
-        constants.O_RDONLY | constants.O_NOFOLLOW,
-      );
+      const pack = await fs.open(gitPackPath, constants.O_RDONLY | constants.O_NOFOLLOW);
       try {
         const stat = await pack.stat();
         if (!stat.isFile() || stat.size > MAX_WORKSPACE_RESULT_GIT_PACK_BYTES) {
           throw new Error("worker Git pack exceeds its byte limit");
         }
-        historyInput.assertCurrent();
+        assertRevision();
         blob = (
           await runExec(
             "git",
-            workspaceResultGitCommand(historyInput.root, ["hash-object", "-w", "--stdin"]).slice(1),
+            workspaceResultGitCommand(root, ["hash-object", "-w", "--stdin"]).slice(1),
             {
               stdinFileDescriptor: pack.fd,
               timeoutMs: WORKSPACE_RESULT_GIT_TIMEOUT_MS,
@@ -504,17 +492,17 @@ export async function stageSessionRepositoryCheckpoint(
         await pack.close();
       }
     } catch (error) {
-      historyInput.assertCurrent();
+      assertRevision();
       note = workerHistoryNotAdopted(boundedWorkerError(error));
     }
   }
-  historyInput.assertCurrent();
-  const tree = await git(historyInput.root, ["mktree"], {
+  assertRevision();
+  const tree = await git(root, ["mktree"], {
     input: Buffer.from(blob ? `100644 blob ${blob}\thistory.pack\n` : ""),
   });
-  historyInput.assertCurrent();
+  assertRevision();
   const parentCommit = await git(
-    historyInput.root,
+    root,
     [
       "-c",
       "user.name=OpenClaw",
@@ -626,19 +614,22 @@ export async function stageSessionRepositoryCheckpoint(
       assertRevision();
     };
     await verify();
+    const publishArtifacts = (additionalRefs: readonly string[] = []) =>
+      publishCheckpointRefs(
+        root,
+        workspace,
+        objectId,
+        companionId,
+        [ref, ...additionalRefs],
+        assertRevision,
+      );
     return {
       checkpointRef: ref,
       verify,
       discard,
+      publishArtifacts,
       publish: async () => {
-        await publishImmutableWorkspaceResultRefs(
-          root,
-          [
-            [ref, objectId],
-            [publicationRef(ref), companionId],
-          ],
-          assertRevision,
-        );
+        await publishArtifacts();
         // Publish immutable artifacts before the SQLite pointer: if the commit
         // fence fails or the Gateway exits, the pending turn can recover this ref.
         const published = await recoverSessionRepositoryCheckpoint({

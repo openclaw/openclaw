@@ -250,6 +250,7 @@ cooldowns. With `auth.order` set, that is the account every earlier run used; wi
 it, runs rotated between accounts of the same type by last use, and Doctor records one
 of them. When several accounts are eligible, Doctor names the others and the command
 to change the choice.
+Doctor can also adopt host-managed accounts on an explicitly selected Codex runtime; it records that runtime with the account. Native-owned or model-locked sessions remain unchanged.
 Doctor uses normal automation model selection, preserves inherited defaults and
 fallback lists, leaves existing bindings unchanged, and backs up cron state before
 committing. Missing accounts, and personal accounts needing their owner's

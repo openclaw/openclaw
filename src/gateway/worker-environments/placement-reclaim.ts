@@ -289,7 +289,10 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                     }
                   };
                   assertCurrent();
-                  const quiescence = await tunnel.quiesceWorkspace(current.remoteWorkspaceDir);
+                  const quiescence = await tunnel.quiesceWorkspace(
+                    current.remoteWorkspaceDir,
+                    assertCurrent,
+                  );
                   try {
                     assertCurrent();
                     const reconciliation = await tunnel.reconcileWorkspace(
@@ -373,6 +376,7 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                             sessionKey: current.sessionKey,
                             agentId: current.agentId,
                             assertCurrent,
+                            quiescence,
                           });
                           assertCurrent();
                         }

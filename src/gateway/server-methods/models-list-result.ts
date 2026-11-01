@@ -188,6 +188,7 @@ export async function prepareModelsListResult({
     const availableDecisionModels = listDecisionModels({
       config: cfg,
       snapshot: metadataSnapshot,
+      catalog: snapshot.entries,
     });
     const selectedModel = resolveSessionModelRef(cfg, scope?.sessionEntry, agentId, {
       allowPluginNormalization: false,
@@ -210,8 +211,6 @@ export async function prepareModelsListResult({
       observationConfig: preparedProjectionOwner?.observationConfig,
     });
     const { defaultModel } = preparedCatalog;
-    const preparedRuntimeAuthModes = preparedProjectionOwner?.authModes;
-    const preparedRuntimeAuthMaterializations = preparedProjectionOwner?.authMaterializations;
     // Capture authority again after acquisition and before hydrating a personal projection.
     draft?.assertCurrent();
     const decisionOwner = () => ({
@@ -220,8 +219,8 @@ export async function prepareModelsListResult({
       metadataSnapshot,
       preparedAuthStore,
       accountCatalog: preparedProjectionOwner?.accountCatalog,
-      preparedRuntimeAuthModes,
-      preparedRuntimeAuthMaterializations,
+      preparedRuntimeAuthModes: preparedProjectionOwner?.authModes,
+      preparedRuntimeAuthMaterializations: preparedProjectionOwner?.authMaterializations,
       pluginRegistry: preparedPluginRegistry,
       isCurrent,
       observationConfig: preparedProjectionOwner?.observationConfig,
