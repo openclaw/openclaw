@@ -32,6 +32,10 @@
   margin-left: auto;
 }
 
+.agents-page-menu {
+  display: none;
+}
+
 .agent-file-tabs {
   display: flex;
   align-items: flex-end;
@@ -1229,6 +1233,15 @@
     margin-left: 0;
     max-width: 100%;
     flex-wrap: wrap;
-    justify-content: flex-start;
+    justify-content: space-between;
+  }
+
+  .agents-toolbar-actions > .agents-toolbar-secondary {
+    display: none;
+  }
+
+  .agents-page-menu {
+    display: inline-flex;
+    flex: none;
   }
 }

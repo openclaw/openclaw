@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, onSettled } from "solid-js";
+import { createEffect, createMemo, onSettled } from "solid-js";
 import { reclaimHubTabFocus, rememberHubTabFocus } from "../hub-tabs-focus.ts";
 import { Tabs } from "./tabs.tsx";
 import "../../styles/hub-tabs.css";
@@ -25,6 +25,24 @@ export type HubTabsProps<T extends string> = {
   onActivate?: (element: HTMLElement) => void;
 };
 
+// Scroll only the tab strip, so revealing the active tab never moves the page.
+function revealHubTab(tab: HTMLElement | undefined) {
+  let strip = tab?.parentElement ?? null;
+  while (strip && strip.scrollWidth <= strip.clientWidth) {
+    strip = strip.parentElement;
+  }
+  if (!tab || !strip) {
+    return;
+  }
+  const tabBox = tab.getBoundingClientRect();
+  const stripBox = strip.getBoundingClientRect();
+  if (tabBox.left < stripBox.left) {
+    strip.scrollLeft -= stripBox.left - tabBox.left;
+  } else if (tabBox.right > stripBox.right) {
+    strip.scrollLeft += tabBox.right - stripBox.right;
+  }
+}
+
 export function HubTabs<T extends string>(props: HubTabsProps<T>) {
   const items = createMemo(() =>
     props.tabs.map((tab) => ({
@@ -46,6 +64,14 @@ export function HubTabs<T extends string>(props: HubTabsProps<T>) {
     })),
   );
   let tabElement!: (value: string) => HTMLElement | undefined;
+  createEffect(
+    () => props.active,
+    (active) => {
+      if (active !== null) {
+        revealHubTab(tabElement(active));
+      }
+    },
+  );
   onSettled(() => {
     if (props.active !== null) {
       reclaimHubTabFocus(props.id, props.active, tabElement(props.active));
