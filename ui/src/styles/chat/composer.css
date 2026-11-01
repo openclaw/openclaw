@@ -2409,8 +2409,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
    14px accent glyph, so checks land on the same rail as 16px row icons. */
 .chat-talk-input-picker__check,
 .chat-controls__inline-select-check,
-.chat-controls__permission-trigger--full .chat-controls__permission-icon,
-.chat-controls__permission-trigger--full .chat-controls__permission-label,
+.agent-chat__input .chat-controls__permission-trigger--full,
 .chat-controls__permission-option--full .chat-controls__permission-option-icon {
   color: var(--accent);
 }
@@ -3579,15 +3578,10 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
     min-height: 44px;
   }
 
+  /* A floor, not a fixed width: a composer wider than 560px still shows the label. */
   .agent-chat__composer-meta .chat-controls__permission-trigger {
-    width: 44px;
+    min-width: 44px;
     justify-content: center;
-    padding-inline: 0;
-  }
-
-  /* The fixed touch target holds only the icon; a label would be clipped. */
-  .agent-chat__composer-meta .chat-controls__permission-label {
-    display: none;
   }
 
   .agent-chat__composer-controls {

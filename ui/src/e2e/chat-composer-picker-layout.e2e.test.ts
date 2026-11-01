@@ -128,7 +128,7 @@ suite.define(() => {
         };
         await prepareComposer();
 
-        // Files keeps the first two composers narrow; 600 keeps the phone touch target.
+        // Files keeps the first two composers narrow; 600 uses the phone touch targets.
         for (const width of [1100, 1280, 560, 600, 900, 393, 320]) {
           if (width === 560) {
             await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
@@ -140,8 +140,8 @@ suite.define(() => {
           // The permission label is whole beside its icon or absent, never clipped.
           await expect
             .poll(() => composer.locator(".chat-controls__permission-label").isVisible())
-            .toBe(width === 900);
-          if (width === 900) {
+            .toBe(width === 600 || width === 900);
+          if (width === 600 || width === 900) {
             const chips = await composer.evaluate((node) => {
               const read = (selector: string) => {
                 const trigger = node.querySelector(selector)!;
