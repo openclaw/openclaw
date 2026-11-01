@@ -1,4 +1,8 @@
-import { LLAMA_CPP_PROVIDER_ID, LLAMA_CPP_PROVIDER_LABEL } from "../defaults.js";
+import {
+  LLAMA_CPP_LOCAL_AUTH_MARKER,
+  LLAMA_CPP_PROVIDER_ID,
+  LLAMA_CPP_PROVIDER_LABEL,
+} from "../defaults.js";
 
 // llama-server's default port since llama.cpp b11521 (ggml-org/llama.cpp#30159); older
 // builds listen on 8080, so setup accepts that endpoint when entered explicitly.
@@ -12,6 +16,7 @@ export type LlamaServerIdentity = {
   label: string;
   defaultOrigin: string;
   apiKeyEnvVar: string;
+  authMarker: string;
 };
 
 export const LLAMA_CPP_SERVER: LlamaServerIdentity = {
@@ -19,4 +24,13 @@ export const LLAMA_CPP_SERVER: LlamaServerIdentity = {
   label: LLAMA_CPP_PROVIDER_LABEL,
   defaultOrigin: LLAMA_SERVER_DEFAULT_ORIGIN,
   apiKeyEnvVar: LLAMA_SERVER_DEFAULT_API_KEY_ENV_VAR,
+  authMarker: LLAMA_CPP_LOCAL_AUTH_MARKER,
+};
+
+export const LLAMA_APP_SERVER: LlamaServerIdentity = {
+  id: "llama-app",
+  label: "Llama",
+  defaultOrigin: "http://127.0.0.1:9931",
+  apiKeyEnvVar: "LLAMA_APP_API_KEY",
+  authMarker: "llama-app-local",
 };

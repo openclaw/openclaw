@@ -40,6 +40,8 @@ export async function discoverLlamaServerProvider(
     run: async () => {
       const discovery = await discoverLlamaServer({
         server,
+        signal: ctx.signal,
+        useRuntimeDefaults: false,
         baseUrl: configured?.baseUrl,
         apiKey,
         headers,

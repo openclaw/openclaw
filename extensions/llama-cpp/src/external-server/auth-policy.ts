@@ -5,7 +5,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { LLAMA_CPP_LOCAL_AUTH_MARKER } from "../defaults.js";
+import { LLAMA_APP_SERVER, LLAMA_CPP_SERVER } from "./defaults.js";
 
 export function hasLlamaServerAuthorizationHeader(headers: unknown): boolean {
   const record = asOptionalRecord(headers);
@@ -24,7 +24,8 @@ export function shouldUseLlamaServerSyntheticAuth(
   const apiKey = normalizeOptionalSecretInput(providerConfig?.apiKey)?.trim();
   const hasRealApiKey =
     hasConfiguredSecretInput(providerConfig?.apiKey) &&
-    apiKey !== LLAMA_CPP_LOCAL_AUTH_MARKER &&
+    apiKey !== LLAMA_CPP_SERVER.authMarker &&
+    apiKey !== LLAMA_APP_SERVER.authMarker &&
     apiKey !== CUSTOM_LOCAL_AUTH_MARKER;
   return !hasRealApiKey;
 }

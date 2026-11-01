@@ -1,6 +1,8 @@
 {
   "id": "llama-cpp",
-  "categories": ["models"],
+  "categories": [
+    "models"
+  ],
   "name": "llama.cpp Provider",
   "description": "Managed and external llama.cpp servers for GGUF chat, embeddings and local images.",
   "activation": {
@@ -8,16 +10,29 @@
   },
   "providerCatalogEntry": "./provider-discovery.ts",
   "enabledByDefault": true,
-  "autoEnableWhenConfiguredProviders": ["llama-cpp"],
-  "providers": ["llama-cpp"],
+  "autoEnableWhenConfiguredProviders": [
+    "llama-cpp",
+    "llama-app"
+  ],
+  "providers": [
+    "llama-cpp",
+    "llama-app"
+  ],
   "modelCatalog": {
     "discovery": {
-      "llama-cpp": "refreshable"
+      "llama-cpp": "refreshable",
+      "llama-app": "refreshable"
     }
   },
   "providerRequest": {
     "providers": {
       "llama-cpp": {
+        "family": "llama-cpp",
+        "openAICompletions": {
+          "supportsStreamingUsage": true
+        }
+      },
+      "llama-app": {
         "family": "llama-cpp",
         "openAICompletions": {
           "supportsStreamingUsage": true
@@ -29,16 +44,33 @@
     "providers": {
       "llama-cpp": {
         "external": false
+      },
+      "llama-app": {
+        "external": false
       }
     }
   },
-  "syntheticAuthRefs": ["llama-cpp"],
-  "nonSecretAuthMarkers": ["llama-cpp-local"],
+  "syntheticAuthRefs": [
+    "llama-cpp",
+    "llama-app"
+  ],
+  "nonSecretAuthMarkers": [
+    "llama-cpp-local",
+    "llama-app-local"
+  ],
   "setup": {
     "providers": [
       {
         "id": "llama-cpp",
-        "envVars": ["LLAMA_SERVER_API_KEY"]
+        "envVars": [
+          "LLAMA_SERVER_API_KEY"
+        ]
+      },
+      {
+        "id": "llama-app",
+        "envVars": [
+          "LLAMA_APP_API_KEY"
+        ]
       }
     ]
   },
@@ -77,9 +109,15 @@
     }
   ],
   "contracts": {
-    "embeddingProviders": ["local"],
-    "mediaUnderstandingProviders": ["llama-cpp"],
-    "tools": ["local_image"]
+    "embeddingProviders": [
+      "local"
+    ],
+    "mediaUnderstandingProviders": [
+      "llama-cpp"
+    ],
+    "tools": [
+      "local_image"
+    ]
   },
   "configSchema": {
     "type": "object",

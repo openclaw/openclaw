@@ -9,6 +9,7 @@ import {
 import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { LLAMA_CPP_PROVIDER_ID } from "./src/defaults.js";
 import { llamaCppEmbeddingProviderAdapter } from "./src/embedding-provider.js";
+import { registerLlamaAppProvider } from "./src/llama-app-provider.js";
 import { registerLlamaCppProvider } from "./src/managed-provider.js";
 import {
   LLAMA_CPP_MEDIA_MAX_BYTES,
@@ -192,5 +193,6 @@ export default definePluginEntry({
       { name: "local_image" },
     );
     registerLlamaCppProvider(api, mediaProvider);
+    registerLlamaAppProvider(api);
   },
 });

@@ -19,6 +19,37 @@ openclaw plugins install @openclaw/llama-cpp-provider
 openclaw onboard
 ```
 
+## Llama.app catalog and inference
+
+The same plugin supplies the separate `llama-app` provider for
+[Llama](https://llama.app). A connection can use its default API endpoint:
+
+```json5
+{
+  models: {
+    providers: {
+      "llama-app": {
+        baseUrl: "http://127.0.0.1:9931/v1",
+        api: "openai-completions",
+        models: [],
+      },
+    },
+  },
+}
+```
+
+The running app supplies its model list. References use
+`llama-app/<server-model-id>`, preserving slashes and quantization suffixes.
+Keyless local servers need no placeholder key in saved configuration.
+`LLAMA_APP_API_KEY` or the provider's normal API-key and header SecretRefs
+support protected endpoints without reusing llama.cpp credentials.
+
+This connection does not replace `models.providers.llama-cpp`, adopt its
+managed process, or change an existing default. Catalog refresh is passive:
+it never downloads, loads, wakes, or unloads models. The app remains responsible
+for the server and inference-triggered model loading. Run it on the Gateway
+host or use an endpoint the Gateway can reach.
+
 ## Choose server ownership
 
 | Setup choice          | Process owner                 | Local embeddings |
