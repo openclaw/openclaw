@@ -229,6 +229,7 @@
     grid-column: 2;
     width: 100%;
     max-width: none;
+    align-items: center;
     justify-content: flex-start;
   }
 
@@ -251,6 +252,15 @@
 
   .device-entry__details > summary {
     line-height: 44px;
+  }
+
+  /* The menu icon centers in its button like the actions beside it. */
+  .device-entry__menu-trigger > .oc-menu-item__label {
+    display: contents;
+  }
+
+  .device-entry__menu-trigger svg {
+    display: block;
   }
 
   .device-resources {
