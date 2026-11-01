@@ -10,7 +10,7 @@ const identity = z
   .min(1)
   .max(128)
   .regex(/^[!-~]+$/u);
-export const workerRetentionPolicySchema = z.strictObject({
+const workerRetentionPolicySchema = z.strictObject({
   version: z.literal(1),
   ownerBinding: identity,
   computeWindowSeconds: z
@@ -19,12 +19,12 @@ export const workerRetentionPolicySchema = z.strictObject({
     .positive()
     .max(Math.floor(Number.MAX_SAFE_INTEGER / 1000)),
 });
-export const workerRetentionOperationSchema = z.strictObject({
+const workerRetentionOperationSchema = z.strictObject({
   id: identity,
   action: z.enum(["pause", "resume"]),
   expectedClaimRevision: identity,
 });
-export const workerRetentionObservationSchema = z.strictObject({
+const workerRetentionObservationSchema = z.strictObject({
   claimRevision: identity,
   state: z.enum(["running", "suspended", "transitioning", "expired", "unavailable"]),
   computeExpiresAtMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
