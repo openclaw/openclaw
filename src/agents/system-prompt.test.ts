@@ -505,6 +505,28 @@ describe("buildAgentSystemPrompt", () => {
     },
   );
 
+  it.each([
+    { codeModeActive: true, search: true, listed: false },
+    { codeModeActive: true, search: false, listed: true },
+    { codeModeActive: false, search: true, listed: true },
+  ])("keeps skill discovery without redundant Code Mode catalogs: %j", (scenario) => {
+    const onRenderedSkillsPrompt = vi.fn();
+    const prompt = renderPrompt({
+      codeModeActive: scenario.codeModeActive,
+      toolNames: scenario.codeModeActive ? ["exec", "wait"] : ["read"],
+      capabilityToolNames: ["skills_read", ...(scenario.search ? ["skills_search"] : [])],
+      skillsPrompt: SKILLS,
+      onRenderedSkillsPrompt,
+    });
+    expect(prompt.includes("<available_skills>")).toBe(scenario.listed);
+    expect(onRenderedSkillsPrompt).toHaveBeenCalledWith(scenario.listed ? SKILLS : "");
+    expect(prompt).toContain("read the complete instructions before task actions");
+    if (!scenario.listed) {
+      expect(prompt).toContain("search with `skills.search(query)` inside `exec`");
+      expect(prompt).toContain('use `skills.read("<name>")` inside `exec`');
+    }
+  });
+
   it("keeps CLI-backend skills when the external harness owns file tools", () => {
     const prompt = renderPrompt({
       promptSurface: "cli_backend",

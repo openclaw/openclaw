@@ -69,6 +69,9 @@ export async function accountAgentTurnCompaction(params: {
   const authorize = () => isCurrentSessionControllerOperation(operation);
   let count: number | undefined;
   for (const fact of params.compaction?.durable ?? []) {
+    if (fact.count === 0) {
+      continue;
+    }
     const persistedCount = await incrementCompactionCount({
       ...fact.target,
       sessionStore: params.sessionStore,
@@ -122,9 +125,11 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     return entry;
   };
   const latestCompaction = execution.compaction?.durable.at(-1);
-  const currentContextSnapshot = execution.compaction
-    ? (latestCompaction?.currentContextSnapshot ?? { tokens: undefined })
-    : undefined;
+  const currentContextSnapshot = latestCompaction
+    ? latestCompaction.currentContextSnapshot
+    : execution.compaction
+      ? { tokens: undefined }
+      : undefined;
   const expectedSession = latestCompaction?.target ?? {
     sessionId: activeSessionEntry?.sessionId ?? followupRun.run.sessionId,
     lifecycleRevision: activeSessionEntry?.lifecycleRevision,

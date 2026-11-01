@@ -58,7 +58,6 @@ import {
   streamWithIdleTimeout,
 } from "./llm-idle-timeout.js";
 import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
-import { estimateProjectedRequestTokenPressure } from "./preemptive-compaction.js";
 import { wrapStreamObjectSettlement } from "./stream-wrapper.js";
 
 type CompactionReplayStreamOptions = NonNullable<Parameters<StreamFn>[2]> & {
@@ -477,17 +476,17 @@ export function installEmbeddedAttemptStreamGuards(
         )
           ? previous
           : undefined;
-      if (input.activeContextEngine?.info.ownsCompaction || request.requestIndex > 1) {
-        contextGuards.checkMidTurnPrecheck({ context: args[1], previousRequest });
-      }
+      const pressure = await contextGuards.checkMidTurnPrecheck({
+        context: args[1],
+        previousRequest,
+        measuredContextTokens:
+          previous?.requestIndex === request.requestIndex - 1 ? previous.contextTokens : undefined,
+      });
       if (args[0].api === "openai-completions") {
         measuredRequestPressure.set(
           args[0],
           args[1],
-          previousRequest && previousRequest.contextTokens > 0
-            ? estimateProjectedRequestTokenPressure({ context: args[1], previousRequest })
-                .estimatedPromptTokens
-            : undefined,
+          previousRequest && previousRequest.contextTokens > 0 ? pressure : undefined,
         );
       }
       return previousRequest;

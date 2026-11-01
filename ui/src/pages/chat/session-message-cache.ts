@@ -8,10 +8,12 @@ import { createSignal } from "solid-js";
 import type { GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ChatFastModePresentation } from "../../lib/chat/model-select-state.ts";
 import { readPairingQrContent } from "../../lib/chat/pairing-qr.ts";
+import { nativeHistoryMessageSourceIdentity } from "../../lib/chat/history-message-identity.ts";
 import {
   chatDisplaySourceKey,
   chatRowDisplaySchema,
   boundChatThumbnails,
+  CHAT_ROW_DISPLAY_WINDOW,
   projectChatRowDisplay,
   MAX_CHAT_THUMBNAILS,
   MAX_CHAT_THUMBNAIL_BYTES,
@@ -195,7 +197,18 @@ export function createChatDisplayFacts(
           }
           const previous = snapshot.rowDisplay?.[messageId];
           const row = parseSnapshot(chatRowDisplaySchema, { ...previous, ...update });
-          if (!row || JSON.stringify(row).length > 8192) {
+          if (!row) {
+            return;
+          }
+          // Oversized replies recover live instead of becoming a first-paint payload.
+          if (
+            row.recoveredMessage &&
+            new TextEncoder().encode(JSON.stringify(row.recoveredMessage)).byteLength > 64 * 1024
+          ) {
+            delete row.recoveredMessage;
+          }
+          const { recoveredMessage: _recoveredMessage, ...display } = row;
+          if (JSON.stringify(display).length > 8192) {
             return;
           }
           cacheChatSessionSnapshot(cache, host, target, {
@@ -624,6 +637,28 @@ function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSess
   }
   let retainedMessageWeight = messageWeights.reduce((sum, weight) => sum + weight, 0);
   let start = 0;
+  // Before the display window, only loss of the intrinsic source changes the
+  // trimmed envelope. Prepare both canonical variants instead of rescanning each cut.
+  const lastIntrinsicIndex = snapshot.pagination.intrinsicSource
+    ? snapshot.messages.findLastIndex(
+        (message) =>
+          nativeHistoryMessageSourceIdentity(message) === snapshot.pagination.intrinsicSource,
+      )
+    : -1;
+  const trimmedPagination = trimmedChatHistoryPagination(
+    snapshot.pagination,
+    snapshot.messages,
+    1,
+  );
+  const trimmedWithoutIntrinsic = trimmedChatHistoryPagination(
+    snapshot.pagination,
+    snapshot.messages,
+    snapshot.messages.length,
+  );
+  const lastSharedTrim = snapshot.messages.length - CHAT_ROW_DISPLAY_WINDOW;
+  let sharedEnvelope:
+    | { pagination: ChatHistoryPagination; measured: ReturnType<typeof measureChatSnapshotEnvelope> }
+    | undefined;
   while (true) {
     if (start > 0 && start === snapshot.messages.length) {
       return null;
@@ -631,18 +666,21 @@ function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSess
     const pagination =
       start === 0
         ? snapshot.pagination
-        : trimmedChatHistoryPagination(snapshot.pagination, snapshot.messages, start);
-    const rowDisplay = projectChatRowDisplay(snapshot, start);
-    const envelope = { ...snapshot, messages: [], rowDisplay, pagination };
-    let weight: number | null;
-    try {
-      weight =
-        (JSON.stringify(envelope)?.length ?? 0) +
-        retainedMessageWeight +
-        Math.max(0, messageWeights.length - start - 1);
-    } catch {
-      weight = null;
+        : start <= lastIntrinsicIndex
+          ? trimmedPagination
+          : trimmedWithoutIntrinsic;
+    const shared = start > 0 && start <= lastSharedTrim;
+    const envelope =
+      (shared && sharedEnvelope?.pagination === pagination && sharedEnvelope.measured) ||
+      measureChatSnapshotEnvelope(snapshot, start, pagination);
+    if (shared) {
+      sharedEnvelope = { pagination, measured: envelope };
     }
+    const { rowDisplay } = envelope;
+    const weight =
+      envelope.weight === null
+        ? null
+        : envelope.weight + retainedMessageWeight + Math.max(0, messageWeights.length - start - 1);
     if (weight !== null && weight <= MAX_CACHED_CHAT_SNAPSHOT_WEIGHT) {
       return {
         snapshot:
@@ -675,6 +713,20 @@ function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSess
   }
 }
 
+function measureChatSnapshotEnvelope(
+  snapshot: ChatSessionSnapshot,
+  start: number,
+  pagination: ChatHistoryPagination,
+) {
+  const rowDisplay = projectChatRowDisplay(snapshot, start);
+  try {
+    const envelope = { ...snapshot, messages: [], rowDisplay, pagination };
+    return { rowDisplay, weight: JSON.stringify(envelope)?.length ?? 0 };
+  } catch {
+    return { rowDisplay, weight: null };
+  }
+}
+
 function serializedArrayItemWeight(value: unknown): number | null {
   if (value && typeof value === "object") {
     const cached = cachedMessageWeights.get(value);
@@ -698,6 +750,7 @@ function samePagination(left: ChatHistoryPagination, right: ChatHistoryPaginatio
   if (
     left.hasMore !== right.hasMore ||
     left.totalMessages !== right.totalMessages ||
+    left.intrinsicSource !== right.intrinsicSource ||
     left.hasNewer !== right.hasNewer ||
     left.newerCursor !== right.newerCursor ||
     left.needsNewerBoundary !== right.needsNewerBoundary ||

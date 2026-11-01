@@ -102,6 +102,8 @@ export const HelloOkSchema = closedObject({
   server: closedObject({
     version: NonEmptyString,
     buildId: Type.Optional(Type.String({ minLength: 1, maxLength: 96 })),
+    commit: Type.Optional(Type.String({ pattern: "^[0-9a-f]{7,40}$" })),
+    builtAt: Type.Optional(NonEmptyString),
     bootId: Type.Optional(Type.String({ minLength: 1, maxLength: 96 })),
     controlUiBuildSource: Type.Optional(stringLiteralUnion(["bundled", "configured"])),
     connId: NonEmptyString,

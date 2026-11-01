@@ -7,6 +7,7 @@ import { PluginInstance } from "../plugins/plugin-instance.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import * as authority from "../plugins/provider-auth-authority.js";
 import { createProviderAuthAvailability } from "../plugins/provider-auth-availability-core.js";
+import { resolveProviderAuthScope } from "../plugins/provider-auth-scope.js";
 import type { ProviderSyntheticAuthResult } from "../plugins/provider-external-auth.types.js";
 import { resolveLoadedProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
 import * as providerRuntime from "../plugins/provider-runtime.js";
@@ -569,17 +570,65 @@ test.each([
   ([scope, runtimeScope]) => ({ scope, runtimeScope, active: false }),
 );
 
-test(
-  "ambient discovery skips a plugin-owned provider without a live credential",
-  async (f) => {
+test.each([false, true])(
+  "ambient discovery never carries plugin-owned credentials (active=%s)",
+  async (active, f) => {
     const options = { config: f.cfg, syntheticAuthProviderRefs: [id] };
-    expect(() => providerRuntime.resolveProviderSyntheticAuthWithPlugin(f.lookup)).toThrow(
-      "live credential or no-auth evidence is missing",
-    );
     expect(resolveAmbientAgentCredentialsForDiscovery(options)).not.toHaveProperty(id);
     await expect(prepareAmbientAgentCredentialsForDiscovery(options)).resolves.not.toHaveProperty(
       id,
     );
+    expect(f.hook).not.toHaveBeenCalled();
+    // The owner path still resolves a live credential inside the plugin's scope.
+    if (active) {
+      expect(providerRuntime.resolveProviderSyntheticAuthWithPlugin(f.lookup)?.apiKey).toBe(
+        pluginAuth.apiKey,
+      );
+    }
   },
-  { active: false },
+  (active) => ({ active }),
+);
+
+baseIt(
+  "ambient discovery isolates a conflicting auth-scope owner from healthy siblings",
+  async () => {
+    const config: OpenClawConfig = {};
+    const metadata = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "owner-a",
+          providers: ["contested"],
+          modelCatalog: { providers: { contested: { authScope: "plugin", models: [] } } },
+        },
+        {
+          id: "owner-b",
+          providers: ["contested"],
+          modelCatalog: { providers: { contested: { authScope: "agent", models: [] } } },
+        },
+      ],
+    });
+    const options = {
+      config,
+      syntheticAuthProviderRefs: ["contested", "healthy"],
+      resolveSyntheticAuth: (provider: string) => ({ apiKey: `${provider}-key` }),
+    };
+    await metadataScope.withPluginMetadataSnapshotScope(
+      metadata,
+      async () => {
+        expect(() => resolveProviderAuthScope({ provider: "contested", config })).toThrow(
+          "conflicting static credential owners",
+        );
+        expect(resolveAmbientAgentCredentialsForDiscovery(options)).toEqual({
+          healthy: { type: "api_key", key: "healthy-key" },
+        });
+        await expect(
+          prepareAmbientAgentCredentialsForDiscovery({
+            ...options,
+            resolveSyntheticAuth: async (provider: string) => ({ apiKey: `${provider}-key` }),
+          }),
+        ).resolves.toEqual({ healthy: { type: "api_key", key: "healthy-key" } });
+      },
+      { config, trustConfigIdentity: true },
+    );
+  },
 );

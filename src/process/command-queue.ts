@@ -90,7 +90,9 @@ export function isCommandLaneTaskTimeoutError(err: unknown, lane?: string): bool
 
 function isExpectedNonErrorLaneFailure(err: unknown): boolean {
   return (
-    (err instanceof Error && err.name === "LiveSessionModelSwitchError") ||
+    (err instanceof Error &&
+      (err.name === "LiveSessionModelSwitchError" ||
+        err.name === "MemoryFlushToolsUnavailableError")) ||
     isExpectedRunCancellation(err)
   );
 }

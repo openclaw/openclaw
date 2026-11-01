@@ -28,7 +28,6 @@ import {
   reconcileHistoryTail,
   commitCurrentChatHistorySnapshot,
   prepareChatHistoryPages,
-  clearHistoryCursor,
 } from "./chat-history-snapshot.ts";
 import {
   beginHistoryRequest,
@@ -208,7 +207,8 @@ export async function hydrateChatHistory(
     const cursorReset = isHistoryCursor(response) && response.kind === "reset";
     let heldGapPagination: ChatHistoryPagination | undefined;
     if (cursorReset) {
-      clearHistoryCursor(state, sessionKey, requestAgentId);
+      // Retain the rejected cursor until publication so a superseding read
+      // repeats the reset and fills any held prefix before adopting its tail.
       response = await request();
       if (!isCurrent()) {
         return undefined;

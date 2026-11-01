@@ -189,7 +189,11 @@ export function measureTranscriptRow(
     // TanStack defers observer entries; they can predate a foreground read.
     // Treat delivery as invalidation so old sizes cannot roll that read back.
     const size = readTranscriptRowHeight(element);
-    if (size !== 0 || virtualizer.scrollElement?.clientHeight !== 0) {
+    if (
+      size !== 0 ||
+      (entry?.borderBoxSize?.[0]?.inlineSize !== 0 &&
+        virtualizer.scrollElement?.clientHeight !== 0)
+    ) {
       return size;
     }
   }

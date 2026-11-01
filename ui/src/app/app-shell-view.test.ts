@@ -408,6 +408,40 @@ it("keeps one sidebar through drawer and settings takeover transitions", async (
   expect(query("openclaw-router-outlet")).toBe(outlet);
 });
 
+it("commits mobile drawer changes without republishing the full shell", async () => {
+  sidebarImport.resolve();
+  mockMobile(() => true);
+  const { owner, query } = await mountShell();
+  const fullCommit = vi.spyOn(owner, "afterCommit");
+  const revision = owner.shellRevision();
+  const sidebar = owner.navigationSidebar;
+  const outlet = query("openclaw-router-outlet");
+  for (const open of [true, false]) {
+    owner.navDrawerOpen = open;
+    expect(owner.navDrawerOpen).toBe(open);
+    const committed = vi.fn();
+    void owner.updateComplete.then(committed);
+    expect(committed).not.toHaveBeenCalled();
+    flush();
+    await owner.updateComplete;
+    expect(owner.shellRevision()).toBe(revision);
+    expect(fullCommit).not.toHaveBeenCalled();
+    expect(query(".shell")?.classList.contains("shell--nav-drawer-open")).toBe(open);
+    expect(query("#control-ui-main")?.hasAttribute("inert")).toBe(open);
+    expect(query(".shell-nav")?.getAttribute("aria-hidden")).toBe(open ? null : "true");
+    expect(sidebar.navigationVisible).toBe(open);
+    expect(query("openclaw-app-sidebar")).toBe(sidebar);
+    expect(query("openclaw-router-outlet")).toBe(outlet);
+  }
+
+  owner.navDrawerOpen = true;
+  owner.invalidate();
+  flush();
+  await owner.updateComplete;
+  expect(fullCommit).toHaveBeenCalledOnce();
+  expect(sidebar.navigationVisible).toBe(true);
+});
+
 it("keeps the mobile New Session action live across selection and access changes", async () => {
   mockMobile(() => true);
   const { owner, runtime, query, refresh } = await mountShell();

@@ -1,5 +1,20 @@
-import type { Virtualizer } from "@tanstack/virtual-core";
-import type { TranscriptInitialRange } from "./chat-transcript-initial-range.ts";
+import type { Range, Virtualizer } from "@tanstack/virtual-core";
+
+/** Commit row keys with the header change in one setOptions; the scroll margin is relative. */
+export function commitTranscriptRows(
+  virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+  keys: readonly string[],
+  headerDelta: number,
+  rangeExtractor: (range: Range) => number[],
+): void {
+  virtualizer.setOptions({
+    ...virtualizer.options,
+    count: keys.length,
+    getItemKey: (index) => keys[index]!,
+    rangeExtractor,
+    scrollMargin: virtualizer.options.scrollMargin + headerDelta,
+  });
+}
 
 /** Compensate a header change when unchanged row keys do not trigger a prepend anchor. */
 export function reconcileTranscriptHeaderMargin(
@@ -24,21 +39,3 @@ export function reconcileTranscriptHeaderMargin(
   return headerHeight;
 }
 
-export function syncTranscriptRowsAndHeader(
-  virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
-  nextKeys: readonly string[],
-  initialRange: TranscriptInitialRange,
-  headerHeight: number,
-  appliedHeaderHeight: number,
-): number {
-  // The header margin must land in the same setOptions as the key change:
-  // exhausting history and removing its header is one edge-key adjustment.
-  virtualizer.setOptions({
-    ...virtualizer.options,
-    count: nextKeys.length,
-    getItemKey: (index) => nextKeys[index]!,
-    rangeExtractor: (range) => initialRange.extract(range),
-    scrollMargin: virtualizer.options.scrollMargin + headerHeight - appliedHeaderHeight,
-  });
-  return headerHeight;
-}

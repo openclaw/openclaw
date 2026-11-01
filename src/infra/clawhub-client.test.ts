@@ -250,3 +250,27 @@ it("does not retry 429 unless the caller enables rate-limit retries", async () =
   expect(await (await optedIn.result).response.text()).toBe("ok");
   expect(optedIn.request).toHaveBeenCalledTimes(2);
 });
+
+it("keeps one long-backoff retry for extended ClawHub outages", async () => {
+  const delays: number[] = [];
+  const request = vi
+    .fn<() => Promise<{ response: Response }>>()
+    .mockResolvedValueOnce({ response: new Response("unavailable", { status: 500 }) })
+    .mockResolvedValueOnce({ response: new Response("unavailable", { status: 500 }) })
+    .mockResolvedValueOnce({ response: new Response("unavailable", { status: 500 }) })
+    .mockResolvedValueOnce({ response: new Response("unavailable", { status: 500 }) })
+    .mockResolvedValueOnce({ response: new Response("ok") });
+
+  const result = await retryClawHubRead(request, {
+    disposeRetry: async ({ response }) => {
+      await response.body?.cancel();
+    },
+    sleep: async (ms) => {
+      delays.push(ms);
+    },
+  });
+
+  expect(await result.response.text()).toBe("ok");
+  expect(request).toHaveBeenCalledTimes(5);
+  expect(delays).toEqual([1_000, 3_000, 10_000, 30_000]);
+});

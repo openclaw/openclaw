@@ -252,6 +252,17 @@ export function projectTranscriptChain(
   return value;
 }
 
+// Message lifetime bounds fingerprint reuse across fresh frame wrappers. Snapshots
+// can replace content or blocks in the same envelope, so those identities invalidate it.
+const messageRevisions = createTranscriptMemo<string>();
+function messageRevision(message: object): string {
+  const content = asNullableRecord(message)?.content;
+  return messageRevisions(message, [content, ...(Array.isArray(content) ? content : [])], () => {
+    const identity = nativeHistoryMessageIdentity(message) ?? JSON.stringify(message);
+    return `${identity.length}:${fnv1aUtf16(identity)}`;
+  });
+}
+
 export function projectTranscriptIndex(
   chain: TranscriptIndexSource,
   expandedToolCards: Map<string, boolean>,
@@ -305,7 +316,7 @@ export function projectTranscriptIndex(
       const revision = rowRevisions(item, revisionInputs, () => {
         const messages = groups.flatMap((group) =>
           group.messages.map(({ message }) => [
-            nativeHistoryMessageIdentity(message) ?? message,
+            message && typeof message === "object" ? messageRevision(message) : message,
             props.messageReactions?.get(persistedMessageEntryId(message) ?? "") ?? [],
           ]),
         );
@@ -434,7 +445,14 @@ export function projectTranscriptRows(
     const result: TranscriptRow<ChatRenderItem>[] = take(null);
     for (const row of rows) {
       result.push(row);
-      const previews = workPreviews.get(row.key);
+      // Work outside a run frame can anchor its previews to an answer inside
+      // one; that answer renders as part of the frame row.
+      const anchors =
+        row.kind === "item" && row.item.kind === "agent-run-frame"
+          ? [row.key, ...row.item.parts.map((part) => part.key)]
+          : [row.key];
+      const anchored = anchors.flatMap((anchor) => workPreviews.get(anchor) ?? []);
+      const previews = anchored.length > 0 ? anchored : undefined;
       if (previews && !(row.kind === "item" && row.item.kind === "work-group")) {
         const content: NativeTranscriptView = { kind: "work-previews", previews };
         result.push({

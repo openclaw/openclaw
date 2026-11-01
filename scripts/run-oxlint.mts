@@ -638,7 +638,7 @@ async function prepareExtensionPackageBoundaryArtifacts(env: NodeJS.ProcessEnv) 
   });
 
   if (status !== 0) {
-    throw new Error(`prepare-extension-package-boundary-artifacts failed with exit code ${status}`);
+    throw new Error(`Boundary preparation failed (${status}). If deps changed, run pnpm install.`);
   }
 }
 

@@ -51,17 +51,12 @@ main.content:where(.content--logs-page) .content-header {
   gap: 12px;
   align-items: start;
   padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
   font-size: 12px;
   transition: background var(--duration-fast) ease;
 }
 
 .log-row:hover {
-  background: var(--bg-hover);
-}
-
-.log-row--last {
-  border-bottom: none;
+  background: var(--surface-hover);
 }
 
 .log-time,

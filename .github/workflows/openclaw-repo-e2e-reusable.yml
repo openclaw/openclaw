@@ -30,6 +30,11 @@ on:
       build_profile:
         required: true
         type: string
+      requires_sandbox_image:
+        description: Whether the selected suites require the Docker sandbox image
+        required: false
+        default: true
+        type: boolean
       suites:
         required: true
         type: string
@@ -165,6 +170,7 @@ jobs:
         if: startsWith(matrix.command, 'pnpm test:ui:e2e')
         run: pnpm --dir ui exec playwright install --with-deps webkit
       - name: Build sandbox image
+        if: inputs.requires_sandbox_image
         run: scripts/sandbox-setup.sh
       - name: Download Bun test runtime
         id: test_bun_download

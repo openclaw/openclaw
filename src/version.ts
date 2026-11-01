@@ -194,6 +194,12 @@ export function resolveRuntimeServiceCommit(): string | null {
   return RUNTIME_SERVICE_COMMIT;
 }
 
+/** Build time recorded beside the loaded build, normalized to ISO; unparseable values are omitted. */
+export function resolveRuntimeServiceBuiltAt(): string | null {
+  const builtAt = Date.parse(RUNTIME_SERVICE_BUILD?.builtAt ?? "");
+  return Number.isFinite(builtAt) ? new Date(builtAt).toISOString() : null;
+}
+
 export function resolveCompatibilityHostVersion(
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
 ): string {

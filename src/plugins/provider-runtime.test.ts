@@ -1438,7 +1438,7 @@ describe("provider-runtime", () => {
 
   it.each([
     { change: "API", normalized: { api: "openai-responses" as const } },
-    { change: "base URL", normalized: { baseUrl: "https://normalized.example/v1" } },
+    { change: "base URL", normalized: { baseUrl: "https://api.openai.com/v1/normalized" } },
   ])("applies foreign transport $change normalization for custom hosts", ({ normalized }) => {
     const model = {
       ...MODEL,

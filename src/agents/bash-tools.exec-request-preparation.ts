@@ -34,6 +34,7 @@ import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import { type ExecWorkdirResolution, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
 import { buildSandboxEnv, coerceEnv } from "./bash-tools.shared.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
+import { EXEC_NODE_PATH_PREPEND_WARNING } from "./exec-node-path-prepend.js";
 import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
 import { sanitizeEnvVars } from "./sandbox/sanitize-env-vars.js";
 import { isSubagentEnvelopeSession } from "./subagents/spawn/subagent-capabilities.js";
@@ -557,9 +558,7 @@ export function resolvePreparedExecEnvironment(params: {
   // The Gateway CLI shim is merged in automatically and only exists on the Gateway host.
   if (params.host === "node") {
     if (omitGatewayAgentCliPath(params.defaultPathPrepend).length > 0) {
-      params.warnings.push(
-        "Warning: tools.exec.pathPrepend is ignored for host=node. Configure PATH on the node host/service instead.",
-      );
+      params.warnings.push(EXEC_NODE_PATH_PREPEND_WARNING);
     }
   } else {
     applyPathPrepend(env, params.defaultPathPrepend);

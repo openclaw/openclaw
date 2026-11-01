@@ -184,7 +184,7 @@ per-export differences.
 
 OpenClaw's Vitest-backed test-helper subpaths are repo-local only and are no
 longer package exports: `agent-runtime-test-contracts`,
-`channel-contract-testing`, `channel-target-testing`, `channel-test-helpers`,
+`channel-contract-testing`, `channel-test-helpers`,
 `compiled-subprocess-testing`,
 `plugin-state-test-runtime`, `plugin-test-api`, `plugin-test-contracts`,
 `plugin-test-runtime`, `provider-http-test-mocks`, `provider-test-contracts`,
@@ -586,7 +586,6 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/plugin-test-api` | Repo-local minimal `createTestPluginApi` helper for direct plugin registration unit tests without importing repo test helper bridges |
     | `plugin-sdk/agent-runtime-test-contracts` | Repo-local native agent-runtime adapter contract fixtures for auth, delivery, fallback, tool-hook, prompt-overlay, schema, and transcript projection tests |
     | `plugin-sdk/channel-test-helpers` | Repo-local channel-oriented test helpers for generic actions/setup/status contracts, directory assertions, account startup lifecycle, send-config threading, runtime mocks, status issues, outbound delivery, and hook registration |
-    | `plugin-sdk/channel-target-testing` | Repo-local shared target-resolution error-case suite for channel tests |
     | `plugin-sdk/channel-contract-testing` | Repo-local narrow channel contract test helpers without the broad testing barrel |
     | `plugin-sdk/compiled-subprocess-testing` | Repo-local side-effect-only compiled-subprocess declaration preload for test collection; no exports or production package artifacts |
     | `plugin-sdk/plugin-test-contracts` | Repo-local plugin package, registration, public artifact, runtime API, and import side-effect contract helpers |

@@ -258,10 +258,14 @@ export abstract class ChatPaneHistory extends ChatPaneHistoryPackets {
           !this.visuallyPresented ||
           document.visibilityState === "hidden" ||
           !this.transcript.isPositionSettled ||
-          this.transcript.isProgrammaticScroll ||
-          this.transcript.isMaintenanceScroll ||
           !entries.some((entry) => entry.isIntersecting)
         ) {
+          return;
+        }
+        if (this.transcript.isProgrammaticScroll || this.transcript.isMaintenanceScroll) {
+          // A layout correction can land in the frame the reader reaches the edge, and an
+          // unchanged intersection is never reported again: let the next sync observe anew.
+          this.clearHistoryObserver();
           return;
         }
         const readerIntent = this.historyObserverArmed;
@@ -351,9 +355,7 @@ export abstract class ChatPaneHistory extends ChatPaneHistoryPackets {
 
   protected consumeHistoryIntent(): boolean {
     const consumed = this.historyIntentTimer !== null;
-    if (this.historyIntentTimer !== null) {
-      window.clearTimeout(this.historyIntentTimer);
-    }
+    window.clearTimeout(this.historyIntentTimer ?? undefined);
     this.historyIntentTimer = window.setTimeout(() => {
       this.historyIntentTimer = null;
     }, CHAT_HISTORY_INTENT_IDLE_MS);

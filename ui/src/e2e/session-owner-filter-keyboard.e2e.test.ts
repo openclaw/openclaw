@@ -145,6 +145,7 @@ suite.define(() => {
         const list = page.getByRole("listbox", { name: "Owners", exact: true });
         await settleSidebarMenuMotion(list);
         await expectContained(list, viewport);
+        await page.locator(".sidebar-session-owner-filter .header-search__toggle").click();
         await page
           .getByRole("combobox", { name: "Search", exact: true })
           .fill(ownerOptions.at(-1)!.id);

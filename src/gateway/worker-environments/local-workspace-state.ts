@@ -18,6 +18,7 @@ import {
   stageLocalWorkspaceCheckpoint,
   type LocalWorkspaceSyncTarget as Direction,
 } from "./local-workspace-checkpoint.js";
+import { LocalWorkspaceConflictError } from "./local-workspace-conflict-error.js";
 import {
   admitLocalWorkspaceSourcePaths,
   captureLocalWorkspaceArchiveBaseline,
@@ -29,6 +30,7 @@ import type {
   LocalWorkspaceManifestAction,
   LocalWorkspaceManifestCheckpoint,
 } from "./local-workspace-manifest-scan.js";
+import { assertLocalWorkspaceProjectionOwner } from "./local-workspace-owner-identity.js";
 import type { LocalWorkspaceStore, LocalWorkspaceProjection } from "./local-workspace-store.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
@@ -72,17 +74,7 @@ export function projectionOperations(
       throw new Error("Local workspace binding is missing");
     }
     assertCurrent?.();
-    if (
-      row.worktree_id !== owner.worktree.id ||
-      row.agent_id !== owner.agentId ||
-      row.session_key !== owner.sessionKey ||
-      row.session_id !== owner.sessionId ||
-      row.lifecycle_revision !== owner.lifecycleRevision
-    ) {
-      throw new Error(
-        "Local sandbox workspace belongs to a different session incarnation; pending edits were preserved",
-      );
-    }
+    assertLocalWorkspaceProjectionOwner(row, owner);
     if (row.projection_path !== projectionPath || store.get()?.revision !== row.revision) {
       throw new Error("Local workspace binding changed");
     }
@@ -235,16 +227,18 @@ export function projectionOperations(
     if (!selected.journal_pack || !pendingDirection(selected.pending_target)) {
       throw new Error("Local workspace recovery metadata is incomplete");
     }
-    const journal = {
-      ...parseWorkerWorkspaceReconciliationPlan(selected.journal_json),
-      basePack: selected.journal_pack,
-    };
-    await recoverWorkerWorkspaceReconciliation({
-      root: targetPath(pendingDirection(selected.pending_target)!),
-      journal,
-      buildCacheInputs: await buildCacheInputs(),
-      assertCurrent,
-    });
+    // A base refresh keeps its receipt and paused runtime until both sides accept it, so an
+    // interrupted application resumes from the files it already wrote. Restoring them would
+    // discard that progress, and a refresh longer than one turn's deadline could never finish.
+    if (!isLocalWorkspaceBaseRefreshRef(selected.pending_ref)) {
+      const plan = parseWorkerWorkspaceReconciliationPlan(selected.journal_json);
+      await recoverWorkerWorkspaceReconciliation({
+        root: targetPath(pendingDirection(selected.pending_target)!),
+        journal: { ...plan, basePack: selected.journal_pack },
+        buildCacheInputs: await buildCacheInputs(),
+        assertCurrent,
+      });
+    }
     await update({ journal_json: null, journal_pack: null });
   };
   const cleanupAccepted = async () => {
@@ -455,9 +449,7 @@ export function projectionOperations(
       return;
     }
     if (current().pending_target) {
-      throw new Error(
-        "Local sandbox edits conflict with the managed workspace; pending changes were preserved. Resolve the workspace conflicts before retrying.",
-      );
+      throw new LocalWorkspaceConflictError();
     }
     if (!retainAccepted) {
       await cleanupAccepted();

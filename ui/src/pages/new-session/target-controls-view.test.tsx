@@ -143,15 +143,13 @@ it.each([
       />
     ));
     await waitForSolid(() =>
-      expect(container.querySelector(".new-session-page__project-search input")).not.toBeNull(),
+      expect(container.querySelector(".header-search__input")).not.toBeNull(),
     );
     const available = writable && advertised;
     const clone = container.querySelector<HTMLButtonElement>('[data-value="project-clone-url"]');
     expect(clone !== null).toBe(available);
     if (enter) {
-      const input = container.querySelector<HTMLInputElement>(
-        ".new-session-page__project-search input",
-      )!;
+      const input = container.querySelector<HTMLInputElement>(".header-search__input")!;
       if (composing === "end") {
         input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
       }

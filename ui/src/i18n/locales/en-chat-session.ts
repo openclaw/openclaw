@@ -9,6 +9,9 @@ const enChatSession = {
     savedConversation: "Saved conversation · {status}",
     sessionAutomation: {
       everyDuration: "Every {duration}",
+      onceAt: "{day} at {time}",
+      today: "Today",
+      tomorrow: "Tomorrow",
     },
     activityPills: {
       publication: {
@@ -34,8 +37,6 @@ const enChatSession = {
       automationEmpty: en.chat.sessionDetails.automationEmpty,
       automationMore: en.chat.sessionDetails.automationMore,
       automationAttention: en.chat.sessionDetails.automationAttention,
-      automationChecked: "Checked",
-      automationCheckFailed: "Check failed",
       automationPaused: en.chat.sessionDetails.automationPaused,
       automationEnabled: en.chat.sessionDetails.automationEnabled,
     },

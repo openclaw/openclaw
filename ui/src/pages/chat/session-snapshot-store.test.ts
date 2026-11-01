@@ -12,6 +12,7 @@ import {
 import { chatThumbnailWeight } from "../../lib/chat/row-display-facts.ts";
 import { cacheChatBoardSnapshotAfterHydration } from "./chat-board-snapshot.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { prewarmChatSnapshot } from "./chat-snapshot-prewarm.ts";
 import {
   cacheChatSessionSnapshot,
   applyChatCacheSnapshot,
@@ -31,7 +32,6 @@ import {
   deleteStoredChatSnapshot,
 } from "./session-snapshot-invalidation.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
-import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
 import { CHAT_SNAPSHOT_PROJECTION_VERSION } from "./session-snapshot-record.ts";
 import {
   cacheSnapshot,
@@ -528,7 +528,7 @@ describe("persistent chat session snapshots", () => {
     await putRawRecord(
       {
         sessionKey: sidebarKey,
-        projectionVersion: 3,
+        projectionVersion: 4,
         savedAt: Date.now(),
         model: { ...sidebarSnapshot, peoplePresenceFilter: undefined, offlineUsers: undefined },
       },
@@ -616,6 +616,8 @@ describe("persistent chat session snapshots", () => {
     { mode: "prewarmed", projectionVersion: 1 },
     { mode: "direct", projectionVersion: 10 },
     { mode: "prewarmed", projectionVersion: 10 },
+    { mode: "direct", projectionVersion: 13 },
+    { mode: "prewarmed", projectionVersion: 13 },
   ])(
     "discards the previous projection ($mode, version $projectionVersion)",
     async ({ mode, projectionVersion }) => {
@@ -721,28 +723,33 @@ describe("persistent chat session snapshots", () => {
         },
       },
     ],
-  ])("resets corrupt %s without hydrating unrelated transcripts", async (corruption, value) => {
-    const valid = key("agent:main:valid");
-    const corrupt = key("agent:main:corrupt");
-    await persist(writer, valid, snapshot("valid"));
-    await putRawRecord(
-      { ...envelope(corrupt, snapshot()), snapshot: value },
-      corruption === "metadata"
-        ? { sessionKey: corrupt, savedAt: "invalid", weight: 0 }
-        : undefined,
-    );
-    const reader = new SessionSnapshotStore();
-    await reader.loadSavedAtIndex();
-    if (corruption !== "metadata") {
-      expect(reader.readSavedAt(valid)).not.toBeNull();
-      expect(reader.readSavedAt(corrupt)).not.toBeNull();
-      expect(await reader.read(corrupt)).toBeNull();
-    } else {
-      expect(reader.readSavedAt(corrupt)).toBeNull();
-    }
-    expect(await readStoredChatSnapshotRecord(corrupt)).toBeUndefined();
-    expect(await reader.read(valid)).toBeNull();
-  });
+  ])(
+    "rejects corrupt %s while retaining unrelated transcripts for record-local corruption",
+    async (corruption, value) => {
+      const valid = key("agent:main:valid");
+      const corrupt = key("agent:main:corrupt");
+      await persist(writer, valid, snapshot("valid"));
+      await putRawRecord(
+        { ...envelope(corrupt, snapshot()), snapshot: value },
+        corruption === "metadata"
+          ? { sessionKey: corrupt, savedAt: "invalid", weight: 0 }
+          : undefined,
+      );
+      const reader = new SessionSnapshotStore();
+      await reader.loadSavedAtIndex();
+      if (corruption !== "metadata") {
+        expect(reader.readSavedAt(valid)).not.toBeNull();
+        expect(reader.readSavedAt(corrupt)).not.toBeNull();
+        expect(await reader.read(corrupt)).toBeNull();
+      } else {
+        expect(reader.readSavedAt(corrupt)).toBeNull();
+      }
+      expect(await readStoredChatSnapshotRecord(corrupt)).toBeUndefined();
+      expect(await reader.read(valid)).toEqual(
+        corruption === "metadata" ? null : snapshot("valid"),
+      );
+    },
+  );
 
   it.each(["unrelated", "session", "cache-eviction", "all"] as const)(
     "settles an in-flight transcript through %s invalidation",

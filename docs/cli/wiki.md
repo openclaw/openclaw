@@ -199,6 +199,10 @@ retain their existing lookup fallbacks and may scan the vault.
 Wiki-page reads support large files and hard links. Reads refuse paths that
 escape the vault or pass through a symbolic link inside it.
 
+Pagination counts real body lines, not the empty split element after a terminal
+newline. A read ending on the last line reports `truncated: false`; intentional
+blank lines are preserved.
+
 ```bash
 openclaw wiki get entity.alpha
 openclaw wiki get syntheses/alpha-summary.md --from 1 --lines 80
@@ -212,6 +216,8 @@ Apply narrow mutations without freeform page surgery:
 - `apply metadata <lookup>`: update metadata on an existing page
 
 Both accept `--source-id`, `--contradiction`, `--question` (each repeatable), `--confidence <n>` (0-1), and `--status <status>`. `apply metadata` also accepts `--clear-confidence` to remove a stored confidence value. This is the supported way to evolve wiki pages so managed generated blocks stay intact.
+
+Refreshing a synthesis without `--status` preserves its existing status. New synthesis pages default to `active`; an explicit `--status` sets or replaces the value.
 
 For `apply synthesis`, pass the summary with `--body <text>` or `--body-file <path>`.
 Body files must be regular files containing nonempty UTF-8 text. Symlinks to

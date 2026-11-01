@@ -14,7 +14,7 @@ it("resolves private QA delivery helpers from bundled flow expressions", async (
   const configs = Array.isArray(buildConfigs) ? buildConfigs : [buildConfigs];
   const selected = configs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
   expect(selected).toBeDefined();
-  const root = fs.realpathSync(tempDirs.make("openclaw-qa-flow-bundle-"));
+  const root = tempDirs.make("openclaw-qa-flow-bundle-");
   fs.copyFileSync("package.json", path.join(root, "package.json"));
   fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "dir");
   const { bundles } = await build({
