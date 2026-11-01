@@ -29,15 +29,11 @@ type MatrixStartupVerificationState = {
 export type MatrixStartupVerificationOutcome =
   | {
       kind: "disabled" | "verified" | "cooldown" | "pending" | "requested" | "request-failed";
-      verification: MatrixOwnDeviceVerificationStatus;
-      requestId?: string;
-      transactionId?: string;
       error?: string;
       retryAfterMs?: number;
     }
   | {
       kind: "unsupported";
-      verification?: undefined;
     };
 
 function createStartupVerificationStore(params: { env?: NodeJS.ProcessEnv; stateDir?: string }) {
@@ -115,7 +111,6 @@ export async function ensureMatrixStartupVerification(params: {
       });
     return {
       kind: verification.verified ? "verified" : "disabled",
-      verification,
     };
   }
 
@@ -125,7 +120,6 @@ export async function ensureMatrixStartupVerification(params: {
   ) {
     return {
       kind: "pending",
-      verification,
     };
   }
 
@@ -152,7 +146,6 @@ export async function ensureMatrixStartupVerification(params: {
   if (retryAfterMs !== undefined) {
     return {
       kind: "cooldown",
-      verification,
       retryAfterMs,
     };
   }
@@ -180,9 +173,6 @@ export async function ensureMatrixStartupVerification(params: {
     });
     return {
       kind: "requested",
-      verification,
-      requestId: request.id,
-      transactionId: request.transactionId,
     };
   } catch (err) {
     const error = formatErrorMessage(err);
@@ -191,7 +181,6 @@ export async function ensureMatrixStartupVerification(params: {
     });
     return {
       kind: "request-failed",
-      verification,
       error,
     };
   }

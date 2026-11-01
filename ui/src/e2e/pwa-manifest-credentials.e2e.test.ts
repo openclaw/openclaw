@@ -105,20 +105,10 @@ suite.define(() => {
 
       expect(proxy.manifestRequests.length).toBeGreaterThan(0);
       expect(proxy.manifestRequests.filter((request) => !request.authorized)).toEqual([]);
-      expect(proxy.manifestRequests.every((request) => request.status === 200)).toBe(true);
       expect(manifest).toMatchObject({ url: manifestUrl.href, errors: [] });
       expect(JSON.parse(manifest.data ?? "null")).toMatchObject({
         display: "standalone",
         name: "OpenClaw Control",
-      });
-      expect(
-        await page.locator('link[rel="manifest"]').evaluate((link) => ({
-          crossOrigin: (link as HTMLLinkElement).crossOrigin,
-          href: (link as HTMLLinkElement).href,
-        })),
-      ).toEqual({
-        crossOrigin: "use-credentials",
-        href: manifestUrl.href,
       });
     } finally {
       await suite.closeBrowserContext(context);

@@ -1,17 +1,28 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql } from "kysely";
+import { readBackgroundResultPlacement } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
+import {
+  jsonObjectFieldsForScan,
+  jsonScannedValue,
+} from "../../infra/database-engine/json-values.js";
 import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
+import {
+  readJsonPredicateScalar,
+  scanJsonObjectFields,
+} from "../../state/json-predicate-fields.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type {
   TranscriptEvent,
   TranscriptEventAppendOptions,
   TranscriptMessageAppendOptions,
 } from "./session-accessor.sqlite-contract.js";
+import { selectActiveTranscriptEventRows } from "./session-accessor.sqlite-projection-read.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { selectTranscriptAppendParentIdentity } from "./session-accessor.sqlite-transcript-state.queries.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import { projectTranscriptNavigationSql } from "./session-model-context-projection.js";
 import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
@@ -24,6 +35,7 @@ import {
   resolveTranscriptAppendParent,
 } from "./transcript-append-parent.js";
 import { transcriptEventNavigationSql } from "./transcript-payload.js";
+import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 import {
   isSessionTranscriptLeafControl,
   parseSessionTranscriptTreeEntry,
@@ -142,29 +154,14 @@ export function canRebasePreparedAssistantInTransaction(
           "identity.parent_id",
           "active.message_position",
           "rewrite.generation",
-          /* kysely-allow-raw: validate the canonical message role without hydrating content. */
-          sql<string>`json_extract(${transcriptEventNavigationSql(database.db, "event")}, '$.message.role')`.as(
-            "message_role",
-          ),
-          /* kysely-allow-raw: only exact canonical booleans exempt a command from model context. */
-          sql<
-            number | null
-          >`json_type(${transcriptEventNavigationSql(database.db, "event")}, '$.message.excludeFromContext') = 'true'
-            AND json_type(${transcriptEventNavigationSql(database.db, "event")}, '$.message.__openclaw.contextFreeCommand') = 'true'`.as(
-            "context_free_command",
-          ),
-          /* kysely-allow-raw: classify realtime voice records without hydrating content. */
-          sql<
-            string | null
-          >`json_extract(${transcriptEventNavigationSql(database.db, "event")}, '$.message.provenance.kind')`.as(
-            "provenance_kind",
-          ),
-          /* kysely-allow-raw: pair the kind with its channel so a partial marker cannot match. */
-          sql<
-            string | null
-          >`json_extract(${transcriptEventNavigationSql(database.db, "event")}, '$.message.provenance.sourceChannel')`.as(
-            "provenance_source_channel",
-          ),
+          jsonObjectFieldsForScan(database.db, transcriptEventNavigationSql(database.db, "event"), {
+            message: {
+              role: true,
+              excludeFromContext: true,
+              __openclaw: { contextFreeCommand: true },
+              provenance: { kind: true, sourceChannel: true },
+            },
+          }).as("message_json"),
         ])
         .where("identity.session_id", "=", sessionId)
         .where("identity.seq", ">=", newerMessageMetadata[0]!.seq)
@@ -174,7 +171,43 @@ export function canRebasePreparedAssistantInTransaction(
         .limit(PREPARED_ASSISTANT_MAX_NEWER_MESSAGES),
     ),
   );
-  return preparedAssistantMessagesPreserveTurn(newerRoles, admittedUserId, (row) => {
+  const newerFacts = newerRoles.map((row) => {
+    const event = scanJsonObjectFields(row.message_json, ["message"]);
+    // SQLite's depth limit does not make a valid navigation envelope corrupt.
+    assertTranscriptNavigationValid(event.valid ? 1 : 0);
+    const message = event.first.get("message");
+    const fields = scanJsonObjectFields(message?.kind === "object" ? message.text : "{}", [
+      "role",
+      "excludeFromContext",
+      "__openclaw",
+      "provenance",
+    ]).first;
+    const internal = fields.get("__openclaw");
+    const command = scanJsonObjectFields(internal?.kind === "object" ? internal.text : "{}", [
+      "contextFreeCommand",
+    ]).first.get("contextFreeCommand");
+    const provenance = fields.get("provenance");
+    const source = scanJsonObjectFields(provenance?.kind === "object" ? provenance.text : "{}", [
+      "kind",
+      "sourceChannel",
+    ]).first;
+    return {
+      event_id: row.event_id,
+      seq: row.seq,
+      parent_id: row.parent_id,
+      message_position: row.message_position,
+      generation: row.generation,
+      message_role: jsonScannedValue(fields.get("role")),
+      context_free_command:
+        readJsonPredicateScalar(fields.get("excludeFromContext")) === true &&
+        readJsonPredicateScalar(command) === true
+          ? 1
+          : 0,
+      provenance_kind: jsonScannedValue(source.get("kind")),
+      provenance_source_channel: jsonScannedValue(source.get("sourceChannel")),
+    };
+  });
+  return preparedAssistantMessagesPreserveTurn(newerFacts, admittedUserId, (row) => {
     const answer = questionAnswers.find((input) => input.entryId === row.event_id);
     return (
       answer !== undefined &&
@@ -203,6 +236,14 @@ export function resolveTranscriptEventAppendParent(
     appendIntent: "active-branch",
     parentId,
   });
+  const placement = readBackgroundResultPlacement(event);
+  if (placement) {
+    return {
+      ...event,
+      parentId: effectiveParentId,
+      data: { ...placement, afterEntryId: effectiveParentId },
+    };
+  }
   return effectiveParentId === parentId ? event : { ...event, parentId: effectiveParentId };
 }
 
@@ -210,8 +251,9 @@ export function resolveTranscriptMessageAppendParent<TMessage>(
   database: Pick<OpenClawAgentDatabase, "db" | "path">,
   sessionId: string,
   options: Pick<TranscriptMessageAppendOptions<TMessage>, "appendIntent" | "parentId">,
+  prepared?: TranscriptAppendParentPreparation,
 ): string | null {
-  const tailId = readActiveTranscriptAppendParentId(database, sessionId);
+  const tailId = readActiveTranscriptAppendParentId(database, sessionId, prepared);
   return resolveTranscriptAppendParent({
     tailId,
     parentId: options.parentId,
@@ -220,6 +262,14 @@ export function resolveTranscriptMessageAppendParent<TMessage>(
       transcriptEntryIsAncestor(database, sessionId, leafId, candidateId),
   });
 }
+
+export type TranscriptAppendParentPreparation = {
+  latest:
+    | Awaited<
+        ReturnType<ReturnType<typeof selectTranscriptAppendParentIdentity>["execute"]>
+      >[number]
+    | null;
+};
 
 /** Checks the durable tree directly when the materialized active-path projection is dirty. */
 export function isTranscriptEntryOnActivePathInTransaction(
@@ -311,13 +361,7 @@ export function readTranscriptVisibleTailEntryIdInTransaction(
   if (!sessionTranscriptIndexNeedsReconcile(database.db, sessionId)) {
     const tail = executeSqliteQueryTakeFirstSync(
       database.db,
-      db
-        .selectFrom("session_transcript_active_events as active")
-        .innerJoin("transcript_events as event", (join) =>
-          join
-            .onRef("event.session_id", "=", "active.session_id")
-            .onRef("event.seq", "=", "active.event_seq"),
-        )
+      selectActiveTranscriptEventRows(database)
         .select(
           projectTranscriptNavigationSql(
             database.db,
@@ -377,6 +421,7 @@ export function readTranscriptVisibleTailEntryIdInTransaction(
 function readActiveTranscriptAppendParentId(
   database: Pick<OpenClawAgentDatabase, "db" | "path">,
   sessionId: string,
+  prepared?: TranscriptAppendParentPreparation,
 ): string | null {
   const actor = readSessionActorTransactionState(database, { sessionId });
   if (actor?.transcript.complete) {
@@ -389,24 +434,12 @@ function readActiveTranscriptAppendParentId(
     actor?.transcript.navigation.findLast((event) => event.seq === retainedIdentity.seq);
   const latest = retainedNavigation
     ? undefined
-    : executeSqliteQueryTakeFirstSync(
-        database.db,
-        db
-          .selectFrom("transcript_event_identities as ti")
-          .innerJoin("transcript_events as te", (join) =>
-            join.onRef("te.session_id", "=", "ti.session_id").onRef("te.seq", "=", "ti.seq"),
-          )
-          .select([
-            "ti.event_type",
-            projectTranscriptNavigationSql(
-              database.db,
-              transcriptEventNavigationSql(database.db, "te"),
-            ).as("event_json"),
-          ])
-          .where("ti.session_id", "=", sessionId)
-          .orderBy("ti.seq", "desc")
-          .limit(1),
-      );
+    : prepared && !actor
+      ? prepared.latest
+      : executeSqliteQueryTakeFirstSync(
+          database.db,
+          selectTranscriptAppendParentIdentity(database, sessionId),
+        );
   const resolveFromNavigation = () =>
     scanSessionTranscriptTree(readTranscriptNavigationEvents(database, sessionId)).appendParentId;
   if (!retainedNavigation && !latest) {

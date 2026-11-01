@@ -30,20 +30,17 @@ suite.define(() => {
         { locale: "en-US", colorScheme: "dark", viewport: { width: 1440, height: 1000 } },
         async ({ page }) => {
           const gateway = await installMockGateway(page, {
-            models: [
-              {
-                provider: "openai",
-                id: "fixture-primary",
-                name: "Fixture primary",
-                available: true,
-              },
-              {
-                provider: "anthropic",
-                id: "fixture-secondary",
-                name: "Fixture secondary",
-                available: true,
-              },
-            ],
+            models: (
+              [
+                ["openai", "primary"],
+                ["anthropic", "secondary"],
+              ] as const
+            ).map(([provider, name]) => ({
+              provider,
+              id: `fixture-${name}`,
+              name: `Fixture ${name}`,
+              available: true,
+            })),
             methodResponses: {
               "config.get": { config: {}, hash: "model-provider-read-errors" },
               "models.authStatus": authStatus,
@@ -56,10 +53,13 @@ suite.define(() => {
             routeId: "model-providers",
           });
           const search = page.getByRole("searchbox", { name: "Search providers" });
-          await search.fill("anthropic");
-          await expect.poll(() => page.locator(".provider-row[data-provider-id]").count()).toBe(1);
-          await search.fill("");
-          await expect.poll(() => page.locator(".provider-row[data-provider-id]").count()).toBe(2);
+          const filter = async (query: string, count: number) => {
+            await search.fill(query);
+            await expect
+              .poll(() => page.locator(".provider-row[data-provider-id]").count())
+              .toBe(count);
+          };
+          await filter("", 2);
           const list = page.locator(".model-providers__provider-list");
           expect(await list.getByRole("alert").count()).toBe(0);
           await gateway.setMethodResponse(method, {
@@ -81,17 +81,13 @@ suite.define(() => {
               await list.ariaSnapshot(),
             );
           }
-          expect(await list.getByRole("alert").filter({ hasText: message }).count()).toBe(1);
-          const originalAlert = await list
-            .getByRole("alert")
-            .filter({ hasText: message })
-            .elementHandle();
+          const alert = list.getByRole("alert").filter({ hasText: message });
+          expect(await alert.count()).toBe(1);
+          const originalAlert = await alert.elementHandle();
           expect(originalAlert).not.toBeNull();
-          await search.fill("anthropic");
-          await expect.poll(() => page.locator(".provider-row[data-provider-id]").count()).toBe(1);
+          await filter("anthropic", 1);
           expect(await originalAlert?.evaluate((element) => element.isConnected)).toBe(true);
-          await search.fill("");
-          await expect.poll(() => page.locator(".provider-row[data-provider-id]").count()).toBe(2);
+          await filter("", 2);
           expect(await originalAlert?.evaluate((element) => element.isConnected)).toBe(true);
 
           const waitingRead = await gateway.deferNext("models.authStatus");

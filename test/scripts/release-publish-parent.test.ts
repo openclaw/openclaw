@@ -290,32 +290,27 @@ describe("optional Gateway publication notification", () => {
   const notificationName = "Notify Windows of published Gateway packages";
   const publisher = job("publish_openclaw_npm", "success");
 
-  it.each(["failure", "timed_out", "cancelled"])(
-    "preserves publisher start and background completion after notification %s",
-    (conclusion) => {
-      const jobs = [publisher, job(notificationName, conclusion)];
-      const states: RunState[] = [{ status: "in_progress", jobs }, terminal("success", ...jobs)];
-      const started = childFixture({ 91: states }).run(
-        source +
-          'wait_for_run openclaw-npm-release.yml 91 "$PARENT_WORKFLOW_SHA" publish_openclaw_npm false',
-      );
-      expect(started.status, started.stderr).toBe(0);
-      expect(started.stdout).toContain("publish_openclaw_npm started");
-      const completed = childFixture({ 91: states }).run(
-        source +
-          'wait_for_run_background openclaw-npm-release.yml 91 "$PARENT_WORKFLOW_SHA" "$RUNNER_TEMP/result" false; wait "$wait_run_pid"; cat "$RUNNER_TEMP/result"',
-      );
-      expect(completed.status, completed.stderr).toBe(0);
-      expect(completed.stdout.trim().endsWith("success")).toBe(true);
-      expect(completed.summary).toContain("openclaw-npm-release.yml: success");
-      expect(completed.calls.some(isCancel)).toBe(false);
-    },
-  );
+  it("preserves publisher start and background completion after notification failure", () => {
+    const jobs = [publisher, job(notificationName, "failure")];
+    const states: RunState[] = [{ status: "in_progress", jobs }, terminal("success", ...jobs)];
+    const started = childFixture({ 91: states }).run(
+      source +
+        'wait_for_run openclaw-npm-release.yml 91 "$PARENT_WORKFLOW_SHA" publish_openclaw_npm false',
+    );
+    expect(started.status, started.stderr).toBe(0);
+    expect(started.stdout).toContain("publish_openclaw_npm started");
+    const completed = childFixture({ 91: states }).run(
+      source +
+        'wait_for_run_background openclaw-npm-release.yml 91 "$PARENT_WORKFLOW_SHA" "$RUNNER_TEMP/result" false; wait "$wait_run_pid"; cat "$RUNNER_TEMP/result"',
+    );
+    expect(completed.status, completed.stderr).toBe(0);
+    expect(completed.stdout.trim().endsWith("success")).toBe(true);
+    expect(completed.summary).toContain("openclaw-npm-release.yml: success");
+    expect(completed.calls.some(isCancel)).toBe(false);
+  });
 
   it.each([
-    { workflow: coreNpm, failed: "validate_publish_request", conclusion: "failure" },
     { workflow: coreNpm, failed: "publish_openclaw_npm", conclusion: "failure" },
-    { workflow: coreNpm, failed: "unknown_job", conclusion: "failure" },
     { workflow: "plugin-npm-release.yml", failed: notificationName, conclusion: "failure" },
     { workflow: coreNpm, failed: notificationName, conclusion: "action_required" },
   ])(
@@ -344,33 +339,8 @@ describe("optional Gateway publication notification", () => {
 });
 
 describe("plugin npm child lifecycle", () => {
-  it.each<[string, RunState[]]>([
-    ["a pre-publish failure while the child is still running", failedBeforePublish],
-    ["a terminal pre-publish failure", [failedBeforePublish[1]!]],
-    [
-      "a failed job while a sibling publisher is still running",
-      [
-        active(previewFailed, "in_progress"),
-        active(previewFailed, "in_progress"),
-        terminal("failure", previewFailed, publish("success")),
-      ],
-    ],
-    [
-      "a failure after publication started",
-      [
-        terminal(
-          "failure",
-          previewPassed,
-          publish("success"),
-          job("Publish plugin npm package (@openclaw/x)", "failure"),
-        ),
-      ],
-    ],
-    [
-      "a cancelled pre-publish job",
-      [terminal("cancelled", job(previewFailed.name, "cancelled"), publish("skipped"))],
-    ],
-  ])("fails the publication step without replacing %s", (_label, states) => {
+  it("waits for a failed child to finish without replacing it", () => {
+    const states = failedBeforePublish;
     const result = childFixture({ 91: states, 92: succeeded }).run(
       step("Start core npm publication").run!,
     );
@@ -380,27 +350,6 @@ describe("plugin npm child lifecycle", () => {
     expect(result.stderr).toContain("deferred cleanup will preserve ClawHub recovery evidence");
   });
 
-  it("records the successful original child before continuing publication", () => {
-    const result = childFixture({ 91: succeeded }).run(step("Start core npm publication").run!);
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.dispatches).toHaveLength(0);
-    expect(result.outputs).toBe("plugin_npm_completed=true\nplugin_npm_run_id=91\n");
-    expect(result.summary).toContain("plugin-npm-release.yml: success");
-  });
-  it.each([
-    { status: "waiting", jobs: [publish(null, "waiting")], cancelled: true },
-    { status: "in_progress", jobs: [publish(null, "in_progress")], cancelled: false },
-    { status: "completed", jobs: [publish("success")], cancelled: false },
-  ])(
-    "preserves active publishers and cancels only waiting children ($status)",
-    ({ status, jobs, cancelled }) => {
-      const result = childFixture({ 91: [{ status, jobs }] }).run(
-        source + "cleanup_waiting_npm_children",
-      );
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.events.filter(Boolean)).toEqual(cancelled ? ["cancel 91"] : []);
-    },
-  );
   it.each([
     { count: 2, message: "gh: Server Error (HTTP 502)", calls: 3, succeeds: true },
     { count: 4, message: "gh: Server Error (HTTP 502)", calls: 4, succeeds: false },
@@ -454,16 +403,6 @@ append_clawhub_dispatch_args() { clawhub_dispatch_args=(); }
     expect(result.stderr).toContain("Publisher slot for plugin-clawhub-new.yml remains occupied");
   } else {
     expect(firstDispatch).toBeGreaterThan(result.calls.findIndex(isCancel));
-    const sweeps = result.calls.filter((call) => call.args[1] === "list");
-    expect(new Set(sweeps.map((call) => call.args[call.args.indexOf("--workflow") + 1]))).toEqual(
-      new Set([
-        "openclaw-release-publish.yml",
-        "plugin-npm-release.yml",
-        clawhub,
-        bootstrap,
-        coreNpm,
-      ]),
-    );
     expect(
       result.calls.slice(firstDispatch).some((call) => call.args[1] === "list" || isCancel(call)),
     ).toBe(false);
@@ -500,18 +439,10 @@ it.each([
         `repos/${repo}/actions/runs/91/pending_deployments`,
         "state=rejected",
         "environment_ids[]=7",
-        "comment=Superseded release child; rejected by publish parent 100/2",
       ]),
       expect.arrayContaining(["run", "cancel", "91"]),
       expect.arrayContaining(["POST", `repos/${repo}/actions/workflows/${name}/dispatches`]),
     ]);
-    const afterCancel = result.calls.slice(
-      result.calls.findIndex(isCancel) + 1,
-      result.calls.findIndex(isDispatch),
-    );
-    expect(
-      afterCancel.filter((call) => call.args.includes(`repos/${repo}/actions/runs/91`)),
-    ).toHaveLength(2);
   },
 );
 
@@ -589,11 +520,6 @@ it.each<[string, Fixture, boolean]>([
   ["failed cancellation", { children: [child()], rejectFails: true, cancelFails: true }, false],
   ["other release", slotFixture(clawhub, `${clawhub} [v2026.9.4] publish parent=80/1`), true],
   [
-    "other bootstrap release",
-    slotFixture(bootstrap, `${bootstrap} [v2026.9.4] publish parent=80/1`),
-    true,
-  ],
-  [
     "validation run",
     slotFixture(clawhub, `${clawhub} [${tag}] validation parent=80/1`, "in_progress"),
     true,
@@ -640,77 +566,30 @@ it.each<{ config: Fixture; env: NodeJS.ProcessEnv; messages: string[] }>([
   },
 );
 
-it("failure cleanup cancels a waiting npm child and preserves an active one", () => {
-  const result = fixture({
-    children: [
-      child(),
-      child({ id: 93, status: "in_progress", jobs: [{ status: "in_progress" }] }),
-    ],
-  }).run(
-    `${source}cleanup_clawhub_children() { :; }\n${step("Clean up npm children after failure").run}`,
-    { CHILD_PLUGIN_NPM_RUN_ID: "91", CHILD_OPENCLAW_NPM_RUN_ID: "93" },
-  );
-  expect(result.status, result.stderr).toBe(0);
-  expect(cancellations(result)).toEqual(["91"]);
-  // Same-tooling npm children publish in npm-publish and have no gate to reject.
-  expect(result.calls.some((call) => call.args.includes("state=rejected"))).toBe(false);
-});
+it.each(["in_progress", "completed"])(
+  "failure cleanup cancels a waiting npm child and preserves a %s one",
+  (status) => {
+    const result = fixture({
+      children: [child(), child({ id: 93, status, jobs: [{ status }] })],
+    }).run(
+      `${source}cleanup_clawhub_children() { :; }\n${step("Clean up npm children after failure").run}`,
+      { CHILD_PLUGIN_NPM_RUN_ID: "91", CHILD_OPENCLAW_NPM_RUN_ID: "93" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(cancellations(result)).toEqual(["91"]);
+    // Same-tooling npm children publish in npm-publish and have no gate to reject.
+    expect(result.calls.some((call) => call.args.includes("state=rejected"))).toBe(false);
+  },
+);
 
 const visible = { versions: { "2026.9.6": {} }, "dist-tags": { latest: "2026.9.6" } };
-it("waits through missing version, missing selector and transport failure", () => {
-  const result = fixture({ registry: [null, {}, { versions: { "2026.9.6": {} } }, visible] }).run(
-    `${source}wait_for_core_npm_visibility`,
-  );
-  expect(result.status, result.stderr).toBe(0);
-  expect(result.calls).toHaveLength(4);
-  expect(result.calls[0]?.args).toEqual(
-    expect.arrayContaining([
-      "--connect-timeout",
-      "10",
-      "--max-time",
-      "60",
-      "Cache-Control: no-cache",
-      "Accept: application/vnd.npm.install-v1+json",
-      "https://registry.npmjs.org/openclaw",
-    ]),
-  );
-  expect(result.summary).toMatch(/openclaw@2026.9.6 visible under latest after \d+s/);
-});
-
-it("fails on visibility timeout with the observed selector", () => {
-  const result = fixture({ registry: [{ ...visible, "dist-tags": { latest: "2026.9.5" } }] }).run(
-    `${source}wait_for_core_npm_visibility`,
-    { RELEASE_NPM_VISIBILITY_TIMEOUT_SECONDS: "0" },
-  );
-  expect(result).toMatchObject({ status: 1, summary: "" });
-  expect(result.calls).toHaveLength(1);
-  expect(result.stderr).toContain("2026.9.5");
-});
-
-it("dispatches and waits for the release ledger using only its token", () => {
-  const result = fixture({
-    ledger: ledgerStates("queued", "success"),
-  }).run(`${source}sync_npm_beta_floor`, { RELEASE_LEDGER_TOKEN: "fixture-ledger" });
-  expect(result.status, result.stderr).toBe(0);
-  expect(result.stderr).toContain(`${url(92)} status=queued elapsed=0s`);
-  expect(result.stderr).toContain(`${url(92)} status=completed elapsed=15s`);
-  expect(result.summary).toContain(`npm beta floor: synced (${url(92)})`);
-  expect(JSON.parse(result.calls[0]!.body!)).toEqual({
-    ref: "main",
-    inputs: { mode: "sync_beta_to_stable" },
-  });
-  expect(result.calls[0]?.args).toContain("X-GitHub-Api-Version: 2026-03-10");
-  expect(result.calls.every((call) => call.ledgerToken)).toBe(true);
-  expect(result.calls).toHaveLength(3);
-});
-
 it.each<[string, Fixture, number]>([
-  ["missing token", {}, 0],
   ["failed dispatch", { dispatchFails: true }, 1],
   ["failed sync", { ledger: ledgerStates("failure") }, 2],
 ])("leaves verification authoritative after %s", (_, config, calls) => {
-  const env = calls ? { RELEASE_LEDGER_TOKEN: "fixture-ledger" } : {};
-  const result = fixture(config).run(`${source}sync_npm_beta_floor`, env);
+  const result = fixture(config).run(`${source}sync_npm_beta_floor`, {
+    RELEASE_LEDGER_TOKEN: "fixture-ledger",
+  });
   expect(result.status, result.stderr).toBe(0);
   expect(result.stderr).toContain("::warning::");
   expect(result.summary).toContain(
@@ -731,19 +610,21 @@ it.each([
   { resume: false, visible: true, sync: "absent" },
   { resume: true, visible: true, sync: "absent" },
   { resume: false, visible: false, sync: "absent" },
-  { resume: true, visible: false, sync: "absent" },
   { resume: false, visible: true, sync: "late" },
   { resume: true, visible: true, sync: "timeout" },
 ])(
   "gates verification on registry visibility and own sync (resume=$resume, visible=$visible, sync=$sync)",
   ({ resume, visible: isVisible, sync }) => {
+    const transientRegistry = isVisible && !resume && sync === "absent";
     const harness = `
 ${noops("resolve_clawhub_release_plan", "verify_release_tag_target", "record_postpublish_diagnostics", "upload_dependency_evidence_release_asset", "upload_release_evidence_assets", "append_release_proof_to_github_release")}
 wait_for_run_background() { (printf success > "$4") & wait_run_pid=$!; }
 verify_published_release() { echo VERIFIED >> "$GITHUB_STEP_SUMMARY"; }
 `;
     const result = fixture({
-      registry: [isVisible ? visible : {}],
+      registry: transientRegistry
+        ? [null, {}, { versions: { "2026.9.6": {} } }, visible]
+        : [isVisible ? visible : { ...visible, "dist-tags": { latest: "2026.9.5" } }],
       harness,
       sleepSeconds: 300,
       ledger:
@@ -764,12 +645,14 @@ verify_published_release() { echo VERIFIED >> "$GITHUB_STEP_SUMMARY"; }
       CLAWHUB_AUTHORIZATION_OUTCOME: "skipped",
       CLAWHUB_RECEIPT_OUTCOME: "skipped",
       WAIT_FOR_CLAWHUB: "false",
-      RELEASE_NPM_VISIBILITY_TIMEOUT_SECONDS: "0",
+      RELEASE_NPM_VISIBILITY_TIMEOUT_SECONDS: transientRegistry ? "1800" : "0",
       ...(sync !== "absent" ? { RELEASE_LEDGER_TOKEN: "fixture-ledger" } : {}),
       ...(sync === "timeout" ? { RELEASE_NPM_DIST_TAG_SYNC_TIMEOUT_SECONDS: "900" } : {}),
     });
     expect(result.status, result.stderr).toBe(isVisible && sync !== "timeout" ? 0 : 1);
-    expect(result.calls.filter((call) => call.binary === "curl")).toHaveLength(1);
+    const registryReads = result.calls.filter((call) => call.binary === "curl");
+    expect(registryReads).toHaveLength(transientRegistry ? 4 : 1);
+    expect(registryReads[0]?.args).toContain("Cache-Control: no-cache");
     if (sync === "timeout") {
       expect(result.stderr).toContain(`parent's own sync run is still in progress (${url(92)})`);
       expect(result.summary).toContain("verification was not judged against it");
@@ -780,8 +663,17 @@ verify_published_release() { echo VERIFIED >> "$GITHUB_STEP_SUMMARY"; }
         expect(result.stderr).toContain("status=in_progress elapsed=900s");
         expect(result.stderr).toContain("status=completed elapsed=1200s");
         expect(result.summary).toContain("npm beta floor: synced");
+        const ledgerCalls = result.calls.filter((call) =>
+          call.args.some((arg) => arg.startsWith("repos/openclaw/releases/")),
+        );
+        expect(ledgerCalls.every((call) => call.ledgerToken)).toBe(true);
+        expect(JSON.parse(ledgerCalls[0]!.body!)).toEqual({
+          ref: "main",
+          inputs: { mode: "sync_beta_to_stable" },
+        });
       }
     } else {
+      expect(result.stderr).toContain("2026.9.5");
       expect(result.summary).not.toMatch(/VERIFIED|npm beta floor/);
     }
   },

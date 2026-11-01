@@ -20,18 +20,24 @@ import {
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 
+function writeJson(file: string, value: unknown) {
+  fs.writeFileSync(file, JSON.stringify(value));
+}
+function writeJsonl(file: string, entries: unknown[]) {
+  fs.writeFileSync(file, entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+}
+
 export function addDeferredPluginSessions(storePath: string, count: number) {
   const entries = JSON.parse(fs.readFileSync(storePath, "utf8"));
   for (let index = 2; index < count; index++) {
     const sessionId = `legacy-volume-${index}`;
     const sessionFile = `${sessionId}.jsonl`;
     entries[`agent:main:volume-${index}`] = { sessionId, sessionFile, updatedAt: 20 };
-    fs.writeFileSync(
-      path.join(path.dirname(storePath), sessionFile),
-      `${JSON.stringify({ type: "session", version: 3, id: sessionId })}\n`,
-    );
+    writeJsonl(path.join(path.dirname(storePath), sessionFile), [
+      { type: "session", version: 3, id: sessionId },
+    ]);
   }
-  fs.writeFileSync(storePath, JSON.stringify(entries));
+  writeJson(storePath, entries);
 }
 
 export async function seedStaleDeferredPluginSessionImport(state: OpenClawTestState) {
@@ -48,7 +54,7 @@ export async function seedStaleDeferredPluginSessionImport(state: OpenClawTestSt
     state: "idle",
     lastActivityAt: 100,
   };
-  fs.writeFileSync(fixture.storePath, JSON.stringify(index));
+  writeJson(fixture.storePath, index);
   await runDoctorSessionSqlite({
     cfg: fixture.cfg,
     env: state.env,
@@ -75,14 +81,10 @@ export async function seedStaleDeferredPluginSessionImport(state: OpenClawTestSt
   );
   await closeOpenClawAgentDatabasesAsync();
   const sqlitePath = resolveSqliteTargetFromSessionStorePath(fixture.storePath, fixture.scope).path;
-  const db = openNodeSqliteDatabase(sqlitePath);
-  try {
-    db.prepare("DELETE FROM transcript_events WHERE session_id = ?").run("legacy-kept");
-    db.prepare("DELETE FROM session_windows WHERE session_id = ?").run("legacy-kept");
-    db.prepare("DELETE FROM session_nodes WHERE session_key = ?").run("agent:main:kept");
-  } finally {
-    db.close();
-  }
+  using db = openNodeSqliteDatabase(sqlitePath);
+  db.prepare("DELETE FROM transcript_events WHERE session_id = ?").run("legacy-kept");
+  db.prepare("DELETE FROM session_windows WHERE session_id = ?").run("legacy-kept");
+  db.prepare("DELETE FROM session_nodes WHERE session_key = ?").run("agent:main:kept");
   return { ...fixture, foreignReport, sqlitePath };
 }
 
@@ -154,30 +156,22 @@ export async function seedDeferredPluginSessionSource(
     const sessionId = `legacy-${name}`;
     const transcript = path.join(sessionsDir, `${sessionId}.jsonl`);
     if (name !== "missing") {
-      fs.writeFileSync(
-        transcript,
-        [
-          { type: "session", version: 3, id: sessionId },
-          {
-            type: "message",
-            id: `${name}-message`,
-            parentId: null,
-            message: { role: "user", content: name },
-          },
-        ]
-          .map((entry) => JSON.stringify(entry))
-          .join("\n") + "\n",
-      );
-      fs.writeFileSync(
-        `${transcript}.${pluginId === "codex" ? "codex-app-server" : pluginId}.json`,
-        JSON.stringify({
-          schemaVersion: 2,
-          threadId: name,
-          sessionFile: transcript,
-          updatedAt: "2026-01-01T00:00:00.000Z",
-          pluginAppPolicyContext: { fingerprint: "policy-1", apps: {}, pluginAppIds: {} },
-        }),
-      );
+      writeJsonl(transcript, [
+        { type: "session", version: 3, id: sessionId },
+        {
+          type: "message",
+          id: `${name}-message`,
+          parentId: null,
+          message: { role: "user", content: name },
+        },
+      ]);
+      writeJson(`${transcript}.${pluginId === "codex" ? "codex-app-server" : pluginId}.json`, {
+        schemaVersion: 2,
+        threadId: name,
+        sessionFile: transcript,
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        pluginAppPolicyContext: { fingerprint: "policy-1", apps: {}, pluginAppIds: {} },
+      });
     }
     records[`agent:main:${name}`] = {
       sessionId,
@@ -187,7 +181,7 @@ export async function seedDeferredPluginSessionSource(
         : {}),
     };
   }
-  fs.writeFileSync(storePath, JSON.stringify(records));
+  writeJson(storePath, records);
   const cfg: OpenClawConfig = {
     agents: { entries: { main: {} } },
     ...(layout === "external" ? { session: { store: storePath } } : {}),

@@ -13,7 +13,12 @@ import { formatUiExternalText } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ModelProviderCard, ModelProviderRemovalTarget } from "./data.ts";
 import { apiKeySource, profileIdentity, ProviderProfiles } from "./profiles-view.tsx";
-import { isProviderUsable, renderMutationMessage, renderProviderStatus } from "./view-status.tsx";
+import {
+  isProviderUsable,
+  needsAuthAttention,
+  renderMutationMessage,
+  renderProviderStatus,
+} from "./view-status.tsx";
 import type { ModelProvidersViewProps } from "./view-types.ts";
 
 type ProviderRowProps = ModelProvidersViewProps & { card: ModelProviderCard };
@@ -326,8 +331,7 @@ function providerName(card: ModelProviderCard): string {
 function needsAttention(card: ModelProviderCard): boolean {
   return (
     card.catalogStatus === "auth-rejected" ||
-    card.auth?.kind === "expired" ||
-    card.auth?.kind === "missing" ||
+    (needsAuthAttention(card) && card.auth?.kind !== "expiring") ||
     Boolean(card.usage?.error)
   );
 }

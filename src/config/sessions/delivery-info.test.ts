@@ -196,12 +196,12 @@ it.each<RouteCase>([
 });
 
 describe("extractDeliveryInfoBatch", () => {
-  it("shares alias discovery while preserving raw keys, thread fallback, and result order", async () => {
-    const canonicalKey = "agent:main:telegram:group:mixedcase";
-    const queriedKey = "agent:main:telegram:group:MiXeDCase";
-    const aliasKey = "agent:main:telegram:group:MixedCase";
-    const canonicalDelivery = { channel: "telegram", to: "telegram:old-route" };
-    const aliasDelivery = { channel: "telegram", to: "telegram:fresh-route" };
+  it("shares Signal alias discovery while preserving thread fallback and result order", async () => {
+    const canonicalKey = "agent:main:signal:group:mixedcase";
+    const queriedKey = "AGENT:main:signal:group:MiXeDCase";
+    const aliasKey = "agent:main:signal:group:MixedCase";
+    const canonicalDelivery = { channel: "signal", to: "signal:group:mixedcase" };
+    const aliasDelivery = { channel: "signal", to: "signal:group:MixedCase" };
     let inventories = 0;
     storeState.store = new Proxy(
       {
@@ -221,7 +221,7 @@ describe("extractDeliveryInfoBatch", () => {
     await expectBatch([
       [canonicalKey, canonicalDelivery],
       [queriedKey, aliasDelivery],
-      [`${queriedKey}:topic:55`, aliasDelivery, "55"],
+      [`${queriedKey}:thread:55`, aliasDelivery, "55"],
       [undefined, undefined],
       ["agent:main:missing", undefined],
       [queriedKey, aliasDelivery],
@@ -246,6 +246,7 @@ describe("extractDeliveryInfoBatch", () => {
       ["agent:main:missing", undefined],
       [healthyKey, telegramDelivery],
     ]);
+    expect(storeState.readSessionEntriesFromStoreInWorker).toHaveBeenCalledTimes(4);
   });
 
   it("keeps global owners and ordered routable stores separate within one batch", async () => {

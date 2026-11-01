@@ -131,11 +131,6 @@ export type ConfigGatewayClient = {
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
 };
 
-type ConfigConnectionState = {
-  client: ConfigGatewayClient | null;
-  connected: boolean;
-};
-
 export function nextRequestVersion(state: RuntimeConfigState): number {
   invalidateConfigRead(state);
   const next = (requestVersionsByState.get(state) ?? 0) + 1;
@@ -164,7 +159,7 @@ export function invalidateConfigConnection(state: object): void {
 }
 
 export function isCurrentConfigConnection(
-  state: ConfigConnectionState,
+  state: { client: ConfigGatewayClient | null; connected: boolean },
   client: ConfigGatewayClient,
   connectionEpoch: number,
 ): boolean {

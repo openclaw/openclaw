@@ -1,4 +1,4 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 // Gateway tool invocation engine.
 // Shared implementation behind HTTP and RPC tool invocation adapters.
 import {
@@ -9,7 +9,6 @@ import { GatewayClientRequestError } from "../../packages/gateway-client/src/req
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
-import { resolveToolLoopDetectionConfig } from "../agents/agent-tools.js";
 import { getChannelAgentToolMeta } from "../agents/channel-tool-metadata.js";
 import { readEmbeddedMessageDeliveryFact } from "../agents/embedded-agent-message-delivery.js";
 import { createGatewayToolPolicyAssertion } from "../agents/gateway-tool-policy.js";
@@ -27,7 +26,7 @@ import {
 } from "../channels/plugins/conversation-read-origin.js";
 import { isMessageToolSendActionName } from "../channels/plugins/message-action-names.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
 import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -49,7 +48,10 @@ import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
 import { withOperatorToolGatewayAuthority } from "./server-plugin-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
-import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
+import {
+  SessionMutationAuthorizationChangedError,
+  sessionMutationForbiddenError,
+} from "./session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import {
   authorizePreparedSessionMutation,
@@ -67,12 +69,29 @@ import {
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
-import { isToolUploadRequest } from "./tool-upload-policy.js";
 import {
   areGatewayUploadsEnabled,
   assertGatewayUploadsEnabled,
   GATEWAY_UPLOADS_DISABLED_MESSAGE,
+  isGatewayUploadRequest,
 } from "./upload-policy.js";
+
+/** New client bytes, not a request to deliver a file already owned by the Gateway. */
+function isToolUploadRequest(toolName: string, args: unknown): boolean {
+  if (!isRecord(args)) {
+    return false;
+  }
+  switch (toolName) {
+    case "file_write":
+      return typeof args.contentBase64 === "string";
+    case "workboard_attachment_add":
+      return true;
+    case "message":
+      return isGatewayUploadRequest("message.action", { params: args });
+    default:
+      return false;
+  }
+}
 
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
 
@@ -151,25 +170,6 @@ function resolveMemoryToolDisableReasons(cfg: OpenClawConfig): string[] {
     reasons.push("memory plugin disabled by test default");
   }
   return reasons;
-}
-
-function mergeActionIntoArgsIfSupported(params: {
-  toolSchema: unknown;
-  action: string | undefined;
-  args: Record<string, unknown>;
-}): Record<string, unknown> {
-  const { toolSchema, action, args } = params;
-  if (!action || args.action !== undefined) {
-    return args;
-  }
-  const schemaObj = toolSchema as { properties?: Record<string, unknown> } | null;
-  const hasAction = Boolean(
-    schemaObj &&
-    typeof schemaObj === "object" &&
-    schemaObj.properties &&
-    "action" in schemaObj.properties,
-  );
-  return hasAction ? { ...args, action } : args;
 }
 
 function resolveToolInputErrorStatus(err: unknown): number | null {
@@ -355,9 +355,7 @@ async function invokeGatewayToolWithSignal(
     if (!profiles) {
       sessionChecks.push(() => {
         if (getRuntimeConfig().gateway?.roles) {
-          throw new SessionMutationAuthorizationChangedError(
-            errorShape(ErrorCodes.FORBIDDEN, "Session role policy changed; retry the request"),
-          );
+          throw sessionMutationForbiddenError("Session role policy changed; retry the request");
         }
       });
       return () => null;
@@ -543,23 +541,30 @@ async function invokeGatewayToolWithSignal(
     const toolCallId = idempotencyKey
       ? `${params.toolCallIdPrefix}-${conversationReadOrigin}-${idempotencyKey}`
       : `${params.toolCallIdPrefix}-${conversationReadOrigin}-${Date.now()}`;
-    const toolArgs = mergeActionIntoArgsIfSupported({
-      toolSchema: tool.parameters,
-      action,
-      args,
-    });
+    const schemaObj = tool.parameters as { properties?: Record<string, unknown> } | null;
+    const toolArgs =
+      action &&
+      args.action === undefined &&
+      Boolean(
+        schemaObj &&
+        typeof schemaObj === "object" &&
+        schemaObj.properties &&
+        "action" in schemaObj.properties,
+      )
+        ? { ...args, action }
+        : args;
     assertInvocationCurrent();
     const hookResult = await runBeforeToolCallHook({
       toolName,
       params: toolArgs,
       toolCallId,
+      // Operator calls share a session key but are outside its agent run.
       ctx: {
         agentId,
         config: params.cfg,
         sessionKey,
         approvalReviewerDeviceId: params.approvalReviewerDeviceId,
         workspaceDir,
-        loopDetection: resolveToolLoopDetectionConfig({ cfg: params.cfg, agentId }),
       },
       signal: params.signal,
       approvalMode: params.approvalMode,
@@ -661,11 +666,8 @@ export async function invokeGatewayTool(
                 current?.spawnedWorkspaceDir !== entry?.spawnedWorkspaceDir ||
                 current?.spawnedBy !== entry?.spawnedBy
               ) {
-                throw new SessionMutationAuthorizationChangedError(
-                  errorShape(
-                    ErrorCodes.FORBIDDEN,
-                    "Session tool policy changed; retry the request",
-                  ),
+                throw sessionMutationForbiddenError(
+                  "Session tool policy changed; retry the request",
                 );
               }
             };

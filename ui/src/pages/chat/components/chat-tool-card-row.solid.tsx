@@ -107,6 +107,7 @@ function ToolRowContent(props: {
   card: ToolCard;
   view: ToolCallView;
   outcome: ToolCardOutcome;
+  running: boolean;
   toolLabel: string;
   workspaceFilePath: string | null;
   onOpenWorkspaceFile?: ToolRenderOptions["onOpenWorkspaceFile"];
@@ -145,12 +146,12 @@ function ToolRowContent(props: {
         <span class="chat-tool-row__prompt" aria-hidden="true">
           $
         </span>
-        <code class="chat-tool-row__cmd">
+        <code class={["chat-tool-row__cmd", { "text-shimmer": props.running }]}>
           <HighlightedCommand command={commandPreview(props.view.command!)} />
         </code>
       </Match>
       <Match when={verb() && props.view.target}>
-        <span class="chat-tool-row__verb">{verb()}</span>
+        <span class={["chat-tool-row__verb", { "text-shimmer": props.running }]}>{verb()}</span>
         <Show
           when={props.workspaceFilePath && props.onOpenWorkspaceFile}
           fallback={<span class="chat-tool-row__target">{target()}</span>}
@@ -262,6 +263,7 @@ export function ToolCardRow(props: ToolCardProps) {
               card={card()}
               view={view()}
               outcome={outcome()}
+              running={running()}
               toolLabel={display().label}
               workspaceFilePath={workspaceFilePath()}
               onOpenWorkspaceFile={props.options.onOpenWorkspaceFile}
@@ -277,7 +279,7 @@ export function ToolCardRow(props: ToolCardProps) {
         </Show>
       </span>
       <Show when={!props.options.expanded}>
-        <ToolOutcomeSummary cards={activityCards()} includeCount={Boolean(props.hasChildren)} />
+        <ToolOutcomeSummary card={card()} />
       </Show>
       <span class="chat-tool-row__chevron" aria-hidden="true">
         <Icon name="chevronRight" />

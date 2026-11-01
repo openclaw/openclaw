@@ -37,6 +37,8 @@ const RATE_LIMIT_ERROR_USER_MESSAGE =
   "⚠️ The AI service needs a short break. Please try again in a few minutes.";
 export const AUTH_INVALID_TOKEN_USER_TEXT =
   "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.";
+export const TLS_CERTIFICATE_ERROR_USER_TEXT =
+  "Couldn't connect securely to the AI service. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
 export const OAUTH_REFRESH_CONTENTION_USER_TEXT =
   "Another sign-in is still in progress. Wait a moment, then try again.";
 const SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT =
@@ -136,6 +138,14 @@ export function renderRateLimitRetryExhaustion(
   return retries === 0
     ? `Automatic rate-limit recovery is disabled${scope} for this session (retry.provider.maxRetries: 0).`
     : `Rate-limit recovery stopped${scope} after ${retries} automatic ${retries === 1 ? "retry" : "retries"} without a completed model response. Check completed work before trying again.`;
+}
+
+/** A watchdog stop mid-backoff interrupted recovery; zero retries never means it was disabled. */
+export function renderRateLimitRecoveryStopped(retries: number): string {
+  return (
+    (retries > 0 && renderRateLimitRetryExhaustion(retries)) ||
+    "Rate-limit recovery stopped without a completed model response. Check completed work before trying again."
+  );
 }
 
 /** Render rate-limit versus overload copy from the canonical classified reason. */
@@ -382,41 +392,6 @@ export function resolveProviderRequestFailureCopy(params: {
 
 export type ReplyFallbackAttempt = FallbackAttemptRecord & { authMode?: string };
 
-function extractCodexUsageLimitErrorMessage(
-  attempts: readonly ReplyFallbackAttempt[],
-  directMessage: string,
-  directReason: FailoverReason | undefined,
-  directProvider: string | undefined,
-  sanitizeText?: (text: string) => string,
-): string | undefined {
-  const attempt = attempts.find(
-    (candidate) =>
-      candidate.provider === "openai" &&
-      candidate.reason === "rate_limit" &&
-      candidate.code !== AUTH_PROFILE_COOLDOWN_ERROR_CODE &&
-      candidate.error,
-  );
-  const text =
-    attempt?.error ??
-    (directProvider === "openai" && directReason === "rate_limit" ? directMessage : undefined);
-  if (!text) {
-    return undefined;
-  }
-  const message = renderSanitizedUserFacingText(sanitizeText?.(text) ?? text, {
-    errorContext: true,
-  })
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .join(" ")
-    .trim();
-  if (!message) {
-    return undefined;
-  }
-  const truncated = message.length > 500 ? `${truncateUtf16Safe(message, 497)}...` : message;
-  return truncated.startsWith("⚠️") ? truncated : `⚠️ ${truncated}`;
-}
-
 /** Render the reply surface's rate-limit copy, including structured cooldown context. */
 export function renderRateLimitReplyCopy(params: {
   message: string;
@@ -450,16 +425,32 @@ export function renderRateLimitReplyCopy(params: {
   if (exhaustion) {
     return exhaustion;
   }
-  const usageLimit = extractCodexUsageLimitErrorMessage(
-    attempts,
-    providerMessage,
-    params.reason,
-    params.provider,
-    params.sanitizeText,
+  const { reason: directReason, provider: directProvider, sanitizeText } = params;
+  const usageAttempt = attempts.find(
+    (candidate) =>
+      candidate.provider === "openai" &&
+      candidate.reason === "rate_limit" &&
+      candidate.code !== AUTH_PROFILE_COOLDOWN_ERROR_CODE &&
+      candidate.error,
   );
-  if (usageLimit) {
-    return usageLimit;
+  const text =
+    usageAttempt?.error ??
+    (directProvider === "openai" && directReason === "rate_limit" ? providerMessage : undefined);
+  if (text) {
+    const message = renderSanitizedUserFacingText(sanitizeText?.(text) ?? text, {
+      errorContext: true,
+    })
+      .split(/\r?\n/u)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+    if (message) {
+      const truncated = message.length > 500 ? `${truncateUtf16Safe(message, 497)}...` : message;
+      return truncated.startsWith("⚠️") ? truncated : `⚠️ ${truncated}`;
+    }
   }
+
   if (attempts.some((attempt) => attempt.reason === "billing") || params.reason === "billing") {
     return BILLING_ERROR_USER_MESSAGE;
   }

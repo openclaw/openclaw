@@ -13,6 +13,7 @@ import { setDisplayName } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { profileActor, writeListEntry } from "./session-list-entry.test-support.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
@@ -23,14 +24,8 @@ import type { WorkerSessionPlacementProjection } from "./worker-environments/pla
 function viewer(name: string): GatewayClient {
   const profileId = ensureProfileForEmail(`${name}@example.com`).id;
   return {
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-      role: "operator",
-      scopes: ["operator.read", "operator.write"],
-    },
-    authenticatedUserProfile: { profileId, displayName: profileId, hasAvatar: false, updatedAt: 1 },
+    connect: gatewayConnect(["operator.read", "operator.write"]),
+    authenticatedUserProfile: gatewayProfile(profileId, profileId),
     preparedSessionProfile: { profileId, aliases: new Set([profileId]), role: null },
   };
 }

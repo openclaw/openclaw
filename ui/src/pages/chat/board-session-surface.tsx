@@ -1,5 +1,5 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import { lazy, type Element } from "solid-js";
+import { createMemo, lazy, type Element } from "solid-js";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
 import type { BoardViewCallbacks } from "../../lib/board/provider.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
@@ -30,6 +30,10 @@ export type BoardSessionSurfaceProps = {
 
 export function BoardSessionSurface(props: BoardSessionSurfaceProps) {
   const active = usePanePresentation(() => props.active);
+  const session = createMemo(() => props.session, {
+    equals: (previous, next) =>
+      previous.sessionKey === next.sessionKey && previous.agentId === next.agentId,
+  });
   const boardRef = elementRef((element: HTMLElementTagNameMap["openclaw-board-view"]) =>
     props.onViewRef?.(element),
   );
@@ -43,7 +47,7 @@ export function BoardSessionSurface(props: BoardSessionSurfaceProps) {
           <BoardView
             ref={[boardRef]}
             active={active()}
-            session={props.session}
+            session={session()}
             snapshot={props.snapshot}
             activeTabId={props.activeTabId}
             pageWidgetName={props.pageWidgetName ?? ""}

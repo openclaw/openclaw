@@ -10,7 +10,7 @@ import { clearToolSearchCatalog, type ToolSearchCatalogRef } from "../../tool-se
 import { log } from "../logger.js";
 import type { retainEmbeddedSessionPromptState } from "../session-prompt-state.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
-import type { UserTranscriptContext } from "./attempt-history.js";
+import type { UserTranscriptContext } from "./attempt-llm-boundary.types.js";
 import type { EmitDiagnosticRunCompleted } from "./attempt-setup.js";
 import { cleanupEmbeddedAttemptResources } from "./attempt-subscription-cleanup.js";
 import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-trajectory-flush.js";

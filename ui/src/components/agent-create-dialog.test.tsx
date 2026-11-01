@@ -30,8 +30,9 @@ vi.mock("../pages/agents/avatar-image.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../pages/agents/avatar-image.ts")>()),
   fileToAvatarDataUrl: picker.convert,
 }));
-// mock-isolation: replace the entire picker with a controlled boundary for dialog-only upload tests.
-vi.mock("../pages/agents/avatar-picker.tsx", () => ({
+// mock-isolation: control picker interactions while keeping the shared result decoder real.
+vi.mock("../pages/agents/avatar-picker.tsx", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../pages/agents/avatar-picker.tsx")>()),
   AvatarPicker: (props: {
     onSelect: (avatar: string) => void;
     onUpload: (file: File) => void;
@@ -118,10 +119,10 @@ it("cancels without creating an agent", () => {
   view.dispose();
 });
 
-it.each(["unusable result", "rejected conversion"])(
+it.each(["too-detailed", "unusable", "rejected conversion"] as const)(
   "retains the draft and recovers from an upload %s",
   async (failure) => {
-    const pending = createDeferred<{ ok: false; reason: "too-detailed" }>();
+    const pending = createDeferred<{ ok: false; reason: "too-detailed" | "unusable" }>();
     const retry = createDeferred<{ ok: true; dataUrl: string }>();
     picker.convert
       .mockReset()
@@ -151,14 +152,18 @@ it.each(["unusable result", "rejected conversion"])(
     expect(create.disabled).toBe(true);
     create.click();
     expect(onCreate).not.toHaveBeenCalled();
-    if (failure === "unusable result") {
-      pending.resolve({ ok: false, reason: "too-detailed" });
-    } else {
+    if (failure === "rejected conversion") {
       pending.reject(new Error("Image conversion failed"));
+    } else {
+      pending.resolve({ ok: false, reason: failure });
     }
     await waitForSolid(() => {
       expect(view.container.querySelector('[role="alert"]')?.textContent).toContain(
-        failure === "unusable result" ? "too detailed" : "Image conversion failed",
+        failure === "rejected conversion"
+          ? "Image conversion failed"
+          : failure === "too-detailed"
+            ? "too detailed"
+            : "That image can't be used",
       );
       expect(create.disabled).toBe(false);
       expect(view.container.querySelector('input[name="name"]')).toBe(name);

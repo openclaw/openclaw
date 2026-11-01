@@ -3,6 +3,36 @@ import { en } from "./en.ts";
 
 // Plugin management and its lazy sibling surfaces register this shared copy on use.
 const enPluginManagement = {
+  pluginUi: {
+    sessionRecentMessages: "Recent messages",
+    sessionHistoryUnavailable: "Session history could not be loaded. Try again.",
+    sessionHistoryEmpty: "No recent messages.",
+    customize: "Customize UI",
+    selectionScope: "Choose views for this browser window. Built-in views are always available.",
+    builtin: "Built-in view",
+    retryView: en.pluginUi.retryView,
+    inlineLoading: en.pluginUi.inlineLoading,
+    inlineUnavailable: en.pluginUi.inlineUnavailable,
+    reload: "Reload plugin UI",
+    dashboardTitle: en.pluginUi.dashboardTitle,
+    dashboardEmpty: "This session has no dashboard widgets yet.",
+    customPluginsDisabled: en.pluginUi.customPluginsDisabled,
+    customPluginsEnableHint: en.pluginUi.customPluginsEnableHint,
+    surface: {
+      "session-list": "Session list",
+      composer: "Composer",
+      workspace: "Workspace",
+      transcript: "Transcript",
+      "tool-result": "Tool results",
+    },
+  },
+  chat: {
+    clawhub: {
+      retryStatus: "Status unavailable · Retry",
+      viewDetails: "View details",
+      signIn: "Sign in",
+    },
+  },
   custodian: {
     pluginPlaceholder: "Ask OpenClaw about {plugin}",
     pluginIntroTitle: "Ask about {plugin}",
@@ -232,6 +262,7 @@ const enPluginManagement = {
         description: "Adds information or controls alongside sessions.",
       },
       widget: { name: "Dashboard widgets", description: "Adds widgets to the dashboard." },
+      inline: { name: "Inline views", description: "Shows native plugin views in conversations." },
       replacement: {
         name: "Interface replacements",
         description: "Replaces supported parts of the interface.",
@@ -305,14 +336,19 @@ const enPluginManagement = {
       edit: "Edit",
       connected: "Connected",
       configured: "Configured",
-      editAccount: "Edit {name} connection",
       editCredential: "Edit {name}",
-      connectAccount: "Connect {name}",
+      connectAccount: "Sign in to {name}",
+      signOut: "Sign out",
+      signOutAccount: "Sign out of {name}",
+      signOutConfirmTitle: "Sign out of {name}?",
+      signOutUnavailable: "Sign-out could not open. Your account is still connected; try again.",
+      signOutConfirmMessage:
+        "OpenClaw removes the saved sign-in for {name}. Its tools stop working until you sign in again.",
       configure: "Configure",
       configureCredential: "Configure {name}",
-      connect: "Connect",
-      requestFailed: "Sign-in did not finish. Try connecting again.",
-      sessionExpired: "This sign-in session expired. Try connecting again.",
+      connect: "Sign in",
+      requestFailed: "Sign-in did not finish. Try signing in again.",
+      sessionExpired: "This sign-in session expired. Try signing in again.",
     },
     toggleNamed: "Enable or disable {name}",
     schemaUnavailable: "Plugin settings schema is unavailable.",
@@ -509,6 +545,8 @@ const enPluginManagement = {
       "Plugin availability changed. Refresh the catalog to see its current state.",
     installDestinationChanged:
       "The Gateway or operator changed. Install the plugin again to request a fresh review.",
+    installBlockedByUpdate:
+      "Installation blocked: an OpenClaw upgrade is in progress, try again when it finishes.",
   },
 } satisfies TranslationMap;
 
@@ -516,6 +554,10 @@ export const registerPluginManagementEnglish = Object.assign(
   () => {
     Object.assign(en.custodian, enPluginManagement.custodian);
     en.pluginsPage = enPluginManagement.pluginsPage;
+    const { surface, ...labels } = enPluginManagement.pluginUi;
+    Object.assign(en.pluginUi, labels);
+    Object.assign(en.pluginUi.surface, surface);
+    Object.assign(en.chat.clawhub, enPluginManagement.chat.clawhub);
   },
   { catalog: enPluginManagement },
 );

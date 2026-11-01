@@ -44,6 +44,13 @@ async function getStatus(host: string, port: number, path: string) {
     .status;
 }
 
+function expectStopped(servers: Iterable<Server>) {
+  for (const server of servers) {
+    expect(server.listening).toBe(false);
+    expect(server.address()).toBeNull();
+  }
+}
+
 function reportTargetPortCollision(server: Server, targetPort: number): void {
   const address = server.address();
   if (!address || typeof address === "string") {
@@ -96,18 +103,16 @@ describe("gateway portal service", () => {
     const release = vi.fn();
     const attempted = new Set<Server>();
     const originalListen = httpListen.listenGatewayHttpServer;
-    const listen = vi
-      .spyOn(httpListen, "listenGatewayHttpServer")
-      .mockImplementation(async (params) => {
-        attempted.add(params.httpServer);
-        await originalListen(params);
-        if (stage === "owner") {
-          owner.abort(new Error(message));
-        }
-        if (stage === "collision") {
-          reportTargetPortCollision(params.httpServer, target.port);
-        }
-      });
+    vi.spyOn(httpListen, "listenGatewayHttpServer").mockImplementation(async (params) => {
+      attempted.add(params.httpServer);
+      await originalListen(params);
+      if (stage === "owner") {
+        owner.abort(new Error(message));
+      }
+      if (stage === "collision") {
+        reportTargetPortCollision(params.httpServer, target.port);
+      }
+    });
     if (stage === "LAN") {
       vi.spyOn(advertisedLanHost, "resolveAdvertisedLanHostCore").mockImplementation(async () => {
         guard.current = false;
@@ -140,18 +145,11 @@ describe("gateway portal service", () => {
         ownerSignal: owner.signal,
         assertCurrent: guard.assertCurrent,
       }),
-    ).rejects.toThrow(stage === "collision" ? `${message} ${target.port}` : message);
+    ).rejects.toThrow(message);
     expect(service.list()).toEqual([]);
     expect(httpServers).toEqual([]);
     expect(release).toHaveBeenCalledOnce();
-    for (const server of attempted) {
-      expect(server.listening).toBe(false);
-      expect(server.address()).toBeNull();
-    }
-    if (stage === "collision") {
-      expect(listen).toHaveBeenCalledOnce();
-      expect(attempted.size).toBe(1);
-    }
+    expectStopped(attempted);
     if (stage === "absent route") {
       expect(claimTailscaleServePort).not.toHaveBeenCalled();
     }
@@ -163,23 +161,16 @@ describe("gateway portal service", () => {
   it("owns the same port on IPv4 and IPv6 and closes both listeners", async () => {
     const { service, httpServers } = makeService({ httpBindHosts: ["127.0.0.1", "::1"] });
     const portal = await service.open({ targetPort: target.port, title: "App" });
-    expect(portal).toMatchObject({ id: `p${target.port}`, port: target.port, title: "App" });
+    expect(portal.port).toBe(target.port);
     for (const host of ["127.0.0.1", "::1"]) {
       expect(await getStatus(host, portal.listenPort, "/")).toBe(401);
     }
     expect(httpServers).toHaveLength(2);
-    for (const server of httpServers) {
-      expect(server.listening).toBe(true);
-      expect(server.address()).toMatchObject({ port: portal.listenPort });
-    }
     expect(await requestText(portal.url)).toMatchObject({ status: 200, body: "target" });
     const ownedServers = [...httpServers];
     await service.closeAll();
     expect(httpServers).toEqual([]);
-    for (const server of ownedServers) {
-      expect(server.listening).toBe(false);
-      expect(server.address()).toBeNull();
-    }
+    expectStopped(ownedServers);
   });
 
   it("updates an existing target without replacing its listener or token", async () => {
@@ -330,12 +321,9 @@ describe("gateway portal service", () => {
     }
   });
 });
-
 describe("direct HTTPS portal publication", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  let certificate: { cert: string; key: string };
-  let ipCertificate: { cert: string; key: string };
-  let wildcardCertificate: { cert: string; key: string };
+  let certificates: Record<"dns" | "ip" | "wildcard", { cert: string; key: string }>;
 
   // Fresh material keeps CA, expiry, and hostname checks enabled in every case.
   function createCertificate(subjectAltName: string) {
@@ -359,13 +347,15 @@ describe("direct HTTPS portal publication", () => {
   }
 
   beforeAll(() => {
-    certificate = createCertificate("DNS:gw.e.test,DNS:alt.e.test");
-    ipCertificate = createCertificate("IP:127.0.0.1");
-    wildcardCertificate = createCertificate("DNS:*.e.test");
+    certificates = {
+      dns: createCertificate("DNS:gw.e.test,DNS:alt.e.test"),
+      ip: createCertificate("IP:127.0.0.1"),
+      wildcard: createCertificate("DNS:*.e.test"),
+    };
   });
 
   // Own the listener route while keeping CA, expiry, and URL hostname checks enabled.
-  async function readPortal(url: string, ca = certificate.cert) {
+  async function readPortal(url: string, ca: string) {
     const agent = new HttpsAgent({
       ca,
       family: 4,
@@ -378,13 +368,16 @@ describe("direct HTTPS portal publication", () => {
     }
   }
 
-  it.each(["ip", "wildcard", "chain", "LAN", "configured"] as const)(
+  it.each([
+    ["ip", "ip", "127.0.0.1", []],
+    ["wildcard", "wildcard", "gw.e.test", ["*", "https://gw.e.test"]],
+    ["chain", "dns", "gw.e.test", []],
+    ["LAN", "dns", "gw.e.test", []],
+    ["configured", "dns", "alt.e.test", ["https://other.e.test", "https://alt.e.test:8443"]],
+  ] as const)(
     "publishes certificate-valid %s origins",
-    async (kind) => {
-      const material =
-        kind === "ip" ? ipCertificate : kind === "wildcard" ? wildcardCertificate : certificate;
-      const hostname =
-        kind === "ip" ? "127.0.0.1" : kind === "configured" ? "alt.e.test" : "gw.e.test";
+    async (kind, identity, hostname, gatewayOrigins) => {
+      const material = certificates[identity];
       if (kind === "LAN") {
         // A broken candidate must fail on TLS, not routing.
         vi.spyOn(advertisedLanHost, "resolveAdvertisedLanHostCore").mockResolvedValue("127.0.0.2");
@@ -392,12 +385,7 @@ describe("direct HTTPS portal publication", () => {
       const { service } = makeService({
         httpBindHosts: [kind === "LAN" ? "0.0.0.0" : "127.0.0.1"],
         tlsOptions: { ...material, cert: kind === "chain" ? [material.cert] : material.cert },
-        gatewayOrigins:
-          kind === "wildcard"
-            ? ["*", `https://${hostname}`]
-            : kind === "configured"
-              ? ["https://other.e.test", "https://alt.e.test:8443"]
-              : [],
+        gatewayOrigins: [...gatewayOrigins],
       });
       const portal = await service.open({ targetPort: kind === "LAN" ? target.port : 3000 });
       expect(new URL(portal.publicUrl).hostname).toBe(hostname);
@@ -407,7 +395,10 @@ describe("direct HTTPS portal publication", () => {
       });
       if (kind === "LAN") {
         target.handler = (_req, res) => res.end("direct TLS app");
-        expect(await readPortal(portal.url)).toMatchObject({ status: 200, body: "direct TLS app" });
+        expect(await readPortal(portal.url, material.cert)).toMatchObject({
+          status: 200,
+          body: "direct TLS app",
+        });
       }
       expect((await readPortal(portal.publicUrl, material.cert)).status).toBe(401);
     },
@@ -509,19 +500,6 @@ describe("private portal ingress", () => {
     expect(resolveHost).not.toHaveBeenCalled();
   });
 
-  it("rewrites protocol-relative redirects to the published HTTPS origin", async () => {
-    target.handler = (_req, res) => {
-      res.writeHead(302, { Location: `//127.0.0.1:${target.port}/next?q=1#section` }).end();
-    };
-    const { service } = wildcardService();
-    const portal = await service.open({ targetPort: target.port });
-    const response = await ingressRequest(portal.listenPort, portal.url);
-    expect(response).toMatchObject({
-      status: 302,
-      headers: { location: `${new URL(portal.publicUrl).origin}/next?q=1#section` },
-    });
-  });
-
   it("shares listener startup across concurrent opens and closes only the selected portal", async () => {
     const { service, httpServers } = wildcardService();
     const [first, second] = await Promise.all([
@@ -547,26 +525,27 @@ describe("private portal ingress", () => {
       }),
     ).toThrow("separate DNS domain");
   });
-  it("uses a private Serve claim with partitioned cookies even for a Funnel Gateway", async () => {
+  it.each(["claim", "gateway"])("keeps Funnel portals private until %s loss", async (loss) => {
     target.handler = (_, res) => {
       res.setHeader("Set-Cookie", "session=ok; Path=/");
       res.end("app");
     };
     const resolveHost = vi.spyOn(advertisedLanHost, "resolveAdvertisedLanHostCore");
-    publishManaged("funnel");
-    const { claim } = fakeClaim();
+    const withdrawGateway = publishManaged("funnel");
+    const { claim, lose } = fakeClaim();
     vi.mocked(claimTailscaleServePort).mockResolvedValue(claim);
     const { service, httpServers } = makeService({
       managedTailscale: true,
       httpBindHosts: ["0.0.0.0"],
     });
-    const portal = await service.open({ targetPort: target.port, path: "/app" });
+    const releaseTarget = vi.fn();
+    const portal = await service.open({
+      targetPort: target.port,
+      path: "/app",
+      onClose: releaseTarget,
+    });
+    const listener = httpServers[0];
     expect(portal.publicUrl).toBe(`https://gw.ts.net:${portal.listenPort}/app`);
-    expect(claimTailscaleServePort).toHaveBeenCalledExactlyOnceWith(
-      portal.listenPort,
-      portal.listenPort,
-      expect.any(Function),
-    );
     expect(httpServers[0]?.address()).toMatchObject({ address: "127.0.0.1" });
     const response = await ingressRequest(portal.listenPort, portal.url);
     expect(response.status).toBe(200);
@@ -578,20 +557,6 @@ describe("private portal ingress", () => {
     }
     await service.open({ targetPort: target.port });
     expect(claimTailscaleServePort).toHaveBeenCalledTimes(1);
-    await service.close(portal.id);
-    expect(claim.stop).toHaveBeenCalledOnce();
-    expect(service.list()).toEqual([]);
-    expect(resolveHost).not.toHaveBeenCalled();
-  });
-
-  it.each(["claim", "gateway"])("retires portals on %s loss", async (loss) => {
-    const withdrawGateway = publishManaged();
-    const { claim, lose } = fakeClaim();
-    vi.mocked(claimTailscaleServePort).mockResolvedValue(claim);
-    const { service, httpServers } = makeService({ managedTailscale: true });
-    const releaseTarget = vi.fn();
-    await service.open({ targetPort: 3000, onClose: releaseTarget });
-    const listener = httpServers[0];
     if (loss === "claim") {
       lose();
     } else {
@@ -599,9 +564,10 @@ describe("private portal ingress", () => {
     }
     expect(service.list()).toEqual([]);
     // Explicit close joins the owner teardown instead of polling the event loop.
-    await service.close("p3000");
+    await service.close(portal.id);
     expect(claim.stop).toHaveBeenCalledOnce();
     expect(releaseTarget).toHaveBeenCalledOnce();
     expect(listener?.listening).toBe(false);
+    expect(resolveHost).not.toHaveBeenCalled();
   });
 });

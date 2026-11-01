@@ -5,6 +5,7 @@ import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { testApi } from "../logging/logger.test-support.js";
+import { listDirectoryTreeStrictSync } from "./directory-walk.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { prepareSqliteReadOnlyLocationSyncInProcess as prepareSnapshot } from "./sqlite-readonly-location.js";
@@ -29,7 +30,7 @@ function fixture(sql: string) {
   return { root, source, cache, before: fs.readFileSync(source) };
 }
 const entries = (directory: string) =>
-  fs.readdirSync(directory, { recursive: true, withFileTypes: true });
+  listDirectoryTreeStrictSync(directory).map((walkEntry) => walkEntry.dirent);
 const entryPath = (entry: fs.Dirent) => path.join(entry.parentPath, entry.name);
 
 it.skipIf(process.platform === "win32").each([
@@ -68,25 +69,24 @@ it.skipIf(process.platform === "win32").each([
     );
     expect(result.error, result.stderr).toBeUndefined();
     expect(result.signal, result.stderr).toBe(signal);
-    const abandoned = fs.readdirSync(cache).map((entry) => path.join(cache, entry));
-    expect(abandoned).toHaveLength(1);
-    const retainedBytes = entries(abandoned[0]!)
+    const abandonedNames = fs.readdirSync(cache);
+    expect(abandonedNames).toHaveLength(1);
+    const abandoned = path.join(cache, abandonedNames[0]!);
+    const retainedBytes = entries(abandoned)
       .filter((entry) => entry.isFile() && !entry.name.startsWith("owner.sqlite"))
       .reduce((bytes, entry) => bytes + fs.statSync(entryPath(entry)).size, 0);
     expect(retainedBytes).toBeGreaterThan(0);
     const aged = new Date(Date.now() - 16 * 60_000);
-    for (const directory of abandoned) {
-      for (const entry of entries(directory)) {
-        fs.utimesSync(entryPath(entry), aged, aged);
-      }
-      fs.utimesSync(directory, aged, aged);
+    for (const entry of entries(abandoned)) {
+      fs.utimesSync(entryPath(entry), aged, aged);
     }
+    fs.utimesSync(abandoned, aged, aged);
     const prepared = prepareSnapshot(source, cache);
     try {
       // Inspection no longer reclaims inline; the idle owner performs that work.
-      expect(abandoned.every((directory) => fs.existsSync(directory))).toBe(true);
+      expect(fs.existsSync(abandoned)).toBe(true);
       Array.from(reclaimAbandonedSqliteSnapshots(cache));
-      expect(abandoned.every((directory) => !fs.existsSync(directory))).toBe(true);
+      expect(fs.existsSync(abandoned)).toBe(false);
       using reader = new (requireNodeSqlite().DatabaseSync)(prepared.location, { readOnly: true });
       expect(reader.prepare("SELECT length(value) AS bytes FROM probe").get()).toEqual({
         bytes: 2097152,

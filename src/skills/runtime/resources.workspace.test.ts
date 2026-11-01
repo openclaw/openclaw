@@ -118,8 +118,11 @@ beforeEach(async () => {
 });
 
 it("keeps Gateway and workspace rewrites separate when their source paths collide", async () => {
-  const workspaceSkill = f.snapshot.resolvedSkills![0]!;
-  recordSkillFileHost(workspaceSkill, "workspace");
+  const workspaceSkill = Object.freeze(
+    recordSkillFileHost({ ...f.snapshot.resolvedSkills![0]! }, "workspace"),
+  );
+  f.snapshot.resolvedSkills![0] = workspaceSkill;
+  f.snapshot.discoverySkills![0] = workspaceSkill;
   const gatewaySkill = recordSkillFileHost(
     { ...workspaceSkill, name: "zeta-gateway-guide" },
     "gateway",
@@ -139,7 +142,7 @@ it("keeps Gateway and workspace rewrites separate when their source paths collid
 
 it("delivers Gateway Workshop files without a live workspace binding", async () => {
   const config = {
-    plugins: { enabled: false },
+    plugins: { allow: ["skill-workshop"] },
     agents: { entries: { main: { agentDir: path.join(f.gateway, "agent") } } },
   };
   const workshop = resolveWorkshopSkillsDir(config, "main");

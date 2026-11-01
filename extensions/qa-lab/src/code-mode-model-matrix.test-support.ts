@@ -6,6 +6,31 @@ import {
   type runCodeModeModelMatrix,
 } from "../../../scripts/code-mode-model-matrix.ts";
 
+export function matrixArtifactOptions(
+  repoRoot: string,
+  outputDir: string,
+  overrides: Partial<CodeModeMatrixOptions> = {},
+): CodeModeMatrixOptions {
+  return {
+    allowFailures: false,
+    dryRun: false,
+    keepState: false,
+    models: ["ollama/qwen3.5:9b"],
+    modes: ["code"],
+    outputDir,
+    repetitions: 1,
+    repoRoot,
+    tasks: ["read"],
+    thinking: "off",
+    timeoutSeconds: 10,
+    ...overrides,
+  };
+}
+
+export function matrixSourceIdentity(gitSha: string) {
+  return async () => ({ gitSha, sourceDirty: false, sourcePatchSha256: null });
+}
+
 export function matrixOptions(
   repoRoot: string,
   overrides: Partial<CodeModeMatrixOptions> = {},
@@ -25,11 +50,7 @@ export function matrixDependencies(
   overrides: NonNullable<Parameters<typeof runCodeModeModelMatrix>[1]> = {},
 ) {
   return {
-    readSourceIdentity: async () => ({
-      gitSha: "synthetic-source",
-      sourceDirty: false,
-      sourcePatchSha256: null,
-    }),
+    readSourceIdentity: matrixSourceIdentity("synthetic-source"),
     readBuildSha256: async () => "synthetic-build",
     buildCliArtifacts: async () => {},
     ...overrides,

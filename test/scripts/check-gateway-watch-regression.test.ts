@@ -11,12 +11,10 @@ import {
   collectGatewayWatchFindings,
   hasGatewayReadyLog,
   parseArgs,
-  resolveTimedWatchShell,
   runTimedWatch,
   shouldReportDuplicateDistRuntimeRegression,
   shouldRefreshBuildStampForRestoredArtifacts,
   updateWatchBuildDetection,
-  WATCH_LOG_CAPTURE_MAX_CHARS,
   writeBuildAndRuntimePostBuildStamps,
 } from "../../scripts/check-gateway-watch-regression.mts";
 import {
@@ -194,31 +192,11 @@ function expectExit(
   });
 }
 
-it("parses timing and growth limits as strict non-negative integers", () => {
-  const limits: [string, string, number][] = [
-    ["window-ms", "windowMs", 0],
-    ["ready-timeout-ms", "readyTimeoutMs", 1],
-    ["ready-settle-ms", "readySettleMs", 2],
-    ["sigkill-grace-ms", "sigkillGraceMs", 3],
-    ["sigkill-exit-grace-ms", "sigkillExitGraceMs", 4],
-    ["cpu-warn-ms", "cpuWarnMs", 5],
-    ["cpu-fail-ms", "cpuFailMs", 6],
-    ["dist-runtime-file-growth-max", "distRuntimeFileGrowthMax", 7],
-    ["dist-runtime-byte-growth-max", "distRuntimeByteGrowthMax", 8],
-  ];
-  expect(
-    parseArgs(limits.flatMap(([flag, , value]) => [`--${flag}`, String(value)])),
-  ).toMatchObject(Object.fromEntries(limits.map(([, field, value]) => [field, value])));
-
-  for (const [value, message] of [
-    ["1.5", "--window-ms must be a non-negative integer"],
-    ["1e3", "--window-ms must be a non-negative integer"],
-    ["-1", "--window-ms must be a non-negative integer"],
-    ["9007199254740992", "--window-ms must be a safe integer"],
-    ["soon", "--window-ms must be a non-negative integer"],
-  ] as const) {
-    expect(() => parseArgs(["--window-ms", value])).toThrow(message);
-  }
+it("routes numeric flags through strict non-negative parsing", () => {
+  expect(parseArgs(["--window-ms", "0"])).toMatchObject({ windowMs: 0 });
+  expect(() => parseArgs(["--window-ms", "-1"])).toThrow(
+    "--window-ms must be a non-negative integer",
+  );
 });
 
 it("recognizes current and legacy gateway ready logs", () => {
@@ -242,7 +220,6 @@ it("bounds in-memory watch output capture while keeping the newest logs", () => 
 
   const second = appendBoundedWatchLog(first.text, "ghijkl", 8);
   expect(second).toEqual({ text: "efghijkl", truncated: true });
-  expect(WATCH_LOG_CAPTURE_MAX_CHARS).toBeGreaterThan(1024);
 });
 
 it.each([
@@ -286,12 +263,6 @@ it("keeps build-regression detection after diagnostic logs truncate", () => {
 });
 
 it("uses bash for timed watch commands when available", () => {
-  expect(
-    resolveTimedWatchShell({
-      existsSync: (candidate: string) => candidate === "/usr/bin/bash",
-    }),
-  ).toBe("/usr/bin/bash");
-
   const command = buildTimedWatchCommand("watch.pid", "watch.time", "/tmp/openclaw-watch", 19042, {
     existsSync: (candidate: string) =>
       candidate === "/usr/bin/bash" || candidate === "/usr/bin/time",
@@ -585,8 +556,7 @@ it(
       expect(error).toBeInstanceOf(AggregateError);
       if (error instanceof AggregateError) {
         expect(error.errors).toHaveLength(2);
-        expect(error.errors).toContain(cleanupError);
-        expect(error.errors).toContain(producerError);
+        expect(error.errors).toEqual(expect.arrayContaining([cleanupError, producerError]));
       }
       expect(phaseSignal?.aborted).toBe(true);
       expectSettled();

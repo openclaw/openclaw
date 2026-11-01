@@ -81,13 +81,7 @@ function readUniqueArgument(argv: readonly string[], name: string): string | und
   return values.length === 1 ? values[0] : undefined;
 }
 
-function parseHuggingFaceSource(source: string): {
-  user: string;
-  repository: string;
-  file?: string;
-  revision: string;
-  tag?: string;
-} {
+function parseHuggingFaceSource(source: string) {
   const content = source.replace(/^(?:hf|huggingface):(?:\/\/)?/iu, "");
   const [pathPart, revisionPart] = content.split("#", 2);
   const [user, repositoryWithTag, ...fileParts] = (pathPart ?? "").split("/");

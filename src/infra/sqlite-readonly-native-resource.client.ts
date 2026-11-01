@@ -203,7 +203,7 @@ export function createSqliteReadOnlyNativeResourceClient(port: MessagePort) {
       pathname: string,
       options: {
         mode: "sync" | "async";
-        stagingRoot?: string;
+        stagingRoot: string;
         signal?: AbortSignal;
         expectedSourceIdentity?: DatabaseFileIdentity;
       },

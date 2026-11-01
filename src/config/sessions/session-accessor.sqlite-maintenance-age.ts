@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import {
@@ -12,6 +13,7 @@ import { hasCanonicalSessionValidationProjection } from "./session-canonical-key
 import { getSessionMaintenanceActivityAt } from "./store-maintenance-activity.js";
 import {
   shouldPreserveMaintenanceEntry,
+  shouldRunSessionEntryMaintenance,
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
@@ -28,6 +30,23 @@ export type SessionEntryMaintenanceAgeFact = {
   next: { at: number };
   recheckAt: number;
 };
+/** The scheduling owner can retain its deadline while acknowledged activity stays below capacity. */
+export function canDeferMaintenance(
+  fact: SessionEntryMaintenanceAgeFact,
+  maintenance: ResolvedSessionMaintenanceConfig,
+  noCandidates: boolean | undefined,
+): boolean {
+  return (
+    fact.entryCount !== undefined &&
+    isDeepStrictEqual(fact.maintenance, maintenance) &&
+    (noCandidates === true ||
+      !shouldRunSessionEntryMaintenance({
+        entryCount: fact.entryCount,
+        maxEntries: maintenance.maxEntries,
+      }))
+  );
+}
+
 type SessionEntryMaintenanceAgeCapture = { fact?: SessionEntryMaintenanceAgeFact };
 type MaintenanceActivity = Pick<
   SessionEntry,

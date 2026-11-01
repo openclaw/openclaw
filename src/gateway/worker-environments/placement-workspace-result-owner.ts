@@ -1,3 +1,5 @@
+import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
+import { requireRepositoryWorkspaceDiskAuthority } from "../../state/session-repository-workspaces.authority.js";
 import {
   isCurrentPlacementTurnClaim,
   placementTurnOwner,
@@ -79,4 +81,29 @@ export function matchesWorkspaceResultClaim(
         claim.owner.environmentId === recoveryOwner.environmentId &&
         claim.owner.ownerEpoch === recoveryOwner.ownerEpoch))
   );
+}
+
+export function pendingResultFromRow(
+  row: StateDatabase["worker_workspace_pending_results"],
+): WorkerWorkspacePendingResult {
+  return {
+    sessionId: row.session_id,
+    environmentId: row.environment_id,
+    ownerEpoch: row.owner_epoch,
+    placementGeneration: row.placement_generation,
+    claimId: row.claim_id,
+    runId: row.run_id,
+    gatewayInstanceId: row.gateway_instance_id,
+    recoveryRequestedAtMs: row.recovery_requested_at_ms,
+    workspaceAcceptedAtMs: row.workspace_accepted_at_ms,
+    stagedResultRef: row.staged_result_ref,
+    ...(row.repository_workspace_id ? { repositoryWorkspaceId: row.repository_workspace_id } : {}),
+    ...(row.repository_disk_authority_json !== null
+      ? {
+          repositoryDiskAuthority: requireRepositoryWorkspaceDiskAuthority(
+            JSON.parse(row.repository_disk_authority_json),
+          ),
+        }
+      : {}),
+  };
 }

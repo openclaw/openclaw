@@ -1,17 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { fixtureFiles } from "./script-fixture-files.test-support.js";
 
 const scriptPath = path.resolve("scripts/dated-todo-scan.mts");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function writeFixture(root: string, file: string, contents: string) {
-  const target = path.join(root, file);
-  mkdirSync(path.dirname(target), { recursive: true });
-  writeFileSync(target, contents);
-}
 
 describe("dated-todo-scan", () => {
   it("finds nearby dated commitments, ignores noise, and includes deprecated compat records", () => {
@@ -42,19 +37,16 @@ describe("dated-todo-scan", () => {
       ".gitignore": "config/ignored.ts\n",
       "test/removal.test.ts":
         "const removalDatePendingCompatCodes = [\n  // keep until July 2028\n];\n",
-      "src/plugins/compat/registry.ts": [
-        'const prefix = { code: "fixture-deprecation-extra" };',
-        'const record = { code: "fixture-deprecation" };',
-        "",
-      ].join("\n"),
+      "src/plugins/compat/registry.ts":
+        'const prefix = { code: "fixture-deprecation-extra" };\nconst record = { code: "fixture-deprecation" };\n',
     };
     for (const [file, contents] of Object.entries(fixtures)) {
-      writeFixture(root, file, contents);
+      fixtureFiles(root).write(file, contents);
     }
     spawnSync("git", ["init", "-q"], { cwd: root });
     spawnSync("git", ["add", "."], { cwd: root });
     spawnSync("git", ["add", "-f", "config/ignored.ts"], { cwd: root });
-    writeFixture(root, "src/untracked.ts", "// TODO remove after 2026-12-01\n");
+    fixtureFiles(root).write("src/untracked.ts", "// TODO remove after 2026-12-01\n");
 
     const compatReport = path.join(reportRoot, "compat.json");
     const records = [
@@ -77,30 +69,25 @@ describe("dated-todo-scan", () => {
     expect(result.status, result.stderr).toBe(0);
     const candidates = JSON.parse(readFileSync(output, "utf8")) as Array<{
       file: string;
-      line: number;
-      text: string;
       source: string;
     }>;
-    expect(candidates).toEqual(
-      expect.arrayContaining([
-        ...Object.keys(scanned).map((file) =>
-          expect.objectContaining({ file, line: 1, source: "scan" }),
-        ),
-        expect.objectContaining({ file: "test/removal.test.ts", line: 2, source: "scan" }),
-        expect.objectContaining({
-          file: "src/plugins/compat/registry.ts",
-          line: 2,
-          source: "compat-registry",
-          text: expect.stringContaining("fixture-deprecation: removeAfter 2026-11-15"),
-        }),
-      ]),
+    for (const file of Object.keys(scanned)) {
+      expect(candidates).toContainEqual(expect.objectContaining({ file, line: 1, source: "scan" }));
+    }
+    expect(candidates).toContainEqual(
+      expect.objectContaining({ file: "test/removal.test.ts", line: 2, source: "scan" }),
     );
+    expect(candidates.filter((candidate) => candidate.source === "compat-registry")).toEqual([
+      expect.objectContaining({
+        file: "src/plugins/compat/registry.ts",
+        line: 2,
+        source: "compat-registry",
+        text: expect.stringContaining("fixture-deprecation: removeAfter 2026-11-15"),
+      }),
+    ]);
     const candidateFiles = candidates.map((candidate) => candidate.file);
     for (const excludedFile of [...Object.keys(excluded), "src/untracked.ts"]) {
       expect(candidateFiles).not.toContain(excludedFile);
     }
-    expect(candidates.filter((candidate) => candidate.source === "compat-registry")).toHaveLength(
-      1,
-    );
   });
 });

@@ -4,7 +4,10 @@ import type {
   SessionTranscriptCorpusScope,
   SessionTranscriptCorpusEntry,
 } from "../../../packages/memory-host-sdk/src/host/session-transcript-corpus.types.js";
-import type { TranscriptArchivePresenceRead } from "./session-accessor.sqlite-archive-types.js";
+import type {
+  SessionColdArchive,
+  TranscriptArchivePresenceRead,
+} from "./session-accessor.sqlite-archive-types.js";
 import type {
   SessionTranscriptInstance,
   SessionTranscriptInstanceListOptions,
@@ -12,7 +15,6 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import type { SessionAccessScope, SessionEntryListScope } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
-import type { SessionColdArchive } from "./session-cold-storage-state.js";
 import type {
   MemorySessionSelectors,
   MemorySessionTarget,

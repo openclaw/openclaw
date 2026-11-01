@@ -3,6 +3,7 @@
  * Keeps optional tool gating separate from tool construction so config and execution contracts decide exposure.
  */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
 import { wrapToolWorkspaceRootGuardWithOptions } from "./agent-tools.read.js";
@@ -129,6 +130,7 @@ export function shouldIncludeProgressCardToolForOpenClawTools(
 
 type PrimarySessionToolRegistrationParams = {
   questionInputMode?: ReturnType<typeof resolveConversationQuestionInputMode>;
+  listingClientCaps?: string[];
   config?: OpenClawConfig;
   agentSessionKey?: string;
   pluginToolDenylist?: string[];
@@ -140,8 +142,8 @@ export function shouldIncludePrimarySessionToolForOpenClawTools(
 ): boolean {
   if (
     toolName === "ask_user" &&
-    params.questionInputMode !== "native" &&
-    params.questionInputMode !== "buttons"
+    ((params.questionInputMode !== "native" && params.questionInputMode !== "buttons") ||
+      params.listingClientCaps?.includes(GATEWAY_CLIENT_CAPS.NO_QUESTION_INPUT))
   ) {
     return false;
   }

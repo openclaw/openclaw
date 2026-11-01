@@ -1,7 +1,6 @@
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOpenClawVersionBase } from "../config/version.js";
-import { inspectDecisionProviders } from "../decisions/runtime.js";
 import { listImportedBundledPluginFacadeIds } from "../plugin-sdk/facade-runtime.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { inspectBundleLspRuntimeSupport } from "./bundle-lsp.js";
@@ -86,7 +85,7 @@ export type PluginInspectReport = ReturnType<typeof buildPluginShapeSummary> & {
   commands: string[];
   cliCommands: string[];
   services: string[];
-  decisions?: ReturnType<typeof inspectDecisionProviders>;
+  decisions?: ReturnType<PluginRegistry["decisionProviders"][number]["host"]["inspect"]>[];
   gatewayDiscoveryServices: string[];
   gatewayMethods: string[];
   mcpServers: Array<{
@@ -444,7 +443,13 @@ export function buildPluginInspectReport({
 
 type PluginInspectRows = Pick<
   PluginRegistry,
-  "typedHooks" | "hooks" | "tools" | "diagnostics" | "gatewayMethodDescriptors" | "sessionCatalogs"
+  | "typedHooks"
+  | "hooks"
+  | "tools"
+  | "diagnostics"
+  | "gatewayMethodDescriptors"
+  | "sessionCatalogs"
+  | "decisionProviders"
 >;
 
 function buildPluginInspectRecord(
@@ -552,9 +557,10 @@ function buildPluginInspectRecord(
     commands: [...plugin.commands],
     cliCommands: [...plugin.cliCommands],
     services: [...plugin.services],
-    decisions: inspectDecisionProviders(config, report).filter(
-      (entry) => entry.pluginId === plugin.id,
-    ),
+    decisions: (
+      rows?.decisionProviders ??
+      report.decisionProviders.filter((entry) => entry.pluginId === plugin.id)
+    ).map((entry) => entry.host.inspect(config)),
     gatewayDiscoveryServices: [...plugin.gatewayDiscoveryServiceIds],
     gatewayMethods,
     mcpServers,
@@ -586,6 +592,7 @@ export function buildAllPluginInspectReports(params: PluginInspectParams): Plugi
   const tools = groupPluginRecords(report.tools, (entry) => entry.pluginId);
   const diagnostics = groupPluginRecords(report.diagnostics, (entry) => entry.pluginId);
   const sessionCatalogs = groupPluginRecords(report.sessionCatalogs, (entry) => entry.pluginId);
+  const decisionProviders = groupPluginRecords(report.decisionProviders, (entry) => entry.pluginId);
   const gatewayMethodDescriptors = groupPluginRecords(
     report.gatewayMethodDescriptors,
     (descriptor) => (descriptor.owner.kind === "plugin" ? descriptor.owner.pluginId : undefined),
@@ -597,6 +604,7 @@ export function buildAllPluginInspectReports(params: PluginInspectParams): Plugi
       tools: tools.get(plugin.id) ?? [],
       diagnostics: diagnostics.get(plugin.id) ?? [],
       sessionCatalogs: sessionCatalogs.get(plugin.id) ?? [],
+      decisionProviders: decisionProviders.get(plugin.id) ?? [],
       gatewayMethodDescriptors: gatewayMethodDescriptors.get(plugin.id) ?? [],
     }),
   );

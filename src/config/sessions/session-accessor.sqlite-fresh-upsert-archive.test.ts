@@ -23,6 +23,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
+import { timedMessageEvent } from "./transcript-message.test-support.js";
 
 const fixture = useTempSessionsFixture("openclaw-fresh-upsert-archive-");
 const archivedSessionId = "unrelated-archived-session";
@@ -147,13 +148,10 @@ it.each(["canonical", "alias"] as const)(
     };
     const transcript = [
       { type: "session", id: scope.sessionId, version: 3, cwd: "/workspace" },
-      {
-        type: "message",
-        id: "retained-message",
-        parentId: null,
-        timestamp: "2026-07-15T21:23:03.698Z",
-        message: { role: "user", content: "Keep adopted history.\r\n  Preserve spacing." },
-      },
+      timedMessageEvent("retained-message", null, "2026-07-15T21:23:03.698Z", {
+        role: "user",
+        content: "Keep adopted history.\r\n  Preserve spacing.",
+      }),
     ];
     await replaceSessionEntry(scope, entry);
     await replaceTranscriptEvents(scope, transcript);

@@ -291,7 +291,9 @@ the private `openclaw/plugin-sdk/agent-harness-tool-runtime` around the host-bou
 before-call hooks have adjusted them, at the existing tool execution boundary.
 Use the shared schema validation helpers for the declared tool schema. Do not
 copy private validation markers or run a second before-call hook. Validation is
-scoped to the tool call and remains isolated from concurrent calls.
+scoped to the tool call and remains isolated from concurrent calls. Once `execute`
+settles, its validator is released. A later callback inheriting that completed
+call's validation scope is rejected rather than skipping validation.
 
 Retain accepted background work before middleware: `isAsyncStartedToolResult`
 and `readAsyncStartedTaskIds` from `openclaw/plugin-sdk/agent-harness-tool-runtime`
@@ -342,6 +344,12 @@ stable release. These helpers accept the
 same `{ event, ctx }` payload as
 `runAgentHarnessAgentEndHook(...)`; their failures do not alter the completed
 attempt result.
+
+Set `event.modelIterations` when the harness observes model calls directly, and
+`ctx.toolNames` to the OpenClaw tool names the model could call. The helpers add
+`event.skillsUsed` from the run's skill-usage record. `ctx.modelIterations` and
+`ctx.skillWorkshopAvailable` are deprecated aliases for those two fields,
+supported through 2026-12-31.
 
 Pass `ctx.foregroundPromptContext` built with
 `buildEmbeddedForegroundPromptContext(params, agentDir)` from the same

@@ -1,18 +1,22 @@
 /// <reference lib="es2024.collection" />
 
-// Shared provider usage content: plan windows, balances and provider-billed cost.
-// Surrounding headers (name, plan, icon) stay surface-owned.
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, For, Repeat, Show } from "solid-js";
 import type {
   ProviderUsageSnapshot,
   UsageWindow,
 } from "../../../../src/infra/provider-usage.types.js";
+// Shared provider usage content: plan windows, balances and provider-billed cost.
+// Surrounding headers (name, plan, icon) stay surface-owned.
+import { registerProviderUsageEnglish } from "../../i18n/locales/en-provider-usage.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
 import { formatRelativeTimestamp } from "../../lib/reactive/format.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import "../../styles/carapace-control-ui.css";
 import "../../styles/provider-usage.css";
 import { Icon } from "./icon.tsx";
+
+registerEnglishCatalog(registerProviderUsageEnglish);
 
 export type ProviderUsageDetails = Pick<
   ProviderUsageSnapshot,
@@ -188,15 +192,15 @@ function BilledCost(props: { history: CostHistory }) {
   );
   return (
     <>
-      <For each={windows()}>
-        {([label, amount]) => (
+      <Repeat count={3}>
+        {(index) => (
           <div class="oc-menu-panel-usage-row provider-usage__row">
-            <span class="oc-menu-panel-usage-label">{label}</span>
+            <span class="oc-menu-panel-usage-label">{windows()[index]![0]}</span>
             <span />
-            <span class="oc-menu-panel-usage-value">{format()(amount)}</span>
+            <span class="oc-menu-panel-usage-value">{format()(windows()[index]![1])}</span>
           </div>
         )}
-      </For>
+      </Repeat>
       <Show when={props.history.models.length > 0}>
         <div class="oc-menu-panel-usage-row provider-usage__row">
           <span class="oc-menu-panel-usage-label">{t("usage.providerUsage.topModels")}</span>
@@ -279,27 +283,28 @@ export function ProviderUsagePanel(props: { usage: ProviderUsageDetails }) {
           </p>
         )}
       </Show>
-      <For each={groups()}>
-        {([group, windows]) => (
-          <div class="provider-usage__group" role="group" aria-label={group || undefined}>
-            <Show when={group}>
-              <div class="provider-usage__note">{group}</div>
+      <For each={groups()} keyed={([group]) => group}>
+        {(group) => (
+          <div class="provider-usage__group" role="group" aria-label={group()[0] || undefined}>
+            <Show when={group()[0]}>
+              <div class="provider-usage__note">{group()[0]}</div>
             </Show>
             <div class="provider-usage__windows">
-              <For each={windows}>
+              {/* Provider snapshots have no row IDs and may repeat labels. These slots own no state. */}
+              <For each={group()[1]} keyed={false}>
                 {(window) => (
-                  <div class="provider-usage__window" data-tone={remainingTone(window)}>
-                    <span class="provider-usage__window-label">{window.label}</span>
+                  <div class="provider-usage__window" data-tone={remainingTone(window())}>
+                    <span class="provider-usage__window-label">{window().label}</span>
                     <strong class="provider-usage__window-value">
                       {t("usage.providerUsage.remaining", {
-                        percent: String(remainingPercent(window)),
+                        percent: String(remainingPercent(window())),
                       })}
                     </strong>
-                    <UsageWindowMeter window={window} />
-                    <Show when={resetText(window).date}>
+                    <UsageWindowMeter window={window()} />
+                    <Show when={resetText(window()).date}>
                       <small class="provider-usage__reset">
                         {t("usage.providerUsage.resets", {
-                          date: `${resetText(window).date} · ${resetText(window).relative}`,
+                          date: `${resetText(window()).date} · ${resetText(window()).relative}`,
                         })}
                       </small>
                     </Show>
@@ -312,12 +317,12 @@ export function ProviderUsagePanel(props: { usage: ProviderUsageDetails }) {
       </For>
       <Show when={hasRows()}>
         <div class="oc-menu-panel-usage provider-usage__rows">
-          <For each={props.usage.billing ?? []}>
+          <For each={props.usage.billing ?? []} keyed={false}>
             {(entry) => (
               <div class="oc-menu-panel-usage-row provider-usage__row">
-                <span class="oc-menu-panel-usage-label">{billingLabel(entry)}</span>
+                <span class="oc-menu-panel-usage-label">{billingLabel(entry())}</span>
                 <span />
-                <span class="oc-menu-panel-usage-value">{billingText(entry)}</span>
+                <span class="oc-menu-panel-usage-value">{billingText(entry())}</span>
               </div>
             )}
           </For>
@@ -339,13 +344,13 @@ export function ProviderUsageChips(props: { usage: ProviderUsageDetails | undefi
   const balance = () => (windows().length === 0 ? props.usage?.billing?.[0] : undefined);
   return (
     <span class="provider-usage__chips">
-      <For each={windows()}>
+      <For each={windows()} keyed={false}>
         {(window) => (
-          <span class="provider-usage__chip" data-tone={remainingTone(window)}>
-            <span class="provider-usage__chip-label">{window.label}</span>
-            <UsageWindowMeter window={window} />
+          <span class="provider-usage__chip" data-tone={remainingTone(window())}>
+            <span class="provider-usage__chip-label">{window().label}</span>
+            <UsageWindowMeter window={window()} />
             <span class="provider-usage__chip-value">
-              {t("usage.providerUsage.remaining", { percent: String(remainingPercent(window)) })}
+              {t("usage.providerUsage.remaining", { percent: String(remainingPercent(window())) })}
             </span>
           </span>
         )}

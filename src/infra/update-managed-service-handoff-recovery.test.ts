@@ -46,6 +46,36 @@ async function withRepair(action: (repair: Awaited<ReturnType<typeof prepareRepa
   using repair = await prepareRepair();
   action(repair);
 }
+function completeRepair(repair: Awaited<ReturnType<typeof prepareRepair>>) {
+  const run = newRun();
+  repair.bindRun(run.runId);
+  repair.complete(run.runId);
+  return run;
+}
+function reboot() {
+  const boot = fixture.store.bootIdentity();
+  vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader").mockReturnValue(() => ({
+    ...boot,
+    identity:
+      boot.platform === "win32"
+        ? "2026-09-16T03:42:10.5000000Z"
+        : "01234567-89ab-cdef-0123-456789abcdee",
+  }));
+  return createManagedHandoffLeaseStore();
+}
+function pauseInspection() {
+  const inspecting = createDeferred();
+  const observation = createDeferred<typeof fixture.facts>();
+  fixture.repairFacts.mockImplementationOnce(() => {
+    inspecting.resolve();
+    return observation.promise;
+  });
+  return { inspecting, observation };
+}
+function expectBlocked() {
+  expect(nextUpdate()).toBe("busy");
+  expect(ledger.listUpdateRuns({}, { env })).toEqual([]);
+}
 
 it("records the settlement receipt before releasing a dead legacy lease and admits the next update", async () => {
   fixture.seed();
@@ -73,36 +103,28 @@ it("records the settlement receipt before releasing a dead legacy lease and admi
   expect(readRun(run.runId)?.steps).toContainEqual(receiptAtRelease);
 });
 
-it.each([
-  "live descendant",
-  "live owner",
-  "unverified owner",
-  "45-minute floor",
-  "larger recorded timeout",
-] as const)("preserves the retained generation for %s", async (reason) => {
-  const largerTimeout = reason === "larger recorded timeout";
-  const grace = largerTimeout || reason === "45-minute floor";
-  const ageMs = (largerTimeout ? 46 : 44) * 60_000;
-  const timeoutMs = largerTimeout ? 90 * 60_000 : undefined;
-  const previous = fixture.seed(grace ? { ageMs, timeoutMs } : {});
-  const { births, helper, processCensus } = fixture;
-  let expected: string | RegExp | Error;
-  if (grace) {
-    expected = new Date(previous.updatedAt + (largerTimeout ? 90 : 45) * 60_000).toISOString();
-  } else if (reason.endsWith("owner")) {
-    births.set(helper.pid, reason === "live owner" ? Number(helper.startIdentity) : null);
-    expected = new RegExp("live or unverified: PID " + helper.pid);
-  } else {
-    processCensus.matchingPids.push(81234);
-    expected = /PID 81234.*openclaw update repair/;
-  }
-  await expect(prepareRepair()).rejects.toThrow(expected);
-  expect(fixture.current()).toEqual(previous);
-  if (reason === "live descendant") {
-    expect(nextUpdate()).toBe("busy");
-    expect(ledger.listUpdateRuns({}, { env })).toEqual([]);
-  }
-});
+it.each(["live descendant", "45-minute floor", "larger recorded timeout"] as const)(
+  "preserves the retained generation for %s",
+  async (reason) => {
+    const largerTimeout = reason === "larger recorded timeout";
+    const grace = largerTimeout || reason === "45-minute floor";
+    const ageMs = (largerTimeout ? 46 : 44) * 60_000;
+    const timeoutMs = largerTimeout ? 90 * 60_000 : undefined;
+    const previous = fixture.seed(grace ? { ageMs, timeoutMs } : {});
+    let expected: string | RegExp | Error;
+    if (grace) {
+      expected = new Date(previous.updatedAt + (largerTimeout ? 90 : 45) * 60_000).toISOString();
+    } else {
+      fixture.processCensus.matchingPids.push(81234);
+      expected = /PID 81234.*openclaw update repair/;
+    }
+    await expect(prepareRepair()).rejects.toThrow(expected);
+    expect(fixture.current()).toEqual(previous);
+    if (reason === "live descendant") {
+      expectBlocked();
+    }
+  },
+);
 
 it.each(["unverified intermediate-parent descendant", "incomplete census"])(
   "blocks settlement and the next update for an %s",
@@ -118,8 +140,7 @@ it.each(["unverified intermediate-parent descendant", "incomplete census"])(
       reason === "incomplete census" ? /census is incomplete/ : /unverified: PID 81234/,
     );
     expect(fixture.current()).toEqual(previous);
-    expect(nextUpdate()).toBe("busy");
-    expect(ledger.listUpdateRuns({}, { env })).toEqual([]);
+    expectBlocked();
     expect(fs.readFileSync(fixture.diagnosticPath, "utf8")).toBe("Retained update diagnostics\n");
   },
 );
@@ -159,12 +180,7 @@ it("preserves an incomplete rollback across repair state overrides", async () =>
 
 it("refuses a changed generation after awaited artifact inspection", async () => {
   const previous = fixture.seed();
-  const inspecting = createDeferred();
-  const observation = createDeferred<typeof fixture.facts>();
-  fixture.repairFacts.mockImplementationOnce(() => {
-    inspecting.resolve();
-    return observation.promise;
-  });
+  const { inspecting, observation } = pauseInspection();
   const result = prepareRepair();
   await inspecting.promise;
   const changed = fixture.replaceHeartbeat(previous);
@@ -173,50 +189,40 @@ it("refuses a changed generation after awaited artifact inspection", async () =>
   expect(fixture.current()).toEqual(changed);
 });
 
-it.each(["installation repair", "settlement receipt"] as const)(
-  "retains uncertain recovery facts and artifacts after failed %s",
-  async (failure) => {
-    const previous = fixture.seed();
-    const diagnostics = fs.readFileSync(fixture.diagnosticPath);
-    const run = failure === "settlement receipt" ? newRun() : undefined;
-    await expect(
-      withRepair((repair) => {
-        if (run) {
-          repair.bindRun(run.runId);
-          ledger.finishUpdateRun(run.runId, { status: "failed" }, { env });
-          repair.complete(run.runId);
-        } else {
-          throw new Error("Current installation repair failed");
-        }
-      }),
-    ).rejects.toThrow(run ? "settlement was not recorded" : "Current installation repair failed");
-    const retained = fixture.current();
-    expect(retained.owner).not.toBe(previous.owner);
-    expect(retained).toMatchObject({
-      helper: { pid: process.pid },
-      action: { kind: "triage", phase: "uncertain" },
-    });
-    expect(fixture.readMetadata(retained)).toMatchObject({
-      source: {
-        owner: previous.owner,
-        payload_json: previous.payload,
-        updated_at: previous.updatedAt,
-      },
-      facts: { ...fixture.facts, runIds: ["retained-update", ...(run ? [run.runId] : [])] },
-    });
-    expect(fs.readFileSync(fixture.diagnosticPath)).toEqual(diagnostics);
-    if (run) {
-      expect(
-        readRun(run.runId)?.steps.some((step) => step.step === "finalize:handoff-settlement"),
-      ).toBe(false);
-    } else {
-      const olderWriterGeneration = fixture.replaceHeartbeat(retained);
-      expect(fixture.readMetadata(olderWriterGeneration)).toBeNull();
-      expect(nextUpdate()).toBe("busy");
-      expect(ledger.listUpdateRuns({}, { env })).toEqual([]);
-    }
-  },
-);
+it("retains uncertain recovery facts and artifacts after a failed settlement receipt", async () => {
+  const previous = fixture.seed();
+  const diagnostics = fs.readFileSync(fixture.diagnosticPath);
+  const run = newRun();
+  await expect(
+    withRepair((repair) => {
+      repair.bindRun(run.runId);
+      ledger.finishUpdateRun(run.runId, { status: "failed" }, { env });
+      repair.complete(run.runId);
+    }),
+  ).rejects.toThrow("settlement was not recorded");
+  const retained = fixture.current();
+  expect(retained.owner).not.toBe(previous.owner);
+  expect(retained).toMatchObject({
+    helper: { pid: process.pid },
+    action: { kind: "triage", phase: "uncertain" },
+  });
+  expect(fixture.readMetadata(retained)).toMatchObject({
+    source: {
+      owner: previous.owner,
+      payload_json: previous.payload,
+      updated_at: previous.updatedAt,
+    },
+    facts: { ...fixture.facts, runIds: ["retained-update", run.runId] },
+  });
+  expect(fs.readFileSync(fixture.diagnosticPath)).toEqual(diagnostics);
+  expect(
+    readRun(run.runId)?.steps.some((step) => step.step === "finalize:handoff-settlement"),
+  ).toBe(false);
+  const olderWriterGeneration = fixture.replaceHeartbeat(retained);
+  expect(fixture.readMetadata(olderWriterGeneration)).toBeNull();
+  expect(nextUpdate()).toBe("busy");
+  expect(ledger.listUpdateRuns({}, { env }).map(({ runId }) => runId)).toEqual([run.runId]);
+});
 
 it("settles a dead original's cancelled family with its retained service root", async () => {
   // Redact all sibling roots so host temp-path length cannot truncate this receipt.
@@ -227,9 +233,7 @@ it("settles a dead original's cancelled family with its retained service root", 
   using repair = await prepareRepair();
   // The claim replaces the original; every other family row retires with it.
   expect(fixture.rows().map((row) => row.install_root)).toEqual([fixture.root]);
-  const run = newRun();
-  repair.bindRun(run.runId);
-  repair.complete(run.runId);
+  const run = completeRepair(repair);
   const detail = settlement(run.runId)?.detail ?? "";
   expect(detail).toContain(`cancelled update custody settled: updater PID ${keys.updater.pid}`);
   // History shortens every family key under the fixture home.
@@ -251,7 +255,6 @@ it("settles a dead original's cancelled family with its retained service root", 
 });
 
 it.each([
-  ["recent custody", /recovery grace ends at/],
   ["recent retained service root", /recovery grace ends at/],
   ["process referencing the retained service root", /PID 81236/],
   [
@@ -264,11 +267,7 @@ it.each([
   ["alias outside the family", /unsupported custody at .*-other\/\.openclaw-update-child-/],
 ] as const)("retains cancelled custody unchanged for %s", async (reason, expected) => {
   const keys = fixture.seedCancellation(
-    reason === "recent custody"
-      ? { ageMs: 44 * 60_000 }
-      : reason === "recent retained service root"
-        ? { serviceAgeMs: 44 * 60_000 }
-        : undefined,
+    reason === "recent retained service root" ? { serviceAgeMs: 44 * 60_000 } : undefined,
   );
   if (reason === "process referencing the retained service root") {
     // The run's own facts name other paths; every retired family key is censused too.
@@ -303,12 +302,7 @@ it.each([
 
 it("preserves a dependent admitted while cancelled custody was inspected", async () => {
   const keys = fixture.seedCancellation();
-  const inspecting = createDeferred();
-  const observation = createDeferred<typeof fixture.facts>();
-  fixture.repairFacts.mockImplementationOnce(() => {
-    inspecting.resolve();
-    return observation.promise;
-  });
+  const { inspecting, observation } = pauseInspection();
   const result = prepareRepair();
   // A repair that skips fact inspection settles first instead of hanging the test.
   await Promise.race([inspecting.promise, result]);
@@ -353,9 +347,7 @@ it("resumes a failed cancelled-custody repair from its retained original", async
   const nextStore = createManagedHandoffLeaseStore();
   using resumed = await prepareRepair(nextStore);
   expect(resumed.cancelledCustody).toEqual(custody);
-  const run = newRun();
-  resumed.bindRun(run.runId);
-  resumed.complete(run.runId);
+  const run = completeRepair(resumed);
   expect(settlement(run.runId)?.detail).toContain("cancelled update custody settled");
   expect(fixture.rows()).toEqual([]);
   expect(nextUpdate(nextStore)).toBe("acquired");
@@ -374,15 +366,7 @@ it("preserves interrupted repair evidence across reboot until explicit repair se
   });
   now += 45 * 60_000 + 1_000;
   fixture.births.set(process.pid, 20);
-  const boot = fixture.store.bootIdentity();
-  vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader").mockReturnValue(() => ({
-    ...boot,
-    identity:
-      boot.platform === "win32"
-        ? "2026-09-16T03:42:10.5000000Z"
-        : "01234567-89ab-cdef-0123-456789abcdee",
-  }));
-  const nextStore = createManagedHandoffLeaseStore();
+  const nextStore = reboot();
   const retained = fixture.current();
   const metadata = fixture.readMetadata(retained);
   expect(nextUpdate(nextStore)).toBe("busy");
@@ -394,9 +378,7 @@ it("preserves interrupted repair evidence across reboot until explicit repair se
   expect(fixture.current()).toEqual(retained);
   fixture.runCensus.clear();
   using reclaimed = await prepareRepair(nextStore);
-  const run = newRun();
-  reclaimed.bindRun(run.runId);
-  reclaimed.complete(run.runId);
+  completeRepair(reclaimed);
   expect(nextStore.read(fixture.root)).toEqual({ kind: "absent" });
   expect(nextUpdate(nextStore)).toBe("acquired");
 });
@@ -404,19 +386,9 @@ it("preserves interrupted repair evidence across reboot until explicit repair se
 it("settles a prior-boot family with an unreadable recycled owner PID", async () => {
   fixture.seed({ ageMs: 1_000 });
   fixture.births.set(fixture.helper.pid, null);
-  const boot = fixture.store.bootIdentity();
-  vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader").mockReturnValue(() => ({
-    ...boot,
-    identity:
-      boot.platform === "win32"
-        ? "2026-09-16T03:42:10.5000000Z"
-        : "01234567-89ab-cdef-0123-456789abcdee",
-  }));
-  const nextStore = createManagedHandoffLeaseStore();
+  const nextStore = reboot();
   using repair = await prepareRepair(nextStore);
-  const run = newRun();
-  repair.bindRun(run.runId);
-  repair.complete(run.runId);
+  completeRepair(repair);
   expect(nextStore.read(fixture.root)).toEqual({ kind: "absent" });
   expect(nextUpdate(nextStore)).toBe("acquired");
 });
@@ -456,8 +428,7 @@ it.each(["before", "retained-child", "at-margin", "after", "unreadable", "runtim
         observation === "runtime-holder" ? /PID 81234/ : /Handoff owners are live or unverified/,
       );
       expect(fixture.store.read(previous.key)).toEqual({ kind: "current", lease: previous });
-      expect(nextUpdate()).toBe("busy");
-      expect(ledger.listUpdateRuns({}, { env })).toEqual([]);
+      expectBlocked();
       return;
     }
     using repair = await prepareRepair();

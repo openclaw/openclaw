@@ -47,14 +47,6 @@ function sanitizeGeminiThoughtSignature(value: string | undefined): string | und
     : undefined;
 }
 
-function toolCallThoughtSignatureReplayKey(
-  id: string,
-  name: string,
-  args: Record<string, unknown>,
-): string {
-  return [id, name, stableStringifyGoogleToolCallValue(args)].join("\u0000");
-}
-
 export function requiresGoogleToolCallId(modelId: string): boolean {
   return modelId.startsWith("claude-") || modelId.startsWith("gpt-oss-");
 }
@@ -169,7 +161,7 @@ export function projectGoogleMessages(params: {
               (params.requiresToolCallSignature &&
                 isSameProviderAndModel &&
                 replaySignatures.size > 0))
-              ? toolCallThoughtSignatureReplayKey(block.id, block.name, args)
+              ? [block.id, block.name, stableStringifyGoogleToolCallValue(args)].join("\u0000")
               : "";
           if (managed && ownSignature) {
             nextReplaySignatures.set(replayKey, ownSignature);

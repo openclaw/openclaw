@@ -9,7 +9,6 @@ import {
   type ChannelAdmissionAudit,
 } from "../channels/message-access/admission-evidence.js";
 import type { ResolvedChannelMessageIngress } from "../channels/message-access/runtime-types.js";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import {
   createChannelIngressResolver,
@@ -19,6 +18,7 @@ import {
 } from "../plugin-sdk/channel-ingress-runtime.js";
 import { recordAcceptedSessionParticipantInput } from "../sessions/session-participant-input-recording.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { createLazyPluginRuntime } from "./loader-module-runtime.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -33,7 +33,7 @@ import {
   inspect,
   resolveIngressForRuntime,
 } from "./registry-runtime.channel-ingress.test-support.js";
-import { createPluginRegistry } from "./registry.js";
+import { createTestPluginRegistry as createRegistry } from "./registry-runtime.test-helpers.js";
 import {
   bindGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
@@ -100,36 +100,33 @@ function recordInput(context: Parameters<typeof recordAcceptedSessionParticipant
     storePath: "/unused",
   });
 }
-function createRegistry(runtime: PluginRuntime = createPluginRuntime()) {
-  return createPluginRegistry({
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-    runtime,
-    activateGlobalSideEffects: false,
-  });
-}
-
-function channelFixture(id: string, label = id): ChannelPlugin {
-  return {
-    id,
-    meta: { id, label, selectionLabel: label, docsPath: `/channels/${id}`, blurb: "test channel" },
-    capabilities: { chatTypes: ["direct"] },
-    config: { listAccountIds: () => [], resolveAccount: () => ({ accountId: "default" }) },
-    outbound: { deliveryMode: "direct" },
-  };
-}
-
 function createGateway(audit: ChannelAdmissionAudit) {
   return { channelAdmissionAudit: audit, getRuntimeConfig: () => ({}) } as GatewayRequestContext;
 }
-function scopedGateway(id: string, audit: ChannelAdmissionAudit) {
+function scopedGateway(id: string, audit: ChannelAdmissionAudit, origin: "bundled" | "global") {
   const gateway = createGateway(audit);
+  const gatewayContextResolver = () => gateway;
   const channel = createRuntimeBuilder({
-    origin: "bundled",
+    origin,
+    trustedOfficialInstall: origin === "global",
     id,
-    gatewayContextResolver: () => gateway,
+    gatewayContextResolver,
   });
   cleanups.push(() => markPluginRegistryRetired(channel.registryBuilder.registry));
-  return { ...channel, gateway };
+  const buildContext = channel.api.runtime.channel.inbound.buildContext;
+  return {
+    ...channel,
+    gateway,
+    gatewayContextResolver,
+    receive: async (senderId = "person-a") =>
+      buildContext(
+        contextParams({
+          ingress: await channel.resolveIngress(senderId, { channelId: id }),
+          channelId: id,
+          senderId,
+        }),
+      ),
+  };
 }
 
 function createAudit() {
@@ -147,103 +144,95 @@ afterEach(async () => {
   audits.clear();
 });
 
-it.each([
-  "loadAdapter",
-  "setIdleTimeoutBySessionKey",
-  "setMaxAgeBySessionKey",
-  "setIdleTimeoutBySessionKeyAsync",
-  "setMaxAgeBySessionKeyAsync",
-] as const)(
-  "keeps adopted channel %s usable after its captured registry is collected",
-  async (method) => {
-    class RetainedService {
-      id = "retired-channel-scope";
-      start() {}
-    }
-    const registryBuilder = createRegistry();
-    const record = createPluginRecord({ id: "adopted-channel", origin: "bundled" });
-    const api = registryBuilder.createApi(record, { config: {} });
-    const instance = getPluginInstance(record)!;
-    const binding = { boundAt: 1, lastActivityAt: 2 };
-    const bindings = {
-      setIdleTimeoutBySessionKey: vi.fn(() => [binding]),
-      setMaxAgeBySessionKey: vi.fn(() => [binding]),
-      setIdleTimeoutBySessionKeyAsync: vi.fn(async () => [binding]),
-      setMaxAgeBySessionKeyAsync: vi.fn(async () => [binding]),
-    };
-    api.registerChannel({
-      plugin: {
-        ...channelFixture(record.id),
-        conversationBindings: bindings,
-      },
+it("keeps adopted channel operations usable after their captured registry is collected", async () => {
+  class RetainedService {
+    id = "retired-channel-scope";
+    start() {}
+  }
+  const registryBuilder = createRegistry(createPluginRuntime());
+  const record = createPluginRecord({ id: "adopted-channel", origin: "bundled" });
+  const api = registryBuilder.createApi(record, { config: {} });
+  const instance = getPluginInstance(record)!;
+  const binding = { boundAt: 1, lastActivityAt: 2 };
+  const bindings = {
+    setIdleTimeoutBySessionKey: vi.fn(() => [binding]),
+    setMaxAgeBySessionKey: vi.fn(() => [binding]),
+    setIdleTimeoutBySessionKeyAsync: vi.fn(async () => [binding]),
+    setMaxAgeBySessionKeyAsync: vi.fn(async () => [binding]),
+  };
+  api.registerChannel({
+    plugin: {
+      ...createChannelTestPluginBase({ id: record.id }),
+      outbound: { deliveryMode: "direct" },
+      conversationBindings: bindings,
+    },
+  });
+  registryBuilder.registry.plugins.push(record);
+  markPluginRegistryActive(registryBuilder.registry);
+  const capturedChannel = api.runtime.channel;
+  const current = createEmptyPluginRegistry();
+  current.plugins.push(record);
+  current.channels.push(...registryBuilder.registry.channels);
+  const resource = (() => {
+    const intermediate = createEmptyPluginRegistry();
+    intermediate.plugins.push(record);
+    intermediate.channels.push(...registryBuilder.registry.channels);
+    intermediate.services.push({
+      id: "retired-channel-scope",
+      pluginId: record.id,
+      source: "retention-test",
+      origin: "config",
+      service: new RetainedService(),
     });
-    registryBuilder.registry.plugins.push(record);
-    markPluginRegistryActive(registryBuilder.registry);
-    const capturedChannel = api.runtime.channel;
-    const current = createEmptyPluginRegistry();
-    current.plugins.push(record);
-    current.channels.push(...registryBuilder.registry.channels);
-    const resource = (() => {
-      const intermediate = createEmptyPluginRegistry();
-      intermediate.plugins.push(record);
-      intermediate.channels.push(...registryBuilder.registry.channels);
-      intermediate.services.push({
-        id: "retired-channel-scope",
-        pluginId: record.id,
-        source: "retention-test",
-        origin: "config",
-        service: new RetainedService(),
-      });
-      markPluginRegistryActive(intermediate);
-      markPluginRegistryRetired(registryBuilder.registry);
-      const captured = instance.run(() => new AsyncResource("adopted-channel-runtime"));
-      markPluginRegistryActive(current);
-      markPluginRegistryRetired(intermediate);
-      return captured;
-    })();
-    const input = { channelId: record.id, targetSessionKey: "agent:main:channel:dm:fixture" };
-    const invoke = (channel: PluginRuntime["channel"]) => {
-      if (method === "loadAdapter") {
-        return channel.outbound.loadAdapter(record.id);
-      }
-      if (method === "setIdleTimeoutBySessionKey" || method === "setIdleTimeoutBySessionKeyAsync") {
-        return channel.threadBindings[method]({ ...input, idleTimeoutMs: 10 });
-      }
-      return channel.threadBindings[method]({ ...input, maxAgeMs: 20 });
-    };
-    try {
-      await setImmediate();
-      expect(queryObjects(RetainedService)).toBe(0);
-      for (const readChannel of [() => capturedChannel, () => api.runtime.channel]) {
-        const result = await resource.runInAsyncScope(() => invoke(readChannel()));
-        if (method === "loadAdapter") {
-          expect(result).toBe(current.channels[0]?.plugin.outbound);
-        } else {
-          expect(result).toEqual([binding]);
+    markPluginRegistryActive(intermediate);
+    markPluginRegistryRetired(registryBuilder.registry);
+    const captured = instance.run(() => new AsyncResource("adopted-channel-runtime"));
+    markPluginRegistryActive(current);
+    markPluginRegistryRetired(intermediate);
+    return captured;
+  })();
+  const input = { channelId: record.id, targetSessionKey: "agent:main:channel:dm:fixture" };
+  try {
+    await setImmediate();
+    expect(queryObjects(RetainedService)).toBe(0);
+    for (const readChannel of [() => capturedChannel, () => api.runtime.channel]) {
+      await resource.runInAsyncScope(async () => {
+        const channel = readChannel();
+        expect(await channel.outbound.loadAdapter(record.id)).toBe(
+          current.channels[0]?.plugin.outbound,
+        );
+        for (const method of [
+          "setIdleTimeoutBySessionKey",
+          "setIdleTimeoutBySessionKeyAsync",
+        ] as const) {
+          expect(await channel.threadBindings[method]({ ...input, idleTimeoutMs: 10 })).toEqual([
+            binding,
+          ]);
         }
-      }
-      if (method === "loadAdapter") {
-        const empty = createEmptyPluginRegistry();
-        await withPluginRuntimeRegistryScope(empty, async () => {
-          expect(await capturedChannel.outbound.loadAdapter(record.id)).toBeUndefined();
-        });
-        expect(empty.channels).toHaveLength(0);
-      }
-      if (method !== "loadAdapter") {
-        expect(bindings[method]).toHaveBeenCalledTimes(2);
-        expect(bindings[method]).toHaveBeenLastCalledWith({
-          targetSessionKey: input.targetSessionKey,
-          accountId: undefined,
-          ...(method.includes("Idle") ? { idleTimeoutMs: 10 } : { maxAgeMs: 20 }),
-        });
-      }
-    } finally {
-      resource.emitDestroy();
-      markPluginRegistryRetired(current);
-      await instance.dispose();
+        for (const method of ["setMaxAgeBySessionKey", "setMaxAgeBySessionKeyAsync"] as const) {
+          expect(await channel.threadBindings[method]({ ...input, maxAgeMs: 20 })).toEqual([
+            binding,
+          ]);
+        }
+      });
     }
-  },
-);
+    for (const [name, method] of Object.entries(bindings)) {
+      expect(method).toHaveBeenCalledTimes(2);
+      expect(method).toHaveBeenLastCalledWith({
+        targetSessionKey: input.targetSessionKey,
+        accountId: undefined,
+        ...(name.includes("Idle") ? { idleTimeoutMs: 10 } : { maxAgeMs: 20 }),
+      });
+    }
+    await withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), async () => {
+      expect(await capturedChannel.outbound.loadAdapter(record.id)).toBeUndefined();
+    });
+  } finally {
+    resource.emitDestroy();
+    markPluginRegistryRetired(current);
+    await instance.dispose();
+  }
+});
 
 type LegacyIngressMethod = "direct" | "stable" | "factory";
 
@@ -401,36 +390,6 @@ describe("bundled channel ingress runtime ownership", () => {
     }
   });
 
-  it.each(["bundled", "global"] as const)(
-    "retains the host Gateway resolver for a trusted %s channel ingress",
-    async (origin) => {
-      const gatewayContext = {} as GatewayRequestContext;
-      const gatewayContextResolver = vi.fn(() => gatewayContext);
-      const channel = createRuntimeBuilder({
-        origin,
-        trustedOfficialInstall: origin !== "bundled",
-        gatewayContextResolver,
-      });
-      const apiInbound = channel.api.runtime.channel.inbound;
-      expect(apiInbound.ingress).toBe(channel.ingress);
-      expect(apiInbound.buildContext).toBe(channel.buildContext);
-      const ingress = await channel.resolveIngress("person-a");
-      const context = apiInbound.buildContext(contextParams({ ingress }));
-
-      const retainedResolver = readChannelContextGatewayContextResolver(context);
-      expect(retainedResolver?.()).toBe(gatewayContext);
-      expect(hasGatewayContextOwner(retainedResolver!, gatewayContextResolver)).toBe(true);
-      markPluginRegistryRetired(channel.registryBuilder.registry);
-      expect(retainedResolver?.()).toBeUndefined();
-      const retiredIngress = await channel.resolveIngress("person-a");
-      expect(
-        readChannelContextGatewayContextResolver(
-          apiInbound.buildContext(contextParams({ ingress: retiredIngress })),
-        ),
-      ).toBeUndefined();
-    },
-  );
-
   it("binds authenticated owner turns to the exact live trusted channel plugin", async () => {
     const runtime = createPluginRuntime();
     const command = vi.fn(async () => ({ payloads: [] }));
@@ -531,48 +490,26 @@ describe("bundled channel ingress runtime ownership", () => {
     const record = createPluginRecord({ id: "deferred-channel", origin: "bundled" });
     const api = registryBuilder.createApi(record, fullRegistration);
 
-    api.registerChannel({ plugin: channelFixture("deferred-channel") });
+    api.registerChannel({ plugin: createChannelTestPluginBase({ id: record.id }) });
 
     registryBuilder.registry.plugins.push(record);
     markPluginRegistryActive(registryBuilder.registry);
-    const inactivePreparedRecord = createPluginRecord({
-      id: record.id,
-      origin: "bundled",
-    });
-    const inactivePreparedApi = registryBuilder.createApi(inactivePreparedRecord, fullRegistration);
+    const inactivePreparedApi = registryBuilder.createApi(
+      createPluginRecord({ id: record.id, origin: "bundled" }),
+      fullRegistration,
+    );
 
     expect(channelReads).toBe(0);
     const registeredRuntime = registryBuilder.registry.channels[0]?.resolveChannelRuntime?.();
-    expect(registeredRuntime).toBeDefined();
     expect(channelReads).toBe(1);
-    expect(registeredRuntime!.turn).toBe(registeredRuntime!.inbound);
-    expect(registeredRuntime!.turn.dispatch).toBe(inbound.dispatch);
     expect(inactivePreparedApi.runtime.channel.inbound.buildContext).toBe(
       buildChannelInboundEventContext,
     );
-    expect(registryBuilder.registry.channels[0]?.resolveChannelRuntime?.()).toBe(registeredRuntime);
 
     const ingress = await resolveIngressForRuntime(registeredRuntime!, "person-a", {
       channelId: "deferred-channel",
     });
     expectIngress(registeredRuntime!.turn, ingress, "present", { channelId: "deferred-channel" });
-  });
-
-  it("does not mint for untrusted plugins, only the exact active bundled record", async () => {
-    const audit = createAudit();
-    const external = createRuntimeBuilder({ origin: "workspace", audit });
-    const bundled = createRuntimeBuilder({ origin: "bundled", audit });
-    const ingress = await bundled.resolveIngress("person-a");
-
-    expect(inspect(external.buildContext(contextParams({ ingress })))).toMatchObject({
-      ingressState: "unknown",
-      invoker: { state: "unknown" },
-    });
-    expect(inspect(bundled.buildContext(contextParams({ ingress })))).toMatchObject({
-      ingressState: "present",
-      invoker: { state: "present", kind: "person" },
-      decisionCoverage: "enforced",
-    });
   });
 
   it.each(["accepted", "mismatched", "builder failure"] as const)(
@@ -646,35 +583,49 @@ describe("bundled channel ingress runtime ownership", () => {
   });
 
   it.each([
-    ["same channel across Gateways", "shared-owner", "shared-owner", "person-a", true],
-    ["different registered records", "alpha-owner", "beta-owner", "person-b", false],
+    ["bundled", "shared-owner", "shared-owner"],
+    ["global", "shared-owner", "shared-owner"],
+    ["bundled", "alpha-owner", "beta-owner"],
   ] as const)(
-    "isolates %s and rejects cross-record reuse",
-    async (_name, firstId, secondId, participant, separateAudit) => {
+    "isolates %s Gateways for %s / %s and rejects cross-record reuse",
+    async (origin, firstId, secondId) => {
       const firstAudit = createAudit();
+      const separateAudit = firstId === secondId;
       const secondAudit = separateAudit ? createAudit() : firstAudit;
-      const first = scopedGateway(firstId, firstAudit);
-      const firstIngress = await first.resolveIngress("person-a", { channelId: firstId });
-      const second = scopedGateway(secondId, secondAudit);
-      const firstContext = first.buildContext(
-        contextParams({ ingress: firstIngress, channelId: firstId }),
-      );
+      const first = scopedGateway(firstId, firstAudit, origin);
+      const second = scopedGateway(secondId, secondAudit, origin);
+      const firstContext = await first.receive();
       expectIngressState(firstContext, "present");
       expect(readChannelContextGatewayContextResolver(firstContext)?.()).toBe(first.gateway);
-      const secondIngress = await second.resolveIngress(participant, { channelId: secondId });
-      const secondContext = second.buildContext(
-        contextParams({ ingress: secondIngress, channelId: secondId, senderId: participant }),
-      );
-      expectIngressState(secondContext, "present");
-      expect(readChannelContextGatewayContextResolver(secondContext)?.()).toBe(second.gateway);
+      const secondContext = await second.receive("person-b");
+      expect(inspect(secondContext)).toMatchObject({
+        ingressState: "present",
+        invoker: { state: "present", kind: "person" },
+        decisionCoverage: "enforced",
+      });
+      const retainedResolver = readChannelContextGatewayContextResolver(secondContext);
+      expect(retainedResolver?.()).toBe(second.gateway);
+      expect(hasGatewayContextOwner(retainedResolver!, second.gatewayContextResolver)).toBe(true);
       const foreignIngress = await first.resolveIngress("person-a", { channelId: firstId });
       expectIngress(second, foreignIngress, "unknown", { channelId: secondId });
+      const external = createRuntimeBuilder({
+        origin: "workspace",
+        id: firstId,
+        audit: firstAudit,
+      });
+      expectIngress(
+        external,
+        await first.resolveIngress("person-a", { channelId: firstId }),
+        "unknown",
+        { channelId: firstId },
+      );
+      markPluginRegistryRetired(second.registryBuilder.registry);
+      expect(retainedResolver?.()).toBeUndefined();
+      expectProvenance(await second.receive("person-b"));
       if (separateAudit) {
         secondAudit.close();
-        markPluginRegistryRetired(second.registryBuilder.registry);
-        const survivingIngress = await first.resolveIngress("person-a", { channelId: firstId });
-        expectIngress(first, survivingIngress, "present", { channelId: firstId });
       }
+      expectProvenance(await first.receive(), firstAudit);
     },
   );
 

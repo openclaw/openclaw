@@ -1,12 +1,12 @@
 import { spawn, spawnSync } from "node:child_process";
-import { once } from "node:events";
-import { createServer, type Server } from "node:http";
+import { createServer } from "node:http";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getFreePort } from "../../src/test-utils/ports.js";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
+import { closeHttpServer, listenLoopback } from "../helpers/gateway-integration-fixtures.js";
 import { createDeferred } from "../helpers/promise.js";
 import { stopChildProcess } from "../helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -25,17 +25,6 @@ type ClickClackFixturePlugin = {
     }): Promise<unknown>;
   };
 };
-
-async function listen(server: Server): Promise<string> {
-  const listening = once(server, "listening");
-  server.listen(0, "127.0.0.1");
-  await listening;
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("test server did not expose a TCP port");
-  }
-  return `http://127.0.0.1:${address.port}`;
-}
 
 describe("e2e helper numeric env limits", () => {
   it("rejects oversized ClickClack fixture request bodies", async () => {
@@ -130,7 +119,7 @@ describe("e2e helper numeric env limits", () => {
       response.flushHeaders();
       headersSent.resolve();
     });
-    const baseUrl = await listen(server);
+    const baseUrl = await listenLoopback(server);
     const realTimeout = AbortSignal.timeout.bind(AbortSignal);
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => realTimeout(200));
     try {
@@ -169,10 +158,7 @@ describe("e2e helper numeric env limits", () => {
       expect(Date.now() - startedAt).toBeLessThan(2_000);
     } finally {
       timeoutSpy.mockRestore();
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      await closeHttpServer(server);
     }
   });
 });

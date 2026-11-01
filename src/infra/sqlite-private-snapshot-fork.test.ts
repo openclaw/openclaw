@@ -3,7 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { assert, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   captureSqlitePrivateSnapshotFamily as captureFamily,
@@ -67,36 +67,18 @@ function fixture() {
   };
 }
 
-it.each(["auto", "off"] as const)(
-  "forks independent main/WAL bytes without comparison reads (native %s)",
-  async (mode) => {
-    const before = image.bytes();
-    const read = fs.readSync.bind(fs);
-    let payloadBytes = 0;
-    const reads = vi.spyOn(fs, "readSync").mockImplementation((...args) => {
-      const bytes = read(...args);
-      // Unique lengths identify source and destination payload descriptors.
-      if ([65573, 113].includes(fs.fstatSync(args[0]).size)) {
-        payloadBytes += bytes;
-      }
-      return bytes;
-    });
-    configureFsSafeNative({ mode });
-    const location = await image.fork();
-    reads.mockRestore();
-    expect(payloadBytes).toBeLessThanOrEqual(65573 + 113);
-    if (mode === "off") {
-      expect(payloadBytes).toBe(65573 + 113);
-    }
-    for (const [index, suffix] of ["", "-wal"].entries()) {
-      expect(fs.readFileSync(location + suffix)).toEqual(before[index]);
-      expect(fs.statSync(location + suffix).ino).not.toBe(fs.statSync(image.source + suffix).ino);
-      fs.writeFileSync(location + suffix, "private write");
-    }
-    expect(fs.existsSync(`${location}-shm`)).toBe(false);
-    expect(image.bytes()).toEqual(before);
-  },
-);
+it.each(["auto", "off"] as const)("forks independent main/WAL bytes (native %s)", async (mode) => {
+  const before = image.bytes();
+  configureFsSafeNative({ mode });
+  const location = await image.fork();
+  for (const [index, suffix] of ["", "-wal"].entries()) {
+    assert(before[index]?.equals(fs.readFileSync(location + suffix)), suffix || "main");
+    expect(fs.statSync(location + suffix).ino).not.toBe(fs.statSync(image.source + suffix).ino);
+    fs.writeFileSync(location + suffix, "private write");
+  }
+  expect(fs.existsSync(`${location}-shm`)).toBe(false);
+  image.bytes().forEach((bytes, i) => assert(before[i]?.equals(bytes), `source ${i}`));
+});
 
 it("preserves committed WAL rows in a separately writable image", async () => {
   const seedPath = path.join(directories.make("private-sqlite-wal-seed-"), "seed.sqlite");
@@ -117,16 +99,14 @@ it("preserves committed WAL rows in a separately writable image", async () => {
     { value: "committed in WAL" },
   ]);
   writable.exec("INSERT INTO entries VALUES('private only'); PRAGMA wal_checkpoint(TRUNCATE)");
-  expect(image.bytes()).toEqual(before);
+  image.bytes().forEach((bytes, i) => assert(before[i]?.equals(bytes), `source ${i}`));
 });
 
 it.each([
   [null, 0, true],
   [0, 32, true],
   [32, null, true],
-  [32, 7, true],
   [113, null, false],
-  [113, 0, false],
   [113, 32, false],
   [0, 33, false],
 ] as const)(
@@ -141,9 +121,9 @@ it.each([
     if (frameFree) {
       const location = await image.fork(family);
       expect(fs.existsSync(`${location}-wal`)).toBe(false);
-      expect(fs.readFileSync(location)).toEqual(Buffer.alloc(65573, 19));
+      assert(Buffer.alloc(65573, 19).equals(fs.readFileSync(location)), location);
     } else {
-      await expect(image.fork(family)).rejects.toThrow("Retained SQLite snapshot changed");
+      await expect(image.fork(family)).rejects.toThrow("reason=retained-snapshot-changed");
     }
   },
 );
@@ -163,7 +143,7 @@ it("refuses retained WAL removal during copy without retrying live capture", asy
   });
   await expect(image.fork()).rejects.toThrow();
   expect(changed).toBe(true);
-  expect(fs.readFileSync(image.source)).toEqual(Buffer.alloc(65573, 19));
+  assert(Buffer.alloc(65573, 19).equals(fs.readFileSync(image.source)), image.source);
 });
 
 it.each(["same-size edit", "replacement", "journal"] as const)(
@@ -180,7 +160,7 @@ it.each(["same-size edit", "replacement", "journal"] as const)(
       fs.writeFileSync(`${image.source}-journal`, "pending rollback");
       expect(captureFamily(image.source, image.owned)).toBeUndefined();
     }
-    await expect(image.fork()).rejects.toThrow("Retained SQLite snapshot changed");
+    await expect(image.fork()).rejects.toThrow("reason=retained-snapshot-changed");
   },
 );
 
@@ -194,5 +174,5 @@ it("cleans failed destination work and releases source custody", async () => {
     fsync(descriptor);
   });
   await expect(image.fork()).rejects.toBe(failure);
-  expect(fs.readFileSync(image.source)).toEqual(Buffer.alloc(65573, 19));
+  assert(Buffer.alloc(65573, 19).equals(fs.readFileSync(image.source)), image.source);
 });

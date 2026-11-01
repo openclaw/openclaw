@@ -2,11 +2,11 @@ import type { DoctorOptions } from "../commands/doctor-prompter.js";
 import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
 import { shouldDeferConfiguredPluginInstallRepair } from "../commands/doctor/shared/update-phase.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { runFinalConfigValidationHealth } from "./doctor-config-validation-findings.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import { runCoreHealthFindingNote } from "./doctor-health-contribution-core.js";
 import {
   collectWriteConfigHealthFindings,
-  runFinalConfigValidationHealth,
   runWriteConfigHealth,
 } from "./doctor-health-contribution-runners.config.js";
 import {
@@ -324,6 +324,24 @@ export function resolveFinalDoctorHealthContributions(params: {
         });
       },
     }),
+    createDoctorHealthContribution("doctor:model-allowlist-wildcards", "Model allowlist", {
+      updateWork: { kind: "standalone" },
+      async run(ctx) {
+        const { maybeOfferModelAllowlistWildcards } =
+          await import("../commands/doctor/shared/legacy-runtime-model-policy.js");
+        const { config, changes } = await maybeOfferModelAllowlistWildcards({
+          cfg: ctx.cfg,
+          prompter: ctx.prompter,
+        });
+        ctx.cfg = config;
+        if (changes.length > 0) {
+          ctx.configResult.pendingChangePanels = [
+            ...(ctx.configResult.pendingChangePanels ?? []),
+            changes.join("\n"),
+          ];
+        }
+      },
+    }),
     createDoctorHealthContribution("doctor:bootstrap-size", "Bootstrap size", {
       updateWork: { kind: "standalone" },
       healthCheckIds: ["core/doctor/bootstrap-size"],
@@ -347,9 +365,9 @@ export function resolveFinalDoctorHealthContributions(params: {
         },
         async run(ctx) {
           const { maybeMigrateHeartbeatCadenceToCron } =
-            await import("../commands/doctor-heartbeat-cadence-migration.js");
+            await import("../commands/doctor-heartbeat-retirement.js");
           await maybeMigrateHeartbeatCadenceToCron({
-            cfg: ctx.cfg,
+            cfg: ctx.configResult.heartbeatMigrationSource ?? ctx.cfg,
             shouldRepair: ctx.prompter.shouldRepair,
             env: ctx.env,
           });
@@ -366,14 +384,14 @@ export function resolveFinalDoctorHealthContributions(params: {
           async detect(ctx) {
             const { collectHeartbeatScratchMigrationFindings } =
               await import("../commands/doctor-heartbeat-scratch-migration.js");
-            return collectHeartbeatScratchMigrationFindings(ctx.cfg);
+            return collectHeartbeatScratchMigrationFindings(ctx.cfg, ctx.env);
           },
         },
         async run(ctx) {
-          const { maybeMigrateHeartbeatFilesToScratch } =
-            await import("../commands/doctor-heartbeat-scratch-migration.js");
-          await maybeMigrateHeartbeatFilesToScratch({
-            cfg: ctx.cfg,
+          const { maybeMigrateHeartbeatCadenceToCron } =
+            await import("../commands/doctor-heartbeat-retirement.js");
+          await maybeMigrateHeartbeatCadenceToCron({
+            cfg: ctx.configResult.heartbeatMigrationSource ?? ctx.cfg,
             shouldRepair: ctx.prompter.shouldRepair,
             env: ctx.env,
           });

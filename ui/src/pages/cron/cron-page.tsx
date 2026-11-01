@@ -1,5 +1,6 @@
-import { createEffect, createMemo } from "solid-js";
+import { createEffect, createMemo, Loading } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
+import type { SolidRouteProps } from "../../app-route-types.tsx";
 import { AgentScopeControl } from "../../components/agent-scope-control.tsx";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
@@ -81,11 +82,19 @@ function CronPageBody(props: { routeSearch?: string; host: HTMLElement }) {
   return <CronPageContent page={page} />;
 }
 
-export function CronPage(props: { routeSearch?: string }) {
+function CronPage(props: { routeSearch?: string }) {
   let host!: HTMLElement;
   return (
     <openclaw-cron-page ref={(element) => (host = element)}>
       <CronPageBody routeSearch={props.routeSearch} host={host} />
     </openclaw-cron-page>
+  );
+}
+
+export function renderSolid(props: SolidRouteProps) {
+  return (
+    <Loading>
+      <CronPage routeSearch={typeof props.data === "string" ? props.data : ""} />
+    </Loading>
   );
 }

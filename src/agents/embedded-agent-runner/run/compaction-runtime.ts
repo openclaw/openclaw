@@ -41,8 +41,9 @@ import { mergeUsageIntoAccumulator, type UsageAccumulator } from "../usage-accum
 import { attachCompactionAccountingRecorder } from "./compaction-accounting-bridge.js";
 import type { resolveCompactionLiveModelSelection } from "./compaction-live-model-selection.js";
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
+import { outsideExecutionCapacity } from "./execution-capacity.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
-import type { RunEmbeddedAgentParams } from "./params.js";
+import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
 import { buildContextEngineCompactionSessionTarget } from "./session-bootstrap.js";
 import { resolveEmbeddedSessionContextLimits } from "./session-context-limits.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
@@ -53,7 +54,7 @@ type CompactionResult = Awaited<ReturnType<ContextEngine["compact"]>>;
 
 export type EmbeddedRunCompactionRecoveryInput = {
   runInput?: PreparedEmbeddedRunInput;
-  runParams: RunEmbeddedAgentParams;
+  runParams: RunEmbeddedAgentInternalParams;
   state: EmbeddedRunContextRecoveryState;
   contextEngine: ContextEngine;
   contextTokenBudget?: number;
@@ -118,6 +119,28 @@ export async function compactEmbeddedRunForRecovery(
   let completed = false;
   emitProgress("start");
   try {
+    if (recovery.trigger === "overflow") {
+      // The detached flush needs its own capacity ticket, while this source keeps custody.
+      let outcome: string;
+      try {
+        const checkpoint = input.runParams.beforeRecoveryCompaction;
+        outcome = checkpoint
+          ? await outsideExecutionCapacity(() =>
+              checkpoint({
+                sessionId: owner.session.id,
+                ...input.modelSelection,
+                contextTokenBudget: recovery.tokenBudget,
+              }),
+            )
+          : "skipped: no reply-owned memory checkpoint";
+      } catch {
+        owner.assertActive();
+        log.warn("Overflow memory checkpoint failed; continuing compaction");
+        outcome = "failed";
+      }
+      owner.assertActive();
+      log.info(`[memory-flush] overflow checkpoint ${outcome}`);
+    }
     const result = await executeRecoveryCompaction(input, recovery, owner);
     completed = result.result.ok && result.result.compacted;
     return result;
@@ -486,7 +509,7 @@ export function createEmbeddedRunCompactionRuntime(input: {
         : await SessionManager.openAsync(
             owner.session.target,
             params.workspaceDir,
-            resolveEmbeddedSessionContextLimits(contextTokenBudget),
+            resolveEmbeddedSessionContextLimits({ contextTokenBudget }),
           ));
     owner.assertActive();
     return {

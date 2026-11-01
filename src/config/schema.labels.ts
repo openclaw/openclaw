@@ -9,7 +9,6 @@ import { GITHUB_TOOL_FIELD_LABELS } from "./schema.labels.github.js";
 import { MESSAGE_FIELD_LABELS } from "./schema.labels.messages.js";
 import { MODEL_FIELD_LABELS } from "./schema.labels.models.js";
 import { SESSION_FIELD_LABELS } from "./schema.labels.session.js";
-import { UI_FIELD_LABELS } from "./schema.labels.ui.js";
 import { WORKSPACE_FIELD_LABELS } from "./schema.labels.workspace.js";
 import { META_FIELD_LABELS } from "./schema.meta.js";
 import { NODE_CAPABILITY_FIELD_LABELS } from "./schema.node-capabilities.js";
@@ -21,6 +20,7 @@ import { STORAGE_FIELD_LABELS } from "./zod-schema.storage.js";
 import { TELEMETRY_FIELD_LABELS } from "./zod-schema.telemetry.js";
 
 export const FIELD_LABELS: Record<string, string> = {
+  repositoryBranchPrefix: "Repository Branch Prefix",
   ...META_FIELD_LABELS,
   ...BROWSER_FIELD_LABELS,
   ...ENVIRONMENT_FIELD_LABELS,
@@ -403,7 +403,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction.notifyUser": "Compaction Notify User",
   "agents.defaults.compaction.memoryFlush": "Compaction Memory Flush",
   "agents.defaults.compaction.memoryFlush.enabled": "Compaction Memory Flush Enabled",
-  "agents.defaults.compaction.memoryFlush.model": "Compaction Memory Flush Model Override",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens":
     "Compaction Memory Flush Soft Threshold",
   "agents.defaults.compaction.memoryFlush.forceFlushTranscriptBytes":
@@ -466,7 +465,10 @@ export const FIELD_LABELS: Record<string, string> = {
   "mcp.servers.*.codex.agents": "Codex MCP Agents",
   "mcp.servers.*.codex.defaultToolsApprovalMode": "Codex MCP Tool Approval",
   "mcp.servers.*.codex.default_tools_approval_mode": "Codex MCP Tool Approval",
-  ...UI_FIELD_LABELS,
+  ui: "UI",
+  "ui.seamColor": "Accent Color",
+  "ui.prefs.accent": "User Accent Color",
+  "ui.prefs.locale": "Interface language",
   tui: "Terminal UI",
   "tui.footer": "Terminal UI Footer",
   "tools.exec.timeoutSeconds": "Exec Timeout (Seconds)",
@@ -474,6 +476,7 @@ export const FIELD_LABELS: Record<string, string> = {
   ...SESSION_FIELD_LABELS,
   cron: "Automations",
   "cron.enabled": "Automations Enabled",
+  "cron.defaultTools": "Automation Default Tools",
   "cron.skipMissedJobs": "Skip Missed Recurring Automations",
   "cron.webhookToken": "Automations Webhook Bearer Token",
   "cron.webhookSsrfPolicy": "Automations Webhook SSRF Policy",
@@ -623,7 +626,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "plugins.load.paths": "Plugin Load Paths",
   "plugins.slots": "Plugin Slots",
   "plugins.slots.memory": "Memory Plugin",
-  "plugins.slots.contextEngine": "Context Engine Plugin",
+  "plugins.slots.contextEngine": "Context Engine ID",
   "plugins.entries": "Plugin Entries",
   "plugins.entries.*.enabled": "Plugin Enabled",
   "plugins.entries.*.hooks": "Plugin Hook Policy",

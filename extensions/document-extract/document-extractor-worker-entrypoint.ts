@@ -1,9 +1,6 @@
-export const documentExtractorWorkerEntrypoint = {
-  currentModuleUrl: import.meta.url,
-  sourceWorkerName: "document-extractor.worker",
-  package: {
-    name: "@openclaw/document-extract-plugin",
-    distWorkerPath: "document-extractor.worker.js",
-  },
-  distWorkerPath: "extensions/document-extract/document-extractor.worker.js",
-} as const;
+import { createPluginRuntimeProcessEntrypoint } from "openclaw/plugin-sdk/process-runtime";
+
+export const documentExtractorWorkerEntrypoint = createPluginRuntimeProcessEntrypoint(
+  "documentExtractor",
+  import.meta.url,
+);

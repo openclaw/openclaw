@@ -38,7 +38,7 @@ function selectParticipantRows(database: EngineConnection) {
       "last_prompted_at",
     ])
     .orderBy("session_key")
-    .orderBy("first_prompted_at")
+    .orderBy("first_prompted_at", (order) => order.asc().nullsFirst())
     .orderBy("actor_id")
     .orderBy("identity_namespace");
 }

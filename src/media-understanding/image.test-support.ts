@@ -194,6 +194,7 @@ export function installImageRuntimeTestHooks({
               modelRegistry: {},
             }),
           },
+          run: <T>(run: () => T): T => run(),
           [Symbol.asyncDispose]: releasePreparedModelRuntimeMock,
         };
       },

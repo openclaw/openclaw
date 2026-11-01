@@ -149,6 +149,7 @@ export function workerRecord(overrides: Partial<TestWorkerRecord> = {}): TestWor
     profileId: "development",
     ownerEpoch: 1,
     leaseId: "lease-1",
+    resourceReceipt: null,
     sharedHost: false,
     sshEndpoint: {
       host: "worker.example.test",
@@ -208,6 +209,7 @@ export const workerService = (overrides: Partial<TestWorkerService> = {}) => ({
     reused: false,
   })),
   destroy: vi.fn(async () => workerRecord({ state: "destroyed" })),
+  reclaim: vi.fn(async () => workerRecord({ state: "destroyed" })),
   destroyUnattached: vi.fn(async () => workerRecord({ state: "destroyed" })),
   observeDesktop: vi.fn(async ({ control }) => ({
     transport: "rfb" as const,

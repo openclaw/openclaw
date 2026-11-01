@@ -20,29 +20,11 @@ export type OpenAIRealtimeSession = {
   token: string;
 };
 
-type SessionLease = {
-  activeSessions: ReadonlyMap<string, OpenAIRealtimeSession>;
-  retiringSessions: ReadonlyMap<string, OpenAIRealtimeSession>;
-  adopt: (token: string, wire: Omit<OpenAIRealtimeSession, "token">) => OpenAIRealtimeSession;
-  close: (
-    session: OpenAIRealtimeSession,
-    disposition?: RealtimeVoiceCloseDisposition,
-    error?: Error,
-    retry?: boolean,
-  ) => Promise<void>;
-  expireIn: (session: OpenAIRealtimeSession, ttlMs: number) => void;
-  deliverAnswer: (
-    session: OpenAIRealtimeSession,
-    signal: AbortSignal,
-    deliver: () => Promise<boolean>,
-  ) => Promise<void>;
-};
-
 export function createOpenAIRealtimeSessionLease(params: {
   logger: Pick<PluginLogger, "warn">;
   releaseReservation: (token: string) => void;
   onSettled: () => void;
-}): SessionLease {
+}) {
   const activeSessions = new Map<string, OpenAIRealtimeSession>();
   const retiringSessions = new Map<string, OpenAIRealtimeSession>();
   const activeSessionLease = {
@@ -138,5 +120,11 @@ export function createOpenAIRealtimeSessionLease(params: {
       }
     },
   };
-  return { ...activeSessionLease, activeSessions, retiringSessions };
+  const activeSessionsView: ReadonlyMap<string, OpenAIRealtimeSession> = activeSessions;
+  const retiringSessionsView: ReadonlyMap<string, OpenAIRealtimeSession> = retiringSessions;
+  return {
+    ...activeSessionLease,
+    activeSessions: activeSessionsView,
+    retiringSessions: retiringSessionsView,
+  };
 }

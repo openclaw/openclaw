@@ -1,10 +1,19 @@
+import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { waitForDead } from "../../../test/helpers/process-wait.js";
+import { withinTest } from "../../../test/helpers/promise.js";
 import * as gatewayService from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
-import { resolvePackageActivationHelper } from "../../infra/package-update-activation-journal.js";
+import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
+import {
+  resolvePackageActivationControl,
+  resolvePackageActivationHelper,
+} from "../../infra/package-update-activation-journal.js";
 import { createPackageActivationLifetimeFixture } from "../../infra/package-update-activation-lifetime.test-support.js";
 import {
   readPackageActivationReceipt,
@@ -15,6 +24,7 @@ import {
   withPublicationFence,
 } from "../../infra/package-update-publication.test-support.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as packageTarget from "../../infra/update-check-package-target.js";
 import * as updateCheck from "../../infra/update-check.js";
 import * as updateGlobal from "../../infra/update-global.js";
@@ -23,11 +33,15 @@ import * as handoffLease from "../../infra/update-managed-service-handoff-lease.
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { defaultRuntime } from "../../runtime.js";
+import { stateNativeProcessEntrypoints } from "../../state/native-process-runtime.test-support.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { killPidIfAlive } from "../../test-utils/process-tree.js";
+import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import * as shared from "./shared.js";
+import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import { prepareUpdateCommand } from "./update-command-run.js";
 import { updateCommand } from "./update-command.js";
 import {
@@ -60,8 +74,8 @@ afterEach(async () => {
 });
 
 function snapshot(root: string) {
-  return fs
-    .readdirSync(root, { recursive: true })
+  return listDirectoryTreeStrictSync(root)
+    .map((walkEntry) => walkEntry.relativePath)
     .map(String)
     .toSorted()
     .map((name) => {
@@ -102,15 +116,27 @@ function expectPreview(note: RegExp, targetVersion?: string) {
 }
 function writeRunnablePackage(root: string, entry = 'import "./dist/index.js";\n') {
   fs.writeFileSync(path.join(root, "openclaw.mjs"), entry);
-  fs.writeFileSync(
-    path.join(root, "package.json"),
-    JSON.stringify({
-      name: "openclaw",
-      version: "1.0.0",
-      type: "module",
-      bin: { openclaw: "openclaw.mjs" },
-    }),
-  );
+  writeFixtureJsonSync(path.join(root, "package.json"), {
+    name: "openclaw",
+    version: "1.0.0",
+    type: "module",
+    bin: { openclaw: "openclaw.mjs" },
+  });
+}
+function prepareRunnablePreview(
+  f: Parameters<typeof preparePreview>[0] & { launcher: string },
+  entry?: string,
+) {
+  writeRunnablePackage(f.packageRoot, entry);
+  fs.unlinkSync(f.launcher);
+  fs.symlinkSync("../lib/node_modules/openclaw/openclaw.mjs", f.launcher);
+  preparePreview(f);
+}
+async function settle(f: { packageRoot: string }) {
+  await expect(prepareUpdateCommand({ json: true })).resolves.toMatchObject({
+    discoveredRoot: f.packageRoot,
+  });
+  expect(readPackageActivationReceipt(f.packageRoot)).toBeUndefined();
 }
 async function publication(phase: Parameters<typeof createInterruptedPackagePublication>[1]) {
   const f = await createInterruptedPackagePublication(fixtureRoot, phase);
@@ -156,44 +182,156 @@ async function expectLiveOwnerBlocks(
 }
 
 describe.skipIf(process.platform === "win32")("package activation admission", () => {
-  it.each(["prepared", "publishing", "publication-complete", "damaged candidate"] as const)(
-    "settles a verified installed candidate with the original lease (%s)",
+  it(
+    "recovers published activation after its stalled maintenance worker loses the executor",
+    { timeout: 40_000 },
+    async ({ signal }) => {
+      const f = await publication("publication-complete");
+      const databasePath = state.path("state", "orphan-maintenance.sqlite");
+      fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+      const executorUrl = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor).href;
+      const ownerUrl = resolveRuntimeWorkerUrl(
+        stateNativeProcessEntrypoints.gatewayStateOwner,
+      ).href;
+      const importArgs = executorUrl.endsWith(".ts")
+        ? ["--import", path.resolve("scripts/tsx.mjs")]
+        : [];
+      const worker = `
+      import { json } from "node:stream/consumers";
+      import { DatabaseSync } from "node:sqlite";
+      import { withDelegatedUpdateCommandExecutor } from ${JSON.stringify(executorUrl)};
+      import { acquireGatewayStateOwner } from ${JSON.stringify(ownerUrl)};
+      const grant = await json(process.stdin);
+      await withDelegatedUpdateCommandExecutor(grant, grant.runId, grant.root, async () => {
+        const owner = acquireGatewayStateOwner({ databasePath: ${JSON.stringify(databasePath)} });
+        const db = new DatabaseSync(${JSON.stringify(databasePath)});
+        db.exec("CREATE TABLE witness(value TEXT); BEGIN; INSERT INTO witness VALUES ('unfinished')");
+        process.on("SIGTERM", () => {});
+        process.send(process.pid);
+        setInterval(() => {}, 1000);
+        await new Promise(() => {});
+        db.close();
+        owner.release();
+      });
+    `;
+      const parentSource = `
+      import { spawn } from "node:child_process";
+      import { withUpdateCommandExecutor, withUpdateCommandExecutorChild } from ${JSON.stringify(executorUrl)};
+      await withUpdateCommandExecutor("orphan-maintenance", async executor => {
+        const fence = await executor.enter(${JSON.stringify(f.packageRoot)});
+        await withUpdateCommandExecutorChild(fence, ${JSON.stringify(f.packageRoot)}, (grant, beforeInput) => new Promise((resolve, reject) => {
+          const child = spawn(process.execPath, [...${JSON.stringify(importArgs)}, "--input-type=module", "-e", ${JSON.stringify(worker)}], { stdio: ["pipe", "inherit", "inherit", "ipc"] });
+          child.once("error", reject);
+          child.once("spawn", () => { beforeInput(child.pid); child.stdin.end(JSON.stringify(grant)); });
+          child.once("message", pid => process.send(pid));
+          child.once("exit", resolve);
+        }));
+      }, { existingAuthority: ${JSON.stringify(f.record.descriptor.authority)} });
+    `;
+      const parent = spawn(
+        process.execPath,
+        [...importArgs, "--input-type=module", "-e", parentSource],
+        {
+          env: { ...process.env, HOME: fixtureRoot, OPENCLAW_STATE_DIR: state.root },
+          stdio: ["ignore", "pipe", "pipe", "ipc"],
+        },
+      );
+      let stderr = "";
+      parent.stderr?.on("data", (bytes) => {
+        stderr += String(bytes);
+      });
+      parent.stdout?.resume();
+      const exited = once(parent, "exit");
+      const closed = once(parent, "close");
+      let workerPid: number | undefined;
+      try {
+        [workerPid] = await withinTest(once(parent, "message"), signal);
+        expect(() => acquireGatewayStateOwner({ databasePath }), stderr).toThrow(
+          "database is busy",
+        );
+        parent.kill("SIGKILL");
+        await withinTest(exited, signal);
+        await waitForDead(workerPid!, signal);
+        acquireGatewayStateOwner({ databasePath }).release();
+        using db = new DatabaseSync(databasePath);
+        expect(db.prepare("SELECT * FROM witness").all()).toEqual([]);
+        await settle(f);
+      } finally {
+        killPidIfAlive(workerPid);
+        if (parent.exitCode === null && parent.signalCode === null) {
+          parent.kill("SIGKILL");
+        }
+        await closed;
+      }
+    },
+  );
+  it.each([
+    "prepared",
+    "publishing",
+    "publication-complete",
+    "damaged candidate",
+    "manual install",
+    "copied journal",
+    "manual with published launcher",
+  ] as const)(
+    "settles only verified or obsolete package publication with the original lease (%s)",
     async (phase) => {
-      const f = await publication(phase === "damaged candidate" ? "publication-complete" : phase);
+      const manual = [
+        "manual install",
+        "copied journal",
+        "manual with published launcher",
+      ].includes(phase);
+      const f = await publication(
+        phase === "prepared" || phase === "publishing" ? phase : "publication-complete",
+      );
+      if (manual) {
+        fs.renameSync(f.packageRoot, `${f.packageRoot}.external-backup`);
+        fs.cpSync(`${f.packageRoot}.external-backup`, f.packageRoot, { recursive: true });
+        writeRunnablePackage(f.packageRoot);
+        if (phase !== "manual with published launcher") {
+          fs.renameSync(f.launcher, `${f.launcher}.external-backup`);
+          fs.symlinkSync("../lib/node_modules/openclaw/openclaw.mjs", f.launcher);
+        }
+        if (phase === "copied journal") {
+          const control = resolvePackageActivationControl(f.anchor);
+          fs.renameSync(control, `${control}.external-backup`);
+          fs.cpSync(`${control}.external-backup`, control, { recursive: true });
+        }
+      }
       if (phase === "damaged candidate") {
         fs.appendFileSync(f.liveFile, "// changed live content\n");
       }
       const retained = () => [snapshot(f.packageRoot), snapshot(f.anchor)];
       const before = retained();
-      if (phase === "damaged candidate") {
+      if (phase === "damaged candidate" || phase === "manual with published launcher") {
         await expect(prepareUpdateCommand({ json: true })).rejects.toThrow(
-          "inventoried dist files changed",
+          phase === "damaged candidate"
+            ? "inventoried dist files changed"
+            : "openclaw update repair",
         );
         expect(retained()).toEqual(before);
         return;
       }
       const previous = fs.readFileSync(f.previousFile);
       const candidate = fs.readFileSync(f.liveFile);
-      await withPublicationFence(f.packageRoot, (fence) => expectLiveOwnerBlocks(f, fence));
       await expectUnchanged(preview);
       expectPreview(/Would settle.*update can proceed/);
+      await withPublicationFence(f.packageRoot, (fence) => expectLiveOwnerBlocks(f, fence));
 
-      await expect(prepareUpdateCommand({ json: true })).resolves.toMatchObject({
-        discoveredRoot: f.packageRoot,
-      });
-
+      await settle(f);
+      if (manual) {
+        expect(defaultRuntime.error).toHaveBeenCalledWith(
+          expect.stringContaining("Stale package publication"),
+        );
+      }
       assertManagedUpdateLeaseDatabaseIdentity(f.record.descriptor.authority);
-      expect(readPackageActivationReceipt(f.packageRoot)).toBeUndefined();
       expect(fs.readFileSync(f.liveFile)).toEqual(candidate);
       expect(fs.readFileSync(f.retiredFile)).toEqual(previous);
     },
   );
   it("retires an untouched preparation before a new update without publishing its candidate", async () => {
     const f = await createPackageSwapFixture(fixtureRoot);
-    writeRunnablePackage(f.packageRoot);
-    fs.unlinkSync(f.launcher);
-    fs.symlinkSync("../lib/node_modules/openclaw/openclaw.mjs", f.launcher);
-    preparePreview(f);
+    prepareRunnablePreview(f);
     await withPublicationFence(f.packageRoot, async (fence) => {
       const prepared = await preparePackagePublication(f, publicationActivation(fence));
       await expectLiveOwnerBlocks({ ...f, ...prepared }, fence);
@@ -229,20 +367,18 @@ describe.skipIf(process.platform === "win32")("package activation admission", ()
     try {
       expect(await closed, stderr).toEqual([null, "SIGKILL"]);
       expect(JSON.parse(stdout.trim())).toEqual({ cut, pid: child.pid });
-      await expect(prepareUpdateCommand({ json: true })).resolves.toMatchObject({
-        discoveredRoot: f.packageRoot,
-      });
-      expect(readPackageActivationReceipt(f.packageRoot)).toBeUndefined();
+      await settle(f);
       expect(fs.readFileSync(f.liveFile)).toEqual(candidate);
     } finally {
       await fixtures.stopChild(child, closed);
     }
   });
-  it.each(
-    (["missing", "replaced"] as const).flatMap((lease) =>
-      (["candidate", "previous", "damaged candidate"] as const).map((live) => ({ lease, live })),
-    ),
-  )(
+  it.each([
+    { lease: "missing", live: "candidate" },
+    { lease: "missing", live: "previous" },
+    { lease: "missing", live: "damaged candidate" },
+    { lease: "replaced", live: "candidate" },
+  ])(
     "dry-run preserves a publication-complete receipt with a $lease lease and $live live",
     async ({ lease, live }) => {
       const f = await publication("publication-complete");
@@ -285,15 +421,11 @@ describe.skipIf(process.platform === "win32")("package activation admission", ()
       } finally {
         vi.stubEnv(POST_CORE_UPDATE_ENV, previousPostCore);
       }
-      await prepareUpdateCommand({ json: true });
-      expect(readPackageActivationReceipt(f.packageRoot)).toBeUndefined();
+      await settle(f);
       expect(fs.readFileSync(f.liveFile)).toEqual(packageBytes);
       if (live === "candidate") {
         expect(fs.readFileSync(f.retiredFile)).toEqual(previousBytes);
       }
-      expect(defaultRuntime.error).toHaveBeenCalledWith(
-        expect.stringContaining("Settled previous package update"),
-      );
     },
   );
   it("previews archival of a completed receipt without changing a leftover helper", async () => {
@@ -301,10 +433,7 @@ describe.skipIf(process.platform === "win32")("package activation admission", ()
     await runPackageActivationRecovery(f.anchor, "repair", f.operationId);
     await runPackageActivationRecovery(f.anchor, "retire", f.operationId);
     fs.writeFileSync(resolvePackageActivationHelper(f.anchor), "retained helper");
-    writeRunnablePackage(f.packageRoot, "export {};\n");
-    fs.unlinkSync(f.launcher);
-    fs.symlinkSync("../lib/node_modules/openclaw/openclaw.mjs", f.launcher);
-    preparePreview(f);
+    prepareRunnablePreview(f, "export {};\n");
     await expectUnchanged(preview);
     expectPreview(/publication-retired/);
   });

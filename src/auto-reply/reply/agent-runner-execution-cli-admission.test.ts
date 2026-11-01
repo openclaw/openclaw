@@ -23,6 +23,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import {
   setupAgentRunnerExecutionTestState,
   getExecuteAgentTurnForTest,
+  getRawExecuteAgentTurnForTest,
   createFollowupRun,
   expectMockCallArgFields,
   runInitialFallbackAttempt,
@@ -116,6 +117,59 @@ function rejectUnexpectedCompactionSuccessor(): never {
   throw new Error("Unexpected compaction successor during CLI admission test");
 }
 
+it.each([true, false])(
+  "retains native context only after provider execution (started=%s)",
+  async (providerStarted) => {
+    const { turn, followupRun } = await sessionFixture("agent:main:scheduled-context", {
+      lifecycleRevision: "current",
+    });
+    followupRun.run.inputProvenance = { kind: "internal_system", sourceTool: "cron_execution" };
+    useCliFallback();
+    state.runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      meta: {
+        providerStarted,
+        agentMeta: {
+          sessionId: "native-id-is-not-the-host-writer",
+          ...(providerStarted
+            ? {
+                usage: { input: 9000, output: 500 },
+                lastCallUsage: {
+                  input: 100,
+                  output: 23,
+                  contextUsage: {
+                    state: "available" as const,
+                    promptTokens: 100,
+                    totalTokens: 123,
+                  },
+                },
+              }
+            : {}),
+        },
+      },
+    });
+    const { outcome } = await (await getRawExecuteAgentTurnForTest())(turn);
+    assert(outcome.kind === "settled");
+    expect(outcome.sessionWriter?.sessionId).toBe("session");
+    expect(outcome.autoCompactionCount).toBe(0);
+    expect(outcome.compaction).toEqual(
+      providerStarted
+        ? {
+            count: 0,
+            durable: [
+              {
+                kind: "durable",
+                count: 0,
+                target: outcome.sessionWriter,
+                currentContextSnapshot: { tokens: 123 },
+              },
+            ],
+          }
+        : undefined,
+    );
+  },
+);
+
 it("reads cold CLI fallback metadata while another connection holds a shared-state write transaction", async () => {
   const sessionKey = "agent:main:cli-read-contention";
   const binding = { sessionId: "existing-native-session" };
@@ -193,9 +247,7 @@ it.each([
   state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
     const first = await runInitialFallbackAttempt(params, CLI.provider, CLI.model);
     if (rejected) {
-      expect(first).toMatchObject({
-        classification: { code: "generic_external_run_failure" },
-      });
+      expect(first).toMatchObject({ classification: { code: "generic_external_run_failure" } });
       return {
         result: await params.run("openai", "gpt-5.4", fallbackAttemptOptions(params, "format")),
         provider: "openai",
@@ -203,11 +255,7 @@ it.each([
         attempts: [{ provider: "claude-cli", model: "claude-sonnet-4-6", reason: "format" }],
       };
     }
-    return {
-      result: first,
-      ...CLI,
-      attempts: [],
-    };
+    return { result: first, ...CLI, attempts: [] };
   });
   const candidateResult = boundReply(settledBinding);
   state.runCliAgentMock.mockResolvedValueOnce(
@@ -244,9 +292,7 @@ it.each([
     }),
   );
   onTestFinished(uninstall);
-  const result = await executeAgentTurn({
-    ...turn,
-  });
+  const result = await executeAgentTurn({ ...turn });
   if (revisionChanged || placementRetired) {
     expect(result.kind).toBe("final");
     expect(state.runCliAgentMock).not.toHaveBeenCalled();
@@ -439,11 +485,7 @@ it("carries the admitted session permission and placement into the CLI grant", a
         modelProvider: "anthropic",
         modelId: "claude-sonnet-4-6",
       }).execSession,
-    ).toMatchObject({
-      permissionMode: "read-only",
-      execHost: "node",
-      execNode: "node-a",
-    });
+    ).toMatchObject({ permissionMode: "read-only", execHost: "node", execNode: "node-a" });
 
     const nodeInvoke = vi.fn<typeof nodeRuntime.invokeNodeClaudeCliRun>(async (request) => {
       expect(request.nodeId).toBe("node-a");
@@ -471,10 +513,7 @@ it("carries the admitted session permission and placement into the CLI grant", a
       sessionEntry: run.sessionEntry,
       backend,
     });
-    prepared.params = {
-      ...(await admitCliRunParams(run, "main")),
-      skillsSnapshot: undefined,
-    };
+    prepared.params = { ...(await admitCliRunParams(run, "main")), skillsSnapshot: undefined };
     prepared.cwd = run.cwd;
     prepared.reusableCliSession = { mode: "reuse", sessionId: observedCliSessionId };
     const nodeInvokeSpy = vi

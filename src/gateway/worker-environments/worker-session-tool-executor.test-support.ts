@@ -33,6 +33,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 import {
@@ -318,18 +319,10 @@ export async function createWorkerSessionToolTestFixture(
         : undefined,
     );
   });
-  const identity: WorkerConnectionIdentity = {
-    environmentId: source.environmentId,
-    credentialHash: "credential-hash",
-    bundleHash: "a".repeat(64),
-    sessionId: source.sessionId,
-    runId: sourceClaim.runId,
-    turnClaim: sourceClaim,
-    ownerEpoch: source.ownerEpoch,
-    rpcSetVersion: 1,
+  const identity: WorkerConnectionIdentity = createWorkerConnectionIdentity(sourceClaim, {
     protocolFeatures: ["worker-gateway-tools-v1"],
     credentialExpiresAtMs: Date.now() + 60_000,
-  };
+  });
   // Reset implementations and queued once overrides, not just call histories.
   for (const value of Object.values(mocks)) {
     if (typeof value === "function") {
@@ -339,45 +332,32 @@ export async function createWorkerSessionToolTestFixture(
     }
   }
   scopedSessionAccess.mockImplementation(async (params) => await params.run());
-  function configureSpawnTarget(
-    owner: typeof CHILD,
-    parent: { sessionKey: string; sessionId: string },
-    runId: string,
-  ) {
-    const state: { childSessionKey: string | undefined; order: string[] } = {
-      childSessionKey: undefined,
-      order: [],
-    };
-    gatewayCreate.mockImplementation(
-      async (request: { method: string; params: Record<string, unknown> }) => {
-        state.order.push("create");
-        state.childSessionKey = String(request.params.key);
-        setEntry(state.childSessionKey, owner.sessionId, parent);
-        return { ok: true, key: state.childSessionKey, sessionId: owner.sessionId };
-      },
-    );
-    dispatchChild.mockImplementation(async (request: { sessionKey: string }) => {
-      state.order.push("dispatch");
-      expect(placements.get(owner.sessionId)).toBeUndefined();
-      await activate({
-        ...owner,
-        sessionKey: request.sessionKey,
-      });
-      return placements.get(owner.sessionId);
-    });
-    gatewayRequest.mockImplementation(
-      async (request: { method: string; params: Record<string, unknown> }) => {
-        if (request.method === "agent") {
-          state.order.push("send");
-          expect(placements.get(owner.sessionId)?.state).toBe("active");
-          return { runId, status: "accepted" };
-        }
-        throw new Error(`Unexpected gateway request: ${request.method}`);
-      },
-    );
-    return state;
-  }
-  const spawnState = configureSpawnTarget(CHILD, source, "spawned-child-run");
+  const spawnState: { childSessionKey: string | undefined; order: string[] } = {
+    childSessionKey: undefined,
+    order: [],
+  };
+  gatewayCreate.mockImplementation(
+    async (request: { method: string; params: Record<string, unknown> }) => {
+      spawnState.order.push("create");
+      spawnState.childSessionKey = String(request.params.key);
+      setEntry(spawnState.childSessionKey, CHILD.sessionId, source);
+      return { ok: true, key: spawnState.childSessionKey, sessionId: CHILD.sessionId };
+    },
+  );
+  dispatchChild.mockImplementation(async (request: { sessionKey: string }) => {
+    spawnState.order.push("dispatch");
+    expect(placements.get(CHILD.sessionId)).toBeUndefined();
+    await activate({ ...CHILD, sessionKey: request.sessionKey });
+    return placements.get(CHILD.sessionId);
+  });
+  gatewayRequest.mockImplementation(async (request: { method: string }) => {
+    if (request.method !== "agent") {
+      throw new Error(`Unexpected gateway request: ${request.method}`);
+    }
+    spawnState.order.push("send");
+    expect(placements.get(CHILD.sessionId)?.state).toBe("active");
+    return { runId: "spawned-child-run", status: "accepted" };
+  });
   const executorParams: Parameters<typeof createWorkerSessionToolExecutor>[0] = {
     inheritedToolPolicySource: options.inheritedToolPolicySource,
     delegatedToolPolicyActive: options.delegatedToolPolicyActive,
@@ -460,13 +440,7 @@ export async function createWorkerSessionToolTestFixture(
   const execute = async (request: Parameters<typeof ownerExecute>[0]) => ({
     resultJson: JSON.stringify(await ownerExecute(request)),
   });
-  async function activate(session: {
-    agentId: string;
-    environmentId: string;
-    ownerEpoch: number;
-    sessionId: string;
-    sessionKey: string;
-  }): Promise<void> {
+  async function activate(session: typeof SOURCE): Promise<void> {
     await advancePlacementFixtureToActive(placements, database, session, {
       environmentId: session.environmentId,
       ownerEpoch: session.ownerEpoch,
@@ -528,7 +502,6 @@ export async function createWorkerSessionToolTestFixture(
       operatorAuthorityActive = false;
     },
     spawnState,
-    configureSpawnTarget,
     activate,
     setEntry,
     send,

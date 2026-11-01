@@ -7,7 +7,7 @@ import { resetDiagnosticSessionStateForTest } from "./diagnostic-session-state.j
 import { resetDiagnosticStabilityRecorderForTest } from "./diagnostic-stability.js";
 import { startGatewayDiagnosticHeartbeat, stopGatewayDiagnosticHeartbeat } from "./diagnostic.js";
 
-export function startDiagnosticHeartbeatForTest(
+function startDiagnosticHeartbeatForTest(
   config?: Parameters<typeof startGatewayDiagnosticHeartbeat>[1],
   opts?: Parameters<typeof startGatewayDiagnosticHeartbeat>[2],
 ) {

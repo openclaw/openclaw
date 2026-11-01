@@ -7,6 +7,12 @@ import {
   emptyPluginConfigSchema,
 } from "./config-schema.js";
 
+const success = (data: unknown) => ({ success: true, data });
+const failure = (path: string[], message?: string) => ({
+  success: false,
+  error: { issues: [{ path, ...(message ? { message } : {}) }] },
+});
+
 it("uses the host converter and preserves metadata, references and runtime transforms", () => {
   const policy = z
     .string()
@@ -44,14 +50,8 @@ it("uses the host converter and preserves metadata, references and runtime trans
   expect(result.jsonSchema).not.toHaveProperty("$schema");
   expect(result.jsonSchema).not.toHaveProperty("properties.settings.propertyNames");
   const input = { first: "read", second: "write", settings: { active: true }, length: "read" };
-  expect(result.safeParse?.(input)).toEqual({
-    success: true,
-    data: { ...input, enabled: true, length: 4 },
-  });
-  expect(result.safeParse?.({ ...input, enabled: "yes" })).toMatchObject({
-    success: false,
-    error: { issues: [{ path: ["enabled"] }] },
-  });
+  expect(result.safeParse?.(input)).toEqual(success({ ...input, enabled: true, length: 4 }));
+  expect(result.safeParse?.({ ...input, enabled: "yes" })).toMatchObject(failure(["enabled"]));
 });
 
 it("preserves permissive json schema and runtime parsing for zod v3 plugins", () => {
@@ -60,11 +60,8 @@ it("preserves permissive json schema and runtime parsing for zod v3 plugins", ()
     legacySchema as unknown as Parameters<typeof buildPluginConfigSchema>[0],
   );
   expect(result.jsonSchema).toEqual({ type: "object", additionalProperties: true });
-  expect(result.safeParse?.({})).toEqual({ success: true, data: { enabled: true } });
-  expect(result.safeParse?.({ enabled: "yes" })).toMatchObject({
-    success: false,
-    error: { issues: [{ path: ["enabled"] }] },
-  });
+  expect(result.safeParse?.({})).toEqual(success({ enabled: true }));
+  expect(result.safeParse?.({ enabled: "yes" })).toMatchObject(failure(["enabled"]));
 });
 
 it("allows custom safeParse overrides", () => {
@@ -73,10 +70,7 @@ it("allows custom safeParse overrides", () => {
     safeParse,
   });
 
-  expect(result.safeParse?.({ enabled: false })).toEqual({
-    success: true,
-    data: { normalized: true },
-  });
+  expect(result.safeParse?.({ enabled: false })).toEqual(success({ normalized: true }));
   expect(safeParse).toHaveBeenCalledWith({ enabled: false });
 });
 
@@ -90,19 +84,13 @@ it("validates direct JSON schemas without zod conversion", () => {
     cacheKey: "config-schema.test.json-plugin",
   });
   expect(result.jsonSchema).toEqual(jsonSchema);
-  expect(result.safeParse?.({})).toEqual({ success: true, data: { enabled: true } });
-  expect(result.safeParse?.({ enabled: "yes" })).toEqual({
-    success: false,
-    error: { issues: [{ path: ["enabled"], message: "must be boolean" }] },
-  });
+  expect(result.safeParse?.({})).toEqual(success({ enabled: true }));
+  expect(result.safeParse?.({ enabled: "yes" })).toEqual(failure(["enabled"], "must be boolean"));
 });
 
 it("emptyPluginConfigSchema accepts undefined and empty objects only", () => {
   const schema = emptyPluginConfigSchema();
-  expect(schema.safeParse?.(undefined)).toEqual({ success: true, data: undefined });
-  expect(schema.safeParse?.({})).toEqual({ success: true, data: {} });
-  expect(schema.safeParse?.({ nope: true })).toEqual({
-    success: false,
-    error: { issues: [{ path: [], message: "config must be empty" }] },
-  });
+  expect(schema.safeParse?.(undefined)).toEqual(success(undefined));
+  expect(schema.safeParse?.({})).toEqual(success({}));
+  expect(schema.safeParse?.({ nope: true })).toEqual(failure([], "config must be empty"));
 });

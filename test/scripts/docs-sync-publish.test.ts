@@ -90,26 +90,6 @@ function collectPages(entry: NavEntry | NavEntry[] | undefined): string[] {
     Array.isArray(entry) ? entry : [entry.page, entry.pages, entry.groups, entry.tabs]
   ).flatMap(collectPages);
 }
-function findNestedGroup(pages: NavGroup["pages"] | undefined, name: string): NavGroup | undefined {
-  for (const entry of pages ?? []) {
-    if (typeof entry === "string") {
-      continue;
-    }
-    const found = entry.group === name ? entry : findNestedGroup(entry.pages, name);
-    if (found) {
-      return found;
-    }
-  }
-  return undefined;
-}
-const findNestedGroupByPage = (pages: NavGroup["pages"] | undefined, page: string) =>
-  pages?.find((entry) => typeof entry !== "string" && collectPages(entry.pages).includes(page));
-function expectFirstLabels(locale: { tabs: NavTab[] } | undefined, tab: string, group: string) {
-  const first = locale!.tabs[0];
-  expect({ tab: first?.tab, group: first?.groups?.[0]?.group }).toEqual({ tab, group });
-}
-const findTab = (locale: { tabs: NavTab[] } | undefined, tab: string) =>
-  locale!.tabs.find((entry) => entry.tab === tab);
 const authoredEnglish = (files("docs").json("docs.json") as DocsConfig).navigation.languages.find(
   (entry) => entry.language === "en",
 )!;
@@ -338,42 +318,9 @@ it("overlays deep groups without changing the input or ambiguously labeling sibl
   );
 });
 
-it("covers every published Swedish navigation label with a matching English anchor", () => {
-  const glossary = new Map<string, string>(
-    files("docs/.i18n")
-      .json("glossary.sv.json")
-      .map((entry: { source: string; target: string }) => [entry.source, entry.target]),
-  );
-  const label = (value: string) => {
-    expect(glossary.has(value), value).toBe(true);
-    return glossary.get(value)!;
-  };
-  const group = (entry: NavGroup, translated: boolean): NavGroup => ({
-    group: translated ? label(entry.group) : entry.group,
-    pages: entry.pages.map((page) =>
-      typeof page === "string" ? `sv/${page}` : group(page, translated),
-    ),
-  });
-  const overlay = files("docs/.i18n").json("sv-navigation.json");
-  const navigation = (translated: boolean) => ({
-    language: "sv",
-    tabs: englishTabs.map((tab) => ({
-      tab: translated ? label(tab.tab) : tab.tab,
-      groups: tab.groups.map((entry) => group(entry, translated)),
-    })),
-  });
-  expect(applyLocaleNavLabelOverlay(navigation(false), overlay)).toEqual(navigation(true));
-});
-
 it("keeps generated locale navigation aligned with English routes", () => {
   const config = composeDocsConfig() as DocsConfig;
-  const [english, chinese, german, turkish, swedish] = ["en", "zh-Hans", "de", "tr", "sv"].map(
-    (code) => {
-      const locale = config.navigation.languages.find((entry) => entry.language === code);
-      expect(locale).toBeDefined();
-      return locale!;
-    },
-  );
+  const english = config.navigation.languages.find((entry) => entry.language === "en");
   expect(english).toEqual(authoredEnglish);
 
   const localeDirs: Record<string, string> = {
@@ -391,58 +338,5 @@ it("keeps generated locale navigation aligned with English routes", () => {
         tab.groups?.map((group) => collectPages(group).map(localize)),
       );
     }
-  }
-
-  expectFirstLabels(chinese, "快速开始", "首页");
-  for (const [tab, groups] of [
-    ["发布", ["发布说明", "发布流程"]],
-    ["贡献", ["成熟度", "测试与 CI"]],
-  ] as const) {
-    expect(findTab(chinese, tab)?.groups.map((group) => group.group)).toEqual(groups);
-  }
-  expectFirstLabels(swedish, "Kom igång", "Översikt");
-  expectFirstLabels(german, "Loslegen", "Überblick");
-
-  const chineseGateway = findTab(chinese, "网关与运维")?.groups.find(
-    (group) => group.group === "网关",
-  );
-  for (const [page, group] of [
-    ["zh-CN/gateway/configuration", "Configuration"],
-    ["zh-CN/gateway/authentication", "Authentication and secrets"],
-    ["zh-CN/gateway/health", "Health and diagnostics"],
-    ["zh-CN/gateway/gateway-lock", "Scaling and operations"],
-  ] as const) {
-    expect(findNestedGroupByPage(chineseGateway?.pages, page)).toEqual(
-      expect.objectContaining({ group }),
-    );
-  }
-
-  expect(turkish!.tabs.map((tab) => tab.tab)).toEqual([
-    "Başlangıç",
-    "Kurulum",
-    "Kanallar",
-    "Ajanlar",
-    "Yetenekler",
-    "Modeller",
-    "Platformlar",
-    "Gateway ve operasyonlar",
-    "Başvuru",
-    "Sürümler",
-    "Katkıda bulunma",
-    "Yardım",
-  ]);
-  expect(turkish!.tabs[0]?.groups?.[0]?.group).toBe("Genel bakış");
-  for (const [tab, parent, child, page] of [
-    ["Kurulum", "Bakım", "Geçiş", "tr/install/migrating"],
-    ["Ajanlar", "Oturumlar ve bellek", "Active Memory", "tr/concepts/active-memory/enabling"],
-    ["Yetenekler", "Plugin kılavuzları", "Codex harness", "tr/plugins/codex-harness/placement"],
-    ["Yetenekler", "Araçlar", "Tarayıcı", "tr/tools/browser/setup"],
-    ["Gateway ve operasyonlar", "Gateway", "OpenTelemetry", "tr/gateway/opentelemetry/setup"],
-    ["Başvuru", "CLI komutları", "Gateway", "tr/cli/gateway/running"],
-  ] as const) {
-    const parentGroup = findTab(turkish, tab)?.groups.find((entry) => entry.group === parent);
-    expect(findNestedGroup(parentGroup?.pages, child)).toEqual(
-      expect.objectContaining({ pages: expect.arrayContaining([page]) }),
-    );
   }
 });

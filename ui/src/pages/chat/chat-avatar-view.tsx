@@ -1,7 +1,6 @@
 import { createMemo, Show } from "solid-js";
 import { isReservedSystemAgentId } from "../../../../src/system-agent/agent-id.js";
 import type { AgentsListResult } from "../../api/types.ts";
-import { currentThemeBranding, subscribeThemeBranding } from "../../app/theme-branding.ts";
 import {
   resolveLocalUserAvatarText,
   resolveLocalUserAvatarUrl,
@@ -31,15 +30,19 @@ import {
 } from "../../lib/chat/channel-sender-avatar.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { formatSenderLabel, type SenderIdentity } from "../../lib/chat/sender-label.ts";
-import { resolveAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
+import {
+  readCachedAvatarImageUrl,
+  resolveAvatarImageUrl,
+} from "../../lib/identity-avatar-loader.ts";
 import type { IdentityAvatarView } from "../../lib/identity-avatar-view.ts";
 import { resolveAvatarInitials } from "../../lib/identity-avatar.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { themeBrandingProjection } from "../../lib/reactive/theme-branding.ts";
 import { DEFAULT_AGENT_ID } from "../../lib/sessions/session-key.ts";
 import { ChatAuthorAvatar, UserAvatarSlot } from "./components/chat-author-avatar-view.tsx";
 
 export type ChatAvatarProps = {
   elementRef?: (element: HTMLElement) => void;
+  mediaReadAllowed?: boolean;
   role: string;
   assistant?: Pick<AssistantIdentity, "agentId" | "name" | "avatar"> & {
     textAvatar?: string | null;
@@ -57,13 +60,21 @@ export function ChatAvatar(props: ChatAvatarProps) {
       fallback={
         <Show
           when={role() === "assistant"}
-          fallback={<LocalAvatar role={role()} user={props.user} elementRef={props.elementRef} />}
+          fallback={
+            <LocalAvatar
+              role={role()}
+              user={props.user}
+              elementRef={props.elementRef}
+              mediaReadAllowed={props.mediaReadAllowed}
+            />
+          }
         >
           <AgentAvatar
             elementRef={props.elementRef}
             id={props.assistant?.agentId ?? DEFAULT_AGENT_ID}
             name={props.assistant?.name?.trim() || "Assistant"}
             avatar={props.assistant?.avatar}
+            mediaReadAllowed={props.mediaReadAllowed}
             textAvatar={
               props.assistant?.textAvatar ?? resolveAssistantTextAvatar(props.assistant?.avatar)
             }
@@ -75,13 +86,14 @@ export function ChatAvatar(props: ChatAvatarProps) {
         <Show
           when={sender().identity?.type === "agent"}
           fallback={
-            <IdentityAvatar identity={sender()}>
+            <IdentityAvatar identity={sender()} cachedOnly={props.mediaReadAllowed === false}>
               {(view) => (
                 <ProfileChatAvatar
                   elementRef={props.elementRef}
                   sender={sender()}
                   view={view()}
                   channelAvatar={props.channelAvatar}
+                  mediaReadAllowed={props.mediaReadAllowed}
                 />
               )}
             </IdentityAvatar>
@@ -91,6 +103,7 @@ export function ChatAvatar(props: ChatAvatarProps) {
             sender={sender()}
             class="chat-avatar assistant"
             elementRef={props.elementRef}
+            mediaReadAllowed={props.mediaReadAllowed}
           />
         </Show>
       )}
@@ -103,6 +116,7 @@ function ProfileChatAvatar(props: {
   sender: SenderIdentity;
   view: IdentityAvatarView;
   channelAvatar?: ChannelSenderAvatarSource;
+  mediaReadAllowed?: boolean;
 }) {
   const gateway = useAvatarGatewayContext();
   const label = () => formatSenderLabel(props.sender) ?? "";
@@ -124,7 +138,7 @@ function ProfileChatAvatar(props: {
         <ChannelAvatar
           routeUrl={photo()}
           authTokens={gateway().authTokens}
-          authReady={Boolean(gateway().origin)}
+          authReady={props.mediaReadAllowed !== false && Boolean(gateway().origin)}
         >
           {props.view.fallback.initials}
         </ChannelAvatar>
@@ -133,7 +147,9 @@ function ProfileChatAvatar(props: {
   );
 }
 
-function LocalAvatar(props: Pick<ChatAvatarProps, "role" | "user" | "elementRef">) {
+function LocalAvatar(
+  props: Pick<ChatAvatarProps, "role" | "user" | "elementRef" | "mediaReadAllowed">,
+) {
   const gateway = useAvatarGatewayContext();
   const name = createMemo(() => resolveLocalUserName(props.user));
   const url = createMemo(() => resolveLocalUserAvatarUrl(props.user));
@@ -141,7 +157,11 @@ function LocalAvatar(props: Pick<ChatAvatarProps, "role" | "user" | "elementRef"
   const view = createMemo(() => {
     gateway();
     const source = url();
-    const imageUrl = source ? resolveAvatarImageUrl(source, source) : null;
+    const imageUrl = source
+      ? props.mediaReadAllowed === false
+        ? readCachedAvatarImageUrl(source)
+        : resolveAvatarImageUrl(source, source)
+      : null;
     return {
       fallback: resolveAvatarInitials({ name: name() }),
       imageUrl,
@@ -216,17 +236,19 @@ function AgentAvatar(props: {
   name: string;
   avatar?: string | null;
   textAvatar?: string | null;
+  mediaReadAllowed?: boolean;
 }) {
   const gateway = useAvatarGatewayContext();
-  const branding = projectSource(null, {
-    read: currentThemeBranding,
-    subscribe: (_source, notify) => subscribeThemeBranding(notify),
-    equality: Object.is,
-  });
+  const branding = themeBrandingProjection;
   const url = createMemo(() => props.avatar?.trim() || "");
+  const cachedUrl = createMemo(() => {
+    gateway();
+    return readCachedAvatarImageUrl(url());
+  });
   const view = createMemo(() => {
     gateway();
-    const imageUrl = resolveAvatarImageUrl(url(), url());
+    const imageUrl =
+      props.mediaReadAllowed === false ? cachedUrl() : resolveAvatarImageUrl(url(), url());
     return { imageUrl, pending: imageUrl !== null && typeof imageUrl !== "string" };
   });
   const presentation = createIdentityAvatarPresentation(view);
@@ -234,7 +256,7 @@ function AgentAvatar(props: {
     <Show
       when={
         !isReservedSystemAgentId(props.id) &&
-        (url().startsWith("blob:") || isRenderableControlUiAvatarUrl(url()))
+        (url().startsWith("blob:") || isRenderableControlUiAvatarUrl(url()) || cachedUrl())
       }
       fallback={
         <AgentIdentityAvatar
@@ -248,6 +270,8 @@ function AgentAvatar(props: {
         ref={(element) => props.elementRef?.(element)}
         data-avatar-state={presentation.state()}
         class={["chat-avatar-slot", presentation.classes()]}
+        role="img"
+        aria-label={props.name}
       >
         <Show when={Boolean(view().imageUrl)}>
           <IdentityAvatarImage
@@ -255,10 +279,11 @@ function AgentAvatar(props: {
             onStateChange={presentation.onStateChange}
             class="chat-avatar assistant"
             alt={props.name}
+            ariaHidden
           />
         </Show>
         <AgentIdentityAvatar
-          agent={{ id: props.id, name: props.name, textAvatar: props.textAvatar }}
+          agent={{ id: props.id, textAvatar: props.textAvatar }}
           class="chat-avatar assistant"
         />
         <AgentAvatarHat agentId={props.id} branding={branding.read()} />
@@ -268,6 +293,7 @@ function AgentAvatar(props: {
 }
 
 export type ForwardedAvatarOptions = {
+  mediaReadAllowed?: boolean;
   agentId?: string;
   agents?: AgentsListResult["agents"];
   senderAgentAvatars?: ReadonlyMap<string, string | null>;
@@ -281,9 +307,10 @@ export function ForwardedAvatar(props: {
   options: ForwardedAvatarOptions;
   elementRef?: (element: HTMLElement) => void;
 }) {
-  const agent = createMemo(() =>
+  const agent = createMemo<AgentsListResult["agents"][number] | undefined>(() =>
     props.agentId
-      ? props.options.agents?.find((candidate) => candidate.id === props.agentId)
+      ? (props.options.agents?.find((candidate) => candidate.id === props.agentId) ??
+        (props.options.senderAgentAvatars?.get(props.agentId) ? { id: props.agentId } : undefined))
       : undefined,
   );
   const avatar = createMemo(() => {
@@ -303,6 +330,7 @@ export function ForwardedAvatar(props: {
               id={value().id}
               name={value().identity?.name?.trim() || value().id}
               avatar={avatar()}
+              mediaReadAllowed={props.options.mediaReadAllowed}
               textAvatar={resolveAssistantTextAvatar(avatar()) ?? resolveAgentTextAvatar(value())}
             />
           )}
@@ -312,6 +340,7 @@ export function ForwardedAvatar(props: {
       <ChatAvatar
         elementRef={props.elementRef}
         role="assistant"
+        mediaReadAllowed={props.options.mediaReadAllowed}
         assistant={{
           agentId: props.agentId,
           name: props.options.assistantName ?? "Assistant",

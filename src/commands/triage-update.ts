@@ -33,6 +33,7 @@ const createUpdateFailureSchema = <T extends z.ZodRawShape>(stepFields: T) =>
           reason: z.string().optional(),
           before: updateIdentitySchema.optional(),
           after: updateIdentitySchema.optional(),
+          target: updateIdentitySchema.optional(),
           steps: z.array(
             z.object({
               name: z.string(),
@@ -168,20 +169,29 @@ export function sanitizeTriageUpdateFailure(
       return redacted;
     }
     // Reserve quotes and the omission marker; escaping also consumes the JSON field budget.
-    let budget = maxBytes - 5;
+    let budget = maxBytes - 7;
     for (;;) {
       const headBytes = Math.floor(budget / 2);
+      // Separate excerpts from words and redacted tokens so a second pass stays readable.
+      const head = truncateUtf8Prefix(redacted, excerpt === "ends" ? headBytes : budget).replace(
+        /\s+\S*$/u,
+        "",
+      );
+      const tail = truncateUtf8Suffix(
+        redacted,
+        excerpt === "ends" ? budget - headBytes : budget,
+      ).replace(/^\S*\s+/u, "");
       const bounded =
         excerpt === "tail"
-          ? `...${truncateUtf8Suffix(redacted, budget)}`
+          ? `... ${tail}`
           : excerpt === "ends"
-            ? `${truncateUtf8Prefix(redacted, headBytes)}...${truncateUtf8Suffix(redacted, budget - headBytes)}`
-            : `${truncateUtf8Prefix(redacted, budget)}...`;
+            ? `${head} ... ${tail}`
+            : `${head} ...`;
       const bytes = Buffer.byteLength(JSON.stringify(bounded));
       if (bytes <= maxBytes) {
         return bounded;
       }
-      budget = Math.floor((budget * (maxBytes - 5)) / (bytes - 5));
+      budget = Math.floor((budget * (maxBytes - 7)) / (bytes - 7));
     }
   }
   let error = text(failure.error, 768, "ends");
@@ -214,7 +224,7 @@ export function sanitizeTriageUpdateFailure(
       const receipt = ` Doctor lint receipt: ${lintReceipt(lint)}`;
       let suffix = `${detail ? `. ${detail}` : ""}${receipt}`;
       // A valid filesystem path can exceed the diagnostic field's entire budget.
-      if (768 - Buffer.byteLength(JSON.stringify(suffix)) <= 5) {
+      if (768 - Buffer.byteLength(JSON.stringify(suffix)) <= 7) {
         suffix = `. Complete Doctor lint inventory unavailable: diagnostic link exceeds error limit.${receipt}`;
       }
       const errorBudget = 768 - Buffer.byteLength(JSON.stringify(suffix));
@@ -330,6 +340,7 @@ export function sanitizeTriageUpdateFailure(
       root: text(result.root, 96),
       before: identity(result.before),
       after: identity(result.after),
+      target: identity(result.target),
       recovery: result.recovery
         ? {
             serviceRestartSafe: result.recovery.serviceRestartSafe,
@@ -353,9 +364,7 @@ export function sanitizeTriageUpdateFailure(
           format !== "prompt" ? (step.signal === null ? null : text(step.signal, 32)) : undefined,
         killed: format !== "prompt" ? step.killed : undefined,
         outputLimitExceeded: format !== "prompt" ? step.outputLimitExceeded : undefined,
-        // Failed-step stderr leads with the triggering error: keep both ends. The 384-byte cap's
-        // tail half is wider than the previous tail-only window, so previously visible excerpts
-        // remain visible; stdout keeps its tail-only outcome excerpt.
+        // Keep both ends of failed-step stderr; stdout keeps its terminal outcome excerpt.
         stderrTail:
           format === "artifact" && step.doctorLintFindings
             ? lintReceipt(step)

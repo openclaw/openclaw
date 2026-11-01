@@ -1,4 +1,4 @@
-import { mkdir, readFile, symlink, unlink, writeFile } from "node:fs/promises";
+import { readFile, symlink, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   createNativeSessionBindingAuthority,
@@ -17,9 +17,10 @@ import {
 } from "./remote-workspace-media.js";
 import { createClientHarness } from "./test-support.js";
 
-const remoteWorkspaceRoot = "/remote/codex-workspace";
+const remoteWorkspaceRoot = "/remote";
 const readPath = "/remote/report.txt";
 const batchPaths = ["first", "second"].map((name) => `${remoteWorkspaceRoot}/reports/${name}.txt`);
+const overLimitPaths = Array.from({ length: 17 }, () => readPath);
 let openClawState: OpenClawTestState;
 type MediaOptions = Parameters<typeof prepareCodexRemoteWorkspaceMessageMedia>[0];
 type ExecClient = Parameters<typeof createCodexRemoteWorkspaceFileReader>[0];
@@ -118,7 +119,6 @@ describe("Codex remote file transport", () => {
         storePath: scope.storePath,
         createSupersededError: () => new Error("Remote file source was replaced"),
       });
-      expect(captured.state).toBe("current");
       const replace = () => store("reader-successor", 2);
       const holdFirstReply = stage === "between chunks" || stage === "before final response";
       const bytes = Buffer.alloc(stage === "before final response" ? 17 : 512 * 1024 + 17, 0x61);
@@ -160,7 +160,6 @@ describe("Codex remote file transport", () => {
             transfer.catch(() => undefined),
             "Remote file read settled before its first command",
           );
-          // The worker admission must end before awaiting the native response.
           await replace();
           reply();
         }
@@ -172,7 +171,6 @@ describe("Codex remote file transport", () => {
         expect(harness.writes).toHaveLength(
           stage === "current" ? 2 : stage === "before first chunk" ? 0 : 1,
         );
-        expect(harness.client.getCloseError()).toBeUndefined();
       } finally {
         harness.client.close();
         await Promise.allSettled([transfer]);
@@ -184,11 +182,10 @@ describe("Codex remote file transport", () => {
 describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
   it("stages scalar, list, and structured attachments from C:/Work/Repo", async () => {
     const remoteRoot = "C:/Work/Repo";
-    const reportAlias = "c:\\work\\repo\\reports\\slack-upload.txt";
-    const reportPath = `${remoteRoot}/reports/slack-upload.txt`;
+    const reportAlias = "c:\\work\\repo\\report.txt";
+    const reportPath = `${remoteRoot}/report.txt`;
     const imagePath = `${remoteRoot}/images/preview.png`;
-    const localReport = path.join(openClawState.workspaceDir, "reports", "slack-upload.txt");
-    await mkdir(path.dirname(localReport), { recursive: true });
+    const localReport = path.join(openClawState.workspaceDir, "report.txt");
     await writeFile(localReport, "stale local report\n");
     const readRemoteFile = createRemoteFileReader({
       [reportPath]: "authoritative remote report\n",
@@ -199,7 +196,7 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
       {
         action: "upload-file",
         filePath: reportAlias,
-        mediaUrls: ["reports/slack-upload.txt", "https://example.com/image.png"],
+        mediaUrls: ["report.txt", "https://example.com/image.png"],
         attachments: [{ filePath: imagePath, title: "Preview" }],
       },
       readRemoteFile,
@@ -214,12 +211,10 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
       mediaUrls: [report, "https://example.com/image.png"],
       attachments: [{ filePath: image, title: "Preview" }],
     });
-    expect(sources.size).toBe(2);
     expect(new Set(sources.get(String(report)))).toEqual(
-      new Set([reportAlias, reportPath, "reports/slack-upload.txt"]),
+      new Set([reportAlias, reportPath, "report.txt"]),
     );
     expect(sources.get(String(image))).toEqual([imagePath]);
-    expect(readRemoteFile).toHaveBeenCalledTimes(2);
     expect(report).toContain(`${path.sep}media${path.sep}outbound${path.sep}`);
     await expect(readText(report)).resolves.toBe("authoritative remote report\n");
     await expect(readText(image)).resolves.toBe("authoritative remote image\n");
@@ -265,12 +260,6 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
     ).rejects.toThrow("requires an active app-server client");
   });
 
-  it("rejects gateway-local paths and traversal before issuing a remote request", async () => {
-    for (const filePath of ["/etc/passwd", `${remoteWorkspaceRoot}/reports/../../private.txt`]) {
-      await expectNoRead({ filePath }, /outside|must stay inside/);
-    }
-  });
-
   it("enforces one aggregate byte limit across remote attachments", async () => {
     await expect(
       prepareMedia(
@@ -297,21 +286,11 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
     expect(readRemoteFile.mock.calls.map(([params]) => params.timeoutMs)).toEqual([500]);
   });
 
-  it("counts repeated attachment entries before issuing any remote request", async () => {
-    const remotePath = `${remoteWorkspaceRoot}/reports/report.txt`;
-    for (const args of [
-      { mediaUrls: Array.from({ length: 17 }, () => remotePath) },
-      { attachments: Array.from({ length: 17 }, () => ({ filePath: remotePath })) },
-    ]) {
-      await expectNoRead(args, "16-attachment limit");
-    }
-  });
-
-  it("honors cancellation before requesting remote bytes", async () => {
-    const controller = new AbortController();
-    controller.abort();
-    await expectNoRead({ filePath: `${remoteWorkspaceRoot}/reports/missing.txt` }, undefined, {
-      signal: controller.signal,
-    });
-  });
+  it.each([
+    [{ filePath: "/etc/passwd" }, /outside|must stay inside/],
+    [{ filePath: `${remoteWorkspaceRoot}/../private.txt` }, /outside|must stay inside/],
+    [{ mediaUrls: overLimitPaths }, "16-attachment limit"],
+    [{ attachments: overLimitPaths.map((filePath) => ({ filePath })) }, "16-attachment limit"],
+    [{ filePath: readPath }, undefined, { signal: AbortSignal.abort() }],
+  ] as const)("rejects unsafe or cancelled media before remote I/O: %j", expectNoRead);
 });

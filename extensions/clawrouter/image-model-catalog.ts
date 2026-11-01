@@ -13,6 +13,7 @@ import {
   resolveProviderHttpRequestConfigWithOriginTrust,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import { mergeSsrFPolicies } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asOptionalRecord,
@@ -148,7 +149,7 @@ export function resolveClawRouterImageHttpContext(
   const providerHeaders = sanitizeConfiguredModelProviderRequest({
     headers: providerConfig?.headers,
   })?.headers;
-  const headers = new Headers(providerHeaders);
+  const headers = new Headers(omitNullRequestHeaders(providerHeaders));
   context.headers.forEach((value, name) => headers.set(name, value));
   // The same resolved ClawRouter credential owns discovery and paid dispatch.
   headers.set("Authorization", "Bearer " + apiKey);

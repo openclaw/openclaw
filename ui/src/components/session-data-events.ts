@@ -79,22 +79,6 @@ export function publishScopedSessionError(
   }
 }
 
-function pruneSidebarAgentSessionCaches(
-  owner: SidebarSessionListOwner,
-  agentIds: readonly string[],
-): void {
-  const retainedAgentIds = new Set(agentIds.map(normalizeAgentId));
-  const entries = Object.entries(owner.sessionResultsByAgent);
-  const retained = entries.filter(([agentId]) => retainedAgentIds.has(agentId));
-  if (retained.length !== entries.length) {
-    owner.sessionResultsByAgent = Object.fromEntries(retained);
-  }
-  if (owner.sessionsAgentId && !retainedAgentIds.has(normalizeAgentId(owner.sessionsAgentId))) {
-    owner.sessionsResult = null;
-    owner.sessionsAgentId = null;
-  }
-}
-
 export function subscribeSidebarAgentSessionCaches(
   agents: AgentCapability,
   owner: SidebarSessionListOwner,
@@ -104,10 +88,17 @@ export function subscribeSidebarAgentSessionCaches(
     const roster = agents.state.agentsList;
     // A null roster is transient during reconnect; only a concrete list can evict agent caches.
     if (roster) {
-      pruneSidebarAgentSessionCaches(
-        owner,
-        roster.agents.map((agent) => agent.id),
-      );
+      const agentIds = roster.agents.map((agent) => agent.id);
+      const retainedAgentIds = new Set(agentIds.map(normalizeAgentId));
+      const entries = Object.entries(owner.sessionResultsByAgent);
+      const retained = entries.filter(([agentId]) => retainedAgentIds.has(agentId));
+      if (retained.length !== entries.length) {
+        owner.sessionResultsByAgent = Object.fromEntries(retained);
+      }
+      if (owner.sessionsAgentId && !retainedAgentIds.has(normalizeAgentId(owner.sessionsAgentId))) {
+        owner.sessionsResult = null;
+        owner.sessionsAgentId = null;
+      }
     }
   };
   synchronize();

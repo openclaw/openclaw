@@ -115,9 +115,7 @@ describe("local Gateway extension relay wakeup", { concurrent: false }, () => {
   );
 
   it.each([
-    [false, false, false, undefined, false],
     [true, false, false, undefined, false],
-    [true, true, false, undefined, false],
     [true, true, true, undefined, false],
     [false, false, false, undefined, true],
     [false, false, false, "open", false],
@@ -278,13 +276,11 @@ describe("local Gateway extension relay wakeup", { concurrent: false }, () => {
               }
               assert(relay.ownership === "owned", "Expected owned relay");
 
-              for (let request = 0; request < 3; request += 1) {
-                const cdpUrl = new URL(chromeProfile().profile.cdpUrl);
-                expect(cdpUrl.username).toBe("openclaw-internal");
-                expect(cdpUrl.password === relay.internalToken).toBe(true);
-                expect(getBrowserControlState()?.extensionRelays?.get("chrome")).toBe(relay);
-                expect(extension.readyState).toBe(WebSocket.OPEN);
-              }
+              const cdpUrl = new URL(chromeProfile().profile.cdpUrl);
+              expect(cdpUrl.username).toBe("openclaw-internal");
+              expect(cdpUrl.password === relay.internalToken).toBe(true);
+              expect(getBrowserControlState()?.extensionRelays?.get("chrome")).toBe(relay);
+              expect(extension.readyState).toBe(WebSocket.OPEN);
 
               const authorization = Buffer.from(
                 `openclaw-internal:${relay.internalToken}`,

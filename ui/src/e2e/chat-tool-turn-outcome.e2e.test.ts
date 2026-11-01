@@ -234,7 +234,7 @@ suite.define(() => {
     },
   );
 
-  it("keeps an earlier autonomous failure visible after a later turn recovers", async () => {
+  it("keeps an earlier autonomous failure on its row after a later turn recovers", async () => {
     const sessionKey = "agent:main:dashboard:tool-turn-outcome";
     const { context, page } = await openChat(
       [
@@ -255,9 +255,8 @@ suite.define(() => {
     await page.getByText("Recovered on the next autonomous turn.", { exact: true }).waitFor();
     const workSummaries = page.locator(".chat-work-group > .chat-activity-group__summary");
     await workSummaries.first().waitFor();
-    expect(await workSummaries.first().getByText("1 failed", { exact: true }).isVisible()).toBe(
-      true,
-    );
+    // The recovery reply owns the outcome; the failed call keeps its status on its own row.
+    expect(await workSummaries.first().textContent()).not.toContain("failed");
     expect(await page.getByText("Command could not finish", { exact: false }).count()).toBe(0);
     for (let index = 0; index < (await workSummaries.count()); index += 1) {
       const summary = workSummaries.nth(index);
@@ -511,12 +510,14 @@ suite.define(() => {
       return {
         animationName: style.animationName,
         backgroundClip: style.getPropertyValue("-webkit-background-clip") || style.backgroundClip,
-        color: style.color,
+        fill: style.webkitTextFillColor,
+        image: style.backgroundImage,
       };
     });
     expect(wave.animationName).toBe("text-shimmer");
     expect(wave.backgroundClip).toBe("text");
-    expect(wave.color).toBe("rgba(0, 0, 0, 0)");
+    expect(wave.fill).toBe("rgba(0, 0, 0, 0)");
+    expect(wave.image).toContain("linear-gradient");
     await captureToolActivityProof(page, "tool-row-running-text-wave");
 
     await emit(3, "tool", {

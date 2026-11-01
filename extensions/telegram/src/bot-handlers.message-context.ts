@@ -314,13 +314,16 @@ export function createTelegramMessageContextRuntime({
   const resolveCachedMessageThreadSpec = async (params: {
     chatId: number | string;
     messageId: number | string;
-  }): Promise<TelegramThreadSpec | undefined> => {
+  }): Promise<{ threadSpec: TelegramThreadSpec; isTopicMessage: boolean } | undefined> => {
     const node = await messageCache.get({
       accountId,
       chatId: params.chatId,
       messageId: String(params.messageId),
     });
-    return resolveProviderObservedTelegramThreadSpec(node);
+    const threadSpec = resolveProviderObservedTelegramThreadSpec(node);
+    return threadSpec
+      ? { threadSpec, isTopicMessage: node?.sourceMessage?.is_topic_message === true }
+      : undefined;
   };
 
   const buildReplyChainForMessage = (msg: Message) =>
@@ -350,26 +353,6 @@ export function createTelegramMessageContextRuntime({
       ...(media.contentType ? { mediaType: media.contentType } : {}),
     };
   };
-
-  const toPromptContextMessage = (
-    node: TelegramCachedMessageNode,
-    ctx: TelegramContext,
-    isReplyTarget: boolean | undefined,
-    media?: TelegramMediaRef,
-  ) => ({
-    message_id: node.messageId,
-    thread_id: node.threadId,
-    sender: resolvePromptSender(node, ctx),
-    sender_id: node.senderId,
-    sender_username: node.senderUsername,
-    timestamp_ms: node.timestamp,
-    body: node.body,
-    media_type: media?.contentType ?? media?.kind ?? node.mediaType,
-    media_path: media?.path,
-    media_ref: media?.path ? undefined : node.mediaRef,
-    reply_to_id: node.replyToId,
-    is_reply_target: isReplyTarget === true ? true : undefined,
-  });
 
   const buildPromptContextForMessage = async (
     ctx: TelegramContext,
@@ -472,15 +455,26 @@ export function createTelegramMessageContextRuntime({
     }
     const cacheEntries = Array.from(conversationContextById.values())
       .toSorted((left, right) => Number(left.node.messageId) - Number(right.node.messageId))
-      .map((entry) => ({
-        node: entry.node,
-        message: toPromptContextMessage(
-          entry.node,
-          ctx,
-          entry.isReplyTarget,
-          entry.node.messageId ? mediaByMessageId?.get(entry.node.messageId) : undefined,
-        ),
-      }));
+      .map(({ node, isReplyTarget }) => {
+        const media = node.messageId ? mediaByMessageId?.get(node.messageId) : undefined;
+        return {
+          node,
+          message: {
+            message_id: node.messageId,
+            thread_id: node.threadId,
+            sender: resolvePromptSender(node, ctx),
+            sender_id: node.senderId,
+            sender_username: node.senderUsername,
+            timestamp_ms: node.timestamp,
+            body: node.body,
+            media_type: media?.contentType ?? media?.kind ?? node.mediaType,
+            media_path: media?.path,
+            media_ref: media?.path ? undefined : node.mediaRef,
+            reply_to_id: node.replyToId,
+            is_reply_target: isReplyTarget === true ? true : undefined,
+          },
+        };
+      });
     const completeProjectionIds = resolveCompleteTelegramPromptContextProjectionIds(
       cacheEntries.map((entry) => entry.node.promptContextProjectionMarker),
     );

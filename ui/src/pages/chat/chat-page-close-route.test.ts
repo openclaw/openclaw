@@ -16,7 +16,10 @@ vi.mock("../../app/native-gateways.runtime.ts", () => ({
   nativeGatewaysCapability: () => null,
 }));
 
+import { adoptBootComposer, retireBootComposer } from "../../app/boot-composer.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { canReloadControlUiDocument } from "../../app/document-reload-guard.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { UI_COMMAND_EVENT, type UiCommandDetail } from "../../components/panel-toggle-contract.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
@@ -29,6 +32,7 @@ import {
   settleChatPage,
   setNavigationContext,
   stubMatchMedia,
+  showSession,
 } from "./chat-page.test-support.ts";
 import "./chat-page.tsx";
 import type { ChatRouteData } from "./route-loader.ts";
@@ -56,14 +60,6 @@ const panesIn = (page: HTMLElementTagNameMap["openclaw-chat-page"]) => [
 function command(detail: UiCommandDetail) {
   window.dispatchEvent(new CustomEvent(UI_COMMAND_EVENT, { cancelable: true, detail }));
 }
-async function showSession(
-  page: HTMLElementTagNameMap["openclaw-chat-page"],
-  sessionKey: string,
-): Promise<void> {
-  page.data = { sessionKey };
-  await settleChatPage(page);
-  await settleChatPage(page);
-}
 
 describe("chat page close navigation", () => {
   beforeEach(() => {
@@ -73,9 +69,56 @@ describe("chat page close navigation", () => {
   });
 
   afterEach(() => {
+    retireBootComposer();
+    document.documentElement.removeAttribute("data-openclaw-boot-chat");
     document.body.replaceChildren();
     localStorage.clear();
     vi.unstubAllGlobals();
+  });
+
+  it.each([
+    {
+      kind: "missing-session",
+      face: "chat",
+      currentSessionHref: "/chat/main",
+      sessionsHref: "/sessions",
+    },
+    { kind: "route-error", face: "chat", message: "Cannot open this conversation" },
+    { kind: "ambiguous", face: "chat", shortId: "deadbeef", candidates: [], truncated: true },
+    { kind: "unavailable-home", face: "chat", agentId: "main" },
+  ] satisfies ChatRouteData[])("keeps early input accessible at $kind", (data) => {
+    const textarea = document.createElement("textarea");
+    textarea.id = "openclaw-boot-composer";
+    textarea.value = "Keep this early input";
+    textarea.setAttribute("data-submit-queued", "");
+    document.documentElement.setAttribute("data-openclaw-boot-chat", "");
+    document.body.append(textarea);
+    adoptBootComposer(true);
+    textarea.remove();
+    // Detachment during the outgoing loading frame must not waive protection.
+    expect(canReloadControlUiDocument()).toBe(false);
+    const { context } = createChatPageNavigationContext();
+    const provider = createSolidApplicationContextProvider(context);
+    const view = mountSolid(() => createComponent(ChatRouteView, { data }), {
+      wrapper: provider.wrapper,
+    });
+    try {
+      flush();
+      expect(view.container.querySelector("#openclaw-boot-composer")).toBe(textarea);
+      expect(textarea.isConnected).toBe(true);
+      expect(textarea.value).toBe("Keep this early input");
+      expect(view.container.querySelector("openclaw-chat-page")).toBeNull();
+      expect(canReloadControlUiDocument(true)).toBe(false);
+      expect(document.activeElement).toBe(textarea);
+      textarea.value = "";
+      expect(canReloadControlUiDocument()).toBe(true);
+      textarea.value = "Not for another conversation";
+      window.dispatchEvent(new PopStateEvent("popstate"));
+      expect(textarea.isConnected).toBe(false);
+      expect(canReloadControlUiDocument()).toBe(true);
+    } finally {
+      view.unmount();
+    }
   });
 
   it("keeps the page and warm pane through the outlet's route adapter and presentation changes", async () => {
@@ -135,12 +178,10 @@ describe("chat page close navigation", () => {
   it("preserves a pending Home draft when its bound pane adopts the global wire key after collapsing", async () => {
     const page = document.createElement("openclaw-chat-page");
     const { context, navigate, replace } = setNavigationContext(page);
-    context.agents.state.agentsList = {
-      defaultId: "main",
-      mainKey: "main",
+    context.agents.state.agentsList = makeBootRoster({
       scope: "global",
       agents: [{ id: "main" }, { id: "research" }],
-    };
+    });
     page.data = { sessionKey: "agent:main:main", agentId: "main" };
     document.body.append(page);
     await settleChatPage(page);

@@ -41,18 +41,6 @@ function writeWebhookError(res: ServerResponse, status: number, error: string): 
   writeJsonWithoutCharset(res, status, { error });
 }
 
-async function rejectWebhookRequest(
-  req: IncomingMessage,
-  res: ServerResponse,
-  status: number,
-  error: string,
-): Promise<void> {
-  if (res.headersSent) {
-    return;
-  }
-  await sendHttpRequestRejection(req, res, status, JSON.stringify({ error }), "application/json");
-}
-
 type RegisteredNextcloudTalkWebhookTarget = NextcloudTalkWebhookTarget & {
   rawPath: string;
   stopping: boolean;
@@ -205,12 +193,19 @@ async function handleWebhookRequest(
     }
     webhookAuthRateLimiter.reset(clientIp, WEBHOOK_AUTH_RATE_LIMIT_SCOPE);
   } catch (err) {
-    if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
-      await rejectWebhookRequest(req, res, 413, "Payload too large");
-      return;
-    }
-    if (isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")) {
-      await rejectWebhookRequest(req, res, 408, requestBodyErrorToText("REQUEST_BODY_TIMEOUT"));
+    if (
+      isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE") ||
+      isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")
+    ) {
+      if (!res.headersSent) {
+        await sendHttpRequestRejection(
+          req,
+          res,
+          err.statusCode,
+          JSON.stringify({ error: requestBodyErrorToText(err.code) }),
+          "application/json",
+        );
+      }
       return;
     }
     const error = err instanceof Error ? err : new Error(formatErrorMessage(err));

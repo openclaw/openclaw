@@ -136,9 +136,9 @@ describe("managed handoff boot identities", () => {
     });
     expect(spawnSyncMock).toHaveBeenCalledTimes(1);
   });
-  it("keeps Linux boot IDs on their existing procfs path", async () => {
+  it.each(["linux", "android"] as const)("reads %s boot IDs from procfs", async (platform) => {
     const read = vi.spyOn(fs, "readFileSync").mockReturnValue(`${uuid}\n`);
-    await withMockedPlatform("linux", async () => {
+    await withMockedPlatform(platform, async () => {
       expect(store.bootIdentity()).toEqual({ platform: "linux", identity: uuid });
     });
     expect(read).toHaveBeenCalledWith("/proc/sys/kernel/random/boot_id", "utf8");

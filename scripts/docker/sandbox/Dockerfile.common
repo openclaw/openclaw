@@ -43,6 +43,15 @@ RUN --mount=type=cache,id=openclaw-sandbox-common-trixie-apt-cache,target=/var/c
   fi
 
 RUN --mount=type=bind,source=package.json,target=/tmp/openclaw-package.json \
+  --mount=type=cache,id=openclaw-sandbox-common-trixie-apt-cache,target=/var/cache/apt,sharing=locked \
+  --mount=type=cache,id=openclaw-sandbox-common-trixie-apt-lists,target=/var/lib/apt,sharing=locked \
+  --mount=type=cache,id=openclaw-sandbox-common-npm-cache,target=/root/.npm,sharing=locked \
+  if [ "${INSTALL_NODE}" = "1" ]; then \
+    playwright_spec="$(node -p '"playwright-core@" + require("/tmp/openclaw-package.json").dependencies["playwright-core"]')" \
+    && npm exec --yes --package="$playwright_spec" -- playwright-core install-deps chromium; \
+  fi
+
+RUN --mount=type=bind,source=package.json,target=/tmp/openclaw-package.json \
   if [ "${INSTALL_PNPM}" = "1" ]; then \
     pnpm_spec="$(node -p 'require("/tmp/openclaw-package.json").packageManager.split("+")[0]')"; \
     npm install -g "$pnpm_spec" "--allow-scripts=$pnpm_spec" && pnpm --version; \

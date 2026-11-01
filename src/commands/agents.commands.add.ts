@@ -3,6 +3,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   checkAgentCreationGate,
   createAgent,
@@ -44,7 +45,7 @@ import { stageProviderAuthProfileBatch } from "../plugins/provider-auth-persiste
 import type { ProviderAuthProfile } from "../plugins/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime as runtime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { resolveUserPath, shortenHomePath } from "../utils.js";
+import { displayPath, resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { describeBinding, describeBindingConflict } from "./agents.binding-format.js";
@@ -94,8 +95,8 @@ function formatSkippedOAuthProfilesMessage(
   sourceIsInheritedMain: boolean,
 ): string {
   return sourceIsInheritedMain
-    ? `OAuth profiles stay shared from "${sourceAgentId}" unless this agent signs in separately.`
-    : `OAuth profiles were not copied from "${sourceAgentId}"; sign in separately for this agent.`;
+    ? terminalText`OAuth profiles stay shared from "${sourceAgentId}" unless this agent signs in separately.`
+    : terminalText`OAuth profiles were not copied from "${sourceAgentId}"; sign in separately for this agent.`;
 }
 
 export async function agentsAddCommand(
@@ -142,7 +143,7 @@ export async function agentsAddCommand(
     }
     const agentId = validation.agentId;
     if (!opts.json && agentId !== nameInput) {
-      runtime.log(`Normalized agent id to "${agentId}".`);
+      runtime.log(terminalText`Normalized agent id to "${agentId}".`);
     }
 
     const created = await runWithLocalStateOwner<
@@ -179,9 +180,7 @@ export async function agentsAddCommand(
             throwExpectedCliError(
               result.reason === "reserved-id"
                 ? `"${result.agentId}" is reserved. Choose another name, or run ${formatCliCommand("openclaw agents list")} to inspect configured agents.`
-                : result.reason === "already-exists"
-                  ? `Agent "${result.agentId}" already exists.`
-                  : result.message,
+                : result.message,
             );
           }
           return result;
@@ -209,17 +208,17 @@ export async function agentsAddCommand(
     if (opts.json) {
       writeRuntimeJson(runtime, payload);
     } else {
-      runtime.log(`Agent: ${agentId}`);
-      runtime.log(`Workspace: ${shortenHomePath(created.workspace)}`);
-      runtime.log(`Agent dir: ${shortenHomePath(created.agentDir)}`);
+      runtime.log(terminalText`Agent: ${agentId}`);
+      runtime.log(`Workspace: ${displayPath(created.workspace)}`);
+      runtime.log(`Agent dir: ${displayPath(created.agentDir)}`);
       if (created.model) {
-        runtime.log(`Model: ${created.model}`);
+        runtime.log(terminalText`Model: ${created.model}`);
       }
       if (conflicts.length > 0) {
         runtime.error(
           [
             "Skipped bindings already claimed by another agent:",
-            ...conflicts.map((conflict) => `- ${describeBindingConflict(conflict)}`),
+            ...payload.bindings.conflicts.map((description) => terminalText`- ${description}`),
           ].join("\n"),
         );
       }
@@ -263,8 +262,8 @@ async function runInteractiveAgentsAdd(opts: AgentsAddOptions, wizardOutput: Nod
           const validation = validateAgentIdInput(value);
           if (!validation.ok) {
             return validation.reason === "reserved-id"
-              ? `"${validation.agentId}" is reserved. Choose another name.`
-              : validation.message;
+              ? terminalText`"${validation.agentId}" is reserved. Choose another name.`
+              : terminalText`${validation.message}`;
           }
           return undefined;
         },
@@ -274,15 +273,17 @@ async function runInteractiveAgentsAdd(opts: AgentsAddOptions, wizardOutput: Nod
     const validation = validateAgentIdInput(agentName);
     if (!validation.ok) {
       if (validation.reason === "reserved-id") {
-        await prompter.outro(`"${validation.agentId}" is reserved. Choose another name.`);
+        await prompter.outro(
+          terminalText`"${validation.agentId}" is reserved. Choose another name.`,
+        );
         return;
       }
-      await prompter.outro(validation.message);
+      await prompter.outro(terminalText`${validation.message}`);
       return;
     }
     const agentId = validation.agentId;
     if (agentName !== agentId) {
-      await prompter.note(`Normalized id to "${agentId}".`, "Agent id");
+      await prompter.note(terminalText`Normalized id to "${agentId}".`, "Agent id");
     }
 
     const existingAgent = listAgentEntries(cfg).find(
@@ -295,7 +296,7 @@ async function runInteractiveAgentsAdd(opts: AgentsAddOptions, wizardOutput: Nod
         );
       }
       const shouldUpdate = await prompter.confirm({
-        message: `Agent "${agentId}" already exists. Update it?`,
+        message: terminalText`Agent "${agentId}" already exists. Update it?`,
         initialValue: false,
       });
       if (!shouldUpdate) {
@@ -305,7 +306,7 @@ async function runInteractiveAgentsAdd(opts: AgentsAddOptions, wizardOutput: Nod
     } else {
       const gateError = await checkAgentCreationGate(agentId);
       if (gateError) {
-        await prompter.outro(gateError.message);
+        await prompter.outro(terminalText`${gateError.message}`);
         return;
       }
     }
@@ -341,7 +342,7 @@ async function runInteractiveAgentsAdd(opts: AgentsAddOptions, wizardOutput: Nod
           ...listAgentEntries(cfg)
             .map((agent) => normalizeAgentId(agent.id))
             .filter((id) => id !== agentId)
-            .map((id) => ({ value: id, label: id })),
+            .map((id) => ({ value: id, label: terminalText`${id}` })),
         ],
       }));
     if (copySourceAgentId !== "__skip__" && copySourceAgentId !== agentId) {
@@ -376,7 +377,7 @@ async function runInteractiveAgentsAdd(opts: AgentsAddOptions, wizardOutput: Nod
           Object.keys(destStore?.profiles ?? {}).length === 0
         ) {
           const shouldCopy = await prompter.confirm({
-            message: `Copy portable auth profiles from "${copySourceAgentId}"?`,
+            message: terminalText`Copy portable auth profiles from "${copySourceAgentId}"?`,
             initialValue: false,
           });
           if (shouldCopy) {
@@ -398,7 +399,7 @@ async function runInteractiveAgentsAdd(opts: AgentsAddOptions, wizardOutput: Nod
                 skippedOAuthProfiles ||
                 copiedOAuthProfileIds.some((profileId) => !persistedIds.has(profileId));
               const copied = copiedCount
-                ? `Copied ${copiedCount} portable auth profile${copiedCount === 1 ? "" : "s"} from "${copySourceAgentId}".`
+                ? terminalText`Copied ${copiedCount} portable auth profile${copiedCount === 1 ? "" : "s"} from "${copySourceAgentId}".`
                 : "";
               const skipped = skippedOAuth
                 ? ` ${formatSkippedOAuthProfilesMessage(copySourceAgentId, sourceIsInheritedMain)}`
@@ -505,7 +506,9 @@ async function runInteractiveAgentsAdd(opts: AgentsAddOptions, wizardOutput: Nod
           await prompter.note(
             [
               "Skipped bindings already claimed by another agent:",
-              ...result.conflicts.map((conflict) => `- ${describeBindingConflict(conflict)}`),
+              ...result.conflicts.map(
+                (conflict) => terminalText`- ${describeBindingConflict(conflict)}`,
+              ),
             ].join("\n"),
             "Routing bindings",
           );
@@ -583,7 +586,7 @@ async function runInteractiveAgentsAdd(opts: AgentsAddOptions, wizardOutput: Nod
         });
       });
       if (created.status === "error") {
-        await prompter.outro(created.message);
+        await prompter.outro(terminalText`${created.message}`);
         return;
       }
       payload = {
@@ -601,7 +604,7 @@ async function runInteractiveAgentsAdd(opts: AgentsAddOptions, wizardOutput: Nod
     if (opts.json) {
       writeRuntimeJson(runtime, payload);
     }
-    await prompter.outro(`Agent "${agentId}" ready.`);
+    await prompter.outro(terminalText`Agent "${agentId}" ready.`);
   } catch (err) {
     if (err instanceof WizardCancelledError) {
       runtime.exit(1);

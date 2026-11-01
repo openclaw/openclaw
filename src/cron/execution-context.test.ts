@@ -132,7 +132,7 @@ describe("buildScheduledExecutionContext principals", () => {
       mediaSessionKey: PARENT_KEY,
       eventTargetSessionKey: PARENT_KEY,
       workspace: { source: "parent-row", dir: "/work/parent" },
-      fileScope: "session",
+      fileScope: "root",
       bootstrap: "default",
       messageAccounts: { ownerAccountId: "default" },
       delivery: { sourceConversation: SOURCE },
@@ -148,6 +148,20 @@ describe("buildScheduledExecutionContext principals", () => {
     expect(context.authority).toMatchObject({ owner: false, basis: "none" });
     expect(context.toolPolicy.automations).toEqual({ scope: "self", jobId: "job-1" });
     expect(context.resources.memory).toMatchObject({ source: "parent", owner: false });
+  });
+
+  it("keeps operator authority for a linked trusted-policy job without a recorded requester", () => {
+    // v2026.10.6 shape: an operator's `cron.add --session-key` stored the parent and a
+    // trusted policy but no createdActor.
+    const stored = parentLinked({
+      createdActor: undefined,
+      owner: undefined,
+      scheduledToolPolicy: { version: 1, mode: "trusted" },
+    });
+    const context = ready(stored, facts({ requesterCheck: undefined }));
+    expect(context.principal).toMatchObject({ kind: "parent", requester: { kind: "unknown" } });
+    expect(context.authority).toMatchObject({ owner: true, basis: "trusted-policy" });
+    expect(context.resources.memory).toMatchObject({ source: "parent", owner: true });
   });
 
   it("fails closed when the caller did not run the requester check", () => {

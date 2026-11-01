@@ -349,7 +349,7 @@ describe("SQLite session handle lifecycle", () => {
       updateMode: "none",
     });
 
-    expect(result.appendedCount).toBe(1);
+    expect(result.messages.filter((m) => m.appended)).toHaveLength(1);
     await expect(loadTranscriptEvents(scope)).resolves.toContainEqual(
       expect.objectContaining({
         message: expect.objectContaining({ content: "append after close" }),

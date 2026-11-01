@@ -5,12 +5,7 @@ import { writeFileSync, writeSync } from "node:fs";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import path from "node:path";
-import {
-  constants,
-  monitorEventLoopDelay,
-  PerformanceObserver,
-  type PerformanceEntry,
-} from "node:perf_hooks";
+import { constants, monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
 import { mock } from "node:test";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
@@ -29,6 +24,8 @@ import {
 } from "../../src/plugins/tool-factory-runtime.js";
 import { AsyncWorkScope } from "../../src/shared/async-work-scope.js";
 import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { summarizeDurationDistribution } from "../lib/perf-duration-distribution.ts";
+import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -129,7 +126,16 @@ const registrations = ["scope-one", "scope-two"].map((pluginId) => {
   assert(instance);
   return { entry, context, instance };
 });
-const gatewayScope = { isWebchatConnect: () => false, pluginRegistry: registry };
+// Match the request fields installed by Gateway method dispatch, including optional fields.
+const gatewayScope = {
+  context: undefined,
+  resolveGatewayContext: () => undefined,
+  client: undefined,
+  signal,
+  hasCurrentClientAuthority: () => true,
+  isWebchatConnect: () => false,
+  pluginRegistry: registry,
+};
 
 async function turn(index: number) {
   const { entry, context } = registrations[index % registrations.length]!;
@@ -178,20 +184,6 @@ async function countEntries(invoke: () => unknown) {
   }
 }
 
-function distribution(samples: number[]) {
-  const sorted = samples.toSorted((left, right) => left - right);
-  const count = sorted.length;
-  const totalMs = sorted.reduce((sum, value) => sum + value, 0);
-  return {
-    count,
-    totalMs,
-    meanMs: count ? totalMs / count : 0,
-    maxMs: sorted.at(-1) ?? 0,
-    p95: { samples: count, ms: sorted[Math.ceil(count * 0.95) - 1] ?? null },
-    p99: { samples: count, ms: sorted[Math.ceil(count * 0.99) - 1] ?? null },
-  };
-}
-
 async function waitUntil(deadline: number) {
   if (deadline) {
     assert(Date.now() < deadline, "Preparation missed the shared start deadline");
@@ -200,21 +192,13 @@ async function waitUntil(deadline: number) {
 }
 
 const inspector = new Session();
-const observer = new PerformanceObserver((list) => recordGc(list.getEntries()));
+const observer = new PerformanceObserver((list) =>
+  recordGcCollections(list.getEntries(), collections, measuredStart, measuredEnd),
+);
 const loop = monitorEventLoopDelay({ resolution: 1 });
 const collections: { kind: number; ms: number }[] = [];
 let measuredStart = Infinity;
 let measuredEnd = Infinity;
-function recordGc(entries: PerformanceEntry[]) {
-  for (const entry of entries) {
-    if (entry.startTime >= measuredStart && entry.startTime < measuredEnd) {
-      collections.push({
-        kind: (entry as PerformanceEntry & { detail: { kind: number } }).detail.kind,
-        ms: entry.duration,
-      });
-    }
-  }
-}
 
 try {
   const control = registrations[0]!.instance;
@@ -267,10 +251,10 @@ try {
   marker("diagnostics-stop");
   loop.disable();
   await nextTurn();
-  recordGc(observer.takeRecords());
+  recordGcCollections(observer.takeRecords(), collections, measuredStart, measuredEnd);
   observer.disconnect();
   const gc = (kind?: number) =>
-    distribution(
+    summarizeDurationDistribution(
       collections
         .filter((entry) => kind === undefined || entry.kind === kind)
         .map((entry) => entry.ms),
@@ -302,7 +286,7 @@ try {
       elapsedMs: measuredEnd - measuredStart,
       totalMs: (usedCpu.user + usedCpu.system) / 1000,
       msPerTurn: (usedCpu.user + usedCpu.system) / 1000 / turns,
-      turnLatency: distribution(latencies),
+      turnLatency: summarizeDurationDistribution(latencies),
     },
     gc: {
       total: totalGc,

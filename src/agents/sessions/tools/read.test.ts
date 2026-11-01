@@ -4,14 +4,18 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
+import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { runNodeScript } from "../../../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import {
   resolveFileMutationQueueKey,
   withFileMutationQueueKeyResolution,
 } from "./file-mutation-queue.js";
+import { readRenderContext } from "./read-render.test-support.js";
 import { createReadTool, createReadToolDefinition, type ReadToolOptions } from "./read.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "./truncate.js";
 import { createWriteTool } from "./write.js";
@@ -120,6 +124,50 @@ function renderReadCall(args: { path: string; offset?: number; limit?: number })
 }
 
 describe("read tool", () => {
+  it("keeps terminal modules cold until rendering in a headless session", async () => {
+    const home = tempDirs.make("headless-read-");
+    const result = await runNodeScript(
+      [
+        "--import",
+        fileURLToPath(new URL("../../../../scripts/tsx.mjs", import.meta.url)),
+        "--input-type=module",
+        "--eval",
+        `import assert from "node:assert/strict";
+import { registerHooks } from "node:module";
+const terminalModules = new Set();
+registerHooks({ load(url, context, nextLoad) {
+  if (url.includes("/pi-tui/")) terminalModules.add(url);
+  return nextLoad(url, context);
+} });
+const { createReadToolDefinition } = await import(${JSON.stringify(new URL("./read.ts", import.meta.url).href)});
+await import(${JSON.stringify(new URL("../resource-loader.ts", import.meta.url).href)});
+await import(${JSON.stringify(new URL("../extensions/runner-defaults.ts", import.meta.url).href)});
+const tool = createReadToolDefinition("/synthetic", { operations: {
+  access: async () => {}, readFile: async () => Buffer.from("hello"),
+} });
+const result = await tool.execute("read", { path: "notes.txt" });
+assert.equal(result.content[0].text, "hello");
+assert.equal(terminalModules.size, 0, "Headless file reads must not load terminal UI modules");
+const component = tool.renderCall({ path: "notes.txt" }, {
+  fg: (_token, text) => text, bold: text => text,
+}, { cwd: "/synthetic" });
+assert.equal(component.render(80).join("\\n").trimEnd(), "read notes.txt");
+assert.ok(terminalModules.size > 0, "Terminal rendering must still load its real runtime");
+console.log("headless-read-ok");`,
+      ],
+      {
+        PATH: process.env.PATH,
+        SystemRoot: process.env.SystemRoot,
+        NODE_OPTIONS: "",
+        HOME: home,
+        OPENCLAW_STATE_DIR: path.join(home, "state"),
+      },
+      30_000,
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("headless-read-ok");
+  });
+
   beforeEach(() => {
     decodeWindowsTextFileBufferMock.mockReset();
     decodeWindowsTextFileBufferMock.mockImplementation(({ buffer }) => buffer.toString("utf8"));
@@ -244,17 +292,50 @@ describe("read tool", () => {
     await expectReadText(tool, { path: filePath, offset: 2 }, "last line\n");
   });
 
+  it.each(["utf8", "utf16le", "utf16be"])(
+    "preserves Unicode and CRLF across large %s source pages",
+    async (encoding) => {
+      const line = "α🦞x";
+      const source = `${`${line}\r\n`.repeat(200_000)}last line\r\n`;
+      const utf16 = Buffer.from(source, "utf16le");
+      const bytes =
+        encoding === "utf8"
+          ? Buffer.from(source)
+          : Buffer.concat([
+              Buffer.from(encoding === "utf16le" ? [0xff, 0xfe] : [0xfe, 0xff]),
+              encoding === "utf16le" ? utf16 : utf16.swap16(),
+            ]);
+      const { tool, filePath } = await fileFixture("unicode.txt", bytes);
+      const page = await executeRead(tool, { path: filePath, offset: 130_000, limit: 2_000 });
+      expect(page.details).toMatchObject({
+        kind: "truncated",
+        content: `${line}\n`.repeat(2_000).slice(0, -1),
+        continuation: { kind: "line", offset: 132_000 },
+      });
+      await expectReadText(tool, { path: filePath, offset: 200_001 }, "last line\n");
+    },
+  );
+
   it("reports the byte count when a BOM-only file decodes to empty text", async () => {
     const tool = memoryRead(Buffer.from([0xef, 0xbb, 0xbf]));
     await expectReadText(tool, { path: "bom.txt" }, "File contains no readable text (3 bytes).");
   });
 
-  it("does not decode PDF bytes from a renamed .bin file", async () => {
-    const { tool } = await fileFixture(
-      "pdf.bin",
-      Buffer.from("%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF", "ascii"),
-    );
-    const result = await executeRead(tool, { path: "pdf.bin" });
+  it.each(["PDF", "OOXML"])("does not decode %s bytes from a renamed .bin file", async (kind) => {
+    const zip = kind === "OOXML" ? new JSZip() : undefined;
+    if (zip) {
+      zip.file("padding.bin", Buffer.alloc(100 * 1024));
+      zip.file(
+        "[Content_Types].xml",
+        '<Types><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>',
+      );
+      zip.file("word/document.xml", "<xml/>");
+    }
+    const bytes = zip
+      ? await zip.generateAsync({ type: "nodebuffer", compression: "STORE" })
+      : Buffer.from("%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF", "ascii");
+    const { tool } = await fileFixture("document.bin", bytes);
+    const result = await executeRead(tool, { path: "document.bin" });
     expect(textContent(result)).toMatch(
       /^Read did not return file contents because it detected a binary document \[.+\]\. Use an available document parser or converter, or convert the file to text, Markdown, or CSV, then read the converted file\.$/,
     );
@@ -370,6 +451,31 @@ describe("read tool", () => {
     expect(textContent(second)).toContain("offset=3");
   });
 
+  it("caps a non-EOF selection ending on a blank line and continues from that line", async () => {
+    const prefix = "é🦞\n".repeat(1999);
+    const { tool } = await fileFixture("selected-blank.txt", `${prefix}\n\nfiné`);
+    const first = await executeRead(tool, { path: "selected-blank.txt", limit: 2001 });
+    expect(first.details).toMatchObject({
+      kind: "truncated",
+      content: prefix,
+      continuation: { kind: "line", offset: 2001, limit: 1 },
+      truncation: {
+        truncatedBy: "lines",
+        outputLines: 2000,
+        outputBytes: Buffer.byteLength(prefix),
+        maxLines: 2000,
+      },
+    });
+    const next = await executeRead(tool, { path: "selected-blank.txt", offset: 2001, limit: 1 });
+    expect(next.details).toMatchObject({
+      kind: "truncated",
+      content: "",
+      continuation: { kind: "line", offset: 2002, limit: 1 },
+    });
+    const last = await executeRead(tool, { path: "selected-blank.txt", offset: 2002, limit: 1 });
+    expect(last.details).toEqual({ kind: "text", content: "finé" });
+  });
+
   it("clamps non-positive line limits before slicing file content", async () => {
     const tool = memoryRead("alpha\nbeta\ngamma", async () => null);
     const result = await executeRead(tool, { path: "notes.txt", limit: -1 });
@@ -385,6 +491,30 @@ describe("read tool", () => {
     expect(renderReadCall({ path: "notes.txt", limit: Number.POSITIVE_INFINITY })).toBe(
       `read notes.txt:1-${DEFAULT_MAX_LINES}`,
     );
+  });
+
+  it("renders sanitized text and a visible fallback when inline images are hidden", () => {
+    const tool = createReadToolDefinition("/workspace");
+    const component = tool.renderResult?.(
+      {
+        content: [
+          { type: "text", text: "alpha\u0000\r\n" },
+          { type: "image", data: ONE_PIXEL_PNG_BASE64, mimeType: "image/png" },
+          { type: "text", text: "beta\tend" },
+        ],
+        details: { kind: "text", content: "alpha\u0000\r\n\nbeta\tend" },
+      },
+      { expanded: true, isPartial: false },
+      plainTheme,
+      readRenderContext("notes.txt"),
+    );
+    expect(
+      component
+        ?.render(120)
+        .map((line) => line.trimEnd())
+        .join("\n")
+        .trim(),
+    ).toBe("alpha\\x00\n\nbeta   end\n[Image: [image/png] 1x1]");
   });
 
   it("rejects offset zero before accessing the file", async () => {

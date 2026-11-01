@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { Socket } from "node:net";
-import { expect, vi } from "vitest";
+import { vi } from "vitest";
 import type { WebSocketServer } from "ws";
 import type { ResolvedGatewayAuth } from "../auth.js";
 import { prepareGatewayIngressAttribution } from "../ingress-attribution.js";
@@ -145,9 +145,7 @@ export function attachGatewayWsForTest(params: {
     ...params.options,
   });
 
-  const onConnection = listeners.get("connection");
-  expect(onConnection).toBeTypeOf("function");
-  onConnection?.(socket, upgradeReq);
+  listeners.get("connection")!(socket, upgradeReq);
 
   return { clients, listeners, socket, upgradeReq, wss };
 }

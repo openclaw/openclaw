@@ -1,4 +1,4 @@
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 import type { CronJob, CronRunLogEntry } from "../../api/types.ts";
 import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -116,8 +116,9 @@ export function createCronViewProps(overrides: Partial<CronProps> = {}): CronPro
   };
 }
 
-export function renderCronView(overrides: Partial<CronProps> = {}) {
+export async function renderCronView(overrides: Partial<CronProps> = {}) {
   const { container } = mountSolid(() => CronView(createCronViewProps(overrides)));
+  await vi.dynamicImportSettled();
   flush();
   return container;
 }

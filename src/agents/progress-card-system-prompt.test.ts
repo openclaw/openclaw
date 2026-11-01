@@ -39,8 +39,9 @@ describe("progress card system prompt", () => {
     hasPairedCardRenderer.mockReset().mockResolvedValue(true);
   });
 
-  it("injects the instruction when every adoption gate passes", async () => {
-    await expect(append({})).resolves.toContain("progress_card");
+  it("preserves existing context bytes when every adoption gate passes", async () => {
+    const prompt = await append({ extraSystemPrompt: "Existing context.\n" });
+    expect(prompt).toMatch(/^Existing context\.\n\n\nCreate a card with progress_card/);
   });
 
   it.each([

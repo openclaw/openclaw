@@ -20,7 +20,11 @@ import {
   readDesktopProofTestReport,
   withDesktopProofCleanup,
 } from "./lib/desktop-resize-proof.mts";
-import { hasUnjoinedWork, runManagedCommand } from "./lib/managed-child-process.mts";
+import {
+  type ManagedCommandTimeoutObservation,
+  hasUnjoinedWork,
+  runManagedCommand,
+} from "./lib/managed-child-process.mts";
 
 const root = process.cwd();
 const output = path.join(root, ".artifacts/control-ui-e2e/real-gateway/desktop-resize");
@@ -68,7 +72,12 @@ const receipt = {
     packages: [] as Array<{ name: string; version: string; sha256: string }>,
     serverBinarySha256: "",
   },
-  commands: [] as Array<{ label: string; exitCode: number | null; elapsedMs: number }>,
+  commands: [] as Array<{
+    label: string;
+    exitCode: number | null;
+    elapsedMs: number;
+    timeoutObservation?: ManagedCommandTimeoutObservation | null;
+  }>,
   carriers: [] as string[],
   testDiagnostics: [] as Array<{
     carrier: "node" | "ssh";
@@ -132,6 +141,7 @@ async function run(
   const log: Buffer[] = [];
   let bytes = 0;
   let exitCode: number | null = null;
+  let timeoutObservation: ManagedCommandTimeoutObservation | null = null;
   const started = Date.now();
   return withDesktopProofCleanup(
     async () => {
@@ -150,6 +160,12 @@ async function run(
         timeoutMs: options.timeoutMs ?? 30_000,
         signal: options.cleanup ? cap.signal : AbortSignal.any([lifetime.signal, cap.signal]),
         requireProcessTreeExit: true,
+        onTimeout:
+          label === "apt-install"
+            ? (observation) => {
+                timeoutObservation = observation;
+              }
+            : undefined,
         onReady(child) {
           const append = (data: Buffer, target?: Buffer[]) => {
             bytes += data.length;
@@ -169,7 +185,12 @@ async function run(
       return Buffer.concat(stdout);
     },
     async () => {
-      receipt.commands.push({ label, exitCode, elapsedMs: Date.now() - started });
+      receipt.commands.push({
+        label,
+        exitCode,
+        elapsedMs: Date.now() - started,
+        ...(label === "apt-install" ? { timeoutObservation } : {}),
+      });
       await withDesktopProofCleanup(
         async () => {
           if (label === "sshd-config" && exitCode !== 0) {

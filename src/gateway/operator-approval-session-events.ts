@@ -5,7 +5,6 @@ import type {
   SessionApprovalReplay,
 } from "../../packages/gateway-protocol/src/index.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveApprovalSourceStreamKey } from "./approval-session-audience.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import type {
@@ -29,13 +28,17 @@ import type { SessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import type { GatewayClient, PreparedSessionApprovalReplay } from "./server-methods/types.js";
 
 const MAX_SESSION_APPROVAL_REPLAY = 1_000;
-type ApprovalReplaySnapshot = Omit<PreparedSessionApprovalReplay, "release">;
+const MAX_IDLE_REPLAY_SCOPES = 64;
+type ApprovalReplaySnapshot = Omit<PreparedSessionApprovalReplay, "release"> & {
+  reusable: boolean;
+};
 type ApprovalReplayScope = {
   sessionKey: string;
   reviewerDeviceId: string | undefined;
   references: number;
   revision: number;
   preparation?: Promise<ApprovalReplaySnapshot>;
+  completed?: ApprovalReplaySnapshot;
 };
 
 type OperatorApprovalSessionEventRuntime = {
@@ -61,7 +64,6 @@ export function createOperatorApprovalSessionEventRuntime(params: {
   sessionMessageSubscribers: Pick<SessionMessageSubscriberRegistry, "getApprovals">;
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   controlUiBasePath?: string;
-  databaseOptions?: OpenClawStateDatabaseOptions;
   reconcileTerminal?: (record: OperatorApprovalRecord) => boolean | Promise<boolean>;
   getLiveManager?: (
     kind: OperatorApprovalRecord["kind"],
@@ -70,6 +72,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
 }): OperatorApprovalSessionEventRuntime {
   const controlUiBasePath = normalizeControlUiBasePath(params.controlUiBasePath);
   const replayScopes = new Map<string, ApprovalReplayScope>();
+  const idleScopes = new Map<string, ApprovalReplayScope>();
 
   const authorizedRecipients = (
     sessionKey: string,
@@ -95,7 +98,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
   };
 
   const publish = (event: OperatorApprovalLifecycleEvent): void => {
-    for (const scope of replayScopes.values()) {
+    for (const [key, scope] of replayScopes) {
       if (
         event.record.audienceSessionKeys.includes(scope.sessionKey) &&
         (scope.reviewerDeviceId === undefined ||
@@ -103,6 +106,11 @@ export function createOperatorApprovalSessionEventRuntime(params: {
       ) {
         scope.revision += 1;
         scope.preparation = undefined;
+        scope.completed = undefined;
+        if (scope.references === 0) {
+          idleScopes.delete(key);
+          replayScopes.delete(key);
+        }
       }
     }
     const source = event.record.source;
@@ -179,7 +187,6 @@ export function createOperatorApprovalSessionEventRuntime(params: {
       reviewerDeviceId,
       limit: MAX_SESSION_APPROVAL_REPLAY + 1,
       nowMs: snapshotAtMs,
-      databaseOptions: params.databaseOptions,
     };
     const readRevision = scope.revision;
     const prepared = await prepareOperatorApprovalReplay(input);
@@ -199,7 +206,8 @@ export function createOperatorApprovalSessionEventRuntime(params: {
     const revision = prepared.outcome === "expired" ? scope.revision : readRevision;
     const records =
       prepared.outcome === "expired" ? await listPendingOperatorApprovals(input) : prepared.records;
-    const isCurrent = () => revision === scope.revision;
+    const storeIsCurrent = prepared.outcome === "pending" ? prepared.isCurrent : undefined;
+    const isCurrent = () => revision === scope.revision && storeIsCurrent?.() !== false;
     const approvals: PendingApprovalSnapshot[] = [];
     const truncated = records.length > MAX_SESSION_APPROVAL_REPLAY;
     for (const record of records) {
@@ -221,7 +229,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
       approvals,
       truncated,
     };
-    return { replay, isCurrent };
+    return { replay, isCurrent, reusable: storeIsCurrent !== undefined };
   };
 
   return {
@@ -254,8 +262,8 @@ export function createOperatorApprovalSessionEventRuntime(params: {
         }
       };
       assertCurrent();
-      // Only share unsettled work. Lifecycle publications fence replies but are
-      // not a durable store revision suitable for retaining completed snapshots.
+      // Completed replay is reusable only while the durable owner confirms its
+      // selection and deadline, independently of runtime lifecycle publications.
       const key = JSON.stringify([sessionKey, reviewerDeviceId]);
       let scope = replayScopes.get(key);
       if (!scope) {
@@ -268,6 +276,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
         replayScopes.set(key, scope);
       }
       const retained = scope;
+      idleScopes.delete(key);
       retained.references += 1;
       let released = false;
       const release = () => {
@@ -277,20 +286,44 @@ export function createOperatorApprovalSessionEventRuntime(params: {
         released = true;
         retained.references -= 1;
         if (retained.references === 0) {
-          replayScopes.delete(key);
+          if (retained.completed?.isCurrent()) {
+            idleScopes.set(key, retained);
+            if (idleScopes.size > MAX_IDLE_REPLAY_SCOPES) {
+              const oldest = idleScopes.keys().next().value!;
+              idleScopes.delete(oldest);
+              replayScopes.delete(oldest);
+            }
+          } else {
+            replayScopes.delete(key);
+          }
         }
       };
       try {
-        let preparation = retained.preparation;
-        if (!preparation) {
-          preparation = prepareReplay(retained).finally(() => {
-            if (retained.preparation === preparation) {
-              retained.preparation = undefined;
-            }
-          });
-          retained.preparation = preparation;
+        let prepared = retained.completed;
+        if (!prepared?.isCurrent()) {
+          retained.completed = undefined;
+          let preparation = retained.preparation;
+          if (!preparation) {
+            preparation = prepareReplay(retained)
+              .then((snapshot) => {
+                if (
+                  retained.preparation === preparation &&
+                  snapshot.reusable &&
+                  snapshot.isCurrent()
+                ) {
+                  retained.completed = snapshot;
+                }
+                return snapshot;
+              })
+              .finally(() => {
+                if (retained.preparation === preparation) {
+                  retained.preparation = undefined;
+                }
+              });
+            retained.preparation = preparation;
+          }
+          prepared = await preparation;
         }
-        const prepared = await preparation;
         assertCurrent();
         return {
           replay: prepared.replay,

@@ -54,7 +54,7 @@ function toTelegramOutboundResult<T extends { chatId?: string }>(result: T) {
     : { ...delivery, target: { kind: "chat" as const, id: chatId } };
 }
 
-async function resolveDefaultTelegramSend(deps?: OutboundSendDeps): Promise<TelegramSendFn> {
+export async function resolveTelegramSend(deps?: OutboundSendDeps): Promise<TelegramSendFn> {
   return (
     resolveOutboundSendDep<TelegramSendFn>(deps, "telegram") ??
     (await loadTelegramSendModule()).sendMessageTelegram
@@ -289,7 +289,7 @@ export async function sendTelegramPayloadMessages(params: {
 export function createTelegramOutboundAdapter(
   options: CreateTelegramOutboundAdapterOptions = {},
 ): ChannelOutboundAdapter {
-  const resolveSend = options.resolveSend ?? resolveDefaultTelegramSend;
+  const resolveSend = options.resolveSend ?? resolveTelegramSend;
   const loadSendModule = options.loadSendModule ?? loadTelegramSendModule;
 
   async function resolveTelegramOutboundSendContext(

@@ -1,8 +1,9 @@
 // @vitest-environment node
-import type { RouteLoaderOptions, RouteLocation } from "@openclaw/uirouter";
+import type { RouteLocation } from "@openclaw/uirouter";
 import { expect, it } from "vitest";
 import { activityPersonFromPath, INTERNAL_ACTIVITY_PATH_PARAM } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
 import { page } from "./route.ts";
 import { resolveActivityRouteData, type ActivityRouteData } from "./run-inspector-model.ts";
 
@@ -10,14 +11,10 @@ function loadRoute(search: string, pathname = "/activity", basePath = ""): Activ
   if (!page.loader) {
     throw new Error("activity route has no loader");
   }
-  const loaded = page.loader({} as ApplicationContext, {
-    signal: new AbortController().signal,
-    shouldRun: () => true,
-    revalidating: false,
-    location: { pathname, search, hash: "" } satisfies RouteLocation,
-    deps: search,
-    cause: "navigation",
-  } satisfies RouteLoaderOptions);
+  const loaded = page.loader(
+    {} as ApplicationContext,
+    createRouteLoaderOptions({ pathname, search, hash: "" } satisfies RouteLocation, search),
+  );
   if (!("pathname" in loaded)) {
     throw new Error("activity route did not return a location");
   }

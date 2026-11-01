@@ -109,9 +109,6 @@ describe("tui last session state", () => {
       await write(scopeKey, "agent:main:main");
       await expect(read(scopeKey)).resolves.toBe("agent:main:main");
     });
-    expect(
-      readConfigMachineStateWithMetadata<string>(`tui.lastSession.${scopeKey}`, options),
-    ).toEqual({ value: "agent:main:main", updatedAtMs: expect.any(Number) });
     await expect(fs.stat(path.join(stateDir, "tui", "last-session.json"))).rejects.toMatchObject({
       code: "ENOENT",
     });

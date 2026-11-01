@@ -90,22 +90,6 @@ function webPushClient(gateway: ApplicationGateway, client: GatewayBrowserClient
   };
 }
 
-function requirePushManager(registration: ServiceWorkerRegistration): PushManager {
-  const manager = registration.pushManager;
-  if (!manager) {
-    throw new Error(
-      "Web Push is unavailable in this browser. On iPhone or iPad, add OpenClaw to the Home Screen and open the installed app.",
-    );
-  }
-  return manager;
-}
-
-function urlBase64ToUint8Array(base64String: string): Uint8Array {
-  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
-  return Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
-}
-
 export async function getExistingSubscription(): Promise<PushSubscription | null> {
   // Passive reads must settle even when no worker is installed or activation is blocked.
   const registration = await navigator.serviceWorker.getRegistration();
@@ -122,33 +106,9 @@ async function resolveGatewayVapidPublicKey(
   if (!vapidPublicKey) {
     throw new Error("Failed to retrieve VAPID public key");
   }
-  return urlBase64ToUint8Array(vapidPublicKey);
-}
-
-function subscriptionUsesVapidKey(
-  subscription: PushSubscription,
-  vapidPublicKey: Uint8Array,
-): boolean {
-  const applicationServerKey = subscription.options.applicationServerKey;
-  if (!applicationServerKey) {
-    return false;
-  }
-  const currentKey = new Uint8Array(applicationServerKey);
-  return (
-    currentKey.length === vapidPublicKey.length &&
-    currentKey.every((value, index) => value === vapidPublicKey[index])
-  );
-}
-
-function serializePushSubscription(subscription: PushSubscription) {
-  const json = subscription.toJSON();
-  if (!json.endpoint || !json.keys?.p256dh || !json.keys.auth) {
-    throw new Error("Invalid push subscription from browser");
-  }
-  return {
-    endpoint: json.endpoint,
-    keys: { p256dh: json.keys.p256dh, auth: json.keys.auth },
-  };
+  const padding = "=".repeat((4 - (vapidPublicKey.length % 4)) % 4);
+  const base64 = (vapidPublicKey + padding).replace(/-/g, "+").replace(/_/g, "/");
+  return Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
 }
 
 async function registerPushSubscription(
@@ -156,7 +116,13 @@ async function registerPushSubscription(
   subscription: PushSubscription,
   vapidPublicKey: Uint8Array,
 ): Promise<WebPushReconcileResult> {
-  if (!subscriptionUsesVapidKey(subscription, vapidPublicKey)) {
+  const applicationServerKey = subscription.options.applicationServerKey;
+  const currentKey = applicationServerKey ? new Uint8Array(applicationServerKey) : null;
+  if (
+    !currentKey ||
+    currentKey.length !== vapidPublicKey.length ||
+    !currentKey.every((value, index) => value === vapidPublicKey[index])
+  ) {
     // Keep the browser subscription for its owning Gateway until the operator
     // explicitly resets it; only this Gateway's unusable row is removed here.
     await client
@@ -164,7 +130,14 @@ async function registerPushSubscription(
       .catch(() => undefined);
     return { state: "vapid-mismatch", error: VAPID_MISMATCH_MESSAGE };
   }
-  await client.request("push.web.subscribe", serializePushSubscription(subscription));
+  const json = subscription.toJSON();
+  if (!json.endpoint || !json.keys?.p256dh || !json.keys.auth) {
+    throw new Error("Invalid push subscription from browser");
+  }
+  await client.request("push.web.subscribe", {
+    endpoint: json.endpoint,
+    keys: { p256dh: json.keys.p256dh, auth: json.keys.auth },
+  });
   return { state: "registered", subscription };
 }
 
@@ -375,7 +348,12 @@ export async function subscribeToWebPush(
       throw new Error("Service worker not ready (timed out)");
     },
   );
-  const pushManager = requirePushManager(registration);
+  const pushManager = registration.pushManager;
+  if (!pushManager) {
+    throw new Error(
+      "Web Push is unavailable in this browser. On iPhone or iPad, add OpenClaw to the Home Screen and open the installed app.",
+    );
+  }
   const vapidPublicKey = await resolveGatewayVapidPublicKey(client);
   const existingSubscription = await pushManager.getSubscription();
   if (existingSubscription) {
@@ -417,14 +395,6 @@ export async function unsubscribeFromWebPush(
   await subscription.unsubscribe();
 }
 
-async function requireExistingSubscription(): Promise<PushSubscription> {
-  const subscription = await getExistingSubscription();
-  if (!subscription) {
-    throw new Error("Enable notifications before changing notification preferences.");
-  }
-  return subscription;
-}
-
 function getWebPushPreferences(
   client: WebPushClient,
   subscription: PushSubscription,
@@ -452,7 +422,10 @@ async function runWebPushCapabilityAction(
       return {};
     case "set": {
       client.assertCanManage();
-      const subscription = await requireExistingSubscription();
+      const subscription = await getExistingSubscription();
+      if (!subscription) {
+        throw new Error("Enable notifications before changing notification preferences.");
+      }
       await client.request("push.web.preferences.set", {
         endpoint: subscription.endpoint,
         scope: action.scope,

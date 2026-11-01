@@ -1,6 +1,10 @@
 import type { BetaContextManagementConfig } from "@anthropic-ai/sdk/resources/beta/messages/messages.js";
 import type { TextBlockParam } from "@anthropic-ai/sdk/resources/messages.js";
-import { supportsClaudeServerCompaction, type Model } from "@openclaw/llm-core";
+import {
+  supportsClaudeServerCompaction,
+  type Model,
+  type PreparedSystemPrompt,
+} from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { getAiTransportHost } from "../host.js";
@@ -205,18 +209,41 @@ export function resolveAnthropicCacheOptions(
   };
 }
 
+// Session revisions own these projections; the four cache policies cannot evict each other.
+const normalizedSystemBlocks = new WeakMap<PreparedSystemPrompt, Map<string, TextBlockParam[]>>();
+
 export function buildAnthropicSystemBlocks(
   systemPrompt: string | undefined,
   isOAuthToken: boolean,
   cacheControl: AnthropicEphemeralCacheControl | undefined,
   claudeCodeVersion = ANTHROPIC_CLAUDE_CODE_VERSION,
+  preparedSystemPrompt?: PreparedSystemPrompt,
 ): TextBlockParam[] | undefined {
-  const blocks: TextBlockParam[] = systemPrompt
-    ? [{ type: "text", text: sanitizeSurrogates(systemPrompt) }]
-    : [];
-  normalizeAnthropicSystemBlocks(blocks, cacheControl);
-  if (systemPrompt && blocks.length === 0) {
-    blocks.push({ type: "text", text: "" });
+  const revision = preparedSystemPrompt?.text === systemPrompt ? preparedSystemPrompt : undefined;
+  const policy = cacheControl ? (cacheControl.ttl ?? "default") : "none";
+  let variants = revision && normalizedSystemBlocks.get(revision);
+  let blocks = variants?.get(policy);
+  if (!blocks) {
+    blocks = systemPrompt ? [{ type: "text", text: sanitizeSurrogates(systemPrompt) }] : [];
+    normalizeAnthropicSystemBlocks(
+      blocks,
+      revision && cacheControl ? { ...cacheControl } : cacheControl,
+    );
+    if (systemPrompt && blocks.length === 0) {
+      blocks.push({ type: "text", text: "" });
+    }
+    if (revision) {
+      variants ??= new Map();
+      variants.set(policy, blocks);
+      normalizedSystemBlocks.set(revision, variants);
+    }
+  }
+  if (revision) {
+    // Payload hooks and OAuth identity blocks remain request-local and editable.
+    blocks = blocks.map((block) => ({
+      ...block,
+      ...(block.cache_control ? { cache_control: { ...block.cache_control } } : {}),
+    }));
   }
   if (isOAuthToken) {
     // The stable application prompt covers the OAuth preamble too; keep slots for history.
@@ -257,12 +284,55 @@ export function applyAnthropicRequestCacheControl(
   const usedMarkers =
     countAnthropicCacheControlMarkers(payload.system) +
     countAnthropicCacheControlMarkers(payload.tools);
-  applyAnthropicCacheControlToMessages(
-    payload.messages,
-    cacheControl,
-    ANTHROPIC_CACHE_CONTROL_LIMIT - usedMarkers,
-    cacheBreakpointOptOutMessageIndexes,
-  );
+  const messages = payload.messages;
+  const markerLimit = ANTHROPIC_CACHE_CONTROL_LIMIT - usedMarkers;
+  if (!Array.isArray(messages) || messages.length === 0 || markerLimit <= 0) {
+    return;
+  }
+
+  let stableEnd = messages.length;
+  for (const index of cacheBreakpointOptOutMessageIndexes) {
+    stableEnd = Math.min(stableEnd, index);
+  }
+  let marked = 0;
+  for (let i = stableEnd - 1; i >= 0 && marked < Math.min(markerLimit, 2); i--) {
+    const record = messages[i];
+    if (!isRecord(record) || record.role !== "user") {
+      continue;
+    }
+
+    const content = record.content;
+    const blocks = typeof content === "string" ? [{ type: "text", text: content }] : content;
+    if (!Array.isArray(blocks)) {
+      continue;
+    }
+
+    for (let j = blocks.length - 1; j >= 0; j--) {
+      const blockRecord = blocks[j];
+      if (!isRecord(blockRecord)) {
+        continue;
+      }
+      if (
+        blockRecord.type === "text" ||
+        blockRecord.type === "image" ||
+        blockRecord.type === "tool_result"
+      ) {
+        // Keep a prior write reachable beyond the 20-block lookback, before transient context.
+        if (Object.isFrozen(record) || Object.isFrozen(blocks) || Object.isFrozen(blockRecord)) {
+          const markedBlocks = blocks.slice();
+          markedBlocks[j] = { ...blockRecord, cache_control: cacheControl };
+          messages[i] = { ...record, content: markedBlocks };
+        } else {
+          blockRecord.cache_control = cacheControl;
+          if (typeof content === "string") {
+            record.content = blocks;
+          }
+        }
+        marked++;
+        break;
+      }
+    }
+  }
 }
 
 function normalizeAnthropicSystemBlocks(
@@ -320,56 +390,6 @@ function normalizeAnthropicSystemBlocks(
 
   if (cacheControl) {
     system.splice(0, system.length, ...normalizedBlocks);
-  }
-}
-
-/** Apply one shared deepest-stable-message cache breakpoint policy. */
-function applyAnthropicCacheControlToMessages(
-  messages: unknown,
-  cacheControl: AnthropicEphemeralCacheControl,
-  markerLimit: number,
-  cacheBreakpointOptOutMessageIndexes: ReadonlySet<number>,
-): void {
-  if (!Array.isArray(messages) || messages.length === 0 || markerLimit <= 0) {
-    return;
-  }
-
-  let stableEnd = messages.length;
-  for (const index of cacheBreakpointOptOutMessageIndexes) {
-    stableEnd = Math.min(stableEnd, index);
-  }
-  let marked = 0;
-  for (let i = stableEnd - 1; i >= 0 && marked < Math.min(markerLimit, 2); i--) {
-    const record = messages[i];
-    if (!isRecord(record) || record.role !== "user") {
-      continue;
-    }
-
-    const content = record.content;
-    const blocks = typeof content === "string" ? [{ type: "text", text: content }] : content;
-    if (!Array.isArray(blocks)) {
-      continue;
-    }
-
-    for (let j = blocks.length - 1; j >= 0; j--) {
-      const blockRecord = blocks[j];
-      if (!isRecord(blockRecord)) {
-        continue;
-      }
-      if (
-        blockRecord.type === "text" ||
-        blockRecord.type === "image" ||
-        blockRecord.type === "tool_result"
-      ) {
-        // Keep a prior write reachable beyond the 20-block lookback, before transient context.
-        blockRecord.cache_control = cacheControl;
-        if (typeof content === "string") {
-          record.content = blocks;
-        }
-        marked++;
-        break;
-      }
-    }
   }
 }
 

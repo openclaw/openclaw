@@ -11,7 +11,7 @@ import {
   Errored,
   For,
   Loading,
-  onCleanup,
+  onSettled,
 } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { AppearancePicker, Dialog } from "../../components/host-components.tsx";
@@ -71,8 +71,13 @@ export function BoardModal(props: {
   readonly canWrite: boolean;
   onSaved: (board: WorkboardBoardMetadata) => void;
   onCancel: () => void;
-  requestUpdate: () => void;
+  onChange: () => void;
 }) {
+  const initialActiveElement = document.activeElement;
+  const initialReturnFocusTarget =
+    initialActiveElement instanceof HTMLElement && initialActiveElement !== document.body
+      ? initialActiveElement
+      : undefined;
   const draft = () => {
     void props.revision;
     return props.draft;
@@ -86,7 +91,7 @@ export function BoardModal(props: {
     setSaving(true);
     yield pending;
   });
-  onCleanup(() => {
+  onSettled(() => () => {
     disposed = true;
   });
   const nameValue = liveInputValue(() => draft().name);
@@ -165,6 +170,7 @@ export function BoardModal(props: {
     <Dialog
       {...{
         label: t(draft().create ? "workboard.newBoard" : "workboard.editBoard"),
+        returnFocusTarget: initialReturnFocusTarget,
         style: `--openclaw-modal-width: ${draft().sessions ? "640px" : "420px"}; --openclaw-modal-backdrop-filter: blur(1px);`,
         onCancel: () => {
           if (busy) {
@@ -208,7 +214,7 @@ export function BoardModal(props: {
                       checked={draft().kind === kind()}
                       onChange={() => {
                         draft().kind = kind();
-                        props.requestUpdate();
+                        props.onChange();
                       }}
                     />
                     {t(
@@ -234,7 +240,7 @@ export function BoardModal(props: {
                 disabled={saving() || !props.canWrite}
                 onInput={(event) => {
                   draft().name = event.currentTarget.value;
-                  props.requestUpdate();
+                  props.onChange();
                 }}
               />
             </label>
@@ -251,7 +257,7 @@ export function BoardModal(props: {
                 onChange: ({ icon, color }) => {
                   draft().icon = icon ?? "";
                   draft().color = color ?? "";
-                  props.requestUpdate();
+                  props.onChange();
                 },
               }}
               disabled={saving() || !props.canWrite}
@@ -262,7 +268,7 @@ export function BoardModal(props: {
               draft={draft()}
               canWrite={props.canWrite}
               saving={saving()}
-              requestUpdate={props.requestUpdate}
+              onChange={props.onChange}
               revision={props.revision}
             />
           ) : undefined}
@@ -334,7 +340,7 @@ function SessionsEditor(props: {
   draft: BoardDraft;
   canWrite: boolean;
   saving: boolean;
-  requestUpdate: () => void;
+  onChange: () => void;
   revision?: number;
 }) {
   const spec = () => {
@@ -369,7 +375,7 @@ function SessionsEditor(props: {
                   ref={labelValue}
                   onInput={(event) => {
                     current().label = event.currentTarget.value;
-                    props.requestUpdate();
+                    props.onChange();
                   }}
                 />
               </label>
@@ -381,7 +387,7 @@ function SessionsEditor(props: {
                   ref={colorValue}
                   onChange={(event) => {
                     current().color = event.currentTarget.value || undefined;
-                    props.requestUpdate();
+                    props.onChange();
                   }}
                 >
                   <option value="">{t("workboard.sessionsBoard.defaultColor")}</option>
@@ -408,7 +414,7 @@ function SessionsEditor(props: {
                   ref={descriptionValue}
                   onInput={(event) => {
                     current().description = event.currentTarget.value;
-                    props.requestUpdate();
+                    props.onChange();
                   }}
                 />
               </label>
@@ -421,7 +427,7 @@ function SessionsEditor(props: {
                     for (const entry of spec().columns) {
                       entry.fallback = entry.id === current().id;
                     }
-                    props.requestUpdate();
+                    props.onChange();
                   }}
                 />
                 {t("workboard.sessionsBoard.fallback")}
@@ -440,7 +446,7 @@ function SessionsEditor(props: {
                       onClick={() => {
                         spec().columns.splice(index(), 1);
                         spec().columns.splice(index() + offset(), 0, current());
-                        props.requestUpdate();
+                        props.onChange();
                       }}
                     >
                       {t(
@@ -457,7 +463,7 @@ function SessionsEditor(props: {
                   disabled={disabled() || spec().columns.length <= 2}
                   onClick={() => {
                     spec().columns.splice(index(), 1);
-                    props.requestUpdate();
+                    props.onChange();
                   }}
                 >
                   {t("workboard.sessionsBoard.removeColumn")}
@@ -477,7 +483,7 @@ function SessionsEditor(props: {
             label: t("workboard.sessionsBoard.newColumn"),
             description: "",
           });
-          props.requestUpdate();
+          props.onChange();
         }}
       >
         {icons.plus}

@@ -91,6 +91,9 @@ type OpenClawPluginToolContextBase = {
   browser?: {
     sandboxBridgeUrl?: string;
     allowHostControl?: boolean;
+    /** Prepared local exec parity; not standalone authority or permission for remote browsers. */
+    allowLocalLoopback?: boolean;
+    assertLocalLoopbackCurrent?: () => void;
   };
   messageChannel?: string;
   agentAccountId?: string;
@@ -164,6 +167,11 @@ export type OpenClawPluginToolOptions = {
   optional?: boolean;
   /** False: independent; execute: pure factory with workspace use; true/omitted: factory may use it. */
   workspaceAccess?: boolean | "execute";
+  /**
+   * System-prompt guidance for these tools. Agent harnesses show it only while one of the
+   * named tools is callable in the run, so a denied tool adds no prompt bytes.
+   */
+  promptGuidance?: string;
 };
 
 export type OpenClawPluginHookOptions = {

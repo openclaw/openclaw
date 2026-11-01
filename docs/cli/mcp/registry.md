@@ -83,16 +83,18 @@ Commands:
 
 Notes:
 
+- Human-readable reports escape control characters in displayed fields. Saved definitions and JSON values retain their existing contents and credential-redaction behavior.
 - `list` sorts server names.
-- `show` without a name prints the full configured MCP server object.
+- `list --json` and `show` redact sensitive headers, environment values, and recognized credential-bearing stdio arguments with `__OPENCLAW_REDACTED__`. `show` without a name prints every saved server with the same redaction. These are inspection views, not credential exports; saved configuration is unchanged. Passing a redacted server back to `set` preserves its existing credentials.
 - `status` classifies configured transports without connecting. `--verbose` includes resolved launch, timeout, OAuth, filter, and parallel-call details, including when stored OAuth tokens require additional authorization. Credential-bearing stdio arguments are redacted in text and JSON output.
 - `doctor` performs static checks without connecting. Add `--probe` when the command should also verify that enabled servers connect.
 - `probe` connects to enabled saved servers and reports tool counts, resources/prompts support, list-change support, and diagnostics. If none are enabled, plain output explains that no servers can be checked and shows add/enable commands; `--json` keeps its empty result envelope. A named disabled server is rejected with an enable hint.
 - `add` accepts stdio flags such as `--command`, `--arg`, `--env`, and `--cwd`, or HTTP flags such as `--url`, `--transport`, `--header`, `--auth oauth`, TLS, timeout, and tool-selection flags. Use `--approval auto|prompt|approve` to set the Codex tool approval mode.
 - Quoted `--command` and `--cwd` values preserve leading and trailing whitespace in executable and directory names. Whitespace-only values are treated as absent.
+- Quoted `--client-cert` and `--client-key` values preserve leading and trailing whitespace in certificate and key paths. Whitespace-only values are treated as absent.
 - `set` expects one JSON object value on the command line.
 - `configure` updates enablement, tool filters, timeouts, OAuth, TLS, Codex approval mode, and parallel-tool-call hints without replacing the whole server definition. Add `--probe` to verify the updated server before saving.
-- `tools` updates per-server tool filters. Include/exclude entries are MCP tool names and simple `*` globs.
+- `tools` updates per-server tool filters. Include/exclude entries accept raw MCP tool names, unambiguous unsuffixed tool names copied from `probe` (such as `docs__search`), and simple `*` globs. Globs match raw MCP tool names only; exact raw names take precedence over probe aliases. Use raw names for tools whose probe names collide or receive a collision suffix such as `-2`; such a probe name selects nothing in `include` and hides every tool that could carry it in `exclude`.
 - `login` runs the OAuth flow for HTTP servers configured with `auth: "oauth"`. For a loopback redirect, OpenClaw listens for the browser callback and completes login automatically. The printed `--code` command remains the fallback for remote, headless, or unreachable callbacks.
 - `logout` clears stored OAuth credentials for the named server without removing the saved server definition.
 - `reload` disposes cached in-process MCP runtimes for the current CLI process only. Gateway or agent processes in another process still need their own reload or restart path.

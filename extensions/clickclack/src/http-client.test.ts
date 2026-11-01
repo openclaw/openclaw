@@ -3,30 +3,17 @@ import { Readable } from "node:stream";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
+import { waitForEffectPreparation } from "../../test-support/effect-preparation.test-support.js";
+import { listenOnLoopback as listenLoopbackServer } from "../../test-support/hanging-loopback-server.js";
 import { createClickClackClient, normalizeClickClackCorrelationId } from "./http-client.js";
 
-const effectGate = vi.hoisted((): { prepare: (() => Promise<void>) | undefined } => ({
-  prepare: undefined,
-}));
-vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
-  return {
-    ...actual,
-    captureEffectAuthority: () => {
-      const authority = actual.captureEffectAuthority();
-      const prepare = effectGate.prepare;
-      return prepare
-        ? {
-            ...authority,
-            initiate: async <T>(effect: () => T | Promise<T>) => {
-              await prepare();
-              return authority.initiate(effect);
-            },
-          }
-        : authority;
-    },
-  };
-});
+const effectGate = await vi.hoisted(async () =>
+  (
+    await import("../../test-support/effect-preparation.test-support.js")
+  ).createEffectPreparationGate(),
+);
+// mock-isolation: Share the export-preserving factory, but keep the preparation gate suite-local.
+vi.mock("openclaw/plugin-sdk/fetch-runtime", effectGate.mockRuntime);
 
 const LOOPBACK_RESPONSE_BYTES = 18 * 1024 * 1024;
 const CLICKCLACK_REQUEST_BODY_LIMIT_BYTES = 1024 * 1024;
@@ -113,21 +100,6 @@ function requestBodyJson(init: unknown): unknown {
     throw new Error("expected string request body");
   }
   return JSON.parse(body);
-}
-
-async function listenLoopbackServer(server: Server): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        reject(new Error("expected loopback TCP address"));
-        return;
-      }
-      resolve(address.port);
-    });
-  });
 }
 
 function createOversizedJsonServer(): { server: Server; closed: Promise<number> } {
@@ -637,12 +609,7 @@ it.each([false, true])(
       (error: unknown) => ({ error }),
     );
     try {
-      await Promise.race([
-        preparing.promise,
-        dispatched.promise.then(() => {
-          throw new Error("dispatched before preparation");
-        }),
-      ]);
+      await waitForEffectPreparation(preparing.promise, dispatched.promise);
       expect(fetch).not.toHaveBeenCalled();
       if (retired) {
         caller.abort(failure);

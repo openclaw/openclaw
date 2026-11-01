@@ -298,7 +298,7 @@ export function normalizeChoices(
       ...(typeof thumbnail === "string" ? { thumbnail } : {}),
     });
   }
-  return validateChoices(choices) ?? choices;
+  return choices.length > 1 ? (validateChoices(choices) ?? choices) : choices;
 }
 
 export function validateChoices(choices: readonly Choice[]): string | undefined {

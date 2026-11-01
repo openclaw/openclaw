@@ -35,18 +35,6 @@ const TOOL_KINDS: ReadonlyArray<readonly [ToolCallKind, ReadonlySet<string>]> = 
   ["fetch", new Set(["web_fetch", "webfetch", "fetch"])],
 ];
 
-function resolvePathArg(args: Record<string, unknown> | null): string | undefined {
-  return (
-    readNonBlankString(args?.path) ??
-    readNonBlankString(args?.file_path) ??
-    readNonBlankString(args?.filePath) ??
-    readNonBlankString(args?.file) ??
-    readNonBlankString(args?.filepath) ??
-    readNonBlankString(args?.filename) ??
-    readNonBlankString(args?.notebook_path)
-  );
-}
-
 function resolveToolCallKind(
   key: string,
   args: Record<string, unknown> | null,
@@ -87,6 +75,13 @@ export function resolveToolCallInput(name: string, args: Record<string, unknown>
   return {
     editorCommand,
     kind: resolveToolCallKind(key, args, editorCommand),
-    path: resolvePathArg(args),
+    path:
+      readNonBlankString(args?.path) ??
+      readNonBlankString(args?.file_path) ??
+      readNonBlankString(args?.filePath) ??
+      readNonBlankString(args?.file) ??
+      readNonBlankString(args?.filepath) ??
+      readNonBlankString(args?.filename) ??
+      readNonBlankString(args?.notebook_path),
   };
 }

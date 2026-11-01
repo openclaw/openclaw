@@ -25,7 +25,7 @@ import {
   PluginOperatorGrantsSchema,
 } from "./plugin-inspection.js";
 import { PluginJsonValueSchema } from "./plugin-json-value.js";
-import { PluginRuntimeRetentionSchema } from "./plugin-retention.js";
+import { PluginInspectRuntimeRetentionSchema } from "./plugin-retention.js";
 import { NonEmptyString } from "./primitives.js";
 import { stringLiteralUnion } from "./string-literal-union.js";
 
@@ -78,6 +78,7 @@ export const PluginControlUiDescriptorSchema = closedObject({
     "tab",
     "widget",
     "link-reader",
+    "inline",
   ]),
   linkReader: Type.Optional(ControlUiLinkReaderMetadataSchema),
   label: NonEmptyString,
@@ -87,6 +88,7 @@ export const PluginControlUiDescriptorSchema = closedObject({
   placement: Type.Optional(Type.String()),
   group: Type.Optional(stringLiteralUnion(["control", "agent"])),
   order: Type.Optional(Type.Number()),
+  version: Type.Optional(Type.Integer({ minimum: 1, maximum: 65535 })),
   schema: Type.Optional(PluginJsonValueSchema),
   requiredScopes: Type.Optional(Type.Array(NonEmptyString)),
 });
@@ -159,6 +161,16 @@ export const PluginsControlUiReloadParamsSchema = closedObject({
 export const PluginsControlUiCatalogSchema = closedObject({
   revision: NonEmptyString,
   plugins: Type.Array(PluginControlUiModuleSchema, { maxItems: 64 }),
+  inlineViews: Type.Optional(
+    Type.Array(
+      closedObject({
+        pluginId: NonEmptyString,
+        id: NonEmptyString,
+        label: NonEmptyString,
+        version: Type.Integer({ minimum: 1, maximum: 65535 }),
+      }),
+    ),
+  ),
   diagnostics: Type.Array(PluginControlUiDiagnosticSchema, { maxItems: 64 }),
 });
 export const PluginsControlUiChangedEventSchema = closedObject({ revision: NonEmptyString });
@@ -254,8 +266,12 @@ export const PluginCatalogEntrySchema = closedObject({
   featured: Type.Optional(Type.Boolean()),
   featuredAt: Type.Optional(Type.Integer({ minimum: 0 })),
   order: Type.Optional(Type.Number()),
+  /** Selected installed manifest declares a native Control UI entry; not a sandbox or grant. */
+  hasNativeUi: Type.Optional(Type.Boolean()),
   /** True when the gateway can resolve a manifest or catalog icon for this plugin identity. */
   hasIcon: Type.Optional(Type.Boolean()),
+  /** Usable branding for tools: nonbundled, with a proven non-OpenClaw ClawHub publisher. */
+  hasToolBrandIcon: Type.Optional(Type.Boolean()),
   /** True when the installed package supplies a default compact activity glyph. */
   hasActivityIcon: Type.Optional(Type.Boolean()),
   /** Exact effective tool IDs with package-owned activity glyph overrides. */
@@ -539,6 +555,8 @@ export const PluginsInspectResultSchema = closedObject({
   ok: Type.Literal(true),
   overview: Type.Optional(
     closedObject({
+      /** Selected inspected manifest declares native browser code, independently of UI capabilities. */
+      hasNativeUi: Type.Optional(Type.Boolean()),
       readme: Type.Optional(Type.String({ maxLength: 524_288 })),
       repositoryUrl: Type.Optional(NonEmptyString),
       documentationUrl: Type.Optional(NonEmptyString),
@@ -571,7 +589,7 @@ export const PluginsInspectResultSchema = closedObject({
     ),
   ),
   /** Live cross-session acquisition facts; emitted only for current administrators. */
-  runtimeRetention: Type.Optional(Type.Union([PluginRuntimeRetentionSchema, Type.Null()])),
+  runtimeRetention: Type.Optional(Type.Union([PluginInspectRuntimeRetentionSchema, Type.Null()])),
   decisions: Type.Optional(Type.Array(PluginDecisionProviderStatusSchema)),
   plugin: closedObject({
     id: NonEmptyString,

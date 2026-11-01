@@ -87,7 +87,7 @@ export async function uploadXMedia(
     await readUploadResponse(await send(path + "/append", "POST", body), true);
   }
   let data = await readUploadResponse(await send(path + "/finalize", "POST"));
-  const deadline = Date.now() + PROCESSING_TIMEOUT_MS;
+  const deadline = performance.now() + PROCESSING_TIMEOUT_MS;
   let polling = false;
   for (;;) {
     params.signal?.throwIfAborted();
@@ -114,12 +114,12 @@ export async function uploadXMedia(
     const delay = Math.max(1, asNonNegativeFiniteNumber(processing.check_after_secs) ?? 1) * 1000;
     // Never poll earlier than X requests. Stop rather than shortening a server
     // delay that exceeds our bounded processing wait.
-    if (Date.now() + delay >= deadline) {
+    if (performance.now() + delay >= deadline) {
       throw mediaError("X media processing timed out before posting; try again later", true);
     }
     await sleepWithAbort(delay, params.signal);
     params.signal?.throwIfAborted();
-    if (Date.now() >= deadline) {
+    if (performance.now() >= deadline) {
       throw mediaError("X media processing timed out before posting; try again later", true);
     }
     data = await readUploadResponse(

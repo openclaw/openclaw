@@ -4,22 +4,28 @@ import {
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
+import { bindSharedGatewayOwnerRunAuthority } from "../agents/harness/host-private-capabilities.js";
 import {
   captureOperatorModelPolicySnapshot,
   prepareOperatorModelPolicy,
   readOperatorModelPolicyMembership,
   type PreparedOperatorModelPolicy,
 } from "../agents/operator-model-policy.js";
+import { runtimeConfigPublication } from "../config/runtime-config-publication.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { intersectOperatorScopes, roleScopesAllow } from "../shared/operator-scope-compat.js";
+import {
+  intersectOperatorScopes,
+  resolveMissingOperatorScope,
+  roleScopesAllow,
+} from "../shared/operator-scope-compat.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import { prepareUserProfileIdentity } from "../state/user-profile-list.js";
 import type { UserChannelAuthorizationReference } from "../state/user-profiles.types.js";
-import { isBrowserOperatorUiClient } from "../utils/message-channel.js";
+import { isBrowserOperatorUiClient, isWebchatClient } from "../utils/message-channel.js";
 import { createChannelOperatorRevocation } from "./channel-operator-revocation.js";
 import {
   onGatewayDeviceSourceRevoked,
@@ -137,6 +143,7 @@ function prepareRunRolePolicy(
         sessionAccessCap: role.sessions.others,
         sandboxRequired: role.sandbox === "required",
         agents: role.agents,
+        accessPrograms: role.accessPrograms,
       }
     : undefined;
 }
@@ -165,6 +172,7 @@ function prepareRunModelPolicy(params: {
   resolvePolicy: (cfg: OpenClawConfig) => GatewayOperatorRoleDefinition["modelPolicy"];
 }) {
   let { cfg, metadata } = params;
+  let publication = runtimeConfigPublication.current?.revision;
   const original = prepareOperatorModelPolicy({
     cfg,
     policy: params.initialPolicy,
@@ -176,7 +184,8 @@ function prepareRunModelPolicy(params: {
     readCurrent: () => {
       const nextConfig = params.getConfig();
       const nextMetadata = getProcessGatewayPluginMetadataSnapshot();
-      if (nextConfig !== cfg || nextMetadata !== metadata) {
+      const nextPublication = runtimeConfigPublication.current?.revision;
+      if (nextConfig !== cfg || nextMetadata !== metadata || nextPublication !== publication) {
         const current = prepareOperatorModelPolicy({
           cfg: nextConfig,
           policy: params.resolvePolicy(nextConfig),
@@ -185,6 +194,7 @@ function prepareRunModelPolicy(params: {
         policy = intersectOperatorRunModelPolicy(original, current);
         cfg = nextConfig;
         metadata = nextMetadata;
+        publication = nextPublication;
       }
       return policy;
     },
@@ -234,8 +244,10 @@ export function captureChannelOperatorRunAuthority(input: {
     assertCurrent: revocation.assertCurrent,
     signal: revocation.signal,
     retain: revocation.retain,
-    readCurrentRoleAssignment: () => params.assignedRole,
-    readCurrentGithubLogin: () => params.githubLogin ?? null,
+    readCurrentRoleFacts: () => ({
+      assignedRole: params.assignedRole,
+      githubLogin: params.githubLogin ?? null,
+    }),
     get modelPolicy() {
       return modelPolicy.readCurrent();
     },
@@ -270,12 +282,14 @@ export async function captureGatewayOperatorRunAuthority(input: {
     "getRuntimeConfig" | "getCommittedRuntimeConfig" | "resolveGatewayContext"
   >;
   hasCurrentClientAuthority?: () => boolean;
-  /** Only an accepting continuation owner may outlive the original recovery claim. */
+  /** Only an accepting work owner may outlive the original scheduling claim. */
   independentContinuation?: true;
   sourceAuthority?: Readonly<{
     assertCurrent: () => void;
     signal?: AbortSignal;
     gatewayAccessGrant?: AdmittedRunOperatorAuthority["gatewayAccessGrant"];
+    /** Transfer the prepared principal/session facts to this admitted lifetime. */
+    release?: () => void;
   }> | null;
   /** Additional request lifetime; never replaces the authenticated access grant. */
   invocationAuthority?: Readonly<{ assertCurrent: () => void; signal?: AbortSignal }>;
@@ -396,10 +410,8 @@ export async function captureGatewayOperatorRunAuthority(input: {
   };
   const assertRoleCurrent = () => {
     const policy = resolveCurrentRole();
-    if (
-      policy &&
-      !roleScopesAllow({ role: "operator", requestedScopes: scopes, allowedScopes: policy.scopes })
-    ) {
+    // Role grants are exact config enum values, unlike signed connection scopes.
+    if (policy && resolveMissingOperatorScope(scopes, policy.scopes) !== null) {
       throw new Error("Your operator role changed; reconnect before continuing.");
     }
   };
@@ -460,6 +472,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
             unsubscribe?.();
           }
           preparedProfile?.release();
+          params.sourceAuthority?.release?.();
           releaseDevice?.();
         }
       }
@@ -579,8 +592,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
       ...admission,
       recoverySnapshot,
       rolePolicy: prepareRunRolePolicy(capturedSourcePolicy),
-      readCurrentRoleAssignment: () => assertProfileCurrent().assignedRole,
-      readCurrentGithubLogin: () => assertProfileCurrent().githubLogin ?? null,
+      readCurrentRoleFacts: assertProfileCurrent,
       source: source.token,
       signal: revocation.signal,
       retain: () => {
@@ -598,6 +610,16 @@ export async function captureGatewayOperatorRunAuthority(input: {
           }
         }),
     });
+    if (
+      authenticatedOwner &&
+      client.usesSharedGatewayAuth === true &&
+      client.sharedGatewaySessionGeneration &&
+      (isBrowserOperatorUiClient(client.connect.client) || isWebchatClient(client.connect.client))
+    ) {
+      // The handshake owns the credential/generation checks, including device
+      // reconnects bound to that shared credential. The profile name grants nothing.
+      bindSharedGatewayOwnerRunAuthority(authority);
+    }
     return { authority, release };
   } catch (error) {
     release();

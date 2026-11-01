@@ -115,7 +115,30 @@ export function registerMemoryCli(
 ): void {
   api.registerCli(
     ({ program }) => {
-      const memory = program.command("ltm").description("LanceDB memory plugin commands");
+      const memory = program
+        .command("ltm")
+        .description("LanceDB memory plugin commands")
+        .hook("postAction", async () => {
+          await db.close();
+        });
+
+      memory
+        .command("optimize")
+        .description("Compact the local shared table offline, preserving rows and version history")
+        .action(async () => {
+          const { runWithLocalStateOwner } = await import("openclaw/plugin-sdk/cli-state-owner");
+          await runWithLocalStateOwner({
+            method: "memory-lancedb.optimize",
+            params: {},
+            target: "LanceDB memory table",
+            onForeignOwner: "refuse",
+            runLocal: async ({ assertCurrent }) => {
+              const result = await db.optimize(assertCurrent);
+              console.log(`Fragments: ${result.before.fragments} -> ${result.after.fragments}`);
+              console.log(`Rows: ${result.before.rows} -> ${result.after.rows}`);
+            },
+          });
+        });
 
       memory
         .command("list")

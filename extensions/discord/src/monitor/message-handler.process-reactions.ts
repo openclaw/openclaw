@@ -12,13 +12,7 @@ import { createDiscordRestClient, createDiscordRuntimeAccountContext } from "../
 import { reactMessageDiscord, removeReactionDiscord } from "../send.js";
 import { resolveDiscordTargetChannelId } from "../send.shared.js";
 import { resolveDiscordChannelId } from "../target-parsing.js";
-import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
-
-type ToolStartPayload = {
-  name?: string;
-  phase?: string;
-  args?: Record<string, unknown>;
-};
+import type { DiscordMessagePreflightContext } from "./message-handler.preflight.types.js";
 
 export function createDiscordMessageReactionRuntime(params: {
   ctx: DiscordMessagePreflightContext;
@@ -124,7 +118,11 @@ export function createDiscordMessageReactionRuntime(params: {
     }
   };
 
-  const maybeBindToToolReaction = async (payload: ToolStartPayload) => {
+  const maybeBindToToolReaction = async (payload: {
+    name?: string;
+    phase?: string;
+    args?: Record<string, unknown>;
+  }) => {
     if (
       params.sourceRepliesAreToolOnly ||
       cfg.messages?.statusReactions?.enabled === false ||

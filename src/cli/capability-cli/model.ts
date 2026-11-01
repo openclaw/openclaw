@@ -17,6 +17,7 @@ import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/
 import { normalizeThinkLevel, THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ADMIN_SCOPE } from "../../gateway/operator-scopes.js";
+import { decodeUtf8Input } from "../../infra/utf8-input.js";
 import { defaultRuntime } from "../../runtime.js";
 import { AsyncWorkScope, captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -88,23 +89,6 @@ async function buildModelProviders(cfg: OpenClawConfig, agentId: string) {
   return [...grouped.values()].toSorted((a, b) => a.provider.localeCompare(b.provider));
 }
 
-async function runModelAuthStatus(agent: string) {
-  const captured: string[] = [];
-  const { modelsStatusCommand } = await import("../../commands/models/list.status-command.js");
-  await modelsStatusCommand(
-    { json: true, agent },
-    {
-      log: (...args) => captured.push(args.join(" ")),
-      error: defaultRuntime.error,
-      exit: (code) => {
-        throw new Error(`exit ${code}`);
-      },
-    },
-  );
-  const raw = captured.find((line) => line.trim().startsWith("{"));
-  return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
-}
-
 async function runModelAuthLogout(provider: string, agent: string) {
   const { captureRuntimeConfigAsyncReader } = await import("../../config/config.js");
   const { resolveAgentDir } = await import("../../agents/agent-scope.js");
@@ -159,7 +143,9 @@ export function registerModelCapabilityCommands(capability: Command): void {
   model
     .command("run")
     .description("Run a one-shot model turn")
-    .requiredOption("--prompt <text>", "Prompt text")
+    .option("--prompt <text>", "Prompt text")
+    .option("--prompt-file <path>", "Prompt file relative to the current directory (max 1 MiB)")
+    .option("--prompt-stdin", "Read a UTF-8 prompt from stdin (max 1 MiB)")
     .option("--file <path>", "Image file", collectOption, [])
     .option("--model <provider/model>", "Model override")
     .option("--thinking <level>", "Thinking level override")
@@ -173,7 +159,26 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .action((opts, command) =>
       runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
         const { resolveCapabilityAgentOption, resolveTransport } = await import("./shared.js");
-        const prompt = opts.prompt;
+        if (
+          [opts.prompt, opts.promptFile, opts.promptStdin].filter((value) => value !== undefined)
+            .length !== 1
+        ) {
+          throw new Error("Use exactly one of --prompt, --prompt-file, or --prompt-stdin.");
+        }
+        let prompt = opts.prompt;
+        if (opts.promptFile !== undefined) {
+          const { root } = await import("../../infra/fs-safe.js");
+          const promptRoot = await root(process.cwd());
+          prompt = await promptRoot.readText(opts.promptFile, { maxBytes: 1_048_576 });
+        }
+        if (opts.promptStdin) {
+          const { readByteStreamWithLimit } =
+            await import("@openclaw/media-core/read-byte-stream-with-limit");
+          prompt = decodeUtf8Input(
+            await readByteStreamWithLimit(process.stdin, { maxBytes: 1_048_576 }),
+            "--prompt-stdin",
+          );
+        }
         if (normalizeOptionalString(prompt) === undefined) {
           throw new Error("--prompt cannot be empty or whitespace-only.");
         }
@@ -198,6 +203,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
         const { captureRuntimeConfigAsyncReader } = await import("../../config/config.js");
         const { canonicalizeCaseOnlyCatalogModelRef } =
           await import("../../agents/model-selection.js");
+        const { hasObservedModelUsage, normalizeUsage } = await import("../../agents/usage.js");
         const explicitModelOverride = requireProviderModelOverride(requestedModel);
         const cfg =
           transport === "local"
@@ -354,12 +360,18 @@ export function registerModelCapabilityCommands(capability: Command): void {
                       `Model run ${result.stopReason === "aborted" ? "aborted" : "failed"} ${target}`,
                     );
                   }
+                  const normalizedUsage = normalizeUsage(result.usage);
+                  const usage = hasObservedModelUsage(normalizedUsage)
+                    ? normalizedUsage
+                    : undefined;
                   return {
                     ok: true,
                     capability: "model.run",
                     transport: "local" as const,
                     provider: prepared.selection.provider,
                     model: prepared.selection.modelId,
+                    usage,
+                    lastCallUsage: usage,
                     attempts: [],
                     ...inputs,
                     outputs: [
@@ -433,13 +445,21 @@ export function registerModelCapabilityCommands(capability: Command): void {
               `Gateway model run ${response.status}.`,
           );
         }
+        const agentMeta = response.result?.meta?.agentMeta;
         return {
           ok: true,
           capability: "model.run",
           transport: "gateway" as const,
-          provider: response?.result?.meta?.agentMeta?.provider,
-          model: response?.result?.meta?.agentMeta?.model,
-          attempts: response?.result?.meta?.agentMeta?.fallbackAttempts ?? [],
+          provider: agentMeta?.provider,
+          model: agentMeta?.model,
+          usage:
+            agentMeta?.usage?.costStatus !== undefined || hasObservedModelUsage(agentMeta?.usage)
+              ? agentMeta?.usage
+              : undefined,
+          lastCallUsage: hasObservedModelUsage(agentMeta?.lastCallUsage)
+            ? agentMeta.lastCallUsage
+            : undefined,
+          attempts: agentMeta?.fallbackAttempts ?? [],
           outputs: (response?.result?.payloads ?? []).map((payload) => ({
             text: payload.text,
             mediaUrl: payload.mediaUrl,
@@ -558,9 +578,22 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action((opts, command) =>
       runCapabilityCommand(opts.json, undefined, async () => {
-        return runModelAuthStatus(
-          await resolveModelAuthAgent(command, opts.agent, "infer model auth status"),
+        const agent = await resolveModelAuthAgent(command, opts.agent, "infer model auth status");
+        const captured: string[] = [];
+        const { modelsStatusCommand } =
+          await import("../../commands/models/list.status-command.js");
+        await modelsStatusCommand(
+          { json: true, agent },
+          {
+            log: (...args) => captured.push(args.join(" ")),
+            error: defaultRuntime.error,
+            exit: (code) => {
+              throw new Error(`exit ${code}`);
+            },
+          },
         );
+        const raw = captured.find((line) => line.trim().startsWith("{"));
+        return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
       }),
     );
 }

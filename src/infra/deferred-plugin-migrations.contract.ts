@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+export const DEFERRED_PLUGIN_MIGRATION_RUN_PREFIX = "deferred-plugin-migration:";
+
 export const deferredPluginMigrationSchema = z.object({
   pluginId: z.string().min(1),
   reason: z.string().min(1),

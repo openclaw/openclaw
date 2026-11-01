@@ -32,7 +32,7 @@ import {
   readWithCanonicalSessionAdmission,
 } from "./session-canonical-key.js";
 import { validateCanonicalSessionRowEntry } from "./session-canonical-row.js";
-import { parseSqliteSessionEntryRecord } from "./session-entry-json.js";
+import { parseCanonicalSqliteSessionEntry } from "./session-entry-json.js";
 import {
   attachSessionEntrySnapshots,
   type SessionEntryProjection,
@@ -55,7 +55,7 @@ export function parseReadableSessionEntryData(
 ): SessionEntry | null {
   const parsed: SessionEntry | null =
     projection === "delivery"
-      ? parseSqliteSessionEntryRecord(row)
+      ? parseCanonicalSqliteSessionEntry(row)
       : parseSessionEntryRow(row, projection);
   if (row.retained_window_id !== undefined) {
     // The guard and decoded entry share one statement snapshot, including cold handles.
@@ -207,7 +207,7 @@ export function readSessionEntryIdentity(
   );
 }
 
-/** Read the selected entry and the exact lookup rows in one owner snapshot. */
+/** Read the selected row and decoded lookup entries in one owner snapshot. */
 export function readSessionEntryRowScan(
   database: OpenClawAgentDatabaseReader,
   sessionKey: string,
@@ -225,27 +225,31 @@ function scanSessionEntryRows(
 ):
   | {
       lookupKeys: string[];
-      rows: ResolvedSessionEntryRow["row"][];
+      entries: Map<string, SessionEntry>;
       selected: ResolvedSessionEntryRow | undefined;
     }
   | undefined {
   const actor = readSessionActorTransactionState(database, { sessionKey });
   if (actor) {
     const lookupKeys = collectSessionEntryLookupKeys(sessionKey);
-    return {
-      lookupKeys,
-      rows: lookupKeys.flatMap((key) => {
-        const row = actor.entryRows.get(key)?.row;
-        return row ? [structuredClone(row)] : [];
-      }),
-      selected: readExactSessionEntryRow(
+    const entries = new Map<string, SessionEntry>();
+    let selected: ResolvedSessionEntryRow | undefined;
+    for (const key of lookupKeys) {
+      const row = readExactSessionEntryRow(
         database,
-        sessionKey,
+        key,
         projection,
         undefined,
         includeWindowFacts,
-      ),
-    };
+      );
+      if (row) {
+        entries.set(key, row.entry);
+        if (key === sessionKey) {
+          selected = row;
+        }
+      }
+    }
+    return { lookupKeys, entries, selected };
   }
   return runSqliteReadOperationSync(database.db, () => {
     assertCanonicalSqliteSessionKeysCurrent(database);
@@ -263,17 +267,21 @@ function scanSessionEntryRows(
         ? { includeWindowFacts, includeBoardPresence: true, includeMembership: true }
         : undefined,
     );
+    const entries = new Map<string, SessionEntry>();
     let selected: ResolvedSessionEntryRow | undefined;
     for (const row of rows) {
       const entry = includeParticipants
         ? parseReadableSqliteSessionEntryRow(database, row, projection)
         : parseReadableSessionEntryData(database, row, projection);
-      if (!entry || row.session_key !== sessionKey.trim()) {
+      if (!entry) {
         continue;
       }
-      selected = { entry, row };
+      entries.set(row.session_key, entry);
+      if (row.session_key === sessionKey.trim()) {
+        selected = { entry, row };
+      }
     }
-    return { lookupKeys, rows, selected };
+    return { lookupKeys, entries, selected };
   });
 }
 
