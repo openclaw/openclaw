@@ -81,6 +81,69 @@ struct CloudflareAccessWebKitTests {
         #expect(admitted.requestCount > admittedBefore)
     }
 
+    @Test func `the Access cookie reaches only the admitted authority and sign out stops it`() async throws {
+        let other = try LocalServer(body: "other service")
+        let otherPort = try await other.start()
+        let admitted = try LocalServer(body: """
+        <html><body><img src="http://127.0.0.1:\(otherPort)/pixel.png"></body></html>
+        """)
+        let admittedPort = try await admitted.start()
+        defer {
+            other.stop()
+            admitted.stop()
+        }
+
+        let cookie = try self.cookie(origin: "https://127.0.0.1:\(admittedPort)")
+        let rules = try #require(CloudflareAccessWebSession.blockRules(
+            host: "127.0.0.1", port: Int(admittedPort), webScheme: "http", socketScheme: "ws"))
+        let dataStore = WKWebsiteDataStore.nonPersistent()
+        let webView = try await self.makeWebView(dataStore: dataStore, rules: rules)
+        let jar = CloudflareAccessWebCookieJar()
+        let registered = jar.register(
+            cookie.origin,
+            unload: { webView.load(URLRequest(url: URL(string: "about:blank")!)) },
+            delete: {
+                for stored in await dataStore.httpCookieStore.allCookies() {
+                    await dataStore.httpCookieStore.deleteCookie(stored)
+                }
+            })
+        let id = try #require(registered)
+        try await dataStore.httpCookieStore.setCookie(#require(cookie.httpCookie()))
+
+        let page = try #require(URL(string: "http://127.0.0.1:\(admittedPort)/page"))
+        let delegate = LoadWaiter()
+        webView.navigationDelegate = delegate
+        try await delegate.load(webView, page)
+        try await Task.sleep(for: .seconds(1))
+        let sentWhileSignedIn = admitted.requests.last?.contains("CF_Authorization=") ?? false
+        print("ACCESS-PROOF signed in: admitted authority received the cookie=\(sentWhileSignedIn), "
+            + "other port requests=\(other.requestCount)")
+        #expect(sentWhileSignedIn)
+        #expect(other.requestCount == 0)
+
+        await jar.retire(cookie.origin)
+        #expect(!jar.isLive(id))
+        #expect(await dataStore.httpCookieStore.allCookies().isEmpty)
+        try await delegate.load(webView, page)
+        try await Task.sleep(for: .seconds(1))
+        let sentAfterSignOut = admitted.requests.last?.contains("CF_Authorization=") ?? false
+        print("ACCESS-PROOF after sign out: cookie sent=\(sentAfterSignOut), other port requests=\(other.requestCount)")
+        #expect(!sentAfterSignOut)
+        #expect(other.requestCount == 0)
+    }
+
+    private func makeWebView(dataStore: WKWebsiteDataStore, rules: String?) async throws -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = dataStore
+        if let rules {
+            let identifier = "ai.openclaw.access.test.\(UUID().uuidString)"
+            let list = try #require(try await WKContentRuleListStore.default().compileContentRuleList(
+                forIdentifier: identifier, encodedContentRuleList: rules))
+            configuration.userContentController.add(list)
+        }
+        return WKWebView(frame: .init(x: 0, y: 0, width: 320, height: 480), configuration: configuration)
+    }
+
     private func load(admittedPort: UInt16, rules: String?) async throws {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
@@ -132,6 +195,7 @@ private final class LocalServer {
     private let response: Data
     private var connections: [NWConnection] = []
     private(set) var requestCount = 0
+    private(set) var requests: [String] = []
 
     init(body: String) throws {
         let parameters = NWParameters.tcp
@@ -169,6 +233,7 @@ private final class LocalServer {
             Task { @MainActor [weak self] in
                 guard let self, data != nil else { return }
                 self.requestCount += 1
+                self.requests.append(data.flatMap { String(data: $0, encoding: .utf8) } ?? "")
                 connection.send(content: self.response, completion: .contentProcessed { _ in connection.cancel() })
             }
         }
