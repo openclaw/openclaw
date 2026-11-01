@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { format } from "oxfmt";
 import * as ts from "typescript/ast";
+import { normalizeChangedPath } from "./lib/changed-path-facts.mjs";
 import { inspectDatabaseWorkerBoundaries } from "./lib/database-worker-compat.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
@@ -3945,6 +3946,7 @@ export function loadInventorySources(root = defaultRoot, ref = "", staged = fals
   }
   const sourceFiles = result.stdout
     .split("\0")
+    .map((file) => normalizeChangedPath(file))
     .filter(
       (file) =>
         /\.(?:ts|tsx|js|mjs|mts|cts|cjs)$/.test(file) &&

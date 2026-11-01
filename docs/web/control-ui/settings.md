@@ -23,6 +23,9 @@ Configuration field text and `tag:` comparisons ignore case and match canonicall
 People search in **Session access**, the **New Session → Where** picker, and provider
 search also match equivalent composed and decomposed Unicode text without changing
 the original labels or identifiers. Filtering does not change sharing permissions.
+The **Connect provider** search and command palette session-settings workspace
+search use the same comparison-only matching. Filtering does not start sign-in or
+change the selected provider, machine, or project.
 
 Model menus with more than eight choices include search. Filter by model name or provider/model reference, then choose a result to apply it. Typing or dismissing the menu leaves the current selection unchanged. Short menus stay compact, and custom model entry remains available where the setting supports it.
 
