@@ -2,7 +2,7 @@ import type { SkillsFileGetResult } from "@openclaw/gateway-protocol";
 import { createMemo, For, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { highlightCodeHtml } from "./markdown-code-blocks.ts";
+import { highlightCodeHtml } from "./markdown-highlighter.ts";
 import { createHovercardControlRef } from "./portaled-hovercard-focus.ts";
 import { CopyButton } from "./solid/copy-button.tsx";
 import { Icon } from "./solid/icon.tsx";

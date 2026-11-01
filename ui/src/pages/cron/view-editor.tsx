@@ -4,7 +4,7 @@ import {
   createFooterControlRef,
   ShellLayoutBoundary,
 } from "../../app/shell-layout-traits-solid.tsx";
-import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
+import { highlightCodeHtml } from "../../components/markdown-highlighter.ts";
 import { providerIdFromModelRef } from "../../components/provider-icon-data.ts";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";

@@ -49,6 +49,15 @@ the product admission semantics, not Team's external OAuth/TLS/CDN implementatio
 See [trusted proxy auth](../../docs/gateway/trusted-proxy-auth.md) and the
 [deep-link admission contract](../../docs/web/urls.md#public-session-transcripts).
 
+`--code-heavy` replaces the final assistant row's single fence with three
+28-line TypeScript, Python, and Bash fences. Their collapsed previews share the
+restored viewport, exercising syntax readiness across several short blocks.
+Both comparison arms use the same fixture. Audit captured pixels: a computed
+style can settle before an older compositor frame presents plain code.
+This workload also uses archived pinned probe sessions, 97 groups with 102
+section-order entries, category grouping, created sorting, five collapsed
+groups, empty-groups mode `always`, no previews, and the involving-me filter.
+
 `--admission token` retains the native CLI browser-handoff path for diagnosis;
 its chat reload may traverse the public reader and a second document. Fixture
 RPC setup always uses the built CLI's authentication owner, with a generated

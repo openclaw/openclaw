@@ -1,9 +1,15 @@
+import path from "node:path";
 import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { chatMessage } from "./chat-flow.test-support.ts";
 import { polledAttribute } from "./chat-presentation.test-support.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  holdModuleResponse,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI fenced code blocks",
@@ -37,6 +43,82 @@ async function setThemeMode(page: Page, mode: "dark" | "light"): Promise<void> {
 }
 
 suite.define(() => {
+  it("paints warmed short fences colored when the preloaded runtime is ready", async () => {
+    await suite.withPage(desktop, async ({ page }) => {
+      const sessionKey = "agent:main:chat:warm-syntax-12345678";
+      const source = "```ts\nconst ready = true;\n```\n\n```python\nif ready: print(1)\n```";
+      const gateway = await installMockGateway(page, {
+        sessionKey,
+        authMethod: "trusted-proxy",
+        authMode: "trusted-proxy",
+        deferredMethods: ["connect"],
+        sessions: [createControlUiSessionRow(sessionKey, "Warm syntax example", 1)],
+        historyMessages: [
+          chatMessage("assistant", source, { __openclaw: { id: "warm-code", seq: 1 } }),
+        ],
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await gateway.waitForRequest("connect");
+      await gateway.resolveDeferred("connect");
+      await page.waitForFunction(() => window.openclawControlUi?.snapshot().routeReady === true);
+      const code = page.locator('[data-entry-id="warm-code"] pre code');
+      await code.nth(1).locator(".hljs-keyword").waitFor();
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) =>
+            requestAnimationFrame(() => requestIdleCallback(() => resolve())),
+          ),
+      );
+      await page.evaluate(async () => {
+        await Reflect.get(
+          document.querySelector(".chat-pane-cache__pane--active")!,
+          "sessionSnapshotStore",
+        ).flush();
+      });
+      await page.addInitScript(() => {
+        const observer = new MutationObserver(() => {
+          const fences = [...document.querySelectorAll('[data-entry-id="warm-code"] pre code')];
+          if (fences.length === 2) {
+            Reflect.set(
+              window,
+              "__firstWarmSyntax",
+              fences.map((fence) => fence.querySelectorAll(".hljs-keyword").length),
+            );
+            observer.disconnect();
+          }
+        });
+        observer.observe(document, { childList: true, subtree: true });
+      });
+      const pane = await holdModuleResponse(
+        page,
+        controlUiE2eBuiltModuleRequest("ui/src/pages/chat/route-entry.ts"),
+      );
+      const runtime = page
+        .waitForResponse(
+          controlUiE2eBuiltModuleRequest("ui/src/components/markdown-highlight-runtime.ts"),
+        )
+        .catch(() => null);
+      try {
+        await page.reload({ waitUntil: "commit" });
+        await pane.request;
+        await gateway.waitForRequest("connect");
+        const response = await runtime;
+        expect(response, "warm syntax starts loading before the pane can mount").not.toBeNull();
+        await response!.finished();
+        await page.evaluate(`import(${JSON.stringify(response!.url())}).then(() => undefined)`);
+      } finally {
+        pane.release();
+      }
+      await code.nth(1).waitFor();
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        await page.screenshot({ path: path.join(suite.artifactDir, "syntax-short-first.png") });
+      }
+      expect(await page.evaluate(() => Reflect.get(window, "__firstWarmSyntax"))).toEqual([1, 1]);
+      await gateway.resolveDeferred("connect");
+      await page.waitForFunction(() => window.openclawControlUi?.snapshot().routeReady === true);
+    });
+  });
+
   it.each([
     { key: "Enter", theme: "dark", width: 1440, overflow: true },
     { key: "Space", theme: "light", width: 390, overflow: false },

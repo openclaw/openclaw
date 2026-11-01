@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs, promisify } from "node:util";
+import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import type { Browser, CDPSession, Page } from "playwright";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { resolveSandboxHostPort } from "../../src/agents/sandbox-host.js";
@@ -38,6 +39,7 @@ const { values } = parseArgs({
     "rtt-ms": { type: "string", default: "80" },
     "capture-ms": { type: "string", default: "8000" },
     route: { type: "string", default: "both" },
+    "code-heavy": { type: "boolean", default: false },
     "audit-report": { type: "string" },
     "paint-audit": { type: "string" },
     help: { type: "boolean", default: false },
@@ -48,6 +50,7 @@ if (values.help) {
   --dist dist --ui-root dist/control-ui --output .local/warm-reload-proof
   --admission signed-in|token --base <dist|ref> --candidate <dist|ref>
   --reloads 11 --sessions 3000 --rtt-ms 80 --capture-ms 8000 --route both|chat|dashboard
+  --code-heavy puts three short fences (TypeScript, Python, Bash) in the restored tail
 Creates fresh isolated state and Chromium, records cold + warm reloads, then stops both.
 Offline paint audit: --audit-report <report.json> --paint-audit <paint-audit.json>
 See scripts/perf/warm-reload-proof.md for metric definitions and limitations.`);
@@ -134,8 +137,13 @@ async function readProbe(page: Page) {
 }
 async function regionBoxes(page: Page) {
   return await page.evaluate((selectors) => {
-    return Object.entries(selectors).flatMap(([name, selector]) => {
-      const elements = [...document.querySelectorAll(selector)];
+    const regions: Array<[string, Element[]]> = Object.entries(selectors).map(
+      ([name, selector]) => [name, [...document.querySelectorAll(selector)]],
+    );
+    document.querySelectorAll(".chat-thread .code-block-viewport").forEach((element, index) => {
+      regions.push([`syntax-${index}`, [element]]);
+    });
+    return regions.flatMap(([name, elements]) => {
       const boxes = elements
         .map((element) => element.getBoundingClientRect())
         .filter(
@@ -225,6 +233,12 @@ async function readWarmCache(page: Page, sessionKey: string) {
         ),
         snapshots: snapshots.length,
         sidebarSnapshots: sidebar.length,
+        sidebarSections: [...document.querySelectorAll("[data-session-section]")].map(
+          (section) => ({
+            id: section.getAttribute("data-session-section"),
+            collapsed: section.classList.contains("sidebar-recent-sessions__group--collapsed"),
+          }),
+        ),
       };
     } finally {
       database.close();
@@ -621,6 +635,7 @@ try {
     port,
     uiRoot: servedUiRoot,
     sessions,
+    codeHeavy: values["code-heavy"],
     ...(admission
       ? {
           admission: {
@@ -818,6 +833,33 @@ try {
             storageTypes: "indexeddb,cache_storage",
           });
           await cdp.send("Network.clearBrowserCache");
+          if (values["code-heavy"]) {
+            await page.evaluate(
+              ({ scope, viewer }) => {
+                const preferences = {
+                  "openclaw:sidebar:sessions:grouping": "category",
+                  "openclaw:sidebar:sessions:sort-mode": "created",
+                  "openclaw:sidebar:sessions:show-preview": "false",
+                  "openclaw:sidebar:sessions:collapsed-sections": JSON.stringify(
+                    Array.from(
+                      { length: 5 },
+                      (_, index) => `category:Synthetic group ${index + 1}`,
+                    ),
+                  ),
+                  [`openclaw.control.sidebarSessionOwnerFilter.v1:${scope}:${encodeURIComponent(viewer)}`]:
+                    "involving-me",
+                  [`openclaw.control.sidebarEmptyGroups.v1:${scope}:user:${encodeURIComponent(viewer)}`]:
+                    "always",
+                };
+                for (const [key, value] of Object.entries(preferences))
+                  localStorage.setItem(key, value);
+              },
+              {
+                scope: gatewayOriginScope(baseUrl.replace(/^http/, "ws")),
+                viewer: fixture.fixtureSummary.viewerProfileId,
+              },
+            );
+          }
           const url = `${baseUrl}${routePath}`;
           results.push({
             arm: arm.name,

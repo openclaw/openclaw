@@ -6,8 +6,8 @@ import {
   markdownCodeBlockCopyAttributes,
   markdownCodeBlockLayout,
   markdownCodeClass,
-  highlightCodeHtml,
 } from "./markdown-code-blocks.ts";
+import { highlightCodeHtml } from "./markdown-highlighter.ts";
 import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
 import { isMarkdownBlockArtText } from "./markdown-text.ts";
 

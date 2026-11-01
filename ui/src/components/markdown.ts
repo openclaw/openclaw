@@ -5,12 +5,9 @@ import { truncateText } from "../lib/format.ts";
 import { markdownContentHtml, type MarkdownContent } from "../lib/markdown-content.ts";
 import { parseGitHubLinkTarget } from "./github-link-target.ts";
 import { createAssistantTranscriptPlainTextFallback } from "./markdown-assistant-transcript.ts";
-import {
-  markdownHighlightingPending,
-  markdownHighlightingReady,
-  renderMarkdownCodeBlock,
-} from "./markdown-code-blocks.ts";
+import { renderMarkdownCodeBlock } from "./markdown-code-blocks.ts";
 import { isHostLocalMarkdownFileHref } from "./markdown-file-links.ts";
+import { markdownHighlightingPending, markdownHighlightingReady } from "./markdown-highlighter.ts";
 import {
   prepareMarkdownHumanMentions,
   restoreMarkdownHumanMentions,

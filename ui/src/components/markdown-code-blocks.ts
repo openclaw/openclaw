@@ -1,9 +1,9 @@
-import { createSignal } from "solid-js";
 import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { t } from "../i18n/index.ts";
 import { registerCodeBlocksEnglish } from "../i18n/locales/en-code-blocks.ts";
 import { CODE_PREVIEW_LINE_COUNT } from "./markdown-code-highlight-chunks.ts";
 import { copyMarkdownText } from "./markdown-copy.ts";
+import { highlightCodeHtml } from "./markdown-highlighter.ts";
 import {
   parseMarkdownJson,
   renderMarkdownJsonModes,
@@ -18,33 +18,6 @@ registerCodeBlocksEnglish();
 const blockArtCopyPayloadPrefix = "openclaw:block-art-code:";
 const blockArtCodeBlockCopyPayloadEncoding = "block-art-json";
 const CODE_STICKY_ACTIONS_LINE_THRESHOLD = 300;
-
-type Highlighter = typeof import("./markdown-highlight-runtime.ts").highlightCodeHtml;
-const [readHighlighter, setHighlighter] = createSignal<Highlighter | null | undefined>(undefined);
-let highlighterLoad: Promise<void> | undefined;
-
-/** Shared by code renderers; a failed optional chunk leaves escaped, copyable text. */
-function loadMarkdownHighlighter(): Promise<void> {
-  highlighterLoad ??= import("./markdown-highlight-runtime.ts").then(
-    (runtime) => {
-      setHighlighter(() => runtime.highlightCodeHtml);
-    },
-    () => {
-      setHighlighter(null);
-      console.warn("[markdown] Syntax highlighting could not be loaded; showing plain code.");
-    },
-  );
-  return highlighterLoad;
-}
-
-// Cached Markdown must subscribe even when a previous render already filled its cache.
-export function markdownHighlightingReady(): boolean {
-  return typeof readHighlighter() === "function";
-}
-
-export function markdownHighlightingPending(): boolean {
-  return highlighterLoad !== undefined && readHighlighter() === undefined;
-}
 
 function encodeCodeBlockCopyPayload(value: string): string {
   // DOMPurify removes attributes containing XML comment ends or closing tags.
@@ -163,18 +136,6 @@ export function measureCodeBlockWidthOverflow(wrapper: HTMLElement): (() => void
   return () => {
     wrapper.classList.toggle("has-horizontal-overflow", overflowing);
   };
-}
-
-/** Highlight when available; plain escaped code remains readable while the chunk loads. */
-export function highlightCodeHtml(text: string, lang: string): string {
-  const highlighter = readHighlighter();
-  if (highlighter) {
-    return highlighter(text, lang);
-  }
-  if (text.trim()) {
-    void loadMarkdownHighlighter();
-  }
-  return escapeHtml(text);
 }
 
 /** Highlight a JSON/JSON5 snippet; output is escaped hljs markup safe for unsafeHTML in a code block. */

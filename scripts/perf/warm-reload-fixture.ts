@@ -16,13 +16,19 @@ export type WarmReloadFixtureOptions = {
   port: number;
   uiRoot?: string;
   sessions?: number;
+  codeHeavy?: boolean;
   admission?: Pick<
     Awaited<ReturnType<typeof startWarmReloadAdmission>>,
     "origin" | "gatewayAuth" | "viewerEmail" | "peerSessions"
   >;
 };
 
-function transcript(session: number, now: number, imageBlocks: readonly unknown[]) {
+function transcript(
+  session: number,
+  now: number,
+  imageBlocks: readonly unknown[],
+  codeHeavy: boolean,
+) {
   const events: unknown[] = [];
   let parentId: string | null = null;
   let sequence = 0;
@@ -109,15 +115,22 @@ function transcript(session: number, now: number, imageBlocks: readonly unknown[
           `| Milestone ${index + 1} | Complete | Fixture team | Synthetic result ${row + 1}.${index + 1} |`,
       ),
     ].join("\n");
-    const code = [
-      "```typescript",
-      ...Array.from(
-        { length: row === 8 ? 28 : 8 },
-        (_, index) =>
-          `const checkpoint${index + 1} = { ready: true, sample: ${row * 100 + index} };`,
-      ),
-      "```",
-    ].join("\n");
+    const languages = codeHeavy && row === 8 ? ["typescript", "python", "bash"] : ["typescript"];
+    const code = languages
+      .map((language) =>
+        [
+          `\`\`\`${language}`,
+          ...Array.from({ length: row === 8 ? 28 : 8 }, (_, index) =>
+            language === "python"
+              ? `if checkpoint_${index + 1}: print("ready", ${row * 100 + index})`
+              : language === "bash"
+                ? `if test ${row * 100 + index} -gt 0; then echo ready; fi`
+                : `const checkpoint${index + 1} = { ready: true, sample: ${row * 100 + index} };`,
+          ),
+          "```",
+        ].join("\n"),
+      )
+      .join("\n\n");
     append(
       {
         role: "assistant",
@@ -126,6 +139,7 @@ function transcript(session: number, now: number, imageBlocks: readonly unknown[
         stopReason: "stop",
         usage: { input: 1200, output: 600, totalTokens: 1800 },
         content: [
+          ...(codeHeavy && row === 8 ? imageBlocks : []),
           {
             type: "text",
             text: [
@@ -136,7 +150,7 @@ function transcript(session: number, now: number, imageBlocks: readonly unknown[
               "[Related fixture session](/chat/main/team-shape-session-2) · [Synthetic pull request](https://github.com/openclaw-fixture/reload-proof/pull/248)",
             ].join("\n\n"),
           },
-          ...(row === 8 ? imageBlocks : []),
+          ...(!codeHeavy && row === 8 ? imageBlocks : []),
         ],
       },
       `assistant-${row}`,
@@ -295,6 +309,8 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
     }));
     let assignedToOperator = 0;
     let activeAssignedToOperator = 0;
+    let viewerProfileId = "";
+    const groups = Array.from({ length: 97 }, (_, index) => `Synthetic group ${index + 1}`);
     try {
       const avatar = png.createSolidPngBuffer(96, 96, { r: 33, g: 108, b: 140 });
       writeFileSync(path.join(workspaceDir, "avatar.png"), avatar);
@@ -327,6 +343,7 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
             env,
           })
         : gatewayOwner;
+      viewerProfileId = viewer.id;
       if (options.admission) {
         await profileWrites.setCanonicalUserProfileDisplayName(
           viewer.id,
@@ -375,7 +392,7 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
               ...old.entry,
               label: target.label,
               displayName: target.label,
-              archivedAt: undefined,
+              archivedAt: options.codeHeavy ? now - 60_000 : undefined,
               pinnedAt: now - index,
               updatedAt: now - index,
               lastActivityAt: now - index,
@@ -406,7 +423,7 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
               sessionKey: target.key,
               sessionId: target.id,
             },
-            transcript(index, now, imageBlocks),
+            transcript(index, now, imageBlocks, options.codeHeavy ?? false),
           );
           reactions.setSessionReactionInDatabase(owner, target.key, {
             expectedSessionId: target.id,
@@ -433,6 +450,16 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
         agentDb.runOpenClawAgentWriteTransaction((owner) => {
           for (let index = offset; index < Math.min(offset + 100, inventory.length); index++) {
             const [key, entry] = inventory[index]!;
+            if (options.codeHeavy) {
+              entries.writeSessionEntry(
+                owner,
+                key,
+                { ...entry, category: groups[index % groups.length] },
+                {
+                  canonicalPreviousEntry: entry,
+                },
+              );
+            }
             if (index % 10 === 0 && !targetKeys.has(key)) {
               continue;
             }
@@ -462,6 +489,8 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       assistantRowsPerRoute: 9,
       largestTableRows: 42,
       largestCodeLines: 28,
+      codeHeavy: options.codeHeavy ?? false,
+      viewerProfileId,
       managedImagePerRoute: 1,
       reactionsPerRoute: 1,
       noticeRowsPerRoute: 1,
@@ -491,6 +520,19 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       })!,
       fixtureSummary,
       async prepareGateway(request: RequestGateway) {
+        if (options.codeHeavy) {
+          await request("sessions.groups.put", {
+            names: groups,
+            sectionOrder: [
+              "work",
+              "groups",
+              "ungrouped",
+              "category:General",
+              "category:Reviews",
+              ...groups.map((name) => `category:${name}`),
+            ],
+          });
+        }
         await request("board.widget.put", {
           sessionKey: targets[1]!.key,
           name: "warm-reload-verification",

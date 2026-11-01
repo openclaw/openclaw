@@ -1,7 +1,7 @@
 import { stripUnsupportedCitationControlMarkers } from "../../../src/shared/text/citation-control-markers.js";
 import { truncateText } from "../lib/format.ts";
 import { markdownContentHtml, type MarkdownContent } from "../lib/markdown-content.ts";
-import { markdownHighlightingPending } from "./markdown-code-blocks.ts";
+import { markdownHighlightingPending } from "./markdown-highlighter.ts";
 import {
   MARKDOWN_PARSE_LIMIT,
   normalizeMarkdownRenderOptions,

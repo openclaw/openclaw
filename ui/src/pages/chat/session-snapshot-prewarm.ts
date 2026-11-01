@@ -3,6 +3,7 @@ import {
   subscribeBootRecordChanges,
   type BootRecord,
 } from "../../app/boot-record.ts";
+import { loadMarkdownHighlighter } from "../../components/markdown-highlighter.ts";
 import type { SidebarSnapshotModel } from "../../components/sidebar-snapshot-data.ts";
 import { readStoredChatSnapshotRecord } from "./session-snapshot-database.ts";
 import {
@@ -65,9 +66,16 @@ export async function prewarmChatSnapshot(cacheKey: string): Promise<void> {
     cacheKey,
     cancelled: false,
     promise: readStoredChatSnapshotRecord(cacheKey)
-      .then((record) =>
-        entry.cancelled || generation !== snapshotStoreGeneration ? undefined : record,
-      )
+      .then((record) => {
+        if (entry.cancelled || generation !== snapshotStoreGeneration) {
+          return undefined;
+        }
+        // Warm syntax evaluation overlaps the route module instead of the first row commit.
+        if (record) {
+          void loadMarkdownHighlighter();
+        }
+        return record;
+      })
       .catch(() => undefined),
   };
   pending = entry;
