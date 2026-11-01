@@ -59,18 +59,23 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main `7c00b5981080`: qualify removal of one direct helper refusal
-case already covered by the real resolver's five-row migrated-utility table.
-Keep normalized-provider and preference-order helper cases, both explicit-primary
-resolver controls and all config migration consumers. Production stays unchanged.
-Complete owners/callers and original regression history inspected.
-Untouched baseline, exclusion-filter preservation fault, candidate, all four
-removal phases, focused checks, fresh review and final-head proof remain pending.
+Pinned main `7c00b5981080`: removed the duplicate utility-only helper refusal
+declaration. Both other helper cases, the full five-row resolver migration table,
+explicit-primary controls and both config migration consumer suites remain.
+Production is unchanged.
+Untouched baseline passes 56 cases/four suites; candidate passes 55/four.
+Bypassing the exclusion filter in the actual helper fails all five retained
+migrated resolver rows (seven other cases filtered), after legacy pre-marker
+assertions execute. The owner is restored byte-for-byte before passing proof.
+All four removal phases pass cleanly before and after, with matching diagnostics
+and no suppressions. The ordinary runner selects unit-fast for helper/resolver
+and runtime-config for both config suites, including IO.
+Focused types, lint, format and MDX pass. Fresh review, final-head proof and CI remain pending.
 
 ## Completed source review
 
-These are local owner/support/caller/history/static-route closures at the original
-audit revision, with bounded transitive framework dependencies. Counts are scoped,
+These are local owner/support/caller/history/static-route closures at source census
+`7c99ae1dd417`, with bounded transitive framework dependencies. Counts are scoped,
 not additive when an aggregate overlaps a row. R=retain; F=repair proof/custody;
 C=transfer assertions before consolidation; D=qualify deletion. Candidates are not
 permission to delete without root qualification.
