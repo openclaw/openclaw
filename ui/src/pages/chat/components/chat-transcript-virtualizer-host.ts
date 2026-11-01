@@ -21,10 +21,7 @@ import {
   type TranscriptAnnouncement,
 } from "./chat-transcript-announcement.ts";
 import { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
-import {
-  initialTranscriptRect,
-  createPositionRailGutter,
-} from "./chat-transcript-geometry.ts";
+import { initialTranscriptRect, createPositionRailGutter } from "./chat-transcript-geometry.ts";
 import { commitTranscriptRows, reconcileTranscriptHeaderMargin } from "./chat-transcript-header.ts";
 import { TranscriptInitialRange } from "./chat-transcript-initial-range.ts";
 import {

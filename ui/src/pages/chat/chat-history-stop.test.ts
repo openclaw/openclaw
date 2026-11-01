@@ -50,12 +50,14 @@ describe("full tail after a long live turn", () => {
       previousLeaf,
       captureState,
       beforeRefresh,
+      supersedeFallback = false,
     }: {
       cursorReset?: boolean;
       initialEnd?: number;
       previousLeaf?: string;
       captureState?: (state: TestState) => void;
       beforeRefresh?: (state: TestState) => void;
+      supersedeFallback?: boolean;
     } = {},
   ) {
     const state = createState(tail);
@@ -70,7 +72,11 @@ describe("full tail after a long live turn", () => {
         sessionInfo: { ...sessionInfo, hasActiveRun: true, activeLeafEntryId: previousLeaf },
       },
       tail,
+      ...(supersedeFallback ? [tail] : []),
     ];
+    const fallbackStarted = createDeferred();
+    const fallbackResponse = createDeferred<ChatHistoryResult>();
+    let deferFallback = supersedeFallback;
     const request = vi
       .spyOn(state.client!, "request")
       .mockImplementation(async (_method, params) => {
@@ -79,7 +85,16 @@ describe("full tail after a long live turn", () => {
           return older(cursor);
         }
         // Stop persists an aborted reply, so the delta cursor resets to a bounded tail.
-        return cursor === "before-stop" && cursorReset ? { kind: "reset" } : pages.shift();
+        if (cursor === "before-stop" && cursorReset) {
+          return { kind: "reset" };
+        }
+        const page = pages.shift();
+        if (deferFallback && page === tail) {
+          deferFallback = false;
+          fallbackStarted.resolve();
+          return fallbackResponse.promise;
+        }
+        return page;
       });
     await loadChatHistory(state);
     // Live rows carry assistant turns only; tool results arrive as activity.
@@ -92,7 +107,14 @@ describe("full tail after a long live turn", () => {
       publishLive(state, row, scope);
     }
     beforeRefresh?.(state);
-    await loadChatHistory(state);
+    const loading = loadChatHistory(state);
+    if (supersedeFallback) {
+      await fallbackStarted.promise;
+      const refreshed = loadChatHistory(state, { supersedeInFlight: true });
+      fallbackResponse.resolve(tail);
+      await refreshed;
+    }
+    await loading;
     return { state, request };
   }
 
@@ -135,6 +157,22 @@ describe("full tail after a long live turn", () => {
     const { segments, ...edges } = state.chatHistoryPagination;
     expect(edges).toEqual({ hasMore: false, totalMessages: 7 });
     expect(segments).toHaveLength(2);
+  });
+
+  it("restores the held prefix when a refresh supersedes the Stop fallback", async () => {
+    const tail = tailFrom(2);
+    const older = vi.fn(async () => ({ messages: transcript.slice(0, 2), sessionInfo }));
+    const { state } = await loadAfterLiveTurn(
+      { ...tail, sessionInfo: { ...tail.sessionInfo, activeLeafEntryId: "stopped-leaf" } },
+      older,
+      { initialEnd: 4, previousLeaf: "running-leaf", supersedeFallback: true },
+    );
+    expect(state.chatMessages).toEqual(transcript);
+    expect(older).toHaveBeenCalledOnce();
+    const { segments, ...edges } = state.chatHistoryPagination;
+    expect(edges).toEqual({ hasMore: false, totalMessages: 7 });
+    expect(segments).toHaveLength(2);
+    expect(segments?.every((packet) => packet.boundedPacket)).toBe(true);
   });
 
   it("refills a fresh tail while the prior mounted reader still names the old prefix", async () => {

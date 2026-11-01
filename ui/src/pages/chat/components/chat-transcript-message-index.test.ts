@@ -288,7 +288,7 @@ it("fingerprints loaded rows once when an older page rebuilds the index", () => 
     turn(`older-${index}`, 1 + index, "Older"),
   );
   const before = indexFor(projectHistory(loaded)).rows;
-  const hash = vi.spyOn(fnv1a, "fnv1aUtf16");
+  const hash = vi.spyOn(fingerprint, "fnv1aUtf16");
   const after = indexFor(projectHistory([...older, ...loaded])).rows;
   const hashed = hash.mock.calls.reduce((sum, [value]) => sum + value.length, 0);
   hash.mockRestore();

@@ -67,6 +67,7 @@ it("retains row measurements across hidden and detached observer receipts", asyn
   // The virtualizer applies ResizeObserver receipts in a later animation frame;
   // a hidden measurement can arrive after the pane is visible again.
   Object.defineProperty(viewport, "clientHeight", { value: 300 });
+  row.style.height = "0px";
   for (const observer of resizeObservers) {
     observer.emitTarget(row, 0, 0);
   }

@@ -1,19 +1,13 @@
-import {
-  createSessionProjection,
-  readSessionMessageSequence,
-  reduceSessionProjection,
-} from "@openclaw/gateway-client/browser";
+import { createSessionProjection, reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import type { MessageReactionSummary, ProgressCard } from "@openclaw/gateway-protocol";
 import { createSignal } from "solid-js";
 import type { GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ChatFastModePresentation } from "../../lib/chat/model-select-state.ts";
 import { readPairingQrContent } from "../../lib/chat/pairing-qr.ts";
-import { nativeHistoryMessageSourceIdentity } from "../../lib/chat/history-message-identity.ts";
 import {
   chatDisplaySourceKey,
   chatRowDisplaySchema,
   boundChatThumbnails,
-  CHAT_ROW_DISPLAY_WINDOW,
   projectChatRowDisplay,
   MAX_CHAT_THUMBNAILS,
   MAX_CHAT_THUMBNAIL_BYTES,
@@ -26,7 +20,6 @@ import type {
   ChatHeaderViewersSnapshot,
 } from "./chat-header-viewers-snapshot.ts";
 import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
-import { trimmedChatHistoryPagination } from "./chat-history-pagination.ts";
 import { prepareChatHistorySegment, selectChatHistoryResidency } from "./chat-history-window.ts";
 import { withoutChatLocalOutputs } from "./chat-local-outputs.ts";
 import type { ChatSessionStateSnapshot } from "./chat-session-state-snapshot.ts";
@@ -40,18 +33,18 @@ import {
 } from "./history-merge.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 import type { ChatDetailsSnapshot } from "./session-details-snapshot-schema.ts";
+import {
+  MAX_CACHED_CHAT_SNAPSHOT_WEIGHT,
+  MAX_CACHED_CHAT_WEIGHT,
+  boundChatSessionSnapshot,
+  serializedArrayItemWeight,
+  type CachedChatSessionSnapshot,
+} from "./session-snapshot-budget.ts";
 import type { SessionSnapshotInvalidationReason } from "./session-snapshot-invalidation-events.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 
 export { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 
-// JSON code-unit weight bounds retained payloads without allocating another
-// UTF-8 buffer on the route-switch path.
-export const MAX_CACHED_CHAT_SNAPSHOT_WEIGHT = 12 * 1024 * 1024;
-export const MAX_CACHED_CHAT_WEIGHT = 24 * 1024 * 1024;
-// History reconciliation replaces changed messages and retains unchanged
-// objects, so serialization weight can follow the same immutable identity.
-const cachedMessageWeights = new WeakMap<object, number>();
 const appendedEventClaims = new WeakMap<ChatMessageCache, WeakSet<object>>();
 
 const transcriptMetadata = new WeakMap<GatewaySessionRow, ChatTranscriptMetadata>();
@@ -324,11 +317,6 @@ export function createChatWidgetLayout() {
       };
     });
 }
-
-type CachedChatSessionSnapshot = {
-  snapshot: ChatSessionSnapshot;
-  weight: number;
-};
 
 export type ChatMessageCache = Map<string, CachedChatSessionSnapshot>;
 
@@ -624,126 +612,6 @@ export function readChatSessionSnapshot(
   target: ChatMessageCacheTarget,
 ): ChatSessionSnapshot | null {
   return getSessionCacheValue(cache, resolveChatSnapshotKey(host, target))?.snapshot ?? null;
-}
-
-function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSessionSnapshot | null {
-  const messageWeights: number[] = [];
-  for (const message of snapshot.messages) {
-    const weight = serializedArrayItemWeight(message);
-    if (weight === null) {
-      return null;
-    }
-    messageWeights.push(weight);
-  }
-  let retainedMessageWeight = messageWeights.reduce((sum, weight) => sum + weight, 0);
-  let start = 0;
-  // Before the display window, only loss of the intrinsic source changes the
-  // trimmed envelope. Prepare both canonical variants instead of rescanning each cut.
-  const lastIntrinsicIndex = snapshot.pagination.intrinsicSource
-    ? snapshot.messages.findLastIndex(
-        (message) =>
-          nativeHistoryMessageSourceIdentity(message) === snapshot.pagination.intrinsicSource,
-      )
-    : -1;
-  const trimmedPagination = trimmedChatHistoryPagination(
-    snapshot.pagination,
-    snapshot.messages,
-    1,
-  );
-  const trimmedWithoutIntrinsic = trimmedChatHistoryPagination(
-    snapshot.pagination,
-    snapshot.messages,
-    snapshot.messages.length,
-  );
-  const lastSharedTrim = snapshot.messages.length - CHAT_ROW_DISPLAY_WINDOW;
-  let sharedEnvelope:
-    | { pagination: ChatHistoryPagination; measured: ReturnType<typeof measureChatSnapshotEnvelope> }
-    | undefined;
-  while (true) {
-    if (start > 0 && start === snapshot.messages.length) {
-      return null;
-    }
-    const pagination =
-      start === 0
-        ? snapshot.pagination
-        : start <= lastIntrinsicIndex
-          ? trimmedPagination
-          : trimmedWithoutIntrinsic;
-    const shared = start > 0 && start <= lastSharedTrim;
-    const envelope =
-      (shared && sharedEnvelope?.pagination === pagination && sharedEnvelope.measured) ||
-      measureChatSnapshotEnvelope(snapshot, start, pagination);
-    if (shared) {
-      sharedEnvelope = { pagination, measured: envelope };
-    }
-    const { rowDisplay } = envelope;
-    const weight =
-      envelope.weight === null
-        ? null
-        : envelope.weight + retainedMessageWeight + Math.max(0, messageWeights.length - start - 1);
-    if (weight !== null && weight <= MAX_CACHED_CHAT_SNAPSHOT_WEIGHT) {
-      return {
-        snapshot:
-          start === 0 && rowDisplay === snapshot.rowDisplay
-            ? snapshot
-            : {
-                ...snapshot,
-                rowDisplay,
-                ...(start > 0
-                  ? { messages: snapshot.messages.slice(start), pagination: { ...pagination } }
-                  : {}),
-              },
-        weight,
-      };
-    }
-    if (start >= snapshot.messages.length) {
-      return null;
-    }
-    const boundarySeq = readSessionMessageSequence(snapshot.messages[start]);
-    do {
-      retainedMessageWeight -= messageWeights[start] ?? 0;
-      start += 1;
-      if (boundarySeq === null) {
-        break;
-      }
-    } while (
-      start < snapshot.messages.length &&
-      readSessionMessageSequence(snapshot.messages[start]) === boundarySeq
-    );
-  }
-}
-
-function measureChatSnapshotEnvelope(
-  snapshot: ChatSessionSnapshot,
-  start: number,
-  pagination: ChatHistoryPagination,
-) {
-  const rowDisplay = projectChatRowDisplay(snapshot, start);
-  try {
-    const envelope = { ...snapshot, messages: [], rowDisplay, pagination };
-    return { rowDisplay, weight: JSON.stringify(envelope)?.length ?? 0 };
-  } catch {
-    return { rowDisplay, weight: null };
-  }
-}
-
-function serializedArrayItemWeight(value: unknown): number | null {
-  if (value && typeof value === "object") {
-    const cached = cachedMessageWeights.get(value);
-    if (cached !== undefined) {
-      return cached;
-    }
-  }
-  try {
-    const serialized = JSON.stringify([value]);
-    const weight = serialized ? Math.max(0, serialized.length - 2) : 0;
-    if (value && typeof value === "object") {
-      cachedMessageWeights.set(value, weight);
-    }
-    return weight;
-  } catch {
-    return null;
-  }
 }
 
 function samePagination(left: ChatHistoryPagination, right: ChatHistoryPagination): boolean {

@@ -191,8 +191,7 @@ export function measureTranscriptRow(
     const size = readTranscriptRowHeight(element);
     if (
       size !== 0 ||
-      (entry?.borderBoxSize?.[0]?.inlineSize !== 0 &&
-        virtualizer.scrollElement?.clientHeight !== 0)
+      (entry?.borderBoxSize?.[0]?.inlineSize !== 0 && virtualizer.scrollElement?.clientHeight !== 0)
     ) {
       return size;
     }

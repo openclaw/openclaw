@@ -79,6 +79,38 @@ describe("session message cache", () => {
     expect(read()?.messages).toBe(messages);
   });
 
+  it("publishes source-only intrinsic coverage changes with the same messages and edges", () => {
+    const { cache, write, read } = createCacheContext();
+    const persisted = vi.fn((_key: string, snapshot: ChatSessionSnapshot, weight: number) => {
+      expect(weight).toBe(JSON.stringify(snapshot).length);
+    });
+    observeChatCache(cache, { write: persisted, delete: vi.fn() });
+    const messages = ["first", "last"].map((id, index) => ({
+      role: "assistant",
+      content: id,
+      __openclaw: { id, seq: index + 1 },
+    }));
+    const snapshot = widgetSnapshot(messages, "session-1", {
+      pagination: { hasMore: false, totalMessages: 2, segments: [] },
+    });
+    write(snapshot);
+    for (const [intrinsicSource, writes] of [
+      ["id:first", 2],
+      ["id:last", 3],
+      [undefined, 4],
+    ] as const) {
+      const pagination = {
+        ...snapshot.pagination,
+        ...(intrinsicSource ? { intrinsicSource } : {}),
+      };
+      write({ ...snapshot, pagination });
+      write({ ...snapshot, pagination: { ...pagination } });
+      expect(read()?.messages).toBe(messages);
+      expect(read()?.pagination).toEqual(pagination);
+      expect(persisted).toHaveBeenCalledTimes(writes);
+    }
+  });
+
   it("persists changed session display facts once without repeating unchanged writes", () => {
     const { cache, write, read } = createCacheContext();
     const persisted = vi.fn();
@@ -605,6 +637,69 @@ describe("session message cache", () => {
     expect(retained.at(-1)).toBe(messages.at(-1));
     expect(envelopes).toBeLessThanOrEqual(2);
   });
+
+  it.each([
+    { name: "retained", intrinsicIndexes: [3_998, 3_999], retained: true },
+    { name: "retired", intrinsicIndexes: [1, 2], retained: false },
+  ])(
+    "charges the canonical trimmed envelope after the intrinsic source is $name",
+    ({ intrinsicIndexes, retained }) => {
+      const { cache, write, read } = createCacheContext();
+      const persisted = vi.fn((_key: string, snapshot: ChatSessionSnapshot, weight: number) => {
+        expect(weight).toBe(JSON.stringify(snapshot).length);
+      });
+      observeChatCache(cache, { write: persisted, delete: vi.fn() });
+      const messages = Array.from({ length: 4_000 }, (_, index) => ({
+        role: "assistant",
+        content: "x".repeat(4 * 1024),
+        __openclaw: {
+          id: intrinsicIndexes.includes(index) ? "intrinsic" : `m-${index}`,
+          seq: intrinsicIndexes.includes(index) ? intrinsicIndexes[0]! + 1 : index + 1,
+        },
+      }));
+      const stringify = vi.spyOn(JSON, "stringify");
+      try {
+        write({
+          messages,
+          rowDisplay: { "m-3997": { links: { source: { title: "Retained linked task" } } } },
+          pagination: {
+            hasMore: true,
+            olderCursor: "older:head",
+            nextOffset: 4_000,
+            hasNewer: true,
+            newerCursor: "newer:tail",
+            intrinsicSource: "id:intrinsic",
+            totalMessages: 4_000,
+          },
+          sessionId: "session-1",
+        });
+        const envelopes = stringify.mock.calls.filter(
+          ([value]) => Array.isArray(value?.messages) && value.messages.length === 0,
+        ).length;
+        const snapshot = read();
+        expect(persisted).toHaveBeenCalledOnce();
+        expect(snapshot?.messages.length).toBeGreaterThan(2_000);
+        expect(snapshot?.messages.length).toBeLessThan(messages.length);
+        expect(snapshot?.messages.at(-1)).toBe(messages.at(-1));
+        expect(snapshot?.pagination).toEqual({
+          hasMore: true,
+          needsBoundary: true,
+          hasNewer: true,
+          needsNewerBoundary: true,
+          totalMessages: 4_000,
+          ...(retained ? { intrinsicSource: "id:intrinsic" } : {}),
+        });
+        expect(
+          snapshot?.messages.filter((message) =>
+            intrinsicIndexes.some((index) => message === messages[index]),
+          ),
+        ).toHaveLength(retained ? 2 : 0);
+        expect(envelopes).toBeLessThanOrEqual(retained ? 2 : 3);
+      } finally {
+        stringify.mockRestore();
+      }
+    },
+  );
 
   it("evicts whole least-recently-used snapshots when the global budget is exceeded", () => {
     const { write, read } = createCacheContext();
