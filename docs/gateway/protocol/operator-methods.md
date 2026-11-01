@@ -86,6 +86,9 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
   - Owner-only core wrappers such as `cron`, `gateway`, and `nodes` require
     owner/admin identity (`operator.admin`) even though `tools.invoke` itself
     is `operator.write`.
+  - Configured MCP tools are invocable by their `<server>__<tool>` name on a
+    private per-call MCP runtime, with `source="mcp"` in the response; see
+    [Configured MCP tools](/gateway/tools-invoke-http-api#configured-mcp-tools).
   - The response is an SDK-facing envelope with `ok`, `toolName`, optional
     `output`, and typed `error` fields. Approval or policy refusals return
     `ok:false` in the payload rather than bypassing the gateway tool policy
