@@ -78,6 +78,7 @@
     "README.md",
     "THIRD_PARTY_NOTICES.md",
     "dist/",
+    "!dist/**/.source-module-urls/**",
     "!dist/worker/**",
     "dist/worker-artifacts/*.tar.gz",
     ".openclaw-lifecycle-pending",

@@ -1,0 +1,2 @@
+# Status text and presentation must honor selectable session context windows.
+41

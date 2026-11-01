@@ -423,6 +423,47 @@ describe("prepared status", () => {
   });
 
   it.each([
+    [undefined, selected, false, "45k/200k"],
+    ["200k", selected, false, "45k/200k"],
+    ["500k", selected, false, "45k/500k"],
+    ["1m", selected, false, "45k/1.0m"],
+    ["500k", active, false, "45k/500k"],
+    ["500k", active, true, "45k/500k"],
+  ] as const)(
+    "uses the effective session window %s for %j (fallback=%s)",
+    async (window, producer, isFallback, expected) => {
+      const parts = await prepared({
+        thinkingCatalog: catalog.map((model) => ({
+          ...model,
+          contextWindow: 1_000_000,
+          contextTokens: 1_000_000,
+          contextWindows: [
+            { id: "200k", label: "200K", contextWindow: 200_000 },
+            { id: "500k", label: "500K", contextWindow: 500_000 },
+            { id: "1m", label: "1M", contextWindow: 1_000_000 },
+          ],
+          contextWindowDefault: "200k",
+        })),
+        sessionEntry: entry({
+          ...modelEntry(producer),
+          ...tokenUsage,
+          agentHarnessId: "openclaw",
+          contextWindow: window,
+          contextTokens: 1_000_000,
+          contextTokensSource: "runtime",
+          fallbackNotice: isFallback ? fallbackNotice : undefined,
+        }),
+      });
+      expect(parts.text).toContain(`Context: ${expected}`);
+      const table = parts.presentation.blocks.find((block) => block.type === "table");
+      expect(table?.type === "table" ? table.rows : []).toContainEqual([
+        "📚 Context",
+        expect.stringContaining(expected),
+      ]);
+    },
+  );
+
+  it.each([
     ["current discovered limits", 262_144, "45k/262k", undefined, undefined],
     ["unknown limits", undefined, "45k/?", undefined, undefined],
     ["another runtime's limits", 262_144, "45k/?", "other-runtime", undefined],
