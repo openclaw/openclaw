@@ -171,6 +171,17 @@ describe("imported PR source refresh", () => {
       });
       expect(f.pr.base.sha).toBe(staleBase);
       expect(f.writes).toEqual([]);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        expect(await f.invoke()).toMatchObject({
+          status: "prepared",
+          review: { mode: "local", base: liveBase },
+        });
+        expect(f.readSession().worktree!.githubPullRequest!.base.commit).toBe(liveBase);
+        expect(await f.guestGit("rev-parse", "refs/openclaw/review-base")).toBe(liveBase);
+        expect(
+          await f.guestGit("diff", "--cached", "--name-only", "refs/openclaw/review-base"),
+        ).not.toContain("live-base.txt");
+      }
     },
   );
   it("still refuses a bot-authored PR this session did not publish", async () => {

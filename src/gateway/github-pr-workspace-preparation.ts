@@ -323,6 +323,25 @@ export async function performSessionGitHubPreparation(
       pendingBase = merge.code === 0;
     }
     if (
+      !pendingBase &&
+      (refreshingBase ||
+        (previous?.base.branch === pullRequest.base.branch &&
+          previous.base.commit !== pullRequest.base.commit))
+    ) {
+      // PR details can lag the live ref, including after a completed base refresh.
+      const { run } = createGitHubPublicationCommandRunner(assertCurrent);
+      pullRequest.base = {
+        ...pullRequest.base,
+        commit: await readGitHubPublicationBaseSha(
+          run,
+          pullRequest.base.repository,
+          pullRequest.base.branch,
+          pullRequest.host,
+          identity.env,
+        ),
+      };
+    }
+    if (
       !refreshingBase &&
       previous &&
       previous.preparedHeadCommit === previous.head.commit &&
@@ -432,17 +451,6 @@ export async function performSessionGitHubPreparation(
       assertReserved();
     };
     assertReserved();
-    if (refreshingBase && !pendingBase) {
-      // PR details can retain an older base SHA after the target branch advances.
-      const { run } = createGitHubPublicationCommandRunner(assertReserved);
-      binding.base.commit = await readGitHubPublicationBaseSha(
-        run,
-        binding.base.repository,
-        binding.base.branch,
-        binding.host,
-        identity.env,
-      );
-    }
     const integration = await integrateManagedWorkspaceSource({
       owner,
       identity,
