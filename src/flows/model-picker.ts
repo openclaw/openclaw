@@ -18,7 +18,6 @@ import {
   createProviderAuthChecker,
   type ProviderModelAuthChecker,
 } from "../agents/model-provider-auth.js";
-import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-shared.js";
 import { createModelPickerVisibleProviderPredicate } from "../agents/model-runtime-aliases.js";
 import {
   buildModelAliasIndex,
@@ -41,10 +40,13 @@ import {
 import { computeModelPolicyAllowlist } from "../config/model-policy-allowlist-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
+import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 import {
+  formatKeepCurrentModelLabel,
+  formatModelRefLabel,
   loadResolvedModelPickerRuntime,
   maybeHandleProviderPluginSelection,
   resolveProviderPluginSetupOptions,
@@ -65,31 +67,6 @@ type ModelRouteRuntimeResolver = (params: {
 // Internal router models are valid defaults during auth/setup but not manual API targets.
 const HIDDEN_ROUTER_MODELS = new Set(["openrouter/auto"]);
 
-function formatKeepCurrentModelLabel(params: {
-  configuredRaw?: string;
-  configuredLabel: string;
-  resolvedKey: string;
-}): string {
-  return params.configuredRaw
-    ? t("wizard.model.keepCurrent", { value: params.configuredLabel })
-    : t("wizard.model.keepCurrentDefault", { value: params.resolvedKey });
-}
-
-function formatModelRefLabel(params: {
-  provider: string;
-  model: string;
-  key: string;
-  literalPrefixProviders: Set<string>;
-}): string {
-  const providerId = normalizeProviderId(params.provider);
-  const modelId = params.model.trim().toLowerCase();
-  return providerId &&
-    params.literalPrefixProviders.has(providerId) &&
-    modelId.startsWith(`${providerId}/`)
-    ? formatLiteralProviderPrefixedModelRef(params.provider, params.key)
-    : params.key;
-}
-
 type PromptDefaultModelParams = {
   config: OpenClawConfig;
   prompter: WizardPrompter;
@@ -101,6 +78,8 @@ type PromptDefaultModelParams = {
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
+  discoveryEnv?: NodeJS.ProcessEnv;
+  pendingAuthProfiles?: ProviderAuthResult["profiles"];
   runtime?: RuntimeEnv;
 };
 
@@ -538,6 +517,7 @@ export async function promptDefaultModel(
         providerScoped: providerScopedCatalog,
         agentDir: pickerAgentDir,
         ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+        env: params.discoveryEnv,
       })
     ).snapshot;
   } finally {
@@ -557,9 +537,12 @@ export async function promptDefaultModel(
     agentId: params.agentId,
     workspaceDir: params.workspaceDir,
     agentDir: pickerAgentDir,
+    env: params.discoveryEnv,
+    pendingAuthProfiles: params.pendingAuthProfiles,
   });
   const resolveModelRouteRuntime = createModelRouteRuntimeResolver({
     config: cfg,
+    env: params.discoveryEnv,
   });
   const models = await resolvePickerLogicalCatalog({
     cfg: pickerConfig,

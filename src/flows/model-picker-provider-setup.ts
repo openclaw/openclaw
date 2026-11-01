@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveManifestProviderAuthChoice } from "../plugins/provider-auth-choices.js";
 import { buildProviderPluginMethodChoice } from "../plugins/provider-plugin-choice.js";
@@ -129,4 +130,29 @@ export async function maybeHandleProviderPluginSelection(params: {
     });
   }
   return { model: applied.defaultModel, config: applied.config };
+}
+
+export function formatKeepCurrentModelLabel(params: {
+  configuredRaw?: string;
+  configuredLabel: string;
+  resolvedKey: string;
+}): string {
+  return params.configuredRaw
+    ? t("wizard.model.keepCurrent", { value: params.configuredLabel })
+    : t("wizard.model.keepCurrentDefault", { value: params.resolvedKey });
+}
+
+export function formatModelRefLabel(params: {
+  provider: string;
+  model: string;
+  key: string;
+  literalPrefixProviders: Set<string>;
+}): string {
+  const providerId = normalizeProviderId(params.provider);
+  const modelId = params.model.trim().toLowerCase();
+  return providerId &&
+    params.literalPrefixProviders.has(providerId) &&
+    modelId.startsWith(`${providerId}/`)
+    ? formatLiteralProviderPrefixedModelRef(params.provider, params.key)
+    : params.key;
 }

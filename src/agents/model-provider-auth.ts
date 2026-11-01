@@ -1,6 +1,7 @@
-/** Route-aware auth checks for model-picker callers. */
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+/** Route-aware auth checks for model-picker callers. */
+import type { ProviderAuthResult } from "../plugins/types.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { ensureAuthProfileStoreWithoutExternalProfilesAsync } from "./auth-profiles.js";
 import {
@@ -29,6 +30,7 @@ export function createProviderAuthChecker(params: {
   workspaceDir?: string;
   agentDir?: string;
   env?: NodeJS.ProcessEnv;
+  pendingAuthProfiles?: ProviderAuthResult["profiles"];
 }): ProviderModelAuthChecker {
   const authCache = new Map<string, Promise<ModelAuthAvailabilityEvaluation>>();
   let modelAuthResolver: Promise<ModelAuthAvailabilityResolver> | undefined;
@@ -40,6 +42,13 @@ export function createProviderAuthChecker(params: {
       const authStore = await ensureAuthProfileStoreWithoutExternalProfilesAsync(params.agentDir, {
         allowKeychainPrompt: false,
       });
+      const pendingAuthProfiles = params.pendingAuthProfiles ?? [];
+      const effectiveAuthStore = pendingAuthProfiles.length
+        ? { ...authStore, profiles: { ...authStore.profiles } }
+        : authStore;
+      for (const { profileId, credential } of pendingAuthProfiles) {
+        effectiveAuthStore.profiles[profileId] = credential;
+      }
       const runtimeAuthLookup = createRuntimeProviderAuthLookup({
         cfg: params.cfg,
         workspaceDir: params.workspaceDir,
@@ -49,7 +58,7 @@ export function createProviderAuthChecker(params: {
       return createModelAuthAvailabilityResolver({
         cfg: params.cfg ?? {},
         agentId: params.agentId,
-        authStore,
+        authStore: effectiveAuthStore,
         agentDir: params.agentDir,
         workspaceDir: params.workspaceDir,
         env: params.env,
