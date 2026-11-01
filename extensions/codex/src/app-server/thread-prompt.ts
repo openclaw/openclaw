@@ -1,5 +1,6 @@
 import {
   buildCredentialSafetyPrompt,
+  buildHandoffPromptSection,
   buildDelegationGuidanceSection,
   buildUiPresentationPrompt,
   listToolPromptGuidance,
@@ -212,6 +213,7 @@ export function buildDeveloperInstructions(
           messageTool,
         })
       : undefined,
+    params.promptMode !== "none" ? buildHandoffPromptSection().join("\n") : undefined,
     buildCredentialSafetyPrompt({
       controlToolsAvailable:
         params.disableTools !== true && (toolNames.has("openclaw") || toolNames.has("gateway")),

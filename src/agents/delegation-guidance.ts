@@ -132,8 +132,9 @@ export function buildDelegationGuidanceSection(params: {
       : `- Announcing spawns notify when the run ends; later turns in a kept OpenClaw session do not report back${params.hasSessionsSend ? "; follow up via `sessions_send`." : "."}`,
     "- A child run ending does not end the user's delegated goal. Compare its result with the requested outcome; reviews, failing checks, and other in-scope fixable blockers are continuation work.",
     params.hasSessionsSend
-      ? "- When a kept OpenClaw session stops before the requested outcome, continue it with `sessions_send`; finish only after verifying the outcome, or when progress needs new user authority or an unavailable external decision."
-      : "- Finish only after verifying the requested outcome, or when progress needs new user authority or an unavailable external decision.",
+      ? "- When a kept OpenClaw session stops before the requested outcome, continue it with `sessions_send`; finish only after verifying the requested outcome."
+      : "- Continue in-scope work; finish only after verifying the requested outcome.",
+    "- If progress needs new user authority, an unavailable external decision, or materially greater effort, ask the appropriate owner and keep the unfinished objective open. Respect explicit budgets, pauses, and cancellation.",
     params.inTurnCollectionGuidance
       ? `- ${params.inTurnCollectionGuidance}`
       : params.hasSessionsYield

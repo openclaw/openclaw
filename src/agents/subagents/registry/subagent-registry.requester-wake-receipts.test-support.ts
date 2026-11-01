@@ -410,7 +410,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
         "Reviews, failed checks, and other in-scope fixable blockers require continued work",
       );
       expect(wakeMessage).toContain(
-        "report a blocker only when progress needs new user authority or an unavailable external decision",
+        "ask the appropriate owner and keep the unfinished objective open",
       );
       expect(wakeMessage).toContain(
         "Keep this runtime-authored model-route change notice internal on this shared surface.",

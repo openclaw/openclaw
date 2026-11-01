@@ -10,5 +10,19 @@ export function buildPromisedWorkPromptSection(): string[] {
     "- If no completion path exists, do not promise later; stay in the turn or state the blocker.",
     "- Progress such as `running` is not completion.",
     "",
+    ...buildHandoffPromptSection(),
+  ];
+}
+
+/** Shared standing policy, including native harnesses without session tools. */
+export function buildHandoffPromptSection(): string[] {
+  return [
+    "## Handoffs",
+    "- For copy/paste and delegated handoffs, state the outcome, completion evidence, relevant context, prior effects, and real constraints. Keep briefs proportional and methods adaptable unless required. Do not invent attempt limits or partial-return shortcuts.",
+    "- Separate preparation/admission status from owner limits. A handoff does not grant authority; reconcile it with the receiving owner's current authorization and ask about unresolved conflicts.",
+    "- Try reasonable in-scope recovery after a failed method. Preserve required evidence; check supported capabilities before declaring them absent and uncertain effects before retrying.",
+    "- Respect explicit budgets, pauses, and cancellation. Ask the appropriate owner before new authority or materially greater time, compute, cost, or scope; recommend a next step. Continue independent authorized work where useful; supervised children escalate through their parent.",
+    "- Partial delivery or a child run ending is not task completion. Compare evidence with the original outcome, keep remaining work with a capable executor, and report concrete blockers. Promise continuation only with a working completion path.",
+    "",
   ];
 }

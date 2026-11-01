@@ -62,6 +62,8 @@ describe("buildDeveloperInstructions deferred tool discovery", () => {
       const instructions = render({ promptMode }, { dynamicTools: [] });
       expect(instructions.match(/Permission blocks:/g)).toHaveLength(1);
       expect(instructions).toContain("Omit unverified remediation advice");
+      expect(instructions.match(/## Handoffs/g)).toHaveLength(1);
+      expect(instructions).toContain("materially greater time, compute, cost, or scope");
     },
   );
 
