@@ -73,18 +73,27 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main `607220f0aed0`: qualify duplicate Memory Core search fixture setup and
-an assertion already implied by retained exact-prefix proof. Remove only the
-bootstrap helper's agent-config reconstruction already supplied by its shared
-factory and the project-result length assertion implied by exact equality with
-the first200 ordinary results. Preserve all six physical declarations/eight cases,
-inputs, plugin isolation, ranking/eligibility/cap and partial-publication contracts.
-Complete selected tests, shared fixture/config helper, acquisition/registry,
-search orchestration/retrieval and hybrid ranking owners inspected; relevant
-history reviewed. Source and guides match the previously qualified revision.
-Untouched baseline, independent three-call config equivalence/FTS-entry control,
-candidate, actual cap-fault keeper control, restoration, removal scans, focused
-checks, complete dead-code phases, fresh review and final-head proof remain pending.
+Pinned main `607220f0aed0`: remove duplicate Memory Core search fixture setup and
+an assertion implied by retained exact-prefix proof. Only the bootstrap helper's
+agent-config reconstruction and project-result length assertion are removed.
+Preserve all six physical declarations/eight cases, every input, plugin isolation,
+ranking/eligibility/cap and partial-publication contracts; production unchanged.
+Full tests, factory, acquisition/registry, orchestration/retrieval and ranking
+owners and relevant history inspected; source/guide parity verified.
+Untouched native baseline and candidate pass eight cases/two suites. Temporary
+independent assertions validate all three factory-config shapes and require the
+FTS bootstrap case to enter; successful JSON report recovered after stdout-only
+collector parsing failed, then source bytes restored. An actual active-project
+cap201 fault fails only the retained exact-prefix equality; owner bytes restored.
+All three scoped removal scans pass: exact two-line-only edit, all declarations,
+rows and keepers retained, and no production/support/export/discovery change.
+Focused type-aware lint, scoped types, format, ledger MDX and diff checks pass.
+Both unused-file phases and script exports pass. Dependency, production-export
+and full-tree-export scans report the unused `retireControlUiSessionPrState`
+Gateway export; both failing surfaces reproduce the same finding on the exact
+untouched base. Candidate bytes are restored and the local failure stays recorded.
+See [PR190553](https://github.com/openclaw/openclaw/pull/190553) for fresh-review,
+published-head verification and merge outcomes. Two fewer test lines; production0.
 
 ## Completed source review
 
