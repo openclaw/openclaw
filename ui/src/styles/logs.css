@@ -154,6 +154,10 @@ main.content:where(.content--logs-page) .content-header {
     flex-direction: column;
     height: auto;
     min-height: 0;
+  }
+
+  /* Without the section heading there is nothing for the description to pull toward. */
+  .content.content--logs-page .settings-section__desc {
     margin-top: 0;
   }
 
@@ -161,7 +165,7 @@ main.content:where(.content--logs-page) .content-header {
     display: flex;
     flex: 1 1 auto;
     flex-direction: column;
-    gap: var(--space-2);
+    gap: var(--space-3);
     min-height: 0;
     margin-top: var(--space-3);
     padding: 0;
