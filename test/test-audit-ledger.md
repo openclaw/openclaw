@@ -63,15 +63,22 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main `c3fca6737b29`: qualify retiring bootstrap body-literal claims,
-two unobserved system-prompt builds and their exclusive scenario IDs/selectors
-and types. Keep the actual filesystem-budget-to-system-notice integration,
-all three system assertions and the real Discord system/body preparation case.
-The sole fixture consumer will use two explicit boundary outputs.
-Complete affected owners, callers and selected history inspected; fresh source
-and guide parity verified. Baseline, real notice-owner preservation fault,
-candidate, all four removal phases, focused checks, fresh review and final-head
-proof remain pending. Production stays unchanged; both declarations remain.
+Pinned main `c3fca6737b29`: retired unsupported bootstrap body-literal
+assertions, two unobserved system-prompt builds and their exclusive scenario/turn
+IDs, selectors and types. The sole fixture consumer now reads explicit bootstrap
+and Discord outputs. Both boundary declarations, all three real bootstrap system
+assertions and every real Discord preparation/input/assertion remain. Production
+is unchanged.
+Untouched baseline and candidate pass 66 cases/two suites: composition two and
+system prompt 64. Omitting the notice input in the actual system-prompt owner
+fails the retained bootstrap case on its missing notice header (one Discord case
+filtered); the owner is restored byte-for-byte before passing proof.
+All four removal phases ran before and after with unchanged diagnostics and no
+suppressions. Existing findings are the unused `assertSafeSqliteRuntime`
+export and `scripts/lib/gateway-bench-heap-profile.mjs` file; all four
+phases exit 1 on the untouched base and candidate. The ordinary runner selects
+unit-fast for composition and agents-core for the system-prompt suite.
+Focused types, lint, format and MDX pass. Fresh review, final-head proof and CI remain pending.
 
 ## Completed source review
 
