@@ -494,7 +494,7 @@ suite.define(() => {
       await captureDeviceRuntimeUiProof(suite, page, "01-main-agent-paired-node-selected.png");
       const agentPicker = page.locator(".new-session-page__select--agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
-      await agentPicker.getByRole("menuitemradio", { name: "research", exact: true }).click();
+      await agentPicker.getByRole("option", { name: "research", exact: true }).click();
       await pollText(agentPicker.locator(".agent-select__label")).toBe("research");
       await pollAttribute(where, "data-device-id").toBeNull();
       await pollText(where.locator(".new-session-page__trigger-label")).toBe("Local");

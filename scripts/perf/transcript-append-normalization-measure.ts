@@ -60,6 +60,7 @@ const counterKey = Symbol.for("openclaw.bench.transcript-normalization");
 Object.defineProperty(globalThis, counterKey, { value: counters, configurable: true });
 const owners = [
   "src/config/sessions/transcript-json.ts",
+  "src/config/sessions/transcript-json-normalize.ts",
   "src/config/sessions/session-accessor.sqlite-transcript-message-append.ts",
   "src/agents/sessions/session-manager-persistence-entry.ts",
   "src/agents/transcript-sanitize.ts",
@@ -78,7 +79,10 @@ registerHooks({
     }
     owner.loaded = true;
     const loaded = nextLoad(owner.source.href, context);
-    if ((mode !== "counts" && mode !== "owner") || !owner.name.endsWith("/transcript-json.ts")) {
+    if (
+      (mode !== "counts" && mode !== "owner") ||
+      !owner.name.endsWith("/transcript-json-normalize.ts")
+    ) {
       return { ...loaded, shortCircuit: true };
     }
     assert(typeof loaded.source === "string", "The TypeScript loader must supply source text");
