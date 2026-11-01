@@ -119,14 +119,36 @@ describe("twilioApiRequest", () => {
 
   it("exposes structured Twilio error codes from json error bodies", async () => {
     const message = "Call is not in-progress. Cannot redirect.";
-    mockResponse(new Response(JSON.stringify({ code: 21220, message }), { status: 400 }));
+    const moreInfo = "https://www.twilio.com/docs/errors/21220";
+    mockResponse(
+      new Response(JSON.stringify({ code: 21220, message, more_info: moreInfo, status: 400 }), {
+        status: 400,
+      }),
+    );
     const request = twilioApiRequest({ endpoint: "/Calls/CA123.json" });
     await expect(request).rejects.toBeInstanceOf(TwilioApiError);
     await expect(request).rejects.toMatchObject({
       name: "TwilioApiError",
       twilioCode: 21220,
-      message: "Twilio API error: 400 Call is not in-progress. Cannot redirect.",
+      moreInfo,
+      message: `Twilio API error: 400 Call is not in-progress. Cannot redirect. (Twilio error 21220: ${moreInfo})`,
     });
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the Twilio code in the message when the docs link is missing or not https", async () => {
+    const message = "Account not allowed to call +15550100";
+    mockResponse(
+      new Response(JSON.stringify({ code: 21216, message, more_info: "javascript:alert(1)" }), {
+        status: 400,
+      }),
+    );
+    const error: unknown = await twilioApiRequest().catch((cause: unknown) => cause);
+    assert(error instanceof TwilioApiError, "expected Twilio API error");
+    expect(error.twilioCode).toBe(21216);
+    expect(error.moreInfo).toBeUndefined();
+    expect(error.message).toBe(
+      "Twilio API error: 400 Account not allowed to call +15550100 (Twilio error 21216)",
+    );
   });
 });
