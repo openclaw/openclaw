@@ -32,6 +32,7 @@ import {
 } from "./sqlite-worker-database-admission-relay.js";
 import {
   isNativeCommitReceipt,
+  resolveSqliteWorkerFinishSettlement,
   type NativeCommitReceipt,
   type RetainedWorkerTransactionAdmission,
   type SqliteWorkerNativeSettlement,
@@ -69,7 +70,7 @@ export type SqliteWorkerOperationAdmission = SqliteWorkerNativeSettlementOwner &
   readonly cleanupFailures: readonly unknown[];
   observeRequests(observer: (request: SqliteWorkerAdmissionRequest) => void): void;
   service(): void;
-  finish(): void;
+  finish(outcome?: "not-entered"): void;
   bindDatabaseAuthority(authority: DatabaseAuthority): void;
 };
 
@@ -674,10 +675,11 @@ function createOperationAdmission(
       }
     },
     service,
-    finish() {
+    finish(outcome) {
       closed = true;
       // Receipts remain observable; late requests can no longer obtain authority.
       service();
+      settlement = resolveSqliteWorkerFinishSettlement(settlement, committed, outcome);
       if (decisions.size > 0) {
         for (const decision of decisions) {
           if (Atomics.load(decision, 0) === REQUESTED) {

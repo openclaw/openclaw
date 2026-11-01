@@ -162,13 +162,52 @@ it("preserves nested finish order and error precedence on repeated calls", () =>
   });
 
   try {
-    expect(() => admission.finish()).toThrow(failure);
+    expect(() => admission.finish("not-entered")).toThrow(failure);
     expect(() => admission.finish()).toThrow(failure);
     expect(events).toEqual(["first", "second", "first", "second"]);
+    expect(admission.settlement).toEqual({ kind: "completed" });
     expect(() => admission.observeRequests(() => {})).toThrow("closed");
   } finally {
     finish();
   }
+});
+
+it.each(["unknown", "committed", "completed"] as const)(
+  "preserves queued %s evidence when finishing a refused dispatch",
+  (outcome) => {
+    const admission = admissionFixture();
+    const committed = { version: 1, sequence: 1, facts: { revision: 2 } };
+    admission.port.postMessage(
+      outcome === "committed"
+        ? { kind: "native-commit", committed }
+        : {
+            kind: "native-settlement",
+            settlement: {
+              kind: outcome,
+              ...(outcome === "completed" ? { committed } : {}),
+            },
+          },
+      [],
+    );
+    admission.finish("not-entered");
+    expect(admission.settlement).toEqual(
+      outcome === "committed"
+        ? undefined
+        : {
+            kind: outcome,
+            ...(outcome === "completed" ? { committed: { facts: committed.facts } } : {}),
+          },
+    );
+    expect(admission.committed).toEqual(
+      outcome === "unknown" ? undefined : { facts: committed.facts },
+    );
+  },
+);
+
+it("keeps an unconfirmed finish unknown", () => {
+  const admission = admissionFixture();
+  admission.finish();
+  expect(admission.settlement).toBeUndefined();
 });
 
 it.each([
