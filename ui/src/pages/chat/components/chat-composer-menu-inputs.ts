@@ -1,8 +1,7 @@
 import type { ToolsEffectiveEntry, ToolsEffectiveResult } from "../../../api/types.ts";
 import { formatUiExternalText } from "../../../lib/format-error.ts";
 import { i18nRevision } from "../../../lib/reactive/i18n.ts";
-import { countSessionToolOverrides, readOwnEntry } from "../../../lib/sessions/tool-overrides.ts";
-import { uploadsEnabled } from "../../../lib/uploads.ts";
+import { readOwnEntry } from "../../../lib/sessions/tool-overrides.ts";
 import type { ChatComposerPlusMenuView } from "../composer-capability-types.ts";
 import type { ChatComposerPlusMenuContentProps } from "./chat-composer-plus-menu.types.ts";
 
@@ -69,28 +68,7 @@ export function menuRenderInputs(
   view: ChatComposerPlusMenuView,
 ) {
   const inputs: unknown[] = [i18nRevision()];
-  if (view === "root") {
-    inputs.push(uploadsEnabled(menu.attachments.uploadConfig), menu.showCapabilities);
-    for (const toggle of menu.rootToggles ?? []) {
-      inputs.push(
-        toggle.value,
-        toggle.label,
-        toggle.icon,
-        toggle.checked,
-        toggle.disabled,
-        toggle.title,
-      );
-    }
-    if (menu.showCapabilities) {
-      inputs.push(
-        menu.basePath,
-        menu.mutationBlockedReason,
-        menu.webSearchBaseEnabled,
-        menu.toolOverrides?.webSearch,
-        countSessionToolOverrides(menu.toolOverrides),
-      );
-    }
-  } else if (view === "skills") {
+  if (view === "skills") {
     inputs.push(menu.basePath, menu.skillsRead, menu.mutationBlockedReason);
     for (const skill of menu.skills ?? []) {
       inputs.push(

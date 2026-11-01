@@ -32,7 +32,7 @@ const { values } = parseArgs({
 assert(values.owner && values.output, "--owner and --output required");
 assert(values.mode === "timing" || values.mode === "allocation");
 assert(global.gc, "--expose-gc required");
-const { resolveCronJobBoundSessionKeys }: typeof import("../../src/cron/job-session-bindings.js") =
+const { resolveCronJobSessionBindings }: typeof import("../../src/cron/job-session-bindings.js") =
   await import(pathToFileURL(values.owner).href);
 const contexts: { cfg: OpenClawConfig; defaultAgentId: string }[] = [
   { cfg: { session: { mainKey: "home" } }, defaultAgentId: "ops" },
@@ -57,8 +57,8 @@ const read = (index: number) => {
   const opts = contexts[index % contexts.length]!;
   let matches = 0;
   for (const job of jobs) {
-    if (resolveCronJobBoundSessionKeys(job, opts).has("agent:ops:shared")) {
-      assert(resolveCronJobBoundSessionKeys(job, opts).has("agent:ops:shared"));
+    if (resolveCronJobSessionBindings(job, opts).has("agent:ops:shared")) {
+      assert(resolveCronJobSessionBindings(job, opts).has("agent:ops:shared"));
       matches++;
     }
   }

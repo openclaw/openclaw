@@ -148,13 +148,17 @@ const historyMessages = [
     model: "delivery-mirror",
     timestamp,
     openclawDeliveryMirror: {
-      kind: "skill-workshop-change",
-      agentId: "research",
-      runId,
-      skills: [
-        { name: skillName, action: "updated", summary: "tightened rollback" },
-        { name: archivedName, action: "created" },
-      ],
+      kind: "plugin-notice",
+      pluginId: "skill-workshop",
+      type: "skills-changed",
+      data: {
+        agentId: "research",
+        runId,
+        skills: [
+          { name: skillName, action: "updated", summary: "tightened rollback" },
+          { name: archivedName, action: "created" },
+        ],
+      },
     },
     __openclaw: { id: "persisted-workshop-notice", seq: 3 },
   },

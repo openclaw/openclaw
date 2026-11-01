@@ -123,6 +123,205 @@ hashes, failed samples, and per-cell results.
 
 ## Control UI warm interactions
 
+### Real-Gateway Usage model filters
+
+`bench-usage-gateway.ts` measures the production Usage page against isolated
+Gateways with durable synthetic session transcripts. Build both clean source
+checkouts with `pnpm build sourcePerformance` first, and supply a frozen
+production UI build with `--ui`. By default all three roles use that build.
+For a renderer change, add `--head-ui <frozen-candidate-ui-build>`: the candidate
+uses that build while both baseline controls keep `--ui`. Each role's complete
+UI tree hash is recorded in `helper-sources.json` and checked again after cleanup.
+Gateway and UI build identities are separate; do not attribute a new renderer to
+a backend-only build. The driver verifies each source commit against build-info
+and both local build stamps, then hashes the complete runtime output and generated
+workspace package outputs before and after the experiment. A frozen source build
+needs both `dist/` and the package `dist/` roots listed by
+`scripts/lib/tsdown-output-roots.mts`. It does not build, install, contact a provider, or use an
+operator's Gateway state.
+
+The source helper only seeds durable synthetic state and exits after draining
+its writers. Ordinary warm runs (including smoke and complete-sequence runs)
+then prepare each compiled Gateway through full-range Usage requests, retrying
+only after successful Usage publications until the response is complete and its
+counts match the fixture. Run with `TZ=UTC` so preparation uses the same
+specific-UTC request shape as the browser's Local mode. `warm-preparations.json` records this setup separately
+from measured observations. Its deadline is the Gateway's existing managed
+lifetime; the measured response deadline remains 60 seconds. Cold modes leave
+this preparation disabled, preserving their initial-load measurements.
+The measured Gateway runs that checkout's normal `dist/entry.js`, with production
+worker entrypoints. Seeding and startup are separate from browser default
+readiness, full-range loading, and warm filters. Numeric dispatch counters
+observe native worker messages, including the first synchronous task, without
+retaining or rewriting their payloads.
+Synthetic state uses the system temp directory so secure temporary-state discovery
+keeps its normal protection; `--out` owns the retained proof artifacts separately.
+The driver fixes one UTC end date for every fixture, including runs crossing midnight.
+All roles use the invoking driver's seed, RTT, and dispatch-observer helpers,
+whose hashes are recorded separately from the per-checkout runtime. The seed
+helper must remain compatible with both checkouts' database schemas. No
+aggregation runs in the shared seed process. Each Gateway uses its own runtime
+profiling and graceful-stop preloads.
+
+Start with the three-session smoke, which includes mixed-model usage and saved
+context, before increasing volume:
+
+```sh
+TZ=UTC NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-usage-gateway.ts \
+  --base <baseline-checkout> --head <candidate-checkout> --ui <frozen-ui-build> \
+  --out <new-output-directory> --sessions 3 --smoke
+```
+
+The smoke checks both model filters with one baseline/candidate/baseline triplet
+at Chromium 4× and at localhost and 100 ms added RTT. The candidate must dispatch
+one prepared-cohort task per model query, without preparing or resending raw
+rows. Totals and visible session counts must match independent fixture values.
+This is specifically a qualification workload for the prepared-cohort path;
+an older candidate without that path is expected to fail the work-count assertion.
+
+For qualification, use `--sessions 12000 --pairs 20` without `--smoke`. It seeds
+180 days and 96 models, retaining the same population throughout. Each distinct
+model query receives 20 interleaved triplets in each 1×/4× and localhost/100 ms
+cell. Keep the two queries separate when computing medians, p95 and min–max;
+baseline/baseline results are the same-host control. Record host load and judge
+noisy wall times with CPU and work counts. A clean median regression is at most
+5% with no worse p95; any 20% regression requires investigation.
+
+Use `--warm-cpu 1` or `--warm-cpu 4` to select one CPU rate for an ordinary warm
+run. Both models and RTT settings remain measured; for example, `--pairs 10
+--warm-cpu 1` records 120 filter observations plus 12 setup observations. The
+selector is also available with `--diagnostic` and `--structure` to attribute the
+same CPU rate; it is rejected with smoke or cold modes. Attribution still defaults
+to native CPU when the selector is omitted.
+
+Use `--engine webkit` for the same real-Gateway model queries, independent fixture
+assertions, alternating baseline/candidate/baseline triplets, and both RTT profiles
+in headless WebKit. WebKit runs at **native CPU only**; `--warm-cpu 4` is rejected
+because Playwright WebKit has no equivalent throttling control. It cannot certify
+a WebKit 4× target. Untraced browser CPU/heap/process counters are null, not zero;
+Gateway CPU and worker counts remain available. `--diagnostic --engine webkit`
+uses the existing in-process Inspector transport for separate Timeline and
+ScriptProfiler attribution. These durations are elapsed wall time, not CPU, and
+the trace includes automation and metric-probe boundaries. CPUProfiler's smoothed
+utilization is not action CPU. CDP-only `--structure` and `--warm-sequence` remain
+Chromium-only.
+
+Add `--profile-last-pair` to an ordinary warm run to append one traced pair
+covering both models after all requested untraced pairs. It reuses the same
+prepared Gateways, browsers, CPU rate and RTT, and produces the same attribution
+files as `--diagnostic`, plus mutation counts and before/after local node
+identities without copying DOM content or forcing GC. The mutation observer runs
+only during the appended diagnostics. Appended rows have `diagnostic: true`;
+exclude them from timing summaries. This option cannot be combined with smoke, cold, diagnostic,
+structure or warm-sequence modes.
+
+Add `--screenshots` to capture each role's first model pair after action timing,
+resource probes, and any trace shutdown. These synthetic full-page PNGs identify
+the role, engine, CPU rate, RTT, and model in their names. Inspect them before
+publishing. Screenshot work is outside the recorded action interval.
+After the full localhost sequence, it also captures the overview, cost-window, and session
+panels, then the session panel at a 390 px viewport. These lower-panel captures
+do not change the viewport or scroll position during any timed action.
+
+Outputs include actual RPC latency/bytes, Gateway process and main-thread CPU,
+Chromium thread-tick task/script/layout/style CPU for non-navigation actions,
+whole-renderer process CPU,
+sampled renderer RSS and JS heap endpoints, worker dispatch counts and packed
+bytes, resource snapshots, and cleanup failures. Each role owns a separate
+headless browser so process metrics exclude the other roles; record host memory
+as well as load with this three-browser setup. Process probes retain their own
+start/end timestamps and bracket the action outside its wall/main-thread timing;
+whole-process CPU includes that boundary overhead. Missing metrics or renderer
+PID changes fail collection. Default navigation records document CPU as unavailable:
+those counters reset across navigation, so only the whole-renderer and Gateway
+CPU intervals cover cold readiness. Heap and RSS endpoints are neither retained-memory
+nor peak/GPU measurements; no browser GC runs inside these timed cells. Child
+output streams
+redact each generated fixture token before writing setup or shutdown logs.
+Chromium throttling does
+not throttle the Node Gateway. The TCP relay adds 50 ms in each direction without
+interpreting HTTP or WebSocket messages; scheduling delay and backpressure may
+add more, and TCP handshakes are undelayed. Localhost bypasses the relay.
+Automation-to-visible-assertion wall time is not INP. Population activation is
+recorded separately from warm filters; per-cell memory snapshots do not establish
+bounded multi-snapshot retention. Runs without `--head-ui` cannot demonstrate a
+renderer change because all roles share the same UI. Keep failed output for diagnosis.
+
+For a fresh compiled cold comparison, add `--cold`. One invocation starts one
+fresh baseline/candidate/baseline triple, using separately seeded durable state,
+and measures only default readiness followed by the first 180-day population
+request at native Chromium CPU and localhost. It produces six observations and
+skips model filters. Run a screening triple first; repeated qualification needs
+separate invocations with new output directories, not `--pairs`. Twenty such
+triples provide 20 observations per role and phase. Keep A and C separate when
+reporting the cold baseline controls. Neither this native/localhost comparison
+nor reused later cells establish cold 4× or 100 ms RTT performance.
+
+For the backend's first full-range read, add `--cold-backend`. It starts fresh
+baseline/candidate/baseline Gateways one at a time and makes each one's first `sessions.usage`
+RPC request all 180 days through the canonical Usage request helper. No browser
+or default 30-day request warms this path. The three observations retain actual
+request parameters, every response payload including partials, Gateway process/main-thread and
+worker CPU snapshots, aggregation dispatches, and post-request resources. First-response
+and complete-ready wall/CPU metrics are separate. If Usage is still being summarized,
+successful `chat.metadata.changed` publications trigger coalesced re-reads, matching
+the page's session refresh path; no timed session polling occurs. All reads and
+publication waits share the same 60-second deadline from the first request. Startup
+backfill stays enabled, and each Gateway fully drains before the next role starts.
+Startup readiness diagnostics are saved even when the readiness check fails. A
+deadline abort remains a failed, censored observation without complete-ready metrics;
+the runner drains that Gateway and continues the remaining roles and pairs. Any
+failed observation makes the invocation exit nonzero; other errors stop the run. The
+client must run with `TZ=UTC`; it asserts the resolved timezone and offset before
+starting Gateways. The canonical helper then emits the browser fixture's exact
+date parameters (`mode: "specific"`, `timeZone: "UTC"`, `utcOffset: "UTC+0"`),
+with family grouping and the usual overview/cost-descending defaults.
+Each client has a fresh in-memory device identity and no saved credential writes.
+The resource capture forces main-isolate GC after timing; worker heaps are cached
+samples with their original coverage and age, not forced-GC retained memory.
+This single triple screens cold backend behavior. It does not qualify browser
+readiness or establish repeated cold performance.
+
+For repeated fresh-process backend reads, use `--cold-backend --cold-pairs 20`.
+Each role seeds once and snapshots its synthetic state after its seed writers
+exit, before any compiled Gateway opens it. Each Gateway process tree stops before
+the next role starts, and snapshots are restored at the same absolute path; each role
+keeps its port and token. File bytes and symlink targets are checked after each
+restore. Every sample starts a fresh compiled process with the pristine report
+state, and output files retain the pair number. This does not flush the operating
+system's file cache or measure cold-storage I/O. Omitting `--cold-pairs` keeps the
+single-triple behavior; `--pairs` still controls only warm filter repetitions.
+
+For attribution, add `--diagnostic`. It runs only 1× at localhost and 100 ms RTT,
+prepares the normal page, runs an untraced model00/model01 pair, then traces
+model00 from model01. The six traced actions retain full synthetic Usage response
+payloads, raw trace events, a 1 ms sampling profile, mapped main-thread hotspots,
+and events from every renderer thread in the wider process-probe interval.
+Marks distinguish action, response observed by the page, visible readiness,
+the two animation frames, and process-probe bounds. Paint, raster, compositor
+and GC events remain in the raw artifacts; overlapping trace slice durations
+must not be summed as CPU. These traced actions are diagnostic evidence, never
+samples for the untraced timing acceptance table. The narrow modes are mutually
+exclusive with `--smoke` and each other.
+
+For warm renderer attribution, `--structure` runs at 1×/localhost by default.
+Use `--structure --structure-rtt 100` for the same diagnostic with 100 ms added
+RTT; the selector is valid only with `--structure` and accepts `0` or `100`. Each role
+warms model00/model01, traces a natural return to model00, resets to model01,
+then traces a separate model00 return after browser GC. Only that second return
+has forced-GC heap and DOM counters before and after; GC stays outside timing.
+The six traces retain passive mutation-record counts and local chart/row node
+identities, plus all WebSocket frame IDs, methods/events, byte counts, and times.
+They retain no frame payloads or DOM text/attribute values. Added/removed counts
+refer to mutation-record roots, not every descendant. The observer and profiler
+add work, so these runs diagnose extra rendering or garbage collection; they
+never replace the earlier untraced timing results or establish a performance win.
+After population timing, this mode also checks the document's build identity and
+fetches the same-origin JavaScript and CSS assets observed by the browser. It
+compares their bytes with the selected frozen UI tree and writes one
+`served-ui-<role>-<cpu>x-<rtt>ms.json` receipt per role. This verifies the served
+build; it is not timing evidence, and ordinary warm runs do not make these requests.
+
 The headless Chromium/WebKit companion reuses the current interaction catalog and
 adds cold boot, persisted-state warm reload, 2,000-message open and 645-delta
 streaming. It alternates engines and bundles within each pair:
@@ -131,6 +330,45 @@ streaming. It alternates engines and bundles within each pair:
 NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
   --bundle-dir dist/control-ui --pairs 10 --viewport both
 ```
+
+`--pages` selects the route-catalog census: first visit after boot, each page's
+primary interaction, and route leave. The manifest records redirects,
+unavailable states and pages excluded for an active campaign; none silently
+count as passing coverage. Include `--source-root <checkout>` for the compiled
+Workboard fixture; comparisons also need `--compare-source-root <checkout>`
+matching their bundle's Workboard source. Run Chromium at `--cpu-throttle 1` and again at
+`--cpu-throttle 4`, then WebKit at 1x, using `--viewport both`. Narrow a follow-up
+with `--steps page-<route>-visit,page-<route>-action,page-<route>-leave`.
+Use `--pages --page-phases visit` to validate every route's loaded state before
+the `--page-phases action,leave` sweep; the default includes all three phases.
+Measure first-use costs separately with
+`--steps page-agent-selector-first-open,page-search-advanced-open,page-terminal-composer-input`.
+These explicit steps are excluded from normal `--pages` runs. Keep first-open
+results separate from route visits and warm interactions; the Terminal step
+creates its session before timing ten typed characters and submission.
+The Memory Import action now reviews a ten-file collection before deselecting
+it, so its results are not directly comparable with older deselect-only timings.
+Virtualized inventories use their logical row count for readiness, including
+Cron's first 50 loaded jobs, rather than requiring every row to be mounted.
+The page table includes longest observed main-thread task, standard CLS, all
+layout shifts including those after input, and DOM counts. Unsupported browser
+metrics are null. DOM counts are collected after the measured interval so the
+census does not add list-size-dependent work to timings. Use a separate `--trace` pass for WebKit script/style/layout
+attribution; its durations are elapsed time, never action CPU. One-pair sweeps
+rank candidates; performance claims require the paired runs and controls below.
+Every phase starts after New Session reports route-ready. Route-ready time ends
+after the loaded page is visible for two animation frames;
+wall time additionally includes driver round trips and assertions. Page targets
+are a longest task of 50 ms at 1x or 200 ms at 4x, zero CLS, and WebKit ready time
+at most 1.3x Chromium. Redirects, native-only actions, and resource execution
+outside the selected flow are recorded explicitly in the coverage manifest.
+
+Store benchmark artifacts on the SSD with `--output`. The harness intentionally
+leaves `TMPDIR` unchanged so OpenClaw's secure-temp guard keeps using the
+OS-provided private temporary directory.
+
+The opt-in [`chat-actions` census](bench-control-ui-chat-actions.md) covers command
+and mention menus, message actions, attachments, transcript search, and side panels.
 
 Use `--steps chat-typing,session-switch` for focused comparisons and `--trace`
 for separate Playwright/Inspector attribution runs. `--compare-bundle-dir` and
@@ -144,9 +382,35 @@ its estimate requires at least one second of interior sample coverage. The expli
 `provider-model-picker-cycles`, `session-switch-cycles`, `sidebar-toggle-cycles`,
 and `cron-held-typing-cycles` steps repeat eight fixed actions for longer CPU
 intervals, retaining their selection, focus, and held-request contracts. Use
-separate untraced runs for timing. Compare automation wall time
-across engines; do not divide their script or CPU measurements as though they
-were the same metric. Mock routing
+separate untraced runs for timing. The headline ratio ranks `actionTiming.applicationMs`:
+first trusted pointer/keyboard/input/wheel event to the last observed DOM mutation
+batch or native input value edit before the scenario returns. `driverMs` measures
+the initial delivery prefix; `settleMs` measures the remaining assertion/settle tail.
+These browser-clock phases sum to `browserSpanMs`, not Node `wallMs`. The report
+keeps wall and driver ratios visible. Missing input/commit boundaries are unranked,
+including navigation/reload and memory scenes.
+
+`--steps sidebar-open,sidebar-close --viewport mobile` measures each activation
+separately with the same 1,000-session fixture. The compound `sidebar-toggle`
+includes the exit animation and driver round trips before the second input;
+compare it only with the same motion contract. The single-action cases still
+wait for the real spring, while their input-to-commit clock excludes CSS-only
+motion after the last DOM mutation.
+
+This is an elapsed DOM-commit proxy, not CPU or input-to-paint latency. The driver
+prefix can include application focus work, and compound actions retain driver gaps
+between successive inputs inside `applicationMs`. Raw first/last-input, focus and
+commit timestamps plus input/mutation counts let traces distinguish those cases.
+Native input value edits may commit without MutationObserver records. Mutations after
+scenario return, paint-only work and CSS transitions are not commit boundaries.
+`scenarioMs` still includes delivery and assertions; `settleWaitMs` is only the
+final two-frame wait, and their sum remains `wallMs`. The probe adds a scenario-end
+RPC; do not compare instrumented wall times with historical uninstrumented runs as
+an application speedup. Consecutive-frame timestamp intervals report cadence, not
+the full wait. Traced document-retaining actions write `*.user-timing.json` with
+the same native input/run boundaries and last-commit mark. Navigation/reload retain
+their existing boot probes because navigation discards document-local marks.
+Mock routing
 disables HTTP caching; warm reload measures persisted state in the same context.
 Boot observations include browser-local transcript/composer readiness, navigation
 and optional paint milestones, completed-by-ready JavaScript/CSS/font requests,
@@ -159,9 +423,16 @@ Mobile transcript-top uses a native scrollport jump because Playwright's mobile
 WebKit driver has no wheel input; it is not a wheel-latency measurement. Tracing
 omits DOM snapshots so snapshot traversal does not dominate attribution.
 
+Mobile `data-logs-scroll` admits touch input with a native tap before jumping the
+log scrollport to each edge. It checks reader anchoring across a live tail and
+return to the newest line, not swipe physics or wheel latency. Desktop uses the
+existing wheel input; both paths retain the same scroll and tail assertions.
+
 Streaming coverage is selectable with `--steps streaming-645-deltas`,
 `streaming-645-deltas-slow`, `streaming-large-transcript`, `streaming-two-panes`,
-and `streaming-tool-code`. The slow case delivers the same 645 snapshots at
+and `streaming-tool-code`. `streaming-two-panes` is desktop-only: narrow layouts
+present only the active pane, so mobile observations record a viewport skip.
+The slow case delivers the same 645 snapshots at
 15 Hz instead of 30 Hz; this throttles delivery, not CPU (WebKit has no matching
 Chromium CPU-throttling API). Every pane must retain native typing, render the
 complete reply, and follow its growing tail; the tool/code case keeps its tool
@@ -195,6 +466,14 @@ history, requests two GCs and saves a heap snapshot. Each observation gets its
 own browser process. Reports include process-tree RSS, WebKit resource categories,
 heap class counts, detached DOM and active resource counters.
 
+`--steps memory-working-day` runs ten rounds of session switches, streaming,
+route/settings visits, pickers, dialogs and reconnects in one document. Use
+`--memory-soak-rounds 2` for a short census; the option accepts 1–10 and defaults
+to 10. Every complete round switches 20 sessions, streams five turns, reconnects
+once, and records a parked checkpoint. The fixture remains 200 sessions at every
+length. The manifest and scenario evidence record the selected workload; compare
+only runs with the same round count.
+
 Memory captures are excluded from the latency table. Compare warm and later
 checkpoints within each engine before attributing growth: Inspector/JIT warmup,
 retained Chat panes and bounded caches are not leaks. WebKit snapshot self sizes
@@ -206,6 +485,8 @@ current checkout; bundle comparisons alone do not compare plugin revisions.
 The collector clears WebKit Inspector's retained snapshot history after every
 capture, so WebKit heap object IDs are checkpoint-local. Raw snapshots remain
 available for class/edge inspection; use Chromium for stable cross-snapshot IDs.
+
+### Synthetic Gateway interactions
 
 Build with `pnpm ui:build`, then collect the production renderer's desktop and
 mobile interactions against the synthetic Gateway:
@@ -238,6 +519,15 @@ profiling and report median, p95, and min–max; every cell over 20% worse is ma
 for review. These are report-only measurements, not timing gates. Wall time is
 automation-to-assertion time, not INP. Keep failed attempts alongside successful
 captures and compare only runs with the same fixture, viewport, and collection mode.
+
+`bench-control-ui-reconnect.ts` measures recovery from synthetic transport loss,
+sleep, restart, and update. Its `manifest.json` records each input bundle's directory,
+build metadata, and `indexSha256`: the SHA-256 of the original `index.html` bytes,
+before any synthetic update rewrite. Match these hashes to the intended saved
+bundles when comparing results.
+`--service-workers allow|block` defaults to `allow` and records the selected policy
+in both the manifest and results. Use `block` to diagnose service-worker overlap;
+compare timings only between runs with the same policy.
 
 Heavy-content steps use `heavy-<fixture>-<action>` IDs. Fixtures are `code`
 (5,000 TypeScript lines), `auto-code` (5,000 language-free lines), `diff`
@@ -327,10 +617,44 @@ use `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to select the installed matching
 Playwright headless shell for both arms. The manifest records the executable;
 compare only against the same browser configuration.
 
+### Media cache and layout
+
+`bench-control-ui-media.ts` serves synthetic media and bootstrap data through the
+local benchmark HTTP server, with browser caching enabled. Thumbnail URLs receive
+bounded WebP renditions from the production thumbnail encoder; full-image URLs
+retain the original PNG. Media responses remain held until the load/CLS interval
+starts. `--profiles remote` applies one server-side 100 ms/shared 10 Mbps media
+schedule in both engines; static assets are unthrottled and outside that interval.
+
+Browser request events include cache hits. `cacheProbe.serverRequests` records
+actual HTTP admissions separately from `fetchAttempts.cacheOnly`, whose
+`only-if-cached` reads must never reach the server. These are request counts, not
+completed-download byte measurements. Earlier routed-media reports disabled HTTP
+caching and returned full-image bytes for thumbnails; compare the corrected
+workload only against runs using the same HTTP fixture and rendition metadata.
+Raw browser errors remain in `errors`, `consoleErrors`, and `failedRequests`.
+`unexpectedErrors` determines failure: WebKit cache-only misses are expected only
+when same-origin media GET rejections match the native fetch failures and console
+errors exactly, including duplicate counts. Page errors and HTTP failures always
+fail the sample; expected misses remain visible in `expectedCacheMisses`.
+
 ## Control UI route dependency probes
 
 `bench-control-ui-route-leaks.ts` compares cold direct navigation using separate
-coverage and interleaved timing contexts. The optional `apps-catalog`,
+coverage and interleaved timing contexts. `--viewport desktop|mobile` selects
+1440×1000 or 390×844 (with mobile/touch emulation); `--cpu-throttle <rate>` applies
+Chromium CPU throttling. Defaults remain desktop and 1×. Native Settings and
+Browser/Reader probes retain their own viewport overrides, recorded separately
+as `contextViewport`. The report records requested viewport, CPU rate and exact
+bundle identities for comparison.
+
+The Terminal, Dashboard, Dashboards, Custodian, Meetings, Memory Import, Debug,
+Logs, Skill Workshop, Skills and plugin routes use populated synthetic fixtures
+and wait for their usable content. For example, Terminal waits for its live
+terminal or desktop session inventory, and Dashboard waits for its report text.
+The `apps` route retains the same catalog fixture as `apps-catalog`.
+
+The optional `apps-catalog`,
 `apps-open-immediate`, and `apps-open-idle` routes seed a synthetic catalog and
 open its first App through the real launch, view, and sandbox path. Immediate
 opens have no intentional wait; idle opens wait at least two seconds without

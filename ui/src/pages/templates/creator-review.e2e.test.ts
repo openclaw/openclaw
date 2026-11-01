@@ -1,32 +1,31 @@
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, type Browser, type Page } from "playwright";
-import { expect, it } from "vitest";
+import { expect, inject, it } from "vitest";
 import type { OpenClawTestInstance } from "../../../../test/helpers/openclaw-test-instance.ts";
-import { runQaGatewayFixture } from "../../../../test/helpers/qa-gateway-cleanup.ts";
-import { startScrollInferenceFixture } from "../../e2e/chat-collaborator-scroll.real-gateway.test-support.ts";
-import { assertServedUi, pairFixture } from "../../e2e/chat-lifecycle.test-support.ts";
-import {
-  connectChatGateway,
-  createChatGatewayInstance,
-} from "../../e2e/chat-real-gateway.test-support.ts";
 import { createDarkDesktopControlUiContextOptions } from "../../e2e/control-ui-browser-options.test-support.ts";
 import { seedSidebarSettings } from "../../e2e/sidebar-contract.test-support.ts";
-import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import { getControlUiContextHandle } from "../../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../../test-helpers/control-ui-e2e-readiness.ts";
-import { takeControlUiScreenshotFrame } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import {
-  canRunPlaywrightChromium,
   installMockGateway,
   reconnectMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
   waitForControlUiRoute,
 } from "../../test-helpers/control-ui-e2e.ts";
 
-const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
+const {
+  executablePath,
+  available: chromiumAvailable,
+  wsEndpoint: chromiumWsEndpoint,
+} = inject("controlUiE2eChromium");
+
+function connectCreatorBrowser() {
+  return chromiumWsEndpoint
+    ? chromium.connect(chromiumWsEndpoint, { timeout: 30_000 })
+    : chromium.launch({ executablePath });
+}
 async function withHeldCreator(
   run: (fixture: {
     page: Page;
@@ -40,7 +39,7 @@ async function withHeldCreator(
   const release = Promise.withResolvers<void>();
   let browser: Browser | undefined;
   try {
-    browser = await chromium.launch({ executablePath });
+    browser = await connectCreatorBrowser();
     const page = await browser.newPage(createDarkDesktopControlUiContextOptions());
     await seedSidebarSettings(page, server.baseUrl, { sidebarAgentsMode: "roster" });
     const config = { gateway: { controlUi: { experimental: { templates: true } } } };
@@ -130,7 +129,7 @@ async function withHeldCreator(
   }
 }
 
-it.skipIf(!canRunPlaywrightChromium(executablePath))(
+it.skipIf(!chromiumAvailable)(
   "loads the creator on the first sidebar action and keeps duplicate clicks behind one admission",
   async () => {
     await withHeldCreator(async ({ page, gateway, imports, openAction, releaseAndSettle }) => {
@@ -168,7 +167,7 @@ it.skipIf(!canRunPlaywrightChromium(executablePath))(
   },
 );
 
-it.skipIf(!canRunPlaywrightChromium(executablePath)).each(["replacement", "read-only"] as const)(
+it.skipIf(!chromiumAvailable).each(["replacement", "read-only"] as const)(
   "rejects deferred creator writes after %s authority retirement",
   async (mode) => {
     await withHeldCreator(async ({ page, gateway, releaseAndSettle }) => {
@@ -238,13 +237,13 @@ it.skipIf(!canRunPlaywrightChromium(executablePath)).each(["replacement", "read-
   },
 );
 
-it.skipIf(!canRunPlaywrightChromium(executablePath))(
+it.skipIf(!chromiumAvailable)(
   "publishes the reviewed selection after closing a pending publish and retrying its failure",
   async () => {
     const server = await startControlUiE2eServer();
     let browser: Browser | undefined;
     try {
-      browser = await chromium.launch({ executablePath });
+      browser = await connectCreatorBrowser();
       const page = await browser.newPage(createDarkDesktopControlUiContextOptions());
       const draftId = "ec8f46b0-4ca3-4991-8a73-dfdcc8764087";
       const optionalFile = "workspace/checklist.md";
@@ -310,14 +309,6 @@ it.skipIf(!canRunPlaywrightChromium(executablePath))(
       await page.goto(`${server.baseUrl}templates?draft=${draftId}&agent=main`);
       const dialog = page.getByRole("dialog", { name: "Review your Template" });
       await dialog.waitFor();
-      const proofDir = createControlUiE2eArtifactDir("templates-rename-creator-after");
-      const frame = await takeControlUiScreenshotFrame(
-        page,
-        dialog,
-        [dialog.getByRole("button", { name: "Publish to ClawHub" })],
-        { animations: "disabled" },
-      );
-      await writeFile(`${proofDir}/after-creator.png`, frame.png);
       expect(await dialog.getByText("View", { exact: true }).count()).toBe(1);
       expect(await dialog.getByLabel("Description").inputValue()).toBe("Summarizes releases");
       await setReview("d");
@@ -370,6 +361,17 @@ it.skipIf(!canRunPlaywrightChromium(executablePath))(
 it.skipIf(!process.env.OPENCLAW_TEMPLATE_CREATOR_AUTHORITY_PROOF)(
   "dispatches an allowed creator once and rejects replaced or revoked authority through real Gateways",
   async () => {
+    const [
+      { runQaGatewayFixture },
+      { startScrollInferenceFixture },
+      { assertServedUi, pairFixture },
+      { connectChatGateway, createChatGatewayInstance },
+    ] = await Promise.all([
+      import("../../../../test/helpers/qa-gateway-cleanup.ts"),
+      import("../../e2e/chat-collaborator-scroll.real-gateway.test-support.ts"),
+      import("../../e2e/chat-lifecycle.test-support.ts"),
+      import("../../e2e/chat-real-gateway.test-support.ts"),
+    ]);
     const provider = await startScrollInferenceFixture();
     const instances: OpenClawTestInstance[] = [];
     let browser: Browser | undefined;

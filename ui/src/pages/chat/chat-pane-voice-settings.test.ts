@@ -15,7 +15,6 @@ it("opens voice settings for dictation without entering chat model setup", () =>
   const props = expectDefined(pane.chatProps, "rendered composer settings actions");
   props.onOpenDictationSettings?.();
   props.onOpenTalkSettings?.();
-  props.onModelSetup?.();
 
-  expect(navigate.mock.calls).toEqual([["talk"], ["talk"], ["model-setup"]]);
+  expect(navigate.mock.calls).toEqual([["talk"], ["talk"]]);
 });

@@ -1,8 +1,7 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import {
   bindCommandOwnerAuthority,
-  captureCommandOwnerAssertion,
-  getCommandOwnerAuthority,
+  CommandOwnerRevokedError,
 } from "../../auto-reply/command-owner-authority.js";
 import { bindRequesterProfile } from "../../auto-reply/requester-profile.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
@@ -131,6 +130,7 @@ export function createHostChannelInboundEventContextBuilder<
             return;
           }
           const requester = batch.at(-1)?.requesterProfile;
+          let operatorAuthority: ReturnType<typeof captureChannelOperatorRunAuthority> | undefined;
           if (
             principal &&
             requester &&
@@ -154,8 +154,31 @@ export function createHostChannelInboundEventContextBuilder<
                 );
               }
             }
+            const prepared = batch.at(-1)?.operatorAuthority;
+            const operatorIsCurrent = () =>
+              owner.isLive() &&
+              owner.resolveGatewayContext?.() === gateway &&
+              batch.every((input) =>
+                input?.operatorAuthority?.isCurrent(gateway.getRuntimeConfig()),
+              );
+            if (prepared && operatorIsCurrent()) {
+              operatorAuthority = captureChannelOperatorRunAuthority({
+                ...prepared.operatorProfile,
+                recoveryReference: prepared.recoveryReference,
+                getRuntimeConfig: () => gateway.getRuntimeConfig(),
+                signal: prepared.signal,
+                assertCurrent: () => {
+                  if (!operatorIsCurrent()) {
+                    throw new CommandOwnerRevokedError(
+                      "Channel operator authority changed; send a new request.",
+                    );
+                  }
+                },
+              });
+            }
             bindRequesterProfile(built, {
               ...requester,
+              operatorAuthority,
               isCurrent: () =>
                 owner.isLive() &&
                 owner.resolveGatewayContext?.() === gateway &&
@@ -180,28 +203,12 @@ export function createHostChannelInboundEventContextBuilder<
           }
           bindCommandOwnerAuthority(built, {
             recoveryReference: authority.recoveryReference,
+            operatorAuthority,
             isCurrent: () =>
               owner.isLive() &&
               owner.resolveGatewayContext?.() === gateway &&
               authority.isCurrent(gateway.getRuntimeConfig()),
           });
-          const assertCurrent = captureCommandOwnerAssertion(built);
-          const commandOwner = getCommandOwnerAuthority(built);
-          if (authority.operatorProfile && assertCurrent && commandOwner) {
-            bindCommandOwnerAuthority(built, {
-              ...commandOwner,
-              operatorAuthority: captureChannelOperatorRunAuthority({
-                ...authority.operatorProfile,
-                recoveryReference:
-                  authority.recoveryReference?.version === 1
-                    ? authority.recoveryReference
-                    : undefined,
-                getRuntimeConfig: () => gateway.getRuntimeConfig(),
-                assertCurrent,
-                signal: authority.signal,
-              }),
-            });
-          }
         };
         bindParticipants();
       }

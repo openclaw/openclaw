@@ -6,10 +6,18 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { MediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
 import { normalizeMediaExecutionProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
+import type {
+  MediaAttachment,
+  MediaUnderstandingCapability,
+  MediaUnderstandingDecision,
+  MediaUnderstandingModelDecision,
+  MediaUnderstandingOutput,
+} from "../../packages/media-understanding-common/src/types.js";
 import {
   estimateBase64Size,
   resolveVideoMaxBase64Bytes,
 } from "../../packages/media-understanding-common/src/video.js";
+import { resolveImageCompressionModelPolicy } from "../agents/image-compression-policy.js";
 import type { RuntimeMsgContext as MsgContext, TemplateContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -58,11 +66,6 @@ import { isTranscriptArtifactText } from "./transcription-text.js";
 import type {
   AudioTranscriptionResult,
   AudioTranscriptionRequest,
-  MediaAttachment,
-  MediaUnderstandingCapability,
-  MediaUnderstandingDecision,
-  MediaUnderstandingModelDecision,
-  MediaUnderstandingOutput,
   MediaUnderstandingProvider,
 } from "./types.js";
 
@@ -295,11 +298,13 @@ export async function runProviderEntry(params: {
         ...normalizedMedia,
         fileName: media.fileName,
         maxBytes,
-        cfg,
-        provider: requestProviderId,
-        model: modelId,
-        agentDir: params.agentDir,
-        workspaceDir: params.workspaceDir,
+        modelPolicy: await resolveImageCompressionModelPolicy({
+          cfg,
+          provider: requestProviderId,
+          model: modelId,
+          agentDir: params.agentDir,
+          workspaceDir: params.workspaceDir,
+        }),
       });
     } catch (error) {
       if (error instanceof ImageOptimizationLimitError) {

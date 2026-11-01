@@ -101,7 +101,7 @@ export async function resolveUpdateCommandTarget(
       // Initialization and confirmations can outlive the earlier admission snapshot.
       const pkgOwnership = createSystemPackageOwnershipInspection(updateStepTimeoutMs);
       await pkgOwnership.assertUnowned(discoveredRoot);
-      let { devTarget } = prepared;
+      let { devTarget, servicePlan: managedServicePlan } = prepared;
       let root = prepared.servicePlan?.rootRedirect?.root ?? discoveredRoot;
       let updateInstallKind = installKind;
       let managedServiceRoot = prepared.servicePlan?.serviceRoot;
@@ -325,27 +325,22 @@ export async function resolveUpdateCommandTarget(
       let packageTargetSchemaVersions: OpenClawSchemaVersions | undefined;
       let packageRuntimeTarget: Parameters<typeof resolvePackageRuntimePreflight>[0]["target"];
       let managedServiceRootRedirect: ManagedServiceRootRedirect | null = null;
-      // The service runtime can differ even when its package root matches the shell.
       let managedServiceNodeRunner: string | undefined;
       let packageUpdateNodeRunner: string | undefined;
-      let serviceUnitTarget: string | undefined;
 
       if (updateInstallKind === "package") {
-        const servicePlan =
-          prepared.servicePlan ??
-          (await resolveManagedServicePackageUpdatePlan({
-            root,
-            pkgOwnership,
-            rebind: prepared.shouldRestart,
-          }));
-        await pkgOwnership.assertUnowned(servicePlan.rootRedirect?.root ?? root);
-        managedServiceRootRedirect = servicePlan.rootRedirect;
-        serviceUnitTarget = servicePlan.serviceUnitTarget;
-        managedServiceRoot = servicePlan.serviceRoot;
-        managedServiceNodeRunner = servicePlan.nodeRunner;
+        managedServicePlan ??= await resolveManagedServicePackageUpdatePlan({
+          root,
+          pkgOwnership,
+          rebind: prepared.shouldRestart,
+        });
+        await pkgOwnership.assertUnowned(managedServicePlan.rootRedirect?.root ?? root);
+        managedServiceRootRedirect = managedServicePlan.rootRedirect;
+        managedServiceRoot = managedServicePlan.serviceRoot;
+        managedServiceNodeRunner = managedServicePlan.nodeRunner;
         root = managedServiceRootRedirect?.root ?? discoveredRoot;
         if (!opts.json) {
-          const { rootRedirect, nodeRunner } = servicePlan;
+          const { rootRedirect, nodeRunner } = managedServicePlan;
           if (rootRedirect) {
             defaultRuntime.log(
               theme.muted(`Targeting managed gateway service package root: ${rootRedirect.root}`),
@@ -363,10 +358,10 @@ export async function resolveUpdateCommandTarget(
             if (nodeRunner) {
               defaultRuntime.log(theme.muted(`Managed gateway service runtime: ${nodeRunner}`));
             }
-          } else if (servicePlan.serviceRoot) {
+          } else if (managedServicePlan.serviceRoot) {
             defaultRuntime.log(
               theme.muted(
-                `Updating this installation and rebinding the managed Gateway from ${servicePlan.serviceRoot} after ownership and runtime verification.`,
+                `Updating this installation and rebinding the managed Gateway from ${managedServicePlan.serviceRoot} after ownership and runtime verification.`,
               ),
             );
           } else if (nodeRunner) {
@@ -416,7 +411,7 @@ export async function resolveUpdateCommandTarget(
           installKind,
           timeoutMs: updateStepTimeoutMs,
           pkgOwnership,
-          serviceUnitTarget,
+          serviceUnitTarget: managedServicePlan?.serviceUnitTarget,
         }).catch(async (error: unknown) => {
           if (hasCommandProcessCleanupError(error) || !(error instanceof UpdatePreMutationError)) {
             throw error;
@@ -626,6 +621,9 @@ export async function resolveUpdateCommandTarget(
           target: packageRuntimeTarget,
           root,
           nodeRunner: managedServiceNodeRunner ?? packageUpdateNodeRunner,
+          service: managedServicePlan?.service,
+          shouldRestart: prepared.shouldRestart,
+          runtimeRecovery: opts.runtimeRecoveryEnv ? { env: opts.runtimeRecoveryEnv } : undefined,
           timeoutMs: updateStepTimeoutMs,
         });
         if (!runtime.ok) {
@@ -637,12 +635,14 @@ export async function resolveUpdateCommandTarget(
           );
           return undefined;
         }
-        if (
-          runtime.value.nodeSecurityWarning &&
-          runtime.value.nodeSecurityWarning !== prepared.nodeSecurityWarning
-        ) {
-          warn(`SECURITY WARNING: ${runtime.value.nodeSecurityWarning}`);
-          recordNodeSecurityWarning(runtime.value.nodeSecurityWarning);
+        packageUpdateNodeRunner = runtime.value.nodeRunner ?? packageUpdateNodeRunner;
+        if (packageInstallEnv && packageUpdateNodeRunner) {
+          packageInstallEnv = withNodeRuntimePath(packageInstallEnv, packageUpdateNodeRunner);
+        }
+        const warning = runtime.value.nodeSecurityWarning;
+        if (warning && warning !== prepared.nodeSecurityWarning) {
+          warn(`SECURITY WARNING: ${warning}`);
+          recordNodeSecurityWarning(warning);
         }
       }
 

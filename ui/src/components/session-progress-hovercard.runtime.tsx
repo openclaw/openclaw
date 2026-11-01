@@ -3,7 +3,6 @@ import type { ProgressCard, ProgressCardGetParams } from "@openclaw/gateway-prot
 import { render, spread } from "@solidjs/web";
 import { createMemo, onSettled, runWithOwner, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { resolveControlUiAvatarAuth } from "../app/control-ui-auth.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
@@ -294,10 +293,7 @@ function createSessionProgressHovercard(
       row: sidebarRow
         ? {
             label: sidebarRow.label,
-            color: sidebarRow.color,
             attention: sidebarRow.attention,
-            boardFace: sidebarRow.boardFace,
-            hasAutomation: sidebarRow.hasAutomation,
             hasActiveRun: sidebarRow.hasActiveRun,
             gatewayHasActiveRun: sidebarRow.gatewayHasActiveRun,
             hasActiveSubagentRun: sidebarRow.hasActiveSubagentRun,
@@ -310,7 +306,8 @@ function createSessionProgressHovercard(
             expandedParticipants: sidebarRow.expandedParticipants,
             participantCount: sidebarRow.participantCount,
             workContext: sidebarRow.workContext,
-            placementMachine: sidebarRow.placementMachine,
+            placementProviderId: sidebarRow.placementProviderId,
+            placementProfileId: sidebarRow.placementProfileId,
             createdAt: sidebarRow.createdAt,
             startedAt: sidebarRow.startedAt,
             updatedAt: sidebarRow.updatedAt,
@@ -345,25 +342,6 @@ function createSessionProgressHovercard(
       // The card can outlive its row after navigation.
       personActivity: currentContext
         ? personActivityRouting(currentContext, () => close())
-        : undefined,
-      automationLink: currentContext
-        ? {
-            gateway: applicationGateway(),
-            sessionKey,
-            agentId: session.agentId!,
-            href: `${pathForRoute("cron", currentContext.basePath)}?${new URLSearchParams({ session: sessionKey, agent: session.agentId! })}`,
-            navigate: (jobId) => {
-              const context = applicationContext();
-              const search = new URLSearchParams({ session: sessionKey, agent: session.agentId! });
-              if (jobId) {
-                search.set("job", jobId);
-              }
-              close();
-              context?.navigate("cron", {
-                search: `?${search}`,
-              });
-            },
-          }
         : undefined,
       pullRequests,
       progressCard: lastProgressCard,

@@ -2,7 +2,7 @@ Third-party notices for the shared Mermaid-syntax renderer
 
 Pele and DOMPurify are distributed with the offline renderer.
 
-Pele 1.6.0 — https://github.com/obsidianmd/pele
+Pele 1.9.0 — https://github.com/obsidianmd/pele
 
 MIT License
 

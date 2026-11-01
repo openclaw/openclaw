@@ -42,11 +42,12 @@ export async function prepareInteractionNavigation(page: Page) {
   await navigation(page, "pages");
 }
 
+/** Wait two frames; the returned timestamp interval excludes waiting for the first frame. */
 export async function frames(page: Page) {
-  await page.evaluate(
+  return page.evaluate(
     () =>
-      new Promise<void>((resolve) => {
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      new Promise<number>((resolve) => {
+        requestAnimationFrame((start) => requestAnimationFrame((end) => resolve(end - start)));
       }),
   );
 }

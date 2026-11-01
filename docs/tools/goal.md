@@ -17,6 +17,10 @@ In built-in chat runs and supported local or cloud-worker Codex sessions, OpenCl
 pursuing an active goal after a normal turn finishes, even when the model ends with a final reply instead of calling
 another tool. A goal is not a reminder, cron job, or standing order.
 
+Local Codex sessions also support explicit Resume of an existing goal. Resume
+retains the goal identity, objective, and conversation history. If current work is
+still active, wait for it to settle before retrying Resume.
+
 Goals are session state: they move with the session key, survive process
 restarts, and appear in `/goal`, the model-facing goal tools, and the TUI
 footer.
@@ -257,9 +261,10 @@ Starting a Goal saves the Goal and its user turn together with the operation
 receipt before acknowledging Send. A failed admission leaves the draft intact and
 does not create a Goal. A failed older chat send stays separate from a newly opened
 Goal draft instead of filling its empty objective. Start and Resume require an idle
-built-in local session with recoverable history, or an existing Codex session
-assigned to a cloud worker with remote execution. Worker setup must admit the input
-before the runtime commits the Goal and its operation receipt. Other external
+built-in local session with recoverable history, or an idle existing Codex session
+running locally or on a cloud worker with remote execution. Codex input must pass
+native admission before the runtime commits the Goal and its operation receipt.
+Cloud-worker sessions also require worker setup to admit that input. Other external
 runtimes remain unsupported. Goals are not queued or steered into another run.
 The UI reports unsupported or busy sessions rather than creating an inactive Goal.
 

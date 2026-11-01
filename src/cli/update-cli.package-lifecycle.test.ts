@@ -2,13 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { root as fsSafeRoot, type Root } from "@openclaw/fs-safe/root";
 import { describe, expect, it, vi } from "vitest";
+import { resolveConfigPath } from "../config/paths.js";
 import type { PackageUpdateTransaction } from "../infra/package-update-swap-contract.js";
 import type { UpdateDoctorConfigWriteRefusal } from "../infra/update-doctor-config.js";
 import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   writeUpdatePostInstallDoctorResult,
 } from "../infra/update-doctor-result.js";
-import { cleanupStaleManagedServiceUpdateHandoffs } from "../infra/update-managed-service-handoff-cleanup.js";
 import { renderUpdateRunReport } from "../infra/update-run-report.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -148,7 +148,6 @@ describe("update-cli", () => {
     });
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
     expectNoSideEffects(resolveGlobalManager, replaceConfigFile, updateGitCheckout);
-    expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
     expect(getErrorOutput()).toContain("openclaw update --channel dev");
   });
@@ -303,11 +302,15 @@ describe("update-cli", () => {
   });
 
   it("fails package activation when Doctor reports requester-revoked", async () => {
+    await useFileBackedConfig();
     const target = "2026.9.4";
     const { nodeModules, pkgRoot, entryPath } = await setupInstalledPackageRoot(
       tempDirs.make("openclaw-update-doctor-failure-"),
       "2026.9.3",
     );
+    const packageBefore = await fs.readFile(path.join(pkgRoot, "package.json"));
+    const configPath = resolveConfigPath();
+    const configBefore = await fs.readFile(configPath);
     primeNpmChannelTag("latest", target);
     mockFileBackedPathExists();
     const refusal: UpdateDoctorConfigWriteRefusal = {
@@ -317,6 +320,11 @@ describe("update-cli", () => {
     };
     mockNpmGlobalCommands(nodeModules, async (argv, options) => {
       if (argv[1] === entryPath && argv[2] === "doctor") {
+        expect(
+          JSON.parse(await fs.readFile(path.join(pkgRoot, "package.json"), "utf8")),
+        ).toMatchObject({
+          version: target,
+        });
         const env = typeof options === "number" ? undefined : options.env;
         const resultPath = requireValue(
           env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV],
@@ -341,6 +349,8 @@ describe("update-cli", () => {
       reason: "requester-revoked",
       steps: expect.arrayContaining([expect.objectContaining({ configWriteRefusal: refusal })]),
     });
+    expect(await fs.readFile(path.join(pkgRoot, "package.json"))).toEqual(packageBefore);
+    expect(await fs.readFile(configPath)).toEqual(configBefore);
   });
 
   it("continues package post-core work for explicit post-update doctor advisories", async () => {

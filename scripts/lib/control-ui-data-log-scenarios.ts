@@ -251,15 +251,29 @@ export const dataLogScenarios: readonly InteractionScenario[] = [
     prepare: holdNextTail,
     run: async (page, gateway) => {
       const stream = page.getByRole("region", { name: "Logs", exact: true });
-      await stream.hover();
-      await page.mouse.wheel(0, -1_000_000);
+      const mobile = page.viewportSize()!.width < 768;
+      if (mobile) {
+        // Admit touch input before the native scrollport jump; this does not measure a swipe.
+        await stream.tap();
+        await stream.evaluate((element) => element.scrollTo({ top: 0, behavior: "instant" }));
+      } else {
+        await stream.hover();
+        await page.mouse.wheel(0, -1_000_000);
+      }
       await page.waitForFunction(() => document.querySelector(".log-stream")?.scrollTop === 0);
       await gateway.resolveDeferred("logs.tail", createDataLogTail(bufferLimit));
       await waitForLine(page, tailSize);
       if ((await stream.evaluate((element) => element.scrollTop)) !== 0) {
         throw new Error("A live tail moved the manually scrolled log stream");
       }
-      await page.mouse.wheel(0, 1_000_000);
+      if (mobile) {
+        await stream.tap();
+        await stream.evaluate((element) =>
+          element.scrollTo({ top: element.scrollHeight, behavior: "instant" }),
+        );
+      } else {
+        await page.mouse.wheel(0, 1_000_000);
+      }
       await page.waitForFunction(() => {
         const element = document.querySelector(".log-stream");
         return element && element.scrollTop + element.clientHeight >= element.scrollHeight - 2;

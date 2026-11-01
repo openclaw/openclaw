@@ -1,6 +1,7 @@
 import type { GatewaySessionRow } from "../api/types.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { t } from "../i18n/index.ts";
+import { registerSessionMenuEnglish } from "../i18n/locales/en-session-menu.ts";
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
@@ -26,6 +27,7 @@ import {
 } from "./session-organizer-batch-mutations.ts";
 import { patchSession } from "./session-organizer-patch.runtime.ts";
 
+registerSessionMenuEnglish();
 registerSessionOrganizationEnglish();
 
 export async function snoozeSessionWithUndo(

@@ -36,6 +36,7 @@ import type { CronFormState, CronState } from "../../lib/cron/types.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { formatMissingOperatorReadScopeMessage } from "../../lib/gateway-errors.ts";
+import { profileDirectory } from "../../lib/profile-directory.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectOwner, projectMutableSource } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
@@ -47,6 +48,7 @@ import {
 } from "./delivery-conversations.ts";
 import { createCronEventEditor } from "./event-editor.ts";
 import { resolveCronEventPatch, validateCronEventSelection } from "./event-source.ts";
+import { canManageCronJob } from "./human-owner.ts";
 import { createCronRouteSelection, resolveCronRouteData } from "./route-model.ts";
 import { createCronRunTranscript } from "./run-transcript.tsx";
 
@@ -131,8 +133,16 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     ensureInitialData();
     publish();
   });
-  function canManageCron(): boolean {
+  function canCreateCron(): boolean {
     return readGatewayOperatorAccess(context().gateway.snapshot).canAdmin;
+  }
+
+  function canManageJob(job: CronJob): boolean {
+    return canManageCronJob(context().gateway, job);
+  }
+
+  function canManageCron(): boolean {
+    return cron.cronEditingJob ? canManageJob(cron.cronEditingJob) : canCreateCron();
   }
 
   function bindContext() {
@@ -183,7 +193,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
           routeSelection.requested = false;
         }
       }
-      if (snapshot.phase === "connected" && !readGatewayOperatorAccess(snapshot).canAdmin) {
+      if (snapshot.phase === "connected" && !canManageCron()) {
         deliveryDirectory.clear();
       }
       if (snapshot.phase === "connected" && !hasOperatorReadAccess(snapshot.hello?.auth ?? null)) {
@@ -301,6 +311,15 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     if (!canRefreshCron() || !cron.connected || !cron.client) {
       return;
     }
+    // Owner choices share the page's visibility and Gateway admission, not an eager subscription.
+    const current = cron;
+    void profileDirectory(context().gateway)
+      .load(forceRefresh)
+      .then(() => {
+        if (canRefreshCron(current)) {
+          publish();
+        }
+      });
     if (!context().agents.state.agentsList && !context().agents.state.agentsLoading) {
       void context().agents.ensureList();
     }
@@ -442,7 +461,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     const view = presentation.capture();
     if (
       !presentation.isCurrent(view) ||
-      !canManageCron() ||
+      !canManageJob(job) ||
       !cron.connected ||
       !cron.client ||
       cron.cronBusy
@@ -453,7 +472,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       cron.cronEditingJob?.id === job.id
         ? cron.cronEditingJob
         : cron.cronJobs.find((entry) => entry.id === job.id);
-    if (!selected) {
+    if (!selected || !canManageJob(selected)) {
       return;
     }
     const scope = gateway.capture();
@@ -465,9 +484,10 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     void presentation.mutate(view, pending, { id: selected.id, enabled });
   }
 
-  function runCronAdminTask<T>(task: (cronState: CronState) => Promise<T>): void {
+  function runCronAdminTask<T>(job: CronJob, task: (cronState: CronState) => Promise<T>): void {
     // Recheck access at dispatch after possible reconnect or downgrade.
-    if (!canManageCron()) {
+    const current = cron.cronJobs.find((entry) => entry.id === job.id) ?? cron.cronEditingJob;
+    if (!current || current.id !== job.id || !canManageJob(current)) {
       return;
     }
     void presentation.runTask(task);
@@ -511,10 +531,12 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     deliveryDirectory.retireEditor();
     cancelCronEdit(cron, context().agentSelection.state.selectedId);
     cron.cronCreateOpen = createOpen;
+    const identity = context().gateway.snapshot.selfUser?.identity;
+    cron.cronForm.ownerProfileId = identity?.type === "profile" ? identity.id : "";
   }
 
   function openCreate(patch?: Partial<CronFormState>) {
-    if (!canManageCron()) {
+    if (!canCreateCron()) {
       return;
     }
     resetEditor(true);
@@ -526,12 +548,14 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
   }
 
   function cloneJob(job: CronJob) {
-    if (!canManageCron()) {
+    if (!canCreateCron()) {
       return;
     }
     routeSelection.target = null;
     // A clone is a prefilled create: the editor submits cron.add, not update.
     startCronClone(cron, job);
+    const identity = context().gateway.snapshot.selfUser?.identity;
+    cron.cronForm.ownerProfileId = identity?.type === "profile" ? identity.id : "";
     cron.cronCreateOpen = true;
     deliveryDirectory.openEditor();
     publishCronState();
@@ -542,21 +566,19 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     const currentContext = context();
     const cronState = cron;
     const connectionScope = gateway.capture();
-    const hadAdminAccess = canManageCron();
     const selectedJob =
       cronState.cronEditingJob?.id === job.id
         ? cronState.cronEditingJob
         : cronState.cronJobs.find(
             (entry) => entry.id === job.id && entry.updatedAtMs === job.updatedAtMs,
           );
-    if (!presentation.isCurrent(view) || !connectionScope || !hadAdminAccess || !selectedJob) {
+    if (!presentation.isCurrent(view) || !connectionScope || !canManageJob(job) || !selectedJob) {
       return;
     }
     const selectedJobId = selectedJob.id;
     const selectedJobRevision = selectedJob.updatedAtMs;
-    const selectedJobName = selectedJob.name;
     const confirmed = await showConfirmDialog({
-      title: t("cron.actions.removeConfirmTitle", { name: selectedJobName }),
+      title: t("cron.actions.removeConfirmTitle", { name: selectedJob.name }),
       message: t("cron.actions.removeConfirmMessage"),
       confirmLabel: t("cron.actions.remove"),
       danger: true,
@@ -571,8 +593,8 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       context() !== currentContext ||
       cron !== cronState ||
       !gateway.isCurrent(connectionScope) ||
-      !canManageCron() ||
       !currentJob ||
+      !canManageJob(currentJob) ||
       currentJob.updatedAtMs !== selectedJobRevision
     ) {
       return;
@@ -667,7 +689,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     onClone: cloneJob,
     onToggle: (job: CronJob, enabled: boolean) => toggle(job, enabled),
     onRun: (job: CronJob, mode?: "force" | "due") =>
-      runCronAdminTask((cronState) => runCronJob(cronState, job.id, mode ?? "force")),
+      runCronAdminTask(job, (cronState) => runCronJob(cronState, job.id, mode ?? "force")),
     onRemove: (job: CronJob) => {
       const view = presentation.capture();
       return removeJob(job).catch((error: unknown) => presentation.reportError(view, error));
@@ -707,6 +729,8 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     getActionRetired: () => presentation.retired,
     reads: presentation.reads,
     canManageCron,
+    canManageJob,
+    canCreateCron,
     cronModelSuggestions: presentation.modelSuggestions,
     listTab,
     detailTab,

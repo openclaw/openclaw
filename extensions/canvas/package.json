@@ -8,7 +8,7 @@
     "@openclaw/plugin-sdk": "workspace:*"
   },
   "dependencies": {
-    "typebox": "1.4.2"
+    "typebox": "1.4.3"
   },
   "openclaw": {
     "extensions": [

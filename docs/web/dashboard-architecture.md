@@ -144,6 +144,8 @@ sandbox proxy described below.
 - **Update in place:** re-emitting a widget with the same `name` and content
   owner replaces its content, bumps `revision`, and broadcasts `board.changed`.
   Live views update that cell. Document widgets reload that iframe only.
+  Naming the widget's current tab does not change its position. A different
+  tab or an explicit `after` anchor requests a layout move.
   Changing the content owner requires removing the widget before creating its replacement.
 - **Byte freezing:** HTML grants bind to the SHA-256
   digest of the approved content. Preserving a grant requires the same content
@@ -500,8 +502,11 @@ invalidate the host's exact session projection before the mutation returns;
 cleanup failures do not turn a completed write into a retryable failure.
 Existing-session write preflight, source-handle acquisition,
 schema/bootstrap/migration, and board-presence projection retain their existing
-owners. Reads capture
-their physical store before waiting and join the same per-agent FIFO as writes.
+owners. Reads capture their physical store before waiting. For an admitted database,
+`board.get` serves a committed metadata snapshot without joining the per-agent write queue. A concurrent
+write may supersede that snapshot; document delivery and capability use still
+check the current widget revision and grants through ordered reads.
+Authority-consumer reads join the same per-agent FIFO as writes.
 The read worker retains its admitted read-only connection and reads one coherent
 snapshot without creating missing board tables or opening a writer publication.
 The host checks the captured physical identity, native mutation witness, and

@@ -10,7 +10,7 @@
   "dependencies": {
     "@livekit/rtc-node": "1.1.0",
     "livekit-server-sdk": "2.19.1",
-    "typebox": "1.4.2",
+    "typebox": "1.4.3",
     "zod": "4.6.7"
   },
   "devDependencies": {

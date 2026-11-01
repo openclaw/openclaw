@@ -202,24 +202,22 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
     expectAnchorOnly(database.path);
   });
 
-  it("closes default and explicit stores with paired handles and a PostgreSQL receipt", () => {
-    return admit(() => {
-      for (const options of [
-        { agentId: "main" },
-        { agentId: "alternate", path: path.join(root, "explicit", "openclaw-agent.sqlite") },
-      ]) {
-        const database = openDatabase(options);
-        assert(isPostgresSqlConnection(database.db));
-        const anchor = database.db.anchor;
-        closeReceipts.mockClear();
-        expect(owners.closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
-        expect([database.db.isOpen, anchor.isOpen]).toEqual([false, false]);
-        expect(closeReceipts).toHaveBeenCalledWith(
-          `agent database clean-close receipt: postgres-closed; agent=${options.agentId}`,
-          expect.objectContaining({ agentId: options.agentId, receipt: "postgres-closed" }),
-        );
-      }
-    });
+  it("closes default and explicit stores with paired handles and a PostgreSQL receipt", async () => {
+    for (const options of [
+      { agentId: "main" },
+      { agentId: "alternate", path: path.join(root, "explicit", "openclaw-agent.sqlite") },
+    ]) {
+      const database = openDatabase(options);
+      assert(isPostgresSqlConnection(database.db));
+      const anchor = database.db.anchor;
+      closeReceipts.mockClear();
+      expect(await owners.closeOpenClawAgentDatabaseByPathAsync(database.path)).toBe(true);
+      expect([database.db.isOpen, anchor.isOpen]).toEqual([false, false]);
+      expect(closeReceipts).toHaveBeenCalledWith(
+        `agent database clean-close receipt: postgres-closed; agent=${options.agentId}`,
+        expect.objectContaining({ agentId: options.agentId, receipt: "postgres-closed" }),
+      );
+    }
   });
 
   it("reuses one idle PostgreSQL backend across sequential read-only session opens", async () => {
@@ -235,6 +233,123 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
         }
       });
     expect(backend()).toBe(backend());
+  });
+
+  it("returns idle PostgreSQL backends without revoking logical readers or active borrowers", async () => {
+    await createSession("readonly-scope-release");
+    const { OpenClawAgentDatabaseReadOnlyScope } =
+      await import("./openclaw-agent-db-readonly-scope.js");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      admit(() => {
+        for (const cached of [false, true]) {
+          const scope = new OpenClawAgentDatabaseReadOnlyScope(cached);
+          const options = { agentId: "actor" };
+          try {
+            const first = scope.retain(options);
+            const second = scope.retain(options);
+            assert(first.found && second.found);
+            const db = first.database.db;
+            const pid = db.prepare("SELECT pg_backend_pid() AS pid").get()?.pid;
+            second.claim.release();
+            vi.advanceTimersByTime(30 * 60_000);
+            expect(first.claim.isCurrent()).toBe(true);
+            first.claim.release();
+            expect(scope.hasRetainedConnection).toBe(true);
+            const reused = scope.read(({ db: reusedDb }) => reusedDb, options);
+            expect(reused).toEqual({ found: true, value: db });
+            const other = owners.openOpenClawAgentDatabaseReadOnly(options);
+            assert(other.found);
+            try {
+              vi.advanceTimersByTime(30 * 60_000);
+              expect(scope.hasRetainedConnection).toBe(false);
+              expect(other.database.db.prepare("SELECT pg_backend_pid() AS pid").get()?.pid).toBe(
+                pid,
+              );
+            } finally {
+              other.database.close();
+            }
+          } finally {
+            scope.close();
+          }
+        }
+      });
+    } finally {
+      vi.advanceTimersByTime(3 * 60_000);
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds physical backends across retained logical stores without repeating admission", async () => {
+    const agents = Array.from({ length: 4 }, (_, index) => `retained-scope-${index}`);
+    for (const agentId of agents) {
+      await createSession("bounded-readers", agentId);
+    }
+    const { OpenClawAgentDatabaseReadOnlyScope } =
+      await import("./openclaw-agent-db-readonly-scope.js");
+    const scopes = agents.map((agentId) => ({
+      agentId,
+      scope: new OpenClawAgentDatabaseReadOnlyScope(),
+    }));
+    const databases: EngineConnection[] = [];
+    const pids: unknown[] = [];
+    const lockBase = Number.parseInt(randomUUID().replaceAll("-", "").slice(0, 10), 16);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      admit(() => {
+        scopes.forEach(({ scope, agentId }, index) => {
+          const result = scope.read(
+            ({ db }) => {
+              databases.push(db);
+              db.prepare("SELECT pg_advisory_lock(?)").get(lockBase + index);
+              return db.prepare("SELECT pg_backend_pid() AS pid").get()?.pid;
+            },
+            { agentId },
+          );
+          assert(result.found);
+          pids.push(result.value);
+        });
+      });
+      await client.query("BEGIN; SET LOCAL lock_timeout = '1s'");
+      // Acquiring evicted backends' session locks waits for their asynchronous socket closes.
+      for (const backend of [...new Set(pids)].slice(0, -2)) {
+        await client.query("SELECT pg_advisory_xact_lock($1)", [lockBase + pids.indexOf(backend)]);
+      }
+      expect(
+        (await queryRows("SELECT pid FROM pg_stat_activity WHERE pid = ANY($1)", [pids])).length,
+      ).toBeLessThanOrEqual(2);
+      await client.query("ROLLBACK");
+      vi.advanceTimersByTime(3 * 60_000);
+      expect(scopes.every(({ scope }) => scope.hasRetainedConnection)).toBe(true);
+      const statements: unknown[] = [];
+      const observer = (event: unknown) => statements.push(event);
+      const observations = channel("openclaw.database.statement");
+      observations.subscribe(observer);
+      try {
+        admit(() => {
+          scopes.forEach(({ scope, agentId }, index) => {
+            const result = scope.read(
+              ({ db }) => {
+                expect(db).toBe(databases[index]);
+                return db.prepare("SELECT pg_backend_pid() AS pid").get()?.pid;
+              },
+              { agentId },
+            );
+            assert(result.found);
+            expect(result.value).not.toBe(pids[index]);
+          });
+        });
+        // Only the requested reads run; retained logical readers do no schema/admission SQL.
+        expect(statements).toHaveLength(agents.length);
+      } finally {
+        observations.unsubscribe(observer);
+      }
+    } finally {
+      await client.query("ROLLBACK");
+      scopes.forEach(({ scope }) => scope.close());
+      vi.advanceTimersByTime(3 * 60_000);
+      vi.useRealTimers();
+    }
   });
 
   it("updates captured PostgreSQL families through Doctor before agent startup, retaining rows and search", async () => {

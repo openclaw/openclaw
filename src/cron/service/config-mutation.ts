@@ -6,6 +6,7 @@ import {
   observeSqliteWorkerCommittedFacts,
   type SqliteWorkerAdmissionFactory,
 } from "../../infra/sqlite-worker-operation-admission.js";
+import { observeSqliteWorkerAdmissionFinish } from "../../infra/sqlite-worker-operation-settlement.js";
 import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import type { CronStreamMutationAdmissionFacts } from "../store/runtime-worker.types.js";
@@ -85,15 +86,10 @@ export function prepareCronStreamMutationAdmission(params: {
         approval.consumption.markCommitted(facts.consumedStreamApproval as OperatorApprovalRecord);
       }
     });
-    const finish = admission.finish.bind(admission);
-    admission.finish = () => {
-      try {
-        finish();
-      } finally {
-        const confirmed = admission.settlement?.kind === "completed";
-        publication.finish(confirmed, confirmed && !admission.committed && !commitAdmitted);
-      }
-    };
+    observeSqliteWorkerAdmissionFinish(admission, () => {
+      const confirmed = admission.settlement?.kind === "completed";
+      publication.finish(confirmed, confirmed && !admission.committed && !commitAdmitted);
+    });
     return retained;
   };
   return { createAdmission, mutation: () => mutation };

@@ -104,7 +104,8 @@ too.
 
 Outbound `initiate_call`, `voicecall.initiate`, and the CLI accept an optional
 `brief`. It applies only to that call and reaches both the voice model and its
-agent consult. The opening `message` stays the first verbatim spoken line.
+agent consult. Supply `brief.task` for the ongoing errand; the opening `message`
+stays the first verbatim spoken line.
 
 Every brief field is optional:
 

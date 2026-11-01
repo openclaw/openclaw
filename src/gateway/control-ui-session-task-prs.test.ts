@@ -20,9 +20,12 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import type { ControlUiSessionPullRequestSnapshot } from "./control-ui-contract.js";
 import { createFixture, sessionKey } from "./control-ui-session-pr-access.test-support.js";
+import { staleReceiptsOnlyCell } from "./control-ui-session-pr-prepared-read.js";
 import {
   createControlUiSessionPrRead,
   prepareControlUiSessionPrServiceTarget,
+  receiptsOnlyTargetIdentity,
+  type ControlUiSessionPrTarget,
 } from "./control-ui-session-pr-read.js";
 import { githubJson, pullListItem, requestUrl } from "./control-ui-session-prs.test-support.js";
 import { prepareTaskPublicationSessions } from "./control-ui-session-task-prs.js";
@@ -672,6 +675,78 @@ it("keeps personal receipts viewer-scoped and withdraws inaccessible descendants
   receipt(sessionKey, 3);
   await fixture.subscriptions.pollNow();
   expect(snapshots()).toHaveLength(delivered);
+});
+
+it("gives passive rows the PR state an active viewer already verified, without GitHub reads", async () => {
+  receipt(sessionKey, 1);
+  const phone = fixture.addReader("phone");
+  const fetcher = stubOffline("No GitHub allowed for passive rows");
+  await passive(phone.client);
+  const phoneLatest = () => snapshots(phone.socket).at(-1)?.taskPullRequests?.[0]?.pullRequest;
+  expect(phoneLatest()).toBeUndefined();
+  fetcher.mockImplementation(async (input) =>
+    githubJson(
+      pullListItem({
+        number: Number(new URL(requestUrl(input)).pathname.split("/").at(-1)),
+        state: "closed",
+        merged_at: "2026-11-01T00:00:00Z",
+        html_url: "https://github.com/example/repository/pull/1",
+        base: { repo: { name: "repository", owner: { login: "example" } } },
+      }),
+    ),
+  );
+  await fixture.subscribe();
+  await fixture.subscriptions.pollNow();
+  expect(latest()?.taskPullRequests?.[0]?.pullRequest?.state).toBe("merged");
+  const verifiedReads = fetcher.mock.calls.length;
+  // The retained passive audience learns the verified state without its own lookup.
+  await vi.waitFor(() => expect(phoneLatest()?.state).toBe("merged"));
+  // Passive pushes carry the state chip only, not diff stats or CI rollups.
+  expect(Object.keys(phoneLatest() ?? {}).toSorted()).toEqual([
+    "branch",
+    "number",
+    "owner",
+    "repo",
+    "state",
+    "title",
+    "url",
+  ]);
+  // A reconnecting sidebar receives it too.
+  const reconnected = fixture.addReader("phone-reconnected");
+  await passive(reconnected.client);
+  expect(snapshots(reconnected.socket).at(-1)?.taskPullRequests?.[0]?.pullRequest?.state).toBe(
+    "merged",
+  );
+  await fixture.subscriptions.pollNow();
+  expect(fetcher).toHaveBeenCalledTimes(verifiedReads);
+});
+
+it("reloads a stale passive cell once per verified state, even when its cache misses", () => {
+  const target = { identity: "session" } as ControlUiSessionPrTarget;
+  const pullRequest = (prState: "open" | "merged") => {
+    const url = "https://github.com/example/repository/pull/1";
+    const facts = { url, owner: "example", repo: "repository", number: 1, branch: "fix" };
+    return {
+      ...facts,
+      sourceSessionKey: sessionKey,
+      sourceAgentId: "main",
+      pullRequest: { ...facts, title: "Fix", state: prState },
+    };
+  };
+  const cell = (taskPullRequests: ControlUiSessionPullRequestSnapshot["taskPullRequests"]) => ({
+    connIds: new Set(["phone"]),
+    target,
+    cacheLifetime: new AbortController(),
+    snapshot: { pullRequests: [], rateLimited: false, status: "ready" as const, taskPullRequests },
+  });
+  const passiveKey = receiptsOnlyTargetIdentity(target.identity);
+  const passiveCell = cell([{ ...pullRequest("open"), pullRequest: undefined }]);
+  passiveCell.target = { ...target, identity: passiveKey, taskReceiptsOnly: true };
+  const keyStates = new Map([[passiveKey, passiveCell]]);
+  const active = cell([pullRequest("merged")]);
+  expect(staleReceiptsOnlyCell(keyStates, active, active.snapshot)).toBe(passiveKey);
+  // The reload missed the cache: the next poll of the same verified state must not reload again.
+  expect(staleReceiptsOnlyCell(keyStates, active, active.snapshot)).toBeUndefined();
 });
 
 it("keeps a known cold URL when GitHub metadata fails, and ignores a replaced session lifecycle", async () => {

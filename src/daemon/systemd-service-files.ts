@@ -37,6 +37,10 @@ import {
 } from "./systemd-environment-files.js";
 import { assertSystemdServiceAccount } from "./systemd-service-identity.js";
 import {
+  canResolveSystemdStateFromHost,
+  readSystemdAccountHome,
+} from "./systemd-state-identity.js";
+import {
   parseSystemdEnvAssignments,
   parseSystemdExecStart,
   splitSystemdLogicalLines,
@@ -311,11 +315,24 @@ async function readSystemdManagerCommand(
       failOnUnavailable: opts?.requireEffective,
     });
     if (
-      sameAccount &&
-      !Object.hasOwn(snapshot.environment ?? {}, "HOME") &&
-      !unset.some((assignment) => assignment === "HOME" || assignment === `HOME=${account.homedir}`)
+      systemScope &&
+      typeof user === "string" &&
+      !Object.hasOwn(snapshot.environment ?? {}, "HOME")
     ) {
-      snapshot.environment = { ...snapshot.environment, HOME: account.homedir };
+      const home = sameAccount ? account.homedir : await readSystemdAccountHome(user);
+      if (
+        !home ||
+        unset.some((assignment) => assignment === "HOME" || assignment === `HOME=${home}`)
+      ) {
+        snapshot.stateIdentityUnverified = true;
+      } else {
+        // systemd supplies User='s home; the inspecting account's HOME is unrelated.
+        snapshot.environment = { ...snapshot.environment, HOME: home };
+      }
+    }
+    if (systemScope && opts?.inspectStateIdentity && !snapshot.stateIdentityUnverified) {
+      snapshot.stateIdentityUnverified =
+        !(await canResolveSystemdStateFromHost(query, destination, unitPath)) || undefined;
     }
     effectiveExecutable = execution[0];
     return {

@@ -12,6 +12,7 @@ import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
 import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { schemaAdmission } from "../infra/sqlite-schema-admission.js";
+import { isSqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -30,8 +31,14 @@ import {
   type AgentDatabaseAdmissionRefusal,
 } from "./agent-database-admission.js";
 import { withAgentDatabasePreparationContext } from "./agent-database-preparation-context.js";
-import { createAgentDatabaseStartupObservation } from "./agent-database-startup-observation.js";
+import { prepareAgentDatabaseStartupVerification } from "./agent-database-startup-integrity.js";
+import {
+  createAgentDatabaseStartupObservation,
+  recoveryTiming,
+} from "./agent-database-startup-observation.js";
 import type {
+  PreparedSchemaHeader,
+  PreparedSchemaHeaders,
   PendingAgentDatabaseInspection as PendingInspection,
   AgentDatabaseStartupActivation as Activation,
   AgentDatabaseStartupPreparationPhase as PreparationPhase,
@@ -47,33 +54,11 @@ import {
   createOpenClawAgentDatabasePathMatcher,
   isSameOpenClawAgentDatabasePath,
 } from "./openclaw-agent-db.paths.js";
-import type { AgentSchemaInspection } from "./openclaw-agent-schema-inspection.js";
 import type { OpenClawDatabaseSchemaPreflight } from "./openclaw-database-preflight.types.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 const PREPARATION_PROGRESS_INTERVAL_MS = 60_000;
 const STARTUP_PUBLICATION_ATTEMPTS = 4;
-
-function recoveryTiming(recovery: PendingRecovery, now = performance.now()) {
-  return {
-    elapsedMs: Math.round(now - recovery.startedAt),
-    phaseDurationsMs: {
-      ...recovery.phaseDurationsMs,
-      [recovery.phase]: Math.round(
-        (recovery.phaseDurationsMs[recovery.phase] ?? 0) + now - recovery.phaseStartedAt,
-      ),
-    },
-  };
-}
-type PreparedSchemaHeader = Pick<
-  AgentSchemaInspection,
-  "version" | "writerAppVersion" | "agentSchemaMeta"
->;
-type PreparedSchemaHeaders = {
-  statePath: string;
-  headers: Map<string, PreparedSchemaHeader>;
-  state?: { identity: string; schemaAdmissionId: string };
-};
 
 function matchesInspectionPath(
   paths: readonly string[],
@@ -118,6 +103,7 @@ class AgentDatabaseStartupAdmission {
   private progressTimer?: ReturnType<typeof setInterval>;
   private readonly opening = createPermitPool(AGENT_DATABASE_PREFLIGHT_CONCURRENCY);
   private readonly migrating = createPermitPool(AGENT_DATABASE_PREPARATION_CONCURRENCY);
+  private readonly verifying = createPermitPool(2);
   // Readiness releases the whole fleet; leave room for other shared-state readers.
   private readonly journalReads = createPermitPool(8);
   private preparedSchemaHeaders?: PreparedSchemaHeaders;
@@ -386,6 +372,8 @@ class AgentDatabaseStartupAdmission {
           recoverInputs?: () => Promise<void>;
         } = {};
         let revokeReadAdmission: (() => void) | undefined;
+        let integrity: ReturnType<typeof prepareAgentDatabaseStartupVerification>;
+        let preparedSuccessfully = false;
         try {
           const results = await checked;
           phase("activation");
@@ -408,6 +396,13 @@ class AgentDatabaseStartupAdmission {
               readSqliteIntegrityFileIdentity(witness.pathname, witness.identity);
             }
           };
+          const capacityRetry = {
+            attempts: 4,
+            minDelayMs: 500,
+            maxDelayMs: 8000,
+            jitter: 0.2,
+            sleep: (ms: number) => sleepWithAbort(ms, this.signal),
+          };
           const assertNotDeleted = async () => {
             const deletion = await retryAsync(
               async () => {
@@ -424,11 +419,7 @@ class AgentDatabaseStartupAdmission {
                 }
               },
               {
-                attempts: 4,
-                minDelayMs: 500,
-                maxDelayMs: 8000,
-                jitter: 0.2,
-                sleep: (ms) => sleepWithAbort(ms, this.signal),
+                ...capacityRetry,
                 // Other producers can still saturate the shared pool after our permit wait.
                 shouldRetry: (error) =>
                   error instanceof WorkerTaskError && error.code === "overloaded",
@@ -468,6 +459,13 @@ class AgentDatabaseStartupAdmission {
           phase("readiness");
           await racePromiseWithAbortSignal(activation.preparationReady, this.signal);
           assertCurrent();
+          if (canReadBeforeOpen) {
+            integrity = prepareAgentDatabaseStartupVerification(
+              { agentId, paths, env, signal: this.signal },
+              activation,
+              this.verifying,
+            );
+          }
           await withSqliteReadOnlyWorkerScope(
             async () => {
               await assertNotDeleted();
@@ -545,7 +543,10 @@ class AgentDatabaseStartupAdmission {
                     sessionChanges.emit({ all: true, scope: { agentId, topology: true } }),
                   );
                 }
-                const retryLockedPreparation = async (run: () => Promise<void>) => {
+                const retryPreparation = async (
+                  run: () => Promise<void>,
+                  shouldRetry = isSqliteLockError,
+                ) => {
                   let preparationAttempts = 0;
                   await retryAsync(
                     async () => {
@@ -556,37 +557,38 @@ class AgentDatabaseStartupAdmission {
                       await run();
                     },
                     {
-                      attempts: 4,
-                      minDelayMs: 500,
-                      maxDelayMs: 8000,
-                      jitter: 0.2,
-                      sleep: (ms) => sleepWithAbort(ms, this.signal),
+                      ...capacityRetry,
                       // Mixed cleanup failures and uncertain outcomes must not replay preparation.
-                      shouldRetry: isSqliteLockError,
-                      onRetry: ({ attempt }) =>
-                        log.warn("agent database startup locked; retrying preparation", {
+                      shouldRetry,
+                      onRetry: ({ attempt, err }) => {
+                        const reason = isSqliteLockError(err) ? "locked" : "capacity reached";
+                        log.warn(`agent database startup ${reason}; retrying preparation`, {
                           agentId,
                           phase: recovery.phase,
                           attempt,
-                        }),
+                        });
+                      },
                     },
                   );
                 };
-                await retryLockedPreparation(async () => {
-                  phase("open-wait");
-                  const release = await this.opening.acquire({ signal: this.signal });
-                  try {
-                    assertCurrent();
-                    phase("open");
-                    const opened = await activation.openAgent(input);
-                    if (opened) {
-                      prepared.use(opened);
+                await retryPreparation(
+                  async () => {
+                    phase("open-wait");
+                    const release = await this.opening.acquire({ signal: this.signal });
+                    try {
+                      assertCurrent();
+                      phase("open");
+                      const opened = await activation.openAgent(input);
+                      if (opened) {
+                        prepared.use(opened);
+                      }
+                    } finally {
+                      release?.();
                     }
-                  } finally {
-                    release?.();
-                  }
-                });
-                await retryLockedPreparation(async () => {
+                  },
+                  (error) => isSqliteLockError(error) || isSqliteWorkerError(error, "overloaded"),
+                );
+                await retryPreparation(async () => {
                   phase("migration-wait");
                   const releaseMigration = await this.migrating.acquire({ signal: this.signal });
                   try {
@@ -617,6 +619,7 @@ class AgentDatabaseStartupAdmission {
             paths,
             ...recoveryTiming(recovery),
           });
+          preparedSuccessfully = true;
         } catch (error) {
           if (!this.stopped) {
             const reason = formatErrorMessage(error);
@@ -630,6 +633,9 @@ class AgentDatabaseStartupAdmission {
             });
           }
         } finally {
+          if (!preparedSuccessfully) {
+            integrity?.revoke();
+          }
           revokeReadAdmission?.();
           if (this.publishingAgentId === agentId) {
             this.publishingAgentId = undefined;
@@ -643,6 +649,9 @@ class AgentDatabaseStartupAdmission {
           ) {
             finishInputs();
           }
+        }
+        if (preparedSuccessfully && integrity) {
+          this.track(runInDetachedAsyncContext(integrity.verify));
         }
         try {
           // Recovery enters ordinary queues after the temporary database borrow has ended.

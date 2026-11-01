@@ -78,6 +78,24 @@ describe("LiveKit extension From numbers", () => {
 });
 
 describe("errand features config", () => {
+  it("accepts Twilio recording only as an explicit boolean in both config schemas", () => {
+    const manifest = JSON.parse(
+      readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
+    );
+    for (const record of [undefined, false, true, "true", 1]) {
+      const input = { twilio: record === undefined ? {} : { record } };
+      const accepted = record === undefined || typeof record === "boolean";
+      expect(validateJsonSchemaValue({ schema: manifest.configSchema, value: input }).ok).toBe(
+        accepted,
+      );
+      if (accepted) {
+        expect(normalizeVoiceCallConfig(input).twilio?.record).toBe(record);
+      } else {
+        rejectsConfig(input);
+      }
+    }
+  });
+
   it("keeps delivery, callbacks and machine detection disabled unless configured", () => {
     const config = normalizeVoiceCallConfig({});
     expect(config.reports).toEqual({ enabled: false, includeTranscript: true });

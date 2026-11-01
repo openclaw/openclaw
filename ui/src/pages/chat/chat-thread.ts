@@ -350,6 +350,8 @@ function sameChatItemsStructuralInput(
     previous.searchQuery === next.searchQuery &&
     previous.messageRecovery?.messages === next.messageRecovery?.messages &&
     previous.messageRecovery?.revision === next.messageRecovery?.revision &&
+    previous.messageRecovery?.displayFacts === next.messageRecovery?.displayFacts &&
+    previous.messageRecovery?.canFetchFullMessage === next.messageRecovery?.canFetchFullMessage &&
     previous.messageRecovery?.agentId === next.messageRecovery?.agentId
   );
 }

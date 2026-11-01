@@ -362,9 +362,15 @@ describe("plugin authoring commands", () => {
     expect(exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
   });
 
-  it.each(["validate", "build --check"] as const)(
-    "accepts reordered JSON object keys without rewriting files in %s",
-    async (command) => {
+  it.each([
+    ["validate", "JSON"],
+    ["build --check", "JSON"],
+    ["validate", "JSON5"],
+    ["build --check", "JSON5"],
+    ["build", "JSON5"],
+  ] as const)(
+    "%s accepts reordered %s metadata and preserves authored fields",
+    async (command, format) => {
       const { root: tmpDir, entry: entryPath } = sourceProject("reordered-json");
       await runPluginsBuildCommand({ root: tmpDir, entry: entryPath });
 
@@ -373,12 +379,20 @@ describe("plugin authoring commands", () => {
       const configSchema = manifest.configSchema as Record<string, unknown>;
       writeJsonFile(manifestPath, {
         ...manifest,
+        uiHints: { token: { label: "Authored label" } },
         configSchema: {
           properties: configSchema.properties,
           additionalProperties: configSchema.additionalProperties,
           type: configSchema.type,
         },
       });
+      if (format === "JSON5") {
+        const authored = readText(tmpDir, "openclaw.plugin.json")
+          .replace("{", "{ // Authored native manifest\n")
+          .replace('"id":', "id:")
+          .replace(/\n\}$/, ",\n}");
+        fs.writeFileSync(manifestPath, authored);
+      }
       const packagePath = path.join(tmpDir, "package.json");
       const manifestBefore = fs.readFileSync(manifestPath, "utf8");
       const packageBefore = fs.readFileSync(packagePath, "utf8");
@@ -389,12 +403,24 @@ describe("plugin authoring commands", () => {
         await runPluginsValidateCommand({ root: tmpDir, entry: entryPath });
         expect(log).toHaveBeenCalledWith("Plugin reordered-json is valid.");
       } else {
-        await runPluginsBuildCommand({ root: tmpDir, entry: entryPath, check: true });
-        expect(log).toHaveBeenCalledWith("Plugin metadata is up to date.");
+        await runPluginsBuildCommand({
+          root: tmpDir,
+          entry: entryPath,
+          check: command !== "build",
+        });
+        if (command === "build --check") {
+          expect(log).toHaveBeenCalledWith("Plugin metadata is up to date.");
+        }
       }
       expect(exit).not.toHaveBeenCalled();
       expect(error).not.toHaveBeenCalled();
-      expect(fs.readFileSync(manifestPath, "utf8")).toBe(manifestBefore);
+      if (command === "build") {
+        expect(readJson(tmpDir, "openclaw.plugin.json").uiHints).toEqual({
+          token: { label: "Authored label" },
+        });
+      } else {
+        expect(fs.readFileSync(manifestPath, "utf8")).toBe(manifestBefore);
+      }
       expect(fs.readFileSync(packagePath, "utf8")).toBe(packageBefore);
     },
   );
@@ -487,15 +513,22 @@ describe("plugin authoring commands", () => {
     ).rejects.toThrow("plugin entry not found: ./dist/index.js");
   });
 
-  it("throws a user-friendly error when package.json is malformed JSON", async () => {
-    const { root: tmpDir, entry: entryPath } = sourceProject("bad-json");
-    const packagePath = path.join(tmpDir, "package.json");
-    fs.writeFileSync(packagePath, "{invalid json");
+  it.each(["{invalid json", "{ // package.json must remain strict JSON\n}"])(
+    "rejects non-JSON package metadata without rewriting it: %s",
+    async (raw) => {
+      const { root: tmpDir, entry: entryPath } = sourceProject("bad-json");
+      const packagePath = path.join(tmpDir, "package.json");
+      fs.writeFileSync(packagePath, raw);
 
-    await expect(runPluginsBuildCommand({ root: tmpDir, entry: entryPath })).rejects.toThrow(
-      `Malformed JSON in ${packagePath}`,
-    );
-  });
+      await expect(runPluginsBuildCommand({ root: tmpDir, entry: entryPath })).rejects.toThrow(
+        `Malformed JSON in ${packagePath}`,
+      );
+      await expect(runPluginsValidateCommand({ root: tmpDir, entry: entryPath })).rejects.toThrow(
+        `Malformed JSON in ${packagePath}`,
+      );
+      expect(fs.readFileSync(packagePath, "utf8")).toBe(raw);
+    },
+  );
 
   it("finishes a build from an absolute root after the launch directory is removed", async () => {
     const tmpDir = tempDirs.make("openclaw-plugin-deleted-cwd-build-");

@@ -1,3 +1,4 @@
+import { formatErrorMessage, readErrorName } from "@openclaw/normalization-core/error-coercion";
 import {
   attachInternalToolExecutionPreparer,
   copyInternalToolResultState,
@@ -115,7 +116,11 @@ async function executeAdaptedToolOperation(params: {
     const operatorHint = described.operatorHint ? ` ${described.operatorHint}` : "";
     // Operator-only: the hint names containment configuration and stays out of the
     // model-visible result below.
-    logError(`[tools] ${params.normalizedToolName} failed:${operatorHint}`);
+    const name = readErrorName(err);
+    const diagnostic = formatErrorMessage(err, { includeCode: true });
+    logError(
+      `[tools] ${params.normalizedToolName} failed: ${name ? `${name}: ` : ""}${diagnostic}${operatorHint}`,
+    );
     const result = buildToolExecutionErrorResult({
       toolName: params.normalizedToolName,
       message: described.message,

@@ -120,6 +120,7 @@ export async function createAdminIngressFixture(
     state,
     admins,
     gateway: host.gateway,
+    resolveGatewayContext: host.owner.resolveGatewayContext,
     context,
     replaceGatewayContext: (replacement?: GatewayRequestContext) => {
       host.replaceGatewayContext(

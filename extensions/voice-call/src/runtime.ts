@@ -109,6 +109,7 @@ async function resolveProvider(config: VoiceCallConfig): Promise<VoiceCallProvid
           accountSid: config.twilio?.accountSid,
           authToken: resolveTwilioAuthToken(config),
           region: config.twilio?.region,
+          record: config.twilio?.record,
         },
         {
           allowNgrokFreeTierLoopbackBypass,

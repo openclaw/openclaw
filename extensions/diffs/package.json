@@ -8,10 +8,10 @@
   },
   "type": "module",
   "dependencies": {
-    "@pierre/diffs": "1.5.2",
+    "@pierre/diffs": "1.6.1",
     "@shikijs/langs": "4.5.0",
     "playwright-core": "1.64.1",
-    "typebox": "1.4.2",
+    "typebox": "1.4.3",
     "zod": "4.6.7"
   },
   "devDependencies": {

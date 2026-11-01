@@ -6,7 +6,7 @@ import {
   renderComposerInto,
   disposeComposer,
 } from "./chat-composer.test-support.ts";
-import { loadComposerWidthEdge } from "./components/chat-composer-width-ref.tsx";
+import { prepareComposerWidthEdge } from "./components/chat-composer-width-ref.tsx";
 import { resetChatComposerState } from "./components/chat-composer.tsx";
 import baseStyles from "../../styles/base.css?inline";
 import surfaceStyles from "../../styles/chat/composer-surface.css?inline";
@@ -24,7 +24,7 @@ describe("composer border width control", () => {
   let styles: HTMLStyleElement;
   beforeEach(async () => {
     // Production warms the lazy edge owner at idle; the new-session suite covers intent loading.
-    await loadComposerWidthEdge();
+    await prepareComposerWidthEdge();
     styles = document.createElement("style");
     styles.textContent = [
       baseStyles,
@@ -102,6 +102,29 @@ describe("composer border width control", () => {
     await page.viewport(1440, 900);
     await settled();
     expect(shell.getBoundingClientRect().width).toBe(1081);
+  });
+
+  it("keeps callback-only updates off the geometry path and uses the latest callback", async () => {
+    await page.viewport(1440, 900);
+    const f = fixture();
+    await settled();
+    const edge = f.edge();
+    const shell = f.input().closest<HTMLElement>(".agent-chat__composer-shell")!;
+    const shellRead = vi.spyOn(shell, "getBoundingClientRect");
+    const inputRead = vi.spyOn(f.input(), "getBoundingClientRect");
+    const onWidthChange = vi.fn(f.onWidthChange);
+    f.props.onComposerWidthChange = onWidthChange;
+    f.props.getTranscriptElement = () =>
+      container.closest(".chat")!.querySelector<HTMLElement>(".chat-thread");
+    f.draw();
+    expect(f.edge()).toBe(edge);
+    expect(shellRead).not.toHaveBeenCalled();
+    expect(inputRead).not.toHaveBeenCalled();
+    await settled();
+    f.edge().dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    await settled();
+    expect(onWidthChange).toHaveBeenCalledWith("1061px");
+    expect(f.width()).toBe("1061px");
   });
 
   it("resets width to the opening preference and leaves no observer-owned handle after unmount", async () => {

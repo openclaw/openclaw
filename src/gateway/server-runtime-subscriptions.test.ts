@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
 import { configureExecutionIdentityAdmissionSink } from "../audit/execution-identity-admission.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
@@ -46,6 +47,7 @@ import {
   registerActivitySummaryPublicationTests,
   registerActivitySummaryRunTests,
 } from "./server-runtime-subscriptions.activity-summary.test-support.js";
+import { registerBackgroundProcessPublicationTests } from "./server-runtime-subscriptions.background-processes.test-support.js";
 import { registerSessionPublicationTests } from "./server-runtime-subscriptions.publication.test-support.js";
 import {
   createSubscriptionTestFixture,
@@ -226,6 +228,7 @@ describe("startGatewayEventSubscriptions", () => {
     heartbeatNotifications.onEvent = () => {};
     unsubs?.transcriptUnsub();
     unsubs?.lifecycleUnsub();
+    resetProcessRegistryForTests();
     resetAgentEventsForTest();
     configureExecutionIdentityAdmissionSink(() => false)();
   });
@@ -986,6 +989,7 @@ describe("startGatewayEventSubscriptions", () => {
     warn,
   };
   registerActivitySummaryRunTests(publicationFixture);
+  registerBackgroundProcessPublicationTests(publicationFixture);
   registerSessionPublicationTests(publicationFixture);
   registerTranscriptScopePublicationTests(publicationFixture);
 
