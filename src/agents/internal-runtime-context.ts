@@ -98,7 +98,7 @@ const INTERNAL_EVENT_MARKER = "[Internal task completion event]";
 
 /** Escape protected context delimiters before embedding untrusted text. */
 export function escapeInternalRuntimeContextDelimiters(value: string): string {
-  if (value.indexOf("OPENCLAW_INTERNAL_CONTEXT") === -1) {
+  if (!value.includes("OPENCLAW_INTERNAL_CONTEXT")) {
     return value;
   }
   return value
