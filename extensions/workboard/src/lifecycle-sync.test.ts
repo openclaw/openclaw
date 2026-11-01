@@ -973,6 +973,38 @@ describe("Workboard lifecycle scoped reads", () => {
     expect(ids).toEqual([ops.id]);
   });
 
+  it("does not hydrate provisional history from another session", async () => {
+    const { store: isolated, dbPath } = createWorkboardSqliteTestHarness();
+    try {
+      const activeKey = "agent:main:active";
+      const historyKey = "agent:main:history";
+      const active = await isolated.create({
+        title: "Active provisional card",
+        status: "running",
+        sessionKey: activeKey,
+      });
+      const history = await isolated.create({
+        title: "Settled provisional history",
+        status: "done",
+        sessionKey: historyKey,
+      });
+      const activeRunId = `workboard:${active.id}:active`;
+      await isolated.update(active.id, { runId: activeRunId });
+      await isolated.update(history.id, { runId: `workboard:${history.id}:history` });
+      const db = new DatabaseSync(dbPath);
+      db.prepare(
+        "INSERT INTO workboard_card_comments (id, card_id, ordinal, body, created_at) VALUES (?, ?, 0, '', ?)",
+      ).run("empty-provisional-history", history.id, Date.now());
+      db.close();
+
+      const cards = await isolated.list({ sessionKey: activeKey, runId: activeRunId });
+
+      expect(cards.map((card) => card.id)).toEqual([active.id]);
+    } finally {
+      await isolated.close();
+    }
+  });
+
   it("does not decode child rows of settled history", async () => {
     const { store: isolated, dbPath } = createWorkboardSqliteTestHarness();
     try {

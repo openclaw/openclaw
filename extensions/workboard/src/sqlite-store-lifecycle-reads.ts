@@ -80,10 +80,21 @@ export function readLifecycleEventCandidateIds(
   }
   if (source.runId) {
     const runId = source.runId;
+    const provisionalRunMatch = source.sessionKey
+      ? sql<SqlBool>`run_id LIKE 'workboard:' || id || ':%' AND (
+          COALESCE(session_key, execution_session_key) IS NULL
+          OR session_key = ${source.sessionKey}
+          OR execution_session_key = ${source.sessionKey}
+          OR (session_key LIKE 'subagent:workboard-%'
+            AND ${source.sessionKey} LIKE '%:' || session_key)
+          OR (execution_session_key LIKE 'subagent:workboard-%'
+            AND ${source.sessionKey} LIKE '%:' || execution_session_key)
+        )`
+      : sql<SqlBool>`run_id LIKE 'workboard:' || id || ':%'`;
     clauses.push(
       sql<SqlBool>`run_id = ${runId}`,
       sql<SqlBool>`execution_run_id = ${runId}`,
-      sql<SqlBool>`run_id LIKE 'workboard:' || id || ':%'`,
+      provisionalRunMatch,
       sql<SqlBool>`EXISTS (SELECT 1 FROM workboard_card_attempts AS attempt
         WHERE attempt.card_id = workboard_cards.id AND attempt.run_id = ${runId})`,
       sql<SqlBool>`EXISTS (SELECT 1 FROM workboard_card_events AS event
