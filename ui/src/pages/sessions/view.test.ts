@@ -856,7 +856,7 @@ describe("sessions view at phone width", () => {
       ],
       { onSearchChange, onSelectPage, selectedKeys: new Set(["agent:main:alpha"]) },
     );
-    await flush();
+    flush();
 
     expectTexts(".session-list-cell__title", ["Alpha", "Beta"]);
     expectTexts(".session-list-cell__key", ["agent:main:alpha", "agent:main:beta"]);
@@ -879,13 +879,13 @@ describe("sessions view at phone width", () => {
     document.body.append(container);
     const defaults = { onSortChange, searchQuery: "alp", includeGlobal: true, limit: "50" };
     await renderSettled([createRow("agent:main:alpha", { updatedAt: Date.now() })], defaults);
-    await flush();
+    flush();
     const trigger = getButton(".sessions-filter-popover__trigger");
     // The toolbar shows the search itself, so only a changed sort lights the trigger.
     expect(trigger?.classList.contains("active")).toBe(false);
 
     trigger?.click();
-    await flush();
+    flush();
     type ChoiceHost = HTMLElement & { params: { onChange: (value: string) => void } };
     await vi.waitFor(() => expect(queryAll("openclaw-select-picker")).toHaveLength(3));
     const [, sort, direction] = queryAll<ChoiceHost>("openclaw-select-picker");
@@ -901,7 +901,7 @@ describe("sessions view at phone width", () => {
       ...defaults,
       sortDir: "asc",
     });
-    await flush();
+    flush();
     expect(getButton(".sessions-filter-popover__trigger")?.classList.contains("active")).toBe(true);
   });
 });
