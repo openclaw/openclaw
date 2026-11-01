@@ -8,6 +8,7 @@ import { registerOpenClawStateDatabaseLifecycleListener } from "../state/opencla
 import type {
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequests,
+  ControlUiSessionTaskPullRequest,
 } from "./control-ui-contract.js";
 import {
   createGitHubReadGroup,
@@ -52,13 +53,39 @@ function metadataKey(
   ]);
 }
 
-/** Last verified metadata this credential scope already holds; never starts a GitHub read. */
-export function peekSessionPullRequestMetadata(
-  target: Pick<ControlUiSessionPullRequest, "owner" | "repo" | "number">,
-  read: Pick<Read, "host" | "apiBaseUrl" | "cacheScope">,
-): ControlUiSessionPullRequest | undefined {
-  const entry = metadata.get(metadataKey(target, read));
-  return entry?.access.signal.aborted ? undefined : entry?.lastGood;
+/**
+ * Passive rows reuse state chips an active viewer already verified; they never start a lookup.
+ * One credential scope per host and state-chip fields only keep sidebar pushes small.
+ */
+export function withCachedPullRequestStates(
+  tasks: readonly ControlUiSessionTaskPullRequest[],
+  read: { target: { githubHost?: string }; assertCurrent: () => void },
+): ControlUiSessionTaskPullRequest[] {
+  const reads = new Map<string, Read | null>();
+  const readFor = (host: string) => {
+    if (!reads.has(host)) {
+      try {
+        const supported = host === "github.com" || host === read.target.githubHost;
+        reads.set(
+          host,
+          supported ? prepareSessionPullRequestGitHubRead(host, read.assertCurrent) : null,
+        );
+      } catch {
+        reads.set(host, null);
+      }
+    }
+    return reads.get(host);
+  };
+  return tasks.map((known) => {
+    const scope = readFor(new URL(known.url).hostname);
+    const entry = scope ? metadata.get(metadataKey(known, scope)) : undefined;
+    const cached = entry?.access.signal.aborted ? undefined : entry?.lastGood;
+    if (!cached) {
+      return known;
+    }
+    const { owner, repo, number, branch, title, url, state } = cached;
+    return { ...known, pullRequest: { owner, repo, number, branch, title, url, state } };
+  });
 }
 
 /** One GitHub metadata read per credential/repository/number, across task and branch views. */

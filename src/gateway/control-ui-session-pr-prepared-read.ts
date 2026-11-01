@@ -106,6 +106,9 @@ export function removeControlUiSessionPrMembership(
   retireControlUiSessionPrState(state, keyStates);
 }
 
+// The verified states each passive cell last reloaded for; a cache miss never retries per poll.
+const passiveReloads = new WeakMap<PreparedSessionPrState, string>();
+
 /**
  * A full read verified task PR states that its watched receipt-only sibling still lacks.
  * Reloading that sibling reuses the verified metadata cache and never starts a GitHub read.
@@ -125,12 +128,20 @@ export function staleReceiptsOnlyCell(
       task.pullRequest ? [[task.url, task.pullRequest.state] as const] : [],
     ),
   );
-  return passive?.connIds.size &&
-    passive.snapshot?.taskPullRequests?.some(
+  if (
+    !passive?.connIds.size ||
+    !passive.snapshot?.taskPullRequests?.some(
       (task) => verified.has(task.url) && task.pullRequest?.state !== verified.get(task.url),
     )
-    ? passiveKey
-    : undefined;
+  ) {
+    return undefined;
+  }
+  const signature = JSON.stringify([...verified]);
+  if (passiveReloads.get(passive) === signature) {
+    return undefined;
+  }
+  passiveReloads.set(passive, signature);
+  return passiveKey;
 }
 
 /** Retain only branch facts across audience/mode changes on the same physical source. */
