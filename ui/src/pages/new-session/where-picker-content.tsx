@@ -118,9 +118,12 @@ export function WherePickerContent(
   const cloudProfilesRead = createMemo(() => cloudProfilesCompletion().promise?.then(() => null));
   const view = createMemo(() => {
     const localName = props.params.gateway.gatewayName.trim() || t("newSession.local");
-    const query = props.params.place.browser.environmentQuery.trim().toLocaleLowerCase();
+    const query = props.params.place.browser.environmentQuery
+      .trim()
+      .toLocaleLowerCase()
+      .normalize("NFC");
     const matches = (...values: (string | undefined)[]) =>
-      values.some((value) => value?.toLocaleLowerCase().includes(query));
+      values.some((value) => value?.toLocaleLowerCase().normalize("NFC").includes(query));
     const showLocal = matches(
       t("newSession.local"),
       t("newSession.gatewayHost"),
