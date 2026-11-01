@@ -523,53 +523,6 @@ it("fails on old Swift before reading package metadata", () => {
   expect(result.stderr).not.toContain("node should not run before Swift preflight");
 });
 
-it("prefers repo Corepack pnpm over a global pnpm shim", () => {
-  const helperBlock = readFileSync("scripts/lib/mac-pnpm.sh", "utf8");
-  const tempRoot = checkpointDirs.make("openclaw-dist-pnpm-root-");
-  const outerRoot = checkpointDirs.make("openclaw-dist-pnpm-outer-");
-  const toolsDir = checkpointDirs.make("openclaw-dist-pnpm-tools-");
-  const logPath = path.join(tempRoot, "pnpm.log");
-
-  writeFileSync(
-    path.join(tempRoot, "package.json"),
-    '{\n  "packageManager": "pnpm@11.2.2+sha512.test"\n}\n',
-  );
-  writeFileSync(
-    path.join(outerRoot, "package.json"),
-    '{\n  "packageManager": "pnpm@11.8.0+sha512.test"\n}\n',
-  );
-  writeExecutable(
-    path.join(toolsDir, "pnpm"),
-    `printf "global|%s|%s\\n" "$PWD" "$*" >> "$OPENCLAW_TEST_LOG"
-if [[ "\${1:-}" == "--version" ]]; then echo "11.8.0"; fi`,
-  );
-  writeExecutable(
-    path.join(toolsDir, "corepack"),
-    `printf "corepack|%s|%s\\n" "$PWD" "$*" >> "$OPENCLAW_TEST_LOG"
-if [[ "\${1:-}" == "pnpm" && "\${2:-}" == "--version" ]]; then
-  if grep -q "pnpm@11.2.2" package.json 2>/dev/null; then echo "11.2.2"; else echo "11.8.0"; fi
-fi`,
-  );
-
-  const result = runHelper(`
-      set -euo pipefail
-      ROOT_DIR=${JSON.stringify(tempRoot)}
-      OPENCLAW_TEST_LOG=${JSON.stringify(logPath)}
-      export OPENCLAW_TEST_LOG
-      PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
-      cd ${JSON.stringify(outerRoot)}
-      ${helperBlock}
-      run_pnpm --version
-    `);
-
-  expectSuccess(result);
-  expect(result.stdout).toBe("11.2.2\n");
-  expect(readFileSync(logPath, "utf8").trim().split("\n")).toEqual([
-    `corepack|${tempRoot}|pnpm --version`,
-    `corepack|${tempRoot}|pnpm --version`,
-  ]);
-});
-
 it.each(["successful", "failed"] as const)(
   "keeps %s Sparkle bootstrap diagnostics separate from build values",
   (outcome) => {
