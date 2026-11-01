@@ -140,29 +140,36 @@ afterEach(() => {
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
 
-it("retains the creating cache generation when broad services initialize later", () => {
-  const owner = createPluginCache();
-  const replacement = createPluginCache();
-  const runtime = { events: {} } as PluginRuntime;
-  const createPluginRuntime = vi.fn(() => {
-    expect(getPluginCache()).toBe(owner);
-    return runtime;
-  });
-  const loadRuntimeModule = vi
-    .spyOn(nativeModuleRequire, "tryNativeRequireModule")
-    .mockImplementation(() => {
+it.each(["events", "system"] as const)(
+  "retains the creating cache generation when %s initializes later",
+  (facet) => {
+    const owner = createPluginCache();
+    const replacement = createPluginCache();
+    const runtime = { events: {}, system: {} } as PluginRuntime;
+    const createPluginRuntime = vi.fn(() => {
       expect(getPluginCache()).toBe(owner);
-      return { ok: true, moduleExport: { createPluginRuntime } };
+      return runtime;
     });
-  const lazyRuntime = withPluginCache(owner, () => createLazyPluginRuntime({}));
-  expect(loadRuntimeModule).not.toHaveBeenCalled();
-  withPluginCache(replacement, () => {
-    expect(lazyRuntime.events).toBe(runtime.events);
-    expect(lazyRuntime.events).toBe(runtime.events);
-  });
-  expect(loadRuntimeModule).toHaveBeenCalledTimes(1);
-  expect(createPluginRuntime).toHaveBeenCalledTimes(1);
-});
+    const createRuntimeSystem = vi.fn(() => {
+      expect(getPluginCache()).toBe(owner);
+      return runtime.system;
+    });
+    const loadRuntimeModule = vi
+      .spyOn(nativeModuleRequire, "tryNativeRequireModule")
+      .mockImplementation(() => {
+        expect(getPluginCache()).toBe(owner);
+        return { ok: true, moduleExport: { createPluginRuntime, createRuntimeSystem } };
+      });
+    const lazyRuntime = withPluginCache(owner, () => createLazyPluginRuntime({}));
+    expect(loadRuntimeModule).not.toHaveBeenCalled();
+    withPluginCache(replacement, () => {
+      expect(lazyRuntime[facet]).toBe(runtime[facet]);
+      expect(lazyRuntime[facet]).toBe(runtime[facet]);
+    });
+    expect(loadRuntimeModule).toHaveBeenCalledTimes(1);
+    expect(facet === "system" ? createRuntimeSystem : createPluginRuntime).toHaveBeenCalledTimes(1);
+  },
+);
 
 describe("capability factory registration", () => {
   it("composes native capability factories with a restricted runtime", async () => {

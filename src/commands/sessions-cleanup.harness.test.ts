@@ -19,6 +19,7 @@ import {
 import * as nativeModule from "../plugins/native-module-require.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
+import { createRuntimeSystem } from "../plugins/runtime/runtime-system.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import {
   withOpenClawTestState,
@@ -125,15 +126,16 @@ function writeCleanupPlugins(bundledRoot: string) {
 beforeEach(() => {
   // Retain lazy initialization while using the harness's real mocked runtime graph.
   const nativeLoad = nativeModule.tryNativeRequireModule;
-  const runtimePaths = new Set([
-    path.resolve("src/plugins/runtime/index.ts"),
-    path.resolve("dist/plugins/runtime/index.js"),
+  const runtimeModules = new Map<string, unknown>([
+    [path.resolve("src/plugins/runtime/index.ts"), { createPluginRuntime }],
+    [path.resolve("dist/plugins/runtime/index.js"), { createPluginRuntime }],
+    [path.resolve("src/plugins/runtime/runtime-system.ts"), { createRuntimeSystem }],
+    [path.resolve("dist/plugins/runtime/runtime-system.js"), { createRuntimeSystem }],
   ]);
-  vi.spyOn(nativeModule, "tryNativeRequireModule").mockImplementation((modulePath, options) =>
-    runtimePaths.has(modulePath)
-      ? { ok: true, moduleExport: { createPluginRuntime } }
-      : nativeLoad(modulePath, options),
-  );
+  vi.spyOn(nativeModule, "tryNativeRequireModule").mockImplementation((modulePath, options) => {
+    const moduleExport = runtimeModules.get(modulePath);
+    return moduleExport ? { ok: true, moduleExport } : nativeLoad(modulePath, options);
+  });
 });
 
 afterEach(() => {

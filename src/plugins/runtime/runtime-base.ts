@@ -1,9 +1,8 @@
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
-import { getRuntimeConfig } from "../../config/io.runtime.js";
 import { resolveStateDir } from "../../config/paths.js";
+import { readRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { createRuntimeConfig } from "./runtime-config.js";
 import { createRuntimeLlmFacade } from "./runtime-llm-facade.js";
-import { createRuntimeSystem } from "./runtime-system.js";
 import type { PluginRuntimeBase, PluginRuntime } from "./types.js";
 
 const COMMAND_NATIVE_SUBAGENTS_CAPABILITY = "command-native-subagents-v1";
@@ -20,7 +19,7 @@ function unavailable(method: string): () => never {
 }
 
 /** Host-owned facades survive later path-loaded runtime materialization unchanged. */
-export function createRuntimeBase(): PluginRuntimeBase {
+export function createRuntimeBase(createSystem: () => PluginRuntime["system"]): PluginRuntimeBase {
   let system: PluginRuntime["system"] | undefined;
   return {
     capabilities: Object.freeze([
@@ -36,7 +35,7 @@ export function createRuntimeBase(): PluginRuntimeBase {
       "channel-ingress-transform-v1",
     ]),
     config: createRuntimeConfig(),
-    llm: createRuntimeLlmFacade(getRuntimeConfig),
+    llm: createRuntimeLlmFacade(readRuntimeConfig),
     // Only the registry proxy grants storage, never the base runtime directly.
     state: {
       resolveStateDir,
@@ -48,7 +47,7 @@ export function createRuntimeBase(): PluginRuntimeBase {
       openChannelIngressDrain: unavailable("openChannelIngressDrain"),
     },
     get system() {
-      return (system ??= createRuntimeSystem());
+      return (system ??= createSystem());
     },
   };
 }

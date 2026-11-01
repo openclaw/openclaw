@@ -8,6 +8,7 @@ import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { createOwnershipRecord } from "./registry-ownership.test-support.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { createRuntimeBase } from "./runtime/runtime-base.js";
+import { createRuntimeSystem } from "./runtime/runtime-system.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { PluginSubagentProfile } from "./subagent-profile.types.js";
 
@@ -18,7 +19,7 @@ function fixture(declared = true) {
   const root = path.join(dir, "plugin");
   fs.mkdirSync(root);
   fs.writeFileSync(path.join(root, "reviewer.md"), instructions);
-  const builder = createTestPluginRegistry(createRuntimeBase() as PluginRuntime);
+  const builder = createTestPluginRegistry(createRuntimeBase(createRuntimeSystem) as PluginRuntime);
   const record = createOwnershipRecord("review", {
     rootDir: root,
     contracts: declared ? { subagentProfiles: ["reviewer"] } : undefined,

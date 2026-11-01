@@ -48,19 +48,21 @@ installInstanceBindingConfigIo();
 async function useGatewayGraphPluginRuntime(): Promise<void> {
   // Keep the real lazy runtime on this server fixture's mocked Vitest graph.
   const runtimeModule = await import("../plugins/runtime/index.js");
+  const systemModule = await import("../plugins/runtime/runtime-system.js");
   const nativeModule = await import("../plugins/native-module-require.js");
   const nativeLoad = nativeModule.tryNativeRequireModule;
-  const runtimePaths = new Set([
-    path.resolve("src/plugins/runtime/index.ts"),
-    path.resolve("dist/plugins/runtime/index.js"),
+  const runtimeModules = new Map<string, unknown>([
+    [path.resolve("src/plugins/runtime/index.ts"), runtimeModule],
+    [path.resolve("dist/plugins/runtime/index.js"), runtimeModule],
+    [path.resolve("src/plugins/runtime/runtime-system.ts"), systemModule],
+    [path.resolve("dist/plugins/runtime/runtime-system.js"), systemModule],
   ]);
   const runtimeLoader = vi
     .spyOn(nativeModule, "tryNativeRequireModule")
-    .mockImplementation((modulePath, options) =>
-      runtimePaths.has(modulePath)
-        ? { ok: true, moduleExport: runtimeModule }
-        : nativeLoad(modulePath, options),
-    );
+    .mockImplementation((modulePath, options) => {
+      const moduleExport = runtimeModules.get(modulePath);
+      return moduleExport ? { ok: true, moduleExport } : nativeLoad(modulePath, options);
+    });
   onTestFinished(() => runtimeLoader.mockRestore());
 }
 

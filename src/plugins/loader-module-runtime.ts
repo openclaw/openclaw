@@ -1,3 +1,4 @@
+import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { VERSION } from "../version.js";
@@ -314,8 +315,9 @@ export function createLazyPluginRuntime(params: {
   const cache = params.inspectionResources ? new WeakRef(getPluginCache()) : getPluginCache();
   type RuntimeModule = {
     createPluginRuntime?: PluginRuntimeFactory;
+    createRuntimeSystem?: typeof import("./runtime/runtime-system.js").createRuntimeSystem;
   };
-  const resolveRuntimeModule = (): RuntimeModule => {
+  const resolveRuntimeModule = (system = false): RuntimeModule => {
     const resolution = resolvePluginRuntimeModulePathWithDiagnostics({
       devSourceRoot: params.devSourceRoot,
       pluginSdkResolution: params.pluginSdkResolution,
@@ -328,7 +330,14 @@ export function createLazyPluginRuntime(params: {
         }),
       );
     }
-    const resolvedPath = resolution.resolvedPath;
+    // The system entry shares the selected host and native module identity, but
+    // does not materialize unrelated runtime facets for system-only plugins.
+    const resolvedPath = system
+      ? path.join(
+          path.dirname(resolution.resolvedPath),
+          `runtime-system${path.extname(resolution.resolvedPath)}`,
+        )
+      : resolution.resolvedPath;
     return withProfile({ source: resolvedPath }, "runtime-module", () => {
       const native = tryNativeRequireModule(resolvedPath, {
         aliasMap: preparePluginLoaderAliases({
@@ -347,17 +356,28 @@ export function createLazyPluginRuntime(params: {
     });
   };
 
-  const base = createRuntimeBase();
+  const withRuntimeOwner = <T>(run: () => T): T => {
+    const owner = cache instanceof WeakRef ? cache.deref() : cache;
+    if (!owner) {
+      throw new PluginInventoryRetiredError();
+    }
+    return withPluginCache(owner, run);
+  };
+  const base = createRuntimeBase(() =>
+    withRuntimeOwner(() => {
+      const { createRuntimeSystem } = resolveRuntimeModule(true);
+      if (typeof createRuntimeSystem !== "function") {
+        throw new Error("Plugin runtime system module missing createRuntimeSystem export");
+      }
+      return createRuntimeSystem();
+    }),
+  );
   let resolvedRuntime: PluginRuntime | null = null;
   const resolveRuntime = (): PluginRuntime => {
     if (resolvedRuntime) {
       return resolvedRuntime;
     }
-    const owner = cache instanceof WeakRef ? cache.deref() : cache;
-    if (!owner) {
-      throw new PluginInventoryRetiredError();
-    }
-    resolvedRuntime = withPluginCache(owner, () => {
+    resolvedRuntime = withRuntimeOwner(() => {
       const { createPluginRuntime } = resolveRuntimeModule();
       if (typeof createPluginRuntime !== "function") {
         throw new Error("Plugin runtime module missing createPluginRuntime export");

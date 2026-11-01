@@ -568,6 +568,7 @@ function buildCoreDistEntries(pluginIds: readonly string[]): Record<string, stri
     "telegram/token": bundledPluginFile("telegram", "src/token.ts"),
     "plugins/build-smoke-entry": "src/plugins/build-smoke-entry.ts",
     "plugins/runtime/index": "src/plugins/runtime/index.ts",
+    "plugins/runtime/runtime-system": "src/plugins/runtime/runtime-system.ts",
     "mcp/plugin-tools-serve": "src/mcp/plugin-tools-serve.ts",
     "mcp/openclaw-tools-serve": "src/mcp/openclaw-tools-serve.ts",
   };

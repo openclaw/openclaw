@@ -33,6 +33,7 @@ import { createRuntimeBase } from "./runtime-base.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
 import { createRuntimeLogging } from "./runtime-logging.js";
 import { createRuntimeMedia } from "./runtime-media.js";
+import { createRuntimeSystem } from "./runtime-system.js";
 import { subscribeRuntimeSessionChanges } from "./session-changes.js";
 import type { PluginRuntimeFactory, PluginRuntime } from "./types.js";
 
@@ -301,7 +302,7 @@ function createRuntimeSandbox(agent: PluginRuntime["agent"]): PluginRuntime["san
 // Loaded by path from the plugin loader, so static export analysis cannot see this contract.
 export const createPluginRuntime: PluginRuntimeFactory = (
   _options = {},
-  base = createRuntimeBase(),
+  base = createRuntimeBase(createRuntimeSystem),
 ) => {
   const agent = createRuntimeAgent();
   let modelAuth = _options.modelAuth;

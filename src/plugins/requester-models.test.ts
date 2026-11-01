@@ -12,6 +12,7 @@ import { markPluginRegistryRetired } from "./registry-lifecycle.js";
 import { createPluginRequesterModels } from "./requester-models.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 import { createRuntimeBase } from "./runtime/runtime-base.js";
+import { createRuntimeSystem } from "./runtime/runtime-system.js";
 import { createPluginToolFactoryContext } from "./tool-factory-context.js";
 import type { OpenClawPluginToolContext } from "./tool-types.js";
 
@@ -66,7 +67,7 @@ function registry() {
 }
 
 it("advertises a version without removing the released string-list capability contract", () => {
-  const runtime = createRuntimeBase();
+  const runtime = createRuntimeBase(createRuntimeSystem);
   expect(runtime.capabilities).toContain("requester-model-catalog-v1");
   expect(runtime.capabilities).toContain("requester-model-family-v1");
   expect(runtime.capabilities).toContain("sender-restricted-hidden-helpers-v1");
