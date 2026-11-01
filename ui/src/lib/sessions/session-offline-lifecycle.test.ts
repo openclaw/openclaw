@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import type { SessionsDeleteResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { roleScopesAllow } from "../../../../src/shared/operator-scope-compat.js";
 import { resolveBaseSessionMutationRequiredScope } from "../../../../src/shared/session-method-scopes-base.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -575,16 +576,20 @@ it("reports automation cleanup failures after deferred deletion", async () => {
   const h = await setup();
   const request = h.current().request.getMockImplementation()!;
   h.current().request.mockImplementation(async (method, params) => {
-    const result = await request(method, params);
-    return method === "sessions.delete"
-      ? {
-          ...result,
-          automationCleanup: {
-            disabledJobIds: ["reminder-disabled"],
-            failures: [{ jobId: "reminder-failed", message: "store unavailable" }],
-          },
-        }
-      : result;
+    if (method !== "sessions.delete") {
+      return request(method, params);
+    }
+    await request(method, params);
+    return {
+      ok: true,
+      key: "agent:main:offline",
+      deleted: true,
+      archived: [],
+      automationCleanup: {
+        disabledJobIds: ["reminder-disabled"],
+        failures: [{ jobId: "reminder-failed", message: "store unavailable" }],
+      },
+    } satisfies SessionsDeleteResult;
   });
   h.offline();
   await h.delete();
