@@ -613,7 +613,15 @@ describe("auditGatewayServiceConfig node version inspection", () => {
     await fs.mkdir(path.dirname(nodePath), { recursive: true });
     await fs.writeFile(nodePath, "");
     await fs.mkdir(versionDir, { recursive: true });
-    await fs.chmod(versionDir, 0);
+    const stat = fs.stat.bind(fs);
+    const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+      if (args[0] === entrypointPath) {
+        throw Object.assign(new Error("EACCES: fixture version directory is unreadable"), {
+          code: "EACCES",
+        });
+      }
+      return stat(...args);
+    });
     try {
       const result = await audit(
         {
@@ -630,7 +638,7 @@ describe("auditGatewayServiceConfig node version inspection", () => {
           ?.message,
       ).toContain("EACCES");
     } finally {
-      await fs.chmod(versionDir, 0o755);
+      statSpy.mockRestore();
     }
   });
 });

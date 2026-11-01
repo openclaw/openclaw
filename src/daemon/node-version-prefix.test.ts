@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import {
   auditGatewayNodeVersionChange,
@@ -200,7 +200,15 @@ describe("gateway node version prefix", () => {
     const entrypointPath = path.join(versionDir, "lib/node_modules/openclaw/dist/index.js");
     await writeFile(nodePath);
     await fs.mkdir(versionDir, { recursive: true });
-    await fs.chmod(versionDir, 0);
+    const stat = fs.stat.bind(fs);
+    const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+      if (args[0] === entrypointPath) {
+        throw Object.assign(new Error("EACCES: fixture version directory is unreadable"), {
+          code: "EACCES",
+        });
+      }
+      return stat(...args);
+    });
     try {
       const issue = await auditGatewayNodeVersionChange({ nodePath, entrypointPath });
       expect(issue).toMatchObject({
@@ -209,7 +217,7 @@ describe("gateway node version prefix", () => {
       });
       expect(issue?.message).toContain("EACCES");
     } finally {
-      await fs.chmod(versionDir, 0o755);
+      statSpy.mockRestore();
     }
   });
 

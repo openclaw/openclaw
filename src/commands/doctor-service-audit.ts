@@ -208,6 +208,7 @@ export async function canRepairRuntime(
     SERVICE_AUDIT_CODES.gatewayRuntimeNode,
     SERVICE_AUDIT_CODES.gatewayRuntimeNodeVersionManager,
     SERVICE_AUDIT_CODES.gatewayRuntimeNodeSystemMissing,
+    SERVICE_AUDIT_CODES.gatewayNodePrefixSkew,
     SERVICE_AUDIT_CODES.gatewayPathMissing,
     SERVICE_AUDIT_CODES.gatewayPathMissingDirs,
     SERVICE_AUDIT_CODES.gatewayPathNonMinimal,
