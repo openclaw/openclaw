@@ -5,7 +5,6 @@ import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
-  applyMarkdownTextEdits,
   FormatCapabilityProfile,
   type MarkdownIR,
   markdownToIRWithMeta,
@@ -274,60 +273,6 @@ export async function resolveJidToE164(
   }, ` for ${jid}`);
 }
 
-function quoteWhatsAppBlockquoteLines(ir: MarkdownIR): MarkdownIR {
-  const quotes = ir.styles.filter((span) => span.style === "blockquote");
-  if (quotes.length === 0) {
-    return ir;
-  }
-  const codeBlocks = ir.styles.filter((span) => span.style === "code_block");
-  const lineStarts = new Set<number>();
-  for (const quote of quotes) {
-    if (quote.start === 0) {
-      lineStarts.add(0);
-    }
-    for (
-      let index = ir.text.indexOf("\n", quote.start);
-      index !== -1 && index + 1 < quote.end;
-      index = ir.text.indexOf("\n", index + 1)
-    ) {
-      if (
-        ir.text[index + 1] !== "\n" &&
-        !codeBlocks.some((code) => code.start <= index && index < code.end)
-      ) {
-        lineStarts.add(index + 1);
-      }
-    }
-  }
-  if (lineStarts.size === 0) {
-    return ir;
-  }
-  const { text, mapOffset } = applyMarkdownTextEdits(
-    ir.text,
-    [...lineStarts].map((start) => ({ start, end: start, text: "> " })),
-  );
-  const mapRange = <T extends { start: number; end: number }>(range: T): T => ({
-    ...range,
-    start: mapOffset(range.start),
-    end: range.end > range.start ? mapOffset(range.end - 1) + 1 : mapOffset(range.start),
-  });
-  return {
-    ...ir,
-    text,
-    styles: ir.styles.map(mapRange),
-    links: ir.links.map(mapRange),
-    ...(ir.annotations ? { annotations: ir.annotations.map(mapRange) } : {}),
-    ...(ir.listItems
-      ? {
-          listItems: ir.listItems.map((item) => ({
-            ...item,
-            ...(item.listMarker ? { listMarker: mapRange(item.listMarker) } : {}),
-            ...(item.taskMarker ? { taskMarker: mapRange(item.taskMarker) } : {}),
-          })),
-        }
-      : {}),
-  };
-}
-
 export function markdownToWhatsAppChunks(
   text: string,
   limit: number,
@@ -379,7 +324,6 @@ export function markdownToWhatsAppChunks(
     enableHtmlUnderline: true,
     enableTaskLists: true,
     headingStyle: "rich",
-    blockquotePrefix: "> ",
     tableMode: tableMode === "block" ? "code" : tableMode,
     preserveSourceBlockSpacing: true,
   });
@@ -392,9 +336,10 @@ export function markdownToWhatsAppChunks(
   }
   const render = (chunk: MarkdownIR) =>
     renderMarkdownWithMarkers(
-      quoteWhatsAppBlockquoteLines(chunk),
+      chunk,
       {
         styleMarkers: WHATSAPP_STYLE_MARKERS,
+        blockquotePrefix: "> ",
         escapeText: (value) => {
           let restored = value;
           for (const { source, placeholder } of escapedMarkers) {

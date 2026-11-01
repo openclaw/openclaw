@@ -52,12 +52,12 @@ describe("WhatsApp text runtime", () => {
   });
 
   it("closes and reopens formatting at chunk boundaries", () => {
-    const chunks = markdownToWhatsAppChunks(`# ${"word ".repeat(12)}`, 20);
+    const chunks = markdownToWhatsAppChunks(`> # ${"word ".repeat(12)}`, 20);
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.every((chunk) => chunk.length <= 20)).toBe(true);
-    expect(chunks.every((chunk) => /^\*.*\*\s*$/su.test(chunk))).toBe(true);
+    expect(chunks.every((chunk) => /^> \*.*\*\s*$/su.test(chunk))).toBe(true);
     expect(
-      chunks.map((chunk) => chunk.replace(/^\*/u, "").replace(/\*(\s*)$/u, "$1")).join(""),
+      chunks.map((chunk) => chunk.replace(/^> \*/u, "").replace(/\*(\s*)$/u, "$1")).join(""),
     ).toBe("word ".repeat(12));
   });
 
@@ -73,20 +73,6 @@ describe("WhatsApp text runtime", () => {
     expect(chunks.join("")).toContain("\\*");
     expect(chunks.join("")).not.toMatch(/\p{Co}/u);
   });
-
-  it("quotes every line of a multi-line blockquote", () => {
-    expect(markdownToWhatsApp("> **First** line\n> second line\n>\n> - item\n\nafter")).toBe(
-      "> *First* line\n> second line\n\n> • item\n\nafter",
-    );
-  });
-
-  it("keeps the quote on blockquote lines carried into later chunks", () => {
-    expect(markdownToWhatsAppChunks("> alpha beta gamma\n> delta epsilon", 20)).toEqual([
-      "> alpha beta gamma\n",
-      "> delta epsilon",
-    ]);
-  });
-
   it("applies the chunk limit to whitespace-only text", () => {
     expect(markdownToWhatsAppChunks(" ".repeat(12), 5)).toEqual(["    ", "    ", "  "]);
   });

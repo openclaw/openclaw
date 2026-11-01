@@ -38,6 +38,8 @@ type MarkdownLinkOrigin = "authored" | "linkify";
 export type RenderOptions = {
   styleMarkers: RenderStyleMap;
   annotationMarkers?: RenderAnnotationMap;
+  /** Line-oriented targets repeat this before each nonempty blockquote line. */
+  blockquotePrefix?: string;
   escapeText: (text: string) => string;
   buildLink?: (
     link: MarkdownLinkSpan,
@@ -193,6 +195,33 @@ export function renderMarkdownWithMarkers(
     ...new Set(annotated.flatMap((span) => [span.start, span.end])),
   ].toSorted((a, b) => a - b);
   const boundaries = new Set([0, text.length]);
+  const blockquotePrefix = options.blockquotePrefix ?? "";
+  const quoteLineStarts =
+    blockquotePrefix && projected.styles.some((span) => span.style === "blockquote")
+      ? new Map<number, number>()
+      : undefined;
+  if (quoteLineStarts) {
+    const codeBlocks = projected.styles.filter((span) => span.style === "code_block");
+    for (const quote of projected.styles) {
+      if (quote.style !== "blockquote") {
+        continue;
+      }
+      for (let start = quote.start; start < quote.end; ) {
+        if (
+          text[start] !== "\n" &&
+          !codeBlocks.some((code) => code.start < start && start < code.end)
+        ) {
+          quoteLineStarts.set(start, (quoteLineStarts.get(start) ?? 0) + 1);
+          boundaries.add(start);
+        }
+        const newline = text.indexOf("\n", start);
+        if (newline === -1) {
+          break;
+        }
+        start = newline + 1;
+      }
+    }
+  }
 
   const startsAt = new Map<number, MarkdownStyleSpan[]>();
   for (const span of projected.styles) {
@@ -286,6 +315,10 @@ export function renderMarkdownWithMarkers(
           stack.push(item);
         }
       }
+    }
+    const quoteDepth = quoteLineStarts?.get(pos);
+    if (quoteDepth) {
+      out += blockquotePrefix.repeat(quoteDepth);
     }
 
     const openingItems: OpeningItem[] = [];
