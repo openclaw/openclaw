@@ -4,6 +4,7 @@ import type { Result } from "@openclaw/normalization-core/result";
 import { isSessionActorCommand } from "../config/sessions/session-actor-command.js";
 import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { sqlPublicationAnchor } from "../infra/sql-connection.js";
+import { recordSqliteDatabaseIntegrity } from "../infra/sqlite-database-admission.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import {
   assertTransactionUsable,
@@ -41,6 +42,7 @@ import { prepareOpenClawAgentDatabaseWorkerLease } from "./openclaw-agent-db-lea
 import { refreshOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema-refresh.js";
 import {
   getOpenClawAgentDatabaseValidation,
+  publishOpenClawAgentDatabaseSchema,
   type OpenClawAgentDatabaseValidation,
 } from "./openclaw-agent-db-validation-cache.js";
 import {
@@ -252,9 +254,11 @@ function openAgentDatabaseBackend(
         const preparation = receiveMessageOnPort(port1)?.message as {
           validation?: OpenClawAgentDatabaseValidation;
           integrityRevoked: boolean;
+          startupIntegrity?: import("./agent-database-startup-integrity.js").AgentDatabaseStartupIntegrity;
         };
         lease.validation = preparation.validation;
         lease.integrityRevoked = preparation.integrityRevoked;
+        lease.startupIntegrity = preparation.startupIntegrity;
         lease.startupRepair = startupJournalRequested
           ? maintenance.repairStartupIntegrity.bind(undefined, lease.receipt)
           : undefined;
@@ -525,6 +529,19 @@ function openAgentDatabaseBackend(
     }
     if (command.type === "database.prepareWrite") {
       openWriter(true);
+      return undefined;
+    }
+    if (command.type === "database.integrityVerified") {
+      const opened = openWriter();
+      admit("commit");
+      recordSqliteDatabaseIntegrity(sqlPublicationAnchor(opened.db), command.input.verifiedAt);
+      const validation = getOpenClawAgentDatabaseValidation(opened);
+      if (validation) {
+        validation.integrityVerifiedAt = command.input.verifiedAt;
+      }
+      // Publish the completed receipt through the same native admission owner.
+      publishOpenClawAgentDatabaseSchema(opened);
+      requestSqliteWorkerOperationAdmission({ stage: "prepare", facts: { identity, validation } });
       return undefined;
     }
     if (command.type === "database.walMaintenance") {

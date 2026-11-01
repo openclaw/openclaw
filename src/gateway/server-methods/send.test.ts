@@ -11,7 +11,10 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { createChannelPartialDeliveryError } from "../../channels/turn/delivery-result.js";
-import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { SessionTranscriptAppendResult } from "../../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { OutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
@@ -78,8 +81,6 @@ const mocks = vi.hoisted(() => ({
   sendPoll: vi.fn<NonNullable<NonNullable<ChannelPlugin["outbound"]>["sendPoll"]>>(),
   getChannelPlugin: vi.fn(),
   loadOpenClawPlugins: vi.fn(),
-  getRuntimeConfigSnapshot: vi.fn(),
-  getRuntimeConfigSourceSnapshot: vi.fn(),
   loadSessionEntry:
     vi.fn<
       (sessionKey: string) => { canonicalKey: string; entry: { sessionId: string } | undefined }
@@ -122,12 +123,6 @@ vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
   resolveAgentConfig: () => undefined,
   resolveDefaultAgentId: () => "main",
   resolveAgentWorkspaceDir: () => TEST_AGENT_WORKSPACE,
-}));
-
-vi.mock("../../config/runtime-snapshot.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../config/runtime-snapshot.js")>()),
-  getRuntimeConfigSnapshot: mocks.getRuntimeConfigSnapshot,
-  getRuntimeConfigSourceSnapshot: mocks.getRuntimeConfigSourceSnapshot,
 }));
 
 vi.mock("../../plugins/loader.js", () => ({
@@ -423,6 +418,7 @@ describe("gateway send conversation ownership", () => {
   });
 
   afterEach(() => {
+    clearRuntimeConfigSnapshot();
     resetPluginRuntimeStateForTest();
   });
 
@@ -430,8 +426,6 @@ describe("gateway send conversation ownership", () => {
     vi.clearAllMocks();
     registrySeq += 1;
     setActivePluginRegistry(createTestRegistry([]), `send-test-${registrySeq}`);
-    mocks.getRuntimeConfigSnapshot.mockReturnValue(null);
-    mocks.getRuntimeConfigSourceSnapshot.mockReturnValue(null);
     mocks.loadSessionEntry.mockImplementation((sessionKey: string) => ({
       canonicalKey: sessionKey,
       entry: undefined,
@@ -502,8 +496,7 @@ describe("gateway send conversation ownership", () => {
       channels: { discord: { enabled: true, accounts: { drclaw: runtimeAccount } } },
       plugins: { allow: ["discord"] },
     };
-    mocks.getRuntimeConfigSnapshot.mockReturnValue(runtimeConfig);
-    mocks.getRuntimeConfigSourceSnapshot.mockReturnValue(sourceConfig);
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
     const { respond } = await runMessageActionRequest(
       {
         channel: "discord",
@@ -513,8 +506,6 @@ describe("gateway send conversation ownership", () => {
       null,
       makeContext(() => sourceConfig),
     );
-    expect(mocks.getRuntimeConfigSnapshot).toHaveBeenCalledTimes(1);
-    expect(mocks.getRuntimeConfigSourceSnapshot).toHaveBeenCalledTimes(1);
     expect(lastDispatchChannelMessageActionCall()?.cfg).toBe(runtimeConfig);
     expect(firstRespondCall(respond)[0]).toBe(true);
   });

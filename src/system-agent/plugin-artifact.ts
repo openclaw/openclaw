@@ -6,7 +6,7 @@ import { containsConfigIncludeDirective } from "../config/io.read-helpers.js";
 import { GUARDED_CONFIG_INCLUDE_WRITE_ERROR } from "../config/mutation-conflict.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { PluginAcceptedDeclaredSurface } from "../config/types.plugins.js";
-import { extractArchive, resolvePackedRootDir } from "../infra/archive.js";
+import { DEFAULT_MAX_ENTRIES, extractArchive, resolvePackedRootDir } from "../infra/archive.js";
 import { root, type Root } from "../infra/fs-safe.js";
 import { withInstallWorkspace } from "../infra/install-source-utils.js";
 import { loadPluginManifest, resolvePackageExtensionEntries } from "../plugins/manifest.js";
@@ -216,7 +216,9 @@ async function withVerifiedArtifact<T>(
       timeoutMs: 30_000,
       limits: {
         maxArchiveBytes: MAX_ARTIFACT_BYTES,
-        maxEntries: 512,
+        // Count files and directory headers like the normal plugin installer;
+        // keep the tighter artifact byte/time budgets and separate review-text cap.
+        maxEntries: DEFAULT_MAX_ENTRIES,
         maxExtractedBytes: 64 * 1024 * 1024,
         maxEntryBytes: MAX_ARTIFACT_BYTES,
       },

@@ -189,6 +189,7 @@ export async function adoptUnboundPullRequestWorkspace(params: {
       }
       const bound = await commitPreparedSessionWorkspace({
         prepared: prepared.value,
+        signal: params.signal,
         priorWorkspace: {
           worktreeId: worktree.id,
           sessionId: entry.sessionId,

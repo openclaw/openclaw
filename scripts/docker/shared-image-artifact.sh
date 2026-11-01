@@ -140,8 +140,8 @@ gh_api_get_with_retry() {
 }
 
 verify_uploaded_artifact() {
-  if [[ "$#" -ne 6 ]]; then
-    fail "usage: $0 verify-upload <label> <artifact-id> <artifact-name> <artifact-digest> <run-id> <run-attempt>"
+  if [[ "$#" -ne 6 && ( "$#" -ne 7 || "${7:-}" != "--json" ) ]]; then
+    fail "usage: $0 verify-upload <label> <artifact-id> <artifact-name> <artifact-digest> <run-id> <run-attempt> [--json]"
   fi
 
   local artifact_label="$1"
@@ -205,6 +205,11 @@ verify_uploaded_artifact() {
     '(.id | tostring) == $run_id and (.run_attempt | tostring) == $attempt' \
     <<< "$attempt_json" >/dev/null ||
     fail "$artifact_label producer run attempt does not match the immutable tuple."
+
+  # Metadata consumers share this verified response only after both identity checks.
+  if [[ "${7:-}" == "--json" ]]; then
+    printf '%s\n' "$artifact_json"
+  fi
 }
 
 require_common_inputs() {

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { resolveNodeRuntimeExecutable } from "../infra/node-runtime-executable.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
 import {
   materializeWindowsSpawnProgram,
@@ -6,7 +7,9 @@ import {
   resolveWindowsSpawnProgram,
 } from "../plugin-sdk/windows-spawn.js";
 import { signalPtySessionTree } from "./kill-tree.js";
+import { getAgentExecCgroup, type ProcessExecutionIntent } from "./linux-exec-cgroup.js";
 import { resolvePtyTerminalName, setPtyTerminalName } from "./pty-terminal-name.js";
+import { getSpawnBroker } from "./spawn-broker/context.js";
 import { prepareChildProcessSpawnRecorder } from "./spawn-diagnostics.js";
 import type { SpawnInitiation } from "./spawn-initiation.js";
 import {
@@ -47,6 +50,7 @@ function resolveTerminalNodeExecutable(env: NodeJS.ProcessEnv): string {
 }
 
 export type TerminalPtySpawnParams = {
+  executionIntent?: ProcessExecutionIntent;
   file: string;
   args: string[];
   cwd?: string;
@@ -78,9 +82,19 @@ export async function spawnTerminalPty(
       throw new Error("PTY construction aborted");
     }
   };
-  if (process.versions.bun && process.platform !== "win32" && !bunTerminalHasFlowControl()) {
+  assertCurrent();
+  const needsNodeFlowControl =
+    process.versions.bun && process.platform !== "win32" && !bunTerminalHasFlowControl();
+  const execCgroup = params.executionIntent === "agent-tool" ? getAgentExecCgroup() : undefined;
+  const canIsolate = execCgroup && (needsNodeFlowControl || resolveNodeRuntimeExecutable());
+  if (execCgroup && !canIsolate) {
+    process.emitWarning(
+      "Agent exec isolation is partial: Node is unavailable for the terminal helper; native PTY commands remain in the Gateway cgroup. Add node to PATH to isolate them.",
+    );
+  }
+  if (getSpawnBroker() || canIsolate || needsNodeFlowControl) {
     const recordSpawn = prepareChildProcessSpawnRecorder(params.file, params.args);
-    // Stock Bun lacks read backpressure; the fork shipping pause also fixes macOS wait4 deadlocks.
+    // The broker launches the existing helper, which owns PTY I/O and exec cgroup placement.
     const { spawnNodeTerminalPty } = await import("./terminal-pty-node.js");
     assertCurrent();
     const pty = await spawnNodeTerminalPty(params, assertCurrent, lifecycle?.initiateSpawn);

@@ -5,17 +5,19 @@
  * --existing-read measures executeExistingOpenClawStateRead with no host SQLite
  * handle. --owner-dir selects a sparse source overlay for before/after runs.
  * --trace-io prints synchronous call stacks only during the delayed probe.
+ * --assert-no-host-io requires zero warm main-thread filesystem and SQLite calls.
  * --assert-no-source-io fails if warm reads synchronously inspect the state DB.
  * --delay-source-only injects latency only for that file; other host I/O is counted.
  * Read fixtures include the quarantine store normally created during agent DB
  * setup; --missing-quarantine separately exercises an empty installation.
  *
- * --baseline uses the retained native lease API; candidate uses its existing async
- * counterpart. Seed 10,000 retained lease keys across 40 scopes, then warm one
+ * --baseline selects the native lease API; omit it for the async counterpart.
+ * Compare native revisions with --baseline on both arms and --owner-dir on base.
+ * Seed 10,000 retained lease keys across 40 scopes, then warm one
  * held lease before measuring repeated effect admission.
  * CPU, sampled allocation, and filesystem counts use separate passes. Counting
  * wrappers are absent from CPU/allocation measurement. A final operation
- * injects latency into host synchronous filesystem calls and awaited stats. This is an owner
+ * injects latency into host synchronous filesystem/SQLite calls and awaited stats. This is an owner
  * benchmark, not Gateway load. State stays under .local and is removed on exit.
  */
 import assert from "node:assert/strict";
@@ -35,6 +37,7 @@ const { values } = parseArgs({
     "existing-read": { type: "boolean", default: false },
     "owner-dir": { type: "string" },
     "trace-io": { type: "boolean", default: false },
+    "assert-no-host-io": { type: "boolean", default: false },
     "assert-no-source-io": { type: "boolean", default: false },
     "delay-source-only": { type: "boolean", default: false },
     "missing-quarantine": { type: "boolean", default: false },
@@ -57,6 +60,7 @@ const { executeExistingOpenClawStateRead } =
   await import("../../src/state/openclaw-state-db-readonly.ts");
 const { captureOpenClawStateWorkerContext } =
   await import("../../src/state/openclaw-state-worker-context.ts");
+const { requireNodeSqlite } = await import("../../src/infra/node-sqlite.ts");
 const { ensureOpenClawQuarantineStore } =
   await import("../../src/state/openclaw-quarantine-store.ts");
 assert(globalThis.gc, "Run with --expose-gc");
@@ -87,20 +91,28 @@ const profiles = [];
 const restores = [];
 let injectedDelay = 0;
 let operations = 0;
+let sqliteCalls = 0;
+let sqliteOpens = 0;
 let sourceOperations = 0;
 let asyncStats = 0;
 const blocked = new Int32Array(new SharedArrayBuffer(4));
-const wrap = (object, key) => {
+const wrap = (object, key, sqlite = false) => {
   const original = object[key];
   const wrapped = function (...args) {
-    operations++;
+    if (sqlite) {
+      sqliteCalls++;
+    } else {
+      operations++;
+    }
     const source = args[0] === databasePath;
     if (source) {
       sourceOperations++;
     }
-    if (injectedDelay && (!values["delay-source-only"] || source)) {
+    if (injectedDelay && (sqlite || !values["delay-source-only"] || source)) {
       if (values["trace-io"]) {
-        console.error(new Error(`Synchronous filesystem call: ${key}`).stack);
+        console.error(
+          new Error(`Synchronous ${sqlite ? "SQLite" : "filesystem"} call: ${key}`).stack,
+        );
       }
       Atomics.wait(blocked, 0, 0, injectedDelay);
     }
@@ -211,6 +223,26 @@ try {
     )) {
       wrap(fs, key);
     }
+    const sqlite = requireNodeSqlite();
+    const DatabaseSync = sqlite.DatabaseSync;
+    sqlite.DatabaseSync = new Proxy(DatabaseSync, {
+      construct(target, args, receiver) {
+        sqliteOpens++;
+        if (injectedDelay) {
+          Atomics.wait(blocked, 0, 0, injectedDelay);
+        }
+        return Reflect.construct(target, args, receiver);
+      },
+    });
+    restores.push(() => {
+      sqlite.DatabaseSync = DatabaseSync;
+    });
+    for (const key of ["exec", "prepare", "open", "close"]) {
+      wrap(DatabaseSync.prototype, key, true);
+    }
+    for (const key of ["run", "get", "all", "iterate"]) {
+      wrap(sqlite.StatementSync.prototype, key, true);
+    }
     const originalStat = fs.promises.stat;
     fs.promises.stat = async (...args) => {
       asyncStats++;
@@ -225,15 +257,21 @@ try {
     wrap(fs.realpathSync, "native");
     syncBuiltinESMExports();
     operations = 0;
+    sqliteCalls = 0;
+    sqliteOpens = 0;
     sourceOperations = 0;
     asyncStats = 0;
     await run(iterations);
     const hostSyncOperations = operations;
+    const hostSqliteCalls = sqliteCalls;
+    const hostSqliteOpens = sqliteOpens;
     const sourceSyncOperations = sourceOperations;
     const hostAsyncStats = asyncStats;
     await immediate();
     injectedDelay = delayMs;
     operations = 0;
+    sqliteCalls = 0;
+    sqliteOpens = 0;
     sourceOperations = 0;
     asyncStats = 0;
     const delayedStart = performance.now();
@@ -260,6 +298,8 @@ try {
         timing: {
           elapsedMs,
           hostSyncOperations,
+          hostSqliteCalls,
+          hostSqliteOpens,
           sourceSyncOperations,
           hostAsyncStats,
           mainThreadCpuMs,
@@ -275,6 +315,8 @@ try {
           delayPerCallMs: delayMs,
           sourceOnly: values["delay-source-only"],
           operations,
+          sqliteCalls,
+          sqliteOpens,
           sourceOperations,
           asyncStats,
           admissionMs,
@@ -282,6 +324,13 @@ try {
         },
       }),
     );
+    if (values["assert-no-host-io"]) {
+      assert.deepEqual(
+        { hostSyncOperations, hostSqliteCalls, hostSqliteOpens },
+        { hostSyncOperations: 0, hostSqliteCalls: 0, hostSqliteOpens: 0 },
+        "Warm reads must not perform synchronous host filesystem or SQLite work",
+      );
+    }
     if (values["assert-no-source-io"]) {
       assert.equal(
         sourceSyncOperations,

@@ -412,6 +412,8 @@ export type CronJob = CronJobBase<
    * schedule keeps its reserved agentTurn sentinel in `payload` for existing readers.
    */
   payloadSource?: { kind: "pluginCommand"; pluginId: string; command: string };
+  /** Human allowed to manage this automation; separate from its execution envelope. */
+  ownerProfileId?: string;
   owner?: {
     agentId?: string;
     sessionKey?: string;
@@ -465,6 +467,8 @@ export type CronStoredJob = Omit<CronJob, "streamExecutionHost" | "payloadSource
     source: import("../gateway/operator-run-recovery-source.codec.js").RestartRecoveryOperatorSource;
     executionRevision: string;
   };
+  /** A human transfer retired inference authority; only fresh capture clears this marker. */
+  ownerTransferPending?: true;
   /** Captured inference owner; private and independent of scheduled tool authority. */
   inferenceBinding?: import("./inference-binding.js").CronInferenceBinding;
   /** Creation-bound destination for isolated results when no external route exists. */
@@ -518,6 +522,7 @@ export type CronJobCreate = Omit<
   | "updatedAtMs"
   | "state"
   | "scheduledToolPolicy"
+  | "ownerProfileId"
   | "streamExecutionHost"
   | "payloadSource"
 > & {

@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { parse } from "@babel/parser";
+import traverse from "@babel/traverse";
 
 function relativeSpecifier(fromFile, targetFile) {
   const relative = path
@@ -327,6 +329,68 @@ function namedImport(names, targetFile, consumerFile, index) {
   return `import { ${bindings.join(", ")} } from ${JSON.stringify(relativeSpecifier(consumerFile, targetFile))};`;
 }
 
+function optionalImportMemberEdges(source, consumerFile) {
+  const edges = new Map();
+  const ast = parse(source, {
+    sourceType: "module",
+    plugins: ["typescript"],
+    createImportExpressions: true,
+  });
+  // Link the optional prelaunch import to calls on that same retained binding.
+  // Syntax and binding identity exclude types, text and shadowed namespaces.
+  traverse(ast, {
+    AssignmentExpression(assignment) {
+      const { left, right, operator } = assignment.node;
+      if (
+        operator !== "=" ||
+        left.type !== "Identifier" ||
+        right.type !== "ConditionalExpression"
+      ) {
+        return;
+      }
+      const awaited = right.consequent;
+      if (awaited.type !== "AwaitExpression" || awaited.argument.type !== "CallExpression") {
+        return;
+      }
+      const caught = awaited.argument.callee;
+      if (
+        caught.type !== "MemberExpression" ||
+        caught.computed ||
+        caught.property.type !== "Identifier" ||
+        caught.property.name !== "catch" ||
+        caught.object.type !== "ImportExpression" ||
+        caught.object.source.type !== "StringLiteral" ||
+        !caught.object.source.value.startsWith(".")
+      ) {
+        return;
+      }
+      const binding = assignment.scope.getBinding(left.name);
+      if (!binding) {
+        return;
+      }
+      const targetFile = path.resolve(path.dirname(consumerFile), caught.object.source.value);
+      const names = edges.get(targetFile) ?? new Set();
+      for (const reference of binding.referencePaths) {
+        const member = reference.parentPath;
+        if (
+          member.isMemberExpression() &&
+          !member.node.computed &&
+          member.node.object === reference.node &&
+          member.node.property.type === "Identifier" &&
+          member.parentPath.isCallExpression() &&
+          member.parentPath.node.callee === member.node
+        ) {
+          names.add(member.node.property.name);
+        }
+      }
+      if (names.size > 0) {
+        edges.set(targetFile, names);
+      }
+    },
+  });
+  return edges;
+}
+
 function sideEffectImport(targetFile, consumerFile) {
   return `import ${JSON.stringify(relativeSpecifier(consumerFile, targetFile))};`;
 }
@@ -556,8 +620,49 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
     imports.push(namedImport([...names], targetFile, filePath, imports.length));
   }
 
+  const broadcastPath = "scripts/perf/transcript-broadcast-measure.ts";
+  const broadcastSource = fs.readFileSync(broadcastPath, "utf8");
+  for (const [, bindings, specifier] of broadcastSource.matchAll(
+    /(?:\\n|\b)import\s*\{([^}]+)\}\s*from\s*\$\{JSON\.stringify\(new URL\("([^"\r\n]+)", import\.meta\.url\)\.href\)\}/gu,
+  )) {
+    addNamedImport(
+      importedNames(`import {${bindings}} from "${specifier}"`, specifier),
+      path.resolve(path.dirname(broadcastPath), specifier),
+    );
+  }
+
+  const telemetryTestPath = "test/scripts/team-shape-stress.test.ts";
+  const telemetryTestSource = fs.readFileSync(telemetryTestPath, "utf8");
+  const telemetryUrls = new Map(
+    [
+      ...telemetryTestSource.matchAll(
+        /^[ \t]*const\s+([A-Za-z_$][\w$]*)\s*=\s*new URL\(\s*["']([^"'\r\n]+)["']\s*,\s*import\.meta\.url\s*,?\s*\)/gmu,
+      ),
+    ].map(([, binding, specifier]) => [binding, specifier]),
+  );
+  // The native child consumes the helper through an interpolated file URL.
+  for (const [, bindings, binding] of telemetryTestSource.matchAll(
+    /^[ \t]*const\s*\{([^}]+)\}\s*=\s*await\s+import\(\s*\$\{JSON\.stringify\(([A-Za-z_$][\w$]*)\.href\)\}\s*\)/gmu,
+  )) {
+    const specifier = telemetryUrls.get(binding);
+    if (specifier) {
+      addNamedImport(
+        importedNames(`import {${bindings}} from "${specifier}"`, specifier),
+        path.resolve(path.dirname(telemetryTestPath), specifier),
+      );
+    }
+  }
+
   for (const [targetFile, names] of prToolingNamedImportEdges(
     fs.readFileSync("scripts/pr", "utf8"),
+  )) {
+    addNamedImport([...names], targetFile);
+  }
+
+  const anchorPath = "src/process/supervisor/service-child-group-anchor.ts";
+  for (const [targetFile, names] of optionalImportMemberEdges(
+    fs.readFileSync(anchorPath, "utf8"),
+    anchorPath,
   )) {
     addNamedImport([...names], targetFile);
   }

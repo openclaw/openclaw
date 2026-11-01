@@ -48,6 +48,11 @@ jobs:
     runs-on: xcode-27-xlarge
     timeout-minutes: 90
     steps:
+      - name: Reserve host CPU for screenshots
+        if: ${{ !inputs.startup_probe }}
+        timeout-minutes: 2
+        run: sudo -n /usr/bin/mdutil -i off /System/Volumes/Data
+
       - name: Checkout screenshot source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -160,6 +165,10 @@ jobs:
     timeout-minutes: 360
     environment: ${{ ((github.event_name == 'schedule' && github.event.schedule == '0 7 * * *') || inputs.operation == 'testflight') && 'ios-testflight' || 'ios-store-release' }}
     steps:
+      - name: Reserve host CPU for release capture
+        timeout-minutes: 2
+        run: sudo -n /usr/bin/mdutil -i off /System/Volumes/Data
+
       - name: Checkout release source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

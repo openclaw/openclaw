@@ -419,12 +419,12 @@ export function reserveSteerCandidate(
     const wasClearing = queue.clearing;
     queue.clearing = true;
     try {
-      if (consume || receipt.accepted === true) {
+      if (consume) {
         input.payload = "unbound";
         delete run.protectFromQueueOverflow;
-        completeFollowupRunLifecycle(run, receipt.accepted === true ? "consumed" : disposition);
+        completeFollowupRunLifecycle(run, disposition);
       }
-      if (!consume && receipt.accepted !== true) {
+      if (!consume) {
         // A settled negative handoff explicitly requests queued execution. Merely
         // remembering the steering callback must leave the mailbox dormant.
         queue.dispatchEnabled = true;

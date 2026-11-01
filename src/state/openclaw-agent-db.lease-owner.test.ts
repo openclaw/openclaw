@@ -133,10 +133,11 @@ describe("agent database lease acquisition owner", () => {
     const owner = createOwner();
     const options = { agentId: "worker", env: owner.env };
     const original = openOpenClawAgentDatabase(options);
+    // A missing uniqueness constraint still requires the yielding full-integrity gate.
     original.db.exec(`
       INSERT INTO cache_entries (scope,key,value_json,expires_at,updated_at)
         VALUES ('admission','retained','{"retained":true}',100,1);
-      DROP INDEX idx_agent_cache_expiry;
+      DROP INDEX idx_agent_conversations_identity;
     `);
     expect(closeOpenClawAgentDatabaseByPath(original.path)).toBe(true);
     closeOpenClawAgentDatabasesForTest(owner.stateDir);
@@ -178,7 +179,9 @@ describe("agent database lease acquisition owner", () => {
     const retained = nativeOpen(original.path, { readOnly: true });
     try {
       expect(
-        retained.prepare("SELECT sql FROM sqlite_schema WHERE name='idx_agent_cache_expiry'").get(),
+        retained
+          .prepare("SELECT sql FROM sqlite_schema WHERE name='idx_agent_conversations_identity'")
+          .get(),
       ).toBeUndefined();
       expect(retained.prepare("SELECT * FROM cache_entries").all()).toEqual([
         {

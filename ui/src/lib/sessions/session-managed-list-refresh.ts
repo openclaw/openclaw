@@ -14,19 +14,14 @@ import type {
   ObservedSessionList,
 } from "./session-list-query.ts";
 import { sessionListReadNeedsEventRefresh } from "./session-list-query.ts";
+import type { SessionListRefreshHost } from "./session-refresh-types.ts";
 import {
   normalizeManagedSessionListQuery,
   requestSessionListParams,
   sessionListQueryKey,
 } from "./session-requests.ts";
 import type { createSessionRosterObservations } from "./session-roster-observations.ts";
-import type {
-  SessionConnectionOwner,
-  SessionGateway,
-  SessionListScope,
-  SessionListSnapshot,
-  SessionState,
-} from "./session-types.ts";
+import type { SessionListScope, SessionListSnapshot } from "./session-types.ts";
 
 export function getManagedSessionList(
   lists: Map<string, ManagedSessionList>,
@@ -75,22 +70,6 @@ export function publishManagedList(
     listener(snapshot);
   }
 }
-
-export type SessionListRefreshHost = {
-  background: (key: string | object, task: () => Promise<unknown>) => Promise<void>;
-  connection: SessionConnectionOwner;
-  snapshot: () => SessionGateway["snapshot"];
-  readState: () => SessionState;
-  decorate: (
-    result: SessionsListResult | null,
-    owner: { scope: SessionListScope },
-  ) => SessionsListResult | null;
-  reconcileList: (
-    result: SessionsListResult | null,
-    issuedRevision: number,
-    agentId?: string,
-  ) => SessionsListResult | null;
-};
 
 /** Owns each managed window's pending request and queued replacement drain. */
 export function createSessionManagedListRefresh(

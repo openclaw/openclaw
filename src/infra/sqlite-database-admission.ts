@@ -34,6 +34,7 @@ import {
 } from "./sqlite-database-admission-record.js";
 import {
   integrityVerificationKey,
+  quickIntegrityVerificationKey,
   SqliteDatabaseCleanCloseSeals,
 } from "./sqlite-database-admission-seal.js";
 import { createSqliteDatabaseWriteReceipts } from "./sqlite-database-write-receipts.js";
@@ -115,7 +116,8 @@ export function prepareSqliteDatabaseCleanClose(database: DatabaseSync) {
   return seals.prepare(
     database,
     admission(database),
-    getSqliteDatabaseAdmission(database, integrityVerificationKey),
+    getSqliteDatabaseAdmission(database, integrityVerificationKey) ??
+      getSqliteDatabaseAdmission(database, quickIntegrityVerificationKey),
   );
 }
 
@@ -137,6 +139,7 @@ export const {
   hasSqliteDatabaseSchemaAdmissionForPath,
   getSqliteDatabaseAdmissionIdentityForPath,
   hasSqliteDatabaseSchemaAdmissionForIdentity,
+  retainSqliteDatabaseAdmissionForPath,
 } = reader;
 
 const scopedWrites = createSqliteDatabaseWriteReceipts({
@@ -160,6 +163,7 @@ export const {
   onSqliteDatabaseWriteSettled,
   retireSqliteDatabaseWriteScopes,
   retainSqliteDatabaseWriteScopesForPath,
+  prepareSqliteDatabaseScopedWriteRevisionForPath,
   withSqliteDatabaseWriteScope,
   withoutSqliteDatabaseWriteScope,
   readSqliteDatabaseScopedWriteToken,
@@ -292,6 +296,7 @@ export function prepareSqliteDatabaseAdmission(
   try {
     const file = fs.statSync(filename, { bigint: true });
     if (!file.isFile()) {
+      state.registry.observeLocation(filename, undefined);
       return undefined;
     }
     const observed = identity(file);
@@ -299,6 +304,7 @@ export function prepareSqliteDatabaseAdmission(
     return observed;
   } catch (error) {
     if (hasErrnoCode(error, "ENOENT")) {
+      state.registry.observeLocation(filename, undefined);
       if (!create) {
         return undefined;
       }

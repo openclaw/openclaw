@@ -155,6 +155,7 @@ export function registerWorkerGoalChatCases(
         placements,
         environments: {
           get: () => environment,
+          inspectTurnLease: async ({ assertCurrent }) => assertCurrent(),
           acquireTurnCredential: unexpectedTransport,
           acknowledgeCredentialDelivery: unexpectedTransport,
           destroy: unexpectedTransport,

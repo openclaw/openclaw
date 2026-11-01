@@ -19,9 +19,9 @@ import {
 } from "./cli-session-history.test-support.js";
 
 const blocks = (text: string) => [{ type: "text", text }];
-const assistantTurn = (text: string) => ({
+const assistantTurn = (text: string, model = "claude-sonnet-4-5") => ({
   type: "assistant",
-  message: { role: "assistant", content: blocks(text) },
+  message: { role: "assistant", model, content: blocks(text) },
 });
 const boundary = (content = "Conversation compacted") => ({
   type: "system",
@@ -32,9 +32,8 @@ const summary = (text: string) => ({ type: "summary", summary: text });
 const writeRows = (filePath: string, rows: readonly unknown[]) =>
   fs.writeFile(filePath, rows.map((row) => JSON.stringify(row)).join("\n"));
 
-function merge(localMessages: unknown[], importedMessages: unknown[]) {
-  return mergeImportedChatHistoryMessages({ localMessages, importedMessages });
-}
+const merge = (localMessages: unknown[], importedMessages: unknown[]) =>
+  mergeImportedChatHistoryMessages({ localMessages, importedMessages });
 
 function classify(line: string) {
   return classifyClaudeCliHistoryLine({
@@ -84,8 +83,8 @@ it.each(["[Request interrupted by user]", "[Request interrupted by user for tool
         claudeUser(`${text} Please explain.`, { uuid: "suffix" }),
         claudeUser(blocks(` ${text}`), { uuid: "whitespace" }),
         claudeUser([...blocks(text), ...blocks("Please explain.")], { uuid: "sibling" }),
-      ];
-      await writeRows(filePath, [interrupt, ...visible]);
+      ].concat(assistantTurn(text));
+      await writeRows(filePath, [interrupt, assistantTurn(text, "<synthetic>"), ...visible]);
       const projected = projectChatDisplayMessagesWithState(merge([], await readMessages()));
       expect(projected.messages.map((message) => message.content)).toEqual(
         visible.map((entry) => entry.message.content),
@@ -93,7 +92,7 @@ it.each(["[Request interrupted by user]", "[Request interrupted by user for tool
       expect(projected.activity).toEqual([]);
       expect(classify(JSON.stringify(interrupt)).humanTurn).toBe(false);
       for (const entry of visible) {
-        expect(classify(JSON.stringify(entry)).humanTurn).toBe(true);
+        expect(classify(JSON.stringify(entry)).humanTurn).toBe(entry.type === "user");
       }
     });
   },
@@ -135,6 +134,7 @@ it("collects valid turns through the HOME-resolved session store despite null ro
       claudeUser(reseedPrompt),
       claudeUser("first user prompt"),
       null,
+      assistantTurn("No response requested.", "<synthetic>"),
       assistantTurn("first assistant reply"),
       claudeUser("second user prompt"),
     ],

@@ -263,7 +263,7 @@ export function createWebListenerFactoryCapture(): AnyExport {
         onMessage: (msg: WebInboundCallbackMessage) => Promise<void>;
         shouldDebounce?: (msg: WebInboundCallbackMessage) => boolean;
         debounceMs?: number;
-        appendReplyWindow?: { afterMs: number; untilMs: number; maxAgeMs: number };
+        appendReplyMaxAgeMs?: number;
         selfChatMode?: boolean;
       }
     | undefined;
@@ -271,7 +271,7 @@ export function createWebListenerFactoryCapture(): AnyExport {
     onMessage: (msg: WebInboundCallbackMessage) => Promise<void>;
     shouldDebounce?: (msg: WebInboundCallbackMessage) => boolean;
     debounceMs?: number;
-    appendReplyWindow?: { afterMs: number; untilMs: number; maxAgeMs: number };
+    appendReplyMaxAgeMs?: number;
     selfChatMode?: boolean;
   }) => {
     capturedOnMessage = opts.onMessage;

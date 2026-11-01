@@ -14,10 +14,7 @@ import { consumeGatewaySuspendHandoff } from "../../infra/gateway-suspend-coordi
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { findStartupMaintenanceRequiredError } from "../../infra/startup-maintenance-required.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import {
-  beginGatewayShutdownCleanup,
-  type GatewayDrainReason,
-} from "../../process/gateway-work-admission.js";
+import type { GatewayDrainReason } from "../../process/gateway-work-admission.js";
 import { runWithProcessCleanupBudget } from "../../process/supervisor/cleanup-budget.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { registerSignalExitOwner } from "../signal-exit-barrier.js";
@@ -720,7 +717,6 @@ export async function runGatewayLoop(params: {
           loopCompletion.formatShutdownReason(acceptedRequest),
         );
         eagerLifecycleRuntime.abortActiveCronTaskRuns();
-        beginGatewayShutdownCleanup();
 
         if (isRestart && activeRestartRequest?.restartIntent?.successorOwner) {
           const owner = activeRestartRequest.restartIntent.successorOwner;

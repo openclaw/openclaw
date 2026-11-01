@@ -1,4 +1,5 @@
 import path from "node:path";
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { disableLocalCronJobsBoundToSessions } from "openclaw/plugin-sdk/cron-store-runtime";
 import { readMemorySearchManagerStatus } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
@@ -409,6 +410,7 @@ async function runMemoryPromotion(
             agentId,
             workspaceAgentIds,
             workspaceDir,
+            workspaceFileMode: resolveAgentConfig(cfg, agentId)?.workspaceFileMode,
             candidates,
             limit: opts.limit,
             minScore: opts.minScore ?? dreaming.minScore,

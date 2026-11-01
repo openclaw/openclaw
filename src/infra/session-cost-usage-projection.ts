@@ -277,6 +277,8 @@ export async function projectSessionCostSummaries(
   params: UsageCostRollupRowSource & {
     sessions: ReadonlyArray<{ sessionId?: string; sessionFile: string }>;
     files: ReadonlyArray<UsageCostTranscriptFile | undefined>;
+    /** Current mutation facts for SQLite files whose replay bounds came from a cached snapshot. */
+    sqliteMutationTimes?: ReadonlyMap<string, number>;
     pricingFingerprint: string;
     startMs?: number;
     endMs?: number;
@@ -315,11 +317,17 @@ export async function projectSessionCostSummaries(
   let cachedFiles = 0;
   const deferredIndexes = new Set<number>();
   const reader = createRollupProjectionReader(params);
+  const isFresh = (
+    checkpoint: Parameters<typeof isUsageCostRollupFresh>[0]["checkpoint"],
+    file: UsageCostTranscriptFile,
+  ) =>
+    isUsageCostRollupFresh({ checkpoint, file }) &&
+    (params.sqliteMutationTimes?.get(file.filePath) ?? file.mtimeMs) <= file.mtimeMs;
   for (const [filePath, requests] of requestsByPath) {
     const { entry, checkpoint, requests: usableRequests } = await reader.read(filePath, requests);
     if (entry === null) {
       for (const { index, file } of requests) {
-        if (isUsageCostRollupFresh({ checkpoint, file })) {
+        if (isFresh(checkpoint, file)) {
           deferredIndexes.add(index);
         }
       }
@@ -329,7 +337,7 @@ export async function projectSessionCostSummaries(
     }
     for (const { index, session, file } of usableRequests) {
       cachedFiles += 1;
-      const fresh = isUsageCostRollupFresh({ checkpoint: entry.checkpoint, file });
+      const fresh = isFresh(entry.checkpoint, file);
       summaries[index] = {
         ...buildSessionCostSummaryFromRollup({
           rollup: entry.rollup,
@@ -341,7 +349,12 @@ export async function projectSessionCostSummaries(
           formatDay,
         }),
         computedAt: entry.scannedAt,
-        ...(!fresh ? { refreshing: false, staleSince: file.mtimeMs } : {}),
+        ...(!fresh
+          ? {
+              refreshing: false,
+              staleSince: params.sqliteMutationTimes?.get(file.filePath) ?? file.mtimeMs,
+            }
+          : {}),
       };
     }
   }

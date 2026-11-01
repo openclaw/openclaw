@@ -110,13 +110,12 @@ const nodeRequiredFiles = new Set([
   "src/gateway/session-list-history-retention.test.ts",
   "src/gateway/session-row-projection.retention.test.ts",
   "src/gateway/session-database-retention.test.ts",
-  "ui/src/components/desktop/desktop-mobile-keyboard.test.ts",
-  "ui/src/lib/reactive/session-progress-roster.test.ts",
+  "ui/src/components/desktop/desktop-mobile-keyboard-retention.test.ts",
   "ui/src/pages/chat/chat-pane-retention.test.ts",
   "ui/src/pages/chat/chat-thread-retention.test.ts",
   "ui/src/pages/chat/components/chat-transcript-layout-retention.test.ts",
   "ui/src/pages/chat/session-message-cache-retention.test.ts",
-  "ui/src/pages/chat/session-snapshot-store.test.ts",
+  "ui/src/pages/chat/session-snapshot-store-retention.test.ts",
   "ui/src/pages/usage/usage-page-retention.test.ts",
 ]);
 // Physical schema and worker lifecycle proofs exercise both host runtimes. Keep Bun coverage

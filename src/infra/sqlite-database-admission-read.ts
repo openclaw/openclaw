@@ -50,6 +50,32 @@ export function createSqliteDatabaseAdmissionReader(owner: {
 }) {
   const { state, admission, pathAdmission, exchange, retain, release, publishFact } = owner;
 
+  /** A retained native consumer keeps its dependency's exact admission generation alive. */
+  function retainSqliteDatabaseAdmissionForPath(location: string) {
+    const record = pathAdmission(location);
+    if (!record) {
+      return undefined;
+    }
+    try {
+      retain(record);
+    } catch (error) {
+      release(record);
+      throw error;
+    }
+    let released = false;
+    const current = state.registry.prepareLocation(location);
+    return {
+      location,
+      isCurrent: () => !released && current() === record,
+      release(this: void) {
+        if (!released) {
+          released = true;
+          release(record);
+        }
+      },
+    };
+  }
+
   function withPathAdmission<T>(
     location: string,
     operation: (record: Admission | undefined) => T,
@@ -243,5 +269,6 @@ export function createSqliteDatabaseAdmissionReader(owner: {
     hasSqliteDatabaseSchemaAdmissionForPath,
     getSqliteDatabaseAdmissionIdentityForPath,
     hasSqliteDatabaseSchemaAdmissionForIdentity,
+    retainSqliteDatabaseAdmissionForPath,
   };
 }

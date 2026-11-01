@@ -14,7 +14,6 @@ import {
   LOCAL_WORKSPACE_CONTENT_BATCH,
   type LocalWorkspacePreparation,
 } from "./local-workspace-cas.js";
-import type { LocalWorkspaceManifestRecord } from "./local-workspace-manifest-tree.js";
 import type { LocalWorkspaceManifestMutation } from "./local-workspace-store.types.js";
 
 const packs = "local_workspace_tree_packs";
@@ -141,13 +140,13 @@ export function readLocalWorkspaceSourcePaths(db: EngineConnection, digest: Uint
   return decodeLocalWorkspaceSourcePathSet(row.paths_zstd);
 }
 
-/** Fetch directory packs level by level inside the caller's read snapshot. */
+/** Capture directory packs without expanding their records in the shared reader. */
 export function readLocalWorkspaceTree(
   db: EngineConnection,
   root: Uint8Array,
   options?: { allowMissing?: boolean },
 ) {
-  const records = new Map<string, LocalWorkspaceManifestRecord>();
+  const records: string[] = [];
   let pending = [localWorkspaceDigestReference(root)];
   while (pending.length) {
     const next: string[] = [];
@@ -165,11 +164,7 @@ export function readLocalWorkspaceTree(
         throw new Error("Local workspace baseline nodes are missing");
       }
       for (const row of rows) {
-        // SAFETY: Immutable packs and their links are produced together by the tree owner.
-        const entries = JSON.parse(row.records_json) as LocalWorkspaceManifestRecord[];
-        for (const record of entries) {
-          records.set(record.node.path, record);
-        }
+        records.push(row.records_json);
         // SAFETY: This is the owner-produced child-pack digest array.
         for (const child of JSON.parse(row.children_json) as string[]) {
           next.push(child);

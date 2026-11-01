@@ -65,6 +65,16 @@ const skill = (name: string) => ({
   skillModelVisible: true,
 });
 
+const skillEntry = (name: string) => ({
+  acceptsArgs: true,
+  description: name,
+  name,
+  scope: "both" as const,
+  source: "skill" as const,
+  skillModelVisible: true,
+  textAliases: [`/${name}`],
+});
+
 afterEach(() => {
   resetComposerTestFixtures();
   vi.unstubAllGlobals();
@@ -218,45 +228,34 @@ describe("new-session composer keyboard submission", () => {
     },
   );
 
-  it.each(["agent", "client"] as const)(
+  it.each(["agent", "client", "project"] as const)(
     "drops pending skill completion after %s replacement",
     async (owner) => {
       const response = createDeferred<CommandsListResult>();
       const request = vi.fn(() => response.promise);
       const snapshot = { client: { request } as unknown as GatewayBrowserClient };
       const context = composerContext(snapshot);
-      const { composer, rerender, rerenderForAgent, composerTextarea } = renderComposer({
-        agentId: "writer",
-        context,
-        message: "$",
-      });
+      const commandProjectId = owner === "project" ? "project-alpha" : undefined;
+      const view = renderComposer({ agentId: "writer", commandProjectId, context, message: "$" });
+      const { composer, composerTextarea } = view;
       const textarea = getComposerTextarea(composer);
       textarea.setSelectionRange(1, 1);
       textarea.dispatchEvent(new Event("select", { bubbles: true }));
       expect(request).toHaveBeenCalledWith("commands.list", {
         agentId: "writer",
+        ...(commandProjectId ? { projectId: commandProjectId } : {}),
         includeArgs: true,
         scope: "text",
       });
       if (owner === "agent") {
-        rerenderForAgent("reviewer");
+        view.rerenderForAgent("reviewer");
+      } else if (owner === "project") {
+        view.rerenderForProject("project-beta");
       } else {
         snapshot.client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-        rerender();
+        view.rerender();
       }
-      response.resolve({
-        commands: [
-          {
-            acceptsArgs: true,
-            description: "Previous owner only",
-            name: "previous_owner_only",
-            scope: "both",
-            source: "skill",
-            skillModelVisible: true,
-            textAliases: ["/previous_owner_only"],
-          },
-        ],
-      });
+      response.resolve({ commands: [skillEntry("previous_owner_only")] });
       await waitForFast(() =>
         expect(composerTextarea.skillMenu.state.skillCommandRefreshPending).toBe(false),
       );
@@ -266,6 +265,40 @@ describe("new-session composer keyboard submission", () => {
       expect(getSkillCommandCompletions("previous_owner_only")).toEqual([]);
     },
   );
+
+  it("requests the new project's slash catalog while the previous project's is pending", async () => {
+    const first = createDeferred<CommandsListResult>();
+    const second = createDeferred<CommandsListResult>();
+    const request = vi
+      .fn()
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+    const context = composerContext({ client: { request } as unknown as GatewayBrowserClient });
+    const { composer, rerenderForProject } = renderComposer({
+      agentId: "writer",
+      commandProjectId: "project-alpha",
+      context,
+    });
+    const textarea = getComposerTextarea(composer);
+    typeDraft(textarea, "/");
+    expect(request).toHaveBeenLastCalledWith(
+      "commands.list",
+      expect.objectContaining({ projectId: "project-alpha" }),
+    );
+    rerenderForProject("project-beta");
+    typeDraft(textarea, "/");
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenLastCalledWith(
+      "commands.list",
+      expect.objectContaining({ projectId: "project-beta" }),
+    );
+    first.resolve({ commands: [skillEntry("alpha_only")] });
+    second.resolve({ commands: [skillEntry("beta_only")] });
+    await waitForFast(() =>
+      expect(composer.querySelector(".slash-menu")?.textContent ?? "").toContain("/beta_only"),
+    );
+    expect(composer.querySelector(".slash-menu")?.textContent ?? "").not.toContain("/alpha_only");
+  });
 
   it("opens skill mentions and inserts the selected skill with Enter", () => {
     replaceSlashCommands([skill("release_notes")]);

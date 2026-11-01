@@ -263,20 +263,20 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 21253
   },
   "openClawDeveloperInstructions": {
-    "chars": 3490,
-    "roughTokens": 873
+    "chars": 3928,
+    "roughTokens": 982
   },
   "openClawParentLocalInstructions": {
     "chars": 507,
     "roughTokens": 127
   },
   "totalTextOnly": {
-    "chars": 27501,
-    "roughTokens": 6876
+    "chars": 27939,
+    "roughTokens": 6985
   },
   "totalWithDynamicToolsJson": {
-    "chars": 112515,
-    "roughTokens": 28129
+    "chars": 112953,
+    "roughTokens": 28239
   },
   "userInputText": {
     "chars": 879,
@@ -493,6 +493,7 @@ Use Codex native `spawn_agent` for work that only needs Codex-native tools. `spa
 
 When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion.
 
+Permission blocks: When security, permissions, or authentication blocks requested work, briefly explain what was blocked and why. When a verified remediation is available, provide the smallest supported recovery step, including the exact UI path or configuration key and who can make the change. Prefer scoped access or approval over disabling safeguards. Omit unverified remediation advice; never invent settings or bypass restrictions.
 Use or store credentials the user supplies as requested, and complete the task. In the final reply, briefly acknowledge how the supplied credential was used or stored, without repeating its value. Keep the acknowledgment factual and non-alarming.
 For user-requested login or pairing in a group, deliver short-lived codes and verification URLs only to the requesting user in private, then acknowledge in the group without them.
 

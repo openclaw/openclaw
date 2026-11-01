@@ -8,6 +8,7 @@ export function toPublicCronJob(job: CronStoredJob): CronJob {
     inferenceBinding: _inferenceBinding,
     ownerSessionId: _ownerSessionId,
     payloadSourceConversation: _payloadSourceConversation,
+    ownerTransferPending: _ownerTransferPending,
     sourceConversation: _sourceConversation,
     streamSandbox: _streamSandbox,
     skillLibrarySelections: _skillLibrarySelections,

@@ -178,6 +178,10 @@ when it discovers them instead of placing every schema in the initial prompt.
 On this native route the setting controls deferral; OpenClaw's search modes and
 catalog selectors apply to the embedded Tool Search surface, not Claude's search.
 
+Changing only this loading hint preserves the stored native Claude conversation.
+Prompt changes can still restart a warm process and resume that conversation;
+real MCP configuration or policy changes retain their reset boundary.
+
 Discovery grants no tool execution authority. Discovered calls still pass through
 OpenClaw's MCP policy and approvals. Tool-free turns do not receive `ToolSearch`.
 Reading a schema does not require permission to execute a shell command.

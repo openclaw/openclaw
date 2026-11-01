@@ -239,6 +239,7 @@ export function buildSidebarSessionNavigationState(input: {
           hasActiveRun: row.archived !== true && isSessionRunStateActive(row),
           isRunVisuallyActive,
           gatewayHasActiveRun: row.hasActiveRun,
+          backgroundProcessCount: row.backgroundProcessCount,
           hasActiveSubagentRun: row.hasActiveSubagentRun,
           activeRunIds: row.archived === true ? undefined : row.activeRunIds,
           modelSelectionLocked: row.modelSelectionLocked === true,

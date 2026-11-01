@@ -3,10 +3,21 @@ import { expect, it, vi } from "vitest";
 import { BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
+import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { upsertSessionEntryCore } from "./session-accessor.js";
+import {
+  appendTranscriptEvent,
+  appendTranscriptMessage,
+  upsertSessionEntryCore,
+  waitForSessionTranscriptProjection,
+} from "./session-accessor.js";
+import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
 import { readSessionTranscriptModelContext } from "./session-accessor.sqlite-model-context.js";
 import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
+import {
+  resolveSqliteTranscriptScope,
+  toDatabaseOptions,
+} from "./session-accessor.sqlite-scope.js";
 
 it("retains accepted background artifacts across bounded placement and compaction without rewriting legacy history", () =>
   withOpenClawTestState({ label: "background-result-placement" }, async (state) => {
@@ -106,6 +117,62 @@ it("retains accepted background artifacts across bounded placement and compactio
       JSON.stringify(loadTranscriptEventsSync(scope).slice(0, JSON.parse(before).length)),
     ).toBe(before);
   }));
+
+it.each(["missing", "unknown"] as const)(
+  "honors resets with %s identity facts when bounding background results",
+  (identity) =>
+    withOpenClawTestState({ label: `background-reset-${identity}` }, async (state) => {
+      const scope = {
+        agentId: "main",
+        sessionId: "placement",
+        sessionKey: "agent:main:placement",
+        storePath: state.statePath("transcript.sqlite"),
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      await SessionManager.openAsync(scope);
+      await appendTranscriptMessage(scope, {
+        eventId: "pending",
+        message: {
+          ...makeAgentAssistantMessage({
+            provider: "openclaw",
+            model: "automation-result",
+            content: [{ type: "text", text: "Result before reset" }],
+          }),
+          excludeFromContext: true,
+          openclawModelPlacement: "pending",
+        },
+      });
+      await appendTranscriptEvent(scope, {
+        type: "reset",
+        id: identity === "unknown" ? "reset" : undefined,
+        reason: "new",
+      });
+      await appendTranscriptMessage(scope, {
+        eventId: "tail",
+        message: { role: "user", content: "Later request", timestamp: 1 },
+      });
+      await waitForSessionTranscriptProjection(scope);
+      if (identity === "unknown") {
+        runOpenClawAgentWriteTransaction(
+          ({ db }) => {
+            const changed = db
+              .prepare(
+                "UPDATE transcript_event_identities SET event_type=NULL WHERE session_id=? AND event_id=?",
+              )
+              .run(scope.sessionId, "reset");
+            expect(changed.changes).toBe(1);
+          },
+          toDatabaseOptions(resolveSqliteTranscriptScope(scope)),
+        );
+      }
+      const context = readSessionTranscriptBoundedActiveContextCore(scope, {
+        maxBytes: 16_384,
+        maxEvents: 1,
+      });
+      expect(context.events).toMatchObject([{ type: "session" }, { id: "tail" }]);
+      expect(context.totalEvents).toBe(3);
+    }),
+);
 
 it("reuses freshly decoded model payloads while keeping stored and subsequent contexts detached", () =>
   withOpenClawTestState({ label: "model-context-payload-ownership" }, async (state) => {

@@ -104,9 +104,24 @@ describe.runIf(browserMode)("Review layout", () => {
       for (const width of [480, 1100]) {
         panel.style.width = `${width}px`;
         split.scrollLeft = 0;
-        await expect
-          .poll(() => panel.querySelector(".session-diff__disclosure")?.getAnimations().length ?? 0)
-          .toBe(0);
+        if (!mobile) {
+          const disclosure = panel.querySelector<HTMLElement>(".session-diff__disclosure")!;
+          // ResizeObserver queues Review's height animation in the next layout frame.
+          // Deliver the new content size before checking whether that animation finished.
+          await new Promise<void>((resolve) => {
+            const observer = new ResizeObserver(() => {
+              observer.disconnect();
+              requestAnimationFrame(() => resolve());
+            });
+            observer.observe(disclosure.firstElementChild!);
+          });
+          await expect
+            .poll(() => ({
+              animations: disclosure.getAnimations().length,
+              height: disclosure.style.height,
+            }))
+            .toEqual({ animations: 0, height: "" });
+        }
         const sides = [...split.querySelectorAll<HTMLElement>(".session-diff-split__side")];
         expect(
           sides.map((side) => side.querySelector(".session-diff-split__text")!.textContent),
