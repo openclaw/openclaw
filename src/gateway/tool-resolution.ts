@@ -234,12 +234,17 @@ export async function resolveGatewayScopedTools(
   const sandboxed = sandboxRuntime.sandboxed;
   const preparedSandboxPolicy = sandboxRuntime.sandboxed ? sandboxRuntime.toolPolicy : undefined;
   const sessionControlAuthority = readAdmittedRunOperatorAuthority(params.admittedRunContext);
+  // An admitted run without a captured lease projects "no operator" (null) instead
+  // of falling back to ambient caller authority (undefined).
+  const sandboxSessionAuthority = params.admittedRunContext
+    ? (sessionControlAuthority ?? null)
+    : undefined;
   const { policy: sandboxPolicy, renameOnly: sandboxSessionRenameOnly } =
     prepareSandboxSessionTools({
       policy: preparedSandboxPolicy,
       senderIsOwner:
         surface === "loopback" && params.admittedRunContext ? senderIsOwner : undefined,
-      authority: sessionControlAuthority,
+      authority: sandboxSessionAuthority,
     });
   const excludedToolNames = params.excludeToolNames ? Array.from(params.excludeToolNames) : [];
   const mediatedToolNames = new Set(
