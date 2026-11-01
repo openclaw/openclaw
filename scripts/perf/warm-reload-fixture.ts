@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { applyMockOpenAiModelConfig } from "../e2e/lib/fixtures/mock-openai-config.mjs";
 import { generateTeamShapeFixture, parseTeamShapeOptions } from "./team-shape-fixture.ts";
 import type { startWarmReloadAdmission } from "./warm-reload-admission.ts";
+import { seedWarmReloadPlugins } from "./warm-reload-plugins.ts";
 
 type RequestGateway = (method: string, params: Record<string, unknown>) => Promise<unknown>;
 
@@ -18,6 +19,7 @@ export type WarmReloadFixtureOptions = {
   sessions?: number;
   transcriptLatePaint?: boolean;
   dashboardEndAnchor?: boolean;
+  pluginActivation?: boolean;
   admission?: Pick<
     Awaited<ReturnType<typeof startWarmReloadAdmission>>,
     "origin" | "gatewayAuth" | "viewerEmail" | "peerSessions"
@@ -298,6 +300,14 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
     };
     config.models = { ...config.models, catalogRefresh: { enabled: false } };
     config.plugins = { enabled: true, allow: ["openai"], entries: { openai: { enabled: true } } };
+    const pluginFixture = options.pluginActivation ? seedWarmReloadPlugins(stateDir) : undefined;
+    if (pluginFixture) {
+      config.plugins.allow!.push(...pluginFixture.ids);
+      config.plugins.load = { paths: pluginFixture.roots };
+      for (const id of pluginFixture.ids) {
+        config.plugins.entries![id] = { enabled: true };
+      }
+    }
     config.agents = {
       ...config.agents,
       defaults: {
@@ -597,6 +607,7 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       otherViewers: options.admission?.peerSessions.length ?? 0,
       targets,
       dashboardEndAnchor: options.dashboardEndAnchor ?? false,
+      pluginActivation: pluginFixture?.ids ?? [],
       viewerId,
       pinKeys,
       sidebarParents,

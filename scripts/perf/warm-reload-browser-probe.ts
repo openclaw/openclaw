@@ -22,6 +22,21 @@ export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint
     firstDashboardContentDomMs: null as number | null,
     firstPaintedRowsMs: null as number | null,
     bottomParagraphPaintMs: null as number | null,
+    transcriptTextPaintMs: null as number | null,
+    pluginsCompleteMs: null as number | null,
+    textPaints: [] as Array<{ atMs: number; tag: string }>,
+    pluginMarks: [] as Array<{ atMs: number; name: string }>,
+    pluginStates: [] as Array<{
+      atMs: number;
+      status: string;
+      pages: number;
+      panels: number;
+      accessories: number;
+      widgets: number;
+      replacements: number;
+      selected: string[];
+      errors: number;
+    }>,
     transcriptGeometry: [] as Array<{
       atMs: number;
       scrollTop: number;
@@ -165,6 +180,18 @@ export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint
       data.bottomParagraphPaintMs ??= renderTime;
     }
   });
+  observe("largest-contentful-paint", (entry) => {
+    const element: unknown = Reflect.get(entry, "element");
+    if (element instanceof Element && element.matches(".chat-text p, .chat-text p *")) {
+      data.transcriptTextPaintMs ??= entry.startTime;
+      data.textPaints.push({ atMs: entry.startTime, tag: element.tagName });
+    }
+  });
+  observe("mark", (entry) => {
+    if (entry.name.startsWith("warm-reload-plugin:")) {
+      data.pluginMarks.push({ atMs: entry.startTime, name: entry.name });
+    }
+  });
   let firstShift = 0;
   let lastShift = 0;
   let shiftValue = 0;
@@ -192,6 +219,7 @@ export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint
     data.loafBlockingMs += blockingMs;
   });
   let stopGateway: (() => void) | undefined;
+  let stopPlugins: (() => void) | undefined;
   const receiveContext = (event: Event) => {
     const provider = event as Event & { context?: unknown; contextTarget?: HTMLElement };
     if (provider.context !== "openclaw.application" || !provider.contextTarget) {
@@ -214,6 +242,32 @@ export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint
                 });
               }
             });
+            let previous = "";
+            const plugins = () => {
+              const runtime = context.plugins;
+              const state = {
+                status: runtime.registryStatus,
+                pages: runtime.registrations("pages").length,
+                panels: runtime.registrations("panels").length,
+                accessories: runtime.registrations("accessories").length,
+                widgets: runtime.registrations("widgets").length,
+                replacements: runtime.registrations("replacements").length,
+                selected: (
+                  ["transcript", "workspace", "composer", "session-list"] as const
+                ).flatMap((surface) => (runtime.selectedReplacement(surface) ? [surface] : [])),
+                errors: runtime.errors.length,
+              };
+              const signature = JSON.stringify(state);
+              if (signature !== previous) {
+                data.pluginStates.push({ atMs: performance.now(), ...state });
+                previous = signature;
+              }
+              if (state.status === "complete") {
+                data.pluginsCompleteMs ??= performance.now();
+              }
+            };
+            stopPlugins = context.plugins.subscribe(plugins);
+            plugins();
           },
         }),
       );
@@ -223,7 +277,14 @@ export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint
     window.removeEventListener("context-provider", receiveContext);
   };
   window.addEventListener("context-provider", receiveContext);
-  window.addEventListener("pagehide", () => stopGateway?.(), { once: true });
+  window.addEventListener(
+    "pagehide",
+    () => {
+      stopGateway?.();
+      stopPlugins?.();
+    },
+    { once: true },
+  );
   let domVersion = 0;
   const textObserver = new MutationObserver((records) => {
     domVersion++;
@@ -412,6 +473,7 @@ export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint
   const sample = () => {
     if (data.stopped) {
       stopGateway?.();
+      stopPlugins?.();
       textObserver.disconnect();
       return;
     }
