@@ -399,6 +399,7 @@ export function LogsView(props: LogsProps) {
           <Menu
             id="logs-actions"
             lazy
+            pointerFocus="trigger"
             label={t("gatewayLogs.moreActions")}
             triggerClass="btn logs-toolbar__button"
             triggerAttributes={{ title: t("gatewayLogs.moreActions") }}
