@@ -129,7 +129,7 @@ describe("telegram session route", () => {
         threadSpec: { id: 21, scope: "dm" },
         senderId: 12345,
       });
-      const inboundSessionKey = resolveTelegramTargetSession({
+      const { sessionKey: inboundSessionKey } = resolveTelegramTargetSession({
         cfg,
         route: inboundRoute,
         chatId: 12345,

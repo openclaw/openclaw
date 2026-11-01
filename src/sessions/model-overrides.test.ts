@@ -313,9 +313,22 @@ describe("stored model overrides", () => {
     ).toBeNull();
   });
 
+  it("does not derive a parent when the channel declares the session has none", () => {
+    const params = {
+      defaultProvider: "openai",
+      sessionKey: "agent:main:main:thread:42001:77",
+      sessionStore: { "agent:main:main": makeEntry(userPin) },
+    };
+
+    expect(resolveStoredModelOverride({ ...params, parentSessionKey: null })).toBeNull();
+    expect(resolveStoredModelOverride(params)).toEqual(
+      parentChoice("anthropic", "claude-sonnet-4-6"),
+    );
+  });
+
   it("reloads parent model choices after in-process writes", async () => {
     const state = await createOpenClawTestState({ label: "stored-model-overrides" });
-    const parent = { agentId: "main", sessionKey: "agent:main:telegram:dm:parent" };
+    const parent = { agentId: "main", sessionKey: "agent:main:discord:channel:parent" };
     const resolve = () =>
       resolveStoredModelOverrideAsync({
         defaultProvider: "openai",

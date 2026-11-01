@@ -35,6 +35,7 @@ export type BuildTelegramInboundContextPayloadParams = {
   dmThreadId?: number;
   threadSpec: TelegramThreadSpec;
   route: ResolvedAgentRoute;
+  modelParentSessionKey?: null;
   bodyResult: NonNullable<Awaited<ReturnType<typeof resolveTelegramInboundBody>>>;
   historyLimit: number;
   dmHistoryLimit: number;

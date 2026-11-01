@@ -168,9 +168,10 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   /**
    * Session key used only for inheriting session-scoped model/provider
    * overrides. Unlike ParentSessionKey, this must not trigger transcript
-   * forking or parent-session lifecycle behavior.
+   * forking or parent-session lifecycle behavior. `null` declares that the
+   * session has no model parent, so none is derived from its thread suffix.
    */
-  ModelParentSessionKey?: string;
+  ModelParentSessionKey?: string | null;
   MessageSid?: string;
   /** Provider-specific full message id when MessageSid is a shortened alias. */
   MessageSidFull?: string;

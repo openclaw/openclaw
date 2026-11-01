@@ -540,7 +540,7 @@ export async function buildTelegramInboundContextPayload(
     route: {
       ...route,
       routeSessionKey: route.sessionKey,
-      mainSessionKey: route.mainSessionKey,
+      modelParentSessionKey: params.modelParentSessionKey,
     },
     reply: {
       to: telegramTo,

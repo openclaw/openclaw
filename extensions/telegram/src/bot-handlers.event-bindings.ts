@@ -302,7 +302,7 @@ export function createTelegramEventBindings({
           topicAgentId: eventAuthContext.topicConfig?.agentId,
         });
         if (recoveredThreadSpec?.scope === "dm") {
-          route = applyTelegramTargetSession({
+          ({ route } = applyTelegramTargetSession({
             cfg: eventAuthContext.cfg,
             route,
             chatId,
@@ -312,7 +312,7 @@ export function createTelegramEventBindings({
             // Like messages, a cached topic message proves topics before a stale getMe does.
             botHasTopicsEnabled:
               cached?.isTopicMessage === true || resolveTelegramBotHasTopicsEnabled(ctx.me),
-          });
+          }));
         }
 
         const senderName = user

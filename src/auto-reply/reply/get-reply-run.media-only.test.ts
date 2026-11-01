@@ -322,12 +322,11 @@ vi.mock("./session-system-events.js", () => ({
 }));
 
 // mock-isolation: reply orchestration uses fixture model overrides without opening host session stores.
-vi.mock("../../sessions/stored-model-overrides.js", () => {
-  return {
-    resolveStoredModelOverride: vi.fn(() => null),
-    resolveStoredModelOverrideAsync: async () => null,
-  };
-});
+vi.mock("../../sessions/stored-model-overrides.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../sessions/stored-model-overrides.js")>()),
+  resolveStoredModelOverride: vi.fn(() => null),
+  resolveStoredModelOverrideAsync: async () => null,
+}));
 
 vi.mock("./session-reset-prompt.js", () => ({
   resolveBareResetBootstrapFileAccess: vi.fn().mockReturnValue(false),
