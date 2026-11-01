@@ -44,9 +44,18 @@ describe("existing PR preparation through the registered agent action", () => {
       expect(await fs.readFile(path.join(f.projection, "pr.txt"), "utf8")).toBe(
         "original PR contents\n",
       );
+      await expect(
+        f.invoke({ action: "refresh_base", pullRequestUrl: undefined }, f.sandbox, undefined, {
+          requester: "maintainer",
+        }),
+      ).resolves.toMatchObject({ status: "refreshed", baseCommit: f.pr.base.sha });
+      expect(await fs.readFile(path.join(f.projection, "newer-base.txt"), "utf8")).toBe(
+        "base advanced after PR\n",
+      );
       await expect(f.invoke()).resolves.toMatchObject({
         status: "prepared",
         headCommit: f.headCommit,
+        review: { base: f.pr.base.sha },
       });
       await expect(
         f.invoke({
@@ -274,9 +283,19 @@ describe("existing PR preparation through the registered agent action", () => {
         code: "push_rejected",
         nextAction: expect.stringContaining("call prepare_pr with this PR's URL"),
       });
-      await expect(f.invoke({ action: "refresh_base", pullRequestUrl: undefined })).rejects.toThrow(
-        "prepare_pr",
-      );
+      await expect(
+        f.invoke({ action: "refresh_base", pullRequestUrl: undefined }),
+      ).resolves.toMatchObject({
+        status: "refreshed",
+        baseCommit: f.pr.base.sha,
+      });
+      // Updating the base does not accept a different writer's remote PR head.
+      await expect(
+        f.invoke({ action: "publish", pullRequestUrl: undefined }),
+      ).resolves.toMatchObject({
+        status: "failed",
+        code: "push_rejected",
+      });
       await expect(
         f.invoke({
           action: "request_review",
