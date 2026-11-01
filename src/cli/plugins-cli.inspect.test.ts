@@ -146,6 +146,25 @@ describe("plugins cli inspect", () => {
     });
   });
 
+  it.each(["fish-audio", "Fish-Audio-Speech"])(
+    "resolves %s to its canonical plugin id like enable and disable",
+    async (requested) => {
+      loadPluginMetadataSnapshotMock.mockReturnValue(
+        createPluginMetadataSnapshotFixture({
+          plugins: [{ id: "fish-audio-speech", legacyPluginIds: ["fish-audio"] }],
+        }),
+      );
+      const plugin = createPluginRecord({ id: "fish-audio-speech", name: "Fish Audio" });
+      mockInspection(plugin);
+
+      await plugins("inspect", requested);
+
+      expect(inspectOne).toHaveBeenCalledWith(expect.objectContaining({ id: "fish-audio-speech" }));
+      expect(runtimeErrors).toEqual([]);
+      expect(stripVTControlCharacters(logs.join("\n"))).toContain("id: fish-audio-speech");
+    },
+  );
+
   it.each([{ selection: ["--all", "extra"] }, { selection: [] }])(
     "rejects invalid runtime selection before acquisition: $selection",
     async ({ selection }) => {
