@@ -130,6 +130,18 @@
   white-space: nowrap;
 }
 
+.chat-details-subagents__row--finished .chat-details-subagents__name {
+  color: var(--muted);
+}
+
+.chat-details-subagents__row--finished .chat-details-subagents__avatar > svg {
+  opacity: 0.6;
+}
+
+.chat-details-subagents__row--finished:is(:hover, :focus-visible) .chat-details-subagents__name {
+  color: var(--text);
+}
+
 .chat-details-subagents__name[data-scrollable="true"] {
   mask-image: linear-gradient(to right, black calc(100% - 16px), transparent);
 }
