@@ -86,7 +86,7 @@ it.each<[string, string, ProviderRuntimeModel[], Partial<ProviderRuntimeModel>]>
     google,
     "google/gemini-3-pro-preview",
     [template(google, pro)],
-    { id: "google/gemini-3.1-pro-preview", api: directApi, reasoning: true },
+    { id: "google/gemini-3.1-pro-preview", api: "google-interactions", reasoning: true },
   ],
   [
     cli,
@@ -165,14 +165,14 @@ it("resolves Gemini latest aliases from current Google templates", () => {
 
   for (const id of ["gemini-pro-latest", "gemini-flash-latest", "gemini-flash-lite-latest"]) {
     expectResolution(google, id, models, {
-      api: id === "gemini-pro-latest" ? directApi : "google-interactions",
+      api: "google-interactions",
       reasoning: true,
     });
   }
 });
 
-it.each(["gemini-4-flash", "gemini-4.1-flash-lite-preview"])(
-  "routes forward-compatible Flash %s through Interactions",
+it.each(["gemini-4-flash", "gemini-4.1-flash-lite-preview", "gemini-4.1-pro-preview"])(
+  "routes forward-compatible Gemini %s through Interactions",
   (id) => {
     expectResolution(google, id, [template(google, "gemini-4-argon")], {
       api: "google-interactions",

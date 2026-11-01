@@ -65,11 +65,10 @@ export function isGoogleTextGenerationModelId(id: string): boolean {
   return GOOGLE_FORWARD_COMPAT_CASES.some((entry) => entry.match(lower));
 }
 
-export function isGoogleFlashTextModelId(id: string): boolean {
+/** Gemini text models (not Gemma, image, speech, Live, or embedding models). */
+export function isGoogleGeminiTextModelId(id: string): boolean {
   const lower = normalizeOptionalLowercaseString(googleFamilyModelId(id)) ?? "";
-  return (
-    isGoogleTextGenerationModelId(lower) && /^gemini-(?:\d+(?:\.\d+)?-)?flash(?:-|$)/.test(lower)
-  );
+  return isGoogleTextGenerationModelId(lower) && lower.startsWith("gemini-");
 }
 
 export function resolveGoogleModelApi(params: {
@@ -100,7 +99,7 @@ export function resolveGoogleModelApi(params: {
     return params.api;
   }
   const baseUrl = model?.baseUrl ?? params.providerConfig?.baseUrl ?? params.baseUrl;
-  return isOfficialGoogleAiStudioBaseUrl(baseUrl) && isGoogleFlashTextModelId(params.modelId)
+  return isOfficialGoogleAiStudioBaseUrl(baseUrl) && isGoogleGeminiTextModelId(params.modelId)
     ? "google-interactions"
     : "google-generative-ai";
 }

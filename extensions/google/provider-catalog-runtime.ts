@@ -16,7 +16,7 @@ import {
   buildGoogleStaticCatalogProvider,
 } from "./provider-catalog.js";
 import {
-  isGoogleFlashTextModelId,
+  isGoogleGeminiTextModelId,
   isGoogleTextGenerationModelId,
   resolveGoogleStaticModelId,
 } from "./provider-models.js";
@@ -45,12 +45,12 @@ function buildGoogleLiveModel(row: unknown): ModelDefinitionConfig | undefined {
   const methods = record.supportedGenerationMethods;
   const contextWindow = asPositiveSafeInteger(record.inputTokenLimit);
   const maxTokens = asPositiveSafeInteger(record.outputTokenLimit);
-  // Flash rows may advertise only the Interactions API; the effective endpoint
+  // Gemini rows may advertise only the Interactions API; the effective endpoint
   // picks the transport when the model resolves (resolveGoogleModelApi).
   if (
     !id ||
     !isGoogleTextGenerationModelId(id) ||
-    (!isGoogleFlashTextModelId(id) &&
+    (!isGoogleGeminiTextModelId(id) &&
       (!Array.isArray(methods) || !methods.includes("generateContent"))) ||
     !contextWindow ||
     !maxTokens
