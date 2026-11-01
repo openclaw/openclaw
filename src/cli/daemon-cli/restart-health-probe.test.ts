@@ -455,7 +455,7 @@ describe("restart health", () => {
       expect(snapshot.elapsedMs).toBe(0);
       expect(snapshot.gatewayVersion).toBe("2026.4.24");
       expect(snapshot.expectedVersion).toBe("2026.4.24");
-      expect(snapshot.activatedPluginErrors).toEqual(activated ? [pluginError] : []);
+      expect(snapshot.activatedPluginErrors).toEqual(activated ? [pluginError] : undefined);
       expect(snapshot.versionMismatch).toBeUndefined();
       expect(callGateway.mock.calls[0]?.[0]).toMatchObject({
         method: "health",
