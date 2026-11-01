@@ -64,7 +64,7 @@ export class PaletteSessionDraft {
 
   private data: NewSessionRouteData | undefined;
   private presentationScope: ReturnType<typeof gatewayPresentationScope> | undefined;
-  private agentPickerOpen = false;
+  private readAgentIdentityTargets: () => readonly string[] = () => [];
   private readonly preferences: PaletteSessionPreferences;
   private closeSettings: (() => void) | undefined;
   private readonly registerSettingsClose = (close: () => void) => {
@@ -402,11 +402,9 @@ export class PaletteSessionDraft {
       }
     }
     if (this.read().open) {
-      void this.read().context?.agentIdentity.ensure(
-        this.agentPickerOpen
-          ? draft.place.agents().map((agent) => agent.id)
-          : [draft.place.agentId],
-      );
+      void this.read().context?.agentIdentity.ensure([
+        ...new Set([draft.place.agentId, ...this.readAgentIdentityTargets()]),
+      ]);
     }
   }
 
@@ -429,10 +427,10 @@ export class PaletteSessionDraft {
         draft,
         context: this.read().context,
         preferences: this.preferences,
-        onAgentPickerOpen: (open: boolean) => {
-          this.agentPickerOpen = open;
-          this.callbacks.changed();
+        identityTargetsRef: (read: () => readonly string[]) => {
+          this.readAgentIdentityTargets = read;
         },
+        onIdentityTargetsChange: () => this.callbacks.changed(),
         onChange: () => this.preferences.changed(),
         onConnectMachine: () => {
           if (draft.place.isAdmin()) {

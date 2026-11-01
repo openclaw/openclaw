@@ -12,6 +12,7 @@ import {
   decodeGatewayOperatorRecoverySource,
   type RestartRecoveryOperatorSource,
 } from "../gateway/operator-run-recovery-source.codec.js";
+import { hasTransferredCronOwner } from "./human-owner.js";
 import type { CronInferenceBinding } from "./inference-binding.js";
 import { resolveCronRunAdmissionSource } from "./run-authority.js";
 import type { CronRuntimeAuthority } from "./runtime-authority.js";
@@ -173,6 +174,7 @@ type BuilderJob = Pick<
   | "payload"
   | "operatorSource"
   | "sourceConversation"
+  | "ownerProfileId"
   | "createdActor"
   | "toolsAllowProvenance"
   | "toolsAllowExecTarget"
@@ -183,7 +185,10 @@ type BuilderJob = Pick<
 
 /** Which requester an occurrence must recheck; the caller runs that owner's check. */
 export function resolveScheduledRequester(
-  job: Pick<CronStoredJob, "operatorSource" | "toolsAllowProvenance" | "createdActor">,
+  job: Pick<
+    CronStoredJob,
+    "operatorSource" | "toolsAllowProvenance" | "createdActor" | "ownerProfileId"
+  >,
 ): ScheduledRequesterRef {
   if (job.operatorSource) {
     return {
@@ -195,7 +200,7 @@ export function resolveScheduledRequester(
   if (channelRequester) {
     return { kind: "channel", requester: channelRequester };
   }
-  const profileId = profileIdOf(job.createdActor);
+  const profileId = job.ownerProfileId ?? profileIdOf(job.createdActor);
   // The parent row's creator records who opened the conversation, not who
   // authorized this job, so it is never a fallback.
   return profileId ? { kind: "profile", profileId } : { kind: "unknown" };
@@ -292,6 +297,10 @@ function resolveAuthority(
     basis,
     ...(admissionSource ? { admissionSource } : {}),
   });
+  if (facts.trigger === "cron" && hasTransferredCronOwner(job) && !job.operatorSource) {
+    const owner = facts.requesterCheck?.owner === true;
+    return withSource(owner, owner ? "profile-role" : "none");
+  }
   if (principal.kind === "parent") {
     const { requester } = principal;
     if (requester.kind === "unknown") {

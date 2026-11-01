@@ -80,6 +80,18 @@ describe("PostgreSQL conformance shards", () => {
     expect(JSON.parse(result.stdout)).toEqual(targets(["--shard", "2/3"]));
   });
 
+  // Node writes asynchronously to POSIX pipes; Windows pipes are synchronous.
+  it.skipIf(process.platform === "win32")("flushes a large target list before exiting", () => {
+    const custom = Array.from(
+      { length: 1024 },
+      (_, index) => `custom/${"large-target/".repeat(10)}${index}.test.ts`,
+    );
+    const result = run(["--list", "--", ...custom], false);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(JSON.parse(result.stdout)).toEqual(custom);
+  });
+
   it.each([
     ["--shard", "unknown"],
     ["--shard", "4/3"],

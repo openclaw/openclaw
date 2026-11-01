@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
-import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 
 describe("plugin activity icons", () => {

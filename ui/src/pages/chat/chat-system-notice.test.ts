@@ -272,10 +272,14 @@ describe("skill review notices", () => {
     model: "delivery-mirror",
     timestamp: 2000,
     openclawDeliveryMirror: {
-      kind: "skill-workshop-change",
-      agentId: "main",
-      runId: "skill-workshop-review:r1",
-      skills,
+      kind: "plugin-notice",
+      pluginId: "skill-workshop",
+      type: "skills-changed",
+      data: {
+        agentId: "main",
+        runId: "skill-workshop-review:r1",
+        skills,
+      },
     },
     __openclaw: { id: "notice-1", seq: 3 },
   });
@@ -295,6 +299,19 @@ describe("skill review notices", () => {
     [{ idempotencyKey: "skill-workshop-notice:review", provider: "model-provider" }, false],
     [{ idempotencyKey: "skill-workshop-notice:review", model: "model-output" }, false],
     [{ idempotencyKey: "skill-workshop-notice:review", role: "user" }, false],
+    // A row written by 2026.10.10 betas, before the plugin-notice marker, stays a text notice.
+    [
+      {
+        idempotencyKey: "skill-workshop-notice:review",
+        openclawDeliveryMirror: {
+          kind: "skill-workshop-change",
+          agentId: "main",
+          runId: "review",
+          skills: [{ name: "deploy-staging", action: "updated" }],
+        },
+      },
+      true,
+    ],
   ])("uses legacy notice provenance, not Learned text: %j", (fields, projected) => {
     const item = {
       kind: "message" as const,
@@ -325,7 +342,6 @@ describe("skill review notices", () => {
         text: "",
         timestamp: 2000,
         skillChanges: {
-          kind: "skill-workshop-change",
           agentId: "main",
           runId: "skill-workshop-review:r1",
           skills,

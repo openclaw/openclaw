@@ -19,7 +19,11 @@ import { SidebarApprovalRow } from "./exec-approval-card-solid.tsx";
 import { ScopeUpgradeActions, scopeUpgradeText } from "./scope-upgrade-actions.tsx";
 import type { SidebarAttentionItem } from "./sidebar-attention-entries.ts";
 import { sidebarAttentionFocusRef } from "./sidebar-attention-focus.ts";
-import { SidebarDismissButton, SidebarNotificationCard } from "./sidebar-notification-card.tsx";
+import {
+  SidebarDismissButton,
+  SidebarNotificationCard,
+  SidebarRowHeading,
+} from "./sidebar-notification-card.tsx";
 import { SidebarUpdateCard } from "./sidebar-update-card.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { ViewerAvatar } from "./solid/viewer-facepile.tsx";
@@ -254,7 +258,7 @@ export function renderSidebarScopeUpgradeItem(params: {
           <Icon name="shieldQuestion" />
         </span>
         <span class="sidebar-issues-panel__content">
-          <span class="sidebar-issues-panel__entity">{t("connection.scopeUpgrade.status")}</span>
+          <SidebarRowHeading title={t("connection.scopeUpgrade.status")} />
           <span class="sidebar-issues-panel__state" title={summary()}>
             {summary()}
           </span>
@@ -263,9 +267,6 @@ export function renderSidebarScopeUpgradeItem(params: {
           itemLabel={t("connection.scopeUpgrade.status")}
           onDismiss={params.onDismiss}
         />
-        <span class="sidebar-issues-panel__chevron" aria-hidden="true">
-          <Icon name="chevronRight" />
-        </span>
       </summary>
       <div class="sidebar-issues-panel__body" role="status" aria-live="polite">
         <div>{text()}</div>
@@ -297,15 +298,13 @@ function SidebarItemMeta(props: { item: SidebarAttentionItem }) {
     >
       {(meta) => (
         <span class="sidebar-issues-panel__state-row" title={props.item.detail}>
+          <span class="sidebar-issues-panel__meta-status">{meta().status}</span>
           {meta().context ? (
             <>
-              <span class="sidebar-issues-panel__meta-context">{meta().context}</span>
               <span aria-hidden="true">·</span>
+              <span class="sidebar-issues-panel__meta-context">{meta().context}</span>
             </>
           ) : null}
-          <span class="sidebar-issues-panel__meta-status">{meta().status}</span>
-          <span aria-hidden="true">·</span>
-          <span class="sidebar-issues-panel__meta-time">{meta().time}</span>
         </span>
       )}
     </Show>
@@ -315,22 +314,11 @@ function SidebarItemMeta(props: { item: SidebarAttentionItem }) {
 function SidebarIssueContent(props: { item: SidebarAttentionItem }) {
   return (
     <>
-      <span
-        class={[
-          "sidebar-issues-panel__icon",
-          {
-            "sidebar-issues-panel__icon--critical":
-              props.item.action.kind !== "navigate" && props.item.kind === "modelAuthExpired",
-          },
-        ]}
-        aria-hidden="true"
-      >
+      <span class="sidebar-issues-panel__icon" aria-hidden="true">
         <Icon name={props.item.icon} />
       </span>
       <span class="sidebar-issues-panel__content">
-        <span class="sidebar-issues-panel__entity" title={props.item.label}>
-          {props.item.label}
-        </span>
+        <SidebarRowHeading title={props.item.label} timestampMs={props.item.arrivedAtMs} />
         <SidebarItemMeta item={props.item} />
       </span>
     </>
@@ -372,9 +360,6 @@ export function SidebarIssueItem(props: {
               itemLabel={props.item.label}
               onDismiss={props.handlers.onDismiss}
             />
-            <span class="sidebar-issues-panel__chevron" aria-hidden="true">
-              <Icon name="chevronRight" />
-            </span>
           </summary>
           <div class="sidebar-issues-panel__body">
             {visibleFacts().length ? (
@@ -435,9 +420,6 @@ export function SidebarIssueItem(props: {
               itemLabel={props.item.label}
               onDismiss={props.handlers.onDismiss}
             />
-            <span class="sidebar-issues-panel__chevron" aria-hidden="true">
-              <Icon name="chevronRight" />
-            </span>
           </div>
         </div>
       )}

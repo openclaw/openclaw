@@ -122,16 +122,6 @@
   padding-left: 32px;
 }
 
-/* The global :focus-visible outline draws an offset accent rectangle around
-   the input, and the accent is red — it reads as an error state. Focus is a
-   quiet border tint instead. */
-.cron-search-box input:focus,
-.cron-search-box input:focus-visible {
-  outline: none;
-  border-color: color-mix(in srgb, var(--accent) 46%, var(--border));
-  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
-}
-
 .cron-toolbar__actions {
   display: flex;
   align-items: center;
@@ -223,6 +213,7 @@
 }
 
 .cron-table__head {
+  padding-block: var(--space-2);
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
   font-weight: 600;
@@ -380,7 +371,7 @@
 }
 
 .cron-table__last-run {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 7px;
   min-width: 0;
@@ -755,13 +746,20 @@
 
 .cron-job-menu {
   position: relative;
+  display: flex;
 }
 
 .cron-job-menu__trigger {
   list-style: none;
   width: 30px;
+  height: 26px;
   justify-content: center;
   padding: 0;
+}
+
+.cron-job-menu__trigger > .oc-menu-item__label {
+  display: flex;
+  justify-content: center;
 }
 
 .cron-job-menu__item {

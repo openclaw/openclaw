@@ -447,8 +447,9 @@ openclaw-custodian-page {
   width: 14px;
   height: 14px;
   margin: 6px auto;
-  border: 2px solid color-mix(in srgb, currentcolor 35%, transparent);
-  border-top-color: currentcolor;
+  color: var(--accent);
+  background: currentColor;
+  mask: var(--spinner-mask);
   border-radius: var(--radius-full);
   animation: btn-spinner-spin 0.7s linear infinite;
 }

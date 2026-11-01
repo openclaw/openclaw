@@ -221,7 +221,7 @@
   padding: 4px;
   place-items: center;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   corner-shape: superellipse(7.5);
   background: transparent;
   color: var(--muted);
@@ -345,7 +345,6 @@
 .task-progress-details .session-progress-card__step-marker[data-status="pending"] > svg {
   width: calc(var(--session-progress-marker-size) - 2px);
   height: calc(var(--session-progress-marker-size) - 2px);
-  border-width: 1px;
 }
 
 /* Keep the checklist's smaller type while sharing the desktop row geometry. */
@@ -393,7 +392,7 @@
   min-height: 24px;
   padding: 2px 8px;
   border: 1px solid var(--border-strong);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--bg-hover);
   color: var(--muted);
   font-size: 12px;
@@ -431,7 +430,7 @@
   margin-block-end: 16px;
   padding: 12px;
   border: 0;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: var(--card);
   font-size: 13px;
   line-height: 18px;

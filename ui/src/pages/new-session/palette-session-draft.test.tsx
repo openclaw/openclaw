@@ -148,7 +148,7 @@ describe("PaletteSessionDraft", () => {
     expect(host.querySelector('[role="switch"][aria-label="New worktree"]')).toBeNull();
   });
 
-  it("loads identities for every open agent-menu row and only the selection after closing", async () => {
+  it("loads identities for both visible agent choices and only the selection after closing", async () => {
     const { host, context } = await mount({
       agents: [
         { id: "main", workspace: "/workspace" },
@@ -157,15 +157,16 @@ describe("PaletteSessionDraft", () => {
     });
     const picker = agent(host);
     await picker.updateComplete;
-    for (const item of picker.querySelectorAll<HTMLElement>('[role="menuitemradio"]')) {
-      item.scrollIntoView = vi.fn();
-    }
     const trigger = expectDefined(
       picker.querySelector<HTMLButtonElement>(".agent-select__trigger"),
       "agent picker trigger",
     );
     const menu = expectDefined(picker.querySelector(".agent-select__menu"), "agent menu");
     const ensure = vi.mocked(context.agentIdentity.ensure);
+    const requestedIds = () =>
+      [...new Set(ensure.mock.calls.flatMap(([ids]) => ids))].toSorted((a, b) =>
+        (a ?? "").localeCompare(b ?? ""),
+      );
     await waitForSolid(() => expect(ensure).toHaveBeenLastCalledWith(["main"]));
 
     setting(host, "trigger")!.click();
@@ -176,14 +177,16 @@ describe("PaletteSessionDraft", () => {
     trigger.click();
     await waitForSolid(() => {
       expect(menu.matches(":popover-open")).toBe(true);
-      expect(ensure).toHaveBeenLastCalledWith(["main", "other"]);
+      expect(picker.querySelectorAll("[data-agent-option]")).toHaveLength(2);
+      expect(requestedIds()).toEqual(["main", "other"]);
     });
 
     ensure.mockClear();
     trigger.click();
     await waitForSolid(() => {
       expect(menu.matches(":popover-open")).toBe(false);
-      expect(ensure).toHaveBeenLastCalledWith(["main"]);
+      expect(picker.querySelector("[data-agent-option]")).toBeNull();
+      expect(requestedIds()).toEqual(["main"]);
     });
   });
 

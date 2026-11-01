@@ -3,7 +3,8 @@ import { en } from "./en.ts";
 
 const enCron = {
   cron: {
-    adminRequired: "Browsing only. Automation changes require operator.admin access.",
+    adminRequired:
+      "Browsing only. Only the human owner or an administrator can change this automation.",
     runNotStarted: {
       notDue: "This automation is not due yet.",
       alreadyRunning: "This automation is already running.",
@@ -137,6 +138,10 @@ const enCron = {
       deliveryNotRequested: "Not requested",
     },
     form: {
+      humanOwner: "Owner",
+      humanOwnerHelp:
+        "The owner can edit this automation. Transferring pauses it and clears the previous owner’s captured credentials.",
+      ownerUnassigned: "Unassigned",
       requiredSr: "required",
       fieldName: "Name",
       description: "Description",

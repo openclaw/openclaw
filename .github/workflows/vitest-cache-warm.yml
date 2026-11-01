@@ -211,7 +211,7 @@ jobs:
           key: ${{ runner.os }}-dist-build-v3-${{ github.sha }}
 
       - name: Restore test Node runtime
-        if: ${{ matrix.platform == 'linux' }}
+        if: ${{ matrix.platform == 'linux' && steps.test-node.outputs.version != env.RELEASE_BUILD_NODE_VERSION }}
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ steps.test-node.outputs.version }}

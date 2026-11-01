@@ -383,8 +383,8 @@ suite.define(() => {
         const markdown = notepad.locator(".session-progress-card__markdown");
         expect(await markdown.locator("progress").count()).toBe(0);
         expect(await card.locator("table").count()).toBe(1);
-        expect(await card.getByRole("cell", { name: "tests" }).count()).toBe(1);
-        expect(await card.getByRole("cell", { name: "green" }).count()).toBe(1);
+        expect(await card.getByRole("columnheader", { name: "step" }).count()).toBe(1);
+        expect(await card.getByRole("cell", { name: "tests" }).count()).toBe(0);
         expect(await card.locator("script").count()).toBe(0);
         expect(await card.locator("[onclick]").count()).toBe(0);
         expect(await card.textContent()).not.toContain("progressCardPwned");
@@ -862,7 +862,7 @@ suite.define(() => {
     const channelAvatarUrl = `/__openclaw__/channel-avatar/${encodeURIComponent(sessionKey)}`;
     const successfulChannelAvatarUrl = `/__openclaw__/channel-avatar/${encodeURIComponent(avatarSessionKey)}`;
     const lastMessagePreview =
-      "The final release notes are ready for review, including <strong>plain text</strong>, rollout details, verification notes, compatibility guidance, and a concise operator checklist.";
+      "The final release notes are ready for review, including <strong>plain text</strong> and rollout details.";
 
     await suite.withPage(
       { hasTouch: false, ...createControlUiE2eContextOptions() },

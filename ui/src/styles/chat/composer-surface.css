@@ -200,7 +200,6 @@
   --chat-composer-menu-row-height: 40px;
   --chat-composer-menu-row-padding: 6px 9px;
   --chat-composer-menu-row-gap: 8px;
-  --chat-composer-menu-row-radius: calc(10px * var(--openclaw-corner-radius-scale));
   --chat-composer-menu-icon: 16px;
   --chat-composer-menu-selected: var(--menu-selected);
   /* Breathing room between the draft and the surface it sits in. Small on
