@@ -23,3 +23,17 @@ export function pickJsonlLineIndex(ast: JsonlAst, addr: string): number {
   const target = Number(match[1]);
   return ast.lines.findIndex((line) => line.line === target);
 }
+
+/**
+ * A recursive wildcard in the line slot can also consume JSONC keys inside the
+ * line. Only the line address belongs in the section slot; move the rest into
+ * the value slots, merging so emitted paths keep at most three slots.
+ */
+export function keepOnlyLineAddressInSection(runs: readonly string[][]): string[][] {
+  const [lineRun = [], ...rest] = runs;
+  if (lineRun.length <= 1) {
+    return [...runs];
+  }
+  const [head = [], ...tail] = rest.length < 2 ? [[], ...rest] : rest;
+  return [lineRun.slice(0, 1), [...lineRun.slice(1), ...head], ...tail];
+}

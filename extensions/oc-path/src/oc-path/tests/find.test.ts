@@ -235,7 +235,7 @@ describe("findOcPaths — JSONL", () => {
 
   it.each([
     ["*/**/**", ["oc://session/L1"], ["oc://session/L3"]],
-    ["**/**/**", ["oc://session", "oc://session/L1", "oc://session/L3"], []],
+    ["**/**/**", ["oc://session", "oc://session/L1"], ["oc://session/L3"]],
     ["{L1,$first,$last}/**/**", ["oc://session/L1"], ["oc://session/L3"]],
   ])("retains distinct physical-line targets for %s", (pattern, prefix, nextLine) => {
     const lineAst = parseJsonl('{"a":{"b":1},"a.b":2}\n\n{"a":{"b":1},"a.b":2}\n');
@@ -282,6 +282,33 @@ describe("findOcPaths — JSONL", () => {
     const out = find(lineAst, "oc://session/**/**/event");
     expect(formattedPaths(out)).toEqual(["oc://session/L1/nest/event"]);
     expect(leafValues(out)).toEqual(["x"]);
+  });
+
+  it("descends into line values when one recursive wildcard spans the line slot", () => {
+    const lineAst = parseJsonl('{"id":"x"}\n{"nest":{"deep":{"event":"y"}}}\n');
+    for (const [pattern, paths] of [
+      ["**/event", ["oc://session/L2/nest.deep/event"]],
+      ["**/deep/event", ["oc://session/L2/nest.deep/event"]],
+      ["**/nest.deep/event", ["oc://session/L2/nest.deep/event"]],
+      [
+        "**",
+        [
+          "oc://session",
+          "oc://session/L1",
+          "oc://session/L1/id",
+          "oc://session/L2",
+          "oc://session/L2/nest",
+          "oc://session/L2/nest.deep",
+          "oc://session/L2/nest.deep.event",
+        ],
+      ],
+    ] as const) {
+      const out = find(lineAst, "oc://session/" + pattern);
+      expect(formattedPaths(out)).toEqual(paths);
+      for (const { path, match } of out) {
+        expect(resolveOcPath(lineAst, parseOcPath(formatOcPath(path)))).toEqual(match);
+      }
+    }
   });
 
   it("bounds JSONL expansion across recursive slot partitions", () => {
