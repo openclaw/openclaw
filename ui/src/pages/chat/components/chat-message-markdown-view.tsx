@@ -11,7 +11,6 @@ import {
   prepareChatMessageRender,
   type ChatMessageRenderPreparation,
 } from "../../../lib/chat/message-display.ts";
-import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
 import type { ChatDisplayFacts } from "../../../lib/chat/row-display-facts.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -19,7 +18,7 @@ import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
 import { assistantMessageCanOwnTurnActions } from "../chat-assistant-reply.ts";
 import {
   type AssistantMessageExpansionState,
-  resolveCappedMessageId,
+  resolveFullMessageRecovery,
   resolveSourceMessageId,
 } from "../chat-message-recovery.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
@@ -84,7 +83,7 @@ export function resolveMessageActionDetails(
     senderLabel: string;
   },
 ): MessageActionDetails | null {
-  const { messageId: renderMessageId, canFetchFullMessage, onReply, senderLabel } = params;
+  const { messageId: renderMessageId, onReply, senderLabel } = params;
   const normalizedRole = normalizeRoleForGrouping(normalizedMessage.role);
   const role =
     normalizedRole === "tool" &&
@@ -94,27 +93,7 @@ export function resolveMessageActionDetails(
       : normalizedRole;
   const pendingInput =
     resolveSourceMessageId(message)?.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX) === true;
-  const cappedMessageId = resolveCappedMessageId(message, role);
-  const cached = cappedMessageId
-    ? params.displayFacts?.forRow(cappedMessageId)?.read()?.facts?.recoveredMessage
-    : undefined;
-  const retained: AssistantMessageExpansionState | undefined =
-    cached && cached.source === extractTextCached(message)
-      ? {
-          status: "loaded",
-          markdown: extractTextCached(cached.message) ?? "",
-          message: cached.message,
-          revision: 0,
-        }
-      : undefined;
-  const live = cappedMessageId ? params.getAssistantMessageExpansion?.(cappedMessageId) : undefined;
-  const fullMessage =
-    cappedMessageId && (canFetchFullMessage || retained)
-      ? {
-          messageId: cappedMessageId,
-          state: live?.status === "loaded" ? live : (retained ?? live),
-        }
-      : undefined;
+  const fullMessage = resolveFullMessageRecovery(message, role, params);
   const expansion = fullMessage?.state;
   const expandedMarkdown = expansion?.status === "loaded" ? expansion.markdown : previewMarkdown;
   // Preparation already filtered the preview; loaded full text is a new display input.

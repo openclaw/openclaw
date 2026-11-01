@@ -28,7 +28,14 @@ suite.define(() => {
         sessions: [row],
         authMethod: "trusted-proxy",
         authMode: "trusted-proxy",
-        historyMessages: projectChatDisplayMessages([message]),
+        historyMessages: projectChatDisplayMessages([
+          message,
+          {
+            role: "user",
+            content: "Unrelated synthetic follow-up",
+            __openclaw: { id: "follow-up", seq: 2 },
+          },
+        ]),
         deferredMethods: ["connect"],
         methodResponses: { "chat.message.get": { ok: true, message } },
       });
@@ -52,6 +59,17 @@ suite.define(() => {
       expect(await body.textContent()).toBe(liveText);
       expect(await body.textContent()).not.toContain("...(truncated)...");
       const cachedHeight = await body.evaluate((element) => element.getBoundingClientRect().height);
+      const followUp = page.locator('.chat-bubble[data-entry-id="follow-up"]');
+      await expect(followUp).toHaveCount(1);
+      await page.locator(".agent-chat__composer-combobox textarea").focus();
+      await page.keyboard.press("ControlOrMeta+f");
+      const search = page.getByRole("textbox", { name: "Search messages", exact: true });
+      await search.fill("Verification 24");
+      await expect(followUp).toHaveCount(0);
+      expect(await body.textContent()).toBe(liveText);
+      await search.press("Escape");
+      await expect(search).toHaveCount(0);
+      await expect(followUp).toHaveCount(1);
       await gateway.resolveDeferred("connect");
       await gateway.waitForRequest("chat.message.get");
       expect(await body.textContent()).toBe(liveText);

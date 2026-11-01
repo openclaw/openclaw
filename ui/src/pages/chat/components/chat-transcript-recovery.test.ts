@@ -156,6 +156,19 @@ describe("chat transcript full-message recovery", () => {
     expect(restored?.snapshot.rowDisplay?.["assistant-full-1"]?.recoveredMessage).toEqual(
       recovered,
     );
+    cacheChatSessionSnapshot(cache, host, target, expectDefined(restored).snapshot);
+    const pane = document.createElement("test-recovery-transcript") as RecoveryTranscriptElement;
+    pane.props = threadProps("cached-search", target.sessionKey, [source], {
+      fullMessageAgentId: target.agentId,
+      displayFacts: createChatDisplayFacts(cache, host, target),
+    });
+    document.body.append(pane);
+    await shows(pane, "Verification 24");
+    await searchTranscript(pane, "Verification 24");
+    expect(pane.querySelector(".chat-group.assistant")?.textContent).toContain("Verification 24");
+    const otherHost = { ...host, client: { ...host.client, recoveryScope: "operator-b" } };
+    await render(pane, { displayFacts: createChatDisplayFacts(cache, otherHost, target) });
+    expect(pane.querySelector(".chat-group.assistant")).toBeNull();
   });
 
   it("recovers an oversized reply from its preview on each mount without retaining it", async () => {

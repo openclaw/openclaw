@@ -1,2 +1,2 @@
-# Accepted transcript recovery persistence/privacy, bounded replay, native reload fidelity; consolidated media and source validation.
-190
+# Accepted recovery persistence/privacy, bounded UTF-8 fallback, offline search and native reload fidelity; consolidated media/source cases.
+221
