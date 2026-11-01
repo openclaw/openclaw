@@ -323,7 +323,22 @@ export function DebugPage() {
       <SettingsPage wide>
         <Section
           title={t("debug.snapshotsTitle")}
-          description={t("debug.snapshotsSubtitle")}
+          description={
+            <span class="debug-read-feedback">
+              <Errored
+                fallback={(error) => (
+                  <span role="alert">
+                    <Status kind="danger" label={t("common.failed")} /> {formatUiError(error())}
+                  </span>
+                )}
+              >
+                <Loading fallback={t("debug.snapshotsSubtitle")}>
+                  {readFeedback()}
+                  {t("debug.snapshotsSubtitle")}
+                </Loading>
+              </Errored>
+            </span>
+          }
           actions={
             <Loading on={diagnosticsRead.receipt()} fallback={<RefreshButton pending />}>
               <RefreshButton pending={isPending(diagnosticsRead.ready)} />
@@ -340,20 +355,6 @@ export function DebugPage() {
               description={t("debug.offlineSnapshots")}
             />
           </Show>
-          <Errored
-            fallback={(error) => (
-              <div class="settings-row" role="alert">
-                <div class="settings-row__text">
-                  <span class="settings-row__title">
-                    <Status kind="danger" label={t("common.failed")} />
-                  </span>
-                  <span class="settings-row__desc">{formatUiError(error())}</span>
-                </div>
-              </div>
-            )}
-          >
-            <Loading>{readFeedback()}</Loading>
-          </Errored>
           <SecurityRow
             status={read("data").status}
             pending={

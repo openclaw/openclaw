@@ -1,6 +1,10 @@
 /* Profile settings page: authenticated user profile and identity controls.
    Structural surfaces come from settings.css. */
 
+.profile-discord-availability {
+  display: block;
+}
+
 .profile-refresh {
   display: inline-grid;
   grid-template-areas: "label";

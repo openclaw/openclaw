@@ -12,6 +12,11 @@ export function DiscordIdentity() {
     (publish) => new DiscordIdentityState(publish),
     (owner) => owner,
   );
+  const unavailable = () =>
+    !view.read().loading &&
+    !view.read().selected?.available &&
+    !view.read().selected?.senderIds.length &&
+    !view.read().error;
   onSettled(() => {
     const stop = context.gateway.subscribe((snapshot) => state.sync(snapshot));
     const stopEvents = context.gateway.subscribeEvents((event) => {
@@ -47,16 +52,14 @@ export function DiscordIdentity() {
               </div>
             )}
           </Show>
-          <Show
-            when={
-              !view.read().loading &&
-              !view.read().selected?.available &&
-              !view.read().selected?.senderIds.length &&
-              !view.read().error
-            }
+          {/* Keep the availability hint's space while its first reply is pending. */}
+          <span
+            class="profile-discord-availability"
+            style={{ visibility: unavailable() ? "visible" : "hidden" }}
+            aria-hidden={unavailable() ? "false" : "true"}
           >
-            <div>{t("profilePage.discord.unavailable")}</div>
-          </Show>
+            {t("profilePage.discord.unavailable")}
+          </span>
         </>
       }
       control={
@@ -78,7 +81,11 @@ export function DiscordIdentity() {
           </Show>
           <Show
             when={!view.read().loading}
-            fallback={<SettingsStatus kind="muted" label={t("common.loading")} />}
+            fallback={
+              <button class="btn btn--sm" disabled aria-busy="true">
+                {t("profilePage.discord.connect")}
+              </button>
+            }
           >
             <Show
               when={view.read().selected?.senderIds.length}

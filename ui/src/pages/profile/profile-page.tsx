@@ -484,7 +484,9 @@ export function ProfilePage() {
               disabled={!view().identityReady || view().identityLoading || identityBusy() !== null}
               onClick={() => state.refreshManually()}
             >
-              <span>{view().identityLoading ? t("common.refreshing") : t("common.refresh")}</span>
+              <Show when={view().identityLoading} fallback={<span>{t("common.refresh")}</span>}>
+                <span>{t("common.refreshing")}</span>
+              </Show>
             </button>
           </Show>
         </section>
