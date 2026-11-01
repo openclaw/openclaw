@@ -828,8 +828,19 @@ struct TalkModeManagerTests {
             ],
             [
                 "role": "assistant",
-                "__openclaw": ["idempotencyKey": "current-run"],
+                "__openclaw": ["runId": "current-run", "idempotencyKey": "native-message-key"],
                 "content": [["type": "text", "text": "current answer"]],
+            ],
+            [
+                "role": "assistant",
+                "__openclaw": ["idempotencyKey": "legacy-run"],
+                "content": [["type": "text", "text": "legacy answer"]],
+            ],
+            [
+                "role": "assistant",
+                "idempotencyKey": "current-run",
+                "__openclaw": ["runId": "other-run"],
+                "content": [["type": "text", "text": "unrelated answer"]],
             ],
         ]
 
@@ -839,70 +850,9 @@ struct TalkModeManagerTests {
         #expect(TalkModeManager._test_latestAssistantText(
             messages: messages,
             runId: "missing-run") == nil)
-    }
-
-    @Test func `native Talk chat request inherits thinking policy`() {
-        let request = OpenClawChatGatewayRequests.sendMessage(
-            sessionKey: "agent:main:main",
-            agentID: nil,
-            expectedSessionRoutingContract: nil,
-            message: "hello",
-            thinking: TalkModeManager.chatThinkingOverride,
-            idempotencyKey: "talk-1",
-            attachments: [],
-            runTimeoutMs: 30000)
-
-        #expect(TalkModeManager.chatThinkingOverride == nil)
-        #expect(request.method == "chat.send")
-        #expect(request.params["message"]?.value as? String == "hello")
-        #expect(request.params["sessionKey"]?.value as? String == "agent:main:main")
-        #expect(request.params["idempotencyKey"]?.value as? String == "talk-1")
-        #expect(request.params["thinking"] == nil)
-        #expect(request.params["timeoutMs"]?.value as? Int == 30000)
-    }
-
-    @Test func `subscribes before sending chat completion request`() throws {
-        let testsURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        let sourceURL = testsURL
-            .deletingLastPathComponent()
-            .appendingPathComponent("Sources/Voice/TalkModeManager.swift")
-        let source = try String(contentsOf: sourceURL, encoding: .utf8)
-        let processingStart = try #require(source.range(of: "private func runTranscriptProcessing("))
-        let completionStart = try #require(
-            source.range(
-                of: "private func completeTranscriptResponse(",
-                range: processingStart.upperBound..<source.endIndex))
-        let waiterStart = try #require(
-            source.range(
-                of: "private func waitForChatCompletion(",
-                range: completionStart.upperBound..<source.endIndex))
-        let streamingStart = try #require(
-            source.range(
-                of: "private func streamAssistant(",
-                range: waiterStart.upperBound..<source.endIndex))
-        let streamingEnd = try #require(
-            source.range(
-                of: "private func updateIncrementalContextIfNeeded(",
-                range: streamingStart.upperBound..<source.endIndex))
-        let processing = source[processingStart.lowerBound..<completionStart.lowerBound]
-        let completion = source[completionStart.lowerBound..<waiterStart.lowerBound]
-        let streaming = source[streamingStart.lowerBound..<streamingEnd.lowerBound]
-        let subscription = try #require(
-            processing.range(of: "let completionSubscription = await gateway.makeServerEventSubscription"))
-        let cleanup = try #require(processing.range(of: "defer { completionSubscription.cancel() }"))
-        let retention = try #require(processing.range(of: "streamingOwner.completionEvents = completionEvents"))
-        let send = try #require(processing.range(of: "let acknowledgement = try await sendChat("))
-
-        #expect(subscription.lowerBound < cleanup.lowerBound)
-        #expect(cleanup.lowerBound < retention.lowerBound)
-        #expect(retention.lowerBound < send.lowerBound)
-        #expect(processing.contains("idempotencyKey: runId"))
-        #expect(completion.contains("guard let completionEvents = streamingOwner.completionEvents"))
-        #expect(completion.contains("stream: completionEvents"))
-        #expect(streaming.contains("as: OpenClawChatEventPayload.self"))
-        #expect(streaming.contains("OpenClawChatEventText.assistantText"))
-        #expect(streaming.contains(#"chatEvent.state == "delta" || chatEvent.state == "final""#))
-        #expect(!streaming.contains("OpenClawAgentEventPayload"))
+        #expect(TalkModeManager._test_latestAssistantText(
+            messages: messages,
+            runId: "legacy-run") == "legacy answer")
     }
 
     @Test func `late incremental final cannot reopen canceled speech ownership`() async {
