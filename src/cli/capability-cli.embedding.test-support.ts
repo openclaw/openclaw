@@ -23,7 +23,12 @@ export function registerEmbeddingCapabilityCliTests({
 
   it.each([
     { provider: "openai", model: "text-embedding-3-large", explicit: false, inputType: undefined },
-    { provider: "deepinfra", model: "Qwen/Qwen3-Embedding-8B", explicit: true, inputType: "document" },
+    {
+      provider: "deepinfra",
+      model: "Qwen/Qwen3-Embedding-8B",
+      explicit: true,
+      inputType: "document",
+    },
     { provider: "voyage", model: "voyage-4-large", explicit: true, inputType: "query" },
   ])(
     "creates embeddings with $provider selection and $inputType input",
