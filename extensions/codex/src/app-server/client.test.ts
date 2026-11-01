@@ -306,6 +306,33 @@ describe("CodexAppServerClient", () => {
     await expect(request).resolves.toEqual({ models: [] });
   });
 
+  it.each(["thread-1", "wrong-thread"])(
+    "retries closing only for the requested thread (%s)",
+    async (closingId) => {
+      vi.useFakeTimers();
+      const harness = createHarness();
+      const params = { threadId: "thread-1" };
+      const request = harness.client.request("thread/resume", params);
+      const first = JSON.parse(harness.writes[0] ?? "{}") as { id: number };
+      const error = {
+        code: -32600,
+        message: `thread ${closingId} is closing; retry thread/resume after the thread is closed`,
+      };
+      harness.send({ id: first.id, error });
+      if (closingId !== params.threadId) {
+        await expect(request).rejects.toThrow(error.message);
+        expect(harness.writes).toHaveLength(1);
+        return;
+      }
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(harness.writes).toHaveLength(2);
+      const retry = JSON.parse(harness.writes[1]!) as { id: number };
+      expect(retry).toMatchObject({ method: "thread/resume", params });
+      harness.send({ id: retry.id, result: { resumed: true } });
+      await expect(request).resolves.toEqual({ resumed: true });
+    },
+  );
+
   it("aborts while waiting to retry an overloaded request", async () => {
     vi.useFakeTimers();
     const harness = createHarness();

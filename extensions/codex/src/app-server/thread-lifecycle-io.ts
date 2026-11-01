@@ -31,7 +31,7 @@ import {
   assertCodexThreadStartResponse,
   resolveCodexThreadRolloutPath,
 } from "./protocol-validators.js";
-import { isCodexThreadReadMissingError } from "./rpc-error.js";
+import { isCodexThreadReadMissingError, isCodexThreadResumeClosingError } from "./rpc-error.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import { getCurrentSharedClientEntry } from "./shared-client-lifecycle.js";
 import {
@@ -376,7 +376,8 @@ export async function resumeExistingCodexThread(
       (!(error instanceof CodexAppServerRpcError) ||
         (error.method === "thread/read" &&
           !isCodexThreadReadMissingError(error, resumeBinding.threadId)) ||
-        isCodexAppServerOverloadError(error))
+        isCodexAppServerOverloadError(error) ||
+        isCodexThreadResumeClosingError(error, resumeBinding.threadId))
     ) {
       throw error;
     }

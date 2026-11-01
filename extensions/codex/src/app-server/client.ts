@@ -52,6 +52,7 @@ import { createCodexRequestAttempt, type CodexRequestAttempt } from "./request-a
 import type { CodexRequestWaiterFinished } from "./request-observation.js";
 import {
   isCodexAppServerOverloadError,
+  isCodexThreadResumeClosingError,
   CodexAppServerRpcError,
   CodexAppServerLocalRequestCancellationError,
 } from "./rpc-error.js";
@@ -560,12 +561,13 @@ export class CodexAppServerClient {
           onResponse,
         );
       } catch (error) {
-        // Codex emits -32001 only when ingress rejects a request before enqueue,
-        // so retrying mutating methods cannot duplicate server-side work.
-        if (
-          !isCodexAppServerOverloadError(error) ||
-          retry >= CODEX_APP_SERVER_OVERLOAD_MAX_RETRIES
-        ) {
+        // Both replies prove the rejected operation acquired no subscription or effect.
+        const retryable =
+          isCodexAppServerOverloadError(error) ||
+          (method === "thread/resume" &&
+            isJsonObject(params) &&
+            isCodexThreadResumeClosingError(error, params.threadId));
+        if (!retryable || retry >= CODEX_APP_SERVER_OVERLOAD_MAX_RETRIES) {
           throw error;
         }
         // Ingress rejected this attempt, so cancellation before the retry
