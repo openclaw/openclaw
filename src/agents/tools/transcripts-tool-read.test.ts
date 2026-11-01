@@ -88,6 +88,37 @@ beforeEach(async () => {
 });
 
 describe("transcripts read actions", () => {
+  it.each([false, true])(
+    "bounds a sparse list and resumes after denied rows (partial=%s)",
+    async (partial) => {
+      for (let index = 0; index < 200; index++) {
+        await saveSession({
+          sessionId: `paged-${String(index).padStart(3, "0")}`,
+          startedAt: "2026-08-03T14:00:00.000Z",
+          source: partial && index === 0 ? session.source : foreignSource,
+        });
+      }
+      const authorize = vi.fn<Authorize>(async ({ source }) =>
+        source.guildId === "team" ? { ok: true, value: undefined } : { ok: false, error: "denied" },
+      );
+      provider(authorize);
+      const listed = await run({ action: "list", limit: 20 }, true);
+      expect(authorize).toHaveBeenCalledTimes(200);
+      expect(listed.details).toMatchObject({
+        sessions: partial ? [{ sessionId: "paged-000" }] : [],
+        nextOffset: 200,
+      });
+      expectNotes(listed, "offset=200");
+      authorize.mockClear();
+      const resumed = await run({ action: "list", limit: 20, offset: 200 }, true);
+      expect(authorize).toHaveBeenCalledOnce();
+      expect(resumed.details).toEqual({
+        sessions: [expect.objectContaining({ sessionId: "meeting" })],
+      });
+      expectNotes(resumed, "Weekly review");
+    },
+  );
+
   it("retains write-time chronology when a skill changes the warm worker timezone", async () => {
     const expected = [{ sessionId: "late" }, { sessionId: "early" }];
     let releaseSkill = () => {};
@@ -252,6 +283,11 @@ describe("transcripts read actions", () => {
     }
     const listed = await run({ action: "list", limit: 50 });
     expect(listed.details).toHaveProperty("sessions.length", 50);
+    expect(listed.details).toHaveProperty("nextOffset", 50);
+    const resumed = await run({ action: "list", limit: 50, offset: 50 });
+    expect(resumed.details).toEqual({
+      sessions: [expect.objectContaining({ sessionId: "meeting-9" })],
+    });
     expect(JSON.stringify(listed.content).length).toBeLessThan(4200);
   });
 });

@@ -161,7 +161,11 @@ write permissions.
 `list` returns newest meetings first, with a selector, start time, title or
 provider name, utterance count, and participants. `limit` defaults to 20 and
 accepts integers from 1 to 50. The text is bounded; structured results are in
-`details.sessions`.
+`details.sessions`. Each call examines at most 200 stored meetings, including
+meetings the caller cannot access. When `details.nextOffset` is present, call
+`list` again with that value as `offset` to continue, even if this page returned
+no accessible meetings. New captures or deletions between calls can shift offsets;
+start again without `offset` to refresh the list.
 
 ```json validate=false
 { "action": "show", "selector": "2026-05-22/notes-room-one" }
