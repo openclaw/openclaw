@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import { collectOption } from "../program/helpers.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import { formatEnvelopeForText, providerSummaryText } from "./output.js";
@@ -15,6 +15,11 @@ export function registerEmbeddingCapabilityCommands(capability: Command): void {
     .command("create")
     .description("Create embeddings")
     .requiredOption("--text <text>", "Input text", collectOption)
+    .addOption(
+      new Option("--input-type <type>", "Embedding input type")
+        .choices(["document", "query"])
+        .default("document"),
+    )
     .option("--provider <id>", "Provider id")
     .option("--model <provider/model>", "Model override")
     .option(
@@ -65,7 +70,9 @@ export function registerEmbeddingCapabilityCommands(capability: Command): void {
         const provider = result.provider;
         let embeddings: number[][];
         try {
-          embeddings = await provider.embedBatch(texts, { inputType: "document" });
+          embeddings = await provider.embedBatch(texts, {
+            inputType: opts.inputType as "document" | "query",
+          });
         } catch (err) {
           // Cleanup failure must not replace the embedding error.
           await Promise.resolve()
