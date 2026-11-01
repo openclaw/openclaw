@@ -136,8 +136,8 @@ import { prepareCliLoopbackBundleMcp } from "./loopback-bundle-mcp.js";
 import { mintCliMcpClientGrant } from "./mcp-client-grant.js";
 import { buildCliMcpGrantContext } from "./mcp-grant-context.js";
 import { resolveCliCatalogCapabilities } from "./model-capabilities.js";
-import { prepareCliDiscoverySurface } from "./prepare-discovery-surface.js";
 import { detectNodeClaudePlacement, resolveClaudeCliContextModelId } from "./prepare-claude.js";
+import { prepareCliDiscoverySurface } from "./prepare-discovery-surface.js";
 import * as mcp from "./prepare-mcp.js";
 import { runWithCliPreparationSource } from "./prepare-source.js";
 import {
