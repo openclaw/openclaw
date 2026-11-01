@@ -62,7 +62,10 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
-import { parseModelPolicyWildcardRef } from "../../config/model-policy-ref.js";
+import {
+  modelPolicyWildcardMatches,
+  parseModelPolicyWildcardRef,
+} from "../../config/model-policy-ref.js";
 import { resolveMergedModelProviderConfig } from "../../config/model-provider-config.js";
 import { getShellEnvAppliedKeys, shouldEnableShellEnvFallback } from "../../infra/shell-env.js";
 import type { ProviderModelRouteCandidate } from "../../plugin-sdk/provider-model-types.js";
@@ -498,15 +501,9 @@ export async function modelsStatusCommand(
             ...new Set([
               ...visibilityPolicy.allowedCatalog.map((entry) => modelKey(entry.provider, entry.id)),
               ...configuredAllowRefs.flatMap((raw) => {
-                const wildcard = parseModelPolicyWildcardRef(raw);
-                if (!wildcard) {
-                  return [];
-                }
-                const prefix = wildcard.key.slice(0, -1);
-                const hasCatalogMatch = catalog.entries.some((entry) =>
-                  modelKey(entry.provider, entry.id).startsWith(prefix),
-                );
-                return hasCatalogMatch ? [] : [wildcard.key];
+                const key = parseModelPolicyWildcardRef(raw)?.key;
+                const keys = catalog.entries.map((entry) => modelKey(entry.provider, entry.id));
+                return key && !keys.some((k) => modelPolicyWildcardMatches(key, k)) ? [key] : [];
               }),
             ]),
           ].toSorted();

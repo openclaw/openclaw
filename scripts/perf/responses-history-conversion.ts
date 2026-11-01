@@ -28,6 +28,7 @@ import { sanitizeResponsesImagePayload } from "../../packages/ai/src/transports/
 import type { Context, Model } from "../../packages/llm-core/src/types.js";
 import { transformTransportMessages } from "../../src/agents/transport-message-transform.js";
 import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../../src/shared/immutable-data.js";
+import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 
 const iterations = Number(process.argv[process.argv.indexOf("--iterations") + 1]) || 2000;
 const allocation = process.argv.includes("--allocation");
@@ -256,14 +257,9 @@ const retainedWarm = process.memoryUsage();
 const gcEntries: { kind: number; ms: number }[] = [];
 let started = Infinity;
 let finished = Infinity;
-const observer = new PerformanceObserver((list) => {
-  for (const entry of list.getEntries()) {
-    if (entry.startTime >= started && entry.startTime < finished) {
-      const detail = (entry as PerformanceEntry & { detail: { kind: number } }).detail;
-      gcEntries.push({ kind: detail.kind, ms: entry.duration });
-    }
-  }
-});
+const observer = new PerformanceObserver((list) =>
+  recordGcCollections(list.getEntries(), gcEntries, started, finished),
+);
 observer.observe({ entryTypes: ["gc"] });
 const inspector = new Session();
 if (allocation) {

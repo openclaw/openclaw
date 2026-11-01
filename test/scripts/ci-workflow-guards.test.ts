@@ -1971,6 +1971,18 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     }
   });
 
+  it("reserves hosted emulator disk for Android native qualification", () => {
+    const job = readCiWorkflow().jobs["android-access-native"];
+    const node = requiredWorkflowStep(job.steps, "Setup Node environment for native resources");
+    const android = requiredWorkflowStep(job.steps, "Setup Android toolchain");
+    expect(node.with).toMatchObject({
+      "cache-mode": "off",
+      "install-deps": "false",
+    });
+    expect(android.with["install-native-deps"]).toBe("true");
+    expect(job.steps.indexOf(node)).toBeLessThan(job.steps.indexOf(android));
+  });
+
   it("installs the Android SDK platform used by Gradle", () => {
     const workflow = readCiWorkflow();
     const releaseWorkflow = readAndroidReleaseWorkflow();

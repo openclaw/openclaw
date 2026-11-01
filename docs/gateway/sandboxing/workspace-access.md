@@ -188,8 +188,9 @@ If you are a guest, you can ask the agent:
 > update the same PR. Do not merge it.
 
 Use `github_publish` with `action: "refresh_base"` to explicitly integrate the
-current selected repository base into this session's existing local managed
-workspace. This action is offered only in sessions with a writable managed sandbox;
+current target branch of a prepared or published PR, or the selected repository
+base when no PR is associated, into this session's existing local managed workspace.
+This action is offered only in sessions with a writable managed sandbox;
 sessions running directly on the host merge the base with git in their workspace,
 then publish. The Gateway fetches with its host identity and prepares any missing
 file contents from the selected repository before offline merge and snapshot
@@ -200,6 +201,10 @@ saved guest files, ignored guest data, and empty directories. The operation retu
 `baseCommit`, changed paths, and conflicting paths; it does not publish or change
 the GitHub pull request. It accepts no repository, URL, arbitrary ref, other
 session, or pull-request selector.
+
+For prepared PRs, commit distinct staged changes before refreshing a file that
+also has unstaged edits. The action preserves both versions and refuses until
+that staged work is saved. Finish any pending `prepare_pr` operation first.
 
 Resolve any reported conflicts in the same workspace, then repeat `refresh_base`
 with `conflictsResolved: true` and the returned `baseCommit`. This acknowledges

@@ -576,6 +576,36 @@ describe("session message cache", () => {
     });
   });
 
+  it("measures the trimmed envelope once while dropping many older rows", () => {
+    const { cache, write, read } = createCacheContext();
+    observeChatCache(cache, {
+      write: (_key, snapshot, weight) => expect(weight).toBe(JSON.stringify(snapshot).length),
+      delete: vi.fn(),
+    });
+    const content = "x".repeat(4 * 1024);
+    const messages = Array.from({ length: 4_000 }, (_, index) => ({
+      role: "assistant",
+      content,
+      __openclaw: { id: `m-${index}`, seq: index + 1 },
+    }));
+    const stringify = vi.spyOn(JSON, "stringify");
+    write({
+      messages,
+      rowDisplay: { "m-3999": { links: { source: { title: "Latest linked task" } } } },
+      pagination: { hasMore: false, totalMessages: 4_000 },
+      sessionId: "session-1",
+    });
+    const envelopes = stringify.mock.calls.filter(
+      ([value]) => Array.isArray(value?.messages) && value.messages.length === 0,
+    ).length;
+    stringify.mockRestore();
+    const retained = read()?.messages ?? [];
+    expect(retained.length).toBeGreaterThan(2_000);
+    expect(retained.length).toBeLessThan(messages.length);
+    expect(retained.at(-1)).toBe(messages.at(-1));
+    expect(envelopes).toBeLessThanOrEqual(2);
+  });
+
   it("evicts whole least-recently-used snapshots when the global budget is exceeded", () => {
     const { write, read } = createCacheContext();
     const content = "x".repeat(9 * 1024 * 1024);

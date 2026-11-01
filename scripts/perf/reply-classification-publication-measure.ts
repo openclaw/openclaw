@@ -11,18 +11,14 @@ import { writeSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
-import {
-  constants,
-  monitorEventLoopDelay,
-  PerformanceObserver,
-  type PerformanceEntry,
-} from "node:perf_hooks";
+import { constants, monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { retainReplyToolAuthorityClassification } from "../../src/auto-reply/reply/reply-tool-authority-cohort.js";
 import { publishRetainedSessionEntryChange } from "../../src/config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import type { SessionEntry } from "../../src/config/sessions/types.js";
 import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 
 const { values } = parseArgs({
   options: {
@@ -123,16 +119,9 @@ if (values.allocations) {
 const collections: { kind: number; ms: number }[] = [];
 let start = Infinity;
 let end = Infinity;
-const observer = new PerformanceObserver((list) => {
-  for (const entry of list.getEntries()) {
-    if (entry.startTime >= start && entry.startTime < end) {
-      collections.push({
-        kind: (entry as PerformanceEntry & { detail: { kind: number } }).detail.kind,
-        ms: entry.duration,
-      });
-    }
-  }
-});
+const observer = new PerformanceObserver((list) =>
+  recordGcCollections(list.getEntries(), collections, start, end),
+);
 observer.observe({ entryTypes: ["gc"] });
 const loop = monitorEventLoopDelay({ resolution: 1 });
 loop.enable();
