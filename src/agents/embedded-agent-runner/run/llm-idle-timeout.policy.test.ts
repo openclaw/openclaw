@@ -54,9 +54,25 @@ describe("LLM watchdog policy", () => {
     ["http://[fe80::1]:11434", 0],
     ["http://172.32.0.1:11434", 120_000],
     ["http://192.169.1.1:11434", 120_000],
+    ["http://[::ffff:10.0.0.5]:11434", 120_000],
+    ["http://[::ffff:126.255.255.255]:11434", 120_000],
+    ["http://[::ffff:128.0.0.0]:11434", 120_000],
   ])("classifies the endpoint without DNS: %s", (baseUrl, expected) => {
     expect(resolveLlmIdleTimeoutMs({ model: { baseUrl } })).toBe(expected);
   });
+
+  it.each(["127.0.0.2", "[::ffff:127.0.0.2]", "[::ffff:7fff:ffff]"])(
+    "keeps local watchdog budgets for loopback endpoint %s",
+    (hostname) => {
+      const params = { model: { provider: "custom", baseUrl: `http://${hostname}:1234/v1` } };
+      expectBudgets(params, 0, 300_000);
+      expectBudgets({ ...params, runTimeoutMs: 600_000 }, 600_000, 300_000);
+      expectBudgets({ ...params, runTimeoutMs: 30_000 }, 30_000);
+      expect(resolveLlmIdleTimeoutMs({ ...params, trigger: "cron", runTimeoutMs: 600_000 })).toBe(
+        600_000,
+      );
+    },
+  );
 
   it.each`
     name                         | params                                                                                                           | expected   | cron
@@ -65,6 +81,7 @@ describe("LLM watchdog policy", () => {
     ${"normalized key"}          | ${configured({ " GPU ": "custom-local" })}                                                                       | ${300_000} | ${undefined}
     ${"canonical key priority"}  | ${configured({ " GPU ": "custom-local", gpu: "synthetic-remote" })}                                              | ${120_000} | ${undefined}
     ${"first normalized key"}    | ${configured({ " GPU ": "synthetic-remote", GPU: "custom-local" })}                                              | ${120_000} | ${undefined}
+    ${"remote mapped loopback"}  | ${configured({ gpu: "synthetic-remote" }, "gpu", { remote: true, baseUrl: "http://[::ffff:127.0.0.2]:8787" })}   | ${120_000} | ${60_000}
     ${"remote loopback"}         | ${configured({ gpu: "synthetic-remote" }, "gpu", { remote: true, baseUrl: "http://127.0.0.1:8787" })}            | ${120_000} | ${60_000}
     ${"remote local marker"}     | ${configured({ gpu: "custom-local" }, "gpu", { remote: true })}                                                  | ${120_000} | ${60_000}
     ${"remote local service"}    | ${configured({ gpu: "synthetic-remote" }, "gpu", { remote: true, localService: { command: "/usr/bin/relay" } })} | ${120_000} | ${60_000}
@@ -92,6 +109,7 @@ describe("LLM watchdog policy", () => {
 
   it.each([
     ["kimi-k2.5:cloud", "http://127.0.0.1:11434", 0],
+    ["kimi-k2.5:cloud", "http://[::ffff:127.0.0.2]:11434", 0],
     ["gpt-oss:120b-cloud", "http://ollama-box:11434", 300_000],
   ])("keeps hosted watchdogs for custom Ollama model %s through %s", (id, baseUrl, localIdle) => {
     const { cfg } = configured({ "local-ollama": "ollama-local" }, "local-ollama", { baseUrl });
