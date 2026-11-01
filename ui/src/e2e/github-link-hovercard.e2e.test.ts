@@ -2,9 +2,11 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { BrowserContext, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
+import {
+  CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+} from "../../../src/gateway/control-ui-contract.js";
 import type { ControlUiLinkReaderPreview } from "../../../src/shared/control-ui-link-reader.js";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { installControlUiE2eRendererStallProbe } from "../test-helpers/control-ui-e2e-renderer-stall.ts";
 import {
   defaultControlUiFeatureMethods,
@@ -13,6 +15,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
 import { waitForWatchedSessionKey } from "./chat-github-publication.test-support.ts";
+import { createLightDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import {
   createControlUiE2eSuite,
   holdModuleResponse,
@@ -32,12 +35,7 @@ const suite = createControlUiE2eSuite({
 });
 
 async function newBrowserContext(): Promise<BrowserContext> {
-  return suite.newBrowserContext({
-    colorScheme: "light",
-    locale: "en-US",
-    serviceWorkers: "block",
-    viewport: { height: 800, width: 1180 },
-  });
+  return suite.newBrowserContext(createLightDesktopControlUiContextOptions());
 }
 
 async function expectText(locator: Locator, ...texts: string[]): Promise<void> {
@@ -838,7 +836,7 @@ suite.define(() => {
     await expect.poll(() => card.count()).toBe(0);
     await expect.poll(() => isFocused(pullLink)).toBe(true);
     // Returning focus to the trigger must not reopen what Escape just dismissed.
-    await page.waitForTimeout(300);
+    await page.clock.runFor(300);
     expect(await card.count()).toBe(0);
   });
 

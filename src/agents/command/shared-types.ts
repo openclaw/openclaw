@@ -115,7 +115,12 @@ export type AgentRunChannelContext = Pick<
 
 type AgentRunModelOptions = Pick<
   QueuedAgentRunParams,
-  "authProfileId" | "thinkLevel" | "thinkingExplicit" | "fastMode" | "fastModeAutoOnSeconds"
+  | "authProfileId"
+  | "thinkLevel"
+  | "thinkingExplicit"
+  | "fastMode"
+  | "fastModeAutoOnSeconds"
+  | "cyberAccessProgram"
 > & {
   /** Vision capability resolved by the run owner from its prepared model catalog. */
   modelHasVision?: boolean;
@@ -140,6 +145,7 @@ type AgentRunInputContext = Pick<
   | "ownerNumbers"
   | "inputProvenance"
   | "extraSystemPrompt"
+  | "extraSystemPromptTurnContext"
 > & {
   /** Canonical agent workspace used for bootstrap files when execution runs elsewhere. */
   bootstrapWorkspaceDir?: string;

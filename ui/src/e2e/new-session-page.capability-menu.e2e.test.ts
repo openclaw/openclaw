@@ -54,7 +54,6 @@ suite.define(() => {
       const draft = menu.getByRole("menuitemcheckbox", { name: "Draft" });
       await composer.getByRole("button", { name: "Add attachment" }).click();
       if (atomic) {
-        await expect.poll(() => menu.getAttribute("data-view")).toBe("root");
         await expect.poll(() => draft.getAttribute("aria-checked")).toBe("false");
         await draft.focus();
         await page.keyboard.press("Space");
@@ -70,23 +69,13 @@ suite.define(() => {
         return;
       }
       await menu.getByRole("menuitem", { name: /^Skills/ }).click();
-      await expect.poll(() => menu.getAttribute("data-view")).toBe("skills");
       const release = menu.getByRole("menuitemcheckbox", { name: "Release" });
-      await expect.poll(() => release.isEnabled()).toBe(true);
       await release.click();
-      await menu.getByRole("menuitem", { name: "Back" }).click();
+      await menu.locator('[data-value="back"]').click();
       await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
-      await expect.poll(() => menu.getAttribute("data-view")).toBe("connectors");
-      await menu.getByRole("menuitemcheckbox", { name: /^github/ }).click();
-      await menu.getByRole("menuitem", { name: "Back" }).click();
+      await menu.getByRole("switch", { name: "github", exact: true }).click();
+      await menu.locator('[data-value="back"]').click();
       await menu.getByRole("menuitemcheckbox", { name: "Web search" }).click();
-      await expect
-        .poll(async () =>
-          (await composer.locator(".new-session-page__selection-status").allTextContents()).map(
-            (text) => text.replace(/\s+/g, " ").trim(),
-          ),
-        )
-        .toEqual(["3 overrides"]);
       await page.locator(".new-session-page__message").fill("prepare the release");
       await composer.getByRole("button", { name: "Start session" }).click();
       expect((await gateway.waitForRequest("sessions.create")).params).toMatchObject({

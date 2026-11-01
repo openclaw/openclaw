@@ -1,7 +1,7 @@
-import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, expect, it } from "vitest";
+import { writeFixtureJson } from "../plugins/loader-fixture-builders.test-support.js";
 import { acquirePluginRegistryForInspection, loadPluginRegistryHandle } from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -10,6 +10,7 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
+import { cleanupNativeFixture, nativeFixtureEnv } from "../plugins/native-resource.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -75,14 +76,11 @@ function createNativeImageFixture(id = "native-image-owner", rejectGeneration = 
     });
 `,
   });
-  fs.writeFileSync(
-    path.join(dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id,
-      contracts: { imageGenerationProviders: [id] },
-      configSchema: { type: "object", additionalProperties: false, properties: {} },
-    }),
-  );
+  writeFixtureJson(dir, "openclaw.plugin.json", {
+    id,
+    contracts: { imageGenerationProviders: [id] },
+    configSchema: { type: "object", additionalProperties: false, properties: {} },
+  });
   const config = {
     plugins: { allow: [id], load: { paths: [plugin.file] }, slots: { memory: "none" } },
   };
@@ -99,12 +97,7 @@ function createNativeImageFixture(id = "native-image-owner", rejectGeneration = 
   cleanups.push(async () => {
     resume.resolve();
     await pending;
-    for (const { database } of connections) {
-      if (database.isOpen) {
-        database.close();
-      }
-    }
-    Reflect.deleteProperty(globalThis, key);
+    cleanupNativeFixture(key, connections);
   });
   return {
     plugin,
@@ -127,11 +120,7 @@ function createNativeImageFixture(id = "native-image-owner", rejectGeneration = 
       resume.resolve();
       return await pending!;
     },
-    env: {
-      OPENCLAW_HOME: dir,
-      OPENCLAW_STATE_DIR: dir,
-      OPENCLAW_CONFIG_PATH: path.join(dir, "config.json"),
-    },
+    env: nativeFixtureEnv(dir),
   };
 }
 

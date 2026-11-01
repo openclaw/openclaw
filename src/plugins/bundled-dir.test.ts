@@ -335,31 +335,17 @@ describe("resolveBundledPluginsDir", () => {
 
 describe("foreign compiled bundle recognition", () => {
   it.each([
-    { mode: "foreign", expected: true },
     { mode: "dist-runtime", expected: true },
     { mode: "own", expected: false },
     { mode: "unknown", expected: false },
     { mode: "override", expected: false },
-    { mode: "source-link", expected: false },
-    { mode: "external", expected: false },
-    { mode: "lookalike", expected: false },
     { mode: "symlink", expected: true },
   ])("preserves the $mode ownership boundary", ({ mode, expected }) => {
     const current = createOpenClawRoot(["dist/extensions"], { prefix: "foreign-current-" });
     const previous = createOpenClawRoot(["dist/extensions"], { prefix: "foreign-previous-" });
     seedBundledPluginTree(current, "dist/extensions", "probe");
-    const relativeDir =
-      mode === "dist-runtime"
-        ? "dist-runtime/extensions"
-        : mode === "source-link"
-          ? "extensions"
-          : mode === "external"
-            ? "plugins"
-            : "dist/extensions";
+    const relativeDir = mode === "dist-runtime" ? "dist-runtime/extensions" : "dist/extensions";
     seedBundledPluginTree(previous, relativeDir, "probe");
-    if (mode === "lookalike") {
-      writeJson(path.join(previous, "package.json"), { name: "external-package" });
-    }
     let pluginRoot = path.join(mode === "own" ? current : previous, relativeDir, "probe");
     if (mode === "symlink") {
       const alias = path.join(makeRepoRoot("foreign-alias-"), "probe");

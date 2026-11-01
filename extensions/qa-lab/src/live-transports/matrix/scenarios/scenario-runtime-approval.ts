@@ -121,7 +121,6 @@ async function waitForApprovalEvent(params: {
 async function waitForObservedApprovalEvent(params: {
   context: MatrixQaScenarioContext;
   expectedApprovalId: string;
-  expectedKind: ChannelApprovalKind;
   excludedRoomIds?: string[];
   roomIds: string[];
   timeoutMs: number;
@@ -140,6 +139,7 @@ async function waitForObservedApprovalEvent(params: {
     return roomIds.some((roomId) =>
       isExpectedApprovalEvent(event, {
         ...params,
+        expectedKind: "exec",
         roomId,
       }),
     );
@@ -150,7 +150,7 @@ async function waitForObservedApprovalEvent(params: {
     if (observedMatch) {
       assertApprovalMetadata({
         event: observedMatch,
-        expectedKind: params.expectedKind,
+        expectedKind: "exec",
       });
       return observedMatch;
     }
@@ -227,14 +227,12 @@ function requestExecApproval(params: {
 async function resolveApprovalDecision(params: {
   approvalId: string;
   context: MatrixQaScenarioContext;
-  decision: MatrixQaApprovalDecision;
-  kind: ChannelApprovalKind;
 }) {
   return resolveLiveQaApprovalDecision({
     approvalId: params.approvalId,
-    decision: params.decision,
+    decision: "allow-once",
     gateway: { call: params.context.gatewayCall },
-    kind: params.kind,
+    kind: "exec",
     timeoutMs: 5_000,
   });
 }
@@ -487,7 +485,6 @@ export async function runApprovalChannelTargetBothScenario(context: MatrixQaScen
     context,
     excludedRoomIds: [context.roomId],
     expectedApprovalId: approvalId,
-    expectedKind: "exec",
     roomIds: dmRoomIds,
     timeoutMs: context.timeoutMs,
   });
@@ -497,8 +494,6 @@ export async function runApprovalChannelTargetBothScenario(context: MatrixQaScen
   await resolveApprovalDecision({
     approvalId,
     context,
-    decision: "allow-once",
-    kind: "exec",
   });
   const lateDuplicate = await client.waitForOptionalRoomEvent({
     observedEvents: context.observedEvents,

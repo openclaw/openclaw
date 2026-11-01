@@ -88,19 +88,15 @@ function queueOwner(
     owner.emit("exit", code, signal);
     owner.emit("close", code, signal);
   };
+  const fail = (code: number | null, stdout = "", stderr = "", signal?: string) =>
+    owner.emit("message", { type: "failed", code, stdout, stderr, signal });
   const owner = Object.assign(new EventEmitter(), {
     connected: true,
     send: vi.fn(() => {
       stopped.resolve();
       options.abortOnStop?.();
       if (options.failureAfterStop) {
-        owner.emit("message", {
-          type: "failed",
-          code: null,
-          signal: "SIGTERM",
-          stdout: options.failureAfterStop,
-          stderr: "",
-        });
+        fail(null, options.failureAfterStop, "", "SIGTERM");
       }
       if (options.stopFailure) {
         owner.emit("message", { type: "stop-failed", message: options.stopFailure });
@@ -115,12 +111,7 @@ function queueOwner(
     started.resolve();
     queueMicrotask(() => {
       if (options.failure || options.stdout) {
-        owner.emit("message", {
-          type: "failed",
-          code: options.code === undefined ? 1 : options.code,
-          stdout: options.stdout ?? "",
-          stderr: options.failure ?? "",
-        });
+        fail(options.code === undefined ? 1 : options.code, options.stdout, options.failure);
       } else if (options.ready !== false) {
         owner.emit("message", { type: "ready" });
       }
@@ -130,17 +121,13 @@ function queueOwner(
   return { owner, exit: exitOwner, started: started.promise, stopped: stopped.promise };
 }
 
+const proxyRoute = (port: number) => ({ Handlers: { "/": { Proxy: `http://127.0.0.1:${port}` } } });
 const legacyRoutes = JSON.stringify({
   TCP: { "443": { HTTPS: true }, "18790": { HTTPS: true } },
-  Web: Object.fromEntries(
-    [
-      [443, 18789],
-      [18790, 18790],
-    ].map(([port, target]) => [
-      `fixture.tailnet.ts.net:${port}`,
-      { Handlers: { "/": { Proxy: `http://127.0.0.1:${target}` } } },
-    ]),
-  ),
+  Web: {
+    "fixture.tailnet.ts.net:443": proxyRoute(18789),
+    "fixture.tailnet.ts.net:18790": proxyRoute(18790),
+  },
 });
 
 beforeEach(() => {
@@ -195,21 +182,6 @@ describe("private Tailscale Serve claims", () => {
     expect(getTailscalePublishedOrigin()).toBeUndefined();
   });
 
-  it("preserves denial and failed cleanup instead of continuing local startup", async () => {
-    queueOwner({
-      failure: serveDenied,
-      stopFailure: retirementFailed,
-    });
-    const error = await startExposure().catch((failure: unknown) => failure);
-    expect(error).toBeInstanceOf(AggregateError);
-    const failure = error as AggregateError;
-    expect(failure.errors.map((cause: Error) => cause.message)).toEqual([
-      serveDenied,
-      retirementFailed,
-    ]);
-    expect(failure.cause).toBe(failure.errors[1]);
-  });
-
   it.each([
     ["policy denial", "serve", "local", "", undefined],
     ["Funnel denial", "funnel", "fatal", "", undefined],
@@ -244,6 +216,12 @@ describe("private Tailscale Serve claims", () => {
         expect(outcome).toBeInstanceOf(Error);
         if (cleanup) {
           expect(outcome).toBeInstanceOf(AggregateError);
+          const failure = outcome as AggregateError;
+          expect(failure.errors.map((cause: Error) => cause.message)).toEqual([
+            serveDenied,
+            retirementFailed,
+          ]);
+          expect(failure.cause).toBe(failure.errors[1]);
         }
       }
       expect(getTailscalePublishedOrigin()).toBeUndefined();

@@ -26,10 +26,17 @@ const models = ["worker-model", "other-model"].map((id) => ({
   unavailableReason: "missing-auth",
 }));
 
-test("does not retain startup worker policy across a command-only refresh", async () => {
+test("publishes cold pinned startup commands without retaining worker policy across refresh", async () => {
   const cfg = structuredClone(config);
   const harness = createChatMetadataHarness(cfg);
-  const scope = { agentId: "main", sessionKey: "agent:main:main" };
+  const scope = {
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    sessionEntry: {
+      authProfileOverride: "openai:pinned",
+      authProfileOverrideSource: "user" as const,
+    },
+  };
   const client = createTestGatewayClient(async (method, params) => {
     if (method === "chat.startup") {
       return (await harness.startup(scope))?.metadata;
@@ -43,10 +50,11 @@ test("does not retain startup worker policy across a command-only refresh", asyn
   });
   try {
     await harness.refresh();
-    await harness.read();
     const startup = await client.request<ChatMetadataResponse>("chat.startup", scope);
     const published = beginChatMetadataPublication(client, scope).publish(startup);
     expect(published.requiredWorkerInferenceProfileId).toBe("dedicated");
+    expect(published.commands).toEqual(expect.any(Array));
+    expect(harness.buildProjection).not.toHaveBeenCalled();
     delete cfg.cloudWorkers!.requiredProfile;
     const refreshed = await revalidateChatMetadata(client, scope);
     expect(refreshed.commands).toEqual(published.commands);

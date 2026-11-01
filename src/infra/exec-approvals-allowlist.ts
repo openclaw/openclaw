@@ -66,6 +66,7 @@ import {
   resolveInlineCommandMatch,
   resolvePowerShellInlineCommandMatch,
 } from "./shell-inline-command.js";
+import { POSIX_SHELLS_WITH_PLUS_OPTIONS } from "./shell-wrapper-resolution.js";
 import { analyzeWindowsShellCommand } from "./windows-shell-command.js";
 
 function hasShellLineContinuation(command: string): boolean {
@@ -772,17 +773,6 @@ function isOpaquePosixShellWrapperSegment(segment: ExecCommandSegment): boolean 
 }
 
 const SHELL_WRAPPER_OPTIONS_WITH_VALUE = new Set(["-c", "--command", "-o", "-O", "+O", "+o"]);
-const POSIX_SHELLS_WITH_PLUS_OPTIONS = new Set([
-  "ash",
-  "bash",
-  "dash",
-  "ksh",
-  "mksh",
-  "osh",
-  "sh",
-  "yash",
-  "zsh",
-]);
 
 const SHELL_WRAPPER_DISQUALIFYING_SCRIPT_OPTIONS = [
   "--rcfile",
@@ -1110,7 +1100,11 @@ function collectAllowAlwaysPatterns(
     }
     return;
   }
-  if (!isWindowsPlatform(params.platform)) {
+  // POSIX inline payloads cannot use the Windows parser to mint reusable grants.
+  if (
+    !isWindowsPlatform(params.platform) ||
+    POSIX_SHELL_WRAPPERS.has(normalizeExecutableToken(segment.argv[0] ?? ""))
+  ) {
     return;
   }
   const nested = analyzeWindowsShellCommand({
@@ -1127,11 +1121,7 @@ function collectAllowAlwaysPatterns(
   }
 }
 
-/**
- * Derive persisted allowlist patterns for an "allow always" decision.
- * When a command is wrapped in a shell (for example `zsh -lc "<cmd>"`),
- * persist the inner executable(s) rather than the shell binary.
- */
+/** Derive persisted allowlist patterns for an "allow always" decision. */
 export function resolveAllowAlwaysPatternEntries(params: {
   segments: ExecCommandSegment[];
   cwd?: string;

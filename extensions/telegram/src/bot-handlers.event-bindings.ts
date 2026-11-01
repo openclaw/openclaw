@@ -24,8 +24,11 @@ import {
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
-import { resolveTelegramThreadSpec, type TelegramThreadSpec } from "./bot/helpers.js";
-import { resolveTelegramConversationRoute } from "./conversation-route.js";
+import { resolveTelegramBotHasTopicsEnabled, resolveTelegramThreadSpec } from "./bot/helpers.js";
+import {
+  applyTelegramTargetSession,
+  resolveTelegramConversationRoute,
+} from "./conversation-route.js";
 import { evaluateTelegramGroupPolicyAccess } from "./group-access.js";
 import { migrateTelegramGroupConfig } from "./group-migration.js";
 import { getPreparedTelegramPollAnswer } from "./poll-answer-context.js";
@@ -80,12 +83,23 @@ export function createTelegramEventBindings({
     eventParams: Parameters<typeof resolveTelegramEventAuthorizationContext>[0] & {
       senderId: string;
       chatTitle?: string;
+      event: "reaction" | "poll_answer";
     },
   ) => {
     const context = await resolveTelegramEventAuthorizationContext(eventParams);
-    return (await authorizeTelegramEventSender({ ...eventParams, mode: "reaction", context }))
-      ? context
-      : undefined;
+    if (!(await authorizeTelegramEventSender({ ...eventParams, mode: "reaction", context }))) {
+      return undefined;
+    }
+    // Events carry no thread id; DM topics come from cached or persisted message context.
+    const { groupConfig } = context;
+    const requireTopic = groupConfig && "requireTopic" in groupConfig && groupConfig.requireTopic;
+    if (!eventParams.isGroup && requireTopic === true && context.dmThreadId == null) {
+      logVerbose(
+        `Blocked telegram ${eventParams.event} in DM ${eventParams.chatId}: requireTopic=true but topic unknown`,
+      );
+      return undefined;
+    }
+    return context;
   };
 
   const registerChatMembership = () => {
@@ -107,21 +121,33 @@ export function createTelegramEventBindings({
       }
 
       const chatId = membership.chat.id;
+      const threadSpec = resolveTelegramThreadSpec({
+        isGroup: true,
+        isForum: membership.chat.is_forum === true,
+      });
       const currentCfg = getRuntimeConfig();
       const telegramCfg = resolveTelegramAccount({ cfg: currentCfg, accountId }).config;
-      const { groupConfig } = params.resolveTelegramGroupConfig(chatId, undefined, currentCfg);
+      const { groupConfig, topicConfig } = params.resolveTelegramGroupConfig(
+        chatId,
+        threadSpec.id,
+        currentCfg,
+      );
       const groupPolicyAccess = evaluateTelegramGroupPolicyAccess({
         isGroup: true,
         chatId,
         cfg: currentCfg,
         telegramCfg,
         groupConfig,
+        topicConfig,
         effectiveGroupAllow: normalizeAllowFrom(),
         resolveGroupPolicy: params.resolveGroupPolicy,
         enforceAllowlistAuthorization: false,
         allowEmptyAllowlistEntries: false,
       });
-      const roomAllowed = groupConfig?.enabled !== false && groupPolicyAccess.allowed;
+      const roomAllowed =
+        groupConfig?.enabled !== false &&
+        topicConfig?.enabled !== false &&
+        groupPolicyAccess.allowed;
       const inviter = membership.from;
       const inviterLabel =
         [inviter.first_name, inviter.last_name].filter(Boolean).join(" ") || inviter.username;
@@ -132,19 +158,21 @@ export function createTelegramEventBindings({
         return;
       }
       try {
-        await reportChannelRoomJoin({
+        const outcome = await reportChannelRoomJoin({
           cfg: currentCfg,
           channel: "telegram",
           accountId,
           conversationId: String(chatId),
           deliverTo: String(chatId),
+          threadId: threadSpec.id,
           route: (
             await resolveTelegramConversationRoute({
               cfg: currentCfg,
               accountId,
               chatId,
               isGroup: true,
-              threadSpec: resolveTelegramThreadSpec({ isGroup: true }),
+              threadSpec,
+              topicAgentId: topicConfig?.agentId,
             })
           ).route,
           inviterLabel,
@@ -160,6 +188,9 @@ export function createTelegramEventBindings({
             };
           },
         });
+        if (outcome.kind === "failed") {
+          throw new Error(outcome.reason);
+        }
         hold?.release("discard-pending");
         participant?.settle({ kind: "completed" });
       } catch (error) {
@@ -184,7 +215,7 @@ export function createTelegramEventBindings({
         const senderId = user?.id != null ? String(user.id) : "";
         const isGroup = reaction.chat.type === "group" || reaction.chat.type === "supergroup";
         const isDirectMessagesChat = reaction.chat.is_direct_messages === true;
-        const isForum = !isDirectMessagesChat && reaction.chat.is_forum === true;
+        const isForum = isGroup && !isDirectMessagesChat && reaction.chat.is_forum === true;
         const authorizationCfg = getRuntimeConfig();
         const authorizationTelegramCfg = resolveTelegramAccount({
           cfg: authorizationCfg,
@@ -219,26 +250,28 @@ export function createTelegramEventBindings({
           return;
         }
 
-        // Reaction updates omit every topic field. Scoped reactions require the bounded cache.
-        let recoveredThreadSpec: TelegramThreadSpec | undefined;
+        // Reaction updates omit every topic field. Scoped reactions require the bounded cache;
+        // private-chat reactions use it when present and otherwise stay on the base DM.
         const requiredScope = isDirectMessagesChat
           ? "direct-messages"
           : isForum
             ? "forum"
             : undefined;
-        if (requiredScope) {
-          recoveredThreadSpec = await resolveCachedMessageThreadSpec({ chatId, messageId });
-          if (
-            recoveredThreadSpec?.scope !== requiredScope ||
-            recoveredThreadSpec.id === undefined
-          ) {
-            runtime.log?.(
-              warn(
-                `telegram: skipped scoped reaction account=${accountId} chat=${chatId} message=${messageId} reason=${TELEGRAM_REACTION_THREAD_UNRESOLVED_REASON}`,
-              ),
-            );
-            return;
-          }
+        const cached =
+          requiredScope || reaction.chat.type === "private"
+            ? await resolveCachedMessageThreadSpec({ chatId, messageId })
+            : undefined;
+        const recoveredThreadSpec =
+          cached?.threadSpec.scope === (requiredScope ?? "dm") && cached.threadSpec.id !== undefined
+            ? cached.threadSpec
+            : undefined;
+        if (requiredScope && !recoveredThreadSpec) {
+          runtime.log?.(
+            warn(
+              `telegram: skipped scoped reaction account=${accountId} chat=${chatId} message=${messageId} reason=${TELEGRAM_REACTION_THREAD_UNRESOLVED_REASON}`,
+            ),
+          );
+          return;
         }
 
         const eventAuthContext = await resolveAuthorizedEventContext({
@@ -247,6 +280,7 @@ export function createTelegramEventBindings({
           chatTitle: reaction.chat.title,
           isGroup,
           senderId,
+          event: "reaction",
           threadSpec:
             recoveredThreadSpec ??
             resolveTelegramThreadSpec({
@@ -258,21 +292,7 @@ export function createTelegramEventBindings({
           return;
         }
 
-        // DM reactions cannot prove topic membership because Telegram omits the thread id.
-        if (!isGroup) {
-          const requireTopic =
-            eventAuthContext.groupConfig && "requireTopic" in eventAuthContext.groupConfig
-              ? eventAuthContext.groupConfig.requireTopic
-              : undefined;
-          if (requireTopic === true) {
-            logVerbose(
-              `Blocked telegram reaction in DM ${chatId}: requireTopic=true but topic unknown for reactions`,
-            );
-            return;
-          }
-        }
-
-        const { route } = await resolveTelegramConversationRoute({
+        let { route } = await resolveTelegramConversationRoute({
           cfg: eventAuthContext.cfg,
           accountId,
           chatId,
@@ -281,6 +301,19 @@ export function createTelegramEventBindings({
           senderId,
           topicAgentId: eventAuthContext.topicConfig?.agentId,
         });
+        if (recoveredThreadSpec?.scope === "dm") {
+          route = applyTelegramTargetSession({
+            cfg: eventAuthContext.cfg,
+            route,
+            chatId,
+            isGroup,
+            senderId,
+            dmThreadId: recoveredThreadSpec.id,
+            // Like messages, a cached topic message proves topics before a stale getMe does.
+            botHasTopicsEnabled:
+              cached?.isTopicMessage === true || resolveTelegramBotHasTopicsEnabled(ctx.me),
+          });
+        }
 
         const senderName = user
           ? [user.first_name, user.last_name].filter(Boolean).join(" ").trim() || user.username
@@ -380,20 +413,9 @@ export function createTelegramEventBindings({
           isGroup,
           senderId,
           threadSpec: entry.threadSpec,
+          event: "poll_answer",
         });
         if (!eventAuthContext) {
-          return;
-        }
-
-        // A DM poll without persisted topic context must not wake the base DM session.
-        const requireTopic =
-          eventAuthContext.groupConfig && "requireTopic" in eventAuthContext.groupConfig
-            ? eventAuthContext.groupConfig.requireTopic
-            : undefined;
-        if (!isGroup && requireTopic === true && eventAuthContext.dmThreadId == null) {
-          logVerbose(
-            `Blocked telegram poll_answer in DM ${chatId}: requireTopic=true but topic unknown`,
-          );
           return;
         }
 

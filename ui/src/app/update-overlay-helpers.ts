@@ -3,7 +3,7 @@ import {
   isAcknowledgedAbandonedUpdateRun,
   type UpdateRunRecord,
 } from "../../../src/infra/update-run-record.js";
-import { classifyUpdateOutcome } from "../../../src/shared/update-outcome.js";
+import { classifyUpdateOutcome } from "../../../src/shared/update-outcome-classification.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import type { CustodianTurnAdmission } from "../components/custodian-alert-contract.ts";

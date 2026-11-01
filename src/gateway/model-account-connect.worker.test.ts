@@ -54,11 +54,11 @@ import {
 } from "./model-account-connect-errors.js";
 import { createModelAccountConnectService } from "./model-account-connect.js";
 import type { RespondFn } from "./server-methods/types.js";
-import { usersAuthConnectHandlers } from "./server-methods/users-auth-connect.js";
 import {
   preparePersonalModelAccountSelection,
   prepareUserModelAccountAction,
 } from "./server-methods/users-model-account-access.js";
+import { usersHandlers as usersAuthConnectHandlers } from "./server-methods/users.js";
 import {
   createContext,
   createOperatorClient,
@@ -532,13 +532,12 @@ it("serves personal account RPCs without caller-thread SQL or credentials", ({ s
       }
       return result;
     });
-    const authMethod: ProviderAuthMethod = {
+    resolveMethod.mockResolvedValue({
       id: "token",
       label: "Synthetic token",
       kind: "token",
       run: async () => ({ profiles: [] }),
-    };
-    resolveMethod.mockResolvedValue(authMethod);
+    } satisfies ProviderAuthMethod);
     vi.spyOn(providerAuth, "runProviderPluginAuthMethodUnpersisted").mockResolvedValue({
       profiles: [{ profileId: "ignored-shared-id", credential }],
     });
@@ -560,9 +559,7 @@ it("serves personal account RPCs without caller-thread SQL or credentials", ({ s
         provider: "synthetic",
         method: "token",
       });
-      if (!isRecord(started) || typeof started.connectId !== "string") {
-        throw new Error("personal account sign-in did not start");
-      }
+      assert(isRecord(started) && typeof started.connectId === "string");
       await settlement.checkpoint(
         committed.promise,
         "Personal account sign-in settled before committing",
@@ -576,13 +573,11 @@ it("serves personal account RPCs without caller-thread SQL or credentials", ({ s
         "Personal account sign-in settled without publishing a connected account",
       );
       const connected = await rpc("users.authConnect.status", { connectId: started.connectId });
-      if (
-        !isRecord(connected) ||
-        connected.status !== "connected" ||
-        typeof connected.authProfileId !== "string"
-      ) {
-        throw new Error("personal account did not connect");
-      }
+      assert(
+        isRecord(connected) &&
+          connected.status === "connected" &&
+          typeof connected.authProfileId === "string",
+      );
       const { authProfileId } = connected;
       const link = { provider: "synthetic", authProfileId };
       expect(connected.links).toMatchObject([link]);
@@ -804,3 +799,22 @@ it("does not replay a committed account mutation whose worker reply is lost", ()
       emitted.mockRestore();
     }
   }));
+
+it("leaves the writer free while the host decides account admission", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const owner = ensureProfileForEmail("contention@example.test").id;
+    using contention = probe.writerLock(resolveOpenClawStateSqlitePath());
+    probe.admission(workerAdmission, (request, grant, admit) => {
+      if (isRecord(request.facts) && request.facts.kind === "model-account-links") {
+        contention.observe(request.stage);
+      }
+      admit(request, grant);
+    });
+    const { authProfileId } = await connectAccount(owner);
+    expect(contention.observed).toEqual(["transaction:free", "commit:held"]);
+    expect(readUserModelAuthProfile(authProfileId)?.credential).toEqual(credential);
+    expect((await listUserModelAccountsAsync({ profileId: owner })).accounts).toContainEqual(
+      expect.objectContaining({ authProfileId }),
+    );
+  });
+});

@@ -54,11 +54,8 @@ export function normalizeSystemdUnit(raw?: string, profile?: string): string {
 export function restartGatewayViaSupervisor(): RestartAttempt {
   cleanStaleGatewayProcessesSync();
 
-  const tried: string[] = [];
-  const run = (command: string, args: string[]) => {
-    tried.push(`${command} ${args.join(" ")}`);
-    return spawnSync(command, args, { encoding: "utf8", timeout: SPAWN_TIMEOUT_MS });
-  };
+  const run = (command: string, args: string[]) =>
+    spawnSync(command, args, { encoding: "utf8", timeout: SPAWN_TIMEOUT_MS });
   if (process.platform === "linux") {
     const unit = normalizeSystemdUnit(
       process.env.OPENCLAW_SYSTEMD_UNIT,
@@ -67,18 +64,18 @@ export function restartGatewayViaSupervisor(): RestartAttempt {
     const userArgs = ["--user", "restart", unit];
     const userRestart = run("systemctl", userArgs);
     if (!userRestart.error && userRestart.status === 0) {
-      return { ok: true, method: "systemd", tried };
+      return { ok: true, method: "systemd" };
     }
     const systemArgs = ["restart", unit];
     const systemRestart = run("systemctl", systemArgs);
     if (!systemRestart.error && systemRestart.status === 0) {
-      return { ok: true, method: "systemd", tried };
+      return { ok: true, method: "systemd" };
     }
     const detail = [
       `user: ${formatSpawnDetail(userRestart)}`,
       `system: ${formatSpawnDetail(systemRestart)}`,
     ].join("; ");
-    return { ok: false, method: "systemd", detail, tried };
+    return { ok: false, method: "systemd", detail };
   }
 
   if (process.platform === "win32") {
@@ -102,7 +99,7 @@ export function restartGatewayViaSupervisor(): RestartAttempt {
   const args = ["kickstart", "-k", target];
   const res = run("launchctl", args);
   if (!res.error && res.status === 0) {
-    return { ok: true, method: "launchctl", tried };
+    return { ok: true, method: "launchctl" };
   }
 
   // kickstart fails when the service was previously booted out (deregistered from launchd).
@@ -122,21 +119,19 @@ export function restartGatewayViaSupervisor(): RestartAttempt {
       ok: false,
       method: "launchctl",
       detail: formatSpawnDetail(boot),
-      tried,
     };
   }
   if (boot.status === 0) {
-    return { ok: true, method: "launchctl", tried };
+    return { ok: true, method: "launchctl" };
   }
   const retryArgs = ["kickstart", target];
   const retry = run("launchctl", retryArgs);
   if (!retry.error && retry.status === 0) {
-    return { ok: true, method: "launchctl", tried };
+    return { ok: true, method: "launchctl" };
   }
   return {
     ok: false,
     method: "launchctl",
     detail: formatSpawnDetail(retry),
-    tried,
   };
 }

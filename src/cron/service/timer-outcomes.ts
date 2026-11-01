@@ -5,7 +5,6 @@ import { STARTUP_INTERRUPTED_ERROR } from "../execution-error-constants.js";
 import { resolvePacedNextRunAtMs } from "../pacing.js";
 import { isPluginCommandCronJob } from "../plugin-command-schedule.js";
 import { normalizeCronRunDiagnostics, summarizeCronRunDiagnostics } from "../run-diagnostics.js";
-import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import type { CronRunFinalizationOutcome } from "../store/runtime-worker.types.js";
 import type { CronJob, CronRunStatus, CronStoredJob, CronTriggerEvalOutcome } from "../types.js";
@@ -35,7 +34,8 @@ import {
   resolveManualOneShotOccurrenceAtMs,
 } from "./one-shot-schedule.js";
 import type { CronJobPolicyContext, DeferredCronNotifications } from "./state.js";
-import { type CronJobRunResult, MIN_REFIRE_GAP_MS } from "./timer-execution-timeout.js";
+import { MIN_REFIRE_GAP_MS } from "./timer-constants.js";
+import type { CronJobRunResult } from "./timer-execution-timeout.js";
 import {
   applyTriggerEvaluationState,
   applyTriggerRunResult,
@@ -86,7 +86,7 @@ function assignNextRunAtMs(
 export function applyJobResult(
   state: CronJobPolicyContext,
   job: CronStoredJob,
-  result: CronJobRunResult,
+  result: CronJobRunResult & Pick<CronRunFinalizationOutcome, "errorReason">,
   opts: {
     // Manual force runs update outcome state but are out-of-band for cadence.
     scheduleMode?: "advance" | "preserve";
@@ -126,13 +126,14 @@ export function applyJobResult(
   job.state.lastRunStatus = result.status;
   job.state.lastStatus = result.status;
   job.state.lastDurationMs = Math.max(0, result.endedAt - result.startedAt);
+  if (result.status === "ok" && result.result && result.result.outcome !== "no_change") {
+    job.state.lastMeaningfulResult = { ...result.result, atMs: result.endedAt };
+  }
   job.state.lastError = result.interruptedByRestart ? STARTUP_INTERRUPTED_ERROR : result.error;
   job.state.lastDiagnostics = normalizeCronRunDiagnostics(result.diagnostics);
   job.state.lastDiagnosticSummary = summarizeCronRunDiagnostics(job.state.lastDiagnostics);
   job.state.lastErrorReason =
-    result.status === "error" && typeof result.error === "string"
-      ? resolveCronRunErrorReason(result.error, result.provider, result.errorClassification)
-      : undefined;
+    result.status === "error" && typeof result.error === "string" ? result.errorReason : undefined;
   if (result.status === "error") {
     state.deps.log.warn(
       {

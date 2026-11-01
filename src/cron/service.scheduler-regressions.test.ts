@@ -168,7 +168,6 @@ describe("Cron issue regressions", () => {
       const cron = await startCronForStore({
         storePath: store.storePath,
         runSessionEvent,
-        runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok" }),
       });
       expect(runSessionEvent).not.toHaveBeenCalled();
       cron.stop();

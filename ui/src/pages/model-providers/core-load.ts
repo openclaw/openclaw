@@ -4,18 +4,12 @@ import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
 import { invalidateModelCatalogCache } from "../../lib/model-catalog-cache.ts";
-import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
-import { loadModelProvidersData, type ModelProvidersData } from "./load.ts";
+import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
+import { catalogDiscoveryError, loadModelProvidersData, type ModelProvidersData } from "./load.ts";
 
 export type ModelProviderRefreshReason = "publication" | "replacement" | "forced";
 
 export type ModelProviderCatalogReceipt = { promise: Promise<string | null> };
-
-type CoreLoadOptions = {
-  onStart: (reason: ModelProviderRefreshReason) => void;
-  onComplete: (result: { client: GatewayBrowserClient; data: ModelProvidersData }) => void;
-  onCatalogComplete: (result: ModelCatalogResult) => void;
-};
 
 async function loadConnectedProviderData(
   client: GatewayBrowserClient,
@@ -61,7 +55,11 @@ export class ModelProviderCoreLoader {
 
   constructor(
     private readonly notify: () => void,
-    private readonly options: CoreLoadOptions,
+    private readonly options: {
+      onStart: (reason: ModelProviderRefreshReason) => void;
+      onComplete: (result: { client: GatewayBrowserClient; data: ModelProvidersData }) => void;
+      onCatalogComplete: (result: ModelCatalogResult) => void;
+    },
   ) {}
 
   get loading(): boolean {
@@ -106,10 +104,7 @@ export class ModelProviderCoreLoader {
         signal: request.signal,
       });
       if (ownsResult()) {
-        this.catalogError = modelCatalogRefreshError(
-          result,
-          t("modelProviders.defaults.discoverFailed"),
-        );
+        this.catalogError = catalogDiscoveryError(result);
         this.options.onCatalogComplete(result);
       }
     } catch (failure) {

@@ -13,6 +13,7 @@ import {
   insertStoredDeviceIdentityIfAbsent,
   readStoredDeviceIdentity,
 } from "../infra/device-identity-store.js";
+import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
@@ -40,8 +41,8 @@ afterAll(() => tempDirs.cleanup());
 function manifest(root: string): Record<string, string> {
   // Ignore lifecycle scratch and SQLite reader noise; persisted state stays byte-identical.
   return Object.fromEntries(
-    fs
-      .readdirSync(root, { recursive: true, withFileTypes: true })
+    listDirectoryTreeStrictSync(root)
+      .map((walkEntry) => walkEntry.dirent)
       .filter((entry) => entry.isFile())
       .map((entry) => path.relative(root, path.join(entry.parentPath, entry.name)))
       .filter((relative) => relative.split(path.sep)[0] !== "tmp" && !relative.endsWith("-shm"))

@@ -4,6 +4,7 @@ import type { readSessionTranscriptModelContext } from "../../config/sessions/se
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import type {
   SessionModelContextLimits,
+  SessionTranscriptContextSelection,
   SessionTranscriptContextSnapshot,
 } from "../../config/sessions/session-history-read.types.js";
 import { readSessionTranscriptModelContextAsync } from "../../config/sessions/session-transcript-context-read.js";
@@ -67,7 +68,7 @@ export function readSessionManagerActorTranscript(
 export function prepareSessionManagerHydration(
   source: SessionTranscriptRuntimeTarget,
   options: {
-    limits?: { maxBytes: number; maxEvents: number };
+    limits?: SessionTranscriptContextSelection;
     signal?: AbortSignal;
     manager?: object;
     retarget?: boolean;

@@ -47,6 +47,8 @@ export type SkillsProps = {
   state: SkillsState & SkillsPresentation;
   mutationSkills: SkillStatusEntry[];
   saving: boolean;
+  toggleSavingSkillKey?: string;
+  toggleDisabled?: boolean;
   readClawHubDetail: () => ClawHubSkillDetail | null;
   readClawHubVerdicts: () => Record<string, ClawHubSkillSecurityVerdict>;
   readClawHubSearch: () => boolean;

@@ -1,6 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
+import { assertCronBindApplies } from "../bind-parent.js";
+import { retireTransferredCronAuthority } from "../human-owner.js";
 import {
   decodePluginCommandSchedule,
   isPluginCommandScheduleCapPeer,
@@ -154,6 +156,7 @@ export function planCronJobMutation(
           mutation.input,
           {
             ...validation,
+            createdAtMs: mutation.createdAtMs,
             scheduledToolPolicy: options.scheduledToolPolicy ?? undefined,
           },
         );
@@ -174,6 +177,9 @@ export function planCronJobMutation(
         }
         if (options.createdActor) {
           nextJob.createdActor = options.createdActor;
+          if (options.createdActor.type === "human" && options.createdActor.source === "profile") {
+            nextJob.ownerProfileId = options.createdActor.id;
+          }
         }
         if (options.sourceConversation) {
           nextJob.sourceConversation = options.sourceConversation;
@@ -195,6 +201,10 @@ export function planCronJobMutation(
       }
       nextJob = cloneCronJobForMutation(previousJob);
       applyJobPatch(nextJob, mutation.patch, { ...validation, scheduleValidationNowMs: now });
+      if (options.bindSourceConversation) {
+        assertCronBindApplies(previousJob, options.bindSourceConversation);
+        nextJob.sourceConversation = { ...options.bindSourceConversation };
+      }
       applyCronStreamSandboxTarget(nextJob, options.streamSandbox);
       finalizeUpdatedJob({
         job: previousJob,
@@ -235,13 +245,23 @@ export function planCronJobMutation(
       runtimeAuthority: options.runtimeAuthority,
       explicitlyMutatesToolsAllow,
     });
+    // Neither an ordinary edit nor an app-only recovery flag proves fresh inference consent.
+    // Capture is admitted and rechecked by the caller's existing mutation commit guard.
+    if (mutation.kind === "update" && (options.runtimeAuthority || options.inferenceBinding)) {
+      delete nextJob.ownerTransferPending;
+    }
     if (nextJob.runtimeAuthority) {
       // Native inference authority replaces, rather than supplements, host credentials.
       delete nextJob.inferenceBinding;
     }
     reconcileCronChannelRequesterAuthority({
       job: nextJob,
-      previousJob,
+      // Bind only records the parent link; the authenticated requester stays bound to an
+      // unchanged executable definition, so compare against the same link.
+      previousJob:
+        previousJob && options.bindSourceConversation
+          ? { ...previousJob, sourceConversation: nextJob.sourceConversation }
+          : previousJob,
       toolsAllowProvenance: options.toolsAllowProvenance,
       reauthorize: mutation.kind === "add" || explicitlyMutatesToolsAllow,
       reauthorizeCallerOrigin: mutation.kind === "update" && explicitlyMutatesToolsAllow,
@@ -255,7 +275,11 @@ export function planCronJobMutation(
         mutation.kind === "add"
           ? resolveCronOperatorExecutionRevision(nextJob)
           : options.operatorSourceExecutionRevision,
+      defaultAgentId,
     });
+    if (previousJob && nextJob.ownerProfileId !== previousJob.ownerProfileId) {
+      retireTransferredCronAuthority(nextJob);
+    }
     plan.created = !previousJob;
     plan.updated =
       previousJob !== undefined &&

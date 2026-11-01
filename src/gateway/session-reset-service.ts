@@ -1,7 +1,7 @@
 // Gateway session reset/delete service.
 // Rotates transcripts and coordinates lifecycle cleanup across runtimes/hooks.
 import { randomUUID } from "node:crypto";
-import { type FastMode, normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -11,6 +11,7 @@ import {
 import { tryPrepareFreshManagerRuntimeSession } from "../acp/control-plane/manager.runtime-resume-state.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import { rebindDurableAcpSessionMetaAfterReset } from "../acp/runtime/session-meta-reset.js";
+import { assertOperatorAccessProgramAllowed } from "../agents/admitted-run-context.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { clearAllCliSessions } from "../agents/cli-session.js";
 import { createAgentRunDirectAbortError } from "../agents/run-termination.js";
@@ -24,7 +25,6 @@ import {
 } from "../auto-reply/reply/session-reset-cleanup.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
-  isRestartRecoveryTombstone,
   resolveSessionWorkStartError,
   SESSION_LIFECYCLE_CHANGED_ERROR_REASON,
   SESSION_TOTAL_TOKENS_VERSION,
@@ -34,21 +34,16 @@ import {
 } from "../config/sessions.js";
 import { rebindCliSessionReseedReceiptsForReset } from "../config/sessions/cli-session-binding.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 import { preserveResetSessionPresentation } from "../config/sessions/reset-preserved-presentation.js";
 import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
-import {
-  getSessionActorStorageBinding,
-  withSessionActorStorage,
-} from "../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
 import { preserveSessionLineage } from "../config/sessions/session-entry-lineage.js";
 import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
 import {
   buildSessionCreationStamp,
   preserveCreationStamp,
-  type SessionCreatedActor,
-  type SessionCreatedVia,
 } from "../config/sessions/session-entry-provenance.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { createSessionResetBoundaryId } from "../config/sessions/session-reset-boundary-event.js";
@@ -56,6 +51,7 @@ import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { runPluginHostCleanup } from "../plugins/host-hook-cleanup.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
@@ -83,7 +79,6 @@ import {
 } from "../sessions/session-worktree-lifecycle.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
-import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import type * as SessionLifecycle from "./session-create-service.types.js";
 import { createResetBoundaryTranscriptSource } from "./session-end-transcript-reader.js";
 import {
@@ -113,7 +108,6 @@ import { readGatewayBeforeResetPluginHookMessages } from "./session-reset-transc
 import { buildResetWorkspaceFields } from "./session-reset-workspace.js";
 import { withGatewaySessionEntryReadOnly } from "./session-utils-read-lifetime.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
-import type { SessionWorkerPlacementContext } from "./session-worker-placement-context.js";
 import {
   readSessionWorkerPlacementAsync,
   resolveSessionWorkerPlacementMutationError,
@@ -177,45 +171,9 @@ export async function emitGatewayBeforeResetPluginHook(params: {
     });
 }
 
-export async function performGatewaySessionReset(params: {
-  key: string;
-  agentId?: string;
-  spawnedCwd?: string;
-  sessionRoot?: string;
-  permissionMode?: SessionEntry["permissionMode"];
-  /** Existing-row changes stay admin-gated across reset preparation and commit. */
-  fastModeSelection?: { value: FastMode; allowExistingChange: boolean };
-  /** Prepares session-owned resources while the target lifecycle fence is held. */
-  prepareLifecycle?: SessionLifecycle.PrepareGatewaySessionLifecycle;
-  onLifecycleCleanupError?: (error: unknown) => void;
-  /** Bind session exec to host=node with this node id; caller scope-checks. */
-  execNode?: string;
-  /** Working directory interpreted only by execNode. */
-  execCwd?: string;
-  /** Clear a prior node binding when a new Gateway-host session replaces it. */
-  clearExecBinding?: boolean;
-  // A plain New Chat must return to the agent workspace instead of inheriting the previous
-  // turn's session worktree cwd; only worktree-requested resets carry a spawnedCwd forward.
-  clearSpawnedCwd?: boolean;
-  reason: "new" | "reset";
-  commandSource: string;
-  /** Trusted provenance for a reset that materializes a previously missing row. */
-  creation?: { via: SessionCreatedVia; actor?: SessionCreatedActor };
-  /** Authenticated durable operator identity for missing-session materialization. */
-  requestingOperatorProfileId?: string;
-  /** Trusted host actor; system-owned resets must identify themselves explicitly. */
-  operatorRoleActor?: GatewayOperatorRoleActor;
-  /** Exact plugin namespace authorized by the scoped plugin runtime. */
-  authorizedPluginId?: string;
-  /** Arms local checkout attribution in the authoritative reset commit. */
-  armSessionDiffBaselineCapture?: boolean;
-  workerPlacementContext?: SessionWorkerPlacementContext;
-  assertCurrent?: () => void;
-  assertAuthorizedInstance?: () => void;
-  /** Optional caller-observed session ID that must still be current at lifecycle admission. */
-  expectedSessionId?: string;
-  onCommitted?: (commit: { key: string; sessionId: string }) => void;
-}): Promise<
+export async function performGatewaySessionReset(
+  params: SessionLifecycle.GatewaySessionResetParams,
+): Promise<
   | {
       ok: true;
       key: string;
@@ -353,10 +311,21 @@ async function performPreparedGatewaySessionReset({
       ? missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] })
       : undefined;
   };
+  const resolveResetAccessProgramError = (entry: SessionEntry | undefined) => {
+    try {
+      assertOperatorAccessProgramAllowed(params.operatorAuthority, entry?.cyberAccessProgram);
+      return undefined;
+    } catch (error) {
+      return errorShape(ErrorCodes.FORBIDDEN, formatErrorMessage(error));
+    }
+  };
   const resolveResetEntryAccessError = (entry: SessionEntry | undefined, canonicalKey: string) =>
-    resolveFastModeSelectionError(entry) ?? resolveResetOwnershipError(entry, canonicalKey);
+    resolveResetAccessProgramError(entry) ??
+    resolveFastModeSelectionError(entry) ??
+    resolveResetOwnershipError(entry, canonicalKey);
   const initialEntryError =
     resolveResetCreationError(initialResetEntry) ??
+    resolveResetAccessProgramError(initialResetEntry) ??
     resolveResetOwnershipError(initialResetEntry) ??
     resolveFastModeSelectionError(initialResetEntry) ??
     resolveResetHarnessError(initialResetEntry);
@@ -384,17 +353,6 @@ async function performPreparedGatewaySessionReset({
     // Reset drains pending preparation before replacing the session.
     const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry, {
       allowPendingWorkspace: true,
-      allowRestartTombstoneReplacement:
-        entry !== undefined &&
-        isRestartRecoveryTombstone(entry) &&
-        (entry.archivedAt === undefined ||
-          (entry.archiveReason === "restart-recovery" &&
-            canonicalKey ===
-              resolveCanonicalMainSessionKey({
-                agentId: resetTarget.target.agentId,
-                mainKey: resetTarget.cfg.session?.mainKey,
-                sessionScope: resetTarget.cfg.session?.scope,
-              }))),
     });
     if (archivedSessionError) {
       return errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError);

@@ -24,6 +24,7 @@ import {
   readIndexedTranscriptEntries,
   readSessionTranscriptIndex,
   selectArchiveTranscriptEntries,
+  type IndexedTranscriptEntry,
   type MaterializedTranscriptEntry,
   type SessionTranscriptIndex,
 } from "./session-transcript-index.fs.js";
@@ -212,27 +213,34 @@ export class ArchivedTranscriptReader {
       };
     }
     const index = prepared?.index;
+    const messageIds = opts.messageIds && new Set(opts.messageIds);
+    const selected: IndexedTranscriptEntry[] = [];
     let end = start;
     let bytes = 0;
     if (index) {
-      while (end < index.entries.length && end - start < SOURCE_PAGE_MAX_MESSAGES) {
-        const size = index.entries[end]!.length;
+      while (end < index.entries.length && selected.length < SOURCE_PAGE_MAX_MESSAGES) {
+        const entry = index.entries[end]!;
+        // ID-less legacy rows can carry the projected ID inside message metadata.
+        if (
+          messageIds &&
+          (messageIds.size === 0 || (entry.rawId !== undefined && !messageIds.has(entry.rawId)))
+        ) {
+          end++;
+          continue;
+        }
+        const size = entry.length;
         if (bytes + size > SOURCE_PAGE_MAX_BYTES) {
           break;
         }
         bytes += size;
+        selected.push(entry);
         end++;
       }
     }
     return {
       messages: index
         ? (
-            await readIndexedTranscriptEntries(
-              filePath,
-              index,
-              index.entries.slice(start, end),
-              this.scope.sessionId,
-            )
+            await readIndexedTranscriptEntries(filePath, index, selected, this.scope.sessionId)
           ).flatMap(indexedTranscriptEntryToMessages)
         : [],
       transcriptPath: filePath,

@@ -2,6 +2,7 @@ import { action, createMemo, createOptimistic, onCleanup } from "solid-js";
 import { isHttpArtifactDownloadUrl } from "../../../api/artifact-download.ts";
 import { fetchControlUiResource } from "../../../app/browser-http.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { showToast } from "../../../lib/toast.ts";
@@ -11,6 +12,8 @@ import type { ChatComposerProps } from "./chat-composer-types.ts";
 import { readFileDraft } from "./chat-file-drafts.ts";
 import { readResponseBytesWithinLimit } from "./chat-response-bytes.ts";
 import type { SidebarSelection, AttachmentSidebarRuntime } from "./chat-sidebar-content-types.ts";
+
+registerChatComposerEnglish();
 
 export type FileSessionAttachment = {
   disabled: boolean;

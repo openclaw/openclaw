@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import type { UserProfile } from "../../state/user-profiles.types.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import type { GatewayClient } from "./types.js";
 
 const network = vi.hoisted(() => ({
@@ -93,18 +94,7 @@ export function createGitHubTestClient(
   return {
     connId: `connection-${profile.id}`,
     authenticatedUserId: email,
-    authenticatedUserProfile: {
-      profileId: profile.id,
-      displayName: profile.displayName,
-      hasAvatar: false,
-      updatedAt: profile.updatedAt,
-    },
-    connect: {
-      role: "operator",
-      scopes,
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "test", mode: "test", version: "1", platform: "test" },
-    },
+    authenticatedUserProfile: gatewayProfile(profile.id, profile.displayName, profile.updatedAt),
+    connect: gatewayConnect(scopes, { id: "test", mode: "test", version: "1" }),
   };
 }

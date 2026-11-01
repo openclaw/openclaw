@@ -79,6 +79,7 @@ An enabled install policy is informational. Static policy configuration errors o
 
 ## Session state and cron
 
+- `doctor --fix` removes obsolete usage-cost cache rows under its database maintenance ownership. Current usage caches, refresh locks, and session history are preserved; clean stores do not produce native-owner warnings.
 - State integrity checks detect orphan transcript files in the sessions directory. Archiving them as `.deleted.<timestamp>` requires interactive confirmation; `--fix`, `--yes`, and headless runs leave them in place.
 - Doctor scans historical `~/.openclaw/cron/jobs.json` stores and previously configured legacy store locations for old cron job shapes, imports jobs and quarantine records into SQLite, and archives the migrated JSON files.
 - Doctor reports cron jobs with an explicit `payload.model` override, including provider-namespace counts and mismatches against `agents.defaults.model`, so scheduled jobs that do not inherit the default model are visible during auth or billing investigations.

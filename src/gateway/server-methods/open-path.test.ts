@@ -25,8 +25,6 @@ function fakeChild(result: Promise<unknown>) {
 }
 
 const linuxCommand = { command: "xdg-open", args: ["/tmp/workspace"] };
-const headlessError = (error: Error, path = "/tmp/workspace") =>
-  isHeadlessOpenPathError(error, resolveOpenPathCommand(path, "linux"), "linux");
 
 afterEach(() => {
   vi.useRealTimers();
@@ -76,14 +74,10 @@ it("returns after startup observation without killing a foreground Linux handler
   await vi.advanceTimersByTimeAsync(1);
   await execution;
 
-  expect(settled).toBe(true);
-  expect(spawnCommandMock).toHaveBeenCalledWith(["xdg-open", "/tmp/workspace"], {
-    buffer: false,
-    cleanup: false,
-    detached: true,
-    reject: true,
-    stdio: ["ignore", "ignore", "pipe"],
-  });
+  expect(spawnCommandMock).toHaveBeenCalledWith(
+    ["xdg-open", "/tmp/workspace"],
+    expect.objectContaining({ cleanup: false, detached: true }),
+  );
   expect(spawned.nodeChildProcess.unref).toHaveBeenCalledOnce();
   expect(spawned.kill).not.toHaveBeenCalled();
   expect(spawned.stderr.destroyed).toBe(false);
@@ -118,12 +112,8 @@ it.each([
 });
 
 it.each([
-  ["xdg-open: no method available for opening '/tmp/workspace'", "/tmp/workspace", true],
-  [
-    "Command failed with exit code 1: xdg-open /tmp/ENOENT-workspace",
-    "/tmp/ENOENT-workspace",
-    false,
-  ],
-] as const)("classifies handler diagnostic %s", (message, path, expected) => {
-  expect(headlessError(new Error(message), path)).toBe(expected);
+  ["xdg-open: no method available for opening '/tmp/workspace'", true],
+  ["Command failed with exit code 1: xdg-open /tmp/ENOENT-workspace", false],
+] as const)("classifies handler diagnostic %s", (message, expected) => {
+  expect(isHeadlessOpenPathError(new Error(message), linuxCommand, "linux")).toBe(expected);
 });

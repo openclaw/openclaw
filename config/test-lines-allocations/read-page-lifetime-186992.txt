@@ -1,0 +1,4 @@
+# Source-read bounds, admitted-file identity, BOM compatibility, and adaptive
+# continuation with unknown totals. Includes actual I/O across all three reader
+# processes and fixed-prefix Windows decoding; covers findings on PR #186992.
+385

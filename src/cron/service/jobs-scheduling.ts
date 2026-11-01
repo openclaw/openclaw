@@ -9,7 +9,6 @@ import { coerceFiniteScheduleNumber } from "../schedule-number.js";
 import { computeNextRunAtMs, computePreviousRunAtMs } from "../schedule.js";
 import {
   cronSourceIdentity,
-  cronSourceScheduleKey,
   createCronSourceIdentity,
   setCronSourceIdentity,
 } from "../source-schedule.js";
@@ -26,7 +25,7 @@ import {
   resolveForcePreservedOneShotAtMs,
 } from "./one-shot-schedule.js";
 import type { CronJobPolicyContext, CronServiceState, DeferredCronNotifications } from "./state.js";
-import { MIN_REFIRE_GAP_MS } from "./timer-execution-timeout.js";
+import { MIN_REFIRE_GAP_MS } from "./timer-constants.js";
 import { hasPendingCronTriggerInterval } from "./trigger-interval.js";
 
 /** A new timer receipt owns continuation; never reopen the interrupted occurrence. */
@@ -490,7 +489,10 @@ function normalizeJobTickState(params: {
     changed = true;
   }
 
-  if (cronSourceScheduleKey(job.schedule) !== undefined && !cronSourceIdentity(job)?.trim()) {
+  if (
+    (job.schedule.kind === "stream" || job.schedule.kind === "event") &&
+    !cronSourceIdentity(job)?.trim()
+  ) {
     // Identity is store-owned state. A hand-imported or pre-identity row must
     // not reach the watcher (which fails closed on a missing identity) or
     // admission (which would reject every batch); assign one like any other

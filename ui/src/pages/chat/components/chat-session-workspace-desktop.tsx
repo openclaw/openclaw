@@ -1,12 +1,12 @@
 import type { JSX } from "@solidjs/web";
 import {
   createMemo,
+  createProjection,
   createSignal,
   createUniqueId,
   Errored,
   For,
   isPending,
-  latest,
   Loading,
   Show,
 } from "solid-js";
@@ -15,27 +15,23 @@ import { Menu } from "../../../components/solid/menu.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
-import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { createPendingFocus } from "../../../lib/reactive/pending-focus.ts";
 import { createScrollPosition } from "../../../lib/reactive/scroll-state.ts";
-import { isSessionWorkspaceFileSelected } from "../../../lib/sessions/workspace.ts";
-import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
 import { WorkspaceTranscriptAttachments } from "./chat-session-workspace-attachments.tsx";
 import { WorkspaceBreadcrumb } from "./chat-session-workspace-breadcrumb.tsx";
 import {
   projectWorkspaceCatalog,
-  splitWorkspaceFilename,
   workspaceCatalogChildren,
   workspaceCatalogFilters,
   workspaceCatalogSearch,
   workspaceSessionFiles,
-  type WorkspaceCatalogFile,
-  type WorkspaceCatalogRow,
 } from "./chat-session-workspace-catalog.ts";
 import { createSessionWorkspaceRead } from "./chat-session-workspace-read.ts";
+import { RailRow, WorkspaceFilename, WorkspaceRows } from "./chat-session-workspace-row.tsx";
 import type { SessionWorkspaceFilter } from "./chat-sidebar-content-types.ts";
 import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
 import { hasTranscriptAttachments } from "./chat-transcript-attachments.ts";
@@ -43,227 +39,7 @@ import "../../../styles/session-panel-rail.css";
 import "./chat-session-workspace-desktop.css";
 import { FileDisclosure } from "./file-disclosure.tsx";
 
-function WorkspaceFilename(props: { name: string }) {
-  const parts = createMemo(() => splitWorkspaceFilename(props.name));
-  const [overflow, setOverflow] = createSignal(false);
-  let stem: HTMLSpanElement | undefined;
-  createLayoutMeasurement(
-    () => props.name,
-    () => {
-      const overflowing = Boolean(stem && stem.scrollWidth > stem.clientWidth);
-      return () => setOverflow(overflowing);
-    },
-    { targets: () => (stem ? [stem] : []), fonts: true },
-  );
-  return (
-    <span class="workspace-desktop__filename">
-      <span
-        ref={(element) => {
-          stem = element;
-        }}
-        class={["workspace-desktop__stem", { "is-overflowed": overflow() }]}
-      >
-        {parts().stem}
-      </span>
-      <span>{parts().extension}</span>
-    </span>
-  );
-}
-
-function RailRow(props: {
-  file: WorkspaceCatalogFile;
-  workspace: SessionWorkspaceProps;
-  depth?: number;
-  directory?: boolean;
-  expanded?: boolean;
-  searching?: boolean;
-  onToggle?: (instant: boolean) => void;
-}) {
-  const selected = () =>
-    props.file.artifactId ||
-    (props.file.origin === "session" && props.file.workspacePath === undefined)
-      ? props.workspace.activeId === props.file.key
-      : isSessionWorkspaceFileSelected(
-          props.workspace.activeId,
-          props.workspace.sessionKey,
-          props.workspace.list?.root,
-          props.file.path,
-          props.file.workspacePath,
-        );
-  const onOpen = (disposition: "preview" | "pinned" = "preview") => {
-    if (props.file.artifactId) {
-      props.workspace.onOpenArtifact(props.file.artifactId, disposition);
-    } else {
-      props.workspace.onOpenFile(props.file.path, props.file.origin, disposition);
-    }
-  };
-  const activity = () =>
-    props.file.activity === "modified" || props.file.activity === "mixed"
-      ? t("chat.workspaceFiles.changed")
-      : props.file.activity === "read"
-        ? t("chat.workspaceFiles.read")
-        : undefined;
-  return (
-    <div role="listitem" class="workspace-desktop__item">
-      <button
-        type="button"
-        class={["workspace-desktop__row", { "is-active": selected() }]}
-        style={{
-          "padding-inline-start": `min(calc(8px + ${props.depth ?? 0} * var(--workspace-tree-step, 16px)), max(8px, calc(100% - 100px)))`,
-        }}
-        aria-label={props.file.path}
-        aria-description={activity()}
-        aria-current={selected() ? "true" : undefined}
-        aria-expanded={props.directory ? (props.expanded ? "true" : "false") : undefined}
-        onClick={(event) => {
-          if (props.directory) {
-            props.onToggle?.(event.detail === 0);
-          } else {
-            onOpen();
-          }
-        }}
-        onDblClick={() => {
-          if (!props.directory) {
-            onOpen("pinned");
-          }
-        }}
-      >
-        <Show
-          when={props.directory}
-          fallback={
-            <AttachmentFileIcon
-              filename={props.file.name}
-              mimeType={props.file.mimeType}
-              mode="preview-with-favicon"
-            />
-          }
-        >
-          <span class="workspace-desktop__folder-icon">
-            <Show when={props.expanded} fallback={<Icon name="folder" />}>
-              {/* Lucide folder-open, the approved Files glyph (ISC). */}
-              <StrokeIcon aria-hidden="true">
-                <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" />
-              </StrokeIcon>
-            </Show>
-          </span>
-        </Show>
-        <span class="workspace-desktop__identity">
-          <span class="workspace-desktop__name-line">
-            <WorkspaceFilename name={props.file.name} />
-            <Show when={!props.directory && activity()}>
-              <span
-                class={[
-                  "workspace-desktop__activity",
-                  { "is-changed": props.file.activity !== "read" },
-                ]}
-                role="img"
-                aria-label={activity()}
-              />
-            </Show>
-          </span>
-          <Show when={props.searching}>
-            <span class="workspace-desktop__location">
-              {props.file.artifactId
-                ? t("chat.workspaceFiles.desktop.sessionFiles")
-                : (props.file.workspacePath ?? props.file.path)}
-            </span>
-          </Show>
-        </span>
-      </button>
-    </div>
-  );
-}
-
-function DirectoryBranch(props: {
-  row: WorkspaceCatalogRow;
-  workspace: SessionWorkspaceProps;
-  childrenByPath: ReadonlyMap<string, readonly WorkspaceCatalogRow[]>;
-  depth: number;
-}) {
-  const path = () => props.row.workspacePath ?? props.row.path;
-  const expanded = () => props.workspace.navigation?.expandedPaths.includes(path()) ?? false;
-  const active = () =>
-    props.workspace.navigation?.treeVisible !== false && !props.workspace.navigation?.searchOpen;
-  const [instant, setInstant] = createSignal(true);
-  const directory = createMemo(() => props.workspace.directories?.[path()]);
-  const readResult = createMemo(
-    () => ({ pending: props.workspace.directories?.[path()]?.readResult }),
-    { equals: (previous, next) => previous.pending === next.pending },
-  );
-  const read = createMemo(async () => {
-    const current = directory();
-    const pending = readResult().pending;
-    await pending;
-    if (current?.error != null) {
-      throw new Error(current.error || t("chat.workspaceFiles.folderUnavailable"));
-    }
-    return null;
-  });
-  const browser = () =>
-    props.workspace.directories?.[path()]?.browser ??
-    (!props.workspace.list?.browser?.search && props.workspace.list?.browser?.path === path()
-      ? props.workspace.list.browser
-      : undefined);
-  return (
-    <div class="workspace-desktop__branch">
-      <RailRow
-        file={props.row}
-        workspace={props.workspace}
-        directory={props.row.directory}
-        depth={props.depth}
-        expanded={expanded()}
-        onToggle={(immediate) => {
-          setInstant(immediate);
-          props.workspace.onToggleDirectory?.(path());
-        }}
-      />
-      <Show when={props.row.directory}>
-        <FileDisclosure variant="folder" open={expanded()} active={active()} instant={instant()}>
-          <Errored
-            fallback={(error) => (
-              <div class="workspace-desktop__notice" role="alert">
-                {formatUiError(error())}
-              </div>
-            )}
-          >
-            <Loading
-              on={directory()}
-              fallback={
-                <div class="workspace-desktop__notice" role="status">
-                  {t("chat.workspaceFiles.loading")}
-                </div>
-              }
-            >
-              {latest(read)}
-              <Show when={isPending(read)}>
-                <div class="workspace-desktop__notice" role="status">
-                  {t("chat.workspaceFiles.loading")}
-                </div>
-              </Show>
-            </Loading>
-          </Errored>
-          <Show when={browser()?.truncated}>
-            <div class="workspace-desktop__notice" role="status">
-              {t("chat.workspaceFiles.truncated")}
-            </div>
-          </Show>
-          <div role="list">
-            <For each={props.childrenByPath.get(path()) ?? []} keyed={(row) => row.key}>
-              {(row) => (
-                <DirectoryBranch
-                  row={row()}
-                  workspace={props.workspace}
-                  childrenByPath={props.childrenByPath}
-                  depth={props.depth + 1}
-                />
-              )}
-            </For>
-          </div>
-        </FileDisclosure>
-      </Show>
-    </div>
-  );
-}
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 function WorkspaceGroup(props: {
   label?: string;
@@ -273,10 +49,11 @@ function WorkspaceGroup(props: {
   class?: string;
   animate?: boolean;
   active?: boolean;
+  contentRef?: (element: HTMLElement) => void;
 }) {
   const [instant, setInstant] = createSignal(true);
   return (
-    <section class={props.class}>
+    <section class={props.class} ref={(element) => props.contentRef?.(element)}>
       <Show when={props.label}>
         <button
           class="workspace-desktop__heading"
@@ -380,17 +157,52 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
   const searchValue = liveValue(() => props.workspace.browserSearch);
   let searchButton: HTMLButtonElement | undefined;
   const [treeScroll, setTreeScroll] = createSignal<HTMLDivElement>();
+  const [treeContent, setTreeContent] = createSignal<HTMLElement>();
   const [sessionScroll, setSessionScroll] = createSignal<HTMLDivElement>();
+  // Directory records mutate in place; retain only the immutable browser inputs
+  // so navigation publications do not rebuild and re-sort the complete tree.
+  const catalogInputs = createMemo(
+    () => ({
+      list: props.workspace.list,
+      directories: Object.fromEntries(
+        Object.entries(props.workspace.directories ?? {}).map(([path, directory]) => [
+          path,
+          { browser: directory.browser },
+        ]),
+      ),
+    }),
+    {
+      equals: (previous, next) => {
+        const paths = Object.keys(next.directories);
+        return (
+          previous.list === next.list &&
+          Object.keys(previous.directories).length === paths.length &&
+          paths.every(
+            (path) => previous.directories[path]?.browser === next.directories[path]?.browser,
+          )
+        );
+      },
+    },
+  );
   const catalog = createMemo(() =>
-    projectWorkspaceCatalog(props.workspace.list, props.workspace.directories),
+    projectWorkspaceCatalog(catalogInputs().list, catalogInputs().directories),
+  );
+  // Search replies replace the list while loaded directory rows usually stay unchanged.
+  const projectRows = createProjection(() => [...catalog().project.values()], [], { key: "key" });
+  const projectByPath = createMemo(
+    () => new Map(projectRows.map((row) => [row.workspacePath ?? row.path, row])),
   );
   const filters = createMemo(() =>
     props.workspace.folderView
-      ? workspaceCatalogFilters(catalog(), props.workspace.browserPath)
+      ? workspaceCatalogFilters(
+          { project: projectByPath(), session: catalog().session },
+          props.workspace.browserPath,
+        )
       : catalog().filters,
   );
-  const filter = () =>
-    filters().includes(props.workspace.filter) ? props.workspace.filter : "all";
+  const filter = createMemo(() =>
+    filters().includes(props.workspace.filter) ? props.workspace.filter : "all",
+  );
   const navigation = () => props.workspace.navigation;
   const root = () => props.workspace.browserPath;
   const expanded = () => navigation()?.expandedPaths ?? [""];
@@ -399,7 +211,9 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
     (!props.workspace.list?.browser?.search && props.workspace.list?.browser?.path === path
       ? props.workspace.list.browser
       : undefined);
-  const childrenByPath = createMemo(() => workspaceCatalogChildren(catalog(), filter()));
+  const childrenByPath = createMemo(() =>
+    workspaceCatalogChildren({ project: projectByPath() }, filter()),
+  );
   const sessionFiles = createMemo(() =>
     props.workspace.folderView ? [] : workspaceSessionFiles(catalog(), filter()),
   );
@@ -433,7 +247,8 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
       }
     },
   });
-  // A new owner snapshot reapplies offsets after catalog reveal, even when the numbers match.
+  // Restore on navigation/reveal, not every snapshot: native scroll events can
+  // reach the owner after a folder click has already published its snapshot.
   const savedScroll = createMemo(() => ({
     tree: navigation()?.treeScroll,
     session: navigation()?.sessionScroll,
@@ -445,14 +260,27 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
   const Contents = (content: { pending: boolean }) => {
     createScrollPosition(() => ({
       restore: {
-        identity: [savedScroll(), treeScroll()],
+        identity: [
+          scope(),
+          treeScroll(),
+          navigation()?.searchOpen,
+          navigation()?.treeVisible,
+          savedScroll().tree,
+        ],
         target: treeScroll(),
         top: savedScroll().tree ?? 0,
       },
     }));
     createScrollPosition(() => ({
       restore: {
-        identity: [savedScroll(), sessionScroll()],
+        identity: [
+          scope(),
+          sessionScroll(),
+          navigation()?.searchOpen,
+          navigation()?.treeVisible,
+          navigation()?.sessionExpanded,
+          savedScroll().session,
+        ],
         target: sessionScroll(),
         top: savedScroll().session ?? 0,
       },
@@ -486,8 +314,11 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
             )}
           </Show>
           <Show when={searchTruncated()}>
-            <div class="workspace-desktop__notice" role="status">
-              {t("chat.workspaceFiles.truncated")}
+            <div class="workspace-desktop__notice">
+              <div role="status">{t("chat.workspaceFiles.searchIncomplete")}</div>
+              <button type="button" class="btn btn--sm" onClick={closeSearch}>
+                {t("chat.workspaceFiles.browseFiles")}
+              </button>
             </div>
           </Show>
           <Show
@@ -555,6 +386,7 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
               }
             >
               <WorkspaceGroup
+                contentRef={setTreeContent}
                 label={
                   props.workspace.folderView
                     ? undefined
@@ -565,18 +397,19 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
                 expanded={expanded().includes(root())}
                 onToggle={() => props.workspace.onToggleDirectory?.(root())}
               >
-                <div role="list">
-                  <For each={childrenByPath().get(root()) ?? []} keyed={(row) => row.key}>
-                    {(row) => (
-                      <DirectoryBranch
-                        row={row()}
-                        workspace={props.workspace}
-                        childrenByPath={childrenByPath()}
-                        depth={0}
-                      />
-                    )}
-                  </For>
-                </div>
+                <WorkspaceRows
+                  rows={childrenByPath().get(root()) ?? []}
+                  workspace={props.workspace}
+                  childrenByPath={childrenByPath()}
+                  depth={0}
+                  viewport={treeScroll()}
+                  content={treeContent()}
+                  active={
+                    navigation()?.treeVisible !== false &&
+                    !navigation()?.searchOpen &&
+                    expanded().includes(root())
+                  }
+                />
                 <Show when={directoryBrowser(root())?.truncated}>
                   <div class="workspace-desktop__notice" role="status">
                     {t("chat.workspaceFiles.truncated")}

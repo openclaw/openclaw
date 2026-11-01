@@ -49,23 +49,6 @@ type StaticHarnessMcpTools = {
   dispose: () => Promise<void>;
 };
 
-function formatConfiguredMcpDiagnosticNotice(
-  messages: readonly string[],
-  runLabel: "this scheduled run" | "this run",
-): string | undefined {
-  const bounded = [...new Set(messages)]
-    .map((message) => message.replaceAll(/\s+/g, " ").trim().slice(0, 180))
-    .filter(Boolean)
-    .slice(0, 4);
-  if (bounded.length === 0) {
-    return undefined;
-  }
-  return (
-    `Configured MCP is incomplete for ${runLabel}: ${bounded.join("; ")}. ` +
-    "Do not claim MCP-backed work succeeded; report this blocker to the operator."
-  );
-}
-
 type InteractiveConfiguredMcpApprovalRequest = {
   signal?: AbortSignal;
   safeToolName: string;
@@ -313,15 +296,22 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
         },
       ),
     );
-    const diagnosticNotice = formatConfiguredMcpDiagnosticNotice(
-      [
-        ...(liveRuntime.diagnostics ?? []).map(
-          (diagnostic) => `${diagnostic.serverName}: ${diagnostic.message}`,
-        ),
-        ...omissions,
-      ],
-      params.requestInteractiveCodexApproval ? "this run" : "this scheduled run",
-    );
+    const messages = [
+      ...(liveRuntime.diagnostics ?? []).map(
+        (diagnostic) => `${diagnostic.serverName}: ${diagnostic.message}`,
+      ),
+      ...omissions,
+    ];
+    const runLabel = params.requestInteractiveCodexApproval ? "this run" : "this scheduled run";
+    const bounded = [...new Set(messages)]
+      .map((message) => message.replaceAll(/\s+/g, " ").trim().slice(0, 180))
+      .filter(Boolean)
+      .slice(0, 4);
+    const diagnosticNotice =
+      bounded.length > 0
+        ? `Configured MCP is incomplete for ${runLabel}: ${bounded.join("; ")}. ` +
+          "Do not claim MCP-backed work succeeded; report this blocker to the operator."
+        : undefined;
     return {
       tools: allowed,
       ...(diagnosticNotice ? { diagnosticNotice } : {}),

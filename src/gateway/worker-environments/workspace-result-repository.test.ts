@@ -8,15 +8,25 @@ import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { ensureStagedInputDirectory, stagedInputDirectory } from "../../media/staged-inputs.js";
 import type { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import * as processExec from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { repositoryRow } from "../../state/github-publication.worker.test-support.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { insertRepositoryGitHubPublicationAsync } from "../github-publication-request-async.js";
+import { prepareGitHubPublicationSource } from "../github-publication-source.js";
+import {
+  bindRepositoryGitHubPublicationCheckpointAsync,
+  readRepositoryGitHubPublicationAsync,
+} from "../github-publication-store-async.js";
 import * as publicationSnapshot from "../github-repository-publication-snapshot.js";
+import { repositoryGitHubPublicationDigest } from "../github-repository-publication-store.js";
+import { captureCheckpoint } from "../github-repository-publication-workspace.js";
 import { workerService } from "../server-methods/environments.test-support.js";
 import { resolveRepositoryWorkspaceAccess } from "../server-methods/session-repository-workspace-access.js";
 import { createGatewayRequestContext } from "../server-request-context.js";
@@ -401,6 +411,194 @@ describe("repository workspace result ownership", () => {
     );
     expect(await f.store.get(f.repository.workspaceId)).toEqual(accepted);
     await f.expectSettled();
+  });
+
+  it("reads, edits, and receives attachments on the exact disk without capturing a stale Gateway mirror", async () => {
+    const f = await fixture("worker-turn");
+    const bound = await f.bindDisk();
+    const attachments = path.join(path.dirname(f.remote), "new-attachments");
+    const directory = stagedInputDirectory("a".repeat(64));
+    const attachmentPath = directory + "/report.txt";
+    await fs.mkdir(attachments);
+    await ensureStagedInputDirectory(attachments, directory);
+    await fs.writeFile(path.join(attachments, attachmentPath), "new attachment original\n");
+    assert(typeof f.tunnel.stageAttachments === "function");
+    await f.tunnel.stageAttachments({
+      localPath: attachments,
+      isAuthorized: () => true,
+      signal: f.ownerSignal,
+    });
+    const context = editorContext(f);
+    context.workerRepositoryWorkspaceMutationService = f.mutations;
+    await f.write("editor.txt", "disk-only\n");
+    using access = await resolveRepositoryWorkspaceAccess(
+      await loadGatewaySessionEntryReadOnlyInWorker({
+        cfg: context.getRuntimeConfig(),
+        key: sessionTarget.sessionKey,
+        agentId: sessionTarget.agentId,
+      }),
+      context,
+      () => {},
+    );
+    assert(access?.kind === "active");
+    await expect(access.inspect("get", { path: attachmentPath, files: [] })).resolves.toMatchObject(
+      {
+        file: { content: "new attachment original\n" },
+      },
+    );
+    await expect(access.inspect("get", { path: "editor.txt", files: [] })).resolves.toMatchObject({
+      file: { content: "disk-only\n" },
+    });
+    const capture = vi.spyOn(f.tunnel, "reconcileWorkspace");
+    await expect(
+      access.inspect("set", {
+        path: "editor.txt",
+        content: "saved on disk\n",
+        expectedHash: createHash("sha256").update("disk-only\n").digest("hex"),
+      }),
+    ).resolves.toMatchObject({ status: "updated" });
+    expect(capture).not.toHaveBeenCalled();
+    expect(await f.store.get(bound.workspaceId)).toEqual(bound);
+    await f.expectSettled();
+    const download = await access.inspect("download", { path: "editor.txt", files: [] });
+    assert(download.status === "ok");
+    await expect(
+      access.inspect("download", {
+        path: "editor.txt",
+        files: [],
+        offset: 0,
+        identity: download.identity,
+      }),
+    ).resolves.toMatchObject({
+      status: "ok",
+      data: Buffer.from("saved on disk\n").toString("base64"),
+    });
+  });
+
+  it("freezes queued disk publications across lost binding and later edits without moving mirror authority", async () => {
+    const f = await fixture("worker-turn");
+    const bound = await f.bindDisk();
+    await f.write("publish.txt", "frozen disk bytes\n");
+    const owned = await f.beginTurn("disk-publication-claim");
+    const context = editorContext(f);
+    const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+      cfg: context.getRuntimeConfig(),
+      key: sessionTarget.sessionKey,
+      agentId: sessionTarget.agentId,
+    });
+    assert(loaded.capturedReadSource);
+    const sourcePath = loaded.capturedReadSource.path;
+    const assertCurrent = () => {
+      assert(placements.validateWorkspaceResultClaim(owned.turnClaim));
+    };
+    const authority = {
+      assertAction: assertCurrent,
+      assertCustody: assertCurrent,
+      prepareSource: () =>
+        prepareGitHubPublicationSource({
+          sourcePath,
+          signal: f.ownerSignal,
+          assertCurrent,
+          selector: {
+            ...sessionTarget,
+            lifecycleRevision: loaded.entry?.lifecycleRevision ?? null,
+            repositoryWorkspaceId: bound.workspaceId,
+            repositoryBranch: bound.branch,
+          },
+        }),
+    };
+    const rows = [];
+    for (const requestId of ["disk-first-publication", "disk-second-publication"]) {
+      const row = {
+        ...repositoryRow(requestId),
+        agent_id: sessionTarget.agentId,
+        session_id: SESSION_ID,
+        session_key: sessionTarget.sessionKey,
+        session_lifecycle_revision: loaded.entry?.lifecycleRevision ?? null,
+        workspace_id: bound.workspaceId,
+        branch: bound.branch,
+        checkpoint_ref: null,
+        checkpoint_digest: null,
+        source_head_commit: null,
+        source_index_tree: null,
+        workspace_tree: null,
+        claim_id: requestId === "disk-first-publication" ? owned.turnClaim.claimId : null,
+        run_id: requestId === "disk-first-publication" ? owned.turnClaim.runId : null,
+        environment_id: owned.placement.environmentId,
+        owner_epoch: owned.placement.activeOwnerEpoch,
+        placement_generation: owned.turnClaim.placementGeneration,
+      };
+      row.request_digest = repositoryGitHubPublicationDigest(row);
+      rows.push(await insertRepositoryGitHubPublicationAsync(row, await authority.prepareSource()));
+    }
+    const disk = { placements, environments: f.environments };
+    const capture = vi.spyOn(f.tunnel, "reconcileWorkspace");
+    await expect(
+      captureCheckpoint(
+        rows[0]!,
+        assertCurrent,
+        async () => {
+          throw new Error("Lost delivery before receipt binding");
+        },
+        authority,
+        { ...disk, captureRequestIds: rows.map((row) => row.request_id) },
+      ),
+    ).rejects.toThrow("Lost delivery before receipt binding");
+    await f.write("publish.txt", "later unselected edit\n");
+    for (const row of rows) {
+      await captureCheckpoint(
+        row,
+        assertCurrent,
+        async (facts, prepared) => {
+          const entry = prepared.snapshot.entries.find((item) => item.path === "publish.txt");
+          assert(entry?.sha);
+          expect(
+            await publicationSnapshot.readGitHubRepositoryPublicationBlob(
+              prepared.snapshotRoot,
+              entry.sha,
+            ),
+          ).toEqual(Buffer.from("frozen disk bytes\n"));
+          return await bindRepositoryGitHubPublicationCheckpointAsync(
+            row,
+            facts,
+            prepared.authority,
+          );
+        },
+        authority,
+        disk,
+      );
+    }
+    const first = await readRepositoryGitHubPublicationAsync(rows[0]!.request_id);
+    const second = await readRepositoryGitHubPublicationAsync(rows[1]!.request_id);
+    assert(first?.checkpoint_ref);
+    expect(second?.checkpoint_ref).not.toBe(first.checkpoint_ref);
+    expect(second).toMatchObject({
+      checkpoint_digest: first.checkpoint_digest,
+      workspace_tree: first.workspace_tree,
+    });
+    await captureCheckpoint(
+      first,
+      assertCurrent,
+      async (_facts, prepared) => {
+        const entry = prepared.snapshot.entries.find((item) => item.path === "publish.txt");
+        assert(entry?.sha);
+        expect(
+          await publicationSnapshot.readGitHubRepositoryPublicationBlob(
+            prepared.snapshotRoot,
+            entry.sha,
+          ),
+        ).toEqual(Buffer.from("frozen disk bytes\n"));
+      },
+      authority,
+      disk,
+    );
+    expect(capture).toHaveBeenCalledTimes(1);
+    expect(await f.store.get(bound.workspaceId)).toEqual(bound);
+    expect(await fs.readFile(path.join(f.remote, "publish.txt"), "utf8")).toBe(
+      "later unselected edit\n",
+    );
+    await placements.acceptWorkspaceResult(owned.turnClaim);
+    await placements.completeWorkspaceResultAndReleaseTurn(owned.turnClaim);
   });
 
   it("recovers unknown editor writes through pending result custody", async () => {

@@ -373,13 +373,6 @@ export function createMatrixQaClient(params: {
         method: "POST",
       });
     },
-    async leaveRoom(roomId: string) {
-      await request<Record<string, never>>({
-        body: {},
-        endpoint: `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/leave`,
-        method: "POST",
-      });
-    },
     waitForOptionalRoomEvent(opts: MatrixQaClientRoomEventWaitParams) {
       return resolveRoomObserver(opts).waitForOptionalRoomEvent(opts);
     },

@@ -1,11 +1,13 @@
 import type { toolIconData } from "../../components/icon-data-tools.ts";
+import { registerChatMessageMetadataEnglish } from "../../i18n/locales/en-chat-message-metadata.ts";
+
+registerChatMessageMetadataEnglish();
 
 export type PendingInputStatus =
   | "queued"
   | "waitingForWorkerSetup"
   | "waitingForWorkspaceSync"
-  | "cancelled"
-  | "interrupted";
+  | "cancelled";
 
 type SystemNoticeKind = {
   icon: keyof typeof toolIconData;
@@ -13,9 +15,7 @@ type SystemNoticeKind = {
   // Fixed operator summary shown instead of the raw model prompt. Omit when the
   // producer emits variable, informative text (reasons, doctor hints) that must
   // stay visible; the notice then keeps the message body under the kind label.
-  // Null keeps only the label unless a pending state supplies an actionable summary.
-  summaryKey?: string | null;
-  pendingSummaryKeys?: Partial<Record<PendingInputStatus, string>>;
+  summaryKey?: string;
   // Collapse the variable body behind a disclosure. For bulky injected context
   // (skill instructions, continuation summaries) the label stays visible while
   // the payload opens on demand.
@@ -27,15 +27,6 @@ type SystemNoticeKind = {
 };
 
 const systemNoticeKinds: Readonly<Record<string, SystemNoticeKind>> = {
-  main_session_restart_recovery: {
-    icon: "cpu",
-    labelKey: "chat.systemNotice.restartRecovery.label",
-    summaryKey: null,
-    pendingSummaryKeys: {
-      interrupted: "chat.systemNotice.restartRecovery.interrupted",
-      cancelled: "chat.systemNotice.restartRecovery.cancelled",
-    },
-  },
   // Older scheduled conversation turns lack the run metadata for an activity row.
   cron: {
     icon: "cpu",

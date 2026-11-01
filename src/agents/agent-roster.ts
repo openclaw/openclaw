@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { LegacyAgentListEntry } from "../config/legacy.roster.js";
+import { runtimeConfigPublication } from "../config/runtime-config-publication.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -7,6 +8,7 @@ import {
   normalizeAgentId,
   normalizeOptionalAgentId,
 } from "../routing/session-key.js";
+import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { SYSTEM_AGENT_ROSTER_ENTRIES } from "../system-agent/agent-id.js";
 
 type AgentEntry = AgentConfig;
@@ -26,6 +28,53 @@ type ListedLegacyAgentEntry = {
   entry: LegacyAgentListEntry;
   source: ListedAgentEntry["source"];
 };
+
+type AgentRosterFacts = {
+  agentIds?: string[];
+  compatibilityAgentId?: { value: string | undefined };
+  legacyDataOwnerAgentId?: { value: string | undefined };
+  entryByNormalizedId?: Map<string, { clone: boolean; entry: AgentEntry }>;
+};
+
+type AgentRosterFactsBatch = {
+  config: AgentRosterConfig;
+  facts: AgentRosterFacts;
+};
+
+let activeAgentRosterFactsBatch: AgentRosterFactsBatch | undefined;
+const agentRosterFacts = new WeakMap<
+  AgentRosterConfig,
+  { publication: object | undefined; facts: AgentRosterFacts }
+>();
+
+/** Share roster reads synchronously; unbound mutable configs expire when the callback returns. */
+export function withAgentRosterFactsBatch<T>(config: AgentRosterConfig, callback: () => T): T {
+  const parent = activeAgentRosterFactsBatch;
+  activeAgentRosterFactsBatch =
+    parent?.config === config ? parent : { config, facts: readAgentRosterFacts(config) ?? {} };
+  try {
+    return callback();
+  } finally {
+    activeAgentRosterFactsBatch = parent;
+  }
+}
+
+export function readAgentRosterFacts(cfg: AgentRosterConfig): AgentRosterFacts | undefined {
+  if (activeAgentRosterFactsBatch?.config === cfg) {
+    return activeAgentRosterFactsBatch.facts;
+  }
+  const current = runtimeConfigPublication.current;
+  const publication = current?.config === cfg ? current.revision : undefined;
+  if (publication === undefined && !isDeeplyFrozenPlainData(cfg)) {
+    return undefined;
+  }
+  let cached = agentRosterFacts.get(cfg);
+  if (!cached || cached.publication !== publication) {
+    cached = { publication, facts: {} };
+    agentRosterFacts.set(cfg, cached);
+  }
+  return cached.facts;
+}
 
 function collectAgentEntries(
   cfg: AgentRosterConfig,
@@ -111,21 +160,38 @@ export function hasAgentRosterProperty(raw: unknown): boolean {
 
 /** Lists unique configured agent ids. */
 export function listAgentIds(cfg: AgentRosterConfig): string[] {
-  const agents = listAgentEntries(cfg);
-  if (agents.length === 0 && !hasAgentRosterProperty(cfg)) {
-    // Match resolveDefaultAgentId's Plugin SDK compatibility for raw pre-roster configs.
-    return [LEGACY_IMPLICIT_AGENT_ID];
+  const facts = readAgentRosterFacts(cfg);
+  if (facts?.agentIds) {
+    return facts.agentIds;
   }
-  return [...new Set(agents.map((entry) => normalizeAgentId(entry?.id)))];
+  const agents = listAgentEntries(cfg);
+  // Match resolveDefaultAgentId's Plugin SDK compatibility for raw pre-roster configs.
+  const ids =
+    agents.length === 0 && !hasAgentRosterProperty(cfg)
+      ? [LEGACY_IMPLICIT_AGENT_ID]
+      : [...new Set(agents.map((entry) => normalizeAgentId(entry?.id)))];
+  if (facts) {
+    // Published generations and immutable captures share ids, never mutable entry objects.
+    Object.freeze(ids);
+    facts.agentIds = ids;
+  }
+  return ids;
 }
 
-/** Lists configured roster and ACP harness targets for subagent policy. */
-export function resolveConfiguredAcpSubagentTargetIds(cfg: OpenClawConfig): Set<string> {
-  const ids = new Set<string>(listAgentIds(cfg));
+/** Lists ACP harness ids and ACP-runtime roster agents named by config; native agents are excluded. */
+export function resolveConfiguredAcpHarnessIds(cfg: OpenClawConfig): Set<string> {
+  const ids = new Set<string>();
+  for (const agent of listAgentEntries(cfg)) {
+    if (agent.runtime?.type !== "acp") {
+      continue;
+    }
+    ids.add(normalizeAgentId(agent.id));
+    const acpAgent = normalizeOptionalAgentId(agent.runtime.acp?.agent);
+    if (acpAgent) {
+      ids.add(acpAgent);
+    }
+  }
   const candidates = [
-    ...listAgentEntries(cfg).flatMap((agent) =>
-      agent.runtime?.type === "acp" ? [agent.runtime.acp?.agent] : [],
-    ),
     cfg.acp?.defaultAgent,
     ...(cfg.acp?.allowedAgents ?? []).filter((entry) => entry.trim() !== "*"),
   ];
@@ -136,6 +202,11 @@ export function resolveConfiguredAcpSubagentTargetIds(cfg: OpenClawConfig): Set<
     }
   }
   return ids;
+}
+
+/** Lists configured roster and ACP harness targets for subagent policy. */
+export function resolveConfiguredAcpSubagentTargetIds(cfg: OpenClawConfig): Set<string> {
+  return new Set([...listAgentIds(cfg), ...resolveConfiguredAcpHarnessIds(cfg)]);
 }
 
 /** Reserved system agents belong to the Gateway without authored roster entries. */

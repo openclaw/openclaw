@@ -40,6 +40,7 @@ jobs:
       (github.event_name != 'issue_comment' || (github.event.issue.pull_request &&
       (contains(github.event.comment.body, '/allow-security-sensitive-change') ||
       contains(github.event.comment.body, '/allow-dependencies-change') ||
+      (github.event.action == 'created' && contains(github.event.comment.body, '/refresh-security-review ')) ||
       (github.event.action == 'edited' &&
       (contains(github.event.changes.body.from, '/allow-security-sensitive-change') ||
       contains(github.event.changes.body.from, '/allow-dependencies-change')))))) &&

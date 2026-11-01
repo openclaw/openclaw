@@ -1,7 +1,7 @@
 // Thread-binding lightweight artifact contract for bundled channel plugins.
 //
 // Core resolves default thread placement from lightweight `thread-binding-api`
-// artifacts before full plugin loading (src/channels/plugins/thread-binding-api.ts).
+// artifacts before full plugin loading (src/channels/conversation-resolution.ts).
 // This shard owns artifact inventory and placement shape; loaded-plugin parity
 // lives in plugin-shape.contract.test.ts.
 import { beforeAll, describe, expect, it } from "vitest";

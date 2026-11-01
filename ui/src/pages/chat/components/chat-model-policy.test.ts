@@ -3,10 +3,15 @@ import { createComponent } from "solid-js";
 import { expect, it, vi } from "vitest";
 import type { ModelCatalogResult } from "../../../api/types.ts";
 import { createSessionsListResult } from "../../../test-helpers/chat-model.ts";
+import { installModelPickerLayout } from "../../../test-helpers/model-picker-layout.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { ChatModelControls } from "./chat-model-controls.tsx";
-import { modelControlSelector, waitForModelMenu } from "./chat-model-picker.test-support.tsx";
+import {
+  expandModelProviders,
+  modelControlSelector,
+  waitForModelMenu,
+} from "./chat-model-picker.test-support.tsx";
 
 const models = ["primary", "fallback", "custom"].map((id) => ({
   id,
@@ -16,6 +21,7 @@ const models = ["primary", "fallback", "custom"].map((id) => ({
 }));
 
 async function mountControls(catalog: ModelCatalogResult, retired = false) {
+  installModelPickerLayout();
   const sessions = createSessionsListResult({
     model: "forbidden-current",
     modelProvider: "fixture",
@@ -51,6 +57,7 @@ async function mountControls(catalog: ModelCatalogResult, retired = false) {
   );
   flush();
   await waitForModelMenu(container);
+  expandModelProviders(container);
   expect(JSON.stringify(selectedSession)).toBe(before);
   const control = (kind: string, value?: string) =>
     container.querySelector<HTMLElement>(modelControlSelector(kind, value));

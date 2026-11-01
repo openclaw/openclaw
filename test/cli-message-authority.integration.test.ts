@@ -589,15 +589,17 @@ describe("CLI message authority integration", () => {
           }),
     });
     const grant = mintMcpLoopbackClientGrant({
-      context: buildCliMcpGrantContext({
-        run,
-        config: cfg,
-        requireExplicitMessageTarget: Boolean(scheduledPolicy),
-        agentId: "main",
-        modelProvider: "anthropic",
-        modelId: "test-model",
+      context: {
+        ...buildCliMcpGrantContext({
+          run,
+          config: cfg,
+          requireExplicitMessageTarget: Boolean(scheduledPolicy),
+          agentId: "main",
+          modelProvider: "anthropic",
+          modelId: "test-model",
+        }),
         toolsAllow: ["message"],
-      }),
+      },
       runtimeOwnerToken: runtime.ownerToken,
       admittedRunContext: admitted,
       messageActionTurnCapability: options.bindCapability === false ? undefined : capability,

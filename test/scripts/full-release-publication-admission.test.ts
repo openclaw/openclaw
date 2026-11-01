@@ -35,6 +35,7 @@ import { createCommandTest, type CommandFixture } from "../helpers/command-fixtu
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { resolveWorkflowBash } from "../helpers/workflow-bash.js";
 import { prepareCopiedSourceModules } from "./copied-source-modules.test-support.js";
 import {
   publicationSelectionFixture,
@@ -70,6 +71,7 @@ const templateDirs = useAutoCleanupTempDirTracker(afterAll);
 let toolingTemplate: { loose: string; packed: string };
 const repo = resolve(".");
 const nodeExecutable = realpathSync(requireNodeTool("node"));
+const workflowBash = process.platform === "darwin" ? resolveWorkflowBash() : "bash";
 const workflowPath = ".github/workflows/full-release-validation.yml";
 type Step = {
   name: string;
@@ -324,7 +326,7 @@ console.log('{"status":"identical"}');
           };
           Object.assign(env, workflowEnv(step.env, context));
           const result = await processFixture.run(
-            "bash",
+            workflowBash,
             ["-c", expectDefined(step.run, "transport command")],
             {
               cwd: root,
@@ -1161,7 +1163,7 @@ process.stdout.write(${JSON.stringify(
         `const OriginalDate = Date;
 globalThis.Date = class extends OriginalDate {
   constructor(...args) {
-    super(...(args.length ? args : [${Date.parse(observation.prerequisitesCompletedAt) + 300_001}]));
+    super(...(args.length ? args : [${Date.parse(observation.collectionCompletedAt) + 300_001}]));
   }
 };
 `,
@@ -1184,8 +1186,8 @@ globalThis.Date = class extends OriginalDate {
     };
     const result =
       options.registry === "parent-interrupt"
-        ? spawnSync("bash", ["-c", step.run], commandOptions)
-        : await processFixture.run("bash", ["-c", step.run], commandOptions);
+        ? spawnSync(workflowBash, ["-c", step.run], commandOptions)
+        : await processFixture.run(workflowBash, ["-c", step.run], commandOptions);
     if (result.error !== undefined && !(result.error instanceof Error)) {
       throw new Error("Unexpected publication command failure", { cause: result.error });
     }
@@ -1736,9 +1738,9 @@ describe("FRV observation worker boundary", () => {
         (entry) => entry.kind === "settled" && entry.worker,
       );
       check(settlement).toMatchObject({ active: 0 });
-      check(settlement?.maximumActive).toBeLessThanOrEqual(8);
+      check(settlement?.maximumActive).toBeLessThanOrEqual(16);
       if (registry === "concurrency") {
-        check(settlement?.maximumActive).toBe(8);
+        check(settlement?.maximumActive).toBe(16);
       }
       for (const plan of [result.observations.plans.npm, result.observations.plans.clawhub]) {
         check(plan.all).toHaveLength(count);
@@ -2430,18 +2432,27 @@ describe("publication source intent and durable binding", () => {
       const historical = createPublicationSourceFact(historicalRequest, null, null);
       const retained = structuredClone(historical);
       retained.coverage.known_flaky_jobs_json = "[]";
+      retained.coverage.telegram_waiver = "";
       refreshDigest(retained);
       for (const fact of [historical, retained]) {
         const bytes = publicationSourceJson(fact);
         expect(bindSource(fact)).toBe(fact);
         expect(publicationSourceJson(fact)).toBe(bytes);
       }
-      expect(() =>
-        bindSource({
-          ...retained,
-          coverage: { ...retained.coverage, known_flaky_jobs_json: '["normalCi:test"]' },
-        }),
-      ).toThrow("known_flaky_jobs_json must be empty");
+      for (const [key, value] of [
+        ["known_flaky_jobs_json", '["normalCi:test"]'],
+        ["telegram_waiver", "legacy-omission"],
+      ] as const) {
+        expect(() =>
+          bindSource({
+            ...retained,
+            coverage: { ...retained.coverage, [key]: value },
+          }),
+        ).toThrow(`${key} must be empty`);
+      }
+      const withoutLegacyField = structuredClone(retained);
+      delete withoutLegacyField.coverage.telegram_waiver;
+      expect(() => bindSource(withoutLegacyField)).toThrow("source admission digest mismatch");
       expect(() =>
         bindSource(historical, {
           validationInputs: {

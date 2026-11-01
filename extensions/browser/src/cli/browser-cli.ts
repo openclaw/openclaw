@@ -205,10 +205,12 @@ export function registerBrowserCli(
         )}\n`,
     )
     .action(() => {
+      const message = `Missing subcommand. Try: "${formatCliCommand("openclaw browser status")}"`;
+      if (browser.opts<BrowserParentOpts>().json) {
+        throw new Error(message);
+      }
       browser.outputHelp();
-      defaultRuntime.error(
-        danger(`Missing subcommand. Try: "${formatCliCommand("openclaw browser status")}"`),
-      );
+      defaultRuntime.error(danger(message));
       defaultRuntime.exit(1);
     });
 

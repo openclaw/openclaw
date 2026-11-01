@@ -103,15 +103,10 @@ type DiagnosticWorkSnapshot = {
   queuedLabels: string[];
 };
 
-type SampleDiagnosticLiveness = (
-  now: number,
-  work: DiagnosticWorkSnapshot,
-) => DiagnosticLivenessSample | null;
-
 type StartDiagnosticHeartbeatOptions = {
   getConfig?: () => OpenClawConfig;
   emitMemorySample?: EmitDiagnosticMemorySample;
-  sampleLiveness?: SampleDiagnosticLiveness;
+  sampleLiveness?: (now: number, work: DiagnosticWorkSnapshot) => DiagnosticLivenessSample | null;
   recoverStuckSession?: RecoverStuckSession;
   startupGraceMs?: number;
   /** Bounds diagnostic reporting in tests, never the controller-owned watchdog policy. */
@@ -760,7 +755,7 @@ export function startGatewayDiagnosticHeartbeat(
                   classification.activeWorkKind
                     ? ` activeWorkKind=${classification.activeWorkKind}`
                     : ""
-                }${detailFields ? ` ${detailFields}` : ""} recovery=${operation ? "controller_owned" : "none"}`;
+                }${detailFields ? ` ${detailFields}` : ""} recovery=${operation ? "controller_owned" : "state_reconciliation"}`;
               },
             });
           }

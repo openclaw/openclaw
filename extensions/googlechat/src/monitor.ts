@@ -26,9 +26,8 @@ import {
   updateGoogleChatMessage,
 } from "./api.js";
 import { maybeHandleGoogleChatApprovalCardClick } from "./approval-card-click.js";
-import { formatGoogleChatTextChunks } from "./format.js";
+import { formatGoogleChatMediaText, formatGoogleChatTextChunks } from "./format.js";
 import { applyGoogleChatInboundAccessPolicy } from "./monitor-access.js";
-import { resolveGoogleChatDurableReplyOptions } from "./monitor-durable.js";
 import {
   createGoogleChatIngressMonitor,
   type GoogleChatIngressLifecycle,
@@ -184,23 +183,30 @@ async function processGoogleChatEvent(
   const mediaInputs: ChannelInboundMediaInput[] = attachments.map((attachment) => ({
     contentType: attachment.contentType,
   }));
-  const first = attachments.at(0);
-  if (first) {
+  const attachmentNotices = new Set<string>();
+  const reportAttachmentUnavailable = (notice: string, hint = "") => {
+    if (attachmentNotices.has(notice)) {
+      return;
+    }
+    attachmentNotices.add(notice);
+    rawBody = formatInboundMediaUnavailableText({ body: rawBody, notice });
+    runtime.error?.(`[${account.accountId}] ${notice}${hint}`);
+  };
+  for (const [index, attachment] of attachments.entries()) {
     try {
-      const attachmentData = await downloadAttachment(first, account, mediaMaxMb, core);
+      const attachmentData = await downloadAttachment(attachment, account, mediaMaxMb, core);
       if (attachmentData) {
-        mediaInputs[0] = {
+        mediaInputs[index] = {
           path: attachmentData.path,
           url: attachmentData.path,
-          contentType: attachmentData.contentType ?? first.contentType,
+          contentType: attachmentData.contentType ?? attachment.contentType,
         };
       } else {
-        const reason = first.driveDataRef
+        const reason = attachment.driveDataRef
           ? "Google Drive files are not downloadable"
           : "unsupported attachment source";
         const notice = `[Google Chat attachment unavailable: ${reason}; upload the file directly]`;
-        rawBody = formatInboundMediaUnavailableText({ body: rawBody, notice });
-        runtime.error?.(`[${account.accountId}] ${notice}`);
+        reportAttachmentUnavailable(notice);
       }
     } catch (error) {
       const missing = error instanceof GoogleChatApiError && error.status === 404;
@@ -212,16 +218,11 @@ async function processGoogleChatEvent(
       const notice = missing
         ? "[Google Chat attachment unavailable: file not found; upload the file directly]"
         : `[Google Chat attachment too large; maximum ${mediaMaxMb} MB]`;
-      rawBody = formatInboundMediaUnavailableText({ body: rawBody, notice });
-      runtime.error?.(
-        `[${account.accountId}] ${notice}${missing ? "" : " Increase channels.googlechat.mediaMaxMb to process larger attachments."}`,
+      reportAttachmentUnavailable(
+        notice,
+        missing ? "" : " Increase channels.googlechat.mediaMaxMb to process larger attachments.",
       );
     }
-  }
-  const additionalCount = attachments.length - 1;
-  if (additionalCount > 0) {
-    const notice = `[Google Chat: ${additionalCount} additional ${additionalCount === 1 ? "attachment was" : "attachments were"} not processed; only the first attachment is supported]`;
-    rawBody = formatInboundMediaUnavailableText({ body: rawBody, notice });
   }
   const media = mediaInputs.length === 0 ? [] : await toInboundMediaFactsWithMetadata(mediaInputs);
 
@@ -382,17 +383,25 @@ async function processGoogleChatEvent(
           route: { agentId: route.agentId, sessionKey: route.sessionKey },
           ctxPayload,
           delivery: {
-            durable: (payload, info) =>
-              resolveGoogleChatDurableReplyOptions({
-                payload: normalizeGoogleChatReplyTarget({
-                  payload,
-                  sourceMessageName: message.name,
-                  replyThreadName: effectiveReplyThreadName,
-                }),
-                infoKind: info.kind,
-                spaceId,
-                hasTypingMessage: Boolean(typingMessage),
-              }),
+            durable: (payload, info) => {
+              const normalizedPayload = normalizeGoogleChatReplyTarget({
+                payload,
+                sourceMessageName: message.name,
+                replyThreadName: effectiveReplyThreadName,
+              });
+              if (info.kind !== "final" || Boolean(typingMessage)) {
+                return false;
+              }
+              const threadId = normalizedPayload.replyToId?.trim() || undefined;
+              if (!threadId) {
+                return { to: spaceId, replyToId: null };
+              }
+              return {
+                to: spaceId,
+                replyToId: threadId,
+                threadId,
+              };
+            },
             deliver: async (payload) => {
               const normalizedPayload = normalizeGoogleChatReplyTarget({
                 payload,
@@ -435,9 +444,14 @@ async function processGoogleChatEvent(
                 deliveryThreadName = deliveryTypingMessage.deliveredThreadName;
               }
 
-              if (reply.hasMedia) {
-                runtime.error?.(
-                  "Google Chat outbound attachments require user OAuth and are not supported by this service-account channel; sending text fallback only.",
+              let text: string;
+              try {
+                text = formatGoogleChatMediaText(reply.text, reply.mediaUrls);
+              } catch (cause) {
+                await cleanupTypingMessage();
+                throw new PlatformMessageNotDispatchedError(
+                  cause instanceof Error ? cause.message : String(cause),
+                  { cause, retryable: false },
                 );
               }
 
@@ -447,15 +461,13 @@ async function processGoogleChatEvent(
                 "googlechat",
                 account.accountId,
               );
-              const chunks = formatGoogleChatTextChunks(reply.text, chunkLimit).flatMap((chunk) =>
+              const chunks = formatGoogleChatTextChunks(text, chunkLimit).flatMap((chunk) =>
                 core.channel.text.chunkMarkdownTextWithMode(chunk, chunkLimit, chunkMode),
               );
               const rejection =
-                reply.hasMedia && !reply.hasText
-                  ? "Google Chat outbound attachments require user OAuth and no text fallback is available."
-                  : reply.hasText && !chunks.some((chunk) => chunk)
-                    ? "Google Chat reply has no visible text after formatting."
-                    : undefined;
+                text && !chunks.some((chunk) => chunk)
+                  ? "Google Chat reply has no visible text after formatting."
+                  : undefined;
               if (rejection) {
                 await cleanupTypingMessage();
                 // Permanent policy rejection before any recipient-visible send; the typed

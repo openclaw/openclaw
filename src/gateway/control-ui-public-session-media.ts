@@ -142,6 +142,52 @@ export async function serveControlUiPublicSessionMedia(params: {
         }
         return await readPublicSessionAttachment(message, attachmentId, locator);
       },
+      consume: async (representation) => {
+        const body = representation?.body;
+        const mime =
+          widgetToken !== null
+            ? typeof body === "string" && isCoreCanvasHostEnabled(config)
+              ? "text/html; charset=utf-8"
+              : undefined
+            : Buffer.isBuffer(body) && body.byteLength <= MAX_IMAGE_BYTES
+              ? await detectMime({ buffer: body })
+              : undefined;
+        return withReadySessionRows(
+          projection,
+          () => [{ key: locator.sessionKey, agentId: locator.agentId }],
+          () => {
+            if (
+              !representation ||
+              !isPublicSessionShareActive(config, locator, projection) ||
+              !mime ||
+              (widgetToken === null && !PUBLIC_IMAGE_TYPES.has(mime))
+            ) {
+              return unavailable(404);
+            }
+            if (!representation.isCurrent()) {
+              return false as const;
+            }
+            res.setHeader("Content-Disposition", "inline");
+            res.setHeader("Content-Type", mime);
+            if (widgetToken !== null) {
+              res.setHeader(
+                "Content-Security-Policy",
+                `${buildBoardWidgetContentSecurityPolicy({ grantState: "none" })}; frame-ancestors 'self'`,
+              );
+            }
+            res.setHeader("ETag", representation.etag);
+            if (req.headers["if-none-match"] === representation.etag) {
+              res.statusCode = 304;
+              res.end();
+            } else {
+              res.statusCode = 200;
+              res.setHeader("Content-Length", Buffer.byteLength(body!));
+              res.end(body);
+            }
+            return true as const;
+          },
+        );
+      },
     });
     if (result.kind !== "ok") {
       return unavailable(
@@ -149,50 +195,7 @@ export async function serveControlUiPublicSessionMedia(params: {
         result.kind === "rate-limited" ? result.retryAfterSeconds : undefined,
       );
     }
-    const representation = result.value;
-    const body = representation?.body;
-    const mime =
-      widgetToken !== null
-        ? typeof body === "string" && isCoreCanvasHostEnabled(config)
-          ? "text/html; charset=utf-8"
-          : undefined
-        : Buffer.isBuffer(body) && body.byteLength <= MAX_IMAGE_BYTES
-          ? await detectMime({ buffer: body })
-          : undefined;
-    return withReadySessionRows(
-      projection,
-      () => [{ key: locator.sessionKey, agentId: locator.agentId }],
-      () => {
-        if (
-          !isPublicSessionShareActive(config, locator, projection) ||
-          !mime ||
-          (widgetToken === null && !PUBLIC_IMAGE_TYPES.has(mime))
-        ) {
-          return unavailable(404);
-        }
-        if (!representation?.isCurrent()) {
-          return unavailable(503);
-        }
-        res.setHeader("Content-Disposition", "inline");
-        res.setHeader("Content-Type", mime);
-        if (widgetToken !== null) {
-          res.setHeader(
-            "Content-Security-Policy",
-            `${buildBoardWidgetContentSecurityPolicy({ grantState: "none" })}; frame-ancestors 'self'`,
-          );
-        }
-        res.setHeader("ETag", representation.etag);
-        if (req.headers["if-none-match"] === representation.etag) {
-          res.statusCode = 304;
-          res.end();
-        } else {
-          res.statusCode = 200;
-          res.setHeader("Content-Length", Buffer.byteLength(body!));
-          res.end(body);
-        }
-        return true as const;
-      },
-    );
+    return true;
   } catch {
     return unavailable(503);
   }

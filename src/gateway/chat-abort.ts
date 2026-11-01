@@ -80,17 +80,6 @@ import {
 
 export { resolveAgentRunExpiresAtMs, resolveChatRunExpiresAtMs } from "./chat-run-deadline.js";
 
-export type RestartRecoveryCandidate = {
-  storePath: string;
-  agentId: string | undefined;
-  runId: string;
-  sourceRunId?: string;
-  lifecycleGeneration: string;
-  sessionKey: string;
-  sessionId: string;
-  observedAt?: number;
-};
-
 type RegisteredChatAbortController = {
   controller: AbortController;
   initializeTiming: (options?: {
@@ -611,7 +600,6 @@ export function abortChatRunsForProvider(
     cfg: OpenClawConfig;
     providerId: string;
     agentId?: string;
-    stopReason?: string;
   },
 ): { runIds: string[] } {
   const providerId = normalizeOptionalLowercaseString(params.providerId);
@@ -652,7 +640,7 @@ export function abortChatRunsForProvider(
   stopSession({
     capture,
     source: "operator-revocation",
-    reason: createChatAbortSignalReason(params.stopReason),
+    reason: createChatAbortSignalReason("auth-revoked"),
     cancelInput: (input, cancel) => {
       const target = byInput.get(input);
       if (!target) {
@@ -664,7 +652,7 @@ export function abortChatRunsForProvider(
         expectedEntry: target.entry,
         presentation: target.presentation,
         cancel,
-        stopReason: params.stopReason,
+        stopReason: "auth-revoked",
         onAbortCommitted: () => runIds.push(target.runId),
       }).aborted;
     },

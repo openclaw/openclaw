@@ -1,4 +1,5 @@
-import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
+import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../lib/reactive/pending-focus.ts";
 import "../styles/option-card.css";
@@ -112,11 +113,12 @@ export function OptionCard(input: { props: OptionCardProps }) {
         <div class="option-card__choices" role="radiogroup" onKeyDown={onChoicesKeyDown}>
           <For each={options()} keyed={(option) => option.value}>
             {(option, index) => {
-              let button: HTMLButtonElement;
-              onCleanup(() => choices.delete(button));
               return (
                 <button
-                  ref={(element) => choices.add((button = element))}
+                  ref={elementRef((element: HTMLButtonElement) => {
+                    choices.add(element);
+                    return () => choices.delete(element);
+                  })}
                   class={[
                     "option-card__choice",
                     {

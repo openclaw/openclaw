@@ -187,6 +187,7 @@ it.each([
       vi.mocked(showConfirmDialog).mockResolvedValue(true);
       await page.removeJob(job);
       await waitForCronPage(() => expect(page.cron.cronEditingJob).toBeNull());
+      expect(page.cron.cronRunsScope).toBe("all");
       expect(request).toHaveBeenCalledWith("cron.remove", { id: "daily-digest" });
     }
     if (!published) {
@@ -374,16 +375,15 @@ async function startConflictRecovery(operation: "save" | "toggle" = "save") {
   const editedJob = digestJob("digest", {
     delivery: { mode: "announce", channel: "telegram", to: "-100original", accountId: "default" },
   });
-  const authoritativeJob: CronJob = {
-    ...editedJob,
+  const authoritativeJob = digestJob("digest", {
     configRevision: "rev-2",
     delivery: {
+      ...editedJob.delivery,
       mode: "announce",
       channel: "discord",
       to: "-100authoritative",
-      accountId: "default",
     },
-  };
+  });
 
   const request = cronRpc({
     "conversations.list": (payload) => {

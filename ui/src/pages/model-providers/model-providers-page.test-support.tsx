@@ -12,6 +12,7 @@ import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createGatewayMetadataObserver } from "../../app/gateway-observers.ts";
 import type { SelectPicker } from "../../components/select-picker.ts";
+import { agentRoster } from "../../e2e/agent-roster.test-support.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import type {
   RuntimeConfigExternalMutationOptions,
@@ -25,9 +26,17 @@ import {
   createRuntimeConfigCapability,
   type RuntimeConfigCapability,
 } from "../../lib/config/runtime-config-capability.ts";
-import { invalidateModelAuthStatusRequests } from "../../lib/model-auth-request-state.ts";
-import { beginModelCatalogRead, publishModelCatalogResult } from "../../lib/model-catalog-cache.ts";
+import {
+  invalidateModelAuthStatusRequests,
+  modelAuthEventInvalidates,
+} from "../../lib/model-auth-request-state.ts";
+import {
+  beginModelCatalogRead,
+  modelCatalogEventInvalidation,
+  publishModelCatalogResult,
+} from "../../lib/model-catalog-cache.ts";
 import { peekModelCatalog } from "../../lib/model-catalog-store.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { updatePickers } from "../../test-helpers/select-picker.ts";
@@ -259,11 +268,9 @@ export function createHarness(initialScopeId: string) {
         return {};
     }
   });
-  const snapshot: ApplicationGatewaySnapshot = {
+  const snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client: { request } as unknown as GatewayBrowserClient,
     phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
     hello: {
       type: "hello-ok",
       protocol: 3,
@@ -292,9 +299,7 @@ export function createHarness(initialScopeId: string) {
     },
     assistantAgentId: "main",
     sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  });
   const gatewaySource = createApplicationGateway(snapshot);
   const metadata = createGatewayMetadataObserver(
     (current) => current === gatewaySource.gateway.snapshot,
@@ -360,15 +365,7 @@ export function createHarness(initialScopeId: string) {
     gateway: gatewaySource.gateway,
     agents: {
       state: {
-        agentsList: {
-          defaultId: "main",
-          mainKey: "main",
-          scope: "project",
-          agents: [
-            { id: "main", name: "Main" },
-            { id: "writer", name: "Writer" },
-          ],
-        },
+        agentsList: agentRoster({ main: "Main", writer: "Writer" }, "main", "project"),
         agentsLoading: false,
         agentsError: null as string | null,
       },
@@ -401,12 +398,12 @@ export function createHarness(initialScopeId: string) {
     },
     publishEvent: (event: GatewayEventFrame) => {
       // The app invalidates shared facts before delivering publication events to pages.
-      if (
-        snapshot.client &&
-        (event.event === "config.changed" || event.event === "chat.metadata.changed")
-      ) {
+      if (snapshot.client && modelAuthEventInvalidates(event)) {
         invalidateModelAuthStatusRequests(snapshot.client);
-        invalidateChatMetadataStore(snapshot.client);
+      }
+      const invalidation = modelCatalogEventInvalidation(event);
+      if (snapshot.client && invalidation) {
+        invalidateChatMetadataStore(snapshot.client, undefined, undefined, invalidation);
       }
       if (event.event === "config.changed" && !runtimeConfig.state.configFormDirty) {
         void runtimeConfig.refresh();

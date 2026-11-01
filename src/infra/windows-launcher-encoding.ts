@@ -6,8 +6,6 @@ import {
   resolveWindowsOemEncoding,
 } from "./windows-encoding.js";
 
-type WindowsLauncherScriptFormat = "cmd" | "vbs";
-
 const UTF16LE_BOM = Buffer.from([0xff, 0xfe]);
 
 // Round-trip verification decoder choice: these DBCS labels match Windows in
@@ -36,7 +34,7 @@ const LAUNCHER_CODEPAGE_PREAMBLE_RE = /^@chcp \d+ >nul\s*$/;
  * simplify back to utf8.
  */
 export function encodeWindowsLauncherScript(params: {
-  format: WindowsLauncherScriptFormat;
+  format: "cmd" | "vbs";
   content: string;
 }): Buffer {
   if (params.format === "vbs") {

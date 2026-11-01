@@ -3,6 +3,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import { getAppSidebarOwner } from "../../components/app-sidebar.tsx";
+import { setSessionsShowPreview } from "../../components/session-organizer-menu.runtime.ts";
 import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
 import {
   createGateway,
@@ -244,7 +245,11 @@ describe("AppSidebar session attention", () => {
   it("shows hourglass attention ahead of a run error", async () => {
     const { sidebar, dom } = await mountAttention([agentAttentionRow(sessionKey, {}, "hourglass")]);
 
-    expect(dom.query('[data-session-attention="agent"] svg circle')).not.toBeNull();
+    const glyph = dom.query<HTMLElement>('[data-session-attention="agent"] .session-css-icon');
+    const mask = glyph?.style.maskImage.match(/data:image\/svg\+xml,([^"\s]+)"/u)?.[1];
+    expect(mask).toBeDefined();
+    const artwork = new DOMParser().parseFromString(decodeURIComponent(mask!), "image/svg+xml");
+    expect(artwork.querySelector('circle[cx="12"][cy="12"][r="10"]')).not.toBeNull();
     expect(attentionLabel(sidebar, "agent")).toBe("Blocked: need the staging password");
     // The default sidebar keeps the note on the icon; it does not add a second line.
     expect(
@@ -256,7 +261,7 @@ describe("AppSidebar session attention", () => {
   it("shows an unflagged agent status note in the subtitle slot", async () => {
     const { sidebar, dom } = await mountAttention([deploymentRow()]);
 
-    sidebar.sessionOrganizer.setSessionsShowPreview(true);
+    setSessionsShowPreview(sidebar.sessionOrganizer, true);
     await settleLitElement(sidebar);
     expect(sidebar.textContent).toContain("Deploying to staging");
     expect(dom.query('[data-session-attention="agent"]')).toBeNull();
@@ -368,7 +373,7 @@ describe("AppSidebar session attention", () => {
     expect(sidebar.textContent).not.toContain("Run failed:");
   });
 
-  it("attributes a nested failure to its child session while its ancestors continue", async () => {
+  it("does not mark continuing ancestors failed when a nested run fails", async () => {
     const parentKey = "agent:main:release";
     const childKey = "agent:main:subagent:validation";
     const failedKey = "agent:main:subagent:review";
@@ -388,10 +393,7 @@ describe("AppSidebar session attention", () => {
     const { sidebar, sessions, result, context } = await mountRoster(TWO_AGENTS, rows);
     const dom = domProbe(sidebar);
     const parentRow = () => dom.query(`[data-session-key="${parentKey}"]`)!;
-    const childFailure = "Child session Source review failed: Provider credits exhausted";
-    const description = await errorDescription(parentRow());
-    expect(description).toContain(childFailure);
-    expect(description).not.toContain("Run failed:");
+    expect(parentRow().querySelector('[data-session-attention="error"]')).toBeNull();
 
     sidebar.sidebarAgentsMode = "roster";
     const agentHeader = () => dom.query('[data-agent-group="main"] .sidebar-agent-roster__header');
@@ -399,12 +401,8 @@ describe("AppSidebar session attention", () => {
       expect(
         dom.query(`openclaw-sidebar-agent-roster [data-session-key="${parentKey}"]`),
       ).toBeNull();
-      expect(
-        agentHeader()
-          ?.querySelector('[data-session-attention="error"]')
-          ?.closest('[role="img"]')
-          ?.getAttribute("aria-label"),
-      ).toBe(childFailure);
+      expect(agentHeader()).not.toBeNull();
+      expect(agentHeader()?.querySelector('[data-session-attention="error"]')).toBeNull();
     });
 
     result.sessions = rows.map((row) =>
@@ -482,6 +480,25 @@ describe("AppSidebar session attention", () => {
       ).not.toBeNull();
       sidebar.remove();
     }
+  });
+
+  it("keeps a parent approval visible while an older child question leads the row", async () => {
+    const parentKey = "agent:main:parent";
+    const childKey = "agent:main:subagent:question";
+    const gatewayHarness = questionsGateway();
+    const { sidebar, dom } = await mountAttention(
+      [{ key: parentKey, kind: "direct", updatedAt: 1, childSessions: [childKey] }, peerRow(0)],
+      gatewayHarness.gateway,
+      null,
+      [approvalRequest(parentKey, { createdAtMs: Date.now() })],
+    );
+    publishQuestion(gatewayHarness, "question-child", childKey, { createdAtMs: Date.now() - 1000 });
+    await settleLitElement(sidebar);
+    const row = dom.query(`[data-session-key="${parentKey}"]`)!;
+    expect(row.querySelector('[data-session-attention="question"]')).not.toBeNull();
+    expect(row.querySelector(".session-row-badge--approval")?.getAttribute("aria-label")).toBe(
+      "Approval needed",
+    );
   });
 
   it("bubbles descendant attention and keeps its branch visible past the child cap", async () => {

@@ -68,11 +68,9 @@ function createAccountScopedBindingAdapter<T>(params: {
   listBySessionKey: (targetSessionKey: string) => T[];
   getByConversation: (ref: ConversationRef) => T | null | undefined;
   touchConversation: (conversationId: string, at?: number) => unknown;
-  touchConversationAsync?: (conversationId: string, at?: number) => Promise<unknown>;
   unbindConversation: (conversationId: string, reason: string) => T | null | Promise<T | null>;
   unbindBySessionKey: (targetSessionKey: string, reason: string) => T[] | Promise<T[]>;
 }): SessionBindingAdapter {
-  const touchAsync = params.touchConversationAsync;
   const conversationIdFromBinding = (bindingId?: string) =>
     resolveThreadBindingConversationIdFromBindingId({ accountId: params.accountId, bindingId });
   return {
@@ -96,16 +94,6 @@ function createAccountScopedBindingAdapter<T>(params: {
         params.touchConversation(conversationId, at);
       }
     },
-    ...(touchAsync
-      ? {
-          touchAsync: async (bindingId: string, at?: number) => {
-            const conversationId = conversationIdFromBinding(bindingId);
-            if (conversationId) {
-              await touchAsync(conversationId, at);
-            }
-          },
-        }
-      : {}),
     unbind: async (input) => {
       if (input.targetSessionKey?.trim()) {
         return (await params.unbindBySessionKey(input.targetSessionKey, input.reason)).map(

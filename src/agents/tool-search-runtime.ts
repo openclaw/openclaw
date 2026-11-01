@@ -1,4 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  attachInternalToolResultContentSource,
+  copyInternalToolResultState,
+} from "../../packages/agent-core/src/internal-hooks.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import { resolveAgentToolExecutionSchema } from "./agent-tool-availability.js";
@@ -12,10 +16,6 @@ import { collectTextContentBlocks } from "./content-blocks.js";
 import { setMcpCodeModeGuestResultFromAgentResult } from "./mcp-content.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolResult } from "./runtime/index.js";
-import {
-  attachInternalToolResultContentSource,
-  copyInternalToolResultState,
-} from "./runtime/internal-hooks.js";
 import {
   captureToolOutputSelection,
   readToolOutputSchemaVariants,
@@ -87,7 +87,7 @@ function findEntry(
   }
   const namedEntries =
     match === "exact-id" ? [] : entries.filter((candidate) => candidate.name === needle);
-  if (namedEntries.length > 1) {
+  if (namedEntries.length > 1 || namedEntries[0]?.requiresExactId) {
     throw new ToolInputError(`Ambiguous tool name: ${needle}; use an exact tool id.`);
   }
   const namedEntry = namedEntries[0];

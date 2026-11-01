@@ -24,6 +24,8 @@ import type {
 export { createPluginStateError, parseStoredJson } from "./plugin-state-error.js";
 
 export const MAX_PLUGIN_STATE_VALUE_BYTES = 1_048_576;
+export const PLUGIN_STATE_NAMESPACE_MAX_ROWS = 10_000;
+export const PLUGIN_STATE_NAMESPACE_MAX_BYTES = 8 * 1024 * 1024;
 // Outside the historical logical namespace alphabet: legacy stores cannot be reclassified.
 export const RETAINED_PLUGIN_STATE_NAMESPACE_PREFIX = "@retained.";
 
@@ -41,6 +43,10 @@ export type PluginStateDatabase = {
   db: EngineConnection;
   path: string;
 };
+
+export function pluginStateNamespaceRowBytes(row: PluginStateReadRow): number {
+  return 128 + 2 * (row.entry_key.length + row.value_json.length);
+}
 
 export function resolvePluginStateExpiresAtMs(params: {
   ttlMs: number | undefined;
@@ -110,11 +116,12 @@ export function selectLivePluginStateRows(
 }
 
 export function assertPluginStateKey(
-  db: EngineConnection,
+  db: EngineConnection | boolean,
   key: string,
   operation: PluginStateStoreOperation,
 ): void {
-  if (isPostgresSqlConnection(db) && key.includes("\0")) {
+  // Memory reads carry the already selected engine fact instead of opening a connection.
+  if ((typeof db === "boolean" ? db : isPostgresSqlConnection(db)) && key.includes("\0")) {
     throw createPluginStateError({
       code: "PLUGIN_STATE_INVALID_INPUT",
       operation,
@@ -269,13 +276,17 @@ export function iteratePluginStateEntries(
 
 export function selectPluginStateEntriesInKeyRange(
   db: EngineConnection,
-  params: PluginStateKeyRangeParams & { order: "asc" | "desc"; now: number },
+  params: PluginStateKeyRangeParams & {
+    order: "asc" | "desc";
+    now: number;
+    exclusiveStart?: boolean;
+  },
 ): PluginStateReadRow[] {
   assertPluginStateKey(db, params.keyStartInclusive, "entries");
   assertPluginStateKey(db, params.keyEndExclusive, "entries");
   let query = selectLivePluginStateRows(db, params)
     .select(["entry_key", "value_json", "created_at", "expires_at"])
-    .where("entry_key", ">=", params.keyStartInclusive)
+    .where("entry_key", params.exclusiveStart ? ">" : ">=", params.keyStartInclusive)
     .where("entry_key", "<", params.keyEndExclusive);
   const filter = params.valueFilter;
   if (filter) {
@@ -339,14 +350,15 @@ export function deleteExpiredPluginStateEntries(
   db: EngineConnection,
   now: number,
   scope: { pluginId: string; namespace: string },
+  hasExpiredEntries = false,
 ): number {
   if (isRetainedPluginStateNamespace(scope.namespace)) {
     return 0;
   }
   const kysely = getPluginStateKysely(db);
   // The expiry index can prove there is nothing due without scanning the namespace.
-  // Only compilation is retained; expiry is checked in the caller's current transaction.
-  if (pluginStateExpiryQuery(db)(now).rows.length === 0) {
+  // Reuse expiry already observed by the namespace aggregate in this transaction.
+  if (!hasExpiredEntries && pluginStateExpiryQuery(db)(now).rows.length === 0) {
     return 0;
   }
   // Leave namespace scans unsorted to avoid an unbounded sort under the write lock.

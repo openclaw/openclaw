@@ -12,6 +12,7 @@ import {
   decodeGatewayOperatorRecoverySource,
   type RestartRecoveryOperatorSource,
 } from "../gateway/operator-run-recovery-source.codec.js";
+import { hasTransferredCronOwner } from "./human-owner.js";
 import type { CronInferenceBinding } from "./inference-binding.js";
 import { resolveCronRunAdmissionSource } from "./run-authority.js";
 import type { CronRuntimeAuthority } from "./runtime-authority.js";
@@ -51,7 +52,13 @@ type ScheduledPlacement = "child" | "in-session" | "detached";
 
 type ScheduledAuthority = Readonly<{
   owner: boolean;
-  basis: "operator-source" | "channel-owner" | "profile-role" | "legacy" | "none";
+  basis:
+    | "operator-source"
+    | "channel-owner"
+    | "profile-role"
+    | "trusted-policy"
+    | "legacy"
+    | "none";
   /** Undefined for ingress turns, which are admitted without a schedule source. */
   admissionSource?: NonNullable<AdmittedRunContext["admissionSource"]>;
 }>;
@@ -167,6 +174,7 @@ type BuilderJob = Pick<
   | "payload"
   | "operatorSource"
   | "sourceConversation"
+  | "ownerProfileId"
   | "createdActor"
   | "toolsAllowProvenance"
   | "toolsAllowExecTarget"
@@ -177,7 +185,10 @@ type BuilderJob = Pick<
 
 /** Which requester an occurrence must recheck; the caller runs that owner's check. */
 export function resolveScheduledRequester(
-  job: Pick<CronStoredJob, "operatorSource" | "toolsAllowProvenance" | "createdActor">,
+  job: Pick<
+    CronStoredJob,
+    "operatorSource" | "toolsAllowProvenance" | "createdActor" | "ownerProfileId"
+  >,
 ): ScheduledRequesterRef {
   if (job.operatorSource) {
     return {
@@ -189,7 +200,7 @@ export function resolveScheduledRequester(
   if (channelRequester) {
     return { kind: "channel", requester: channelRequester };
   }
-  const profileId = profileIdOf(job.createdActor);
+  const profileId = job.ownerProfileId ?? profileIdOf(job.createdActor);
   // The parent row's creator records who opened the conversation, not who
   // authorized this job, so it is never a fallback.
   return profileId ? { kind: "profile", profileId } : { kind: "unknown" };
@@ -286,10 +297,20 @@ function resolveAuthority(
     basis,
     ...(admissionSource ? { admissionSource } : {}),
   });
+  if (facts.trigger === "cron" && hasTransferredCronOwner(job) && !job.operatorSource) {
+    const owner = facts.requesterCheck?.owner === true;
+    return withSource(owner, owner ? "profile-role" : "none");
+  }
   if (principal.kind === "parent") {
     const { requester } = principal;
     if (requester.kind === "unknown") {
-      return withSource(false, "none");
+      // v2026.10.6 recorded a trusted policy, but no requester, for jobs an
+      // authenticated operator linked with `cron.add --session-key`; agents never
+      // get one. Those runs keep the operator surface they had, like an unlinked
+      // trusted job. Agent-created jobs with no requester stay non-owners.
+      return job.scheduledToolPolicy?.mode === "trusted"
+        ? withSource(true, "trusted-policy")
+        : withSource(false, "none");
     }
     // A missing check fails closed: the caller owns running it each occurrence.
     const owner = facts.requesterCheck?.owner === true;
@@ -452,7 +473,8 @@ export function buildScheduledExecutionContext(
                 ...(liveRow.worktree ? { worktreePath: liveRow.worktree.path } : {}),
               }
             : { source: "run-session" },
-        fileScope: detached ? "root" : "session",
+        // Only an in-session run uses its session's file scope; child runs stay at root.
+        fileScope: placement === "in-session" ? "session" : "root",
         bootstrap: detached ? "cron-allowlist" : "default",
         sandbox: { required: sandboxBasis.length > 0, basis: sandboxBasis },
         ...(job.toolsAllowExecTarget ? { execHost: job.toolsAllowExecTarget } : {}),

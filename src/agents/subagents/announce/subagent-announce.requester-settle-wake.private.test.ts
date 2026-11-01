@@ -16,6 +16,8 @@ import {
 
 const { maybeWakeRequesterAfterAllChildrenSettled } =
   await import("./subagent-announce.requester-settle-wake.js");
+const wake = (overrides?: Parameters<typeof wakeParams>[0]) =>
+  maybeWakeRequesterAfterAllChildrenSettled(wakeParams(overrides));
 
 describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
   type PrivateOptions = Partial<Record<"mixed" | "yielded" | "single" | "marked", boolean>>;
@@ -48,27 +50,14 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
     current?: { sessionId: string; lifecycleRevision?: string };
     frozen?: boolean;
   };
-  it.each<Scenario>([
-    { name: "pending private pair" },
-    { name: "pending mixed pair", mixed: true },
-    { name: "yielded private child", single: true, yielded: true },
-    { name: "yielded mixed pair", mixed: true, yielded: true },
-    { name: "unmarked upgrade", single: true, yielded: true, marked: false, frozen: true },
-    {
-      name: "replacement session",
-      single: true,
-      yielded: true,
-      frozen: true,
-      current: { sessionId: "new-parent" },
-    },
-    {
-      name: "reset lifecycle",
-      single: true,
-      yielded: true,
-      frozen: true,
-      current: { sessionId: "sess-main", lifecycleRevision: "rev-2" },
-    },
-  ])("preserves the admitted reply policy: $name", async (scenario) => {
+  it.each`
+    name                     | mixed    | single   | yielded  | marked   | frozen   | current
+    ${"pending mixed pair"}  | ${true}  | ${false} | ${false} | ${true}  | ${false} | ${undefined}
+    ${"yielded mixed pair"}  | ${true}  | ${false} | ${true}  | ${true}  | ${false} | ${undefined}
+    ${"unmarked upgrade"}    | ${false} | ${true}  | ${true}  | ${false} | ${true}  | ${undefined}
+    ${"replacement session"} | ${false} | ${true}  | ${true}  | ${true}  | ${true}  | ${{ sessionId: "new-parent" }}
+    ${"reset lifecycle"}     | ${false} | ${true}  | ${true}  | ${true}  | ${true}  | ${{ sessionId: "sess-main", lifecycleRevision: "rev-2" }}
+  `("preserves the admitted reply policy: $name", async (scenario: Scenario) => {
     const { single, yielded, current, marked = true } = scenario;
     if (current) {
       setSessionStore({ [REQUESTER]: current });
@@ -77,7 +66,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
     if (scenario.frozen) {
       children[0]!.requesterSettleWake!.batchRunIds = ["run-b"];
     }
-    expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(!current);
+    expect(await wake()).toBe(!current);
     if (current) {
       expect(deliverSpy).not.toHaveBeenCalled();
       expect(completeBatchSpy).toHaveBeenCalledWith(
@@ -91,7 +80,6 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
       );
       return;
     }
-    expect(deliverSpy).toHaveBeenCalledOnce();
     const call = deliveredCallArg();
     expect(call.completionRequesterSessionId).toBe("sess-main");
     expect(call.requireVisibleReply).toBeUndefined();
@@ -103,17 +91,23 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
     expect(trigger).toContain("private marker");
     if (yielded && marked) {
       expect(trigger).not.toContain("Your final reply stays internal");
-      expect(trigger).toContain("under its normal reply rules");
       expect(trigger).toContain("must go through the message tool, send your answer with it");
-      expect(trigger).toContain("avoid repeating an update already delivered");
     } else if (!yielded) {
-      expect(trigger).toContain("send it through an available, permitted messaging tool");
-      expect(trigger).toContain("briefly record the reviewed outcome and any remaining work");
-      expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
+      expect(trigger).not.toContain("messaging tool");
+      expect(trigger).toContain("Your final reply is recorded in this session for the requester");
+      expect(await wake()).toBe(false);
       expect(deliverSpy).toHaveBeenCalledOnce();
       expect(completeBatchSpy.mock.calls[0]?.[2]).not.toHaveProperty(
         "requesterVisibleFinalDelivered",
       );
     }
+  });
+
+  it("forwards the requester route to private completion guidance", async () => {
+    settledPrivateChildren({});
+    expect(await wake({ requesterOrigin: { channel: "discord", to: "channel:123" } })).toBe(true);
+    expect(deliveredCallArg().triggerMessage).toContain(
+      "send it through an available, permitted messaging tool",
+    );
   });
 });

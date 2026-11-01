@@ -1,9 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { createSignal } from "solid-js";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred as deferred } from "../../../../../test/helpers/promise.js";
+import { useFakeClock } from "../../../test-helpers/fake-clock.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
@@ -15,24 +16,14 @@ import {
 } from "../../../test-helpers/native-gateways.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import type { SessionDiffProps } from "./chat-sidebar-content-types.ts";
+import {
+  fileResult,
+  FRESH_PATCH,
+  mountPanel,
+  result,
+  SNAPSHOT_PATCH,
+} from "./session-diff-panel.test-support.tsx";
 import { SessionDiffPanel } from "./session-diff-panel.tsx";
-
-function mountPanel() {
-  const [props, setProps] = createSignal<SessionDiffProps>({
-    owner: null,
-    execNode: null,
-    loader: null,
-    loadFileText: null,
-    openFile: null,
-    revealFile: null,
-  });
-  const view = mountSolid(() => <SessionDiffPanel {...props()} />);
-  return {
-    panel: view.container.querySelector<HTMLElement>("openclaw-session-diff")!,
-    unmount: view.unmount,
-    update: (patch: Partial<SessionDiffProps>) => setProps((current) => ({ ...current, ...patch })),
-  };
-}
 
 afterEach(async () => {
   await vi.dynamicImportSettled();
@@ -40,54 +31,6 @@ afterEach(async () => {
   clearNativeGatewayTestState();
   vi.restoreAllMocks();
 });
-
-function result(branch: string): SessionsDiffResult {
-  return {
-    sessionKey: "agent:main:test",
-    branch,
-    baseRef: "main",
-    files: [],
-    additions: 0,
-    deletions: 0,
-  };
-}
-
-const SNAPSHOT_PATCH = [
-  "--- a/example.txt",
-  "+++ b/example.txt",
-  "@@ -3 +3 @@",
-  "-before",
-  "+snapshot line",
-].join("\n");
-
-const FRESH_PATCH = [
-  "--- a/example.txt",
-  "+++ b/example.txt",
-  "@@ -1,3 +1,3 @@",
-  " fresh gap edit",
-  " context",
-  "-before",
-  "+fresh snapshot line",
-].join("\n");
-
-function fileResult(patch: string): SessionsDiffResult {
-  return {
-    sessionKey: "agent:main:test",
-    branch: "feature/test",
-    baseRef: "main",
-    files: [
-      {
-        path: "example.txt",
-        status: "modified",
-        additions: 1,
-        deletions: 1,
-        patch,
-      },
-    ],
-    additions: 1,
-    deletions: 1,
-  };
-}
 
 describe("SessionDiffPanel readiness", () => {
   it("renders a skeleton only while a real diff request is pending", async () => {
@@ -141,10 +84,7 @@ describe("SessionDiffPanel readiness", () => {
   it.each(["resolve", "reject"])(
     "defers an inactive owner read without holding its sibling's transition: %s",
     async (outcome) => {
-      vi.useFakeTimers();
-      onTestFinished(() => {
-        vi.useRealTimers();
-      });
+      useFakeClock();
       const pending = deferred<SessionsDiffResult>();
       const loader = vi
         .fn<NonNullable<SessionDiffProps["loader"]>>()
@@ -224,10 +164,7 @@ describe("SessionDiffPanel readiness", () => {
   });
 
   it("keeps computing responses pending and retains the last diff during refresh", async () => {
-    vi.useFakeTimers();
-    onTestFinished(() => {
-      vi.useRealTimers();
-    });
+    useFakeClock();
     const computing = { ...result("feature/test"), computing: true };
     const slow = deferred<SessionsDiffResult>();
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
@@ -276,10 +213,7 @@ describe("SessionDiffPanel readiness", () => {
   });
 
   it("stops computing polls while hidden or inactive and retires them with the request owner", async () => {
-    vi.useFakeTimers();
-    onTestFinished(() => {
-      vi.useRealTimers();
-    });
+    useFakeClock();
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     const loader = vi.fn().mockResolvedValue({ ...result("feature/test"), computing: true });
     const { panel, update, unmount } = mountPanel();

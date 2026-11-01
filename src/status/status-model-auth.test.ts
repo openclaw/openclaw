@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AuthProfileStore, OAuthCredential } from "../agents/auth-profiles/types.js";
 import { dualRoutes } from "../agents/model-auth-availability.test-support.js";
 import * as modelCatalogDecisions from "../agents/model-catalog-decisions.js";
+import { harnessRegistry } from "../agents/model-catalog-fixtures.test-support.js";
 import { createModelRuntimeChoiceOwnerFixture } from "../agents/model-runtime-choice.test-support.js";
 import * as openaiRoutes from "../agents/openai-model-routes.js";
 import { bindPreparedModelRuntimeAuth } from "../agents/prepared-model-runtime-auth.js";
@@ -59,21 +60,13 @@ function statusAuth(options: {
     ...options.model,
     ...(options.nativeDiscovery ? { nativeRuntime: "codex" } : {}),
   };
-  const pluginRegistry = createEmptyPluginRegistry();
-  if (options.nativeDiscovery) {
-    pluginRegistry.agentHarnesses.push({
-      pluginId: "codex",
-      source: "test",
-      harness: {
-        id: "codex",
-        label: "Codex",
+  const pluginRegistry = options.nativeDiscovery
+    ? harnessRegistry("codex", {
         authBootstrap: "harness",
-        supports: () => ({ supported: true }),
         readModelCatalogReadiness: () => options.nativeDiscovery,
         runAttempt: noModelExecution,
-      },
-    });
-  }
+      })
+    : createEmptyPluginRegistry();
   const owner = {
     ...createModelRuntimeChoiceOwnerFixture(
       config,

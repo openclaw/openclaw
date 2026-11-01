@@ -37,7 +37,7 @@ export function captureStalledGatewayStartup(env: NodeJS.ProcessEnv = process.en
     elapsedMs <= GATEWAY_STARTUP_BUDGET_MS ||
     holder.startTime === undefined ||
     !isPidAlive(holder.pid) ||
-    classifyGatewayLockProcessNamespace(holder.processNamespace, lockPath) !== "same"
+    classifyGatewayLockProcessNamespace(holder, lockPath) !== "same"
   ) {
     return undefined;
   }

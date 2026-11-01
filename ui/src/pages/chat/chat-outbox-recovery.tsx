@@ -2,7 +2,9 @@ import { action, createMemo, createOptimistic, createSignal, For, onSettled, Sho
 import type { SessionsListResult } from "../../api/types.ts";
 import { readOfflineStorageScope } from "../../app/boot-record.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
 import type { DurableComposerRecoveryEntry } from "../../lib/chat/composer-draft-store.runtime.ts";
+import "../../styles/chat/outbox-recovery.css";
 import {
   captureChatOutboxRecoveryDestination,
   discardChatOutboxRecovery,
@@ -11,7 +13,6 @@ import {
   retireDeliveredChatOutboxRecovery,
   type ChatOutboxRecoveryEntry,
 } from "../../lib/chat/outbox-recovery.ts";
-import "../../styles/chat/outbox-recovery.css";
 import {
   parseStoredChatOutboxScope,
   storageTargetForGateway,
@@ -19,10 +20,12 @@ import {
   subscribeStoredChatOutboxChanges,
 } from "../../lib/chat/outbox-store.ts";
 import { formatDateTimeMs } from "../../lib/format.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 type RecoveryEntry = ChatOutboxRecoveryEntry | DurableComposerRecoveryEntry;
 type RecoveryHost = Parameters<typeof captureChatOutboxRecoveryDestination>[0] &
@@ -36,7 +39,10 @@ type RecoveryHost = Parameters<typeof captureChatOutboxRecoveryDestination>[0] &
     sessionsResult?: SessionsListResult | null;
   };
 
-const draftStore = import("../../lib/chat/composer-draft-store.runtime.ts");
+// Start at the first admitted refresh, preserving promise ordering for recovery actions.
+let draftStore: Promise<typeof import("../../lib/chat/composer-draft-store.runtime.ts")>;
+const loadDraftStore = () =>
+  (draftStore ??= import("../../lib/chat/composer-draft-store.runtime.ts"));
 
 type RecoveryProps = {
   host: RecoveryHost | undefined;
@@ -131,7 +137,7 @@ function createChatOutboxRecovery(props: RecoveryProps, element: () => HTMLEleme
       }
       setEntries(recovery?.entries ?? []);
       setError(retirementError || (recovery?.blocked ? t("chat.outboxRecoveryFull") : ""));
-      const result = await (await draftStore).prepareDurableComposerRecovery(owner);
+      const result = await (await loadDraftStore()).prepareDurableComposerRecovery(owner);
       if (request !== generation || !isConnected()) {
         return;
       }
@@ -195,7 +201,7 @@ function createChatOutboxRecovery(props: RecoveryProps, element: () => HTMLEleme
         if ("id" in entry) {
           result = discardChatOutboxRecovery(host, entry, isCurrent);
         } else {
-          const store: Awaited<typeof draftStore> = yield draftStore;
+          const store: Awaited<typeof draftStore> = yield loadDraftStore();
           const discarded: Awaited<ReturnType<typeof store.discardDurableComposerRecovery>> =
             yield store.discardDurableComposerRecovery(owner, entry, isCurrent);
           result = discarded.status;
@@ -222,7 +228,7 @@ function createChatOutboxRecovery(props: RecoveryProps, element: () => HTMLEleme
       const scope = resolveUiConversationIdentity(host, host.sessionKey);
       const destination = captureChatOutboxRecoveryDestination(host, scope);
       const durableScope = { ...owner, scopeKey: `chat:v3:${storedChatOutboxScopeKey(scope)}` };
-      const store: Awaited<typeof draftStore> = yield draftStore;
+      const store: Awaited<typeof draftStore> = yield loadDraftStore();
       const before: Awaited<ReturnType<typeof store.readDurableComposerDraft>> =
         yield store.readDurableComposerDraft(durableScope);
       if (before.status === "storage-failed") {
@@ -344,14 +350,6 @@ function preview(entry: RecoveryEntry) {
   }
   return t("chat.outboxRecoveryQueued");
 }
-function unconfirmed(entry: RecoveryEntry) {
-  return (
-    "id" in entry &&
-    entry.session.queue?.some(
-      (item) => (item.sendAttempts ?? 0) > 0 || item.sendState === "unconfirmed",
-    )
-  );
-}
 function details(entry: RecoveryEntry) {
   const session = "id" in entry ? entry.session : null;
   const text = "id" in entry ? entry.session.draft : entry.text;
@@ -375,7 +373,6 @@ function details(entry: RecoveryEntry) {
         : "",
       item.attachmentStorageError ? t("chat.outboxRecoveryAttachmentMissing") : "",
     ]),
-    unconfirmed(entry) ? t("chat.outboxRecoveryUnconfirmed") : "",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -428,11 +425,6 @@ function RecoveryRow(props: {
         {t(view().queued ? "chat.outboxRecoveryQueued" : "chat.outboxRecoveryDraft")}
       </span>
       <span class="chat-outbox-recovery__preview">{preview(props.entry)}</span>
-      {unconfirmed(props.entry) ? (
-        <span class="chat-outbox-recovery__warning" title={t("chat.outboxRecoveryUnconfirmed")}>
-          {t("chat.outboxRecoveryUnconfirmedLabel")}
-        </span>
-      ) : null}
       {view().source ? (
         <span class="chat-outbox-recovery__source">
           {t("chat.outboxRecoverySource", {

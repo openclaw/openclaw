@@ -12,43 +12,33 @@ registerUsageEnglish();
 
 const CHARS_PER_TOKEN = 4;
 const DAY_MS = 86_400_000;
-
-type UsageCostWindowSummary = {
-  days: number;
-  endDate: string;
-  totals: UsageTotals;
-};
+const costFormatters: Partial<Record<2 | 4 | 6, Intl.NumberFormat>> = {};
+// These labels use the host realm's default locale, independently of the UI language.
+let dayLabelFormatter: Intl.DateTimeFormat | undefined;
+let fullDateFormatter: Intl.DateTimeFormat | undefined;
 
 function charsToTokens(chars: number): number {
   return Math.round(chars / CHARS_PER_TOKEN);
 }
 
-/** A turn that ended before final usage leaves a known subtotal: show it as a lower bound. */
-function atLeast(value: string, report?: UsageTotals["usageReport"]): string {
-  return report?.state === "unavailable" ? t("usage.common.atLeast", { value }) : value;
-}
-
-function formatUsageTokens(n: number, report?: UsageTotals["usageReport"]): string {
-  return atLeast(
-    formatCompactTokenCount(n, { thousandsSuffix: "K", trimTrailingZero: false }),
-    report,
-  );
+function formatUsageTokens(n: number): string {
+  return formatCompactTokenCount(n, { thousandsSuffix: "K", trimTrailingZero: false });
 }
 
 // Usage charts choose fixed precision from the surrounding scale; the shared
 // adaptive cost formatter would change labels as values cross its thresholds.
-function formatUsageCost(n: number, decimals = 2, report?: UsageTotals["usageReport"]): string {
-  const amount = n.toLocaleString("en-US", {
+function formatUsageCost(n: number, decimals: 2 | 4 | 6 = 2): string {
+  const formatter = (costFormatters[decimals] ??= new Intl.NumberFormat("en-US", {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
-  });
-  return atLeast(`$${amount}`, report);
+  }));
+  return `$${formatter.format(n)}`;
 }
 
-export function formatAnalysisCost(value: number, report?: UsageTotals["usageReport"]): string {
+export function formatAnalysisCost(value: number): string {
   const magnitude = Math.abs(value);
   const decimals = magnitude === 0 || magnitude >= 0.01 ? 2 : magnitude >= 0.0001 ? 4 : 6;
-  return formatUsageCost(value, decimals, report);
+  return formatUsageCost(value, decimals);
 }
 
 function formatHourLabel(hour: number): string {
@@ -96,23 +86,41 @@ function parseIsoDayIndex(dateStr: string): number | null {
 }
 
 function formatDayLabel(dateStr: string): string {
-  return formatCalendarDate(dateStr, { month: "short", day: "numeric" });
+  const date = parseYmdDate(dateStr);
+  if (!date) {
+    return dateStr;
+  }
+  dayLabelFormatter ??= new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+  return dayLabelFormatter.format(date);
 }
 
 function formatFullDate(dateStr: string): string {
-  return formatCalendarDate(dateStr, { month: "long", day: "numeric", year: "numeric" });
-}
-
-function formatCalendarDate(dateStr: string, options: Intl.DateTimeFormatOptions): string {
   const date = parseYmdDate(dateStr);
-  return date ? date.toLocaleDateString(undefined, { ...options, timeZone: "UTC" }) : dateStr;
+  if (!date) {
+    return dateStr;
+  }
+  fullDateFormatter ??= new Intl.DateTimeFormat(undefined, {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+  return fullDateFormatter.format(date);
 }
 
 function buildUsageCostWindows(
   daily: Array<UsageTotals & { date: string }>,
   rangeStartDate: string,
   rangeEndDate: string,
-): UsageCostWindowSummary[] {
+): {
+  days: number;
+  endDate: string;
+  totals: UsageTotals;
+}[] {
   const rangeStartDay = parseIsoDayIndex(rangeStartDate);
   const rangeEndDay = parseIsoDayIndex(rangeEndDate);
   if (rangeStartDay === null || rangeEndDay === null || rangeStartDay > rangeEndDay) {
@@ -120,17 +128,24 @@ function buildUsageCostWindows(
   }
 
   const rangeDays = rangeEndDay - rangeStartDay + 1;
-  return [rangeDays, ...[1, 7, 30, 90].filter((days) => days < rangeDays)].map((days) => {
-    const startDay = rangeEndDay - days + 1;
-    const totals = createEmptyCostUsageTotals();
-    for (const entry of daily) {
-      const day = parseIsoDayIndex(entry.date);
-      if (day !== null && day >= startDay && day <= rangeEndDay) {
-        addCostUsageTotals(totals, entry);
+  const windows = [rangeDays, ...[1, 7, 30, 90].filter((days) => days < rangeDays)].map((days) => ({
+    days,
+    endDate: rangeEndDate,
+    totals: createEmptyCostUsageTotals(),
+  }));
+  for (const entry of daily) {
+    const day = parseIsoDayIndex(entry.date);
+    if (day === null || day < rangeStartDay || day > rangeEndDay) {
+      continue;
+    }
+    const daysAgo = rangeEndDay - day;
+    for (const window of windows) {
+      if (daysAgo < window.days) {
+        addCostUsageTotals(window.totals, entry);
       }
     }
-    return { days, endDate: rangeEndDate, totals };
-  });
+  }
+  return windows;
 }
 
 type UsageInsightStats = {

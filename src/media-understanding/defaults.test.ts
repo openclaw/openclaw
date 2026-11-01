@@ -4,17 +4,17 @@ import type { MediaUnderstandingProvider } from "./types.js";
 const mediaMetadataPlugins = vi.hoisted(() => {
   const pdf = { pdf: { textExtraction: "MiniMax-M2.7", image: false } };
   const minimax = { capabilities: ["image"], documentModels: pdf };
+  const mediaUnderstandingProviderMetadata = {
+    google: { capabilities: ["image"], autoPriority: { image: 30 } },
+    minimax: { ...minimax, autoPriority: { image: 40 } },
+    "minimax-portal": { ...minimax, autoPriority: { image: 50 } },
+    openrouter: { capabilities: ["image"], defaultModels: { image: "auto" } },
+    openai: {},
+  };
   return [
     {
-      contracts: {
-        mediaUnderstandingProviders: ["google", "minimax", "minimax-portal", "openrouter"],
-      },
-      mediaUnderstandingProviderMetadata: {
-        google: { capabilities: ["image"], autoPriority: { image: 30 } },
-        minimax: { ...minimax, autoPriority: { image: 40 } },
-        "minimax-portal": { ...minimax, autoPriority: { image: 50 } },
-        openrouter: { capabilities: ["image"], defaultModels: { image: "auto" } },
-      },
+      contracts: { mediaUnderstandingProviders: Object.keys(mediaUnderstandingProviderMetadata) },
+      mediaUnderstandingProviderMetadata,
     },
   ];
 });
@@ -31,7 +31,6 @@ vi.mock("../plugins/manifest-contract-eligibility.js", () => {
 });
 
 import {
-  providerSupportsNativePdfDocument,
   resolveAutoMediaKeyProviders,
   resolveDefaultMediaModel,
   resolveDocumentMediaModel,
@@ -55,11 +54,7 @@ describe("media defaults", () => {
   });
   it("orders priorities without conflating declared capabilities and runtime hooks", () => {
     const capability = "video";
-    const hooks = {
-      describeImage: async () => ({ text: "image" }),
-      transcribeAudio: async () => ({ text: "audio" }),
-      describeVideo: async () => ({ text: "video" }),
-    };
+    const hooks = { describeVideo: async () => ({ text: "video" }) };
     const providers: MediaUnderstandingProvider[] = [
       { id: "z-tie", capabilities: [capability], autoPriority: { [capability]: 2 } },
       { id: "a-tie", capabilities: [capability], autoPriority: { [capability]: 2 } },
@@ -84,7 +79,6 @@ describe("media defaults", () => {
       "google",
       "google",
     ]);
-    expect([...providerRegistry.values()]).toEqual(providers);
   });
 
   it("preserves configured MiniMax CN aliases for image auto discovery", () => {
@@ -101,32 +95,23 @@ describe("media defaults", () => {
       } as never,
     });
 
-    expect(providers).toContain("minimax-cn");
-    expect(providers).toContain("minimax-portal-cn");
-    expect(providers).not.toContain("gemini");
-    expect(providers).toContain("google");
-    expect(providers.indexOf("minimax-cn")).toBeLessThan(providers.indexOf("minimax"));
-    expect(providers.indexOf("minimax-portal-cn")).toBeLessThan(
-      providers.indexOf("minimax-portal"),
-    );
-  });
-  it("reads native PDF support from provider metadata", () => {
-    const providerRegistry = new Map([
-      ["anthropic", { id: "anthropic", nativeDocumentInputs: ["pdf" as const] }],
-      ["google", { id: "google", nativeDocumentInputs: ["pdf" as const] }],
-      ["openai", { id: "openai", nativeDocumentInputs: [] }],
+    expect(providers).toEqual([
+      "google",
+      "minimax-cn",
+      "minimax",
+      "minimax-portal-cn",
+      "minimax-portal",
     ]);
-    const supports = (providerId: string) =>
-      providerSupportsNativePdfDocument({ providerId, providerRegistry });
-    expect([supports("anthropic"), supports("google"), supports("openai")]).toEqual([
-      true,
-      true,
-      false,
+    providers.length = 0;
+    expect(resolveAutoMediaKeyProviders({ capability: "image" })).toEqual([
+      "google",
+      "minimax",
+      "minimax-portal",
     ]);
   });
   it("reads document model hints from provider metadata", () => {
     const resolve = (providerId: string, mode: "textExtraction" | "image") =>
-      resolveDocumentMediaModel({ providerId, document: "pdf", mode });
+      resolveDocumentMediaModel({ providerId, mode });
     expect(resolve("minimax-portal-cn", "textExtraction")).toBe("MiniMax-M2.7");
     expect(resolve("minimax", "image")).toBe(false);
     expect(resolve("openai", "textExtraction")).toBeUndefined();

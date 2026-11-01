@@ -533,8 +533,9 @@ describe("OAuth refresh authority chain", () => {
       const peer = await startPendingPeer(scenario, client, SAME_PEER_MARKER);
 
       scenario.provider.releaseRefresh();
-      await expect(owner.terminal).resolves.toMatchObject({ status: "ok" });
-      await expect(peer.terminal).resolves.toMatchObject({ status: "ok" });
+      const [ownerTerminal, peerTerminal] = await Promise.all([owner.terminal, peer.terminal]);
+      expect(ownerTerminal.status, JSON.stringify(ownerTerminal)).toBe("ok");
+      expect(peerTerminal.status, JSON.stringify(peerTerminal)).toBe("ok");
       await vi.waitFor(() => expect(scenario.provider.modelRequests).toHaveLength(2), {
         interval: 20,
         timeout: REQUEST_TIMEOUT_MS,

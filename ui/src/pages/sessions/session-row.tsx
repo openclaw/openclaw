@@ -5,9 +5,13 @@ import {
 import { createMemo, Errored, For, isPending, latest, Loading, Show } from "solid-js";
 import { formatAgentRuntimeLabel } from "../../../../src/shared/agent-runtime-display.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
-import type { AgentIdentityResult, GatewaySessionRow } from "../../api/types.ts";
+import {
+  formatGoalDetail,
+  formatGoalSummary,
+} from "../../../../src/shared/session-goal-display.js";
+import type { AgentIdentityResult, GatewaySessionRow, SessionRunStatus } from "../../api/types.ts";
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
+import { sessionIconMask } from "../../components/solid/icon.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import {
   formatThinkingOverrideLabel,
@@ -23,7 +27,7 @@ import { formatSessionTokens } from "../../lib/presenter.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { liveValue as createLiveValue } from "../../lib/reactive/live-value.ts";
 import { resolveSessionDisplayKind } from "../../lib/session-display.ts";
-import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
 import {
   resolveSessionPreferredFace,
@@ -33,10 +37,53 @@ import { formatSessionArchiveReason } from "../../lib/sessions/session-archive-r
 import { parseAgentSessionKey, parseSessionKeyParts } from "../../lib/sessions/session-key.ts";
 import type { JSX as SolidJSX } from "../../types/solid-elements.js";
 import { CategoryCell } from "./category-cell.tsx";
-import { SessionStatusBadge } from "./session-status.tsx";
 import { categoryDropHandlers } from "./sessions-filters.tsx";
 import type { SessionsProps } from "./view-types.ts";
 import "../../components/tooltip.ts";
+
+const SESSION_RUN_STATUS_LABELS = {
+  queued: "sessionsView.statusQueued",
+  running: "sessionsView.statusRunning",
+  done: "sessionsView.statusDone",
+  failed: "sessionsView.statusFailed",
+  interrupted: "sessionsView.statusInterrupted",
+  killed: "sessionsView.statusKilled",
+  timeout: "sessionsView.statusTimeout",
+} as const satisfies Record<SessionRunStatus, string>;
+
+function SessionStatusBadge(props: { row: GatewaySessionRow }) {
+  const active = () => isSessionRunStateActive(props.row);
+  const idle = () =>
+    props.row.hasActiveRun === false && (!props.row.status || props.row.status === "running");
+  const label = () =>
+    t(
+      props.row.status === "queued"
+        ? "sessionsView.statusQueued"
+        : active()
+          ? "sessionsView.statusLive"
+          : idle()
+            ? "sessionsView.statusIdle"
+            : (props.row.status && SESSION_RUN_STATUS_LABELS[props.row.status]) ||
+              "sessionsView.statusUnknown",
+    );
+  const kind = (): "ok" | "warn" | "muted" | "danger" =>
+    props.row.status === "queued"
+      ? "warn"
+      : active() || props.row.status === "done"
+        ? "ok"
+        : idle() || !props.row.status || props.row.status === "interrupted"
+          ? "muted"
+          : "danger";
+  const detail = () => `${t("sessionsView.status")}: ${label()}`;
+  // The tooltip needs a focusable trigger for keyboard access.
+  return (
+    <openclaw-tooltip prop:content={detail()}>
+      <span tabindex="0" aria-label={detail()}>
+        <SettingsStatus kind={kind()} label={label()} />
+      </span>
+    </openclaw-tooltip>
+  );
+}
 
 const VERBOSE_LEVEL_VALUES = ["", "off", "on", "full"] as const;
 const FAST_LEVEL_VALUES = ["", "auto", "on", "off"] as const;
@@ -97,47 +144,47 @@ function SessionGoalStatus(props: { goal: GatewaySessionRow["goal"] }) {
 function sessionDetailItems(
   row: GatewaySessionRow,
   updated: string,
-): Array<{ label: string; value: string }> {
-  const details: Array<{ label: string; value: string }> = [
-    { label: t("sessionsView.key"), value: row.key },
-    { label: t("sessionsView.kind"), value: resolveSessionDisplayKind(row) },
-    { label: t("sessionsView.updated"), value: updated },
-    { label: t("sessionsView.tokens"), value: formatSessionTokens(row) },
+): Array<{ key: string; value: string }> {
+  const details: Array<{ key: string; value: string }> = [
+    { key: "sessionsView.key", value: row.key },
+    { key: "sessionsView.kind", value: resolveSessionDisplayKind(row) },
+    { key: "sessionsView.updated", value: updated },
+    { key: "sessionsView.tokens", value: formatSessionTokens(row) },
   ];
-  const add = (label: string, value: string | null | undefined) => {
+  const add = (key: string, value: string | null | undefined) => {
     const normalized = normalizeOptionalString(value);
     if (normalized) {
-      details.push({ label, value: normalized });
+      details.push({ key, value: normalized });
     }
   };
-  add(t("sessionsView.group"), row.category);
-  add(t("sessionsView.status"), row.status);
+  add("sessionsView.group", row.category);
+  add("sessionsView.status", row.status);
   if (row.goal) {
-    details.push({ label: t("sessionsView.goal"), value: formatGoalDetail(row.goal) });
+    details.push({ key: "sessionsView.goal", value: formatGoalDetail(row.goal) });
   }
-  add(t("sessionsView.goalNote"), row.goal?.lastStatusNote);
-  add(t("sessionsView.model"), row.model);
-  add(t("sessionsView.provider"), row.modelProvider);
-  add(t("sessionsView.runtime"), formatAgentRuntimeLabel(row.agentRuntime));
-  add(t("sessionsView.runDuration"), formatRuntimeMs(row.runtimeMs));
-  add(t("sessionsView.surface"), row.surface);
-  add(t("sessionsView.subject"), row.subject);
-  add(t("sessionsView.room"), row.room);
-  add(t("sessionsView.space"), row.space);
-  add(t("sessionsView.sessionId"), row.sessionId);
+  add("sessionsView.goalNote", row.goal?.lastStatusNote);
+  add("sessionsView.model", row.model);
+  add("sessionsView.provider", row.modelProvider);
+  add("sessionsView.runtime", formatAgentRuntimeLabel(row.agentRuntime));
+  add("sessionsView.runDuration", formatRuntimeMs(row.runtimeMs));
+  add("sessionsView.surface", row.surface);
+  add("sessionsView.subject", row.subject);
+  add("sessionsView.room", row.room);
+  add("sessionsView.space", row.space);
+  add("sessionsView.sessionId", row.sessionId);
   if (row.archiveReason) {
     details.push({
-      label: t("sessionsView.archiveReason"),
+      key: "sessionsView.archiveReason",
       value: formatSessionArchiveReason(row.archiveReason),
     });
   }
-  for (const [label, value] of [
-    [t("sessionsView.activeRun"), row.hasActiveRun],
-    [t("sessionsView.archived"), row.archived],
-    [t("sessionsView.pinned"), row.pinned],
+  for (const [key, value] of [
+    ["sessionsView.activeRun", row.hasActiveRun],
+    ["sessionsView.archived", row.archived],
+    ["sessionsView.pinned", row.pinned],
   ] as const) {
     if (typeof value === "boolean") {
-      details.push({ label, value: value ? t("common.yes") : t("common.no") });
+      details.push({ key, value: value ? t("common.yes") : t("common.no") });
     }
   }
   return details;
@@ -154,14 +201,15 @@ function isRowControlTarget(target: EventTarget | null): boolean {
   );
 }
 
-export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
+export function SessionRows(props: SessionsProps & { row: GatewaySessionRow; rowIndex: number }) {
   let menuTrigger: HTMLButtonElement | null = null;
-  let sessionLink: HTMLAnchorElement | undefined;
   const row = createMemo(() => props.row);
   const updated = createMemo(() =>
     row().updatedAt ? formatRelativeTimestamp(row().updatedAt) : t("common.na"),
   );
-  const isExpanded = () => props.expandedSessionKey === row().key;
+  const isExpanded = createMemo(() => props.expandedSessionKey === row().key);
+  const selectLabel = createMemo(() => t("sessionsView.selectSession"));
+  const menuLabel = createMemo(() => t("chat.sidebar.openSessionMenu"));
   const detailsId = () => `session-details-${encodeURIComponent(row().key)}`;
   const displayName = () => normalizeOptionalString(row().displayName) ?? null;
   const trimmedLabel = () => normalizeOptionalString(row().label) ?? "";
@@ -202,10 +250,11 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
     },
   ];
   // The {count} placeholder predates the drawer redesign; it carries the session title.
-  const detailsToggleLabel = () =>
+  const detailsToggleLabel = createMemo(() =>
     isExpanded()
       ? t("sessionsView.hideSessionDetails", { count: keyCellTitle() })
-      : t("sessionsView.showSessionDetails", { count: keyCellTitle() });
+      : t("sessionsView.showSessionDetails", { count: keyCellTitle() }),
+  );
   const categoryMode = () => props.groupBy === "category";
   // Dropping on a row targets that row's group so the whole section area accepts drops.
   const rowDrop = createMemo(() =>
@@ -226,6 +275,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
     <>
       <tr
         class={rowClass()}
+        aria-rowindex={props.rowIndex}
         tabindex="0"
         aria-controls={isExpanded() ? detailsId() : undefined}
         draggable={categoryMode() ? "true" : undefined}
@@ -265,50 +315,47 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
             type="checkbox"
             checked={props.selectedKeys.has(row().key)}
             onChange={() => props.onToggleSelect(row().key)}
-            aria-label={`${t("sessionsView.selectSession")}: ${row().key}`}
+            aria-label={`${selectLabel()}: ${row().key}`}
           />
         </td>
         <td class="data-table-key-col">
-          <openclaw-tooltip
-            prop:content={keyCellTitle()}
-            prop:descriptionTarget={canLink() ? () => sessionLink ?? null : undefined}
+          <div
+            class={["session-key-cell", { mono: !friendlyKeyLabel() }]}
+            data-tooltip={keyCellTitle()}
           >
-            <div class={["session-key-cell", { mono: !friendlyKeyLabel() }]}>
-              <div class="session-key-cell__text">
-                <span class="session-key-cell__primary">
-                  {row().unread === true ? (
-                    <span
-                      class="session-unread-dot"
-                      role="img"
-                      aria-label={t("sessionsView.unread")}
-                    />
-                  ) : undefined}
-                  {canLink() ? (
-                    <a
-                      ref={(element) => (sessionLink = element)}
-                      href={chatUrl()}
-                      class="session-link"
-                      onClick={(e: MouseEvent) =>
-                        handleNavigationClick(e, () => props.onNavigateToChat(row().key))
-                      }
-                    >
-                      {friendlyKeyLabel() ?? row().key}
-                    </a>
-                  ) : (
-                    <span>{friendlyKeyLabel() ?? row().key}</span>
-                  )}
-                  {trimmedLabel() ? (
-                    <span class="session-label-chip" title={trimmedLabel()}>
-                      {trimmedLabel()}
-                    </span>
-                  ) : undefined}
-                </span>
-                {showDisplayName() ? (
-                  <span class="muted session-key-display-name">{displayName()}</span>
+            <div class="session-key-cell__text">
+              <span class="session-key-cell__primary">
+                {row().unread === true ? (
+                  <span
+                    class="session-unread-dot"
+                    role="img"
+                    aria-label={t("sessionsView.unread")}
+                  />
                 ) : undefined}
-              </div>
+                {canLink() ? (
+                  <a
+                    href={chatUrl()}
+                    class="session-link"
+                    onClick={(e: MouseEvent) =>
+                      handleNavigationClick(e, () => props.onNavigateToChat(row().key))
+                    }
+                  >
+                    {friendlyKeyLabel() ?? row().key}
+                  </a>
+                ) : (
+                  <span>{friendlyKeyLabel() ?? row().key}</span>
+                )}
+                {trimmedLabel() ? (
+                  <span class="session-label-chip" title={trimmedLabel()}>
+                    {trimmedLabel()}
+                  </span>
+                ) : undefined}
+              </span>
+              {showDisplayName() ? (
+                <span class="muted session-key-display-name">{displayName()}</span>
+              ) : undefined}
             </div>
-          </openclaw-tooltip>
+          </div>
         </td>
         {props.allAgentsScope ? (
           <td class="session-agent-col">
@@ -332,14 +379,18 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
                 props.onToggleDetails(row().key);
               }}
             >
-              <Icon name="chevronDown" />
+              <i
+                class="session-css-icon"
+                aria-hidden="true"
+                style={{ "mask-image": sessionIconMask("chevronDown") }}
+              />
             </button>
             <button
               ref={(element) => (menuTrigger = element)}
               class="icon-btn"
               type="button"
-              title={t("chat.sidebar.openSessionMenu")}
-              aria-label={`${t("chat.sidebar.openSessionMenu")}: ${row().key}`}
+              title={menuLabel()}
+              aria-label={`${menuLabel()}: ${row().key}`}
               aria-haspopup="menu"
               aria-expanded={props.sessionMenu?.key === row().key ? "true" : "false"}
               onClick={(event) => {
@@ -349,7 +400,11 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
                 props.onOpenSessionMenu(row(), { x: rect.right, y: rect.bottom + 4 }, trigger);
               }}
             >
-              <Icon name="moreHorizontal" />
+              <i
+                class="session-css-icon"
+                aria-hidden="true"
+                style={{ "mask-image": sessionIconMask("moreHorizontal") }}
+              />
             </button>
           </div>
         </td>
@@ -484,12 +539,19 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
           </div>
 
           <div class="session-details-grid">
-            <For each={sessionDetailItems(row(), updated())}>
+            <For each={sessionDetailItems(row(), updated())} keyed={(item) => item.key}>
               {(item) => (
                 <div class="session-detail-stat">
-                  <div class="session-detail-stat__label">{item.label}</div>
-                  <openclaw-tooltip prop:content={item.value}>
-                    <div class="session-detail-stat__value">{item.value}</div>
+                  <div class="session-detail-stat__label">{t(item().key)}</div>
+                  {/* Values clip at the column width, so the tooltip is the only full value: it needs a focusable trigger carrying the value it names. */}
+                  <openclaw-tooltip prop:content={item().value}>
+                    <div
+                      class="session-detail-stat__value"
+                      tabindex="0"
+                      aria-label={`${t(item().key)}: ${item().value}`}
+                    >
+                      {item().value}
+                    </div>
                   </openclaw-tooltip>
                 </div>
               )}
@@ -500,7 +562,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
     }
 
     return (
-      <tr id={detailsId()} class="session-details-row">
+      <tr id={detailsId()} class="session-details-row" aria-rowindex={props.rowIndex + 1}>
         <td colspan={sessionsTableColumnCount(props)}>
           <div class="session-details-panel">
             <div class="session-details-panel__hero">

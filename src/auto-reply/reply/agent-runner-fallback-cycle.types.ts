@@ -85,24 +85,17 @@ export type AgentFallbackCycleState = {
   };
 };
 
-type CompletedFallbackCycle = {
-  kind: "completed";
-  runResult: EmbeddedAgentRunResult;
-  fallbackProvider: string;
-  fallbackModel: string;
-  fallbackExhausted: boolean;
-  fallbackAttempts: RuntimeFallbackAttempt[];
-  terminalRunFailed: boolean;
-};
-
 export type AgentFallbackCycleResult =
-  | CompletedFallbackCycle
+  | {
+      kind: "completed";
+      runResult: EmbeddedAgentRunResult;
+      fallbackProvider: string;
+      fallbackModel: string;
+      fallbackExhausted: boolean;
+      fallbackAttempts: RuntimeFallbackAttempt[];
+      terminalRunFailed: boolean;
+    }
   | Extract<AgentTurnInternalResult, { kind: "final" | "aborted" }>;
-
-type AgentFallbackModelPatch = {
-  captureFallbackFailure: (attempts: RuntimeFallbackAttempt[]) => boolean | undefined;
-  captureFailure: (error: unknown) => void;
-};
 
 export type AgentFallbackCycleParams = AgentFallbackRunContext & {
   effectiveRun: FollowupRun["run"];
@@ -120,7 +113,10 @@ export type AgentFallbackCycleParams = AgentFallbackRunContext & {
     | "signalExecutionPhaseForTyping"
   > & { close: () => void };
   notifyUserAboutCompaction: boolean;
-  modelPatch: AgentFallbackModelPatch;
+  modelPatch: {
+    captureFallbackFailure: (attempts: RuntimeFallbackAttempt[]) => boolean | undefined;
+    captureFailure: (error: unknown) => void;
+  };
   shouldSurfaceToControlUi: boolean;
   commitTerminalOutcome: () => void;
   clearRecoveredAutoFallbackPrimaryProbe: (candidate: {

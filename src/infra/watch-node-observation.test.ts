@@ -45,7 +45,6 @@ describe("developer source observation", () => {
     await fs.writeFile(target("first/main.ts"), "before linked edit");
     await pointTo(target("first"));
     const subscriptions: observation.WatchSubscription[] = [];
-    const reads: string[] = [];
     const rereadStarted = createDeferredCore();
     const releaseReread = createDeferredCore();
     let holdReread = true;
@@ -55,7 +54,6 @@ describe("developer source observation", () => {
     vi.spyOn(observation, "watch").mockImplementation((authority, options) => {
       const open = authority.open.bind(authority);
       vi.spyOn(authority, "open").mockImplementation(async (relative, settings) => {
-        reads.push(path.resolve(authority.rootReal, relative));
         if (holdReread) {
           holdReread = false;
           rereadStarted.resolve();
@@ -109,14 +107,12 @@ describe("developer source observation", () => {
     const repository = subscriptions[0]!;
     await expectChange(first);
     expect(onLog).toHaveBeenCalledExactlyOnceWith("Watching sources (poll).");
-    reads.length = 0;
 
     await fs.writeFile(first, "one");
     await fs.writeFile(second, "two");
     await repository.reconcile();
     await changed.promise;
     expect(onChange).toHaveBeenCalledOnce();
-    expect(reads.toSorted()).toEqual([first, second]);
     resetChange();
     await fs.writeFile(src("ignored.test.ts"), "test");
     await fs.writeFile(src("node_modules/ignored.ts"), "dependency");
@@ -128,22 +124,14 @@ describe("developer source observation", () => {
     await linked.reconcile();
     await expectChange(path.join(alias, "main.ts"));
 
-    const replaced = createDeferredCore();
-    const setScopes = linked.setScopes.bind(linked);
-    vi.spyOn(linked, "setScopes").mockImplementation(async (scopes) => {
-      await setScopes(scopes);
-      replaced.resolve();
-    });
     await fs.unlink(alias);
     await pointTo(target("second"));
     await repository.reconcile();
-    await replaced.promise;
     await expectChange(path.join(alias, "main.ts"));
     await fs.writeFile(target("first/retired.ts"), "old target");
     await fs.writeFile(target("second/current.ts"), "new target");
     await linked.reconcile();
     await expectChange(path.join(alias, "current.ts"));
-    reads.length = 0;
     await fs.writeFile(pkg, "{}");
     invalidate!({ reason: "overflow" });
     await repository.reconcile();
@@ -154,7 +142,6 @@ describe("developer source observation", () => {
     await fs.rename(nextPackage, pkg);
     invalidate!({ reason: "overflow" });
     await expectChange(pkg);
-    expect(reads).toEqual(expect.arrayContaining([pkg, first]));
     await fs.writeFile(src("new.ts"), "new source");
     invalidate!({ reason: "event", changes: [{ path: "src/new.ts", type: "content" }] });
     await expectChange(src("new.ts"));

@@ -1,14 +1,21 @@
-import type { Worker } from "node:worker_threads";
-import { createCpuTrackedWorker } from "../../infra/worker-cpu.js";
+import { writeSync } from "node:fs";
+import { Worker } from "node:worker_threads";
+import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
+import { resolveRuntimeWorkerThreadExecArgv } from "../../infra/runtime-worker-url.js";
 
 export type ShutdownHardExitWatchdog = {
+  reportPending: () => void;
   cancel: () => Promise<void>;
 };
 
 export function armShutdownHardExitWatchdog(params: {
   delayMs: number;
+  describePending?: () => string;
   onError: (error: unknown) => void;
-}): ShutdownHardExitWatchdog | null {
+}): ShutdownHardExitWatchdog {
+  const delayMs = Math.max(0, Math.floor(params.delayMs));
+  const deadlineNs = process.hrtime.bigint() + BigInt(delayMs) * 1_000_000n;
+  let pending = params.describePending?.() ?? "unreported";
   const reportError = (error: unknown) => {
     try {
       params.onError(error);
@@ -16,44 +23,58 @@ export function armShutdownHardExitWatchdog(params: {
       // Shutdown must retain the main-thread fallback even if warning delivery fails.
     }
   };
-  let worker: Worker;
+  // Worker bootstrap can itself stall. A responsive main thread retains the same deadline.
+  const timer = setTimeout(() => {
+    try {
+      pending = params.describePending?.() ?? pending;
+      writeSync(
+        2,
+        `hard-exit watchdog deadline reached; pending close steps: ${pending}; forcing SIGKILL\n`,
+      );
+    } finally {
+      process.kill(process.pid, "SIGKILL");
+    }
+  }, delayMs);
+  timer.unref();
+  let worker: Worker | undefined;
+  let exited = Promise.resolve();
+  let active = true;
   try {
-    worker = createCpuTrackedWorker(
-      `const { parentPort, workerData } = require("node:worker_threads");
-       const timer = setTimeout(() => process.kill(process.pid, "SIGKILL"), workerData.delayMs);
-       parentPort.once("message", () => {
-         clearTimeout(timer);
-         parentPort.close();
-       });`,
-      {
-        eval: true,
-        execArgv: [],
-        workerData: { delayMs: Math.max(0, Math.floor(params.delayMs)) },
-      },
-    );
+    const url = resolveRuntimeProcessEntrypointUrl("shutdownHardExit");
+    // Keep this safety net independent of the runtime/telemetry cleanup graph.
+    worker = new Worker(url, {
+      execArgv: resolveRuntimeWorkerThreadExecArgv(url),
+      workerData: { deadlineNs, pending },
+    });
+    const ownedWorker = worker;
+    exited = new Promise<void>((resolve) => {
+      ownedWorker.once("exit", () => resolve());
+    });
+    // The Gateway's process lease retains required cleanup, not this safety net.
+    worker.unref();
+    worker.once("error", (error) => {
+      if (active) {
+        reportError(error);
+      }
+    });
   } catch (error) {
     reportError(error);
-    return null;
   }
 
-  // The Gateway's process lease retains required cleanup, not this safety net.
-  const exited = new Promise<void>((resolve) => {
-    worker.once("exit", () => resolve());
-  });
-  worker.unref();
-  let active = true;
-  worker.once("error", (error) => {
-    if (active) {
-      active = false;
-      reportError(error);
-    }
-  });
-
   return {
+    reportPending: () => {
+      try {
+        pending = params.describePending?.() ?? pending;
+        worker?.postMessage(pending, []);
+      } catch (error) {
+        reportError(error);
+      }
+    },
     cancel: () => {
+      clearTimeout(timer);
       active = false;
       try {
-        worker.postMessage("cancel", []);
+        worker?.postMessage("cancel", []);
       } catch (error) {
         reportError(error);
       }

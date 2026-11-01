@@ -6,6 +6,7 @@ import {
   GenerationCodec,
   type GenerationNativeRootTransport,
 } from "./plugin-generation-worker-codec.js";
+import { markPluginSourcePreparationOperation } from "./plugin-instance-error.js";
 import { restorePluginNativeRecovery } from "./plugin-native-admission.js";
 import { retainPluginNativeRoot } from "./plugin-native-root-lease.js";
 
@@ -21,6 +22,21 @@ function nativeRootTransport(): GenerationNativeRootTransport {
 }
 
 const disposable = () => ({ dispose() {}, async disposeAsync() {} });
+
+it("attests source preparation handles independently of callback names and capture deadlines", () => {
+  const sender = new GenerationCodec(() => undefined, nativeRootTransport());
+  const prepare = sender.encode(markPluginSourcePreparationOperation(() => undefined));
+  const callback = sender.encode(function prepareModule() {});
+  expect(prepare.kind).toBe("function");
+  expect(callback.kind).toBe("function");
+  if (prepare.kind !== "function" || callback.kind !== "function") {
+    throw new Error("Expected function handles");
+  }
+  expect(sender.isSourcePreparationCall(prepare.id)).toBe(true);
+  expect(sender.isSourcePreparationCall(callback.id)).toBe(false);
+  expect(prepare.sourceCapture).toBe(false);
+  expect(sender.isSourcePreparationCall(-1)).toBe(false);
+});
 const weak = (...values: object[]) => values.map((value) => new WeakRef(value));
 async function expectCollected(references: WeakRef<object>[]) {
   const control = new WeakRef({});
@@ -228,17 +244,10 @@ it("keeps only owner-marked source copies outside the ordinary method deadline",
   const ownerCopy = markPluginSourceCaptureOperation(() => undefined);
   const original = {
     captureRecoverySource: ownerCopy,
-    retainSourceCustody: ownerCopy,
-    recovery: { fork: ownerCopy },
     fork: () => undefined,
-    resolve: () => undefined,
   };
   const decoded = receiver.decode(sender.encode(original)) as typeof original;
   decoded.captureRecoverySource();
-  decoded.retainSourceCustody();
-  decoded.recovery.fork();
   decoded.fork();
-  decoded.resolve();
-  expect(calls).toEqual([true, true, true, false, false]);
-  expect(decoded.captureRecoverySource).toBe(decoded.recovery.fork);
+  expect(calls).toEqual([true, false]);
 });

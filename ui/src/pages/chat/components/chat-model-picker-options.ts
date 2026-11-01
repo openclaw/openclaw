@@ -44,16 +44,20 @@ export function isModelPickerOptionSelected(
   );
 }
 
-export function formatModelContextMeta(option: ChatModelPickerOption): string {
+export function formatModelContextMeta(
+  option: ChatModelPickerOption,
+  translate: typeof t = t,
+): string {
   const active = option.contextTokens;
   const maximum = option.contextWindow;
-  if (active && maximum && active !== maximum) {
-    return t("chat.modelControls.contextActiveAndMax", {
+  if (active && maximum && active < maximum) {
+    return translate("chat.modelControls.contextActiveAndMax", {
       active: formatContextTokenCapacity(active),
       maximum: formatContextTokenCapacity(maximum),
     });
   }
-  return maximum ? formatContextTokenCapacity(maximum) : "";
+  const capacity = active || maximum;
+  return capacity ? formatContextTokenCapacity(capacity) : "";
 }
 
 /** Owners omit completed empty groups; a published group has rows or an active receipt. */
@@ -67,7 +71,9 @@ export type ChatModelPickerTargetGroup = {
   completion: { promise: Promise<ChatModelPickerTargetGroup["options"]> };
 };
 
-export function formatModelLabel(option: ChatModelPickerOption): string {
+export function formatModelLabel(
+  option: Pick<ChatModelPickerOption, "label" | "provider">,
+): string {
   const prefixes = [
     formatRawProviderLabel(option.provider),
     providerDisplayLabel(option.provider),

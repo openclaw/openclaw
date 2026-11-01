@@ -19,6 +19,7 @@ import type { assertSupportedJobSpec } from "../../cron/service/jobs-validation.
 import { resolveCronStaggerMs } from "../../cron/stagger.js";
 import type { CronDeliveryPreview, CronJob, CronSchedule } from "../../cron/types.js";
 import { danger } from "../../globals.js";
+import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveTimezone } from "../../infra/format-time/format-datetime.js";
 import { formatExactDuration } from "../../infra/format-time/format-duration-exact.js";
@@ -26,6 +27,7 @@ import { formatDurationHuman } from "../../infra/format-time/format-duration.ts"
 import { parseOffsetlessIsoDateTimeInTimeZone } from "../../infra/format-time/parse-offsetless-zoned-datetime.js";
 import { formatTimestamp } from "../../logging/timestamps.js";
 import { defaultRuntime, ExitError, type RuntimeEnv } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { isOffsetlessIsoDateTime } from "../../shared/iso-time.js";
 import { formatCliCommand } from "../command-format.js";
 import {
@@ -303,6 +305,10 @@ export function handleCronCliError(err: unknown) {
   // Completed outcomes must reach CLI cleanup, not become new cron errors.
   if (err instanceof ExitError) {
     throw err;
+  }
+  // Cancelled reads belong to root cleanup; uncancelled mutation failures remain visible.
+  if (getAsyncWorkSignal()?.aborted && isAbortError(err)) {
+    return;
   }
   rethrowExpectedCliError(err);
   const missingJob = readCronJobNotFoundError(err);

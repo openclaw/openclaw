@@ -78,7 +78,7 @@ function isSameAgentSessionStore(leftSessionKey: string, rightSessionKey: string
   return Boolean(leftAgentId) && leftAgentId === rightAgentId;
 }
 
-function resolveSessionCapabilityEntry(params: {
+export function resolveSessionCapabilityEntry(params: {
   sessionKey: string;
   cfg?: OpenClawConfig;
   store?: SessionCapabilityStore;
@@ -323,7 +323,7 @@ export function resolvePersistedSubagentToolPolicyEnvelope(
       (!direct &&
         (parent?.delegatedToolPolicy?.requesterSessionKey !==
           delegatedToolPolicy.requesterSessionKey ||
-          parent?.delegatedToolPolicy?.targetAgentId !== targetAgentId))
+          parent.delegatedToolPolicy?.targetAgentId !== targetAgentId))
     ) {
       delegatedToolPolicy = undefined;
     }

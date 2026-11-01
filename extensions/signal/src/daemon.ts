@@ -17,20 +17,6 @@ import {
 } from "./daemon-env.js";
 import { prepareSignalSocketPath } from "./socket-path.js";
 
-type SignalDaemonOpts = {
-  cliPath: string;
-  configPath?: string;
-  account?: string;
-  httpHost: string;
-  httpPort: number;
-  socketPath?: string;
-  receiveMode?: "on-start" | "manual";
-  ignoreAttachments?: boolean;
-  ignoreStories?: boolean;
-  sendReadReceipts?: boolean;
-  runtime?: RuntimeEnv;
-};
-
 export type SignalDaemonHandle = {
   stop: () => Promise<void>;
   exited: Promise<SignalDaemonExitEvent>;
@@ -141,10 +127,6 @@ export async function waitForSignalDaemonReady(params: {
   });
 }
 
-function isRecoverableSignalCliReceiveException(line: string): boolean {
-  return /\breceive exception:\s+.*\binvalid PreKey message:\s+decryption failed\b/i.test(line);
-}
-
 function classifySignalCliLogLine(line: string): "log" | "error" | null {
   const trimmed = line.trim();
   if (!trimmed) {
@@ -155,7 +137,7 @@ function classifySignalCliLogLine(line: string): "log" | "error" | null {
   if (/\bERROR\b/.test(trimmed)) {
     return "error";
   }
-  if (isRecoverableSignalCliReceiveException(trimmed)) {
+  if (/\breceive exception:\s+.*\binvalid PreKey message:\s+decryption failed\b/i.test(trimmed)) {
     return "log";
   }
   // Some signal-cli failures are not tagged with ERROR but should still be surfaced loudly.
@@ -197,7 +179,19 @@ function resolveSignalCliConfigPath(raw: string): string {
   return value;
 }
 
-function buildDaemonArgs(opts: SignalDaemonOpts): string[] {
+export function spawnSignalDaemon(opts: {
+  cliPath: string;
+  configPath?: string;
+  account?: string;
+  httpHost: string;
+  httpPort: number;
+  socketPath?: string;
+  receiveMode?: "on-start" | "manual";
+  ignoreAttachments?: boolean;
+  ignoreStories?: boolean;
+  sendReadReceipts?: boolean;
+  runtime?: RuntimeEnv;
+}): SignalDaemonHandle {
   const args: string[] = [];
   if (opts.configPath?.trim()) {
     args.push("--config", resolveSignalCliConfigPath(opts.configPath));
@@ -229,11 +223,6 @@ function buildDaemonArgs(opts: SignalDaemonOpts): string[] {
     args.push("--send-read-receipts");
   }
 
-  return args;
-}
-
-export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
-  const args = buildDaemonArgs(opts);
   warnSignalDaemonDroppedEnvOnce();
   // The executable is operator-selected or setup-discovered signal-cli.
   // Runtime message content only flows through the daemon HTTP API, not argv.

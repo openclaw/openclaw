@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as processExec from "../process/exec.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { execFileUtf8 } from "./exec-file.js";
 import { resolveLaunchAgentPlistPath, writeLaunchAgentPlist } from "./launchd-service-files.js";
 import {
@@ -64,15 +65,9 @@ it("retains the live original installation through nested guards and compensatio
 });
 
 it("retains recovery material when a native writer has not settled", async () => {
-  vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValue({
-    stdout: "",
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-    cleanup: "uncertain",
-  });
+  vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValue(
+    createCommandResult({ cleanup: "uncertain" }),
+  );
   const restore = vi.fn(async () => true);
   await expect(
     owner.run(() =>

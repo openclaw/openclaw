@@ -2,7 +2,7 @@ import { prepareModelForSimpleCompletion } from "@openclaw/ai/transports";
 import { requiredWorkerHelperError } from "../config/required-worker-profile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { bindModelLlmRuntime } from "../llm/model-runtime-binding.js";
+import { bindModelCompletionOwner, bindModelLlmRuntime } from "../llm/model-runtime-binding.js";
 import type { Model } from "../llm/types.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -43,6 +43,7 @@ import {
 import { resolveModelRouteIntent } from "./model-runtime-policy.js";
 import { resolveDefaultModelForAgent } from "./model-selection.js";
 import { resolveOpenAIModelRoutes } from "./openai-model-routes.js";
+import { runOutsidePreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   type PreparedModelRuntimeSnapshot,
@@ -512,8 +513,10 @@ export async function acquireSimpleCompletionModelWithSelection(
   params: SimpleCompletionAcquisitionParams,
   resolveRequest: SimpleCompletionRequestResolver,
 ): Promise<AcquiredSimpleCompletionModelForAgent> {
-  return await runOutsidePluginRuntimeGenerationScope(() =>
-    acquireCommittedSimpleCompletionModel(params, resolveRequest),
+  return await runOutsidePreparedModelRuntimePluginGenerationScope(() =>
+    runOutsidePluginRuntimeGenerationScope(() =>
+      acquireCommittedSimpleCompletionModel(params, resolveRequest),
+    ),
   );
 }
 
@@ -605,6 +608,7 @@ async function acquireCommittedSimpleCompletionModel(
         agentDir,
         workspaceDir: requestedWorkspaceDir,
         loadRuntimePlugins: true,
+        runtimePluginPurpose: "isolated-completion",
         runtimePluginSelections: [
           { provider: selection.provider, modelId: selection.modelId, agentId },
         ],
@@ -616,6 +620,17 @@ async function acquireCommittedSimpleCompletionModel(
       },
     );
     releaseRuntime = () => lease[Symbol.asyncDispose]();
+    const runPrepared = <T>(run: () => T): T =>
+      lease.run(() => withPluginRuntimeGenerationScope(lease.snapshot, run));
+    const ownModel = (model: Model) =>
+      bindModelCompletionOwner(model, {
+        run: runPrepared,
+        assertCurrent: () => {
+          if (callerReleased) {
+            throw new Error("Prepared completion model has been released");
+          }
+        },
+      });
     const context = createPreparedSimpleCompletionResolverContext({
       preparedModelRuntime: lease.snapshot,
       workspaceDir: lease.snapshot.workspaceDir ?? requestedWorkspaceDir,
@@ -631,7 +646,7 @@ async function acquireCommittedSimpleCompletionModel(
       profileId: selection.profileId,
     };
     let authProfiles: SimpleCompletionAuthProfiles | undefined;
-    const prepared = await withPluginRuntimeGenerationScope(context.preparedModelRuntime, () => {
+    const prepared = await runPrepared(() => {
       captureWorkContext();
       return prepareSimpleCompletionModelCore(
         {
@@ -641,8 +656,8 @@ async function acquireCommittedSimpleCompletionModel(
                 authProfiles = {
                   store,
                   profileIds,
-                  prepare: (profileId, assertCurrent) =>
-                    withPluginRuntimeGenerationScope(context.preparedModelRuntime, () =>
+                  prepare: async (profileId, assertCurrent) => {
+                    const next = await runPrepared(() =>
                       prepareSimpleCompletionModelCore(
                         {
                           ...preparationParams,
@@ -653,7 +668,9 @@ async function acquireCommittedSimpleCompletionModel(
                         context,
                         assertCurrent,
                       ),
-                    ),
+                    );
+                    return "model" in next ? { ...next, model: ownModel(next.model) } : next;
+                  },
                 };
               }
             : undefined,
@@ -668,6 +685,7 @@ async function acquireCommittedSimpleCompletionModel(
     callerReleased = false;
     return {
       ...prepared,
+      model: ownModel(prepared.model),
       ...(authProfiles ? { authProfiles } : {}),
       async [Symbol.asyncDispose]() {
         callerReleased = true;

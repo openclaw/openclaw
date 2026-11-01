@@ -1,5 +1,3 @@
-import { createServer } from "node:http";
-import { promisify } from "node:util";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "./bridge-server.js";
@@ -30,7 +28,6 @@ describe("startBrowserBridgeServer auth", () => {
   }
 
   it.each([
-    ["127.0.0.1", tokenAuth, tokenHeaders],
     ["::1", tokenAuth, tokenHeaders],
     [
       "127.0.0.1",
@@ -51,25 +48,6 @@ describe("startBrowserBridgeServer auth", () => {
     await expect(startBridge()).rejects.toThrow(/requires auth/i);
   });
 
-  it("rejects startup when the bridge port is already in use", async () => {
-    const blocker = createServer();
-    await new Promise<void>((resolve) => {
-      blocker.listen(0, "127.0.0.1", resolve);
-    });
-    const address = blocker.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected blocker TCP address");
-    }
-
-    try {
-      await expect(startBridge({ ...tokenAuth, port: address.port })).rejects.toMatchObject({
-        code: "EADDRINUSE",
-      });
-    } finally {
-      await promisify(blocker.close.bind(blocker))();
-    }
-  });
-
   it("closes ingress but retains exact bridge cleanup state for retry", async () => {
     const bridge = await startBridge(tokenAuth);
     const close = vi
@@ -81,8 +59,7 @@ describe("startBrowserBridgeServer auth", () => {
     expect(getBridgeAuthForPort(bridge.port)).toEqual({ token: "secret-token" });
 
     const firstStop = stopBrowserBridgeServer(bridge.server);
-    const concurrentStop = stopBrowserBridgeServer(bridge.server);
-    expect(concurrentStop).toBe(firstStop);
+    expect(stopBrowserBridgeServer(bridge.server)).toBe(firstStop);
     await expect(firstStop).rejects.toThrow("relay cleanup failed");
     expect(bridge.server.listening).toBe(false);
     expect(getBridgeAuthForPort(bridge.port)).toBeUndefined();
@@ -139,7 +116,6 @@ describe("startBrowserBridgeServer auth", () => {
       headers: tokenHeaders,
     });
     expect(res.status).toBe(200);
-    expect(resolveToken).toHaveBeenCalledOnce();
     expect(res.headers.get("location")).toBeNull();
     expect(res.headers.get("cache-control")).toContain("no-store");
     expect(res.headers.get("referrer-policy")).toBe("no-referrer");

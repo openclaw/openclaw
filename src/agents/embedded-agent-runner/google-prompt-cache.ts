@@ -13,6 +13,7 @@ import {
   parseDateStringTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { omitNullRequestHeaders } from "../../../packages/llm-core/src/utils/request-headers.js";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
 import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
 import { cancelUnreadResponseBody } from "../../infra/http-body.js";
@@ -279,18 +280,20 @@ export async function prepareGooglePromptCacheStreamFn(
           );
     const callerHeaders = mergeTransportHeaders(params.model.headers, options?.headers);
     const headers =
-      resolveProviderRequestHeaders({
-        provider: params.model.provider,
-        api: params.model.api,
-        baseUrl: normalizeGoogleApiBaseUrl(params.model.baseUrl),
-        capability: "llm",
-        transport: "http",
-        defaultHeaders: authHeaders,
-        callerHeaders,
-        precedence: "caller-wins",
-      }) ??
-      mergeTransportHeaders(authHeaders, callerHeaders) ??
-      authHeaders;
+      omitNullRequestHeaders(
+        resolveProviderRequestHeaders({
+          provider: params.model.provider,
+          api: params.model.api,
+          baseUrl: normalizeGoogleApiBaseUrl(params.model.baseUrl),
+          capability: "llm",
+          transport: "http",
+          defaultHeaders: authHeaders,
+          callerHeaders,
+          precedence: "caller-wins",
+        }) ??
+          mergeTransportHeaders(authHeaders, callerHeaders) ??
+          authHeaders,
+      ) ?? {};
     const configuredModel = params.model;
     const provider = params.provider;
     const sessionManager = params.sessionManager;

@@ -4,13 +4,7 @@ import { en } from "./en.ts";
 // Analysis copy loads with Usage; shared labels and Settings search stay eager.
 const enUsage = {
   usage: {
-    // The session time series still names a response that ended before its final usage.
-    unavailable:
-      "Token usage and cost are unknown because a response ended before final usage arrived. Select an unaffected session to view its usage.",
-    lowerBoundShort: "≥ Lower bound",
     partialShort: "Partial results",
-    lowerBound:
-      "≥ marks a lower bound: some responses ended before their final usage arrived, so their tokens and cost are partly counted.",
     presets: {
       today: "Today",
       last7d: "7d",
@@ -196,6 +190,52 @@ const enUsage = {
       copy: "Copy",
       limitReached: "Showing first 1,000 sessions. Narrow date range for complete results.",
     },
+    details: {
+      noUsageData: "No usage data for this session.",
+      duration: "Duration",
+      modelMix: "Model Mix",
+      filtered: "(filtered)",
+      close: "Close session details",
+      noTimeline: "No timeline data",
+      loadFailed: "Could not load {detail}: {error}",
+      noDataInRange: "No data in range",
+      usageOverTime: "Usage Over Time",
+      rangeStart: "Range start",
+      rangeEnd: "Range end",
+      reset: "Reset",
+      perTurn: "Per Turn",
+      cumulative: "Cumulative",
+      turnRange: "Turns {start}–{end} of {total}",
+      assistantOutputTokens: "Assistant output tokens",
+      userToolInputTokens: "User + tool input tokens",
+      tokensWrittenToCache: "Tokens written to cache",
+      tokensReadFromCache: "Tokens read from cache",
+      noContextData: "No context data",
+      contextOutOfDate: "These context details are out of date. Refresh usage and try again.",
+      systemPromptBreakdown: "System Prompt Breakdown",
+      collapseAll: "Collapse All",
+      expandAll: "Expand All",
+      baseContextPerMessage: "Base context per message",
+      system: "System",
+      systemShort: "Sys",
+      skills: "Skills",
+      tools: "Tools",
+      files: "Files",
+      ofInput: "of input",
+      of: "of",
+      timelineFiltered: "timeline filtered",
+      loadedIntervalMessages: "Loaded conversation · selected interval",
+      conversation: "Conversation",
+      noMessages: "No messages",
+      tool: "Tool",
+      toolResult: "Tool result",
+      hasTools: "Has tools",
+      searchConversation: "Search conversation",
+      filterByRole: "Filter by role",
+      filterByTool: "Filter by tool",
+      you: "You",
+      noMessagesMatch: "No messages match the filters.",
+    },
     mosaic: {
       title: "Activity by Time",
       subtitleEmpty: "Estimates require session timestamps.",
@@ -222,8 +262,9 @@ const enUsage = {
 
 export const registerUsageEnglish = Object.assign(
   () => {
-    const { overview, ...sections } = enUsage.usage;
+    const { details, overview, ...sections } = enUsage.usage;
     Object.assign(en.usage, sections);
+    Object.assign(en.usage.details, details);
     Object.assign(en.usage.overview, overview);
   },
   { catalog: enUsage },

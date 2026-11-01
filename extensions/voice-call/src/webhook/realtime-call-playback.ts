@@ -123,7 +123,7 @@ export function createRealtimeCallPlayback(params: {
               () => finish(new Error("Realtime speech did not finish within 45 seconds")),
               45_000,
             );
-            deadline.unref?.();
+            deadline.unref();
             const session = params.getSession();
             if (!session) {
               throw new Error("No active realtime bridge for call");
@@ -141,8 +141,7 @@ export function createRealtimeCallPlayback(params: {
           return;
         }
         clearTimeout(quietTimer);
-        quietTimer = setTimeout(() => finish(), 1_500);
-        quietTimer.unref?.();
+        quietTimer = setTimeout(() => finish(), 1_500).unref();
       },
       close() {
         closed = true;

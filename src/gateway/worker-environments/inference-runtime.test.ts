@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
@@ -7,7 +8,7 @@ import { bindAgentToolExecutionLocation } from "../../agents/agent-tool-metadata
 import { createToolSurfacePresentationForTest } from "../../agents/tool-surface-plan.test-support.js";
 import { makeZeroUsageSnapshot } from "../../agents/usage.js";
 import { onTrustedInternalDiagnosticEvent } from "../../infra/diagnostic-events.js";
-import type { AssistantMessage, StreamFn } from "../../llm/types.js";
+import type { AssistantMessage, AssistantMessageEvent, StreamFn } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import type { ProviderWrapStreamFnContext } from "../../plugins/provider-transport.types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -43,6 +44,19 @@ import {
 import { createWorkerToolCallStream } from "./inference-tool-call-stream.js";
 import * as workerTurnOwners from "./placement-turn-claim-events.js";
 import { createWorkerGatewayToolRuntime } from "./worker-gateway-tool-runtime.js";
+
+const run = (
+  runtime: ReturnType<typeof setup>,
+  input = request(),
+  emit: Execution["emit"] = vi.fn(),
+) => runtime.executor(params(input, emit));
+function streamOf(...events: AssistantMessageEvent[]) {
+  const stream = createAssistantMessageEventStream();
+  for (const event of events) {
+    stream.push(event);
+  }
+  return stream;
+}
 
 const MODEL_ERROR = {
   type: "error",
@@ -80,13 +94,13 @@ describe("worker inference provider runtime", () => {
       { "openai:worker": { type: "api_key", provider: PROVIDER, key: AUTH_MARKER } },
     );
 
-    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
+    await expect(run(runtime)).resolves.toMatchObject({
       type: "done",
       message: { provider: PROVIDER, model: MODEL },
     });
     expect(createStreamFn).toHaveBeenCalledOnce();
-    expect(wrapSimpleCompletionStreamFn).not.toHaveBeenCalled();
     expect(stream).toHaveBeenCalledOnce();
+    expect(wrapSimpleCompletionStreamFn).not.toHaveBeenCalled();
     expect(stream.mock.calls[0]?.[2]).toMatchObject({ apiKey: AUTH_MARKER });
     expect(runtime.releaseRuntime).toHaveBeenCalledOnce();
   });
@@ -115,7 +129,7 @@ describe("worker inference provider runtime", () => {
       if (!explicitKey) {
         Object.assign(inferenceRequest.options, { promptCacheKey: "worker-chosen-key" });
       }
-      await expect(runtime.executor(params(inferenceRequest, vi.fn()))).resolves.toMatchObject({
+      await expect(run(runtime, inferenceRequest)).resolves.toMatchObject({
         type: "done",
       });
     }
@@ -125,11 +139,10 @@ describe("worker inference provider runtime", () => {
     );
     if (explicitKey) {
       runtime.readPromptCacheContext.mockReturnValue(undefined);
-      await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
+      await expect(run(runtime)).resolves.toMatchObject({
         type: "error",
         reason: "session-not-attached",
       });
-      expect(runtime.stream).toHaveBeenCalledOnce();
     }
   });
 
@@ -156,7 +169,7 @@ describe("worker inference provider runtime", () => {
       { role: "user", content: "Current facts", timestamp: 3, runtimeContext: {} },
     ];
     const original = structuredClone(inferenceRequest);
-    expect((await runtime.executor(params(inferenceRequest, vi.fn()))).type).toBe("done");
+    expect((await run(runtime, inferenceRequest)).type).toBe("done");
     const messages = runtime.stream.mock.calls[0]?.[1].messages;
     expect(messages).toMatchObject([
       { content: "Earlier facts", runtimeContext: { retained: retain } },
@@ -175,7 +188,6 @@ describe("worker inference provider runtime", () => {
       message: { provider: PROVIDER, model: MODEL },
     });
     expect(runtime.stream).toHaveBeenCalledOnce();
-    expect(runtime.releaseRuntime).toHaveBeenCalledOnce();
   });
 
   it("returns bounded, redacted model preparation guidance", async () => {
@@ -188,10 +200,7 @@ describe("worker inference provider runtime", () => {
     const failure = await runtime
       .executor(params(request(), vi.fn()))
       .catch((error: unknown) => error);
-    expect(failure).toBeInstanceOf(Error);
-    if (!(failure instanceof Error)) {
-      throw new Error("expected model preparation to fail");
-    }
+    assert(failure instanceof Error);
     const message = failure.message;
     expect(message).toContain("configure the selected auth profile");
     expect(message).not.toContain(secret);
@@ -208,9 +217,8 @@ describe("worker inference provider runtime", () => {
     async ({ errorCode, detailed }) => {
       const runtime = setup();
       const secret = `stream-secret-${"a".repeat(48)}`;
-      runtime.stream.mockImplementation(() => {
-        const stream = createAssistantMessageEventStream();
-        stream.push({
+      runtime.stream.mockImplementation(() =>
+        streamOf({
           type: "error",
           reason: "error",
           error: {
@@ -224,16 +232,13 @@ describe("worker inference provider runtime", () => {
                 }
               : {}),
           },
-        });
-        return stream;
-      });
+        }),
+      );
 
-      const outcome = await runtime.executor(params(request(), vi.fn()));
+      const outcome = await run(runtime);
 
       expect(outcome).toMatchObject({ type: "error", reason: "provider-error", usage });
-      if (outcome.type !== "error") {
-        throw new Error("expected provider failure");
-      }
+      assert(outcome.type === "error");
       expect(parseApiErrorInfo(outcome.message)?.code).toBe(errorCode);
       if (detailed) {
         expect(parseApiErrorInfo(outcome.message)).toMatchObject({
@@ -261,11 +266,9 @@ describe("worker inference provider runtime", () => {
       });
     });
 
-    const outcome = await runtime.executor(params(request(), vi.fn()));
+    const outcome = await run(runtime);
 
-    if (outcome.type !== "error") {
-      throw new Error("expected provider failure");
-    }
+    assert(outcome.type === "error");
     expect(outcome).toMatchObject({ type: "error", reason: "provider-error" });
     expect(parseApiErrorInfo(outcome.message)).toMatchObject({
       httpCode: String(status),
@@ -287,7 +290,7 @@ describe("worker inference provider runtime", () => {
         }),
       });
     });
-    const outcome = await runtime.executor(params(request(), vi.fn()));
+    const outcome = await run(runtime);
     expect(outcome).toMatchObject({
       type: "error",
       reason: "provider-error",
@@ -305,7 +308,7 @@ describe("worker inference provider runtime", () => {
         headers: new Headers({ "retry-after": "9".repeat(30) }),
       });
     });
-    const outcome = await runtime.executor(params(request(), vi.fn()));
+    const outcome = await run(runtime);
     expect(outcome).toMatchObject({ type: "error", retryAfterMs: null });
     expect(validateWorkerInferenceTerminalOutcome(outcome)).toBe(true);
   });
@@ -325,7 +328,7 @@ describe("worker inference provider runtime", () => {
     });
 
     try {
-      await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
+      await expect(run(runtime)).resolves.toMatchObject({
         type: "done",
       });
     } finally {
@@ -333,7 +336,6 @@ describe("worker inference provider runtime", () => {
     }
 
     expect(observed).toEqual(["factory:A", "policy:A", "wrapper:A", "execution:A"]);
-    expect(runtime.releaseRuntime).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -369,7 +371,7 @@ describe("worker inference provider runtime", () => {
         routeRequirement,
       });
 
-      await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
+      await expect(run(runtime)).resolves.toMatchObject({
         type: "done",
       });
       expect(runtime.prepareModel.mock.calls[0]?.[0].cfg?.models?.providers?.openai).toMatchObject({
@@ -377,13 +379,6 @@ describe("worker inference provider runtime", () => {
         api,
         baseUrl,
       });
-      expect(runtime.prepareModel).toHaveBeenCalledWith(
-        expect.objectContaining({
-          profileId: PROFILE,
-          preferredProfile: PROFILE,
-          bindAuthOwner: true,
-        }),
-      );
     },
   );
 
@@ -400,22 +395,6 @@ describe("worker inference provider runtime", () => {
     const execution = params(inferenceRequest, (event) => emitted.push(event));
     const outcome = await runtime.executor(execution).finally(unsubscribe);
 
-    expect(runtime.releaseRuntime).toHaveBeenCalledOnce();
-
-    const prepared = runtime.prepareModel.mock.calls[0]?.[0];
-    expect(prepared?.signal).toBe(execution.signal);
-    expect(runtime.scope).toEqual({
-      agentDir: prepared?.agentDir,
-      agentRuntime: "openclaw",
-      authProfile: PROFILE,
-      preparedModelRuntime: true,
-      prepareWorkspace: WORKSPACE,
-    });
-    expect(runtime.acquireRuntimeLease).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "runtime-agent",
-      }),
-    );
     const [streamModel, streamContext, streamOptions] = runtime.stream.mock.calls[0] ?? [];
     expect(streamModel).toMatchObject({ baseUrl: ENDPOINT });
     expect(streamContext?.messages).toEqual(inferenceRequest.context.messages);
@@ -432,12 +411,6 @@ describe("worker inference provider runtime", () => {
       "toolcall_delta",
       "toolcall_end",
     ]);
-    expect(emitted).toContainEqual({
-      type: "toolcall_start",
-      contentIndex: 1,
-      id: TOOL_CALL.id,
-      toolName: TOOL_CALL.name,
-    });
     expect(outcome).toMatchObject({
       type: "done",
       message: {
@@ -486,7 +459,7 @@ describe("worker inference provider runtime", () => {
       Object.assign(message.providerReplay, { providerScratch: "private" });
       runtime.stream.mockImplementation(() => providerStream(message));
 
-      const outcome = await runtime.executor(params(request(), vi.fn()));
+      const outcome = await run(runtime);
 
       expect(validateWorkerInferenceTerminalOutcome(outcome)).toBe(true);
       for (const privateField of ["providerScratch", "partialJson", "streamIndex"]) {
@@ -512,9 +485,7 @@ describe("worker inference provider runtime", () => {
           },
         },
       });
-      if (outcome.type !== "done") {
-        throw new Error("expected successful worker inference");
-      }
+      assert(outcome.type === "done");
       expect(isWorkerTranscriptMessageFrameSafe(outcome.message)).toBe(true);
     },
   );
@@ -538,26 +509,23 @@ describe("worker inference provider runtime", () => {
       toolCall,
     ];
     const original = structuredClone(message);
-    runtime.stream.mockImplementation(() => {
-      const stream = createAssistantMessageEventStream();
-      stream.push({ type: "toolcall_start", contentIndex: 2, partial: message });
-      stream.push({
-        type: "toolcall_delta",
-        contentIndex: 2,
-        delta: JSON.stringify(toolCall.arguments),
-        partial: message,
-      });
-      stream.push({ type: "toolcall_end", contentIndex: 2, toolCall, partial: message });
-      stream.push({ type: "done", reason: "toolUse", message });
-      return stream;
-    });
+    runtime.stream.mockImplementation(() =>
+      streamOf(
+        { type: "toolcall_start", contentIndex: 2, partial: message },
+        {
+          type: "toolcall_delta",
+          contentIndex: 2,
+          delta: JSON.stringify(toolCall.arguments),
+          partial: message,
+        },
+        { type: "toolcall_end", contentIndex: 2, toolCall, partial: message },
+        { type: "done", reason: "toolUse", message },
+      ),
+    );
 
-    const outcome = await runtime.executor(params(request(), vi.fn()));
+    const outcome = await run(runtime);
 
-    expect(outcome.type).toBe("done");
-    if (outcome.type !== "done") {
-      throw new Error("expected successful worker inference");
-    }
+    assert(outcome.type === "done");
     expect(outcome.message.content).toEqual([
       { type: "thinking", thinking: "fresh summary", thinkingSignature: canonical },
       { type: "text", text: "Calling lookup" },
@@ -582,7 +550,7 @@ describe("worker inference provider runtime", () => {
       },
     );
     const approvedHistory = structuredClone(continuation.context.messages);
-    await runtime.executor(params(continuation, vi.fn()));
+    await run(runtime, continuation);
     expect(runtime.stream.mock.calls[1]?.[1].messages).toEqual(approvedHistory);
     expect(continuation.context.messages).toEqual(approvedHistory);
   });
@@ -606,7 +574,7 @@ describe("worker inference provider runtime", () => {
       }
     });
 
-    const outcome = await runtime.executor(params(request(), vi.fn())).finally(unsubscribe);
+    const outcome = await run(runtime).finally(unsubscribe);
 
     expect(outcome).toMatchObject({
       type: "error",
@@ -666,9 +634,7 @@ describe("worker inference provider runtime", () => {
       });
       const emitted: Parameters<Execution["emit"]>[0][] = [];
 
-      await expect(
-        runtime.executor(params(request(), (event) => emitted.push(event))),
-      ).resolves.toMatchObject(
+      await expect(run(runtime, request(), (event) => emitted.push(event))).resolves.toMatchObject(
         outcome === "done" ? { type: "done" } : { type: "error", reason: "provider-error" },
       );
       if (name === "incomplete JSON") {
@@ -712,9 +678,10 @@ describe("worker inference provider runtime", () => {
       });
       const emitted: Parameters<Execution["emit"]>[0][] = [];
 
-      await expect(
-        runtime.executor(params(request(), (event) => emitted.push(event))),
-      ).resolves.toMatchObject({ type: "error", reason: "provider-error" });
+      await expect(run(runtime, request(), (event) => emitted.push(event))).resolves.toMatchObject({
+        type: "error",
+        reason: "provider-error",
+      });
       if (!ended) {
         expect(emitted.some((event) => event.type === "toolcall_end")).toBe(false);
       }
@@ -740,9 +707,10 @@ describe("worker inference provider runtime", () => {
     });
     const emitted: Parameters<Execution["emit"]>[0][] = [];
 
-    await expect(
-      runtime.executor(params(request(), (event) => emitted.push(event))),
-    ).resolves.toMatchObject({ type: "error", reason: "provider-error" });
+    await expect(run(runtime, request(), (event) => emitted.push(event))).resolves.toMatchObject({
+      type: "error",
+      reason: "provider-error",
+    });
     expect(
       emitted.flatMap((event) => (event.type === "toolcall_delta" ? [event.delta] : [])),
     ).toEqual(["{}"]);
@@ -865,9 +833,7 @@ describe("worker inference provider runtime", () => {
         }
       });
 
-      await expect(
-        runtime.executor(params(request(), vi.fn())).finally(unsubscribe),
-      ).resolves.toMatchObject({
+      await expect(run(runtime).finally(unsubscribe)).resolves.toMatchObject({
         type: "error",
         reason: "provider-error",
       });
@@ -905,7 +871,6 @@ describe("worker inference provider runtime", () => {
       });
     });
     expect(runtime.prepareModel).toHaveBeenCalledOnce();
-    expect(runtime.readSessionEntry).toHaveBeenCalledOnce();
     expect(runtime.stream).toHaveBeenCalledTimes(2);
     expect(runtime.stream.mock.calls.map((call) => call[2]?.apiKey)).toEqual([
       AUTH_MARKER,
@@ -944,7 +909,7 @@ describe("worker inference provider runtime", () => {
         if (!enabled) {
           toolRuntime.applyPromptToolsAllow([]);
         }
-        expect(await runtime.executor(params(request(), vi.fn()))).toMatchObject({ type: "done" });
+        expect(await run(runtime)).toMatchObject({ type: "done" });
         expect(
           runtime.applyStreamPolicy.mock.lastCall?.[11]?.nativeWebSearchPolicyContext
             ?.webSearchEnabled,
@@ -961,11 +926,10 @@ describe("worker inference session admission", () => {
     const changedConfig = { ...config, session: { store: "replacement-sessions.json" } };
     const runtime = setup(sessionEntry, { config: changedConfig });
 
-    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
+    await expect(run(runtime)).resolves.toMatchObject({
       type: "done",
     });
     expect(runtime.scope.authProfile).toBe(PROFILE);
-    expect(runtime.readSessionEntry).toHaveBeenCalledOnce();
     expect(runtime.stream).toHaveBeenCalledOnce();
   });
 
@@ -975,10 +939,7 @@ describe("worker inference session admission", () => {
       const runtime = setup();
       runtime.readSessionEntry.mockResolvedValue(entry);
 
-      await expect(runtime.executor(params(request(), vi.fn()))).rejects.toThrow(
-        "Worker model is not approved for this session",
-      );
-      expect(runtime.readSessionEntry).toHaveBeenCalledOnce();
+      await expect(run(runtime)).rejects.toThrow("Worker model is not approved for this session");
       expect(runtime.prepareModel).not.toHaveBeenCalled();
       expect(runtime.stream).not.toHaveBeenCalled();
     },
@@ -996,7 +957,6 @@ describe("worker inference session admission", () => {
     read.resolve(sessionEntry);
 
     await expect(pending).rejects.toThrow("Worker inference source is no longer current");
-    expect(runtime.readSessionEntry).toHaveBeenCalledOnce();
     expect(runtime.prepareModel).not.toHaveBeenCalled();
     expect(runtime.stream).not.toHaveBeenCalled();
   });

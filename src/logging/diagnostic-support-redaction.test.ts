@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   redactPublicSupportDiagnosticLine,
   redactSupportDiagnosticLine,
@@ -9,6 +9,9 @@ import {
   sanitizeSupportConfigValue,
   sanitizeSupportSnapshotValue,
 } from "./diagnostic-support-redaction.js";
+import * as textRedaction from "./redact.js";
+import { registerSecretValueForRedaction } from "./secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "./secret-redaction-registry.test-support.js";
 
 function fakeAwsSecretAccessKey(): string {
   return fakeRepeatedToken(["A", "b", "9", "/"]);
@@ -47,7 +50,26 @@ describe("diagnostic support redaction", () => {
   const npmLayoutRefusal =
     "The npm global install layout cannot stage a candidate. Reinstall with npm into its default global layout, then retry the update.";
 
+  it("checks repeated field names once per capture and rechecks newly registered secrets", () => {
+    const context = { env: {}, stateDir: tempDir };
+    const redact = vi.spyOn(textRedaction, "redactText");
+    try {
+      const values = [{ source: "workspace" }, { source: "bundled" }, { source: "project" }];
+      expect(sanitizeSupportSnapshotValue(values, context)).toEqual(values);
+      expect(redact.mock.calls.filter(([text]) => text === "source")).toHaveLength(1);
+      registerSecretValueForRedaction("source");
+      expect(sanitizeSupportSnapshotValue({ source: "workspace" }, context)).toEqual({
+        "<identifier#1>": "workspace",
+      });
+    } finally {
+      redact.mockRestore();
+      resetSecretRedactionRegistryForTest();
+    }
+  });
+
   it.each([
+    "Update database backup volume: needs 8.5 GiB; available 7.8 GiB",
+    "Update database rollback volume: needs 80 MiB; available 70 MiB",
     "schema migration required",
     "database schema newer than candidate",
     "plugin load failed",
@@ -57,7 +79,7 @@ describe("diagnostic support redaction", () => {
     "native module missing",
     "native module ABI mismatch",
     "startup ran out of memory",
-  ])("admits only the exact startup template %s", (message) => {
+  ])("admits only the exact public diagnostic template %s", (message) => {
     const context = { env: {}, stateDir: tempDir };
     expect(redactPublicSupportDiagnosticLine(message, context)).toBe(message);
     expect(redactPublicSupportDiagnosticLine(`${message} private-tenant`, context)).toBe(
@@ -175,7 +197,7 @@ describe("diagnostic support redaction", () => {
     ["SQLite file generation changed while reading", ": /private/example/openclaw.sqlite"],
     ["SQLite file generation did not stabilize", " during confirmation: /private/example/a.sqlite"],
     [
-      "SQLite source did not stabilize",
+      "SQLite source did not stabilize; (reason=wal-copy-unstable, attempts=10)",
       " after 3 read-only inspection attempts: /private/x.sqlite",
     ],
     ["SQLite WAL commit header is unavailable or changing", ": /private/example/a.sqlite"],
@@ -195,6 +217,10 @@ describe("diagnostic support redaction", () => {
   });
 
   it.each([
+    "(reason=private-customer, attempts=10)",
+    "(reason=source-disappeared, attempts=1000)",
+    "(reason=source-disappeared, attempts=1.5)",
+    "(reason=source-disappeared, attempts=0)",
     "ERR_PNPM_PRIVATE_CUSTOMER",
     "ERR_OSSL_PRIVATE_CUSTOMER",
     "EPRIVATE_CUSTOMER",
@@ -433,6 +459,25 @@ describe("diagnostic support redaction", () => {
         maxLength: redactedPathPrefix.length + 5,
       }),
     ).toBe(`${redactedPathPrefix}abcd${truncationSuffix}`);
+  });
+
+  it("redacts absolute path prefixes after the working directory disappears", () => {
+    const home = path.join(os.tmpdir(), "support-redaction-home");
+    const stateDir = path.join(home, ".openclaw");
+    const redaction = { env: { HOME: home }, stateDir };
+    // Post-update failure diagnostics run after the old install root may be removed.
+    const cwd = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw Object.assign(new Error("uv_cwd"), { code: "ENOENT" });
+    });
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        expect(redactSupportString(`failed at ${stateDir}/logs/gateway.log`, redaction)).toBe(
+          "failed at $OPENCLAW_STATE_DIR/logs/gateway.log",
+        );
+      }
+    } finally {
+      cwd.mockRestore();
+    }
   });
 
   it("redacts Windows USERPROFILE paths when HOME is unset", () => {

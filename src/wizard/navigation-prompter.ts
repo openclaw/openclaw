@@ -1,15 +1,8 @@
 import type { WizardMultiSelectParams, WizardPrompter, WizardSelectParams } from "./prompts.js";
 import { WizardNavigationError } from "./prompts.js";
 
-type PromptKind = "select" | "multiselect" | "text" | "confirm";
 type WizardTextParams = Parameters<WizardPrompter["text"]>[0];
 type WizardConfirmParams = Parameters<WizardPrompter["confirm"]>[0];
-
-type PromptRecord = {
-  signature: string;
-  answer: unknown;
-  answerKey: string;
-};
 
 type PromptRequest<T, Params> = {
   params: Params;
@@ -47,7 +40,7 @@ function optionSignature(options: Array<{ value: unknown; label: string }>): str
 }
 
 function buildPromptSignature(
-  kind: PromptKind,
+  kind: "select" | "multiselect" | "text" | "confirm",
   params: { message: string; options?: Array<{ value: unknown; label: string }>; layout?: string },
 ): string {
   return stableKey({
@@ -64,7 +57,8 @@ class WizardPromptNavigator {
   private restartRequested = false;
   private boundaryBackRequested = false;
   private backNavigationDisabled = false;
-  private records: Array<PromptRecord | undefined> = [];
+  private records: Array<{ signature: string; answer: unknown; answerKey: string } | undefined> =
+    [];
 
   constructor(
     private readonly base: WizardPrompter,

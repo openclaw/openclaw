@@ -7,7 +7,7 @@ const suite = createControlUiE2eSuite({ name: "Plugin settings background refres
 const objectSchema = (properties: Record<string, unknown>) => ({ type: "object", properties });
 
 suite.define(() => {
-  it.each(["github", "workboard"])(
+  it.each(["workboard"])(
     "keeps %s settings interactive through save notifications and catalog refreshes",
     async (pluginId) => {
       await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {

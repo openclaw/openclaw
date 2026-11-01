@@ -49,10 +49,7 @@ function createGmailHooksConfig(mapping?: {
 type HandlerOptions = Parameters<typeof createHooksRequestHandler>[0];
 function createFanOutHandler(
   params?: Partial<
-    Pick<
-      HandlerOptions,
-      "dispatchWakeHook" | "dispatchAgentHook" | "getHooksConfig" | "fanoutResponseDeadlineMs"
-    >
+    Pick<HandlerOptions, "dispatchWakeHook" | "dispatchAgentHook" | "getHooksConfig">
   > & { hooksConfig?: HooksConfigResolved },
 ) {
   const dispatchWakeHook = vi.fn(
@@ -72,7 +69,6 @@ function createFanOutHandler(
     logHooks,
     dispatchWakeHook,
     dispatchAgentHook,
-    fanoutResponseDeadlineMs: params?.fanoutResponseDeadlineMs,
   });
   const startDirect = (idempotencyKey: string, waitForCompletion = false) =>
     startRequest(handler, { message: "direct", idempotencyKey, waitForCompletion });
@@ -117,7 +113,10 @@ function gmailMessage(id: string) {
 }
 
 describe("hook fan-out dispatch", () => {
-  afterEach(() => vi.unstubAllEnvs());
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
+  });
   beforeEach(() => {
     readJsonBodyMock.mockReset();
   });
@@ -154,9 +153,9 @@ describe("hook fan-out dispatch", () => {
   });
 
   test("answers before the producer client timeout when an item admission hangs", async () => {
+    vi.useFakeTimers();
     const hang = createDeferred<HookAgentDispatchResult>();
     const { handler, dispatchAgentHook } = createFanOutHandler({
-      fanoutResponseDeadlineMs: 50,
       dispatchAgentHook: (value) =>
         value.sessionKey === "hook:gmail:slow"
           ? hang.promise
@@ -164,7 +163,9 @@ describe("hook fan-out dispatch", () => {
     });
     const payload = { messages: [gmailMessage("fast"), gmailMessage("slow")] };
 
-    expect(await postGmailPayload(handler, payload, 503)).toMatchObject({
+    const response = postGmailPayload(handler, payload, 503);
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(await response).toMatchObject({
       error: expect.stringContaining("pending"),
       runIds: ["run:hook:gmail:fast"],
     });

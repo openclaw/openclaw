@@ -1,11 +1,17 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import type { RouteLocation } from "@openclaw/uirouter";
+import type { RouteLocation, RouterHistory } from "@openclaw/uirouter";
 import type {
   ModelCatalogTarget,
   SessionsResolveResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { AgentsListResult } from "../api/types.ts";
-import { isSessionRouteId, pathForRoute, pluginSlugCandidate } from "../app-route-paths.ts";
+import {
+  isSessionRouteId,
+  locationForRoute,
+  pathForRoute,
+  sameRouteLocation,
+  type RouteId,
+} from "../app-route-paths.ts";
 import { routeIdFromPath, type ApplicationRouter } from "../app-routes.ts";
 import { pathForSession } from "../app-session-path-builder.ts";
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
@@ -22,7 +28,11 @@ import {
 import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
 import { isDefaultChatLanding } from "../pages/model-setup/first-run.ts";
 import { newSessionLocationFromSearch } from "../pages/new-session/location.ts";
-import type { ApplicationContext, ApplicationGateway } from "./context.ts";
+import type {
+  ApplicationContext,
+  ApplicationGateway,
+  ApplicationNavigationOptions,
+} from "./context.ts";
 import { waitForGatewayClient } from "./gateway-readiness.ts";
 import { releasedSessionQuery, resolvePersistedAgentId } from "./released-session-query.ts";
 import { loadGatewaySessionSelection } from "./settings.ts";
@@ -31,10 +41,8 @@ import { loadGatewaySessionSelection } from "./settings.ts";
 // candidates remain explicit, even before Gateway hello registers plugin tabs.
 function isPersistedSessionLanding(location: RouteLocation, basePath: string): boolean {
   return (
-    !new URLSearchParams(location.search + "&" + location.hash.slice(1)).has("session") &&
-    !pluginSlugCandidate(location.pathname, basePath) &&
-    (routeIdFromPath(location.pathname, basePath) === null ||
-      /^\/chat\/?$/u.test(location.pathname.slice(basePath.length)))
+    isDefaultChatLanding(location, basePath, routeIdFromPath) &&
+    !/^\/chat\/main\/?$/u.test(location.pathname.slice(basePath.length))
   );
 }
 
@@ -155,6 +163,50 @@ export function resolveBootstrapModelCatalogTarget(
     return { sessionKey: selection.sessionKey, ...(agentId ? { agentId } : {}) };
   }
   return undefined;
+}
+
+/** Explicit location parts replace a route's default; Workboard keeps its active board path. */
+export function applicationRouteLocation(
+  router: Pick<ApplicationRouter, "getState">,
+  basePath: string,
+  routeId: RouteId,
+  options?: ApplicationNavigationOptions,
+): RouteLocation {
+  const location = locationForRoute(routeId, basePath);
+  const activeMatch = router.getState().matches[0];
+  const activeDynamicPath =
+    activeMatch?.routeId === routeId && routeId === "workboard"
+      ? activeMatch.location.pathname
+      : null;
+  if (
+    options?.pathname !== undefined ||
+    options?.search !== undefined ||
+    options?.hash !== undefined
+  ) {
+    return {
+      ...location,
+      pathname: options?.pathname ?? activeDynamicPath ?? location.pathname,
+      search: options?.search ?? "",
+      hash: options?.hash ?? "",
+    };
+  }
+  return location;
+}
+
+/**
+ * Whether the browser still shows the default landing, or the session startup
+ * restored for it, once that resolution settles. Navigation meanwhile wins.
+ */
+export async function isResolvedDefaultLanding(
+  resolved: Promise<RouteLocation>,
+  history: Pick<RouterHistory, "location">,
+  basePath: string,
+): Promise<boolean> {
+  const landing = await resolved;
+  const current = history.location();
+  return (
+    isDefaultChatLanding(current, basePath, routeIdFromPath) || sameRouteLocation(current, landing)
+  );
 }
 
 export function createInitialApplicationLocationResolver(params: {

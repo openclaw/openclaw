@@ -35,7 +35,6 @@ export async function writeListToolsMcpServer(
     notifyListChangedOnInitializedReleaseToken?: string;
     notifyListChangedAfterFirstList?: boolean;
     notifyListChangedReleasePath?: string;
-    notifyListChangedBeforeEveryListResponse?: boolean;
     exitOnListCall?: number;
     listToolsMethodNotFound?: boolean;
     listToolsJsonRpcErrorMessage?: string;
@@ -73,7 +72,7 @@ const {
   inputSchema = { type: "object", properties: {} },
   tools = [{ name: "slow_tool", description: "Returned after a slow catalog response.", inputSchema }],
   notifyListChangedOnInitialized = false, notifyListChangedAfterFirstList = false,
-  notifyListChangedBeforeEveryListResponse = false, exitOnListCall = 0,
+  exitOnListCall = 0,
   listToolsMethodNotFound = false, callToolJsonRpcError = false,
   callToolJsonRpcErrorCode = -32000, notifyListChangedOnToolCall = false,
   resourceReadJsonRpcError = false,
@@ -87,6 +86,10 @@ async function waitForPath(filePath) {
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
+}
+
+function afterPath(filePath, action) {
+  void waitForPath(filePath).then(action);
 }
 
 let buffer = "";
@@ -209,10 +212,6 @@ function handle(message) {
     const toolPageCursor = toolPageCursors?.[currentListCount - 1];
     log("delay tools/list " + delayMs);
     const sendListResponse = () => {
-      if (notifyListChangedBeforeEveryListResponse) {
-        log("notify tools/list_changed before response");
-        notifyToolsChanged();
-      }
       reply(message.id, {
         tools: toolsByList
             ? toolsByList[Math.min(currentListCount - 1, toolsByList.length - 1)]
@@ -222,19 +221,18 @@ function handle(message) {
         ...nextCursor(toolPageCursor),
       });
       if (notifyListChangedAfterFirstList && currentListCount === 1) {
-        void (async () => {
-          await waitForPath(notifyListChangedReleasePath);
+        afterPath(notifyListChangedReleasePath, () => {
           log("notify tools/list_changed");
           notifyToolsChanged();
-        })();
+        });
       }
     };
-    void (async () => {
-      await waitForPath(listToolsReleasePath);
+    afterPath(listToolsReleasePath, () => {
       pendingTimer = setTimeout(sendListResponse, delayMs);
-    })();
+    });
   }
   if (message.method === "tools/call") {
+    log("call " + String(message.params?.name));
     if (hangToolCallsUntilRestart) {
       log("hang tools/call");
       keepAlive = setInterval(() => {}, 1000);
@@ -248,28 +246,26 @@ function handle(message) {
       log("notify tools/list_changed during tools/call");
       notifyToolsChanged();
     }
-    void (async () => {
-      await waitForPath(callToolReleasePath);
+    afterPath(callToolReleasePath, () => {
       reply(message.id, {
         isError: false,
         ...(callToolResult ?? { content: [{ type: "text", text: "tool ok" }] }),
       });
-    })();
+    });
   }
   if (message.method === "resources/list" || message.method === "prompts/list") {
     const resources = message.method === "resources/list";
     const page = resources ? ++resourceListCount : ++promptListCount;
     const cursors = resources ? resourcePageCursors : promptPageCursors;
     log(message.method + " cursor " + JSON.stringify(message.params?.cursor));
-    void (async () => {
-      await waitForPath(utilityListReleasePath);
+    afterPath(utilityListReleasePath, () => {
       reply(message.id, {
         ...(resources
           ? { resources: cursors ? [{ uri: "memo://page-" + page, name: "page-" + page }] : [] }
           : { prompts: [{ name: "prompt-" + page }] }),
         ...nextCursor(cursors?.[page - 1]),
       });
-    })();
+    });
     return;
   }
   if (message.method === "resources/read") {

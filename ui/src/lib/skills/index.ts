@@ -288,6 +288,35 @@ export async function loadSkills(
   }
 }
 
+/**
+ * skills.update answers before the Gateway reloads its config, so the status read behind a
+ * toggle can predate it. The Gateway sends skills.changed once it caught up. A change that
+ * arrives while a read or write is running is replayed when that work settles.
+ */
+export function createSkillsChangeReloader(state: SkillsState) {
+  let queued = false;
+  const reload = () => {
+    if (!state.connected || state.skillsLoading || state.skillOperation) {
+      queued = true;
+      return;
+    }
+    queued = false;
+    void loadSkills(state);
+  };
+  return {
+    onEvent: (event: { event: string }) => {
+      if (event.event === "skills.changed") {
+        reload();
+      }
+    },
+    onStateChange: () => {
+      if (queued) {
+        reload();
+      }
+    },
+  };
+}
+
 export async function refreshSkills(state: SkillsState, loadAgents: () => Promise<void>) {
   const client = state.client;
   if (!client || !state.connected || state.skillsLoading || state.skillOperation) {

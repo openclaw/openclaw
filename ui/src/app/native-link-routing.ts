@@ -20,10 +20,6 @@ export const NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT =
   "openclaw:native-update-availability-changed";
 let nativeUpdatePosted: (() => void) | undefined;
 
-type NativeLinkRouting = {
-  dispose(): void;
-};
-
 type NativeLinkRoutingOptions = {
   signal?: AbortSignal;
   prepareNativeUpdateFallback?: () => { isCurrent: () => boolean; run: () => void };
@@ -111,7 +107,7 @@ export function postNativeExternalLink(url: string): boolean {
   }
 }
 
-export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): NativeLinkRouting {
+export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}) {
   if (options.signal?.aborted || typeof window === "undefined" || typeof document === "undefined") {
     return { dispose() {} };
   }

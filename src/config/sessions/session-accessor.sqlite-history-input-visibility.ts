@@ -16,7 +16,7 @@ import {
   resolveVisibleHistoryRange,
 } from "./session-accessor.sqlite-history-projection.js";
 import {
-  getActiveTranscriptKysely,
+  selectActiveTranscriptEventRows,
   type CurrentTranscriptProjection,
 } from "./session-accessor.sqlite-projection-read.js";
 import { resolveVisibleMessagePositions } from "./session-accessor.sqlite-reset-window.js";
@@ -71,7 +71,6 @@ export function readSessionTranscriptRunInputVisibilityFromProjection(
     isHiddenInput: (message: unknown) => boolean;
   },
 ): RunInputVisibility {
-  const db = getActiveTranscriptKysely(projection.database);
   // Validate custody without applying execution-only bounds to requested display history.
   resolveSqliteSessionTranscriptReadFence({
     database: projection.database,
@@ -81,13 +80,7 @@ export function readSessionTranscriptRunInputVisibilityFromProjection(
   const keptPositions =
     /* kysely-allow-raw: Bind the exact retained display positions without SQLite's variable limit. */
     sql<number>`(SELECT CAST(value AS BIGINT) FROM ${jsonArrayElements(projection.database.db, sql.val(JSON.stringify(visible.kept)))})`;
-  const userInputs = db
-    .selectFrom("session_transcript_active_events as active")
-    .innerJoin("transcript_events as event", (join) =>
-      join
-        .onRef("event.session_id", "=", "active.session_id")
-        .onRef("event.seq", "=", "active.event_seq"),
-    )
+  const userInputs = selectActiveTranscriptEventRows(projection.database)
     .select([
       "active.message_position",
       transcriptPredicateSql(projection.database.db, "navigation_valid", "event").as(

@@ -2,9 +2,7 @@ import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { definePluginEntry, type AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
-import { canvasA2UIBoardWidgetKind } from "./src/board-widget.js";
 import { canvasConfigSchema, isCanvasHostEnabled } from "./src/config.js";
-import { A2UI_PATH } from "./src/host/a2ui-shared.js";
 import { CANVAS_PRESENT_COMMAND, isEligibleCanvasNode } from "./src/node-eligibility.js";
 import { canvasToolDefinition } from "./src/tool-schema.js";
 
@@ -29,15 +27,6 @@ export default definePluginEntry({
   configSchema: canvasConfigSchema,
   register(api) {
     if (isCanvasHostEnabled(api.config)) {
-      api.registerBoardWidgetContentKind(canvasA2UIBoardWidgetKind);
-      const loadRenderer = createLazyRuntimeModule(() => import("./src/host/a2ui.js"));
-      api.registerHttpRoute({
-        path: A2UI_PATH,
-        auth: "plugin",
-        match: "prefix",
-        nodeCapability: { surface: "canvas" },
-        handler: async (req, res) => await (await loadRenderer()).handleA2uiHttpRequest(req, res),
-      });
       const nodesRuntime = api.runtime.nodes;
       type CanvasRuntimeNode = Awaited<ReturnType<typeof nodesRuntime.list>>["nodes"][number];
       async function selectCanvasNode(): Promise<CanvasRuntimeNode | null> {

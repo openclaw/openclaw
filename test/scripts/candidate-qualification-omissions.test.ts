@@ -2,13 +2,13 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { parse } from "yaml";
 import { buildFrozenTargetWorkflowRequest } from "../../scripts/lib/frozen-target-workflow-request.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { readWorkflow, requiredWorkflowStep } from "./ci-workflow.test-support.js";
 import { readFixtureJson } from "./z0632-fixtures.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const workflow = parse(readFileSync(".github/workflows/full-release-validation.yml", "utf8"));
+const workflow = readWorkflow(".github/workflows/full-release-validation.yml");
 const targetSha = "a".repeat(40);
 const contextRef = "release/2026.9.7";
 function workflowEnv() {
@@ -31,11 +31,7 @@ function emptyInputs(names: string) {
 }
 
 function step(job: string, name: string) {
-  const selected = workflow.jobs[job].steps.find((entry: { name?: string }) => entry.name === name);
-  if (!selected) {
-    throw new Error("Missing actual child dispatch step");
-  }
-  return selected;
+  return requiredWorkflowStep(workflow.jobs[job].steps, name);
 }
 
 it.each([
@@ -153,9 +149,7 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:process.env.C
         TEST_TITLE: title,
         PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: "[]",
         EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: "[]",
-        ...emptyInputs(
-          "CANDIDATE_ARTIFACT_JSON TELEGRAM_WAIVER CROSS_OS_SUITE_FILTER CODEX_PLUGIN_SPEC",
-        ),
+        ...emptyInputs("CANDIDATE_ARTIFACT_JSON CROSS_OS_SUITE_FILTER CODEX_PLUGIN_SPEC"),
         PROVIDER: "openai",
         MODE: "both",
         RELEASE_PROFILE: "stable",

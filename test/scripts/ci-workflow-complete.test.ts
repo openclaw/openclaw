@@ -238,6 +238,8 @@ describe("CI check failure collection", () => {
   it.each([
     ["native-i18n", "Check native app generated locale parity", "node_setup"],
     ["control-ui-i18n", "Check Control UI locale parity", "node_setup"],
+    ["build-artifacts", "Verify Control UI i18n source", "node_setup"],
+    ["build-artifacts", "Check Control UI locale parity", "node_setup"],
     ["checks-ui", "Test Control UI", "ui_chromium"],
     ["checks-ui", "Install Playwright WebKit", "node_setup"],
     ["checks-ui", "Test Control UI WebKit overlays and focus", "ui_webkit"],
@@ -311,7 +313,7 @@ describe("CI check failure collection", () => {
     expect(result.status, result.stderr).toBe(1);
     expect(result.stdout).toContain("CHECK check:max-lines-ratchet --base base");
     expect(result.stdout).toContain("CHECK plugins:inventory:check");
-    expect(result.stdout.match(/^CHECK /gm)).toHaveLength(8);
+    expect(result.stdout.match(/^CHECK /gm)).toHaveLength(9);
   });
   it("preserves the combined baseline runner's failure", () => {
     const result = runChecks("checks-baseline-ratchets", "Run baseline ratchets", {
@@ -341,7 +343,7 @@ describe("CI check failure collection", () => {
       BASE_SHA: "base",
     });
     expect(result.status, result.stderr).toBe(1);
-    expect(result.stdout.match(/^CHECK /gm)).toHaveLength(7);
+    expect(result.stdout.match(/^CHECK /gm)).toHaveLength(8);
     expect(result.stdout).toContain("scripts/check-protocol-since.mts");
   });
   it("finishes legacy native locale checks after a failed native check", () => {
@@ -392,18 +394,24 @@ describe("native CI failure collection", () => {
     const result = run(
       root,
       `
-swift() { printf '%s\\n' "$*" >> "$TRACE"; }
+swift() { printf '%s\\t' "$@" >> "$TRACE"; printf '\\n' >> "$TRACE"; }
 export -f swift
 ${optOut.run}
-if [[ -f "$GITHUB_ENV" ]]; then source "$GITHUB_ENV"; fi
+if [[ -f "$GITHUB_ENV" ]]; then
+  while IFS='=' read -r name value; do export "$name=$value"; done < "$GITHUB_ENV"
+fi
 ${tests.run}
 ${ciStep("macos-swift-packages", "Clean OpenClawKit build scratch").run}
 `,
       { GITHUB_ENV: path.join(root, "environment"), OPENCLAWKIT_TEST_EXECUTION: "serial" },
     );
     expect(result.status, result.stderr).toBe(0);
-    const commands = readFileSync(path.join(root, "trace"), "utf8").trim().split("\n");
-    const scratchPaths = commands.map((command) => command.match(/--scratch-path (\S+)/)?.[1]);
+    const invocations = readFileSync(path.join(root, "trace"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => line.split("\t").filter(Boolean));
+    const commands = invocations.map((args) => args.join(" "));
+    const scratchPaths = invocations.map((args) => args[args.indexOf("--scratch-path") + 1]);
     expect(scratchPaths[0]).toBeTruthy();
     expect(new Set(scratchPaths).size).toBe(1);
     expect(existsSync(scratchPaths[0]!)).toBe(false);

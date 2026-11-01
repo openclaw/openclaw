@@ -14,11 +14,9 @@ import { isValidProfileName, resolveProfileStateDir } from "./profile-utils.js";
 import { scanCliRootOptions } from "./root-option-scan.js";
 import { takeCliRootOptionValue } from "./root-option-value.js";
 
-type CliProfileParseResult =
-  | { ok: true; profile: string | null; argv: string[] }
-  | { ok: false; error: string };
-
-export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
+export function parseCliProfileArgs(
+  argv: string[],
+): { ok: true; profile: string | null; argv: string[] } | { ok: false; error: string } {
   // Root profile flags are stripped before Commander sees argv, except command-local cases.
   let profile: string | null = null;
   let sawDev = false;

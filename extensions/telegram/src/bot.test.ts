@@ -46,6 +46,7 @@ import {
   vi,
   type MockInstance,
 } from "vitest";
+import { makeUserMessage } from "../../test-support/message-fixtures.test-support.js";
 import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
 import type { TelegramBotFixtureMocks } from "./bot-module-mocks.test-support.js";
 import {
@@ -501,11 +502,7 @@ async function writeDirectTelegramTranscriptContext(params: {
     storePath: params.storePath,
     sessionId: params.sessionId,
     sessionKey,
-    message: {
-      role: "user",
-      content: params.text,
-      timestamp: params.timestamp,
-    },
+    message: makeUserMessage(params.text, params.timestamp),
     eventId: "transcript-user-1",
   });
 }

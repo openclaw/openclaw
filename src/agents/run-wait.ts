@@ -55,54 +55,6 @@ function resolveRunWaitDeadlineAtMs(params: { deadlineAtMs?: number; timeoutMs?:
   );
 }
 
-type RawAgentWaitResponse = {
-  status?: string;
-  error?: string;
-  startedAt?: unknown;
-  endedAt?: unknown;
-  stopReason?: unknown;
-  livenessState?: unknown;
-  yielded?: unknown;
-  pendingError?: unknown;
-  timeoutPhase?: unknown;
-  providerStarted?: unknown;
-  terminalReply?: unknown;
-  terminalReceipt?: unknown;
-};
-
-function normalizeAgentWaitResult(
-  status: AgentWaitResult["status"],
-  runId: string,
-  wait?: RawAgentWaitResponse,
-): AgentWaitResult {
-  const receipt = normalizeAgentRunTerminalReceipt(wait?.terminalReceipt);
-  const stopReason = typeof wait?.stopReason === "string" ? wait.stopReason : undefined;
-  const terminalOutcome = buildAgentRunTerminalOutcomeFromWaitResult({ ...wait, status });
-  const normalized =
-    terminalOutcome?.reason === "hard_timeout"
-      ? { status: terminalOutcome.status, error: terminalOutcome.error }
-      : normalizeBlockedLivenessWaitStatus({
-          status: terminalOutcome?.status ?? status,
-          livenessState: wait?.livenessState,
-          error: terminalOutcome?.error,
-        });
-  return {
-    status: normalized.status,
-    error: normalized.error,
-    startedAt: typeof wait?.startedAt === "number" ? wait.startedAt : undefined,
-    endedAt: typeof wait?.endedAt === "number" ? wait.endedAt : undefined,
-    stopReason,
-    livenessState: typeof wait?.livenessState === "string" ? wait.livenessState : undefined,
-    yielded: wait?.yielded === true ? true : undefined,
-    pendingError: wait?.pendingError === true ? true : undefined,
-    timeoutPhase: normalizeAgentRunTimeoutPhase(wait?.timeoutPhase),
-    providerStarted: normalizeProviderStarted(wait?.providerStarted),
-    terminalReply: normalizeAgentRunTerminalReplySnapshot(wait?.terminalReply),
-    sourceReplyDelivered:
-      receipt?.runId === runId && receipt.sourceReplyDelivered === true ? true : undefined,
-  };
-}
-
 const RECOVERABLE_AGENT_WAIT_ERROR_PATTERNS: readonly RegExp[] = [
   /gateway closed \(1006/i,
   /transport close/i,
@@ -223,12 +175,38 @@ export async function waitForAgentRun(params: {
       timeoutMs: addTimerTimeoutGraceMs(timeoutMs, 2_000),
       ...(params.signal ? { signal: params.signal } : {}),
     });
-    const status = wait?.status;
-    return normalizeAgentWaitResult(
-      status === "timeout" || status === "pending" || status === "error" ? status : "ok",
-      params.runId,
-      wait,
-    );
+    const rawStatus = wait?.status;
+    const status =
+      rawStatus === "timeout" || rawStatus === "pending" || rawStatus === "error"
+        ? rawStatus
+        : "ok";
+    const runId = params.runId;
+    const receipt = normalizeAgentRunTerminalReceipt(wait?.terminalReceipt);
+    const stopReason = typeof wait?.stopReason === "string" ? wait.stopReason : undefined;
+    const terminalOutcome = buildAgentRunTerminalOutcomeFromWaitResult({ ...wait, status });
+    const normalized =
+      terminalOutcome?.reason === "hard_timeout"
+        ? { status: terminalOutcome.status, error: terminalOutcome.error }
+        : normalizeBlockedLivenessWaitStatus({
+            status: terminalOutcome?.status ?? status,
+            livenessState: wait?.livenessState,
+            error: terminalOutcome?.error,
+          });
+    return {
+      status: normalized.status,
+      error: normalized.error,
+      startedAt: typeof wait?.startedAt === "number" ? wait.startedAt : undefined,
+      endedAt: typeof wait?.endedAt === "number" ? wait.endedAt : undefined,
+      stopReason,
+      livenessState: typeof wait?.livenessState === "string" ? wait.livenessState : undefined,
+      yielded: wait?.yielded === true ? true : undefined,
+      pendingError: wait?.pendingError === true ? true : undefined,
+      timeoutPhase: normalizeAgentRunTimeoutPhase(wait?.timeoutPhase),
+      providerStarted: normalizeProviderStarted(wait?.providerStarted),
+      terminalReply: normalizeAgentRunTerminalReplySnapshot(wait?.terminalReply),
+      sourceReplyDelivered:
+        receipt?.runId === runId && receipt.sourceReplyDelivered === true ? true : undefined,
+    };
   } catch (err) {
     return normalizeAgentWaitError(err);
   }
@@ -290,7 +268,8 @@ export async function waitForAgentRunsToDrain(params: {
   deadlineAtMs?: number;
   callGateway?: GatewayCaller;
 }): Promise<void> {
-  const deadlineAtMs = resolveRunWaitDeadlineAtMs(params);
+  const deadlineWallAtMs = resolveRunWaitDeadlineAtMs(params);
+  const deadlineAtMs = performance.now() + Math.max(0, deadlineWallAtMs - Date.now());
   const callGateway = params.callGateway ?? bindAgentToolGatewayRequest({ hostedOnly: true });
 
   // Runs may finish and spawn more runs, so refresh until no pending IDs remain.
@@ -298,8 +277,8 @@ export async function waitForAgentRunsToDrain(params: {
     params.initialPendingRunIds ?? (await params.getPendingRunIds()),
   );
 
-  while (pendingRunIds.size > 0 && Date.now() < deadlineAtMs) {
-    const remainingMs = Math.max(1, deadlineAtMs - Date.now());
+  while (pendingRunIds.size > 0 && performance.now() < deadlineAtMs) {
+    const remainingMs = Math.max(1, deadlineAtMs - performance.now());
     await Promise.allSettled(
       [...pendingRunIds].map((runId) =>
         waitForAgentRun({
@@ -311,7 +290,7 @@ export async function waitForAgentRunsToDrain(params: {
     );
     const previousRunIds = pendingRunIds;
     pendingRunIds = normalizePendingRunIds(await params.getPendingRunIds());
-    const retryDelayMs = Math.min(AGENT_RUN_WAIT_RETRY_DELAY_MS, deadlineAtMs - Date.now());
+    const retryDelayMs = Math.min(AGENT_RUN_WAIT_RETRY_DELAY_MS, deadlineAtMs - performance.now());
     if (
       retryDelayMs > 0 &&
       pendingRunIds.size > 0 &&

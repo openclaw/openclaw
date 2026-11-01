@@ -5,21 +5,6 @@ import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { cronJob, cronList } from "./cron-fixtures.test-support.ts";
 
-type PerformanceMetrics = { metrics: Array<{ name: string; value: number }> };
-
-function metricDeltas(before: PerformanceMetrics, after: PerformanceMetrics) {
-  return Object.fromEntries(
-    ["ScriptDuration", "TaskDuration", "LayoutDuration", "RecalcStyleDuration"].map((name) => {
-      const earlier = before.metrics.find((entry) => entry.name === name)?.value;
-      const later = after.metrics.find((entry) => entry.name === name)?.value;
-      if (earlier === undefined || later === undefined) {
-        throw new Error(`Missing CDP metric: ${name}`);
-      }
-      return [name, (later - earlier) * 1000];
-    }),
-  );
-}
-
 // Exercise shipped CSS chunks: a cold source-mode route omits cross-page selectors.
 const suite = createControlUiE2eSuite({
   name: "Control UI Cron search bundled Gateway E2E",
@@ -56,42 +41,14 @@ suite.define(() => {
       const rows = page.locator(".cron-table__row");
       const loadMore = page.getByRole("button", { name: "Load more", exact: true });
       await loadMore.click();
-      await expect.poll(() => rows.count()).toBe(jobs.length);
-      const menuClient = await context.newCDPSession(page);
-      try {
-        await menuClient.send("Performance.enable");
-        const before: { metrics: Array<{ name: string; value: number }> } =
-          await menuClient.send("Performance.getMetrics");
-        const started = performance.now();
-        await page.locator(".cron-job-menu__trigger").first().click();
-        await page.getByRole("menuitem", { name: "Remove", exact: true }).waitFor();
-        const after: typeof before = await menuClient.send("Performance.getMetrics");
-        console.log(
-          JSON.stringify({
-            proof: "cron-expanded-inventory-menu-open",
-            jobs: jobs.length,
-            elapsedMs: performance.now() - started,
-            metrics: Object.fromEntries(
-              ["ScriptDuration", "TaskDuration", "LayoutDuration", "RecalcStyleDuration"].map(
-                (name) => {
-                  const earlier = before.metrics.find((entry) => entry.name === name)?.value;
-                  const later = after.metrics.find((entry) => entry.name === name)?.value;
-                  if (earlier === undefined || later === undefined) {
-                    throw new Error(`Missing CDP metric: ${name}`);
-                  }
-                  return [name, (later - earlier) * 1000];
-                },
-              ),
-            ),
-          }),
-        );
-        await page.keyboard.press("Escape");
-        await page
-          .getByRole("menuitem", { name: "Remove", exact: true })
-          .waitFor({ state: "hidden" });
-      } finally {
-        await menuClient.detach();
-      }
+      await expect.poll(() => rows.first().getAttribute("aria-setsize")).toBe(String(jobs.length));
+      expect(await rows.count()).toBeLessThan(40);
+      await page.locator(".cron-job-menu__trigger").first().click();
+      await page.getByRole("menuitem", { name: "Remove", exact: true }).waitFor();
+      await page.keyboard.press("Escape");
+      await page
+        .getByRole("menuitem", { name: "Remove", exact: true })
+        .waitFor({ state: "hidden" });
       const search = page.getByRole("searchbox", { name: "Search automations" });
       await search.click();
       const query = "inventory";
@@ -107,7 +64,6 @@ suite.define(() => {
       );
       const client = await context.newCDPSession(page);
       try {
-        await client.send("Performance.enable");
         const { frameTree } = await client.send("Page.getFrameTree");
         const recalculated: number[] = [];
         client.on("Tracing.dataCollected", ({ value }) => {
@@ -131,8 +87,6 @@ suite.define(() => {
           transferMode: "ReportEvents",
         });
         try {
-          const before: PerformanceMetrics = await client.send("Performance.getMetrics");
-          const started = performance.now();
           await search.press(query.slice(0, 1));
           await gateway.waitForRequest("cron.list", {
             after: deferredAfter,
@@ -145,24 +99,12 @@ suite.define(() => {
                 requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
               }),
           );
-          const elapsedMs = performance.now() - started;
-          const after: PerformanceMetrics = await client.send("Performance.getMetrics");
           expect(await search.inputValue()).toBe(query);
           expect(
             (await gateway.getRequests("cron.list"))
               .slice(requestsBefore)
               .map(({ params }) => (isRecord(params) ? [params.query, params.offset] : null)),
           ).toEqual([[deferredMatch.query, 0]]);
-          console.log(
-            JSON.stringify({
-              proof: "cron-expanded-inventory-pending-query-typing",
-              jobs: jobs.length,
-              query,
-              keystrokes: query.length,
-              elapsedMs,
-              metrics: metricDeltas(before, after),
-            }),
-          );
         } finally {
           const complete = new Promise<void>((resolve) => {
             client.once("Tracing.tracingComplete", () => resolve());
@@ -170,35 +112,26 @@ suite.define(() => {
           await client.send("Tracing.end");
           await complete;
         }
-        expect(await rows.count()).toBe(jobs.length);
+        expect(await rows.first().getAttribute("aria-setsize")).toBe(String(jobs.length));
+        expect(await rows.count()).toBeLessThan(40);
         expect(await page.locator(".cron-table").getAttribute("aria-busy")).toBe("true");
         // A loading indicator may restyle itself, not every retained row or shadow part.
         // Count work rather than wall time so the regression is independent of CPU speed.
         expect(recalculated.length).toBeGreaterThan(0);
         expect(Math.max(...recalculated)).toBeLessThan(jobs.length);
-        const before: PerformanceMetrics = await client.send("Performance.getMetrics");
-        const started = performance.now();
         await gateway.resolveDeferred("cron.list");
         // The pending read queues one replacement for the latest typed query.
         await gateway.waitForRequest("cron.list", { match: { query, offset: 0 } });
-        await expect.poll(() => rows.count()).toBe(50);
+        await expect.poll(() => rows.first().getAttribute("aria-setsize")).toBe("50");
         await expect.poll(() => page.locator(".cron-table").getAttribute("aria-busy")).toBe(null);
-        const elapsedMs = performance.now() - started;
-        const after: PerformanceMetrics = await client.send("Performance.getMetrics");
-        console.log(
-          JSON.stringify({
-            proof: "cron-expanded-inventory-search-results",
-            jobs: jobs.length,
-            query,
-            elapsedMs,
-            metrics: metricDeltas(before, after),
-          }),
-        );
         expect(await search.inputValue()).toBe(query);
         expect(await search.evaluate((element) => element === document.activeElement)).toBe(true);
         await expect.poll(() => loadMore.isEnabled()).toBe(true);
         await loadMore.click();
-        await expect.poll(() => rows.count()).toBe(jobs.length);
+        await expect
+          .poll(() => rows.first().getAttribute("aria-setsize"))
+          .toBe(String(jobs.length));
+        expect(await rows.count()).toBeLessThan(40);
         expect(
           (await gateway.getRequests("cron.list"))
             .slice(requestsBefore)
@@ -213,4 +146,84 @@ suite.define(() => {
       }
     });
   });
+  it.each([
+    { width: 1280, height: 900 },
+    { width: 390, height: 844 },
+  ])(
+    "windows jobs while preserving native Tab, menu focus, and the last loaded job at %o",
+    async (viewport) => {
+      await suite.withPage({ viewport }, async ({ page }) => {
+        const jobs = Array.from({ length: 500 }, (_, index) =>
+          cronJob("window-" + index, "Windowed reminder " + index),
+        );
+        await installMockGateway(page, {
+          methodResponses: {
+            "cron.list": cronListResponseFixture(
+              Array.from({ length: 10 }, (_, pageIndex) => {
+                const offset = pageIndex * 50;
+                return {
+                  match: { offset },
+                  response: cronList(jobs.slice(offset, offset + 50), "window-query", {
+                    total: jobs.length,
+                    offset,
+                    hasMore: offset + 50 < jobs.length,
+                    nextOffset: offset + 50 < jobs.length ? offset + 50 : null,
+                  }),
+                };
+              }),
+            ),
+            "cron.status": { enabled: true, jobs: jobs.length, nextWakeAtMs: null },
+            "cron.runs": { entries: [], total: 0, offset: 0, hasMore: false },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "cron");
+        const rows = page.locator(".cron-table__row");
+        for (let count = 50; count <= jobs.length; count += 50) {
+          await expect.poll(() => rows.first().getAttribute("aria-setsize")).toBe(String(count));
+          if (count < jobs.length) {
+            await page.getByRole("button", { name: "Load more", exact: true }).press("Enter");
+          }
+        }
+        expect(await rows.count()).toBeLessThan(40);
+        // The last row is pinned as the native reverse-Tab entry from the footer.
+        const edge = rows.nth((await rows.count()) - 2);
+        const index = Number(await edge.getAttribute("data-index"));
+        await edge.locator(".cron-table__name").focus();
+        for (let step = 0; step < 4; step++) {
+          await page.keyboard.press("Tab");
+        }
+        const next = page.locator(`[data-test-id="cron-row-window-${index + 1}"]`);
+        await expect
+          .poll(() =>
+            next
+              .locator(".cron-table__name")
+              .evaluate((element) => element === document.activeElement),
+          )
+          .toBe(true);
+        const trigger = next.locator(".cron-job-menu__trigger");
+        await trigger.click();
+        await page.getByRole("menuitem", { name: "Remove", exact: true }).waitFor();
+        await page.keyboard.press("Escape");
+        await expect
+          .poll(() => trigger.evaluate((element) => element === document.activeElement))
+          .toBe(true);
+        const lastName = page.locator('[data-test-id="cron-row-window-499"] .cron-table__name');
+        await lastName.focus();
+        await expect
+          .poll(() =>
+            lastName.evaluate((element) => {
+              const rect = element.getBoundingClientRect();
+              return rect.top >= 0 && rect.bottom <= innerHeight;
+            }),
+          )
+          .toBe(true);
+        await expect
+          .poll(() =>
+            page.locator('[data-test-id="cron-row-window-499"]').getAttribute("aria-posinset"),
+          )
+          .toBe("500");
+        expect(await rows.count()).toBeLessThan(40);
+      });
+    },
+  );
 });

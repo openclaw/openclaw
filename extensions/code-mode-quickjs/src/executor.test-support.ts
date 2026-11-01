@@ -69,7 +69,7 @@ export async function runQuickJsExecutor(
 }
 
 const resolve = createRequire(import.meta.url).resolve;
-const modules = Promise.all([
+export const quickJsTestModules = Promise.all([
   readFile(resolve("quickjs-wasi/quickjs.wasm")).then((bytes) => WebAssembly.compile(bytes)),
   readFile(resolve("quickjs-wasi/encoding.so")).then((bytes) => WebAssembly.compile(bytes)),
 ]).then(([wasmModule, encoding]) => ({
@@ -84,7 +84,7 @@ export async function runQuickJsWire(input: CodeModeWorkerPayload<Snapshot>, tim
     maxWorkers: 1,
   });
   try {
-    return await pool.run({ ...input, ...(await modules) }, { timeoutMs });
+    return await pool.run({ ...input, ...(await quickJsTestModules) }, { timeoutMs });
   } finally {
     await pool.close();
   }

@@ -102,7 +102,6 @@ export async function dispatchInboundDirectDm(params: DispatchInboundDirectDmPar
     body: params.rawBody,
     timestamp: params.timestamp,
   });
-  const accountId = route.accountId ?? params.accountId;
   const injectedBuilder = params.channelRuntime?.inbound?.buildContext;
   const buildContext =
     typeof injectedBuilder === "function"
@@ -111,7 +110,7 @@ export async function dispatchInboundDirectDm(params: DispatchInboundDirectDmPar
   const ctxPayload = await Promise.resolve(
     buildContext({
       channel: params.channel,
-      accountId,
+      accountId: route.accountId,
       provider: params.provider,
       surface: params.surface,
       messageId: params.messageId,

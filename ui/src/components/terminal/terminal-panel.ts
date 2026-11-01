@@ -2,9 +2,10 @@ import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
 import type { ApplicationContext } from "../../app/context.ts";
 import { terminalFontFamily } from "../../app/terminal-font.ts";
 import { i18n } from "../../i18n/lib/translate.ts";
-import { renderSolidSnapshot } from "../../lib/dom/solid-snapshot.ts";
+import { registerTerminalEnglish } from "../../i18n/locales/en-terminal.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
+import { renderSolidSnapshot } from "../../lib/reactive/detached-root.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { showConfirmDialog } from "../confirm-dialog.ts";
 import { createDockLayout } from "../dock-layout.ts";
@@ -26,6 +27,8 @@ import type { TerminalInputs, TerminalPanelSessionTab } from "./terminal-panel-s
 import { terminalPanelTabIcon, terminalPanelHostedTabs } from "./terminal-panel-tabs.tsx";
 import { createTerminalPanelUpload, type TerminalPanelUpload } from "./terminal-panel-upload.ts";
 import { createTerminalSessionPicker } from "./terminal-session-picker.ts";
+
+registerTerminalEnglish();
 
 // Clone the SVG itself: insertion consumes a fragment and loses its replacement boundary.
 const hostedTabIcon = renderSolidSnapshot(terminalPanelTabIcon).firstElementChild!;

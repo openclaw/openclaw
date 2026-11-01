@@ -462,11 +462,13 @@ export function prepareGatewayRestartIntentConsumption(
   env: NodeJS.ProcessEnv = process.env,
   now?: number,
   assertCurrent?: () => void,
+  signal?: AbortSignal,
 ): () => Promise<GatewayRestartIntent | null> {
   const source = prepareOpenClawStateReadSource({ path: resolveOpenClawStateSqlitePath(env), env });
   return async () => {
     const context = source.workerContext();
     const check = () => {
+      signal?.throwIfAborted();
       context.admission.assertCurrent();
       assertCurrent?.();
     };
@@ -478,6 +480,7 @@ export function prepareGatewayRestartIntentConsumption(
         (scope) => scope.execute({ type: "restartLifecycle.consumeIntent", input: undefined }),
         {
           existingOnly: true,
+          signal,
           assertCurrent: check,
           createAdmission: () => {
             admission = createSqliteWorkerOperationAdmission((_request, grant) => {

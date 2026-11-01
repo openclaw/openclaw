@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { materializeErrorStack } from "openclaw/plugin-sdk/error-runtime";
 import {
   CodexAppServerRpcError,
   CodexCatalogResponseTooLargeError,
@@ -75,6 +76,7 @@ export class CodexCatalogSourceBackoff {
             : failure
               ? Math.min(failure.delayMs * 2 || INITIAL_BACKOFF_MS, MAX_BACKOFF_MS)
               : 0;
+        materializeErrorStack(error);
         sources.set(key, {
           failure: { error, delayMs, retryAt: this.now() + delayMs, probing: false },
         });

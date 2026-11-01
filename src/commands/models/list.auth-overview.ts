@@ -4,7 +4,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { formatRemainingShort } from "../../agents/auth-health.js";
-import { resolveAuthProfileDisplayLabel } from "../../agents/auth-profiles/display.js";
+import { formatAuthProfileOAuthLabel } from "../../agents/auth-profiles/display.js";
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
 import { loadPersistedAuthProfileStore } from "../../agents/auth-profiles/persisted.js";
 import { listProfilesForProvider } from "../../agents/auth-profiles/profiles.js";
@@ -91,14 +91,7 @@ export function resolveProviderAuthOverview(params: {
         profileId,
       );
     }
-    const display = resolveAuthProfileDisplayLabel({ cfg, store, profileId });
-    const suffix =
-      display === profileId
-        ? ""
-        : display.startsWith(profileId)
-          ? display.slice(profileId.length).trim()
-          : `(${display})`;
-    const base = `${profileId}=OAuth${suffix ? ` ${suffix}` : ""}`;
+    const base = formatAuthProfileOAuthLabel({ cfg, store, profileId });
     return withUnusableSuffix(base, profileId);
   });
   const oauthCount = profiles.filter((id) => store.profiles[id]?.type === "oauth").length;

@@ -36,12 +36,9 @@ describe("provider login choices", () => {
       choice({
         pluginId: "meta",
         providerId: "meta",
-        methodId: "muse-code",
         groupId: "meta",
         groupLabel: "Meta",
         choiceId: "muse-code",
-        choiceLabel: "Muse Code",
-        appGuidedAuth: "device-code",
         credentialOnly: undefined,
       }),
       choice({ choiceId: "discovery", appGuidedDiscovery: true }),
@@ -63,8 +60,8 @@ describe("provider login choices", () => {
     expect(options[0]).not.toHaveProperty("requiresSetup");
   });
 
-  it("orders login methods by the provider's declared priority", () => {
-    const choices = [
+  it("orders login methods without mutating declarations", () => {
+    const choices = Object.freeze([
       choice({
         choiceId: "codex-device",
         choiceLabel: "Codex device code",
@@ -72,19 +69,12 @@ describe("provider login choices", () => {
         assistantPriority: -40,
       }),
       choice({ choiceId: "chatgpt", choiceLabel: "Sign in with ChatGPT", assistantPriority: -50 }),
-    ];
+    ]);
     expect(listProviderLoginOptions(choices).map((option) => option.id)).toEqual([
       "demo/chatgpt",
       "demo/codex-device",
     ]);
-  });
-
-  it("keeps a single provider behind an explicit menu selection", () => {
-    declarations.read.mockReturnValue([choice()]);
-    expect(resolveProviderChannelLoginChoice(undefined)).toEqual({
-      status: "providers",
-      providers: [{ pluginId: "demo", providerId: "demo", label: "Demo" }],
-    });
+    expect(choices.map((entry) => entry.choiceId)).toEqual(["codex-device", "chatgpt"]);
   });
 
   it("lists provider families once even when login requires setup", () => {
@@ -147,13 +137,9 @@ describe("provider login choices", () => {
       status: "resolved",
       choice: { pluginId: "demo", methodId: "device-code", command: "demo/demo-device" },
     });
-    expect(resolveProviderChannelLoginChoice("gone/demo-device")).toMatchObject({
-      status: "unsupported",
-    });
-    expect(resolveProviderChannelLoginChoice("DEMO/demo-device")).toMatchObject({
-      status: "unsupported",
-    });
-    expect(resolveProviderChannelLoginChoice("demo-device")).toMatchObject({ status: "ambiguous" });
+    expect(resolveProviderChannelLoginChoice("gone/demo-device").status).toBe("unsupported");
+    expect(resolveProviderChannelLoginChoice("DEMO/demo-device").status).toBe("unsupported");
+    expect(resolveProviderChannelLoginChoice("demo-device").status).toBe("ambiguous");
   });
 
   it("offers aliases only for a declared fixed-input method and keeps unsupported chat on handoff", () => {

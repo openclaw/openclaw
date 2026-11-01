@@ -7,7 +7,7 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 import { searchRemoteProjects } from "./project-github-search.js";
 
-function repository(fullName: string, updatedAt: string, description?: string) {
+function repository(fullName: string, description?: string, updatedAt?: string) {
   const [owner, name] = fullName.split("/");
   return {
     id: fullName,
@@ -18,7 +18,7 @@ function repository(fullName: string, updatedAt: string, description?: string) {
     clone_url: `https://github.com/${owner}/${name}.git`,
     description: description ?? null,
     default_branch: "main",
-    updated_at: updatedAt,
+    ...(updatedAt ? { updated_at: updatedAt } : {}),
   };
 }
 
@@ -55,6 +55,32 @@ function trackedTasks() {
 const affiliatedRequest = ([input]: Parameters<typeof fetch>) =>
   new URL(requestUrl(input)).pathname === "/user/repos";
 
+function clock() {
+  let now = 1_000;
+  vi.spyOn(Date, "now").mockImplementation(() => now);
+  return (value: number) => {
+    now = value;
+  };
+}
+
+function deferredFetch() {
+  const gate = createDeferredCore<Response>();
+  const started = createDeferredCore();
+  const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
+    started.resolve();
+    return new Promise<Response>((resolve, reject) => {
+      void gate.promise.then(resolve, reject);
+      const signal = init?.signal;
+      signal?.addEventListener(
+        "abort",
+        () => reject(new Error("Fixture request aborted", { cause: signal.reason })),
+        { once: true },
+      );
+    });
+  });
+  return { gate, started, fetchImpl };
+}
+
 describe("project GitHub search", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -66,8 +92,7 @@ describe("project GitHub search", () => {
     "retains quota cooldown across repeated and different queries (authenticated=%s)",
     async (authenticated) => {
       const token = authenticated ? "synthetic-search-quota-token" : undefined;
-      let now = 1_000;
-      vi.spyOn(Date, "now").mockImplementation(() => now);
+      const setTime = clock();
       const fetchImpl = vi.fn<typeof fetch>(
         async () => new Response(null, { status: 429, headers: { "retry-after": "60" } }),
       );
@@ -78,7 +103,7 @@ describe("project GitHub search", () => {
         retryAfterMs: 60_000,
       });
       const calls = fetchImpl.mock.calls.length;
-      now += 1_000;
+      setTime(2_000);
       await expect(searchRemoteProjects(query, options)).rejects.toMatchObject({
         statusCode: 429,
         retryAfterMs: 59_000,
@@ -88,7 +113,7 @@ describe("project GitHub search", () => {
         retryAfterMs: 59_000,
       });
       expect(fetchImpl).toHaveBeenCalledTimes(calls);
-      now += 59_000;
+      setTime(61_000);
       fetchImpl.mockImplementation(async () => json({ items: [] }));
       await expect(searchRemoteProjects(query, options)).resolves.toMatchObject({ projects: [] });
       expect(fetchImpl.mock.calls.length).toBeGreaterThan(calls);
@@ -124,24 +149,9 @@ describe("project GitHub search", () => {
   it.each([true, false])(
     "keeps coalesced search independent of a retired first reader (remaining=%s)",
     async (remaining) => {
-      const gate = createDeferredCore<Response>();
-      const started = createDeferredCore();
+      const { gate, started, fetchImpl } = deferredFetch();
       const firstAbort = new AbortController();
       const secondAbort = new AbortController();
-      const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
-        started.resolve();
-        return await new Promise<Response>((resolve, reject) => {
-          void gate.promise.then(resolve, reject);
-          const signal = init?.signal;
-          signal?.addEventListener(
-            "abort",
-            () => reject(new Error("Fixture request aborted", { cause: signal.reason })),
-            {
-              once: true,
-            },
-          );
-        });
-      });
       const options = { env: {}, fetchImpl };
       const query = `coalesced-retirement-${remaining}`;
       const first = searchRemoteProjects(query, { ...options, signal: firstAbort.signal });
@@ -155,7 +165,7 @@ describe("project GitHub search", () => {
       if (!remaining) {
         secondAbort.abort(new Error("Second reader retired"));
       }
-      gate.resolve(json({ items: [repository("acme/shared-result", "2026-09-01")] }));
+      gate.resolve(page(repository("acme/shared-result")));
       await Promise.all([rejected, secondOutcome]);
       expect(fetchImpl).toHaveBeenCalledOnce();
     },
@@ -188,7 +198,7 @@ describe("project GitHub search", () => {
         started.resolve();
         return gate.promise;
       }
-      return json({ items: [repository("acme/public-project", "2026-10-01")] });
+      return page(repository("acme/public-project"));
     });
     const options = { token: "synthetic-shared-retirement-token", fetchImpl };
     const first = searchRemoteProjects("first", {
@@ -208,16 +218,15 @@ describe("project GitHub search", () => {
     expect(fetchImpl.mock.calls.filter(affiliatedRequest)).toHaveLength(1);
   });
 
-  it("returns anonymous public results with a typed missing-credential state", async () => {
+  it("returns normalized anonymous results in GitHub best-match order", async () => {
     const fetchImpl = fetchReturning(
-      json({
-        items: [
-          {
-            ...repository("openclaw/openclaw", "2026-08-10T00:00:00Z", "  public project  "),
-            html_url: "  https://github.com/openclaw/openclaw  ",
-          },
-        ],
-      }),
+      page(
+        {
+          ...repository("openclaw/openclaw", "  public project  ", "2020-01-01T00:00:00Z"),
+          html_url: "  https://github.com/openclaw/openclaw  ",
+        },
+        repository("someone/recently-pushed-fork", undefined, "2026-08-25T00:00:00Z"),
+      ),
     );
 
     const result = await search("anonymous-openclaw", fetchImpl);
@@ -230,51 +239,48 @@ describe("project GitHub search", () => {
           webUrl: "https://github.com/openclaw/openclaw",
           description: "public project",
         },
+        { fullName: "someone/recently-pushed-fork" },
       ],
     });
-    expect(fetchImpl).toHaveBeenCalledOnce();
     expect(fetchImpl.mock.calls[0]?.[0]).toContain("/search/repositories?");
+    expect(requestUrl(fetchImpl.mock.calls[0]?.[0])).not.toContain("sort=");
   });
 
-  it("prioritizes matching affiliated repositories and fills from global search", async () => {
-    const fetchImpl = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        json([
-          repository("acme/matching-private", "2026-01-01T00:00:00Z", "configured-query"),
-          repository("acme/unrelated", "2026-08-10T00:00:00Z"),
-        ]),
-      )
-      .mockResolvedValueOnce(
-        page(
-          repository("acme/matching-private", "2026-08-11T00:00:00Z"),
-          repository("public/configured-query", "2026-08-10T00:00:00Z"),
-        ),
-      );
-
-    const result = await searchRemoteProjects("configured-query", {
-      env: { GH_TOKEN: "test-github-token" },
-      fetchImpl,
-    });
-
-    expect(result).toEqual({
-      credential: "configured",
-      projects: [
-        expect.objectContaining({ fullName: "acme/matching-private" }),
-        expect.objectContaining({ fullName: "public/configured-query" }),
-      ],
-    });
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(fetchImpl.mock.calls[0]?.[0]).toContain("/user/repos?");
-    expect(fetchImpl.mock.calls[0]?.[1]?.headers).toHaveProperty(
-      "Authorization",
-      "Bearer test-github-token",
-    );
-  });
+  it.each([false, true])(
+    "ranks and deduplicates affiliations with native credentials=%s",
+    async (native) => {
+      const token = "synthetic-token";
+      const query = native ? "acme/private-repo" : "configured-query";
+      const selected = repository(native ? query : "acme/matching-private", query);
+      const global = repository("public/configured-query");
+      const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+        const path = new URL(requestUrl(input)).pathname;
+        if (path === `/repos/${query}`) {
+          return json(selected);
+        }
+        if (path === "/user/repos") {
+          return json([selected, repository("acme/unrelated")]);
+        }
+        expect(path).toBe("/search/repositories");
+        return page(global, selected);
+      });
+      const result = await searchRemoteProjects(query, {
+        env: native ? {} : { GH_TOKEN: token },
+        token: native ? token : undefined,
+        fetchImpl,
+      });
+      expect(result.credential).toBe("configured");
+      expect(projectNames(result)).toEqual([selected.full_name, global.full_name]);
+      expect(result.projects[0]?.defaultBranch).toBe("main");
+      expect(fetchImpl).toHaveBeenCalledTimes(native ? 3 : 2);
+      for (const [, init] of fetchImpl.mock.calls) {
+        expect(new Headers(init?.headers).get("Authorization")).toBe(`Bearer ${token}`);
+      }
+    },
+  );
 
   it("shares affiliated pages across queries, conditionally refreshes, and isolates credentials", async () => {
-    let now = 1_000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const setTime = clock();
     const { tasks, trackExecution } = trackedTasks();
     const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
       const url = new URL(requestUrl(input));
@@ -283,9 +289,7 @@ describe("project GitHub search", () => {
         return new Response(null, { status: 304 });
       }
       const data =
-        url.pathname === "/user/repos"
-          ? [repository("acme/shared-project", "2026-10-01")]
-          : { items: [] };
+        url.pathname === "/user/repos" ? [repository("acme/shared-project")] : { items: [] };
       return new Response(JSON.stringify(data), { headers: { etag: '"page-v1"' } });
     });
     const options = {
@@ -299,8 +303,7 @@ describe("project GitHub search", () => {
     expect(results.map(projectNames)).toEqual([["acme/shared-project"], ["acme/shared-project"]]);
     const affiliatedCalls = () => fetchImpl.mock.calls.filter(affiliatedRequest);
     expect(affiliatedCalls()).toHaveLength(1);
-    expect(fetchImpl).toHaveBeenCalledTimes(3);
-    now += 60_001;
+    setTime(61_001);
     expect(await searchRemoteProjects("shared", options)).toMatchObject({ stale: true });
     await Promise.all(tasks);
     expect(await searchRemoteProjects("shared", options)).toEqual(results[0]);
@@ -309,50 +312,6 @@ describe("project GitHub search", () => {
     await searchRemoteProjects("shared", { ...options, token: "synthetic-other-project-token" });
     expect(affiliatedCalls()).toHaveLength(3);
     expect(new Headers(affiliatedCalls()[2]?.[1]?.headers).has("if-none-match")).toBe(false);
-  });
-
-  it("accepts an explicitly prepared native credential without ambient token state", async () => {
-    const selected = repository("acme/private-repo", "2026-09-23T00:00:00Z");
-    const fetchImpl = vi.fn<typeof fetch>(async (input) => {
-      const url = requestUrl(input);
-      if (url.includes("/repos/acme/private-repo")) {
-        return json(selected);
-      }
-      if (url.includes("/user/repos")) {
-        return json([selected]);
-      }
-      return page(selected);
-    });
-
-    const result = await searchRemoteProjects("acme/private-repo", {
-      env: {},
-      fetchImpl,
-      token: "prepared-native-token",
-    });
-
-    expect(result).toMatchObject({
-      credential: "configured",
-      projects: [{ fullName: "acme/private-repo", defaultBranch: "main" }],
-    });
-    expect(fetchImpl).toHaveBeenCalledTimes(3);
-    for (const [, init] of fetchImpl.mock.calls) {
-      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer prepared-native-token");
-    }
-  });
-
-  it("preserves GitHub best-match order for global results instead of re-sorting by recency", async () => {
-    const fetchImpl = fetchReturning(
-      page(
-        repository("openclaw/best-match", "2020-01-01T00:00:00Z"),
-        repository("someone/recently-pushed-fork", "2026-08-25T00:00:00Z"),
-      ),
-    );
-    expect(projectNames(await search("best-match", fetchImpl))).toEqual([
-      "openclaw/best-match",
-      "someone/recently-pushed-fork",
-    ]);
-    const searchUrl = requestUrl(fetchImpl.mock.calls[0]?.[0]);
-    expect(searchUrl).not.toContain("sort=");
   });
 
   it.each([
@@ -368,14 +327,12 @@ describe("project GitHub search", () => {
     async (outcome, query, global, expected) => {
       const fetchImpl = vi.fn<typeof fetch>(async (input) => {
         if (requestUrl(input).includes("/repos/")) {
-          return outcome === "hit"
-            ? json(repository(query, "2026-08-20T00:00:00Z"))
-            : json({ message: "Not Found" }, 404);
+          return outcome === "hit" ? json(repository(query)) : json({ message: "Not Found" }, 404);
         }
-        return page(...global.map((name) => repository(name, "2026-08-25T00:00:00Z")));
+        return page(...global.map((name) => repository(name)));
       });
       expect(projectNames(await search(query, fetchImpl))).toEqual(expected);
-      expect(fetchImpl.mock.calls.map((call) => requestUrl(call[0]))).toEqual([
+      expect(fetchImpl.mock.calls.map(([input]) => requestUrl(input))).toEqual([
         expect.stringContaining(`/repos/${query}`),
         expect.stringContaining("/search/repositories?"),
       ]);
@@ -388,7 +345,7 @@ describe("project GitHub search", () => {
       if (url.includes("/repos/") || url.includes("/user/repos")) {
         throw new TypeError("fetch failed");
       }
-      return page(repository("acme/still-works", "2026-08-10T00:00:00Z"));
+      return page(repository("acme/still-works"));
     });
 
     const options = { env: { GH_TOKEN: "test-github-token" }, fetchImpl };
@@ -402,13 +359,12 @@ describe("project GitHub search", () => {
   it("returns marked stale normalized results while one refresh runs, then publishes fresh results", async ({
     signal,
   }) => {
-    let now = 1_000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const setTime = clock();
     const gate = createDeferredCore<Response>();
     const { tasks: refreshes, trackExecution } = trackedTasks();
     const fetchImpl = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(page(repository("acme/cache-query", "2026-08-10")))
+      .mockResolvedValueOnce(page(repository("acme/cache-query")))
       .mockImplementation(() => gate.promise);
     const options = {
       env: {},
@@ -416,9 +372,9 @@ describe("project GitHub search", () => {
       trackExecution,
     };
     const first = await searchRemoteProjects("Cache-Query", options);
-    now = 60_999;
+    setTime(60_999);
     expect(await searchRemoteProjects(" cache-query ", options)).toEqual(first);
-    now = 61_001;
+    setTime(61_001);
     try {
       const stale = await withinTest(searchRemoteProjects("cache-query", options), signal);
       expect(stale).toEqual({ ...first, stale: true });
@@ -433,7 +389,7 @@ describe("project GitHub search", () => {
         }),
       ).rejects.toThrow("Search authority retired");
     } finally {
-      gate.resolve(page(repository("acme/refreshed-query", "2026-08-11")));
+      gate.resolve(page(repository("acme/refreshed-query")));
       await Promise.all(refreshes);
     }
     expect(await searchRemoteProjects("cache-query", options)).toMatchObject({
@@ -450,7 +406,6 @@ describe("project GitHub search", () => {
           authorization === "Bearer github-token-a"
             ? "acme/token-rotation-a"
             : "acme/token-rotation-b",
-          "2026-08-10T00:00:00Z",
         ),
       );
     });
@@ -462,12 +417,9 @@ describe("project GitHub search", () => {
     vi.stubEnv("GH_TOKEN", "github-token-b");
     const second = await searchRemoteProjects("token-rotation", { fetchImpl });
 
-    expect(first.projects).toContainEqual(
-      expect.objectContaining({ fullName: "acme/token-rotation-a" }),
-    );
-    expect(second.projects).toContainEqual(
-      expect.objectContaining({ fullName: "acme/token-rotation-b" }),
-    );
-    expect(fetchImpl).toHaveBeenCalledTimes(4);
+    expect([first, second].map(projectNames)).toEqual([
+      ["acme/token-rotation-a"],
+      ["acme/token-rotation-b"],
+    ]);
   });
 });

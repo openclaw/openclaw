@@ -1,18 +1,17 @@
+import { addAbortListener } from "node:events";
 import path from "node:path";
-import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import type { Result } from "@openclaw/normalization-core/result";
 import { joinOwnedWorkerTasks } from "@openclaw/worker-runtime";
 import { racePromiseWithAbortSignal } from "../../../packages/retry/src/index.js";
 import { encodeAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
-import type {
-  UsageCostWorkerDatabase,
-  UsageCostWorkerInput,
-  UsageCostWorkerReply,
-} from "../../infra/session-cost-usage-worker.types.js";
-import { runWithSqliteDatabaseAdmissionTurn } from "../../infra/sqlite-database-admission-turn.js";
+import type { UsageCostWorkerDatabase } from "../../infra/session-cost-usage-worker.types.js";
+import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { SESSION_TRANSCRIPT_FOREGROUND_WORKERS } from "../../infra/worker-pool-sizing.js";
-import { WorkerTaskError, type WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import { WorkerTaskError } from "../../infra/worker-task-pool.js";
+import { getGatewayShutdownCleanupSignal } from "../../process/gateway-work-admission.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
+import { runWithAgentDatabaseReadAdmissionTurn } from "../../state/agent-database-admission.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import {
   assertAgentDatabaseResourceAdmission,
@@ -32,17 +31,14 @@ import type {
   CombinedSessionStoreTopologyRequest,
   CombinedSessionStoreTopologyResult,
 } from "./combined-store.types.js";
-import {
-  decodeSessionTranscriptWorkerReadError,
-  unwrapSessionTranscriptWorkerReply,
-} from "./session-history-worker-errors.js";
+import { unwrapSessionTranscriptWorkerReply } from "./session-history-worker-errors.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import {
   captureSessionStoreReadCandidate,
-  measureSessionStoreTargetInventoryInputBytes,
   type SessionStoreReadCandidate,
 } from "./session-store-read-candidates.js";
 import type {
+  SessionStoreTargetPreparationRequest,
   SessionStoreTargetInventoryRequest,
   SessionStoreTargetReadRequest,
   SessionStoreTargetReadResult,
@@ -51,27 +47,28 @@ import type {
 import {
   createSessionTranscriptHistoryPool,
   createUsageCostPool,
+  type SessionCostWorkerLane,
   type SessionDatabaseWorkerLane,
+  type SessionHistoryWorkerLane,
 } from "./session-transcript-read-pools.js";
+import {
+  createSessionStoreTargetReaders,
+  sessionDiscoveryConfig,
+} from "./session-transcript-worker-readers.js";
 import type {
   SessionHistoryWorkerInput,
   SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
-import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
-export type SessionCostWorkerLane = SessionDatabaseWorkerLane & {
-  pool: WorkerTaskPool<UsageCostWorkerInput, UsageCostWorkerReply>;
-};
-
-export type SessionHistoryWorkerLane = SessionDatabaseWorkerLane & {
-  pool: ReturnType<typeof createSessionTranscriptHistoryPool>;
-};
+export type { SessionHistoryWorkerLane } from "./session-transcript-read-pools.js";
 
 export type SessionDatabaseCleanup = { run: () => Promise<void> };
 
 /** Physical path for work; callers' lexical paths select the same owner for cleanup. */
 export type SessionHistoryDatabaseTarget = OpenClawAgentDatabaseOptions & {
   requestedPaths?: readonly string[];
+  readIdentity?: DatabasePathIdentity;
+  readSourcePath?: string;
   /** Capture a cold physical source after admission and before the row request. */
   prepareRead?: () => void;
 };
@@ -97,7 +94,7 @@ const historyDatabases = new Map<string, HistoryDatabaseResource>();
 // An exact lexical lookup derives from the physical owner; it owns no separate lifecycle.
 const historyReadCandidates = new Map<string, HistoryDatabaseResource>();
 const historySetTimeout = setTimeout;
-export const historyClearTimeout = clearTimeout;
+const historyClearTimeout = clearTimeout;
 const databaseWorkerLanes: SessionDatabaseWorkerLane[] = [];
 
 export function registerSessionTranscriptReaderLane<Pool extends SessionDatabaseWorkerLane["pool"]>(
@@ -120,9 +117,10 @@ function createHistoryLane(name: string, maxWorkers?: number) {
   );
 }
 
-export const historyLane = createHistoryLane(
-  "Session history",
-  SESSION_TRANSCRIPT_FOREGROUND_WORKERS,
+export const historyLane = registerSessionTranscriptReaderLane("Session history", (closed) =>
+  createSessionTranscriptHistoryPool(SESSION_TRANSCRIPT_FOREGROUND_WORKERS, closed, {
+    prewarmHistory: true,
+  }),
 );
 // Search readiness can await a host writer; it cannot occupy committed-history workers.
 export const transcriptSearchLane = createHistoryLane(
@@ -169,8 +167,7 @@ registerOpenClawStateDatabaseAsyncResource({
     // Per-database closes retain execution; whole-runtime close owns its final retirement.
     await joinOwnedWorkerTasks(
       databaseWorkerLanes.map(async (lane) => {
-        historyClearTimeout(lane.idleTimer);
-        lane.idleTimer = undefined;
+        clearDatabaseWorkerIdleRetirement(lane);
         await rotateDatabaseWorkers(lane);
       }),
     );
@@ -182,7 +179,7 @@ function retireIdleDatabaseWorkers(): void {
     if (lane.pending > 0 || lane.rotation || !lane.native) {
       continue;
     }
-    historyClearTimeout(lane.idleTimer);
+    clearDatabaseWorkerIdleRetirement(lane);
     void runInDetachedAsyncContext(() => rotateDatabaseWorkers(lane)).catch((error: unknown) => {
       process.emitWarning(`${lane.name} worker retirement failed: ${String(error)}`);
     });
@@ -205,6 +202,7 @@ export function pruneHistoryDatabases(): void {
 }
 
 export function releaseRetiredDatabaseCustody(lane: SessionDatabaseWorkerLane): void {
+  clearDatabaseWorkerIdleRetirement(lane);
   lane.native = false;
   for (const resource of historyDatabases.values()) {
     resource.nativeLanes.delete(lane);
@@ -227,19 +225,39 @@ export function rotateDatabaseWorkers(lane: SessionDatabaseWorkerLane): Promise<
   return rotation;
 }
 
-// Retire idle isolates independently of the longer SQLite handle retention window.
-export function armDatabaseWorkerIdleRetirement(lane: SessionDatabaseWorkerLane): void {
+export function clearDatabaseWorkerIdleRetirement(lane: SessionDatabaseWorkerLane): void {
+  lane.idleCleanupListener?.[Symbol.dispose]();
+  lane.idleCleanupListener = undefined;
   historyClearTimeout(lane.idleTimer);
+  lane.idleTimer = undefined;
+}
+
+// Keep interactive readers warm; background lanes span minute-spaced bursts before retiring.
+// Only new work cancels the idle deadline, never unrelated database cleanup.
+export function armDatabaseWorkerIdleRetirement(lane: SessionDatabaseWorkerLane): void {
   refreshDatabaseWorkerPressureSubscription();
   if (!lane.native || lane.pending > 0) {
+    clearDatabaseWorkerIdleRetirement(lane);
     return;
   }
+  if (lane.idleTimer) {
+    return;
+  }
+  const cleanupSignal = getGatewayShutdownCleanupSignal();
+  // Accepted reads keep their lane until settlement; then shutdown needs no warm retention.
+  if (cleanupSignal.aborted) {
+    retireIdleDatabaseWorkers();
+    return;
+  }
+  lane.idleCleanupListener = addAbortListener(cleanupSignal, retireIdleDatabaseWorkers);
+  const idleMs = lane === historyLane || lane === transcriptSearchLane ? 5 * 60_000 : 90_000;
   lane.idleTimer = runInDetachedAsyncContext(() =>
     historySetTimeout(() => {
+      clearDatabaseWorkerIdleRetirement(lane);
       void rotateDatabaseWorkers(lane).catch((error: unknown) => {
         process.emitWarning(`${lane.name} worker retirement failed: ${String(error)}`);
       });
-    }, 5 * 60_000),
+    }, idleMs),
   );
   lane.idleTimer.unref();
 }
@@ -480,6 +498,39 @@ export function acquireSessionTranscriptReadResource(storePath: string): History
   return resource;
 }
 
+/** Qualification has no database open or content read and precedes physical FIFO admission. */
+export async function prepareSessionStoreCandidatesInWorker(
+  request: SessionStoreTargetPreparationRequest,
+) {
+  const prepared =
+    "config" in request ? { ...request, config: sessionDiscoveryConfig(request.config) } : request;
+  const lane = targetDiscoveryLane;
+  clearDatabaseWorkerIdleRetirement(lane);
+  lane.pending++;
+  try {
+    const reply = await lane.pool.run(
+      () => ({ kind: "session-target-prepare", request: prepared }),
+      {
+        inputBytes: JSON.stringify(prepared).length * 2,
+        timeoutMs: 60_000,
+      },
+    );
+    const result = unwrapSessionTranscriptWorkerReply(reply);
+    if (
+      !result ||
+      typeof result !== "object" ||
+      !("kind" in result) ||
+      result.kind !== "session-target-prepare"
+    ) {
+      throw new Error("Session discovery worker returned an unexpected result kind");
+    }
+    return result;
+  } finally {
+    lane.pending--;
+    armDatabaseWorkerIdleRetirement(lane);
+  }
+}
+
 /** Keep captured discovery aliases until the existing history worker retires its readers. */
 export async function withSessionHistoryWorkerReadCandidates<T>(
   candidates: readonly SessionStoreReadCandidate[],
@@ -501,11 +552,14 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
   lane: SessionHistoryWorkerLane = historyLane,
   signal?: AbortSignal,
 ): Promise<T> {
-  const capturedCandidates = candidates.map(({ path: requestedPath, physicalPath, scope }) => ({
-    path: requestedPath,
-    physicalPath,
-    scope,
-  }));
+  const capturedCandidates = candidates.map(
+    ({ path: requestedPath, physicalPath, scope, identity }) => ({
+      path: requestedPath,
+      physicalPath,
+      scope,
+      identity,
+    }),
+  );
   const selected = capturedCandidates.map(({ physicalPath, scope }) => ({
     path: physicalPath,
     ...(scope ? { scope } : {}),
@@ -516,7 +570,7 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
   const admissionFamilies = capturedCandidates
     .filter((candidate) => candidate.scope === "sibling-family")
     .map((candidate) => path.dirname(candidate.physicalPath));
-  historyClearTimeout(lane.idleTimer);
+  clearDatabaseWorkerIdleRetirement(lane);
   lane.pending++;
   refreshDatabaseWorkerPressureSubscription();
   try {
@@ -633,12 +687,12 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
       ): Promise<SessionTranscriptWorkerValues[Input["kind"]]> => {
         // An admitted empty catalog can still belong to the agent's first schema birth.
         for (const physicalPath of admissionPaths) {
-          const preparation = getPendingOpenClawAgentDatabasePreparation(physicalPath);
+          const preparation = getPendingOpenClawAgentDatabasePreparation(physicalPath, "read");
           if (preparation) {
             await racePromiseWithAbortSignal(preparation, signal, (aborted) => aborted.reason);
           }
         }
-        const reply = await runWithSqliteDatabaseAdmissionTurn(
+        const reply = await runWithAgentDatabaseReadAdmissionTurn(
           admissionPaths,
           () =>
             lane.pool.run(
@@ -652,70 +706,30 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
             ),
           admissionFamilies,
           signal,
+          {
+            readIdentities: new Map(
+              capturedCandidates.flatMap((candidate) =>
+                candidate.identity ? [[candidate.physicalPath, candidate.identity] as const] : [],
+              ),
+            ),
+            physicalFamilies: capturedCandidates.every(
+              (candidate) => candidate.scope || candidate.identity,
+            )
+              ? true
+              : undefined,
+            env:
+              input.kind === "combined-store-topology"
+                ? input.request.options.discovery.env
+                : input.request.env,
+          },
         );
         const result = unwrapSessionTranscriptWorkerReply(reply);
         // SAFETY: The pool pairs this reply with the exact request dispatched above.
         return result as SessionTranscriptWorkerValues[Input["kind"]];
       };
-      const readStoreTargetResult = async (
-        request: Omit<SessionStoreTargetReadRequest, "candidates">,
-      ): Promise<Result<SessionStoreTargetReadResult, unknown>> => {
-        const preparedRequest = {
-          ...request,
-          env: captureSessionTranscriptStorageEnvironment(request.env),
-          candidates: capturedCandidates,
-        };
-        const result = await runRead(
-          { kind: "session-store-target", request: preparedRequest },
-          JSON.stringify(preparedRequest).length * 2,
-        );
-        return "readError" in result
-          ? err(decodeSessionTranscriptWorkerReadError(result.readError))
-          : ok(result);
-      };
       return await operation({
         assertCurrent,
-        readCombinedTopology: async (request) => {
-          const preparedRequest = {
-            ...request,
-            options: {
-              ...request.options,
-              discovery: {
-                ...request.options.discovery,
-                env: captureSessionTranscriptStorageEnvironment(request.options.discovery.env),
-              },
-            },
-            candidates: capturedCandidates,
-          };
-          return await runRead(
-            { kind: "combined-store-topology", request: preparedRequest },
-            JSON.stringify(preparedRequest).length * 2,
-          );
-        },
-        readStoreTargetResult,
-        readStoreTarget: async (request) => {
-          const read = await readStoreTargetResult(request);
-          if (!read.ok) {
-            throw read.error;
-          }
-          return read.value;
-        },
-        readTargetInventory: async (request) => {
-          const preparedRequest = {
-            ...request,
-            env: captureSessionTranscriptStorageEnvironment(request.env),
-            candidates: capturedCandidates,
-          };
-          const result = await runRead(
-            { kind: "session-target-inventory", request: preparedRequest },
-            measureSessionStoreTargetInventoryInputBytes(preparedRequest),
-          );
-          if (result.kind === "session-target-registry-required") {
-            // Release native readers before registry work without discarding a healthy worker.
-            await settleCandidates();
-          }
-          return result;
-        },
+        ...createSessionStoreTargetReaders(capturedCandidates, runRead, settleCandidates),
       });
     } finally {
       try {

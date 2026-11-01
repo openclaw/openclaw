@@ -5,10 +5,12 @@ const TRAITS = [
   ["settingsPage", "content--settings-page"],
   ["settingsWide", "content--settings-wide"],
   ["settingsWorkspace", "content--settings-workspace"],
+  ["cronEditor", "content--cron-editor"],
   ["memoryPage", "content--memory-page"],
   ["logsPage", "content--logs-page"],
   ["activityPage", "content--activity-page"],
   ["terminalPage", "content--terminal-page"],
+  ["portalsPage", "content--portals-page"],
 ] as const;
 
 export type ShellLayoutTraits = Partial<Record<(typeof TRAITS)[number][0], boolean>>;

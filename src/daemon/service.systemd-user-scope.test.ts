@@ -34,15 +34,11 @@ vi.mock("./systemd-peer-native.js", () => ({
 
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import { readGatewayServiceState, resolveGatewayService } from "./service.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
-const success = (stdout: string): ExecResult => ({
-  code: 0,
-  termination: "exit",
-  stdout,
-  stderr: "",
-});
+const success = (stdout: string): ExecResult => nativeExit(stdout);
 
 it("keeps strict legacy-user inspection on one admitted unit until its operation closes", async () => {
   mockProcessPlatform("linux");

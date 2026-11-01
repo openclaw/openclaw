@@ -5,6 +5,10 @@ import { expect, it } from "vitest";
 import type { SessionPlacementRecovery } from "../lib/sessions/session-placement-recovery.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { openChatModelPicker } from "../test-helpers/select-picker-e2e.ts";
+import {
+  createStandardCloudProfile,
+  createActiveSessionPlacement,
+} from "../test-helpers/session-placement.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import { createPageOpener } from "./new-session-page.scenario.test-support.ts";
 import {
@@ -47,18 +51,13 @@ import {
 const suite = createNewSessionPageE2eSuite();
 
 function activePlacement(id: string, remoteWorkspaceDir: string) {
-  return {
-    state: "active",
-    generation: 1,
-    createdAtMs: 1,
+  return createActiveSessionPlacement({
     updatedAtMs: 2,
     stateChangedAtMs: 2,
     environmentId: `worker-${id}`,
-    activeOwnerEpoch: 1,
-    workerBundleHash: "a".repeat(64),
     workspaceBaseManifestRef: `manifest-${id}`,
     remoteWorkspaceDir,
-  };
+  });
 }
 
 function readRecovery(page: Page) {
@@ -150,7 +149,6 @@ suite.define(() => {
         gateway,
         "sessions.create",
         "sessions.dispatch",
-        "sessions.send",
         "chat.send",
         "sessions.delete",
       );
@@ -181,7 +179,7 @@ suite.define(() => {
               message: "session cannot dispatch from placement active",
             },
           },
-          "sessions.send": { runId: messageId, status: "started" },
+          "chat.send": { runId: messageId, status: "started" },
         },
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -211,11 +209,13 @@ suite.define(() => {
       await pollLocatorText(alert).toContain("startup needs attention");
       expect(await composer.isDisabled()).toBe(false);
       await composer.fill("Follow-up waiting for startup recovery");
-      expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
       await retry.click();
-      await expectRequest(gateway, "sessions.send", {
-        key: sessionKey,
+      await expectRequest(gateway, "chat.send", {
+        sessionKey,
+        sessionId,
+        expectedLeafEntryId: null,
         agentId: "cloud",
         message,
         idempotencyKey: messageId,
@@ -230,14 +230,8 @@ suite.define(() => {
       await composer.fill("Follow-up after recovery");
       expect(await composer.inputValue()).toBe("Follow-up after recovery");
       expect(await initialTurn.count()).toBe(1);
-      expect(await gateway.getRequests("sessions.send")).toHaveLength(1);
-      await expectNoRequests(
-        gateway,
-        "sessions.create",
-        "sessions.dispatch",
-        "sessions.reclaim",
-        "chat.send",
-      );
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+      await expectNoRequests(gateway, "sessions.create", "sessions.dispatch", "sessions.reclaim");
     });
   });
 
@@ -280,22 +274,10 @@ suite.define(() => {
         },
         "environments.list": {
           environments: [],
-          profiles: [
-            {
-              id: "aws",
-              providerId: "crabbox",
-              machines: [
-                { id: "standard", label: "Standard", default: true },
-                { id: "fast", label: "Fast" },
-              ],
-            },
-          ],
+          profiles: [createStandardCloudProfile()],
         },
         "worktrees.branches": cloudWorkspaceResponses()["worktrees.branches"],
-        "sessions.dispatch": {
-          placement: { state: "active", environmentId: "worker-create-recovery" },
-        },
-        "sessions.send": { runId: "run-create-recovery", status: "started" },
+        "chat.send": { runId: "run-create-recovery", status: "started" },
       },
     });
     await page.goto(`${suite.server.baseUrl}new`);
@@ -353,7 +335,10 @@ suite.define(() => {
     });
     expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
     await gateway.deferNext("sessions.dispatch");
-    await gateway.resolveDeferred("sessions.create", { key: firstKey });
+    await gateway.resolveDeferred("sessions.create", {
+      key: firstKey,
+      sessionId: `session:${firstKey}`,
+    });
 
     await expectRequest(gateway, "sessions.dispatch", {
       key: firstKey,
@@ -361,17 +346,19 @@ suite.define(() => {
       profileId: "aws",
       machineClass: "fast",
     });
-    expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+    expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     await gateway.resolveDeferred("sessions.dispatch");
-    await expectRequest(gateway, "sessions.send", {
-      key: firstKey,
+    await expectRequest(gateway, "chat.send", {
+      sessionKey: firstKey,
+      sessionId: `session:${firstKey}`,
+      expectedLeafEntryId: null,
       agentId: "cloud",
       message,
       attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
     });
     expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
     expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(1);
-    expect(await gateway.getRequests("sessions.send")).toHaveLength(1);
+    expect(await gateway.getRequests("chat.send")).toHaveLength(1);
     expect(await gateway.getRequests("users.selectModelAccount")).toHaveLength(0);
     await page.waitForURL((url) => url.pathname === controlUiSessionPath(firstKey), {
       timeout: 30_000,
@@ -401,10 +388,7 @@ suite.define(() => {
           ...(replacement
             ? {
                 "sessions.delete": { deleted: true },
-                "sessions.dispatch": {
-                  placement: { state: "active", environmentId: "worker-replacement-create" },
-                },
-                "sessions.send": { runId: "run-replacement-create", status: "started" },
+                "chat.send": { runId: "run-replacement-create", status: "started" },
               }
             : {}),
         },
@@ -534,25 +518,34 @@ suite.define(() => {
           phase: "creating",
         });
 
-      await gateway.resolveDeferred("sessions.create", { key: nextKey });
+      await gateway.resolveDeferred("sessions.create", {
+        key: nextKey,
+        sessionId: `session:${nextKey}`,
+      });
       await expectRequest(gateway, "sessions.dispatch", {
         key: nextKey,
         agentId: "cloud",
         profileId: "aws",
       });
-      await expectRequest(gateway, "sessions.send", { key: nextKey, agentId: "cloud", message });
+      await expectRequest(gateway, "chat.send", {
+        sessionKey: nextKey,
+        sessionId: `session:${nextKey}`,
+        expectedLeafEntryId: null,
+        agentId: "cloud",
+        message,
+      });
       await page.waitForURL((url) => url.pathname === controlUiSessionPath(nextKey), {
         timeout: 30_000,
       });
     },
   );
 
-  it("checks an unconfirmed cloud turn without replay when composer storage is unavailable", async () => {
+  it("resends a pending cloud turn with the same key when composer storage is unavailable", async () => {
     const page = await openPage(createControlUiE2eContextOptions());
     const sessionKey = "agent:cloud:storage-recovery";
     const message = "keep this cloud recovery task";
     const gateway = await installMockGateway(page, {
-      deferredMethods: ["sessions.send"],
+      deferredMethods: ["chat.send"],
       workspaceGit: true,
       methodResponses: {
         ...cloudWorkspaceResponses(),
@@ -586,52 +579,45 @@ suite.define(() => {
     await page.locator(".new-session-page__message").fill(message);
     await pastePng(page.locator(".new-session-page__message"));
     await page.getByRole("button", { name: "Start session" }).click();
-    const firstSend = await gateway.waitForRequest("sessions.send");
-    await waitForCommittedChatRoute(page);
-    await gateway.rejectDeferred("sessions.send", unavailableError("send outcome unknown"));
-
-    const alert = page.getByRole("alert").filter({ hasText: "send outcome unknown" });
-    await pollLocatorText(alert).toContain("send outcome unknown");
-    expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
-    await replaceGatewayClient(page);
-    const retainedTurn = page.locator(".chat-group.user", { hasText: message });
-    const checkDelivery = retainedTurn.getByRole("button", {
-      name: "Check delivery",
-      exact: true,
+    const firstSend = await gateway.waitForRequest("chat.send");
+    expect(firstSend.params).toMatchObject({
+      sessionKey,
+      sessionId: "session-storage-recovery",
+      expectedLeafEntryId: null,
     });
-    await checkDelivery.waitFor({ state: "visible" });
-    const historyCount = (await gateway.getRequests("chat.history")).length;
-    await checkDelivery.click();
-    // Background history loads may arrive before this action's request.
-    await expect
-      .poll(async () => (await gateway.getRequests("chat.history")).slice(historyCount))
-      .toContainEqual(
-        expect.objectContaining({
-          params: {
-            sessionKey,
-            toolResultMaxChars: 2_000,
-            limit: 1000,
-            inputRunIds: [(firstSend.params as { idempotencyKey: string }).idempotencyKey],
-          },
-        }),
-      );
-    await pollLocatorText(page.getByRole("alert")).toContain("No matching user message");
-    await expectPastedPngImage(retainedTurn.locator("img.chat-message-image"));
-    const followUp = page.locator(".agent-chat__composer-combobox textarea");
-    await pollDisabled(followUp).toBe(false);
-    await followUp.fill("Unsent follow-up while checking delivery");
-    expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+    await waitForCommittedChatRoute(page);
+    await gateway.rejectDeferred("chat.send", unavailableError("send outcome unknown"));
+
+    const retainedTurn = page.locator(".chat-group.user", { hasText: message });
+    await retainedTurn.locator("time.chat-group-timestamp").waitFor();
+    await pollCount(retainedTurn.locator(".chat-send-status")).toBe(0);
+    expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
     expect(await readRecovery(page)).toMatchObject({
-      phase: "paused",
-      reason: "unconfirmed",
+      phase: "sending",
+      sessionId: "session-storage-recovery",
       messageId: (firstSend.params as { idempotencyKey: string }).idempotencyKey,
       sessionKey,
       message,
       attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
       target: { kind: "profile", profileId: "aws" },
     });
+    await gateway.deferNext("chat.send");
+    await replaceGatewayClient(page);
+    const replay = await gateway.waitForRequest("chat.send", { after: 1 });
+    expect(replay.params).toEqual(firstSend.params);
+    await expectPastedPngImage(retainedTurn.locator("img.chat-message-image"));
+    const followUp = page.locator(".agent-chat__composer-combobox textarea");
+    await pollDisabled(followUp).toBe(false);
+    await followUp.fill("Unsent follow-up while delivery is pending");
+    expect(await gateway.getRequests("chat.send")).toHaveLength(2);
+    await gateway.resolveDeferred("chat.send", {
+      runId: (firstSend.params as { idempotencyKey: string }).idempotencyKey,
+      status: "ok",
+    });
+    await expect.poll(() => readRecovery(page)).toBeNull();
+    await pollCount(retainedTurn.locator(".chat-send-status")).toBe(0);
     expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
-    expect(await gateway.getRequests("sessions.send")).toHaveLength(1);
+    expect(await gateway.getRequests("chat.send")).toHaveLength(2);
     expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(1);
     expect(await gateway.getRequests("sessions.reclaim")).toHaveLength(0);
   });

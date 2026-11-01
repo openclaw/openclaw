@@ -6,6 +6,7 @@ import {
   type AgentItemEventData,
 } from "../infra/agent-activity-events.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { readAutomationDisplayState } from "../infra/agent-run-registry.automation.js";
 import { isAgentPlanProgressToolName } from "../session-cards/progress-card-input.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel-normalize.js";
 import { resolveCompletedActivityWrappers } from "./agent-activity-presentation.js";
@@ -379,6 +380,8 @@ export function handleToolExecutionStart(
     ctx.state.toolMetaById.set(toolCallId, callSummary);
 
     const shouldEmitToolEvents = ctx.shouldEmitToolResult();
+    const hideFromChannelProgress =
+      evt.hideFromChannelProgress === true || readAutomationDisplayState(runId) !== "ordinary";
     const itemData = {
       ...projectAgentToolActivity({
         toolCallId,
@@ -386,11 +389,10 @@ export function handleToolExecutionStart(
         phase: "start",
         args,
         meta,
-        hideFromChannelProgress: evt.hideFromChannelProgress,
+        hideFromChannelProgress,
       }),
       startedAt,
     };
-    const hideFromChannelProgress = evt.hideFromChannelProgress === true;
     emitTrackedItemEvent(ctx, itemData);
     const createStartEvent = () => ({
       stream: "tool" as const,
@@ -410,6 +412,7 @@ export function handleToolExecutionStart(
     if (
       ctx.params.onToolResult &&
       shouldEmitToolEvents &&
+      !hideFromChannelProgress &&
       !isAgentPlanProgressToolName(toolName) &&
       !ctx.state.toolSummaryById.has(toolCallId)
     ) {

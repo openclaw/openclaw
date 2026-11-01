@@ -6,7 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createCompiledSdkHost } from "./compiled-sdk-host.test-support.js";
-import { writeTree } from "./plugin-generation-capture.test-support.js";
+import { writeArtifacts as writeTree } from "./public-surface.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const require = createRequire(import.meta.url);

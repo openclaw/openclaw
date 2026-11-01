@@ -1,20 +1,26 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { resolveConfigPath, resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import type { NativeHostRegistrationStatus } from "./extension-install-context.js";
 import type { ChromeStoreInstallRequest } from "./extension-install-external.js";
 import type { ChromeProduct } from "./extension-install-layout.js";
 import {
-  admitWindowsNativeRuntime,
-  readWindowsNativeGeneration,
-  matchesWindowsContext,
-} from "./extension-windows-context.js";
-import {
+  bindingSchema,
+  receiptSchema,
+  windowsManifestSchema,
+  installationSchema,
+  parseWindowsJson,
+  sameWindowsPath,
   nativeWindowsContextSchema,
   managementRequestSchema,
   WINDOWS_NATIVE_EXE,
+  WINDOWS_BINDING,
+  WINDOWS_RECEIPT,
+  WINDOWS_MANIFEST,
   WINDOWS_OFFICIAL_ORIGIN,
   type NativeWindowsContext,
+  type WindowsInstallation,
   type WindowsManagementRequest,
   type WindowsManagementResponse,
 } from "./extension-windows-contract.js";
@@ -23,6 +29,93 @@ import {
   WindowsManagementTransportError,
 } from "./extension-windows-management.js";
 import { windowsNativePlatform as ops } from "./extension-windows-platform.js";
+
+function matchesWindowsContext(a: NativeWindowsContext, b: NativeWindowsContext): boolean {
+  return (
+    a.browserProfile === b.browserProfile &&
+    (["nodePath", "cliPath", "stateDir", "configPath"] as const).every((key) =>
+      sameWindowsPath(a[key], b[key]),
+    )
+  );
+}
+/** Descriptor/receipt are evidence, never permission to skip current OS admission. */
+async function readWindowsNativeGeneration(
+  manifestPath: string,
+): Promise<{ installation: WindowsInstallation; binding: ReturnType<typeof bindingSchema.parse> }> {
+  const identity = await ops.identity();
+  const root = path.win32.join(
+    identity.localAppData,
+    "OpenClawTray",
+    "browser-native",
+    "generations",
+  );
+  const dir = path.win32.dirname(manifestPath);
+  const installation = installationSchema.parse({
+    generation: path.win32.basename(dir),
+    manifestPath,
+    launcherPath: path.win32.join(dir, WINDOWS_NATIVE_EXE),
+    bindingPath: path.win32.join(dir, WINDOWS_BINDING),
+    receiptPath: path.win32.join(dir, WINDOWS_RECEIPT),
+  });
+  if (!sameWindowsPath(path.win32.dirname(dir), root)) {
+    throw new Error("Windows generation is outside the fixed root");
+  }
+  for (const directory of [root, dir]) {
+    await ops.assertPath(directory, { kind: "directory", private: true });
+  }
+  const files = await ops.listFiles(dir);
+  if (
+    files.length !== 4 ||
+    files.some(
+      (name) =>
+        ![WINDOWS_NATIVE_EXE, WINDOWS_BINDING, WINDOWS_RECEIPT, WINDOWS_MANIFEST].includes(name),
+    )
+  ) {
+    throw new Error("Windows generation contains foreign files");
+  }
+  const [receiptBytes, bindingBytes, manifestBytes, image] = await Promise.all([
+    ops.readFile(installation.receiptPath, 32768),
+    ops.readFile(installation.bindingPath, 32768),
+    ops.readFile(installation.manifestPath, 32768),
+    ops.readFile(installation.launcherPath, 256 * 1024 * 1024),
+  ]);
+  const receipt = receiptSchema.parse(parseWindowsJson(receiptBytes));
+  const binding = bindingSchema.parse(parseWindowsJson(bindingBytes));
+  const manifest = windowsManifestSchema.parse(parseWindowsJson(manifestBytes));
+  if (
+    receipt.ownerSid !== identity.sid ||
+    receipt.generation !== installation.generation ||
+    receipt.bindingSha256 !== sha256Hex(bindingBytes) ||
+    receipt.manifestSha256 !== sha256Hex(manifestBytes) ||
+    receipt.executableSha256 !== sha256Hex(image) ||
+    binding.manifestPath !== installation.manifestPath ||
+    manifest.path !== installation.launcherPath ||
+    JSON.stringify(binding.expectedOrigins) !== JSON.stringify(manifest.allowed_origins)
+  ) {
+    throw new Error("Windows generation integrity mismatch");
+  }
+  return { installation, binding };
+}
+async function admitWindowsNativeRuntime(
+  params: { manifestPath: string; launcherPath: string; expectedOrigins: string[] },
+  context: NativeWindowsContext,
+): Promise<string> {
+  const owned = await readWindowsNativeGeneration(params.manifestPath);
+  if (
+    owned.binding.mode !== "native-windows-cli" ||
+    !owned.binding.nativeWindows ||
+    !matchesWindowsContext(owned.binding.nativeWindows, context) ||
+    !sameWindowsPath(owned.installation.launcherPath, params.launcherPath) ||
+    JSON.stringify(owned.binding.expectedOrigins) !== JSON.stringify(params.expectedOrigins)
+  ) {
+    throw new Error("Windows native execution context mismatch");
+  }
+  await ops.assertPath(context.nodePath, { kind: "file", private: false });
+  await ops.assertPath(context.cliPath, { kind: "file", private: false });
+  await ops.assertPath(context.stateDir, { kind: "directory", private: true, allowMissing: true });
+  await ops.assertPath(context.configPath, { kind: "file", private: true, allowMissing: true });
+  return context.browserProfile;
+}
 
 const products: Array<[ChromeProduct, string]> = [
   ["chrome", "Google Chrome"],

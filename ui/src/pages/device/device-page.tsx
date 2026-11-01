@@ -16,6 +16,7 @@ import type {
   SettingKey,
 } from "../../app/native-device-settings.ts";
 import { NativeChromeSetup } from "../../components/native-chrome-setup.tsx";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   LearnMoreLink,
   SettingsEmpty,
@@ -193,25 +194,18 @@ export function DevicePage() {
         title={title()}
         description={props.description}
         control={
-          <select
-            class="settings-select"
+          <SettingsSelect
             aria-label={title()}
             ref={liveValue(() => props.value)}
+            value={props.value}
+            options={props.options.map((option) => ({
+              value: option.id,
+              label: option.name,
+              disabled: option.disabled,
+            }))}
             disabled={props.disabled}
             onChange={(event) => void capability?.set(props.setting, event.currentTarget.value)}
-          >
-            <For each={props.options} keyed={(option) => option.id}>
-              {(option) => (
-                <option
-                  value={option().id}
-                  selected={option().id === props.value}
-                  disabled={option().disabled}
-                >
-                  {option().name}
-                </option>
-              )}
-            </For>
-          </select>
+          />
         }
       />
     );
@@ -242,7 +236,8 @@ export function DevicePage() {
             </>
           }
           checked={props.app.keepGatewayRunning ?? false}
-          disabled={props.app.keepGatewayRunningAvailable !== true || gatewayHostingPending()}
+          disabled={props.app.keepGatewayRunningAvailable !== true}
+          saving={gatewayHostingPending()}
           onChange={(value) => {
             if (!capability || disposed || finishGatewayHosting) {
               return;

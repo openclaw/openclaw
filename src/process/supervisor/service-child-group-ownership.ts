@@ -16,14 +16,6 @@ export type ProcessCommand =
   | { argvUnavailable: true; uid: number; owner?: "same" | "different" | "unknown" }
   | { argvUnavailable: true; uid?: never; owner: "different" };
 
-type GroupMember = {
-  pid: number;
-  ppid?: number;
-  pgid: number;
-  state: string;
-  command?: { ppid: number } & ProcessCommand;
-};
-
 /** Reject a known unsupported legacy contract before launching application work. */
 export function assertProcessGroupControl(): void {
   if (process.platform !== "linux") {
@@ -101,7 +93,13 @@ export function* readProcessGroupMembers(
       owner: "same" | "different" | "unknown",
     ) => ProcessCommand | undefined;
   },
-): Generator<GroupMember> {
+): Generator<{
+  pid: number;
+  ppid?: number;
+  pgid: number;
+  state: string;
+  command?: { ppid: number } & ProcessCommand;
+}> {
   const includeCommand = commandInspection !== undefined;
   if (process.platform === "linux") {
     const deadline = Date.now() + timeoutMs;

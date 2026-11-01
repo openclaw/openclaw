@@ -2,13 +2,18 @@ import type { BoardSnapshot } from "@openclaw/gateway-protocol";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
+import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  holdModuleResponse,
+} from "./control-ui-e2e-suite.test-support.ts";
 import { withWidgetChromeDiagnostics } from "./solo-widget-chrome.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "single widget chrome" });
@@ -28,18 +33,14 @@ function snapshot(overrides: Partial<BoardSnapshot> = {}): BoardSnapshot {
       { tabId: "research", title: "Research", position: 1, chatDock: "right" },
     ],
     widgets: [
-      {
+      createBoardWidget({
         name: "release-status",
-        tabId: "main",
         title: "Release status",
-        contentKind: "html",
         sizeW: 12,
         sizeH: 8,
-        position: 0,
         grantState: "granted",
-        revision: 1,
         declared: { tools: ["health"], netOrigins: [] },
-      },
+      }),
     ],
     ...overrides,
   };
@@ -122,6 +123,52 @@ async function updateBoard(gateway: MockGatewayControls, board: BoardSnapshot) {
 }
 
 suite.define(() => {
+  it("relocates singleton chrome after a cold board import without another owner publication", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, colorScheme: "dark", serviceWorkers: "block" },
+      async ({ page }) => {
+        const held = await holdModuleResponse(
+          page,
+          controlUiE2eBuiltModuleRequest("ui/src/components/board/board-view.tsx"),
+        );
+        try {
+          const opening = openDashboard(page, snapshot());
+          await held.request;
+          const { gateway } = await opening;
+          expect(
+            await page.evaluate(() => Boolean(customElements.get("openclaw-board-view"))),
+          ).toBe(false);
+          expect(await page.locator("openclaw-board-view").count()).toBe(0);
+          expect(await gateway.getRequests("board.update")).toHaveLength(0);
+          // The header may offer the data-owned action before code loads; no live
+          // view exists to admit it yet.
+          const pendingMenu = await showDashboardMenu(page);
+          await pendingMenu.locator('[data-value="resize:xl"]').click();
+          expect(await gateway.getRequests("board.update")).toHaveLength(0);
+          held.release();
+          const widget = page.locator('[data-widget-name="release-status"]');
+          const frame = widget.locator("iframe");
+          await frame
+            .contentFrame()
+            .getByRole("textbox", { name: "Release note" })
+            .fill("Keep this local draft");
+          await widget.focus();
+          expect(await widget.locator(chrome).count()).toBe(0);
+          expect(
+            await page.evaluate(
+              () => document.querySelector("openclaw-board-view")?.pageWidgetName,
+            ),
+          ).toBe("release-status");
+          const menu = await showDashboardMenu(page);
+          await menu.locator('[data-value="remove"]').waitFor();
+          expect(await gateway.getRequests("board.update")).toHaveLength(0);
+        } finally {
+          held.release();
+        }
+      },
+    );
+  });
+
   it("retains page controls in split view and restores multi-widget controls without reloading", async () => {
     await suite.withPage(
       { viewport: { width: 1280, height: 900 }, serviceWorkers: "block" },

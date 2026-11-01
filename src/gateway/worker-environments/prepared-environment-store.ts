@@ -244,6 +244,7 @@ export function createPreparedEnvironmentStoreOps(options: {
           existing.profileId !== input.intent.profileId ||
           existing.provisionOperationId !== input.intent.provisionOperationId ||
           !isDeepStrictEqual(existing.profileSnapshot, input.intent.profileSnapshot) ||
+          !isDeepStrictEqual(existing.retention?.policy, input.intent.retention) ||
           existing.preparation?.key !== input.intent.preparation.key ||
           existing.preparation.purpose !== input.intent.preparation.purpose ||
           existing.preparation.demandAtMs !== input.intent.preparation.demandAtMs ||
