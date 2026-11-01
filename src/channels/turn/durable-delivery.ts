@@ -10,7 +10,10 @@ import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isProvenDeliveryNotSentError } from "../../infra/delivery-recovery.shared.js";
 import { normalizeDeliverableOutboundChannel } from "../../infra/outbound/channel-resolution.js";
-import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
+import {
+  isOutboundDeliveryError,
+  PlatformMessageNotDispatchedError,
+} from "../../infra/outbound/deliver-types.js";
 import {
   type DurableFinalDeliveryRequirement,
   resolveOutboundDurableFinalDeliverySupport,
@@ -81,6 +84,11 @@ type DurableInboundReplyDeliveryResult =
       error: unknown;
       /** False requires affirmative no-dispatch proof; omission preserves ambiguity. */
       sentBeforeError?: boolean;
+      /**
+       * The delivery queue still holds this proven-unsent reply, so recovery may replay it.
+       * Custody is not a delivery guarantee: replays are bounded and can still fail.
+       */
+      retainedForRecovery?: true;
     };
 
 function resolveDurableInboundReplyToId(
@@ -325,12 +333,14 @@ async function deliverAdmittedInboundReply(
     gatewayClientScopes: params.ctxPayload.GatewayClientScopes ?? [],
   });
   if (send.status === "failed") {
+    const provenNotSent =
+      !durableMessageBatchMayHaveReachedRecipient(send) && isProvenDeliveryNotSentError(send.error);
     return {
       status: "failed" as const,
       error: send.error,
-      ...(!durableMessageBatchMayHaveReachedRecipient(send) &&
-      isProvenDeliveryNotSentError(send.error)
-        ? { sentBeforeError: false }
+      ...(provenNotSent ? { sentBeforeError: false } : {}),
+      ...(provenNotSent && isOutboundDeliveryError(send.error) && send.error.queueCustody === "held"
+        ? { retainedForRecovery: true as const }
         : {}),
     };
   }

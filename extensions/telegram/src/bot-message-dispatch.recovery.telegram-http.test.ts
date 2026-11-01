@@ -6,6 +6,7 @@ import type {
   PluginHookReplyPayloadSendingEvent,
   PluginHookReplyPayloadSendingResult,
 } from "openclaw/plugin-sdk/core";
+import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { readQueuedDeliveryEntriesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
@@ -221,6 +222,70 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
       await delivering.catch(() => undefined);
     }
   });
+
+  it.each(["final", "terminal block"] as const)(
+    "keeps a flood-refused %s queued for recovery without a resend notice",
+    async (shape) => {
+      const { manager, dispatch } = await transcriptCase(
+        `flood-refused-${shape.replace(" ", "-")}`,
+      );
+      http.respondToCall = (call) =>
+        call.method === "sendMessage" && call.fields.text === recoveredAnswer
+          ? {
+              error_code: 429,
+              // Longer than the five-minute flood budget: the limiter gives up at once.
+              description: "Too Many Requests: retry after 600",
+              parameters: { retry_after: 600 },
+            }
+          : undefined;
+      // A progress card holds a streamed answer block until the turn ends, then sends it
+      // from finalizePendingAnswerBlockDraft; the plain case sends the final reply.
+      const terminalBlock = shape === "terminal block";
+      const delivering = dispatch(
+        async (options) => {
+          if (terminalBlock) {
+            await http.emitToolStart(options, {
+              toolCallId: "flood-1",
+              name: "exec",
+              phase: "start",
+            });
+            await options?.onBlockReply?.({ text: recoveredAnswer });
+          }
+          manager.appendMessage(assistant(recoveredAnswer));
+          manager.flushPendingPersistence();
+        },
+        // The existing "final reply failed" log is allowed; only chat text decides the result.
+        terminalBlock
+          ? { mode: "progress", toolProgress: true, finalReply: {}, allowErrors: true }
+          : { allowErrors: true },
+      );
+      await delivering;
+      const notice = /deliver my reply|went wrong|No answer|No response|Please try again/;
+      expect(http.texts().filter((text) => notice.test(text) || text === recoveredAnswer)).toEqual(
+        [],
+      );
+      // Recorded as not sent (fail-before-send clears the send markers), so recovery may replay it.
+      const [entry] = readQueuedDeliveryEntriesForTest(http.state.stateDir);
+      expect(entry).toMatchObject({ attemptCount: 1, lastError: expect.stringContaining("429") });
+      expect(entry?.recoveryState).toBeUndefined();
+      expect(entry?.platformSendAttemptId).toBeUndefined();
+      // Telegram allows sends again after its wait: the existing recovery drain delivers once.
+      http.respondToCall = undefined;
+      await vi.advanceTimersByTimeAsync(601_000);
+      await drainPendingDeliveries({
+        drainKey: "telegram:flood-test",
+        logLabel: "flood test drain",
+        stateDir: http.state.stateDir,
+        cfg: { channels: { telegram: { botToken: http.token, apiRoot: http.apiRoot } } },
+        log: { info: () => {}, warn: () => {}, error: () => {} },
+        selectEntry: () => ({ match: true, bypassBackoff: true }),
+      });
+      expect(http.texts().filter((text) => notice.test(text) || text === recoveredAnswer)).toEqual([
+        recoveredAnswer,
+      ]);
+      expect(readQueuedDeliveryEntriesForTest(http.state.stateDir)).toEqual([]);
+    },
+  );
 
   it("recovers the latest scoped answer without reopening an accepted first target", async () => {
     const { context, manager, dispatch } = await transcriptCase("latest-queued-answer");

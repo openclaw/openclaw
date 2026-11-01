@@ -280,10 +280,11 @@ export async function sendPayload(
     });
     if (durable.status === "failed") {
       sourceTurn.finalDeliveryError = durable.error;
-      // A flood refusal with no-send proof stays in the delivery queue, which resends it
-      // once Telegram allows. Telling the user to ask again would precede that answer.
+      // An unsent flood refusal that the delivery queue still holds is replayed by
+      // recovery once Telegram allows; asking the user to resend would precede it.
+      // Missing or released custody keeps the normal failure handling.
       sourceTurn.finalDeliveryQueuedForRetry =
-        durable.sentBeforeError === false && isTelegramRateLimitError(durable.error);
+        durable.retainedForRecovery === true && isTelegramRateLimitError(durable.error);
       return await failPromptContextSequence(projectionSequence, durable.error);
     }
     if (durable.status === "handled_visible") {
