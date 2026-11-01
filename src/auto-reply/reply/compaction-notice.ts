@@ -12,6 +12,7 @@ export type CompactionNoticePhase =
   | "start"
   | "end"
   | "degraded"
+  | "trimmed"
   | "incomplete"
   | "skipped"
   | "context_bounded"
@@ -20,6 +21,8 @@ export type CompactionNoticePhase =
 const COMPACTION_NOTICE_TEXT: Record<CompactionNoticePhase, string> = {
   start: "🧹 Compacting context...",
   end: "🧹 Compaction complete",
+  trimmed:
+    "⚠️ Context trimmed because the summarizer refused. Recent turns were kept verbatim; older messages remain in saved history but are outside active context. Resend essential older details to continue.",
   degraded:
     "⚠️ Compaction completed with a degraded summary. Older details, exact identifiers, or pending requests may be missing. Resend important context; /new or a larger model can help.",
   incomplete: "🧹 Compaction incomplete",
@@ -43,6 +46,9 @@ export function resolveCompactionCompletionNotice(
   result: EmbeddedAgentCompactResult,
   contextBounded: boolean,
 ): { phase: CompactionNoticePhase; text?: string } {
+  if (parseCompactionDetails(result.result?.details)?.summaryRefused) {
+    return { phase: "trimmed" };
+  }
   if (parseCompactionDetails(result.result?.details)?.qualityDegraded) {
     return {
       phase: "degraded",

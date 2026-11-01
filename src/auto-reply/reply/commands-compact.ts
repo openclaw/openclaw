@@ -434,9 +434,10 @@ export async function handleCompactCommand(
         );
         const reason = formatCompactionReason(result.reason);
         const line = `${compactLabel}${reason ? `: ${reason}` : ""} • ${contextSummary}`;
+        const details = parseCompactionDetails(result.result?.details);
         const degradedNotice =
-          didCompact && parseCompactionDetails(result.result?.details)?.qualityDegraded
-            ? `\n${createCompactionNoticePayload({ phase: "degraded" }).text}`
+          didCompact && details?.qualityDegraded
+            ? `\n${createCompactionNoticePayload({ phase: details.summaryRefused ? "trimmed" : "degraded" }).text}`
             : "";
         runtime.enqueueSystemEvent(line, {
           sessionKey: resolveSystemEventQueueKey(params.sessionKey, sessionAgentId),
