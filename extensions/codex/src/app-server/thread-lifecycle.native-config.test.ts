@@ -104,7 +104,15 @@ describe("Codex native configuration lifecycle", () => {
     );
   });
 
-  it.each(["addition", "removal", "schema change", "revocation"] as const)(
+  it.each([
+    "addition",
+    "removal",
+    "description change",
+    "schema change",
+    "defer change",
+    "revocation",
+    "pending handoff",
+  ] as const)(
     "retains an immutable local catalog only when its declarations remain allowed (%s)",
     async (change) => {
       registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
@@ -117,13 +125,19 @@ describe("Codex native configuration lifecycle", () => {
         description: name,
         inputSchema: { type: "object" },
       });
-      const tools = [spec("one"), spec("two")];
-      const after =
-        change === "removal"
-          ? tools.slice(0, 1)
-          : change === "schema change"
-            ? [tools[0]!, { ...tools[1]!, inputSchema: { type: "string" } }]
-            : [...tools, spec("three")];
+      const one = spec("one");
+      const two = spec("two");
+      const tools = [one, two];
+      const added = [spec("three"), ...tools];
+      const after = {
+        addition: added,
+        removal: [one],
+        "description change": [one, { ...two, description: "changed" }],
+        "schema change": [one, { ...two, inputSchema: { type: "string" } }],
+        "defer change": [one, { ...two, deferLoading: true }],
+        revocation: added,
+        "pending handoff": added,
+      }[change];
       await writeNativeCatalogFixture(rolloutPath, "old-thread", tools);
       const old = threadStartResult("old-thread", { cwd: workspaceDir });
       const native = { ...old, thread: { ...old.thread, path: rolloutPath } };
@@ -158,11 +172,17 @@ describe("Codex native configuration lifecycle", () => {
         }),
       };
       await startOrResumeThread({ ...common, dynamicTools: tools, availableDynamicTools: tools });
+      const binding = await readCodexAppServerBinding(sessionFile);
+      if (!binding) {
+        throw new Error("expected original settled binding");
+      }
+      if (change === "pending handoff") {
+        await writeCodexAppServerBinding(sessionFile, {
+          ...binding,
+          dynamicToolHandoff: { version: 99, turnId: "previous" },
+        });
+      }
       if (change === "addition") {
-        const binding = await readCodexAppServerBinding(sessionFile);
-        if (!binding) {
-          throw new Error("expected original settled binding");
-        }
         await expect(
           loadCodexNativeToolCatalog({
             binding,
@@ -179,7 +199,7 @@ describe("Codex native configuration lifecycle", () => {
       const result = await startOrResumeThread({
         ...common,
         dynamicTools: after,
-        availableDynamicTools: change === "revocation" ? after.slice(1) : after,
+        availableDynamicTools: change === "revocation" ? [one] : after,
       });
       if (change === "addition") {
         expect(result.threadId).toBe("old-thread");
