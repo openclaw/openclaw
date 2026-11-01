@@ -83,7 +83,8 @@ extension ChatTranscriptRow {
                    !source.content.contains(where: \.isWorkContent) { return [] }
                 let canFold = (finalIndex.map { cursor < $0 } ?? true) || !source.hasUnresolvedWork
                 return source.workPresentationParts.map { message in
-                    let kind: ChatWorkPartKind = canFold && row.id != preservedRowID && message.isCollapsibleWork ? .work : .visible
+                    let kind: ChatWorkPartKind = canFold && row.id != preservedRowID && message
+                        .isCollapsibleWork ? .work : .visible
                     return (.message(message), kind)
                 }
             }
