@@ -7,11 +7,10 @@ import {
 } from "../agents/agent-run-terminal-outcome.js";
 import { resolveAgentRunCwd } from "../agents/agent-scope-config.js";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
-import type { EmbeddedAgentRunPayload } from "../agents/embedded-agent-runner/result.types.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunMeta } from "../agents/embedded-agent-runner/types.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../agents/spawned-context.js";
-import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import { getReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { resolveLoadedSessionThreadInfo } from "../channels/plugins/session-thread-info-loaded.js";
 import { buildSpawnAuthorityReceipt } from "../config/sessions/session-entry-lineage.js";
 import {
@@ -20,7 +19,6 @@ import {
 } from "../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeLogger, PluginRuntimeCore } from "../plugins/runtime/types-core.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { isModelSelectionLocked, ModelSelectionLockedError } from "../sessions/model-overrides.js";
@@ -45,7 +43,7 @@ export type RealtimeVoiceAgentConsultResult = { text: string; yielded?: true };
 const REALTIME_VOICE_YIELD_ACK_MAX_CHARS = 500;
 const REALTIME_VOICE_YIELD_ACK_FALLBACK =
   "I started that work and will share the result when it is ready.";
-const REALTIME_VOICE_MEDIA_ONLY_ACK = "I shared it in the chat.";
+const REALTIME_VOICE_MEDIA_ONLY_ACK = "I've put that in the chat.";
 
 /**
  * Sender-auth contract revision for official realtime voice plugins.
@@ -237,12 +235,13 @@ export async function consultRealtimeVoiceAgent(params: {
   abortSignal?: AbortSignal;
   /**
    * Chat surfaces deliver the current answer's media while the run is still registered.
-   * Resolves true when the attachments reached the chat, so a media-only answer is spoken.
+   * Resolves true when attachments reached the chat, so a media-only answer is spoken.
    */
   deliverAnswerMedia?: (reply: {
     runId: string;
     sessionId: string;
-    payloads: EmbeddedAgentRunPayload[];
+    payloads: ReplyPayload[];
+    abortSignal: AbortSignal;
   }) => Promise<boolean>;
   /** Gateway ingress adapts authenticated policy; channel bridges keep their own authority. */
   prepareToolContext?: (
@@ -595,7 +594,7 @@ export async function consultRealtimeVoiceAgent(params: {
         }
         throw error;
       }
-      let currentInputPayloads: EmbeddedAgentRunPayload[] = [];
+      let currentInputPayloads: ReplyPayload[] = [];
       let mediaDelivered = false;
       const result = await runPromise
         .catch((error: unknown) => {
@@ -608,22 +607,22 @@ export async function consultRealtimeVoiceAgent(params: {
           currentInputPayloads = (completed.payloads ?? []).filter(
             (payload) => getReplyPayloadMetadata(payload)?.precedingInputAnswer !== true,
           );
-          if (
-            params.deliverAnswerMedia &&
-            completed.meta?.yielded !== true &&
-            currentInputPayloads.some((payload) => payload.mediaUrl || payload.mediaUrls?.length)
-          ) {
+          if (params.deliverAnswerMedia && completed.meta?.yielded !== true) {
             try {
               mediaDelivered = await params.deliverAnswerMedia({
                 runId,
                 sessionId,
                 payloads: currentInputPayloads,
+                abortSignal,
               });
-            } catch (error) {
-              params.logger.warn(
-                `[talk] agent consult media delivery failed: ${formatErrorMessage(error)}`,
-              );
+            } catch {
+              // Delivery errors can name local media paths; keep them out of logs.
+              if (!abortSignal.aborted) {
+                params.logger.warn("[talk] agent consult media could not be delivered to chat");
+              }
             }
+            // Cancellation during delivery stays a cancellation, not an unanswered consult.
+            assertRealtimeVoiceConsultNotInterrupted(abortSignal);
           }
           return completed;
         })

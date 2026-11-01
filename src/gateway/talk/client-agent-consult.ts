@@ -11,7 +11,6 @@ import {
   GatewayDrainingError,
   tryBeginGatewayIndependentRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import type { SessionControllerInput } from "../../sessions/session-controller.mailbox.js";
 import { getRpcSourceLifecycleGeneration } from "../../sessions/session-controller.rpc-sources.js";
@@ -260,10 +259,7 @@ export function createTalkClientAgentConsultRunner(params: {
             };
           },
           abortSignal: signal,
-          deliverAnswerMedia: async ({ runId, sessionId, payloads }) => {
-            if (isIncognitoSessionKey(canonicalKey)) {
-              return false;
-            }
+          deliverAnswerMedia: async ({ runId, sessionId, payloads, abortSignal }) => {
             const [{ createOutboundPayloadPlan }, { finalizeAgentRunMedia }] = await Promise.all([
               import("../../infra/outbound/payloads.js"),
               import("../agent-turn/agent-run-final-media.js"),
@@ -302,12 +298,12 @@ export function createTalkClientAgentConsultRunner(params: {
                     params.sessionTarget.assertCurrent(getConfig());
                     assertCurrent?.();
                     physicalSource?.assertCurrent();
-                    return signal?.aborted !== true && isCompletionCurrent?.() === true;
+                    return !abortSignal.aborted && isCompletionCurrent?.() === true;
                   } catch {
                     return false;
                   }
                 },
-                abortSignal: signal,
+                abortSignal,
                 logGateway: params.context.logGateway,
               },
               { payloads, sessionId, lifecycleRevision, storePath },
