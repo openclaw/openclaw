@@ -1,0 +1,3 @@
+# Preserve all materialization cases through the canonical Move wrapper and real exclusion.
+# Keep the existing accepted disk snapshot and late-verification controls.
+30

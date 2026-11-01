@@ -27,15 +27,18 @@ import * as projectCloning from "../projects/project-clone.js";
 import { registerClonedProjectRegistry } from "../projects/project-registry.test-support.js";
 import * as secretsRuntime from "../secrets/runtime-state.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { NODE_WORKSPACE_GIT_HISTORY_SCRIPT } from "../worker/node-workspace-transfer-protocol.js";
 import * as githubOAuthLifecycle from "./github-oauth-lifecycle.js";
 import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-git-transport.js";
 import { REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS } from "./github-repository-publication-snapshot.js";
-import { materializeSessionRepositoryWorkspaceOnGateway } from "./session-repository-materialization.js";
+import { createRepositoryGatewayMovePreparation } from "./session-repository-materialization.js";
+import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { bindRepositoryDiskForTest } from "./worker-environments/repository-disk-authority.test-support.js";
 import * as repositoryGitHubIdentity from "./worker-environments/repository-github-identity.js";
+import * as repositorySnapshot from "./worker-environments/repository-workspace-snapshot.js";
 import { stageSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
 import { captureWorkspaceManifest } from "./worker-environments/workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./worker-environments/workspace-manifest.js";
@@ -49,6 +52,19 @@ const enterpriseGitHub = {
   apiBaseUrl: "https://ghe.example.test/api/v3",
 };
 const readFile = (root: string, name: string) => fsp.readFile(path.join(root, name), "utf8");
+
+function createMovePreparation(cfg: OpenClawConfig) {
+  return createRepositoryGatewayMovePreparation({
+    placements: createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }),
+    environments: {
+      get: () => undefined,
+      startTunnel: async () => {
+        throw new Error("unexpected disk export");
+      },
+    },
+    getConfig: () => cfg,
+  });
+}
 
 async function createRepository(
   scope: { agentId: string; sessionKey: string },
@@ -215,9 +231,9 @@ it.each([
             }
             throw cloneFailure;
           });
-        const operation = materializeSessionRepositoryWorkspaceOnGateway({
+        const prepareMove = createMovePreparation(cfg);
+        const operation = prepareMove({
           ...scope,
-          cfg,
           sessionId,
           assertCurrent: () => {
             if (!current) {
@@ -474,20 +490,27 @@ it.each([
           throw new Error("source disk changed before handoff");
         }
       });
-      const operation = materializeSessionRepositoryWorkspaceOnGateway({
+      if (diskExport) {
+        // Retained-state fixtures supply an accepted export; the real disk Move suite
+        // exercises capture, quiescence and source verification through the node transport.
+        vi.spyOn(repositorySnapshot, "captureRepositoryDiskCheckpoint").mockImplementation(
+          async ({ assertCurrent: assertExportCurrent }, use) => {
+            assertExportCurrent();
+            return await use(
+              { checkpointRef: checkpoint.checkpointRef, manifestHash: current.manifestRef },
+              verifyDisk,
+            );
+          },
+        );
+      }
+      const prepareMove = createMovePreparation(cfg);
+      const operation = prepareMove({
         ...scope,
-        cfg,
         sessionId,
         assertCurrent,
-        exportDisk: diskExport
-          ? async (_repository, assertExportCurrent, use) => {
-              assertExportCurrent();
-              await use(
-                { checkpointRef: checkpoint.checkpointRef, manifestHash: current.manifestRef },
-                verifyDisk,
-              );
-            }
-          : undefined,
+        ...(diskExport
+          ? { quiescence: { assertActive: async () => {}, resume: async () => {} } }
+          : {}),
       });
       if (outcome === "revoked" || outcome === "disk changed") {
         await expect(operation).rejects.toThrow(
@@ -539,9 +562,8 @@ it.each([
         ).split("\n");
         expect(published.includes("published[1].ignored")).toBe(Boolean(publicationDigest));
         expect(published).not.toContain("retained.ignored");
-        await materializeSessionRepositoryWorkspaceOnGateway({
+        await prepareMove({
           ...scope,
-          cfg,
           sessionId,
           assertCurrent,
         });
