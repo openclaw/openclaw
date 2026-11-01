@@ -359,13 +359,19 @@ async function runShell(opts: {
 }): Promise<number | null> {
   return await new Promise((resolve) => {
     const child = withChildProcessOperation("shell.snapshot", () =>
-      spawnProcess(opts.shell, [...opts.shellArgs, opts.command], {
-        cwd: opts.cwd,
-        detached: process.platform !== "win32",
-        env: opts.env,
-        stdio: "ignore",
-        windowsHide: true,
-      }),
+      spawnProcess(
+        opts.shell,
+        [...opts.shellArgs, opts.command],
+        {
+          cwd: opts.cwd,
+          detached: process.platform !== "win32",
+          env: opts.env,
+          stdio: "ignore",
+          windowsHide: true,
+        },
+        undefined,
+        "agent-tool",
+      ),
     );
     let settled = false;
     const finish = (status: number | null) => {
