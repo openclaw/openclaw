@@ -154,6 +154,7 @@ export async function settleFailedFinalDelivery(turn: Turn): Promise<void> {
     turn.isSuperseded() ||
     turn.previewLifecycle.finalSucceeded ||
     turn.progressContinuationAdopted ||
+    turn.finalDeliveryQueuedForRetry === true ||
     turn.context.ctxPayload.InboundEventKind === "room_event" ||
     !turn.previewLifecycle.finalFailed
   ) {

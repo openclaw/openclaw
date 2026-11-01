@@ -63,6 +63,7 @@ import {
   type LaneName,
   type TelegramSendPayloadOptions,
 } from "./lane-delivery-text-deliverer.js";
+import { isTelegramRateLimitError } from "./network-errors.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import {
   createTelegramPromptContextProjectionSequence,
@@ -169,6 +170,7 @@ export async function sendPayload(
 ): Promise<LivePreviewDeliveryResult> {
   if (options?.durable) {
     sourceTurn.finalDeliveryError = undefined;
+    sourceTurn.finalDeliveryQueuedForRetry = undefined;
   }
   if (sourceTurn.isSuperseded()) {
     await options?.promptContextSequence?.fail();
@@ -278,6 +280,10 @@ export async function sendPayload(
     });
     if (durable.status === "failed") {
       sourceTurn.finalDeliveryError = durable.error;
+      // A flood refusal with no-send proof stays in the delivery queue, which resends it
+      // once Telegram allows. Telling the user to ask again would precede that answer.
+      sourceTurn.finalDeliveryQueuedForRetry =
+        durable.sentBeforeError === false && isTelegramRateLimitError(durable.error);
       return await failPromptContextSequence(projectionSequence, durable.error);
     }
     if (durable.status === "handled_visible") {

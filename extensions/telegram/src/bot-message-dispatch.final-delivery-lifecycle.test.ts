@@ -3,6 +3,7 @@ import {
   createAcceptedChannelDeliveryResult,
   createChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { dispatchReplyWithBufferedBlockDispatcher as dispatchThroughSharedOwner } from "openclaw/plugin-sdk/reply-dispatch-runtime";
@@ -284,6 +285,23 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
       expect(failedStatus.setDone).not.toHaveBeenCalled();
     },
   );
+
+  it("does not ask the user to resend while a flood-refused final stays queued", async () => {
+    const { bot, messages } = await observeTransport();
+    const status = createReactions();
+    const flood = Object.assign(new Error("429: Too Many Requests: retry after 8"), {
+      error_code: 429,
+    });
+    deliverInbound.mockResolvedValueOnce({
+      status: "failed",
+      error: new PlatformMessageNotDispatchedError(flood.message, { cause: flood }),
+      sentBeforeError: false,
+    });
+    resolveReply(async () => ({ text: "The answer the queue will resend" }));
+    await dispatchTurn(bot, { status, streamMode: "off" });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect([...messages.values()]).toEqual([]);
+  });
 
   it.each(["recording", "replacement", "second"] as const)(
     "preserves the accepted answer across a %s failure",
