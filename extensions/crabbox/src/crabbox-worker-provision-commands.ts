@@ -265,11 +265,6 @@ export async function waitForProvisionReady(
     params.signal?.throwIfAborted();
     // Reject forbidden state immediately; omitted AWS metadata is pending only until ready.
     assertProvisionSecurityPolicy({ inspect, provider: params.provider });
-    if (params.retention && inspect.retention?.state !== "running") {
-      throw new Error(
-        "Crabbox retained compute is not running; explicit lifecycle recovery required",
-      );
-    }
     while (inspect.ready !== true && !isNonRunnableState(inspect.state)) {
       // A readiness probe may lag valid allocation. Poll without changing compute;
       // a closed window still needs an explicitly authorized lifecycle operation.
