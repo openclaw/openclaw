@@ -311,8 +311,12 @@ describe("resolveReactionSyntheticEvent", () => {
     async (kind) => {
       vi.useFakeTimers();
       chatGetMock.mockImplementation(async () => {
-        if (kind === "failed") throw new Error("chat lookup failed");
-        if (kind === "timeout") return new Promise<never>(() => {});
+        if (kind === "failed") {
+          throw new Error("chat lookup failed");
+        }
+        if (kind === "timeout") {
+          return new Promise<never>(() => {});
+        }
         return { code: 0, data: { chat_type: "private" } };
       });
       const pending = resolveReaction({
