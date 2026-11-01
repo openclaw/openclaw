@@ -191,7 +191,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
             </div>
           </div>
           ${row("fits", "", value("Ready"))}
-          ${row("plugin", "", `<span style="display: contents">${value("Ready")}</span>`)}
+          ${row("plugin", "", `<span style="display: contents"><span style="display: contents">${value("Ready")}</span></span>`)}
           ${row("long", "", value("ws://gateway.example.com:18789/a/very/long/path/that/cannot/share/a/line"))}
           ${row("action", "", `${value("Ready")}<button class="btn" type="button">Test</button>`)}
           <div class="settings-segmented settings-segmented--primary" id="mode">
