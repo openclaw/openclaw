@@ -45,6 +45,12 @@ type TelegramDebounceLane = "default" | "forward";
 // the Gateway re-polled within 40 ms, so the quiet window must outlast one late delivery.
 const FORWARD_BURST_QUIET_MS = 1_000;
 
+// The shared debouncer does not bound a collecting batch, so this lane must.
+// A forwarded burst can be arbitrarily long; without these limits one sender
+// retains every forwarded message until the quiet window closes.
+const INBOUND_BATCH_MAX_ITEMS = 12;
+const INBOUND_BATCH_MAX_CHARS = 50_000;
+
 export type TelegramInboundMediaHydration =
   | { kind: "ready"; allMedia: TelegramMediaRef[] }
   | { kind: "retry"; error: unknown };
@@ -181,11 +187,10 @@ export function createTelegramInboundBuffers({
     },
     canAppend: (entry, pending) =>
       entry.debounceLane === pending[0]?.debounceLane &&
-      (entry.debounceLane === "forward" ||
-        (pending.length < 12 &&
-          pending.reduce((total, item) => total + getTelegramTextParts(item.msg).text.length, 0) +
-            getTelegramTextParts(entry.msg).text.length <=
-            50_000)),
+      pending.length < INBOUND_BATCH_MAX_ITEMS &&
+      pending.reduce((total, item) => total + getTelegramTextParts(item.msg).text.length, 0) +
+        getTelegramTextParts(entry.msg).text.length <=
+        INBOUND_BATCH_MAX_CHARS,
     // Spooled processing returns at durable turn adoption. A deferred turn already holds
     // its FIFO slot in the session lane, so it releases this sender's key: queued batches
     // and immediate items have no claim heartbeat while they wait here.
