@@ -8,6 +8,7 @@ import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promi
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -95,17 +96,9 @@ const loop = monitorEventLoopDelay({ resolution: 10 });
 const collections: Array<{ kind: number; ms: number }> = [];
 let begin = Infinity;
 let end = Infinity;
-const record: PerformanceObserverCallback = (entries) => {
-  for (const entry of entries.getEntries()) {
-    if (entry.startTime < begin || entry.startTime >= end) {
-      continue;
-    }
-    const detail = entry.toJSON().detail as { kind: number };
-    collections.push({ kind: detail.kind, ms: entry.duration });
-  }
-};
-type PerformanceObserverCallback = ConstructorParameters<typeof PerformanceObserver>[0];
-const observer = new PerformanceObserver(record);
+const observer = new PerformanceObserver((entries) =>
+  recordGcCollections(entries.getEntries(), collections, begin, end),
+);
 observer.observe({ entryTypes: ["gc"] });
 loop.enable();
 function distribution(samples: number[]) {

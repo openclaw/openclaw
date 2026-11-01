@@ -17,6 +17,7 @@ import { GitHubIdentityError } from "../../agents/github-read-identity.js";
 import { canRefreshGitHubPublicationBase } from "../../agents/sandbox/github-publication.js";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { githubAccountAvatarUrl } from "../../shared/github-account-avatar.js";
 import { OpenClawStateLeaseAcquisitionError } from "../../state/openclaw-state-lease-error.js";
 import { createControlUiSessionPrRead } from "../control-ui-session-pr-read.js";
 import { performSessionGitHubPreparation } from "../github-pr-workspace-preparation.js";
@@ -487,9 +488,19 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
             action && personalSnapshot
               ? service!.revalidateStatus(action, personalSnapshot)
               : personalSnapshot;
+          // Personal publication accounts are always issued by github.com.
+          const avatarUrls = {
+            ...(shared && identity?.host
+              ? { shared: githubAccountAvatarUrl(identity.host, shared.accountId) }
+              : {}),
+            ...(personal?.account
+              ? { personal: githubAccountAvatarUrl("github.com", personal.account.accountId) }
+              : {}),
+          };
           options.respond(true, {
             personal,
             shared,
+            ...(Object.keys(avatarUrls).length ? { avatarUrls } : {}),
             ...(identity?.stale || personal?.stale ? { stale: true } : {}),
             ...(sharedUnavailableReason ? { sharedUnavailableReason } : {}),
             pendingPersonal,
