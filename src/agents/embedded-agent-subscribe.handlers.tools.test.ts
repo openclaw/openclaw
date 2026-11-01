@@ -324,8 +324,8 @@ describe("handleToolExecutionStart read path checks", () => {
           {
             type: "text",
             text: [
-              "- Staging (Recommended): Safer default",
-              "- Production",
+              "1. Staging (Recommended) - Safer default",
+              "2. Production",
               "",
               "Reply with the number, the option text, or your own answer.",
             ].join("\n"),
@@ -488,7 +488,7 @@ describe("handleToolExecutionStart read path checks", () => {
           options: [{ label: "EU" }, { label: "US" }],
         },
       ],
-      hint: "Reply by number or question id. Use a declared option where choices are fixed.",
+      hint: "Answer each question by number or question id, one answer per line.",
     },
     {
       name: "multi-select",
