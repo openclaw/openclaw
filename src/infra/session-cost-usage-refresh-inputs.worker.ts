@@ -243,15 +243,18 @@ export function createUsageCostCollectionAccess(params: {
                 "rewrite.generation",
                 "cold.session_id as coldSessionId",
               ]);
-            const stored = executeSqliteQuerySync(
-              opened.db,
-              getSessionKysely(opened.db)
-                .selectFrom("session_windows")
-                .select((eb) => eb.fn.countAll<number>().as("count")),
-            ).rows[0]?.count;
+            const scanAll =
+              ids.length > 1 &&
+              ids.length * 4 >=
+                (executeSqliteQuerySync(
+                  opened.db,
+                  getSessionKysely(opened.db)
+                    .selectFrom("session_windows")
+                    .select((eb) => eb.fn.countAll<number>().as("count")),
+                ).rows[0]?.count ?? 0);
             // Overview reads ask for most sessions; one scan beats thousands of key probes.
             // Both paths return every window, including those without a transcript update time.
-            return ids.length * 4 >= (stored ?? 0)
+            return scanAll
               ? executeSqliteQuerySync(opened.db, query).rows
               : chunkItems(ids, 2_000).flatMap(
                   (chunk) =>
