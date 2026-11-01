@@ -498,10 +498,12 @@ describe("agentCommand embedded maintenance", () => {
     ).toHaveLength(1);
     expect(state.runMemoryFlushIfNeededMock).toHaveBeenCalledOnce();
     expect(state.runMemoryFlushIfNeededMock).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionEntry: expect.objectContaining({ totalTokens: 904_869 }) }),
+      expect.objectContaining({
+        sessionEntry: expect.objectContaining({ totalTokens: lastCallUsage.total }),
+      }),
     );
     expect(storedBeforeMaintenance).toMatchObject({
-      totalTokens: 904_869,
+      totalTokens: lastCallUsage.total,
       inputTokens: lastCallUsage.input,
       outputTokens: lastCallUsage.output,
       cacheRead: lastCallUsage.cacheRead,

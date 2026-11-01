@@ -153,6 +153,21 @@ describe("preemptive-compaction", () => {
     },
   );
 
+  it("rejects short-key JSON that exceeds the measured provider window", () => {
+    // Real Responses input count: 26,806 tokens, versus 114 with an empty result.
+    const text = '{"id":123,"ok":false,"path":"src/a.ts","value":[1,2,3]}\n'
+      .repeat(1300)
+      .slice(0, 65_000);
+    const decision = resolveProjectedRequestPressure({
+      context: { messages: [makeToolResultMessage(text)] },
+      previousRequest: { requestIndex: 1, messageCount: 0, contextTokens: 107 },
+      contextTokenBudget: 20_000,
+      reserveTokens: 0,
+    });
+    expect(decision.estimatedPromptTokens).toBeGreaterThanOrEqual(26_806);
+    expect(decision.route).not.toBe("fits");
+  });
+
   const verboseHistory =
     "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu ".repeat(40);
   const verboseSystem =

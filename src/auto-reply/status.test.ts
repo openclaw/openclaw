@@ -590,7 +590,7 @@ describe("status transcript usage and model context", () => {
         cacheWrite: 11_000,
         totalTokens: 2_300_000,
       },
-      present: ["Cache: 100% hit · 2.3m cached, 11k new", "Context: 36k/1.0m (4%)"],
+      present: ["Cache: 100% hit · 2.3m cached, 11k new", "Context: 37k/1.0m (4%)"],
       absent: ["Context: 2.3m/1.0m"],
     },
   ])("$name", async ({ transcript, entry, present, absent }) => {
