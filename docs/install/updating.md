@@ -53,6 +53,12 @@ backup.
 
 ## Update implementation contract
 
+Pre-update config copies publish through a temporary file and same-directory
+rename. An interrupted write preserves the previous `.pre-update` copy, and a
+later snapshot attempt can retry. Post-update recovery refuses malformed copies
+and leaves the current config intact. This repair must be present in the updater
+taking the snapshot; it does not establish power-loss durability.
+
 On macOS, Doctor reports generated service environment values surrounded by
 literal double quotes. Interactive `openclaw doctor` can back up the private env
 file and remove one outer quote pair after confirmation; unrelated bytes stay
