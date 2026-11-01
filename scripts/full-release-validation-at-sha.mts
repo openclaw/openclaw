@@ -1713,7 +1713,11 @@ function releaseDecisionAvailable(parentRunId: string, parentRunAttempt: number)
   }
 }
 
-function waitForWorkflowRun(parentRunId: string, workflowSha: string, record?: DispatchRecord) {
+function waitForWorkflowRun(
+  parentRunId: string,
+  workflowSha: string,
+  record?: DispatchRecord,
+): "success" | "pending" {
   let lastSummary = "";
   let consecutiveErrors = 0;
   const startedAt = Date.now();
@@ -1759,6 +1763,14 @@ function waitForWorkflowRun(parentRunId: string, workflowSha: string, record?: D
       }
       if (decision.state === "ready") {
         const releaseDecision = tryReadReleaseDecision(parentRunId, attempt, workflowSha);
+        if (releaseDecision?.state === "blocked_diagnostics_running") {
+          console.log(formatReleaseStateOutcome(releaseDecision));
+          console.log(
+            `Full Release Validation remains active: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
+          );
+          console.log(`Continue with: pnpm frv watch --run ${parentRunId}`);
+          return "pending";
+        }
         if (releaseDecision && releaseDecisionStopsForeground(releaseDecision.state)) {
           throw new Error(
             `${formatReleaseStateOutcome(releaseDecision)}\nhttps://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
@@ -1773,7 +1785,7 @@ function waitForWorkflowRun(parentRunId: string, workflowSha: string, record?: D
     }
     if (suite?.status === "completed" && stringValue(suite.conclusion)) {
       if (suite.conclusion === "success") {
-        return suite;
+        return "success";
       }
       throw new Error(
         `Full Release Validation concluded ${stringValue(suite.conclusion, "unknown").toLowerCase()}: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
@@ -2381,15 +2393,16 @@ async function executeFrozenDispatch(options: {
     }
     if (parentRunId) {
       console.log(`Parent run: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`);
-      waitForWorkflowRun(parentRunId, workflowSha, record);
-      parentConclusion = "success";
-      verifyReleaseEvidence(
-        parentRunId,
-        // Admission may have advanced P with main before its POST.
-        record?.admission?.workflowSha ?? admissionWorkflowSha ?? workflowSha,
-        candidateOwned ? args.admissionWorkflowRef : args.trustedWorkflowRef,
-      );
-      evidenceVerified = true;
+      parentConclusion = waitForWorkflowRun(parentRunId, workflowSha, record);
+      if (parentConclusion === "success") {
+        verifyReleaseEvidence(
+          parentRunId,
+          // Admission may have advanced P with main before its POST.
+          record?.admission?.workflowSha ?? admissionWorkflowSha ?? workflowSha,
+          candidateOwned ? args.admissionWorkflowRef : args.trustedWorkflowRef,
+        );
+        evidenceVerified = true;
+      }
     }
   } catch (error) {
     operationError = error instanceof Error ? error : new Error(String(error));
