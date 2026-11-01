@@ -91,8 +91,18 @@ describe("buildDelegationGuidanceSection", () => {
 
   it.each(["`sessions_spawn`", "native `spawn_agent`"])("injects %s", (hiddenDelegationTool) => {
     expect(buildSection({ hiddenDelegationTool }).join("\n")).toContain(
-      `delegate via ${hiddenDelegationTool}`,
+      `delegate via ${hiddenDelegationTool} to keep this session responsive`,
     );
+  });
+
+  it("accounts for handoff overhead and preserves explicit model choices", () => {
+    const section = buildSection().join("\n");
+
+    expect(section).toContain(
+      "context-transfer and coordination overhead would outweigh the delegation benefit",
+    );
+    expect(section).toContain("only when the work is small or tightly coupled");
+    expect(section).toContain("delegation must not silently substitute another model");
   });
 
   it.each([

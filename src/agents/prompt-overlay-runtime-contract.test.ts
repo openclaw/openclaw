@@ -22,6 +22,12 @@ describe("GPT-5 prompt overlay runtime contract", () => {
     });
 
     expect(contribution?.stablePrefix).toContain("<persona_latch>");
+    for (const text of [
+      "explicit current-turn authorization satisfies confirmation only for its bounded target, content, and scope",
+      "Runtime policy, enforced approvals, and missing safety decisions still govern.",
+    ]) {
+      expect(contribution?.stablePrefix).toContain(text);
+    }
     expect(contribution?.sectionOverrides?.interaction_style).toContain(
       "Live chat: short, natural, human.",
     );
