@@ -717,7 +717,7 @@ describe("client voice session worker contract", () => {
     });
     try {
       await appendTranscript(voiceSessionId, "committed-together", text);
-      expect(await loadSessionEntry(target)).toMatchObject({
+      expect(loadSessionEntry(target)).toMatchObject({
         lastInteractionAt: expect.any(Number),
       });
       expect(observed).toEqual([
