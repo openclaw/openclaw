@@ -130,7 +130,7 @@ function backupRows(backupPath: string, verify = false) {
 async function backups() {
   const databasePath = openOpenClawStateDatabase().path;
   return (await fs.readdir(path.dirname(databasePath)))
-    .filter((name) => name.startsWith(`${path.basename(databasePath)}.doctor-cron-`))
+    .filter((name) => name.startsWith(`${path.basename(databasePath)}.pre-startup-migration-`))
     .map((name) => path.join(path.dirname(databasePath), name));
 }
 
