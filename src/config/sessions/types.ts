@@ -53,7 +53,7 @@ export type { SessionSystemPromptReport } from "./session-system-prompt-report.j
 export type { SessionScope } from "../types.base.js";
 export type SessionChatType = ChatType;
 export type PersistedSessionRunStatus = Exclude<SessionRunStatus, "running" | "queued">;
-export const SESSION_TOTAL_TOKENS_VERSION = 1 as const;
+export const SESSION_TOTAL_TOKENS_VERSION = 2 as const;
 
 type SessionGitHubPullRequestSource = {
   repository: string;
@@ -563,8 +563,8 @@ type SessionEntryCore = SessionEntryProvenance &
      * totalTokens as stale/unknown for context-utilization displays.
      */
     totalTokensFresh?: boolean;
-    /** Version 1 records totalTokens as the current prompt/context snapshot only. */
-    totalTokensVersion?: typeof SESSION_TOTAL_TOKENS_VERSION;
+    /** Version 2 includes the last response's completion and pending request additions. */
+    totalTokensVersion?: 1 | typeof SESSION_TOTAL_TOKENS_VERSION;
     estimatedCostUsd?: number;
     cacheRead?: number;
     cacheWrite?: number;
@@ -642,6 +642,14 @@ export type SessionProfileInvolvement = {
 };
 
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** Atomic history-cut receipt for the exact settled local projection, cleared after adoption. */
+  localWorkspaceHandoff?: {
+    worktreeId: string;
+    fromSessionId: string;
+    toSessionId: string;
+    lifecycleRevision: string | null;
+    projectionRevision: number;
+  };
   /** Original unbound files, private to this conversation's adopted workspace. */
   priorWorkspace?: {
     worktreeId: string;

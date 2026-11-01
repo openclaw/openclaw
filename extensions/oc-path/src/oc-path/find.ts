@@ -13,7 +13,7 @@ import type { AstBlock, AstItem, MdAst } from "./ast.js";
 import type { JsoncValue } from "./jsonc/ast.js";
 import { resolveJsoncPositionalSegment } from "./jsonc/resolve-value.js";
 import type { JsonlAst, JsonlLine } from "./jsonl/ast.js";
-import { pickJsonlLine } from "./jsonl/line.js";
+import { keepOnlyLineAddressInSection, pickJsonlLine } from "./jsonl/line.js";
 import type { OcPath, PredicateSpec } from "./oc-path.js";
 import {
   MAX_SUB_SEGMENTS_PER_SLOT,
@@ -159,6 +159,7 @@ function repackSlotSubs(
     }
     runs[runs.length - 1]?.push(value);
   }
+  runs = kind === "jsonl" ? keepOnlyLineAddressInSection(runs) : runs;
   if (kind !== "md") {
     const firstValueRun = kind === "jsonl" ? 1 : 0;
     const valueRuns = runs.slice(firstValueRun);
@@ -312,8 +313,11 @@ function dispatchSeg<T extends object, Child extends object>(
 const jsoncOps: WalkOps<JsoncValue> = {
   *enumerate(node, matches) {
     if (node.kind === "object") {
-      for (const e of node.entries) {
-        if (!matches || matches(e.value)) {
+      // Duplicate keys: yield only the last (effective) occurrence of each key.
+      const entries = node.entries;
+      const lastIndex = new Map(entries.map((e, idx) => [e.key, idx]));
+      for (const [idx, e] of entries.entries()) {
+        if (lastIndex.get(e.key) === idx && (!matches || matches(e.value))) {
           yield { keySub: quoteSeg(e.key), child: e.value };
         }
       }
@@ -327,10 +331,8 @@ const jsoncOps: WalkOps<JsoncValue> = {
   },
   lookup(node, key) {
     if (node.kind === "object") {
-      // Entry keys are unquoted in the AST; strip quotes from a quoted
-      // path key so the walker matches the resolver's behavior.
       const lookupKey = unquoteSeg(key);
-      const e = node.entries.find((entry) => entry.key === lookupKey);
+      const e = node.entries.findLast((entry) => entry.key === lookupKey);
       return e === undefined
         ? null
         : { keySub: key === lookupKey ? quoteSeg(e.key) : key, child: e.value };
@@ -751,7 +753,7 @@ function jsoncChildFieldText(
   if (node.kind !== "object") {
     return null;
   }
-  const e = node.entries.find((entry) => entry.key === key);
+  const e = node.entries.findLast((entry) => entry.key === key);
   if (e === undefined) {
     return null;
   }
@@ -762,8 +764,5 @@ function jsoncChildFieldText(
   if (v.kind === "number" || v.kind === "boolean") {
     return String(v.value);
   }
-  if (v.kind === "null") {
-    return nullText;
-  }
-  return null;
+  return v.kind === "null" ? nullText : null;
 }

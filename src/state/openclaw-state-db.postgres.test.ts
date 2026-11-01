@@ -135,25 +135,31 @@ async function restoreEmptyPredecessorTables(client: pg.Client, previousVersion:
   );
   const eager = expectDefined(source.postgres, "Historical PostgreSQL DDL");
   // DROP COLUMN retains an attnum hole, including at the tail. Recreate the empty
-  // worker table, preserving incoming foreign keys from installed optional fragments too.
-  expect((await client.query("SELECT count(*)::int AS n FROM worker_environments")).rows).toEqual([
-    { n: 0 },
-  ]);
-  const workerTable = expectDefined(
-    eager.match(/CREATE TABLE "worker_environments" \([\s\S]*?\n\);/u)?.[0],
-    "Historical worker environment declaration",
-  );
-  const references = await client.query<{ source: string; definition: string }>(
-    `SELECT conrelid::regclass::text AS source, pg_get_constraintdef(oid) AS definition
-     FROM pg_constraint WHERE contype = 'f' AND confrelid = 'worker_environments'::regclass`,
-  );
-  const workerDependents = eager.match(
-    /CREATE (?:UNIQUE )?INDEX [^;]+ ON "worker_environments"[^;]*;|ALTER TABLE "worker_environments" ADD FOREIGN KEY[^;]*;/gu,
-  );
-  await client.query(
-    `DROP TABLE worker_environments CASCADE; ${workerTable} ${workerDependents?.join("\n") ?? ""}
-     ${references.rows.map((ref) => `ALTER TABLE ${ref.source} ADD ${ref.definition};`).join("\n")}`,
-  );
+  // receipt tables, retaining incoming foreign keys from installed optional fragments too.
+  for (const table of ["worker_environments", "worker_workspace_pending_results"]) {
+    expect((await client.query(`SELECT count(*)::int AS n FROM "${table}"`)).rows).toEqual([
+      { n: 0 },
+    ]);
+    const declaration = expectDefined(
+      eager.match(new RegExp(`CREATE TABLE "${table}" \\([\\s\\S]*?\\n\\);`))?.[0],
+      `Historical declaration for ${table}`,
+    );
+    const references = await client.query<{ source: string; definition: string }>(
+      `SELECT conrelid::regclass::text AS source, pg_get_constraintdef(oid) AS definition
+       FROM pg_constraint WHERE contype = 'f' AND confrelid = $1::regclass`,
+      [table],
+    );
+    const dependents = eager.match(
+      new RegExp(
+        `CREATE (?:UNIQUE )?INDEX [^;]+ ON "${table}"[^;]*;|ALTER TABLE "${table}" ADD FOREIGN KEY[^;]*;`,
+        "gu",
+      ),
+    );
+    await client.query(
+      `DROP TABLE "${table}" CASCADE; ${declaration} ${dependents?.join("\n") ?? ""}
+       ${references.rows.map((ref) => `ALTER TABLE ${ref.source} ADD ${ref.definition};`).join("\n")}`,
+    );
+  }
   for (const [previous, current] of TEMPLATE_STATE_TABLE_RENAMES) {
     const declaration = expectDefined(
       eager.match(new RegExp(`CREATE TABLE "${previous}" \\([\\s\\S]*?\\n\\);`))?.[0],

@@ -40,6 +40,9 @@ it.each([false, true])(
       let toolRounds = 0;
       let overWindow = 0;
       let summariesBeforeAnswer = 0;
+      let largestPrompt = 0;
+      let publishedBeforeSummary = 0;
+      const contextWindow = midTurn ? 1_000_000 : 32_768;
       const reportPath = path.join(state.workspaceDir, "report.txt");
       await writeFile(reportPath, "Project evidence row.\n".repeat(1_800));
       const server = createServer((request, response) => {
@@ -49,6 +52,36 @@ it.each([false, true])(
           body += chunk;
         });
         request.on("end", () => {
+          const wire = JSON.parse(body) as {
+            input: unknown[];
+            instructions?: string;
+            tools?: unknown[];
+            max_output_tokens?: number;
+          };
+          const tokens = Math.ceil(
+            JSON.stringify({
+              input: wire.input,
+              instructions: wire.instructions,
+              tools: wire.tools,
+            }).length / 4,
+          );
+          if (summaryRequests === 0) {
+            publishedBeforeSummary = Math.max(
+              publishedBeforeSummary,
+              loadSessionEntry(scope)?.totalTokens ?? 0,
+            );
+          }
+          largestPrompt = Math.max(largestPrompt, tokens);
+          if (midTurn && tokens + (wire.max_output_tokens ?? 4_096) > contextWindow) {
+            overWindow += 1;
+            response.writeHead(400, { "content-type": "application/json" });
+            response.end(
+              JSON.stringify({
+                error: { message: "Your input exceeds the context window of this model." },
+              }),
+            );
+            return;
+          }
           // Built-in summarization requests carry SUMMARIZATION_SYSTEM_PROMPT.
           if (body.includes("context summarization assistant")) {
             summaryRequests += 1;
@@ -64,25 +97,7 @@ it.each([false, true])(
             response.end(JSON.stringify({ error: { message: "upstream request timed out" } }));
             return;
           }
-          const wire = JSON.parse(body) as {
-            input: unknown[];
-            tools?: unknown[];
-            max_output_tokens?: number;
-          };
-          const tokens = Math.ceil(
-            JSON.stringify({ input: wire.input, tools: wire.tools }).length / 4,
-          );
-          if (midTurn && tokens + (wire.max_output_tokens ?? 4_096) > 32_768) {
-            overWindow += 1;
-            response.writeHead(400, { "content-type": "application/json" });
-            response.end(
-              JSON.stringify({
-                error: { message: "Your input exceeds the context window of this model." },
-              }),
-            );
-            return;
-          }
-          const toolCall = midTurn && summaryRequests === 0 && toolRounds < 16;
+          const toolCall = midTurn && summaryRequests === 0 && toolRounds < 64;
           if (toolCall) {
             toolRounds += 1;
           } else {
@@ -151,8 +166,8 @@ it.each([false, true])(
                   name: "Synthetic model",
                   reasoning: false,
                   input: ["text"],
-                  contextWindow: 32_768,
-                  contextTokens: 32_768,
+                  contextWindow,
+                  contextTokens: contextWindow,
                   maxTokens: 4_096,
                   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                 },
@@ -169,18 +184,18 @@ it.each([false, true])(
         await replaceSessionEntry(scope, {
           sessionId,
           updatedAt: Date.now(),
-          totalTokens: midTurn ? 0 : 30_000,
+          totalTokens: midTurn ? 560_000 : 30_000,
           totalTokensFresh: true,
           totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
         });
-        const seed = SessionManager.open(scope, state.workspaceDir);
-        for (let turn = 0; turn < (midTurn ? 0 : 12); turn += 1) {
-          seed.appendMessage({
+        const seed = await SessionManager.openAsync(scope, state.workspaceDir);
+        for (let turn = 0; turn < (midTurn ? 56 : 12); turn += 1) {
+          await seed.appendMessageAsync({
             role: "user",
-            content: `Earlier question ${turn}. ${"Background detail. ".repeat(250)}`,
+            content: `Earlier question ${turn}. ${"Background detail. ".repeat(midTurn ? 2_200 : 250)}`,
             timestamp: turn + 1,
           });
-          seed.appendMessage(
+          await seed.appendMessageAsync(
             makeAssistantMessageFixture({
               provider: "test-provider",
               api: midTurn ? "openai-responses" : "openai-completions",
@@ -188,7 +203,7 @@ it.each([false, true])(
               content: [{ type: "text", text: `Earlier answer ${turn}.` }],
               stopReason: "stop",
               errorMessage: undefined,
-              usage: createUsageFixture(30_000, 5, 30_005),
+              usage: createUsageFixture(midTurn ? 560_000 : 30_000, 5, midTurn ? 560_005 : 30_005),
             }),
           );
         }
@@ -235,6 +250,8 @@ it.each([false, true])(
         if (midTurn) {
           expect(toolRounds).toBeGreaterThan(1);
           expect(summariesBeforeAnswer).toBeGreaterThan(0);
+          expect(largestPrompt).toBeLessThan(800_000);
+          expect(publishedBeforeSummary).toBeGreaterThan(700_000);
         }
         const compactions = (await loadTranscriptEvents(scope))
           .map(asOptionalRecord)

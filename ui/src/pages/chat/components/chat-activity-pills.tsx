@@ -443,16 +443,8 @@ function ActivityPill(props: {
       >
         {leading()}
       </Show>
-      <span
-        ref={labelRef}
-        class={["activity-pill__label", { "activity-pill__label--shine": props.view.shine }]}
-      >
+      <span ref={labelRef} class={["activity-pill__label", { "text-shimmer": props.view.shine }]}>
         {props.view.label}
-        <Show when={props.view.shine}>
-          <span class="activity-pill__shimmer" aria-hidden="true">
-            {props.view.label}
-          </span>
-        </Show>
       </span>
       <Show when={props.view.count}>
         {(count) => <span class="activity-pill__count">{count()}</span>}

@@ -327,12 +327,11 @@ it.each(["off", "tool-policy"] as const)(
       ).toEqual({ ...candidate, config: candidate.config });
       prepare.mockClear();
       scheduleSkillExperienceReview({
-        event: { messages: [], success: true },
+        event: { messages: [], success: true, modelIterations: 10 },
         ctx: {
           ...candidate.ctx,
           sessionKey: candidate.source.sessionKey,
-          modelIterations: 10,
-          skillWorkshopAvailable: true,
+          toolNames: ["skill_workshop"],
         },
         config: candidate.config,
         source: candidate.source,

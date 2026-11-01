@@ -113,19 +113,17 @@ it("retains agent row content while selection and roster details change", async 
   });
   expect(element.querySelectorAll("[data-agent-option]")).toHaveLength(0);
   element.querySelector<HTMLButtonElement>(".agent-select__trigger")!.click();
-  await element.updateComplete;
+  await waitForSolid(() => expect(element.querySelectorAll("[data-agent-option]")).toHaveLength(2));
   const alpha = element.querySelector<HTMLElement>('[data-agent-option][value="alpha"]')!;
   const beta = element.querySelector<HTMLElement>('[data-agent-option][value="beta"]')!;
   const alphaAvatar = alpha.querySelector(".agent-select__avatar");
   const betaAvatar = beta.querySelector(".agent-select__avatar");
   expect(alphaAvatar).not.toBeNull();
   expect(betaAvatar).not.toBeNull();
-  element.querySelector<HTMLButtonElement>(".agent-select__trigger")!.click();
-
   element.value = "beta";
   await waitForSolid(() => {
-    expect(beta.getAttribute("aria-checked")).toBe("true");
-    expect(alpha.getAttribute("aria-checked")).toBe("false");
+    expect(beta.getAttribute("aria-selected")).toBe("true");
+    expect(alpha.getAttribute("aria-selected")).toBe("false");
     expect(alpha.querySelector(".agent-select__avatar")).toBe(alphaAvatar);
     expect(beta.querySelector(".agent-select__avatar")).toBe(betaAvatar);
   });
@@ -153,6 +151,8 @@ it("retains agent row content while selection and roster details change", async 
     expect(beta.querySelector(".agent-select__avatar")).toBe(betaAvatar);
     expect(element.querySelector(".agent-select__label")?.textContent).toBe("Research");
   });
+  element.querySelector<HTMLButtonElement>(".agent-select__trigger")!.click();
+  await waitForSolid(() => expect(element.querySelectorAll("[data-agent-option]")).toHaveLength(0));
 });
 
 it("keeps a failed avatar on its fallback until the image changes", async () => {
@@ -440,6 +440,7 @@ it("keeps avatar text out of typeahead and announces option metadata", async () 
   element.querySelector<HTMLButtonElement>(".agent-select__trigger")!.click();
   await element.updateComplete;
 
+  await waitForSolid(() => expect(element.querySelectorAll("[data-agent-option]")).toHaveLength(2));
   const items = Array.from(
     element.querySelectorAll<HTMLElement & { value: string }>("[data-agent-option]"),
   );

@@ -1460,7 +1460,7 @@
   background: var(--bg-hover);
 }
 
-.sidebar-session-filter-panel :is(button, a, input):focus-visible {
+.sidebar-session-filter-panel :is(button:not(.picker-select__trigger), a, input):focus-visible {
   outline: var(--control-ui-focus-ring);
   outline-offset: var(--control-ui-focus-ring-offset);
 }

@@ -78,6 +78,23 @@ commit without a generated summary; see [Auto-compaction](#auto-compaction).
 
 Auto-compaction is on by default. It runs when the session nears the context limit, or when the model returns a context-overflow error (in which case OpenClaw compacts and retries).
 
+Built-in client maintenance starts at the smaller of 75% of the active window
+and the window minus its compaction reserve. A 1,000,000-token window therefore
+starts maintenance at 750,000 tokens, while the summary reserve stays 20,000.
+During tool loops, completed provider usage triggers this maintenance before the
+next request. The request boundary also checks projected occupancy, including
+new tool results, against the full window even when proactive compaction is
+disabled. It stops an over-window submission and uses the existing safe recovery
+path. Native Codex and Claude CLI keep their own compaction policies.
+
+Scheduled turns in an existing session use the same built-in request checks.
+Their context totals update during requests and after completion even when the
+automation preserves the conversation's displayed model and billing snapshot.
+
+Preflight uses published context totals, falling back to a bounded recent usage
+tail or the same bounded context view used by the runtime. Missing usage does not
+trigger a second accounting pass over the entire conversation history.
+
 In the built-in runtime, native ChatGPT sign-in uses V2 compaction at normal
 request boundaries, including between completed tool rounds. It starts when the
 known or projected request occupancy reaches the smaller of the reserve-based

@@ -46,14 +46,6 @@ export function finalizePluginModelUsage(params: {
 }): LlmCompleteUsage {
   // SAFETY: normalizeUsage narrows each optional provider counter before returning typed facts.
   const normalized = normalizeUsage(params.rawUsage as UsageLike | undefined);
-  const costConfig =
-    params.estimate === "none"
-      ? undefined
-      : resolveModelCostConfig({
-          provider: params.target.provider,
-          model: params.target.model,
-          config: params.cfg,
-        });
   // Isolated runtimes may report a whole run; only direct calls retain tier boundaries here.
   const estimateCost =
     params.estimate === "direct" ? estimateUsageCost : estimateAggregateUsageCost;
@@ -76,7 +68,14 @@ export function finalizePluginModelUsage(params: {
       ? estimateUsageCost({ usage: normalized, declaredCost })
       : params.estimate === "none"
         ? undefined
-        : estimateCost({ usage: normalized, cost: costConfig }));
+        : estimateCost({
+            usage: normalized,
+            cost: resolveModelCostConfig({
+              provider: params.target.provider,
+              model: params.target.model,
+              config: params.cfg,
+            }),
+          }));
   const usage: LlmCompleteUsage = {
     ...(normalized?.input !== undefined ? { inputTokens: normalized.input } : {}),
     ...(normalized?.output !== undefined ? { outputTokens: normalized.output } : {}),

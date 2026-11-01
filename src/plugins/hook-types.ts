@@ -14,6 +14,11 @@ import type {
   PluginHookContextWindow,
 } from "./hook-agent-context.types.js";
 import type {
+  PluginHookAgentEndEvent,
+  PluginHookBeforeAgentFinalizeEvent,
+  PluginHookBeforeAgentFinalizeResult,
+} from "./hook-agent-finalize.types.js";
+import type {
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
@@ -58,6 +63,11 @@ export type {
   PluginHookAgentContext,
   PluginHookToolAuthority,
 } from "./hook-agent-context.types.js";
+export type {
+  PluginHookAgentEndEvent,
+  PluginHookBeforeAgentFinalizeEvent,
+  PluginHookBeforeAgentFinalizeResult,
+} from "./hook-agent-finalize.types.js";
 
 export type {
   PluginHookBeforeModelResolveAttachment,
@@ -317,43 +327,6 @@ export type PluginHookLlmOutputEvent = PluginHookContextWindow & {
   reasoningEffort?: string;
   /** Whether fast mode was active for this call. */
   fastMode?: boolean;
-};
-
-export type PluginHookAgentEndEvent = {
-  runId?: string;
-  messages: unknown[];
-  success: boolean;
-  error?: string;
-  durationMs?: number;
-};
-
-export type PluginHookBeforeAgentFinalizeEvent = {
-  runId?: string;
-  sessionId: string;
-  sessionKey?: string;
-  turnId?: string;
-  provider?: string;
-  model?: string;
-  cwd?: string;
-  transcriptPath?: string;
-  stopHookActive: boolean;
-  lastAssistantMessage?: string;
-  messages?: unknown[];
-};
-
-export type PluginHookBeforeAgentFinalizeResult = {
-  /**
-   * continue: accept normal finalization.
-   * revise: block finalization and ask the harness for another model pass.
-   * finalize: force finalization even if another hook requested revision.
-   */
-  action?: "continue" | "revise" | "finalize";
-  reason?: string;
-  retry?: {
-    instruction: string;
-    idempotencyKey?: string;
-    maxAttempts?: number;
-  };
 };
 
 type PluginHookBeforeCompactionEvent = {

@@ -307,7 +307,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: lossless Decision V1 compatibility predicate (#188251).
       // +1: callable-tool prompt guidance for harnesses (#187661).
       // +1: accepted diagnostic trace-context normalizer (#189133).
-      3854,
+      // +1: accepted WorkerResourceReceipt type on plugin-entry (#189019).
+      3855,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

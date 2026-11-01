@@ -1,7 +1,43 @@
 import { bucketRelativeTimeMs, type RelativeTimeUnit } from "@openclaw/normalization-core";
 import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { i18n, t } from "../i18n/index.ts";
+import { takeGraphemes } from "../lib/graphemes.ts";
 import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
+
+// Above what three lines hold in any theme, so a long transcript never reaches layout.
+const EXCERPT_MAX_GRAPHEMES = 320;
+
+function cutExcerpt(text: string, graphemes: number): string {
+  return `${takeGraphemes(text, graphemes).replace(/[\s\p{Po}]+$/u, "")}…`;
+}
+
+/**
+ * Writes only the part of the source that fits the element's line clamp, as one text node.
+ * The first write and the search share a task, so only the final text is painted.
+ */
+export function writeHovercardExcerpt(element: HTMLElement, source: string): void {
+  const text = source.replace(/\s+/gu, " ").trim();
+  const fits = () => element.scrollHeight <= element.clientHeight;
+  element.textContent =
+    takeGraphemes(text, EXCERPT_MAX_GRAPHEMES) === text
+      ? text
+      : cutExcerpt(text, EXCERPT_MAX_GRAPHEMES);
+  if (fits()) {
+    return;
+  }
+  let fitting = 0;
+  let overflowing = Math.min(text.length, EXCERPT_MAX_GRAPHEMES);
+  while (overflowing - fitting > 1) {
+    const middle = Math.floor((fitting + overflowing) / 2);
+    element.textContent = cutExcerpt(text, middle);
+    if (fits()) {
+      fitting = middle;
+    } else {
+      overflowing = middle;
+    }
+  }
+  element.textContent = cutExcerpt(text, fitting);
+}
 
 export function participantLabel(participant: SessionParticipant): string {
   return participant.label?.trim() || participant.identity.id;

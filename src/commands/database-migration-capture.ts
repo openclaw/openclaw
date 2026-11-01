@@ -9,6 +9,7 @@ import { readConfigFileSnapshotForWrite } from "../config/io.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { buildBackupArchivePath } from "../infra/backup-archive-path-policy.js";
 import { resolveBackupConfigCapture } from "../infra/backup-config-capture.js";
+import { createBackupArchive } from "../infra/backup-create.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { readClientCredentialFileIdentity } from "../infra/client-credential-receipt.js";
 import { rebindRehearsalClientCredentials } from "../infra/client-credential-restore.js";
@@ -20,9 +21,11 @@ import { publishVerifiedSqliteFile } from "../infra/sqlite-snapshot.js";
 import { createUpdateDatabaseBackup } from "../infra/update-database-backup.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { captureDatabaseArtifact, assertDatabaseArtifact } from "../snapshot/database-backup.js";
+import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { backupRestoreCommand } from "./backup-restore.js";
 import { canonicalizePathForContainment } from "./backup-shared.js";
 import { prepareBackupArchive } from "./backup-verify.js";
+import { withGatewayMigrationQuiescence } from "./database-migration-quiescence.js";
 import { assertDoctorSqliteMaintenancePathsNotAliased } from "./doctor-sqlite-maintenance-lock.js";
 
 const absolute = z.string().refine((value) => path.isAbsolute(value) && !value.includes("\u0000"));
@@ -51,6 +54,15 @@ const manifestSchema = z.strictObject({
   databases: z.array(captured),
   missingDatabases: z.array(absolute),
   configs: z.array(captured).min(1),
+  quiescence: z
+    .strictObject({
+      requestId: z.string().min(1).max(128),
+      suspensionId: z.string().min(1).max(128),
+      ownerId: z.string().min(1),
+      pid: z.number().int().positive(),
+      expiresAtMs: z.number().int().positive(),
+    })
+    .optional(),
   // This is a captured shared/local-pair witness, never a new owner's authority.
   sourceSharedFile: z
     .strictObject({
@@ -109,158 +121,247 @@ async function privateArtifact(root: string, entry: z.infer<typeof artifact>): P
   return file;
 }
 
-/** Capture exact native SQLite state after the host has stopped all writers. */
+/** Capture exact SQLite state under offline custody or an existing host-held suspension. */
 export async function createDatabaseMigrationCapture(options: {
-  baseArchive: string;
+  baseArchive?: string;
   output: string;
+  externallyQuiesced?: boolean;
+  requestId?: string;
+  suspensionId?: string;
 }) {
+  if (options.externallyQuiesced) {
+    if (options.baseArchive || !options.requestId || !options.suspensionId) {
+      throw new Error(
+        "Externally quiesced capture requires request/suspension IDs and creates its own filesystem base; --base-archive is not accepted.",
+      );
+    }
+  } else if (!options.baseArchive || options.requestId || options.suspensionId) {
+    throw new Error(
+      "Offline migration capture requires --base-archive; suspension IDs require --externally-quiesced.",
+    );
+  }
+  const suspension =
+    options.requestId && options.suspensionId
+      ? { requestId: options.requestId, suspensionId: options.suspensionId }
+      : undefined;
   if (hasActiveGatewayStateOwner(path.join(resolveStateDir(), "state/openclaw.sqlite"))) {
     throw new Error(
       "Exact migration capture requires the Gateway stopped through its service owner.",
     );
   }
-  return runWithLocalStateOwner({
-    method: "database.migration-capture",
-    params: {},
-    target: resolveStateDir(),
-    onForeignOwner: "refuse",
-    databaseEngine: "configured",
-    runLocal: async ({ env, assertCurrent, signal }) => {
-      const stateDir = path.resolve(resolveStateDir(env));
-      const configPath = path.resolve(resolveConfigPath(env));
-      const [root, physicalStateDir, physicalConfigRoot] = await Promise.all([
-        canonicalizePathForContainment(path.resolve(options.output)),
-        canonicalizePathForContainment(stateDir),
-        canonicalizePathForContainment(path.dirname(configPath)),
-      ]);
-      if (isPathInside(physicalStateDir, root) || isPathInside(physicalConfigRoot, root)) {
-        throw new Error(
-          "Migration capture output must be outside the source state and configuration roots.",
-        );
-      }
-      const configuration = await readConfigFileSnapshotForWrite({
-        observe: false,
-        skipPluginValidation: true,
-      });
-      if (!configuration.snapshot.valid || configuration.snapshot.path !== configPath) {
-        throw new Error("Migration capture requires valid pinned source configuration.");
-      }
-      if (
-        Object.values(resolveDatabaseFamilyEngines(configuration.snapshot.config)).includes(
-          "postgres",
-        )
-      ) {
-        throw new Error(
-          "This migration capture accepts SQLite sources only; it never exports or restores PostgreSQL namespaces.",
-        );
-      }
-      const configCapture = await resolveBackupConfigCapture(configuration, { env });
-      const preparedBase = await prepareBackupArchive(options.baseArchive);
-      if (
-        preparedBase.databaseRestoreCandidates.length > 0 ||
-        (preparedBase.manifest.postgresAnchors?.length ?? 0) > 0
-      ) {
-        throw new Error("Migration capture requires a SQLite-only base archive.");
-      }
-      if (
-        !preparedBase.manifest.assets.some(
-          (entry) => entry.kind === "state" && entry.sourcePath === stateDir,
-        )
-      ) {
-        throw new Error("Base archive belongs to a different state root.");
-      }
-      assertCurrent();
-      await fs.mkdir(root, { mode: 0o700 });
-      const base = path.join(root, "filesystem.tar.gz");
+  const capture = async ({
+    env,
+    assertCurrent,
+    signal,
+    revalidate = async () => assertCurrent(),
+    quiescence,
+  }: {
+    env: NodeJS.ProcessEnv;
+    assertCurrent: () => void;
+    signal: AbortSignal;
+    revalidate?: () => Promise<void>;
+    quiescence?: () => NonNullable<Manifest["quiescence"]>;
+  }) => {
+    await revalidate();
+    const stateDir = path.resolve(resolveStateDir(env));
+    const configPath = path.resolve(resolveConfigPath(env));
+    const [root, physicalStateDir, physicalConfigRoot] = await Promise.all([
+      canonicalizePathForContainment(path.resolve(options.output)),
+      canonicalizePathForContainment(stateDir),
+      canonicalizePathForContainment(path.dirname(configPath)),
+    ]);
+    if (isPathInside(physicalStateDir, root) || isPathInside(physicalConfigRoot, root)) {
+      throw new Error(
+        "Migration capture output must be outside the source state and configuration roots.",
+      );
+    }
+    const configuration = await readConfigFileSnapshotForWrite({
+      observe: false,
+      skipPluginValidation: true,
+    });
+    if (!configuration.snapshot.valid || configuration.snapshot.path !== configPath) {
+      throw new Error("Migration capture requires valid pinned source configuration.");
+    }
+    if (
+      Object.values(resolveDatabaseFamilyEngines(configuration.snapshot.config)).includes(
+        "postgres",
+      )
+    ) {
+      throw new Error(
+        "This migration capture accepts SQLite sources only; it never exports or restores PostgreSQL namespaces.",
+      );
+    }
+    const configCapture = await resolveBackupConfigCapture(configuration, { env });
+    const preparedBase = options.baseArchive
+      ? await prepareBackupArchive(options.baseArchive)
+      : undefined;
+    if (
+      preparedBase &&
+      (preparedBase.databaseRestoreCandidates.length > 0 ||
+        (preparedBase.manifest.postgresAnchors?.length ?? 0) > 0)
+    ) {
+      throw new Error("Migration capture requires a SQLite-only base archive.");
+    }
+    if (
+      preparedBase &&
+      !preparedBase.manifest.assets.some(
+        (entry) => entry.kind === "state" && entry.sourcePath === stateDir,
+      )
+    ) {
+      throw new Error("Base archive belongs to a different state root.");
+    }
+    assertCurrent();
+    await fs.mkdir(root, { mode: 0o700 });
+    const base = path.join(root, "filesystem.tar.gz");
+    if (preparedBase) {
       await fs.copyFile(
         preparedBase.result.archivePath,
         base,
         constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE,
       );
       await fs.chmod(base, 0o600);
-      const backup = await createUpdateDatabaseBackup({
-        backupRoot: path.join(root, "native"),
-        stateDir,
-        config: configuration.snapshot.config,
-        env,
-        stopped: true,
-        preserveSourceArtifacts: true,
-        sourceEngine: "sqlite",
-        timeoutMs: 600_000,
+    }
+    const backup = await createUpdateDatabaseBackup({
+      backupRoot: path.join(root, "native"),
+      stateDir,
+      config: configuration.snapshot.config,
+      env,
+      stopped: !options.externallyQuiesced,
+      preserveSourceArtifacts: true,
+      sourceEngine: "sqlite",
+      timeoutMs: 600_000,
+      signal,
+      purpose: "original-state",
+    });
+    await revalidate();
+    if (!preparedBase) {
+      // The SQLite-only exact owner has admitted every physical store before
+      // ordinary archive traversal. Both images share this same suspension.
+      await createBackupArchive({
+        output: base,
+        verify: true,
         signal,
-        purpose: "original-state",
+        preserveSourceArtifacts: true,
       });
-      assertCurrent();
-      const entry = async (sourcePath: string, file: string) => {
-        await using copied = await fs.open(file, "r+");
-        await copied.sync();
-        const value = await captureDatabaseArtifact(file);
-        return {
-          sourcePath,
-          file: path.relative(root, file),
-          sha256: value.sha256,
-          size: value.size,
-        };
-      };
-      // These images and hashes are already verified and synced by the capture owner.
-      const databases = backup.databases.map((database) => ({
-        sourcePath: database.path,
-        file: path.relative(root, database.snapshotPath),
-        sha256: database.sha256,
-        size: database.sizeBytes,
-      }));
-      const configs = [];
-      for (const [index, input] of configCapture.files.entries()) {
-        const file = path.join(root, `config-${index}.json`);
-        await fs.copyFile(input.canonicalPath, file, constants.COPYFILE_EXCL);
-        await fs.chmod(file, 0o600);
-        configs.push(await entry(input.sourcePath, file));
-      }
-      await configCapture.revalidate();
-      assertCurrent();
-      const baseIdentity = await entry(stateDir, base);
-      const manifest: Manifest = {
-        schema: "openclaw.database-migration-capture.v1",
-        profile: "exact-sqlite-migration",
-        captureId: randomUUID(),
-        createdAt: new Date().toISOString(),
-        sourceStateDir: stateDir,
-        sourceConfigPath: configPath,
-        baseArchive: {
-          file: "filesystem.tar.gz",
-          sha256: baseIdentity.sha256,
-          size: baseIdentity.size,
-        },
-        databases,
-        missingDatabases: backup.missingPaths,
-        configs,
-        sourceSharedFile:
-          readClientCredentialFileIdentity(path.join(stateDir, "state/openclaw.sqlite")) ?? null,
-      };
-      assertLogicalPaths(manifest);
-      const manifestPath = path.join(root, "manifest.json");
-      await using handle = await fs.open(manifestPath, "wx", 0o600);
-      const contents = `${JSON.stringify(manifest)}\n`;
-      await handle.writeFile(contents);
-      await handle.sync();
-      requireDirectorySync(await syncDirectory(root), "Migration capture publication");
-      assertCurrent();
+      await revalidate();
+    }
+    const entry = async (sourcePath: string, file: string) => {
+      await using copied = await fs.open(file, "r+");
+      await copied.sync();
+      const value = await captureDatabaseArtifact(file);
       return {
-        ok: true,
-        verified: true,
-        schema: manifest.schema,
-        profile: manifest.profile,
-        captureId: manifest.captureId,
-        directory: root,
-        manifestPath,
-        manifestSha256: sha256Hex(contents),
-        sourceStateDir: stateDir,
-        sourceConfigPath: configPath,
-        databases: databases.length,
-        configs: configs.length,
+        sourcePath,
+        file: path.relative(root, file),
+        sha256: value.sha256,
+        size: value.size,
       };
-    },
-  });
+    };
+    // These images and hashes are already verified and synced by the capture owner.
+    const databases = backup.databases.map((database) => ({
+      sourcePath: database.path,
+      file: path.relative(root, database.snapshotPath),
+      sha256: database.sha256,
+      size: database.sizeBytes,
+    }));
+    const configs = [];
+    for (const [index, input] of configCapture.files.entries()) {
+      const file = path.join(root, `config-${index}.json`);
+      await fs.copyFile(input.canonicalPath, file, constants.COPYFILE_EXCL);
+      await fs.chmod(file, 0o600);
+      configs.push(await entry(input.sourcePath, file));
+    }
+    await configCapture.revalidate();
+    assertCurrent();
+    const baseIdentity = await entry(stateDir, base);
+    const manifest: Manifest = {
+      schema: "openclaw.database-migration-capture.v1",
+      profile: "exact-sqlite-migration",
+      captureId: randomUUID(),
+      createdAt: new Date().toISOString(),
+      sourceStateDir: stateDir,
+      sourceConfigPath: configPath,
+      baseArchive: {
+        file: "filesystem.tar.gz",
+        sha256: baseIdentity.sha256,
+        size: baseIdentity.size,
+      },
+      databases,
+      missingDatabases: backup.missingPaths,
+      configs,
+      ...(quiescence ? { quiescence: quiescence() } : {}),
+      sourceSharedFile:
+        readClientCredentialFileIdentity(path.join(stateDir, "state/openclaw.sqlite")) ?? null,
+    };
+    assertLogicalPaths(manifest);
+    await revalidate();
+    const manifestPath = path.join(root, "manifest.json");
+    await using handle = await fs.open(manifestPath, "wx", 0o600);
+    const contents = `${JSON.stringify(manifest)}\n`;
+    await handle.writeFile(contents);
+    await handle.sync();
+    requireDirectorySync(await syncDirectory(root), "Migration capture publication");
+    await revalidate();
+    assertCurrent();
+    return {
+      ok: true,
+      verified: true,
+      schema: manifest.schema,
+      profile: manifest.profile,
+      captureId: manifest.captureId,
+      directory: root,
+      manifestPath,
+      manifestSha256: sha256Hex(contents),
+      sourceStateDir: stateDir,
+      sourceConfigPath: configPath,
+      databases: databases.length,
+      configs: configs.length,
+      ...(manifest.quiescence ? { quiescence: manifest.quiescence } : {}),
+    };
+  };
+  const run = () =>
+    runWithLocalStateOwner({
+      method: "database.migration-capture",
+      params: {},
+      target: resolveStateDir(),
+      databaseEngine: "configured",
+      onForeignOwner: suspension
+        ? async ({ env, signal, assertCurrent }) =>
+            withGatewayMigrationQuiescence({
+              env,
+              signal,
+              assertCurrent,
+              requestId: suspension.requestId,
+              suspensionId: suspension.suspensionId,
+              run: (held) =>
+                capture({
+                  env,
+                  signal: held.signal,
+                  assertCurrent: held.assertCurrent,
+                  revalidate: held.revalidate,
+                  quiescence: () => ({
+                    requestId: suspension.requestId,
+                    suspensionId: suspension.suspensionId,
+                    ownerId: held.owner.ownerId,
+                    pid: held.owner.pid,
+                    expiresAtMs: held.expiresAtMs,
+                  }),
+                }),
+            })
+        : "refuse",
+      runLocal: async (scope) => {
+        if (options.externallyQuiesced) {
+          throw new Error(
+            "Externally quiesced capture requires the existing running Gateway owner.",
+          );
+        }
+        return capture(scope);
+      },
+    });
+  // Config and registry discovery also use the existing read owner. Keep those
+  // descriptive reads on private copies, including the source WAL index.
+  return options.externallyQuiesced
+    ? withArtifactPreservingStateReads(run, { agentDatabases: true })
+    : run();
 }
 
 /** Restore a full base plus exact native images only into a new private staging tree. */

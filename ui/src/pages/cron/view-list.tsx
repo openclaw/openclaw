@@ -224,6 +224,7 @@ function Toolbar(
               <Icon name="search" />
             </span>
             <input
+              ref={props.focus?.ref("search")}
               type="search"
               class="settings-input"
               value={props.jobsQuery}
@@ -255,8 +256,9 @@ function Toolbar(
           >
             <Icon name="refresh" />
           </button>
-          {props.canManage ? (
+          {(props.canCreate ?? props.canManage) ? (
             <button
+              ref={props.focus?.ref("create")}
               type="button"
               class="btn primary btn--sm cron-new-task"
               data-test-id="cron-new-task"
@@ -387,6 +389,7 @@ function JobRows(props: CronProps & { rows: CronJob[] }) {
         return;
       }
       const { rows } = next;
+      focusedId ??= props.focus?.target;
       scroller = list.closest<HTMLElement>(".content");
       current = rows;
       const margin = scroller
@@ -446,7 +449,8 @@ function JobRows(props: CronProps & { rows: CronJob[] }) {
       <JobRow
         job={row.job}
         jobs={props.jobs}
-        canManage={canManage()}
+        canManage={props.canManageJob?.(row.job) ?? canManage()}
+        canCreate={props.canCreate}
         busy={busy()}
         connected={connected()}
         toggleSavingJobId={props.toggleSavingJobId}
@@ -454,9 +458,16 @@ function JobRows(props: CronProps & { rows: CronJob[] }) {
         onToggle={(job, enabled) => props.onToggle(job, enabled)}
         onClone={(job) => props.onClone(job)}
         onRemove={(job) => props.onRemove(job)}
-        onSelectJob={(job) => props.onSelectJob(job)}
+        onSelectJob={(job) => {
+          props.focus?.remember(
+            job.id,
+            props.rows.map((entry) => entry.id),
+          );
+          props.onSelectJob(job);
+        }}
         index={byId().get(row.job.id)!.index}
         count={props.rows.length}
+        focus={props.focus}
         rowRef={(node) => (element = node)}
         onFocus={() => {
           if (focusedId === row.job.id) {
@@ -521,7 +532,7 @@ function JobsTableFrame(props: { canManage: boolean; busy: boolean; children: JS
 }
 function JobRow(
   props: CronJobActionProps &
-    Pick<CronProps, "jobs" | "onSelectJob"> & {
+    Pick<CronProps, "jobs" | "onSelectJob" | "focus"> & {
       job: CronJob;
       index: number;
       count: number;
@@ -550,7 +561,7 @@ function JobRow(
         }
       }}
     >
-      <button type="button" class="cron-table__name">
+      <button ref={props.focus?.ref(props.job.id)} type="button" class="cron-table__name">
         <JobStateIndicator job={props.job} />
         <span class="cron-table__name-copy">
           <span class="cron-table__name-line">
