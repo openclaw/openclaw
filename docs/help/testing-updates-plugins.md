@@ -79,9 +79,10 @@ a temp prefix, runs postinstall, and smokes bundled channel entrypoints.
 The runtime-floor step (`pnpm check:official-runtime-floor`) type-checks each
 version-bound official runtime (Codex) at its `minimumCompatibleVersion` release
 tag against this checkout. If an SDK export or a required argument that runtime
-used has changed, it fails and asks for a higher floor; an unreleased floor is
-skipped because no older runtime can be admitted, and a floor above the release
-version fails because it would refuse the matching runtime.
+used has changed, it fails and asks for a higher floor. An unreleased floor is
+skipped only when it matches the release candidate's version; a missing tag for
+an older floor fails because compatibility cannot be verified. A floor above the
+release version fails because it would refuse the matching runtime.
 
 For a Plugin SDK change, compare the exact commits separately:
 

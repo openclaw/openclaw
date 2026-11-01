@@ -34,7 +34,8 @@ export function planRuntimeFloorChecks(params: {
       continue;
     }
     // A floor above this release would refuse the runtime published alongside it.
-    if ((compareOpenClawReleaseVersions(floor, params.hostVersion) ?? 0) > 0) {
+    const floorComparedToHost = compareOpenClawReleaseVersions(floor, params.hostVersion);
+    if ((floorComparedToHost ?? 0) > 0) {
       plans.push({
         pluginId: candidate.pluginId,
         floor,
@@ -44,9 +45,19 @@ export function planRuntimeFloorChecks(params: {
       continue;
     }
     const tag = `v${floor}`;
-    // No published runtime exists at an unreleased floor, so nothing older can be admitted.
+    const released = params.isReleased(tag);
+    if (!released && floorComparedToHost !== 0) {
+      plans.push({
+        pluginId: candidate.pluginId,
+        floor,
+        action: "fail",
+        reason: `floor ${floor} has no release tag ${tag}; verify the published tag or use the candidate version ${params.hostVersion} for an unreleased floor`,
+      });
+      continue;
+    }
+    // Only the release candidate itself may use a floor without a published tag.
     plans.push(
-      params.isReleased(tag)
+      released
         ? { pluginId: candidate.pluginId, floor, action: "check", tag }
         : { pluginId: candidate.pluginId, floor, action: "skip-unreleased" },
     );
