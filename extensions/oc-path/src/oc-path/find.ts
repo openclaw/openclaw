@@ -763,8 +763,5 @@ function jsoncChildFieldText(
   if (v.kind === "number" || v.kind === "boolean") {
     return String(v.value);
   }
-  if (v.kind === "null") {
-    return nullText;
-  }
-  return null;
+  return v.kind === "null" ? nullText : null;
 }
