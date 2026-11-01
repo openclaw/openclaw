@@ -28,7 +28,9 @@ it("reports a closed write separately from the queued stream failure", async () 
   const onError = vi.fn();
   const stdin = createManagedChildStdin(stream, undefined, onError)!;
   const onWrite = vi.fn();
-  const closed = new Promise<void>((resolve) => stream.once("close", resolve));
+  const closed = new Promise<void>((resolve) => {
+    stream.once("close", resolve);
+  });
 
   stdin.destroy!();
   stdin.write("late input", onWrite);
