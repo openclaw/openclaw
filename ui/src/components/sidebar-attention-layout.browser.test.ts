@@ -74,6 +74,15 @@ function inboxEntries(attention: SidebarAttentionItem[], mentions: MentionInboxI
     update: null,
   });
 }
+type SidebarInboxApproval = Parameters<typeof buildSidebarInboxEntries>[0]["approvals"][number];
+const scopeUpgradeEntry = {
+  type: "scopeUpgrade",
+  category: "system",
+  dismissal: null,
+  requiresAction: true,
+  severity: "warning",
+  state: { phase: "available" },
+} as Extract<SidebarInboxEntry, { type: "scopeUpgrade" }>;
 type PanelFixtureParams = SidebarAttentionPanelParams & {
   context: ApplicationContext;
   mentions: MentionsCapability;
@@ -348,17 +357,9 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       expect(style(part(fixture, "list-wrap")).backgroundColor).toBe(
         style(fixture).backgroundColor,
       );
-      const colorProbe = document.createElement("span");
-      colorProbe.style.cssText = "position: absolute; color: var(--track-color);";
-      group.append(colorProbe);
-      const separatorColor = style(colorProbe).color;
-      colorProbe.remove();
-      const paint = document.createElement("canvas").getContext("2d")!;
-      paint.fillStyle = separatorColor;
-      paint.fillRect(0, 0, 1, 1);
-      expect(paint.getImageData(0, 0, 1, 1).data[3]).toBeGreaterThan(0);
-      expect(style(group).boxShadow).toBe(`${separatorColor} 0px -2px 0px 0px inset`);
-      if (width === 320) {
+      expect(style(group).boxShadow).toBe("none");
+      expect(style(group).scrollbarWidth).toBe("none");
+      if (textScale > 1) {
         expect(group.scrollWidth).toBeGreaterThan(group.clientWidth);
       }
       for (const [index, tab] of tabs.entries()) {
@@ -391,10 +392,90 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
         await expect.poll(() => horizontalOverflow(tab, group)).toBeLessThanOrEqual(1);
       }
       expect(style(badge).borderRadius).not.toBe("0px");
-      expect(style(summary!).paddingBlock).toBe("8px");
-      expect(bounds(item!).right).toBeCloseTo(bounds(list!).right, 1);
+      expect(style(summary!).paddingBlock).toBe("10px");
+      expect(bounds(item!).right).toBeCloseTo(bounds(list!).right - 6, 0);
     },
   );
+
+  it("clears System in two passes so automations keep their own Dismiss shown", () => {
+    const automation: SidebarAttentionItem = {
+      ...authWarning,
+      category: "automations",
+      kind: "cronFailed",
+      label: "Nightly report",
+      dismissal: { kind: "cronFailed", signature: "nightly-report" },
+      signature: "nightly-report",
+    };
+    const params = panelParams(inboxEntries([authWarning, automation], []));
+    const shell = mountPanel({ ...params, selectedTab: "system" });
+
+    part(shell, "dismiss-shown").click();
+    expect(vi.mocked(params.onDismiss).mock.calls).toEqual([[authWarning.dismissal]]);
+    shell.remove();
+
+    vi.mocked(params.onDismiss).mockClear();
+    const remaining = inboxEntries([automation], []);
+    const next = mountPanel({ ...params, entries: remaining, selectedTab: "system" });
+    part(next, "dismiss-shown").click();
+    expect(vi.mocked(params.onDismiss).mock.calls).toEqual([[automation.dismissal]]);
+  });
+
+  it("gives every row the same marker and text column", () => {
+    const entries = buildSidebarInboxEntries({
+      approvals: [
+        {
+          id: "approval-a",
+          kind: "exec",
+          createdAtMs: 1_000,
+          expiresAtMs: Date.now() + 60_000,
+          request: { command: "pnpm test" },
+        } as SidebarInboxApproval,
+      ],
+      attention: [authWarning],
+      mentions: [inboxMention("mention-a")],
+      scopeUpgrade: { ...scopeUpgradeEntry },
+      update: null,
+    });
+    const shell = shellFor();
+    mountPanel(panelParams(entries), shell);
+    const rows = Array.from(shell.querySelectorAll<HTMLElement>("[data-attention-kind]"));
+    expect(new Set(rows.map((row) => row.dataset.attentionKind))).toEqual(
+      new Set(["mention", "modelAuthExpired", "pendingApproval", "scopeUpgrade"]),
+    );
+    const columns = new Set<string>();
+    for (const row of rows) {
+      const marker = query(row, ".sidebar-issues-panel__icon");
+      const markerBounds = bounds(marker);
+      expect([markerBounds.width, markerBounds.height]).toEqual([28, 28]);
+      expect(style(marker).borderRadius).toBe("9999px");
+      const glyph = bounds(marker.querySelector("svg, .viewer-avatar")!);
+      expect(glyph.x + glyph.width / 2).toBeCloseTo(markerBounds.x + 14, 1);
+      expect(glyph.y + glyph.height / 2).toBeCloseTo(markerBounds.y + 14, 1);
+      columns.add(
+        `${markerBounds.left}:${bounds(query(row, ".sidebar-issues-panel__entity")).left}`,
+      );
+    }
+    expect(columns.size).toBe(1);
+  });
+
+  it("trades the arrival time for dismiss on hover without moving the row", async () => {
+    const { page } = await import("vitest/browser");
+    const shell = shellFor();
+    const timed = { ...authWarning, arrivedAtMs: Date.now() - 300_000 };
+    mountPanel(panelParams(inboxEntries([timed], [])), shell);
+    const row = part(shell, "summary");
+    const age = part(shell, "age");
+    const dismiss = part(shell, "dismiss");
+    const before = { row: bounds(row).height, title: bounds(part(shell, "entity")).width };
+    await page.elementLocator(part(shell, "header")).hover();
+    await expect.poll(() => style(dismiss).opacity).toBe("0");
+    expect(style(age).visibility).toBe("visible");
+
+    await page.elementLocator(row).hover();
+    await expect.poll(() => style(dismiss).opacity).toBe("1");
+    expect(style(age).visibility).toBe("hidden");
+    expect({ row: bounds(row).height, title: bounds(part(shell, "entity")).width }).toEqual(before);
+  });
 
   it("keeps mobile controls touch-sized and the sheet header visually continuous", () => {
     const shell = shellFor(true);
