@@ -27,6 +27,13 @@ and history stay unchanged. OpenClaw verifies that the original app-server clien
 is still current, the thread has no active turn, and Codex has unloaded the
 previous configuration before installing the current policy.
 
+An upgrade that changes plugin admission inputs revalidates ordinary persistent
+conversations before reuse. If the rebuilt app configuration and policy are
+unchanged, OpenClaw preserves the native thread and commits the new admission
+metadata only after the normal resume checks succeed. Actual permission or tool
+catalog changes still follow their existing safety checks; revalidation does not
+authorize replaying an interrupted task's tools.
+
 This refresh requires OpenClaw to be the sole lifecycle owner of the native
 conversation. A gateway-owned remote app-server satisfies this deployment contract
 when no independent client can reload the same conversation during the handoff.

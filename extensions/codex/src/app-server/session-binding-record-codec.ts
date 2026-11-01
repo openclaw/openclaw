@@ -112,6 +112,8 @@ const threadBindingSchema = z
   .object({
     threadId: z.string().refine((value) => Boolean(value.trim())),
     clientId: optionalStringSchema,
+    // Unknown journal versions remain opaque and ineligible across unrelated writes.
+    dynamicToolHandoff: z.unknown().optional(),
     // Exact native acceptance, not a replay checkpoint. Settling survives a host restart.
     turnRecovery: z
       .object({
