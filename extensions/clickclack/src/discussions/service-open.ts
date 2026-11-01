@@ -39,6 +39,7 @@ import {
   clearClickClackDiscussionChannelRevoked,
   markClickClackDiscussionChannelIdentityRevoked,
 } from "./revoked-channel-store.js";
+import { prepareDiscussionSessionEntry } from "./session-authority.js";
 
 const CHANNEL_NAME_MUTATION_ATTEMPTS = 4;
 
@@ -271,20 +272,30 @@ export async function openClickClackDiscussionBinding(
     config.session?.mainKey,
     label,
   );
-  const assertCurrentAuthority = () => {
-    const currentEntry = runtime.agent.session.getSessionEntry({
-      sessionKey,
-      readConsistency: "latest",
-    });
-    if (
-      // SAFETY: Runtime config has passed the registered ClickClack schema.
-      !isDiscussionAccountCurrent(runtime.config.current() as CoreConfig, account) ||
-      !currentEntry?.sessionId ||
-      currentEntry.archivedAt !== undefined
-    ) {
-      throw new Error("ClickClack discussion authority changed while opening the channel");
+  const withCurrentAuthority = async <T>(
+    operation: (assertCurrent: () => NonNullable<typeof entry>) => Promise<T>,
+  ): Promise<T> => {
+    // Opening follows resets during HTTP; retain one incarnation only for each effect or commit.
+    const session = await prepareDiscussionSessionEntry(runtime, sessionKey);
+    try {
+      const assertCurrentAuthority = () => {
+        session.source();
+        const currentEntry = session.entry;
+        if (
+          // SAFETY: Runtime config has passed the registered ClickClack schema.
+          !isDiscussionAccountCurrent(runtime.config.current() as CoreConfig, account) ||
+          !currentEntry?.sessionId ||
+          currentEntry.archivedAt !== undefined
+        ) {
+          throw new Error("ClickClack discussion authority changed while opening the channel");
+        }
+        return currentEntry;
+      };
+      assertCurrentAuthority();
+      return await operation(assertCurrentAuthority);
+    } finally {
+      session.release();
     }
-    return currentEntry;
   };
   return await params.withChannelMutationLock(async () => {
     await params.ensureBindingCapacity(sessionKey);
@@ -331,7 +342,7 @@ export async function openClickClackDiscussionBinding(
         channels,
         ownChannelId: adopted?.id,
       });
-      managedFields = {
+      const fields: NonNullable<typeof managedFields> = {
         name,
         external_managed: true,
         external_ref: externalRef,
@@ -339,6 +350,7 @@ export async function openClickClackDiscussionBinding(
         sidebar_section: section,
         display_title: displayTitle,
       };
+      managedFields = fields;
       await recordPendingDiscussionOpen({
         runtime,
         sessionKey,
@@ -353,14 +365,15 @@ export async function openClickClackDiscussionBinding(
         },
       });
       await params.ensureTimer();
-      assertCurrentAuthority();
       try {
         if (adopted) {
-          await revokeChannel(adopted.id);
-          assertCurrentAuthority();
-          resolved = await client.updateChannel(adopted.id, managedFields);
+          const channelId = adopted.id;
+          await withCurrentAuthority(() => revokeChannel(channelId));
+          resolved = await withCurrentAuthority(() => client.updateChannel(channelId, fields));
         } else {
-          resolved = await client.createChannel(workspace.id, { ...managedFields, kind: "public" });
+          resolved = await withCurrentAuthority(() =>
+            client.createChannel(workspace.id, { ...fields, kind: "public" }),
+          );
           await revokeChannel(resolved.id);
         }
         break;
@@ -383,8 +396,7 @@ export async function openClickClackDiscussionBinding(
           if (recovered) {
             adopted = recovered;
             await revokeChannel(recovered.id);
-            assertCurrentAuthority();
-            resolved = await client.updateChannel(recovered.id, managedFields);
+            resolved = await withCurrentAuthority(() => client.updateChannel(recovered.id, fields));
             break;
           }
           if (definitiveNoCreate) {
@@ -458,13 +470,15 @@ export async function openClickClackDiscussionBinding(
       ...(channel.display_title !== undefined ? { displayTitle: channel.display_title } : {}),
     };
     try {
-      nextBinding.sessionId = assertCurrentAuthority().sessionId;
-      const applied = await store.setIfCurrent(sessionKey, undefined, nextBinding, {
-        assertCurrent: () => {
-          if (assertCurrentAuthority().sessionId !== nextBinding.sessionId) {
-            throw new Error("ClickClack discussion session changed before binding committed");
-          }
-        },
+      const applied = await withCurrentAuthority(async (assertCurrentAuthority) => {
+        nextBinding.sessionId = assertCurrentAuthority().sessionId;
+        return await store.setIfCurrent(sessionKey, undefined, nextBinding, {
+          assertCurrent: () => {
+            if (assertCurrentAuthority().sessionId !== nextBinding.sessionId) {
+              throw new Error("ClickClack discussion session changed before binding committed");
+            }
+          },
+        });
       });
       if (!applied) {
         await clearPendingDiscussionOpen(generationScope);
