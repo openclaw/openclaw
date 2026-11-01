@@ -69,25 +69,31 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 - [190455](https://github.com/openclaw/openclaw/pull/190455): Catch the actual credentialed browser rejection instead of fabricating an Error on fulfillment. Actual open-dispatch rejection-to-result fault passes the old case and fails the repaired Error assertion; temporary owner/test bytes restored. Untouched baseline, candidate and published final head pass115 cases/two suites; focused checks, full-range fresh review and47 CI checks pass. All60 physical declarations and every target/URL/assertion/fixture remain; one fewer test line, production unchanged.
 
+- [190492](https://github.com/openclaw/openclaw/pull/190492): Remove five unused search-manager methods and close-all fixture/export/reset; independent zero-access accounting passes both cases. Both complete test bodies remain byte-identical. Dropped-code and bypassed-normalization owner faults each fail their retained keeper; owner bytes restored. Exact one-row mock allowance shrink and documented isolation repair the reproduced guard failure. Focused checks, full-range fresh review, final-head2 cases and52 CI checks pass. Both unused-file phases and script exports pass; dependency/production/full-tree export scans reproduce the same three worker-retention schemas on untouched base, recorded as inherited local failures. Eight fewer test lines and one obsolete baseline row; production unchanged.
+
 ## Current qualification
 
-Pinned main `60c2748f4927`: obsolete Memory Core search-manager fixtures removed.
-Five fake-manager methods and the unused close-all mock/export/reset are retired;
-the successful acquisition identity, both declarations/cases and every assertion
-remain. Production and protected database-worker discovery are unchanged; eight
-fewer test lines, plus one obsolete mock-export allowance removed. Complete selected test, owner, runtime barrels/close APIs, lazy
-loading and relevant fixture/deletion history inspected; source/guide parity verified.
-Untouched baseline and candidate pass both cases/one suite. Temporary throwing
-getters/close-all mock plus an independent afterEach counter prove zero accesses,
-even if a poison exception were swallowed; original test bytes then restored.
-Actual missing-error-code and bypassed-normalization faults each fail one intended
-retained case while the other passes; all owner hashes restored afterward.
-All three scoped removal scans pass; both test bodies are byte-preserved.
-Focused type-aware extension lint, scoped types, format, ledger MDX and diff
-checks pass. Fresh review found a changed mock-factory fingerprint; the native
-guard reproduced it. An adjacent annotation preserves intentional index/database
-isolation and the obsolete allowance is pruned without a replacement. Guard and
-focused tests pass; fresh review and final-head proof remain pending.
+Pinned main `607220f0aed0`: remove duplicate Memory Core search fixture setup and
+an assertion implied by retained exact-prefix proof. Only the bootstrap helper's
+agent-config reconstruction and project-result length assertion are removed.
+Preserve all six physical declarations/eight cases, every input, plugin isolation,
+ranking/eligibility/cap and partial-publication contracts; production unchanged.
+Full tests, factory, acquisition/registry, orchestration/retrieval and ranking
+owners and relevant history inspected; source/guide parity verified.
+Untouched native baseline and candidate pass eight cases/two suites. Temporary
+independent assertions validate all three factory-config shapes and require the
+FTS bootstrap case to enter; successful JSON report recovered after stdout-only
+collector parsing failed, then source bytes restored. An actual active-project
+cap201 fault fails only the retained exact-prefix equality; owner bytes restored.
+All three scoped removal scans pass: exact two-line-only edit, all declarations,
+rows and keepers retained, and no production/support/export/discovery change.
+Focused type-aware lint, scoped types, format, ledger MDX and diff checks pass.
+Both unused-file phases and script exports pass. Dependency, production-export
+and full-tree-export scans report the unused `retireControlUiSessionPrState`
+Gateway export; both failing surfaces reproduce the same finding on the exact
+untouched base. Candidate bytes are restored and the local failure stays recorded.
+See [PR190553](https://github.com/openclaw/openclaw/pull/190553) for fresh-review,
+published-head verification and merge outcomes. Two fewer test lines; production0.
 
 ### Current assertion repair
 
