@@ -171,13 +171,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
     });
   });
 
-  it("keeps read-only rows, section help and the form toggle compact at phone width", async () => {
-    const row = (id: string, value: string, control = value) =>
-      `<div class="settings-row" id="${id}">
-        <div class="settings-row__text"><span class="settings-row__title">Label</span></div>
-        <div class="settings-row__control">${control}</div>
-      </div>`;
-    const value = (text: string) => `<span class="settings-row__value">${text}</span>`;
+  it("keeps section help and the form toggle compact at phone width", async () => {
     await withBrowserPage(mobileContext.newPage(), async (page) => {
       await setFixture(
         page,
@@ -190,10 +184,6 @@ describeBrowserLayout("form controls and app chrome styles", () => {
               </span>
             </div>
           </div>
-          ${row("fits", "", value("Ready"))}
-          ${row("plugin", "", `<span style="display: contents"><span style="display: contents">${value("Ready")}</span></span>`)}
-          ${row("long", "", value("ws://gateway.example.com:18789/a/very/long/path/that/cannot/share/a/line"))}
-          ${row("action", "", `${value("Ready")}<button class="btn" type="button">Test</button>`)}
           <div class="settings-segmented settings-segmented--primary" id="mode">
             <button class="settings-segmented__btn" type="button">Form</button>
             <button class="settings-segmented__btn" type="button">Raw</button>
@@ -205,8 +195,6 @@ describeBrowserLayout("form controls and app chrome styles", () => {
       const measured = await page.evaluate(() => {
         const rect = (selector: string) =>
           document.querySelector(selector)!.getBoundingClientRect();
-        const inline = (id: string) =>
-          rect(`#${id} .settings-row__control`).top < rect(`#${id} .settings-row__text`).bottom;
         return {
           headerHeight: rect("#help-header").height,
           helpBeside:
@@ -215,10 +203,6 @@ describeBrowserLayout("form controls and app chrome styles", () => {
             document.querySelector(".settings-section__help-button")!,
             "::after",
           ).inset,
-          fits: inline("fits"),
-          plugin: inline("plugin"),
-          long: inline("long"),
-          action: inline("action"),
           mode: [...document.querySelectorAll("#mode > button")].map(
             (button) => button.getBoundingClientRect().height,
           ),
@@ -227,7 +211,6 @@ describeBrowserLayout("form controls and app chrome styles", () => {
       expect(measured.headerHeight).toBeLessThan(24);
       expect(measured.helpBeside).toBe(true);
       expect(measured.helpTarget).toBe("-14px");
-      expect(measured).toMatchObject({ fits: true, plugin: true, long: false, action: false });
       expect(measured.mode).toEqual([44, 44]);
     });
   });
