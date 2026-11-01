@@ -163,7 +163,10 @@ describe("PaletteSessionDraft", () => {
     );
     const menu = expectDefined(picker.querySelector(".agent-select__menu"), "agent menu");
     const ensure = vi.mocked(context.agentIdentity.ensure);
-    const requestedIds = () => [...new Set(ensure.mock.calls.flatMap(([ids]) => ids))].toSorted();
+    const requestedIds = () =>
+      [...new Set(ensure.mock.calls.flatMap(([ids]) => ids))].toSorted((a, b) =>
+        a.localeCompare(b),
+      );
     await waitForSolid(() => expect(ensure).toHaveBeenLastCalledWith(["main"]));
 
     setting(host, "trigger")!.click();

@@ -6,6 +6,7 @@ import {
   createMemo,
   createSignal,
   createStore,
+  latest,
   lazy,
   onSettled,
   untrack,
@@ -19,7 +20,6 @@ import { nativeListener } from "../lib/solid-native-listener.ts";
 import type { OverlayPlacement } from "./overlay-anchor.ts";
 import { createOverlay } from "./overlay-lifecycle.ts";
 import type { OverlayNativeAdapter } from "./overlay-types.ts";
-import { revealInScrollRegion } from "./scroll-state.ts";
 import { PickerOptionContent, PickerTriggerContent } from "./select-picker-presentation.tsx";
 import { pickerSearchInputProps } from "./select-picker-search.ts";
 import type { PickerOption, PickerParams, PickerGroup } from "./select-picker-types.ts";
@@ -197,7 +197,9 @@ export function PickerContent<Option extends PickerOption>(props: {
       target?.focus({ preventScroll: true });
     },
   });
-  const opened = projectOwner(overlay, (owner) => owner.open, Object.is).read;
+  const acceptedOpen = projectOwner(overlay, (owner) => owner.open, Object.is).read;
+  // Native admission must paint even while an unrelated settings action is pending.
+  const opened = () => latest(acceptedOpen);
   const renderWindowSizer = createMemo(() => props.params.windowed);
   const canWindow = createMemo(
     () =>
@@ -542,13 +544,6 @@ export function PickerContent<Option extends PickerOption>(props: {
       <div
         {...menu.content()}
         onKeyDown={handleKeydown}
-        onOverlay-after-show={() => {
-          // Entry scaling can leave the first geometric reveal short of its target.
-          const target = optionElements.get(menu.highlightedValueNow() ?? "");
-          if (target && !pointerHighlight) {
-            revealInScrollRegion(list, target);
-          }
-        }}
         role={undefined}
         aria-label={undefined}
         aria-labelledby={undefined}
@@ -597,6 +592,8 @@ export function PickerContent<Option extends PickerOption>(props: {
         <div
           ref={[(element) => (list = element), scrollRef, pointerHighlightRef]}
           class="picker-select__options"
+          // A late initial highlight must not undo scrolling while navigation loads.
+          onScroll={markPointerHighlight}
           role={props.params.groupBy ? undefined : "listbox"}
           id={props.params.groupBy ? undefined : id}
           aria-label={props.params.groupBy ? undefined : props.params.label}

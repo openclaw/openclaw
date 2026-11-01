@@ -192,9 +192,12 @@ it("windows a large catalog while revealing keyboard targets and filtering searc
       onIdentityTargetsChange: () => ensure(readTargets()),
     },
   );
-  const requested = () => [...new Set(ensure.mock.calls.at(-1)?.[0] ?? [])].toSorted();
+  const requested = () =>
+    [...new Set(ensure.mock.calls.at(-1)?.[0] ?? [])].toSorted((a, b) => a.localeCompare(b));
   const visibleTargets = () =>
-    [...new Set(["agent-250", ...f.items.map((item) => item.getAttribute("value"))])].toSorted();
+    [...new Set(["agent-250", ...f.items.map((item) => item.getAttribute("value"))])].toSorted(
+      (a, b) => (a ?? "").localeCompare(b ?? ""),
+    );
   await expect.poll(requested).toEqual(["agent-250"]);
   const onSelect = vi.fn();
   f.select.onSelect = onSelect;

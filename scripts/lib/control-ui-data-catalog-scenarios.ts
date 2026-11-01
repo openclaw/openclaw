@@ -468,7 +468,8 @@ const agentFirstOpenScenario: InteractionScenario = {
       const selectedActive =
         selected &&
         (selected === document.activeElement ||
-          (document.activeElement === list &&
+          (list &&
+            document.activeElement === list &&
             list.getAttribute("aria-activedescendant") === selected.id));
       return (
         rows &&
