@@ -284,21 +284,17 @@ public enum ChatSessionSidebarModel {
             return sections
             #endif
         }
-        // Resolve Gateway ancestry before projecting roots into display sections.
-        let roots = self.tree(from: visible, identity: identity)
-        let pinnedOrder = OpenClawChatSessionListOrganizer.organize(visible.filter { $0.pinned == true })
-            .map(identity)
-        let pinned = roots.filter { $0.session.pinned == true }.sorted {
-            (pinnedOrder.firstIndex(of: identity($0.session)) ?? Int.max) <
-                (pinnedOrder.firstIndex(of: identity($1.session)) ?? Int.max)
-        }
-        let unpinned = roots.filter { $0.session.pinned != true }
+        // Explicit pin and category placement takes precedence over ancestry.
+        let pinned = self.tree(
+            from: OpenClawChatSessionListOrganizer.organize(visible.filter { $0.pinned == true }),
+            identity: identity)
+        let unpinned = visible.filter { $0.pinned != true }
         let orderedGroups = groups.sorted { lhs, rhs in
             lhs.position == rhs.position ? lhs.name < rhs.name : lhs.position < rhs.position
         }
         let groupNames = Set(orderedGroups.map(\.name))
-        let recent = unpinned.filter { node in
-            guard let category = node.session.category else { return true }
+        let recent = unpinned.filter { session in
+            guard let category = session.category else { return true }
             return !groupNames.contains(category)
         }
 
@@ -307,7 +303,7 @@ public enum ChatSessionSidebarModel {
             result.append(Section(id: "pinned", title: "Pinned", nodes: pinned))
         }
         for group in orderedGroups {
-            let nodes = unpinned.filter { $0.session.category == group.name }
+            let nodes = self.tree(from: unpinned.filter { $0.category == group.name }, identity: identity)
             if !nodes.isEmpty {
                 result.append(Section(id: "group:\(group.name)", title: group.name, nodes: nodes))
             }
@@ -316,7 +312,7 @@ public enum ChatSessionSidebarModel {
             result.append(Section(
                 id: "recent",
                 title: result.isEmpty ? nil : "Recent",
-                nodes: recent))
+                nodes: self.tree(from: recent, identity: identity)))
         }
         return result
     }

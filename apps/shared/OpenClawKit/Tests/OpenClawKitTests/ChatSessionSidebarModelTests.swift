@@ -5,22 +5,25 @@ import Testing
 
 @MainActor
 struct ChatSessionSidebarModelTests {
-    @Test func `folding preserves gateway ancestry across explicit group placement`() throws {
+    @Test func `explicit group placement wins over ancestry while folding stays within each section`() throws {
         let sessions = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: Data(#"""
         {"sessions":[
           {"key":"parent","category":"A","childSessions":["child"]},
           {"key":"child","category":"B","parentSessionKey":"parent","childSessions":["grandchild"]},
-          {"key":"grandchild","parentSessionKey":"child"}
+          {"key":"grandchild","category":"B","parentSessionKey":"child"}
         ]}
         """#.utf8)).sessions
         let sections = ChatSessionSidebarModel.sections(
             sessions: sessions, currentSessionKey: "parent", mainSessionKey: "main",
             groups: [.init(name: "A", position: 0), .init(name: "B", position: 1)], query: "")
-        let roots = sections.flatMap(\.nodes)
-        #expect(roots.map(\.id) == ["parent"])
-        #expect(ChatSessionSidebarModel.rows(roots, showsChildren: { _ in true }).map(\.depth) == [0, 1, 2])
-        #expect(ChatSessionSidebarModel.rows(roots, showsChildren: { _ in false }).map(\.id) == ["parent"])
-        #expect(roots.first?.children.first?.session.category == "B")
+        #expect(sections.map(\.id) == ["group:A", "group:B"])
+        #expect(sections[0].nodes.map(\.id) == ["parent"])
+        #expect(sections[0].nodes[0].children.isEmpty)
+        let roots = sections[1].nodes
+        #expect(roots.map(\.id) == ["child"])
+        #expect(ChatSessionSidebarModel.rows(roots, showsChildren: { _ in true }).map(\.depth) == [0, 1])
+        #expect(ChatSessionSidebarModel.rows(roots, showsChildren: { _ in false }).map(\.id) == ["child"])
+
     }
 
     private func mixedRoster() throws -> [OpenClawChatSessionEntry] {
@@ -431,7 +434,7 @@ struct ChatSessionSidebarModelTests {
         #expect(Set(sections[1].nodes.map(\.session.key)) == Set(["case", "spaces"]))
     }
 
-    @Test func `pinned descendants retain gateway parent placement`() {
+    @Test func `pinned descendants are placed independently of unpinned parents`() {
         let sections = ChatSessionSidebarModel.sections(
             sessions: [
                 self.entry(key: "parent", updatedAt: 200, childSessions: ["child"]),
@@ -440,10 +443,10 @@ struct ChatSessionSidebarModelTests {
             currentSessionKey: "parent",
             query: "")
 
-        #expect(sections.map(\.id) == ["recent"])
-        #expect(sections[0].nodes.map(\.id) == ["parent"])
-        #expect(sections[0].nodes[0].children.map(\.id) == ["child"])
-        #expect(sections[0].nodes[0].children[0].session.pinned == true)
+        #expect(sections.map(\.id) == ["pinned", "recent"])
+        #expect(sections[0].nodes.map(\.id) == ["child"])
+        #expect(sections[1].nodes.map(\.id) == ["parent"])
+        #expect(sections[1].nodes[0].children.isEmpty)
     }
 
     @Test func `hides onboarding and archived sessions, keeps the active one`() {
