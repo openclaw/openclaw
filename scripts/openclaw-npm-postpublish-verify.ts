@@ -28,8 +28,6 @@ import {
   WORKER_BUNDLE_SQLITE_STORE_PATH,
 } from "../src/shared/worker-bundle-hash.js";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
-import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
-import { bundledModuleRegions } from "./lib/bundled-module-regions.mjs";
 import { formatErrorMessage } from "./lib/error-format.mts";
 import { verifyNpmRegistrySignatures } from "./lib/npm-registry-signatures.mjs";
 import { runNpmVerifyCommand } from "./lib/npm-verify-exec.ts";
