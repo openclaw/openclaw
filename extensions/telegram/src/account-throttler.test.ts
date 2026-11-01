@@ -440,7 +440,10 @@ it("stops retrying a final reply five minutes after it started, counting slow 42
   vi.useFakeTimers();
   const { api, sent } = floodApi(
     "flood-slow",
-    () => new Promise<Response>((resolve) => setTimeout(() => resolve(flood(8)), 28_000)),
+    () =>
+      new Promise<Response>((resolve) => {
+        setTimeout(() => resolve(flood(8)), 28_000);
+      }),
   );
   let failure: unknown;
   const final = api.sendMessage(-100444, "final answer").catch((error: unknown) => {
