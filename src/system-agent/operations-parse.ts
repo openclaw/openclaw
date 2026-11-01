@@ -92,7 +92,7 @@ const CHANNEL_INFO_RE =
 const OPEN_CHANNEL_SETUP_RE = /^open\s+channel\s+wizard(?:\s+for\s+(?<channel>[a-z0-9_-]+))?$/i;
 
 const NO_MATCH_MESSAGE =
-  "I can run doctor/status/health, check or restart Gateway, configure gateway settings, list agents/models, configure skills or web search, import memory, set default model, connect channels (`connect telegram`), show `channel info <channel>`, open the setup wizard, show audit, or switch to your agent TUI.";
+  "I can run doctor/status/health, check or restart Gateway, configure gateway settings, list agents/models, show usage cost, configure skills or web search, import memory, set default model, connect channels (`connect telegram`), show `channel info <channel>`, open the setup wizard, show audit, or switch to your agent TUI.";
 
 const SIMPLE_COMMANDS: ReadonlyArray<readonly [readonly string[] | RegExp, SystemAgentOperation]> =
   [
@@ -100,6 +100,7 @@ const SIMPLE_COMMANDS: ReadonlyArray<readonly [readonly string[] | RegExp, Syste
     [["audit", "audit log", "show audit"], { kind: "audit" }],
     [["status"], { kind: "status" }],
     [["health"], { kind: "health" }],
+    [["usage", "cost", "cost usage", "usage cost"], { kind: "usage" }],
     [["doctor"], { kind: "doctor" }],
     [["doctor fix", "doctor repair"], { kind: "doctor-fix" }],
     [["config validate", "validate config"], { kind: "config-validate" }],

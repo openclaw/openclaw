@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
       return { applied: false };
     },
   ),
+  loadCostUsageSummary: vi.fn(),
 }));
 const artifact = { action: "plugin_activate_artifact", path: "/tmp/authored-plugin.tgz" };
 
@@ -29,6 +30,11 @@ vi.mock("../../system-agent/plugin-artifact.js", () => ({
 vi.mock("../../system-agent/operations.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../system-agent/operations.js")>()),
   executeSystemAgentOperation: mocks.executeSystemAgentOperation,
+}));
+
+// mock-isolation: Fixture cost loader output drives real tool→executor rendering without loading the real usage cache.
+vi.mock("../../infra/session-cost-usage.js", () => ({
+  loadCostUsageSummary: mocks.loadCostUsageSummary,
 }));
 
 afterEach(() => {
@@ -101,6 +107,48 @@ describe("openclaw tool", () => {
     ).properties.action.enum;
     expect(actionEnum).toContain("health");
     expect(tool.description).toMatch(/Read now:.*health/);
+  });
+
+  it("registers usage as a read-only action and formats the real executor output", async () => {
+    const realExecutor = await vi.importActual<typeof import("../../system-agent/operations.js")>(
+      "../../system-agent/operations.js",
+    );
+    mocks.executeSystemAgentOperation.mockImplementationOnce(
+      realExecutor.executeSystemAgentOperation as unknown as typeof mocks.executeSystemAgentOperation,
+    );
+    mocks.loadCostUsageSummary.mockResolvedValue({
+      updatedAt: 0,
+      days: 30,
+      daily: [],
+      totals: {
+        input: 1_000,
+        output: 500,
+        cacheRead: 200,
+        cacheWrite: 50,
+        totalTokens: 1_750,
+        totalCost: 0.1234,
+        inputCost: 0.01,
+        outputCost: 0.02,
+        cacheReadCost: 0.001,
+        cacheWriteCost: 0.002,
+        missingCostEntries: 0,
+      },
+    });
+    const tool = createSystemAgentTool({ surface: "cli" });
+    const result = await tool.execute("t-usage", { action: "usage" });
+    const text = toolText(result);
+    expect(text).toContain("Usage (last 30 days");
+    expect(text).toContain("Tokens: 1,750");
+    expect(text).toContain("Cost: $0.1234 (session-derived estimate");
+    expect(mocks.loadCostUsageSummary).toHaveBeenCalled();
+
+    const actionEnum = (
+      tool.parameters as {
+        properties: { action: { enum: string[] } };
+      }
+    ).properties.action.enum;
+    expect(actionEnum).toContain("usage");
+    expect(tool.description).toMatch(/Read now:.*usage/);
   });
 
   it("routes action:overview through the canonical overview executor", async () => {
