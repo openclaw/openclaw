@@ -2,18 +2,14 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
-import { extractTextCached } from "../../lib/chat/message-extract.ts";
-import { removePairingQrContent } from "../../lib/chat/pairing-qr.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { uiConversationMatches } from "../../lib/sessions/session-key.ts";
-import { resolveCappedMessageId } from "./chat-message-recovery.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import type { SidebarFullMessageLoader } from "./components/chat-sidebar-content-types.ts";
 import type { SidebarRegionParams } from "./components/chat-sidebar-region-types.ts";
-import { createChatDisplayFacts, readChatSessionSnapshot } from "./session-message-cache.ts";
 import { closeSlot, fitSidebarLayout, openSlot, type SidebarLayout } from "./sidebar-layout.ts";
 
 const DETAIL_FULL_MESSAGE_MAX_CHARS = 500_000;
@@ -116,15 +112,19 @@ export function createSidebarFullMessageLoader(
       scope.lifecycleRevision !== undefined;
     const key = JSON.stringify([scope.sessionKey, scope.agentId, request.messageId, maxChars]);
     const cached = cacheable ? cache.messages.get(key) : undefined;
-    const result =
-      cached ??
-      (await client.request<Awaited<ReturnType<SidebarFullMessageLoader>>>("chat.message.get", {
+    if (cached) {
+      return cached;
+    }
+    const result = await client.request<Awaited<ReturnType<SidebarFullMessageLoader>>>(
+      "chat.message.get",
+      {
         sessionKey: request.sessionKey,
         ...(request.agentId ? { agentId: request.agentId } : {}),
         ...(sessionId ? { sessionId } : {}),
         messageId: request.messageId,
         maxChars,
-      }));
+      },
+    );
     if (
       !state.connected ||
       state.client !== client ||
@@ -142,33 +142,10 @@ export function createSidebarFullMessageLoader(
       !(message.role === "assistant" && message.stopReason === "error")
     ) {
       // Imported content and retry-hidden errors can change without a session lifecycle change.
-      if (!cached) {
-        if (cache.messages.size >= 16) {
-          cache.messages.delete(cache.messages.keys().next().value!);
-        }
-        cache.messages.set(key, result);
+      if (cache.messages.size >= 16) {
+        cache.messages.delete(cache.messages.keys().next().value!);
       }
-      const target = { sessionKey: scope.sessionKey, agentId: scope.agentId };
-      const source = readChatSessionSnapshot(
-        state.chatMessagesBySession,
-        state,
-        target,
-      )?.messages.find(
-        (entry) =>
-          asOptionalRecord(entry)?.role === "assistant" &&
-          resolveCappedMessageId(entry, "assistant") === request.messageId,
-      );
-      if (source) {
-        // Recovery is the displayed row; keep it with that row's disposable snapshot.
-        createChatDisplayFacts(state.chatMessagesBySession, state, target)
-          .forRow(request.messageId)
-          ?.write({
-            recoveredMessage: {
-              source: extractTextCached(source) ?? "",
-              message: removePairingQrContent(message),
-            },
-          });
-      }
+      cache.messages.set(key, result);
     }
     return result;
   };
