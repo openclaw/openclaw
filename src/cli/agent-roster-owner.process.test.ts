@@ -111,8 +111,8 @@ it("completes offline onboarding and releases ownership for Gateway startup", as
 it.each(["fresh", "persisted-session", "detach-retiring", "retiring", "missing-journal"] as const)(
   "recovers only an existing preserve-store detach (%s)",
   async (phase) => {
-    const root = roots.make("openclaw-offline-detach-");
-    const offline = createCliProcessFixture(root, stateOwnerEnv(root));
+    const detachRoot = roots.make("openclaw-offline-detach-");
+    const offline = createCliProcessFixture(detachRoot, stateOwnerEnv(detachRoot));
     const agentDir = path.join(offline.env.OPENCLAW_STATE_DIR, "agents/traveler/agent");
     const workspace = path.join(offline.env.HOME, "traveler-workspace");
     const before = {
