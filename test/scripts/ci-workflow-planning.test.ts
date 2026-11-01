@@ -13401,10 +13401,7 @@ describe("shared test-source check execution", () => {
     ["src/shared.test-support.ts", "src/shared.test.ts"],
     ["packages/example/src/shared.test-support.ts"],
     ["ui/src/shared.test-support.ts"],
-    [
-      "src/gateway/server.chat-steer-direct-command.test.ts",
-      "config/test-lines-allocations/ci-visible-completion-steering-fixture.txt",
-    ],
+    ["src/selection.test.ts", "config/test-lines-allocations/selection-proof.txt"],
   ])("keeps full guards and selects compiler consumers for %j", (...changedPaths) => {
     const graphs = ["core", "extensions-test"];
     const manifest = runManifest(changedPaths, graphs);
