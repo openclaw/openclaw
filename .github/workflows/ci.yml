@@ -3629,7 +3629,7 @@ jobs:
       - *linux_node_checkout_step
       - name: Initialize RunsOn
         if: matrix.runner == 'runson-c8i-8xlarge' && runner.environment == 'self-hosted'
-        uses: runs-on/action@17b59092eb37ebfdbb034460892887c09100eaa3 # v2.5.0
+        uses: runs-on/action@284bff869d4a825f778ac7c38e50f1e31ef198fd # v2.6.0
 
       - name: Record RunsOn allocation
         if: matrix.runner == 'runson-c8i-8xlarge' && runner.environment == 'self-hosted'
@@ -4854,7 +4854,7 @@ jobs:
         run: *owned_checkout_run
 
       - name: Setup Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.14.8"
 
@@ -6144,7 +6144,7 @@ jobs:
       - *platform_checkout_step
 
       - name: Setup Ruby
-        uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8 # v1.331.0
+        uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
         with:
           ruby-version: "4.0.7"
           bundler: "4.0.23"
