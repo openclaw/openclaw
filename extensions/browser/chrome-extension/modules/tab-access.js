@@ -589,6 +589,19 @@ export function createTabAccessPolicy({ getGroupColor }) {
     };
   }
 
+  async function requireInputReceipt(tabId, epoch) {
+    const proof = provenEpochs.get(epoch);
+    if (proof?.tabId !== tabId) {
+      throw new Error(`tab ${tabId} input receipt has no admitted access`);
+    }
+    // The input has already reached Chrome. Its empty receipt depends on the
+    // original sharing authority, not the document that the input may replace.
+    // Preserve that authority and its proven group; never capture a new epoch.
+    const receiptEpoch = { ...epoch, documentRevision: undefined };
+    provenEpochs.set(receiptEpoch, proof);
+    return requireTab(tabId, receiptEpoch);
+  }
+
   async function requireTab(tabId, epoch = capture(tabId), afterNavigation = false) {
     const state = await inspectTab(tabId, epoch);
     if (state.accessible) {
@@ -742,6 +755,7 @@ export function createTabAccessPolicy({ getGroupColor }) {
     addTabToGroup,
     inspectTab,
     requireTab,
+    requireInputReceipt,
     listAccessibleTabs,
     canPublishTab: (tabId) => !createdTabs.has(tabId) || createdTabs.get(tabId).handedOff,
     pause,
