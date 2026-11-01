@@ -16,6 +16,7 @@ import {
   availableLinkPreviewReaders,
 } from "../../app/link-reader-routing.ts";
 import { nativeGatewaysCapability } from "../../app/native-gateways.runtime.ts";
+import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { isChatControlCommand } from "../../lib/chat/commands.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
@@ -403,7 +404,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
   }
 
   return (
-    <Show when={ready()}>
+    <Show when={ready()} fallback={<LoadingState route composer={runtime.ownsRouteComposer} />}>
       <MountedPane />
     </Show>
   );

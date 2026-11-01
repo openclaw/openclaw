@@ -3,6 +3,7 @@
   "version": "2026.10.9",
   "openclaw": {
     "updateAdmissionProtocol": 1,
+    "updatePreflightProtocol": 1,
     "databaseEngines": [
       "sqlite",
       "postgres"
@@ -15,7 +16,7 @@
       "team-reports"
     ],
     "schemaVersions": {
-      "state": 38,
+      "state": 39,
       "agent": 39
     }
   },
