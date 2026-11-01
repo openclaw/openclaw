@@ -117,6 +117,42 @@ describe("applyMemoryWikiMutation", () => {
     await expect(read(target)).resolves.toBe(original);
   });
 
+  it("keeps a curated synthesis status when a refresh omits it (#190476)", async () => {
+    const { config, read } = await createVault();
+    const target = "syntheses/alpha-synthesis.md";
+
+    await mutate(config, { op: "create_synthesis", ...synthesisInput });
+    expect(parseWikiMarkdown(await read(target)).frontmatter.status).toBe("active");
+
+    await mutate(config, {
+      op: "update_metadata",
+      lookup: "synthesis.alpha-synthesis",
+      status: "review",
+      confidence: "0.4",
+    });
+    expect(parseWikiMarkdown(await read(target)).frontmatter).toMatchObject({
+      status: "review",
+      confidence: 0.4,
+    });
+
+    await mutate(config, {
+      op: "create_synthesis",
+      ...synthesisInput,
+      body: "Summary, refreshed.",
+    });
+    const refreshed = parseWikiMarkdown(await read(target));
+    expect(refreshed.frontmatter).toMatchObject({ status: "review", confidence: 0.4 });
+    expect(refreshed.body).toContain("Summary, refreshed.");
+
+    await mutate(config, {
+      op: "create_synthesis",
+      ...synthesisInput,
+      body: "Summary, reviewed.",
+      status: "stale",
+    });
+    expect(parseWikiMarkdown(await read(target)).frontmatter.status).toBe("stale");
+  });
+
   it("preserves disjoint metadata updates from concurrent agent turns", async () => {
     const { config, page, read } = await createVault();
     const target = "entities/shared.md";

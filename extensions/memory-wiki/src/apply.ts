@@ -231,7 +231,10 @@ async function applyCreateSynthesisMutation(params: {
       ...(params.mutation.confidence !== undefined
         ? { confidence: params.mutation.confidence }
         : {}),
-      status: params.mutation.status?.trim() || "active",
+      status:
+        params.mutation.status?.trim() ||
+        (typeof parsed.frontmatter.status === "string" && parsed.frontmatter.status.trim()) ||
+        "active",
       updatedAt: new Date().toISOString(),
     },
     body: buildSynthesisBody({
