@@ -100,6 +100,81 @@ describe("runMessageAction core send routing", () => {
     });
   });
 
+  it("denies a same-provider cross-conversation send by default", async () => {
+    const sendText = registerSlackTextPlugin();
+    await expect(
+      runMessageAction({
+        cfg: slackConfig,
+        action: "send",
+        params: {
+          channel: "slack",
+          target: "channel:C999",
+          message: "unsolicited cross-chat probe",
+        },
+        toolContext: {
+          currentChannelProvider: "slack",
+          currentChannelId: "channel:C123",
+        },
+        dryRun: false,
+      }),
+    ).rejects.toMatchObject({
+      reasonCode: "message_cross_context_denied",
+      policyRef: "message-cross-context:target",
+    });
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it("allows a same-provider cross-conversation send when explicitly opted in", async () => {
+    const sendText = registerSlackTextPlugin();
+    const result = await runMessageAction({
+      cfg: {
+        ...slackConfig,
+        tools: { message: { crossContext: { allowWithinProvider: true } } },
+      } as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "slack",
+        target: "channel:C999",
+        message: "opted-in cross-chat probe",
+      },
+      toolContext: {
+        currentChannelProvider: "slack",
+        currentChannelId: "channel:C123",
+      },
+      dryRun: false,
+    });
+    expect(result.kind).toBe("send");
+    expect(sendText).toHaveBeenCalledOnce();
+    expect(mockFirstRecordArg(sendText, "send text")).toMatchObject({
+      to: "channel:C999",
+      text: "opted-in cross-chat probe",
+    });
+  });
+
+  it("keeps allowing same-conversation sends by default", async () => {
+    const sendText = registerSlackTextPlugin();
+    const result = await runMessageAction({
+      cfg: slackConfig,
+      action: "send",
+      params: {
+        channel: "slack",
+        target: "channel:C123",
+        message: "same-chat probe",
+      },
+      toolContext: {
+        currentChannelProvider: "slack",
+        currentChannelId: "channel:C123",
+      },
+      dryRun: false,
+    });
+    expect(result.kind).toBe("send");
+    expect(sendText).toHaveBeenCalledOnce();
+    expect(mockFirstRecordArg(sendText, "send text")).toMatchObject({
+      to: "channel:C123",
+      text: "same-chat probe",
+    });
+  });
+
   it("accepts Telegram numeric forum topic targets through plugin-owned grammar", async () => {
     setActivePluginRegistry(
       createTestRegistry([
