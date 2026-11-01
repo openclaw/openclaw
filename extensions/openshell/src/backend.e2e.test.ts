@@ -509,9 +509,14 @@ it
       expect(verifyResult.stdout.replace(/\r?\n$/, "")).toContain("Host ");
 
       const policyRequest = `curl --fail --silent --show-error --max-time 15 "http://host.openshell.internal:${hostPolicyServer.port}/policy-test"`;
+      const allowedGetResult = await exec(allowBackend, policyRequest);
+      expect(allowedGetResult.code).toBe(0);
+      expect(allowedGetResult.stdout).toContain('"message":"hello-from-host"');
+
+      // v0.1.3 rejects unauthorized binaries at TCP admission, before any HTTP response.
       const blockedGetResult = await exec(backend, policyRequest, { allowFailure: true });
-      expect(blockedGetResult.code).not.toBe(0);
-      expect(`${blockedGetResult.stdout}\n${blockedGetResult.stderr}`).toMatch(/403|deny/i);
+      expect(blockedGetResult.code).toBe(7);
+      expect(blockedGetResult.stdout).not.toContain('"message":"hello-from-host"');
 
       const mirrorExecResult = await exec(
         mirrorBackend,
@@ -563,10 +568,6 @@ it
       });
       await expectFile(mirrorWorkspaceDir, "nested/mirror-note.txt", "mirror-write\n");
       await expectExec(mirrorBackend, "cat nested/mirror-note.txt", "mirror-write\n");
-
-      const allowedGetResult = await exec(allowBackend, policyRequest);
-      expect(allowedGetResult.code).toBe(0);
-      expect(allowedGetResult.stdout).toContain('"message":"hello-from-host"');
 
       const overlappingExec = await prepareExec(
         mirrorBackend,
