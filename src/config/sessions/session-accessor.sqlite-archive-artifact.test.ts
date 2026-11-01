@@ -78,4 +78,27 @@ describe("encoded transcript archive publication", () => {
     expect(fs.readFileSync(collisionPath)).toEqual(priorBytes);
     expect(fs.readdirSync(input.archiveDirectory)).toEqual([path.basename(collisionPath)]);
   });
+
+  it("keeps an archive created while a refused hard link is being published", () => {
+    const input = archiveInput();
+    const archivePath = path.join(input.archiveDirectory, input.archiveName);
+    const priorBytes = Buffer.from("concurrent archive bytes");
+    const originalRename = fs.renameSync;
+    const originalCopy = fs.copyFileSync;
+    vi.spyOn(fs, "linkSync").mockImplementation(() => {
+      throw Object.assign(new Error("EACCES: permission denied, link"), { code: "EACCES" });
+    });
+    vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
+      fs.writeFileSync(destination, priorBytes);
+      return originalRename(source, destination);
+    });
+    vi.spyOn(fs, "copyFileSync").mockImplementation((source, destination, mode) => {
+      fs.writeFileSync(destination, priorBytes);
+      return originalCopy(source, destination, mode);
+    });
+
+    expect(() => publishEncodedSessionTranscriptArchive(input)).toThrow(/verification failed/);
+    expect(fs.readFileSync(archivePath)).toEqual(priorBytes);
+    expect(fs.readdirSync(input.archiveDirectory)).toEqual([input.archiveName]);
+  });
 });

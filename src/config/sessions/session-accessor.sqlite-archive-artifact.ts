@@ -215,12 +215,24 @@ export function publishEncodedSessionTranscriptArchive(params: {
   try {
     fs.linkSync(tempPath, archivePath);
   } catch (error) {
-    const hardLinkDenied = isHardlinkFallbackError(error);
-    if (hardLinkDenied && !fs.existsSync(archivePath)) {
-      // Staging is already in this directory. Android app storage rejects link(2)
-      // after that write; rename publishes the same file without a second copy.
-      fs.renameSync(tempPath, archivePath);
-    } else if (!hasErrnoCode(error, "EEXIST") && !hardLinkDenied) {
+    if (isHardlinkFallbackError(error)) {
+      // link(2) publishes the fsynced staging inode and fails if the name exists.
+      // rename(2) replaces an archive created after the existence check, so a
+      // refused hard link copies exclusively and leaves EEXIST for the hash check.
+      try {
+        fs.copyFileSync(tempPath, archivePath, fs.constants.COPYFILE_EXCL);
+        const published = fs.openSync(archivePath, "r+");
+        try {
+          fs.fsyncSync(published);
+        } finally {
+          fs.closeSync(published);
+        }
+      } catch (copyError) {
+        if (!hasErrnoCode(copyError, "EEXIST")) {
+          throw copyError;
+        }
+      }
+    } else if (!hasErrnoCode(error, "EEXIST")) {
       throw error;
     }
   } finally {
