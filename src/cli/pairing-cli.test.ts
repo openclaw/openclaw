@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
+import { formatCliFailureLines } from "./failure-output.js";
 import type { runWithLocalStateOwner } from "./local-state-owner.js";
 import { registerPairingCli } from "./pairing-cli.js";
 
@@ -154,6 +155,22 @@ it("redirects to openclaw devices when no pairing channels are configured", asyn
   await expect(listing).rejects.toThrow("openclaw devices");
   await expect(listing).rejects.not.toThrow(/expected one of: \)|\(\)/);
   expect(listChannelPairingRequests).not.toHaveBeenCalled();
+});
+
+it("shows the devices redirect in human failure output, not a generic failure", async () => {
+  listPairingChannels.mockReturnValueOnce([]);
+
+  const error = await runPairing("list").catch((caught: unknown) => caught);
+  const lines = formatCliFailureLines({
+    title: "The CLI command failed.",
+    error,
+    argv: ["node", "openclaw", "pairing", "list"],
+    env: {},
+  }).join("\n");
+
+  expect(lines).toContain("No chat DM pairing channels are configured.");
+  expect(lines).toContain("openclaw devices approve");
+  expect(lines).not.toContain("The CLI command failed.");
 });
 
 it("lists supported channels when one is required but omitted", async () => {
