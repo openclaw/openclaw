@@ -71,47 +71,25 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 - [190492](https://github.com/openclaw/openclaw/pull/190492): Remove five unused search-manager methods and close-all fixture/export/reset; independent zero-access accounting passes both cases. Both complete test bodies remain byte-identical. Dropped-code and bypassed-normalization owner faults each fail their retained keeper; owner bytes restored. Exact one-row mock allowance shrink and documented isolation repair the reproduced guard failure. Focused checks, full-range fresh review, final-head2 cases and52 CI checks pass. Both unused-file phases and script exports pass; dependency/production/full-tree export scans reproduce the same three worker-retention schemas on untouched base, recorded as inherited local failures. Eight fewer test lines and one obsolete baseline row; production unchanged.
 
+- [190553](https://github.com/openclaw/openclaw/pull/190553): Remove duplicate search factory setup and an implied project-result length assertion. All six declarations/eight cases remain. Factory/FTS controls and actual cap201 keeper fault qualified; candidate/final eight pass. Both unused-file phases and script exports pass; dependency and production/full-tree export scans reproduce the same inherited Gateway finding on the exact base. Focused checks, fresh review and50 CI checks pass. Two fewer test lines; production unchanged.
+
+- [190581](https://github.com/openclaw/openclaw/pull/190581): Check the trimmed synthetic chat key for secret echoes. Actual pending-response fault passes the old padded check and fails the strengthened assertion; owner byte-restored. All20 declarations/21 cases remain and baseline/candidate/final pass. Focused checks, full-range fresh review and54 CI checks pass; neutral CodeQL summary concerns unselected configurations. Zero net test LOC; production unchanged.
+
 ## Current qualification
 
-Pinned main `607220f0aed0`: remove duplicate Memory Core search fixture setup and
-an assertion implied by retained exact-prefix proof. Only the bootstrap helper's
-agent-config reconstruction and project-result length assertion are removed.
-Preserve all six physical declarations/eight cases, every input, plugin isolation,
-ranking/eligibility/cap and partial-publication contracts; production unchanged.
-Full tests, factory, acquisition/registry, orchestration/retrieval and ranking
-owners and relevant history inspected; source/guide parity verified.
-Untouched native baseline and candidate pass eight cases/two suites. Temporary
-independent assertions validate all three factory-config shapes and require the
-FTS bootstrap case to enter; successful JSON report recovered after stdout-only
-collector parsing failed, then source bytes restored. An actual active-project
-cap201 fault fails only the retained exact-prefix equality; owner bytes restored.
-All three scoped removal scans pass: exact two-line-only edit, all declarations,
-rows and keepers retained, and no production/support/export/discovery change.
-Focused type-aware lint, scoped types, format, ledger MDX and diff checks pass.
-Both unused-file phases and script exports pass. Dependency, production-export
-and full-tree-export scans report the unused `retireControlUiSessionPrState`
-Gateway export; both failing surfaces reproduce the same finding on the exact
-untouched base. Candidate bytes are restored and the local failure stays recorded.
-See [PR190553](https://github.com/openclaw/openclaw/pull/190553) for fresh-review,
-published-head verification and merge outcomes. Two fewer test lines; production0.
-
-### Current assertion repair
-
-Pinned main `93925d28f0c5`: strengthen the system-agent chat-secret negative
-assertion against the trimmed synthetic key. All20 physical declarations/21 cases,
-raw-secret proposal identity, approval result and no-execution assertion remain.
-Untouched native baseline passes21; an actual pending-response-builder fault
-echoing only the trimmed key passes the old assertion and fails the strengthened
-assertion at the intended site. The producer is restored byte-for-byte and all21
-candidate cases pass. One expression changed; zero net test LOC, production0.
-Focused type-aware lint, scoped types, format, ledger MDX and whitespace checks
-pass. See [PR190581](https://github.com/openclaw/openclaw/pull/190581) for
-fresh-review, published-head verification and merge outcomes.
-
-Batch [190553](https://github.com/openclaw/openclaw/pull/190553) landed at
-`93d933e8d604`, with50 successful CI checks and no failures. Both unused-file
-phases passed; the same inherited Gateway export was independently reproduced
-on its untouched base and remains explicitly recorded as a local failure.
+Pinned main `39e08ca72b4b`: remove retired ephemeral system-event queue setup
+from the dreaming coordinator and sweep narrative suites. The current reply hook
+admits the captured dreaming token directly; completion uses the Memory Host
+journal. Remove only two enqueue blocks, two reset calls and their unused SDK
+imports. Preserve all25 physical declarations/30 cases, token/session inputs,
+live-config and report assertions, and service/task cleanup; production unchanged.
+Full selected tests, dreaming/phase/cron/narrative owners, queue and journal
+boundaries, consumed support and retirement history inspected. Source and owning
+guides remain unchanged from the prior qualification; the unrelated core test
+routing addition does not change the extension database-worker route.
+Native untouched baseline, zero-queue-access control, actual reply-hook keeper
+fault, byte restoration, candidate, all removal phases, focused checks, fresh
+review and published-head proof remain pending.
 
 ## Completed source review
 
