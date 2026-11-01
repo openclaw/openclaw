@@ -4,7 +4,8 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { hasLoadedDetailsSubagents, projectDetailsSubagents } from "../chat-details-snapshot.ts";
+import { projectDetailsSubagents } from "../chat-details-snapshot.ts";
+import { hasLoadedDetailsSubagents } from "../chat-spawned-subagent.ts";
 import {
   listSubagents,
   type ChatSubagentActivity as ChatSubagentActivityRow,

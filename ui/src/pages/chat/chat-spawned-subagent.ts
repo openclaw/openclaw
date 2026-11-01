@@ -23,6 +23,18 @@ export type SubagentRoster = {
   subagentSessionsPending?: boolean;
 };
 
+/** A child query can be hydrated before it observes its own parent. */
+export function hasLoadedDetailsSubagents(
+  details: SubagentRoster & { selectedSession?: GatewaySessionRow },
+) {
+  return (
+    details.subagentSessionsHydrated &&
+    details.subagentSessions?.some((row) =>
+      areUiSessionKeysEquivalent(row.key, details.selectedSession?.key),
+    )
+  );
+}
+
 /** What a launch row needs to show its subagent's session and open it. */
 export type SubagentRowContext = Pick<
   SubagentRoster,

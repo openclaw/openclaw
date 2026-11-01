@@ -16,7 +16,7 @@ import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { hasLoadedDetailsSubagents } from "../chat-details-snapshot.ts";
+import { hasLoadedDetailsSubagents } from "../chat-spawned-subagent.ts";
 import { projectProgressCardRuntime } from "../chat-subagent-wait.ts";
 import type { ChatDetailsSnapshot } from "../session-details-snapshot-schema.ts";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
@@ -38,20 +38,15 @@ export function ChatDetailsProgress(props: Props) {
     if (!details?.progressCard) {
       return undefined;
     }
-    const session = details.selectedSession;
+    const { progressCard: card, selectedSession: session } = details;
     return {
-      revision: details.progressCard.revision,
-      updatedAt: details.progressCard.updatedAt,
+      revision: card.revision,
+      updatedAt: card.updatedAt,
       sessionStatus: session?.status,
       startedAt: session?.startedAt,
       endedAt: session?.endedAt,
       hasActiveRun: details.runActive,
-      runtime: projectProgressCardRuntime(
-        session,
-        details,
-        details.progressCard.updatedAt,
-        details.connected,
-      ),
+      runtime: projectProgressCardRuntime(session, details, card.updatedAt, details.connected),
     };
   });
   const cached = () => {
@@ -67,11 +62,11 @@ export function ChatDetailsProgress(props: Props) {
     !props.props.progressCardInitialLoading &&
     (hasLoadedDetailsSubagents(props.props) || props.props.subagentSessionsUnavailable);
   const presentation = () => (!liveReady() && cached()) || live();
-  const receipt = createMemo(() =>
-    props.desktop && liveReady() && live() && props.props?.onDetailsSnapshot
-      ? { write: props.props.onDetailsSnapshot, progress: live()! }
-      : undefined,
-  );
+  const receipt = createMemo(() => {
+    const progress = props.desktop && liveReady() ? live() : undefined;
+    const write = progress && props.props?.onDetailsSnapshot;
+    return progress && write ? { write, progress } : undefined;
+  });
   return (
     <openclaw-chat-details-progress>
       <Show when={receipt()} keyed>
