@@ -39,7 +39,6 @@ export class DraftSuggestedCloudProfile {
       !snapshot.submitting &&
       !snapshot.pendingPlacementSessionKey &&
       !this.place.requiredPlacement &&
-      this.place.isAdmin() &&
       profile !== undefined &&
       !environmentCloudDisabledReason(this.place.modelControl, profile)
     );

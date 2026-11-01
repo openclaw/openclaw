@@ -14,6 +14,7 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createOpenClawTestState,
   withOpenClawTestState,
@@ -161,12 +162,7 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       if (!html) {
         expect(fields.rich_message).toMatchObject({
           skip_entity_detection: true,
-          blocks: [
-            {
-              type: "table",
-              caption: "Pipeline",
-            },
-          ],
+          blocks: [{ type: "table", caption: "Pipeline" }],
         });
       } else {
         expect(fields.text).toContain("Pipeline");
@@ -266,11 +262,9 @@ describe("Telegram registered adapter conformance over HTTP", () => {
             platformMessageIds: ["1001", "1002"],
             primaryPlatformMessageId: "1001",
           });
-          expect(
-            albumResult!.receipt.parts.map((part) => [part.platformMessageId, part.kind]),
-          ).toEqual([
-            ["1001", "media"],
-            ["1002", "media"],
+          expect(albumResult!.receipt.parts).toMatchObject([
+            { platformMessageId: "1001", kind: "media" },
+            { platformMessageId: "1002", kind: "media" },
           ]);
         }
         if (host || album) {
@@ -292,16 +286,7 @@ describe("Telegram registered adapter conformance over HTTP", () => {
     });
   });
 
-  type ReactionCase = [
-    entry: "adapter" | "stream",
-    text: string,
-    nested: number | string | undefined,
-    target: number | undefined,
-    mode: "off" | "all",
-    failure: "target" | "api" | undefined,
-    media: boolean,
-  ];
-  it.each<ReactionCase>([
+  it.each([
     ["adapter", "answer", "777", 777, "all", undefined, false],
     ["adapter", "", "777", 777, "all", undefined, false],
     ["adapter", "answer", "invalid", undefined, "all", "target", true],
@@ -311,7 +296,7 @@ describe("Telegram registered adapter conformance over HTTP", () => {
     ["stream", "answer", "777", 777, "all", undefined, false],
     ["stream", "", undefined, 888, "all", undefined, false],
     ["stream", "must not send", "0", undefined, "all", "target", false],
-  ])(
+  ] as const)(
     "delivers %s reaction text=%j nested=%s target=%s mode=%s failure=%s media=%s",
     async (entry, text, nested, target, mode, failure, media) => {
       if (failure === "api") {
@@ -448,11 +433,8 @@ describe("Telegram registered adapter conformance over HTTP", () => {
     let state: OpenClawTestState;
     beforeEach(async () => {
       state = await createOpenClawTestState({ layout: "state-only", prefix: "telegram-actions-" });
-      actionCfg = {
-        ...cfg,
-        channels: { telegram: { ...cfg.channels.telegram } },
-        session: { store: path.join(state.stateDir, "{agentId}", "sessions.json") },
-      };
+      actionCfg = structuredClone(cfg);
+      actionCfg.session = { store: path.join(state.stateDir, "{agentId}", "sessions.json") };
       setTelegramPluginStateRuntimeForTests();
       setActivePluginRegistry(telegramRegistry());
     });
@@ -464,36 +446,51 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       await state.cleanup();
     });
 
-    it("commits the registered action before HTTP and returns its actual reply receipt", async () => {
-      let queued: unknown;
-      const result = await action(
-        "send",
-        { to: "-1001:topic:77", message: "durable answer", quoteText: " \nquoted text  " },
-        {
-          sessionKey: "agent:main:telegram:group:-1001:topic:77",
-          reply: { replyToId: "456", source: "implicit", mode: "first" },
-          onPlatformSendDispatch: async () => {
-            expect(requests).toEqual([]);
-            queued = readQueuedDeliveryEntriesForTest(state.stateDir);
+    it.each([
+      ["requested topic", 77, false, "77"],
+      ["non-forum reply chain", undefined, false, undefined],
+      ["forum topic reply", undefined, true, "99"],
+    ] as const)(
+      "commits a registered send before HTTP and preserves its provider receipt (%s)",
+      async (_name, requestedTopic, forum, observedThread) => {
+        const to = requestedTopic ? `-1001:topic:${requestedTopic}` : "-1001";
+        fixture.responseFor = (method) =>
+          method === "sendMessage"
+            ? {
+                message_id: 102,
+                date: 1_700_000_000,
+                chat: { id: -1001, type: "supergroup", title: "Fixture group" },
+                message_thread_id: requestedTopic ?? 99,
+                ...(forum ? { is_topic_message: true } : {}),
+              }
+            : undefined;
+        let queued: unknown;
+        const result = await action(
+          "send",
+          { to, message: "durable answer", quoteText: " \nquoted text  " },
+          {
+            sessionKey: `agent:main:telegram:group:${to}`,
+            reply: { replyToId: "456", source: "implicit", mode: "first" },
+            onPlatformSendDispatch: async () => {
+              expect(requests).toEqual([]);
+              queued = readQueuedDeliveryEntriesForTest(state.stateDir);
+            },
           },
-        },
-      );
-      expect(queued).toMatchObject([{ channel: "telegram", to: "-1001:topic:77", retryCount: 0 }]);
-      expectMethods("sendMessage");
-      expectFields({
-        chat_id: "-1001",
-        message_thread_id: 77,
-        text: "durable answer",
-        reply_parameters: { message_id: 456, quote: " \nquoted text  " },
-      });
-      expect(result.details).toMatchObject({
-        ok: true,
-        messageId: "1",
-        chatId: "-1001",
-        receipt: { threadId: "77", replyToId: "456" },
-      });
-      expect(readQueuedDeliveryEntriesForTest(state.stateDir)).toEqual([]);
-    });
+        );
+        expect(queued).toMatchObject([{ channel: "telegram", to, retryCount: 0 }]);
+        expectMethods("sendMessage");
+        expectFields({
+          chat_id: "-1001",
+          text: "durable answer",
+          reply_parameters: { message_id: 456, quote: " \nquoted text  " },
+        });
+        expect(requestFields().message_thread_id).toBe(requestedTopic);
+        expect(result.details).toMatchObject({ ok: true, messageId: "102", chatId: "-1001" });
+        const receipt = asNullableRecord(asNullableRecord(result.details)?.receipt);
+        expect([receipt?.threadId, receipt?.replyToId]).toEqual([observedThread, "456"]);
+        expect(readQueuedDeliveryEntriesForTest(state.stateDir)).toEqual([]);
+      },
+    );
 
     it.each([undefined, "caller"] as const)(
       "leaves exactly one retry owner after a proven pre-dispatch failure (%s)",
@@ -602,13 +599,11 @@ describe("Telegram registered adapter conformance over HTTP", () => {
           ...dropped.blocks[0]!.buttons,
         ),
       });
-      expect(requests[2]).toEqual({
-        method: "editMessageReplyMarkup",
-        fields: {
-          chat_id: "123",
-          message_id: 1,
-          reply_markup: replyMarkup({ text: "Open", callback_data: "env|prod" }),
-        },
+      expectMethods("sendMessage", "sendVenue", "editMessageReplyMarkup");
+      expect(requestFields(2)).toEqual({
+        chat_id: "123",
+        message_id: 1,
+        reply_markup: replyMarkup({ text: "Open", callback_data: "env|prod" }),
       });
       expect(edited.details).toMatchObject({
         ok: true,

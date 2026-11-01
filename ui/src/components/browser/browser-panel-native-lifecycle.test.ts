@@ -1,9 +1,10 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { createInitializationContext } from "../../pages/chat/chat-pane.test-support.ts";
+import { createInitializationContext } from "../../pages/chat/chat-application-context.test-support.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { BROWSER_PANEL_TOGGLE_EVENT } from "../panel-toggle-contract.ts";
 import { flushBrowserResponses } from "./browser-panel-controller-test-support.ts";
 import {
   fakeNativeBrowser,
@@ -12,7 +13,7 @@ import {
   setupNativeBrowserPanelTests,
 } from "./test-helpers/native-browser.ts";
 
-const { controllerFixture, flushFrames } = setupNativeBrowserPanelTests();
+const { controllerFixture, flushFrames, setHit } = setupNativeBrowserPanelTests();
 const urlOf = (panel: Element) => panel.querySelector<HTMLInputElement>(".bp-url")?.value;
 const createPanel = () =>
   Object.assign(document.createElement("openclaw-browser-panel"), {
@@ -142,4 +143,108 @@ it.each([
   const error =
     panel?.querySelector(".bp-note--error")?.textContent ?? fixture?.controller.errorText;
   expect(error ?? null).toEqual(owner === "current" ? expect.stringContaining(message) : null);
+});
+
+it("shares geometry observers and global listeners across native stages", () => {
+  fakeNativeBrowser([nativeTab("mac-one")]);
+  const resize = vi.fn(function () {
+    return { observe() {}, unobserve() {}, disconnect() {} };
+  });
+  const intersection = vi.fn(function () {
+    return { observe() {}, unobserve() {}, disconnect() {} };
+  });
+  vi.stubGlobal("ResizeObserver", resize);
+  vi.stubGlobal("IntersectionObserver", intersection);
+  const addWindow = vi.spyOn(window, "addEventListener");
+  const addDocument = vi.spyOn(document, "addEventListener");
+  const fixtures = Array.from({ length: 20 }, () => controllerFixture());
+  flushFrames();
+  expect(resize).toHaveBeenCalledTimes(1);
+  expect(intersection).toHaveBeenCalledTimes(1);
+  expect(addWindow.mock.calls.filter(([type]) => type === "resize")).toHaveLength(1);
+  expect(
+    addWindow.mock.calls.filter(([type]) => type === "openclaw:native-browser-state"),
+  ).toHaveLength(1);
+  expect(
+    addDocument.mock.calls.filter(([type, , capture]) => type === "scroll" && capture === true),
+  ).toHaveLength(1);
+  expect(new Set(fixtures.map(({ controller }) => controller.native.presentation.scope)).size).toBe(
+    20,
+  );
+});
+
+it("repositions native stages on non-bubbling ancestor scroll", () => {
+  const native = fakeNativeBrowser([nativeTab("mac-one")]);
+  const first = controllerFixture();
+  const second = controllerFixture();
+  const scroller = document.createElement("div");
+  document.body.append(scroller);
+  scroller.append(first.host.renderRoot);
+  let bounds = new DOMRect(30, 40, 300, 200);
+  vi.spyOn(first.host.stage, "getBoundingClientRect").mockImplementation(() => bounds);
+  setHit(first.host.stage);
+  flushFrames();
+  native.postMessage.mockClear();
+  bounds = new DOMRect(30, 10, 300, 200);
+  scroller.dispatchEvent(new Event("scroll", { bubbles: false }));
+  flushFrames();
+  expect(native.messages()).toContainEqual({
+    type: "present",
+    scope: first.controller.native.presentation.scope,
+    tabId: "mac-one",
+    rect: { x: 30, y: 10, width: 300, height: 200 },
+    visible: true,
+  });
+  expect(
+    native
+      .messages()
+      .some(
+        (message) =>
+          message.type === "present" &&
+          message.scope === second.controller.native.presentation.scope &&
+          message.visible,
+      ),
+  ).toBe(false);
+});
+
+it("omits embedded toggle listeners and synchronously follows changes to embedding", async () => {
+  fakeNativeBrowser([nativeTab("mac-one")]);
+  const resize = vi.fn();
+  const intersection = vi.fn();
+  vi.stubGlobal(
+    "ResizeObserver",
+    class extends ResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        super(callback);
+        resize();
+      }
+    },
+  );
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class extends IntersectionObserver {
+      constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+        super(callback, options);
+        intersection();
+      }
+    },
+  );
+  const add = vi.spyOn(window, "addEventListener");
+  const remove = vi.spyOn(window, "removeEventListener");
+  const panels = [];
+  for (let index = 0; index < 8; index += 1) {
+    panels.push(await mountSessionPanel(""));
+  }
+  expect(resize).toHaveBeenCalledTimes(1);
+  expect(intersection).toHaveBeenCalledTimes(1);
+  expect(add.mock.calls.filter(([type]) => type === BROWSER_PANEL_TOGGLE_EVENT)).toHaveLength(0);
+  const panel = panels[0]!;
+  panel.embedded = false;
+  expect(add.mock.calls.filter(([type]) => type === BROWSER_PANEL_TOGGLE_EVENT)).toHaveLength(1);
+  window.dispatchEvent(new CustomEvent(BROWSER_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
+  expect(panel.browserPanelIsOpen()).toBe(true);
+  panel.embedded = true;
+  expect(remove.mock.calls.filter(([type]) => type === BROWSER_PANEL_TOGGLE_EVENT)).toHaveLength(1);
+  window.dispatchEvent(new CustomEvent(BROWSER_PANEL_TOGGLE_EVENT, { detail: { open: false } }));
+  expect(panel.browserPanelIsOpen()).toBe(true);
 });

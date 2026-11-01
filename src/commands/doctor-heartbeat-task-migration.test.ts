@@ -14,7 +14,7 @@ import {
   saveCronJobsStore,
   resolveCronJobsStorePathFromConfig,
 } from "../cron/store.js";
-import { cronStoreKey } from "../cron/store/key.js";
+import { resolveCronStoreKeyInDatabase } from "../cron/store/paths.js";
 import { updateCronRuntimeRow } from "../cron/store/row-codec.js";
 import type { CronStoredJob as CronJob } from "../cron/types.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -211,7 +211,12 @@ describe("heartbeat scratch task cron migration", () => {
       inbox.state.lastRunAtMs = inbox.updatedAtMs;
       inbox.state.lastRunStatus = "ok";
       runOpenClawStateWriteTransaction(
-        ({ db }) => updateCronRuntimeRow(db, cronStoreKey(fixture.storePath), inbox),
+        ({ db }) =>
+          updateCronRuntimeRow(
+            db,
+            resolveCronStoreKeyInDatabase(db, fixture.storePath, fixture.env),
+            inbox,
+          ),
         { env: fixture.env },
       );
 

@@ -166,6 +166,7 @@ export async function proveHotReloadServicePolicy({
     async () => {
       const gateway = await owner.start({
         repoRoot,
+        initializeCurrentRuntimeState: true,
         useRepoCli: true,
         command: {
           executablePath: process.execPath,

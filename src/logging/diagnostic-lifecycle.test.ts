@@ -1,6 +1,6 @@
 import { channel } from "node:diagnostics_channel";
 import { totalmem } from "node:os";
-import { afterEach, expect, it, vi, type MockInstance } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { recordCommandPoll } from "../agents/command-poll-backoff.js";
 import { detectToolCallLoop, recordToolCall } from "../agents/tool-loop-detection.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
@@ -19,6 +19,7 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { expectCallCount as expectCalls } from "../test-utils/mock-call-assertions.js";
 import * as runActivity from "./diagnostic-run-activity.js";
 import {
   getDiagnosticSessionState,
@@ -36,12 +37,6 @@ import {
 } from "./diagnostic.js";
 import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
 import { createDiagnosticMessageLifecycle } from "./message-lifecycle.js";
-
-function expectCalls(count: number, ...observers: MockInstance[]) {
-  for (const observer of observers) {
-    expect(observer).toHaveBeenCalledTimes(count);
-  }
-}
 
 function heartbeatOptions() {
   return {

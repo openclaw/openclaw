@@ -51,6 +51,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "src/**/*.{test,spec}.{js,mjs,cjs,ts,tsx,mts,cts}!",
   "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,tsx,mts,cts}!",
   "test/**/*.{test,spec}.{js,mjs,cjs,ts,tsx,mts,cts}!",
+  // The isolated live steering launcher is invoked directly by its documented command.
+  "test/helpers/run-quiet-steering-live.mts!",
   // The PR artifact Vitest suite launches this standalone Node regression by path.
   "test/scripts/pr-review-artifacts.node.mjs!",
   // The Gateway profiler tests launch these subprocess fixtures through a computed path.
@@ -76,6 +78,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "src/cli/plugins-feature-artifact.native.test-support.ts!",
   // ExecHostTransportProofTests.swift launches this isolated native client by path.
   "src/infra/exec-host.native.test-support.ts!",
+  // The authority retention test launches this isolated V8 heap proof by path.
+  "src/agents/harness/tool-authority.runtime.retention.test-support.ts!",
   // Generated handoff preload and resolver shims import this helper by URL.
   "test/helpers/managed-handoff-isolation.ts!",
   // The Windows CLI lifetime test launches this isolated probe by path.
@@ -165,8 +169,13 @@ const workspaces = Object.fromEntries(
         : {}),
       entry: [
         ...settings.entry,
-        // The presentation proof HTML loads this browser entry.
-        ...(workspace === "ui" ? ["src/test-helpers/presentation-primitives-solid.tsx!"] : []),
+        // The presentation HTML and projection benchmark builder load these browser entries.
+        ...(workspace === "ui"
+          ? [
+              "src/test-helpers/presentation-primitives-solid.tsx!",
+              "src/test-helpers/control-ui-projection-fixture.tsx!",
+            ]
+          : []),
         // Native builds load this private entry through the generator's temporary bundle.
         ...(workspace === "packages/gateway-protocol" ? ["scripts/native-codegen.ts!"] : []),
         // Compiler registries emit entry modules, including declarations
@@ -223,7 +232,13 @@ const workspaces = Object.fromEntries(
               // E2E, so nothing imports their entry files. Matched as a group:
               // a per-fixture list silently rots into a knip failure the next
               // time a scenario needs its own fixture plugin.
-              ...(workspace === "extensions/qa-lab" ? ["test-fixtures/*/index.js!"] : []),
+              ...(workspace === "extensions/qa-lab"
+                ? [
+                    "test-fixtures/*/index.js!",
+                    // The lifecycle test spawns this suite fixture as a separate Node process.
+                    "src/suite-process-lifecycle.test-support.ts!",
+                  ]
+                : []),
             ]),
       ],
       project:

@@ -5,7 +5,7 @@ import {
 import type { SessionTranscriptCorpusEntry } from "../../../packages/memory-host-sdk/src/host/session-transcript-corpus.types.js";
 import {
   decodeUsageCostRollupEnvelope,
-  type UsageCostFreshnessCheckpoint,
+  readUsageCostDeferredMetadata,
 } from "../../infra/session-cost-usage-rollup-codec.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import {
@@ -149,31 +149,8 @@ export function readSessionActorMemoryUsage(
             !headerAllowed &&
             metadataCount < budget.metadataLimit
           ) {
-            const source = envelope.checkpoint;
-            const checkpoint: UsageCostFreshnessCheckpoint =
-              source.kind === "jsonl"
-                ? {
-                    kind: source.kind,
-                    observedSize: source.observedSize,
-                    observedMtimeMs: source.observedMtimeMs,
-                    device: source.device,
-                    inode: source.inode,
-                  }
-                : {
-                    kind: source.kind,
-                    maxSeq: source.maxSeq,
-                    eventCount: source.eventCount,
-                    size: source.size,
-                    mtimeMs: source.mtimeMs,
-                  };
-            if (
-              Object.entries(checkpoint).every(
-                ([key, value]) =>
-                  key === "kind" || (typeof value === "number" && Number.isFinite(value)),
-              ) &&
-              Number.isFinite(envelope.scannedAt)
-            ) {
-              deferredRollupMetadata = { checkpoint, scannedAt: envelope.scannedAt };
+            deferredRollupMetadata = readUsageCostDeferredMetadata(envelope);
+            if (deferredRollupMetadata) {
               metadataCount += 1;
             }
           }

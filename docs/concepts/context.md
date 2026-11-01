@@ -150,7 +150,7 @@ OpenClaw pins the complete system prompt for the session. Changed sections,
 including skills, workspace memory, and temporal context, arrive as instruction
 messages after the current user turn. Existing skill and memory refresh rules
 still apply. Changing the route or selected personal profile, resetting, or
-compacting history starts a new series; ordinary turn teardown and Gateway restarts restore the saved series.
+compacting history starts a new series; internal turns continuing the same session keep the series, and ordinary turn teardown and Gateway restarts restore the saved series.
 
 ## Injected workspace files (Project Context)
 
@@ -171,6 +171,10 @@ When truncation occurs, the runtime injects a concise in-prompt notice under Pro
 The system prompt includes a compact **skills list** (name + description + location). This list has real overhead.
 
 `/context` counts the catalog included in the rendered system prompt, not every installed skill. In the embedded runtime without Code Mode, denying both `read` and `skills_read` omits the catalog and reports zero skills.
+
+Code Mode also omits the catalog when installed skill search and reading are
+available. Its report then shows zero listed skills, while the agent can still
+search eligible skills and read their complete instructions on demand.
 
 Skill instructions are _not_ included by default. The model is expected to `read` the skill's `SKILL.md` **only when needed**.
 

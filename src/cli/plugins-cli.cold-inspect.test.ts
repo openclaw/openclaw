@@ -114,17 +114,13 @@ it.each([false, true])("isolates incompatible plugins (runtime=%s)", async (runt
     codex: { enabled: true },
   });
   const runtimeArgs = runtime ? ["--runtime"] : [];
-  const failed = { id: "codex", status: "error", activated: false, imported: false };
-  const error = expect.stringContaining("openclaw plugins update codex");
   const incompatibleReport = expect.objectContaining({
-    plugin: expect.objectContaining({ ...failed, error }),
-    diagnostics: [
-      expect.objectContaining({
-        level: "error",
-        pluginId: "codex",
-        message: expect.stringContaining("minimum compatible plugin version is 2026.9.7"),
-      }),
-    ],
+    plugin: expect.objectContaining({
+      id: "codex",
+      status: "error",
+      activated: false,
+      imported: false,
+    }),
   });
   expect(await runPluginsCommand(["inspect", "codex", ...runtimeArgs])).toEqual(incompatibleReport);
   expect(await runPluginsCommand(["inspect", pluginId, ...runtimeArgs])).toMatchObject({

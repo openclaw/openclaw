@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
+import type { MockGatewayWindow } from "../test-helpers/control-ui-e2e-contract.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureComposerProof,
@@ -55,6 +56,25 @@ function installTalkGateway(
     ...options,
     methodResponses: { "talk.client.create": clientSession, ...options.methodResponses },
   });
+}
+async function completeGoogleSetup(
+  page: Page,
+  gateway: Awaited<ReturnType<typeof installTalkGateway>>,
+) {
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (window as MockGatewayWindow).openclawControlUiE2eGateway
+          ?.socketStates()
+          .some(
+            (socket) =>
+              socket.url.startsWith("wss://generativelanguage.googleapis.com/") &&
+              socket.readyState === WebSocket.OPEN,
+          ),
+      ),
+    )
+    .toBe(true);
+  await gateway.deliverLatest({ setupComplete: {} });
 }
 type TalkWindow = Window & {
   openclawTalkE2eState?: {
@@ -192,7 +212,7 @@ suite.define(() => {
       await openTalk(page);
       await page.getByRole("button", { name: "Start voice input" }).click();
       await gateway.waitForRequest("talk.client.create");
-      await gateway.deliverLatest({ setupComplete: {} });
+      await completeGoogleSetup(page, gateway);
       const stopVoice = page.getByRole("button", { name: "Stop voice input" });
       await expect.poll(() => stopVoice.isVisible()).toBe(true);
       await page.mouse.move(0, 0);

@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 273686,
-  "reason": "Route readiness: 20 interleaved pairs against the original base showed 15.8% faster Settings readiness and 8.3% less task CPU. After merging main 2f95e977, same-host builds compare 272893 to 273686 B startup gzip (+793 B); seven JS requests, one CSS request, and total CSS are unchanged. Set the baseline to the measured head.",
-  "updatedAt": "2026-10-25"
+  "startupJsGzipBytes": 90111,
+  "reason": "First-pane snapshot admission starts the scoped read and validation before application loading: 11 interleaved warm chat pairs improve first rows by a 96 ms paired median, with breadcrumb and archived footer present at first mount in all 11. Exact-base startup grows 794 B to 90111 B; complete Chat/New boot shrinks 279/200 B, with unchanged request counts and FCP/hello/LoAF within A/A. Record the measured earlier-load redistribution; keep existing growth and variance allowances.",
+  "updatedAt": "2026-10-31"
 }

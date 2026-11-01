@@ -29,53 +29,32 @@ it.each([
   expect(container.querySelector(".cmd-palette__item-title img")).toBeNull();
 });
 
-it.each<[string, string, [string, string][], string, boolean?, string[]?]>([
-  [
-    "**Bold *needle***, ~~old~~, `config` [guide](https://example.com) ![diagram](https://example.com/image.png)\n\n| A | B |\n| --- | --- |\n| one | two |",
-    "needle",
-    [
-      ["strong em mark", "needle"],
-      ["s", "old"],
-      ["code", "config"],
-    ],
-    "a, img, table, pre, p",
-    false,
-    ["guide", "diagram"],
-  ],
-  [
-    "<img src=x onerror=alert(1)> **&lt;script&gt;**",
-    "<img",
-    [
-      ["mark", "<img"],
-      ["strong", "<script>"],
-    ],
-    "img, script",
-  ],
-  ["**Literal** description", "Literal", [], "strong", true],
-])(
-  "renders safe %s descriptions",
-  (description, query, nodes, forbidden, catalog = false, contents = []) => {
-    const container = renderResult(
-      {
-        session: catalog ? undefined : item.session,
-        category: catalog ? "skills" : "messages",
-        description,
-      },
-      query,
-    );
-    const snippet = container.querySelector(".cmd-palette__item-desc")!;
-    for (const [selector, text] of nodes) {
-      expect(snippet.querySelector(selector)?.textContent).toBe(text);
-    }
-    for (const text of contents) {
-      expect(snippet.textContent).toContain(text);
-    }
-    expect(snippet.querySelector(forbidden)).toBeNull();
-    if (catalog) {
-      expect(snippet.textContent).toBe(description);
-    }
-  },
-);
+it("renders only passive inline markup in message descriptions", () => {
+  const description =
+    "<img src=x onerror=alert(1)> **Bold *needle***, ~~old~~, `config` [guide](https://example.com) ![diagram](https://example.com/image.png) **&lt;script&gt;**\n\n| A | B |\n| --- | --- |\n| one | two |";
+  const snippet = renderResult({ description }, "needle").querySelector(".cmd-palette__item-desc")!;
+  for (const [selector, text] of Object.entries({
+    "strong em mark": "needle",
+    s: "old",
+    code: "config",
+  })) {
+    expect(snippet.querySelector(selector)?.textContent).toBe(text);
+  }
+  for (const text of ["guide", "diagram", "<script>"]) {
+    expect(snippet.textContent).toContain(text);
+  }
+  expect(snippet.querySelector("a, img, script, table, pre, p")).toBeNull();
+});
+
+it("keeps catalog descriptions literal", () => {
+  const description = "**Literal** description";
+  const snippet = renderResult(
+    { session: undefined, category: "skills", description },
+    "Literal",
+  ).querySelector(".cmd-palette__item-desc")!;
+  expect(snippet.textContent).toBe(description);
+  expect(snippet.querySelector("strong")).toBeNull();
+});
 
 it.each([
   ["See ![A &amp; B](https://example.com/image.png).", "&", "See A & B."],
@@ -93,21 +72,13 @@ it.each([
 });
 
 it.each([true, false])("uses only explicit session ownership: %s", (hasOwner) => {
+  const actor = { type: "human", id: "owner", label: "Current owner" } as const;
   const container = renderResult(
     {
       session: {
         ...item.session!,
         createdActor: { type: "human", id: "creator", label: "Former owner" },
-        owner: hasOwner
-          ? {
-              actor: {
-                type: "human",
-                id: "owner",
-                label: "Current owner",
-                identity: { type: "profile", id: "owner" },
-              },
-            }
-          : undefined,
+        owner: hasOwner ? { actor } : undefined,
       },
     },
     "needle",

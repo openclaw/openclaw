@@ -12,6 +12,7 @@ import {
   runOpenClawAgentWriteAdmission,
   withOpenClawAgentDatabaseWrite,
 } from "openclaw/plugin-sdk/sqlite-runtime";
+import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   requireNativeSqliteDatabase,
   observeHostDataSql,
@@ -290,6 +291,59 @@ it("reads committed index state while another operation holds the writer FIFO", 
     }
   });
 });
+
+it.each(["read", "retirement"] as const)(
+  "keeps publication reads valid when %s starts first",
+  async (first) => {
+    const entered = createDeferred<void>();
+    const resume = createDeferred<void>();
+    const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
+    using opening = vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2");
+    opening.mockImplementation(async (...args) => {
+      const worker = await open(...args);
+      if (first === "read") {
+        const execute = worker.execute.bind(worker);
+        vi.spyOn(worker, "execute").mockImplementation(async (...executeArgs) => {
+          if (executeArgs[0].type === "index.facts") {
+            entered.resolve();
+            await resume.promise;
+          }
+          return execute(...executeArgs);
+        });
+      } else {
+        const close = worker.close.bind(worker);
+        vi.spyOn(worker, "close").mockImplementationOnce(async () => {
+          await close();
+          entered.resolve();
+          await resume.promise;
+        });
+      }
+      return worker;
+    });
+    await withPublishedIndex(async (database) => {
+      await replaceSource(database, "fts-only");
+      const actions = {
+        read: () =>
+          database.executePublication({ type: "index.facts", input: undefined }, () => {}),
+        retirement: () => database.closePublicationWorker(),
+      };
+      const started = actions[first]();
+      void started.catch(() => {});
+      let following: Promise<unknown> | undefined;
+      try {
+        await entered.promise;
+        following = actions[first === "read" ? "retirement" : "read"]();
+        void following.catch(() => {});
+        resume.resolve();
+        const results = await Promise.all([started, following]);
+        expect(results[first === "read" ? 0 : 1]).toMatchObject({ hasIndexedChunks: true });
+      } finally {
+        resume.resolve();
+        await Promise.allSettled([started, following]);
+      }
+    });
+  },
+);
 
 it("publishes committed metadata, presence, and revision facts with source mutations", async () => {
   await withPublishedIndex(async (database) => {

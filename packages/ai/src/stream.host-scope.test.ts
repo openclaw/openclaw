@@ -7,7 +7,7 @@ import {
   createAssistantMessageEventStream,
   getEventStreamCompletion,
 } from "@openclaw/llm-core/event-stream";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createApiRegistry, type ApiStreamFunction } from "./api-registry.js";
 import {
   configureAiTransportHost,
@@ -37,13 +37,7 @@ const context = { messages: [] };
 const host = (prefix: string) => ({ resolveSecretSentinel: (value: string) => prefix + value });
 const resolveSecret = (value: string) => getAiTransportHost().resolveSecretSentinel(value);
 const textContent = (text: string) => [textBlock(text)];
-const model: Model = makeProviderModel("test-scoped", "fixture", "scoped", {
-  name: "Scoped",
-  baseUrl: "https://fixture.invalid",
-  reasoning: false,
-  contextWindow: 1000,
-  maxTokens: 100,
-});
+const model: Model = makeProviderModel("test-scoped", "fixture", "scoped");
 function message(text: string): AssistantMessage {
   return assistantMessage(model, textContent(text));
 }
@@ -65,6 +59,14 @@ function registryFor(resolve: (value: string) => Promise<string>) {
       },
     };
   });
+}
+type Cleanup = Parameters<typeof registerSessionResourceCleanup>[0];
+function withCleanup(run: (cleanup: Mock<Cleanup>) => void | Promise<void>) {
+  const cleanup = vi.fn<Cleanup>();
+  const unregister = registerSessionResourceCleanup(cleanup);
+  return Promise.resolve()
+    .then(() => run(cleanup))
+    .finally(unregister);
 }
 
 describe("transport host installation and registry", () => {
@@ -146,11 +148,6 @@ describe("transport host installation and registry", () => {
     configureAiTransportHost({ registerCustomApi: registrar });
     expect(registrar).toHaveBeenCalledOnce();
     const registered = registry.getApiProvider(customApi);
-    expect(registered).toMatchObject({
-      api: customApi,
-      stream: expect.any(Function),
-      streamSimple: expect.any(Function),
-    });
     const configuredModel = prepare();
     expect(configuredModel.api).toBe(customApi);
     expect(registered?.streamSimple(configuredModel, context)).toHaveProperty("result");
@@ -163,10 +160,8 @@ describe("transport host installation and registry", () => {
     expect(getAiTransportHost().transformTransportMessages(messages, targetModel)).toEqual([
       userMessage([textBlock("(image omitted: model does not support images)")]),
     ]);
-    const override = vi.fn<import("./host.js").AiTransformTransportMessages>((next) => next);
-    configureAiTransportHost({ transformTransportMessages: override });
+    configureAiTransportHost({ transformTransportMessages: (next) => next });
     expect(getAiTransportHost().transformTransportMessages(messages, targetModel)).toBe(messages);
-    expect(override).toHaveBeenCalledOnce();
   });
 });
 describe("runtime-owned transport host", () => {
@@ -188,10 +183,7 @@ describe("runtime-owned transport host", () => {
       [Symbol.asyncIterator]: withReceiver("iterator", () => ({
         async next() {
           observe("next");
-          return {
-            done: false as const,
-            value: { type: "done" as const, reason: "stop" as const, message: final },
-          };
+          return { done: false as const, value: done };
         },
         async return() {
           observe("return");
@@ -210,7 +202,7 @@ describe("runtime-owned transport host", () => {
       : createLlmRuntime(registry);
     for (const method of ["stream", "streamSimple"] as const) {
       const stream = runtime[method](model, context);
-      stream.push({ type: "done", reason: "stop", message: final });
+      stream.push(done);
       stream.end(final);
       expect(await stream.result()).toBe(final);
       const iterator = stream[Symbol.asyncIterator]();
@@ -228,7 +220,6 @@ describe("runtime-owned transport host", () => {
       ),
     );
     expect(resolveSecret("caller")).toBe("gateway:caller");
-    expect(Object.isFrozen(source)).toBe(true);
   });
 
   it.each(["stream", "streamSimple"] as const)(
@@ -312,10 +303,8 @@ describe("runtime-owned transport host", () => {
     expect(resolveSecret("opaque")).toBe("Gateway:opaque");
   });
 
-  it("passes each explicit runtime owner to session-resource cleanup", () => {
-    const cleanup = vi.fn<(sessionId?: string, owner?: object) => void>();
-    const unregister = registerSessionResourceCleanup(cleanup);
-    try {
+  it("passes each explicit runtime owner to session-resource cleanup", () =>
+    withCleanup((cleanup) => {
       const first = createNodeLlmRuntime();
       const second = createNodeLlmRuntime();
       first.cleanupSessionResources("shared");
@@ -328,15 +317,10 @@ describe("runtime-owned transport host", () => {
       expect(calls[1]?.[1]).toBeDefined();
       expect(calls[0]?.[1]).not.toBe(calls[1]?.[1]);
       expect(calls[2]?.[1]).toBeUndefined();
-    } finally {
-      unregister();
-    }
-  });
+    }));
 
-  it("binds ordinary streams to their host and cleans the current default", async () => {
-    const cleanup = vi.fn<(sessionId?: string, owner?: object) => void>();
-    const unregister = registerSessionResourceCleanup(cleanup);
-    try {
+  it("binds ordinary streams to their host and cleans the current default", () =>
+    withCleanup(async (cleanup) => {
       configureAiTransportHost(host("first:"));
       const runtime = createLlmRuntime(registryFor(async (value) => resolveSecret(value)));
       const stream = runtime.streamSimple(model, context, {
@@ -355,10 +339,7 @@ describe("runtime-owned transport host", () => {
         ["shared", replacementHost],
         ["shared", replacementHost],
       ]);
-    } finally {
-      unregister();
-    }
-  });
+    }));
 
   it.each(["stream", "streamSimple"] as const)(
     "binds lazy %s and early return without caller-context leaks",

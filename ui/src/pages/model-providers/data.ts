@@ -435,16 +435,26 @@ export function resolveDefaultModelPresentation(
       ...modelSettingFallbacks(defaults.utilityModel),
     ].filter((value): value is string => typeof value === "string" && value.length > 0),
   );
-  const selectable: ModelPickerEntry[] = (models ?? []).filter(
-    (model) => model.available !== false || selected.has(modelCatalogRef(model)),
-  );
-  const seen = new Set(selectable.map(modelCatalogRef));
-  // An unavailable catalog cannot establish that a saved model is unavailable.
-  const availability = models === null ? {} : { available: false as const };
-  for (const ref of selected) {
-    if (seen.has(ref)) {
+  const source = models ?? [];
+  const missing = new Set(selected);
+  let filtered: ModelPickerEntry[] | undefined;
+  for (let index = 0; index < source.length; index++) {
+    const model = source[index]!;
+    if (model.available === false && !selected.has(modelCatalogRef(model))) {
+      filtered ??= source.slice(0, index);
       continue;
     }
+    if (missing.size > 0) {
+      missing.delete(modelCatalogRef(model));
+    }
+    filtered?.push(model);
+  }
+  // Preserve catalog identity through unrelated page notifications; copy only for
+  // actual filtering or saved selections absent from the published catalog.
+  const selectable: ModelPickerEntry[] = filtered ?? (missing.size > 0 ? [...source] : source);
+  // An unavailable catalog cannot establish that a saved model is unavailable.
+  const availability = models === null ? {} : { available: false as const };
+  for (const ref of missing) {
     const { model: modelRef, profile } = splitTrailingAuthProfile(ref);
     if (profile) {
       const match = (models ?? []).find((model) => modelCatalogRef(model) === modelRef);

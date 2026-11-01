@@ -109,18 +109,6 @@ export function createOpenAICompletionsToolCallDeltaNormalizer(): (
     return pendingFollowingDeltas.splice(0).map((delta) => ({ delta, toolCalls: [] }));
   };
 
-  const bufferFollowingDelta = (delta: ChatCompletionChunk.Choice.Delta): void => {
-    const nextDeltaBytes = Buffer.byteLength(JSON.stringify(delta), "utf8");
-    if (
-      pendingFollowingDeltaBytes + nextDeltaBytes > MAX_BUFFERED_LEGACY_FOLLOWING_DELTA_BYTES ||
-      pendingFollowingDeltas.length >= MAX_BUFFERED_LEGACY_FOLLOWING_DELTAS
-    ) {
-      throw new Error("Exceeded legacy tool-call content buffer limit");
-    }
-    pendingFollowingDeltaBytes += nextDeltaBytes;
-    pendingFollowingDeltas.push(delta);
-  };
-
   return (delta, finishReason) => {
     const ordinaryDelta = { ...delta };
     delete ordinaryDelta.function_call;
@@ -167,7 +155,15 @@ export function createOpenAICompletionsToolCallDeltaNormalizer(): (
       if (hadPendingLegacyCall) {
         // Keep every lane behind its provisional call; publishing text early
         // permanently reverses the assistant's original tool/content order.
-        bufferFollowingDelta(ordinaryDelta);
+        const nextDeltaBytes = Buffer.byteLength(JSON.stringify(ordinaryDelta), "utf8");
+        if (
+          pendingFollowingDeltaBytes + nextDeltaBytes > MAX_BUFFERED_LEGACY_FOLLOWING_DELTA_BYTES ||
+          pendingFollowingDeltas.length >= MAX_BUFFERED_LEGACY_FOLLOWING_DELTAS
+        ) {
+          throw new Error("Exceeded legacy tool-call content buffer limit");
+        }
+        pendingFollowingDeltaBytes += nextDeltaBytes;
+        pendingFollowingDeltas.push(ordinaryDelta);
       } else {
         leadingDeltas.push({ delta: ordinaryDelta, toolCalls: [] });
       }

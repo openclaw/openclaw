@@ -1,7 +1,6 @@
 // Loaded when a real config snapshot is available, not by the synchronous edit/outbox seam.
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { DEFAULT_SIDEBAR_ENTRIES } from "../app-navigation.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { readConfirmedPrefs, publishConfirmedPrefs } from "./server-prefs-confirmation.ts";
 import {
@@ -327,21 +326,26 @@ export function applyServerUiPrefs(
   }
   const lastSeenSnapshot = readConfirmedPrefs(sync, scope);
   const lastSeen = { ...lastSeenSnapshot };
+  const navigationKeys = SYNCED_PREF_KEYS.filter(isNavigationPref);
   if (hooks.profileId && !hooks.navigationConfirmed) {
     // Config/appearance application cannot publish a stale profile cache over a sibling read.
-    const confirmed = SYNCED_PREFS.sidebarEntries.extract(lastSeen.sidebarEntries);
-    if (confirmed !== undefined) {
-      prefs.sidebarEntries = confirmed;
+    for (const key of navigationKeys) {
+      const confirmed = SYNCED_PREFS[key].extract(lastSeen[key]);
+      if (confirmed !== undefined) {
+        Object.assign(prefs, { [key]: confirmed });
+      }
     }
   }
   if (hooks.navigationConfirmed) {
     // Local retention covers the old/unknown baseline, not a newer confirmed navigation value.
-    if (
-      isServerUiPrefReady("sidebarEntries", readiness) &&
-      Object.hasOwn(lastSeen, "sidebarEntries") &&
-      !prefValuesEqual(prefs.sidebarEntries, lastSeen.sidebarEntries)
-    ) {
-      retainedLocalKeys.delete("sidebarEntries");
+    for (const key of navigationKeys) {
+      if (
+        isServerUiPrefReady(key, readiness) &&
+        Object.hasOwn(lastSeen, key) &&
+        !prefValuesEqual(prefs[key], lastSeen[key])
+      ) {
+        retainedLocalKeys.delete(key);
+      }
     }
   }
   retainPendingAppearanceSnapshot(prefs, lastSeen, readiness.appearanceReady);
@@ -351,28 +355,31 @@ export function applyServerUiPrefs(
   const localNavigation = loadLocalNavigationPreferences(gatewayScope, hooks.profileId);
   const navigationPatch: ServerUiPrefs = {};
   // Profile navigation uses profile snapshots; profileless navigation remains browser-owned.
-  if (!hasProfile) {
-    // Retired shared-config mirrors are not authority to reset browser-owned shortcuts.
-    delete lastSeen.sidebarEntries;
-  } else if (profilePrefs === null) {
-    // Incomplete reads retain confirmed profile values, never inferred absence.
-    delete prefs.sidebarEntries;
-    if (Object.hasOwn(lastSeen, "sidebarEntries")) {
-      prefs.sidebarEntries = lastSeen.sidebarEntries;
+  for (const key of navigationKeys) {
+    if (!hasProfile) {
+      delete lastSeen[key];
+    } else if (profilePrefs === null) {
+      // Incomplete reads retain confirmed profile values, never inferred absence.
+      delete prefs[key];
+      if (Object.hasOwn(lastSeen, key)) {
+        Object.assign(prefs, { [key]: lastSeen[key] });
+      }
+    } else if (!Object.hasOwn(prefs, key)) {
+      Object.assign(prefs, { [key]: SYNCED_PREFS[key].write?.(undefined)?.[key] });
     }
-  } else if (!Object.hasOwn(prefs, "sidebarEntries")) {
-    prefs.sidebarEntries = [...DEFAULT_SIDEBAR_ENTRIES];
-  }
-  if (identityChanged) {
-    const confirmedDelta =
-      profilePrefs !== null &&
-      !retainedLocalKeys.has("sidebarEntries") &&
-      !prefValuesEqual(prefs.sidebarEntries, lastSeen.sidebarEntries);
-    navigationPatch.sidebarEntries =
-      shadowPrefs?.sidebarEntries ??
-      (localNavigation && !confirmedDelta
-        ? localNavigation.sidebarEntries
-        : (prefs.sidebarEntries ?? null));
+    if (identityChanged) {
+      const confirmedDelta =
+        profilePrefs !== null &&
+        !retainedLocalKeys.has(key) &&
+        !prefValuesEqual(prefs[key], lastSeen[key]);
+      Object.assign(navigationPatch, {
+        [key]:
+          shadowPrefs?.[key] ??
+          (localNavigation?.[key] !== undefined && !confirmedDelta
+            ? localNavigation[key]
+            : (prefs[key] ?? null)),
+      });
+    }
   }
   if (!navigationIdentityChanged && JSON.stringify(prefs) === JSON.stringify(lastSeen)) {
     publishConfirmedPrefs(sync, scope, prefs);
@@ -479,7 +486,7 @@ export async function loadProfileAppearancePrefs(
 function loadLocalNavigationPreferences(
   gatewayUrl: string,
   profileId?: string | null,
-): Pick<UiSettings, "sidebarEntries"> | null {
+): Partial<Pick<UiSettings, "sidebarEntries" | "personalSessionGroups">> | null {
   if (!profileId) {
     // The connection owner has adopted profileless identity before reconciliation.
     return loadUiPreferences(gatewayUrl || undefined);
@@ -489,7 +496,12 @@ function loadLocalNavigationPreferences(
       readSettingsForGateway(getSafeLocalStorage(), gatewayUrl)?.parsed,
       profileId,
     );
-    return navigation ? { sidebarEntries: navigation.railShortcuts } : null;
+    return navigation
+      ? {
+          sidebarEntries: navigation.railShortcuts,
+          personalSessionGroups: navigation.personalSessionGroups,
+        }
+      : null;
   } catch {
     return null;
   }

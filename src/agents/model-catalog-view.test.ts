@@ -405,6 +405,13 @@ it.each([
     undefined,
   ],
   ["native-without-api-fallback", [base], "native-fixture", false, undefined],
+  [
+    "native-before-api",
+    [base, { ...base, nativeRuntime: "native-fixture", contextWindows: undefined }],
+    "native-fixture",
+    true,
+    undefined,
+  ],
 ] as const)(
   "preserves logical fallback without borrowing native windows (%s)",
   (_, routeVariants, runtimeId, allowApiFallback, expected) => {
@@ -415,5 +422,7 @@ it.each([
       allowApiFallback,
     });
     expect(selected.entry.contextWindows).toEqual(expected);
+    const view = createModelCatalogView({ cfg: {}, catalog: [base], routeVariants });
+    expect(view.selectRuntimeEntry({ entry: base, runtimeId, allowApiFallback })).toEqual(selected);
   },
 );

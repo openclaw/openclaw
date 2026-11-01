@@ -1625,7 +1625,8 @@ it.each([
         if (layout === "include") {
           const { agents: sourceAgents, ...sourceRoot } = snapshot.sourceConfig;
           const { agents: runtimeAgents, ...runtimeRoot } = snapshot.runtimeConfig;
-          expect(sourceRoot).toStrictEqual(runtimeRoot);
+          // Undefined normalization-only fields have no authored JSON representation.
+          expect(sourceRoot).toEqual(runtimeRoot);
           expect(sourceAgents).not.toStrictEqual(runtimeAgents);
         }
         const originalRoot = await readRaw(configPath);

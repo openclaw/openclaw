@@ -13,7 +13,6 @@ import {
   type StartupMigrationLease,
 } from "./startup-migration-checkpoint.js";
 import * as tempRoot from "./tmp-openclaw-dir.js";
-import { resolveManagedUpdateLeaseDatabasePath } from "./update-managed-service-handoff-lease.js";
 
 const dirs = createTempDirTracker();
 afterEach(() => {
@@ -23,6 +22,9 @@ afterEach(() => {
 });
 const checkIntegrity = sqliteIntegrity.assertSqliteIntegrity;
 const LEASE_SQL = "SELECT owner FROM state_leases WHERE scope = 'startup-migrations'";
+const FOREIGN_KEY_SCHEMA = `PRAGMA foreign_keys = OFF;
+CREATE TABLE parent (id INTEGER PRIMARY KEY);
+CREATE TABLE child (parent_id INTEGER REFERENCES parent(id));`;
 let env: NodeJS.ProcessEnv;
 beforeEach(() => {
   const root = dirs.make("openclaw-checkpoint-inspection-");
@@ -30,9 +32,6 @@ beforeEach(() => {
   const handoffRoot = path.join(root, "handoff");
   mkdirSync(handoffRoot, { mode: 0o700 });
   vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(handoffRoot);
-  expect(resolveManagedUpdateLeaseDatabasePath()).toBe(
-    path.join(handoffRoot, "managed-update-handoffs.sqlite"),
-  );
 });
 function acquire(options: Parameters<typeof acquireWithWait>[0] = {}) {
   return acquireWithWait({ env, timeoutMs: 0, sleep: async () => {}, ...options });
@@ -43,9 +42,9 @@ function seed(sql: string) {
   using db = new DatabaseSync(pathname);
   db.exec(sql);
 }
-function query(sql: string, ...params: import("node:sqlite").SQLInputValue[]) {
+function query(sql: string) {
   using db = new DatabaseSync(resolveOpenClawStateSqlitePath(env), { readOnly: true });
-  return db.prepare(sql).all(...params);
+  return db.prepare(sql).all();
 }
 async function initializeLeaseDatabase() {
   const lease = await acquire();
@@ -65,11 +64,7 @@ it.each(["stale", "corrupt", "writer", "timeout"])("%s WAL interference", async 
   using peer = new DatabaseSync(resolveOpenClawStateSqlitePath(env));
   peer.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 0;");
   if (phase === "stale") {
-    peer.exec(`
-      PRAGMA foreign_keys = OFF;
-      CREATE TABLE parent (id INTEGER PRIMARY KEY);
-      CREATE TABLE child (parent_id INTEGER REFERENCES parent(id));
-    `);
+    peer.exec(FOREIGN_KEY_SCHEMA);
   }
   let interfered = false,
     nowMs = Date.now(),
@@ -125,7 +120,6 @@ it.each(["stale", "corrupt", "writer", "timeout"])("%s WAL interference", async 
       expect(peer.prepare(LEASE_SQL).all()).toEqual([]);
     } else {
       lease = await operation;
-      expect(lease).toBeDefined();
       if (phase === "stale") {
         expect(
           peer.prepare("SELECT expires_at FROM state_leases WHERE owner = ?").get(lease.owner)
@@ -206,12 +200,7 @@ it.each(["repair", "commit"] as const)("rolls back a failed %s", async (failure)
 });
 
 it("refuses corruption before schema bootstrap or lease writes", async () => {
-  seed(`
-      PRAGMA foreign_keys = OFF;
-      CREATE TABLE parent (id INTEGER PRIMARY KEY);
-      CREATE TABLE child (parent_id INTEGER REFERENCES parent(id));
-      INSERT INTO child VALUES (1);
-    `);
+  seed(`${FOREIGN_KEY_SCHEMA} INSERT INTO child VALUES (1);`);
   await expect(acquire()).rejects.toThrow("foreign_key_check failed");
   expect({
     tables: query("SELECT name FROM sqlite_schema WHERE name IN ('schema_meta', 'state_leases')"),

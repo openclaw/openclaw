@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -56,6 +57,33 @@ describe("memory index", () => {
   }
   const providersSince = (index: number) =>
     providerFixture.providerCalls.slice(index).map((call) => call.provider);
+
+  it("indexes and searches NoNe without an embedding provider", async () => {
+    const manager = await getPersistentManager(createCfg({ provider: "NoNe", minScore: 0 }));
+    await manager.sync({ reason: "test" });
+
+    expect(await manager.search("zebra")).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
+    );
+    expect(await manager.statusAsync({ includeCounts: false })).toMatchObject({
+      provider: "none",
+      custom: { searchMode: "fts-only" },
+    });
+    expect(providerFixture.providerCalls).toEqual([]);
+  });
+
+  it("keeps keyword recall available when Auto cannot initialize embeddings", async () => {
+    const indexed = await getPersistentManager(createCfg({ provider: "none" }));
+    await indexed.sync({ reason: "test" });
+    await indexed.close();
+    providerFixture.providerCreationFailure = "openai";
+
+    const manager = await getFreshManager(createCfg({ provider: "Auto" }));
+    expect(await manager.search("zebra")).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
+    );
+    expect(providersSince(0)).toEqual(["openai"]);
+  });
 
   it.each([false, true])(
     "drains startup transcript discovery before closing (scan failure: %s)",
@@ -129,17 +157,16 @@ describe("memory index", () => {
     trackManager(second);
 
     const cachedBeforeProbe = second.getCachedEmbeddingAvailability?.();
-    expect(cachedBeforeProbe?.ok).toBe(true);
-    expect(cachedBeforeProbe?.checked).toBe(true);
-    expect(cachedBeforeProbe?.cached).toBe(true);
-    expect(cachedBeforeProbe?.checkedAtMs).toBeTypeOf("number");
-    expect(cachedBeforeProbe?.cacheExpiresAtMs).toBeTypeOf("number");
-    if (
-      typeof cachedBeforeProbe?.checkedAtMs === "number" &&
-      typeof cachedBeforeProbe.cacheExpiresAtMs === "number"
-    ) {
-      expect(cachedBeforeProbe.cacheExpiresAtMs - cachedBeforeProbe.checkedAtMs).toBe(30_000);
-    }
+    expect(cachedBeforeProbe).toMatchObject({
+      ok: true,
+      checked: true,
+      cached: true,
+      checkedAtMs: expect.any(Number),
+      cacheExpiresAtMs: expect.any(Number),
+    });
+    expect((cachedBeforeProbe?.cacheExpiresAtMs ?? 0) - (cachedBeforeProbe?.checkedAtMs ?? 0)).toBe(
+      30_000,
+    );
     await expect(second.probeEmbeddingAvailability()).resolves.toStrictEqual({
       ok: true,
       checked: true,
@@ -148,9 +175,6 @@ describe("memory index", () => {
       cacheExpiresAtMs: cachedBeforeProbe?.cacheExpiresAtMs,
     });
     expect(providerFixture.embedQueryCalls).toBe(1);
-
-    const cached = second.getCachedEmbeddingAvailability?.();
-    expect((cached?.cacheExpiresAtMs ?? 0) - (cached?.checkedAtMs ?? 0)).toBe(30_000);
   });
 
   it("clears cached embedding probe readiness when local embeddings degrade", async () => {
@@ -186,9 +210,7 @@ describe("memory index", () => {
       if (mode === "retry") {
         fields.resetProviderInitializationForRetry();
       } else {
-        if (!fields.provider) {
-          throw new Error("Expected a test embedding provider");
-        }
+        assert.ok(fields.provider, "Expected a test embedding provider");
         fields.provider.id = "local";
         fields.markLocalEmbeddingProviderDegraded(providerFixture.createLocalWorkerExitError());
       }
@@ -232,9 +254,7 @@ describe("memory index", () => {
       fallback: "fallback-provider",
     });
     const releaseProviderClose = holdProviderClose();
-    if (!fields.provider?.close) {
-      throw new Error("Expected a test embedding provider");
-    }
+    assert.ok(fields.provider?.close, "Expected a test embedding provider");
     const providerCloseStarted = createDeferred<void>();
     const closeProvider = fields.provider.close.bind(fields.provider);
     fields.provider.close = () => {
@@ -274,9 +294,7 @@ describe("memory index", () => {
     );
     const fields = fieldsOf(manager);
     await fields.ensureProviderInitialized();
-    if (!fields.provider) {
-      throw new Error("Expected a test embedding provider");
-    }
+    assert.ok(fields.provider, "Expected a test embedding provider");
     const indexedProvider = fields.provider;
     indexedProvider.id = "local";
     fields.providerKey = fields.computeProviderKey();

@@ -1,9 +1,8 @@
 import "./test/dom.setup.ts";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { expect, it, onTestFinished, vi } from "vitest";
-import { createWorkboardCapability } from "./lib/workboard/capability.ts";
 import { createWorkboardCard } from "./lib/workboard/test/index-helpers.ts";
-import { createWorkboardPage } from "./pages/workboard/workboard-page.tsx";
+import { mountPage } from "./pages/workboard/workboard-page.test-support.ts";
 import { createWorkboardSessionAccessory } from "./session-accessory.tsx";
 import { workboardTestHost } from "./test/host.setup.ts";
 import { createViewContext } from "./test/host.ts";
@@ -36,20 +35,16 @@ it("reveals a reassigned linked card without changing the selected chat agent", 
   const payload = { cards: [card], boards: [{ id: "ops" }] };
   const { host, container } = mountAccessory(sessionKey, payload);
   Object.assign(host.agents, { selectedId: "writer", scopeId: "writer" });
-  const workboard = createWorkboardCapability();
-  onTestFinished(() => workboard.dispose());
-  const destination = document.body.appendChild(document.createElement("div"));
+  let destination: HTMLElement | undefined;
   vi.mocked(host.navigation.openPage).mockImplementation(({ path }) => {
-    const page = createWorkboardPage(workboard, vi.fn())(
-      destination,
-      createViewContext(host, { boardId: path?.[0] ?? "__all__" }),
-    );
-    onTestFinished(() => page?.dispose?.());
+    const page = mountPage({ boardId: path?.[0] ?? "__all__", connected: true });
+    page.cards([card]);
+    destination = page.container;
   });
   await vi.waitFor(() => expect(container.textContent).toContain(card.title));
   container.querySelector("a")!.click();
   await vi.waitFor(() =>
-    expect(destination.querySelector(".workboard-board")?.textContent).toContain(card.title),
+    expect(destination?.querySelector(".workboard-board")?.textContent).toContain(card.title),
   );
   expect(host.agents).toMatchObject({ scopeId: null, selectedId: "writer" });
 });

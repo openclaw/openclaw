@@ -221,6 +221,7 @@ describeControlUiE2e("Plugin skill bundle routes", () => {
     });
     await open();
     await read();
+    await modal.waitFor();
     expect(await modal.locator("openclaw-panel-loading-skeleton").count()).toBe(2);
     expect(await modal.locator(".body[aria-busy]").textContent()).not.toMatch(
       /Loading|Try another file name or content search\./,

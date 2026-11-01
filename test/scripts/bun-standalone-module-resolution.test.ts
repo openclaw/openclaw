@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import vm from "node:vm";
-import { parse } from "acorn";
+import { moduleResolve } from "import-meta-resolve";
 import { afterEach, describe, expect, it } from "vitest";
 import { rewriteStandaloneImports } from "../../scripts/lib/bun-standalone-imports.mjs";
 import { createStandaloneNativeAdapter } from "../../scripts/lib/bun-standalone-native.mjs";
@@ -14,7 +14,11 @@ import {
   planStandaloneRuntime,
   pruneStandaloneRuntime,
 } from "../../scripts/lib/bun-standalone-sidecar.mjs";
+import { createStandaloneSourceEntries } from "../../scripts/lib/bun-standalone-source-entries.mjs";
+import { createStandaloneSourceGraph } from "../../scripts/lib/bun-standalone-source-graph.mjs";
+import { createStandaloneSourceParser } from "../../scripts/lib/bun-standalone-source-parser.mjs";
 
+const parse = createStandaloneSourceParser();
 const temporary: string[] = [];
 afterEach(() => {
   for (const directory of temporary.splice(0)) {
@@ -125,76 +129,100 @@ console.log(JSON.stringify({ before, answer, file, alias, loaded }));`,
     });
   });
 
-  it("loads the require export lazily after pruning and relocation without package-manager paths", () => {
-    const { root, library, filename, source, write } = fixture();
-    const image = fs.mkdtempSync(path.join(os.tmpdir(), "standalone-module-image-"));
-    temporary.push(image);
-    const factoryMarker = path.join(image, "factory-loaded");
-    const transformMarker = path.join(image, "transform-loaded");
-    const entry = path.join(library, "lib #/factory.cjs");
-    const factorySource = `require("node:fs").writeFileSync(${JSON.stringify(factoryMarker)}, "loaded");
+  it.each(["emitted", "typed"])(
+    "loads the %s require export lazily after pruning and relocation without package-manager paths",
+    (mode) => {
+      const { root, library, filename: emittedFilename, source, write } = fixture();
+      let filename = emittedFilename;
+      if (mode === "typed") {
+        const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "standalone-module-source-"));
+        temporary.push(sourceRoot);
+        write(path.join(sourceRoot, "package.json"), '{"name":"openclaw","type":"module"}');
+        const original = path.join(sourceRoot, "src/factory.ts");
+        write(original, source);
+        const config = { entry: { factory: "src/factory.ts" } };
+        const graph = createStandaloneSourceGraph({
+          sourceRoot,
+          runtimeRoot: root,
+          outputRoot: path.dirname(root),
+          sourceEntries: createStandaloneSourceEntries({ sourceRoot, configs: [config] }),
+          embeddedPaths: {},
+        });
+        filename = graph.addSource(original, config);
+      }
+      const image = fs.mkdtempSync(path.join(os.tmpdir(), "standalone-module-image-"));
+      temporary.push(image);
+      const factoryMarker = path.join(image, "factory-loaded");
+      const transformMarker = path.join(image, "transform-loaded");
+      const entry = path.join(library, "lib #/factory.cjs");
+      const factorySource = `require("node:fs").writeFileSync(${JSON.stringify(factoryMarker)}, "loaded");
 exports.createFactory = value => ({ read: () => require("./transform.cjs")(value) });`;
-    const transformSource = `require("node:fs").writeFileSync(${JSON.stringify(transformMarker)}, "loaded");
+      const transformSource = `require("node:fs").writeFileSync(${JSON.stringify(transformMarker)}, "loaded");
 module.exports = value => value + " transformed";`;
-    write(entry, factorySource);
-    write(path.join(path.dirname(entry), "transform.cjs"), transformSource);
-    const adapter = createStandaloneNativeAdapter({ runtimeRoot: root, parse });
-    adapter.discover([path.relative(root, filename)]);
-    expect(adapter.additionalModuleEntries).toEqual([path.relative(root, entry)]);
-    expect(adapter.commonJsEntries).toEqual([path.relative(root, entry)]);
-    const transformed = adapter.transform({ filename, contents: source });
-    adapter.transform({ filename: entry, contents: factorySource });
-    const imageEntry = path.join(image, "factory.cjs");
-    write(imageEntry, factorySource);
-    write(path.join(image, "transform.cjs"), transformSource);
-    const embeddedPaths = { [path.relative(root, entry)]: imageEntry };
-    const rewritten = rewriteStandaloneImports({
-      contents: transformed.contents,
-      filename,
-      runtimeRoot: root,
-      embeddedPaths,
-      moduleAliases: {},
-      workerThreadsShim: path.join(root, "worker-shim.mjs"),
-      parse,
-    });
-    const finalized = adapter.finalize({ embeddedPaths });
-    const requireAdapter = createStandaloneRequireAdapter({ runtimeRoot: root, embeddedPaths });
-    pruneStandaloneRuntime(planStandaloneRuntime(root, finalized.files));
-    const relocated = `${root} moved #`;
-    fs.renameSync(root, relocated);
-    temporary.push(relocated);
-    const context = vm.createContext({
-      root: relocated,
-      path,
-      URL,
-      fileURLToPath,
-      createRequire,
-      commonJsEntries: new Set(),
-      embedded: (target: string) =>
-        target === imageEntry ? imageEntry : embeddedPaths[path.relative(relocated, target)],
-      __openclawStandaloneRootUrl: pathToFileURL(relocated + path.sep).href,
-    });
-    vm.runInContext(
-      adapter.bootstrap
-        .replace(/^import[^\n]+\n/, "")
-        .replace(finalized.bootstrapReplacement.search, finalized.bootstrapReplacement.replacement),
-      context,
-    );
-    vm.runInContext(requireAdapter.bootstrap, context);
-    vm.runInContext(
-      rewritten.replace(/^import[^\n]+\n/gm, "").replace("export function", "function") +
-        "\nglobalThis.loadFactory = loadFactory;",
-      context,
-    );
-    expect(fs.existsSync(factoryMarker)).toBe(false);
-    const loader = context.loadFactory("value");
-    expect(fs.existsSync(factoryMarker)).toBe(true);
-    expect(fs.existsSync(transformMarker)).toBe(false);
-    expect(loader.read()).toBe("value transformed");
-    expect(fs.existsSync(transformMarker)).toBe(true);
-    expect(fs.existsSync(path.join(relocated, "node_modules"))).toBe(false);
-    expect(fs.existsSync(path.join(relocated, path.relative(root, entry)))).toBe(false);
-  });
+      write(entry, factorySource);
+      write(path.join(path.dirname(entry), "transform.cjs"), transformSource);
+      const adapter = createStandaloneNativeAdapter({ runtimeRoot: root, parse });
+      adapter.discover([path.relative(root, filename)]);
+      expect(adapter.additionalModuleEntries).toEqual([path.relative(root, entry)]);
+      expect(adapter.commonJsEntries).toEqual([path.relative(root, entry)]);
+      const transformed = adapter.transform({ filename, contents: source });
+      adapter.transform({ filename: entry, contents: factorySource });
+      const imageEntry = path.join(image, "factory.cjs");
+      write(imageEntry, factorySource);
+      write(path.join(image, "transform.cjs"), transformSource);
+      const embeddedPaths = { [path.relative(root, entry)]: imageEntry };
+      const rewritten = rewriteStandaloneImports({
+        contents: transformed.contents,
+        filename,
+        runtimeRoot: root,
+        embeddedPaths,
+        moduleAliases: {},
+        workerThreadsShim: path.join(root, "worker-shim.mjs"),
+        parse,
+      });
+      const finalized = adapter.finalize({ embeddedPaths });
+      const requireAdapter = createStandaloneRequireAdapter({ runtimeRoot: root, embeddedPaths });
+      pruneStandaloneRuntime(planStandaloneRuntime(root, finalized.files));
+      const relocated = `${root} moved #`;
+      fs.renameSync(root, relocated);
+      temporary.push(relocated);
+      const context = vm.createContext({
+        root: relocated,
+        path,
+        URL,
+        lookup: moduleResolve,
+        fileURLToPath,
+        createRequire,
+        commonJsEntries: new Set(),
+        embedded: (target: string) =>
+          target === imageEntry ? imageEntry : embeddedPaths[path.relative(relocated, target)],
+        __openclawStandaloneRootUrl: pathToFileURL(relocated + path.sep).href,
+      });
+      vm.runInContext(
+        adapter.bootstrap
+          .replace(/^import[^\n]+\n/, "")
+          .replace(
+            finalized.bootstrapReplacement.search,
+            finalized.bootstrapReplacement.replacement,
+          ),
+        context,
+      );
+      vm.runInContext(requireAdapter.bootstrap, context);
+      vm.runInContext(
+        rewritten.replace(/^import[^\n]+\n/gm, "").replace("export function", "function") +
+          "\nglobalThis.loadFactory = loadFactory;",
+        context,
+      );
+      expect(fs.existsSync(factoryMarker)).toBe(false);
+      const loader = context.loadFactory("value");
+      expect(fs.existsSync(factoryMarker)).toBe(true);
+      expect(fs.existsSync(transformMarker)).toBe(false);
+      expect(loader.read()).toBe("value transformed");
+      expect(fs.existsSync(transformMarker)).toBe(true);
+      expect(fs.existsSync(path.join(relocated, "node_modules"))).toBe(false);
+      expect(fs.existsSync(path.join(relocated, path.relative(root, entry)))).toBe(false);
+    },
+  );
 
   it.each([
     'const conditions = ["node", "require"]; lookup("factory-library", new URL(import.meta.url), new Set(conditions));',

@@ -83,6 +83,33 @@ it("preserves hub styling when native defaults load last", async () => {
   }
 });
 
+it.each([
+  ["settings first", settingsStyles, hubStyles],
+  ["settings last", hubStyles, settingsStyles],
+])("keeps the stacked workspace gap with %s", (_order, first, second) => {
+  const styles = document.createElement("style");
+  styles.textContent = [baseStyles, first, second].join("\n");
+  document.head.append(styles);
+  const view = mountSolid(() => (
+    <>
+      <section class="content-header hub-page-header hub-page-header--stacked">
+        Stacked header
+      </section>
+      <section class="settings-workspace">Stacked workspace</section>
+      <section class="content-header">Ordinary header</section>
+      <section class="settings-workspace">Ordinary workspace</section>
+    </>
+  ));
+  flush();
+  try {
+    expect(getComputedStyle(view.getByText("Stacked workspace")).marginTop).toBe("0px");
+    expect(getComputedStyle(view.getByText("Ordinary workspace")).marginTop).toBe("20px");
+  } finally {
+    view.unmount();
+    styles.remove();
+  }
+});
+
 const hosts: HTMLElement[] = [];
 
 afterEach(() => {

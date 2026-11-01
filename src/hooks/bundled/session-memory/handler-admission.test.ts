@@ -37,33 +37,22 @@ describe("session-memory gateway admission", () => {
     const storePath = path.join(tempDir, "sessions.json");
     const cfg = {
       agents: { defaults: { workspace: tempDir } },
-      hooks: {
-        internal: {
-          entries: {
-            "session-memory": { enabled: true, llmSlug: true },
-          },
-        },
-      },
+      hooks: { internal: { entries: { "session-memory": { enabled: true, llmSlug: true } } } },
       session: { store: storePath },
     } satisfies OpenClawConfig;
-    await replaceTranscriptEvents({ agentId: "main", sessionId, sessionKey, storePath }, [
-      {
+    await replaceTranscriptEvents(
+      { agentId: "main", sessionId, sessionKey, storePath },
+      ["user", "assistant"].map((role, index) => ({
         type: "message",
-        id: "manual-reset-user",
-        parentId: null,
+        id: String(index),
+        parentId: index ? "0" : null,
         message: {
-          role: "user",
+          role,
           content: "Keep a descriptive memory filename",
           __openclaw: { senderIsOwner: true },
         },
-      },
-      {
-        type: "message",
-        id: "manual-reset-assistant",
-        parentId: "manual-reset-user",
-        message: { role: "assistant", content: "I will retain the slug generation work" },
-      },
-    ]);
+      })),
+    );
     const event = createInternalHookEvent("command", "reset", sessionKey, {
       agentId: "main",
       cfg,

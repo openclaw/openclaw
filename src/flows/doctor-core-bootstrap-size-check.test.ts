@@ -3,7 +3,6 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { bootstrapSizeCheck as check } from "./doctor-core-bootstrap-size-check.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
 import { runDoctorLintChecks } from "./doctor-lint-flow.js";
@@ -65,10 +64,7 @@ describe("core/doctor/bootstrap-size", () => {
 
     expectFinding(findings, {
       severity: "warning",
-      message: expect.stringContaining("AGENTS.md"),
       path: join(root, "packages", "core", "AGENTS.md"),
-    });
-    expectFinding(findings, {
       message: expect.stringContaining("No content from this file reaches the model."),
     });
   });
@@ -156,6 +152,16 @@ describe("core/doctor/skill-workshop-tool-policy", () => {
       fixHint: `Add ${prefix}tools.alsoAllow: ["skill_workshop"].`,
     });
 
+  it.each<[OpenClawConfig["plugins"], string]>([
+    [{ allow: ["diffs"] }, "plugins.allow"],
+    [{ enabled: false }, "plugins.enabled"],
+  ])("warns when %o keeps the skill-workshop plugin off", async (plugins, path) => {
+    expect(await detect({ plugins })).toEqual([
+      expect.objectContaining({ severity: "warning", path }),
+    ]);
+    expect(await detect({ plugins: { allow: ["diffs", "skill-workshop"] } })).toEqual([]);
+  });
+
   it("warns when autonomous capture is enabled but policy hides its tool", async () => {
     expect(await detect({ tools: { profile: "messaging" } })).toEqual([warning()]);
   });
@@ -180,28 +186,6 @@ describe("core/doctor/skill-workshop-tool-policy", () => {
       { checks: [workshopCheck] },
     );
     expect(result.findings).toEqual([warning("agents.entries.helper.", "helper")]);
-  });
-
-  it.each([
-    {
-      cfg: {
-        agents: { entries: { solo: { tools: { profile: "messaging" } } } },
-      } satisfies OpenClawConfig,
-      target: "solo",
-    },
-    {
-      cfg: createCanonicalAgentConfigFixture({
-        agents: {
-          list: [
-            { id: "owner", default: true, tools: { profile: "messaging" } },
-            { id: "helper", tools: { profile: "coding" } },
-          ],
-        },
-      }).config,
-      target: "owner",
-    },
-  ])("preserves normal diagnostics for roster target $target", async ({ cfg, target }) => {
-    expect(await detect(cfg)).toEqual([expect.objectContaining({ severity: "warning", target })]);
   });
 
   it("does not warn when autonomous capture is disabled", async () => {

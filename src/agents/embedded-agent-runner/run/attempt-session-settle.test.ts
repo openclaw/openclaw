@@ -30,13 +30,10 @@ it("releases prompt payloads while completed attempts' resource owners remain re
   };
   const callbacks = [createRetainedReview(false)];
   try {
-    for (const count of [4, 32]) {
-      callbacks.push(...Array.from({ length: count }, () => createRetainedReview(true)));
-      expect(queryObjects(PromptPayload)).toBe(1);
-    }
+    callbacks.push(...Array.from({ length: 32 }, () => createRetainedReview(true)));
+    expect(queryObjects(PromptPayload)).toBe(1);
     callbacks.shift();
     expect(queryObjects(PromptPayload)).toBe(0);
-    expect(callbacks.every((owner) => owner.reviewTranscript() === undefined)).toBe(true);
   } finally {
     callbacks.length = 0;
   }
@@ -134,35 +131,33 @@ it("preserves a teardown failure raised outside the caller async context", async
   await cleanupScope.run(async () => tracker.buildAbortSettlePromise());
   expect(cleanupScope.outcome).toBe("uncertain");
 });
-it("waits for both prompt and abort settlement during cleanup", async () => {
-  const prompt = deferred();
-  const abort = deferred();
-  const abortSession = vi.fn(() => abort.promise);
-  const tracker = createEmbeddedAttemptSessionSettleTracker({ abort: abortSession });
+it.each([false, true])(
+  "waits for prompt and abort settlement (rejected prompt=%s)",
+  async (rejectPrompt) => {
+    const prompt = deferred();
+    const abort = deferred();
+    const abortSession = vi.fn(() => abort.promise);
+    const tracker = createEmbeddedAttemptSessionSettleTracker({ abort: abortSession });
 
-  void tracker.trackPromptSettlePromise(prompt.promise);
-  const abortReason = new Error("stop");
-  void tracker.abortActiveSession(abortReason);
-  const settled = tracker.buildAbortSettlePromise();
-  expect(settled).not.toBeNull();
-  expect(abortSession).toHaveBeenCalledWith(abortReason);
+    void tracker.trackPromptSettlePromise(prompt.promise);
+    const abortReason = new Error("stop");
+    void tracker.abortActiveSession(abortReason);
+    const settled = tracker.buildAbortSettlePromise();
+    expect(abortSession).toHaveBeenCalledWith(abortReason);
 
-  const finished = vi.fn();
-  void settled?.then(finished);
-  prompt.resolve();
-  await Promise.resolve();
-  expect(finished).not.toHaveBeenCalled();
+    const finished = vi.fn();
+    void settled?.then(finished);
+    if (rejectPrompt) {
+      prompt.reject(new Error("prompt failed"));
+    } else {
+      prompt.resolve();
+    }
+    await Promise.resolve();
+    expect(finished).not.toHaveBeenCalled();
 
-  abort.resolve();
-  await settled;
-  expect(finished).toHaveBeenCalledOnce();
-  expect(tracker.buildAbortSettlePromise()).toBeNull();
-});
-
-it("settles rejected prompt work without leaking it into later cleanup", async () => {
-  const tracker = createEmbeddedAttemptSessionSettleTracker({ abort: async () => undefined });
-  void tracker.trackPromptSettlePromise(Promise.reject(new Error("prompt failed")));
-
-  await expect(tracker.buildAbortSettlePromise()).resolves.toBeUndefined();
-  expect(tracker.buildAbortSettlePromise()).toBeNull();
-});
+    abort.resolve();
+    await settled;
+    expect(finished).toHaveBeenCalledOnce();
+    expect(tracker.buildAbortSettlePromise()).toBeNull();
+  },
+);

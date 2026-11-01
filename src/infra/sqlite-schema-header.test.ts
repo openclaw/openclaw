@@ -10,6 +10,7 @@ import {
   type FixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
 import { withinTest } from "../../test/helpers/promise.js";
+import { createHotSqliteRollbackJournal } from "../../test/helpers/sqlite-hot-journal.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createAgentSchemaInspectionWorker } from "../state/openclaw-agent-schema-inspection-worker.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
@@ -103,21 +104,12 @@ describe("schema-header native reader lifetime", () => {
       CREATE TABLE schema_meta(meta_key TEXT PRIMARY KEY, app_version TEXT);
       INSERT INTO schema_meta VALUES('primary','committed');
       PRAGMA user_version=7;
-      CREATE TABLE payload(data BLOB);
-      WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<32)
-      INSERT INTO payload SELECT zeroblob(8192) FROM n;
     `);
       database.close();
-      const crashed = runSqliteChild(
-        pathname,
-        `
-      import { DatabaseSync } from 'node:sqlite';
-      const db = new DatabaseSync(process.argv[1]);
-      db.exec("PRAGMA synchronous=FULL; PRAGMA cache_size=2; PRAGMA cache_spill=ON; BEGIN IMMEDIATE; PRAGMA user_version=8; UPDATE schema_meta SET app_version='uncommitted'; UPDATE payload SET data=zeroblob(16384);");
-      process.kill(process.pid, 'SIGKILL');
-    `,
-      );
-      expect(crashed.signal, crashed.stderr).toBe("SIGKILL");
+      createHotSqliteRollbackJournal({
+        path: pathname,
+        mutationSql: "PRAGMA user_version=8; UPDATE schema_meta SET app_version='uncommitted'",
+      });
       const before = readFamily(pathname, "-journal");
       const cacheRoot = dirs.make("sqlite-header-journal-cache-");
       vi.stubEnv("XDG_CACHE_HOME", cacheRoot);

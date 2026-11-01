@@ -12,14 +12,9 @@ import { waitForExecScope } from "../agents/bash-process-registry.js";
 import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
 import { createExecTool } from "../agents/bash-tools.exec-run.js";
 import { nodeCommand } from "../agents/bash-tools.lifecycle.test-support.js";
+import { TRUNCATED_REPLY_NOTICE_TEXT } from "../agents/embedded-agent-runner/run/incomplete-turn-resolution.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import { buildPayloads } from "../agents/embedded-agent-runner/run/payloads.test-helpers.js";
-import { resolveEmbeddedRunTerminal } from "../agents/embedded-agent-runner/run/terminal-resolution.js";
-import {
-  expectComplete,
-  makeTerminalInput,
-  textAssistant,
-} from "../agents/embedded-agent-runner/run/terminal-resolution.test-support.js";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import * as runtimePlugins from "../agents/runtime-plugins.js";
 import {
@@ -257,41 +252,6 @@ it.for(completionRoutingCases)(
               meta: { durationMs: 1 },
             };
           }
-          if (testCase.reply === "truncated") {
-            const provider = expectDefined(params.provider, "admitted provider");
-            const modelId = expectDefined(params.model, "admitted model");
-            const assistant = textAssistant(answer, {
-              provider,
-              model: modelId,
-              stopReason: "length",
-            });
-            const resolved = await resolveEmbeddedRunTerminal(
-              makeTerminalInput({
-                runParams: {
-                  sessionId: params.sessionId,
-                  sessionKey: params.sessionKey,
-                  runId: params.runId,
-                },
-                provider,
-                modelId,
-                modelTransportId: modelId,
-                activeErrorContext: { provider, model: modelId },
-                agentMeta: { sessionId: params.sessionId, provider, model: modelId },
-                reportedModelRef: { provider, model: modelId },
-                assistant,
-                attemptOverrides: {
-                  assistantTexts: [answer],
-                  currentAttemptReplayMetadata: {
-                    hadPotentialSideEffects: false,
-                    replaySafe: true,
-                  },
-                },
-                payloadsWithToolMedia: [{ text: answer }],
-              }),
-            );
-            expectComplete(resolved);
-            return resolved.result;
-          }
           return {
             payloads:
               testCase.reply === "status"
@@ -299,9 +259,11 @@ it.for(completionRoutingCases)(
                     { text: answer },
                     { text: "🧩 Active Memory: status=policy-disabled", isStatusNotice: true },
                   ]
-                : testCase.reply === "quiet"
-                  ? []
-                  : [{ text: answer }],
+                : testCase.reply === "truncated"
+                  ? [{ text: answer }, { text: TRUNCATED_REPLY_NOTICE_TEXT }]
+                  : testCase.reply === "quiet"
+                    ? []
+                    : [{ text: answer }],
             meta: {
               durationMs: 1,
               terminalReply:
@@ -390,7 +352,7 @@ it.for(completionRoutingCases)(
               expect(sent).toContain("🧩 Active Memory: status=policy-disabled");
             }
             if (testCase.reply === "truncated") {
-              expect(sent).toHaveLength(2);
+              expect(sent).toEqual([answer, TRUNCATED_REPLY_NOTICE_TEXT]);
             }
           }
           for (const [request] of [...sendRaw.mock.calls, ...sendPrepared.mock.calls]) {

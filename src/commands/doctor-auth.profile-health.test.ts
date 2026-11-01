@@ -3,6 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import { writePersistedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -90,18 +94,15 @@ describe("inspectAuthProfileHealth", () => {
   }
 
   function expiredStore(profileId: string, expires: number) {
-    return {
-      version: 1,
-      profiles: {
-        [profileId]: {
-          type: "oauth" as const,
-          provider: "openai-codex",
-          access: "access",
-          refresh: "refresh",
-          expires,
-        },
+    return createAuthProfileStoreFixture({
+      [profileId]: {
+        type: "oauth" as const,
+        provider: "openai-codex",
+        access: "access",
+        refresh: "refresh",
+        expires,
       },
-    } satisfies AuthProfileStore;
+    }) satisfies AuthProfileStore;
   }
 
   it("keeps expiring warnings for static and custom Claude CLI profiles", async () => {
@@ -224,22 +225,16 @@ describe("inspectAuthProfileHealth", () => {
     );
     authProfileMocks.loadAuthProfileStoreForRuntime.mockImplementation((agentDir) => {
       if (agentDir === mainDir) {
-        return {
-          version: 1,
-          profiles: {
-            ...expiredStore("openai-codex:shared", now - 60_000).profiles,
-            ...expiredStore("openai-codex:main", now - 60_000).profiles,
-          },
-        };
+        return createAuthProfileStoreFixture({
+          ...expiredStore("openai-codex:shared", now - 60_000).profiles,
+          ...expiredStore("openai-codex:main", now - 60_000).profiles,
+        });
       }
       if (agentDir === coderDir) {
-        return {
-          version: 1,
-          profiles: {
-            ...expiredStore("openai-codex:shared", now - 60_000).profiles,
-            ...expiredStore("openai-codex:coder", now - 60_000).profiles,
-          },
-        };
+        return createAuthProfileStoreFixture({
+          ...expiredStore("openai-codex:shared", now - 60_000).profiles,
+          ...expiredStore("openai-codex:coder", now - 60_000).profiles,
+        });
       }
       throw new Error(`unexpected agent dir: ${agentDir ?? "<default>"}`);
     });
@@ -313,16 +308,12 @@ describe("inspectAuthProfileHealth", () => {
     authProfileMocks.loadAuthProfileStoreForRuntime.mockImplementation(
       (receivedAgentDir): AuthProfileStore => {
         if (receivedAgentDir === agentDir) {
-          return {
-            version: 1,
-            profiles: {
-              "zai:default": {
-                type: "api_key",
-                provider: "zai",
-                key: "openclaw onboard --auth-choice zai-coding-global",
-              },
-            },
-          };
+          return createAuthProfileStoreFixture({
+            "zai:default": createApiKeyCredential(
+              "zai",
+              "openclaw onboard --auth-choice zai-coding-global",
+            ),
+          });
         }
         return { version: 1, profiles: {} };
       },

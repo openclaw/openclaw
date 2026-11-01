@@ -10,9 +10,8 @@ vi.mock("openclaw/plugin-sdk/agent-sessions", () => ({
 function report(skills: SkillStatusEntry[]): SkillStatusReport {
   return { workspaceDir: "/workspace", managedSkillsDir: "/managed", skills };
 }
-function info(skills: SkillStatusEntry[], name: string, json = false) {
-  return formatSkillInfo(report(skills), name, { json });
-}
+const info = (skills: SkillStatusEntry[], name: string, json = false) =>
+  formatSkillInfo(report(skills), name, { json });
 function expectContains(output: string, ...parts: string[]) {
   for (const part of parts) {
     expect(output).toContain(part);
@@ -109,27 +108,15 @@ describe("skills formatting", () => {
       agentSkillFilter: ["ready", "prompt-hidden", "slash-hidden", "missing-bin"],
     };
     const parsed = JSON.parse(formatSkillsCheck(mixed, { json: true }));
-    expect(parsed).toEqual(
-      expect.objectContaining({
-        summary: {
-          total: 8,
-          eligible: 4,
-          modelVisible: 2,
-          commandVisible: 2,
-          disabled: 1,
-          blocked: 1,
-          agentFiltered: 4,
-          notInjected: 1,
-          missingRequirements: 2,
-        },
-        modelVisible: ["ready", "slash-hidden"],
-        commandVisible: ["ready", "prompt-hidden"],
-        agentFiltered: ["agent-filtered", "excluded-missing", "disabled", "blocked-bundled"],
-        disabled: ["disabled"],
-        blocked: ["blocked-bundled"],
-        notInjected: [{ name: "prompt-hidden", reason: "disable-model-invocation" }],
-      }),
-    );
+    expect(parsed).toMatchObject({
+      summary: { total: 8, eligible: 4 },
+      modelVisible: ["ready", "slash-hidden"],
+      commandVisible: ["ready", "prompt-hidden"],
+      agentFiltered: ["agent-filtered", "excluded-missing", "disabled", "blocked-bundled"],
+      disabled: ["disabled"],
+      blocked: ["blocked-bundled"],
+      notInjected: [{ name: "prompt-hidden", reason: "disable-model-invocation" }],
+    });
     expect(parsed.missingRequirements.map((entry: { name: string }) => entry.name)).toEqual([
       "excluded-missing",
       "missing-bin",

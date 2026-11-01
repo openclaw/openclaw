@@ -8,9 +8,14 @@ import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.transcript-turn.js";
 import { readSessionEntryInWorker } from "../config/sessions/session-entry-read-writable.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import * as aggregation from "../infra/session-cost-usage-aggregation.js";
 import * as cacheRuntime from "../infra/session-cost-usage-cache-runtime.js";
 import { sessionCostUsageNotifications } from "../infra/session-cost-usage-events.js";
+import * as pricing from "../infra/session-cost-usage-pricing-context.js";
+import { acquireSqliteDatabaseAdmissionTurn } from "../infra/sqlite-database-admission-turn.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
+import * as modelPricing from "../model-catalog/pricing.js";
 import { closeAgentWorkAdmissions } from "../sessions/session-controller.lifecycle.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
@@ -24,6 +29,7 @@ import {
   closeOpenClawAgentDatabasesAsync,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -69,10 +75,6 @@ const sessionFresh = (totalTokens: number) => ({
 });
 const timestamp = Date.parse("2026-09-18T12:00:00Z");
 const mainConfig = () => ({ agents: { entries: { main: {} } } });
-const topologyAgents = () => ({
-  ownership: "explicit" as const,
-  entries: { main: {}, alpha: {}, beta: {} },
-});
 
 function refuseStartup(agentId: string) {
   const refusal = createAgentDatabaseInspectionRefusal({
@@ -89,8 +91,7 @@ function observeProjection(config: Parameters<typeof costWindow>[0]) {
   const publications: SessionCostUsagePublication[] = [];
   sessionCostUsageNotifications.onUpdated = (event) => publications.push(event);
   const warn = vi.fn();
-  const lifetime = startProjection(config, warn);
-  return { publications, warn, lifetime };
+  return { publications, warn, lifetime: startProjection(config, warn) };
 }
 const startProjection = (config: Parameters<typeof costWindow>[0], warn = vi.fn()) =>
   startSessionCostUsageProjectionLifetime({ getConfig: () => config, warn });
@@ -122,6 +123,57 @@ function removeUsage(
 function costWindow(config: Parameters<typeof loadCostUsageSummaryCached>[0]["config"]) {
   return { config, startMs: timestamp - 1, endMs: timestamp + 1 };
 }
+
+it.for(["discovery", "pricing", "scan admission"])(
+  "aborts in-flight %s before joining the usage sidecar",
+  async (phase, { signal }) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const entered = createDeferred();
+      const release = createDeferred();
+      let releaseAdmission: (() => void) | undefined;
+      if (phase === "discovery") {
+        const read = stateReads.executeExistingOpenClawStateRead;
+        vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementation(
+          async (...args) => {
+            if (args[1].type === "agentDatabaseDeletion.snapshot") {
+              entered.resolve();
+              await racePromiseWithAbortSignal(release.promise, args[2]?.signal);
+            }
+            return read(...args);
+          },
+        );
+      } else if (phase === "pricing") {
+        vi.spyOn(modelPricing, "prepareModelPricingContext").mockImplementationOnce(async () => {
+          entered.resolve();
+          await release.promise;
+        });
+      } else {
+        seedUsage("stop-during-scan");
+        const prepare = pricing.prepareUsageCostPricing;
+        vi.spyOn(pricing, "prepareUsageCostPricing").mockImplementation(async (...args) => {
+          const result = await prepare(...args);
+          const path = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+          revokeSqliteDatabaseAdmissionsForPath(path);
+          releaseAdmission = await acquireSqliteDatabaseAdmissionTurn(path);
+          entered.resolve();
+          return result;
+        });
+      }
+      const lifetime = startProjection(mainConfig());
+      try {
+        await withinTest(entered.promise, signal);
+        vi.useFakeTimers();
+        const stopped = vi.fn();
+        void lifetime.stop().then(stopped);
+        await vi.advanceTimersByTimeAsync(100);
+        expect(stopped).toHaveBeenCalledOnce();
+      } finally {
+        release.resolve();
+        releaseAdmission?.();
+        await lifetime.stop();
+      }
+    }),
+);
 
 it("keeps usage backfill and all-agent totals available while another agent's deletion drains", async ({
   signal,
@@ -319,11 +371,10 @@ it("coalesces usage through alias cleanup, flushes exact reads, and recovers def
   });
 });
 
-it("projects committed usage after startup preparation without borrowing its expired context", ({
+it("projects committed usage after startup preparation without borrowing its expired context", async ({
   signal,
-  onTestFinished,
 }) => {
-  const run = withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const wait = <T>(work: PromiseLike<T>) => withinTest(work, signal);
     const config = mainConfig();
     const target = seedUsage("usage-admission");
@@ -335,27 +386,18 @@ it("projects committed usage after startup preparation without borrowing its exp
     const nextStarted = createDeferred();
     const releaseRefresh = createDeferred();
     let holdRefresh = false;
-    const outcomes: Array<
-      Promise<
-        | { ok: true; context: string | undefined }
-        | { ok: false; context: string | undefined; error: unknown }
-      >
-    > = [];
+    const outcomes: Promise<unknown>[] = [];
+    const contexts: Array<string | undefined> = [];
     const actualRefresh = aggregation.refreshCostUsageCacheForAgent;
     vi.spyOn(aggregation, "refreshCostUsageCacheForAgent").mockImplementation((params) => {
-      const context = publisher.getStore();
+      contexts.push(publisher.getStore());
       const operation = (async () => {
         if (holdRefresh) {
           await releaseRefresh.promise;
         }
         return actualRefresh(params);
       })();
-      outcomes.push(
-        operation.then(
-          () => ({ ok: true as const, context }),
-          (error: unknown) => ({ ok: false as const, context, error }),
-        ),
-      );
+      outcomes.push(operation);
       firstStarted.resolve();
       if (outcomes.length > 1) {
         nextStarted.resolve();
@@ -370,7 +412,7 @@ it("projects committed usage after startup preparation without borrowing its exp
     let pendingRefreshes = -1;
     try {
       await wait(firstStarted.promise);
-      expect(await wait(outcomes[0]!)).toEqual({ ok: true, context: "owner" });
+      await wait(outcomes[0]!);
       const initialRequests = requested.mock.calls.length;
       const refusal = refuseStartup(target.agentId);
       holdRefresh = true;
@@ -388,7 +430,7 @@ it("projects committed usage after startup preparation without borrowing its exp
       await roster.mock.results.at(-1)?.value;
       await wait(nextStarted.promise);
       releaseRefresh.resolve();
-      const settled = await wait(Promise.all(outcomes));
+      const settled = await wait(Promise.allSettled(outcomes));
       await lifetime.stop();
       const summary = await cacheRuntime.loadCostUsageSummaryFromCache({
         ...costWindow(config),
@@ -397,27 +439,23 @@ it("projects committed usage after startup preparation without borrowing its exp
       });
       expect.soft(summary).toMatchObject(fresh(30));
       expect.soft(pendingRefreshes).toBe(0);
-      expect(settled).toEqual([
-        { ok: true, context: "owner" },
-        { ok: true, context: "owner" },
-      ]);
+      expect(contexts).toEqual(["owner", "owner"]);
+      expect(settled.every((result) => result.status === "fulfilled")).toBe(true);
       expect(publications.filter((event) => event.usageRefreshFailed)).toEqual([]);
       expect(warn).not.toHaveBeenCalled();
     } finally {
       releaseRefresh.resolve();
-      await Promise.all(outcomes);
+      await Promise.allSettled(outcomes);
       await lifetime.stop();
     }
   });
-  onTestFinished(() => run);
-  return run;
 });
 
 it("routes startup, shared selectors, invalidations, and admitted topology owners", async ({
   signal,
 }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const agents = topologyAgents();
+    const agents = { ownership: "explicit" as const, entries: { main: {}, alpha: {}, beta: {} } };
     let config: Parameters<typeof costWindow>[0] = { agents };
     setRuntimeConfigSnapshot(config);
     await state.writeText("agents/unowned/marker", "Synthetic unowned agent");
@@ -432,14 +470,8 @@ it("routes startup, shared selectors, invalidations, and admitted topology owner
       warn: vi.fn(),
     });
     const topology = { agentId: "alpha", topology: true } as const;
-    const cases: Array<
-      [
-        name: string,
-        scope: Extract<SessionRowChange, { all: true }>["scope"],
-        store?: string,
-        factsInvalidated?: true,
-      ]
-    > = [
+    type Scope = Extract<SessionRowChange, { all: true }>["scope"];
+    const cases: [name: string, scope: Scope, store?: string, factsInvalidated?: true][] = [
       ["unqualified agent", { agentId: "alpha" }],
       ["unknown object scope", {}],
       ["topology without an owner", { topology: true }],

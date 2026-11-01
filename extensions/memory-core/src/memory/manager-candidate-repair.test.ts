@@ -39,6 +39,13 @@ describe("automatic candidates during provenance repair", () => {
         WHERE key = 'memory_index_meta_v1'`);
     }
     await initial.close();
+    if (resetVersions) {
+      // Published vectors outlive the cache reset; new input makes the rebuild embed again.
+      await fs.writeFile(
+        path.join(paths.workspace, "MEMORY.md"),
+        `- Keep every release local. <!-- trigger: release local --> <!-- project: ${projectKey} -->\n`,
+      );
+    }
   }
   const lookups = (manager: MemoryIndexManager) => [
     manager.listCuratedProjectCandidates(projectOpts),
@@ -76,9 +83,16 @@ describe("automatic candidates during provenance repair", () => {
       let candidates: ReturnType<typeof lookups> = [];
       try {
         signal.throwIfAborted();
+        if (startupCatchup) {
+          vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+        }
         const upgraded = await getFreshManager(cfg);
         if (startupCatchup) {
+          // Let real startup discovery finish before advancing its scheduled quiet period.
+          await (upgraded as unknown as { awaitManagerIdle(): Promise<void> }).awaitManagerIdle();
+          await vi.advanceTimersByTimeAsync(30_000);
           await batchEntered.promise;
+          vi.useRealTimers();
           signal.throwIfAborted();
         }
         candidates = lookups(upgraded);

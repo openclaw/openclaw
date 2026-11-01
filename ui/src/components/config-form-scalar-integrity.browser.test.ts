@@ -1,6 +1,7 @@
 // Control UI tests cover scalar identity and nullable enum behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  expectElement,
   renderNumberInputFixture,
   renderTextInputFixture,
   renderSelectFixture,
@@ -8,14 +9,6 @@ import {
 } from "../test-helpers/config-form-fixtures.tsx";
 import { analyzeConfigSchema } from "./config-form.analyze.ts";
 import type { JsonSchema } from "./config-form.shared.ts";
-
-function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
-  expect(element instanceof Element, label).toBe(true);
-  if (!(element instanceof Element)) {
-    throw new Error(`missing ${label}`);
-  }
-  return element;
-}
 
 const multilinePlaceholder = "Default guidance.\nSecond line.";
 const multilineSchema: JsonSchema = { type: "string", maxLength: 4000 };

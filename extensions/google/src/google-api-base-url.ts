@@ -39,6 +39,24 @@ export function isGoogleVertexHostname(hostname: string): boolean {
   );
 }
 
+export function resolveGoogleVertexBaseUrlLocation(baseUrl?: string | null): string | undefined {
+  const raw = normalizeOptionalString(baseUrl);
+  // Template endpoints retain the explicit option or environment location.
+  if (!raw || raw.includes("{location}")) {
+    return undefined;
+  }
+  const url = URL.parse(raw);
+  if (!url || !isGoogleVertexHostname(url.hostname)) {
+    return undefined;
+  }
+  if (url.hostname === GOOGLE_VERTEX_HOST) {
+    return "global";
+  }
+  return GOOGLE_VERTEX_MULTI_REGION_HOSTS.has(url.hostname)
+    ? url.hostname.split(".")[1]
+    : url.hostname.slice(0, -GOOGLE_VERTEX_REGION_HOST_SUFFIX.length);
+}
+
 export function isGoogleVertexBaseUrl(baseUrl?: string | null): boolean {
   const raw = normalizeOptionalString(baseUrl);
   if (!raw) {
@@ -85,4 +103,20 @@ export function normalizeGoogleGenerativeAiBaseUrl(baseUrl?: string): string | u
   }
 
   return normalized;
+}
+
+/** Keep configured API version paths intact instead of appending the SDK default. */
+export function resolveGoogleGenerativeAiSdkHttpOptions(baseUrl?: string): {
+  baseUrl?: string;
+  apiVersion: string;
+} {
+  const normalized = normalizeGoogleGenerativeAiBaseUrl(baseUrl);
+  if (!normalized) {
+    return { apiVersion: "v1beta" };
+  }
+  const path = URL.parse(normalized)?.pathname ?? normalized;
+  return {
+    baseUrl: normalized,
+    apiVersion: /(?:^|\/)v\d+(?:(?:alpha|beta)\d*)?(?:\/|$)/i.test(path) ? "" : "v1beta",
+  };
 }

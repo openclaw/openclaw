@@ -10,6 +10,7 @@ import type {
 } from "./server-reload-contracts.js";
 import {
   createDefaultGatewayReloadState,
+  createHotReloadHandlerTestParams,
   createTestCronState,
   makePluginReloadResult,
 } from "./server-reload-handlers.config.test-support.js";
@@ -66,30 +67,13 @@ async function createFixture() {
     state = value;
   });
   const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
-  const params: GatewayReloadHandlerParams = {
+  const params = createHotReloadHandlerTestParams({
     scheduler: createTestGatewayScheduler(),
     deps: {} as GatewayReloadHandlerParams["deps"],
-    broadcast: vi.fn(),
     getState: () => state,
     setState,
-    getPluginRegistry: vi.fn(),
-    startChannel: vi.fn(async () => new Map()),
-    stopChannel: vi.fn(async () => {}),
-    releaseChannelRouteHandoffs: vi.fn(),
-    pruneInactiveChannelAccountState: vi.fn(),
-    reloadPlugins: vi.fn<GatewayReloadHandlerParams["reloadPlugins"]>(async () =>
-      makePluginReloadResult(),
-    ),
-    logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    logChannels: { info: vi.fn(), error: vi.fn() },
-    logCron: { error: vi.fn() },
-    logReload: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    cronReconciliation: {
-      arm: vi.fn(() => ({ complete: vi.fn(async () => {}) })),
-      invalidate: vi.fn(),
-    },
     requestRecoveryRestart,
-  };
+  });
   const handlers = createGatewayReloadHandlers(params);
   const nextConfig: OpenClawConfig = { cron: { enabled: true } };
   const plan = buildGatewayReloadPlan(["cron.enabled"]);

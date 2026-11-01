@@ -32,6 +32,7 @@ import {
 } from "./subagent-exec-request-ownership.js";
 import { observeSubagentExecution } from "./subagent-execution-observation.js";
 import { captureSubagentListReadContext, type SubagentListReadContext } from "./subagent-list.js";
+import { captureSubagentRetainedWork } from "./subagent-registry-execution-cleanup.js";
 import {
   getCurrentSubagentRunOwner,
   getSubagentRunsForRequesterSession,
@@ -81,6 +82,18 @@ export async function prepareSessionSubagentKillSelection(params: {
     ].map((entry) => [entry.runId, entry]),
   );
   const preparationErrors: string[] = [];
+  const hasRetainedWork = captureSubagentRetainedWork();
+  // Inert history needs no session preparation; its original incarnation may be gone.
+  // Select before any awaited notice retirement, which can publish new run state.
+  for (const entry of runs.values()) {
+    if (
+      entry.execution.suppressSessionEffects !== true &&
+      ownsRoot(entry) &&
+      !hasRetainedWork(entry)
+    ) {
+      runs.delete(entry.runId);
+    }
+  }
   for (const entry of runs.values()) {
     if (
       entry.execution.status !== "terminal" ||

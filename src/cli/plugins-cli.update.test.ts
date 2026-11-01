@@ -10,6 +10,7 @@ import {
   type PluginInstallTransaction,
 } from "../plugins/install-transaction.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
+import { expectNoCalls } from "../test-utils/mock-call-assertions.js";
 import {
   createTestInstalledPluginIndex,
   pluginCliConfigMock as configMock,
@@ -168,12 +169,6 @@ function primeBraveRecords() {
   const nextRecords = { brave: record("2026.6.11", "/tmp/brave-stable") };
   setInstalledPluginIndexInstallRecords(previousRecords);
   return { previousRecords, nextRecords };
-}
-
-function expectNoCalls(...mocks: unknown[]) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
 }
 
 beforeEach(resetPluginsCliTestState);

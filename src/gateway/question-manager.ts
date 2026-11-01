@@ -346,8 +346,7 @@ export class QuestionManager {
       }
       signal?.addEventListener("abort", waiter, { once: true });
       if (timeoutMs !== undefined) {
-        timer = setTimeout(waiter, resolveTimerTimeoutMs(timeoutMs, 1));
-        timer.unref?.();
+        timer = setTimeout(waiter, resolveTimerTimeoutMs(timeoutMs, 1)).unref();
       }
     });
   }

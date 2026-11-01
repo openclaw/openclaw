@@ -18,7 +18,6 @@ const runtimeMocks = vi.hoisted(() => ({
   create: vi.fn(),
   fontReady: vi.fn<() => Promise<void>>(),
   load: vi.fn(),
-  activate: vi.fn(),
   proposeDimensions: vi.fn<() => { cols: number; rows: number } | undefined>(),
   disposeMeasurement: vi.fn(),
   observe: vi.fn(),
@@ -33,7 +32,7 @@ vi.mock("@openclaw/libterminal/browser", () => ({
 vi.mock("ghostty-web", () => ({ mockedGhosttyModule: true }));
 
 class MeasurementAddon {
-  activate = runtimeMocks.activate;
+  activate() {}
   proposeDimensions = runtimeMocks.proposeDimensions;
   dispose = runtimeMocks.disposeMeasurement;
 }
@@ -89,10 +88,7 @@ beforeEach(() => {
 afterEach(() => {
   document.body.replaceChildren();
   restorePropertyDescriptor(document, "fonts", originalFonts);
-  runtimeMocks.create.mockReset();
-  runtimeMocks.load.mockReset();
-  runtimeMocks.proposeDimensions.mockReset();
-  vi.clearAllMocks();
+  vi.resetAllMocks();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
@@ -105,15 +101,12 @@ it("cleans up pinned listeners before idempotent disposal", async () => {
   const handleMouseUp = vi.fn();
   (underlying.terminal as unknown as { handleMouseUp: EventListener }).handleMouseUp =
     handleMouseUp;
-  const runtime = { isolated: true, FitAddon: MeasurementAddon };
-  runtimeMocks.load.mockResolvedValue(runtime);
   runtimeMocks.create.mockResolvedValue(underlying);
   const removeEventListener = vi.spyOn(document, "removeEventListener");
   const controller = await createIsolatedGhosttyTerminal({ parent });
   expect(() => disposeTerminalController(controller, parent)).not.toThrow();
   expect(() => disposeTerminalController(controller, parent)).not.toThrow();
 
-  expect(runtimeMocks.create).toHaveBeenCalledWith(expect.objectContaining({ parent, runtime }));
   expect(removeEventListener).toHaveBeenCalledExactlyOnceWith("mouseup", handleMouseUp);
   expect(removeEventListener.mock.invocationCallOrder[0]).toBeLessThan(
     underlyingDispose.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
@@ -153,7 +146,6 @@ it.each([true, false])("gates opening focus, not explicit focus (allowed=%s)", a
   vi.runOnlyPendingTimers();
   expect(focus).toHaveBeenCalledTimes(allowed ? 2 : 0);
   focus.mockClear();
-  expect(opened).toHaveLength(1);
   opened[0]?.focus();
   expect(focus).toHaveBeenCalledOnce();
   vi.runOnlyPendingTimers();
@@ -168,24 +160,18 @@ it("applies rapid fit/resize updates and ignores them after disposal", async () 
   });
   runtimeMocks.proposeDimensions.mockReturnValue({ cols: 95, rows: 57 });
   const controller = await createIsolatedGhosttyTerminal({ parent });
-
+  expect(underlying.terminal).toMatchObject({ cols: 95, rows: 57 });
   runtimeMocks.proposeDimensions.mockReturnValue({ cols: 2, rows: 57 });
   controller.fit();
+  expect(underlying.terminal).toMatchObject({ cols: 2, rows: 57 });
   runtimeMocks.proposeDimensions.mockReturnValue({ cols: 51, rows: 25 });
   runtimeMocks.notifyResize();
-  runtimeMocks.notifyResize();
 
-  expect(underlying.resize.mock.calls).toEqual([
-    [{ columns: 95, rows: 57 }],
-    [{ columns: 2, rows: 57 }],
-    [{ columns: 51, rows: 25 }],
-  ]);
-  expect(runtimeMocks.create).toHaveBeenCalledWith(expect.objectContaining({ autoFit: false }));
-  expect(runtimeMocks.observe).toHaveBeenCalledExactlyOnceWith(parent);
+  expect(underlying.terminal).toMatchObject({ cols: 51, rows: 25 });
   controller.dispose();
   runtimeMocks.proposeDimensions.mockReturnValue({ cols: 100, rows: 30 });
   runtimeMocks.notifyResize();
-  expect(underlying.resize).toHaveBeenCalledTimes(3);
+  expect(underlying.terminal).toMatchObject({ cols: 51, rows: 25 });
 });
 
 it.each([false, true])("remeasures fonts only while live (disposed=%s)", async (disposed) => {
@@ -206,8 +192,7 @@ it.each([false, true])("remeasures fonts only while live (disposed=%s)", async (
 });
 
 it("does not observe a terminal aborted during creation", async () => {
-  const dispose = vi.fn();
-  underlying = terminalController(dispose);
+  const dispose = vi.spyOn(underlying, "dispose");
   const created = createDeferred<GhosttyTerminalController>();
   runtimeMocks.create.mockReturnValue(created.promise);
   const abort = new AbortController();

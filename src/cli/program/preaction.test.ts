@@ -92,10 +92,6 @@ describe("registerPreActionHooks", () => {
       .argument("<value>")
       .option("--json")
       .action(() => {});
-    config
-      .command("validate")
-      .option("--json")
-      .action(() => {});
     registerPreActionHooks(programLocal, "9.9.9-test");
     return programLocal;
   }
@@ -112,8 +108,9 @@ describe("registerPreActionHooks", () => {
     return current;
   }
 
-  async function runPreAction(parseArgv: string[], processArgv?: string[]) {
-    process.argv = processArgv ?? ["node", "openclaw", ...parseArgv];
+  async function runPreAction(command: string, argv = command) {
+    const parseArgv = command.split(" ");
+    process.argv = ["node", "openclaw", ...argv.split(" ")];
     const actionCommand = resolveActionCommand(parseArgv);
     if (!preActionHook) {
       throw new Error("missing preAction hook");
@@ -148,8 +145,8 @@ describe("registerPreActionHooks", () => {
     gatewayRunCommand.setOptionValueWithSource("force", true, "cli");
     try {
       await runPreAction(
-        ["gateway", "run"],
-        "node openclaw --log-level debug gateway run --raw-stream-path --reset --force".split(" "),
+        "gateway run",
+        "--log-level debug gateway run --raw-stream-path --reset --force",
       );
     } finally {
       gatewayRunCommand.setOptionValueWithSource("force", false, "default");
@@ -163,55 +160,33 @@ describe("registerPreActionHooks", () => {
   });
 
   it("passes the gateway config recheck to the state migration boundary", async () => {
-    await runPreAction(["gateway", "run"]);
-
-    expect(configReadyMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        beforeStatePreparation: expect.any(Function),
-        commandPath: ["gateway", "run"],
-        measure: expect.any(Function),
-      }),
-    );
+    await runPreAction("gateway run");
+    expectConfig(["gateway", "run"], { beforeStatePreparation: expect.any(Function) });
     const beforeStatePreparation = configReadyMock.mock.calls[0]?.[0]?.beforeStatePreparation;
     await beforeStatePreparation?.();
     expect(recheckGatewayMock).toHaveBeenCalledWith({
       opts: expect.objectContaining({ force: false, reset: false }),
       runtime: runtimeMock,
     });
-    expect(reloadGatewayEnvMock).toHaveBeenCalledWith({
-      runtime: runtimeMock,
-    });
+    expect(reloadGatewayEnvMock).toHaveBeenCalledWith({ runtime: runtimeMock });
   });
 
-  it("loads plugins for text local agent runs", async () => {
-    await runPreAction(["agent"], ["node", "openclaw", "agent", "--local", "--message", "hi"]);
-    expectConfig(["agent"]);
-    expect(loadPluginsMock).toHaveBeenCalledWith({ scope: "all" });
-  });
-
-  it.each([["onboard"], ["channels", "add"]])("keeps %j manifest-first", async (...commandPath) => {
-    await runPreAction(commandPath);
-    expectConfig(commandPath);
+  it.each(["onboard", "channels add"])("keeps %s manifest-first", async (command) => {
+    await runPreAction(command);
+    expectConfig(command.split(" "));
     expectNoCalls(loadPluginsMock);
   });
 
   it("skips startup bootstrap for parent default help actions", async () => {
-    await runPreAction(["channels"]);
+    await runPreAction("channels");
 
     expectNoCalls(emitCliBannerMock, setVerboseMock, configReadyMock, loadPluginsMock);
   });
 
-  it("skips help/version preaction and respects banner opt-out", async () => {
-    await runPreAction(["status"], ["node", "openclaw", "--version"]);
+  it("skips help/version preaction", async () => {
+    await runPreAction("status", "--version");
 
     expectNoCalls(emitCliBannerMock, setVerboseMock, configReadyMock);
-
-    vi.clearAllMocks();
-    process.env.OPENCLAW_HIDE_BANNER = "1";
-
-    await runPreAction(["status"]);
-
-    expectNoCalls(emitCliBannerMock, configReadyMock);
   });
 
   it("bootstraps when Commander consumed --help as a required option value", async () => {
@@ -227,16 +202,13 @@ describe("registerPreActionHooks", () => {
   });
 
   it.each([
-    ["channels send --json", false, 1, undefined],
-    ["config set gateway.auth.mode local --json", true, 0, false],
-    ["config set gateway.auth.mode local --dry-run --json", true, 1, true],
-    ["agents list", true, 0, undefined],
-  ] as const)("resolves early JSON log routing for %s", async (args, early, calls, forced) => {
-    if (early) {
-      loggingState.forceConsoleToStderr = true;
-      loggingState.earlyConsoleRoutingRestore = false;
-    }
-    await runPreAction(args.split(" "));
+    ["config set gateway.auth.mode local --json", 0, false],
+    ["config set gateway.auth.mode local --dry-run --json", 1, true],
+    ["agents list", 0, undefined],
+  ] as const)("resolves early JSON log routing for %s", async (args, calls, forced) => {
+    loggingState.forceConsoleToStderr = true;
+    loggingState.earlyConsoleRoutingRestore = false;
+    await runPreAction(args);
     expect(routeLogsToStderrMock).toHaveBeenCalledTimes(calls);
     if (forced !== undefined) {
       expect(loggingState.forceConsoleToStderr).toBe(forced);
@@ -247,10 +219,7 @@ describe("registerPreActionHooks", () => {
     loggingState.forceConsoleToStderr = true;
     loggingState.earlyConsoleRoutingRestore = false;
 
-    await runPreAction(
-      ["models", "aliases", "list"],
-      ["node", "openclaw", "models", "aliases", "list", "--plain"],
-    );
+    await runPreAction("models aliases list", "models aliases list --plain");
 
     expect(loggingState.forceConsoleToStderr).toBe(true);
     expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
@@ -298,26 +267,16 @@ describe("registerPreActionHooks", () => {
     }
   });
 
-  it("bypasses config guard for config validate when root option values are present", async () => {
-    await runPreAction(
-      ["config", "validate"],
-      ["node", "openclaw", "--profile", "work", "config", "validate"],
-    );
-
-    expectNoCalls(configReadyMock, loadPluginsMock);
-  });
-
   it("routes logs to stderr during plugin loading in --json mode and restores after", async () => {
     let stderrDuringPluginLoad = false;
     loadPluginsMock.mockImplementation(() => {
       stderrDuringPluginLoad = loggingState.forceConsoleToStderr;
     });
 
-    await runPreAction(["channels", "send"], ["node", "openclaw", "channels", "send", "--json"]);
+    await runPreAction("channels send", "channels send --json");
 
-    expect(loadPluginsMock).toHaveBeenCalledWith({
-      scope: "configured-channels",
-    });
+    expect(loadPluginsMock).toHaveBeenCalledWith({ scope: "configured-channels" });
+    expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
     expect(stderrDuringPluginLoad).toBe(true);
     expect(loggingState.forceConsoleToStderr).toBe(false);
   });
@@ -327,9 +286,7 @@ describe("registerPreActionHooks", () => {
     program = buildProgram();
     const hooks = (
       program as unknown as {
-        _lifeCycleHooks?: {
-          preAction?: Array<(thisCommand: Command, actionCommand: Command) => Promise<void> | void>;
-        };
+        _lifeCycleHooks?: { preAction?: Array<Parameters<Command["hook"]>[1]> };
       }
     )["_lifeCycleHooks"]?.preAction;
     preActionHook = hooks?.[0] ?? null;

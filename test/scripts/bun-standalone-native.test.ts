@@ -111,6 +111,84 @@ function hoistedCopies() {
 }
 
 describe("standalone native sidecar", () => {
+  it("retains opaque parser dependencies from emitted companions excluded by source selection", () => {
+    const { root, write, pkg } = fixture();
+    write(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        type: "module",
+        dependencies: { "syntax-library": "1.0.0" },
+      }),
+    );
+    const parser = pkg(
+      "syntax-library",
+      { main: "index.cjs" },
+      { "index.cjs": "exports.parse = JSON.parse;" },
+    );
+    const source = `import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
+export function parse(text) { return require("syntax-library").parse(text); }`;
+    write(path.join(root, "src/scanner.ts"), source);
+    write(path.join(root, "dist/scanner.js"), 'export { parse } from "./scanner-hash.mjs";');
+    write(path.join(root, "dist/scanner-hash.mjs"), source);
+    write(
+      path.join(root, "disk-loader.cjs"),
+      'const {createRequire} = require("node:module"); exports.load = createRequire(__filename); exports.platform = require("node:os").platform();',
+    );
+    const sources = createStandaloneSourceEntries({
+      sourceRoot: root,
+      configs: [{ entry: { scanner: "src/scanner.ts" }, fixedExtension: false }],
+    });
+    const native = createStandaloneNativeAdapter({ runtimeRoot: root, parse });
+    const entries = native.discover(["dist/scanner.js", "dist/scanner-hash.mjs"], {
+      selectRuntimeEntries: sources.selectRuntimeEntries,
+      scanOnlyEntries: ["disk-loader.cjs"],
+    });
+    expect(entries).toEqual([
+      "dist/scanner.js",
+      path.relative(root, path.join(parser, "index.cjs")).split(path.sep).join("/"),
+    ]);
+    expect(native.builtinModules).toContain("node:os");
+    fs.unlinkSync(path.join(root, "dist/scanner-hash.mjs"));
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `const {parse} = await import(${JSON.stringify(pathToFileURL(path.join(root, "src/scanner.ts")).href)}); console.log(JSON.stringify(parse('{"type":"fixture"}')));`,
+      ],
+      { cwd: root, encoding: "utf8", timeout: 10_000 },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ type: "fixture" });
+  });
+
+  it("keeps native routing bytes stable across graph discovery order", () => {
+    const { root, pkg } = fixture();
+    const entries = ["@fixture/alpha", "@fixture/bravo"].map((name) =>
+      path.join(
+        pkg(
+          name,
+          { type: "module", main: "index.js" },
+          { "index.js": "export const value = 1;", "runtime.wasm": "synthetic resource" },
+        ),
+        "index.js",
+      ),
+    );
+    const capture = (filenames: string[]) =>
+      createStandaloneNativeAdapter({ runtimeRoot: root, parse }).finalize({
+        metafile: { inputs: Object.fromEntries(filenames.map((filename) => [filename, {}])) },
+      });
+    const first = capture(entries);
+    const reversed = capture(entries.toReversed());
+    expect(first.files.filter((file) => file.source.endsWith("runtime.wasm"))).toHaveLength(2);
+    expect(
+      reversed.files.map((file) => file.source).toSorted((a, b) => a.localeCompare(b)),
+    ).toEqual(first.files.map((file) => file.source).toSorted((a, b) => a.localeCompare(b)));
+    expect(reversed.bootstrapReplacement.replacement).toBe(first.bootstrapReplacement.replacement);
+  });
+
   it("loads admitted addons through the native boundary and preserves the module cache", () => {
     const { root, write, pkg } = fixture();
     const addon = pkg("addon", { main: "binding.node" }, { "binding.node": "native fixture" });

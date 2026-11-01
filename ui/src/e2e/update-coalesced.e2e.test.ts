@@ -49,7 +49,7 @@ function watchPageErrors(page: Page) {
 }
 async function announceUpdate(page: Page, gateway: MockGatewayControls, mobile = false) {
   expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
-  await gateway.waitForRequest("chat.startup");
+  await gateway.waitForRequest("sessions.messages.subscribe");
   if (mobile) {
     await page.getByRole("button", { name: "Expand sidebar" }).click();
   }

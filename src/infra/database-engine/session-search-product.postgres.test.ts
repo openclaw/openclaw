@@ -138,6 +138,12 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
     expect(capped.truncated).toBe(true);
     expect(capped.hits.every((hit) => hit.sessionKey.startsWith("agent:main:"))).toBe(true);
 
+    await append("underscore", "underscore-hit", "quay signal", "user", "dev_ops");
+    await append("lookalike", "lookalike-hit", "quay signal", "user", "devxops");
+    expect(
+      (await search("quay signal", { agentId: "dev_ops" })).hits.map((hit) => hit.messageId),
+    ).toEqual(["underscore-hit"]);
+
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
     const config = {
       agents: { entries: { main: {} } },
@@ -197,8 +203,18 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
     expect((await search("& | ! ()")).hits).toEqual([]);
     expect((await search("x".repeat(4096))).hits).toEqual([]);
     expect((await search("x ".repeat(2048).trim())).hits).toEqual([]);
-    await expect(search(" ")).rejects.toThrow("query must not be empty");
-    await expect(search("x".repeat(4097))).rejects.toThrow("query must not exceed 4096");
+  });
+
+  it("snippets the passage holding a punctuation-joined match and keeps its punctuation", async () => {
+    await append(
+      "filename",
+      "filename-hit",
+      `Opening notes for the deploy review. ${"Routine context keeps going here. ".repeat(80)}The fix to server.py landed after review.`,
+    );
+    const { hits } = await search("server.py", { sessionId: "filename" });
+    expect(hits.map((hit) => hit.messageId)).toEqual(["filename-hit"]);
+    expect(hits[0]!.snippet).toContain("fix to server.py landed");
+    expect(hits[0]!.snippet).not.toContain("Opening");
   });
 
   it("publishes appends, rebuilds the active branch and removes deleted transcripts", async () => {

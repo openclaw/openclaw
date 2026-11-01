@@ -30,14 +30,10 @@ describe("isSessionTitlePending", () => {
 
 describe("resolveSessionDisplayName", () => {
   it.each(["Subagent [worker]:"])("treats translated prefix %s as literal text", (prefix) => {
-    const translation = vi.spyOn(i18n, "t").mockReturnValue(prefix);
-    try {
-      const key = "agent:main:subagent:worker";
-      const row = { label: `${prefix} Research sources` };
-      expect(resolveSessionDisplayName(key, row)).toBe("Research sources");
-    } finally {
-      translation.mockRestore();
-    }
+    using _ = vi.spyOn(i18n, "t").mockReturnValue(prefix);
+    const key = "agent:main:subagent:worker";
+    const row = { label: `${prefix} Research sources` };
+    expect(resolveSessionDisplayName(key, row)).toBe("Research sources");
   });
 
   it("uses the same friendly main-thread name for every agent", () => {

@@ -38,7 +38,7 @@ export const EXTRA_PAIRING_CHANNELS = [
   "line",
   "sms",
 ] as const;
-export type ExtraPairingChannel = (typeof EXTRA_PAIRING_CHANNELS)[number];
+type ExtraPairingChannel = (typeof EXTRA_PAIRING_CHANNELS)[number];
 
 // No redirects or ambient proxy: this fixture sends only to its owned loopback listeners.
 async function post(

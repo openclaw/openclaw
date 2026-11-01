@@ -381,7 +381,9 @@ export function createXApiClient(options: XOAuthOptions & { spend: XSpend; beare
   }
 
   return {
-    spend: options.spend,
+    get spend() {
+      return options.spend;
+    },
     getMentions: (params: {
       userId: string;
       sinceId?: string;

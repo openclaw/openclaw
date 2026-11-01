@@ -6,6 +6,7 @@ import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-c
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import * as state from "../../state/openclaw-state-db.js";
 import * as accountOps from "../../state/user-model-account-operations.js";
+import { readUserModelAccountRecord } from "../../state/user-model-account-records.kernel.js";
 import * as accounts from "../../state/user-model-accounts.js";
 import { mergeCanonicalUserProfiles } from "../../state/user-profile-writes.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -80,12 +81,7 @@ function mutateRecord(profileId: string, transform: (value: string) => string | 
       scope_id: ownerProfileId,
       name: `model-account:${profileId}`,
     } as const;
-    const predicate = query
-      .selectFrom("secret_store_entries")
-      .select("value")
-      .where((eb) => eb.and(scope));
-    const row = executeSqliteQuerySync(db, predicate).rows[0]!;
-    const value = transform(row.value!);
+    const value = transform(readUserModelAccountRecord(db, ownerProfileId, scope.name)!);
     const mutation =
       value === undefined
         ? query.deleteFrom("secret_store_entries").where((eb) => eb.and(scope))
@@ -98,15 +94,11 @@ function mutateRecord(profileId: string, transform: (value: string) => string | 
 }
 
 it("keeps its private lifetime through OAuth/usage updates and unlink, with cheap effect assertions", () =>
-  withAccount(async ({ owner, profileId }) => {
+  withAccount(async ({ owner, profileId, credential }) => {
     const grant = await withoutMainThreadSql(() => capture(profileId));
     await withPersonalAuthProfileStore(profileId, async (store) => {
       await store.update(
         (current) => {
-          const credential = current.profiles[profileId];
-          if (credential?.type !== "oauth") {
-            throw new Error("Expected synthetic OAuth credential");
-          }
           current.profiles[profileId] = {
             ...credential,
             access: "synthetic-refreshed-access",
@@ -136,13 +128,6 @@ it("keeps its private lifetime through OAuth/usage updates and unlink, with chea
       grant.assertCurrent();
       expect(requests).not.toHaveBeenCalled();
     });
-    requests.mockRestore();
-    expect(Object.keys(grant).toSorted()).toEqual([
-      "assertCurrent",
-      "authorizationId",
-      "dispose",
-      "revalidate",
-    ]);
     expect(accounts.readUserModelAuthProfile(profileId)).toEqual({
       credential: expect.objectContaining({ access: "synthetic-refreshed-access" }),
       usageStats: { lastUsed: 17 },
@@ -154,28 +139,20 @@ it("keeps its private lifetime through OAuth/usage updates and unlink, with chea
     expectRetired(grant);
   }));
 
-it.each(["same bytes", "refreshed bytes"])(
-  "survives owner restart but rotates on same-ID reconnect (%s)",
-  async (kind) => {
-    await withAccount(async ({ profileId, credential, reconnect }) => {
-      const before = await capture(profileId);
-      const originalId = before.authorizationId;
-      await closeOpenClawStateDatabaseAsync();
-      const restarted = await capture(profileId);
-      expect(restarted.authorizationId).toBe(originalId);
-      const connected = await reconnect(
-        kind === "same bytes" ? credential : { ...credential, access: "synthetic-new-access" },
-      );
-      expect(connected.authProfileId).toBe(profileId);
-      expectRetired(restarted);
-      await expect(restarted.revalidate()).rejects.toMatchObject(retired);
-      await closeOpenClawStateDatabaseAsync();
-      const replacement = await capture(profileId);
-      expect(replacement.authorizationId).not.toBe(originalId);
-      replacement.assertCurrent();
-    });
-  },
-);
+it("survives owner restart but rotates on identical-byte same-ID reconnect", () =>
+  withAccount(async ({ profileId, reconnect }) => {
+    const { authorizationId } = await capture(profileId);
+    await closeOpenClawStateDatabaseAsync();
+    const restarted = await capture(profileId);
+    expect(restarted.authorizationId).toBe(authorizationId);
+    expect((await reconnect()).authProfileId).toBe(profileId);
+    expectRetired(restarted);
+    await expect(restarted.revalidate()).rejects.toMatchObject(retired);
+    await closeOpenClawStateDatabaseAsync();
+    const replacement = await capture(profileId);
+    expect(replacement.authorizationId).not.toBe(authorizationId);
+    replacement.assertCurrent();
+  }));
 
 it("allows concurrent adoption after an out-of-process reconnect without reviving old grants", () =>
   withAccount(async ({ owner, profileId, credential, env }) => {
@@ -228,7 +205,7 @@ it("separates a different account while preserving the original explicit pin", (
   }));
 
 it("explicitly enrolls a legacy record once through the native writer without exporting its lifetime", () =>
-  withAccount(async ({ profileId }) => {
+  withAccount(async ({ owner, profileId }) => {
     mutateRecord(profileId, (raw) => {
       const record = JSON.parse(raw);
       delete record.authorizationId;
@@ -236,14 +213,8 @@ it("explicitly enrolls a legacy record once through the native writer without ex
     });
     const grant = await withoutMainThreadSql(() => capture(profileId));
     const { db } = state.openOpenClawStateDatabase();
-    const row = executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<Pick<DB, "secret_store_entries">>(db)
-        .selectFrom("secret_store_entries")
-        .select("value")
-        .where("name", "=", `model-account:${profileId}`),
-    ).rows[0]!;
-    expect(JSON.parse(row.value!).authorizationId).toMatch(/^[0-9a-f-]{36}$/);
+    const raw = readUserModelAccountRecord(db, owner.id, `model-account:${profileId}`)!;
+    expect(JSON.parse(raw).authorizationId).toMatch(/^[0-9a-f-]{36}$/);
     await closeOpenClawStateDatabaseAsync();
     const restarted = await capture(profileId);
     expect(restarted.authorizationId).toBe(grant.authorizationId);

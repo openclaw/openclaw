@@ -16,6 +16,7 @@ import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { projectProgressCardRuntime } from "../chat-subagent-wait.ts";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
@@ -54,6 +55,12 @@ export function ChatDetailsProgress(props: Props) {
           startedAt={props.props?.selectedSession?.startedAt}
           endedAt={props.props?.selectedSession?.endedAt}
           hasActiveRun={props.props?.runActive}
+          runtime={projectProgressCardRuntime(
+            props.props?.selectedSession,
+            props.props ?? {},
+            props.props!.progressCard!.updatedAt,
+            props.props?.connected,
+          )}
           collapseComposerByDefault={props.props?.collapseTaskProgress}
           composerDisclosureContext={{
             presented: props.presented,
@@ -63,6 +70,7 @@ export function ChatDetailsProgress(props: Props) {
             manualOnly: true,
           }}
           refreshAction={props.props?.progressCardRefresh}
+          reserveRefresh={props.desktop && props.props?.progressCardRefreshReserved}
           menuRef={props.menuRef}
           menuOptions={{
             class: "chat-details-progress__menu",
@@ -183,6 +191,7 @@ export function MobileTaskProgressControls(props: MobileTaskProgressProps) {
           props.startedAt,
           props.endedAt,
           props.hasActiveRun ?? true,
+          props.runtime,
         )
       : undefined,
   );
@@ -196,7 +205,7 @@ export function MobileTaskProgressControls(props: MobileTaskProgressProps) {
         <button
           {...attributes}
           type="button"
-          class="oc-menu-item task-progress-details__show-in-chat"
+          class="oc-menu-item oc-menu-item--switch task-progress-details__show-in-chat"
         >
           <span class="oc-menu-item__label">{t("sessionProgressCard.showInChat")}</span>
           <span

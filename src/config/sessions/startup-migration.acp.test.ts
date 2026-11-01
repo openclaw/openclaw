@@ -29,7 +29,7 @@ import * as legacyMainMigration from "./legacy-main-session-migration.js";
 import { replaceSessionEntrySync } from "./session-accessor.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
 import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
-import { runSessionStartupMigration } from "./startup-migration.js";
+import { runSessionStartupMigration } from "./startup-migration-runtime.js";
 
 function acpMeta(agent: string, lastActivityAt = 100) {
   return {
@@ -307,6 +307,60 @@ it("startup requires offline ACP repair before handing restored stores to runtim
         .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
         .get(nullKey),
     ).toEqual({ entry_json: rawNull });
+  });
+});
+
+it.each(["running", "queued", "duplicate"] as const)(
+  "startup repairs %s legacy outcomes before refusing embedded ACP metadata",
+  async (status) => {
+    await withAcpState(["main"], async ({ env, startup, handoff, seed }) => {
+      const sessionKey = "agent:main:acp:legacy-outcome";
+      const entry = seed(sessionKey);
+      const raw = `${JSON.stringify({ ...entry, acp: acpMeta("main") }).slice(0, -1)},${
+        status === "duplicate" ? '"status":"running","status":"done"' : `"status":"${status}"`
+      }}`;
+      const { db } = openOpenClawAgentDatabase({ agentId: "main", env });
+      db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
+        raw,
+        sessionKey,
+      );
+
+      await expect(startup()).rejects.toThrow(
+        `ACP metadata requires offline migration at agent "main" session "${sessionKey}"`,
+      );
+      expect(handoff).not.toHaveBeenCalled();
+      const persisted = db
+        .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+        .get(sessionKey)?.entry_json;
+      if (status === "duplicate") {
+        expect(persisted).toBe(raw);
+      } else {
+        expect(JSON.parse(String(persisted))).toMatchObject({
+          status: "killed",
+          abortedLastRun: true,
+          acp: acpMeta("main"),
+        });
+      }
+    });
+  },
+);
+
+it("startup finishes legacy validation after finding ACP and before repairing any outcome", async () => {
+  await withAcpState(["main"], async ({ env, startup, handoff, seed }) => {
+    const sessionKey = "agent:main:a-legacy-outcome";
+    const raw = JSON.stringify({ ...seed(sessionKey), status: "running", acp: acpMeta("main") });
+    const unsupportedKey = "agent:main:z-unsupported";
+    const unsupported = JSON.stringify({ ...seed(unsupportedKey), room: "retired-room" });
+    const { db } = openOpenClawAgentDatabase({ agentId: "main", env });
+    const update = db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?");
+    update.run(raw, sessionKey);
+    update.run(unsupported, unsupportedKey);
+
+    await expect(startup()).rejects.toThrow('Session field "room" predates July 2026');
+    expect(handoff).not.toHaveBeenCalled();
+    expect(
+      db.prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?").get(sessionKey),
+    ).toEqual({ entry_json: raw });
   });
 });
 

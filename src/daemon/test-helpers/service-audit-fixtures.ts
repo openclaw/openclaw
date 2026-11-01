@@ -23,7 +23,7 @@ export function resetServiceAuditMocks() {
     });
   }
   resolveBunRuntimeInfoMock.mockReset();
-  resolveBunRuntimeInfoMock.mockResolvedValue(runtimeFixture("1.4.3", "3.51.3"));
+  resolveBunRuntimeInfoMock.mockResolvedValue(runtimeFixture("1.4.4", "3.51.3"));
   resolveNodeRuntimeInfoMock.mockReset();
   resolveNodeRuntimeInfoMock.mockResolvedValue(runtimeFixture("26.8.1", "3.53.4"));
 }

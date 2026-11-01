@@ -205,6 +205,7 @@ export function projectSettledProviderFailureAttempt(
       bootstrap: { bootstrapPromptWarning: {} },
       systemPrompt: {},
       sessionRuntime: {
+        transport: { effectiveExtraParams: {} },
         agentSession: {
           clientToolCallSlots: [],
           hasDeliveredSourceReply: () => false,

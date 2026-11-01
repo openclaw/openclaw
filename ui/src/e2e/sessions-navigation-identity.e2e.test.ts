@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { installMockGateway, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
+import { getInitialHistoryRequests } from "./chat-initial-history.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "sessions-navigation-identity" });
@@ -7,13 +8,13 @@ const targetKey = "agent:main:thread:12345678-aaaa-4000-8000-000000000001";
 const targetText = "Selected target transcript 741";
 const timestamp = Date.parse("2026-09-15T12:00:00.000Z");
 
-async function requestParams(gateway: MockGatewayControls, method: string) {
-  return (await gateway.getRequests(method)).map((request) => request.params);
+async function requestParams(gateway: MockGatewayControls) {
+  return (await getInitialHistoryRequests(gateway)).map((request) => request.params);
 }
-async function expectTargetOnly(gateway: MockGatewayControls, method: string, otherKey: string) {
-  const params = await requestParams(gateway, method);
-  expect(params).toContainEqual(expect.objectContaining({ sessionKey: targetKey }));
-  expect(params).not.toContainEqual(expect.objectContaining({ sessionKey: otherKey }));
+async function expectTargetOnly(gateway: MockGatewayControls, otherKey: string) {
+  const params = await requestParams(gateway);
+  expect(params).toContainEqual(expect.objectContaining({ key: targetKey }));
+  expect(params).not.toContainEqual(expect.objectContaining({ key: otherKey }));
 }
 function session(key: string, sessionId: string, displayName: string) {
   return { key, sessionId, displayName, kind: "direct", updatedAt: timestamp };
@@ -141,18 +142,18 @@ suite.define(() => {
             await page.getByRole("heading", { name: "Choose a session", exact: true }).isVisible(),
           ).toBe(false);
           await expect
-            .poll(() => requestParams(gateway, "chat.startup"))
-            .toContainEqual(expect.objectContaining({ sessionKey: targetKey }));
-          await expectTargetOnly(gateway, "chat.startup", other.key);
+            .poll(() => requestParams(gateway))
+            .toContainEqual(expect.objectContaining({ key: targetKey }));
+          await expectTargetOnly(gateway, other.key);
           expect(
             await page.getByText("Different synthetic transcript 982", { exact: true }).isVisible(),
           ).toBe(false);
         };
         await assertDestination();
-        const beforeReloadRequests = await gateway.getRequests("chat.startup");
+        const beforeReloadRequests = await getInitialHistoryRequests(gateway);
         await page.reload();
         await assertDestination();
-        const afterReloadRequests = await gateway.getRequests("chat.startup");
+        const afterReloadRequests = await getInitialHistoryRequests(gateway);
         expect(
           afterReloadRequests.every((request) =>
             beforeReloadRequests.every((previous) => previous.id !== request.id),

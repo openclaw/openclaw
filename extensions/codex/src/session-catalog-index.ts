@@ -495,7 +495,8 @@ export class CodexCatalogIndex {
     this.assertCurrent();
     let frontier: CodexCatalogOrderKey | undefined;
     const batchOrder = this.ordering.captureBatch(this.availability.complete);
-    const remaining = incremental ? undefined : new Map(this.rows);
+    const trackRemovals = !incremental && (!useStateDbOnly || !this.options.localSessionsRoot);
+    const remaining = trackRemovals ? new Map(this.rows) : undefined;
     const pages = readCodexCatalogHydrationPages(async (params, remainingRows) => {
       this.assertCurrent();
       return await this.options.readNative(params, remainingRows);
@@ -545,13 +546,11 @@ export class CodexCatalogIndex {
     }
     // DB-only listing can omit local files when indexing is incomplete or the
     // database is unavailable. Verified file absence and events own their removal.
-    if (remaining && (!useStateDbOnly || !this.options.localSessionsRoot)) {
-      for (const [id, row] of remaining) {
-        if (this.rows.get(id) === row) {
-          this.remove(id);
-        }
+    remaining?.forEach((row, id) => {
+      if (this.rows.get(id) === row) {
+        this.remove(id);
       }
-    }
+    });
     this.availability.publish(frontier, true);
     await this.persistence.finishHydration(this.overflow);
   }

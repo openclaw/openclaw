@@ -16,6 +16,7 @@ import * as restartSentinel from "../infra/restart-sentinel.js";
 import { resetLogger } from "../logging/logger.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { GatewayClient, isGatewayProtocolResponseError } from "./client.js";
@@ -384,6 +385,29 @@ describe("config writer policy-close ordering", () => {
       clients.push(client);
       return client;
     }
+
+    it("reports the external read-only policy to an admin who tries to write config", async () => {
+      const config = makeConfig({ controlUi: { enabled: false }, reload: { mode: "off" } });
+      await withEnvAsync({ OPENCLAW_CONFIG_READONLY: "1" }, async () => {
+        const writer = await start(config, { scopes: ["operator.admin"] });
+        const before = await writer.request<ConfigSnapshot>("config.get", {});
+        const beforeBytes = await fs.readFile(state.configPath, "utf8");
+        const logging = { level: "debug" };
+        for (const method of ["config.set", "config.patch", "config.apply"]) {
+          const raw = JSON.stringify(
+            method === "config.patch" ? { logging } : { ...config, logging },
+          );
+          await expect(
+            writer.request(method, { baseHash: before.hash, raw }),
+            method,
+          ).rejects.toMatchObject({
+            code: "UNAVAILABLE",
+            details: { code: "OPENCLAW_CONFIG_READONLY" },
+          });
+        }
+        expect(await fs.readFile(state.configPath, "utf8")).toBe(beforeBytes);
+      });
+    });
 
     it("keeps authored provenance out of valid and invalid read-scoped config.get responses", async () => {
       const inlineKey = "synthetic-provider-key";

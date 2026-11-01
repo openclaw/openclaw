@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createWizardPrompter } from "../../test/helpers/auth-wizard.js";
+import { createWizardPrompter as createPrompter } from "../../test/helpers/auth-wizard.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveGatewaySshRemotePort } from "../gateway/connection-details.js";
 import type { GatewayBonjourBeacon } from "../infra/bonjour-discovery.js";
@@ -30,10 +30,6 @@ vi.mock("../infra/widearea-dns.js", () => ({
 vi.mock("./onboard-helpers.js", () => ({
   detectBinary,
 }));
-
-function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
-  return createWizardPrompter(overrides, { defaultSelect: "" });
-}
 
 function remoteConfig(
   remote: NonNullable<NonNullable<OpenClawConfig["gateway"]>["remote"]>,

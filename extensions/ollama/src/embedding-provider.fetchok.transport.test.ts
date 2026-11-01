@@ -2,11 +2,13 @@
 // Drives the production embedding path through the real SSRF guard and loopback
 // sockets, without mocking global fetch, SSRF runtime, or logging redaction.
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
+import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { buffer as consumeBuffer } from "node:stream/consumers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { createOllamaEmbeddingProvider } from "./embedding-provider.js";
+import { ollamaMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 
 type OllamaRequest = {
   method: string | undefined;
@@ -105,6 +107,71 @@ describe("Ollama embedding provider real transport", () => {
     vi.unstubAllEnvs();
     const pending = servers.splice(0);
     await Promise.all(pending.map((server) => server.close()));
+  });
+
+  it("separates alias caches by model digest while preserving embedding-only endpoints", async () => {
+    let digest: string | undefined = "first-model-digest";
+    const server = await startOllamaServer((request) =>
+      request.url === "/api/tags"
+        ? {
+            status: digest ? 200 : 404,
+            body: JSON.stringify({ models: [{ name: "alias:latest", digest }] }),
+          }
+        : { status: 200, body: JSON.stringify({ embeddings: [[1, 0]] }) },
+    );
+    const create = () =>
+      ollamaMemoryEmbeddingProviderAdapter.create({
+        config: {},
+        provider: "ollama",
+        model: "alias",
+        fallback: "none",
+        remote: { baseUrl: server.baseUrl, headers: { "X-Proxy-Auth": "fixture-proxy-key" } },
+      });
+    const first = await create();
+    const legacyIdentity = {
+      provider: "ollama",
+      baseUrl: server.baseUrl,
+      model: "alias",
+      outputDimensionality: undefined,
+      headersHash: createHash("sha256")
+        .update(JSON.stringify([["X-Proxy-Auth", "fixture-proxy-key"]]))
+        .digest("hex"),
+    };
+    expect(first.runtime?.cacheKeyData).toMatchObject({
+      model: "alias",
+      modelDigest: "first-model-digest",
+    });
+    expect(first.runtime?.indexIdentityAliases).toEqual([
+      { model: "alias", cacheKeyData: legacyIdentity },
+    ]);
+    digest = "second-model-digest";
+    const second = await create();
+    expect(second.runtime?.cacheKeyData).toEqual({
+      ...first.runtime?.cacheKeyData,
+      modelDigest: "second-model-digest",
+    });
+    expect(second.runtime?.indexIdentityAliases).toEqual(first.runtime?.indexIdentityAliases);
+    digest = undefined;
+    const embeddingOnly = await create();
+    expect(embeddingOnly.runtime?.cacheKeyData).not.toHaveProperty("modelDigest");
+    expect(embeddingOnly.runtime?.cacheKeyData).toEqual(legacyIdentity);
+    expect(embeddingOnly.runtime?.indexIdentityAliases).toBeUndefined();
+    if (!embeddingOnly.provider) {
+      throw new Error("Expected fixture embedding provider");
+    }
+    await expect(embeddingOnly.provider.embed("hello", { inputType: "query" })).resolves.toEqual([
+      1, 0,
+    ]);
+    expect(server.requests.filter((request) => request.url === "/api/tags")).toEqual(
+      Array.from({ length: 3 }, () => ({
+        method: "GET",
+        url: "/api/tags",
+        authorization: undefined,
+        proxyAuthorization: undefined,
+        proxyAuth: "fixture-proxy-key",
+        body: "",
+      })),
+    );
   });
 
   it("redacts bare authorization credentials reflected under unknown fields", async () => {

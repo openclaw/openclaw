@@ -2,7 +2,6 @@ import { setImmediate as afterMicrotasks } from "node:timers/promises";
 import { afterEach, assert, expect, it, onTestFinished, vi } from "vitest";
 // @vitest-environment node
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { outboxStorageScope } from "../../lib/chat/outbox-payload-store.runtime.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
@@ -11,6 +10,7 @@ import * as chat from "./chat-host.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { readQueuedMessageById } from "./chat-queue.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
+import { queued } from "./chat-thread-fixtures.test-support.ts";
 import { admitInitialTurnHandoff } from "./initial-turn-handoff-admission.ts";
 import { prepareInitialTurnHandoff } from "./initial-turn-handoff.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
@@ -97,15 +97,11 @@ it.each([false, true])("retries only confirmed versions (edited: %s)", async (ed
     },
     retainedAttachmentIds: () => new Set(),
   });
-  const item: ChatQueueItem = {
-    id: "confirmed",
-    text: "The message I confirmed",
-    createdAt: 1,
+  const item = queued("confirmed", "The message I confirmed", 1, "failed", {
     sessionKey: key,
     agentId: "main",
-    sendState: "failed",
     storageScope: outboxStorageScope(host),
-  };
+  });
   const loading = loadChatHistory(host, { deferBranches: true });
   const historyState = getChatHistoryLoadState(host);
   assert(historyState.phase === "in-flight", "Expected the pending history owner");
