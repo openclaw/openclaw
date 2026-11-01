@@ -19,7 +19,7 @@ describe("setOcPath", () => {
     expect(r.raw).toBe(`---\nname: github\ndescription: new desc\n---\nBody ${REDACTED_SENTINEL}.`);
   });
 
-  it.each(["has: colon", "1.10", "0123", "true", "~", "null", "- draft"])(
+  it.each(["", "has: colon", "1.10", "0123", "true", "~", "null", "- draft"])(
     "keeps the string %s readable as the same string",
     (value) => {
       const r = edit("---\nversion: 9.9\n---\n", "[frontmatter]/version", value);
@@ -38,6 +38,15 @@ describe("setOcPath", () => {
     const r = edit("---\nname: x\n---\n", "[frontmatter]/+version", "1.10");
     expect(r.raw).toContain('version: "1.10"');
     expect(parseYaml(r.raw.split(/^---$/m)[1] ?? "").version).toBe("1.10");
+  });
+
+  it.each(["", " \t", "\r\n"])("rejects blank item-field replacements %j", (value) => {
+    const ast = parseMd("## Tools\n- name: original\n- keep: stable\n");
+    const before = structuredClone(ast);
+    expect(() => setOcPath(ast, parseOcPath("oc://X.md/tools/name/name"), value)).toThrow(
+      expect.objectContaining({ reason: "parse-error" }),
+    );
+    expect(ast).toEqual(before);
   });
 
   it("edits only the selected duplicate-key item", () => {
