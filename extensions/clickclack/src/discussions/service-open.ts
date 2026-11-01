@@ -365,29 +365,37 @@ export async function openClickClackDiscussionBinding(
         },
       });
       await params.ensureTimer();
+      if (adopted) {
+        const channelId = adopted.id;
+        await withCurrentAuthority(() => revokeChannel(channelId));
+      }
+      let attempted = false;
       try {
-        if (adopted) {
-          const channelId = adopted.id;
-          await withCurrentAuthority(() => revokeChannel(channelId));
-          resolved = await withCurrentAuthority(() => client.updateChannel(channelId, fields));
-        } else {
-          resolved = await withCurrentAuthority(() =>
-            client.createChannel(workspace.id, { ...fields, kind: "public" }),
-          );
+        resolved = await withCurrentAuthority(() => {
+          attempted = true;
+          return adopted
+            ? client.updateChannel(adopted.id, fields)
+            : client.createChannel(workspace.id, { ...fields, kind: "public" });
+        });
+        if (!adopted) {
           await revokeChannel(resolved.id);
         }
         break;
       } catch (error) {
+        // Only a dispatched mutation can have an ambiguous remote outcome.
+        if (!attempted) {
+          throw error;
+        }
         const nameConflict = isClickClackChannelNameConflict(error);
         if (nameConflict && attempt < CHANNEL_NAME_MUTATION_ATTEMPTS - 1) {
           // A failed relist leaves the pending reservation for reconciliation.
-          channels = await client.channels(workspace.id);
+          channels = await withCurrentAuthority(() => client.channels(workspace.id));
           assertManagedChannelListContract(channels);
           continue;
         }
         const definitiveNoCreate = isDefinitiveNoCreateHttpError(error);
         try {
-          const relisted = await client.channels(workspace.id);
+          const relisted = await withCurrentAuthority(() => client.channels(workspace.id));
           assertManagedChannelListContract(relisted);
           const recovered = relisted.find(
             (candidate) =>

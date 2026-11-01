@@ -35,6 +35,7 @@ it("opens discussions through real agent storage, follows HTTP resets, and refus
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.sqlite");
   const channels: ClickClackChannel[] = [];
+  let lists = 0;
   let beforeList: (() => Promise<void>) | undefined;
   let duringCreate: (() => Promise<void>) | undefined;
   const apiBaseUrl = registerDiscussionTestTransport(
@@ -49,6 +50,7 @@ it("opens discussions through real agent storage, follows HTTP resets, and refus
         },
       ],
       channels: async () => {
+        lists += 1;
         await beforeList?.();
         return channels;
       },
@@ -150,10 +152,20 @@ it("opens discussions through real agent storage, follows HTTP resets, and refus
             await getClickClackDiscussionBindingStore(runtime).getAsync(scope(name).sessionKey),
           ).toMatchObject({ sessionId: reset ? "replacement" : name });
         }
+        duringCreate = async () => {
+          throw new Error("Ambiguous fixture transport failure");
+        };
+        await write("recover-attempted");
+        const recoveryLists = lists;
+        await expect(service.open(scope("recover-attempted").sessionKey)).resolves.toMatchObject({
+          state: "open",
+        });
+        expect(lists).toBe(recoveryLists + 2);
         duringCreate = undefined;
         for (const change of ["archive", "remove", "credential", "destination"] as const) {
           await write(change);
           const creates = channels.length;
+          const initialLists = lists;
           beforeList = async () => {
             beforeList = undefined;
             if (change === "archive") {
@@ -170,6 +182,31 @@ it("opens discussions through real agent storage, follows HTTP resets, and refus
             /authority changed|selected session changed/,
           );
           expect(channels).toHaveLength(creates);
+          expect(lists).toBe(initialLists + 1);
+          config.channels.clickclack.token = "synthetic";
+          config.channels.clickclack.apiBaseUrl = apiBaseUrl;
+        }
+        for (const change of ["archive", "credential", "destination"] as const) {
+          const name = "retire-during-http-" + change;
+          await write(name);
+          const initialLists = lists;
+          duringCreate = async () => {
+            if (change === "archive") {
+              await write(name, name, 1);
+            } else if (change === "credential") {
+              config.channels.clickclack.token = "retired";
+            } else {
+              config.channels.clickclack.apiBaseUrl = "https://retired.fixture.invalid";
+            }
+            throw new Error("Ambiguous fixture transport failure");
+          };
+          await expect(service.open(scope(name).sessionKey)).rejects.toThrow(
+            "Ambiguous fixture transport failure",
+          );
+          expect(lists).toBe(initialLists + 1);
+          expect(
+            await getClickClackDiscussionBindingStore(runtime).getAsync(scope(name).sessionKey),
+          ).toBeUndefined();
           config.channels.clickclack.token = "synthetic";
           config.channels.clickclack.apiBaseUrl = apiBaseUrl;
         }
