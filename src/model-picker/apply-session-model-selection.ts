@@ -38,8 +38,11 @@ import type { InternalSessionEntry as SessionEntry } from "../config/sessions/ty
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { triggerSessionPatchHook } from "../gateway/session-patch-hooks.js";
 import { resolveSessionWorkerPlacementContext } from "../gateway/session-worker-placement-context.js";
+import {
+  resolveWorkerPlacementCapabilities,
+  resolveWorkerPlacementRuntimeChangeError,
+} from "../gateway/worker-environments/placement-capabilities.js";
 import { prepareWorkerPlacementSessionRuntime } from "../gateway/worker-environments/placement-session-runtime-preparation.js";
-import { resolveWorkerPlacementCapabilities } from "../gateway/worker-environments/placement-session-runtime.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveSystemEventQueueKey } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -266,29 +269,6 @@ export async function applySessionModelSelectionInternal(
     sessionKey: params.sessionKey,
     entry: nextEntry,
   });
-  const readRuntimeCapabilities = () =>
-    resolveWorkerPlacementCapabilities(placementRuntime(params.cfg, nextEntry));
-  /**
-   * Rejects a model selection when the candidate runtime is incompatible with an
-   * active cloud-worker placement. Mirrors the sessions.patch guard so directive
-   * model changes are validated before they persist.
-   */
-  function resolveActivePlacementModelSelectionError(): string | undefined {
-    const sessionId = nextEntry.sessionId;
-    if (!sessionId) {
-      return undefined;
-    }
-    if (!placement || placement.state === "local") {
-      return undefined;
-    }
-    const { executionMode } = readRuntimeCapabilities();
-    if (executionMode === placement.executionMode) {
-      return undefined;
-    }
-    return executionMode
-      ? `Session cannot change cloud placement execution mode while placement is ${placement.state}.`
-      : `Session cannot select a runtime without cloud placement support while cloud worker placement is ${placement.state}.`;
-  }
   // An explicit selection retains the existing persistence and conflict semantics even when idempotent.
   nextEntry.updatedAt = Date.now();
   let persistedEntry: SessionEntry;
@@ -300,7 +280,14 @@ export async function applySessionModelSelectionInternal(
       placementError = "Session placement changed; retry model selection.";
       return placementError;
     }
-    placementError = resolveActivePlacementModelSelectionError();
+    placementError =
+      nextEntry.sessionId && placement && placement.state !== "local"
+        ? resolveWorkerPlacementRuntimeChangeError(
+            placement,
+            resolveWorkerPlacementCapabilities(placementRuntime(params.cfg, nextEntry))
+              .executionMode,
+          )
+        : undefined;
     return (
       params.validateAuthProfileSelection?.() ??
       prepared.validateRuntimeSelection?.() ??

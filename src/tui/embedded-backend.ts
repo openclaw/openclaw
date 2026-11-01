@@ -285,8 +285,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       }
       opts = { ...options, message: command.args };
     }
-    const sideCommand = /^\/(?:btw|side)(?::|\s)+(.*)$/i.exec(opts.message.trim());
-    const question = !explicitFollowup ? sideCommand?.[1]?.trim() || undefined : undefined;
+    const question = command?.command.key === "btw" ? command.args : undefined;
     const isQueueCommand = !explicitFollowup && command?.command.key === "queue";
     const agentId = resolveSessionAgentId({
       sessionKey: opts.sessionKey,

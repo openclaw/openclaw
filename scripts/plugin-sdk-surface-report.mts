@@ -308,7 +308,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: callable-tool prompt guidance for harnesses (#187661).
       // +1: accepted diagnostic trace-context normalizer (#189133).
       // +1: accepted WorkerResourceReceipt type on plugin-entry (#189019).
-      3855,
+      // +3: accepted WorkerRetention policy, operation, and observation types (#189346).
+      3858,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

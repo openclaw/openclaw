@@ -7,7 +7,6 @@ import { resolveConfiguredGitHubToolIdentity } from "../../agents/github-tool-id
 import { resolveGitRepositoryPaths } from "../../agents/worktrees/git.js";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import type { WorkerExecutionMode, WorkerProfile, WorkerProvider } from "../../plugins/types.js";
-import { requireWorkerRetentionPolicy } from "../../plugins/worker-retention.js";
 import { workerEnvironmentServiceError as serviceError } from "./environment-errors.js";
 import { assertEnvironmentRecipeSecretsMapped } from "./environment-recipe.js";
 import {
@@ -18,6 +17,10 @@ import * as prep from "./preparation-identity.schema.js";
 import * as projects from "./project-preparation.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import type { WorkerProviderRepositorySource } from "./provider-project-preparation.js";
+import {
+  prepareWorkerRetentionPolicy,
+  requireAdmittedWorkerRetentionPolicy,
+} from "./provider-retention-policy.js";
 import { prepareRepositoryWorkerProjectSource } from "./repository-project-admission.js";
 import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
@@ -54,7 +57,13 @@ export type WorkerProviderIntentPreparationOptions = {
   emptyWorkspace?: true;
   /** Dedicated runtime capacity without repository contents or read authority. */
   imageReserve?: true;
-  repository?: { agentId: string; url: string; ref?: string; baseCommit?: string };
+  repository?: {
+    agentId: string;
+    url: string;
+    ref?: string;
+    baseCommit?: string;
+    workspaceId?: string;
+  };
   projectRepository?: RepositoryWorkerProjectSnapshot;
   runSetupScript?: boolean;
   signal?: AbortSignal;
@@ -169,8 +178,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
       }
       provider = providerFor(configuredProfile.provider);
       providerId = normalizeCapabilityProviderId(provider.id) ?? provider.id;
-      const settings = validation.requireWorkerProfile(configuredProfile.settings ?? {});
-      profileSnapshot = { install: configuredProfile.install ?? "bundle", settings };
+      profileSnapshot = validation.snapshotWorkerAllocationProfile(configuredProfile);
     }
     const snapshot = allocationSnapshot(profileSnapshot, createOptions);
     validation.requireWorkerProfile(snapshot);
@@ -214,6 +222,14 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
     const { provider, providerId } = resolved;
     const { signal, projectPath } = createOptions;
     let profileSnapshot: WorkerProviderPreparedIntent["profileSnapshot"] = resolved.profileSnapshot;
+    const retainedPolicy = prepareWorkerRetentionPolicy({
+      projectNamespace: options.projectNamespace,
+      workspaceId: createOptions.repository?.workspaceId,
+      imageReserve: createOptions.imageReserve,
+      profileSnapshot,
+      provider,
+      retainedPolicy: createOptions.retainedPolicy,
+    });
     const machineClass =
       typeof profileSnapshot.machineClass === "string" ? profileSnapshot.machineClass : undefined;
     const os = typeof profileSnapshot.os === "string" ? profileSnapshot.os : undefined;
@@ -236,11 +252,9 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
         "Worker preparation must have exactly one project source",
       );
     }
-    const supportsProjectPreparation = provider.supportsProjectPreparation?.(
-      profile,
-      machineClass,
-      os,
-    );
+    // A session-private retained disk cannot consume a fixed-lease prepared image/reserve.
+    const supportsProjectPreparation =
+      !retainedPolicy && provider.supportsProjectPreparation?.(profile, machineClass, os);
     if (
       (projectPath ||
         createOptions.repository ||
@@ -377,6 +391,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
     const intent = {
       providerId,
       profileSnapshot,
+      ...(retainedPolicy ? { retainedPolicy } : {}),
     };
     preparedIntents.set(intent, {
       profileId,
@@ -425,19 +440,12 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
       signal,
     };
     signal?.throwIfAborted();
-    const config = options.getConfig();
-    const configured = config.cloudWorkers?.profiles?.[record.profileId];
+    const configured = options.getConfig().cloudWorkers?.profiles?.[record.profileId];
     if (
       !configured ||
       normalizeCapabilityProviderId(configured.provider) !== record.providerId ||
       !isDeepStrictEqual(
-        allocationSnapshot(
-          {
-            install: configured.install ?? "bundle",
-            settings: validation.requireWorkerProfile(configured.settings ?? {}),
-          },
-          createOptions,
-        ),
+        allocationSnapshot(validation.snapshotWorkerAllocationProfile(configured), createOptions),
         allocationSnapshot(record.profileSnapshot, createOptions),
       )
     ) {
@@ -544,10 +552,10 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
     admittedIntent?: WorkerProviderPreparedIntent,
   ) => {
     const { machineClass, os, executionMode, projectPath, signal } = createOptions;
-    const retainedPolicy =
-      createOptions.retainedPolicy === undefined
-        ? undefined
-        : requireWorkerRetentionPolicy(createOptions.retainedPolicy);
+    const retainedPolicy = requireAdmittedWorkerRetentionPolicy(
+      createOptions.retainedPolicy,
+      admittedIntent?.retainedPolicy,
+    );
     const inherited = createOptions.inherited
       ? {
           providerId: createOptions.inherited.providerId,
@@ -696,7 +704,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
           profileId: normalizedProfileId,
           profileSnapshot,
           provisionOperationId,
-          retention: retainedPolicy,
+          retention: retainedPolicy ?? admitted.retainedPolicy,
         },
         () => {
           signal?.throwIfAborted();

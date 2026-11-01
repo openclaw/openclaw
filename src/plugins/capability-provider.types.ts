@@ -43,13 +43,15 @@ import type {
   SpeechProviderPreparedSynthesis,
   SpeechProviderId,
   SpeechSynthesisRequest,
-  SpeechSynthesisResult,
   SpeechSynthesisStreamRequest,
-  SpeechSynthesisStreamResult,
   SpeechTelephonySynthesisRequest,
-  SpeechTelephonySynthesisResult,
   SpeechVoiceOption,
 } from "../tts/provider-types.js";
+import type {
+  SpeechSynthesisResult,
+  SpeechSynthesisStreamResult,
+  SpeechTelephonySynthesisResult,
+} from "../tts/tts-runtime-types.js";
 import type { VideoGenerationProvider } from "../video-generation/types.js";
 import type { PluginJsonValue } from "./host-hook-json.js";
 import type {

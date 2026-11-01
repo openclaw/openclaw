@@ -2025,8 +2025,13 @@ or inspection until the plugin is active. Installing or enabling that plugin
 does not bypass its migration: runtime admission holds it until Doctor migrates
 the state or confirms it is already ready. This deferral clears the inactive
 plugin's repair warning without claiming its state was migrated.
-Active plugins and retained settings still require their
-migration owner; Doctor names the install or enable step when that owner is missing.
+For an installed inactive plugin with retained settings, Doctor can inspect both
+migration phases without enabling the plugin or registering its runtime or tools.
+If its detectors confirm no remaining work and the retained settings validate,
+Doctor completes the obligation with a warning and keeps those settings, including
+`config.enabled: false`. Detected source data, failed inspection, or settings that
+still need repair keep the obligation pending. Missing migration owners still
+require the install or enable step named by Doctor.
 For a systemd system unit, Doctor
 checks stop permission before draining the Gateway; an unprivileged run names
 the `sudo systemctl stop <unit>` command for the service owner. Run Doctor as the

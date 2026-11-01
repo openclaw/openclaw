@@ -627,7 +627,6 @@ export abstract class ChatPaneStateOwner {
       config: SessionDiscussionPanelConfig;
     }
   >();
-  protected presentationUserId: string | null = null;
   protected readonly retrySessionPlacementStartup = () => {
     const sessionKey = this.state?.sessionKey;
     if (sessionKey) {
