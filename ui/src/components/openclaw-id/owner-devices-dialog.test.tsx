@@ -20,7 +20,18 @@ describe("owner key regeneration placement", () => {
       });
       await vi.waitFor(() => expect(document.body.textContent).toContain("Your devices"));
       await vi.waitFor(() => expect(request).toHaveBeenCalledWith("openclawId.status", {}));
-      await vi.waitFor(() => expect(document.body.textContent).toContain("This browser"));
+      await vi.waitFor(() =>
+        expect(document.body.textContent).toContain(
+          channel === "local_operator"
+            ? "Use your recovery kit or another owner device"
+            : "This browser",
+        ),
+      );
+      expect(
+        Array.from(document.querySelectorAll("button")).some(
+          (button) => button.textContent?.trim() === "Approve a new device",
+        ),
+      ).toBe(false);
       expect(document.body.textContent?.includes("Regenerate owner key")).toBe(
         channel === "local_operator",
       );

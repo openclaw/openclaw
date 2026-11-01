@@ -11,8 +11,7 @@ const enOpenClawIdDialogs = {
     approvalApprove: "Numbers match — Approve",
     approvalEmpty:
       "No new browsers are waiting for approval. Start “Approve from another device” on the new browser.",
-    approvalRequiresKey:
-      "Use the original browser on this machine that linked the claw, and sign in with OpenClaw ID. Its owner device key is required.",
+    approvalRequiresKey: "Use your recovery kit or another owner device",
     yourDevicesBody:
       "Browsers that act as you, the owner. Each has its own key, signed by your owner key.",
     deviceLocal: "This machine (direct, no relay)",

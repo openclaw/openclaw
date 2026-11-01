@@ -183,7 +183,9 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
             </Show>
             <Show when={link() && !ownPub()}>
               <div class="callout info" role="note">
-                {t("openclawId.notOwnerDevice")}
+                {localOperator()
+                  ? t("openclawId.approvalRequiresKey")
+                  : t("openclawId.notOwnerDevice")}
               </div>
             </Show>
             <div
@@ -204,7 +206,7 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
                 )}
               </For>
             </div>
-            <Show when={localOperator()}>
+            <Show when={localOperator() && ownPub()}>
               <button
                 type="button"
                 class="btn"
