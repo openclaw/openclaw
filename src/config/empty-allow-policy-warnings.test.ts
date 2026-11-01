@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "./types.js";
 import { collectConfigValidationWarnings } from "./validation-core.js";
+import { validateConfigObjectWithPlugins } from "./validation.js";
 
 function configWith(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -127,5 +128,28 @@ describe("collectConfigValidationWarnings empty allow (#147342)", () => {
     );
     expect(warnings).toEqual([]);
     expect(collectConfigValidationWarnings(configWith({}))).toEqual([]);
+  });
+});
+
+// Behavior through the real `config validate` pipeline, not just the collector.
+describe("validateConfigObjectWithPlugins empty allow (#147342)", () => {
+  it("surfaces empty allow warnings while keeping the config valid", () => {
+    const result = validateConfigObjectWithPlugins({
+      tools: { allow: [], sandbox: { tools: { allow: [] } } },
+    });
+    expect(result.ok).toBe(true);
+    const paths = result.warnings
+      .filter((warning) => warning.message.includes('deny:["*"]'))
+      .map((warning) => warning.path)
+      .toSorted();
+    expect(paths).toEqual(["tools", "tools.sandbox.tools"]);
+  });
+
+  it("stays silent for sub-agent allow: [] with alsoAllow and for omitted allow", () => {
+    const result = validateConfigObjectWithPlugins({
+      tools: { deny: ["exec"], subagents: { tools: { allow: [], alsoAllow: ["read"] } } },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.filter((warning) => warning.message.includes('deny:["*"]'))).toEqual([]);
   });
 });
