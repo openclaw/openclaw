@@ -1315,22 +1315,28 @@ a.activity-current-work__row:hover {
     vertical-align: baseline;
   }
 
-  .activity-feed__recap {
-    display: flow-root;
+  /* Inspect run shares a short recap's line; otherwise it wraps below at one fixed gap,
+     so text, loading and note states all place it the same way. */
+  .activity-feed__recap:not(.activity-feed__recap-skeleton) {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
   }
 
   .activity-feed__recap-text {
-    display: inline;
+    min-width: 0;
   }
 
-  .activity-feed__recap .activity-feed__note {
-    display: inline-flex;
+  .activity-feed__recap > .activity-feed__recap-skeleton {
+    flex: 1 0 100%;
   }
 
   .activity-feed__inspect-run {
     position: static;
-    float: inline-end;
-    margin-inline-start: var(--space-2);
+    flex: none;
+    margin-inline-start: auto;
     opacity: 1;
     pointer-events: auto;
     translate: none;

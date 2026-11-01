@@ -316,4 +316,109 @@ suite.define(() => {
         await expectCount(entries).toBe(0);
       },
     ));
+
+  it("omits raw actor ids from phone rows and keeps Inspect run at one gap", () =>
+    suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 844, width: 390 } },
+      async ({ page }) => {
+        const rawId = "147591189530201337";
+        const now = Date.now();
+        const row = (name: string, age: number, actor: object, activitySummary: object) => ({
+          key: `agent:main:${name}`,
+          kind: "direct",
+          label: name,
+          displayName: name,
+          agentId: "main",
+          updatedAt: now - age,
+          createdActor: actor,
+          hasActiveRun: true,
+          activeRunIds: [`run-${name}`],
+          activitySummary,
+          observerDigest: {
+            headline: "Checking a fictional mock step",
+            health: "healthy",
+            revision: 1,
+            runId: `run-${name}`,
+            updatedAt: now - age,
+          },
+        });
+        const recap =
+          "Reconciled the fictional timeline and listed the two remaining mock decisions that still need an answer before this handoff can close for the day.";
+        const listing = {
+          ...chatSessionListResponse([
+            row(
+              "unresolved",
+              60_000,
+              { type: "human", id: rawId },
+              {
+                state: "current",
+                canEnsure: true,
+                text: recap,
+                updatedAt: now,
+              },
+            ),
+            row(
+              "named",
+              120_000,
+              { type: "human", ...alice },
+              {
+                state: "updating",
+                canEnsure: true,
+              },
+            ),
+          ]),
+          people: [
+            { ...alice, sessionCount: 1 },
+            { identity: { type: "profile" as const, id: rawId }, sessionCount: 1 },
+          ],
+          peopleSessionCount: 2,
+        };
+        await installMockGateway(page, {
+          sessionKey: "agent:main:named",
+          methodResponses: {
+            "sessions.list": {
+              cases: [
+                {
+                  match: { involvingProfileId: rawId },
+                  response: { ...listing, involvingProfileId: rawId },
+                },
+                { response: listing },
+              ],
+            },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}activity`);
+        await waitForControlUiRoute(page, { pathname: "/activity", routeId: "activity" });
+        const activity = page.locator("openclaw-activity-page");
+        const rowLink = (name: string) =>
+          activity.locator(`[data-activity-session="agent:main:${name}"]`);
+        const meta = (name: string) => rowLink(name).locator(".activity-feed__session-meta");
+        await meta("unresolved").waitFor();
+
+        expect(await meta("unresolved").textContent()).not.toContain(rawId);
+        expect(await meta("unresolved").locator(".activity-feed__session-owner").count()).toBe(0);
+        await expectCount(meta("unresolved").locator(".activity-feed__session-time")).toBe(1);
+        await expectText(meta("named")).toContain("Alice Chen");
+
+        const gap = (name: string) =>
+          activity
+            .locator(`[data-activity-recap="agent:main:${name}"]`)
+            .evaluate((recapElement) => {
+              const content = recapElement.querySelector(
+                ".activity-feed__recap-text, .activity-feed__recap-skeleton",
+              )!;
+              const inspect = recapElement.querySelector(".activity-feed__inspect-run")!;
+              return inspect.getBoundingClientRect().top - content.getBoundingClientRect().bottom;
+            });
+        const textGap = await gap("unresolved");
+        expect(textGap).toBeGreaterThanOrEqual(6);
+        // Loading and loaded recaps place Inspect run at the same distance.
+        expect(Math.abs((await gap("named")) - textGap)).toBeLessThan(1);
+
+        // The filter and identity header still reach the full id.
+        await activity.locator(".activity-feed__people-trigger").click();
+        await page.locator(`[data-activity-unresolved] [data-activity-person="${rawId}"]`).click();
+        await expectText(activity.locator(".activity-feed__identity h2")).toBe(rawId);
+      },
+    ));
 });

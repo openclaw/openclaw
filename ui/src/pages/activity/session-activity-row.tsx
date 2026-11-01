@@ -32,6 +32,7 @@ import {
 import { activityRunInspectorHref } from "./run-inspector-model.ts";
 import { ActivitySessionGit } from "./session-activity-git.tsx";
 import { ActivitySessionMedia } from "./session-activity-media.tsx";
+import { isUnresolvedPerson } from "./session-activity-people.tsx";
 import { ACTIVITY_PHONE_QUERY, sessionActivityOwner } from "./session-activity.ts";
 
 registerEnglishCatalog(registerActivityEnglish);
@@ -189,7 +190,10 @@ export function SessionLinkView(props: {
             <>
               {headline() ? <Headline /> : undefined}
               <span class="activity-feed__session-meta activity-feed__session-meta--line">
-                <span class="activity-feed__session-owner">{ownerName()}</span>
+                {/* A raw actor id stays reachable through the person filter. */}
+                {isUnresolvedPerson(owner()) ? undefined : (
+                  <span class="activity-feed__session-owner">{ownerName()}</span>
+                )}
                 {source() ? (
                   <span class="activity-feed__session-source" data-activity-created-via="cron">
                     {source()}

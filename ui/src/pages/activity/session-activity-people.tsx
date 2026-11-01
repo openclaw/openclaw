@@ -26,7 +26,7 @@ type PeopleView = {
   result?: Pick<SessionsListResult, "peopleIncomplete">;
 };
 
-function isUnresolvedPerson(person: PresenceViewer): boolean {
+export function isUnresolvedPerson(person: PresenceViewer): boolean {
   return !person.name && !person.email && presenceViewerLabel(person) === person.id;
 }
 
