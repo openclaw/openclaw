@@ -45,6 +45,22 @@ beforeEach(() => {
 });
 
 describe("gateway suspend handlers", () => {
+  it.each([{ drain: false }, { drain: true, terminalPolicy: "terminate" }])(
+    "rejects planned handoff outside a preserving drain (options: %o)",
+    async (options) => {
+      const { respond } = await invoke("gateway.suspend.prepare", {
+        requestId: "rollout",
+        plannedDeadlineMs: 60_000,
+        ...options,
+      });
+      expect(coordinator.prepare).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "INVALID_REQUEST" }),
+      );
+    },
+  );
   it("validates the closed prepare params shape", async () => {
     const { respond } = await invoke("gateway.suspend.prepare", {
       requestId: "request-1",

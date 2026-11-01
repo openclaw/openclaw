@@ -22,6 +22,7 @@ import {
 } from "./gateway-active-work.js";
 
 const GATEWAY_SUSPEND_TTL_MS = 2 * 60_000;
+const MAX_PLANNED_DRAIN_MS = 30 * 60_000;
 const GATEWAY_SUSPEND_RETRY_AFTER_MS = 20_000;
 const GATEWAY_SCHEDULER_RECOVERY_RETRY_MS = 1_000;
 
@@ -63,6 +64,7 @@ type HeldGatewaySuspension = GatewaySuspendCoordinatorEntryBase & {
   requestId: string;
   terminalPolicy: GatewaySuspendTerminalPolicy;
   drain: boolean;
+  planned?: { deadlineMs: number; monotonicDeadline: number };
   suspensionId: string;
   expiresAtMs: number;
   deadlineAtMs: number;
@@ -280,6 +282,7 @@ export function prepareGatewaySuspend(params: {
   requestId: string;
   terminalPolicy?: GatewaySuspendTerminalPolicy;
   drain?: boolean;
+  plannedDeadlineMs?: number;
   pauseScheduling: () => void;
   resumeScheduling: () => void;
   inspect?: Partial<GatewayActiveWorkInspectors>;
@@ -293,7 +296,8 @@ export function prepareGatewaySuspend(params: {
     ignoreTerminalSessions: terminalPolicy === "terminate",
   };
   const nowMs = (params.nowMs ?? Date.now)();
-  const deadlineAtMs = performance.now() + GATEWAY_SUSPEND_TTL_MS;
+  const startedAt = performance.now();
+  const deadlineAtMs = startedAt + GATEWAY_SUSPEND_TTL_MS;
   const existing = currentSuspension();
   if (existing?.kind === "recovering") {
     return schedulerRecoveryResult();
@@ -302,7 +306,8 @@ export function prepareGatewaySuspend(params: {
     if (
       existing.requestId !== params.requestId ||
       existing.terminalPolicy !== terminalPolicy ||
-      existing.drain !== drain
+      existing.drain !== drain ||
+      existing.planned?.deadlineMs !== params.plannedDeadlineMs
     ) {
       return { status: "conflict", expiresAtMs: existing.expiresAtMs };
     }
@@ -399,6 +404,15 @@ export function prepareGatewaySuspend(params: {
       requestId: params.requestId,
       terminalPolicy,
       drain,
+      ...(drain && terminalPolicy === "preserve" && params.plannedDeadlineMs !== undefined
+        ? {
+            planned: {
+              deadlineMs: params.plannedDeadlineMs,
+              monotonicDeadline:
+                startedAt + Math.min(MAX_PLANNED_DRAIN_MS, params.plannedDeadlineMs - nowMs),
+            },
+          }
+        : {}),
       suspensionId,
       expiresAtMs,
       deadlineAtMs,
@@ -546,6 +560,23 @@ export function isGatewaySuspendControlAvailable(): boolean {
   return (
     getRestartingSuspension()?.shutdown?.phase === "interrupting" ||
     (!isGatewayRestartDraining() && (phase === "draining" || phase === "prepared"))
+  );
+}
+
+/** Only the original, renewable suspension may wait; renewal never moves the rollout deadline. */
+export function isGatewayWaitingForPlannedRollout(): boolean {
+  const held = COORDINATOR_STATE.current;
+  if (
+    held?.kind !== "held" ||
+    !held.planned ||
+    held.handoff ||
+    getGatewaySuspendAdmissionPhase() !== "draining"
+  ) {
+    return false;
+  }
+  return (
+    held.nowMs() < Math.min(held.expiresAtMs, held.planned.deadlineMs) &&
+    performance.now() < Math.min(held.deadlineAtMs, held.planned.monotonicDeadline)
   );
 }
 
