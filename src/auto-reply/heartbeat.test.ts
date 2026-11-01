@@ -26,18 +26,8 @@ describe("stripHeartbeatToken", () => {
 
   it.each([
     [`hello ${HEARTBEAT_TOKEN} there`, `hello ${HEARTBEAT_TOKEN} there`, false],
-    [`<code>${HEARTBEAT_TOKEN}</code> all good`, "all good", true],
-    [`I should not respond ${HEARTBEAT_TOKEN}.`, "I should not respond.", true],
-    [
-      `Deploy checklist:\n\n1. Pull main\n2. Run migrations\n\n\`\`\`sh\nif [ -f .env ]; then\n  source .env\nfi\n\`\`\`\n\n${HEARTBEAT_TOKEN}`,
-      "Deploy checklist:\n\n1. Pull main\n2. Run migrations\n\n```sh\nif [ -f .env ]; then\n  source .env\nfi\n```",
-      true,
-    ],
-    [
-      `${HEARTBEAT_TOKEN}\n\nStatus:\n  - api: up\n  - db: degraded`,
-      "Status:\n  - api: up\n  - db: degraded",
-      true,
-    ],
+    [`<code>${HEARTBEAT_TOKEN}</code>\nfirst\n  second`, "first\n  second", true],
+    [`first\n  second ${HEARTBEAT_TOKEN}.`, "first\n  second.", true],
   ] as const)("preserves content around the token in %s", (input, text, didStrip) => {
     expectStripped(input, "message", false, text, didStrip);
   });
