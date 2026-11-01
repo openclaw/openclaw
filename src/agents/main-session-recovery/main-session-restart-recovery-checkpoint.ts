@@ -1,7 +1,11 @@
+import { isDeepStrictEqual } from "node:util";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
-import { buildRestartRecoveryClaimCleanupPatch } from "../../config/sessions/restart-recovery-state.js";
+import {
+  buildRestartRecoveryClaimCleanupPatch,
+  getRestartRecoveryTerminalDeliveryEvidence,
+} from "../../config/sessions/restart-recovery-state.js";
 import {
   applySessionEntryReplacements,
   persistSessionTranscriptTurn,
@@ -10,7 +14,11 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import { buildRunUserTurnIdempotencyKey } from "../../sessions/user-turn-transcript.js";
-import { getOwedHarnessCompletionTask } from "../agent-harness-completion-recovery.js";
+import { deliveryContextKey } from "../../utils/delivery-context.shared.js";
+import {
+  getOwedHarnessCompletionTask,
+  hasHarnessCompletionFinalReceipt,
+} from "../agent-harness-completion-recovery.js";
 import {
   getTranscriptMessageRole as getMessageRole,
   isTerminalSilentAssistantMessage,
@@ -191,6 +199,50 @@ function canReconcileTerminalDeliveryAtSourceTurnTail(params: {
   return true;
 }
 
+/** Only an identified final from the interrupted writer can override its exhausted model budget. */
+export function confirmedExhaustedFinalReceipt(
+  target: MainSessionRecoveryStoreTarget,
+  entry: SessionEntry,
+) {
+  const claim = entry.restartRecoveryHarnessCompletion;
+  const pending = entry.pendingFinalDelivery;
+  if (
+    !claim ||
+    claim.requesterAgentId !== target.agentId ||
+    claim.requesterSessionKey !== target.sessionKey ||
+    claim.sessionId !== entry.sessionId ||
+    !claim.lifecycleRevision ||
+    claim.lifecycleRevision !== entry.lifecycleRevision ||
+    entry.activeWriterRunId != null ||
+    claim.sourceRunId !== entry.restartRecoveryDeliverySourceRunId ||
+    claim.sourceRunId !== entry.restartRecoveryDeliveryRunId ||
+    entry.mainRestartRecovery?.reservation ||
+    entry.mainRestartRecovery?.foregroundClaims ||
+    pending?.kind !== "replayable" ||
+    !pending.text.trim() ||
+    /^\s*MEDIA:/imu.test(pending.text) ||
+    pending.deliveries?.length !== 1 ||
+    pending.deliveries[0]?.state !== "delivered"
+  ) {
+    return undefined;
+  }
+  const evidence = getRestartRecoveryTerminalDeliveryEvidence(entry, claim.sourceRunId);
+  const receipt = evidence?.durableFinalReceipt;
+  const route = deliveryContextKey(pending.context);
+  return receipt?.platformMessageId &&
+    receipt.intentId === pending.intentId &&
+    receipt.deliveryId === pending.deliveries[0].id &&
+    pending.context?.channel &&
+    pending.context.to &&
+    route === deliveryContextKey(evidence?.deliveryContext) &&
+    route === deliveryContextKey(entry.restartRecoveryDeliveryContext) &&
+    evidence &&
+    hasHarnessCompletionFinalReceipt(evidence) &&
+    isDeepStrictEqual(evidence.harnessCompletion, claim)
+    ? evidence
+    : undefined;
+}
+
 type RecoveryCheckpointCompletion =
   | { outcome: "completed" }
   | { outcome: "changed" }
@@ -201,6 +253,7 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
   entry: SessionEntry;
   messages: readonly unknown[];
   pendingFinalDeliveryIntentId?: string;
+  confirmedExhaustedReceipt?: ReturnType<typeof confirmedExhaustedFinalReceipt>;
   reason: "delivered-terminal" | "delivered-terminal-receipt" | "handled-silent";
   storePath: string;
   sessionKey: string;
@@ -358,11 +411,12 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
         !entry ||
         entry.sessionId !== params.entry.sessionId ||
         (params.pendingFinalDeliveryIntentId !== undefined &&
-          (entry.pendingFinalDelivery?.intentId !== params.pendingFinalDeliveryIntentId ||
-            entry.lifecycleRevision !== params.entry.lifecycleRevision ||
-            entry.activeWriterRunId !== params.entry.activeWriterRunId ||
-            entry.mainRestartRecovery?.reservation !== undefined ||
-            entry.mainRestartRecovery?.foregroundClaims !== undefined)) ||
+          entry.pendingFinalDelivery?.intentId !== params.pendingFinalDeliveryIntentId) ||
+        (params.confirmedExhaustedReceipt !== undefined &&
+          !isDeepStrictEqual(
+            confirmedExhaustedFinalReceipt(params, entry),
+            params.confirmedExhaustedReceipt,
+          )) ||
         entry.status !== "running" ||
         entry.abortedLastRun !== true ||
         normalizeOptionalString(entry.restartRecoveryDeliveryRunId) !== expectedRecoveryRunId ||

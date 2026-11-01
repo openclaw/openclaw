@@ -38,11 +38,11 @@ import {
   resumeMainSession,
 } from "./main-session-restart-dispatch.js";
 import {
+  confirmedExhaustedFinalReceipt,
   markSessionCompletedAfterRecoveryCheckpoint,
   reconcileInvalidHarnessCompletion,
 } from "./main-session-restart-recovery-checkpoint.js";
 import { tombstoneMainRestartRecoveryWithNotice } from "./main-session-restart-recovery-failure.js";
-import { recoverPreparedFinalDelivery } from "./main-session-restart-recovery-final.js";
 import { readMainSessionRecoveryCheckpoint } from "./main-session-restart-recovery-replay-safety.js";
 import {
   hasReplaySafeCodeModeCheckpointInCurrentTurn,
@@ -293,14 +293,12 @@ export async function recoverStore(params: {
       result.skipped++;
       continue;
     }
-    const capturedFinal = entry.pendingFinalDelivery;
-    const hasCapturedFinalDelivery =
-      capturedFinal?.kind === "replayable" &&
-      Boolean(capturedFinal.intentId && capturedFinal.context) &&
-      capturedFinal.deliveries?.length === 1;
+    const confirmedExhaustedReceipt =
+      recoveryView.status === "exhausted"
+        ? confirmedExhaustedFinalReceipt(target, entry)
+        : undefined;
     if (
-      (recoveryView.status === "exhausted" &&
-        (params.observationOnly || !hasCapturedFinalDelivery)) ||
+      (recoveryView.status === "exhausted" && !confirmedExhaustedReceipt) ||
       (!params.observationOnly &&
         requiresRestartRecoveryMessageActionAuthority(entry) &&
         !hasRestartRecoveryMessageActionAuthority(entry))
@@ -342,12 +340,14 @@ export async function recoverStore(params: {
       result.skipped++;
       continue;
     }
-    if (pendingAction === "complete") {
+    // An exhausted run can only reach settlement with its identified final receipt.
+    if (pendingAction === "complete" || recoveryView.status === "exhausted") {
       const completion = await markSessionCompletedAfterRecoveryCheckpoint({
         ...target,
         entry,
         messages: [],
         pendingFinalDeliveryIntentId: entry.pendingFinalDelivery?.intentId,
+        confirmedExhaustedReceipt,
         reason: "delivered-terminal-receipt",
       });
       result[completion.outcome === "completed" ? "settled" : "skipped"]++;
@@ -480,30 +480,6 @@ export async function recoverStore(params: {
         reason: "delegated recovery sender authority is unavailable",
       });
       result[tombstone === "notice_failed" ? "failed" : "skipped"]++;
-      continue;
-    }
-
-    if (pendingAction === "retry") {
-      const delivered = await recoverPreparedFinalDelivery({
-        ...target,
-        entry,
-        cfg: params.cfg,
-        stateDir: params.stateDir,
-        lifecycleGeneration: params.lifecycleGeneration,
-        shouldContinue: params.shouldContinue,
-      });
-      if (delivered !== "not-applicable") {
-        result[delivered]++;
-        if (delivered === "settled") {
-          params.handledSessionKeys.add(resumeDedupeKey);
-        }
-        continue;
-      }
-    }
-    // Only delivery of an identified captured answer may outlive the model
-    // attempt budget. No fallthrough from malformed custody can restart work.
-    if (recoveryView.status === "exhausted") {
-      result.skipped++;
       continue;
     }
 
