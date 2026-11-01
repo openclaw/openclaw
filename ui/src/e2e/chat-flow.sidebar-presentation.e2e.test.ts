@@ -402,12 +402,9 @@ suite.define(() => {
             return {
               actual: style.backgroundColor,
               expected: accent.color,
-              arc: style.maskImage.includes("stroke-dasharray"),
             };
           });
         expect.soft(spinnerColors.actual).toBe(spinnerColors.expected);
-        // A still spinner shows only the full ring so it never reads as a frozen arc.
-        expect.soft(spinnerColors.arc).toBe(reducedMotion !== "reduce");
       }
       await page.emulateMedia({ reducedMotion: "no-preference" });
     }

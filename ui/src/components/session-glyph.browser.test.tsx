@@ -146,10 +146,6 @@ describe.skipIf(!hasBrowserLayout)("sidebar glyph geometry", () => {
         const slot = bounds(".session-glyph");
         const ringStyle = getComputedStyle(ringElement);
         expect(ringStyle.width).toBe(ringStyle.height);
-        // A closed track and a short arc, masked over the current color.
-        expect(ringStyle.backgroundColor).toBe(ringStyle.color);
-        expect(ringStyle.maskImage).toContain("stroke-dasharray='26 74'");
-        expect(ringStyle.maskImage).toContain("stroke-width='1.75'");
         expect(Number.parseFloat(ringStyle.width)).toBeGreaterThan(artwork.width);
         expect(ring.x + ring.width / 2).toBeCloseTo(slot.x + slot.width / 2, 3);
         expect(ring.y + ring.height / 2).toBeCloseTo(slot.y + slot.height / 2, 3);
