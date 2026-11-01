@@ -78,6 +78,20 @@ describe("provider model access after sign-in", () => {
     expect(saved.agents?.defaults?.modelPolicy).toBeUndefined();
   });
 
+  it("infers a bare legacy ref's provider like the policy owner", async () => {
+    delete config.agents!.defaults!.modelPolicy;
+    config.agents!.defaults!.models = { tiny: {} };
+    config.models = {
+      providers: {
+        sample: { baseUrl: "https://sample.invalid/v1", models: [{ id: "tiny", name: "Tiny" }] },
+      },
+    };
+    await state.writeConfig(config);
+    const before = await readBytes();
+    await expect(allow()).resolves.toBeUndefined();
+    expect(await readBytes()).toBe(before);
+  });
+
   it("does not treat a migrated model map as an allowlist", async () => {
     delete config.agents!.defaults!.modelPolicy;
     config.agents!.defaults!.models = { "other/current": {} };

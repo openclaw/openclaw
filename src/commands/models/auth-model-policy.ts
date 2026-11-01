@@ -4,7 +4,6 @@ import { normalizeProviderId } from "../../agents/model-ref-shared.js";
 import {
   LEGACY_MODEL_POLICY_ALLOW_CONFIG_PATH,
   resolveConfiguredModelPolicyAllow,
-  resolveModelRefFromString,
 } from "../../agents/model-selection-shared.js";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import { logConfigUpdated } from "../../config/logging.js";
@@ -59,27 +58,14 @@ export function withoutProviderModelPolicy<T extends Pick<Partial<OpenClawConfig
 
 /** True when the allowlist names any model of the provider: the operator already chose those. */
 function policyNamesProvider(config: OpenClawConfig, agentId: string, provider: string): boolean {
-  const policy = createModelVisibilityPolicy({
+  // The policy owner resolves exact refs, aliases and bare legacy refs (from configured provider rows).
+  const { allowedKeys } = createModelVisibilityPolicy({
     cfg: config,
     catalog: [],
     defaultProvider: DEFAULT_PROVIDER,
     agentId,
   });
-  return (
-    policy.providerWildcards.has(provider) ||
-    policy.exactModelRefs.some(
-      (raw) =>
-        normalizeProviderId(
-          resolveModelRefFromString({
-            cfg: config,
-            defaultProvider: DEFAULT_PROVIDER,
-            agentId,
-            raw,
-            aliasIndex: policy.policyAliasIndex,
-          })?.ref.provider ?? "",
-        ) === provider,
-    )
-  );
+  return [...allowedKeys].some((key) => normalizeProviderId(key.split("/")[0] ?? "") === provider);
 }
 
 /**

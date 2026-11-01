@@ -164,6 +164,12 @@ it.each([
   ["config transform", true],
 ] as const)("checks requester authority after %s (revoked=%s)", async (stage, revoke) => {
   await seedKey("sample:manual", "synthetic-before", "writer");
+  // The same guarded config write also widens this allowlist for the saved provider.
+  const seeded = await readConfig();
+  writeConfig({
+    ...seeded,
+    agents: { ...seeded.agents, defaults: { modelPolicy: { allow: ["other/*"] } } },
+  });
   const beforeConfig = configBytes();
   const beforeProfiles = profiles();
   let callbackComplete = false;
@@ -211,7 +217,9 @@ it.each([
   } else {
     await expect(result).resolves.toMatchObject({ profileId: "sample:manual" });
     if (stage === "config transform") {
-      expect((await readConfig()).auth?.profiles?.["sample:manual"]).toMatchObject(profileConfig);
+      const saved = await readConfig();
+      expect(saved.auth?.profiles?.["sample:manual"]).toMatchObject(profileConfig);
+      expect(saved.agents?.defaults?.modelPolicy?.allow).toEqual(["other/*", "sample/*"]);
     }
   }
   expect(callbackComplete).toBe(true);
