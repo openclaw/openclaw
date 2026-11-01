@@ -10,9 +10,8 @@ import {
 import { delimiter, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { runWorkflowCommand } from "./ci-workflow.test-support.js";
+import { readWorkflow, runWorkflowCommand } from "./ci-workflow.test-support.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 const repository = "openclaw/openclaw";
@@ -30,7 +29,7 @@ type Fault =
   | "symlink";
 
 function fixture(file: string, jobName: string, fault: Fault) {
-  const workflow = parse(readFileSync(file, "utf8")) as Workflow;
+  const workflow = readWorkflow(file) as Workflow;
   const restoration = workflow.jobs[jobName]?.steps.find((step) => step.name === restoreName);
   const script = restoration?.run;
   const harnessPath = restoration?.env?.HARNESS_PATH;
