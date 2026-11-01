@@ -91,6 +91,22 @@ function pendingProbe(stalled = true) {
 }
 
 describe("Control UI document shell", () => {
+  it("explains how to recover when module scripts cannot run", () => {
+    const win = createIsolatedWindow();
+    const parsed = new win.DOMParser().parseFromString(html, "text/html");
+    win.document.body.innerHTML = parsed.body.innerHTML;
+    for (const script of parsed.querySelectorAll("script[nomodule]")) {
+      win.eval(script.textContent ?? "");
+    }
+    expect(win.document.body.textContent).toContain("This browser is not supported");
+    expect(win.document.body.textContent).toContain("update your system WebView");
+    expect(win.document.querySelector("openclaw-app")).toBeNull();
+    expect(win.getComputedStyle(win.document.querySelector("main")!).color).toBe(
+      "rgb(244, 244, 245)",
+    );
+    win.frameElement?.remove();
+  });
+
   it.each([
     ["/new", "", "new"],
     ["/new/?agent=main", "", "new"],

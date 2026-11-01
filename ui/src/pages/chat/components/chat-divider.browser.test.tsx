@@ -8,7 +8,6 @@ import { TranscriptSearchState } from "./chat-transcript-search-state.ts";
 import "../../../styles/base.css";
 import "../../../styles/chat/grouped.css";
 
-const CHAT_SEARCH_HIGHLIGHT = "openclaw-chat-search";
 const root = document.documentElement;
 const originalTheme = root.getAttribute("data-theme");
 const originalMode = root.getAttribute("data-theme-mode");
@@ -94,7 +93,7 @@ it("offers notice text to transcript search highlighting", async () => {
   try {
     await expect
       .poll(() =>
-        Array.from(CSS.highlights.get(CHAT_SEARCH_HIGHLIGHT) ?? [], (range) =>
+        Array.from(CSS.highlights.get("openclaw-chat-search") ?? [], (range) =>
           range instanceof Range ? range.toString() : null,
         ),
       )
