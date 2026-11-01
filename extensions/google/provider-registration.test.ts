@@ -150,7 +150,7 @@ describe("Google catalog transport defaults", () => {
       ...apis.flatMap((api) =>
         ["provider", "model"]
           // Catalog routes admit a provider-wide API that matches the catalog row;
-          // AI Studio selects Interactions per model (or by the Flash default).
+          // AI Studio selects Interactions per model (or by the Gemini default).
           .filter(
             (scope) =>
               !(scope === "provider" && api === "google-interactions" && baseUrl === endpoints[0]),

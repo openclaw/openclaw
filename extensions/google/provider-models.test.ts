@@ -2,7 +2,7 @@ import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { expect, it } from "vitest";
 import { createProviderDynamicModelContext as createContext } from "../test-support/provider-model-test-helpers.js";
 import {
-  isGoogleNativeVideoModelId,
+  isGoogleGeminiTextModelId,
   isGoogleTextGenerationModelId,
   isModernGoogleModel,
   resolveGoogleGeminiForwardCompatModel,
@@ -276,9 +276,13 @@ it("keeps non-chat Gemini surfaces out of text discovery and forward compatibili
   }
 });
 
-it("classifies only ordinary Gemini generation ids for native video", () => {
-  expect(isGoogleNativeVideoModelId("models/gemini-flash-latest")).toBe(true);
-  for (const modelId of ["tunedModels/gemini-2.5-flash", "gemini-2.5-computer-use-preview"]) {
-    expect(isGoogleNativeVideoModelId(modelId), modelId).toBe(false);
+it("classifies only ordinary Gemini generation ids as Gemini text models", () => {
+  expect(isGoogleGeminiTextModelId("models/gemini-flash-latest")).toBe(true);
+  for (const modelId of [
+    "tunedModels/gemini-2.5-flash",
+    "gemini-2.5-computer-use-preview",
+    "gemma-4-26b-a4b-it",
+  ]) {
+    expect(isGoogleGeminiTextModelId(modelId), modelId).toBe(false);
   }
 });
