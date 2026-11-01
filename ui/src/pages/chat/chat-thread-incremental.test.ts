@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import * as displayText from "../../lib/strip-thinking-tags.ts";
@@ -28,6 +28,17 @@ function message(
 ) {
   return { role, timestamp, content, __openclaw: { id, seq: timestamp }, ...extra };
 }
+
+// Older-page reuse loads on the first prepend, which takes the full build.
+beforeAll(async () => {
+  resetChatThreadState();
+  const recent = message("warm-recent", "user", 2, "Recent");
+  const props = createProps({ paneId: "warm", sessionKey: "warm", messages: [recent] });
+  buildCachedChatItems(props);
+  buildCachedChatItems({ ...props, messages: [message("warm-older", "user", 1, "Older"), recent] });
+  await vi.dynamicImportSettled();
+  resetChatThreadState();
+});
 
 function fixture(): { props: BuildChatItemsProps; older: unknown[] } {
   const canvas = JSON.stringify({

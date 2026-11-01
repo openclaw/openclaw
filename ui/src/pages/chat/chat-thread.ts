@@ -22,7 +22,7 @@ import { collectOwnedCanvasPreviews, stripOwnedCanvasShortcodes } from "./chat-t
 import type { ChatItemsFacts } from "./chat-thread-facts.ts";
 import type { ChatInputOrderState } from "./chat-thread-inputs.ts";
 import { sanitizeStreamText } from "./chat-thread-items.ts";
-import { prependOlderChatItems, type PrependFacts } from "./chat-thread-prepend.ts";
+import type { PrependFacts } from "./chat-thread-prepend.ts";
 import { getOrCreateSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 
 type CachedChatItems = {
@@ -40,6 +40,18 @@ type CachedChatItems = {
 };
 
 type RenderChatItem = ReturnType<typeof buildChatItems>[number];
+
+let prependRuntime: typeof import("./chat-thread-prepend.ts") | undefined;
+let prependLoading: Promise<unknown> | undefined;
+
+/** Older-page reuse stays out of chat boot; prepends take the full build until it loads. */
+function loadedPrependRuntime() {
+  prependLoading ??= import("./chat-thread-prepend.ts").then(
+    (loaded) => (prependRuntime = loaded),
+    () => (prependLoading = undefined),
+  );
+  return prependRuntime;
+}
 
 type ToolCardExpansionState = {
   expanded: Map<string, boolean>;
@@ -444,11 +456,16 @@ export function buildCachedChatItems(
     }
   }
   const previous = cached.input;
+  const added = previous ? input.messages.length - previous.messages.length : 0;
+  // Only a page in front of retained history loads the reuse runtime.
   const prepended =
     previous &&
     cached.facts &&
+    added > 0 &&
+    added < input.messages.length &&
+    input.messages[added] === previous.messages[0] &&
     sameChatItemsStructuralInput(previous, { ...input, messages: previous.messages })
-      ? prependOlderChatItems(
+      ? loadedPrependRuntime()?.prependOlderChatItems(
           { messages: previous.messages, items: cached.items, facts: cached.facts },
           input,
           projections.inputOrder,
