@@ -423,6 +423,13 @@
     aspect-ratio: auto;
     contain: inline-size;
   }
+  /* The preview is inert and the card already names it, so its widgets drop the title bar. */
+  .dashboard-preview .board-widget {
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .dashboard-preview .board-widget__chrome {
+    display: none;
+  }
   .dashboard-card__body {
     display: contents;
   }

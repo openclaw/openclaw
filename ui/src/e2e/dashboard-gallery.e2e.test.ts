@@ -444,6 +444,20 @@ suite.define(() => {
         await popover.getByRole("radio", { name: "Recently updated" }).click();
         await expect.poll(() => cards.count()).toBe(12);
         expect(await filter.getAttribute("class")).not.toContain("active");
+
+        // The inert preview drops its widget title bar here; the opened dashboard keeps its own.
+        const previewBar = cards.first().locator(".dashboard-preview .board-widget__bar");
+        expect(await previewBar.isVisible()).toBe(false);
+
+        // An outside tap only closes the popover; the next one opens the card.
+        const galleryUrl = page.url();
+        const card = cards.nth(1);
+        const cardBox = (await card.boundingBox())!;
+        await page.mouse.click(cardBox.x + 4, cardBox.y + cardBox.height - 8);
+        await popover.waitFor({ state: "hidden" });
+        expect(page.url()).toBe(galleryUrl);
+        await page.mouse.click(cardBox.x + 4, cardBox.y + cardBox.height - 8);
+        await expect.poll(() => page.url()).not.toBe(galleryUrl);
       },
     );
   });

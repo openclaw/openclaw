@@ -1,6 +1,6 @@
-import { For, Show } from "solid-js";
+import { For, Show, onSettled } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
-import { Popover } from "../../components/solid/popover.tsx";
+import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { DashboardGalleryFilters, DashboardGalleryHandlers } from "./view.tsx";
 
@@ -29,14 +29,43 @@ export function DashboardFilterPopover(props: {
   filters: DashboardGalleryFilters;
   handlers: DashboardGalleryHandlers;
 }) {
+  let root!: HTMLDivElement;
+  let popover: PopoverHandle | undefined;
+  // A tap outside only dismisses: the click that follows must not open the card underneath.
+  onSettled(() => {
+    let dismissing = false;
+    const controller = new AbortController();
+    const options = { capture: true, signal: controller.signal };
+    document.addEventListener(
+      "pointerdown",
+      (event) => {
+        dismissing = Boolean(popover?.overlay.open) && !event.composedPath().includes(root);
+      },
+      options,
+    );
+    document.addEventListener("pointercancel", () => (dismissing = false), options);
+    document.addEventListener(
+      "click",
+      (event) => {
+        if (dismissing && event.detail > 0) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+        dismissing = false;
+      },
+      options,
+    );
+    return () => controller.abort();
+  });
   const sorts = () =>
     [
       ["updated", t("dashboardsPage.sortUpdated")],
       ["title", t("dashboardsPage.sortTitle")],
     ] as const;
   return (
-    <div class="dashboards-filter">
+    <div ref={(element) => (root = element)} class="dashboards-filter">
       <Popover
+        ref={(handle) => (popover = handle)}
         id="dashboards-filter-popover"
         class="dashboards-filter__popover"
         label={t("chat.sidebar.menuFilters")}
