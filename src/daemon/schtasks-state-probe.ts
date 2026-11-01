@@ -342,9 +342,9 @@ export function prepareScheduledTaskSettlement(taskName: string) {
     end: () => Promise<void>,
   ): Promise<ScheduledTaskSettlement> => {
     let ended = false;
-    const deadline = Date.now() + GATEWAY_SERVICE_STOP_TIMEOUT_MS;
+    const deadline = performance.now() + GATEWAY_SERVICE_STOP_TIMEOUT_MS;
     for (;;) {
-      const remaining = Math.max(1, deadline - Date.now());
+      const remaining = Math.max(1, deadline - performance.now());
       const task = probeScheduledTaskState(
         taskName,
         Math.min(WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS, remaining),
@@ -359,18 +359,18 @@ export function prepareScheduledTaskSettlement(taskName: string) {
           return { status: "settled", taskName, lastRunResult, ended };
         }
         // Reserve 60s for query, 15s for /End, and 60s to confirm the observed task run.
-        if ((state === 2 || state === 4) && Date.now() >= deadline - (ended ? 0 : 135_000)) {
-          if (ended || Date.now() >= deadline) {
+        if ((state === 2 || state === 4) && performance.now() >= deadline - (ended ? 0 : 135_000)) {
+          if (ended || performance.now() >= deadline) {
             throw new Error(`Task ${taskName} did not settle; /Run refused.`);
           }
           await end();
           ended = true;
         }
       }
-      if (Date.now() >= deadline) {
+      if (performance.now() >= deadline) {
         return { status: "unavailable", taskName, ended };
       }
-      await sleep(Math.min(100, deadline - Date.now()));
+      await sleep(Math.min(100, deadline - performance.now()));
     }
   };
 }

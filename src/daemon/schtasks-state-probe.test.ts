@@ -1,9 +1,11 @@
 import { spawnSync } from "node:child_process";
 import { beforeEach, expect, it, vi } from "vitest";
+import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { readWindowsProcessSnapshot } from "./schtasks-process-snapshot.js";
 import {
   listScheduledTasks,
+  prepareScheduledTaskSettlement,
   probeScheduledTaskExists as probeExists,
   probeScheduledTaskState as probeState,
   probeScheduledTaskUpdateAccess as probeAccess,
@@ -116,4 +118,37 @@ it.each([
       ]);
     }
   }),
+);
+
+it.each([280_000, 380_000] as const)(
+  "keeps the settlement probe deadline monotonic under forward wall-clock skew (%s ms)",
+  (skewMs) =>
+    withMockedPlatform("win32", () => {
+      const monotonicMs = 0;
+      let dateNowCalls = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => monotonicMs);
+      vi.spyOn(Date, "now").mockImplementation(() => {
+        dateNowCalls += 1;
+        // First call seeds the deadline; later calls read the remaining budget.
+        return dateNowCalls === 1 ? monotonicMs : monotonicMs + skewMs;
+      });
+      const initial = {
+        taskPath: "\\Synthetic Gateway",
+        state: 1,
+        lastRunTime: "2026-01-01T00:00:00Z",
+      };
+      native.mockReturnValueOnce(nativeResult(JSON.stringify(initial)));
+      const settle = prepareScheduledTaskSettlement("Synthetic Gateway");
+      native.mockReturnValue(
+        nativeResult(JSON.stringify({ ...initial, lastRunTime: "2026-01-01T00:00:01Z" })),
+      );
+      return settle(
+        () => {},
+        async () => {},
+      ).then((result) => {
+        expect(result.status).toBe("replaced");
+        const probeTimeout = native.mock.calls[1]?.[2]?.timeout;
+        expect(probeTimeout).toBe(Math.min(60_000, GATEWAY_SERVICE_STOP_TIMEOUT_MS));
+      });
+    }),
 );

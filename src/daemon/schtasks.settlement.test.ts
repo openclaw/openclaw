@@ -703,7 +703,7 @@ describe("Scheduled Task settlement", () => {
       let prepared = false;
       const noRun = failure === "stop" || failure === "no-owner";
       const onMutation = vi.fn();
-      vi.spyOn(Date, "now").mockImplementation(() => now);
+      vi.spyOn(performance, "now").mockImplementation(() => now);
       readGatewayOwnerLease.mockImplementation(() =>
         exited || failure === "no-owner" ? undefined : GATEWAY_OWNER,
       );
