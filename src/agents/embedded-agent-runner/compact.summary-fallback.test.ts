@@ -304,6 +304,9 @@ it.each([
     expect(
       createCompactionNoticePayload(resolveCompactionCompletionNotice(result, false)).text,
     ).toContain("Context trimmed because the summarizer refused");
+    expect(
+      createCompactionNoticePayload(resolveCompactionCompletionNotice(result, true)).text,
+    ).toContain("Continuing with bounded recent context");
   },
 );
 

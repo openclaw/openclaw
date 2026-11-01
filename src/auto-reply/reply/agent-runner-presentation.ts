@@ -306,7 +306,6 @@ export function prepareReplyRunPresentation(
     if (
       phase !== "context_bounded" &&
       phase !== "degraded" &&
-      phase !== "trimmed" &&
       !shouldNotifyUserAboutCompaction(cfg)
     ) {
       return;

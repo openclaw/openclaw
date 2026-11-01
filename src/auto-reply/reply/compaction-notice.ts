@@ -12,7 +12,6 @@ export type CompactionNoticePhase =
   | "start"
   | "end"
   | "degraded"
-  | "trimmed"
   | "incomplete"
   | "skipped"
   | "context_bounded"
@@ -21,8 +20,6 @@ export type CompactionNoticePhase =
 const COMPACTION_NOTICE_TEXT: Record<CompactionNoticePhase, string> = {
   start: "🧹 Compacting context...",
   end: "🧹 Compaction complete",
-  trimmed:
-    "⚠️ Context trimmed because the summarizer refused. Recent turns were kept verbatim; older messages remain in saved history but are outside active context. Resend essential older details to continue.",
   degraded:
     "⚠️ Compaction completed with a degraded summary. Older details, exact identifiers, or pending requests may be missing. Resend important context; /new or a larger model can help.",
   incomplete: "🧹 Compaction incomplete",
@@ -46,15 +43,12 @@ export function resolveCompactionCompletionNotice(
   result: EmbeddedAgentCompactResult,
   contextBounded: boolean,
 ): { phase: CompactionNoticePhase; text?: string } {
-  if (parseCompactionDetails(result.result?.details)?.summaryRefused) {
-    return { phase: "trimmed" };
-  }
-  if (parseCompactionDetails(result.result?.details)?.qualityDegraded) {
+  const details = parseCompactionDetails(result.result?.details);
+  if (details?.qualityDegraded) {
+    const text = compactionNoticeText("degraded", details.summaryRefused);
     return {
       phase: "degraded",
-      text: contextBounded
-        ? `${COMPACTION_NOTICE_TEXT.degraded}\n\n${COMPACTION_NOTICE_TEXT.context_bounded}`
-        : undefined,
+      text: contextBounded ? `${text}\n\n${COMPACTION_NOTICE_TEXT.context_bounded}` : text,
     };
   }
   if (contextBounded) {
@@ -97,10 +91,23 @@ function createNoticePayload(text: string, params: CompactionNoticeOptions): Rep
   return params.applyReplyToMode ? params.applyReplyToMode(payload) : payload;
 }
 
+function compactionNoticeText(phase: CompactionNoticePhase, summaryRefused?: boolean): string {
+  return phase === "degraded" && summaryRefused
+    ? "⚠️ Context trimmed because the summarizer refused. Recent turns were kept verbatim; older messages remain in saved history but are outside active context. Resend essential older details to continue."
+    : COMPACTION_NOTICE_TEXT[phase];
+}
+
 export function createCompactionNoticePayload(
-  params: CompactionNoticeOptions & { phase: CompactionNoticePhase; text?: string },
+  params: CompactionNoticeOptions & {
+    phase: CompactionNoticePhase;
+    text?: string;
+    summaryRefused?: boolean;
+  },
 ): ReplyPayload {
-  return createNoticePayload(params.text ?? COMPACTION_NOTICE_TEXT[params.phase], params);
+  return createNoticePayload(
+    params.text ?? compactionNoticeText(params.phase, params.summaryRefused),
+    params,
+  );
 }
 
 export function createCompactionHookNoticePayload(
