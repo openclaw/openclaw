@@ -1,7 +1,36 @@
 import { describe, expect, it } from "vitest";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
-import { canCallGatewayMethod, canPresentGatewayMethod } from "./gateway-methods.ts";
+import {
+  canCallGatewayMethod,
+  canPresentGatewayMethod,
+  isGatewayMethodAdvertised,
+} from "./gateway-methods.ts";
+
+it("prepares each advertised catalog once across interleaved connections and capability refreshes", () => {
+  const catalogs = ["sessions.patch", "sessions.create", "plugins.reload"].map((method) => {
+    let visits = 0;
+    const methods = ["health", method];
+    Object.defineProperty(methods, 0, {
+      get: () => {
+        visits++;
+        return "health";
+      },
+    });
+    return { methods, visits: () => visits };
+  });
+  const first = snapshot({ methods: catalogs[0]!.methods });
+  const second = snapshot({ methods: catalogs[1]!.methods });
+  for (let row = 0; row < 100; row++) {
+    expect(isGatewayMethodAdvertised(first, "sessions.patch")).toBe(true);
+    expect(isGatewayMethodAdvertised(second, "sessions.patch")).toBe(false);
+  }
+  first.hello!.features = { methods: catalogs[2]!.methods };
+  expect(isGatewayMethodAdvertised(first, "sessions.patch")).toBe(false);
+  expect(isGatewayMethodAdvertised(first, "plugins.reload")).toBe(true);
+  expect(isGatewayMethodAdvertised(second, "sessions.create")).toBe(true);
+  expect(catalogs.map((catalog) => catalog.visits())).toEqual([1, 1, 1]);
+});
 
 function snapshot(params: {
   connected?: boolean;
