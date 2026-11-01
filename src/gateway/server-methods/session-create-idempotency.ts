@@ -56,7 +56,7 @@ export function idempotentSessionCreate(handler: GatewayRequestHandler): Gateway
       respondError(
         respond,
         ErrorCodes.INVALID_REQUEST,
-        "idempotent session creation requires an authenticated principal or device identity",
+        "idempotent session creation requires an authenticated principal or device identity; agent runtime identity alone cannot scope replay, so omit idempotencyKey and pass a deterministic session key to adopt the same session on retry",
       );
       return;
     }
