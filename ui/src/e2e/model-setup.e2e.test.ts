@@ -1,11 +1,11 @@
 // Control UI tests cover guided model setup against a mocked Gateway.
 import { expect, it } from "vitest";
+import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   activated,
   button,
   candidate,
-  configSnapshot,
   expectCount,
   expectFocused,
   expectText,
@@ -53,7 +53,7 @@ suite.define(() => {
         const gateway = await installSetupGateway(page, {
           featureMethods: ["chat.metadata", "chat.startup", rpc.detect, rpc.auth, rpc.next],
           methodResponses: {
-            "config.get": configSnapshot({}, "config-hash-1"),
+            "config.get": sourceConfigSnapshot({}, "config-hash-1"),
             [rpc.detect]: initialDetection,
             [rpc.auth]: runningWizard("device-code-session"),
             [rpc.next]: {

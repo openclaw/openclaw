@@ -5,7 +5,15 @@ import {
   projectModelProviderConfig,
   resolveMergedModelProviderConfig,
 } from "../config/model-provider-config.js";
-import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
+import { getRuntimeConfigCapture } from "../config/runtime-config-capture-state.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshotMetadata,
+} from "../config/runtime-snapshot.js";
+import {
+  captureRuntimeConfig,
+  projectConfigOntoRuntimeSourceSnapshot,
+} from "../config/runtime-source-projection.js";
 import type { ModelApi, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderModelRouteCandidate } from "../plugin-sdk/provider-model-types.js";
@@ -164,15 +172,49 @@ export function createProviderModelCatalogRoutePolicy(providerId: string) {
   };
 }
 
-/** Projects a selected route onto transient config used only for model materialization. */
+const preparedRouteConfigs = new WeakMap<
+  OpenClawConfig,
+  {
+    snapshot: ReturnType<typeof getRuntimeConfigSnapshotMetadata>;
+    routes: Map<string, OpenClawConfig>;
+  }
+>();
+
+/** Reuses selected-route config within one config generation and source publication. */
 export function projectProviderModelRouteConfig(params: {
   provider: string;
   config?: OpenClawConfig;
   route: ProviderModelRouteCandidate;
 }): OpenClawConfig {
-  return projectModelProviderConfig(params.config, params.provider, {
+  // Mutable scoped inputs have no publication owner and must remain uncached.
+  const canReuse =
+    getRuntimeConfigCapture(params.config) || params.config === getRuntimeConfigSnapshot();
+  const key = canReuse
+    ? JSON.stringify([
+        normalizeProviderId(params.provider),
+        params.route.authRequirement,
+        params.route.api,
+        params.route.baseUrl,
+      ])
+    : undefined;
+  const snapshot = getRuntimeConfigSnapshotMetadata();
+  const cached = params.config && preparedRouteConfigs.get(params.config);
+  const routes = cached?.snapshot === snapshot ? cached.routes : undefined;
+  const previous = key && routes?.get(key);
+  if (previous) {
+    return previous;
+  }
+  const projected = projectModelProviderConfig(params.config, params.provider, {
     auth: params.route.authRequirement === "subscription" ? "oauth" : "api-key",
     api: params.route.api,
     baseUrl: params.route.baseUrl,
   });
+  if (!key || !params.config) {
+    return projected;
+  }
+  const config = captureRuntimeConfig(projected);
+  const nextRoutes = routes ?? new Map<string, OpenClawConfig>();
+  nextRoutes.set(key, config);
+  preparedRouteConfigs.set(params.config, { snapshot, routes: nextRoutes });
+  return config;
 }

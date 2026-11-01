@@ -1,5 +1,4 @@
 import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
-import type { SessionPublicShareSetResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { SessionsCompanionResetResult } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import type {
@@ -7,7 +6,6 @@ import type {
   SessionMembersListEvidenceResult as SessionSharingResult,
   SessionVisibility,
 } from "../../api/types.ts";
-import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
@@ -19,6 +17,8 @@ import {
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
+import type { ChatHeaderSharingSnapshot } from "./chat-header-viewers-snapshot.ts";
+import { chatHistoryRequests } from "./chat-history-state.ts";
 import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
 import type { ChatPaneConnectionScope } from "./chat-pane-shared.ts";
 import { ChatPaneSidePanels } from "./chat-pane-side-panels.ts";
@@ -30,6 +30,7 @@ import {
   type ChatSessionSharingProps,
   type ChatSessionSharingState,
 } from "./components/chat-session-sharing-shared.tsx";
+import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
 
 registerChatSessionEnglish();
 
@@ -37,6 +38,44 @@ const SESSION_MEMBERS_LIST_METHOD = "session.members.listEvidence";
 
 export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
   private readonly sessionSharingPropsMemo = new ChatPaneHeaderMemo<PreparedChatSessionSharing>();
+
+  protected headerSharingPlaceholder(
+    row: GatewaySessionRow | undefined,
+    control: ChatSessionSharingProps | undefined,
+  ): ChatHeaderSharingSnapshot | undefined {
+    const state = this.state;
+    if (!state) {
+      return undefined;
+    }
+    const target = { sessionKey: state.sessionKey };
+    const saved = readChatSessionSnapshot(state.chatMessagesBySession, state, target);
+    if (!saved || saved.sessionId !== state.currentSessionId) {
+      return undefined;
+    }
+    if (
+      row &&
+      (control || (row.sharingRole !== undefined && !canManageChatSessionSharing(row))) &&
+      state.connected &&
+      state.client?.recoveryScopeReady &&
+      !chatHistoryRequests(state).initialSnapshotHydration
+    ) {
+      const display =
+        control && canManageChatSessionSharing(row)
+          ? (control.state?.result ? control.state.result.publicShare : control.cachedPublished)
+            ? "public"
+            : (row.visibility ?? "shared")
+          : null;
+      if (saved.headerSharing !== display) {
+        cacheChatSessionSnapshot(state.chatMessagesBySession, state, target, {
+          ...saved,
+          headerSharing: display,
+        });
+      }
+      return undefined;
+    }
+    // A connected row can precede control admission; retain its geometry until replacement.
+    return saved.headerSharing ?? undefined;
+  }
 
   /** Shared presentation facts; loading and mutations remain with this pane's native owner. */
   protected prepareSessionSharing(
@@ -78,6 +117,14 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
     const openDisabledReason =
       readAccess.allowed || visibilityDisabledReason === undefined ? undefined : readAccess.reason;
     const state = this.collaboration.sharingStates.get(this.sessionSharingCacheKey(row.key));
+    const cached =
+      this.state && !state?.result
+        ? readChatSessionSnapshot(this.state.chatMessagesBySession, this.state, {
+            sessionKey: row.key,
+          })
+        : undefined;
+    const cachedPublished =
+      cached?.headerSharing === "public" && cached.sessionId === row.sessionId;
     const allowedVisibilities = snapshot.hello?.policy?.allowedSessionVisibilities;
     const operationSignal = this.headerSessionMutationAbortController.signal;
     return this.sessionSharingPropsMemo.read(
@@ -85,6 +132,7 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
         row,
         ...Object.entries(row).flat(),
         state,
+        cachedPublished,
         allowedVisibilities,
         operationSignal,
         readAccess.allowed,
@@ -100,6 +148,7 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
       () => ({
         session: row,
         state,
+        cachedPublished,
         allowedVisibilities,
         operationSignal,
         membersAvailable: readAccess.allowed,
@@ -332,51 +381,19 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
     const pending = { ...previous, loading: true, error: undefined };
     this.setSessionSharingState(cacheKey, pending);
     try {
-      if (enabled) {
-        if (!isCurrent() || !access()) {
-          return { status: "unavailable" };
-        }
-        const confirmed = await showConfirmDialog({
-          title: t("chat.sessionSharing.publicConfirmTitle"),
-          message: t("chat.sessionSharing.publicConfirmMessage"),
-          confirmLabel: t("chat.sessionSharing.publicConfirmEnable"),
-          danger: true,
-        });
-        if (!confirmed) {
-          return { status: "cancelled" };
-        }
-      }
-      // Confirmation can outlive a route, connection, or exact session instance.
-      // Never publish a replacement session under the previous consent.
-      if (!isCurrent() || !access()) {
-        return { status: "unavailable" };
-      }
-      const result = await scope.client.request<SessionPublicShareSetResult>(
-        "session.publicShare.set",
-        {
-          sessionKey: currentRow.key,
-          agentId: this.sessionSharingAgentId(currentRow.key),
-          expectedSessionId,
-          enabled,
-        },
-      );
-      if (!isCurrent()) {
-        this.sessionSharingHydrationTargets.delete(cacheKey);
-        return { status: "stale" };
-      }
-      this.setSessionSharingState(cacheKey, {
-        loading: false,
-        ...(previous?.result
-          ? { result: { ...previous.result, publicShare: result.publicShare } }
-          : {}),
+      const { setSessionPublicShare } = await import("./chat-pane-sharing-operations.ts");
+      return await setSessionPublicShare(scope, currentRow, {
+        enabled,
+        expectedSessionId,
+        agentId: this.sessionSharingAgentId(currentRow.key),
+        previous,
+        isCurrent,
+        access,
+        setState: (state) => this.setSessionSharingState(cacheKey, state),
+        invalidateHydration: () => this.sessionSharingHydrationTargets.delete(cacheKey),
+        reload: (target) => this.loadSessionSharing(target, true),
+        outcome: () => this.sessionSharingOutcome(cacheKey),
       });
-      showToast({
-        message: t(
-          enabled ? "chat.sessionSharing.publicEnabled" : "chat.sessionSharing.publicDisabled",
-        ),
-      });
-      await this.loadSessionSharing(currentRow, true);
-      return isCurrent() ? this.sessionSharingOutcome(cacheKey) : { status: "stale" };
     } catch (error) {
       if (isCurrent()) {
         this.failSharing(scope, cacheKey, currentRow.key, error);
@@ -471,32 +488,17 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
     const pending = { ...previous, loading: true, error: undefined };
     this.setSessionSharingState(cacheKey, pending);
     try {
-      await scope.client.request(method, params);
-      if (!this.ownsSessionSharing(scope, currentRow)) {
-        return { status: "stale" };
-      }
-      const visibilityChanged = "visibility" in change;
-      if (!visibilityChanged) {
-        await this.loadSessionSharing(currentRow, true);
-        if (!this.ownsSessionSharing(scope, currentRow)) {
-          return { status: "unavailable" };
-        }
-      }
-      const outcome = await scope.sessions.reconcileMutation(agentId);
-      const refreshedRow = this.currentSessionSharingRow(scope, currentRow);
-      if (!this.ownsHeaderOutcomeScope(scope) || !refreshedRow) {
-        return { status: "unavailable" };
-      }
-      if (outcome.status === "failed") {
-        this.failSharing(scope, cacheKey, currentRow.key, outcome.error);
-        return { status: "failed", error: formatUiError(outcome.error) };
-      }
-      if (visibilityChanged) {
-        await this.loadSessionSharing(refreshedRow, true);
-      }
-      return this.ownsSessionSharing(scope, refreshedRow)
-        ? this.sessionSharingOutcome(cacheKey)
-        : { status: "stale" };
+      const { mutateSessionSharing } = await import("./chat-pane-sharing-operations.ts");
+      return await mutateSessionSharing(scope, currentRow, method, params, {
+        agentId,
+        visibilityChanged: "visibility" in change,
+        isCurrent: () => this.ownsSessionSharing(scope, currentRow),
+        currentRow: () => this.currentSessionSharingRow(scope, currentRow),
+        ownsHeader: () => this.ownsHeaderOutcomeScope(scope),
+        reload: (target) => this.loadSessionSharing(target, true),
+        fail: (error) => this.failSharing(scope, cacheKey, currentRow.key, error),
+        outcome: () => this.sessionSharingOutcome(cacheKey),
+      });
     } catch (error) {
       if (!this.ownsSessionSharing(scope, currentRow)) {
         return { status: "stale" };

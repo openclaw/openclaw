@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 
 struct WebChatRoute: Equatable, Sendable {
     let sessionKey: String
@@ -20,6 +21,24 @@ struct WebChatRoute: Equatable, Sendable {
 }
 
 extension WebChatRoute {
+    static func documentURL(sessionKey: String, agentID: String?, draft: String?, baseURL: URL) -> URL? {
+        guard let path = self.dashboardPath(sessionKey: sessionKey, agentID: agentID),
+              let destination = DashboardRouteMap.dashboardURL(byAppendingSameAppPath: path, to: baseURL),
+              var route = URLComponents(url: destination, resolvingAgainstBaseURL: false),
+              let entry = DashboardRouteMap.dashboardURL(
+                  byAppendingSameAppPath: "/__openclaw__/session-entry", to: baseURL),
+              var components = URLComponents(url: entry, resolvingAgainstBaseURL: false)
+        else { return nil }
+        // Canonical /chat URLs are public documents. Bootstrap the private app
+        // shell first; its WebSocket still requires the native signing bridge.
+        route.queryItems = draft.flatMap { $0.isEmpty ? nil : [.init(name: "draft", value: $0)] }
+        let search = route.percentEncodedQuery.map {
+            "?" + $0.replacingOccurrences(of: "+", with: "%2B")
+        } ?? ""
+        components.queryItems = [.init(name: "path", value: route.percentEncodedPath + search)]
+        return components.url
+    }
+
     static func dashboardPath(sessionKey: String, agentID: String?) -> String? {
         let key = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let explicitAgent = Self.normalizedAgentID(agentID)

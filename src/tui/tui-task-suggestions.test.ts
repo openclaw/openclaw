@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { expectUnused } from "./tui-handler-test-support.js";
 import { createChoicePromptHarness, createPendingRequests } from "./tui-overlay.test-support.js";
 import { createTuiTaskSuggestionController } from "./tui-task-suggestions.js";
 const acceptedTask = { taskId: "task_1", key: "agent:main:task" };
@@ -68,6 +69,12 @@ function createHarness() {
       selectors[0]?.onSelect?.(item);
       selectors[0]?.onSelect?.(item);
     },
+    resolve: (resolution: "accepted" | "dismissed") =>
+      controller.handleEvent("task.suggestion", {
+        action: "resolved",
+        taskId: "task_1",
+        resolution,
+      }),
     listTaskSuggestions,
     acceptTaskSuggestion,
     dismissTaskSuggestion,
@@ -193,10 +200,7 @@ describe("TUI task suggestions", () => {
   it("rebuilds an active selector when reconnect changes action scopes", async () => {
     const ui = createHarness();
     const suggestion = suggestionPayload();
-    ui.controller.handleEvent("task.suggestion", {
-      action: "created",
-      suggestion,
-    });
+    ui.suggest();
     const staleSelector = ui.selectors[0];
     ui.setActionCapabilities({ canAccept: false, canDismiss: true });
     ui.listTaskSuggestions.mockResolvedValueOnce([suggestion]);
@@ -285,10 +289,7 @@ describe("TUI task suggestions", () => {
       result.resolve({ ...acceptedTask, dismissed: true });
     }
     await new Promise(setImmediate);
-    expect(ui.onAccepted).not.toHaveBeenCalled();
-    expect(ui.addSystem).not.toHaveBeenCalled();
-    expect(ui.listTaskSuggestions).not.toHaveBeenCalled();
-    expect(ui.requestRender).not.toHaveBeenCalled();
+    expectUnused(ui.onAccepted, ui.addSystem, ui.listTaskSuggestions, ui.requestRender);
   });
   it("ignores a failed recovery refresh after disposal", async () => {
     const ui = createHarness();
@@ -333,11 +334,7 @@ describe("TUI task suggestions", () => {
   it("closes a suggestion resolved by another client", () => {
     const ui = createHarness();
     ui.suggest();
-    ui.controller.handleEvent("task.suggestion", {
-      action: "resolved",
-      taskId: "task_1",
-      resolution: "accepted",
-    });
+    ui.resolve("accepted");
     expect(ui.closeOverlay).toHaveBeenCalledWith(ui.overlayHandles[0]);
   });
   it("does not resurrect a resolved suggestion from a stale refresh", async () => {
@@ -345,11 +342,7 @@ describe("TUI task suggestions", () => {
     const pendingList = pending<unknown[]>([]);
     ui.listTaskSuggestions.mockReturnValueOnce(pendingList.promise);
     const refresh = ui.controller.refresh();
-    ui.controller.handleEvent("task.suggestion", {
-      action: "resolved",
-      taskId: "task_1",
-      resolution: "dismissed",
-    });
+    ui.resolve("dismissed");
     pendingList.resolve([suggestionPayload()]);
     await refresh;
     expect(ui.openOverlay).not.toHaveBeenCalled();

@@ -18,7 +18,6 @@ import { inspectExecutionIdentityRunInDatabase } from "../audit/execution-identi
 import type { ExecutionIdentityInspectionOutcome } from "../audit/execution-identity-inspection.types.js";
 import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
 import { readChannelIngressInDatabase } from "../channels/message/ingress-queue-read.worker.js";
-import { readClawStateCommandInDatabase } from "../claws/state-read.kernel.js";
 import { readConfigSnapshotAuditRecordInDatabase } from "../config/config-journal-snapshot.kernel.js";
 import {
   isCronStateReadCommand,
@@ -36,6 +35,7 @@ import {
 } from "../gateway/operator-approval-standing-grants.worker.js";
 import {
   readOperatorApprovalReplayInDatabase,
+  readOperatorApprovalPendingSnapshotInDatabase,
   readPendingOperatorApprovalsInDatabase,
   listTerminalOperatorApprovalsInDatabase,
 } from "../gateway/operator-approval-store.kernel.worker.js";
@@ -73,6 +73,10 @@ import {
   readUpdateRunReconciliationCandidates,
 } from "../infra/update-run-reconciliation.read.js";
 import {
+  canCollectPluginSourceSnapshotsInDatabase,
+  inspectPluginCohortRecoveryRows,
+} from "../infra/update-run-recovery-store.js";
+import {
   pluginBlobLookupInDatabase,
   pluginBlobEntriesInDatabase,
 } from "../plugin-state/plugin-blob-store.sqlite.js";
@@ -86,6 +90,7 @@ import {
   selectSkillLibraryRevisionMetadataBatch,
   selectSkillLibraryRevisionManifestsBatch,
 } from "../skills/library/selection-read.kernel.js";
+import { readTemplateStateCommandInDatabase } from "../templates/state-read.kernel.js";
 import { isTuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import { readTuiLastSessionCommand } from "../tui/tui-last-session.kernel.js";
 import { readAgentDeletionJournalStatusInDatabase } from "./agent-deletion-journal.read.js";
@@ -109,7 +114,11 @@ import type { OpenClawStateReadRequest } from "./openclaw-state-read.types.js";
 import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
 import { readUserBackgroundCommand } from "./user-background.kernel.js";
 import { readUserModelAccountCommand } from "./user-model-accounts.read.worker.js";
-import { readUserPreferences, selectUserPreferenceValues } from "./user-preferences.store.js";
+import {
+  readUserPreferences,
+  selectPersonalPinnedSessionKeys,
+  selectUserPreferenceValues,
+} from "./user-preferences.store.js";
 import { readUserProfileCommand } from "./user-profile-read.worker.js";
 import { selectResolvedUserProfileMetadataById } from "./user-profiles-internal.js";
 
@@ -136,8 +145,8 @@ export function readOpenClawStateDatabaseCommand(
   >,
   metadataRead: ReturnType<typeof prepareAcpSessionMetadataRead> | undefined,
 ) {
-  if (command.type === "claws.inventory") {
-    return readClawStateCommandInDatabase(db, command);
+  if (command.type === "templates.inventory") {
+    return readTemplateStateCommandInDatabase(db, command);
   }
   if (command.type === "agentDatabaseDeletion.snapshot") {
     return {
@@ -324,6 +333,18 @@ export function readOpenClawStateDatabaseCommand(
       run: readInterruptedUpdateCandidate(db),
     };
   }
+  if (command.type === "updateRuns.pluginCohortRecoveries") {
+    return {
+      type: command.type,
+      pairs: runSqliteReadSnapshotSync(db, () => inspectPluginCohortRecoveryRows(db)),
+    };
+  }
+  if (command.type === "updateRuns.pluginSnapshotCollection") {
+    return {
+      type: command.type,
+      allowed: runSqliteReadSnapshotSync(db, () => canCollectPluginSourceSnapshotsInDatabase(db)),
+    };
+  }
   if (command.type === "exec-approvals.read") {
     return {
       type: command.type,
@@ -348,6 +369,12 @@ export function readOpenClawStateDatabaseCommand(
   }
   if (command.type === "operatorApprovals.placementGrant") {
     return { type: command.type, rows: readPlacementGrantRows(db, command.input) };
+  }
+  if (command.type === "operatorApprovals.pendingSnapshot") {
+    return {
+      type: command.type,
+      page: readOperatorApprovalPendingSnapshotInDatabase(command.input, db),
+    };
   }
   if (command.type === "operatorApprovals.pending") {
     return {
@@ -420,6 +447,7 @@ export function readOpenClawStateDatabaseCommand(
   }
   if (
     command.type === "userProfiles.catalogIdentity" ||
+    command.type === "userProfiles.identity" ||
     command.type === "userProfiles.githubIdentity.cached" ||
     command.type === "userProfiles.githubAttribution.resolve" ||
     command.type === "userProfiles.channelIdentity.list" ||
@@ -433,6 +461,9 @@ export function readOpenClawStateDatabaseCommand(
   }
   if (command.type === "userBackground.snapshot" || command.type === "userBackground.image") {
     return readUserBackgroundCommand(db, command);
+  }
+  if (command.type === "userPreferences.sessionPins") {
+    return { type: command.type, sessionKeys: selectPersonalPinnedSessionKeys(db) };
   }
   if (command.type === "userPreferences.values") {
     return {
@@ -549,7 +580,7 @@ export function readOpenClawStateDatabaseCommand(
     return { type: command.type, agentIds: readRetainedAgentDeletionIds(db) };
   }
   if (command.type === "sandboxRegistry.list") {
-    return { type: command.type, entries: readSandboxRegistryInDatabase(db) };
+    return { type: command.type, entries: readSandboxRegistryInDatabase(db, command.workspaceDir) };
   }
   if (command.type === "sandboxRegistry.get") {
     return {
@@ -564,7 +595,10 @@ export function readOpenClawStateDatabaseCommand(
     };
   }
   if (command.type === "sandboxRegistry.browsers") {
-    return { type: command.type, entries: readSandboxBrowserRegistryInDatabase(db) };
+    return {
+      type: command.type,
+      entries: readSandboxBrowserRegistryInDatabase(db, command.workspaceDir),
+    };
   }
   return {
     type: command.type,

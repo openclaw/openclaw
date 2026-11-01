@@ -129,7 +129,7 @@ it.each([
   expect(files).toEqual(expected);
   const rows = JSON.parse(result.outputs.ui_e2e_matrix!) as { include: { task: string }[] };
   expect(rows.include.filter((row) => row.task === "control-ui")).toHaveLength(
-    full ? 8 : Math.min(8, Math.ceil(count / 30)),
+    full ? 6 : Math.min(6, Math.ceil(count / 30)),
   );
   expect(result.summary).toContain(`Mode: ${full ? "full" : "owners"}`);
   if (expected.length > 0) {

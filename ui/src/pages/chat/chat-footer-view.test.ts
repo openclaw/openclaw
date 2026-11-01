@@ -32,6 +32,7 @@ function expectFooterContext(container: Element, surface: Element) {
   expect(scrollAnchor?.classList.contains("chat-scroll-to-bottom-wrap")).toBe(true);
   expect(viewport.compareDocumentPosition(scrollAnchor!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   expect(viewport.querySelector(':scope > .chat-thread[role="log"]')).not.toBeNull();
+  expect(viewport.querySelector('[role="log"]')?.getAttribute("aria-label")).toBe("Chat");
   expect(surface.closest(".chat-footer")).toBe(footer);
   expect(shell.closest(".chat-footer")).toBe(footer);
   const input = requireElement(shell, ".agent-chat__input", "composer input");
@@ -40,7 +41,7 @@ function expectFooterContext(container: Element, surface: Element) {
   expect(surface.compareDocumentPosition(input)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
 }
 
-it("keeps delegated work with its launching turn and leaves the composer alone", async () => {
+it("leaves ordinary turn history and the draft intact without delegated-work rows", async () => {
   const sessionKey = "agent:main:parent";
   const childKey = "agent:main:subagent:worker";
   const groupId = "custom-review-batch";
@@ -130,7 +131,6 @@ it("keeps delegated work with its launching turn and leaves the composer alone",
     messages,
     showToolCalls: true,
     subagentSessions: sessions.slice(1),
-    swarm: { sessionKey, sessions },
     draft: "Keep the draft while progress arrives",
   };
   const container = renderChatView(props);
@@ -140,29 +140,31 @@ it("keeps delegated work with its launching turn and leaves the composer alone",
     observer.emitTarget(viewport, 800, 600);
   }
   const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
-  textarea.focus();
+  container.querySelector<HTMLAnchorElement>(".chat-composer-skip-link")!.click();
   await vi.dynamicImportSettled();
-  const activity = await waitForSolid(() =>
-    requireElement(container, "[data-test-id=chat-delegation]", "inline delegated work"),
+  await waitForSolid(() => {
+    expect(container.textContent).toContain("The release notes are ready.");
+    expect(container.textContent).toContain("Now do something unrelated");
+  });
+  const thread = requireElement(container, ".chat-thread", "transcript");
+  expect(thread.querySelector("[data-test-id=chat-delegation]")).toBeNull();
+  expect(thread.querySelector(".chat-subagent-activity")).toBeNull();
+  expect(container.querySelector(".chat-footer [data-test-id=chat-swarm]")).toBeNull();
+  const answer = [...container.querySelectorAll(".chat-text")].find((node) =>
+    node.textContent?.includes("The release notes are ready."),
   );
-  expect(activity.closest(".chat-thread")).not.toBeNull();
-  expect(activity.closest(".chat-footer")).toBeNull();
-  expect(activity.textContent).toContain("Check release notes");
-  expect(activity.textContent).toContain("Completed");
   const later = [...container.querySelectorAll(".chat-text")].find((node) =>
     node.textContent?.includes("Now do something unrelated"),
   );
+  expect(answer).toBeDefined();
   expect(later).toBeDefined();
-  expect(activity.compareDocumentPosition(later!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-  expect(container.querySelector(".chat-footer [data-test-id=chat-swarm]")).toBeNull();
+  expect(answer!.compareDocumentPosition(later!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   renderChatInto(container, { ...props, runId: "later-run", runActive: true });
-  await waitForSolid(() =>
-    expect(container.querySelectorAll("[data-test-id=chat-delegation]")).toHaveLength(1),
-  );
-  expect(
-    requireElement(container, "[data-test-id=chat-delegation]", "inline delegated work")
-      .textContent,
-  ).not.toContain("processing");
+  await waitForSolid(() => {
+    expect(container.querySelector("[data-test-id=chat-delegation]")).toBeNull();
+    expect(container.querySelector(".chat-subagent-activity")).toBeNull();
+    expect(container.textContent).toContain("The release notes are ready.");
+  });
   expect(container.querySelector("textarea")).toBe(textarea);
   expect(textarea.value).toBe(props.draft);
   expect(document.activeElement).toBe(textarea);
@@ -207,20 +209,21 @@ it("places inline approval above the composer and enforces its grant projection"
   expect(card?.getAttribute("data-approval-id")).toBe("approval-inline");
   expectFooterContext(container, inlineSurface);
   flush();
-  expect(text("countdown")?.trim()).toBe("expires in 01:00");
+  expect(text("countdown")?.trim()).toBe("1:00");
   expect(text("command-span")).toBe("rm -r");
-  expect(text("error")).toBe("Approval failed: gateway unavailable");
-  expect(text("warning")?.trim()).toBe(
-    "Review only. Sign in with approval access to record a decision.",
-  );
+  expect(container.textContent).toContain("Approval failed: gateway unavailable");
   const buttons = [
     ...container.querySelectorAll<HTMLButtonElement>(".exec-approval-actions button"),
   ];
   expect(buttons.every((button) => button.disabled)).toBe(true);
-  buttons[0]?.click();
+  for (const button of buttons) {
+    button.click();
+  }
   expect(onApprovalDecision).not.toHaveBeenCalled();
 
   const authorizedContainer = await render(true);
-  authorizedContainer.querySelector<HTMLButtonElement>(".exec-approval-actions button")?.click();
+  authorizedContainer
+    .querySelector<HTMLButtonElement>('.exec-approval-actions button[aria-label="Allow once"]')
+    ?.click();
   expect(onApprovalDecision).toHaveBeenCalledWith("approval-inline", "allow-once");
 });

@@ -316,6 +316,16 @@ export async function normalizeEmbeddedRunAttempt(input: {
   const lastRunPromptUsage = contextMutatedByMidTurnTruncation
     ? { contextUsage: { state: "unavailable" as const } }
     : callUsage.latest;
+  const nativeContext = attempt.attemptUsage?.contextUsage;
+  if (runtime.pluginHarnessOwnsTransport && nativeContext) {
+    // The native producer orders its final context observation against its own compactions.
+    input.contextRecoveryState.currentContextSnapshot = {
+      tokens:
+        !contextMutatedByMidTurnTruncation && nativeContext.state === "available"
+          ? nativeContext.totalTokens
+          : undefined,
+    };
+  }
   const breakerStep = stepIdleTimeoutBreaker(input.idleTimeoutBreakerState, {
     idleTimedOut: terminalTimedOut && idleTimedOut,
     completedModelProgress: hasCompletedModelProgressForIdleBreaker(attempt),

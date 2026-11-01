@@ -406,11 +406,21 @@ it.skipIf(process.platform === "win32")(
                 return;
               }
               // Ordinary node workspaces bind physical sessionId, not sessionKey.
-              if (input.sessionId !== readSettlement(gateway, key).placement?.session_id) {
+              const state = readSettlement(gateway, key);
+              if (input.sessionId !== state.placement?.session_id) {
+                return;
+              }
+              const launch = host.frames
+                .filter((item) => item.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND)
+                .map((item) => parseNodeWorkerLaunchInput(item.paramsJSON))
+                .findLast(
+                  (item) => item.descriptor.assignment.runId === state.placement?.turn_claim_run_id,
+                );
+              // Input refresh also quiesces; these barriers own completed-turn settlement.
+              if (!launch) {
                 return;
               }
               observedPhases[phase] = true;
-              const state = readSettlement(gateway, key);
               const acquiring = phase === "acquire";
               if (acquiring) {
                 aClaim = state.placement?.turn_claim_id ?? undefined;
@@ -424,10 +434,6 @@ it.skipIf(process.platform === "win32")(
               });
               if (acquiring) {
                 expectCursorAdvance(state.placement!);
-                const launch = host.frames
-                  .filter((item) => item.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND)
-                  .map((item) => parseNodeWorkerLaunchInput(item.paramsJSON))
-                  .findLast((item) => item.descriptor.assignment.runId === aRun)!;
                 expect(launch.descriptor.assignment.inference).toBe("runtime-local");
                 expect(await host.supervisor.status(launch.launchId)).toMatchObject({
                   state: "completed",

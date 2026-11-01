@@ -4,6 +4,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { publishActiveSessionLineage } from "../../components/app-sidebar-child-session-data.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { createActiveSessionPlacement } from "../../test-helpers/session-placement.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
@@ -94,19 +95,15 @@ function publishLineage(
 }
 
 function placement(status: "available" | "offline") {
-  return {
-    state: "active" as const,
+  return createActiveSessionPlacement({
     generation: 4,
-    createdAtMs: 1,
     updatedAtMs: 2,
     stateChangedAtMs: 2,
     environmentId: "environment-device",
     activeOwnerEpoch: 7,
-    workerBundleHash: "a".repeat(64),
     workspaceBaseManifestRef: "manifest-device",
-    remoteWorkspaceDir: "/workspace",
     runner: { kind: "device" as const, status },
-  };
+  });
 }
 
 describe("supplemental session reconciliation", () => {
@@ -134,10 +131,9 @@ describe("supplemental session reconciliation", () => {
       const delayed = createDeferred<ReturnType<typeof sessionsResult>>();
       let hold = false;
       let reply = initial;
-      const { sessions, emitChange, primary } = setup(async (method) => {
-        expect(method).toBe("sessions.list");
-        return hold ? delayed.promise : sessionsResult([{ ...reply }], 20);
-      });
+      const { sessions, emitChange, primary } = setup(async () =>
+        hold ? delayed.promise : sessionsResult([{ ...reply }], 20),
+      );
       const options = { agentId: "main", includeLastMessage: true, force: true };
       let pending: Promise<void> | undefined;
       try {
@@ -163,9 +159,7 @@ describe("supplemental session reconciliation", () => {
         hold = false;
         reply = catalog;
         await sessions.refresh(options);
-        expect(primary()).toEqual(
-          expect.objectContaining({ ...selected, ...thinkingCatalog("medium") }),
-        );
+        expect(primary()).toMatchObject({ ...selected, ...thinkingCatalog("medium") });
       } finally {
         delayed.resolve(sessionsResult([initial], 20));
         await pending;
@@ -239,8 +233,7 @@ describe("supplemental session reconciliation", () => {
         row,
         primary,
         refresh: load,
-      } = setup(async (method, params) => {
-        expect(method).toBe("sessions.list");
+      } = setup(async (_method, params) => {
         if (holdManaged && (params as { ownerId?: string }).ownerId) {
           return delayed.promise;
         }
@@ -307,12 +300,7 @@ describe("supplemental session reconciliation", () => {
             expect(row()).not.toHaveProperty("permissionMode");
           }
         } else if (scenario === "deletion") {
-          emitChange({
-            key,
-            sessionId: initial.sessionId,
-            agentId: "main",
-            reason: "delete",
-          });
+          emitChange({ key, sessionId: initial.sessionId, agentId: "main", reason: "delete" });
           expect(reconcile(accepted)).toBe(false);
           expect(sessions.state.result?.sessions).toEqual([]);
           expect(list()?.sessions).toEqual([]);

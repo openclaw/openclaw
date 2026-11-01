@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
+import type { MockGatewayWindow } from "../test-helpers/control-ui-e2e-contract.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureComposerProof,
@@ -55,6 +56,25 @@ function installTalkGateway(
     ...options,
     methodResponses: { "talk.client.create": clientSession, ...options.methodResponses },
   });
+}
+async function completeGoogleSetup(
+  page: Page,
+  gateway: Awaited<ReturnType<typeof installTalkGateway>>,
+) {
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (window as MockGatewayWindow).openclawControlUiE2eGateway
+          ?.socketStates()
+          .some(
+            (socket) =>
+              socket.url.startsWith("wss://generativelanguage.googleapis.com/") &&
+              socket.readyState === WebSocket.OPEN,
+          ),
+      ),
+    )
+    .toBe(true);
+  await gateway.deliverLatest({ setupComplete: {} });
 }
 type TalkWindow = Window & {
   openclawTalkE2eState?: {
@@ -120,8 +140,20 @@ async function openTalk(page: Page, width = 1366, height = 900) {
 suite.define(() => {
   it("keeps reduced-motion voice activity readable in a narrow viewport", async () => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
-      const gateway = await installTalkGateway(page, googleSession("voice-browser-talk-e2e"));
+      const gateway = await installTalkGateway(page, googleSession("voice-browser-talk-e2e"), {
+        deferredMethods: ["talk.client.create"],
+        webSocketPassthroughPrefixes: ["wss://generativelanguage.googleapis.com/"],
+      });
       await installTalkBrowserFixtures(page);
+      const providerSetup = Promise.withResolvers<() => void>();
+      await page.routeWebSocket("wss://generativelanguage.googleapis.com/**", (socket) => {
+        socket.onMessage((message) => {
+          const frame = JSON.parse(message.toString()) as { setup?: unknown };
+          if (frame.setup) {
+            providerSetup.resolve(() => socket.send(JSON.stringify({ setupComplete: {} })));
+          }
+        });
+      });
 
       await page.emulateMedia({ reducedMotion: "reduce" });
       const tapToTalk = page.getByRole("button", { name: "Tap to talk" });
@@ -147,7 +179,10 @@ suite.define(() => {
         .toBe("none");
       const connectingReducedMotionTransform = await barTransform();
 
-      await gateway.deliverLatest({ setupComplete: {} });
+      await gateway.waitForRequest("talk.client.create");
+      await gateway.resolveDeferred("talk.client.create");
+      const completeProviderSetup = await providerSetup.promise;
+      completeProviderSetup();
       await expect
         .poll(() => page.locator('.agent-chat__voice-activity[data-status="listening"]').count())
         .toBe(1);
@@ -177,7 +212,7 @@ suite.define(() => {
       await openTalk(page);
       await page.getByRole("button", { name: "Start voice input" }).click();
       await gateway.waitForRequest("talk.client.create");
-      await gateway.deliverLatest({ setupComplete: {} });
+      await completeGoogleSetup(page, gateway);
       const stopVoice = page.getByRole("button", { name: "Stop voice input" });
       await expect.poll(() => stopVoice.isVisible()).toBe(true);
       await page.mouse.move(0, 0);

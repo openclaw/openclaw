@@ -1,6 +1,7 @@
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
 import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
 import { readConfigFileSnapshot } from "../config/config.js";
+import { createConfigReadError, isConfigReadFailure } from "../config/io.invalid-config.js";
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { assertGatewayAuthNotKnownWeak } from "../gateway/known-weak-gateway-secrets.js";
@@ -18,8 +19,12 @@ export async function gatewayAuthTokenCommand(
     );
   }
 
-  const snapshot = await readConfigFileSnapshot();
+  // Revealing a token must not record config health or open plugin state.
+  const snapshot = await readConfigFileSnapshot({ observe: false, pluginValidation: "core-only" });
   if (!snapshot.valid) {
+    if (isConfigReadFailure(snapshot)) {
+      throw createConfigReadError(snapshot);
+    }
     throw new Error("Gateway config is invalid. Run `openclaw doctor --fix`, then try again.");
   }
 

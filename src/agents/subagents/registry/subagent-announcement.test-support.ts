@@ -25,7 +25,7 @@ import { registerSubagentRun } from "./subagent-registry.js";
 import { writeChildSession } from "./subagent-registry.persistence.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-export const registrationDefaults = {
+const registrationDefaults = {
   childAgentId: "main",
   requesterSessionKey: "agent:main:main",
   requesterAgentId: "main",
@@ -158,21 +158,16 @@ export function holdAnnouncementCommand(
   const worker = sqliteWorkerOwnerProbe.command(
     stateWorker,
     async (command, options, scope) => {
-      if (afterCommit) {
-        const result = await scope.execute(command, options);
-        if (!held && select(command)) {
-          held = true;
-          ready.resolve();
-          await release.promise;
-        }
-        return result;
+      const executed = afterCommit ? scope.execute(command, options) : undefined;
+      if (executed) {
+        await executed;
       }
       if (!held && select(command)) {
         held = true;
         ready.resolve();
         await release.promise;
       }
-      return scope.execute(command, options);
+      return executed ?? scope.execute(command, options);
     },
     { original: runSubagentStateWorkerOperation },
   );

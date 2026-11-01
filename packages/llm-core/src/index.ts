@@ -11,3 +11,4 @@ export {
   createAssistantMessageEventStream,
 } from "./utils/event-stream.js";
 export * from "./validation.js";
+export { observeAsyncIterator } from "./utils/observe-async-iterator.js";

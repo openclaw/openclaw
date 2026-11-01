@@ -4,6 +4,7 @@
  * confirms stay unskippable by simply not offering one.
  */
 export type ConfirmDialogSkipPreference = {
+  label?: string;
   /** True when the operator already chose to stop being asked. */
   skipped: boolean;
   /** Persists that choice; runs only when they confirm with the box ticked. */

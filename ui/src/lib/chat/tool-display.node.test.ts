@@ -1,8 +1,9 @@
 // @vitest-environment node
 
 import { describe, expect, it } from "vitest";
+import { resolveEmbedSandbox } from "./canvas-embed-policy.ts";
 import { resolveToolDisplayIcon } from "./tool-display-icon.ts";
-import { formatToolDetail, resolveEmbedSandbox, resolveToolDisplay } from "./tool-display.ts";
+import { formatToolDetail, resolveToolDisplay } from "./tool-display.ts";
 
 describe("tool display", () => {
   it("shares semantic icons across compact and full tool displays", () => {

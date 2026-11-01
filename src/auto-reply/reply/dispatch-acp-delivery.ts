@@ -8,16 +8,21 @@ import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
+  combineNonStreamingReplyParts,
+  trimTextPreservingCode,
+} from "../../shared/text/trim-code-text.js";
+import {
   buildCaptionedFinalTextFallback,
   cleanDeferredFinalText,
-  isCaptionedFinalTextPayload,
   mergeDeferredFinalText,
 } from "../../tts/captioned-final.js";
-import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
+import { createTtsDirectiveTextStreamCleaner } from "../../tts/directive-facts.js";
 import { shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
 import {
   copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
+  isReplyPayloadTerminalContent,
   isReplyPayloadTtsSupplement,
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
@@ -250,6 +255,8 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
         : undefined;
       const prepared = routed
         ? normalizeReplyPayloadOutcome(payload, {
+            preserveLeadingSourceBoundary:
+              kind === "block" && getReplyPayloadMetadata(payload)?.streamedSourceBoundary === true,
             transformReplyPayload: createChannelReplyTransform({
               messaging,
               cfg: params.cfg,
@@ -288,7 +295,11 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
         if (!visiblePayload.isCommentary && !visiblePayload.isReasoning) {
           blockSource = pendingBlockSource ?? createBlockReplySource();
         }
-        const text = state.cleanBlockTtsDirectiveText.push(rawBlockPayloadText);
+        const text = state.cleanBlockTtsDirectiveText.push(
+          // Keep authored line boundaries without restoring padding removed by
+          // the existing speech-cleaning path (including private-context gaps).
+          visiblePayload.text?.replace(/^[^\S\r\n]+|[^\S\r\n]+$/g, "") ?? rawBlockPayloadText,
+        );
         if (blockSource) {
           const hasPendingText = state.cleanBlockTtsDirectiveText.hasBufferedDirectiveText();
           blockSource.setComplete(!hasPendingText);
@@ -390,7 +401,7 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
         shouldTreatDeliveredTextAsVisible({ channel, kind: sendKind, text: ttsPayload.text });
       const isAnswerBearingFinal =
         sendKind === "final" &&
-        (isCaptionedFinalTextPayload(outgoingPayload) ||
+        (isReplyPayloadTerminalContent(outgoingPayload) ||
           (hasFinalTtsMedia && Boolean(ttsPayload.text?.trim())));
 
       const recordVisibleBlock = (tracksVisibleText: boolean, confirmed: boolean) => {
@@ -676,6 +687,11 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
       }
     },
     getAccumulatedVisibleBlockText: () => joinAcpBlockText(state.blockTexts),
+    // Live chat previews use the same paragraph join as the final webchat message.
+    getVisibleBlockDisplayText: () =>
+      combineNonStreamingReplyParts(
+        state.blockTexts.map((block) => trimTextPreservingCode(block.payload.text ?? "")),
+      ),
     recoverBlockText: async (options?: { onlyUndelivered?: boolean }) => {
       if (!params.suppressBlockUserDelivery) {
         await settleDirectVisibleText();

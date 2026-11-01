@@ -315,7 +315,7 @@ function resolveContainedSkillPath(params: {
 function resolveNestedSkillsRoot(dir: string, maxEntriesToScan: number): string {
   const nested = path.join(dir, "skills");
   try {
-    if (!fs.existsSync(nested) || !fs.statSync(nested).isDirectory()) {
+    if (!fs.statSync(nested).isDirectory()) {
       return dir;
     }
   } catch {

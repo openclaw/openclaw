@@ -47,6 +47,7 @@ export function captureDurableSessionActor(params: {
       },
     }),
     transport: {
+      agentId: database.agentId,
       run: (operation, authorize, concurrentBoardReads) => {
         const prepared = concurrentBoardReads
           ? execution.capturePreparedGenerationClaim()

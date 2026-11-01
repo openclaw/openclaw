@@ -12,16 +12,21 @@ import {
 } from "solid-js";
 import { MarkdownBlocks } from "../../../components/markdown-blocks-owner.ts";
 import { createMarkdownRef } from "../../../components/markdown-dom-ref.ts";
+import {
+  markdownFileLinkFromEvent,
+  markdownFileLinkFromKeyboardEvent,
+  type MarkdownFileLinkTarget,
+} from "../../../components/markdown-file-links.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
-import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
+import type { EmbedSandboxMode } from "../../../lib/chat/canvas-embed-policy.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
@@ -34,18 +39,37 @@ registerEnglishCatalog(registerChatComposerEnglish);
 
 registerEnglishCatalog(registerChatMediaEnglish);
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 registerEnglishCatalog(registerFilePreviewEnglish);
 
-function MarkdownAttachment(props: { text: string; label: string }) {
+function MarkdownAttachment(props: { text: string; label: string; onBrowseFiles?: () => void }) {
   let article!: HTMLElement;
+  let browseAction: HTMLButtonElement | undefined;
+  let linkAction: HTMLElement | null = null;
+  const [linkedFile, setLinkedFile] = createSignal<string | null>(null);
+  const selectLinkedFile = (event: Event, target: MarkdownFileLinkTarget | null) => {
+    if (!target?.documentRelative || !props.onBrowseFiles) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    linkAction =
+      event.target instanceof Element
+        ? event.target.closest<HTMLElement>("a[data-file-path]")
+        : null;
+    setLinkedFile(target.path);
+    onSettled(() => browseAction?.focus());
+  };
   const markdown = createMarkdownRef(() => ({
     incremental: true,
     content: toSanitizedMarkdownHtml(props.text, {
       mode: "document",
       remoteImages: false,
       codeBlockInteraction: "interactive",
+      // Detached attachments have no source folder. Decorate authored links only;
+      // the selected catalog row, never this reference, owns the eventual file read.
+      documentFileLinks: props.onBrowseFiles ? "select" : false,
     }),
   }));
   onSettled(() => {
@@ -54,15 +78,49 @@ function MarkdownAttachment(props: { text: string; label: string }) {
     return () => blocks.dispose();
   });
   return (
-    <article
-      ref={(element) => {
-        article = element;
-        markdown(element);
-      }}
-      class="sidebar-attachment-preview__markdown sidebar-markdown-reader sidebar-markdown"
-      dir={detectTextDirection(props.text)}
-      aria-label={props.label}
-    />
+    <>
+      <Show when={linkedFile()}>
+        {(path) => (
+          <div class="callout" role="status">
+            <p>{t("chat.attachments.chooseLinkedFile", { path: path() })}</p>
+            <button
+              class="btn btn--sm"
+              type="button"
+              onClick={() => {
+                setLinkedFile(null);
+                linkAction?.focus();
+              }}
+            >
+              {t("common.cancel")}
+            </button>{" "}
+            <button
+              ref={(element) => {
+                browseAction = element;
+              }}
+              class="btn btn--sm"
+              type="button"
+              onClick={() => {
+                setLinkedFile(null);
+                props.onBrowseFiles?.();
+              }}
+            >
+              {t("chat.workspaceFiles.browseFiles")}
+            </button>
+          </div>
+        )}
+      </Show>
+      <article
+        ref={(element) => {
+          article = element;
+          markdown(element);
+        }}
+        class="sidebar-attachment-preview__markdown sidebar-markdown-reader sidebar-markdown"
+        dir={detectTextDirection(props.text)}
+        aria-label={props.label}
+        onClick={(event) => selectLinkedFile(event, markdownFileLinkFromEvent(event))}
+        onKeyDown={(event) => selectLinkedFile(event, markdownFileLinkFromKeyboardEvent(event))}
+      />
+    </>
   );
 }
 
@@ -76,6 +134,7 @@ type TextAttachmentProps = {
   label: string;
   mimeType: string;
   sizeBytes: number | undefined;
+  onBrowseFiles: (() => void) | undefined;
 };
 
 type TextRead =
@@ -256,7 +315,11 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
                   </div>
                 </Show>
                 {markdown() && !htmlDocument() && !source() ? (
-                  <MarkdownAttachment text={content.text} label={props.label} />
+                  <MarkdownAttachment
+                    text={content.text}
+                    label={props.label}
+                    onBrowseFiles={props.onBrowseFiles}
+                  />
                 ) : (
                   <pre
                     class="sidebar-attachment-preview__text"
@@ -315,6 +378,7 @@ export const ChatTextAttachment = defineSolidBridge<TextAttachmentProps>(
       label: { default: "" },
       mimeType: { default: "" },
       sizeBytes: { default: undefined, type: Number },
+      onBrowseFiles: { default: undefined, attribute: false },
     },
   },
 );

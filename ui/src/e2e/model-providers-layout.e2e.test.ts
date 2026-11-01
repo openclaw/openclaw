@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
+import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { configSnapshot } from "./model-setup-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Models settings layout and discovery" });
 
@@ -33,7 +33,7 @@ const gatewayScenario = {
         { id: "work", name: "Work" },
       ],
     },
-    "config.get": configSnapshot(config, "models-layout"),
+    "config.get": sourceConfigSnapshot(config, "models-layout"),
     "models.list": catalog,
     "models.authStatus": {
       ts: Date.now(),

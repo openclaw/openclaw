@@ -9,27 +9,14 @@ import {
   selectAffectedBoundaryPackages,
 } from "../../scripts/lib/extension-boundary-selection.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { fixtureGit } from "./release-publish.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const packages = ["consumer", "direct", "unrelated", "telegram", "codex", "slack"];
 const smoke = ["telegram", "codex", "slack"];
 const selectedPackages = (selection: ReturnType<typeof selectAffectedBoundaryPackages>) =>
   selection.selected.map((row) => row.package);
-function gitIn(cwd: string) {
-  return (...args: string[]) =>
-    execFileSync("git", args, {
-      cwd,
-      encoding: "utf8",
-      stdio: "pipe",
-      env: {
-        ...process.env,
-        GIT_AUTHOR_NAME: "Boundary fixture",
-        GIT_AUTHOR_EMAIL: "fixture@example.invalid",
-        GIT_COMMITTER_NAME: "Boundary fixture",
-        GIT_COMMITTER_EMAIL: "fixture@example.invalid",
-      },
-    }).trim();
-}
+const gitIn = (cwd: string) => fixtureGit(cwd, "Boundary fixture", "fixture@example.invalid");
 
 function fixture(overrides: Record<string, string> = {}) {
   const root = tempDirs.make("boundary-selection-");

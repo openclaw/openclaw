@@ -123,7 +123,8 @@ export function createPortalOperations(
   };
   return {
     list,
-    async close(id: string) {
+    async close(rawId: string) {
+      const id = rawId.trim();
       if (owner && !list().portals.some((portal) => portal.id === id)) {
         throw new Error(owner.ownershipError);
       }
@@ -664,12 +665,11 @@ export function createGatewayPortalService(params: {
             (resourceOwnerKey === undefined || portal.resourceOwnerKey === resourceOwnerKey),
         ),
       ),
-    close: async (id: string, assertCurrent?: () => void) => {
-      await serialize(id, () => {
+    close: (id: string, assertCurrent?: () => void) =>
+      serialize(id, () => {
         assertCurrent?.();
         return closeEntry(id);
-      });
-    },
+      }),
     closeWorkerPortals: async (environmentId: string, ownerEpoch?: number) => {
       const environmentSuffix = `-worker-${sha256HexPrefixCore(environmentId, 32)}-`;
       // Include in-flight opens so teardown fences a listener still awaiting its bind.

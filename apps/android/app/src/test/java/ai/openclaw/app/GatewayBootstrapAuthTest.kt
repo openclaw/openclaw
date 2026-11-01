@@ -294,6 +294,10 @@ class GatewayBootstrapAuthTest {
         val initialNodeListRead = CompletableDeferred<Job>()
         runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
           when (method) {
+            "agents.list" -> {
+              """{"defaultId":"main","mainKey":"main","agents":[{"id":"main"}]}"""
+            }
+
             "node.list" -> {
               if (runtime.nodeConnected.value) {
                 """{"nodes":[{"nodeId":"$deviceId","paired":true,"connected":true,"approvalState":"approved"}]}"""
@@ -316,7 +320,7 @@ class GatewayBootstrapAuthTest {
             mainSessionKey = null,
             updateAvailable = null,
             authScopes = listOf("operator.read"),
-            methods = setOf("node.list"),
+            methods = setOf("agents.list", "node.list"),
           )
 
         fun connectSession(fieldName: String) {
@@ -530,6 +534,7 @@ class GatewayBootstrapAuthTest {
       neutralizeColdStartAutoConnect(runtime)
       prefs.setManualTls(false)
       val endpoint = gatewayEndpoint()
+      prefs.saveGatewayTlsFingerprint(endpoint.stableId, "ab".repeat(32))
       installControlPageGateway(authMethod = "device-token")
       assertTrue(runtime.connectSwitchingGateway(endpoint, auth(token = "setup-shared-secret")))
       val page =
@@ -538,6 +543,8 @@ class GatewayBootstrapAuthTest {
             page?.connectAuth?.let { runCatching { it("browser-challenge", 1700000000123) }.isSuccess } == true
           }
         }!!
+      // Manual local cleartext ignores a saved pin; the page must reflect the admitted transport.
+      assertNull(page.tlsFingerprintSha256)
       val identityStore = DeviceIdentityStore.withPrefs(app, prefs)
       val identity = identityStore.loadOrCreate()
       val tokens = DeviceAuthStore(prefs)
@@ -2812,6 +2819,8 @@ class GatewayBootstrapAuthTest {
                     val methodField = authMethod?.let { "\"method\":\"$it\"," }.orEmpty()
                     val scopes = if (role == "operator") "[\"operator.read\"]" else "[]"
                     """{"auth":{$methodField"deviceToken":"native-$role-token","role":"$role","scopes":$scopes},"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}"""
+                  } else if (frame["method"]?.jsonPrimitive?.content == "agents.list") {
+                    """{"defaultId":"main","mainKey":"main","agents":[{"id":"main"}]}"""
                   } else {
                     "{}"
                   }

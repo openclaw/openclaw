@@ -1,14 +1,18 @@
 /** Assembles an agent session from the run owner's selected model and prepared resources. */
 import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
+import {
+  setInternalBeforeToolBatch,
+  type InternalBeforeToolBatchHook,
+} from "../../../packages/agent-core/src/internal-hooks.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
+import type { SessionMetadataCommit } from "../../config/sessions/transcript-write-context-store.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   withSessionMetadataPublication,
   withSessionTranscriptWriteAssertion,
-  type SessionMetadataCommit,
 } from "../../config/sessions/transcript-write-context.js";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
-import type { Message, Model } from "../../llm/types.js";
+import type { Model } from "../../llm/types.js";
 import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
 import { applyLocalNoAuthHeaders } from "../model-auth-markers.js";
 import { resolveProviderRequestPolicy } from "../provider-attribution.js";
@@ -19,14 +23,10 @@ import {
   type AgentTool,
   type ThinkingLevel,
 } from "../runtime/index.js";
-import {
-  setInternalBeforeToolBatch,
-  type InternalBeforeToolBatchHook,
-} from "../runtime/internal-hooks.js";
 import type { AgentSessionConfig } from "./agent-session-types.js";
 import { AgentSession } from "./agent-session.js";
 import type { ExtensionRunner } from "./extensions/index.js";
-import { convertToLlm } from "./messages.js";
+import { convertToLlmWithBlockImages } from "./messages.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
@@ -150,7 +150,6 @@ function getAttributionHeaders(
   return undefined;
 }
 
-// Fork replay retains this transport after disposal; never capture the session's options or scope.
 function createSessionStreamFn(
   modelRegistry: CreateAgentSessionOptions["modelRegistry"],
   settingsManager: SettingsManager,
@@ -219,38 +218,6 @@ export async function createAgentSession(
   const model = options.model;
   const thinkingLevel = clampThinkingLevel(model, options.thinkingLevel) as ThinkingLevel;
 
-  const convertToLlmWithBlockImages = (messages: AgentMessage[]): Message[] => {
-    const converted = convertToLlm(messages);
-    // Check setting dynamically so mid-session changes take effect
-    if (!settingsManager.getBlockImages()) {
-      return converted;
-    }
-    return converted.map((msg) => {
-      if (msg.role !== "user" && msg.role !== "toolResult") {
-        return msg;
-      }
-      const content = msg.content;
-      if (!Array.isArray(content) || !content.some((c) => c.type === "image")) {
-        return msg;
-      }
-      const filteredContent = content
-        .map((c) =>
-          c.type === "image" ? { type: "text" as const, text: "Image reading is disabled." } : c,
-        )
-        .filter((c, i, arr) => {
-          const previous = arr.at(i - 1);
-          return !(
-            c.type === "text" &&
-            c.text === "Image reading is disabled." &&
-            i > 0 &&
-            previous?.type === "text" &&
-            previous.text === "Image reading is disabled."
-          );
-        });
-      return Object.assign({}, msg, { content: filteredContent });
-    });
-  };
-
   const extensionRunnerRef: { current?: ExtensionRunner } = {};
   const runWithSessionWriteSettlement = async <T>(run: () => Promise<T> | T): Promise<T> =>
     options.withSessionWriteSettlement
@@ -264,7 +231,9 @@ export async function createAgentSession(
       thinkingLevel,
       tools: [],
     },
-    convertToLlm: convertToLlmWithBlockImages,
+    // Resolve dynamically so attempt-local image policy changes affect the next request.
+    convertToLlm: (messages) =>
+      convertToLlmWithBlockImages(messages, settingsManager.getBlockImages()),
     streamFn: createSessionStreamFn(modelRegistry, settingsManager, options.thinkingExplicit),
     onPayload: async (payload) => {
       const runner = extensionRunnerRef.current;

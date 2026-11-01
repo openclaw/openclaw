@@ -1,11 +1,6 @@
-type ParsedVcard = {
-  name?: string;
-  phones: string[];
-};
-
 const ALLOWED_VCARD_KEYS = new Set(["FN", "N", "TEL"]);
 
-export function parseVcard(vcard?: string): ParsedVcard {
+export function parseVcard(vcard?: string) {
   if (!vcard) {
     return { phones: [] };
   }

@@ -30,16 +30,25 @@ const { values } = parseArgs({
     minutes: { type: "string", default: "90" },
     sessions: { type: "string", default: "2000" },
     clients: { type: "string", default: "10" },
-    port: { type: "string", default: "19548" },
+    port: { type: "string", default: "41673" },
     "rpc-interval-ms": { type: "string", default: "2000" },
     "turn-interval-ms": { type: "string", default: "180000" },
     "snapshot-minutes": { type: "string" },
+    "module-census": { type: "boolean" },
+    coverage: { type: "boolean" },
+    "lazy-import-trace": { type: "boolean" },
+    "turn-count": { type: "string" },
+    "gateway-preload": { type: "string" },
+    "shell-turns": { type: "boolean" },
+    "idle-minutes": { type: "string" },
+    "ready-file": { type: "string" },
+    "start-file": { type: "string" },
     help: { type: "boolean" },
   },
 });
 if (values.help) {
   console.log(
-    "node scripts/gateway-heap-rig.mjs --root .rig/node26 --minutes 90 [--sessions 2000 --clients 10 --port 19548 --snapshot-minutes 10,90]",
+    "node scripts/gateway-heap-rig.mjs --root .rig/node26 --minutes 90 [--sessions 2000 --clients 10 --port 41673 --snapshot-minutes 10,90 --module-census --coverage --idle-minutes 5]",
   );
   process.exit(0);
 }
@@ -49,23 +58,38 @@ function positiveInteger(value, label) {
   }
   return Number(value);
 }
+if (values.coverage && !values["module-census"]) {
+  throw new Error("--coverage requires --module-census");
+}
+if (Boolean(values["ready-file"]) !== Boolean(values["start-file"])) {
+  throw new Error("--ready-file and --start-file must be supplied together");
+}
 const minutes = positiveInteger(values.minutes, "minutes");
+const idleMinutes = values["idle-minutes"]
+  ? positiveInteger(values["idle-minutes"], "idle-minutes")
+  : 0;
 const sessionCount = positiveInteger(values.sessions, "sessions");
 const clientCount = positiveInteger(values.clients, "clients");
 const port = positiveInteger(values.port, "port");
 const rpcInterval = positiveInteger(values["rpc-interval-ms"], "rpc-interval-ms");
 const turnInterval = positiveInteger(values["turn-interval-ms"], "turn-interval-ms");
-if (port < 19500 || port > 19597) {
-  throw new Error("port and two adjacent mock ports must fit 19500–19599");
+const turnCount = values["turn-count"]
+  ? positiveInteger(values["turn-count"], "turn-count")
+  : Infinity;
+if (port < 40000 || port > 65533) {
+  throw new Error("port and two adjacent mock ports must fit 40000–65535");
 }
 if (!values.root) {
   throw new Error("--root is required; it must name a new synthetic state directory");
 }
 const root = path.resolve(values.root);
 const build = JSON.parse(readFileSync("dist/build-info.json", "utf8"));
-const snapshotMinutes = (values["snapshot-minutes"] ?? `10,${minutes}`)
-  .split(",")
-  .map((v) => positiveInteger(v, "snapshot-minutes"));
+const snapshotMinutes =
+  values["snapshot-minutes"] === "none"
+    ? []
+    : (values["snapshot-minutes"] ?? `10,${minutes}`)
+        .split(",")
+        .map((v) => positiveInteger(v, "snapshot-minutes"));
 if (snapshotMinutes.some((v, i) => v > minutes || (i > 0 && v - snapshotMinutes[i - 1] < 2))) {
   throw new Error("snapshot minutes must increase by at least two and fit the duration");
 }
@@ -116,6 +140,9 @@ config.agents.entries = Object.fromEntries(
   }),
 );
 const turnDriver = await configureHeapRigTurns(config, root, port + 1);
+if (values["shell-turns"]) {
+  config.tools.exec = { security: "full", ask: "off" };
+}
 await configureHeapRigCatalog(config, root);
 const configPath = path.join(root, "openclaw.json");
 writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
@@ -124,6 +151,8 @@ const env = createGatewayBenchEnv(root, configPath, {
   caseEnv: {
     ...turnDriver.env,
     OPENAI_API_KEY: "synthetic-heap-rig-not-a-real-key",
+    OPENCLAW_PROFILE: `heap-rig-${port}`,
+    OPENCLAW_SYSTEMD_UNIT: `openclaw-heap-rig-${port}`,
     PATH: `${path.dirname(process.execPath)}:${process.env.PATH}`,
     TMPDIR: root,
   },
@@ -161,7 +190,7 @@ function start(args, label, extraEnv = {}) {
     cwd: process.cwd(),
     env: { ...env, ...extraEnv },
     detached: true,
-    stdio: ["ignore", fd, fd],
+    stdio: ["ignore", fd, fd, ...(label === "gateway" && values["module-census"] ? ["ipc"] : [])],
   });
   closeSync(fd);
   children.push(child);
@@ -298,7 +327,52 @@ try {
     MOCK_REQUEST_LOG: path.join(root, "mock-utility-requests.jsonl"),
     SUCCESS_MARKER: "Synthetic activity summary",
   });
-  const gateway = start(["dist/index.js", "gateway", "--port", String(port)], "gateway");
+  const coldStarted = performance.now();
+  const gateway = start(
+    [
+      ...(values["gateway-preload"] ? ["--import", path.resolve(values["gateway-preload"])] : []),
+      ...(values["lazy-import-trace"]
+        ? ["--import", path.resolve("scripts/perf/lazy-import-trace-preload.mjs")]
+        : []),
+      ...(values["module-census"]
+        ? ["--import", path.resolve("scripts/perf/main-module-census-preload.mjs")]
+        : []),
+      "dist/index.js",
+      "gateway",
+      "--port",
+      String(port),
+    ],
+    "gateway",
+    values["lazy-import-trace"]
+      ? { OPENCLAW_LAZY_IMPORT_TRACE_DIR: path.join(root, "lazy-import-trace") }
+      : {},
+  );
+  async function census(action, label) {
+    if (!values["module-census"]) {
+      return;
+    }
+    const id = randomUUID();
+    const output = path.join(root, `modules-${label}.json`);
+    const reply = Promise.withResolvers();
+    const listener = (message) => {
+      if (message?.channel === "main-module-census" && message.id === id) {
+        if (message.error) {
+          reply.reject(new Error(message.error));
+        } else {
+          reply.resolve(message);
+        }
+      }
+    };
+    gateway.on("message", listener);
+    const timeout = setTimeout(() => reply.reject(new Error("Module census timed out")), 120000);
+    try {
+      gateway.send({ channel: "main-module-census", id, action, output });
+      record({ kind: "module-census", label, ...(await reply.promise), output });
+    } finally {
+      clearTimeout(timeout);
+      gateway.off("message", listener);
+    }
+  }
   const startupDeadline = Date.now() + 600000;
   while (!admin && !abort.signal.aborted && Date.now() < startupDeadline) {
     try {
@@ -312,6 +386,7 @@ try {
   }
   record({
     kind: "ready",
+    coldStartMs: performance.now() - coldStarted,
     pid: gateway.pid,
     node: process.version,
     v8: process.versions.v8,
@@ -344,6 +419,32 @@ try {
     throw new Error(`Seed inventory incomplete: ${inventory.totalCount}`);
   }
   record({ kind: "seeded", totalCount: inventory.totalCount, historyBytesPerSession: 32 * 1024 });
+  await census("capture", "seeded");
+  if (values["ready-file"]) {
+    writeFileSync(
+      values["ready-file"],
+      JSON.stringify({ pid: process.pid, gatewayPid: gateway.pid }),
+    );
+    let startAt;
+    while (!abort.signal.aborted) {
+      try {
+        startAt = positiveInteger(readFileSync(values["start-file"], "utf8").trim(), "start-file");
+        break;
+      } catch (error) {
+        if (error.code !== "ENOENT") {
+          throw error;
+        }
+        await sleep(100);
+      }
+    }
+    if (abort.signal.aborted || startAt <= Date.now()) {
+      throw new Error("Preparation missed the workload start; discard the run");
+    }
+    await sleep(startAt - Date.now());
+  }
+  if (values.coverage) {
+    await census("coverage-start", "workload");
+  }
   const startedAt = performance.now();
   const deadline = startedAt + minutes * 60000;
   const samples = [];
@@ -486,7 +587,11 @@ try {
   }
   tasks.push(
     (async () => {
-      for (let index = 0; !abort.signal.aborted && performance.now() < deadline; index++) {
+      for (
+        let index = 0;
+        index < turnCount && !abort.signal.aborted && performance.now() < deadline;
+        index++
+      ) {
         await workloadReady;
         if (abort.signal.aborted || performance.now() >= deadline) {
           break;
@@ -494,6 +599,7 @@ try {
         const turnWork = turnDriver.runTurn(admin.rpc, index, {
           agentId: index % 2 === 0 ? "main" : "second",
           canStart: () => !abort.signal.aborted && performance.now() < deadline,
+          shell: values["shell-turns"],
         });
         currentTurn = turnWork;
         const turn = await turnWork;
@@ -530,6 +636,21 @@ try {
   finishFloor();
   if (failure) {
     throw failure;
+  }
+  await census("capture", "complete");
+  if (idleMinutes) {
+    await Promise.all(tasks);
+    for (let minute = 1; minute <= idleMinutes; minute++) {
+      await sleep(60000);
+      if (failure) {
+        throw new Error("Idle observation interrupted", { cause: failure });
+      }
+      await census("stats", `idle-${minute}`);
+    }
+    if (snapshotMinutes.length > 0) {
+      await snapshot(minutes + idleMinutes);
+    }
+    await census("capture", "idle");
   }
   record({
     kind: "complete",

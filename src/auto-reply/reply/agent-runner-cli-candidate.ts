@@ -9,15 +9,18 @@ import {
   settleCliSessionResult,
 } from "../../agents/cli-session-store.js";
 import { shouldClearFailedCliSessionBinding } from "../../agents/cli-session.js";
-import { resolveDelegationCapability } from "../../agents/delegation-capability.js";
+import {
+  isFallbackAttempt,
+  resolveDelegationCapability,
+} from "../../agents/delegation-capability.js";
 import { withAdmittedCliCandidate } from "../../agents/embedded-agent-runner/run-entry-cli.js";
-import type { CompactionAccountingTarget } from "../../agents/embedded-agent-runner/run/internal-params.js";
+import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../agents/media-generation-activity.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
-import { recordModelFallbackStop } from "../../agents/model-fallback-stop.js";
+import { createUnrecordedScheduledAccountRefusal } from "../../agents/scheduled-unrecorded-account.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
@@ -49,9 +52,17 @@ export async function runCliFallbackCandidate(
   params: AgentFallbackCandidateCommonParams & {
     cliExecutionProvider: string;
     lifecycleGeneration: string;
-    onSessionWriter: (writer: CompactionAccountingTarget) => void;
+    onCompactionAccounting: (fact: CompactionAccountingFact) => void;
   },
 ): ReturnType<typeof runCliAgentWithLifecycle> {
+  if (
+    params.candidateRun.cyberAccessProgram !== undefined &&
+    params.candidateRun.cyberAccessProgram !== "standard"
+  ) {
+    throw new Error(
+      "Daybreak access is unsupported by this CLI runtime. Select Standard or use the OpenClaw or native Codex runtime.",
+    );
+  }
   const turn = params.turn;
   params.scheduledInference?.assertCandidate(params.provider, true);
   const onPreparedBlockReply = turn.opts?.onPreparedBlockReply;
@@ -179,6 +190,7 @@ export async function runCliFallbackCandidate(
         readMode: "read-only",
         getSessionEntry: () => turn.getActiveSessionEntry(),
         classifyResult: params.classifyResult,
+        onCompactionAccounting: params.onCompactionAccounting,
       },
       async ({
         sessionEntry: initialSessionEntry,
@@ -229,11 +241,11 @@ export async function runCliFallbackCandidate(
                 config: params.runtimeConfig,
               }).authProfileId;
         if (turn.followupRun.run.scheduledAutomation && !scheduledInference && authProfileId) {
-          const refusal = new Error(
-            "Automation has no recorded inference account. Explicitly select its account with a model@profile update before running it.",
-          );
-          recordModelFallbackStop(refusal);
-          throw refusal;
+          throw createUnrecordedScheduledAccountRefusal({
+            runtime: params.cliExecutionProvider,
+            modelRef: `${params.provider}/${params.model}`,
+            profileId: authProfileId,
+          });
         }
         const diagnosticOwner = params.deferredLifecycle.handoffToCli();
         // A forked child carries the parent's binding with a one-shot fork marker;
@@ -433,12 +445,11 @@ export async function runCliFallbackCandidate(
               turn.followupRun.currentInboundEventKind !== "room_event" &&
               turn.followupRun.run.suppressTranscriptOnlyAssistantPersistence !== true,
             storePath: turn.storePath,
-            // Candidate zero is the primary attempt; later candidates are
-            // fallbacks. Carry the runner-owned fact instead of inferring from
-            // this shared dispatch path, or primary CLI runs lose delegation.
+            // Carry the runner-owned facts instead of inferring from this shared
+            // dispatch path, or primary CLI runs lose delegation.
             ...buildCliMcpDelegationCapabilityBinding(
               resolveDelegationCapability({
-                fallbackActive: params.isFallbackRetry,
+                fallbackActive: isFallbackAttempt(params),
                 inputProvenance: turn.followupRun.run.inputProvenance,
                 disableTools: turn.opts?.disableTools,
                 toolsAllow: turn.opts?.toolsAllow,
@@ -520,14 +531,6 @@ export async function runCliFallbackCandidate(
             onExecutionPhase: params.signalExecutionPhaseForTyping,
           },
         });
-        if (sessionTarget && sessionEntry) {
-          // History preparation publishes its committed writer into this candidate's detached row.
-          params.onSessionWriter({
-            ...sessionTarget,
-            lifecycleRevision: sessionEntry.lifecycleRevision,
-            activeWriterRunId: sessionEntry.activeWriterRunId,
-          });
-        }
         if (droppedCliSessionReplacement) {
           // The room-event transform removed native continuity; only its guarded
           // invalidation remains, and failure must retain the returned turn.

@@ -128,7 +128,7 @@ describe("node-host SQLite config", () => {
     };
   }
 
-  it("round-trips the complete gateway snapshot across database reopen", async () => {
+  it("persists complete snapshots, replaces endpoint fields and enables app sharing across reopen", async () => {
     const { env, stateDir, configure, load } = makeTestEnv();
     const expected = {
       version: 1,
@@ -138,7 +138,7 @@ describe("node-host SQLite config", () => {
       gateway: {
         host: "gateway.local",
         port: 18443,
-        tls: false,
+        tls: true,
         tlsFingerprint: fixtureDigest,
         contextPath: "/openclaw-gw",
         cloudflareAccess: {
@@ -167,13 +167,21 @@ describe("node-host SQLite config", () => {
     await expect(fs.stat(path.join(stateDir, "node.json"))).rejects.toMatchObject({
       code: "ENOENT",
     });
-  });
 
-  it("persists an explicit installed-app sharing enable", async () => {
-    const { configure, load } = makeTestEnv();
-    vi.spyOn(Date, "now").mockReturnValue(1);
-    await configure();
-    vi.spyOn(Date, "now").mockReturnValue(2);
+    vi.spyOn(Date, "now").mockReturnValue(1_235);
+    const replaced = await configure({
+      nodeId: "custom id with spaces inside",
+      gateway: { host: "new.example", port: 18789, tls: false },
+    });
+    expect(replaced).toMatchObject({
+      nodeId: "custom id with spaces inside",
+      gateway: { host: "new.example", port: 18789, tls: false },
+    });
+    expect(replaced.gateway?.tlsFingerprint).toBeUndefined();
+    expect(replaced.gateway?.contextPath).toBeUndefined();
+    await expect(load()).resolves.toEqual(replaced);
+
+    vi.spyOn(Date, "now").mockReturnValue(1_236);
     const enabled = await configure({ installedAppsSharing: true });
     expect(enabled.installedAppsSharing).toBe(true);
     await closeOpenClawStateDatabaseAsync();
@@ -241,34 +249,6 @@ describe("node-host SQLite config", () => {
     expect(second.gateway).toBeUndefined();
     await expect(loadNodeHostConfig(env)).resolves.toEqual(second);
   }, 30_000);
-
-  it("preserves explicit custom ids and atomically clears omitted gateway fields", async () => {
-    const { configure, load } = makeTestEnv();
-    vi.spyOn(Date, "now").mockReturnValue(20);
-    await configure({
-      nodeId: "first-custom-id",
-      gateway: {
-        host: "old.example",
-        port: 443,
-        tls: true,
-        tlsFingerprint: fixtureDigest,
-        contextPath: "/old",
-      },
-    });
-    vi.spyOn(Date, "now").mockReturnValue(21);
-    const configured = await configure({
-      nodeId: "custom id with spaces inside",
-      gateway: { host: "new.example", port: 18789, tls: false },
-    });
-
-    expect(configured).toMatchObject({
-      nodeId: "custom id with spaces inside",
-      gateway: { host: "new.example", port: 18789, tls: false },
-    });
-    expect(configured.gateway?.tlsFingerprint).toBeUndefined();
-    expect(configured.gateway?.contextPath).toBeUndefined();
-    await expect(load()).resolves.toEqual(configured);
-  });
 
   it("rejects corrupt canonical rows instead of rotating identity", async () => {
     const { env, configure, load } = makeTestEnv();

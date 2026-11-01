@@ -200,6 +200,30 @@ check_prep_baseline_transition() {
     "$command" "$pr" "$source" "$target" "$branch" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID"
 }
 
+prefetch_review_transition_objects() {
+  # Path-based restore fetches cold blobs individually. Refetch skips Git's
+  # local-history negotiation; bounded batches keep each fetch small. Retain
+  # one restore because directory/file replacements can span path batches.
+  GIT_NO_LAZY_FETCH=1 pr_git rev-list --objects --missing=print --no-object-names \
+    --quiet --max-count=1 "$1" |
+    {
+      local oid
+      local batch=()
+      while IFS= read -r oid; do
+        case "$oid" in \?*) batch+=("${oid#?}") ;; *) continue ;; esac
+        if [ "${#batch[@]}" -eq 1024 ]; then
+          printf '%s\n' "${batch[@]}" |
+            fetch_canonical_ref "${batch[0]}" --stdin --refetch --no-write-fetch-head || return 1
+          batch=()
+        fi
+      done
+      if [ "${#batch[@]}" -gt 0 ]; then
+        printf '%s\n' "${batch[@]}" |
+          fetch_canonical_ref "${batch[0]}" --stdin --refetch --no-write-fetch-head || return 1
+      fi
+    }
+}
+
 recover_review_transition() {
   local pr="$1"
   local journal=.local/review-transition.json
@@ -235,6 +259,8 @@ recover_review_transition() {
     return 1
   fi
 
+  # Network preparation precedes the existing admission immediately before writes.
+  prefetch_review_transition_objects "$target" || return 1
   validate_review_transition_state "$pr" "$source" "$target" || return 1
   if [ "$mode" = prep ]; then
     validate_prep_baseline_transition install-transition "$pr" "$source" "$target" "$branch" || return 1
@@ -280,6 +306,16 @@ recover_review_transition() {
     return 1
   fi
   rm -f "$journal"
+}
+
+review_transition_recover() {
+  local pr="$1" plan="$2" seal="$3"
+  # Containment-only entry must not replay the transition we are repairing.
+  enter_worktree "$pr" false true || return 1
+  mark_pr_operation_side_effects_started || return 1
+  node "$(dirname "${BASH_SOURCE[0]}")/review-transition-recovery.mjs" \
+    "$pr" "$plan" "$seal" "$(repo_root)" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" \
+    "$PR_WORKFLOW_SOURCE_REVISION" "$PR_WORKFLOW_BINDING_OID"
 }
 
 checkout_pr_worktree_target() {
@@ -680,12 +716,13 @@ gc_pr_worktrees() {
   cd "$root"
 
   local dir
-  local removed=0
+  local removed=0 selected_status=0
   # Select before locks or remote reads: scoped cleanup must not observe sibling PRs.
   local directories=(".worktrees/pr-$selected_pr")
   [ -n "$selected_pr" ] || directories=(.worktrees/pr-*)
   for dir in "${directories[@]}"; do
     [ -d "$dir" ] || continue
+    [ -z "$selected_pr" ] || selected_status=1
     local pr
     if ! pr=$(pr_number_from_worktree_dir "$dir"); then
       echo "skipping $dir (could not parse PR number)"
@@ -716,6 +753,7 @@ gc_pr_worktrees() {
           echo "removed $dir (failed template clone)"
         fi
         removed=$((removed + 1))
+        selected_status=0
       fi
       release_pr_operation_lock
       continue
@@ -733,12 +771,14 @@ gc_pr_worktrees() {
           if remove_worktree_if_present "$dir" true; then
             echo "would remove $dir (PR #$pr state=$state)"
             removed=$((removed + 1))
+            selected_status=0
           else
             echo "skipping $dir (cleanup incomplete)"
           fi
         elif cleanup_pr_worktree "$dir"; then
           echo "removed $dir (PR #$pr state=$state)"
           removed=$((removed + 1))
+          selected_status=0
         else
           echo "skipping $dir (cleanup incomplete)"
         fi
@@ -754,6 +794,7 @@ gc_pr_worktrees() {
       echo "No merged/closed PR worktrees removed."
     fi
   fi
+  return "$selected_status"
 }
 
 pr_number_from_worktree_dir() {

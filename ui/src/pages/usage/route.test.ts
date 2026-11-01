@@ -1,25 +1,23 @@
 // @vitest-environment node
 import { createRouter } from "@openclaw/uirouter";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import {
   createGatewayStoreTestStore,
-  GATEWAY_STORE_TEST_HELLO,
+  GATEWAY_STORE_TEST_HELLO as STORE_HELLO,
   stubGatewayStoreTestGlobals,
 } from "../../app/gateway-store.test-support.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { page } from "./route.tsx";
 import type { UsageRouteData } from "./types.ts";
+import { usageTotals } from "./view.test-support.ts";
 
-const totals = {
-  ...createEmptyCostUsageTotals(),
-  input: 100,
-  totalTokens: 100,
-  totalCost: 1,
-  inputCost: 1,
+const GATEWAY_STORE_TEST_HELLO = {
+  ...STORE_HELLO,
+  auth: { role: "operator", scopes: ["operator.read"] },
 };
+const totals = usageTotals(100, 1);
 const payload = {
   updatedAt: 1,
   startDate: "2026-07-09",
@@ -80,6 +78,19 @@ describe("usage route", () => {
     setAvatarGatewayOrigin(null);
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it("explains unavailable usage without reading it for a session-only operator", async () => {
+    const { router, context, current, usageCalls } = createUsageRouter();
+    current().testOptions.onHello?.({
+      ...GATEWAY_STORE_TEST_HELLO,
+      auth: { role: "operator", scopes: ["operator.sessions.read"] },
+    });
+    await router.navigate("usage", context);
+    expect(usageCalls()).toEqual([]);
+    expect(router.getState().matches[0]?.data?.error).toContain(
+      "Ask the person who manages OpenClaw for access.",
+    );
   });
 
   it.each(["navigation", "disconnect", "reconnect", "client", "set", "setScope"] as const)(

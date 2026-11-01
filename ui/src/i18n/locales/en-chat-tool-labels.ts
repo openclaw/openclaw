@@ -4,23 +4,6 @@ import { en } from "./en.ts";
 const enChatToolLabels = {
   chat: {
     toolCards: {
-      delegation: {
-        task: "Delegated task",
-        tasks: "{count} delegated tasks",
-        parallel: "{count} parallel tasks",
-        progress: "{complete} of {total} completed",
-        unknown: "Outcome unavailable",
-        attention: "{count} needing attention",
-        more: "{count} more tasks",
-        completedTasks: "Completed tasks",
-        accepted: "Started",
-        queued: "Queued",
-        running: "Running",
-        done: "Completed",
-        failed: "Failed",
-        killed: "Stopped",
-        timeout: "Timed out",
-      },
       tool: "Tool",
       canvas: "Canvas",
       summary: "Summary",
@@ -78,7 +61,6 @@ const enChatToolLabels = {
       blocked: "Blocked",
       outcomeUnknown: "Outcome unknown",
       exitCode: "Exit code {code}",
-      failureCount: "{count} failed",
       noOutputSucceeded: "No output — tool completed successfully.",
       noResult: "No result available.",
       review: {

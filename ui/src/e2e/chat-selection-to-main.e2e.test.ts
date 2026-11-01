@@ -214,15 +214,19 @@ suite.define(() => {
           }
           await editor.waitFor({ state: "detached" });
           const send = side.locator(".chat-session-rail__composer button[type=submit]");
-          // A text comment alone is not a question.
-          expect(await send.isDisabled()).toBe(true);
-          await sideComposer.press("Enter");
-          expect(await gateway.getRequests("sessions.companion.ask")).toHaveLength(0);
-          expect(await chip.count()).toBe(1);
-          await sideComposer.fill("Explain the selected text.");
+          if (scenario === "normal") {
+            // Saving a comment is sufficient input; no second question is required.
+            expect(await send.isEnabled()).toBe(true);
+          } else {
+            await sideComposer.fill("Explain the selected text.");
+          }
           await send.click();
           const params = await sideQuestion(gateway);
-          expect(params.question).toBe("Explain the selected text.");
+          expect(params.question).toBe(
+            scenario === "normal"
+              ? "Respond to the selected text and comments."
+              : "Explain the selected text.",
+          );
           expect(params.attachments).toBeUndefined();
           expect(params.selectionContext).toContain(`Selected text:\n${passage}`);
           expect(params.selectionContext).toContain(
@@ -374,10 +378,11 @@ suite.define(() => {
         expect(await sentChip.textContent()).toContain("2 comments");
         await sentChip.hover();
         await expectPreview(preview, "Explain the rollback checks. 🦞");
+        await sentChip.focus();
         expect(await preview.locator("li").count()).toBe(2);
         expect(await preview.locator("button").count()).toBe(0);
         await bounded(preview);
-        await page.keyboard.press("Escape");
+        await sentChip.press("Escape");
         await preview.waitFor({ state: "hidden" });
         await page.reload();
         await sentChip.waitFor({ state: "visible" });
@@ -396,62 +401,64 @@ suite.define(() => {
   });
 
   it("keeps comment pins and their editor anchored through scrolling and reflow", async () => {
-    const viewport = viewports[0]!;
-    await withPage(
-      async ({ page, editor, comment }) => {
-        const passage =
-          "Review the rollback checklist carefully before the deployment starts. Confirm every recovery step with the team.";
-        const filler = Array.from(
-          { length: 24 },
-          (_, index) => `Deployment context paragraph ${index + 1}.`,
-        ).join("\n\n");
-        await openSelection(page, {}, `${filler}\n\n${passage}\n\n${filler}`);
-        const text = selectedSource(page, passage);
-        await waitForChatScrollIdle(page);
-        await page.locator(".chat-thread").hover();
-        await page.mouse.wheel(0, -32);
-        await waitForChatScrollIdle(page);
-        await addComment(page, "Keep this pin on its original passage.", passage);
-        const pin = button(page, "Edit comment 1");
-        const aligned = async () => {
-          await expect
-            .poll(async () => {
-              const lastLine = await text.evaluate((element) => {
-                const range = document.createRange();
-                range.selectNodeContents(element);
-                const last = Array.from(range.getClientRects()).findLast(
-                  (rect) => rect.width && rect.height,
-                )!;
-                return { top: last.top, height: last.height, right: last.right };
-              });
-              const marker = await pin.boundingBox();
-              return marker
-                ? Math.abs(marker.y + marker.height / 2 - lastLine.top - lastLine.height / 2)
-                : 1000;
-            })
-            .toBeLessThan(3);
-        };
-        await aligned();
-        await pin.click();
-        await page.locator(".chat-thread").evaluate((element) => (element.scrollTop += 100));
-        await editor.waitFor({ state: "detached" });
-        await text.scrollIntoViewIfNeeded();
-        await aligned();
-        await pin.click();
-        await page.setViewportSize({ width: 390, height: viewport.height });
-        await aligned();
+    await withPage(async ({ page, editor, comment }) => {
+      const passage =
+        "Review the rollback checklist carefully before the deployment starts. Confirm every recovery step with the team.";
+      const filler = Array.from(
+        { length: 24 },
+        (_, index) => `Deployment context paragraph ${index + 1}.`,
+      ).join("\n\n");
+      const sourceMarkdown = `**${passage}** This context is not selected.`;
+      await openSelection(page, {}, `${filler}\n\n${sourceMarkdown}\n\n${filler}`);
+      const text = selectedSource(page, passage);
+      await waitForChatScrollIdle(page);
+      await page.locator(".chat-thread").hover();
+      await page.mouse.wheel(0, -32);
+      await waitForChatScrollIdle(page);
+      await selectText(text.locator("strong"));
+      await button(page, "Add to chat").click();
+      await submitComment(comment, "Keep this pin on its original passage.");
+      const pin = button(page, "Edit comment 1");
+      const aligned = async () => {
         await expect
           .poll(async () => {
+            const lastLine = await text.evaluate((element) => {
+              const last = [...element.querySelector("strong")!.getClientRects()].at(-1)!;
+              const range = document.createRange();
+              range.selectNodeContents(element);
+              const right = Math.max(
+                ...Array.from(range.getClientRects(), (rect) =>
+                  rect.top < last.bottom && rect.bottom > last.top ? rect.right : 0,
+                ),
+              );
+              return { top: last.top, height: last.height, right };
+            });
             const marker = await pin.boundingBox();
-            const popup = await editor.boundingBox();
-            return marker && popup ? verticalGap(popup, marker) : 1000;
+            return marker && marker.x >= lastLine.right
+              ? Math.abs(marker.y + marker.height / 2 - lastLine.top - lastLine.height / 2)
+              : 1000;
           })
-          .toBeLessThan(12);
-        expect(await comment.inputValue()).toBe("Keep this pin on its original passage.");
-        await comment.press("Escape");
-      },
-      { viewport },
-    );
+          .toBeLessThan(3);
+      };
+      await aligned();
+      await pin.click();
+      await page.locator(".chat-thread").evaluate((element) => (element.scrollTop += 100));
+      await editor.waitFor({ state: "detached" });
+      await text.scrollIntoViewIfNeeded();
+      await aligned();
+      await pin.click();
+      await page.setViewportSize({ width: 390, height: viewports[0]!.height });
+      await aligned();
+      await expect
+        .poll(async () => {
+          const marker = await pin.boundingBox();
+          const popup = await editor.boundingBox();
+          return marker && popup ? verticalGap(popup, marker) : 1000;
+        })
+        .toBeLessThan(12);
+      expect(await comment.inputValue()).toBe("Keep this pin on its original passage.");
+      await comment.press("Escape");
+    });
   });
 
   it.each([false, true])(

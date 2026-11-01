@@ -4,20 +4,34 @@ import {
   getAdmittedSqliteSchemaFacts,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { TEAM_REPORTS_POSTGRES_SCHEMA_SQL } from "./src/store-postgres-schema.js";
+import { TEAM_REPORTS_SCHEMA_VERSION } from "./src/store-schema.js";
 import { openTeamReportsDatabase } from "./src/store.worker.js";
 
 export const teamReportsDatabasePortApi = {
   postgres: TEAM_REPORTS_POSTGRES_SCHEMA_SQL,
   inspectSqliteSource(db: DatabaseSync) {
     admitSqliteSchema(db);
-    if ((getAdmittedSqliteSchemaFacts(db)?.userVersion ?? 0) > 1) {
-      throw new Error("Team Reports requires SQLite schema version at most 1");
+    if ((getAdmittedSqliteSchemaFacts(db)?.userVersion ?? 0) > TEAM_REPORTS_SCHEMA_VERSION) {
+      throw new Error(
+        `Team Reports requires SQLite schema version at most ${TEAM_REPORTS_SCHEMA_VERSION}`,
+      );
     }
     const rows = db.prepare("SELECT id FROM team_reports_schema_migrations").all();
-    if (rows.some((row) => row.id !== "schema-1")) {
-      throw new Error("Unknown Team Reports schema migration; required schema 1");
+    let version = 0;
+    for (const row of rows) {
+      const match = typeof row.id === "string" && /^schema-([1-9][0-9]*)$/.exec(row.id);
+      if (!match || Number(match[1]) > TEAM_REPORTS_SCHEMA_VERSION) {
+        throw new Error(
+          `Unknown Team Reports schema migration; required schema ${TEAM_REPORTS_SCHEMA_VERSION}`,
+        );
+      }
+      version = Math.max(version, Number(match[1]));
     }
-    return { version: rows.length ? 1 : 0, migrationRequired: !rows.length, pendingColumns: {} };
+    return {
+      version,
+      migrationRequired: version < TEAM_REPORTS_SCHEMA_VERSION,
+      pendingColumns: {},
+    };
   },
   admit(file: string, input?: Parameters<typeof openTeamReportsDatabase>[1]) {
     openTeamReportsDatabase(file, input).close();

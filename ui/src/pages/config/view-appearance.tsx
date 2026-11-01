@@ -27,6 +27,7 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { createIntersectionObserver } from "../../lib/reactive/observers.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { AppearanceBackground } from "./appearance-background.tsx";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
@@ -40,6 +41,7 @@ import {
   SidebarPreferencesSection,
 } from "./view-appearance-preferences.tsx";
 import { Typography } from "./view-appearance-typography.tsx";
+import { ConfigReadStatus } from "./view-readiness.tsx";
 import { TabIconSection } from "./view-tab-icon.tsx";
 import type { ConfigProps } from "./view-types.ts";
 const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
@@ -96,24 +98,37 @@ const ACCENT_PRESETS = [
    mirrored from the base.css theme blocks). The custom card only has real
    colors while active — its chips read the live CSS variables — so it falls
    back to the download icon otherwise. */
-function renderThemeCardVisual(id: ThemeName, activeTheme: ThemeName) {
-  if ((id === "custom" || id.includes("/")) && activeTheme !== id) {
-    return (
-      <span class="settings-theme-card__icon" aria-hidden="true">
-        <Icon name="download" />
-      </span>
-    );
-  }
+function ThemeCardVisual(props: { id: ThemeName; activeTheme: ThemeName }) {
   return (
-    <span class="settings-theme-card__palette" aria-hidden="true">
-      <span class="settings-theme-card__chip settings-theme-card__chip--accent" />
-      <span class="settings-theme-card__chip settings-theme-card__chip--accent-2" />
-      <span class="settings-theme-card__chip settings-theme-card__chip--bg" />
-    </span>
+    <Show
+      when={(props.id !== "custom" && !props.id.includes("/")) || props.activeTheme === props.id}
+      fallback={
+        <span class="settings-theme-card__icon" aria-hidden="true">
+          <Icon name="download" />
+        </span>
+      }
+    >
+      <span class="settings-theme-card__palette" aria-hidden="true">
+        <span class="settings-theme-card__chip settings-theme-card__chip--accent" />
+        <span class="settings-theme-card__chip settings-theme-card__chip--accent-2" />
+        <span class="settings-theme-card__chip settings-theme-card__chip--bg" />
+      </span>
+    </Show>
   );
 }
 export function AppearanceSection(props: ConfigProps) {
   let customThemeImportInput: HTMLInputElement | undefined;
+  let sidebar!: HTMLElement;
+  let sessionSources!: HTMLElement;
+  createIntersectionObserver(
+    () => [sidebar, sessionSources],
+    (entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        props.onAppearanceDataNeeded?.();
+      }
+    },
+    { rootMargin: "400px 0px" },
+  );
   const [importing, setImporting] = createOptimistic(false, { equals: false });
   // Pending work belongs to the action; terminal receipts feed the error region.
   const importResult = createMemo(() => props.customThemeImportCompletion);
@@ -335,7 +350,7 @@ export function AppearanceSection(props: ConfigProps) {
                       }
                     }}
                   >
-                    {renderThemeCardVisual(opt().id, presentedTheme().id)}
+                    <ThemeCardVisual id={opt().id} activeTheme={presentedTheme().id} />
                     <span class="settings-theme-card__label">{opt().label}</span>
                   </button>
                 )}
@@ -383,7 +398,10 @@ export function AppearanceSection(props: ConfigProps) {
           />
           <div class="settings-row settings-row--stacked">
             {showCustomThemeImport() ? (
-              <div class="settings-theme-import">
+              <div
+                class="settings-theme-import"
+                onFocusIn={() => props.onCustomThemeImportFocus?.()}
+              >
                 <div class="settings-theme-import__copy">
                   <div class="settings-theme-import__title">
                     {t("configView.appearance.importFromTweakcn")}
@@ -400,6 +418,7 @@ export function AppearanceSection(props: ConfigProps) {
                 >
                   {t("configView.appearance.browseTweakcn")} <Icon name="externalLink" />
                 </a>
+                <ConfigReadStatus config={props} />
                 <label class="settings-theme-import__field">
                   <span class="settings-theme-import__label">
                     {t("configView.appearance.themeLink")}
@@ -423,7 +442,11 @@ export function AppearanceSection(props: ConfigProps) {
                 <div class="settings-theme-import__actions">
                   <button
                     class="btn btn--sm primary"
-                    disabled={importing() || props.customThemeImportUrl.trim().length === 0}
+                    disabled={
+                      importing() ||
+                      (props.connected && (!props.configLoaded || props.loading)) ||
+                      props.customThemeImportUrl.trim().length === 0
+                    }
                     onClick={importTheme}
                   >
                     {importing()
@@ -610,8 +633,10 @@ export function AppearanceSection(props: ConfigProps) {
           </div>
         </div>
       </section>
-      <SidebarPreferencesSection {...props} /> <LobsterPetSection {...props} />
-      <ChatPreferencesSection {...props} /> <SessionSources {...props} />
+      <SidebarPreferencesSection {...props} sectionRef={(element) => (sidebar = element)} />
+      <LobsterPetSection {...props} />
+      <ChatPreferencesSection {...props} />
+      <SessionSources {...props} sectionRef={(element) => (sessionSources = element)} />
       <section id={APPEARANCE_SETTINGS_TARGET_IDS.connection} class="settings-section">
         <SettingsSectionHeader title={t("configView.connection.title")} />
         <div class="settings-group">

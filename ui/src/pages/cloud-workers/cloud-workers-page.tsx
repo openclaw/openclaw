@@ -13,6 +13,7 @@ import {
 } from "solid-js";
 import type { EnvironmentsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   DocsLink,
   SettingsEmpty,
@@ -492,10 +493,20 @@ export function CloudWorkersPage() {
             title={t("cloudWorkersPage.fields.operatingSystem")}
             description={t("cloudWorkersPage.fields.operatingSystemHelp")}
             control={
-              <select
-                class="settings-select"
+              <SettingsSelect
                 aria-label={t("cloudWorkersPage.fields.operatingSystem")}
                 value={view.draft.target}
+                options={[
+                  { value: "", label: t("cloudWorkersPage.fields.providerDefault") },
+                  ...systems().map((system) => ({
+                    value: system.id,
+                    label: `${system.label}${system.disabledReason ? ` — ${system.disabledReason}` : ""}`,
+                    disabled: Boolean(system.disabledReason),
+                  })),
+                  ...(unadvertised()
+                    ? [{ value: view.draft.target, label: view.draft.target }]
+                    : []),
+                ]}
                 disabled={saving()}
                 onChange={(event) => {
                   const target = event.currentTarget.value;
@@ -503,28 +514,7 @@ export function CloudWorkersPage() {
                     patchDraft({ target });
                   }
                 }}
-              >
-                <option value="" selected={!view.draft.target}>
-                  {t("cloudWorkersPage.fields.providerDefault")}
-                </option>
-                <For each={systems()}>
-                  {(system) => (
-                    <option
-                      value={system.id}
-                      selected={view.draft.target === system.id}
-                      disabled={Boolean(system.disabledReason)}
-                    >
-                      {system.label}
-                      {system.disabledReason ? ` — ${system.disabledReason}` : ""}
-                    </option>
-                  )}
-                </For>
-                <Show when={unadvertised()}>
-                  <option value={view.draft.target} selected>
-                    {view.draft.target}
-                  </option>
-                </Show>
-              </select>
+              />
             }
           />
         </Show>

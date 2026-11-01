@@ -4,19 +4,14 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   expectAugmentedCodexCatalog,
-  expectedOpenaiPluginCodexCatalogEntriesWithGpt55,
+  expectedOpenaiPluginCodexCatalogEntriesWithGpt55 as expectedCatalog,
   expectCodexMissingAuthHint,
   importProviderRuntimeCatalogModule,
   type ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-test-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-type ResolvePluginProviders = (params?: { onlyPluginIds?: string[] }) => ProviderPlugin[];
-const resolveProviders = vi.hoisted(() => vi.fn<ResolvePluginProviders>(() => []));
-const resolveOwners = vi.hoisted(() =>
-  vi.fn<(params: { provider: string }) => string[] | undefined>(),
-);
-const resolveCatalogIds = vi.hoisted(() => vi.fn<(_params: unknown) => string[]>(() => []));
+const catalog = vi.hoisted(() => ({ providers: new Array<ProviderPlugin>() }));
 
 vi.mock("openclaw/plugin-sdk/provider-catalog-runtime", async () => {
   const actual = await vi.importActual<
@@ -28,18 +23,11 @@ vi.mock("openclaw/plugin-sdk/provider-catalog-runtime", async () => {
       context: Parameters<NonNullable<ProviderPlugin["augmentModelCatalog"]>>[0];
     }) => {
       const supplemental = [];
-      for (const provider of resolveProviders({
-        onlyPluginIds: resolveCatalogIds(params),
-      })) {
-        const entries = await provider.augmentModelCatalog?.(params.context);
-        supplemental.push(...(entries ?? []));
+      for (const provider of catalog.providers) {
+        supplemental.push(...((await provider.augmentModelCatalog?.(params.context)) ?? []));
       }
       return supplemental;
     },
-    resolveOwningPluginIdsForProvider: resolveOwners,
-    resolveCatalogHookProviderPluginIds: resolveCatalogIds,
-    isPluginProvidersLoadInFlight: () => false,
-    resolvePluginProviders: resolveProviders,
   };
 });
 
@@ -58,21 +46,7 @@ export function describeOpenAIProviderCatalogContract() {
 
   describe("openai provider catalog contract", { timeout: 300_000 }, () => {
     beforeEach(async () => {
-      const { openaiProviders } = await contractDepsPromise;
-
-      resolveProviders
-        .mockReset()
-        .mockImplementation(({ onlyPluginIds }: { onlyPluginIds?: string[] } = {}) =>
-          !onlyPluginIds?.length || onlyPluginIds.includes("openai") ? openaiProviders : [],
-        );
-
-      resolveOwners
-        .mockReset()
-        .mockImplementation(({ provider }) =>
-          ["azure-openai-responses", "openai"].includes(provider) ? ["openai"] : undefined,
-        );
-
-      resolveCatalogIds.mockReset().mockReturnValue(["openai"]);
+      catalog.providers = (await contractDepsPromise).openaiProviders;
     });
 
     it("keeps codex-only missing-auth hints wired through the provider runtime", async () => {
@@ -85,10 +59,7 @@ export function describeOpenAIProviderCatalogContract() {
 
     it("keeps bundled model augmentation wired through the provider runtime", async () => {
       const { augmentModelCatalogWithProviderPlugins } = await contractDepsPromise;
-      await expectAugmentedCodexCatalog(
-        augmentModelCatalogWithProviderPlugins,
-        expectedOpenaiPluginCodexCatalogEntriesWithGpt55,
-      );
+      await expectAugmentedCodexCatalog(augmentModelCatalogWithProviderPlugins, expectedCatalog);
     });
 
     it("stops catalog template searches after the preferred rows match", async () => {
@@ -113,7 +84,7 @@ export function describeOpenAIProviderCatalogContract() {
       const result = await openaiProvider.augmentModelCatalog?.({ env: {}, entries });
       const observedReads = providerReads;
       expect(result).toEqual(
-        expectedOpenaiPluginCodexCatalogEntriesWithGpt55.map((entry, index) =>
+        expectedCatalog.map((entry, index) =>
           Object.assign(
             {
               ...entry,

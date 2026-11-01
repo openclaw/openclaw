@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 
 const TEST_GGUF_SHA256 = "b83633aa785344791618f2fddf131b010ea04912a60430760b070bad293f65bd";
 
@@ -68,19 +69,13 @@ export async function withHuggingFaceMetadataFixture(
     res.end("{}");
   });
   servers.push(server);
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("missing test server address");
-  }
+  const port = await listenOnLoopback(server);
   const realFetch = globalThis.fetch;
   const localFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const upstream = new URL(
       typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
     );
-    return await realFetch(`http://127.0.0.1:${address.port}${upstream.pathname}`, init);
+    return await realFetch(`http://127.0.0.1:${port}${upstream.pathname}`, init);
   });
   vi.stubGlobal("fetch", localFetch);
   try {

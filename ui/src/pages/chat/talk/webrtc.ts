@@ -213,32 +213,28 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         this.ctx.callbacks.onTalkEvent?.({ type: "session.closed" });
       }
     } finally {
-      this.releaseResources();
+      this.starting = false;
+      this.controlAbortController.abort();
+      this.input.stop();
+      this.offerExchange.abort();
+      this.channel?.close();
+      this.channel = null;
+      this.peer?.close();
+      this.peer = null;
+      this.camera.release();
+      this.inputMeter?.stop();
+      this.inputMeter = null;
+      this.audio?.remove();
+      this.audio = null;
+      for (const controller of this.consultAbortControllers) {
+        controller.abort();
+      }
+      this.consultAbortControllers.clear();
+      this.completedToolCallIds.clear();
+      this.responseOutcomes.reset();
+      this.responseState = "idle";
+      this.responseCreatePending = false;
     }
-  }
-
-  private releaseResources(): void {
-    this.starting = false;
-    this.controlAbortController.abort();
-    this.input.stop();
-    this.offerExchange.abort();
-    this.channel?.close();
-    this.channel = null;
-    this.peer?.close();
-    this.peer = null;
-    this.camera.release();
-    this.inputMeter?.stop();
-    this.inputMeter = null;
-    this.audio?.remove();
-    this.audio = null;
-    for (const controller of this.consultAbortControllers) {
-      controller.abort();
-    }
-    this.consultAbortControllers.clear();
-    this.completedToolCallIds.clear();
-    this.responseOutcomes.reset();
-    this.responseState = "idle";
-    this.responseCreatePending = false;
   }
 
   private failConnection(detail: string): void {
@@ -334,8 +330,28 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
             void steerRealtimeTalkActiveConsult({
               ctx: this.ctx,
               text: event.transcript,
-              onControlResult: (result) => this.interruptSuppressedControlResponse(result),
-              speakControlResult: (message) => this.sendControlSpeechMessage(message),
+              onControlResult: (result) => {
+                if (
+                  this.responseState === "active" &&
+                  shouldInterruptRealtimeTalkControlResponse(result)
+                ) {
+                  this.send({ type: "response.cancel" });
+                }
+              },
+              speakControlResult: (message) => {
+                if (this.responseState === "active") {
+                  this.send({ type: "response.cancel" });
+                }
+                this.send({
+                  type: "conversation.item.create",
+                  item: {
+                    type: "message",
+                    role: "user",
+                    content: [{ type: "input_text", text: message }],
+                  },
+                });
+                this.requestResponseCreate();
+              },
             });
           }
         }
@@ -555,27 +571,6 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       },
     });
     this.requestResponseCreate();
-  }
-
-  private sendControlSpeechMessage(message: string): void {
-    if (this.responseState === "active") {
-      this.send({ type: "response.cancel" });
-    }
-    this.send({
-      type: "conversation.item.create",
-      item: {
-        type: "message",
-        role: "user",
-        content: [{ type: "input_text", text: message }],
-      },
-    });
-    this.requestResponseCreate();
-  }
-
-  private interruptSuppressedControlResponse(result: unknown): void {
-    if (this.responseState === "active" && shouldInterruptRealtimeTalkControlResponse(result)) {
-      this.send({ type: "response.cancel" });
-    }
   }
 
   private requestResponseCreate(): void {

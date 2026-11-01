@@ -6,13 +6,16 @@ export function normalizeSessionIdentities(
   if (!normalizedScope) {
     throw new Error("session lifecycle scope is required");
   }
-  return Array.from(
-    new Set(
-      Array.from(identities, (identity) => identity?.trim()).filter(
-        (identity): identity is string => Boolean(identity),
+  return (
+    Array.from(
+      new Set(
+        Array.from(identities, (identity) => identity?.trim()).filter(
+          (identity): identity is string => Boolean(identity),
+        ),
       ),
-    ),
-  )
-    .map((identity) => JSON.stringify([normalizedScope, identity]))
-    .toSorted();
+    )
+      .map((identity) => JSON.stringify([normalizedScope, identity]))
+      // oxlint-disable-next-line unicorn/no-array-sort -- map created a private array.
+      .sort()
+  );
 }

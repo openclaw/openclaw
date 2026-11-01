@@ -5,6 +5,7 @@ import {
   createControlUiMockGatewayInitScript,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
@@ -13,12 +14,7 @@ import {
 import { catalogList, expectVisible, mockRequests } from "./sidebar-assertions.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
-const pageOptions = {
-  colorScheme: "dark",
-  locale: "en-US",
-  serviceWorkers: "block",
-  viewport: { height: 900, width: 1280 },
-} as const;
+const pageOptions = { colorScheme: "dark", ...createControlUiE2eContextOptions() } as const;
 
 const MAIN_KEY = "agent:main:main";
 const RESEARCH_KEY = "agent:main:research";

@@ -198,8 +198,7 @@ export class RequestClient {
     }
     const body = serializeRequestBody(params.data, headers);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.options.timeout);
-    timeout.unref?.();
+    const timeout = setTimeout(() => controller.abort(), this.options.timeout).unref();
     const signal = this.options.signal
       ? AbortSignal.any([this.options.signal, controller.signal])
       : controller.signal;

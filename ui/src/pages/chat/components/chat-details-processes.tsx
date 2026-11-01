@@ -1,10 +1,11 @@
-import { Errored, For, Loading, Show, createMemo, isPending, latest, onSettled } from "solid-js";
+import { Errored, For, Loading, Show, createMemo, createSignal, isPending, latest } from "solid-js";
 import type { SessionProcessSummary } from "../../../../../packages/gateway-protocol/src/schema/session-processes.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { createKeyedListMotion } from "../../../lib/reactive/keyed-list-motion.ts";
 import type { ProcessesPanelData } from "../processes-panel-data.ts";
 import "./chat-details-processes.css";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
@@ -15,25 +16,20 @@ registerEnglishCatalog(registerChatSessionEnglish);
 registerEnglishCatalog(registerChatDetailsEnglish);
 
 type Props = {
-  sessionKey: string;
-  agentId: string;
   /** Read the native host's projection; it owns observation, refresh and stop authority. */
   processes: () => ProcessesPanelData | undefined;
   presented: boolean;
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
-  onOpen?: () => void;
+  onOpen?: (instanceId?: string) => void;
 };
-
-const order = { running: 0, failed: 1, killed: 2, completed: 3 } as const;
 
 function ProcessRow(props: {
   row: SessionProcessSummary;
   presentation: ReturnType<typeof createProcessesPresentation>;
   presented: boolean;
   onOpen: () => void;
-  onDismiss: (row: SessionProcessSummary) => void;
-  dismissReady: boolean;
+  elementRef: (instanceId: string) => (element: HTMLDivElement) => void;
 }) {
   const stop = createMemo(() => props.presentation.createStop(() => props.row));
   const nameOverflow = useScrollState(true, false, { revision: () => props.row.name });
@@ -46,16 +42,13 @@ function ProcessRow(props: {
   const description = () => `${props.row.name}. ${status()}`;
   return (
     <div
+      ref={[props.elementRef(props.row.instanceId)]}
       class="chat-details-processes__row"
       role="listitem"
       data-process-id={props.row.processId}
       data-status={props.row.status}
       data-stopping={stop().stopping() ? "" : undefined}
-      data-actionable={
-        props.row.status === "completed" || (props.row.status === "running" && props.row.canStop)
-          ? ""
-          : undefined
-      }
+      data-actionable={props.row.canStop ? "" : undefined}
     >
       <button
         class="chat-details-processes__open"
@@ -67,22 +60,7 @@ function ProcessRow(props: {
         <span class="chat-details-processes__icon" aria-hidden="true">
           <Icon name="squareTerminal" />
           <span class="chat-details-processes__badge" data-status={props.row.status}>
-            <Show
-              when={props.row.status === "running"}
-              fallback={
-                <Icon
-                  name={
-                    props.row.status === "completed"
-                      ? "check"
-                      : props.row.status === "failed"
-                        ? "x"
-                        : "square"
-                  }
-                />
-              }
-            >
-              <span class="chat-details-processes__spinner" />
-            </Show>
+            <span class="chat-details-processes__spinner" />
           </span>
         </span>
         <span class="chat-details-processes__name" ref={nameOverflow}>
@@ -107,18 +85,6 @@ function ProcessRow(props: {
           </Show>
         </button>
       </Show>
-      <Show when={props.row.status === "completed"}>
-        <button
-          class="chat-details-processes__action chat-details-processes__dismiss"
-          type="button"
-          title={t("chat.processesPanel.dismiss")}
-          aria-label={t("chat.processesPanel.dismiss")}
-          disabled={!props.presented || !props.dismissReady}
-          onClick={() => props.onDismiss(props.row)}
-        >
-          <Icon name="x" />
-        </button>
-      </Show>
       <Show when={stop().stopping()}>
         <span class="sr-only" role="status">
           {status()}
@@ -130,29 +96,25 @@ function ProcessRow(props: {
 
 /** Desktop list using the same process snapshot and operations as the full panel. */
 export function ChatDetailsProcesses(props: Props) {
-  const details = createDetailsProcessesPresentation(() => ({
-    sessionKey: props.sessionKey,
-    agentId: props.agentId,
-    rows: props.processes()?.snapshot.rows ?? [],
-  }));
-  let list: HTMLDivElement | undefined;
-  const dismiss = (row: SessionProcessSummary) => {
-    if (props.presented) {
-      details.dismiss(row);
-      onSettled(() => list?.focus({ preventScroll: true }));
-    }
-  };
   const presentation = createProcessesPresentation(() => props.processes(), true);
   const snapshot = () => props.processes()?.snapshot;
-  const rows = createMemo(() =>
-    details.rows().toSorted((a, b) => order[a.status] - order[b.status]),
-  );
-  const open = () => {
+  const rows = createDetailsProcessesPresentation(() => snapshot()?.rows ?? []);
+  const visibleRows = createMemo(() => rows().slice(0, 3));
+  const hidden = () => rows().length - visibleRows().length;
+  const [revealing, setRevealing] = createSignal(false);
+  const motion = createKeyedListMotion({
+    ids: () => visibleRows().map((row) => row.instanceId),
+    scope: presentation.scope,
+    ready: () => Boolean(snapshot()?.hasResult),
+    active: () =>
+      props.presented && props.expanded && !revealing() && snapshot()?.errorKind !== "access",
+  });
+  const open = (instanceId?: string) => {
     if (props.presented) {
-      props.onOpen?.();
+      props.onOpen?.(instanceId);
     }
   };
-  const hasRunning = () => rows().some((row) => row.status === "running");
+  const hasRunning = () => rows().length > 0;
   const ProcessError = (errorProps: { loading: boolean; retry: () => void }) => (
     <Show when={snapshot()?.errorKind !== "read" && snapshot()?.error}>
       {(error) => (
@@ -181,28 +143,30 @@ export function ChatDetailsProcesses(props: Props) {
           <div
             class="chat-details-processes__list"
             role="list"
-            tabindex={-1}
-            ref={(element) => {
-              list = element;
-            }}
             aria-label={t("chat.sessionDetails.processes")}
           >
-            <For each={rows()} keyed={(row) => row.instanceId}>
+            <For each={visibleRows()} keyed={(row) => row.instanceId}>
               {(row) => (
                 <ProcessRow
                   row={row()}
+                  elementRef={motion.row}
                   presentation={presentation}
                   presented={props.presented}
-                  onOpen={open}
-                  onDismiss={dismiss}
-                  dismissReady={details.ready()}
+                  onOpen={() => open(row().instanceId)}
                 />
               )}
             </For>
           </div>
-          <Show when={snapshot()?.truncated}>
-            <div class="chat-details__muted">{t("chat.processesPanel.listTruncated")}</div>
-          </Show>
+          <button
+            class="chat-details-processes__view-all"
+            type="button"
+            disabled={!props.presented}
+            onClick={() => open()}
+          >
+            {hidden() > 0
+              ? t("chat.sessionDetails.showMore", { count: String(hidden()) })
+              : t("chat.processesPanel.viewAll")}
+          </button>
         </div>
       </Show>
     </>
@@ -229,16 +193,23 @@ export function ChatDetailsProcesses(props: Props) {
   // The disclosure's layout owner must survive pending and errored body reads.
   return (
     <Show when={props.onOpen}>
-      <Show when={hasRunning()} fallback={<ReadContent />}>
-        <ChatDetailsDesktopSection
-          section="processes"
-          title={t("chat.sessionDetails.processes")}
-          expanded={props.expanded}
-          presented={props.presented}
-          onExpandedChange={(expanded) => props.onExpandedChange(expanded)}
-        >
-          <ReadContent />
-        </ChatDetailsDesktopSection>
+      <Show when={motion.present()} fallback={<ReadContent />}>
+        <div ref={motion.shell} class="chat-details-processes__envelope">
+          <div ref={motion.content} class="chat-details-processes__motion-content">
+            <Show when={hasRunning()}>
+              <ChatDetailsDesktopSection
+                section="processes"
+                title={t("chat.sessionDetails.processes")}
+                expanded={props.expanded}
+                presented={props.presented}
+                onExpandedChange={(expanded) => props.onExpandedChange(expanded)}
+                onRevealMotionChange={setRevealing}
+              >
+                <ReadContent />
+              </ChatDetailsDesktopSection>
+            </Show>
+          </div>
+        </div>
       </Show>
     </Show>
   );

@@ -1,5 +1,6 @@
 // Control UI tests cover local-provider recovery against a mocked Gateway.
 import { expect, it } from "vitest";
+import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { expandProvider } from "./model-providers.test-support.ts";
@@ -7,7 +8,6 @@ import {
   activationFailure,
   button,
   candidate,
-  configSnapshot,
   expectCount,
   expectRequestCounts,
   expectText,
@@ -115,7 +115,7 @@ suite.define(() => {
             rpc.next,
           ],
           methodResponses: {
-            "config.get": configSnapshot(config, "configured-provider"),
+            "config.get": sourceConfigSnapshot(config, "configured-provider"),
             "models.authStatus": {
               ts: 1,
               providerCapabilities: [],

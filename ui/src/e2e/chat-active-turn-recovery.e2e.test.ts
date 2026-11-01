@@ -170,7 +170,10 @@ async function waitForGatewayConnected(page: Page): Promise<void> {
 
 async function openActiveTurn(scenario: Parameters<typeof installMockGateway>[1] = {}) {
   const { page } = await newChatPage(suite);
-  const gateway = await installMockGateway(page, scenario);
+  const gateway = await installMockGateway(page, {
+    ...scenario,
+    subscriptionInitialHistory: false,
+  });
   await page.goto(`${suite.server.baseUrl}chat`);
   await composer(page).waitFor({ timeout: 10_000 });
   return { page, gateway };

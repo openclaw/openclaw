@@ -4,6 +4,7 @@ import { afterEach, expect, it } from "vitest";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
 import { createModelAuthAvailabilityResolver } from "../agents/model-auth-availability.js";
+import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadCronJobsStore, resolveCronJobsStorePathFromConfig } from "../cron/store.js";
@@ -13,12 +14,14 @@ import {
 } from "../flows/doctor-health-contribution-runners.config.js";
 import { createUpdatePostInstallDoctorResultPath } from "../infra/update-doctor-result.js";
 import { createUpdateRun, getUpdateRun, recordUpdateRunStep } from "../infra/update-run-ledger.js";
-import { renderUpdateRunReport } from "../infra/update-run-report.js";
+import { updateRunWarningMessages } from "../infra/update-run-step.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { maybeMigrateAuthProfileJsonStoresToSqlite } from "./doctor-auth-flat-profiles.js";
 import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
 import { useDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 import { collectModelBillingRouteMigrationWarnings } from "./doctor/shared/model-billing-route-migration.js";
+import { createTestModelDefinition } from "./test-runtime-config-helpers.js";
 
 const withDoctorConfigPreflightHome = useDoctorConfigPreflightHome("billing-route");
 const retirementStep = "finalize:doctor:model-retirement";
@@ -57,16 +60,7 @@ async function writeBillingFixture(
         openai: {
           baseUrl: "https://api.openai.com/v1",
           api: "openai-completions",
-          models: [
-            {
-              id: retiredModel,
-              name: "Heartbeat",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              maxTokens: 4096,
-            },
-          ],
+          models: [createTestModelDefinition(retiredModel, { name: "Heartbeat" })],
         },
       },
     },
@@ -76,10 +70,7 @@ async function writeBillingFixture(
   const configPath = await writeOpenClawConfig(home, config);
   const agentDir = path.join(path.dirname(configPath), "agents", "main", "agent");
   await fs.mkdir(agentDir, { recursive: true });
-  await fs.writeFile(
-    path.join(agentDir, "auth-profiles.json"),
-    JSON.stringify({ version: 1, profiles }),
-  );
+  await writeFixtureJson(path.join(agentDir, "auth-profiles.json"), { version: 1, profiles });
   return { configPath, agentDir, config };
 }
 
@@ -93,7 +84,7 @@ function billingDefaults(model: string, retired: string) {
 
 it("does not compare Decision selectors through conversational billing routes", async () => {
   await withDoctorConfigPreflightHome(async (home) => {
-    const { config: before, configPath } = await writeBillingFixture(home, "gpt-4o-mini", {
+    const { config: before } = await writeBillingFixture(home, "gpt-4o-mini", {
       defaults: billingDefaults("gpt-5.4", "gpt-4o-mini"),
       entries: { main: { decisionModel: "openai/gpt-4o-mini" } },
     });
@@ -101,8 +92,10 @@ it("does not compare Decision selectors through conversational billing routes", 
       ...before,
       agents: { ...before.agents, entries: { main: { decisionModel: "openai/gpt-5.6-luna" } } },
     };
-    await using ctx = await prepareDoctorContext(configPath);
-    expect(ctx.sourceConfigValid).toBe(true);
+    await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg: before,
+      prompter: { confirmAutoFix: async () => true },
+    });
     expect(collectModelBillingRouteMigrationWarnings({ before, after })).toEqual([]);
     const withChatSelection = (config: OpenClawConfig, model: string): OpenClawConfig => ({
       ...config,
@@ -116,12 +109,8 @@ it("does not compare Decision selectors through conversational billing routes", 
       after: withChatSelection(after, "openai/gpt-5.6-luna"),
     });
     expect(warnings).toEqual([
-      expect.stringContaining(
-        "Billing route changed for agents.entries.main.model.primary (agent main):",
-      ),
-      expect.stringContaining(
-        "Billing route changed for agents.entries.main.subagents.model (agent main):",
-      ),
+      "Billing route changed for agents.entries.main.model.primary (agent main): openai/gpt-4o-mini via metered API-key profile openai:default -> openai/gpt-5.6-luna via subscription/OAuth profile openai:chatgpt-default. Review its model and authentication settings.",
+      "Billing route changed for agents.entries.main.subagents.model (agent main): openai/gpt-4o-mini via metered API-key profile openai:default -> openai/gpt-5.6-luna via subscription/OAuth profile openai:chatgpt-default. Review its model and authentication settings.",
     ]);
   });
 });
@@ -161,11 +150,7 @@ it.each([false, true])(
         ]);
         const saved: unknown = JSON.parse(await fs.readFile(configPath, "utf8"));
         expect(saved).toMatchObject({
-          agents: {
-            defaults: {
-              subagents: { model: "openai/gpt-4o-mini" },
-            },
-          },
+          agents: { defaults: { subagents: { model: "openai/gpt-4o-mini" } } },
         });
       }
       await using repeated = await prepareDoctorContext(configPath);
@@ -223,20 +208,11 @@ it.each(["run-id", "result-channel"] as const)(
         await runInitialConfigWriteHealth(swap);
         expect(resolveAgentEffectiveModelPrimary(swap.cfg, "main")).toBe("openai/gpt-5.4");
         await expectInheritedHeartbeatAutomation(swap.cfg);
-        expect(f.receipt()).toMatchObject({ status: "skipped" });
-      }
-      for (const [index, detail] of [
-        "Heartbeat billing route changed.",
-        "Subagent billing route changed.",
-        "Gateway is bound to loopback.",
-      ].entries()) {
-        recordUpdateRunStep(f.runId, {
-          step: `warning:openclaw doctor:${index + 1}`,
-          status: "completed",
-          detail,
+        expect(f.receipt()).toMatchObject({
+          status: "skipped",
+          detail: expect.stringContaining("the updating parent still owns plugin installation"),
         });
       }
-
       await withEnvAsync({ OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" }, async () => {
         {
           await using converged = await prepareDoctorContext(f.configPath);
@@ -266,9 +242,9 @@ it.each(["run-id", "result-channel"] as const)(
           if (!completedRun) {
             throw new Error("Expected the update run after Doctor committed its repair.");
           }
-          expect(renderUpdateRunReport(completedRun).lines).toContain(
-            "Warning: Deferred model retirement repair completed after plugin convergence.",
-          );
+          expect(updateRunWarningMessages(completedRun.steps)).toEqual([
+            "Deferred model retirement repair completed after plugin convergence.",
+          ]);
         }
 
         f.defer();

@@ -156,21 +156,18 @@ describe("channel plugin catalog", () => {
     ).toBe("bundled");
   });
 
-  it.each(["__proto__"])(
-    "rejects inherited install default choice %s from external catalog input",
-    (defaultChoice) => {
-      const root = makeRoot();
-      const catalogPath = path.join(root, "catalog.json");
-      writeChannelCatalog(catalogPath, "unsafe-choice", "Unsafe Choice", defaultChoice);
+  it("rejects inherited install default choice from external catalog input", () => {
+    const root = makeRoot();
+    const catalogPath = path.join(root, "catalog.json");
+    writeChannelCatalog(catalogPath, "unsafe-choice", "Unsafe Choice", "__proto__");
 
-      const entry = getChannelPluginCatalogEntry("unsafe-choice", {
-        catalogPaths: [catalogPath],
-        workspaceDir: root,
-        env: {},
-      });
-      expect(entry?.install.defaultChoice).toBe("npm");
-    },
-  );
+    const entry = getChannelPluginCatalogEntry("unsafe-choice", {
+      catalogPaths: [catalogPath],
+      workspaceDir: root,
+      env: {},
+    });
+    expect(entry?.install.defaultChoice).toBe("npm");
+  });
 
   it.each([
     ["bundled", "bundled", false, "@example/fixture", "fixture", "/channels/fixture"],

@@ -9,6 +9,7 @@ import { makeRunAgentAttemptParams } from "../../agents/command/attempt-executio
 import { runAgentAttempt } from "../../agents/command/attempt-execution.js";
 import type { AgentCommandGatewayIngressOpts } from "../../agents/command/types.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "../../agents/embedded-agent-runner/run/attempt-transcript-lifecycle.js";
+import { buildSourceReplyPayloadState } from "../../agents/embedded-agent-runner/run/source-reply-payloads.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
@@ -102,6 +103,7 @@ async function storedImage(sessionKey: string, png?: Buffer) {
 
 type MediaFinal = {
   payloads?: ReplyPayload[];
+  committedMirror?: Record<string, unknown>;
   options?: Partial<AgentCommandGatewayIngressOpts>;
   incognito?: boolean;
   changeAfterPreparation?: "abort" | "permission" | "placement" | "route";
@@ -249,6 +251,14 @@ async function runMediaTurn(
           withTranscriptWrite: (operation) => lifecycle.withTranscriptWrite(operation),
         },
         async () => {
+          if (final.committedMirror) {
+            expect(
+              appendTranscriptMessageSync(scope, {
+                eventId: "delivery-mirror",
+                message: final.committedMirror,
+              }),
+            ).toMatchObject({ ok: true });
+          }
           const message = runAgentHarnessBeforeMessageWriteHook({
             message: attachSessionTranscriptRunId(authoredMessage, runId),
             prepareAssistantTranscriptMessage: options.prepareAssistantTranscriptMessage,
@@ -426,6 +436,50 @@ it.each(["structured attachment", "store alias"] as const)(
       expect(finalizationStatements).toBe(0);
       expectDisplay(messageAtFinal, displayedText("Completed"), managedImage());
       await storedImage(sessionKey);
+    }),
+);
+
+it.each([true, false])(
+  "enriches message-tool source media only without a committed owner (committed: %s)",
+  (committed) =>
+    withImage(async (state, { imagePath }) => {
+      const text = "File ready";
+      const idempotencyKey = "message-tool-source-reply";
+      const { replyItems } = buildSourceReplyPayloadState({
+        sessionKey: "agent:main:dispatch-owner",
+        agentId: "main",
+        payloads: [
+          {
+            text,
+            mediaUrls: [imagePath],
+            attachments: [{ path: imagePath, mimeType: "image/png" }],
+            idempotencyKey,
+            transcriptOwner: true,
+          },
+        ],
+      });
+      const turn = await runMediaTurn(state, assistantText(""), {
+        payloads: replyItems,
+        options: { sourceReplyDeliveryMode: "message_tool_only" },
+        committedMirror: committed
+          ? {
+              role: "assistant",
+              provider: "openclaw",
+              model: "delivery-mirror",
+              idempotencyKey,
+              content: [{ type: "text", text }],
+              openclawDisplayContent: [{ type: "text", text }],
+            }
+          : undefined,
+      });
+      expectSuccess(turn);
+      if (committed) {
+        expect(turn.message?.openclawDisplayContent).toBeUndefined();
+        expect(await listManagedImageRecordEntries({ sessionKey: turn.sessionKey })).toEqual([]);
+      } else {
+        expectDisplay(turn.messageAtFinal, displayedText(text), managedImage());
+        await storedImage(turn.sessionKey);
+      }
     }),
 );
 

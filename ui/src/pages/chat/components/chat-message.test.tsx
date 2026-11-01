@@ -126,23 +126,30 @@ describe("grouped chat rendering", () => {
       retry: false,
       discard: true,
     },
-    { state: "submitting", label: "Queued", actionLabel: undefined, retry: false, discard: true },
-    { state: "sending", label: "Queued", actionLabel: undefined, retry: false, discard: true },
+    { state: "submitting", label: undefined, actionLabel: undefined, retry: false, discard: false },
+    { state: "sending", label: undefined, actionLabel: undefined, retry: false, discard: false },
     {
       state: "waiting-model",
-      label: "Queued",
+      label: undefined,
       actionLabel: undefined,
       retry: false,
-      discard: true,
+      discard: false,
     },
-    { state: "waiting-idle", label: "Queued", actionLabel: undefined, retry: false, discard: true },
+    {
+      state: "waiting-idle",
+      label: undefined,
+      actionLabel: undefined,
+      retry: false,
+      discard: false,
+    },
   ] as const)(
-    "shows a $state footer with its diagnostic and recovery actions ($actionLabel)",
+    "shows only actionable $state delivery status ($actionLabel)",
     ({ state, label, actionLabel, retry: canRetry, discard: canDiscard }) => {
       const onRetryQueuedMessage = vi.fn();
       const onDiscardQueuedMessage = vi.fn();
       renderGroupedMessage(
         createUserMessage("Attempted message", {
+          timestamp: 1_000,
           __openclaw: {
             id: "attempted-send",
             kind: "pending-send",
@@ -161,10 +168,18 @@ describe("grouped chat rendering", () => {
       );
 
       const status = element(".chat-send-status");
+      if (!label) {
+        expect(status).toBeNull();
+        expect(requireElement(".chat-group-timestamp", HTMLTimeElement).dateTime).toBe(
+          new Date(1_000).toISOString(),
+        );
+        return;
+      }
       expect(status).not.toBeNull();
       expect(status?.title).toBe("Delivery diagnostic");
       expect(status?.textContent).toContain(label);
       expect(status?.textContent).not.toContain("unconfirmed");
+      expectAbsent(".chat-group-timestamp");
       const retry = status?.querySelector<HTMLButtonElement>(".chat-send-status__retry");
       expect(Boolean(retry)).toBe(canRetry);
       retry?.click();
@@ -179,6 +194,13 @@ describe("grouped chat rendering", () => {
       } else {
         expect(discard).toBeNull();
       }
+      const bubble = element(".chat-bubble");
+      renderGroupedMessage(createUserMessage("Attempted message", { timestamp: 1_000 }), "user");
+      expectAbsent(".chat-send-status");
+      expect(element(".chat-bubble")).toBe(bubble);
+      expect(requireElement(".chat-group-timestamp", HTMLTimeElement).dateTime).toBe(
+        new Date(1_000).toISOString(),
+      );
     },
   );
 
@@ -534,7 +556,7 @@ describe("grouped chat rendering", () => {
     expect(renderSender("profile-alice", false).querySelector("a.chat-sender-name")).toBeNull();
   });
 
-  it("renders multiline system notices as sanitized markdown", () => {
+  it("renders multiline system notices as sanitized markdown", async () => {
     markdownRenderMock.mockImplementationOnce(renderMarkdownHtml);
     render(
       renderChatNotice({
@@ -547,6 +569,7 @@ describe("grouped chat rendering", () => {
       }),
     );
 
+    await waitForSolid(() => expect(element(".chat-notice")).not.toBeNull());
     const notice = element(".chat-notice");
     expect(notice?.querySelector(".chat-divider__title")?.textContent).toBe("System");
     expect(notice?.querySelector("strong")?.textContent).toBe("first line");
@@ -556,7 +579,7 @@ describe("grouped chat rendering", () => {
     expect(notice?.querySelector("img[onerror]")).toBeNull();
   });
 
-  it("renders Codex guardian decisions and warnings in the transcript", () => {
+  it("renders Codex guardian decisions and warnings in the transcript", async () => {
     const host = createHost();
     applyNotice(host, 1, {
       phase: "completed",
@@ -580,6 +603,7 @@ describe("grouped chat rendering", () => {
       phase: "strict_review_required",
     });
     renderNotices(host, "run-guardian", "guardian-render-test");
+    await waitForSolid(() => expect(elements(".chat-notice")).toHaveLength(4));
 
     const notices = elements(".chat-notice");
     expect(notices).toHaveLength(4);
@@ -643,7 +667,7 @@ describe("grouped chat rendering", () => {
     ]);
   });
 
-  it("renders configuration warnings as system notices rather than Guardian failures", () => {
+  it("renders configuration warnings as system notices rather than Guardian failures", async () => {
     const host = createHost();
     applyNotice(
       host,
@@ -656,6 +680,7 @@ describe("grouped chat rendering", () => {
       "notice",
     );
     renderNotices(host, "run-warning", "configuration-warning-render-test");
+    await waitForSolid(() => expect(elementText(".chat-divider__title")).toBe("System"));
 
     expect(elementText(".chat-divider__title")).toBe("System");
     expect(harness.view.textContent).toContain("Custom execution rules were not applied.");

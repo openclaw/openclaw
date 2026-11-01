@@ -8,6 +8,7 @@ import { NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT } from "../app/native-link-rou
 import { formatDateTimeMs } from "../lib/format.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import { SidebarUpdateCard, type SidebarUpdateCardProps } from "./sidebar-update-card.tsx";
 
@@ -130,11 +131,7 @@ afterEach(async () => {
   await Promise.resolve();
   vi.useRealTimers();
   vi.restoreAllMocks();
-  if (originalWebkit) {
-    Object.defineProperty(window, "webkit", originalWebkit);
-  } else {
-    Reflect.deleteProperty(window, "webkit");
-  }
+  restorePropertyDescriptor(window, "webkit", originalWebkit);
 });
 
 describe("SidebarUpdateCard", () => {
@@ -575,7 +572,7 @@ describe("SidebarUpdateCard", () => {
     { state: "running", ageMinutes: 30 },
     { state: "campaign", ageMinutes: 20 },
   ] as const)(
-    "shows the recorded $state age beside the compact row's detail",
+    "shows the recorded $state age beside the compact row's title",
     async ({ state, ageMinutes }) => {
       const now = Date.parse("2026-09-23T12:00:00Z");
       vi.useFakeTimers({ now });
@@ -607,10 +604,9 @@ describe("SidebarUpdateCard", () => {
       )?.updateComplete;
 
       const title = element.find("summary .sidebar-issues-panel__entity");
-      const meta = title?.nextElementSibling;
-      const time = meta?.querySelector("time");
+      const time = title?.parentElement?.querySelector("time");
       const timestamp = now - ageMinutes * 60_000;
-      expect(meta?.querySelector(".sidebar-issues-panel__state")).not.toBeNull();
+      expect(element.find("summary .sidebar-issues-panel__state")).not.toBeNull();
       expect(time?.getAttribute("datetime")).toBe(new Date(timestamp).toISOString());
       expect(time?.getAttribute("title")).toBe(formatDateTimeMs(timestamp));
       expect(time?.textContent?.trim()).toBe(`${ageMinutes}m ago`);

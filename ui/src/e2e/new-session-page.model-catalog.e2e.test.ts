@@ -3,6 +3,7 @@ import type { ModelCatalogEntry } from "../api/types.ts";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import { catalogModel } from "./model-catalog-fixtures.test-support.ts";
 import {
   NEW_SESSION_MODEL_CATALOG,
   createNewSessionPageE2eSuite,
@@ -19,12 +20,7 @@ import {
 } from "./new-session-shard.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
-const luna: ModelCatalogEntry = {
-  available: true,
-  id: "gpt-5.6-luna",
-  name: "GPT-5.6 Luna",
-  provider: "openai",
-};
+const luna: ModelCatalogEntry = catalogModel("openai", "gpt-5.6-luna", "GPT-5.6 Luna");
 
 suite.define(() => {
   it("keeps picker geometry stable while shortcut visibility follows focus", async () => {
@@ -80,7 +76,7 @@ suite.define(() => {
               },
             };
           });
-        await expect.poll(async () => (await menuGeometry())?.anchorGap).toBe(6);
+        await expect.poll(async () => (await menuGeometry())?.anchorGap).toBe(4);
         const geometryBeforeFocus = await menuGeometry();
         expect(geometryBeforeFocus).not.toBeNull();
         await pollOpacity(secondShortcut).toBe("1");

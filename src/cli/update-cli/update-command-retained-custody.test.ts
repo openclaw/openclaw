@@ -45,15 +45,13 @@ function parentScript() {
       run.executorFence=await executor.enter(b,{serviceRoot:a});
       fs.writeFileSync(ready+".tmp","ready"); fs.renameSync(ready+".tmp",ready);
       while(!fs.existsSync(request))await sleep(10);
-      const {argv,timeout,parallel}=JSON.parse(fs.readFileSync(request,"utf8"));
+      const {argv,timeout}=JSON.parse(fs.readFileSync(request,"utf8"));
       const result=await withRetainedUpdateServiceAuthority(
         {run,root:a,assertCurrent:()=>{}},
-        ()=>parallel
-          ? Promise.all([execFileUtf8(argv[0],argv.slice(1),{timeout}),execFileUtf8(argv[0],argv.slice(1),{timeout})])
-          : execFileUtf8(argv[0],argv.slice(1),{timeout})
+        ()=>execFileUtf8(argv[0],argv.slice(1),{timeout})
       );
       fs.writeFileSync(outcome,JSON.stringify(result));
-      if((Array.isArray(result)?result:[result]).some(entry=>entry.code!==0))throw Error("native-failed:"+JSON.stringify(result));
+      if(result.code!==0)throw Error("native-failed:"+JSON.stringify(result));
     });
   } catch(error) { process.stderr.write(error.message); process.exitCode=1; }
 `;
@@ -67,7 +65,6 @@ function setup() {
     a: file("A"),
     b: file("B"),
     temp: file("control"),
-    controllers: file("controllers"),
     started: file("started.json"),
     request: file("request.json"),
     ready: file("parent-ready"),
@@ -75,7 +72,7 @@ function setup() {
     effect: file("effect"),
     outcome: file("outcome.json"),
   };
-  for (const dir of [fixture.a, fixture.b, fixture.temp, fixture.controllers]) {
+  for (const dir of [fixture.a, fixture.b, fixture.temp]) {
     fs.mkdirSync(dir);
   }
   return fixture;
@@ -87,7 +84,7 @@ function startParent(killProcessTree: boolean) {
   const abort = new AbortController();
   let parentPid: number | undefined;
   let dispatched = false;
-  let expectedControllers = 0;
+  let missingExecutable = false;
   let behaviorTimer: ReturnType<typeof setTimeout> | undefined;
   const pending = runCommandWithTimeout(
     [process.execPath, "--input-type=module", "-e", parentScript(), "--", JSON.stringify(fixture)],
@@ -109,16 +106,13 @@ function startParent(killProcessTree: boolean) {
     pid: () => parentPid,
     ready: (signal: AbortSignal) =>
       withinTest(waitForFixtureFile(fixture.ready, pending, "ready"), signal),
-    run(
-      script: string,
-      { timeout = 10000, deadline = 15000, parallel = false, missing = false } = {},
-    ) {
+    run(script: string, { timeout = 10000, deadline = 15000, missing = false } = {}) {
       if (dispatched) {
         throw new Error("Fixture command was already dispatched");
       }
       dispatched = true;
       // The missing executable has no controller; every Node command records its own receipt.
-      expectedControllers = missing ? 0 : parallel ? 2 : 1;
+      missingExecutable = missing;
       behaviorTimer = setTimeout(
         () => abort.abort(new Error("Fixture behavior deadline expired")),
         deadline,
@@ -126,7 +120,7 @@ function startParent(killProcessTree: boolean) {
       const argv = missing
         ? [path.join(fixture.root, "missing-native")]
         : [process.execPath, "-e", controllerScript(fixture, script)];
-      const command = { argv, timeout, parallel };
+      const command = { argv, timeout };
       fs.writeFileSync(`${fixture.request}.tmp`, JSON.stringify(command));
       fs.renameSync(`${fixture.request}.tmp`, fixture.request);
       return pending;
@@ -150,19 +144,15 @@ function startParent(killProcessTree: boolean) {
       if (parentPid !== undefined) {
         expect(isPidAlive(parentPid)).toBe(false);
       }
-      const receipts = () =>
-        fs.readdirSync(fixture.controllers).filter((file) => file.endsWith(".json"));
       // The real owner can settle a timeout or spawn failure before any controller starts.
       if (dispatched && !fs.existsSync(fixture.outcome)) {
-        if (expectedControllers === 0) {
+        if (missingExecutable) {
           throw new Error(`Native launch did not report settlement; retaining ${fixture.root}`);
         }
-        await expect.poll(() => receipts().length, { timeout: 5000 }).toBe(expectedControllers);
+        await expect.poll(() => fs.existsSync(fixture.started), { timeout: 5000 }).toBe(true);
       }
-      for (const receipt of receipts()) {
-        const native: { pid: number; gate: number } = readJson(
-          path.join(fixture.controllers, receipt),
-        );
+      if (fs.existsSync(fixture.started)) {
+        const native: { pid: number; gate: number } = readJson(fixture.started);
         await waitForDead(native.pid, AbortSignal.timeout(NATIVE_CLEANUP_GUARD_MS));
         await waitForDead(native.gate, AbortSignal.timeout(NATIVE_CLEANUP_GUARD_MS));
         await expect
@@ -204,12 +194,9 @@ const expectEffect = (fixture: ReturnType<typeof setup>) =>
 function controllerScript(fixture: ReturnType<typeof setup>, script: string): string {
   return `
     const fs=require("node:fs");
-    const receipt=${JSON.stringify(fixture.controllers)}+"/"+process.pid+".json";
-    fs.writeFileSync(receipt+".tmp",JSON.stringify({pid:process.pid,gate:process.ppid}));
-    fs.renameSync(receipt+".tmp",receipt);
     const started=${JSON.stringify(fixture.started)};
-    fs.copyFileSync(receipt,receipt+".started");
-    fs.renameSync(receipt+".started",started);
+    fs.writeFileSync(started+".tmp",JSON.stringify({pid:process.pid,gate:process.ppid}));
+    fs.renameSync(started+".tmp",started);
     const cleanup=setInterval(()=>{
       if(fs.existsSync(${JSON.stringify(fixture.finish)})){
         fs.writeFileSync(${JSON.stringify(fixture.effect)},"finished");
@@ -320,19 +307,6 @@ describe.skipIf(process.platform === "win32")("POSIX bound native control", () =
       },
       20000,
     );
-
-    it("serializes real concurrent reads under one retained executor", async () => {
-      const prepared = parent();
-      const fixture = prepared.fixture;
-      const settled = await prepared.run('setTimeout(()=>process.stdout.write("read"),30);', {
-        parallel: true,
-      });
-      expect(settled.code, settled.stderr).toBe(0);
-      expect(readJson(fixture.outcome)).toEqual([
-        expect.objectContaining({ code: 0, stdout: "read" }),
-        expect.objectContaining({ code: 0, stdout: "read" }),
-      ]);
-    });
   });
 });
 

@@ -46,7 +46,7 @@ export function toAIFriendlyError(error: unknown, selector: string): Error {
   }
   const message = stripVTControlCharacters(formatErrorMessage(error));
   const headline = (message.split("\n", 1)[0] ?? message).replace(
-    /^(?:Error:\s*)?(?:locator\.\w+:\s*)?(?:Error:\s*)?/,
+    /^(?:Error:\s*)?(?:(?:locator\.)?\w+:\s*)?(?:Error:\s*)?/,
     "",
   );
   const locatorTimeout = /^Timeout \d+ms exceeded\./.test(headline);

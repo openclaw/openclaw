@@ -5,11 +5,13 @@ const catalog = {
   chat: {
     processesPanel: {
       back: "Back to Processes",
+      backToDetails: "Back to Details",
       running: "Running ({count})",
       finished: "Finished ({count})",
       runningDesktop: "Running  {count}",
       finishedDesktop: "Finished  {count}",
       empty: "No background processes in this conversation.",
+      viewAll: "View all processes",
       openOutput: "Open output",
       cannotStop: "Can’t be stopped",
       runningFor: "Running for",
@@ -18,7 +20,6 @@ const catalog = {
       noRunning: "No running processes",
       stop: "Stop {name}",
       stopProcess: "Stop process",
-      dismiss: "Dismiss process",
       stopping: "Stopping…",
       stopNotRequested: "The process could not be stopped. Refresh to check its current state.",
       expired: "This process is no longer retained. Return to the process list.",

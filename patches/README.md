@@ -194,3 +194,77 @@ The package extension supplies Acorn, and the root and browser plugin packages
 bundle the patched runtime for npm installs. Remove the patch, extension, and
 exact-version guard when upstream passes the browser serialization regression
 with host string compilation disabled.
+
+The same Playwright patch removes graceful-fs's obsolete process-wide `cwd` and
+`chdir` cache. Importing the browser runtime leaves those functions owned by the
+host, and relative filesystem access continues to use the native implementation.
+The remaining graceful-fs behavior and L7's syntax normalizer are unchanged.
+Upstream follow-up: [graceful-fs](https://github.com/isaacs/node-graceful-fs) should
+remove this historical process polyfill, then
+[Playwright](https://github.com/microsoft/playwright) can refresh its bundled copy.
+Remove this hunk when `extensions/browser/src/browser/playwright-import.test.ts`
+passes with the published dependency.
+
+`@homebridge/ciao@1.3.12` adds an explicit `@homebridge/ciao/native.js` entry that
+does not install source-map-support. The historical root entry retains its
+published behavior. Responder diagnostics accept an optional typed logger;
+custom loggers receive separate responders, while default responder pooling is
+unchanged. Bonjour uses this entry and its existing plugin logger instead of
+replacing process-wide console functions. The published JavaScript, declarations,
+and source maps were regenerated from the upstream v1.3.12 TypeScript source.
+
+Upstream follow-up: offer the native-source-map entry and per-responder logger to
+[homebridge/ciao](https://github.com/homebridge/ciao). Remove the patch and its
+registration when an upstream release supports both contracts and passes
+`extensions/bonjour/src/ciao-runtime.test.ts` and `advertiser.test.ts` without the
+patch. Bonjour bundles the patched dependency so installed plugin artifacts retain
+the same entry and logger behavior as source installs.
+
+`proper-lockfile@4.1.2`, used by Crabline's recorder, uses native `node:fs` and
+installs its own exit/signal listeners only while locks are held. Importing it
+no longer loads graceful-fs or signal-exit's process-method wrappers. The
+cleanup owner preserves application signal handlers, signal-exit v3/v4 observers
+and vetoes, separately installed lockfile copies, and the original termination
+signal. Release and compromise remove listeners when the last lock is gone.
+
+Upstream follow-up: submit the native-fs default and owned cleanup to
+`moxystudio/node-proper-lockfile`; keep the existing custom `fs` option. Remove
+this patch and its registration when an upstream version passes
+`extensions/qa-lab/src/proper-lockfile-runtime.test.ts`, including Crabline
+recorder writes, import identity, contention, stale recovery, compromise,
+normal exit, and signal cleanup. Its package file list explicitly retains the
+published changelog during patch regeneration. The existing Crabline package
+patch is unchanged.
+
+`@clawdbot/lobster@2026.9.16` has an approved temporary validation patch. Its two
+fixed LLM payload/envelope checks are generated with Ajv at build time. A scoped
+compiler callback lets the OpenClaw plugin use the shared codegen-free validator
+on AOT hosts while keeping native Ajv validation on Node and JIT Bun. The scope
+belongs to one async tool request; schema caches remain separate for each native
+Ajv owner. No process-global engine setter or format-registry write is added.
+
+Regenerate fixed checks inside a `pnpm patch` edit directory with
+`pnpm lobster:validators:gen --package-dir <directory>`, then run
+`pnpm patch-commit <directory>`. `pnpm lobster:validators:check` checks the installed
+patch without editing `node_modules`. The generator owns the generated file;
+never edit its patch hunk directly.
+The generated header records the Ajv version and canonical Unicode helper hash;
+the existing CI generated-validator gate checks both through `pnpm validators:check`.
+
+Normalize pnpm's trailing header tabs, then refresh the native patch hash:
+
+```sh
+node --input-type=module <<'JS'
+import { readFileSync, writeFileSync } from "node:fs";
+const patch = "patches/@clawdbot__lobster@2026.9.16.patch";
+const source = readFileSync(patch, "utf8");
+writeFileSync(patch, source.replace(/^(?:---|\+\+\+) .+\t$/gm, (line) => line.slice(0, -1)));
+JS
+pnpm install --fix-lockfile
+pnpm lobster:validators:check
+```
+
+Upstream follow-up: port the generated fixed checks and request-scoped compiler
+hook to [openclaw/lobster](https://github.com/openclaw/lobster), then remove this
+patch and its exact-version guard when a published version passes the Lobster
+runner validation suite and the AOT/codegen-ban probe without the patch.

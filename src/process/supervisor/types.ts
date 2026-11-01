@@ -1,4 +1,5 @@
 import type { WindowsJobExtinction } from "../../../scripts/lib/managed-windows-job.mts";
+import type { ProcessExecutionIntent } from "../linux-exec-cgroup.js";
 import type { SpawnInitiation } from "../spawn-initiation.js";
 
 export type ProcessExtinctionResult = void | WindowsJobExtinction;
@@ -62,6 +63,7 @@ export type SpawnSecretInput = {
 };
 
 export type ProcessAdapterConstruction = {
+  executionIntent?: ProcessExecutionIntent;
   assertCurrent?: () => void;
   initiateSpawn?: SpawnInitiation;
   /** Synchronous launch admission; never recheck after the target command starts. */
@@ -113,6 +115,7 @@ export type ProcessAdapterStartup<Adapter extends SpawnProcessAdapter> = {
 };
 
 type SpawnBaseInput = {
+  executionIntent?: ProcessExecutionIntent;
   initiateSpawn?: SpawnInitiation;
   /** The local subprocess transports execution owned outside its local process tree. */
   cleanupOwnership?: "external";
@@ -146,36 +149,33 @@ type SpawnBaseInput = {
   onCancel?: (reason: TerminationReason) => void;
 };
 
-type SpawnChildInput = SpawnBaseInput & {
-  mode: "child";
-  argv: string[];
-  /** Append invocation arguments after queued scope admission, immediately before child construction. */
-  resolveArgs?: () => string[];
-  /** Preserve a distinct invocation name while executing argv[0]. */
-  argv0?: string;
-  /** Preserve a caller-prepared environment without environment-mutating spawn wrappers. */
-  exactEnv?: true;
-  windowsVerbatimArguments?: boolean;
-  input?: string;
-  /** Prepare input authority at the adapter's stdin delivery boundary. */
-  prepareInput?: () => void | Promise<void>;
-  stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
-  secretInput?: SpawnSecretInput;
-  onStdoutRaw?: (chunk: Buffer) => void;
-  onStderrRaw?: (chunk: Buffer) => void;
-};
-
-type SpawnPtyInput = SpawnBaseInput & {
-  mode: "pty";
-  argv: string[];
-};
-
-type SpawnAnchoredShellInput = SpawnBaseInput & {
-  mode: "anchored-shell";
-  command: string;
-};
-
-export type SpawnInput = SpawnChildInput | SpawnPtyInput | SpawnAnchoredShellInput;
+export type SpawnInput =
+  | (SpawnBaseInput & {
+      mode: "child";
+      argv: string[];
+      /** Append invocation arguments after queued scope admission, immediately before child construction. */
+      resolveArgs?: () => string[];
+      /** Preserve a distinct invocation name while executing argv[0]. */
+      argv0?: string;
+      /** Preserve a caller-prepared environment without environment-mutating spawn wrappers. */
+      exactEnv?: true;
+      windowsVerbatimArguments?: boolean;
+      input?: string;
+      /** Prepare input authority at the adapter's stdin delivery boundary. */
+      prepareInput?: () => void | Promise<void>;
+      stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
+      secretInput?: SpawnSecretInput;
+      onStdoutRaw?: (chunk: Buffer) => void;
+      onStderrRaw?: (chunk: Buffer) => void;
+    })
+  | (SpawnBaseInput & {
+      mode: "pty";
+      argv: string[];
+    })
+  | (SpawnBaseInput & {
+      mode: "anchored-shell";
+      command: string;
+    });
 
 /**
  * required-all includes external execution; owned-only leaves explicit backend

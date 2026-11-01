@@ -2,8 +2,9 @@ import type { WAMessage } from "baileys";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
+import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { warnMissingProviderGroupPolicyFallbackOnce } from "openclaw/plugin-sdk/runtime-group-policy";
-import { logWhatsAppVerbose } from "../auto-reply/loggers.js";
+import { logWhatsAppVerbose, whatsappInboundLog } from "../auto-reply/loggers.js";
 import { resolveWhatsAppInboundPolicy, resolveWhatsAppIngressAccess } from "../inbound-policy.js";
 import { buildWhatsAppInboundAdmission } from "./admission.js";
 import { isRecentOutboundMessage } from "./dedupe.js";
@@ -28,6 +29,16 @@ export function createWhatsAppInboundMessageNormalizer(options: {
   parseTimestampSeconds: (value: unknown) => number | undefined;
 }) {
   const { socketSession, groupMetadata } = options;
+  const denialLogs = createDedupeCache({ ttlMs: 60_000, maxSize: 32 });
+  const logAccessDenial = (reasonCode: string) => {
+    // Key only by bounded policy reasons; repeated denials must not refresh the
+    // window indefinitely or retain sender identifiers and message content.
+    if (denialLogs.peek(reasonCode)) {
+      return;
+    }
+    denialLogs.check(reasonCode);
+    whatsappInboundLog.info(`Inbound message blocked (reason=${reasonCode})`);
+  };
   const shouldSkipRecentOutboundEcho = (msg: WAMessage): boolean => {
     const id = msg.key?.id ?? undefined;
     const remoteJid = msg.key?.remoteJid;
@@ -123,19 +134,7 @@ export function createWhatsAppInboundMessageNormalizer(options: {
     const ingressAccess = await resolveChannelIngress();
     const { senderAccess } = ingressAccess;
     if (group && senderAccess.decision !== "allow") {
-      if (senderAccess.reasonCode === "group_policy_disabled") {
-        logWhatsAppVerbose(options.verbose, "Blocked group message (groupPolicy: disabled)");
-      } else if (senderAccess.reasonCode === "group_policy_empty_allowlist") {
-        logWhatsAppVerbose(
-          options.verbose,
-          "Blocked group message (groupPolicy: allowlist, no groupAllowFrom)",
-        );
-      } else {
-        logWhatsAppVerbose(
-          options.verbose,
-          `Blocked group message from ${senderE164 ?? "unknown sender"} (groupPolicy: allowlist)`,
-        );
-      }
+      logAccessDenial(senderAccess.reasonCode);
       return null;
     }
 
@@ -148,7 +147,7 @@ export function createWhatsAppInboundMessageNormalizer(options: {
         return null;
       }
       if (senderAccess.decision === "block" && senderAccess.reasonCode === "dm_policy_disabled") {
-        logWhatsAppVerbose(options.verbose, "Blocked dm (dmPolicy: disabled)");
+        logAccessDenial(senderAccess.reasonCode);
         return null;
       }
       if (senderAccess.decision === "pairing" && !policy.isSamePhone(from)) {
@@ -193,10 +192,7 @@ export function createWhatsAppInboundMessageNormalizer(options: {
         return null;
       }
       if (senderAccess.decision !== "allow") {
-        logWhatsAppVerbose(
-          options.verbose,
-          `Blocked unauthorized sender ${from} (dmPolicy=${policy.dmPolicy})`,
-        );
+        logAccessDenial(senderAccess.reasonCode);
         return null;
       }
     }

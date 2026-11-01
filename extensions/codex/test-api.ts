@@ -162,3 +162,9 @@ export const loadCodexDynamicToolBuildTestFixture = () =>
 export const loadCodexNativeWebSearchTestFixture = () => import("./native-web-search.test-api.js");
 
 export const loadCodexAccountUsageTestFixture = () => import("./src/account-usage.test-support.js");
+
+export const loadCodexSubscriptionRoutingTestFixture = () =>
+  import("./src/app-server/subscription-routing.test-support.js");
+
+export const loadNativeCommandGatewayTestFixture = () =>
+  import("./src/app-server/native-command-auth.test-support.js");

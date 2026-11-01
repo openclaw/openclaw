@@ -21,7 +21,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
 import { prepareTalkClientControlAuthority } from "./client-agent-consult.js";
-import { resolveTalkAgentConsultAuthority } from "./client-gateway-control.js";
+import { resolveTalkAgentConsultAuthority } from "./client-tool-authority.js";
 import { resolveOwnedActiveTalkRunTarget } from "./run-ownership.js";
 import { prepareTalkSessionTarget } from "./session-target.js";
 

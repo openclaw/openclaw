@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { parseUpdateRecoveryBackupManifest } from "../commands/backup-verify-manifest.js";
+import type { DoctorMaintenanceParams } from "../commands/doctor-maintenance-types.js";
 import { beginDoctorMaintenance } from "../commands/doctor-maintenance.js";
 import { preserveDoctorOriginalState } from "../commands/doctor-original-capture.js";
 import * as declarations from "../plugins/doctor-contract-registry.js";
@@ -25,8 +26,7 @@ import { captureRetainedNativeWorkerSource } from "./worker-native-lifecycle.js"
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     await closeOpenClawStateDatabaseAsync();
-    // The native source caches its broker across operations. Its socket lives
-    // under this fixture's TMPDIR, so join that owner before removing the root.
+    // Join the cached broker before removing its TMPDIR socket.
     const source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
     expect(await retireIdleOpenClawStateReadWorkers(source)).toBe(true);
     expect(await source.retireIdleBroker()).toBe(true);
@@ -46,7 +46,7 @@ async function fixture() {
   await fs.writeFile(config, "{}");
   const file = path.join(plugin, "data.txt");
   await fs.writeFile(file, "before");
-  const env = {
+  const fixtureEnv = {
     HOME: root,
     USERPROFILE: root,
     OPENCLAW_HOME: root,
@@ -64,42 +64,45 @@ async function fixture() {
     OPENCLAW_SERVICE_REPAIR_POLICY: "external",
     OPENCLAW_IMAGE_ACTIVATION_CAPTURE_MARKER: undefined,
   };
-  for (const [key, value] of Object.entries(env)) {
+  for (const [key, value] of Object.entries(fixtureEnv)) {
     vi.stubEnv(key, value);
   }
   expect(resolveManagedUpdateLeaseDatabasePath().startsWith(`${temporary}${path.sep}`)).toBe(true);
   const resources: Array<{ path: string; kind: "file" | "directory" | "sqlite" }> = [
     { path: plugin, kind: "directory" },
   ];
-  // Only the plugin's declaration producer is synthetic. Capture, verification,
-  // source comparison, retention, and Doctor's entry point are real.
+  // Only plugin declarations are synthetic; capture and maintenance are real.
   vi.spyOn(declarations, "preparePluginDoctorMigrationBackupResources").mockImplementation(
     async () => ({ resources, deferredPluginIds: new Set(), notices: [], assertCurrent() {} }),
   );
-  const capture = async (fullIntegrityCheck?: boolean) => {
-    const runtime = { log() {}, error() {}, exit() {} };
-    let result: Awaited<ReturnType<typeof preserveDoctorOriginalState>> | undefined;
+  const runtime = { log() {}, error() {}, exit() {} };
+  const maintain = async (beforeStateMutation: DoctorMaintenanceParams["beforeStateMutation"]) => {
     const maintenance = await beginDoctorMaintenance({
       options: { repair: true, nonInteractive: true },
       root,
       env: { ...process.env },
       runtime,
-      beforeStateMutation: async ({ env: selectedEnv, signal }) => {
-        result = await preserveDoctorOriginalState({
-          fullIntegrityCheck,
-          root,
-          env: selectedEnv,
-          runtime,
-          signal,
-          assertCurrent: getOpenClawDatabaseMaintenanceScope()!.assertAdmission,
-        });
-      },
+      beforeStateMutation,
     });
     await maintenance?.release();
+  };
+  const capture = async (fullIntegrityCheck?: boolean) => {
+    let result: Awaited<ReturnType<typeof preserveDoctorOriginalState>> | undefined;
+    await maintain(async ({ env, signal }) => {
+      result = await preserveDoctorOriginalState({
+        fullIntegrityCheck,
+        root,
+        env,
+        runtime,
+        signal,
+        assertCurrent: getOpenClawDatabaseMaintenanceScope()!.assertAdmission,
+      });
+    });
     if (!result) {
       throw new Error("Doctor did not enter its admitted original-state capture boundary");
     }
-    return result;
+    expect(result.warnings).toEqual([]);
+    return captures();
   };
   const captures = async () =>
     (await fs.readdir(resolveUpdateCaptureRoot(stateDir))).filter((name) =>
@@ -112,24 +115,46 @@ async function fixture() {
       env: { ...process.env },
       assertCurrent() {},
     });
-  return { root, stateDir, plugin, file, config, resources, capture, captures, reuse };
+  const capturedFile = async (source: string, sqlite = false) => {
+    const ref = await reuse();
+    expect(ref).toBeDefined();
+    const manifest = parseUpdateRecoveryBackupManifest(
+      await fs.readFile(ref!.manifestPath, "utf8"),
+    );
+    const entry = manifest.entries.find((candidate) => candidate.sourcePath === source);
+    if (entry?.kind !== "file" || (sqlite && !entry.sqlite)) {
+      throw new Error("Expected captured file");
+    }
+    return { ref: ref!, payloadPath: path.join(ref!.directory, entry.archivePath) };
+  };
+  return {
+    root,
+    stateDir,
+    plugin,
+    file,
+    config,
+    resources,
+    capture,
+    captures,
+    reuse,
+    maintain,
+    capturedFile,
+  };
 }
 
 it("reuses a sealed standalone baseline only while the complete source is unchanged", async () => {
   const f = await fixture();
-  expect((await f.capture()).warnings).toEqual([]);
-  const first = await f.captures();
+  const first = await f.capture();
   expect(first).toHaveLength(1);
-  expect((await f.capture()).warnings).toEqual([]);
-  expect(await f.captures()).toEqual(first);
+  expect(await f.capture()).toEqual(first);
   // Same-size writes with restored mtime are not evidence of equality.
   const stat = await fs.stat(f.file);
   await fs.writeFile(f.file, "after!");
   await fs.utimes(f.file, stat.atime, stat.mtime);
-  expect((await f.capture()).warnings).toEqual([]);
-  expect(await f.captures()).toHaveLength(2);
-  expect((await f.capture(true)).warnings).toEqual([]);
-  expect(await f.captures(), "explicit full integrity verification does not reuse").toHaveLength(3);
+  expect(await f.capture()).toHaveLength(2);
+  expect(await f.capture(true), "explicit full integrity verification does not reuse").toHaveLength(
+    3,
+  );
 });
 
 it("rediscovers files, declared paths, config includes, links, permissions, and new agent databases", async () => {
@@ -139,7 +164,7 @@ it("rediscovers files, declared paths, config includes, links, permissions, and 
   const link = path.join(f.plugin, "link");
   await fs.symlink("data.txt", link);
   await fs.chmod(f.file, 0o600);
-  expect((await f.capture()).warnings).toEqual([]);
+  await f.capture();
   expect(await f.reuse()).toBeDefined();
 
   const added = path.join(f.plugin, "new.txt");
@@ -180,34 +205,24 @@ it("rediscovers files, declared paths, config includes, links, permissions, and 
   // The newly discovered agent directory itself adds a missing database root.
   expect(await f.reuse(), "new agent inventory survives database removal").toBeUndefined();
   await fs.rm(path.join(f.stateDir, "agents/new-agent"), { recursive: true });
-  expect(
-    await f.reuse(),
-    "restored exact source is reusable despite timestamp drift",
-  ).toBeDefined();
+  expect(await f.reuse(), "restored source despite timestamp drift").toBeDefined();
 });
 
 it("verifies retained payloads and seals, and leaves unusable originals intact while capturing fresh", async () => {
   const f = await fixture();
-  expect((await f.capture()).warnings).toEqual([]);
-  const ref = await f.reuse();
-  expect(ref).toBeDefined();
-  const manifest = parseUpdateRecoveryBackupManifest(await fs.readFile(ref!.manifestPath, "utf8"));
-  const entry = manifest.entries.find((candidate) => candidate.sourcePath === f.file);
-  if (entry?.kind !== "file") {
-    throw new Error("Expected captured plugin file");
-  }
-  const partial = `${ref!.manifestPath}.partial`;
+  await f.capture();
+  const { ref, payloadPath } = await f.capturedFile(f.file);
+  const partial = `${ref.manifestPath}.partial`;
   await fs.writeFile(partial, "unfinished");
   expect(await f.reuse()).toBeUndefined();
   await fs.rm(partial);
-  await fs.mkdir(path.join(ref!.directory, "candidate"));
+  await fs.mkdir(path.join(ref.directory, "candidate"));
   expect(await f.reuse()).toBeUndefined();
-  await fs.rm(path.join(ref!.directory, "candidate"), { recursive: true });
-  await fs.writeFile(path.join(ref!.directory, entry.archivePath), "broken");
+  await fs.rm(path.join(ref.directory, "candidate"), { recursive: true });
+  await fs.writeFile(payloadPath, "broken");
   expect(await f.reuse()).toBeUndefined();
-  expect((await f.capture()).warnings).toEqual([]);
-  expect(await f.captures()).toHaveLength(2);
-  expect(await fs.readFile(path.join(ref!.directory, entry.archivePath), "utf8")).toBe("broken");
+  expect(await f.capture()).toHaveLength(2);
+  expect(await fs.readFile(payloadPath, "utf8")).toBe("broken");
 });
 
 it("accepts only exact consolidated SQLite bytes and rejects durable WAL data and changed databases", async () => {
@@ -217,49 +232,32 @@ it("accepts only exact consolidated SQLite bytes and rejects durable WAL data an
     using db = new DatabaseSync(file);
     db.exec("CREATE TABLE payload(value TEXT); INSERT INTO payload VALUES('retained')");
   }
-  expect((await f.capture()).warnings).toEqual([]);
-  const [name] = await f.captures();
-  const directory = path.join(resolveUpdateCaptureRoot(f.stateDir), name!);
-  const manifest = parseUpdateRecoveryBackupManifest(
-    await fs.readFile(path.join(directory, "manifest.json"), "utf8"),
-  );
-  const entry = manifest.entries.find((candidate) => candidate.sourcePath === file);
-  if (entry?.kind !== "file" || !entry.sqlite) {
-    throw new Error("Expected consolidated SQLite capture");
-  }
-  const payload = await fs.readFile(path.join(directory, entry.archivePath));
-  // Doctor retains original bytes under maintenance custody. Repeating capture
-  // without a repair must reuse the same image, not require rewriting the source.
+  const [name] = await f.capture();
+  const { payloadPath } = await f.capturedFile(file, true);
+  const payload = await fs.readFile(payloadPath);
   expect(await fs.readFile(file)).toEqual(payload);
-  expect((await f.capture()).warnings).toEqual([]);
-  expect(await f.captures()).toEqual([name]);
+  expect(await f.capture()).toEqual([name]);
   expect(await f.reuse()).toBeDefined();
   await fs.writeFile(`${file}-wal`, "");
   await fs.writeFile(`${file}-shm`, "disposable index");
   expect(await f.reuse()).toBeDefined();
   await fs.rm(`${file}-wal`);
   await fs.rm(`${file}-shm`);
-  let writer: DatabaseSync | undefined;
   let retainedWal: Buffer | undefined;
-  try {
-    writer = new DatabaseSync(file);
+  {
+    using writer = new DatabaseSync(file);
     writer.exec(
       "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; INSERT INTO payload VALUES('newer')",
     );
     retainedWal = await fs.readFile(`${file}-wal`);
     expect(retainedWal.length).toBeGreaterThan(0);
     expect(await f.reuse(), "uncheckpointed data is not in the main-file digest").toBeUndefined();
-  } finally {
-    writer?.close();
   }
   expect(await f.reuse(), "checkpointed changed data").toBeUndefined();
   await fs.writeFile(file, payload);
   await fs.writeFile(`${file}-wal`, retainedWal!);
   expect(await fs.readFile(file)).toEqual(payload);
-  expect(
-    await f.reuse(),
-    "retained WAL data refuses even an exact main-file match",
-  ).toBeUndefined();
+  expect(await f.reuse(), "retained WAL with exact main-file match").toBeUndefined();
   await fs.rm(`${file}-wal`);
   await fs.writeFile(`${file}-journal`, "retained journal");
   expect(await f.reuse(), "unresolved rollback journal").toBeUndefined();
@@ -274,11 +272,9 @@ it("reuses large unchanged originals instead of falling back because of their by
   await source.truncate(257 * 1024 * 1024);
   await source.write("retained history", 0, "utf8");
   await source.sync();
-  expect((await f.capture()).warnings).toEqual([]);
-  const first = await f.captures();
+  const first = await f.capture();
   expect(first).toHaveLength(1);
-  expect((await f.capture()).warnings).toEqual([]);
-  expect(await f.captures()).toEqual(first);
+  expect(await f.capture()).toEqual(first);
 });
 
 it.each(["selection", "discovery", "comparison"] as const)(
@@ -289,8 +285,7 @@ it.each(["selection", "discovery", "comparison"] as const)(
     await closeOpenClawStateDatabaseAsync();
     {
       using database = new DatabaseSync(shared);
-      // A WAL-mode main file needs private normalization to the retained image
-      // format even after checkpoint, which exercises the comparison worker.
+      // WAL mode requires private normalization, exercising the comparison worker.
       if (phase === "comparison") {
         database.exec("PRAGMA journal_mode=WAL");
       }
@@ -298,20 +293,15 @@ it.each(["selection", "discovery", "comparison"] as const)(
         "CREATE TABLE doctor_capture_fixture(payload BLOB); INSERT INTO doctor_capture_fixture VALUES(zeroblob(68157440));",
       );
     }
-    expect((await f.capture()).warnings).toEqual([]);
-    const originals = await f.captures();
+    const originals = await f.capture();
     if (phase === "comparison") {
-      expect((await f.capture()).warnings).toEqual([]);
-      expect(await f.captures(), "large WAL-mode sources reuse the exact normalized image").toEqual(
-        originals,
-      );
+      expect(await f.capture(), "reuse normalized WAL image").toEqual(originals);
     }
     const controller = new AbortController();
     const cancellation = new Error("cancel large shared-state comparison");
     const scratchRoot = resolvePrivateSqliteSnapshotStagingRoot();
     const scratchBefore = (await fs.readdir(scratchRoot)).toSorted();
     let staging: string | undefined;
-    let observedProgress = false;
     let comparing = false;
     let selected = false;
     let preparation: ReturnType<typeof snapshots.startSqliteReadOnlyLocationAsync> | undefined;
@@ -326,15 +316,13 @@ it.each(["selection", "discovery", "comparison"] as const)(
         const pending = start(...args);
         if (comparing && args[0] === shared && !preparation) {
           preparation = pending;
-          observedProgress = true;
           queueMicrotask(() => controller.abort(cancellation));
         }
         return pending;
       });
     } else {
       const runWorker = discoveryWorker.runUpdateStateInspectionWorker;
-      // Observe the real child's progress and cancel its actual owner; do not
-      // replace discovery, its result, capture, or process settlement.
+      // Cancel the real child at progress, without replacing its work or settlement.
       vi.spyOn(discoveryWorker, "runUpdateStateInspectionWorker").mockImplementation((params) =>
         runWorker({
           ...params,
@@ -343,7 +331,6 @@ it.each(["selection", "discovery", "comparison"] as const)(
             const mode = phase === "comparison" ? "database-backup" : "discover";
             if (params.input.mode === mode && progress.path === shared) {
               staging = params.stagingRoot;
-              observedProgress = true;
               controller.abort(cancellation);
             }
           },
@@ -351,31 +338,19 @@ it.each(["selection", "discovery", "comparison"] as const)(
       );
     }
     await expect(
-      beginDoctorMaintenance({
-        options: { repair: true, nonInteractive: true },
-        root: f.root,
-        runtime: { log() {}, error() {}, exit() {} },
-        beforeStateMutation: async ({ env }) => {
-          comparing = true;
-          await findReusableDoctorCapture({
-            stateDir: f.stateDir,
-            installRoot: f.root,
-            env,
-            signal: controller.signal,
-            assertCurrent: getOpenClawDatabaseMaintenanceScope()!.assertAdmission,
-          });
-        },
-      }).then(async (maintenance) => {
-        // A regression that bypasses the worker must still release its real owner
-        // before the expected-cancellation assertion fails.
-        await maintenance?.release();
-        return maintenance;
+      f.maintain(async ({ env }) => {
+        comparing = true;
+        await findReusableDoctorCapture({
+          stateDir: f.stateDir,
+          installRoot: f.root,
+          env,
+          signal: controller.signal,
+          assertCurrent: getOpenClawDatabaseMaintenanceScope()!.assertAdmission,
+        });
       }),
     ).rejects.toThrow(cancellation.message);
-    expect(observedProgress).toBe(true);
     if (phase === "selection") {
-      // Cancellation must precede the synchronous ledger reads, not merely be
-      // noticed by a later asynchronous plugin/discovery snapshot.
+      // Cancellation must precede synchronous ledger reads.
       expect(selected).toBe(false);
       expect(preparation).toBeDefined();
       expect(preparation!.startClose().read().status).toBe("fulfilled");
@@ -386,11 +361,8 @@ it.each(["selection", "discovery", "comparison"] as const)(
     expect((await fs.readdir(scratchRoot)).toSorted()).toEqual(scratchBefore);
     expect(await f.captures()).toEqual(originals);
     using source = new DatabaseSync(shared, { readOnly: true });
-    expect(
-      source.prepare("SELECT length(payload) AS size FROM doctor_capture_fixture").get(),
-    ).toEqual({
-      size: 68157440,
-    });
+    const row = source.prepare("SELECT length(payload) AS size FROM doctor_capture_fixture").get();
+    expect(row).toEqual({ size: 68157440 });
   },
 );
 
@@ -400,8 +372,7 @@ it("treats the verification entry bound as a cache miss and still creates a fres
   for (let i = 0; i < 4096; i++) {
     await fs.mkdir(path.join(f.plugin, String(i)));
   }
-  expect((await f.capture()).warnings).toEqual([]);
+  await f.capture();
   expect(await f.reuse()).toBeUndefined();
-  expect((await f.capture()).warnings).toEqual([]);
-  expect(await f.captures()).toHaveLength(2);
+  expect(await f.capture()).toHaveLength(2);
 });

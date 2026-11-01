@@ -12,7 +12,7 @@ import {
 } from "../cron/proactive-job-receipt.js";
 import type { CronJobScratchState } from "../cron/scratch-contract.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
-import { cronStoreKey } from "../cron/store/key.js";
+import { resolveCronStoreKeyInDatabase } from "../cron/store/paths.js";
 import {
   loadedCronStoreFromRows,
   loadCronRows,
@@ -23,6 +23,7 @@ import {
   loadCronRuntimeAuthorities,
   replaceCronRuntimeAuthorityRows,
 } from "../cron/store/runtime-authority-store.js";
+import { CronStoreSelectionRequiredError } from "../cron/store/selection-error.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { formatErrorMessage as errorMessage } from "../infra/errors.js";
 import {
@@ -78,10 +79,11 @@ export async function collectHeartbeatTaskMigrationFindings(
     try {
       monitor = readLegacyHeartbeatScratch(storePath, agent.agentId, { env });
     } catch (error) {
+      const deferred = error instanceof CronStoreSelectionRequiredError;
       findings.push({
         ...finding,
-        requirement: "heartbeat-task-migration-blocked",
-        severity: "error",
+        requirement: deferred ? "heartbeat-migration-deferred" : "heartbeat-task-migration-blocked",
+        severity: deferred ? "warning" : "error",
         message: `Agent "${agent.agentId}" heartbeat scratch cannot be inspected: ${errorMessage(error)}`,
       });
       continue;
@@ -122,9 +124,10 @@ export async function migrateStoredHeartbeatTaskJobs(
   const monitors = await ensureHeartbeatMonitorJobs(cfg, storePath, env);
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
-      const rows = loadCronRows(db, cronStoreKey(storePath));
+      const storeKey = resolveCronStoreKeyInDatabase(db, storePath, env);
+      const rows = loadCronRows(db, storeKey);
       const jobs = loadedCronStoreFromRows(rows).store.jobs;
-      loadCronRuntimeAuthorities({ db, storeKey: cronStoreKey(storePath), jobs });
+      loadCronRuntimeAuthorities({ db, storeKey, jobs });
       let converted = 0;
       for (const job of jobs) {
         if (!isHeartbeatTaskCronJob(job)) {
@@ -154,7 +157,7 @@ export async function migrateStoredHeartbeatTaskJobs(
             `Legacy task ${job.id} has no unambiguous monitor owner; preserve its input and resolve the owner before rerunning Doctor.`,
           );
         }
-        const receipt = readDefaultProactiveJobReceiptInDatabase(db, storePath, monitorAgentId);
+        const receipt = readDefaultProactiveJobReceiptInDatabase(db, storeKey, monitorAgentId);
         if (receipt?.phase !== "pending" || receipt.jobId !== monitor.id) {
           throw new Error(`Heartbeat task ${job.id} no longer has a pending cutover owner`);
         }
@@ -166,17 +169,17 @@ export async function migrateStoredHeartbeatTaskJobs(
         const convertedJob = convertStoredHeartbeatTask(job, monitor, Date.now());
         upsertCronJobRow(
           db,
-          cronStoreKey(storePath),
+          storeKey,
           convertedJob,
           rows.find((row) => row.job_id === job.id)!.sort_order,
           { preserveRuntimeState: true },
         );
         replaceCronRuntimeAuthorityRows({
           db,
-          storeKey: cronStoreKey(storePath),
+          storeKey,
           jobs: [convertedJob],
         });
-        recordConvertedProactiveJobInDatabase(db, storePath, monitorAgentId, convertedJob.id);
+        recordConvertedProactiveJobInDatabase(db, storeKey, monitorAgentId, convertedJob.id);
         converted += 1;
       }
       return converted;
@@ -190,7 +193,8 @@ async function loadCronPlanningSnapshot(
   storePath: string,
   env: NodeJS.ProcessEnv,
 ): Promise<CronPlanningSnapshot> {
-  return loadHeartbeatTaskPlanningSnapshot(openOpenClawStateDatabase({ env }).db, storePath);
+  const { db } = openOpenClawStateDatabase({ env });
+  return loadHeartbeatTaskPlanningSnapshot(db, resolveCronStoreKeyInDatabase(db, storePath, env));
 }
 
 async function clearLegacyTaskTimestamps(params: {
@@ -344,7 +348,7 @@ export async function maybeMigrateHeartbeatTasksToCron(params: {
         ({ db }) =>
           commitHeartbeatTaskMigrationInDatabase({
             db,
-            storePath,
+            storePath: resolveCronStoreKeyInDatabase(db, storePath, env),
             defaultAgentId: tryResolveAmbientOwnerAgentId(params.cfg),
             nowMs,
             plan,

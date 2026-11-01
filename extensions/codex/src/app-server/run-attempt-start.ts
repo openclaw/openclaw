@@ -51,6 +51,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
   const {
     params,
     attemptClientFactory,
+    callerOwnedAttemptClient,
     bindingStore,
     appServer,
     pluginConfig,
@@ -87,6 +88,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       assertCurrentAsync: runtime.nativeExecutionPolicy.assertCurrent,
       authority: connection.authority,
       attemptClientFactory,
+      callerOwnedAttemptClient,
       bindingStore,
       runtime: connection.options.runtime,
       appServer: pluginAppServer,
@@ -110,6 +112,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       effectiveWorkspace,
       effectiveCwd,
       dynamicTools: toolBridge.specs,
+      askUserAvailable: toolBridge.availableTools.some((tool) => tool.name === "ask_user"),
       persistentWebSearchAllowed: toolState.persistentWebSearchAllowed,
       webSearchAllowed: toolState.webSearchAllowed,
       developerInstructions,

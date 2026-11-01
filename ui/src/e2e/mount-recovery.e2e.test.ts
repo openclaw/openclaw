@@ -4,6 +4,7 @@ import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-ar
 import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const suite = createControlUiE2eSuite({
   name: "Control UI mount recovery E2E",
   startServer: () => startControlUiE2eServer(undefined, { source: true }),
@@ -13,11 +14,15 @@ const suite = createControlUiE2eSuite({
 
 suite.define(() => {
   it("reloads a fresh document after the initial app module is unavailable", async () => {
-    const artifactDir = createControlUiE2eArtifactDir("mount-recovery");
+    const artifactDir = captureUiProof
+      ? createControlUiE2eArtifactDir("mount-recovery")
+      : undefined;
     await suite.withPage(
       {
         locale: "en-US",
-        recordVideo: { dir: artifactDir, size: { height: 720, width: 1280 } },
+        ...(artifactDir
+          ? { recordVideo: { dir: artifactDir, size: { height: 720, width: 1280 } } }
+          : {}),
         serviceWorkers: "block",
         viewport: { height: 720, width: 1280 },
       },
@@ -59,12 +64,14 @@ suite.define(() => {
           )?.status(),
         ).toBe(200);
         await page.locator("openclaw-app-shell").waitFor();
-        await page.locator(".agent-chat__welcome").waitFor();
+        await page.locator(".agent-chat__empty").waitFor();
 
         expect(documentRequests).toBe(2);
         expect(failedModuleRequests).toBe(1);
         await expect.poll(() => page.url()).not.toContain("openclaw_mount_recovery");
-        await page.screenshot({ path: path.join(artifactDir, "recovered-control-ui.png") });
+        if (artifactDir) {
+          await page.screenshot({ path: path.join(artifactDir, "recovered-control-ui.png") });
+        }
       },
     );
   });

@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import {
   seedChatSettings,
@@ -76,13 +77,16 @@ suite.define(() => {
       const cells = page.locator("openclaw-chat-page .chat-split-view__cell");
       await expect.poll(() => cells.count()).toBe(2);
       const research = cells.first().locator('openclaw-chat-pane[aria-hidden="false"]');
-      const widget = research.locator('[data-test-id="chat-delegation"]');
-      const outcome = widget
-        .locator(".chat-delegation__summary")
-        .getByText("Completed", { exact: true });
-      await widget.locator(".chat-delegation__summary").click();
-      await widget.getByRole("button", { name: "Research worker", exact: true }).waitFor();
-      await expect.poll(() => outcome.isVisible()).toBe(true);
+      const details = await openChatDetails(research);
+      const group = details.locator('[data-details-group="subagents"]');
+      const summary = group.locator(":scope > summary");
+      if ((await summary.getAttribute("aria-expanded")) !== "true") {
+        await summary.click();
+      }
+      const childRow = group.locator('[data-subagent-session-key="' + child.key + '"]');
+      const outcome = childRow.locator(".chat-details-subagents__status");
+      await childRow.getByText("Research worker", { exact: true }).waitFor();
+      await expect.poll(() => outcome.textContent()).toBe("Done");
       // Finish compaction after the other pane replaces the primary session page.
       await gateway.deferNext("sessions.compact");
       const composer = research.locator(".agent-chat__composer-combobox textarea");
@@ -122,7 +126,8 @@ suite.define(() => {
       );
       await gateway.resolveDeferred("sessions.compact", { ok: true, compacted: true });
       await research.getByText("Refreshed research results.", { exact: true }).waitFor();
-      await expect.poll(() => outcome.isVisible()).toBe(true);
+      await expect.poll(() => outcome.textContent()).toBe("Done");
+      expect(await research.locator('[data-test-id="chat-delegation"]').count()).toBe(0);
     });
   });
 });

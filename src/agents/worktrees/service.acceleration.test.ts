@@ -20,8 +20,12 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import * as stateLease from "../../state/openclaw-state-lease.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { captureWorktreeMutationHeartbeat } from "./allocation.test-support.js";
-import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
+import {
+  createWorktreeCapacityStatfs,
+  useInProcessWorktreeCapacityTransport,
+} from "./capacity.test-support.js";
 import { addManagedWorktree } from "./checkout.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import { createCopyWorktreeBackend } from "./filesystem-backend.test-support.js";
@@ -248,16 +252,9 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       }
       const available = 4 * 1024 ** 3 + (mode === "small" ? 1 : 24) * 1024 ** 2;
       const stats = fsSync.statfsSync(repo);
-      vi.spyOn(fsSync, "statfsSync").mockReturnValue({
-        type: stats.type,
-        files: stats.files,
-        ffree: stats.ffree,
-        frsize: stats.frsize,
-        bsize: 4096,
-        blocks: 1024 ** 4 / 4096,
-        bavail: available / 4096,
-        bfree: available / 4096,
-      });
+      vi.spyOn(fsSync, "statfsSync").mockReturnValue(
+        createWorktreeCapacityStatfs(stats, available),
+      );
       const result = restoreId
         ? service.restore({ id: restoreId })
         : service.create({ repoRoot: repo, name: "limited", baseRef: "HEAD" });
@@ -305,16 +302,9 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     const before = await service.listRegistryRecords();
     const stats = fsSync.statfsSync(repo);
     let available = 4 * 1024 ** 3 + 24 * 1024 ** 2;
-    vi.spyOn(fsSync, "statfsSync").mockImplementation(() => ({
-      type: stats.type,
-      files: stats.files,
-      ffree: stats.ffree,
-      frsize: stats.frsize,
-      bsize: 4096,
-      blocks: 1024 ** 4 / 4096,
-      bavail: available / 4096,
-      bfree: available / 4096,
-    }));
+    vi.spyOn(fsSync, "statfsSync").mockImplementation(() =>
+      createWorktreeCapacityStatfs(stats, available),
+    );
     let advanced = false;
     vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
       if (
@@ -864,14 +854,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
           queued.resolve();
           return enqueue(...args);
         });
-        return {
-          stdout: "",
-          stderr: "native checkout failed",
-          code: 1,
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
+        return createCommandResult({ stderr: "native checkout failed", code: 1 });
       }
       return await realRunCommand(argv, options);
     });

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { resolveSshClient } from "./ssh-client.js";
 import { resolveSshConfig } from "./ssh-config.js";
 
@@ -19,15 +20,7 @@ const command = () => runCommandMock.mock.calls[0]?.[0];
 function commandResult(
   overrides: Partial<Awaited<ReturnType<typeof runCommandWithTimeout>>> = {},
 ): Awaited<ReturnType<typeof runCommandWithTimeout>> {
-  return {
-    stdout: sshOutput,
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-    ...overrides,
-  };
+  return createCommandResult({ stdout: sshOutput, ...overrides });
 }
 
 describe("ssh-config", () => {

@@ -22,6 +22,7 @@ import { runStartupConfigPreflight } from "../../commands/startup-config-preflig
 import { captureConfigHealthStateStore } from "../../config/io.health-state.js";
 import { resetConfigRuntimeState } from "../../config/runtime-snapshot.js";
 import { saveCronJobsStore } from "../../cron/store.js";
+import { createReloadCronJob } from "../../cron/store.test-support.js";
 import { cronStoreKey } from "../../cron/store/key.js";
 import {
   inspectCronJobsReadOnly,
@@ -168,6 +169,7 @@ describe.skipIf(!connection)("offline CLI on PostgreSQL", () => {
             await saveModelProviderApiKey({
               provider: "openai",
               apiKey: "sk-synthetic-offline-cli-replacement",
+              agentId: "main",
               agentDir: state.agentDir(),
             });
             const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(state.agentDir());
@@ -251,19 +253,11 @@ describe.skipIf(!connection)("PostgreSQL cron read-only owner", () => {
         const store: CronStoreFile = {
           version: 1,
           jobs: [
-            {
+            createReloadCronJob({
               id: "postgres-read-only",
-              name: "persisted PostgreSQL job",
-              enabled: true,
               agentId: "main",
-              createdAtMs: 1,
-              updatedAtMs: 2,
-              schedule: { kind: "every", everyMs: 60_000 },
-              sessionTarget: "main",
-              wakeMode: "next-heartbeat",
-              payload: { kind: "systemEvent", text: "synthetic event" },
               state: { nextRunAtMs: 60_001 },
-            },
+            }),
           ],
         };
         await saveCronJobsStore(storePath, store);

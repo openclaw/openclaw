@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import path from "node:path";
 import { constants } from "node:sqlite";
 import { afterEach, expect, it, vi, describe } from "vitest";
@@ -64,9 +65,7 @@ it("refreshes admitted session readers after worker commits without schema or fr
   };
   const writer = openOpenClawAgentDatabase(options);
   const reader = openOpenClawAgentDatabaseReadOnly(options);
-  if (!reader.found) {
-    throw new Error("Session probe reader is missing");
-  }
+  assert(reader.found, "Session probe reader is missing");
   const broker = new SqliteWorkerBroker();
   try {
     const worker = await broker.open<SessionProbeOperations>({
@@ -77,9 +76,7 @@ it("refreshes admitted session readers after worker commits without schema or fr
       databasePath: writer.path,
       input: undefined,
     });
-    if (!worker) {
-      throw new Error("Session probe worker is unavailable");
-    }
+    assert(worker, "Session probe worker is unavailable");
     const lookupDatabase = openOpenClawAgentDatabase({
       ...options,
       path: path.join(path.dirname(writer.path), "lookup-traffic.sqlite"),
@@ -115,9 +112,7 @@ it("refreshes admitted session readers after worker commits without schema or fr
     setCanonicalSqliteSessionMainKey(writer, "main");
     writeSessionEntry(writer, "agent:main:probe", { sessionId: "probe", updatedAt: 1 });
     const borrowed = withOpenClawAgentDatabaseReadOnly(measureSessionSchemaProbes, options);
-    if (!borrowed.found) {
-      throw new Error("Session probe borrowed reader is missing");
-    }
+    assert(borrowed.found, "Session probe borrowed reader is missing");
     const results = {
       writer: measureSessionSchemaProbes(writer),
       readOnly: measureSessionSchemaProbes(reader.database),

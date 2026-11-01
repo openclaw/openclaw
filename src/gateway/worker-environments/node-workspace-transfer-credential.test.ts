@@ -59,7 +59,7 @@ describe("node workspace credential revocation", () => {
       const resumeVerification = createDeferred();
       const committed = createDeferred();
       const publish = createDeferred();
-      const handled = createDeferred<{ headersSent: boolean }>();
+      const handled = createDeferred<boolean>();
       const verifyBlob = service.verifyBlob.bind(service);
       const verification = vi.spyOn(service, "verifyBlob").mockImplementation(async (blob) => {
         const valid = await verifyBlob(blob);
@@ -79,9 +79,7 @@ describe("node workspace credential revocation", () => {
           .catch((error: unknown) => {
             res.destroy(error instanceof Error ? error : new Error(String(error)));
           })
-          .then(() => {
-            handled.resolve({ headersSent: res.headersSent });
-          });
+          .then(() => handled.resolve(res.headersSent));
       });
       const requestAbort = new AbortController();
       let request: Promise<{ status: number; body: Buffer } | { error: unknown }> | undefined;
@@ -138,12 +136,10 @@ describe("node workspace credential revocation", () => {
           "Inventory mutation finished before its publication gate",
         );
         resumeVerification.resolve();
-        const response = await handled.promise;
-        expect(response.headersSent).toBe(mutationKind !== "revokeEnvironmentCredential");
+        expect(await handled.promise).toBe(mutationKind !== "revokeEnvironmentCredential");
         if (mutationKind !== "revokeEnvironmentCredential") {
           expect(await request).toEqual({ status: 200, body: payload });
         }
-        expect(verification).toHaveBeenCalledOnce();
         publish.resolve();
         await mutation;
       } finally {

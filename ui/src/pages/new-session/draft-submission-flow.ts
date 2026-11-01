@@ -76,7 +76,6 @@ export class DraftSubmissionFlow {
     message: ReturnType<typeof buildLocalUserMessage>;
   } | null = null;
   private blockedSubmitAttempt = false;
-  private rejectedPromptError: string | null = null;
   submissionOutcomeUnknown: SubmissionOutcomeReason | null = null;
   private readonly startedSession = new StartedSessionNavigation();
   error: string | null = null;
@@ -122,19 +121,16 @@ export class DraftSubmissionFlow {
         mentions: this.mentionsValue,
         attachments: this.attachmentDraft.attachments,
         incognito: this.visibilityValue === "incognito",
+        permissionMode: this.permissionMode,
       }),
-      (message, attachments, resetVisibility, mentions) => {
+      (state, resetVisibility) =>
         this.restoreDraftState({
-          message,
-          mentions,
-          attachments,
+          ...state,
           visibility: resetVisibility ? "normal" : this.visibilityValue,
-        });
-      },
+        }),
       () => this.setError(CHAT_COMPOSER_DRAFT_STORAGE_ERROR),
     );
     this.attachmentDraft = new NewSessionAttachmentDraft(this.draftChanged, () => {
-      this.rejectedPromptError = null;
       this.startedSession.current = null;
       this.draftPersistence.noteUserMutation();
     });
@@ -193,9 +189,6 @@ export class DraftSubmissionFlow {
   }
 
   setMessage(message: string, mentions?: readonly HumanMention[]) {
-    if (message !== this.messageText) {
-      this.rejectedPromptError = null;
-    }
     this.startedSession.current = null;
     this.mentionsValue =
       mentions ?? updateHumanMentions(this.messageText, message, this.mentionsValue);
@@ -205,7 +198,6 @@ export class DraftSubmissionFlow {
   }
 
   restoreMessage(message: string, mentions: readonly HumanMention[] = []) {
-    this.rejectedPromptError = null;
     this.draftPersistence.noteDraftReplaced();
     this.updateMessage(message);
     this.mentionsValue = mentions;
@@ -229,6 +221,7 @@ export class DraftSubmissionFlow {
   setPermissionMode(permissionMode: SessionCreateParams["permissionMode"]) {
     this.permissionMode = permissionMode;
     this.startedSession.current = null;
+    this.draftPersistence.noteSelectionMutation("permission");
     this.callbacks.changed();
   }
 
@@ -265,10 +258,15 @@ export class DraftSubmissionFlow {
     this.callbacks.changed();
   }
 
-  /** Follow the current gate after an attempt, including successive readiness gates. */
+  /** Audience retirement needs an explicit choice; other gates follow a submit attempt. */
   blockedSubmitNotice(): string | undefined {
-    const block = this.blockedSubmitAttempt ? this.submitBlock() : undefined;
-    return block && !PAGE_RENDERED_GATES.has(block.gate) ? block.reason : undefined;
+    const block = this.submitBlock();
+    if (block?.gate === "draft-unavailable") {
+      return block.reason;
+    }
+    return this.blockedSubmitAttempt && block && !PAGE_RENDERED_GATES.has(block.gate)
+      ? block.reason
+      : undefined;
   }
 
   private buildDraftSessionCreateParams = (options: DraftSessionCreateOverrides = {}) =>
@@ -308,9 +306,6 @@ export class DraftSubmissionFlow {
 
   /** Single owner for submit state, tooltips, and blocked-Enter notices. */
   submitBlock(): NewSessionSubmitBlock | undefined {
-    if (this.rejectedPromptError) {
-      return { gate: "initial-turn-rejected", reason: this.rejectedPromptError };
-    }
     if (
       !catalog.isTarget(this.read().data) &&
       this.attachmentDraft.reads.pendingReads === 0 &&
@@ -357,7 +352,6 @@ export class DraftSubmissionFlow {
     this.creationComposerValue?.releaseDraft();
     this.creationComposerValue = undefined;
     this.startedSession.clearSubmission();
-    this.rejectedPromptError = null;
     this.sessionStartup.clear();
     this.blockedSubmitAttempt = false;
     const preservePendingPlacement = Boolean(this.pendingPlacement.sessionKey);
@@ -502,11 +496,7 @@ export class DraftSubmissionFlow {
           message: input.message,
           mentions: input.mentions,
           displayName: preparedTitle,
-          visibility:
-            this.visibilityValue === "draft" &&
-            !this.capabilities.canStartAsDraft(this.read().context)
-              ? "normal"
-              : this.visibilityValue,
+          visibility: this.visibilityValue,
           attachments: input.draftAttachments,
         });
       const beginInstant = prepareInstantThreadHandoff({
@@ -630,22 +620,14 @@ export class DraftSubmissionFlow {
           onAccepted: () => this.callbacks.onAccepted?.({ ...result, agentId: input.agentId }),
           navigate: () =>
             this.startedSession.navigate(context, {
+              ...result,
               client: input.client,
-              key: result.key,
               agentId: input.agentId,
             }),
         });
         return;
       }
       await completeInitialSessionTurn({
-        onRejectedPrompt:
-          background && this.callbacks.retainRejectedPrompt
-            ? (error) => {
-                this.rejectedPromptError = error;
-                this.error = error;
-                this.sessionStartup.clear();
-              }
-            : undefined,
         context,
         client: input.client,
         agentId: input.agentId,
@@ -726,6 +708,7 @@ export class DraftSubmissionFlow {
       }
       this.updateMessage("");
       this.mentionsValue = [];
+      this.permissionMode = undefined;
       this.draftPersistence.noteDraftReplaced();
       this.attachmentDraft.clearAfterSubmit(release);
       this.sessionStartup.clear();

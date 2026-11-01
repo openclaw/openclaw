@@ -59,14 +59,12 @@ const files = {
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 8192, maxTokens: 1024 }] } };
     } } };`,
 };
-await Promise.all(
-  Object.entries(files).map(([name, content]) =>
-    fs.writeFile(
-      path.join(pluginRoot, name),
-      typeof content === "string" ? content : JSON.stringify(content),
-    ),
-  ),
-);
+for (const [name, content] of Object.entries(files)) {
+  await fs.writeFile(
+    path.join(pluginRoot, name),
+    typeof content === "string" ? content : JSON.stringify(content),
+  );
+}
 const config: OpenClawConfig = {
   agents: {
     ownership: "explicit",

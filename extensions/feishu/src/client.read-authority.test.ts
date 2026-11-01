@@ -8,6 +8,7 @@ import { setImmediate } from "node:timers/promises";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { createFeishuClient, type FeishuClientCredentials } from "./client.js";
 
 const { captureReadAuthority, resolveProxy } = vi.hoisted(() => ({
@@ -155,15 +156,7 @@ describe("Feishu read authority over the real Lark SDK transport", () => {
         reply({ code: 0, data: { message_id: "om_result", items: [] } });
       })().catch((error: unknown) => reply({ error: String(error) }, 500));
     });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Expected a loopback TCP listener");
-    }
-    const origin = `http://127.0.0.1:${address.port}`;
+    const origin = `http://127.0.0.1:${await listenOnLoopback(server)}`;
     interceptors.push(
       http.interceptors.request.use(
         (options) => {
@@ -228,6 +221,9 @@ describe("Feishu read authority over the real Lark SDK transport", () => {
       { status: "fulfilled", value: { code: 0 } },
     ]);
     expect(paths()).toEqual([AUTH_PATH, `${MESSAGE_PATH}/om_current`]);
+    for (const request of requests) {
+      expect(request.headers["user-agent"]).toMatch(/^openclaw-feishu-builtin\//);
+    }
   });
 
   it.each([false, true])(

@@ -2,7 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
@@ -438,6 +438,23 @@ describe("Home work context admission", () => {
 });
 
 describe("handleSendChat immediate local commands", () => {
+  it("shows export read failures without clearing the draft or staged attachments", async () => {
+    const attachment = createStagedAttachment("failed-export-att");
+    const host = makeChatHost({
+      chatMessage: "/export",
+      chatAttachments: [attachment],
+      exportCurrentChat: async () => {
+        throw new Error("History unavailable; retry export.");
+      },
+      requestHandlers: {},
+    });
+    await handleSendChat(host);
+    expect(host.chatError).toContain("History unavailable; retry export.");
+    expect(host.chatMessage).toBe("/export");
+    expect(host.chatAttachments).toEqual([attachment]);
+    expect(host.request).not.toHaveBeenCalled();
+  });
+
   it.each(["draft", "session"])("keeps a newer %s intact when export finishes", async (change) => {
     const exported = createDeferred<"downloaded">();
     const attachment = createStagedAttachment("pending-export-att");

@@ -1,6 +1,7 @@
 import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveUserPath } from "../utils.js";
 import {
   type ArchiveExtractLimits,
@@ -14,7 +15,7 @@ import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
 import { withInstallActivity, type InstallActivityObserver } from "./install-progress.js";
 import { withInstallWorkspace } from "./install-source-utils.js";
 
-type ExistingInstallPathResult =
+export async function resolveExistingInstallPath(inputPath: string): Promise<
   | {
       ok: true;
       resolvedPath: string;
@@ -23,11 +24,8 @@ type ExistingInstallPathResult =
   | {
       ok: false;
       error: string;
-    };
-
-export async function resolveExistingInstallPath(
-  inputPath: string,
-): Promise<ExistingInstallPathResult> {
+    }
+> {
   const resolvedPath = resolveUserPath(inputPath);
   if (!(await pathExists(resolvedPath))) {
     return { ok: false, error: `path not found: ${resolvedPath}` };
@@ -61,7 +59,7 @@ export async function withExtractedArchiveRoot<
     const extractDir = path.join(tmpDir, "extract");
     await fs.mkdir(extractDir, { recursive: true });
 
-    params.logger?.info?.(`Extracting ${params.archivePath}…`);
+    params.logger?.info?.(terminalText`Extracting ${params.archivePath}…`);
     try {
       await withInstallActivity(params.logger, "extract", () =>
         extractArchive({

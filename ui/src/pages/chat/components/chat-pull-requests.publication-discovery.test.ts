@@ -13,15 +13,7 @@ describe("failed publication account discovery", () => {
   let container: HTMLDivElement;
 
   function paint(props: Partial<ChatPullRequestsProps>) {
-    paintChatPullRequests(
-      {
-        pullRequests: [],
-        status: "ready",
-        onDismiss: () => {},
-        ...props,
-      },
-      container,
-    );
+    paintChatPullRequests(props, container);
   }
 
   beforeEach(() => {

@@ -1,5 +1,9 @@
 import { expect, it } from "vitest";
-import { buildAggregatesFromSessions, usageTotals } from "../pages/usage/view.test-support.ts";
+import {
+  usageMessages,
+  buildAggregatesFromSessions,
+  usageTotals,
+} from "../pages/usage/view.test-support.ts";
 import { waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installUsageOverviewGateway } from "./usage-overview-fixture.test-support.ts";
@@ -126,14 +130,7 @@ suite.define(() => {
           usage: {
             ...usageTotals(100, 0.1),
             durationMs: index === 0 ? 60000 : 0,
-            messageCounts: {
-              total: 2,
-              user: 1,
-              assistant: 1,
-              toolCalls: 0,
-              toolResults: 0,
-              errors: 0,
-            },
+            messageCounts: usageMessages(),
           },
         });
         const sessions = Array.from({ length: 1250 }, (_, index) => session(index));
@@ -189,6 +186,66 @@ suite.define(() => {
         await expect
           .poll(() => page.locator(".usage-metric-badge").allTextContents())
           .toEqual(["100 Tokens", "$0.10 Cost", "1 Sessions"]);
+      },
+    );
+  });
+  it("keeps a multiword model selected and filtered after choosing it from the menu", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        timezoneId: "UTC",
+        viewport: { width: 1440, height: 1100 },
+        serviceWorkers: "block",
+      },
+      async ({ page }) => {
+        await page.clock.setFixedTime(new Date("2026-08-07T12:00:00Z"));
+        const sessions = [
+          ["Synthetic usage example", "Local Model", 100],
+          ["Hosted model session", "gpt-5-mini", 300],
+        ].map(([label, model, tokens], index) => ({
+          key: `agent:main:model-${index}`,
+          label: label as string,
+          agentId: "main",
+          model: model as string,
+          updatedAt: Date.parse("2026-08-07T12:00:00Z") - index,
+          usage: usageTotals(tokens as number, (tokens as number) / 10_000),
+        }));
+        const gateway = await installUsageOverviewGateway(page, {
+          methodResponses: {
+            "sessions.usage": {
+              updatedAt: Date.parse("2026-08-07T12:00:00Z"),
+              startDate: "2026-08-07",
+              endDate: "2026-08-07",
+              totals: usageTotals(400, 0.04),
+              sessions,
+              aggregates: buildAggregatesFromSessions(sessions),
+            },
+            "usage.status": { updatedAt: 1, providers: [] },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}usage`);
+        await waitForControlUiRoute(page, { routeId: "usage" });
+        const rows = page.locator(".sessions-card .session-bar-title");
+        await expect.poll(() => rows.count()).toBe(2);
+
+        const trigger = page.locator('[id="usage-filter-model:trigger"]');
+        await trigger.click();
+        const option = page.locator(
+          '[id="usage-filter-model:content"] [data-value="option:Local%20Model"]',
+        );
+        await option.click();
+        await expect.poll(() => option.getAttribute("aria-checked")).toBe("true");
+        await trigger.click();
+        const query = page.locator(".usage-query-input");
+        expect(await query.inputValue()).toBe('model:"Local Model" ');
+
+        const previous = (await gateway.getRequests("sessions.usage")).length;
+        await query.press("Enter");
+        await gateway.waitForRequest("sessions.usage", { after: previous });
+        await expect.poll(() => rows.allTextContents()).toEqual(["Synthetic usage example"]);
+        await expect
+          .poll(() => page.locator(".usage-metric-badge").allTextContents())
+          .toEqual(["100 Tokens", "$0.01 Cost", "1 Sessions"]);
       },
     );
   });

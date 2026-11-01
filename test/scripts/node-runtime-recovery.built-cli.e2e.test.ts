@@ -58,6 +58,7 @@ it.each([
       `import childProcess from "node:child_process";
      import { EventEmitter } from "node:events";
      import fs from "node:fs";
+     import path from "node:path";
      import { syncBuiltinESMExports } from "node:module";
      const result = { probes: [] };
      Object.defineProperty(process.versions, "node", { value: ${JSON.stringify(legacy || startupRespawn ? "22.23.2" : "20.0.0")} });
@@ -69,8 +70,8 @@ it.each([
      childProcess.spawnSync = (command, args) => {
        result.probes.push(command);
        return {
-         status: command === ${JSON.stringify(node)} && ${legacy ? 'args[0] === "-e"' : "true"} ? 0 : 1,
-         stdout: JSON.stringify({ version: "24.22.1", probe: { available: true, version: "3.53.4", text: true, blob: true, json: true } }),
+         status: command === ${JSON.stringify(node)} && path.basename(args[0] ?? "") === "daemon-runtime-probe.mjs" && args[1] === "node" ? 0 : 1,
+         stdout: JSON.stringify({ nodeVersion: "24.22.1", bunVersion: null, sqliteVersion: "3.53.4", sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true } }),
        };
      };
      childProcess.spawn = (command, args, options) => {

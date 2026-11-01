@@ -29,7 +29,7 @@ describe("native session pages", () => {
       const context = Object.assign(pageContext(gateway, agents, { sessions }), {
         basePath: "",
         config: createApplicationConfigCapability({ resourceBasePath: "" }),
-        channels,
+        acquireChannels: () => channels,
         runtimeConfig,
         navigation: createNavigationPreferencesFixture(),
       });

@@ -51,6 +51,8 @@ function createLintFixture() {
         encoding: "utf8",
         env: {
           ...process.env,
+          CI: "false",
+          OPENCLAW_LINT_TOOL: "oxlint",
           GITHUB_ACTIONS: "false",
           OPENCLAW_CI_STATIC_EVIDENCE: "0",
           OPENCLAW_OXLINT_SKIP_PREPARE: "0",
@@ -74,6 +76,15 @@ const striped = [
 ];
 
 describe("typed lint Kysely prerequisites", () => {
+  it("names the recovery step when plugin boundary preparation fails", () => {
+    const fixture = createLintFixture();
+    fixture.write("scripts/prepare-extension-package-boundary-artifacts.mts", "process.exit(3);");
+    const result = fixture.run(["scripts/run-oxlint.mjs", consumer]);
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stderr).toMatch(/failed.*3/u);
+    expect(result.stderr).toContain("If deps changed, run pnpm install");
+  });
+
   it.each([
     { name: "striped", args: striped },
     { name: "direct", args: direct },

@@ -1,6 +1,5 @@
 import {
   ErrorCodes,
-  errorShape,
   validateSessionMemberAddParams,
   validateSessionMemberRemoveParams,
   validateSessionMembersListParams,
@@ -48,6 +47,7 @@ import {
   resolveSessionVisibility,
 } from "../session-sharing.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
+import { respondError } from "./response.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { measureSessionCollaborationPhase } from "./sessions-collaboration-diagnostics.js";
 import { prepareManagedSessionAccess, sharingExpectedEntry } from "./sessions-sharing-authority.js";
@@ -256,19 +256,16 @@ function createSessionMembersListHandler(
           ? evidenceMembers
           : evidenceMembers.map(projectLegacySessionMember);
         if (!evidenceAware && members.some((member) => member === null)) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              "session membership includes actor evidence this client cannot represent",
-              {
-                details: {
-                  code: "SESSION_MEMBER_ACTOR_EVIDENCE_UNSUPPORTED",
-                  recommendedMethod: "session.members.listEvidence",
-                },
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            "session membership includes actor evidence this client cannot represent",
+            {
+              details: {
+                code: "SESSION_MEMBER_ACTOR_EVIDENCE_UNSUPPORTED",
+                recommendedMethod: "session.members.listEvidence",
               },
-            ),
+            },
           );
           return;
         }
@@ -359,7 +356,7 @@ function createSessionMemberMutationHandler(
           profiles: listResidentUserProfileDisplayFacts(),
         });
         if (!known.some((identity) => identity.id === params.identityId)) {
-          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown identity"));
+          respondError(respond, ErrorCodes.INVALID_REQUEST, "unknown identity");
           return;
         }
       }
@@ -432,21 +429,18 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
     async ({ params, respond, context }, access) => {
       const managed = access.target;
       if (managed.entry.incognito || isIncognitoSessionKey(managed.canonicalKey)) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "Incognito sessions cannot be published."),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "Incognito sessions cannot be published.",
         );
         return;
       }
       if (managed.entry.sessionId !== params.expectedSessionId) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "Session changed; reopen sharing before publishing.",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "Session changed; reopen sharing before publishing.",
         );
         return;
       }
@@ -543,12 +537,13 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
         }
       };
       if (!isSessionVisibilityAllowed(context.getRuntimeConfig(), visibility)) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `session visibility is disabled: ${visibility}`, {
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          `session visibility is disabled: ${visibility}`,
+          {
             details: { code: "SESSION_VISIBILITY_DISABLED", visibility },
-          }),
+          },
         );
         return;
       }

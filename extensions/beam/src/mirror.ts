@@ -126,7 +126,7 @@ export function beamMirrorId(catalogId: string, hostId: string, threadId: string
  * message text crosses the wire; reasoning, tool calls, tool results, and raw
  * payloads collapse into compact counts.
  */
-export function buildBeamMirrorItems(items: readonly SessionCatalogTranscriptItem[]) {
+function buildBeamMirrorItems(items: readonly SessionCatalogTranscriptItem[]) {
   const out: BeamTranscriptItem[] = [];
   const dropped = new Map<string, number>();
   let truncated = items.some((item) => item.truncated);
@@ -159,7 +159,7 @@ export function buildBeamMirrorItems(items: readonly SessionCatalogTranscriptIte
 }
 
 /** Drop oldest items until the payload fits the receiver's item and byte caps. */
-export function fitBeamMirrorUpload(upload: BeamUpload): BeamUpload {
+function fitBeamMirrorUpload(upload: BeamUpload): BeamUpload {
   const items = upload.items.slice(-BEAM_MAX_ITEMS);
   const fitted: BeamUpload = { ...upload, items };
   let bytes = Buffer.byteLength(JSON.stringify(fitted), "utf8");

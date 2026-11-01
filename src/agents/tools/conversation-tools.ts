@@ -13,6 +13,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { OpenClawToolsOptions } from "../openclaw-tools.types.js";
 import { optionalPositiveIntegerSchema } from "../schema/typebox.js";
+import { resolveRequesterDeliveryThreadId } from "../spawn-requester-origin.js";
 import type { AnyAgentTool } from "./common.js";
 import {
   jsonResult,
@@ -197,7 +198,7 @@ export function createHostedConversationTools(
         channel: options?.agentChannel,
         accountId: options?.agentAccountId,
         to: options?.currentMessagingTarget ?? options?.currentChannelId ?? options?.agentTo,
-        threadId: options?.currentThreadTs ?? options?.agentThreadId,
+        threadId: options ? resolveRequesterDeliveryThreadId(options) : undefined,
       },
       config: sessionConfig,
     }),

@@ -20,13 +20,24 @@ const nodeTypes = [
   "string",
   "array",
   "closure",
+  "code",
   "sliced string",
   "concatenated string",
 ] as const;
-const edgeTypes = ["property", "weak", "shortcut", "internal", "element"];
+const edgeTypes = ["property", "weak", "shortcut", "internal", "element", "hidden"];
 const properties = (names: Record<number, string>): Edges =>
   Object.entries(names).map(([target, name]) => [0, Number(target), name]);
 const internals = (...targets: number[]): Edges => targets.map((target) => [3, target]);
+
+function scriptNode(
+  id: number,
+  name: string,
+  source: number,
+  nameNode: number,
+  additionalEdges: Edges = [],
+): FixtureNode {
+  return [id, name, 10, [[3, source, "source"], [3, nameNode, "name"], ...additionalEdges], "code"];
+}
 
 function fixture(grown: boolean) {
   const growthEdges: Edges = grown ? [[0, 8]] : [];
@@ -84,7 +95,12 @@ function snapshot(nodes: FixtureNode[], unusedString = "") {
   });
 }
 
-function run(snapshots: string[], args: string[] = [], labels: string[] = []) {
+function run(
+  snapshots: string[],
+  args: string[] = [],
+  labels: string[] = [],
+  scripts: string[] = [],
+) {
   const directory = tempDirs.make("heap-snapshot-diff-");
   const files = snapshots.map((contents, index) => {
     const file = path.join(directory, `${index}.heapsnapshot`);
@@ -96,6 +112,11 @@ function run(snapshots: string[], args: string[] = [], labels: string[] = []) {
     const allowlist = path.join(directory, "source-labels.txt");
     writeFileSync(allowlist, labels.join("\n"));
     mode.push("--labels", allowlist);
+  }
+  if (args.includes("--code-by-script")) {
+    const allowlist = path.join(directory, "script-files.txt");
+    writeFileSync(allowlist, scripts.join("\n"));
+    mode.push("--script-allowlist", allowlist);
   }
   return JSON.parse(
     execFileSync(process.execPath, ["scripts/heap-snapshot-diff.mjs", ...mode, ...files, ...args], {
@@ -389,4 +410,223 @@ it("attributes excess string nodes once, preserves unreachable accounting, and e
   expect(result.retainers.some((row: { id: number }) => row.id === 9)).toBe(true);
   expect(JSON.stringify(result)).not.toContain(secret);
   expect(JSON.stringify(result)).not.toContain("private-edge");
+});
+
+it("attributes compiled scripts without exposing unreviewed names or double-counting shared code", () => {
+  const data = snapshot([
+    [1, "root", 0, refs(1, 2, 3, 4, 5, 6, 20, 22, 23, 24, 25)],
+    scriptNode(3, "/product/a.mjs?secret=one", 17, 18),
+    scriptNode(5, "/product/a.mjs#secret-two", 17, 19),
+    scriptNode(7, "/private/x.mjs?secret=three", 17, 21),
+    [
+      9,
+      "privateFunction",
+      1,
+      [
+        [3, 7, "shared"],
+        [3, 11, "code"],
+        [3, 10, "feedback_cell"],
+      ],
+      "closure",
+    ],
+    [
+      11,
+      "privateFunction",
+      1,
+      [
+        [3, 8, "shared"],
+        [3, 12, "code"],
+        [3, 10, "feedback_cell"],
+      ],
+      "closure",
+    ],
+    [
+      13,
+      "privateFunction",
+      1,
+      [
+        [3, 9, "shared"],
+        [3, 11, "code"],
+        [3, 13, "feedback_cell"],
+      ],
+      "closure",
+    ],
+    [
+      15,
+      "privateFunction",
+      20,
+      [
+        [3, 1, "script"],
+        [3, 14, "trusted_function_data"],
+        [1, 16, "weak"],
+      ],
+      "code",
+    ],
+    [
+      17,
+      "privateFunction",
+      20,
+      [
+        [3, 2, "script"],
+        [3, 14, "trusted_function_data"],
+      ],
+      "code",
+    ],
+    [19, "privateFunction", 20, [[3, 3, "script"]], "code"],
+    [21, "system / FeedbackCell", 8, [[3, 15, "value"]], "code"],
+    [23, "(code)", 30, [], "code"],
+    [25, "(InterpreterEntryTrampoline builtin code)", 40, [], "code"],
+    [27, "system / FeedbackCell", 8, [], "code"],
+    [
+      29,
+      "system / BytecodeArray",
+      50,
+      [
+        [5, 26],
+        [0, 20, "property"],
+      ],
+      "code",
+    ],
+    [31, "system / FeedbackVector", 12, [], "code"],
+    [33, "weak-only-code", 9000, [], "code"],
+    [35, "secret source contents", 100, [], "string"],
+    [37, "/product/a.mjs?secret=one", 30, [], "string"],
+    [39, "/product/a.mjs#secret-two", 30, [], "string"],
+    [41, "unassociated-code", 16, [], "code"],
+    [43, "/private/x.mjs?secret=three", 30, [], "string"],
+    scriptNode(45, "/private/x.mjs#another", 17, 21),
+    scriptNode(47, "", 17, 21),
+    scriptNode(49, "", 17, 21),
+    scriptNode(51, "/product/a.mjs.evil", 17, 21),
+    [53, "system / TrustedByteArray", 6, [[3, 27, "payload"]], "code"],
+    [55, "secret payload", 70, [], "string"],
+  ]);
+  const report = run([data], ["--code-by-script", "--top", "1"], [], ["/product/a.mjs"]);
+  const result = report.codeByScript;
+  expect(result.scriptCount).toBe(7);
+  expect(result.identityCount).toBe(5);
+  expect(result.topScripts).toHaveLength(1);
+  expect(result.duplicateScripts).toHaveLength(2);
+  expect(result.topScripts[0]).toEqual({
+    name: "/product/a.mjs",
+    identityHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    instanceCount: 2,
+    codeObjects: 8,
+    shallowBytes: 136,
+    retainedBytes: 266,
+  });
+  expect(result.duplicateScripts[1]).toMatchObject({
+    name: "(redacted)",
+    identityHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    instanceCount: 2,
+    codeObjects: 4,
+    shallowBytes: 48,
+    retainedBytes: 48,
+  });
+  expect(result.sharedOrRuntime).toEqual({ codeObjects: 2, shallowBytes: 70, retainedBytes: 70 });
+  expect(result.unattributed).toEqual({ codeObjects: 1, shallowBytes: 16, retainedBytes: 16 });
+  expect(result.total).toEqual({ codeObjects: 18, shallowBytes: 300, retainedBytes: 430 });
+  const text = JSON.stringify(report);
+  for (const forbidden of [
+    "secret",
+    "/private",
+    ".evil",
+    "privateFunction",
+    "secret source contents",
+    "weak-only",
+  ]) {
+    expect(text).not.toContain(forbidden);
+  }
+  const all = run([data], ["--code-by-script"], [], ["/product/a.mjs"]).codeByScript;
+  expect(
+    all.topScripts.filter((row: { identityHash: string | null }) => row.identityHash === null),
+  ).toHaveLength(2);
+  expect(all.duplicateScripts[0].identityHash).not.toBe(all.duplicateScripts[1].identityHash);
+  const truncated = run([data], ["--code-by-script", "--string-limit", "8"]).codeByScript;
+  expect(truncated.duplicateScripts).toEqual([]);
+  expect(truncated.topScripts).toHaveLength(7);
+  expect(
+    truncated.topScripts.every((row: { identityHash: string | null }) => row.identityHash === null),
+  ).toBe(true);
+});
+
+it("matches decorated V8 Script labels and keeps unnamed scripts separate", () => {
+  const data = snapshot([
+    [1, "root", 0, refs(1, 2, 3, 4)],
+    scriptNode(3, "system / Script / /product/b.mjs?one", 5, 6),
+    scriptNode(5, "system / Script / /product/b.mjs#two", 5, 6),
+    scriptNode(7, "system / Script", 5, 6),
+    scriptNode(9, "system / Script", 5, 6),
+    [11, "secret source contents", 20, [], "string"],
+    [13, "script name", 10, [], "string"],
+  ]);
+  const result = run([data], ["--code-by-script"], [], ["/product/b.mjs"]).codeByScript;
+  expect(result.scriptCount).toBe(4);
+  expect(result.duplicateScripts).toEqual([
+    expect.objectContaining({ name: "/product/b.mjs", instanceCount: 2 }),
+  ]);
+  expect(
+    result.topScripts.filter((row: { identityHash: string | null }) => row.identityHash === null),
+  ).toHaveLength(2);
+});
+
+it("unions flat and shared rope source strings without counting other script data", () => {
+  const data = snapshot([
+    [1, "root", 0, refs(1, 2, 3, 4, 11, 12)],
+    scriptNode(3, "/product/a.mjs?private", 5, 10, [[3, 11, "unrelated"]]),
+    scriptNode(5, "/product/a.mjs#private", 6, 10, [[3, 11, "unrelated"]]),
+    scriptNode(7, "/private/b.mjs", 7, 10, [[3, 11, "unrelated"]]),
+    scriptNode(9, "/product/flat.mjs", 13, 10, [[3, 11, "unrelated"]]),
+    [
+      11,
+      "rope",
+      32,
+      [
+        [3, 6, "first"],
+        [3, 8, "second"],
+        [1, 12, "weak"],
+      ],
+      "concatenated string",
+    ],
+    [13, "slice", 24, [[3, 9, "parent"]], "sliced string"],
+    [15, "other slice", 24, [[3, 9, "parent"]], "sliced string"],
+    [17, "secret flat contents", 40, [], "string"],
+    [19, "secret backing contents", 100, [], "string"],
+    [21, "private script name", 500, [], "string"],
+    [23, "unrelated string", 1000, [], "string"],
+    [25, "weak string", 2000, [], "string"],
+    [27, "secret independent flat contents", 60, [], "string"],
+  ]);
+  const report = run(
+    [data],
+    ["--code-by-script", "--top", "2"],
+    [],
+    ["/product/a.mjs", "/product/flat.mjs"],
+  );
+  expect(report.codeByScript.sourceStrings).toEqual({
+    stringNodes: 6,
+    shallowBytes: 280,
+    topScripts: [
+      {
+        name: "/product/a.mjs",
+        identityHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        instanceCount: 2,
+        stringNodes: 4,
+        shallowBytes: 196,
+      },
+      {
+        name: "(redacted)",
+        identityHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        instanceCount: 1,
+        stringNodes: 2,
+        shallowBytes: 124,
+      },
+    ],
+  });
+  expect(report.codeByScript.sourceStrings.topScripts[0].identityHash).toBe(
+    report.codeByScript.duplicateScripts[0].identityHash,
+  );
+  for (const forbidden of ["private", "secret", "unrelated string", "weak string"]) {
+    expect(JSON.stringify(report)).not.toContain(forbidden);
+  }
 });

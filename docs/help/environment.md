@@ -47,6 +47,12 @@ The variables below are the supported environment contract for operators. Undocu
 
 A named `OPENCLAW_PROFILE` uses `~/.openclaw-<profile>` for state and config defaults, even before that profile has a config file. Explicit `OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH` values take precedence. An explicit CLI `--profile` selects the requested profile as described in [Global flags](/cli#global-flags).
 
+After startup environment selection, the Gateway pins the default home-based state
+directory when the config directory matches it. Named profiles and separate config
+directories keep their existing selection behavior. Foreground child restarts
+inherit a pinned directory. To select a different home, profile, or state directory, stop the
+Gateway and launch it with the new environment.
+
 #### `OPENCLAW_HOME`
 
 When set, `OPENCLAW_HOME` replaces the system home directory (`$HOME` / `os.homedir()`) for internal OpenClaw path defaults. This includes the default state directory, config path, agent directories, credentials, installer onboarding workspace, and the default dev checkout used by `openclaw update --channel dev`.
@@ -142,6 +148,7 @@ Installed third-party plugins may declare additional credential variables in the
 | Variable                             | Purpose                                                                                      |
 | ------------------------------------ | -------------------------------------------------------------------------------------------- |
 | `OPENCLAW_CONFIG_READONLY`           | Set to `1` for [externally managed immutable config](/cli/config#externally-managed-config). |
+| `OPENCLAW_CONFIG_READONLY_NOTICE`    | Customize the read-only configuration banner in the [Control UI](/web/control-ui).           |
 | `OPENCLAW_LOAD_SHELL_ENV`            | Import missing expected variables from the login shell.                                      |
 | `OPENCLAW_SHELL_ENV_TIMEOUT_MS`      | Set the login-shell import timeout.                                                          |
 | `OPENCLAW_EXEC_SHELL_SNAPSHOT`       | Disable exec shell snapshots with `0`.                                                       |
@@ -156,8 +163,11 @@ Installed third-party plugins may declare additional credential variables in the
 
 ### Filesystem observation
 
-Config hot reload, skills refresh, memory indexing, and the development watch
-supervisor use `@openclaw/fs-safe/watch`. The existing `CHOKIDAR_*` variable
+Config hot reload uses nonrecursive directory notifications to trigger guarded
+`@openclaw/fs-safe/watch` reconciliation. Missing directories observe only their
+next existing ancestor without recursion, and move inward when created. Personal
+skills watch their own directory; workspace skills retain their workspace watch
+on Windows. The existing `CHOKIDAR_*` variable
 names remain supported for Docker, virtual machines, and other deployments
 that need an observation preference:
 
@@ -167,21 +177,25 @@ that need an observation preference:
 | `CHOKIDAR_USEPOLLING` | Any other nonempty value                | Select `poll`. Values are case-insensitive.                                                 |
 | `CHOKIDAR_INTERVAL`   | Positive integer in milliseconds        | Polling interval for explicit polling and automatic fallback; overrides the defaults below. |
 
-Native events are supported on Node.js on Linux, macOS, and Windows. In `auto`
-mode, Bun and runtimes without the native backend use polling with the same
+The fs-safe native backend supports Node.js on Linux, macOS, and Windows. For
+consumers of that backend, Bun and runtimes without it use polling with the same
 `CHOKIDAR_INTERVAL` setting as explicit polling. Native events retain fs-safe's
 30-second reconciliation interval. Config hot reload and the development
 supervisor default to `100` ms polling; Memory indexing and skills refresh default
 to `30000` ms to bound idle background scanning. A valid explicit
 `CHOKIDAR_INTERVAL` overrides those defaults, with a `20` ms minimum and
 `2147483647` ms maximum. Invalid or nonpositive values use the owner's default.
-Native event hints still trigger prompt updates; Memory and Skills log one warning
+Config uses the runtime's nonrecursive directory notifications, including on Bun,
+with guarded reconciliation every five minutes for missed events. Explicit polling
+disables these notifications. Native event hints still trigger prompt updates; Memory and Skills log one warning
 per watcher when automatic polling fallback is used.
 
-Recovery remains specific to each owner. Config hot reload retries a failed
-subscription with its existing backoff. With `CHOKIDAR_USEPOLLING` unset, native
-watch failures can additionally trigger a fresh polling subscription after those
-retries. Explicit overrides keep the existing retry limit. Memory indexing switches to
+Recovery remains specific to each owner. Config hot reload retries failed guarded
+reconciliation and unavailable directory notifications with its existing backoff.
+With `CHOKIDAR_USEPOLLING` unset, exhausted native-notification retries degrade to
+polling; explicit overrides retain the existing retry limit. Its five-minute
+safety pass covers missed events. Explicit polling retains `CHOKIDAR_INTERVAL`.
+Memory indexing switches to
 refresh-on-search when native watch capacity is exhausted (`watch-limit`).
 Each Memory subscription admits up to 1,000,000 directories and 1,000,000
 examined entries per scan, including excluded entries. Larger trees also fall

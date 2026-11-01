@@ -9,16 +9,28 @@ import {
   needsAttachmentSourceAdmission,
   type AttachmentAdmission,
 } from "./chat-message-attachment-admission-model.ts";
-import { ChatAttachmentAdmission } from "./chat-message-attachment-admission-solid.tsx";
-import type { AttachmentItem, ImageRenderOptions } from "./chat-message-media.ts";
+import { createChatAttachmentAdmission } from "./chat-message-attachment-admission-solid.tsx";
+import {
+  isChatMediaResourceCurrent,
+  observeChatMediaResource,
+  type ChatMediaResource,
+  type AttachmentItem,
+  type ImageRenderOptions,
+} from "./chat-message-media.ts";
 
 registerEnglishCatalog(registerChatComposerEnglish);
 
+type SentCommentSnapshot = {
+  preview: CommentPreview;
+  src: string;
+  sizeBytes?: number;
+};
 type SentCommentSource = {
   identity: string;
   src?: string;
   sizeBytes?: number;
   pending?: boolean;
+  snapshot?: ChatMediaResource<SentCommentSnapshot>;
   fallback: () => SolidJSX.Element;
 };
 type Props = {
@@ -29,39 +41,67 @@ type Props = {
 };
 
 export function SentCommentAttachments(props: Props) {
-  const renderComments = (admission?: AttachmentAdmission) => (
-    <SentComments
-      inline={props.inline}
-      sources={props.comments.map((item) =>
-        admission?.observeElement
-          ? { identity: item.attachment.url, pending: true, fallback: () => undefined }
-          : props.resolve(item),
-      )}
-      scope={JSON.stringify([
-        props.options.sessionKey,
-        props.options.agentId,
-        props.options.messageId,
-        props.options.connectionEpoch,
-        props.options.resourceBasePath,
-        props.options.authToken,
-        props.options.policyKey,
-      ])}
-      admission={admission}
-    />
+  const authority = () =>
+    JSON.stringify([
+      props.options.sessionKey,
+      props.options.agentId,
+      props.options.connectionEpoch,
+      props.options.resourceBasePath,
+      props.options.authToken,
+      props.options.policyKey,
+      props.comments.map(({ attachment }) => [attachment.kind, attachment.label]),
+      props.options.messageSendId ??
+        props.options.canonicalMessageKey ??
+        props.options.messageId ??
+        props.comments.map((item) => item.attachment.url),
+    ]);
+  return (
+    <Show when={props.comments.length > 0 && authority()} keyed>
+      {(acceptedAuthority) => <AdmittedComments {...props} authority={acceptedAuthority} />}
+    </Show>
+  );
+}
+
+function AdmittedComments(props: Props & { authority: string }) {
+  const admission = createChatAttachmentAdmission(
+    () =>
+      JSON.stringify(
+        props.comments.map((item) => [item.attachment.url, item.attachment.artifactId]),
+      ),
+    () => !props.comments.some((item) => needsAttachmentSourceAdmission(item.attachment)),
   );
   return (
-    <Show when={props.comments.length}>
-      <Show
-        when={props.comments.some((item) => needsAttachmentSourceAdmission(item.attachment))}
-        fallback={renderComments()}
-      >
-        <ChatAttachmentAdmission
-          attachments={props.comments.map((item) => item.attachment)}
-          options={props.options}
-          render={renderComments}
-        />
-      </Show>
-    </Show>
+    <SentComments
+      inline={props.inline}
+      sources={props.comments.map((item) => {
+        const scope = JSON.stringify([
+          props.options.resourceBasePath,
+          props.options.sessionKey,
+          props.options.agentId,
+          props.options.messageSendId ??
+            props.options.canonicalMessageKey ??
+            props.options.messageId,
+          item.attachment.url,
+        ]);
+        const snapshot = observeChatMediaResource<SentCommentSnapshot>(
+          "comment-preview",
+          JSON.stringify([
+            props.authority,
+            props.options.messageId,
+            props.options.canonicalMessageKey,
+            item.attachment,
+          ]),
+          props.options.onMediaChange,
+          scope,
+          scope,
+        );
+        return admission.admitted
+          ? { ...props.resolve(item), snapshot }
+          : { identity: item.attachment.url, pending: true, snapshot, fallback: () => undefined };
+      })}
+      scope={JSON.stringify([props.options.messageId, props.options.canonicalMessageKey])}
+      admission={admission}
+    />
   );
 }
 
@@ -81,26 +121,38 @@ function SentComments(props: {
       return {
         key: JSON.stringify([
           props.scope,
-          current.map(({ fallback: _fallback, ...source }) => source),
+          current.map(({ fallback: _fallback, snapshot: _snapshot, ...source }) => source),
         ]),
         sources: current,
       };
     },
     { equals: (before, next) => before.key === next.key },
   );
-  const comments = createMemo(() => {
+  const comments = createMemo<Array<CommentPreview | null | undefined>>((previous) => {
     const current = request().sources;
-    let values: Array<CommentPreview | null | undefined> = current.map((source) =>
-      !source.src && !source.pending ? null : undefined,
-    );
+    let values: Array<CommentPreview | null | undefined> = current.map((source, index) => {
+      if (!source.src && !source.pending) {
+        if (source.snapshot) {
+          source.snapshot.value = undefined;
+          source.snapshot.retainUntil = undefined;
+        }
+        return null;
+      }
+      return source.snapshot?.value?.preview ?? previous?.[index];
+    });
     if (!inline() && !revealed()) {
-      return values;
+      // A warm preview does not open the contents of a collapsed comment chip.
+      return values.map((value) => (value === null ? null : undefined));
     }
     const controller = new AbortController();
     onCleanup(() => controller.abort());
     const pending = new Map<number, Promise<{ index: number; comment: CommentPreview | null }>>();
     current.forEach((source, index) => {
-      if (source.src) {
+      const snapshot = source.snapshot?.value;
+      if (
+        source.src &&
+        (snapshot?.src !== source.src || snapshot?.sizeBytes !== source.sizeBytes)
+      ) {
         pending.set(
           index,
           readAttachmentText(source.src, source.sizeBytes, controller.signal)
@@ -108,11 +160,24 @@ function SentComments(props: {
               (text) => parseCommentAttachment(text),
               () => null,
             )
-            .then((comment) => ({ index, comment })),
+            .then((comment) => {
+              if (
+                source.snapshot &&
+                !controller.signal.aborted &&
+                isChatMediaResourceCurrent(source.snapshot)
+              ) {
+                source.snapshot.value = comment
+                  ? { preview: comment, src: source.src!, sizeBytes: source.sizeBytes }
+                  : undefined;
+                // The shared media owner bounds idle successes across virtual-row remounts.
+                source.snapshot.retainUntil = comment ? Infinity : undefined;
+              }
+              return { index, comment };
+            }),
         );
       }
     });
-    // Publish each completed attachment independently while retaining cancellation at this read.
+    // Retain the accepted quote through remounts and ticket renewal while the new source is read.
     return (async function* () {
       yield values;
       while (pending.size) {
@@ -144,16 +209,12 @@ function SentComments(props: {
               >
                 <ol class="chat-comment-preview__list" role="list">
                   <For each={sources()} keyed={false}>
-                    {(source, index) => (
+                    {(_source, index) => (
                       <Show
                         when={comments()[index]}
                         fallback={
                           comments()[index] === null ? undefined : (
-                            <li class="chat-comment-preview__item muted">
-                              {source().src || source().pending
-                                ? t("common.loading")
-                                : t("chat.attachments.textPreviewUnavailable")}
-                            </li>
+                            <li class="chat-comment-preview__item muted">{t("common.loading")}</li>
                           )
                         }
                       >

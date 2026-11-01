@@ -108,6 +108,7 @@ export default definePluginEntry({
     }
     const store = WorkboardStore.openSqlite(
       resolveWorkboardSqliteWorkerModuleUrl(api.runtimeSource),
+      { lazy: api.registrationMode === "tool-discovery" },
     );
     const resourceServices: Array<{ stop(): void | Promise<void> }> = [];
     registerWorkboardStoreLifecycle(api, store, async () => {

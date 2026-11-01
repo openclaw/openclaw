@@ -207,6 +207,7 @@ export async function withCronStreamExecApproval<T>(params: {
           const value = await params.mutate({
             policyKey: error.policyKey,
             binding,
+            createdAtMs: job.createdAtMs,
             consumption: {
               ...consumption,
               markCommitted: (committed) => {

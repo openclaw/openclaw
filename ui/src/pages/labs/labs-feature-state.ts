@@ -28,12 +28,6 @@ export type LabFeature = {
 
 export type LabFeatureDefinition = Omit<LabFeature, "title" | "description">;
 
-type LabFeatureState = {
-  enabled: boolean;
-  defaultEnabled: boolean;
-  overridden: boolean;
-};
-
 export const BOOLEAN_GATE = {
   onValue: true,
   offValue: false,
@@ -102,7 +96,7 @@ export function labFeatureOverridePath(
 export function resolveLabFeatureState(
   config: Record<string, unknown> | null,
   feature: LabFeatureDefinition,
-): LabFeatureState {
+) {
   const source = config ?? {};
   const parentPath = feature.configPath.slice(0, -1);
   const key = feature.configPath.at(-1);

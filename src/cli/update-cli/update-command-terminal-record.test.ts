@@ -18,6 +18,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { cleanupUpdateCommandTest } from "./update-command-cleanup.test-support.js";
 import {
   resultFixture,
   stepFixture,
@@ -36,11 +37,7 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
 });
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-});
+afterEach(cleanupUpdateCommandTest);
 
 function fixture(
   existingRunId?: string,
@@ -76,12 +73,8 @@ function fixture(
     },
     databasePath: resolveOpenClawStateSqlitePath(env),
     write(sql: string, ...values: (string | number)[]) {
-      const db = new DatabaseSync(resolveOpenClawStateSqlitePath(env));
-      try {
-        db.prepare(sql).run(...values);
-      } finally {
-        db.close();
-      }
+      using db = new DatabaseSync(resolveOpenClawStateSqlitePath(env));
+      db.prepare(sql).run(...values);
     },
     capture: (candidate = result) =>
       captureUpdateCommandTerminalRecord(params, candidate, assertCurrent),

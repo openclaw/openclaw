@@ -75,7 +75,12 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}settings/general`);
         await page.locator('.settings-sidebar__item[href="/logs"]').click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/logs");
-        await expect.poll(() => page.locator(".log-row").count()).toBe(logLines.length);
+        const logRows = page.locator(".log-row");
+        await logRows.first().waitFor({ state: "visible" });
+        await expect
+          .poll(() => logRows.first().getAttribute("aria-setsize"))
+          .toBe(String(logLines.length));
+        await expect.poll(() => logRows.count()).toBeLessThan(logLines.length);
         if (proofDir) {
           await writeFile(
             path.join(proofDir, "logs-layout.png"),

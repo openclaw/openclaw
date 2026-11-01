@@ -194,6 +194,14 @@ The shared operator flow uses the following commands:
     openclaw mcp login docs --code abc123
     ```
 
+    If the callback URL also contains `iss`, pass its exact decoded value from
+    that same callback. OpenClaw validates it against the sign-in provider; do
+    not replace it with a different issuer or omit it when the provider requires it.
+
+    ```bash
+    openclaw mcp login docs --code abc123 --issuer https://accounts.example.com
+    ```
+
   </Step>
   <Step title="Check authorization">
     Use status or doctor to confirm that tokens are present and do not require additional authorization. If status reports `authorization-required` or doctor asks for additional authorization, run `openclaw mcp login <name>` again.
