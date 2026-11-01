@@ -1,2 +1,2 @@
-175
-# Missing-lease prepared recovery, read-only status, evidence archival, refusal controls, and CLI/helper entry points.
+254
+# Missing-lease prepared recovery, read-only status, evidence archival, live-owner refusal/reassignment, and CLI/helper entry points.

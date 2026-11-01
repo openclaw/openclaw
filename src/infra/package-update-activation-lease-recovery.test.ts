@@ -1,7 +1,10 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
+import * as activationJournal from "./package-update-activation-journal.js";
 import {
   openPackageActivationJournal,
   packageActivationIdentity,
@@ -204,6 +207,82 @@ describe.skipIf(process.platform === "win32")(
       expect(fs.readFileSync(path.join(f.packageRoot, "package.json"))).toEqual(manifest);
       expect(fs.readFileSync(f.launcher)).toEqual(launcher);
       expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+    });
+
+    it.each(["close", "archive"] as const)(
+      "refuses missing-lease helper settlement after ownership is reassigned before %s",
+      async (boundary) => {
+        const f = await fixtures.prepare();
+        const initial = openPackageActivationJournal(f.anchor).read();
+        const databasePath = initial.descriptor.authority.databasePath;
+        fs.unlinkSync(databasePath);
+        const before = fixtures.snapshotControl(f.anchor);
+        const reassign = () => {
+          using db = new DatabaseSync(databasePath);
+          expect(
+            db
+              .prepare("UPDATE managed_update_handoffs SET owner = ? WHERE install_root = ?")
+              .run(randomUUID(), f.packageRoot).changes,
+          ).toBe(1);
+        };
+        const open = activationJournal.openPackageActivationSettlementJournal;
+        vi.spyOn(activationJournal, "openPackageActivationSettlementJournal").mockImplementation(
+          (anchor) => {
+            const journal = open(anchor);
+            return {
+              ...journal,
+              transition(...args) {
+                if (boundary === "close") {
+                  reassign();
+                }
+                return journal.transition(...args);
+              },
+              archiveSettled(...args) {
+                if (boundary === "archive") {
+                  reassign();
+                }
+                return journal.archiveSettled(...args);
+              },
+            };
+          },
+        );
+        await expect(
+          settlePendingPackageActivation(f.packageRoot, undefined, undefined, {
+            operationId: f.operationId,
+          }),
+        ).rejects.toMatchObject({
+          message: "Update failed and executor release remains pending",
+          cause: { cause: { message: "Update executor ownership is no longer current." } },
+        });
+        if (boundary === "close") {
+          expect(fixtures.snapshotControl(f.anchor)).toEqual(before);
+        } else {
+          expect(openPackageActivationJournal(f.anchor).read()).toMatchObject({
+            phase: "superseded",
+            intent: { kind: "recovery-lease-missing", settled: true },
+          });
+        }
+        expect(fs.existsSync(f.anchor)).toBe(true);
+        expect(fs.existsSync(`${f.anchor}.superseded-${f.operationId}`)).toBe(false);
+      },
+    );
+
+    it("refuses helper repair and settlement while a fresh executor owns the replacement lease store", async () => {
+      const f = await fixtures.prepare();
+      const record = openPackageActivationJournal(f.anchor).read();
+      fs.unlinkSync(record.descriptor.authority.databasePath);
+      const before = fixtures.snapshotControl(f.anchor);
+      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+        await executor.enter(f.packageRoot);
+        await expect(
+          runPackageActivationRecovery(f.anchor, "repair", f.operationId),
+        ).rejects.toThrow("lease database identity changed");
+        await expect(settlePendingPackageActivation(f.packageRoot)).rejects.toThrow(
+          /executor.*owns/iu,
+        );
+      });
+      expect(fixtures.snapshotControl(f.anchor)).toEqual(before);
+      expect(fs.existsSync(f.anchor)).toBe(true);
     });
 
     it("replays a completed receipt without recreating a foreign user's lease", async () => {
