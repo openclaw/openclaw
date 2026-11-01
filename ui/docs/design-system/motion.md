@@ -60,7 +60,7 @@ Opt-in decorative motion that should vanish entirely belongs inside `@media (pre
 
 ## Shimmer
 
-`base.css` owns the only two shimmers. Do not add keyframes, gradients, or per-surface durations for either; `ui/src/styles/shimmer.node.test.ts` rejects them.
+`base.css` owns the only two shimmers. Do not add keyframes, gradients, or per-surface durations for either.
 
 | Family      | Use                                                | Keyframe       | Tokens                                                                                                                                          |
 | ----------- | -------------------------------------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |

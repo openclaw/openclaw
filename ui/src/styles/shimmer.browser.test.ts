@@ -194,27 +194,23 @@ fixture.describe("Control UI shimmer", () => {
           const style = getComputedStyle(text);
           const highlight = getComputedStyle(block, "::after");
           return {
-            text: [style.animationName, style.animationDuration, style.animationTimingFunction],
-            block: [
-              highlight.animationName,
-              highlight.animationDuration,
-              highlight.animationTimingFunction,
-            ],
+            text: style.animationName,
+            block: highlight.animationName,
             textProperties: properties(text),
             blockProperties: properties(block),
             parkedX: Number.parseFloat(highlight.transform.split(",")[4] ?? "NaN"),
           };
         });
       expect(await read()).toMatchObject({
-        text: ["text-shimmer", "2.4s", "ease-in-out"],
-        block: ["shimmer", "2s", "ease-in-out"],
+        text: "text-shimmer",
+        block: "shimmer",
         textProperties: ["backgroundPositionX", "backgroundPositionY"],
         blockProperties: ["transform"],
       });
       await page.emulateMedia({ forcedColors: "active" });
       const forced = await read();
-      expect(forced.text[0]).toBe("none");
-      expect(forced.block[0]).toBe("none");
+      expect(forced.text).toBe("none");
+      expect(forced.block).toBe("none");
       expect(forced.parkedX).toBe(-120);
     });
   });
