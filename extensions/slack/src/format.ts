@@ -2,6 +2,7 @@ import { eastAsianWidthType } from "get-east-asian-width";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import {
+  applyMarkdownTextEdits,
   chunkTextForOutbound,
   FormatCapabilityProfile,
   markdownToIR,
@@ -406,6 +407,60 @@ function buildSlackRenderOptions({ enclosingStyle, mentions }: SlackMarkdownOpti
   };
 }
 
+function quoteSlackBlockquoteLines(ir: MarkdownIR): MarkdownIR {
+  const quotes = ir.styles.filter((span) => span.style === "blockquote");
+  if (quotes.length === 0) {
+    return ir;
+  }
+  const codeBlocks = ir.styles.filter((span) => span.style === "code_block");
+  const lineStarts = new Set<number>();
+  for (const quote of quotes) {
+    if (quote.start === 0) {
+      lineStarts.add(0);
+    }
+    for (
+      let index = ir.text.indexOf("\n", quote.start);
+      index !== -1 && index + 1 < quote.end;
+      index = ir.text.indexOf("\n", index + 1)
+    ) {
+      if (
+        ir.text[index + 1] !== "\n" &&
+        !codeBlocks.some((code) => code.start <= index && index < code.end)
+      ) {
+        lineStarts.add(index + 1);
+      }
+    }
+  }
+  if (lineStarts.size === 0) {
+    return ir;
+  }
+  const { text, mapOffset } = applyMarkdownTextEdits(
+    ir.text,
+    [...lineStarts].map((start) => ({ start, end: start, text: "> " })),
+  );
+  const mapRange = <T extends { start: number; end: number }>(range: T): T => ({
+    ...range,
+    start: mapOffset(range.start),
+    end: range.end > range.start ? mapOffset(range.end - 1) + 1 : mapOffset(range.start),
+  });
+  return {
+    ...ir,
+    text,
+    styles: ir.styles.map(mapRange),
+    links: ir.links.map(mapRange),
+    ...(ir.annotations ? { annotations: ir.annotations.map(mapRange) } : {}),
+    ...(ir.listItems
+      ? {
+          listItems: ir.listItems.map((item) => ({
+            ...item,
+            ...(item.listMarker ? { listMarker: mapRange(item.listMarker) } : {}),
+            ...(item.taskMarker ? { taskMarker: mapRange(item.taskMarker) } : {}),
+          })),
+        }
+      : {}),
+  };
+}
+
 function prepareSlackMarkdownIR(markdown: string, options: SlackMarkdownOptions): MarkdownIR {
   return makeSlackEmphasisStylesSafe(
     markdownToIR(markdown ?? "", {
@@ -425,7 +480,11 @@ export function normalizeSlackOutboundText(
 ): string {
   const ir = prepareSlackMarkdownIR(markdown, options);
   return protectSlackAssistantTranscriptRoleHeaders(
-    renderMarkdownWithMarkers(ir, buildSlackRenderOptions(options), SLACK_FORMAT_PROFILE),
+    renderMarkdownWithMarkers(
+      quoteSlackBlockquoteLines(ir),
+      buildSlackRenderOptions(options),
+      SLACK_FORMAT_PROFILE,
+    ),
   );
 }
 
@@ -515,7 +574,11 @@ export function markdownToSlackMrkdwnChunks(
     ir,
     limit: normalizedLimit,
     renderChunk: (chunk) => {
-      const rendered = renderMarkdownWithMarkers(chunk, renderOptions, SLACK_FORMAT_PROFILE);
+      const rendered = renderMarkdownWithMarkers(
+        quoteSlackBlockquoteLines(chunk),
+        renderOptions,
+        SLACK_FORMAT_PROFILE,
+      );
       // Protection only adds a prefix, so an oversized probe cannot become a fit.
       return rendered.length > normalizedLimit
         ? rendered

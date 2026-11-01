@@ -109,6 +109,22 @@ describe("normalizeSlackOutboundText", () => {
     );
   });
 
+  it("quotes every line of a multi-line blockquote", () => {
+    expect(
+      normalizeSlackOutboundText("> **First** line\n> second line\n>\n> - item\n\nafter\nquote"),
+    ).toBe("> *First* line\n> second line\n\n> • item\n\nafter\nquote");
+    expect(normalizeSlackOutboundText("> ```\n> code\n> ```\n> after")).toBe(
+      "> ```\ncode\n```\n> after",
+    );
+  });
+
+  it("keeps the quote on blockquote lines carried into later chunks", () => {
+    expect(markdownToSlackMrkdwnChunks("> alpha beta gamma\n> delta epsilon", 20)).toEqual([
+      "> alpha beta gamma\n",
+      "> delta epsilon",
+    ]);
+  });
+
   it("leaves table parsing off for callers without an authored-text table mode", () => {
     const table = "| Name | Value |\n| --- | --- |\n| Beta | 2 |";
     expect(normalizeSlackOutboundText(table)).toBe(table);
