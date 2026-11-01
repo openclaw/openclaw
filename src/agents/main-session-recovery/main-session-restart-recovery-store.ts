@@ -38,6 +38,7 @@ import {
   resumeMainSession,
 } from "./main-session-restart-dispatch.js";
 import {
+  confirmedExhaustedFinalReceipt,
   markSessionCompletedAfterRecoveryCheckpoint,
   reconcileInvalidHarnessCompletion,
 } from "./main-session-restart-recovery-checkpoint.js";
@@ -292,8 +293,12 @@ export async function recoverStore(params: {
       result.skipped++;
       continue;
     }
+    const confirmedExhaustedReceipt =
+      recoveryView.status === "exhausted"
+        ? confirmedExhaustedFinalReceipt(target, entry)
+        : undefined;
     if (
-      recoveryView.status === "exhausted" ||
+      (recoveryView.status === "exhausted" && !confirmedExhaustedReceipt) ||
       (!params.observationOnly &&
         requiresRestartRecoveryMessageActionAuthority(entry) &&
         !hasRestartRecoveryMessageActionAuthority(entry))
@@ -335,12 +340,14 @@ export async function recoverStore(params: {
       result.skipped++;
       continue;
     }
-    if (pendingAction === "complete") {
+    // An exhausted run can only reach settlement with its identified final receipt.
+    if (pendingAction === "complete" || recoveryView.status === "exhausted") {
       const completion = await markSessionCompletedAfterRecoveryCheckpoint({
         ...target,
         entry,
         messages: [],
         pendingFinalDeliveryIntentId: entry.pendingFinalDelivery?.intentId,
+        confirmedExhaustedReceipt,
         reason: "delivered-terminal-receipt",
       });
       result[completion.outcome === "completed" ? "settled" : "skipped"]++;
