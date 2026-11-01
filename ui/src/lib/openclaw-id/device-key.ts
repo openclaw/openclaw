@@ -6,6 +6,15 @@ import { listen } from "../reactive/listener.ts";
 
 const DB_NAME = "openclaw-id";
 const STORE = "owner-devices";
+const keyListeners = new Set<() => void>();
+
+/** Notifies approval lifetimes after a newly linked browser has durably stored D. */
+export function subscribeOwnerDeviceKey(listener: () => void) {
+  keyListeners.add(listener);
+  return () => {
+    keyListeners.delete(listener);
+  };
+}
 
 type StoredDeviceKey = { privateKey: CryptoKey; publicKey: CryptoKey };
 
@@ -52,7 +61,29 @@ export async function loadOwnerDeviceSigner(clawId: string): Promise<StatementSi
   return pair ? await toSigner(pair) : undefined;
 }
 
+/** A mailbox-only peer proof key. It is never enrolled in the claw or granted tunnel access. */
+export async function loadMailboxPeerSigner(clawId: string): Promise<StatementSigner> {
+  const key = `${clawId}:mailbox`;
+  const stored = await run<StoredDeviceKey | undefined>("readonly", (store) => store.get(key));
+  if (stored) {
+    return toSigner(stored);
+  }
+  const generated = await generateOwnerDeviceKey();
+  try {
+    // Two tabs may start together; retain the first key instead of replacing a bound W.
+    await run("readwrite", (store) => store.add(generated.pair, key));
+    return generated.signer;
+  } catch (error) {
+    if (!(error instanceof DOMException) || error.name !== "ConstraintError") {
+      throw error;
+    }
+    const existing = await run<StoredDeviceKey>("readonly", (store) => store.get(key));
+    return toSigner(existing);
+  }
+}
+
 /** Stores this origin's owner device key for a claw. */
 export async function saveOwnerDeviceKey(clawId: string, pair: StoredDeviceKey): Promise<void> {
   await run("readwrite", (store) => store.put(pair, clawId));
+  keyListeners.forEach((listener) => listener());
 }

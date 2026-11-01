@@ -5,6 +5,14 @@ import { en } from "./en.ts";
 // with the dialogs, not with the sidebar, and merge into the openclawId namespace.
 const enOpenClawIdDialogs = {
   openclawId: {
+    approvalWaiting: "Waiting for the other browser’s matching number…",
+    approvalCompare: "Check that both screens show this same number. Approve only if they match.",
+    approvalDeny: "Deny",
+    approvalApprove: "Numbers match — Approve",
+    approvalEmpty:
+      "No new browsers are waiting for approval. Start “Approve from another device” on the new browser.",
+    approvalRequiresKey:
+      "Use the original browser on this machine that linked the claw, and sign in with OpenClaw ID. Its owner device key is required.",
     yourDevicesBody:
       "Browsers that act as you, the owner. Each has its own key, signed by your owner key.",
     deviceLocal: "This machine (direct, no relay)",

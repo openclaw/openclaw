@@ -8,6 +8,7 @@
 import { createSignal } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
+import { listen } from "../reactive/listener.ts";
 import {
   OPENCLAW_ID_CALLBACK_KEY_PREFIX,
   OPENCLAW_ID_CALLBACK_PATH,
@@ -32,6 +33,15 @@ function readStored(): OpenClawIdSignedIn | null {
 }
 
 const [account, setAccount] = createSignal<OpenClawIdSignedIn | null>(readStored());
+const accountListeners = new Set<(value: OpenClawIdSignedIn | null) => void>();
+
+/** Account lifecycle events for browser-owned work that must stop immediately on sign-out. */
+export function subscribeOpenClawIdAccount(listener: (value: OpenClawIdSignedIn | null) => void) {
+  accountListeners.add(listener);
+  return () => {
+    accountListeners.delete(listener);
+  };
+}
 
 /** The signed-in account, re-checked for expiry on every read. */
 export function openClawIdAccount(): OpenClawIdSignedIn | null {
@@ -46,12 +56,14 @@ export function openClawIdAccount(): OpenClawIdSignedIn | null {
 export function signOutOfOpenClawId(): void {
   getSafeLocalStorage()?.removeItem(STORAGE_KEY);
   setAccount(null);
+  accountListeners.forEach((listener) => listener(null));
 }
 
 // Stores and publishes a completed sign-in.
 function keep(signedIn: OpenClawIdSignedIn): void {
   getSafeLocalStorage()?.setItem(STORAGE_KEY, JSON.stringify(signedIn));
   setAccount(signedIn);
+  accountListeners.forEach((listener) => listener(signedIn));
 }
 
 /** The redirect URI this Control UI registers with the issuer. */
@@ -64,9 +76,10 @@ export function openClawIdRedirectUri(basePath: string): string {
 function awaitCallback(state: string): Promise<OpenClawIdCallbackMessage> {
   const key = `${OPENCLAW_ID_CALLBACK_KEY_PREFIX}${state}`;
   return new Promise<OpenClawIdCallbackMessage>((resolve, reject) => {
+    let stopListening = () => {};
     const stop = () => {
       window.clearTimeout(timer);
-      window.removeEventListener("storage", onStorage);
+      stopListening();
       getSafeLocalStorage()?.removeItem(key);
     };
     const onStorage = (event: StorageEvent) => {
@@ -77,14 +90,14 @@ function awaitCallback(state: string): Promise<OpenClawIdCallbackMessage> {
       try {
         resolve(JSON.parse(event.newValue) as OpenClawIdCallbackMessage);
       } catch (error) {
-        reject(error);
+        reject(error instanceof Error ? error : new Error(String(error)));
       }
     };
     const timer = window.setTimeout(() => {
       stop();
       reject(new Error("Sign-in timed out. Try again."));
     }, SIGN_IN_TIMEOUT_MS);
-    window.addEventListener("storage", onStorage);
+    stopListening = listen(window, "storage", onStorage);
   });
 }
 

@@ -4,6 +4,8 @@ import { en } from "./en.ts";
 const enOpenClawId = {
   openclawId: {
     menuTitle: "OpenClaw ID",
+    approveNewDevice: "Approve a new device",
+    approvalNotice: "A new browser wants to become an owner device",
     signIn: "Sign in with OpenClaw ID",
     signInLocalOnly: "Sign in from the Control UI on this machine (127.0.0.1).",
     signInUnconfigured: "Set gateway.openclawId.clientId to sign in.",

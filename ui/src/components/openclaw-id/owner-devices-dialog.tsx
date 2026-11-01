@@ -24,6 +24,7 @@ import type {
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { showToast } from "../../lib/toast.ts";
 import { withPromiseModalHost } from "../promise-modal-host.ts";
+import { showOwnerApprovalDialog } from "./owner-approval-dialog.tsx";
 import { showRegenerateOwnerKeyDialog } from "./regenerate-owner-key-dialog.tsx";
 
 registerEnglishCatalog(registerOpenClawIdDialogsEnglish);
@@ -203,6 +204,18 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
                 )}
               </For>
             </div>
+            <Show when={localOperator()}>
+              <button
+                type="button"
+                class="btn"
+                onClick={() => {
+                  modal.finish(undefined);
+                  void showOwnerApprovalDialog({ client: params.client });
+                }}
+              >
+                {t("openclawId.approveNewDevice")}
+              </button>
+            </Show>
             <Show when={ownerFp()}>
               {(fp) => (
                 <p class="muted openclaw-id-devices__hint">

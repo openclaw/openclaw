@@ -137,6 +137,45 @@ commitment it forwards) before it sees eph_E, and the key it gives N before it s
 It cannot grind, so each attempt matches with probability 10^-6. X25519 needs WebCrypto
 X25519 (current Chrome, Firefox, Safari; qualify alongside Ed25519).
 
+### Approval from the original local Control UI (OCF-287)
+
+The original linking browser retains its non-extractable owner-device key D in IndexedDB,
+scoped to that exact origin. It signs the same certificate and membership change as the loader
+approver, using `certificateChain`, `ownerDeviceCertBody`, and the SAS helpers above. The Gateway
+holds neither D nor the recovery-kit root. Direct-loopback operator access alone cannot sign.
+
+The local browser sends its account token and exact D-signed Discovery request through the
+owner-only `openclawId.authority` `device_mail` relay. The relay constructs only fixed device
+binding/mailbox paths, preserves request bytes/signature, prohibits redirects and checks current
+owner authorization before and after the request. It never signs device mail with K_gw.
+This avoids adding loopback origins to Discovery's CORS policy.
+
+For mail addressing, the browser binds D with a separate non-extractable mailbox-only peer
+proof key W. W is not added to its owner certificate, membership, or tunnel admission.
+Discovery's optional `OpenClaw-Owner-Certificate` header verifies the local D's certificate under
+the claw's current root and epoch, owner account, validity window and current snapshot
+revocations. This lets a local certificate with no peer keys read owner mail. It does not grant
+membership or give an account session owner-device authority.
+
+A single connection-owned mailbox long poll updates the notification and **Your devices →
+Approve a new device** without refreshing. Approval requires matching six-digit numbers.
+Expiry is optional and defaults to none. Failed or uncertain membership submissions are not
+resubmitted by the attempt; no sealed handoff is sent before confirmed admission.
+
+Manual verification on an existing claw:
+
+1. Use the original browser profile and exact local origin that linked the claw. `localhost`
+   and `127.0.0.1` have different IndexedDB key stores. Sign in to OpenClaw ID if needed.
+2. Open the claw's remote address in a separate fresh browser profile. Sign in as the same
+   owner and choose **Approve from another device**.
+3. In the original local Control UI, open the new-browser notification or **Your devices →
+   Approve a new device**. Compare all six digits on both screens; deny if they differ.
+4. Leave expiry blank for no expiry, or enter the desired number of days. Confirm matching
+   numbers on both screens and approve. The new browser must reach the Control UI on its own.
+5. For a test browser, revoke its named device from the original browser's **Your devices**
+   afterward. Confirm that its remote connection ends. Do not revoke the original device,
+   regenerate the owner key, reset the profile, or paste a recovery kit to make this test pass.
+
 ## Kit enrollment (spec 6.2)
 
 N decodes the kit (`decodeKit`), derives R (`deriveRootSigner`), checks fp(R), verifies the

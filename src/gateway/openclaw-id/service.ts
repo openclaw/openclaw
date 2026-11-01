@@ -698,6 +698,11 @@ export function createOpenClawIdService(params: {
      */
     linkStatus: ownerLinkStatus,
 
+    /** Public signed binding for an owner-device SAS handoff; callers must enforce owner access. */
+    async ownerBinding() {
+      return (await getAuthority()).current()?.binding ?? null;
+    },
+
     /**
      * Step 1 of "Make reachable": the claw identity, keys and the address for the
      * owner's chosen name, which the owner root will sign.

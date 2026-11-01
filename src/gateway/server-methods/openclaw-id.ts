@@ -239,6 +239,11 @@ export const openclawIdHandlers: GatewayRequestHandlers = {
       await handleAccount(opts, params.action);
       return;
     }
+    if (params.action === "device_mail") {
+      const { handleOpenClawIdDeviceMail } = await import("./openclaw-id-device-mail.js");
+      await handleOpenClawIdDeviceMail(opts, service);
+      return;
+    }
     const channel = resolveOpenClawIdClientChannel(opts.client);
     const nameRequest = {
       enrollmentCode: optionalCode(params.enrollmentCode),

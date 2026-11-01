@@ -4,6 +4,7 @@ import { getObserver } from "@solidjs/signals";
 import type { JSX } from "@solidjs/web";
 import { createEffect, createMemo, createProjection, onCleanup, onSettled } from "solid-js";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
+import { bindOwnerApprovalNotifications } from "../lib/openclaw-id/owner-approval-notifications.ts";
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
 import { i18nRevision } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
@@ -200,6 +201,7 @@ function AppSidebarContent(
     },
   );
   onSettled(() => context.gateway.subscribeEvents((event) => owner.narration?.handleEvent(event)));
+  onSettled(() => bindOwnerApprovalNotifications(context.gateway));
   const presentationRevision = createParkedProjection(
     () => {
       Object.values(props);

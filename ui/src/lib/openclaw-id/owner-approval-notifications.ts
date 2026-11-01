@@ -1,0 +1,44 @@
+// Persistent local-owner notifications reuse the sidebar's admitted Gateway lifetime.
+import type { ApplicationGateway } from "../../app/gateway.ts";
+import { registerOpenClawIdEnglish } from "../../i18n/locales/en-openclaw-id.ts";
+import { formatUiError } from "../format-error.ts";
+import { registerEnglishCatalog, t } from "../reactive/i18n.ts";
+import { showToast } from "../toast.ts";
+
+/** Installs notification delivery without mounting approval dialogs or retaining any owner keys. */
+export function bindOwnerApprovalNotifications(gateway: ApplicationGateway) {
+  registerEnglishCatalog(registerOpenClawIdEnglish);
+  let disposed = false;
+  let stop = () => {};
+  void import("./owner-approval-lifetime.ts")
+    .then(({ bindOwnerApproval }) => {
+      if (disposed) {
+        return;
+      }
+      stop = bindOwnerApproval(gateway, (client) =>
+        showToast({
+          message: t("openclawId.approvalNotice"),
+          actionLabel: t("openclawId.approveNewDevice"),
+          durationMs: 30_000,
+          onAction: () => {
+            void import("../../components/openclaw-id/owner-approval-dialog.tsx")
+              .then(({ showOwnerApprovalDialog }) => showOwnerApprovalDialog({ client }))
+              .catch((error: unknown) =>
+                showToast({
+                  message: t("openclawId.actionFailed", { error: formatUiError(error) }),
+                }),
+              );
+          },
+        }),
+      );
+    })
+    .catch((error: unknown) => {
+      if (!disposed) {
+        showToast({ message: t("openclawId.actionFailed", { error: formatUiError(error) }) });
+      }
+    });
+  return () => {
+    disposed = true;
+    stop();
+  };
+}
