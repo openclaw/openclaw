@@ -14,6 +14,7 @@ import {
   revokeSqliteDatabaseAdmissionsForPath,
   readSqliteDatabaseIntegrityVerification,
 } from "../infra/sqlite-database-admission.js";
+import * as fileGenerationWorker from "../infra/sqlite-file-generation-worker.js";
 import { readStableSqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import { assertSqliteDatabaseHeader } from "../infra/sqlite-integrity.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
@@ -251,6 +252,51 @@ it("expires a persisted quarantine when the verified database generation changes
   expect(f.read()).toBeUndefined();
   expect(f.row()).toEqual(quarantineBefore);
 });
+
+it("expires a size-mismatched quarantine without hashing the database", () => {
+  const { env, databasePath } = f;
+  execDatabase(databasePath, "CREATE TABLE records (id INTEGER PRIMARY KEY) STRICT;");
+  const generation = readStableSqliteFileGeneration(databasePath);
+
+  seedOpenClawDatabaseQuarantine({
+    env,
+    generation,
+    kind: "agent",
+    path: databasePath,
+    reason: "corrupt generation",
+  });
+  expect(f.read()).toMatchObject({ name: "SqliteIntegrityError" });
+
+  fs.appendFileSync(databasePath, Buffer.alloc(1));
+  using generationReads = vi.spyOn(fileGenerationWorker, "readSqliteFileGenerationSync");
+  expect(f.read()).toBeUndefined();
+  expect(generationReads).not.toHaveBeenCalled();
+});
+
+it.each(["-journal", "-wal"])(
+  "expires a size-mismatched %s generation without hashing the database",
+  (suffix) => {
+    const { env, databasePath } = f;
+    execDatabase(databasePath, "CREATE TABLE records (id INTEGER PRIMARY KEY) STRICT;");
+    const sidecarPath = `${databasePath}${suffix}`;
+    fs.writeFileSync(sidecarPath, "recorded");
+    const generation = readStableSqliteFileGeneration(databasePath);
+
+    seedOpenClawDatabaseQuarantine({
+      env,
+      generation,
+      kind: "agent",
+      path: databasePath,
+      reason: "corrupt generation",
+    });
+    expect(f.read()).toMatchObject({ name: "SqliteIntegrityError" });
+
+    fs.appendFileSync(sidecarPath, "changed");
+    using generationReads = vi.spyOn(fileGenerationWorker, "readSqliteFileGenerationSync");
+    expect(f.read()).toBeUndefined();
+    expect(generationReads).not.toHaveBeenCalled();
+  },
+);
 
 it("reads schema-v1 quarantine rows and migrates them when clearing another path", () => {
   const { databasePath, storePath } = f;
