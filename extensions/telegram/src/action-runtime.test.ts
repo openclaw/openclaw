@@ -556,6 +556,17 @@ describe("Telegram registered action authority and input contracts", () => {
     },
   );
 
+  it("sends silent stickers without a notification", async () => {
+    cfg.channels!.telegram!.actions = { sticker: true };
+    await invoke("sticker", { to: "-1001", stickerId: ["sticker-file"], silent: true });
+    expect(requests).toEqual([
+      {
+        method: "sendSticker",
+        fields: { chat_id: "-1001", sticker: "sticker-file", disable_notification: true },
+      },
+    ]);
+  });
+
   it("rejects sending without a configured credential", async () => {
     cfg = {};
     await expect(invoke("send", { to: "123", message: "hello" })).rejects.toThrow(
