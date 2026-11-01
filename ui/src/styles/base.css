@@ -410,7 +410,9 @@
     var(--text) calc(var(--surface-selected-amount) / 2),
     transparent
   );
-  --menu-surface: color-mix(in srgb, var(--popover) 90%, transparent);
+  /* Floating surfaces hold text and controls, so content behind them must not compete. */
+  --floating-surface-opacity: 95%;
+  --menu-surface: color-mix(in srgb, var(--popover) var(--floating-surface-opacity), transparent);
   --menu-backdrop: blur(8px);
   /* Hairlines are spread shadows so they never consume the panel's box. */
   --menu-shadow:

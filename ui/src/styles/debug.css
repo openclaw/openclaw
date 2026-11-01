@@ -14,7 +14,7 @@ openclaw-debug-overlay-content {
   flex-direction: column;
   overflow: hidden;
   color: var(--text);
-  background: color-mix(in srgb, var(--bg-elevated) 90%, transparent);
+  background: color-mix(in srgb, var(--bg-elevated) var(--floating-surface-opacity), transparent);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-xl);

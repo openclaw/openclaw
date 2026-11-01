@@ -42,7 +42,7 @@ openclaw-new-session-page,
   height: 40px;
   border-color: color-mix(in srgb, var(--text-strong) 12%, transparent);
   border-radius: 12px;
-  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  background: color-mix(in srgb, var(--panel) var(--floating-surface-opacity), transparent);
   corner-shape: superellipse(1.5);
 }
 
