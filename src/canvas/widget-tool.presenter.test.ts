@@ -157,3 +157,36 @@ describe("show_widget current-channel presentation", () => {
     },
   );
 });
+
+it.each([false, true])(
+  "refuses device presentation from an admitted pin-only turn (pin=%s)",
+  async (pin) => {
+    const { mock: board } = createBoardPutCaller();
+    const present = vi.fn(async () => ({
+      ok: true as const,
+      value: { kind: "node" as const, nodeId: "test-mac" },
+    }));
+    const availability = vi.fn(async () => ({
+      ok: true as const,
+      value: { available: true as const },
+    }));
+    const options = {
+      agentSessionKey: "agent:main:dashboard:completion",
+      inlineClientAvailable: true,
+      presenters: [
+        { target: "node_panel" as const, description: "Test Mac", availability, present },
+      ],
+    };
+    const operator = createTool(options);
+    const completion = createTool({ ...options, pinWithoutInlineClient: true });
+    expect(completion.parameters).toEqual(operator.parameters);
+    expect(completion.description).toBe(operator.description);
+    await expect(run(completion, { pin, presentation: { target: "node_panel" } })).rejects.toThrow(
+      /pin=true|presentation.target is unavailable/,
+    );
+    expect(board).not.toHaveBeenCalled();
+    expect(availability).not.toHaveBeenCalled();
+    expect(present).not.toHaveBeenCalled();
+    await expectNoDocument();
+  },
+);

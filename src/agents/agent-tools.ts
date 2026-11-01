@@ -437,6 +437,12 @@ function* assembleOpenClawCodingTools(
           ringZeroTools,
           yield {
             ...pluginToolOptions,
+            // Verified completion authority may finish the requester's durable board.
+            // Recorded client caps select the surface; replayed policy still gates calls.
+            pinnedWidgetAuthoring:
+              options?.pinnedWidgetAuthoring === true ||
+              (capabilityProfile.policy.requesterPolicySource === "completion-handoff" &&
+                listingClientCaps.includes("inline-widgets")),
             cronSandboxContext: sandbox,
             sessionPortalTarget,
             sandboxSessionRenameOnly: capabilityProfile.policy.sandboxSessionRenameOnly,

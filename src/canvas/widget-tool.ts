@@ -344,8 +344,12 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
         }
       }
       const shouldPin = params.pin === true;
-      if (pinnedOnly && !shouldPin) {
-        throw new WidgetHtmlInputError("pin=true is required for this pinned-only widget surface");
+      if ((pinnedOnly || pinWithoutInlineClient) && !shouldPin) {
+        throw new WidgetHtmlInputError(
+          pinnedOnly
+            ? "pin=true is required for this pinned-only widget surface"
+            : "no connected client can show inline widgets this turn; set pin=true to place the widget on the session dashboard",
+        );
       }
       const capabilities = normalizeBoardWidgetDeclared(
         params.capabilities as { netOrigins?: string[]; tools?: string[] } | undefined,
@@ -359,7 +363,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
       }
       const widgetCode = rawWidgetCode.trim();
       const presentation = asOptionalRecord(params.presentation);
-      if (pinnedOnly && presentation?.target !== undefined) {
+      if ((pinnedOnly || pinWithoutInlineClient) && presentation?.target !== undefined) {
         throw new WidgetHtmlInputError(
           "presentation.target is unavailable for this pinned-only widget surface",
         );

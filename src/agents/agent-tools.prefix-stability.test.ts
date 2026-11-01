@@ -22,6 +22,7 @@ import { prepareConversationCapabilityProfile } from "./conversation-capability-
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { clearToolSearchCatalog, createToolSearchCatalogRef } from "./tool-search-catalog.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
+import * as gateway from "./tools/in-process-gateway.js";
 
 vi.mock("./openclaw-plugin-tools.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./openclaw-plugin-tools.js")>()),
@@ -375,3 +376,71 @@ it("offers the session's tool definitions and refuses tools outside the replayed
     "write is not available during a child-completion turn",
   );
 });
+
+it.each(["allowed", "denied", "untrusted"] as const)(
+  "keeps dashboard publishing scoped to verified completion authority (%s)",
+  async (authority) => {
+    const { sessionKey, operator, wake } = await webchatSession();
+    const childSessionKey = "agent:main:subagent:widget-author";
+    const storePath = operator.config!.session!.store!;
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: childSessionKey, storePath },
+      {
+        sessionId: "widget-child",
+        updatedAt: 1,
+        spawnedBy: sessionKey,
+        spawnDepth: 1,
+        inheritedToolPolicyVersion: 1,
+        inheritedToolAllow: ["show_widget", "dashboard"],
+        ...(authority === "denied" ? { inheritedToolDeny: ["show_widget"] } : {}),
+      },
+    );
+    const request = {
+      ...wake,
+      sessionId: "webchat-session",
+      modelProvider: "openai",
+      modelId: "gpt-5.4",
+      inputProvenance: {
+        kind: "inter_session" as const,
+        sourceSessionKey: childSessionKey,
+        sourceTool: "subagent_announce",
+      },
+      ...(authority !== "untrusted"
+        ? {
+            trustedInternalHandoff: {
+              kind: "subagent-completion" as const,
+              sourceSessionKey: childSessionKey,
+              sourceSessionId: "widget-child",
+              targetSessionKey: sessionKey,
+              targetSessionId: "webchat-session",
+              provider: "openai",
+              model: "gpt-5.4",
+            },
+          }
+        : {}),
+    };
+    const tools = createOpenClawCodingTools(request);
+    expect(surface(tools)).toEqual(surface(createOpenClawCodingTools(operator)));
+    const put = vi.spyOn(gateway, "callInProcessGatewayTool").mockResolvedValue({
+      widgets: [{ name: "status", tabId: "main", grantState: "none" }],
+      resolvedWidgetName: "status",
+    });
+    onTestFinished(() => put.mockRestore());
+    const widget = tools.find((tool) => tool.name === "show_widget")!;
+    const args = { title: "Status", name: "status", widget_code: "<p>ready</p>", pin: true };
+    const result = await widget.execute("publish", args);
+    if (authority === "allowed") {
+      expect(put).toHaveBeenCalledWith(
+        "board.widget.put",
+        expect.objectContaining({ sessionKey, name: "status" }),
+      );
+      expect(JSON.stringify(result.content)).toContain("pinned");
+      await expect(widget.execute("inline", { ...args, pin: false })).rejects.toThrow(
+        "set pin=true",
+      );
+    } else {
+      expect(result.details).toMatchObject({ gated: true });
+      expect(put).not.toHaveBeenCalled();
+    }
+  },
+);
