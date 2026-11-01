@@ -485,14 +485,6 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
         agentDb.runOpenClawAgentWriteTransaction((owner) => {
           for (let index = offset; index < Math.min(offset + 100, inventory.length); index++) {
             const [key, entry] = inventory[index]!;
-            if (
-              index % 10 === 0 &&
-              !targetKeys.has(key) &&
-              !parentKeys.has(key) &&
-              !childKeys.has(key)
-            ) {
-              continue;
-            }
             const old = entries.readExactSessionEntryRow(owner, key);
             if (!old) {
               throw new Error("Missing synthetic sidebar session");
@@ -521,6 +513,14 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
               },
               { canonicalPreviousEntry: old.entry, canonicalPreviousRow: old.row },
             );
+            if (
+              index % 10 === 0 &&
+              !targetKeys.has(key) &&
+              !parentKeys.has(key) &&
+              !childKeys.has(key)
+            ) {
+              continue;
+            }
             owners.replaceSessionOwnerInTransaction(owner, key, {
               actor: { type: "human", id: viewer.id },
               assignedBy: { type: "human", id: viewer.id },

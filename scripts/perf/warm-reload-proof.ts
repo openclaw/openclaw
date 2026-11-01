@@ -216,7 +216,8 @@ async function inspectWarmCache(page: Page, sessionKey: string, removeTarget = f
                 request.addEventListener("success", () => resolve(request.result), { once: true });
                 request.addEventListener(
                   "error",
-                  () => reject(new Error("Unable to read sidebar snapshot", { cause: request.error })),
+                  () =>
+                    reject(new Error("Unable to read sidebar snapshot", { cause: request.error })),
                   { once: true },
                 );
               }),
