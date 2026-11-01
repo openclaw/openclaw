@@ -4,10 +4,12 @@ export function installPaneChromeProbe() {
     headerTrailing: ".chat-pane__header-trailing",
     headerIdentity: ".chat-pane__identity-actions",
     identity: ".chat-pane__crumbs",
+    sessionTitle: ".chat-pane__session-title-text",
     composerControls: ".chat-controls__session, .chat-controls__permission-picker",
     workspace: ".chat-pane__workspace-chip",
     details: ".chat-details",
     breadcrumb: ".chat-pane__parent-session",
+    ownFooter: ".chat-group.user .chat-group-footer__meta",
     composerState: ".agent-chat__disabled-banner, .agent-chat__input",
   };
   type Region = keyof typeof selectors;
@@ -177,7 +179,9 @@ export function installPaneChromeProbe() {
       const root = document.querySelector(".chat-pane-cache__pane--active");
       const boxes = Object.fromEntries(
         regions.map((region) => {
-          const box = root?.querySelector(selectors[region])?.getBoundingClientRect();
+          const elements = root?.querySelectorAll(selectors[region]);
+          const element = region === "ownFooter" ? elements?.[elements.length - 1] : elements?.[0];
+          const box = element?.getBoundingClientRect();
           return [region, box ? [box.x, box.y, box.width, box.height] : null];
         }),
       ) as Frame["boxes"];
