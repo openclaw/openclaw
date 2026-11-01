@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
@@ -630,7 +631,7 @@ function resolveTemplateExpr(expr: string, ctx: HookMappingContext) {
     return new Date().toISOString();
   }
   if (expr.startsWith("headers.")) {
-    return getByPath(ctx.headers, expr.slice("headers.".length));
+    return getByPath(ctx.headers, normalizeLowercaseStringOrEmpty(expr.slice("headers.".length)));
   }
   if (expr.startsWith("query.")) {
     return getByPath(
