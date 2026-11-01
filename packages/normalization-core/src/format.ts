@@ -19,7 +19,7 @@ const BYTE_SIZE_STYLES = {
 
 export type RelativeTimeUnit = "second" | "minute" | "hour" | "day";
 
-/** Buckets an absolute duration while preserving nested display rounding at unit boundaries. */
+/** Buckets an absolute duration, rounding each display unit from the original milliseconds. */
 export function bucketRelativeTimeMs(durationMs: number): {
   value: number;
   unit: RelativeTimeUnit;

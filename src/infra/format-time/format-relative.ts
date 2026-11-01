@@ -24,15 +24,14 @@ export function formatTimeAgo(
     return fallback;
   }
 
-  const totalSeconds = Math.round(durationMs / 1000);
   const minutes = Math.round(durationMs / 60_000);
 
   if (minutes < 1) {
-    return suffix ? "just now" : `${totalSeconds}s`;
+    return suffix ? "just now" : `${Math.round(durationMs / 1000)}s`;
   }
-  const hours = Math.round(durationMs / 3_600_000);
-  const days = Math.round(durationMs / 86_400_000);
-  const label = minutes < 60 ? `${minutes}m` : hours < 48 ? `${hours}h` : `${days}d`;
+  const { value, unit } = bucketRelativeTimeMs(durationMs);
+  // CLI ages promote to minutes before the localized timestamp's sub-minute cutoff.
+  const label = unit === "second" ? `${minutes}m` : `${value}${unit[0]}`;
   return suffix ? `${label} ago` : label;
 }
 
