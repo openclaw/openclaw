@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "sourceInventorySha256": "6ad9bc8d64e8a9ea0e05936243a78a793378563d9bb1703e3bdfbd708defd986",
+  "sourceInventorySha256": "2f0e95e1bca0748be5ad729dbff25a561bceccf7d6d5ee39453b1ad28498599e",
   "messages": {
     "chrome.closeWindow": {
       "en": "Close window",
@@ -430,6 +430,127 @@
         "name",
         "reason"
       ]
+    },
+    "nativeMenu.about": {
+      "en": "About",
+      "ptPT": "Acerca de",
+      "args": []
+    },
+    "nativeMenu.aboutNamed": {
+      "en": "About {appName}",
+      "ptPT": "Acerca de {appName}",
+      "args": [
+        "appName"
+      ]
+    },
+    "nativeMenu.closeWindow": {
+      "en": "Close Window",
+      "ptPT": "Fechar janela",
+      "args": []
+    },
+    "nativeMenu.copy": {
+      "en": "Copy",
+      "ptPT": "Copiar",
+      "args": []
+    },
+    "nativeMenu.cut": {
+      "en": "Cut",
+      "ptPT": "Cortar",
+      "args": []
+    },
+    "nativeMenu.edit": {
+      "en": "Edit",
+      "ptPT": "Editar",
+      "args": []
+    },
+    "nativeMenu.file": {
+      "en": "File",
+      "ptPT": "Ficheiro",
+      "args": []
+    },
+    "nativeMenu.fullscreen": {
+      "en": "Toggle Full Screen",
+      "ptPT": "Alternar ecrã completo",
+      "args": []
+    },
+    "nativeMenu.help": {
+      "en": "Help",
+      "ptPT": "Ajuda",
+      "args": []
+    },
+    "nativeMenu.hide": {
+      "en": "Hide",
+      "ptPT": "Ocultar",
+      "args": []
+    },
+    "nativeMenu.hideNamed": {
+      "en": "Hide {appName}",
+      "ptPT": "Ocultar {appName}",
+      "args": [
+        "appName"
+      ]
+    },
+    "nativeMenu.hideOthers": {
+      "en": "Hide Others",
+      "ptPT": "Ocultar outras aplicações",
+      "args": []
+    },
+    "nativeMenu.maximize": {
+      "en": "Zoom",
+      "ptPT": "Maximizar",
+      "args": []
+    },
+    "nativeMenu.minimize": {
+      "en": "Minimize",
+      "ptPT": "Minimizar",
+      "args": []
+    },
+    "nativeMenu.paste": {
+      "en": "Paste",
+      "ptPT": "Colar",
+      "args": []
+    },
+    "nativeMenu.quit": {
+      "en": "Quit",
+      "ptPT": "Sair",
+      "args": []
+    },
+    "nativeMenu.quitNamed": {
+      "en": "Quit {appName}",
+      "ptPT": "Sair de {appName}",
+      "args": [
+        "appName"
+      ]
+    },
+    "nativeMenu.redo": {
+      "en": "Redo",
+      "ptPT": "Refazer",
+      "args": []
+    },
+    "nativeMenu.selectAll": {
+      "en": "Select All",
+      "ptPT": "Selecionar tudo",
+      "args": []
+    },
+    "nativeMenu.services": {
+      "en": "Services",
+      "ptPT": "Serviços",
+      "args": []
+    },
+    "nativeMenu.undo": {
+      "en": "Undo",
+      "ptPT": "Desfazer",
+      "args": []
+    },
+    "nativeMenu.view": {
+      "en": "View",
+      "ptPT": "Ver",
+      "args": []
+    },
+    "nativeMenu.window": {
+      "en": "Window",
+      "ptPT": "Janela",
+      "args": []
     },
     "quickChat.agentDefault": {
       "en": "Agent",

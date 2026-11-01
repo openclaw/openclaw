@@ -244,9 +244,141 @@ pub fn chrome_copy() -> Value {
     Value::Object(copy)
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn menu_text_for(locale: &str, key: &str) -> String {
+    format_for(locale, key, &[])
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn default_app_name<'a>(native_text: &'a str, english_prefix: &str) -> Option<Option<&'a str>> {
+    if native_text == english_prefix {
+        return Some(None);
+    }
+    native_text
+        .strip_prefix(english_prefix)
+        .and_then(|suffix| suffix.strip_prefix(' '))
+        .filter(|name| !name.is_empty())
+        .map(Some)
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn default_app_menu_text(
+    locale: &str,
+    bare_key: &str,
+    named_key: &str,
+    english_prefix: &str,
+    native_text: &str,
+) -> Option<String> {
+    if locale != "pt-PT" {
+        return Some(native_text.to_owned());
+    }
+    match default_app_name(native_text, english_prefix)? {
+        None => Some(menu_text_for(locale, bare_key)),
+        Some(app_name) => {
+            let escaped_name = app_name.replace('&', "&&");
+            Some(format_for(
+                locale,
+                named_key,
+                &[("appName", escaped_name.as_str())],
+            ))
+        }
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn default_submenu_label_for(locale: &str, native_text: &str) -> Option<String> {
+    let key = match native_text {
+        "File" => "nativeMenu.file",
+        "Edit" => "nativeMenu.edit",
+        "View" => "nativeMenu.view",
+        "Window" => "nativeMenu.window",
+        "Help" => "nativeMenu.help",
+        _ => return None,
+    };
+    Some(menu_text_for(locale, key))
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn default_predefined_label_for(locale: &str, native_text: &str) -> Option<String> {
+    match native_text {
+        "Hide Others" => Some(menu_text_for(locale, "nativeMenu.hideOthers")),
+        _ if native_text == "About" || native_text.starts_with("About ") => default_app_menu_text(
+            locale,
+            "nativeMenu.about",
+            "nativeMenu.aboutNamed",
+            "About",
+            native_text,
+        ),
+        _ if native_text == "Hide" || native_text.starts_with("Hide ") => default_app_menu_text(
+            locale,
+            "nativeMenu.hide",
+            "nativeMenu.hideNamed",
+            "Hide",
+            native_text,
+        ),
+        _ if native_text == "Quit" || native_text.starts_with("Quit ") => default_app_menu_text(
+            locale,
+            "nativeMenu.quit",
+            "nativeMenu.quitNamed",
+            "Quit",
+            native_text,
+        ),
+        _ => {
+            let key = match native_text {
+                "Services" => "nativeMenu.services",
+                "Close Window" => "nativeMenu.closeWindow",
+                "Undo" => "nativeMenu.undo",
+                "Redo" => "nativeMenu.redo",
+                "Cut" => "nativeMenu.cut",
+                "Copy" => "nativeMenu.copy",
+                "Paste" => "nativeMenu.paste",
+                "Select All" => "nativeMenu.selectAll",
+                "Toggle Full Screen" => "nativeMenu.fullscreen",
+                "Minimize" => "nativeMenu.minimize",
+                "Zoom" => "nativeMenu.maximize",
+                _ => return None,
+            };
+            Some(menu_text_for(locale, key))
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub fn localize_default_macos_menu<R: tauri::Runtime>(
+    menu: &tauri::menu::Menu<R>,
+) -> tauri::Result<()> {
+    let locale = locale();
+    if locale != "pt-PT" {
+        return Ok(());
+    }
+
+    for (position, kind) in menu.items()?.iter().enumerate() {
+        let Some(submenu) = kind.as_submenu() else {
+            continue;
+        };
+        if position != 0 {
+            if let Some(text) = default_submenu_label_for(locale, &submenu.text()?) {
+                submenu.set_text(text)?;
+            }
+        }
+        for child in submenu.items()? {
+            let Some(item) = child.as_predefined_menuitem() else {
+                continue;
+            };
+            if let Some(text) = default_predefined_label_for(locale, &item.text()?) {
+                item.set_text(text)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{chrome_copy, format_for, render, select_locale};
+    use super::{
+        chrome_copy, default_app_menu_text, default_predefined_label_for,
+        default_submenu_label_for, format_for, menu_text_for, render, select_locale,
+    };
 
     #[test]
     fn only_explicit_portuguese_portugal_tags_select_portuguese() {
@@ -321,5 +453,119 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("{error}"));
+    }
+
+    #[test]
+    fn default_macos_menu_labels_use_the_native_portuguese_catalog() {
+        let labels = [
+            ("nativeMenu.about", "About", "Acerca de"),
+            ("nativeMenu.closeWindow", "Close Window", "Fechar janela"),
+            ("nativeMenu.copy", "Copy", "Copiar"),
+            ("nativeMenu.cut", "Cut", "Cortar"),
+            ("nativeMenu.edit", "Edit", "Editar"),
+            ("nativeMenu.file", "File", "Ficheiro"),
+            (
+                "nativeMenu.fullscreen",
+                "Toggle Full Screen",
+                "Alternar ecrã completo",
+            ),
+            ("nativeMenu.help", "Help", "Ajuda"),
+            ("nativeMenu.hide", "Hide", "Ocultar"),
+            (
+                "nativeMenu.hideOthers",
+                "Hide Others",
+                "Ocultar outras aplicações",
+            ),
+            ("nativeMenu.maximize", "Zoom", "Maximizar"),
+            ("nativeMenu.minimize", "Minimize", "Minimizar"),
+            ("nativeMenu.paste", "Paste", "Colar"),
+            ("nativeMenu.quit", "Quit", "Sair"),
+            ("nativeMenu.redo", "Redo", "Refazer"),
+            ("nativeMenu.selectAll", "Select All", "Selecionar tudo"),
+            ("nativeMenu.services", "Services", "Serviços"),
+            ("nativeMenu.undo", "Undo", "Desfazer"),
+            ("nativeMenu.view", "View", "Ver"),
+            ("nativeMenu.window", "Window", "Janela"),
+        ];
+        for (key, english, portuguese) in labels {
+            let submenu = matches!(
+                key,
+                "nativeMenu.edit"
+                    | "nativeMenu.file"
+                    | "nativeMenu.help"
+                    | "nativeMenu.view"
+                    | "nativeMenu.window"
+            );
+            let english_label = if submenu {
+                default_submenu_label_for("en", english)
+            } else {
+                default_predefined_label_for("en", english)
+            };
+            let portuguese_label = if submenu {
+                default_submenu_label_for("pt-PT", english)
+            } else {
+                default_predefined_label_for("pt-PT", english)
+            };
+            assert_eq!(english_label.as_deref(), Some(english));
+            assert_eq!(portuguese_label.as_deref(), Some(portuguese));
+            assert_eq!(menu_text_for("pt-PT", key), portuguese);
+        }
+    }
+
+    #[test]
+    fn named_macos_menu_labels_preserve_literal_app_names() {
+        for (bare_key, named_key, prefix, expected_bare, expected_named) in [
+            (
+                "nativeMenu.about",
+                "nativeMenu.aboutNamed",
+                "About",
+                "Acerca de",
+                "Acerca de File && {name}",
+            ),
+            (
+                "nativeMenu.hide",
+                "nativeMenu.hideNamed",
+                "Hide",
+                "Ocultar",
+                "Ocultar File && {name}",
+            ),
+            (
+                "nativeMenu.quit",
+                "nativeMenu.quitNamed",
+                "Quit",
+                "Sair",
+                "Sair de File && {name}",
+            ),
+        ] {
+            assert_eq!(
+                default_app_menu_text("pt-PT", bare_key, named_key, prefix, prefix),
+                Some(expected_bare.to_owned())
+            );
+            assert_eq!(
+                default_app_menu_text(
+                    "pt-PT",
+                    bare_key,
+                    named_key,
+                    prefix,
+                    &format!("{prefix} File & {{name}}"),
+                ),
+                Some(expected_named.to_owned())
+            );
+            let english = format!("{prefix} File & {{name}}");
+            assert_eq!(
+                default_app_menu_text("en", bare_key, named_key, prefix, &english),
+                Some(english)
+            );
+        }
+        assert_eq!(
+            default_app_menu_text(
+                "pt-PT",
+                "nativeMenu.about",
+                "nativeMenu.aboutNamed",
+                "About",
+                "Aboutface File",
+            ),
+            None
+        );
     }
 }

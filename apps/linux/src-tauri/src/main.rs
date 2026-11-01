@@ -3611,6 +3611,8 @@ fn main() {
             move |status| tray::publish_keep_awake(&power_app, status),
         )?);
         if let Some(menu) = app.menu() {
+            #[cfg(target_os = "macos")]
+            shell_i18n::localize_default_macos_menu(&menu)?;
             menu.append(&gateway_windows::menu(app.handle())?)?;
         }
         app.on_menu_event(|app, event| {

@@ -210,6 +210,13 @@ cargo run
 cargo build
 ```
 
+For packaged macOS QA, use `tauri build --debug`. The Tauri CLI enables
+`tauri/custom-protocol`; a plain `cargo build` followed by bundle-only packaging
+can retain the development embedded partial plist. To build with Cargo against
+already staged assets from `apps/linux/src-tauri`, run
+`cargo build --locked --features tauri/custom-protocol`. This build-mode
+distinction does not establish the cause of CUA discovery behavior.
+
 The app uses `OPENCLAW_DESKTOP_CLI` when set. Otherwise it checks `~/.openclaw/bin/openclaw`, then `openclaw` on `PATH`.
 
 Desktop notifications use each platform's system notification service. macOS uses Apple's User Notifications framework; Windows uses native system toasts and Linux uses the desktop notification service through `notify-rust`. On macOS, test notifications from a signed `.app` bundle: a direct `cargo run` stays unbundled, so the app disables notifications instead of initializing Apple's framework with no bundle identity.

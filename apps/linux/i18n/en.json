@@ -352,6 +352,104 @@
         "reason"
       ]
     },
+    "nativeMenu.about": {
+      "source": "About",
+      "args": []
+    },
+    "nativeMenu.aboutNamed": {
+      "source": "About {appName}",
+      "args": [
+        "appName"
+      ]
+    },
+    "nativeMenu.closeWindow": {
+      "source": "Close Window",
+      "args": []
+    },
+    "nativeMenu.copy": {
+      "source": "Copy",
+      "args": []
+    },
+    "nativeMenu.cut": {
+      "source": "Cut",
+      "args": []
+    },
+    "nativeMenu.edit": {
+      "source": "Edit",
+      "args": []
+    },
+    "nativeMenu.file": {
+      "source": "File",
+      "args": []
+    },
+    "nativeMenu.fullscreen": {
+      "source": "Toggle Full Screen",
+      "args": []
+    },
+    "nativeMenu.help": {
+      "source": "Help",
+      "args": []
+    },
+    "nativeMenu.hide": {
+      "source": "Hide",
+      "args": []
+    },
+    "nativeMenu.hideNamed": {
+      "source": "Hide {appName}",
+      "args": [
+        "appName"
+      ]
+    },
+    "nativeMenu.hideOthers": {
+      "source": "Hide Others",
+      "args": []
+    },
+    "nativeMenu.maximize": {
+      "source": "Zoom",
+      "args": []
+    },
+    "nativeMenu.minimize": {
+      "source": "Minimize",
+      "args": []
+    },
+    "nativeMenu.paste": {
+      "source": "Paste",
+      "args": []
+    },
+    "nativeMenu.quit": {
+      "source": "Quit",
+      "args": []
+    },
+    "nativeMenu.quitNamed": {
+      "source": "Quit {appName}",
+      "args": [
+        "appName"
+      ]
+    },
+    "nativeMenu.redo": {
+      "source": "Redo",
+      "args": []
+    },
+    "nativeMenu.selectAll": {
+      "source": "Select All",
+      "args": []
+    },
+    "nativeMenu.services": {
+      "source": "Services",
+      "args": []
+    },
+    "nativeMenu.undo": {
+      "source": "Undo",
+      "args": []
+    },
+    "nativeMenu.view": {
+      "source": "View",
+      "args": []
+    },
+    "nativeMenu.window": {
+      "source": "Window",
+      "args": []
+    },
     "quickChat.agentDefault": {
       "source": "Agent",
       "args": []
