@@ -64,7 +64,8 @@ export function registerWebCapabilityCommands(capability: Command): void {
     .action((opts) =>
       runWebCommand("web.search", opts.json, async () => {
         const query = String(opts.query);
-        const provider = opts.provider as string | undefined;
+        const provider =
+          opts.provider === undefined ? undefined : normalizeLowercaseStringOrEmpty(opts.provider);
         const limit = parseOptionalPositiveInteger(opts.limit, "--limit");
         const { captureRuntimeConfigAsyncReader } = await import("../../config/config.js");
         const { getCapabilityWebSearchCommandSecretTargets } =
@@ -102,7 +103,8 @@ export function registerWebCapabilityCommands(capability: Command): void {
     .action((opts) =>
       runWebCommand("web.fetch", opts.json, async () => {
         const url = String(opts.url);
-        const provider = opts.provider as string | undefined;
+        const provider =
+          opts.provider === undefined ? undefined : normalizeLowercaseStringOrEmpty(opts.provider);
         const format = opts.format as string | undefined;
         const { captureRuntimeConfigAsyncReader } = await import("../../config/config.js");
         const { getCapabilityWebFetchCommandSecretTargets } =
